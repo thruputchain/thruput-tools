@@ -1,6 +1,6 @@
 # groundhog-rpc
 
-Standalone JSON-RPC 2.0 gateway for the [Groundhog](https://groundhog.network) blockchain. Communicates with the validator stack (hogd indexer, hogd scheduler, chuckd coordinator) exclusively over x23 RPC.
+Standalone JSON-RPC 2.0 gateway for the [Groundhog](https://groundhog.dev) blockchain. Communicates with the validator stack (hogd indexer, hogd scheduler, chuckd coordinator) exclusively over x23 RPC.
 
 ## Crates
 
