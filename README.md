@@ -37,7 +37,3 @@ cargo fmt --check
 
 - [System Design](docs/system-design.md) — architecture, data flows, open questions
 - [API Sketch](docs/api-sketch.md) — trait definition, types, handler examples
-
-## License
-
-Apache-2.0 — see [LICENSE](LICENSE).
