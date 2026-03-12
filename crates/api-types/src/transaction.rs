@@ -9,7 +9,14 @@ use crate::{BlockHeight, SHA256Hash};
 pub struct TxHash(pub SHA256Hash);
 
 /// Lightweight status — the result of checking mempool then indexer.
+///
+/// Lookup order: scheduler (Pending) → indexer (Committed) → Unknown.
+/// See `docs/system-design.md` "Transaction Status Lookup Order" for
+/// degraded-mode behavior when a backend is unavailable.
+///
+/// New variants may be added in future phases.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 #[serde(tag = "status", rename_all = "camelCase")]
 pub enum TransactionStatus {
     /// In the mempool, not yet in a committed block.

@@ -1,3 +1,4 @@
+pub mod hex;
 pub mod receipt;
 pub mod block;
 pub mod transaction;

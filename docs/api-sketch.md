@@ -1,12 +1,35 @@
 # RPC Gateway: API Sketch
 
-**Status:** Draft — for Daniel to review and iterate
-**Context:** Code sketches for [rpc-gateway-system-design.md](rpc-gateway-system-design.md).
+**Status:** Draft v2 — updated 2026-03-11
+**Context:** Code sketches for [system-design.md](system-design.md).
 Not compilable as-is; intended to communicate shape and decisions.
 
 ---
 
-## 1. jsonrpsee Trait Definition
+## 1. Wire Format Conventions
+
+All byte values use `0x`-prefixed lowercase hex. Numeric values use
+JSON numbers (decimal). See system-design.md "Wire Format Conventions"
+for the full table.
+
+```json
+{
+  "txHash": "0xa1b2c3d4e5f6...",
+  "height": 42,
+  "status": { "result": "ok" },
+  "events": [
+    {
+      "contractAddress": "0x00112233...",
+      "topics": ["0xdeadbeef...", "0xcafebabe..."],
+      "data": "0x48656c6c6f"
+    }
+  ]
+}
+```
+
+---
+
+## 2. jsonrpsee Trait Definition
 
 Single trait, `#[rpc(client, server)]` generates both the gateway
 server stubs and the typed Rust client library. This is the Substrate
@@ -40,8 +63,10 @@ pub trait GroundhogApi {
         tx_hash: TxHash,
     ) -> RpcResult<Option<TransactionReceipt>>;
 
-    /// Lightweight status check. Queries mempool first (Pending),
-    /// then indexer (Committed), falls back to Unknown.
+    /// Lightweight status check.
+    /// Lookup order: scheduler (Pending) → indexer (Committed) → Unknown.
+    /// See system-design.md "Transaction Status Lookup Order" for
+    /// degraded-mode behavior when a backend is unavailable.
     #[method(name = "getTransactionStatus")]
     async fn get_transaction_status(
         &self,
@@ -61,13 +86,15 @@ pub trait GroundhogApi {
         height: BlockHeight,
     ) -> RpcResult<Option<BlockInfo>>;
 
-    /// Number of transactions in the mempool.
+    /// Number of transactions in the mempool (scheduler.size()).
     #[method(name = "pendingTransactionCount")]
     async fn pending_transaction_count(&self) -> RpcResult<u64>;
 
     // --- Event Queries ---
 
     /// Contract events filtered by address and height range.
+    /// Returns RANGE_TOO_LARGE (-32011) if height span exceeds
+    /// the gateway's configured maximum (default: 1000 blocks).
     #[method(name = "getContractEvents")]
     async fn get_contract_events(
         &self,
@@ -100,7 +127,7 @@ pub trait GroundhogApi {
 
 ---
 
-## 2. API Types (`api-types` crate)
+## 3. API Types (`api-types` crate)
 
 These are the RPC-layer types that developers interact with.
 They import from `groundhog-xdr` where the wire type already
@@ -109,6 +136,7 @@ exists and define new types where the RPC needs something different.
 ```rust
 // api-types/src/lib.rs
 
+pub mod hex;
 pub mod receipt;
 pub mod block;
 pub mod transaction;
@@ -124,13 +152,28 @@ pub use groundhog_xdr::types::{
 };
 ```
 
+### Hex Byte Types
+
+```rust
+// api-types/src/hex.rs
+
+/// Variable-length byte array. Serializes as "0x..." hex string.
+/// Used for event data and other opaque byte fields.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HexBytes(pub Vec<u8>);
+// Custom Serialize/Deserialize: "0x" + hex::encode / hex::decode
+
+/// Fixed-size 32-byte event topic. Serializes as "0x..." hex string.
+/// Hogd supports up to 3 topics per event, each exactly 32 bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Topic(pub [u8; 32]);
+// Custom Serialize/Deserialize: "0x" + hex::encode / hex::decode
+```
+
 ### Transaction Hash
 
 ```rust
 // api-types/src/transaction.rs
-
-use serde::{Serialize, Deserialize};
-use groundhog_xdr::types::SHA256Hash;
 
 /// Canonical transaction hash: sha256(xdr_serialize(signed_tx.tx)).
 /// Covers the inner Transaction body (not signatures), matching
@@ -140,32 +183,13 @@ pub struct TxHash(pub SHA256Hash);
 
 /// Lightweight status — the result of checking mempool then indexer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 #[serde(tag = "status", rename_all = "camelCase")]
 pub enum TransactionStatus {
-    /// In the mempool, not yet in a committed block.
     Pending,
-
-    /// Included in a committed block. SCP finality = done.
-    Committed {
-        height: BlockHeight,
-        block_hash: SHA256Hash,
-    },
-
-    /// Scheduler rejected the transaction.
-    Invalid {
-        reason: String,
-    },
-
-    /// Not found in mempool or indexer.
+    Committed { height: BlockHeight, block_hash: SHA256Hash },
+    Invalid { reason: String },
     Unknown,
-}
-
-/// Result of sendRawTransaction.
-/// Phase 1: just the hash. Phase 2 response options could add
-/// wait_for_commit, show_events, etc. (Sui pattern).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SubmitResult {
-    pub tx_hash: TxHash,
 }
 ```
 
@@ -174,11 +198,6 @@ pub struct SubmitResult {
 ```rust
 // api-types/src/receipt.rs
 
-use serde::{Serialize, Deserialize};
-use groundhog_xdr::types::{BlockHeight, SHA256Hash, ContractAddress};
-use crate::transaction::TxHash;
-use crate::events::EmittedEvent;
-
 /// Full transaction receipt. Returned by getTransactionReceipt.
 ///
 /// Diverges from EVM receipts intentionally:
@@ -186,7 +205,6 @@ use crate::events::EmittedEvent;
 /// - No transactionIndex (not stored in indexer)
 /// - No logsBloom (events are directly indexed)
 /// - ExecStatus is richer than EVM's binary 0/1
-/// - storage_delta replaces gas economics
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TransactionReceipt {
@@ -194,39 +212,20 @@ pub struct TransactionReceipt {
     pub height: BlockHeight,
     pub status: ExecStatus,
     pub events: Vec<EmittedEvent>,
-
-    /// Net change in locked HOG from storage writes/deletes.
-    /// Positive = more HOG locked (storage grew).
-    /// Negative = HOG unlocked (storage shrank).
-    /// None if not available from the indexer.
-    /// [TODO: confirm with Geoff whether this is in TxEventLog today]
-    pub storage_delta: Option<i128>,
+    // storage_delta deferred — not available from hogd indexer.
+    // TxInfo only contains height + TxEventLog. Add back when
+    // indexer captures storage deltas.
 }
 
 /// Execution result. Maps to hogd's ExecResult variants.
-/// Richer than EVM's binary status (0 = fail, 1 = success).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 #[serde(tag = "result", rename_all = "camelCase")]
 pub enum ExecStatus {
-    /// Transaction executed successfully.
     Ok,
-
-    /// Root call frame reverted (contract called abort/revert).
-    Reverted {
-        /// Abort buffer from the contract, if any.
-        message: Option<String>,
-    },
-
-    /// Deterministic execution error (out of gas, stack overflow, etc.).
-    DeterministicError {
-        kind: String,
-    },
-
-    /// Gas sponsorship failed.
+    Reverted { message: Option<String> },
+    DeterministicError { kind: String },
     FailedGasSponsorship,
-
-    // Future: additional variants as hogd ExecResult evolves.
-    // Keep this enum non_exhaustive so clients handle new variants.
     #[serde(other)]
     Other,
 }
@@ -237,10 +236,6 @@ pub enum ExecStatus {
 ```rust
 // api-types/src/block.rs
 
-use serde::{Serialize, Deserialize};
-use groundhog_xdr::types::{BlockHeight, SHA256Hash};
-use crate::transaction::TxHash;
-
 /// Current chain tip. Returned by chainTip.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -250,9 +245,7 @@ pub struct ChainTip {
 }
 
 /// Block summary. Returned by getBlockByNumber.
-///
-/// Intentionally minimal for Phase 1. Doesn't include full
-/// transaction list (that's a separate query if needed).
+/// Intentionally minimal for Phase 1.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BlockInfo {
@@ -261,8 +254,6 @@ pub struct BlockInfo {
     pub parent_hash: SHA256Hash,
     pub tx_count: u32,
     pub tx_hashes: Vec<TxHash>,
-    // TODO: timestamp? CV bytes? consensus metadata?
-    // Keep minimal until we know what block explorers need.
 }
 ```
 
@@ -271,26 +262,22 @@ pub struct BlockInfo {
 ```rust
 // api-types/src/events.rs
 
-use serde::{Serialize, Deserialize};
-use groundhog_xdr::types::{BlockHeight, SHA256Hash, ContractAddress};
-use crate::transaction::TxHash;
-
-/// A single emitted event, as stored by the hogd indexer.
-/// Maps to hogd's TxEmittedEvent + identification metadata.
+/// A single emitted event.
+///
+/// The gateway parses hogd's TxEmittedEvent.serialized_event into
+/// separate topics and data. See system-design.md "Event Parsing"
+/// for the wire format.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EmittedEvent {
     pub contract_address: ContractAddress,
-
-    /// Up to 3 topics per event (indexed, filterable in Phase 4).
-    pub topics: Vec<Vec<u8>>,
-
-    /// Opaque event data (up to 1KB, contract-defined encoding).
-    pub data: Vec<u8>,
+    /// Up to 3 topics per event, each 32 bytes.
+    pub topics: Vec<Topic>,
+    /// Opaque event data (contract-defined encoding).
+    pub data: HexBytes,
 }
 
 /// Event with provenance — includes which tx emitted it.
-/// Returned by getContractEvents.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IdentifiedEvent {
@@ -308,59 +295,43 @@ pub struct IdentifiedEvent {
 
 /// Groundhog-specific JSON-RPC error codes.
 /// Standard JSON-RPC reserves -32000 to -32099 for server errors.
-/// We follow Substrate's pattern of per-module ranges.
+/// Per-module ranges following Substrate's pattern.
 ///
 /// -32000 to -32009: Transaction errors
 /// -32010 to -32019: Query errors
 /// -32020 to -32029: Subscription errors (Phase 2)
+/// -32050 to -32059: Backend errors
 pub mod codes {
-    /// Transaction was malformed (bad XDR, missing fields).
     pub const TX_INVALID: i32 = -32000;
-
-    /// Transaction was well-formed but rejected by the scheduler.
     pub const TX_REJECTED: i32 = -32001;
-
-    /// Transaction hash not found in mempool or indexer.
     pub const TX_NOT_FOUND: i32 = -32002;
-
-    /// Block height out of range (negative, or beyond current tip).
     pub const BLOCK_NOT_FOUND: i32 = -32010;
-
-    /// Height range too large for getContractEvents.
     pub const RANGE_TOO_LARGE: i32 = -32011;
-
-    /// Backend (hogd indexer or scheduler) unavailable.
     pub const BACKEND_UNAVAILABLE: i32 = -32050;
-
-    /// Request timed out waiting for backend response.
     pub const BACKEND_TIMEOUT: i32 = -32051;
 }
 ```
 
 ---
 
-## 3. Gateway Context (Shared State)
+## 4. Gateway Context (Shared State)
 
 ```rust
 // gateway/src/context.rs
 
-use std::sync::Arc;
-
 /// Shared state injected into every handler.
-/// All backend connections are behind Arc for cheap cloning
-/// into spawned handler tasks.
+/// All backend connections are behind Arc for cheap cloning.
 pub struct GatewayContext {
     /// x23 RPC client to hogd scheduler.
-    /// Used for: submit_unvetted, get_tip, find_tx, size.
+    /// Used for: submit_unvetted, get_tip, lookup_transactions, size.
     pub scheduler: Arc<SchedulerClient>,
 
     /// x23 RPC client to hogd indexer.
     /// Used for: get_transaction_info, get_contract_events.
     pub indexer: Arc<IndexerClient>,
 
-    /// x23 RPC client to coordinator storage.
-    /// Used for: lookup_cv_by_height, lookup_cv.
-    /// [TODO: may not be needed if block data comes from indexer]
+    /// x23 RPC client to coordinator storage (optional).
+    /// Used for: block/CV queries (pending question #1).
     pub coordinator: Option<Arc<CoordinatorClient>>,
 
     /// Prometheus metrics registry.
@@ -373,21 +344,11 @@ pub struct GatewayContext {
 
 ---
 
-## 4. Handler Example
+## 5. Handler Examples
+
+### getTransactionReceipt
 
 ```rust
-// gateway/src/handlers/receipt.rs
-
-use crate::context::GatewayContext;
-use groundhog_rpc_api_types::{
-    transaction::TxHash,
-    receipt::TransactionReceipt,
-};
-
-/// Implementation of groundhog_getTransactionReceipt.
-///
-/// Calls hogd indexer's get_transaction_info(tx_hash) via x23 RPC.
-/// Converts TxEventLog → TransactionReceipt for the RPC response.
 pub async fn get_transaction_receipt(
     ctx: &GatewayContext,
     tx_hash: TxHash,
@@ -398,22 +359,25 @@ pub async fn get_transaction_receipt(
         .await
         .map_err(|e| internal_error(e, "indexer query failed"))?;
 
-    // 2. Convert to API type
-    let Some(info) = tx_info else {
-        return Ok(None);
-    };
+    let Some(info) = tx_info else { return Ok(None); };
 
-    // 3. Map TxEventLog events to EmittedEvent
+    // 2. Parse serialized_event → topics + data
     let events = info.event_log.events
         .iter()
-        .map(|e| EmittedEvent {
-            contract_address: e.contract_address,
-            topics: e.topics(),
-            data: e.data(),
+        .map(|e| {
+            let (topics, data) = parse_serialized_event(
+                e.num_topics,
+                &e.serialized_event,
+            );
+            EmittedEvent {
+                contract_address: e.contract_address,
+                topics,
+                data,
+            }
         })
         .collect();
 
-    // 4. Map ExecResult to ExecStatus
+    // 3. Map ExecResult → ExecStatus
     let status = map_exec_result(&info.event_log.exec_result);
 
     Ok(Some(TransactionReceipt {
@@ -421,14 +385,48 @@ pub async fn get_transaction_receipt(
         height: info.height,
         status,
         events,
-        storage_delta: None, // TODO: available from indexer?
     }))
+}
+```
+
+### getTransactionStatus (lookup order)
+
+```rust
+pub async fn get_transaction_status(
+    ctx: &GatewayContext,
+    tx_hash: TxHash,
+) -> RpcResult<TransactionStatus> {
+    // 1. Check scheduler (mempool) — best-effort
+    match ctx.scheduler.lookup_transactions(&[tx_hash.0]).await {
+        Ok(results) if results[0].is_some() => {
+            return Ok(TransactionStatus::Pending);
+        }
+        Err(e) => {
+            // Scheduler down — log warning, continue to indexer
+            tracing::warn!(error = %e, "scheduler unreachable, cannot detect pending txs");
+        }
+        _ => {}
+    }
+
+    // 2. Check indexer — authoritative
+    let tx_info = ctx.indexer
+        .get_transaction_info(tx_hash.0)
+        .await
+        .map_err(|e| internal_error(e, "indexer query failed"))?;
+
+    match tx_info {
+        Some(info) => Ok(TransactionStatus::Committed {
+            height: info.height,
+            block_hash: info.block_hash,
+        }),
+        None => Ok(TransactionStatus::Unknown),
+    }
 }
 ```
 
 ---
 
-## 5. Workspace Cargo.toml
+## 6. Workspace Cargo.toml
 
 ```toml
 [workspace]
@@ -476,69 +474,6 @@ sha2 = "0.10"
 
 # --- Error handling ---
 thiserror = "2"
-anyhow = "1"
-```
-
-```toml
-# crates/api-types/Cargo.toml
-[package]
-name = "groundhog-rpc-api-types"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-groundhog-xdr = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-jsonrpsee-types = { workspace = true }
-bytes = { workspace = true }
-hex = { workspace = true }
-```
-
-```toml
-# crates/gateway/Cargo.toml
-[package]
-name = "groundhog-rpc-gateway"
-version = "0.1.0"
-edition = "2021"
-
-[[bin]]
-name = "groundhog-rpc"
-path = "src/main.rs"
-
-[dependencies]
-groundhog-rpc-api-types = { path = "../api-types" }
-groundhog-xdr = { workspace = true }
-rpc_driver = { workspace = true }
-jsonrpsee = { workspace = true }
-axum = { workspace = true }
-tokio = { workspace = true }
-tower = { workspace = true }
-tower-http = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-prometheus = { workspace = true }
-clap = { workspace = true }
-toml = { workspace = true }
-sha2 = { workspace = true }
-thiserror = { workspace = true }
-anyhow = { workspace = true }
-```
-
-```toml
-# crates/client/Cargo.toml
-[package]
-name = "groundhog-rpc-client"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-groundhog-rpc-api-types = { path = "../api-types" }
-jsonrpsee = { workspace = true, features = ["client", "macros"] }
-tokio = { workspace = true }
-serde = { workspace = true }
 ```
 
 ---
@@ -548,6 +483,8 @@ serde = { workspace = true }
 - The `#[rpc(client, server)]` macro on the trait generates both
   `GroundhogApiServer` (for the gateway) and `GroundhogApiClient`
   (for the client crate / SDK / CLI). One definition, two sides.
+  See system-design.md "Client Crate Trait Location" for where the
+  trait should live.
 
 - `api-types` should be the single source of truth for every type
   that crosses the RPC boundary. The SDK's `GroundhogClient` wraps
@@ -558,9 +495,14 @@ serde = { workspace = true }
   for `TransactionStatus` and `ExecStatus` (discriminated unions
   in JSON).
 
+- Both `TransactionStatus` and `ExecStatus` are `#[non_exhaustive]`
+  so new variants can be added without semver breaks. Clients must
+  handle unknown variants via `#[serde(other)]` on `ExecStatus` and
+  by matching a wildcard arm on `TransactionStatus`.
+
 - `ExecStatus` variants should track hogd's `ExecResult` enum.
-  I've sketched the obvious ones; the full mapping needs your
-  and Geoff's input on which variants are user-visible vs internal.
+  The full mapping needs your and Geoff's input on which variants
+  are user-visible vs internal.
 
 - `TxHash` is `sha256(xdr_serialize(signed_tx.tx))` — the inner
   `Transaction` body, not the full `SignedTransaction`. This matches
@@ -568,9 +510,9 @@ serde = { workspace = true }
   The hash computation should live in `api-types` (or a utility
   in `groundhog-xdr`) so the SDK and gateway compute it identically.
 
-- I've left `storage_delta` as `Option<i128>` on the receipt.
-  Whether it's available depends on what the indexer's `TxEventLog`
-  captures today — question for Geoff/Jack.
+- `storage_delta` deferred from Phase 1 — hogd's `TxInfo` doesn't
+  include it. Will add to `TransactionReceipt` when indexer support
+  lands.
 
 - Topics on events: hogd supports up to 3 topics × 32 bytes
   (similar to EVM log topics). Phase 4 adds topic-based filtering
@@ -578,5 +520,4 @@ serde = { workspace = true }
   they're returned but not filterable.
 
 - jsonrpsee version: 0.24 is current as of early 2026. Both
-  Substrate and Sui use it. Needs to be on the private registry
-  (or mirrored from crates.io).
+  Substrate and Sui use it.

@@ -4,33 +4,39 @@ use crate::events::EmittedEvent;
 use crate::transaction::TxHash;
 use crate::BlockHeight;
 
-/// Full transaction receipt. Returned by getTransactionReceipt.
+/// Full transaction receipt. Returned by `getTransactionReceipt`.
 ///
 /// Diverges from EVM receipts intentionally:
-/// - No gasUsed/gasPrice (gas bounds computation but costs zero)
-/// - No transactionIndex (not stored in indexer)
-/// - No logsBloom (events are directly indexed)
-/// - ExecStatus is richer than EVM's binary 0/1
-/// - storage_delta replaces gas economics
+/// - No `gasUsed`/`gasPrice` (gas bounds computation but costs zero)
+/// - No `transactionIndex` (not stored in indexer)
+/// - No `logsBloom` (events are directly indexed)
+/// - `ExecStatus` is richer than EVM's binary 0/1
+///
+/// `storage_delta` (net HOG locked/unlocked) is deferred — hogd's
+/// `TxInfo` doesn't include it. Will be added when indexer support lands.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TransactionReceipt {
+    /// Canonical transaction hash.
     pub tx_hash: TxHash,
-    pub height: BlockHeight,
-    pub status: ExecStatus,
-    pub events: Vec<EmittedEvent>,
 
-    /// Net change in locked HOG from storage writes/deletes.
-    /// Positive = more HOG locked (storage grew).
-    /// Negative = HOG unlocked (storage shrank).
-    /// None if not available from the indexer.
-    /// TODO: confirm with Geoff whether this is in TxEventLog today
-    pub storage_delta: Option<i128>,
+    /// Block height at which this transaction was committed.
+    pub height: BlockHeight,
+
+    /// Execution result.
+    pub status: ExecStatus,
+
+    /// Events emitted during execution.
+    pub events: Vec<EmittedEvent>,
 }
 
-/// Execution result. Maps to hogd's ExecResult variants.
+/// Execution result. Maps to hogd's `ExecResult` variants.
 /// Richer than EVM's binary status (0 = fail, 1 = success).
+///
+/// New variants may be added as hogd's `ExecResult` evolves.
+/// Clients should handle unknown variants gracefully.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 #[serde(tag = "result", rename_all = "camelCase")]
 pub enum ExecStatus {
     /// Transaction executed successfully.
@@ -43,13 +49,17 @@ pub enum ExecStatus {
     },
 
     /// Deterministic execution error (out of gas, stack overflow, etc.).
-    DeterministicError { kind: String },
+    DeterministicError {
+        /// Error kind from the execution engine.
+        kind: String,
+    },
 
     /// Gas sponsorship failed.
     FailedGasSponsorship,
 
-    // Future: additional variants as hogd ExecResult evolves.
-    // Keep this enum non_exhaustive so clients handle new variants.
+    /// Unrecognized execution result from the indexer.
+    /// Returned when the gateway encounters an `ExecResult` variant
+    /// it doesn't know about. Check for gateway updates.
     #[serde(other)]
     Other,
 }

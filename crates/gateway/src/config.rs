@@ -21,7 +21,13 @@ pub struct GatewayConfig {
 
     /// x23 RPC address for coordinator (for block/CV queries).
     /// Optional — may not be needed if block data comes from indexer.
+    /// See `docs/system-design.md` question #1.
     pub coordinator_address: Option<String>,
+
+    /// Maximum height range for `getContractEvents` queries.
+    /// Requests exceeding this return `RANGE_TOO_LARGE` (-32011).
+    /// Hogd has no built-in limits, so the gateway must enforce bounds.
+    pub max_event_height_range: u64,
 }
 
 impl Default for GatewayConfig {
@@ -33,6 +39,7 @@ impl Default for GatewayConfig {
             scheduler_address: "127.0.0.1:9000".into(),
             indexer_address: "127.0.0.1:9001".into(),
             coordinator_address: None,
+            max_event_height_range: 1000,
         }
     }
 }
