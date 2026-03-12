@@ -1,0 +1,46 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/api-types",
+    "crates/gateway",
+    "crates/client",
+]
+
+[workspace.dependencies]
+# --- Groundhog (private registry) ---
+groundhog-xdr = { version = "0.3", registry = "groundhog" }
+xdrs = { version = "0.5", registry = "groundhog" }
+rpc_driver = { version = "0.3", registry = "groundhog" }
+
+# --- JSON-RPC ---
+jsonrpsee = { version = "0.24", features = ["server", "client", "macros"] }
+jsonrpsee-types = "0.24"
+
+# --- HTTP / Async ---
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+hyper = "1"
+
+# --- Serialization ---
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+bytes = "1"
+hex = "0.4"
+
+# --- Observability ---
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+prometheus = "0.13"
+
+# --- CLI / Config ---
+clap = { version = "4", features = ["derive"] }
+toml = "0.8"
+
+# --- Crypto ---
+sha2 = "0.10"
+
+# --- Error handling ---
+thiserror = "2"
+anyhow = "1"

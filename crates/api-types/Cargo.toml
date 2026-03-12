@@ -1,0 +1,12 @@
+[package]
+name = "groundhog-rpc-api-types"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+groundhog-xdr = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+jsonrpsee-types = { workspace = true }
+bytes = { workspace = true }
+hex = { workspace = true }

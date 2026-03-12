@@ -1,0 +1,3 @@
+[registries.groundhog]
+# TODO: replace with actual private registry URL
+index = "https://registry.example.com/groundhog"

@@ -1,0 +1,10 @@
+[package]
+name = "groundhog-rpc-client"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+groundhog-rpc-api-types = { path = "../api-types" }
+jsonrpsee = { workspace = true, features = ["client", "macros"] }
+tokio = { workspace = true }
+serde = { workspace = true }
