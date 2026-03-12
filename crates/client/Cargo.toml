@@ -2,6 +2,7 @@
 name = "groundhog-rpc-client"
 version = "0.1.0"
 edition = "2021"
+license = "Apache-2.0"
 
 [dependencies]
 groundhog-rpc-api-types = { path = "../api-types" }
