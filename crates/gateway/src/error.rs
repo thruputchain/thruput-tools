@@ -1,2 +1,52 @@
-// Gateway error types — maps internal errors to JSON-RPC ErrorObject.
-// See api-types/src/error.rs for error code constants.
+//! Gateway error types — maps internal errors to JSON-RPC ErrorObject.
+//! See api-types/src/error.rs for error code constants.
+
+use groundhog_rpc_api_types::error::codes;
+use jsonrpsee::types::ErrorObjectOwned;
+
+/// Top-level gateway error.
+#[derive(Debug, thiserror::Error)]
+pub enum GatewayError {
+    /// Transaction was malformed (bad XDR, missing fields).
+    #[error("invalid transaction: {0}")]
+    TxInvalid(String),
+
+    /// Transaction was well-formed but rejected by the scheduler.
+    #[error("transaction rejected: {0}")]
+    TxRejected(String),
+
+    /// Transaction hash not found in mempool or indexer.
+    #[error("transaction not found")]
+    TxNotFound,
+
+    /// Block height out of range.
+    #[error("block not found")]
+    BlockNotFound,
+
+    /// Height range too large for event queries.
+    #[error("range too large: {0}")]
+    RangeTooLarge(String),
+
+    /// Backend (hogd indexer or scheduler) unavailable.
+    #[error("backend unavailable: {0}")]
+    BackendUnavailable(String),
+
+    /// Request timed out waiting for backend response.
+    #[error("backend timeout")]
+    BackendTimeout,
+}
+
+impl From<GatewayError> for ErrorObjectOwned {
+    fn from(err: GatewayError) -> Self {
+        let (code, msg) = match &err {
+            GatewayError::TxInvalid(_) => (codes::TX_INVALID, err.to_string()),
+            GatewayError::TxRejected(_) => (codes::TX_REJECTED, err.to_string()),
+            GatewayError::TxNotFound => (codes::TX_NOT_FOUND, err.to_string()),
+            GatewayError::BlockNotFound => (codes::BLOCK_NOT_FOUND, err.to_string()),
+            GatewayError::RangeTooLarge(_) => (codes::RANGE_TOO_LARGE, err.to_string()),
+            GatewayError::BackendUnavailable(_) => (codes::BACKEND_UNAVAILABLE, err.to_string()),
+            GatewayError::BackendTimeout => (codes::BACKEND_TIMEOUT, err.to_string()),
+        };
+        ErrorObjectOwned::owned(code, msg, None::<()>)
+    }
+}

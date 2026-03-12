@@ -10,3 +10,4 @@ serde_json = { workspace = true }
 jsonrpsee-types = { workspace = true }
 bytes = { workspace = true }
 hex = { workspace = true }
+thiserror = { workspace = true }

@@ -52,7 +52,16 @@ runtime), `tower`/`tower-http` (middleware), `clap` (CLI), `prometheus`
 - Method prefix is `groundhog_` (may change — see open questions in
   system-design.md).
 
-## Building
+## Build Commands
+
+```bash
+cargo build                     # Build the full workspace
+cargo test                      # Run all tests
+cargo test -p groundhog-rpc-api-types  # Run tests for a specific crate
+cargo check                     # Check without building
+cargo clippy -- -D warnings     # Lint — must be clean
+cargo fmt --check               # Format check — must pass
+```
 
 Won't compile until the private registry is configured and `groundhog-xdr`
 is available. The `api.rs` trait definition is commented out for this reason.
@@ -62,12 +71,65 @@ To get started:
 2. Uncomment the trait in `gateway/src/api.rs`
 3. `cargo check` to verify deps resolve
 
+## Code Style
+
+### Error Handling
+
+- `thiserror` for all per-crate error enums. **No `anyhow` in this project.**
+- Never `.unwrap()` in library code. `.unwrap()` is fine in tests.
+- `.expect("bug: reason")` only for true invariant violations (use `bug:`
+  prefix for grep-ability).
+- Propagate transient errors with `?`. Add context via error enum variants,
+  not string chaining.
+- Untrusted input (user-supplied data, peer responses) must never trigger
+  a panic. Return `Result` or log and drop instead.
+
+### Observability
+
+- Use `#[tracing::instrument(skip_all, fields(...))]` on public async
+  methods at handler and subsystem boundaries. Simple delegation and
+  test helpers can skip it.
+- Use `tracing::error!` / `tracing::warn!` for diagnostics, never
+  `println!`.
+- No `dbg!` or debug `println!` in committed code.
+
+### Types and APIs
+
+- Derive `Debug` on all public types.
+- Add `Serialize, Deserialize` for types that cross the RPC boundary.
+- Prefer `&str` and `&[u8]` over owned types in function parameters.
+- When two crates have structurally similar types, use `From` impls so the
+  compiler catches field additions instead of silently dropping data.
+- All public items get `///` doc comments.
+
 ## Testing
 
 No tests yet. When adding:
 - Unit tests for type conversions (XDR ↔ API types) in `api-types`
 - Integration tests for handlers using mock x23 backends in `gateway`
 - The `client` crate should have roundtrip tests against a test server
+- Unit tests: inline `#[cfg(test)] mod tests` in the source file.
+- Integration tests: `crates/{name}/tests/*.rs`.
+- Async tests use `#[tokio::test]`.
+- Follow Arrange-Act-Assert pattern.
+
+## Git Workflow
+
+- Use feature branches and PRs — never commit directly to main.
+- `cargo test`, `cargo clippy -- -D warnings`, and `cargo fmt --check`
+  must all pass before committing.
+
+## Before Committing
+
+- [ ] `cargo test` — all tests pass
+- [ ] `cargo build` — no compiler warnings
+- [ ] `cargo clippy -- -D warnings` — clean
+- [ ] `cargo fmt --check` — formatted
+- [ ] No `.unwrap()` added outside of tests
+- [ ] No `.expect()` on untrusted input
+- [ ] New `.expect()` messages use `bug:` prefix
+- [ ] No debug print statements
+- [ ] All new public items have doc comments
 
 ## Context
 

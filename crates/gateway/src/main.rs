@@ -8,6 +8,7 @@ mod middleware;
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
+/// Groundhog JSON-RPC gateway.
 #[derive(Parser)]
 #[command(name = "groundhog-rpc", about = "Groundhog JSON-RPC gateway")]
 struct Cli {
@@ -21,7 +22,7 @@ struct Cli {
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .init();

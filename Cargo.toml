@@ -43,4 +43,6 @@ sha2 = "0.10"
 
 # --- Error handling ---
 thiserror = "2"
-anyhow = "1"
+
+[profile.release]
+overflow-checks = true
