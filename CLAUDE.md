@@ -43,10 +43,24 @@ runtime), `tower`/`tower-http` (middleware), `clap` (CLI), `prometheus`
   XDR types — re-export them.
 - JSON field names use `camelCase` (serde `rename_all`). Enums use
   tagged serialization (`#[serde(tag = "...")]`).
-- The jsonrpsee trait in `gateway/src/api.rs` is the single source of truth
+- Wire format: `0x`-prefixed lowercase hex for all byte values
+  (hashes, addresses, topics, event data). Decimal JSON numbers for
+  heights, counts, and other quantities. See system-design.md
+  "Wire Format Conventions".
+- Byte fields use `HexBytes` (variable-length) or `Topic` (32-byte
+  fixed) from `api-types/src/hex.rs` — never raw `Vec<u8>` in
+  RPC-facing types.
+- `#[non_exhaustive]` on public enums that will gain variants
+  (`TransactionStatus`, `ExecStatus`).
+- The jsonrpsee trait in `gateway/src/api.rs` is the source of truth
   for the RPC surface. `#[rpc(client, server)]` generates both sides.
+  (May move to `api-types` — see system-design.md "Client Crate Trait
+  Location".)
 - Handler implementations go in `gateway/src/handlers/`, one file per
   logical group (submit, receipt, blocks, events).
+- The gateway enforces query bounds (e.g., max height range for
+  `getContractEvents`) since hogd has none. Limits are in
+  `GatewayConfig`.
 - Error codes follow Substrate's per-module range pattern. Constants
   live in `api-types/src/error.rs`.
 - Method prefix is `groundhog_` (may change — see open questions in
@@ -65,11 +79,6 @@ cargo fmt --check               # Format check — must pass
 
 Won't compile until the private registry is configured and `groundhog-xdr`
 is available. The `api.rs` trait definition is commented out for this reason.
-
-To get started:
-1. Set the registry URL in `.cargo/config.toml`
-2. Uncomment the trait in `gateway/src/api.rs`
-3. `cargo check` to verify deps resolve
 
 ## Code Style
 
@@ -104,7 +113,8 @@ To get started:
 
 ## Testing
 
-No tests yet. When adding:
+- `api-types/src/hex.rs` has serde roundtrip tests for `HexBytes`
+  and `Topic`.
 - Unit tests for type conversions (XDR ↔ API types) in `api-types`
 - Integration tests for handlers using mock x23 backends in `gateway`
 - The `client` crate should have roundtrip tests against a test server
