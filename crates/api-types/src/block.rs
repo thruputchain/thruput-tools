@@ -1,6 +1,6 @@
+use groundhog_xdr::types::DbHash;
 use serde::{Deserialize, Serialize};
 
-use crate::hex::HexBytes;
 use crate::{BlockHeader, BlockHeight, SHA256Hash};
 
 /// Current chain tip. Returned by chainTip.
@@ -25,7 +25,7 @@ pub struct BlockInfo {
     pub network_id: u64,
     pub block_height: BlockHeight,
     pub txset_hash: SHA256Hash,
-    pub db_hash: HexBytes,
+    pub db_hash: DbHash,
     pub events_hash: SHA256Hash,
     pub prev_block_hash: SHA256Hash,
 }
@@ -45,7 +45,7 @@ impl From<BlockHeader> for BlockInfo {
             network_id,
             block_height,
             txset_hash,
-            db_hash: HexBytes(db_hash.as_ref().to_vec()),
+            db_hash,
             events_hash,
             prev_block_hash,
         }
