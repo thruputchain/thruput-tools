@@ -29,7 +29,10 @@ impl Serialize for HexBytes {
 impl<'de> Deserialize<'de> for HexBytes {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let s = String::deserialize(deserializer)?;
-        let s = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(&s);
+        let s = s
+            .strip_prefix("0x")
+            .or_else(|| s.strip_prefix("0X"))
+            .unwrap_or(&s);
         hex::decode(s)
             .map(HexBytes)
             .map_err(serde::de::Error::custom)
@@ -75,7 +78,10 @@ impl Serialize for Topic {
 impl<'de> Deserialize<'de> for Topic {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let s = String::deserialize(deserializer)?;
-        let s = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(&s);
+        let s = s
+            .strip_prefix("0x")
+            .or_else(|| s.strip_prefix("0X"))
+            .unwrap_or(&s);
         let bytes = hex::decode(s).map_err(serde::de::Error::custom)?;
         let arr: [u8; 32] = bytes
             .try_into()
