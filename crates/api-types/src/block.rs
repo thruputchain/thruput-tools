@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::transaction::TxHash;
-use crate::{BlockHeight, SHA256Hash};
+use crate::{BlockHeader, BlockHeight, SHA256Hash};
 
 /// Current chain tip. Returned by chainTip.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -11,18 +10,14 @@ pub struct ChainTip {
     pub block_hash: SHA256Hash,
 }
 
-/// Block summary. Returned by getBlockByNumber.
+/// Block data returned by getBlockByNumber.
 ///
-/// Intentionally minimal for Phase 1. Doesn't include full
-/// transaction list (that's a separate query if needed).
+/// Wraps the XDR `BlockHeader` so the RPC layer can add fields
+/// (e.g. tx list, metadata) without modifying the wire type.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BlockInfo {
-    pub height: BlockHeight,
-    pub block_hash: SHA256Hash,
-    pub parent_hash: SHA256Hash,
-    pub tx_count: u32,
-    pub tx_hashes: Vec<TxHash>,
-    // TODO: timestamp? CV bytes? consensus metadata?
-    // Keep minimal until we know what block explorers need.
+    /// Block header from the consensus layer.
+    #[serde(flatten)]
+    pub header: BlockHeader,
 }

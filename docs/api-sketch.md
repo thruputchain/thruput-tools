@@ -145,10 +145,11 @@ pub mod error;
 
 // Re-export XDR types that appear in the public API unchanged.
 pub use groundhog_xdr::types::{
-    ContractAddress,
-    SHA256Hash,
+    BlockHeader,
     BlockHeight,
+    ContractAddress,
     Ed25519PublicKey,
+    SHA256Hash,
 };
 ```
 
@@ -231,7 +232,7 @@ pub enum ExecStatus {
 }
 ```
 
-### Block Info
+### Block Types
 
 ```rust
 // api-types/src/block.rs
@@ -244,16 +245,14 @@ pub struct ChainTip {
     pub block_hash: SHA256Hash,
 }
 
-/// Block summary. Returned by getBlockByNumber.
-/// Intentionally minimal for Phase 1.
+/// Block data returned by getBlockByNumber.
+/// Wraps the XDR BlockHeader so the RPC layer can add fields
+/// without modifying the wire type.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BlockInfo {
-    pub height: BlockHeight,
-    pub block_hash: SHA256Hash,
-    pub parent_hash: SHA256Hash,
-    pub tx_count: u32,
-    pub tx_hashes: Vec<TxHash>,
+    #[serde(flatten)]
+    pub header: BlockHeader,
 }
 ```
 
@@ -439,7 +438,7 @@ members = [
 
 [workspace.dependencies]
 # --- Groundhog (private registry) ---
-groundhog-xdr = { version = "0.3", registry = "groundhog" }
+groundhog-xdr = { version = "0.3.5", registry = "groundhog" }
 xdrs = { version = "0.5", registry = "groundhog" }
 rpc_driver = { version = "0.3", registry = "groundhog" }
 
