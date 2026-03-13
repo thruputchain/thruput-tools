@@ -371,7 +371,7 @@ index = "..."  # private registry URL
 
 # Cargo.toml (workspace root)
 [workspace.dependencies]
-groundhog-xdr = { version = "0.3", registry = "groundhog" }
+groundhog-xdr = { version = "0.3.5", registry = "groundhog" }
 xdrs = { version = "0.5", registry = "groundhog" }
 rpc_driver = { version = "0.3", registry = "groundhog" }
 jsonrpsee = { version = "0.24", features = ["server", "client", "macros"] }

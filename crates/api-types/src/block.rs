@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-use crate::transaction::TxHash;
-use crate::{BlockHeight, SHA256Hash};
+use crate::hex::HexBytes;
+use crate::{BlockHeader, BlockHeight, SHA256Hash};
 
 /// Current chain tip. Returned by chainTip.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -11,18 +11,43 @@ pub struct ChainTip {
     pub block_hash: SHA256Hash,
 }
 
-/// Block summary. Returned by getBlockByNumber.
+/// Block data returned by getBlockByNumber.
 ///
-/// Intentionally minimal for Phase 1. Doesn't include full
-/// transaction list (that's a separate query if needed).
+/// Maps the XDR `BlockHeader` to RPC-friendly serialization
+/// (camelCase fields, `0x`-prefixed hex). Add RPC-specific fields
+/// here without modifying the wire type.
+///
+/// The `From<BlockHeader>` impl uses exhaustive destructuring so
+/// adding a field to `BlockHeader` causes a compile error here.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BlockInfo {
-    pub height: BlockHeight,
-    pub block_hash: SHA256Hash,
-    pub parent_hash: SHA256Hash,
-    pub tx_count: u32,
-    pub tx_hashes: Vec<TxHash>,
-    // TODO: timestamp? CV bytes? consensus metadata?
-    // Keep minimal until we know what block explorers need.
+    pub network_id: u64,
+    pub block_height: BlockHeight,
+    pub txset_hash: SHA256Hash,
+    pub db_hash: HexBytes,
+    pub events_hash: SHA256Hash,
+    pub prev_block_hash: SHA256Hash,
+}
+
+impl From<BlockHeader> for BlockInfo {
+    fn from(
+        BlockHeader {
+            network_id,
+            block_height,
+            txset_hash,
+            db_hash,
+            events_hash,
+            prev_block_hash,
+        }: BlockHeader,
+    ) -> Self {
+        Self {
+            network_id,
+            block_height,
+            txset_hash,
+            db_hash: HexBytes(db_hash.as_ref().to_vec()),
+            events_hash,
+            prev_block_hash,
+        }
+    }
 }

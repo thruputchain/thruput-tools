@@ -8,8 +8,8 @@ members = [
 
 [workspace.dependencies]
 # --- Groundhog (private registry) ---
-groundhog-xdr = { version = "0.3", registry = "groundhog" }
-xdrs = { version = "0.5", registry = "groundhog" }
+groundhog-xdr = { version = "0.3.5", registry = "groundhog", features = ["std", "serde"]}
+xdrs = { version = "0.5", registry = "groundhog" , features = ["std", "alloc"] }
 rpc_driver = { version = "0.3", registry = "groundhog" }
 
 # --- JSON-RPC ---
@@ -20,7 +20,7 @@ jsonrpsee-types = "0.24"
 axum = "0.8"
 tokio = { version = "1", features = ["full"] }
 tower = "0.5"
-tower-http = { version = "0.6", features = ["cors", "trace"] }
+tower-http = { version = "0.6", features = ["cors", "trace", "timeout"] }
 hyper = "1"
 
 # --- Serialization ---

@@ -1,14 +1,10 @@
+pub mod block;
+pub mod error;
+pub mod events;
 pub mod hex;
 pub mod receipt;
-pub mod block;
 pub mod transaction;
-pub mod events;
-pub mod error;
 
 // Re-export XDR types that appear in the public API unchanged.
-pub use groundhog_xdr::types::{
-    ContractAddress,
-    SHA256Hash,
-    BlockHeight,
-    Ed25519PublicKey,
-};
+pub use groundhog_xdr::block::BlockHeader;
+pub use groundhog_xdr::types::{BlockHeight, ContractAddress, Ed25519PublicKey, SHA256Hash};

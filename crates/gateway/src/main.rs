@@ -1,3 +1,6 @@
+// TODO: remove once handlers are wired to the jsonrpsee server
+#![allow(dead_code)]
+
 mod api;
 mod config;
 mod context;

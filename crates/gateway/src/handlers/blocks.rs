@@ -15,9 +15,7 @@ use crate::error::GatewayError;
 /// 1. Query hogd scheduler `get_tip()`
 /// 2. Map to `ChainTip { height, block_hash }`
 #[tracing::instrument(skip_all)]
-pub async fn chain_tip(
-    _ctx: &GatewayContext,
-) -> Result<ChainTip, GatewayError> {
+pub async fn chain_tip(_ctx: &GatewayContext) -> Result<ChainTip, GatewayError> {
     // TODO: query scheduler
     //   let tip = ctx.scheduler.get_tip().await
     //       .map_err(|e| GatewayError::BackendUnavailable(e.to_string()))?;
@@ -27,6 +25,9 @@ pub async fn chain_tip(
 }
 
 /// Block data at a given height.
+///
+/// Returns a `BlockInfo` wrapping the XDR `BlockHeader` (available
+/// since protocol-rs 0.3.5).
 ///
 /// **Data source is an open question.** Options:
 /// - (A) New x23 query endpoint on chuckd-rs wrapping
