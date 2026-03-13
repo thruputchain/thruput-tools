@@ -23,6 +23,7 @@ use crate::config::GatewayConfig;
 /// 1. **CORS** — permissive for dev, restrictive for prod
 /// 2. **Tracing** — request/response spans for observability
 /// 3. **Timeout** — per-request timeout from config
+#[allow(clippy::type_complexity)]
 pub fn middleware_stack(
     config: &GatewayConfig,
 ) -> tower::ServiceBuilder<
