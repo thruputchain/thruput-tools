@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::hex::HexBytes;
 use crate::{BlockHeader, BlockHeight, SHA256Hash};
 
 /// Current chain tip. Returned by chainTip.
@@ -12,12 +13,41 @@ pub struct ChainTip {
 
 /// Block data returned by getBlockByNumber.
 ///
-/// Wraps the XDR `BlockHeader` so the RPC layer can add fields
-/// (e.g. tx list, metadata) without modifying the wire type.
+/// Maps the XDR `BlockHeader` to RPC-friendly serialization
+/// (camelCase fields, `0x`-prefixed hex). Add RPC-specific fields
+/// here without modifying the wire type.
+///
+/// The `From<BlockHeader>` impl uses exhaustive destructuring so
+/// adding a field to `BlockHeader` causes a compile error here.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BlockInfo {
-    /// Block header from the consensus layer.
-    #[serde(flatten)]
-    pub header: BlockHeader,
+    pub network_id: u64,
+    pub block_height: BlockHeight,
+    pub txset_hash: SHA256Hash,
+    pub db_hash: HexBytes,
+    pub events_hash: SHA256Hash,
+    pub prev_block_hash: SHA256Hash,
+}
+
+impl From<BlockHeader> for BlockInfo {
+    fn from(
+        BlockHeader {
+            network_id,
+            block_height,
+            txset_hash,
+            db_hash,
+            events_hash,
+            prev_block_hash,
+        }: BlockHeader,
+    ) -> Self {
+        Self {
+            network_id,
+            block_height,
+            txset_hash,
+            db_hash: HexBytes(db_hash.as_ref().to_vec()),
+            events_hash,
+            prev_block_hash,
+        }
+    }
 }

@@ -10,6 +10,7 @@
 
 use std::time::Duration;
 
+use axum::http::StatusCode;
 use tower::ServiceBuilder;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
@@ -28,7 +29,11 @@ pub fn middleware_stack(
     tower::layer::util::Stack<
         tower_http::timeout::TimeoutLayer,
         tower::layer::util::Stack<
-            TraceLayer,
+            TraceLayer<
+                tower_http::classify::SharedClassifier<
+                    tower_http::classify::ServerErrorsAsFailures,
+                >,
+            >,
             tower::layer::util::Stack<CorsLayer, tower::layer::util::Identity>,
         >,
     >,
@@ -36,7 +41,8 @@ pub fn middleware_stack(
     ServiceBuilder::new()
         .layer(cors_layer())
         .layer(TraceLayer::new_for_http())
-        .layer(tower_http::timeout::TimeoutLayer::new(
+        .layer(tower_http::timeout::TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
             Duration::from_millis(config.request_timeout_ms),
         ))
 }

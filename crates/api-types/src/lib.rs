@@ -6,6 +6,5 @@ pub mod receipt;
 pub mod transaction;
 
 // Re-export XDR types that appear in the public API unchanged.
-pub use groundhog_xdr::types::{
-    BlockHeader, BlockHeight, ContractAddress, Ed25519PublicKey, SHA256Hash,
-};
+pub use groundhog_xdr::block::BlockHeader;
+pub use groundhog_xdr::types::{BlockHeight, ContractAddress, Ed25519PublicKey, SHA256Hash};

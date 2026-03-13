@@ -1,3 +1,2 @@
 [registries.groundhog]
-# TODO: replace with actual private registry URL
-index = "https://registry.example.com/groundhog"
+index = "sparse+https://groundhog.dev/crates/api/v1/crates/"
