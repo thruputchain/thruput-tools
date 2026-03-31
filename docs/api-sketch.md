@@ -176,7 +176,7 @@ pub struct Topic(pub [u8; 32]);
 ```rust
 // api-types/src/transaction.rs
 
-/// Canonical transaction hash: sha256(xdr_serialize(signed_tx.tx)).
+/// Canonical transaction hash: sha256(xdrs::txs::encode(signed_tx.tx)).
 /// Covers the inner Transaction body (not signatures), matching
 /// the scheduler's lookup key and the indexer's primary key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -323,14 +323,17 @@ pub mod codes {
 pub struct GatewayContext {
     /// x23 RPC client to hogd scheduler.
     /// Used for: submit_unvetted, get_tip, lookup_transactions, size.
-    pub scheduler: Arc<SchedulerClient>,
+    pub scheduler: Arc<groundhog_scheduler::SchedulerCoord_SchedulerCoord1_Client>,
 
     /// x23 RPC client to hogd indexer.
     /// Used for: get_transaction_info, get_contract_events.
     pub indexer: Arc<IndexerClient>,
 
     /// x23 RPC client to coordinator storage (optional).
-    /// Used for: block/CV queries (pending question #1).
+    /// Used for: block/CV queries and any future chuckd-backed submit path.
+    ///
+    /// Note: protocol-rs currently provides a generated scheduler client, but
+    /// not an equivalent generated x23 unvetted-submit path into chuckd.
     pub coordinator: Option<Arc<CoordinatorClient>>,
 
     /// Prometheus metrics registry.
@@ -503,7 +506,7 @@ thiserror = "2"
   The full mapping needs your and Geoff's input on which variants
   are user-visible vs internal.
 
-- `TxHash` is `sha256(xdr_serialize(signed_tx.tx))` — the inner
+- `TxHash` is `sha256(xdrs::txs::encode(signed_tx.tx))` — the inner
   `Transaction` body, not the full `SignedTransaction`. This matches
   the scheduler's canonical key and the indexer's primary key.
   The hash computation should live in `api-types` (or a utility

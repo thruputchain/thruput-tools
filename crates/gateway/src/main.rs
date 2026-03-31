@@ -51,8 +51,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!(
         listen = %config.listen_address,
+        submission_backend = ?config.submission_backend,
         scheduler = %config.scheduler_address,
         indexer = %config.indexer_address,
+        coordinator = ?config.coordinator_address,
         "loading configuration",
     );
 
@@ -60,7 +62,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ctx = GatewayContext::new(config)?;
 
     // --- Server ---
-    // TODO: build jsonrpsee server once private registry is configured.
+    // TODO: finish wiring the jsonrpsee server once the scaffolded backend
+    // contracts in this repo solidify.
     //
     // Startup sequence:
     //
@@ -83,7 +86,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // handle.stopped().await;
 
     tracing::info!("groundhog-rpc gateway starting");
-    tracing::warn!("server not yet wired — blocked on private registry deps");
+    tracing::warn!("server scaffold only — backend wiring intentionally incomplete");
 
     Ok(())
 }
