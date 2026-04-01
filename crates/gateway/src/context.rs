@@ -1,19 +1,22 @@
 use std::sync::Arc;
 
-use crate::config::GatewayConfig;
+use crate::config::{GatewayConfig, SubmissionBackend};
 
 /// Shared state injected into every handler.
 ///
 /// All backend connections are behind `Arc` for cheap cloning into
 /// spawned handler tasks.
 ///
-/// Backend client fields are commented out until `rpc_driver` types
-/// are available from the private registry.
+/// This module is intentionally scaffold-oriented while the gateway shape and
+/// backend contracts are being worked out.
 pub struct GatewayContext {
     /// x23 RPC client to hogd scheduler.
     /// Used for: `submit_unvetted`, `get_tip`, `lookup_transactions`, `size`.
-    // TODO: uncomment when rpc_driver types available
-    // pub scheduler: Arc<SchedulerClient>,
+    ///
+    /// Even when tx submission is routed through chuckd, read paths still use
+    /// the scheduler directly.
+    // TODO: wire the generated protocol-rs client:
+    // pub scheduler: Arc<groundhog_scheduler::SchedulerCoord_SchedulerCoord1_Client>,
 
     /// x23 RPC client to hogd indexer.
     /// Used for: `get_transaction_info`, `get_contract_events`.
@@ -21,9 +24,10 @@ pub struct GatewayContext {
     // pub indexer: Arc<IndexerClient>,
 
     /// x23 RPC client to coordinator storage (optional).
-    /// Used for: block/CV queries — pending data source decision
-    /// (see `docs/system-design.md` question #1).
-    // TODO: uncomment when rpc_driver types available + block data source decided
+    /// Used for: block/CV queries and optional tx submission relay path.
+    // TODO: define the concrete chuckd submit/query client contract. protocol-rs
+    // currently gives us a generated scheduler client, but not an equivalent
+    // x23 unvetted-submit path into chuckd.
     // pub coordinator: Option<Arc<CoordinatorClient>>,
 
     /// Prometheus metrics for the gateway.
@@ -39,15 +43,20 @@ impl GatewayContext {
     ///
     /// Once x23 clients are available, this will establish connections
     /// to scheduler and indexer backends and fail if required backends
-    /// are unreachable.
+    /// for the selected submission topology are unreachable.
     pub fn new(config: GatewayConfig) -> Result<Self, Box<dyn std::error::Error>> {
         // TODO: create x23 RPC clients from config addresses
-        // let scheduler = SchedulerClient::connect(&config.scheduler_address).await?;
+        // let scheduler =
+        //     groundhog_scheduler::SchedulerCoord_SchedulerCoord1_Client::new(...);
         // let indexer = IndexerClient::connect(&config.indexer_address).await?;
         // let coordinator = match &config.coordinator_address {
         //     Some(addr) => Some(CoordinatorClient::connect(addr).await?),
         //     None => None,
         // };
+        //
+        // TODO: if config.submission_backend == SubmissionBackend::ChuckdCoordinator,
+        // require coordinator_address to be set.
+        let _ = SubmissionBackend::HogdScheduler;
 
         Ok(Self {
             config: Arc::new(config),

@@ -141,7 +141,7 @@ embedding it in chuckd or chuckd-rs. Reasons:
 | Transaction receipt (events, height, status) | hogd indexer | `get_transaction_info(tx_hash)` | Returns `TxInfo { height, TxEventLog }` |
 | Contract events by address + height range | hogd indexer | `get_contract_events(start, end, addr)` | No built-in limits — gateway must enforce bounds |
 | Chain tip (height, hash) | hogd scheduler | `get_tip()` | |
-| Transaction submission | hogd scheduler (via coordinator) | `submit_unvetted(batch)` | |
+| Transaction submission | configurable: hogd scheduler or chuckd coordinator | `submit_unvetted(batch)` | Gateway config selects the private-network ingress path |
 | Transaction lookup (pending) | hogd scheduler | `lookup_transactions(hashes)` | Returns `Option<SignedTransaction>` per hash |
 | Pending tx count | hogd scheduler | `size()` | Atomic counter, includes runqueue + stranded |
 | Block/CV data by height or hash | chuckd coordinator | **TBD** — see question #1 | `DiskStorage` exists but not exposed for queries |
@@ -160,6 +160,115 @@ Most query paths already exist. Gaps:
   but is stubbed (`IgnoreNotify`). Phase 2 needs this wired to a
   broadcast channel that the gateway can subscribe to.
   **[Question #4 above]**
+
+- **A concrete Rust surface for a chuckd submit backend**: `protocol-rs`
+  now provides generated Rust/XDR support for the direct scheduler path
+  (`groundhog-xdr`, `groundhog_scheduler`), but it does not yet provide an
+  equivalent generated x23 "submit unvetted to chuckd" surface. If we keep a
+  configurable `chuckd_coordinator` submission backend, we still need to define
+  its concrete transport contract.
+
+---
+
+## Transaction Submission Backend
+
+The gateway should support two private-network submission targets:
+
+- **`hogd_scheduler`**: `groundhog_sendRawTransaction` forwards directly to
+  hogd's `submit_unvetted`.
+- **`chuckd_coordinator`**: `groundhog_sendRawTransaction` forwards to
+  chuckd, which relays the transaction to hogd.
+
+This should be a deployment-time config choice, not a baked-in protocol
+decision. The gateway still uses hogd scheduler/indexer directly for the
+read paths; only tx ingress is switchable.
+
+### Why both exist
+
+- **Direct to hogd** keeps the public ingress as close as possible to the
+  authoritative mempool admission point, removes one hop/queue, and
+  now has a concrete generated Rust client path via `protocol-rs`.
+- **Via chuckd** can simplify private-network topology and ACLs because
+  hogd only needs to trust a single internal caller.
+
+### What does not change
+
+Routing through chuckd does **not** materially change the proposer-local
+fairness posture by itself. If chuckd is only a relay, the pressure point
+simply moves from `gateway -> hogd` to `gateway -> chuckd -> hogd`.
+Whichever component first accepts internet-originated transactions still
+owns rate limiting, dedupe, backpressure, overload shedding, and any
+future QoS policy.
+
+### Client-facing submit semantics
+
+`groundhog_sendRawTransaction` should preserve the same external
+contract in both modes:
+
+- success means the transaction was accepted by the authoritative
+  downstream mempool path
+- failure means the transaction was rejected by that path
+
+If the gateway routes through chuckd, it should not silently degrade to
+"accepted by a relay queue." Otherwise the topology choice leaks into
+API semantics and makes downstream admission behavior harder to reason
+about.
+
+### V1 posture
+
+For testnet v1, the goal is not to solve final-form proposer-ingress economics.
+The goal is to establish the correct boundary:
+
+- dedicated public RPC gateway
+- private-network hop to validator components
+- one explicit admission layer in the gateway
+- a submission path that preserves mempool-acceptance semantics
+
+The v1 policy can stay intentionally simple:
+
+- deterministic dedupe
+- basic per-IP / per-key rate limits
+- bounded queues
+- overload shedding
+- metrics
+
+That is enough to be architecturally sound for testnet while leaving room for
+later QoS or quota systems.
+
+---
+
+## Threat Model: Proposer-Local Ingress Races
+
+The gateway is not just a convenience layer. It is the primary public
+defense boundary for Groundhog's local-producer race.
+
+Groundhog validators do **not** each rerun a concurrent proposal race and
+independently decide which conflicting `NNInt` reservation wins. The
+proposer runs proposal scheduling, packages the winning tx set plus any
+required nondeterministic metadata, and validators replay that exact
+proposal during validation.
+
+That means:
+
+- the system is not exposed to consensus divergence from every validator
+  making a different local race decision
+- the remaining game is concentrated at proposer-local ingress and
+  proposal execution
+- the public gateway layer is therefore the natural place for anti-spam
+  and fairness controls
+
+The practical risk is not "all nodes fork because threads raced
+differently." The practical risk is that searchers or abusive clients try
+to win contested local reservations by dominating the proposer's public
+ingress path.
+
+This is why gateway design should be framed as an admission-control and
+defense problem, not only as a throughput or topology problem.
+
+See also [Transaction Ingress and Proposer-Local Races](tx-ingress-and-proposer-race.md)
+for the code-verified version of this threat model, and
+[Roadmap](roadmap.md) for the staged plan from thin testnet gateway to more
+advanced ingress policy.
 
 ---
 
@@ -399,7 +508,7 @@ transport only (no WebSocket).
 
 | Method | Data Source | Notes |
 |--------|-----------|-------|
-| `groundhog_sendRawTransaction(bytes) → TxHash` | scheduler `submit_unvetted` | |
+| `groundhog_sendRawTransaction(bytes) → TxHash` | configurable submission backend | Preserve mempool-acceptance semantics in both modes |
 | `groundhog_getTransactionReceipt(hash) → Receipt` | indexer `get_transaction_info` | No `storage_delta` in Phase 1 |
 | `groundhog_getTransactionStatus(hash) → Status` | scheduler `find_tx` + indexer | See lookup order above |
 | `groundhog_chainTip() → TipInfo` | scheduler `get_tip` | |
@@ -408,6 +517,10 @@ transport only (no WebSocket).
 | `groundhog_pendingTransactionCount() → u64` | scheduler `size()` | Includes runqueue + stranded |
 
 Plus `rpc.discover` for free from jsonrpsee's OpenRPC generation.
+
+Admission policy for this phase should stay intentionally minimal: basic rate
+limits, dedupe, bounded queues, and overload shedding. Mainnet-grade QoS and
+economic spam controls are later-phase concerns.
 
 ### Phase 2: Subscriptions (WebSocket)
 

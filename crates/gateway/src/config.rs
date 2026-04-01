@@ -1,5 +1,25 @@
 use serde::Deserialize;
 
+/// Backend used for transaction submission.
+///
+/// This only affects `groundhog_sendRawTransaction`. Read paths still use
+/// hogd scheduler/indexer directly.
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SubmissionBackend {
+    /// Gateway forwards signed transactions straight to hogd scheduler.
+    HogdScheduler,
+
+    /// Gateway forwards signed transactions to chuckd, which relays them to hogd.
+    ChuckdCoordinator,
+}
+
+impl Default for SubmissionBackend {
+    fn default() -> Self {
+        Self::HogdScheduler
+    }
+}
+
 /// Gateway configuration, loaded from TOML.
 #[derive(Debug, Deserialize)]
 #[serde(default)]
@@ -13,15 +33,23 @@ pub struct GatewayConfig {
     /// Maximum concurrent in-flight requests.
     pub max_in_flight_requests: u32,
 
+    /// Backend used for `groundhog_sendRawTransaction`.
+    pub submission_backend: SubmissionBackend,
+
     /// x23 RPC address for hogd scheduler.
+    ///
+    /// Required for scheduler-backed submission and for read paths such as
+    /// `chainTip`, `pendingTransactionCount`, and pending tx lookup.
     pub scheduler_address: String,
 
     /// x23 RPC address for hogd indexer.
     pub indexer_address: String,
 
     /// x23 RPC address for coordinator (for block/CV queries).
-    /// Optional — may not be needed if block data comes from indexer.
-    /// See `docs/system-design.md` question #1.
+    ///
+    /// Also used for tx submission when `submission_backend=chuckd_coordinator`.
+    /// Optional if block data comes from indexer and tx submission goes direct
+    /// to hogd scheduler. See `docs/system-design.md`.
     pub coordinator_address: Option<String>,
 
     /// Maximum height range for `getContractEvents` queries.
@@ -36,6 +64,7 @@ impl Default for GatewayConfig {
             listen_address: "0.0.0.0:8545".into(),
             request_timeout_ms: 60_000,
             max_in_flight_requests: 2000,
+            submission_backend: SubmissionBackend::HogdScheduler,
             scheduler_address: "127.0.0.1:9000".into(),
             indexer_address: "127.0.0.1:9001".into(),
             coordinator_address: None,

@@ -2,6 +2,15 @@
 
 Standalone JSON-RPC 2.0 gateway for the [Groundhog](https://groundhog.dev) blockchain. Communicates with the validator stack (hogd indexer, hogd scheduler, chuckd coordinator) exclusively over x23 RPC.
 
+This repo is currently a design/scaffolding workspace for shaping the gateway
+architecture, backend boundaries, and public RPC types. It is not yet intended
+to be treated as a finished compile-first implementation.
+
+`groundhog_sendRawTransaction` is intentionally configurable to submit
+through either `hogd` or `chuckd`. That choice is a deployment/topology
+decision, not a consensus decision; the gateway remains the primary
+public admission-control boundary in either mode.
+
 ## Crates
 
 | Crate | Description |
@@ -24,7 +33,9 @@ groundhog_getContractEvents(addr, from, to)    → Vec<IdentifiedEvent>
 
 ## Building
 
-Requires the private Groundhog registry configured in `.cargo/config.toml`.
+The eventual build uses the private Groundhog registry configured in
+`.cargo/config.toml`, but the repo is still being used primarily as a stubbing
+exercise to settle architecture and types.
 
 ```bash
 cargo build
@@ -37,3 +48,5 @@ cargo fmt --check
 
 - [System Design](docs/system-design.md) — architecture, data flows, open questions
 - [API Sketch](docs/api-sketch.md) — trait definition, types, handler examples
+- [Transaction Ingress and Proposer-Local Races](docs/tx-ingress-and-proposer-race.md) — code-verified threat model framing
+- [Roadmap](docs/roadmap.md) — v1 testnet scope and later ingress evolution

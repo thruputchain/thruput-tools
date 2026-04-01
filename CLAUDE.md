@@ -4,6 +4,10 @@ Standalone JSON-RPC 2.0 gateway for the Groundhog blockchain. Separate
 service — does NOT embed or depend on the coordinator (chuckd/chuckd-rs).
 Communicates with the validator stack exclusively over x23 RPC.
 
+This repository is currently being used to shape the gateway architecture and
+type surface. Prefer preserving clarity of architecture and API contracts over
+forcing the scaffold to compile at every intermediate checkpoint.
+
 ## Architecture
 
 See `docs/system-design.md` for full design and `docs/api-sketch.md`
@@ -18,10 +22,17 @@ Three crates:
   trait as the server. Wraps api-types.
 
 Data flows:
-- **Tx submission** → hogd scheduler or chuckd validator (tbd) (`submit_unvetted`) via x23
+- **Tx submission** → configurable: hogd scheduler or chuckd coordinator (`submit_unvetted`) via x23
 - **Receipts/events** → hogd indexer (`get_transaction_info`, `get_contract_events`) via x23
 - **Chain state** → hogd scheduler (`get_tip`, `find_tx`, `size`) via x23
 - **Block data** → coordinator storage (TBD — open question in system-design.md)
+
+The submit target is a topology choice, not a change in external
+gateway semantics. `groundhog_sendRawTransaction` should only return
+success once the authoritative downstream mempool path accepted the tx.
+Routing through chuckd is useful for private-network topology or ACL
+simplicity, but it does not by itself solve proposer-ingress fairness or
+anti-spam concerns; those still belong at the public gateway boundary.
 
 ## Dependencies
 
@@ -77,8 +88,8 @@ cargo clippy -- -D warnings     # Lint — must be clean
 cargo fmt --check               # Format check — must pass
 ```
 
-Won't compile until the private registry is configured and `groundhog-xdr`
-is available. The `api.rs` trait definition is commented out for this reason.
+The workspace is still scaffold-heavy. Treat these commands as eventual targets,
+not as a requirement that every intermediate design checkpoint already compile.
 
 ## Code Style
 
@@ -153,3 +164,6 @@ is available. The `api.rs` trait definition is commented out for this reason.
 - This repo is Phase 1 of the developer-facing API effort. Phase 2 adds
   WebSocket subscriptions, Phase 3 adds SDK client + CLI, Phase 4 adds
   production hardening (rate limiting, pagination, DenyUnsafe).
+- Submission through chuckd's current wallet stub is not a target architecture
+  for this repo. If a `chuckd` backend remains configurable, it should mean a
+  real private-network transport contract, not reuse of the old wallet path.
