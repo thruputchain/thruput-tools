@@ -25,8 +25,8 @@ pub struct GatewayConfig {
     /// Request timeout in milliseconds.
     pub request_timeout_ms: u64,
 
-    /// Maximum concurrent in-flight requests.
-    pub max_in_flight_requests: u32,
+    /// Maximum simultaneous TCP/WebSocket connections.
+    pub max_connections: u32,
 
     /// Backend used for `groundhog_sendRawTransaction`.
     pub submission_backend: SubmissionBackend,
@@ -58,7 +58,7 @@ impl Default for GatewayConfig {
         Self {
             listen_address: "0.0.0.0:8545".into(),
             request_timeout_ms: 60_000,
-            max_in_flight_requests: 2000,
+            max_connections: 2000,
             submission_backend: SubmissionBackend::HogdScheduler,
             scheduler_address: "127.0.0.1:9000".into(),
             indexer_address: "127.0.0.1:9001".into(),

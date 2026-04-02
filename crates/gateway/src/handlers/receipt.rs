@@ -50,8 +50,8 @@ pub async fn get_transaction_status(
     tx_hash: TxHash,
 ) -> Result<TransactionStatus, GatewayError> {
     // 1. Check scheduler (best-effort).
-    let guard = ctx.scheduler.read().await;
-    if let Some(client) = guard.as_ref() {
+    let maybe_client = ctx.scheduler.read().await.clone();
+    if let Some(client) = maybe_client.as_ref() {
         let hash = SignedTransactionHash::from(tx_hash.0 .0.into_inner());
         let batch: VecM<SignedTransactionHash> = VecM(vec![hash]);
 

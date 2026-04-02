@@ -12,9 +12,11 @@ use crate::error::{self, GatewayError};
 /// Current chain tip: height + block hash.
 #[tracing::instrument(skip_all)]
 pub async fn chain_tip(ctx: &GatewayContext) -> Result<ChainTip, GatewayError> {
-    let guard = ctx.scheduler.read().await;
-    let client = guard
-        .as_ref()
+    let client = ctx
+        .scheduler
+        .read()
+        .await
+        .clone()
         .ok_or_else(|| GatewayError::BackendUnavailable("scheduler not connected".into()))?;
 
     let result = client

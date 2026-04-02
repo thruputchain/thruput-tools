@@ -6,14 +6,28 @@ use tokio::sync::RwLock;
 
 use crate::config::GatewayConfig;
 
+/// Startup errors for the gateway context.
+#[derive(Debug, thiserror::Error)]
+pub enum GatewayStartupError {
+    #[error("invalid scheduler address '{addr}': {source}")]
+    BadSchedulerAddress {
+        addr: String,
+        source: std::net::AddrParseError,
+    },
+
+    #[error("failed to connect to scheduler at {addr}: {source}")]
+    SchedulerConnect {
+        addr: String,
+        source: rpc_driver::RpcError,
+    },
+}
+
 /// Shared state injected into every handler.
 ///
 /// Backend connections are behind `RwLock<Option<...>>` to support
-/// lazy connection and reconnection.
-///
-/// TODO: the read lock is held across `.await` in handlers, which
-/// blocks reconnection (write lock) for the duration of backend RPCs.
-/// Consider cloning `Arc<Client>` out of the lock, or using `ArcSwap`.
+/// lazy connection and reconnection. Handlers clone the client out of
+/// the lock before making RPC calls, so the read guard is not held
+/// across `.await`.
 pub struct GatewayContext {
     /// x23 RPC client to hogd scheduler.
     /// Used for: `submit_unvetted`, `get_tip`, `lookup_transactions`, `size`.
@@ -50,7 +64,7 @@ impl GatewayContext {
     ///
     /// TODO: if config.submission_backend == ChuckdCoordinator,
     /// require coordinator_address to be set.
-    pub async fn new(config: GatewayConfig) -> Result<Self, Box<dyn std::error::Error>> {
+    pub async fn new(config: GatewayConfig) -> Result<Self, GatewayStartupError> {
         let config = Arc::new(config);
 
         // Try to connect to scheduler; log and continue if unreachable.
@@ -78,8 +92,20 @@ impl GatewayContext {
 
 async fn connect_scheduler(
     addr: &str,
-) -> Result<SchedulerCoord_SchedulerCoord1_Client, Box<dyn std::error::Error>> {
-    let socket_addr: std::net::SocketAddr = addr.parse()?;
-    let pool = Arc::new(FixedSerialPool::connect(&socket_addr, 4).await?);
+) -> Result<SchedulerCoord_SchedulerCoord1_Client, GatewayStartupError> {
+    let socket_addr: std::net::SocketAddr =
+        addr.parse()
+            .map_err(|e| GatewayStartupError::BadSchedulerAddress {
+                addr: addr.to_string(),
+                source: e,
+            })?;
+    let pool = Arc::new(
+        FixedSerialPool::connect(&socket_addr, 4)
+            .await
+            .map_err(|e| GatewayStartupError::SchedulerConnect {
+                addr: addr.to_string(),
+                source: e,
+            })?,
+    );
     Ok(SchedulerCoord_SchedulerCoord1_Client::new(pool))
 }
