@@ -120,7 +120,7 @@ dependencies = [
  "serde_urlencoded",
  "sync_wrapper",
  "tokio",
- "tower 0.5.3",
+ "tower",
  "tower-layer",
  "tower-service",
  "tracing",
@@ -423,7 +423,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -561,6 +561,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "getrandom"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "899def5c37c4fd7b2664648c28120ecec138e4d395b459e5ca34f9cce2dd77fd"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "r-efi",
+ "wasip2",
+]
+
+[[package]]
 name = "gloo-net"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -633,10 +645,14 @@ dependencies = [
 name = "groundhog-rpc-gateway"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum",
+ "bytes",
  "clap",
  "groundhog-rpc-api-types",
  "groundhog-xdr",
+ "groundhog_scheduler",
+ "hex",
  "jsonrpsee",
  "prometheus",
  "rpc_driver",
@@ -646,10 +662,12 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "toml",
- "tower 0.5.3",
+ "tower",
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "xdr-common",
+ "xdrs",
 ]
 
 [[package]]
@@ -663,9 +681,9 @@ dependencies = [
 
 [[package]]
 name = "groundhog-xdr"
-version = "0.3.5"
+version = "0.7.2"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "7cd345b3fcf5b383683c9a40b9eda9e09f9ab613ec3cb80e8873f99a2b317a36"
+checksum = "a6ee1ab1256fa4d8246e5f8d77843c4b07d9f0424888ebc03a1293da1c4bb391"
 dependencies = [
  "groundhog-serde_arrays",
  "groundhog-xdr-macros",
@@ -677,9 +695,9 @@ dependencies = [
 
 [[package]]
 name = "groundhog-xdr-macros"
-version = "0.3.5"
+version = "0.7.2"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "6263f48dbe7c3e1b6d5c794eb093797c876b5ff5203d5118104886316765ff48"
+checksum = "a6fd320a68e4460e878ff65d2cb7b993023d14919b1d62cc6fdcda48a56c0787"
 dependencies = [
  "darling 0.20.11",
  "proc-macro2",
@@ -688,6 +706,46 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "syn",
+]
+
+[[package]]
+name = "groundhog_coordinator"
+version = "0.7.2"
+source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
+checksum = "f6472fcc88d2570bd3ac42d998861c129cc28300e5a25057691657b1083cbceb"
+dependencies = [
+ "async-trait",
+ "groundhog-xdr",
+ "groundhog_scp",
+ "rpc_driver",
+ "xdrs",
+]
+
+[[package]]
+name = "groundhog_scheduler"
+version = "0.7.2"
+source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
+checksum = "c8b6b7a3a60d925fe20682f44275ed99b29ef32bfa49c01fd0fe5b54304e9c6c"
+dependencies = [
+ "async-trait",
+ "groundhog-xdr",
+ "groundhog_coordinator",
+ "rpc_driver",
+ "xdr-common",
+ "xdrs",
+]
+
+[[package]]
+name = "groundhog_scp"
+version = "0.7.2"
+source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
+checksum = "7646713e47b52fbea6f7c9f2b06ee56a0ee3d5457ac32f4e7a8bbb53d09b8c6e"
+dependencies = [
+ "async-trait",
+ "groundhog-xdr",
+ "rpc_driver",
+ "xdr-common",
+ "xdrs",
 ]
 
 [[package]]
@@ -1039,9 +1097,9 @@ dependencies = [
 
 [[package]]
 name = "jsonrpsee"
-version = "0.24.10"
+version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e281ae70cc3b98dac15fced3366a880949e65fc66e345ce857a5682d152f3e62"
+checksum = "1fba77a59c4c644fd48732367624d1bcf6f409f9c9a286fbc71d2f1fc0b2ea16"
 dependencies = [
  "jsonrpsee-client-transport",
  "jsonrpsee-core",
@@ -1057,9 +1115,9 @@ dependencies = [
 
 [[package]]
 name = "jsonrpsee-client-transport"
-version = "0.24.10"
+version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cc4280b709ac3bb5e16cf3bad5056a0ec8df55fa89edfe996361219aadc2c7ea"
+checksum = "a2a320a3f1464e4094f780c4d48413acd786ce5627aaaecfac9e9c7431d13ae1"
 dependencies = [
  "base64",
  "futures-channel",
@@ -1072,7 +1130,7 @@ dependencies = [
  "rustls-pki-types",
  "rustls-platform-verifier",
  "soketto",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "tokio",
  "tokio-rustls",
  "tokio-util",
@@ -1082,9 +1140,9 @@ dependencies = [
 
 [[package]]
 name = "jsonrpsee-core"
-version = "0.24.10"
+version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "348ee569eaed52926b5e740aae20863762b16596476e943c9e415a6479021622"
+checksum = "693c93cbb7db25f4108ed121304b671a36002c2db67dff2ee4391a688c738547"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1096,24 +1154,24 @@ dependencies = [
  "jsonrpsee-types",
  "parking_lot",
  "pin-project",
- "rand",
+ "rand 0.9.2",
  "rustc-hash",
  "serde",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
+ "tower",
  "tracing",
  "wasm-bindgen-futures",
 ]
 
 [[package]]
 name = "jsonrpsee-http-client"
-version = "0.24.10"
+version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f50c389d6e6a52eb7c3548a6600c90cf74d9b71cb5912209833f00a5479e9a01"
+checksum = "6962d2bd295f75e97dd328891e58fce166894b974c1f7ce2e7597f02eeceb791"
 dependencies = [
- "async-trait",
  "base64",
  "http-body",
  "hyper",
@@ -1125,18 +1183,17 @@ dependencies = [
  "rustls-platform-verifier",
  "serde",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "tokio",
- "tower 0.4.13",
- "tracing",
+ "tower",
  "url",
 ]
 
 [[package]]
 name = "jsonrpsee-proc-macros"
-version = "0.24.10"
+version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7398cddf5013cca4702862a2692b66c48a3bd6cf6ec681a47453c93d63cf8de5"
+checksum = "2fa4f5daed39f982a1bb9d15449a28347490ad42b212f8eaa2a2a344a0dce9e9"
 dependencies = [
  "heck",
  "proc-macro-crate",
@@ -1147,9 +1204,9 @@ dependencies = [
 
 [[package]]
 name = "jsonrpsee-server"
-version = "0.24.10"
+version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "21429bcdda37dcf2d43b68621b994adede0e28061f816b038b0f18c70c143d51"
+checksum = "d38b0bcf407ac68d241f90e2d46041e6a06988f97fe1721fb80b91c42584fae6"
 dependencies = [
  "futures-util",
  "http",
@@ -1164,47 +1221,49 @@ dependencies = [
  "serde",
  "serde_json",
  "soketto",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
  "tokio-util",
- "tower 0.4.13",
+ "tower",
  "tracing",
 ]
 
 [[package]]
 name = "jsonrpsee-types"
-version = "0.24.10"
+version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0f05e0028e55b15dbd2107163b3c744cd3bb4474f193f95d9708acbf5677e44"
+checksum = "66df7256371c45621b3b7d2fb23aea923d577616b9c0e9c0b950a6ea5c2be0ca"
 dependencies = [
  "http",
  "serde",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "jsonrpsee-wasm-client"
-version = "0.24.10"
+version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e9d745e4f543fc10fc0e2b11aa1f3be506b1e475d412167e7191a65ecd239f1c"
+checksum = "6b67695cbcf4653f39f8f8738925547e0e23fd9fe315bccf951097b9f6a38781"
 dependencies = [
  "jsonrpsee-client-transport",
  "jsonrpsee-core",
  "jsonrpsee-types",
+ "tower",
 ]
 
 [[package]]
 name = "jsonrpsee-ws-client"
-version = "0.24.10"
+version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "78fc744f17e7926d57f478cf9ca6e1ee5d8332bf0514860b1a3cdf1742e614cc"
+checksum = "2da2694c9ff271a9d3ebfe520f6b36820e85133a51be77a3cb549fd615095261"
 dependencies = [
  "http",
  "jsonrpsee-client-transport",
  "jsonrpsee-core",
  "jsonrpsee-types",
+ "tower",
  "url",
 ]
 
@@ -1285,7 +1344,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1455,14 +1514,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "r-efi"
+version = "5.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
+
+[[package]]
 name = "rand"
 version = "0.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "34af8d1a0e25924bc5b7c43c079c942339d8f0a8b57c39049bef581b46327404"
 dependencies = [
  "libc",
- "rand_chacha",
- "rand_core",
+ "rand_chacha 0.3.1",
+ "rand_core 0.6.4",
+]
+
+[[package]]
+name = "rand"
+version = "0.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6db2770f06117d490610c7488547d543617b21bfa07796d7a12f6f1bd53850d1"
+dependencies = [
+ "rand_chacha 0.9.0",
+ "rand_core 0.9.5",
 ]
 
 [[package]]
@@ -1472,7 +1547,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6c10a63a0fa32252be49d21e7709d4d4baf8d231c2dbce1eaa8141b9b127d88"
 dependencies = [
  "ppv-lite86",
- "rand_core",
+ "rand_core 0.6.4",
+]
+
+[[package]]
+name = "rand_chacha"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3022b5f1df60f26e1ffddd6c66e8aa15de382ae63b3a0c1bfc0e4d3e3f325cb"
+dependencies = [
+ "ppv-lite86",
+ "rand_core 0.9.5",
 ]
 
 [[package]]
@@ -1481,7 +1566,16 @@ version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
 dependencies = [
- "getrandom",
+ "getrandom 0.2.17",
+]
+
+[[package]]
+name = "rand_core"
+version = "0.9.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "76afc826de14238e6e8c374ddcc1fa19e374fd8dd986b0d2af0d02377261d83c"
+dependencies = [
+ "getrandom 0.3.4",
 ]
 
 [[package]]
@@ -1538,7 +1632,7 @@ checksum = "a4689e6c2294d81e88dc6261c768b63bc4fcdb852be6d1352498b114f61383b7"
 dependencies = [
  "cc",
  "cfg-if",
- "getrandom",
+ "getrandom 0.2.17",
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
@@ -1552,13 +1646,15 @@ checksum = "afab94fb28594581f62d981211a9a4d53cc8130bbcbbb89a0440d9b8e81a7746"
 
 [[package]]
 name = "rpc_driver"
-version = "0.3.1"
+version = "0.7.3"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "6e167d25e41be63415f7edb2f1692f8e81b97f519f309b3cf2a175ddcae7abb7"
+checksum = "287eb5bcc69f732e95129275a0f8fa4efd89626ad1453bdc26755030640e96b1"
 dependencies = [
  "async-trait",
+ "libc",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
  "xdrs",
 ]
 
@@ -1931,7 +2027,7 @@ dependencies = [
  "http",
  "httparse",
  "log",
- "rand",
+ "rand 0.8.5",
  "sha1",
 ]
 
@@ -2208,21 +2304,6 @@ checksum = "5d99f8c9a7727884afe522e9bd5edbfc91a3312b36a77b5fb8926e4c31a41801"
 
 [[package]]
 name = "tower"
-version = "0.4.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8fa9be0de6cf49e536ce1851f987bd21a43b771b09473c3549a6c853db37c1c"
-dependencies = [
- "futures-core",
- "futures-util",
- "pin-project",
- "pin-project-lite",
- "tower-layer",
- "tower-service",
- "tracing",
-]
-
-[[package]]
-name = "tower"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ebe5ef63511595f1344e2d5cfa636d973292adc0eec1f0ad45fae9f0851ab1d4"
@@ -2420,6 +2501,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ccf3ec651a847eb01de73ccad15eb7d99f80485de043efb2f370cd654f4ea44b"
 
 [[package]]
+name = "wasip2"
+version = "1.0.2+wasi-0.2.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9517f9239f02c069db75e65f174b3da828fe5f5b945c4dd26bd25d89c03ebcf5"
+dependencies = [
+ "wit-bindgen",
+]
+
+[[package]]
 name = "wasm-bindgen"
 version = "0.2.114"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2512,7 +2602,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2741,6 +2831,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "wit-bindgen"
+version = "0.51.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d7249219f66ced02969388cf2bb044a09756a083d0fab1e566056b04d9fbcaa5"
+
+[[package]]
 name = "writeable"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2748,9 +2844,9 @@ checksum = "9edde0db4769d2dc68579893f2306b26c6ecfbe0ef499b013d731b7b9247e0b9"
 
 [[package]]
 name = "xdr-common"
-version = "0.5.0"
+version = "0.5.3"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "5f37325215270fa9b7a3aa00b09d6aa5c9d23e520a89e0f5ebddb07eecb032af"
+checksum = "a66af7d314d7880009fd5117f11d7608f88a5411dfb3602ea1159325f4bfe75a"
 dependencies = [
  "escape-bytes",
  "hex",
@@ -2760,9 +2856,9 @@ dependencies = [
 
 [[package]]
 name = "xdr-derive"
-version = "0.5.0"
+version = "0.5.3"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "2b094c7ca2f5cf454287d2270cf61eb81570f83c4c5a1e11100c61979bee589e"
+checksum = "94defb5dfe3cada1533d7c6d4a21f0f9c88c390a568c0042838f40ce0b04e0fc"
 dependencies = [
  "darling 0.20.11",
  "proc-macro2",
@@ -2772,18 +2868,18 @@ dependencies = [
 
 [[package]]
 name = "xdr-repr"
-version = "0.5.0"
+version = "0.5.3"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "b6bac715ccc7daced76441e4801e79960360cdaf1e1956b37447c455b33e95c8"
+checksum = "d0bf0f712c9c713d0ee91fbb7e9d1bc98dff37ec25b279dbe3c8e5f4e260cab1"
 dependencies = [
  "xdr-common",
 ]
 
 [[package]]
 name = "xdrs"
-version = "0.5.0"
+version = "0.5.3"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "d84dbebd0fbc1229f3daef973bdc0bafca67fe8f7ed9597b6ec53cbc0028748f"
+checksum = "d0202de759a0e8446b6b74f5fbb50ea2e96f29790772a42956aaa8077e4a4cb5"
 dependencies = [
  "thiserror 2.0.18",
  "xdr-common",

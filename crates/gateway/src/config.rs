@@ -4,20 +4,15 @@ use serde::Deserialize;
 ///
 /// This only affects `groundhog_sendRawTransaction`. Read paths still use
 /// hogd scheduler/indexer directly.
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SubmissionBackend {
     /// Gateway forwards signed transactions straight to hogd scheduler.
+    #[default]
     HogdScheduler,
 
     /// Gateway forwards signed transactions to chuckd, which relays them to hogd.
     ChuckdCoordinator,
-}
-
-impl Default for SubmissionBackend {
-    fn default() -> Self {
-        Self::HogdScheduler
-    }
 }
 
 /// Gateway configuration, loaded from TOML.

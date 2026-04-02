@@ -34,6 +34,15 @@ pub enum GatewayError {
     /// Request timed out waiting for backend response.
     #[error("backend timeout")]
     BackendTimeout,
+
+    /// Method exists but is not yet implemented in this gateway version.
+    #[error("not implemented: {0}")]
+    NotImplemented(String),
+}
+
+/// Return a "method not implemented" JSON-RPC error.
+pub fn not_implemented(method: &str) -> GatewayError {
+    GatewayError::NotImplemented(method.to_string())
 }
 
 impl From<GatewayError> for ErrorObjectOwned {
@@ -46,6 +55,7 @@ impl From<GatewayError> for ErrorObjectOwned {
             GatewayError::RangeTooLarge(_) => (codes::RANGE_TOO_LARGE, err.to_string()),
             GatewayError::BackendUnavailable(_) => (codes::BACKEND_UNAVAILABLE, err.to_string()),
             GatewayError::BackendTimeout => (codes::BACKEND_TIMEOUT, err.to_string()),
+            GatewayError::NotImplemented(_) => (codes::NOT_IMPLEMENTED, err.to_string()),
         };
         ErrorObjectOwned::owned(code, msg, None::<()>)
     }

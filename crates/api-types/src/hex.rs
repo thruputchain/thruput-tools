@@ -7,7 +7,116 @@
 //! See `docs/system-design.md` "Wire Format Conventions" for the full
 //! serialization table.
 
+use std::fmt;
+use std::ops::{Deref, DerefMut};
+
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+// ---------------------------------------------------------------------------
+// Hex0x<T> — generic 0x-prefixed hex wrapper for fixed-size XDR byte types
+// ---------------------------------------------------------------------------
+
+/// Wraps an XDR byte type (e.g., `SHA256Hash`, `ContractAddress`) and
+/// serializes it as a `"0x..."` lowercase hex string.
+///
+/// The inner type must implement `AsRef<[u8]>` (for serialization) and
+/// `From<[u8; N]>` (for deserialization). This is true for all
+/// `groundhog-xdr` fixed-size byte types.
+///
+/// ```json
+/// "0xa1b2c3d4e5f6..."
+/// ```
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Hex0x<T>(pub T);
+
+impl<T: AsRef<[u8]>> Serialize for Hex0x<T> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let hex_str = format!("0x{}", hex::encode(self.0.as_ref()));
+        serializer.serialize_str(&hex_str)
+    }
+}
+
+impl<'de, T> Deserialize<'de> for Hex0x<T>
+where
+    T: AsRef<[u8]> + TryFromSlice,
+{
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        let s = s
+            .strip_prefix("0x")
+            .or_else(|| s.strip_prefix("0X"))
+            .unwrap_or(&s);
+        let bytes = hex::decode(s).map_err(serde::de::Error::custom)?;
+        let inner = T::try_from_slice(&bytes).map_err(serde::de::Error::custom)?;
+        Ok(Hex0x(inner))
+    }
+}
+
+/// Trait for constructing a fixed-size XDR type from a byte slice.
+pub trait TryFromSlice: Sized {
+    fn try_from_slice(slice: &[u8]) -> Result<Self, String>;
+}
+
+/// Implement `TryFromSlice` for a concrete XDR type with a known byte size.
+macro_rules! impl_try_from_slice_for {
+    ($ty:ty, $n:expr) => {
+        impl TryFromSlice for $ty {
+            fn try_from_slice(slice: &[u8]) -> Result<Self, String> {
+                let arr: [u8; $n] = slice.try_into().map_err(|_| {
+                    format!(
+                        "invalid length {}, expected {} bytes ({} hex characters)",
+                        slice.len(),
+                        $n,
+                        $n * 2
+                    )
+                })?;
+                Ok(<$ty>::from(arr))
+            }
+        }
+    };
+}
+
+impl_try_from_slice_for!(groundhog_xdr::types::SHA256Hash, 32);
+impl_try_from_slice_for!(groundhog_xdr::types::ContractAddress, 32);
+impl_try_from_slice_for!(groundhog_xdr::types::Ed25519PublicKey, 32);
+impl_try_from_slice_for!(groundhog_xdr::types::DbHash, 2048);
+
+// BlockHash wraps SHA256Hash, so deserialize as SHA256Hash then convert.
+impl TryFromSlice for groundhog_xdr::types::BlockHash {
+    fn try_from_slice(slice: &[u8]) -> Result<Self, String> {
+        let hash = groundhog_xdr::types::SHA256Hash::try_from_slice(slice)?;
+        Ok(groundhog_xdr::types::BlockHash::from(hash))
+    }
+}
+
+impl<T: fmt::Debug> fmt::Debug for Hex0x<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl<T> Deref for Hex0x<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
+
+impl<T> DerefMut for Hex0x<T> {
+    fn deref_mut(&mut self) -> &mut T {
+        &mut self.0
+    }
+}
+
+impl<T> From<T> for Hex0x<T> {
+    fn from(inner: T) -> Self {
+        Hex0x(inner)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Variable-length byte types (unchanged, already 0x-aware)
+// ---------------------------------------------------------------------------
 
 /// Variable-length byte array. Serializes as `"0x..."` hex string.
 ///
@@ -140,6 +249,42 @@ mod tests {
     #[test]
     fn topic_wrong_length_fails() {
         let result: Result<Topic, _> = serde_json::from_str(r#""0xcafe""#);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn hex0x_sha256_roundtrip() {
+        use groundhog_xdr::types::SHA256Hash;
+
+        let mut bytes = [0u8; 32];
+        bytes[0] = 0xab;
+        bytes[31] = 0xcd;
+        let original: Hex0x<SHA256Hash> = Hex0x(SHA256Hash::from(bytes));
+
+        let json = serde_json::to_string(&original).unwrap();
+        assert!(json.starts_with(r#""0xab"#));
+        assert!(json.ends_with(r#"cd""#));
+        assert_eq!(json.len(), 2 + 64 + 2); // quotes + 0x + 64 hex chars
+
+        let decoded: Hex0x<SHA256Hash> = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn hex0x_accepts_no_prefix() {
+        use groundhog_xdr::types::SHA256Hash;
+
+        let hex_str = format!(r#""{}""#, "ab".to_owned() + &"00".repeat(30) + "cd");
+        let decoded: Hex0x<SHA256Hash> = serde_json::from_str(&hex_str).unwrap();
+        assert_eq!(decoded.0.as_ref()[0], 0xab);
+        assert_eq!(decoded.0.as_ref()[31], 0xcd);
+    }
+
+    #[test]
+    fn hex0x_wrong_length_fails() {
+        use groundhog_xdr::types::SHA256Hash;
+
+        let result: Result<Hex0x<SHA256Hash>, _> = serde_json::from_str(r#""0xcafe""#);
         assert!(result.is_err());
     }
 }

@@ -1,6 +1,3 @@
-// TODO: remove once handlers are wired to the jsonrpsee server
-#![allow(dead_code)]
-
 mod api;
 mod config;
 mod context;
@@ -8,9 +5,12 @@ mod error;
 mod handlers;
 mod middleware;
 
+use std::sync::Arc;
+
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
+use crate::api::{GroundhogApiImpl, GroundhogApiServer};
 use crate::config::GatewayConfig;
 use crate::context::GatewayContext;
 
@@ -25,6 +25,10 @@ struct Cli {
     /// Listen address (overrides config file)
     #[arg(long)]
     listen: Option<String>,
+
+    /// Scheduler (mempool) x23 RPC address (overrides config file)
+    #[arg(long)]
+    scheduler: Option<String>,
 }
 
 #[tokio::main]
@@ -48,6 +52,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(listen) = cli.listen {
         config.listen_address = listen;
     }
+    if let Some(scheduler) = cli.scheduler {
+        config.scheduler_address = scheduler;
+    }
 
     tracing::info!(
         listen = %config.listen_address,
@@ -59,34 +66,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // --- Context (backend connections) ---
-    let _ctx = GatewayContext::new(config)?;
+    let ctx = Arc::new(GatewayContext::new(config).await?);
 
     // --- Server ---
-    // TODO: finish wiring the jsonrpsee server once the scaffolded backend
-    // contracts in this repo solidify.
-    //
-    // Startup sequence:
-    //
-    // let middleware = middleware::middleware_stack(&ctx.config);
-    //
-    // let server = jsonrpsee::server::ServerBuilder::default()
-    //     .set_http_middleware(middleware)
-    //     .max_connections(ctx.config.max_in_flight_requests)
-    //     .build(&ctx.config.listen_address)
-    //     .await?;
-    //
-    // let api_impl = api::GroundhogApiImpl::new(ctx);
-    // let handle = server.start(api_impl.into_rpc());
-    //
-    // tracing::info!("groundhog-rpc gateway listening");
-    //
-    // // Graceful shutdown on SIGINT/SIGTERM
-    // tokio::signal::ctrl_c().await?;
-    // handle.stop()?;
-    // handle.stopped().await;
+    let server_cfg = jsonrpsee::server::ServerConfig::builder()
+        .max_connections(ctx.config.max_in_flight_requests)
+        .build();
+    let server = jsonrpsee::server::Server::builder()
+        .set_config(server_cfg)
+        .build(&ctx.config.listen_address)
+        .await?;
 
-    tracing::info!("groundhog-rpc gateway starting");
-    tracing::warn!("server scaffold only — backend wiring intentionally incomplete");
+    let api_impl = GroundhogApiImpl::new(ctx);
+    let handle = server.start(api_impl.into_rpc());
+
+    tracing::info!("groundhog-rpc gateway listening");
+
+    // Graceful shutdown on SIGINT/SIGTERM.
+    tokio::signal::ctrl_c().await?;
+    handle.stop()?;
+    handle.stopped().await;
 
     Ok(())
 }
