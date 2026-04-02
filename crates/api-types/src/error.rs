@@ -26,4 +26,7 @@ pub mod codes {
 
     /// Request timed out waiting for backend response.
     pub const BACKEND_TIMEOUT: i32 = -32051;
+
+    /// Method exists but is not yet implemented in this gateway version.
+    pub const NOT_IMPLEMENTED: i32 = -32052;
 }

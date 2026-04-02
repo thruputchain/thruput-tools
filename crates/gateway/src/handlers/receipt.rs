@@ -1,86 +1,76 @@
 //! `groundhog_getTransactionReceipt` and `groundhog_getTransactionStatus`
 //! handlers.
-//!
-//! Queries hogd indexer (`get_transaction_info`) and scheduler
-//! (`lookup_transactions`) via x23 RPC.
 
 use groundhog_rpc_api_types::{
     receipt::TransactionReceipt,
     transaction::{TransactionStatus, TxHash},
 };
+use groundhog_xdr::transaction::SignedTransactionHash;
+use xdr_common::VecM;
 
 use crate::context::GatewayContext;
-use crate::error::GatewayError;
+use crate::error::{self, GatewayError};
 
 /// Full receipt for a committed transaction.
 ///
-/// Flow:
+/// **Deferred** — requires hogd indexer client (not available in Rust yet).
+///
+/// Implementation plan:
 /// 1. Query hogd indexer `get_transaction_info(tx_hash)`
 /// 2. If not found, return `None`
 /// 3. Parse each `TxEmittedEvent.serialized_event` into topics + data
 ///    (see `docs/system-design.md` "Event Parsing")
 /// 4. Map `ExecResult` → `ExecStatus`
 /// 5. Build `TransactionReceipt`
-#[tracing::instrument(skip_all, fields(?tx_hash))]
+#[tracing::instrument(skip_all)]
 pub async fn get_transaction_receipt(
     _ctx: &GatewayContext,
-    tx_hash: TxHash,
+    _tx_hash: TxHash,
 ) -> Result<Option<TransactionReceipt>, GatewayError> {
-    // TODO: query indexer
-    //   let tx_info = ctx.indexer
-    //       .get_transaction_info(tx_hash.0).await
-    //       .map_err(|e| GatewayError::BackendUnavailable(e.to_string()))?;
-    //   let Some(info) = tx_info else { return Ok(None); };
-    //
-    // TODO: parse events from serialized_event
-    //   let events = info.event_log.events.iter()
-    //       .map(|e| parse_emitted_event(e))
-    //       .collect();
-    //
-    // TODO: map exec result
-    //   let status = map_exec_result(&info.event_log.exec_result);
-
-    let _ = tx_hash;
-    todo!("blocked on x23 indexer client")
+    Err(error::not_implemented("getTransactionReceipt"))
 }
 
 /// Lightweight status check.
 ///
 /// Lookup order:
-/// 1. **Scheduler (mempool)** → if found, return `Pending`
-/// 2. **Indexer** → if found, return `Committed { height, block_hash }`
-/// 3. **Neither** → return `Unknown`
+/// 1. **Scheduler (mempool)** -> if found, return `Pending`
+/// 2. **Indexer** -> if found, return `Committed { height, block_hash }`
+/// 3. **Neither** -> return `Unknown`
 ///
 /// Degraded-mode behavior:
 /// - Scheduler unreachable, indexer up → can return `Committed` or
 ///   `Unknown` (cannot detect `Pending`). Log warning, don't fail.
 /// - Indexer unreachable → return `BackendUnavailable` error.
 ///   The indexer is the authoritative source.
+///
+/// TODO: wire indexer query (step 2) when Rust client is available.
 #[tracing::instrument(skip_all, fields(?tx_hash))]
 pub async fn get_transaction_status(
-    _ctx: &GatewayContext,
+    ctx: &GatewayContext,
     tx_hash: TxHash,
 ) -> Result<TransactionStatus, GatewayError> {
-    // TODO: 1. Check scheduler (best-effort)
-    //   match ctx.scheduler.lookup_transactions(&[tx_hash.0]).await {
-    //       Ok(results) if results[0].is_some() => {
-    //           return Ok(TransactionStatus::Pending);
-    //       }
-    //       Err(e) => {
-    //           tracing::warn!(error = %e, "scheduler unreachable");
-    //       }
-    //       _ => {}
-    //   }
-    //
-    // TODO: 2. Check indexer (authoritative)
-    //   let tx_info = ctx.indexer
-    //       .get_transaction_info(tx_hash.0).await
-    //       .map_err(|e| GatewayError::BackendUnavailable(e.to_string()))?;
-    //   match tx_info {
-    //       Some(info) => Ok(TransactionStatus::Committed { ... }),
-    //       None => Ok(TransactionStatus::Unknown),
-    //   }
+    // 1. Check scheduler (best-effort).
+    let guard = ctx.scheduler.read().await;
+    if let Some(client) = guard.as_ref() {
+        let hash = SignedTransactionHash::from(tx_hash.0 .0.into_inner());
+        let batch: VecM<SignedTransactionHash> = VecM(vec![hash]);
 
-    let _ = tx_hash;
-    todo!("blocked on x23 indexer + scheduler clients")
+        match client.schedcoord_lookup_transactions(&batch).await {
+            Ok(results) => {
+                if results.iter().next().is_some_and(|opt| opt.is_some()) {
+                    return Ok(TransactionStatus::Pending);
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "scheduler unreachable, cannot detect pending txs");
+            }
+        }
+    } else {
+        tracing::warn!("scheduler not connected, cannot detect pending txs");
+    }
+
+    // 2. Indexer check — deferred.
+    // When available: query indexer, return Committed{height, block_hash} or Unknown.
+
+    Ok(TransactionStatus::Unknown)
 }

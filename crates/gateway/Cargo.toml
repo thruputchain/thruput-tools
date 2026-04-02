@@ -11,7 +11,13 @@ path = "src/main.rs"
 [dependencies]
 groundhog-rpc-api-types = { path = "../api-types" }
 groundhog-xdr = { workspace = true }
+groundhog_scheduler = { workspace = true }
 rpc_driver = { workspace = true }
+xdrs = { workspace = true }
+xdr-common = { workspace = true }
+async-trait = { workspace = true }
+bytes = { workspace = true }
+hex = { workspace = true }
 jsonrpsee = { workspace = true }
 axum = { workspace = true }
 tokio = { workspace = true }

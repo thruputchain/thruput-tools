@@ -34,23 +34,9 @@ changes, option B requires hogd changes.
 `groundhog_`, `gh_`, or something else? Low stakes but should be
 decided before clients exist. Current scaffold uses `groundhog_`.
 
-### 3. Byte format for JSON wire protocol
+### ~~3. Byte format for JSON wire protocol~~ — RESOLVED
 
-All byte values (hashes, addresses, event topics, event data) need a
-JSON serialization convention. Recommendation: **`0x`-prefixed lowercase
-hex**, matching the Ethereum/Alchemy convention.
-
-`groundhog-xdr` already serializes `SHA256Hash`, `ContractAddress`,
-`Ed25519PublicKey` as lowercase hex via `serde_arrays::hex`, but
-**without** `0x` prefix. The gateway's `api-types` crate defines
-wrapper types (`HexBytes`, `Topic`) that add the `0x` prefix for
-new fields. The open question is whether to also wrap the XDR
-re-exports (`TxHash`, etc.) to add the prefix consistently, or
-accept bare hex for hashes and `0x`-hex for event data.
-
-Recommendation: `0x` everywhere for consistency. Skip checksums for
-now (can add a display format later like EIP-55 without changing
-wire format).
+See "Resolved" section below.
 
 ### 4. Notify over x23 for Phase 2
 
@@ -75,6 +61,12 @@ stream? [Petar, Geoff]
   `ContractAddress`, `Ed25519PublicKey` as lowercase hex strings via
   `serde_arrays::hex`. No `0x` prefix from the XDR layer.
   (`protocol-rs/groundhog-xdr/src/types.rs:345`)
+- **Byte format (Q3):** `0x`-prefixed lowercase hex for all byte values
+  (hashes, addresses, topics, event data). Decimal integers for heights
+  and counts. Implemented via `Hex0x<T>` wrapper in `api-types/src/hex.rs`
+  — wraps XDR byte types at the API boundary without modifying
+  `groundhog-xdr`. Bare hex (no prefix) is accepted on input for
+  backwards compatibility. (`api-types/src/hex.rs`, `api-types/src/lib.rs`)
 
 ---
 
