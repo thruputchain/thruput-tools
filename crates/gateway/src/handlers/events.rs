@@ -27,7 +27,7 @@ pub async fn get_contract_events(
 ) -> Result<Vec<IdentifiedEvent>, GatewayError> {
     // Validate range.
     if to_height < from_height {
-        return Err(GatewayError::RangeTooLarge(
+        return Err(GatewayError::InvalidParam(
             "to_height must be >= from_height".into(),
         ));
     }

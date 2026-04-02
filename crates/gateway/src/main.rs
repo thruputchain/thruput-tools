@@ -70,10 +70,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // --- Server ---
     let server_cfg = jsonrpsee::server::ServerConfig::builder()
-        .max_connections(ctx.config.max_in_flight_requests)
+        .max_connections(ctx.config.max_connections)
         .build();
+    let http_mw = middleware::http_middleware(&ctx.config);
     let server = jsonrpsee::server::Server::builder()
         .set_config(server_cfg)
+        .set_http_middleware(http_mw)
         .build(&ctx.config.listen_address)
         .await?;
 

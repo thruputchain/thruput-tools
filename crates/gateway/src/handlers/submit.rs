@@ -49,22 +49,29 @@ pub async fn send_raw_transaction(
 
     // 3. Forward to scheduler (hogd_scheduler backend).
     // TODO: branch on ctx.config.submission_backend for chuckd_coordinator path.
-    let guard = ctx.scheduler.read().await;
-    let client = guard
-        .as_ref()
+    let client = ctx
+        .scheduler
+        .read()
+        .await
+        .clone()
         .ok_or_else(|| GatewayError::BackendUnavailable("scheduler not connected".into()))?;
 
-    let tx_len = tx_bytes.len() as u32;
+    let tx_len: u32 = tx_bytes
+        .len()
+        .try_into()
+        .map_err(|_| GatewayError::TxInvalid("transaction too large".into()))?;
     let batch = ParallelSignedTransactionBatch::new(ParallelBatch {
         segment_tokens: VecM(vec![1]),
         segment_bytes: VecM(vec![tx_len]),
         xdr: BytesM(tx_bytes.to_vec()),
     });
 
+    // submit_unvetted returns () on success; any RpcError is a transport or
+    // protocol failure, not an application-level rejection of the transaction.
     client
         .schedulercoord_submit_unvetted(&batch)
         .await
-        .map_err(|e| GatewayError::TxRejected(e.to_string()))?;
+        .map_err(|e| GatewayError::BackendUnavailable(format!("scheduler: {e}")))?;
 
     Ok(tx_hash)
 }

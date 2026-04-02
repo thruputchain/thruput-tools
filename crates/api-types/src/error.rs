@@ -6,6 +6,9 @@
 /// -32010 to -32019: Query errors
 /// -32020 to -32029: Subscription errors (Phase 2)
 pub mod codes {
+    /// Standard JSON-RPC: invalid method parameter(s).
+    pub const INVALID_PARAMS: i32 = -32602;
+
     /// Transaction was malformed (bad XDR, missing fields).
     pub const TX_INVALID: i32 = -32000;
 
