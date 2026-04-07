@@ -29,6 +29,10 @@ struct Cli {
     /// Scheduler (mempool) x23 RPC address (overrides config file)
     #[arg(long)]
     scheduler: Option<String>,
+
+    /// Indexer x23 RPC address (overrides config file)
+    #[arg(long)]
+    indexer: Option<String>,
 }
 
 #[tokio::main]
@@ -54,6 +58,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if let Some(scheduler) = cli.scheduler {
         config.scheduler_address = scheduler;
+    }
+    if let Some(indexer) = cli.indexer {
+        config.indexer_address = indexer;
     }
 
     tracing::info!(

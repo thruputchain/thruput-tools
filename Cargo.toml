@@ -4,15 +4,17 @@ members = [
     "crates/api-types",
     "crates/gateway",
     "crates/client",
+    "crates/tx-builder",
 ]
 
 [workspace.dependencies]
 # --- Groundhog (private registry) ---
-groundhog-xdr = { version = "0.7.2", registry = "groundhog", features = ["serde", "xdrs"] }
-groundhog_scheduler = { version = "0.7.2", registry = "groundhog" }
+groundhog-xdr = { version = "0.7.7", registry = "groundhog", features = ["serde", "xdrs"] }
+groundhog_indexer = { version = "0.7.7", registry = "groundhog" }
+groundhog_scheduler = { version = "0.7.7", registry = "groundhog" }
 xdrs = { version = "0.5.3", registry = "groundhog", features = ["alloc"] }
 xdr-common = { version = "0.5.3", registry = "groundhog" }
-rpc_driver = { version = "0.7.3", registry = "groundhog" }
+rpc_driver = { version = "0.8", registry = "groundhog" }
 
 # --- Async ---
 async-trait = "0.1"
@@ -45,6 +47,9 @@ toml = "0.8"
 
 # --- Crypto ---
 sha2 = "0.10"
+
+# --- Crypto ---
+ed25519-compact = { version = "2.2", default-features = false, features = ["opt_size"] }
 
 # --- Error handling ---
 thiserror = "2"

@@ -1,33 +1,65 @@
 //! `groundhog_getTransactionReceipt` and `groundhog_getTransactionStatus`
 //! handlers.
 
+use groundhog_indexer::indexer::TxInfoResult;
+use groundhog_rpc_api_types::hex::Hex0x;
 use groundhog_rpc_api_types::{
-    receipt::TransactionReceipt,
+    receipt::{ExecStatus, TransactionReceipt},
     transaction::{TransactionStatus, TxHash},
 };
 use groundhog_xdr::transaction::SignedTransactionHash;
 use xdr_common::VecM;
 
 use crate::context::GatewayContext;
-use crate::error::{self, GatewayError};
+use crate::error::GatewayError;
+
+use super::parse_event::parse_emitted_event;
 
 /// Full receipt for a committed transaction.
 ///
-/// **Deferred** — requires hogd indexer client (not available in Rust yet).
-///
-/// Implementation plan:
+/// Flow:
 /// 1. Query hogd indexer `get_transaction_info(tx_hash)`
 /// 2. If not found, return `None`
 /// 3. Parse each `TxEmittedEvent.serialized_event` into topics + data
-///    (see `docs/system-design.md` "Event Parsing")
-/// 4. Map `ExecResult` → `ExecStatus`
-/// 5. Build `TransactionReceipt`
-#[tracing::instrument(skip_all)]
+/// 4. Build `TransactionReceipt`
+#[tracing::instrument(skip_all, fields(?tx_hash))]
 pub async fn get_transaction_receipt(
-    _ctx: &GatewayContext,
-    _tx_hash: TxHash,
+    ctx: &GatewayContext,
+    tx_hash: TxHash,
 ) -> Result<Option<TransactionReceipt>, GatewayError> {
-    Err(error::not_implemented("getTransactionReceipt"))
+    let client = ctx
+        .indexer
+        .read()
+        .await
+        .clone()
+        .ok_or_else(|| GatewayError::BackendUnavailable("indexer not connected".into()))?;
+
+    let hash = SignedTransactionHash::from(tx_hash.0 .0.into_inner());
+    let result = client
+        .get_transaction_info(&hash)
+        .await
+        .map_err(|e| GatewayError::BackendUnavailable(format!("indexer: {e}")))?;
+
+    match result {
+        TxInfoResult::TxInfoFound { info } => {
+            let events = info
+                .events
+                .events
+                .iter()
+                .filter_map(parse_emitted_event)
+                .collect();
+
+            Ok(Some(TransactionReceipt {
+                tx_hash,
+                height: info.height,
+                // TODO: map ExecResult → ExecStatus when indexer provides it.
+                // Currently TxInfo only has height + events, no exec result.
+                status: ExecStatus::Ok,
+                events,
+            }))
+        }
+        _ => Ok(None),
+    }
 }
 
 /// Lightweight status check.
@@ -42,16 +74,14 @@ pub async fn get_transaction_receipt(
 ///   `Unknown` (cannot detect `Pending`). Log warning, don't fail.
 /// - Indexer unreachable → return `BackendUnavailable` error.
 ///   The indexer is the authoritative source.
-///
-/// TODO: wire indexer query (step 2) when Rust client is available.
 #[tracing::instrument(skip_all, fields(?tx_hash))]
 pub async fn get_transaction_status(
     ctx: &GatewayContext,
     tx_hash: TxHash,
 ) -> Result<TransactionStatus, GatewayError> {
     // 1. Check scheduler (best-effort).
-    let maybe_client = ctx.scheduler.read().await.clone();
-    if let Some(client) = maybe_client.as_ref() {
+    let maybe_scheduler = ctx.scheduler.read().await.clone();
+    if let Some(client) = maybe_scheduler.as_ref() {
         let hash = SignedTransactionHash::from(tx_hash.0 .0.into_inner());
         let batch: VecM<SignedTransactionHash> = VecM(vec![hash]);
 
@@ -69,8 +99,30 @@ pub async fn get_transaction_status(
         tracing::warn!("scheduler not connected, cannot detect pending txs");
     }
 
-    // 2. Indexer check — deferred.
-    // When available: query indexer, return Committed{height, block_hash} or Unknown.
+    // 2. Check indexer (authoritative).
+    let maybe_indexer = ctx.indexer.read().await.clone();
+    if let Some(client) = maybe_indexer.as_ref() {
+        let hash = SignedTransactionHash::from(tx_hash.0 .0.into_inner());
+        match client.get_transaction_info(&hash).await {
+            Ok(result) => {
+                if let TxInfoResult::TxInfoFound { info } = result {
+                    // TODO: include block_hash when indexer provides it.
+                    // Currently TxInfo only has height, not block hash.
+                    return Ok(TransactionStatus::Committed {
+                        height: info.height,
+                        block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0u8; 32])),
+                    });
+                }
+            }
+            Err(e) => {
+                return Err(GatewayError::BackendUnavailable(format!("indexer: {e}")));
+            }
+        }
+    } else {
+        return Err(GatewayError::BackendUnavailable(
+            "indexer not connected".into(),
+        ));
+    }
 
     Ok(TransactionStatus::Unknown)
 }

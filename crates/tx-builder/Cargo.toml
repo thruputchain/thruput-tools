@@ -1,0 +1,18 @@
+[package]
+name = "groundhog-tx-builder"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+
+[[bin]]
+name = "tx-builder"
+path = "src/main.rs"
+
+[dependencies]
+groundhog-xdr = { workspace = true }
+xdrs = { workspace = true }
+xdr-common = { workspace = true }
+hex = { workspace = true }
+sha2 = { workspace = true }
+clap = { workspace = true }
+ed25519-compact = { workspace = true }
