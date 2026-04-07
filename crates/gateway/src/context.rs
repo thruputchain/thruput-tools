@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use groundhog_indexer::IndexerBlockExplorer_IndexerBlockExplorer1_Client;
 use groundhog_scheduler::sched_coord::SchedulerCoord_SchedulerCoord1_Client;
 use rpc_driver::FixedSerialPool;
 use tokio::sync::RwLock;
@@ -9,14 +10,15 @@ use crate::config::GatewayConfig;
 /// Startup errors for the gateway context.
 #[derive(Debug, thiserror::Error)]
 pub enum GatewayStartupError {
-    #[error("invalid scheduler address '{addr}': {source}")]
-    BadSchedulerAddress {
+    #[error("invalid address '{addr}': {source}")]
+    BadAddress {
         addr: String,
         source: std::net::AddrParseError,
     },
 
-    #[error("failed to connect to scheduler at {addr}: {source}")]
-    SchedulerConnect {
+    #[error("failed to connect to {service} at {addr}: {source}")]
+    ConnectFailed {
+        service: &'static str,
         addr: String,
         source: rpc_driver::RpcError,
     },
@@ -38,8 +40,7 @@ pub struct GatewayContext {
 
     /// x23 RPC client to hogd indexer.
     /// Used for: `get_transaction_info`, `get_contract_events`.
-    /// Not yet available in Rust — blocked on indexer Rust client crate.
-    // TODO: pub indexer: RwLock<Option<IndexerClient>>,
+    pub indexer: RwLock<Option<IndexerBlockExplorer_IndexerBlockExplorer1_Client>>,
 
     /// x23 RPC client to coordinator storage (optional).
     /// Used for: block/CV queries and optional tx submission relay path.
@@ -59,53 +60,83 @@ pub struct GatewayContext {
 impl GatewayContext {
     /// Create a new gateway context from configuration.
     ///
-    /// Attempts to connect to the scheduler. If the scheduler is
-    /// unreachable, starts in degraded mode (scheduler = None).
+    /// Attempts to connect to scheduler and indexer. If either is
+    /// unreachable, starts in degraded mode (that backend = None).
     ///
     /// TODO: if config.submission_backend == ChuckdCoordinator,
     /// require coordinator_address to be set.
     pub async fn new(config: GatewayConfig) -> Result<Self, GatewayStartupError> {
         let config = Arc::new(config);
 
-        // Try to connect to scheduler; log and continue if unreachable.
-        let scheduler = match connect_scheduler(&config.scheduler_address).await {
-            Ok(client) => {
-                tracing::info!(addr = %config.scheduler_address, "connected to scheduler");
-                Some(client)
-            }
-            Err(e) => {
-                tracing::warn!(
-                    addr = %config.scheduler_address,
-                    error = %e,
-                    "scheduler unreachable, starting in degraded mode"
-                );
-                None
-            }
-        };
+        let scheduler = try_connect("scheduler", &config.scheduler_address, 4).await?;
+
+        let indexer = try_connect("indexer", &config.indexer_address, 4).await?;
 
         Ok(Self {
             scheduler: RwLock::new(scheduler),
+            indexer: RwLock::new(indexer),
             config,
         })
     }
 }
 
-async fn connect_scheduler(
+/// Try to connect to a backend.
+///
+/// Fails hard on configuration errors (bad address). Tolerates transient
+/// connection failures (returns None, logs warning).
+async fn try_connect<C: FromPool>(
+    service: &'static str,
     addr: &str,
-) -> Result<SchedulerCoord_SchedulerCoord1_Client, GatewayStartupError> {
+    pool_size: usize,
+) -> Result<Option<C>, GatewayStartupError> {
+    match connect(service, addr, pool_size).await {
+        Ok(client) => {
+            tracing::info!(addr, service, "connected");
+            Ok(Some(client))
+        }
+        Err(e @ GatewayStartupError::BadAddress { .. }) => Err(e),
+        Err(e) => {
+            tracing::warn!(addr, service, error = %e, "unreachable, starting in degraded mode");
+            Ok(None)
+        }
+    }
+}
+
+async fn connect<C: FromPool>(
+    service: &'static str,
+    addr: &str,
+    pool_size: usize,
+) -> Result<C, GatewayStartupError> {
     let socket_addr: std::net::SocketAddr =
-        addr.parse()
-            .map_err(|e| GatewayStartupError::BadSchedulerAddress {
-                addr: addr.to_string(),
-                source: e,
-            })?;
+        addr.parse().map_err(|e| GatewayStartupError::BadAddress {
+            addr: addr.to_string(),
+            source: e,
+        })?;
     let pool = Arc::new(
-        FixedSerialPool::connect(&socket_addr, 4)
+        FixedSerialPool::connect(&socket_addr, pool_size)
             .await
-            .map_err(|e| GatewayStartupError::SchedulerConnect {
+            .map_err(|e| GatewayStartupError::ConnectFailed {
+                service,
                 addr: addr.to_string(),
                 source: e,
             })?,
     );
-    Ok(SchedulerCoord_SchedulerCoord1_Client::new(pool))
+    Ok(C::from_pool(pool))
+}
+
+/// Trait to construct an RPC client from a connection pool.
+trait FromPool {
+    fn from_pool(pool: Arc<FixedSerialPool>) -> Self;
+}
+
+impl FromPool for SchedulerCoord_SchedulerCoord1_Client {
+    fn from_pool(pool: Arc<FixedSerialPool>) -> Self {
+        Self::new(pool)
+    }
+}
+
+impl FromPool for IndexerBlockExplorer_IndexerBlockExplorer1_Client {
+    fn from_pool(pool: Arc<FixedSerialPool>) -> Self {
+        Self::new(pool)
+    }
 }
