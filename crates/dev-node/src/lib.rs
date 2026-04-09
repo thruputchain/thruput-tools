@@ -8,6 +8,7 @@ pub mod accounts;
 pub mod backend;
 pub mod error;
 pub mod rpc;
+pub mod wallet;
 pub mod worker;
 
 use groundhog_rpc_api::{GroundhogApiServer, GroundhogDevApiServer};
