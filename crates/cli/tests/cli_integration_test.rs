@@ -404,7 +404,7 @@ fn deploy_json_fails_without_config() {
 }
 
 #[test]
-fn call_json_returns_structured_error() {
+fn call_json_fails_without_config() {
     let output = groundhog()
         .args(["--json", "call", "0x1234", "transfer"])
         .output()
@@ -413,11 +413,11 @@ fn call_json_returns_structured_error() {
     let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(stderr["ok"], false);
     assert_eq!(stderr["command"], "call");
-    assert_eq!(stderr["error"]["code"], "not_implemented");
+    assert_eq!(stderr["error"]["code"], "other");
 }
 
 #[test]
-fn call_returns_not_implemented() {
+fn call_fails_without_config() {
     let output = groundhog()
         .arg("call")
         .arg("0x1234")
@@ -426,7 +426,7 @@ fn call_returns_not_implemented() {
         .unwrap();
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("not yet implemented"));
+    assert!(stderr.contains("rpc_url") || stderr.contains("profile"));
 }
 
 #[test]
