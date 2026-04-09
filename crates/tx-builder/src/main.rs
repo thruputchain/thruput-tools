@@ -10,13 +10,12 @@
 //! Prints to stderr: tx_hash and account address (for use in queries)
 
 use clap::Parser;
-use ed25519_compact::{KeyPair, Seed as EdSeed};
-use groundhog_xdr::auth_claim::*;
+use groundhog_signing::{
+    build_call_transaction, encode_signed_transaction_xdr, sign_transaction, transaction_hash,
+    BuildCallTransaction, LocalSigner, PubkeyAccount, SignTransactionParams, Signer,
+};
 use groundhog_xdr::contract::ContractEntrypointID;
-use groundhog_xdr::transaction::*;
-use groundhog_xdr::types::*;
 use sha2::{Digest, Sha256};
-use xdr_common::{BytesM, VecM};
 
 /// Build a signed test transaction and print hex-encoded XDR to stdout.
 #[derive(Parser)]
@@ -43,105 +42,43 @@ struct Cli {
     gas_limit: u64,
 }
 
-fn pubkey_account_tag() -> SHA256Hash {
-    let bytes: [u8; 32] = Sha256::digest(b"PUBKEY_ACCOUNT_TAG").into();
-    SHA256Hash::from(bytes)
-}
-
-/// Derive a keypair from seed + account name.
-fn derive_keypair(seed: &str, account: &str) -> KeyPair {
+/// Derive a local signer from seed + account name.
+fn derive_signer(seed: &str, account: &str) -> LocalSigner {
     let mut hasher = Sha256::new();
     hasher.update(seed.as_bytes());
     hasher.update(b":");
     hasher.update(account.as_bytes());
     let seed_bytes: [u8; 32] = hasher.finalize().into();
-    let ed_seed = EdSeed::new(seed_bytes);
-    KeyPair::from_seed(ed_seed)
-}
-
-/// Derive the contract address for a pubkey account.
-fn derive_address(pubkey: &Ed25519PublicKey, nonce: u64) -> ContractAddress {
-    let preimage = PubkeyAccountPreimage {
-        pubkey: PublicKey::Ed25519 { ed25519: *pubkey },
-        nonce,
-    };
-    let preimage_bytes = xdrs::txs::encode(&preimage).expect("bug: encode preimage");
-    let mut digest: [u8; 32] = Sha256::digest(&preimage_bytes).into();
-
-    // XOR with the pubkey account tag
-    let tag = pubkey_account_tag();
-    for (d, t) in digest.iter_mut().zip(tag.as_ref().iter()) {
-        *d ^= t;
-    }
-
-    ContractAddress::from(digest)
+    LocalSigner::from_secret_key(seed_bytes)
 }
 
 fn main() {
     let cli = Cli::parse();
 
-    // Derive keypair
-    let kp = derive_keypair(&cli.seed, &cli.account);
-    let pk_bytes: [u8; 32] = kp
-        .pk
-        .as_ref()
-        .try_into()
-        .expect("bug: pubkey must be 32 bytes");
-    let pubkey = Ed25519PublicKey::from(pk_bytes);
-    let address = derive_address(&pubkey, 0);
+    let signer = derive_signer(&cli.seed, &cli.account);
+    let account = PubkeyAccount::new(signer.public_key(), 0);
+    let address = account.address().expect("bug: address should derive");
 
-    // Build the invocation — a no-op call to the account's own address.
-    let invocation = Invocation {
+    let tx = build_call_transaction(BuildCallTransaction {
         invoked_address: address,
         entrypoint: ContractEntrypointID::from([0u8; 8]),
         gas_limit: cli.gas_limit,
-        calldata: BytesM(vec![]),
-    };
-
-    let uniquifier = Uniquifier {
-        block_expiry_height: BlockHeight::from(cli.expiry),
+        calldata: vec![],
+        block_expiry_height: cli.expiry,
         nonce: cli.nonce,
-    };
+        auth_claims: vec![account.auth_claim()]
+            .try_into()
+            .expect("bug: test auth claims are within bounds"),
+    });
 
-    let auth_claim = AuthClaim::kPubkeySignature {
-        pubkey_preimage: PubkeyAccountPreimage {
-            pubkey: PublicKey::Ed25519 { ed25519: pubkey },
-            nonce: 0,
-        },
-    };
-
-    let tx = Transaction {
-        invocation,
-        uniquifier,
-        contracts_to_deploy: VecM(vec![]),
-        auth_claims: VecM(vec![auth_claim]),
-        gas_claims: VecM(vec![]),
-    };
-
-    // Sign the transaction
-    let tx_bytes = xdrs::txs::encode(&tx).expect("bug: encode tx");
-    let sig = kp.sk.sign(&tx_bytes, None);
-    let sig_bytes: [u8; 64] = sig.as_ref().try_into().expect("bug: sig must be 64 bytes");
-
-    let decorated_sig = DecoratedSignature {
-        auth_claim_idx: 0,
-        public_key_id: 0,
-        signature: Signature::Ed25519 {
-            ed25519: Ed25519Signature::from(sig_bytes),
-        },
-    };
-
-    let stx = SignedTransaction {
-        tx,
-        signatures: VecM(vec![decorated_sig]),
-    };
-
-    // Encode and print
-    let stx_bytes = xdrs::txs::encode(&stx).expect("bug: encode signed tx");
+    let tx_hash = transaction_hash(&tx).expect("bug: tx should hash");
+    let signed_tx = sign_transaction(tx, &signer, SignTransactionParams::default())
+        .expect("bug: tx should sign");
+    let stx_bytes =
+        encode_signed_transaction_xdr(&signed_tx).expect("bug: signed tx should encode");
     println!("0x{}", hex::encode(&stx_bytes));
 
     // Print metadata to stderr for the test script
-    let tx_hash: [u8; 32] = Sha256::digest(&tx_bytes).into();
-    eprintln!("tx_hash=0x{}", hex::encode(tx_hash));
+    eprintln!("tx_hash=0x{}", hex::encode(tx_hash.as_ref()));
     eprintln!("address=0x{}", hex::encode(address.as_ref()));
 }

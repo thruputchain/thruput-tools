@@ -4,6 +4,7 @@ members = [
     "crates/api-types",
     "crates/gateway",
     "crates/client",
+    "crates/signing",
     "crates/tx-builder",
 ]
 
@@ -50,6 +51,8 @@ sha2 = "0.10"
 
 # --- Crypto ---
 ed25519-compact = { version = "2.2", default-features = false, features = ["opt_size"] }
+ed25519-dalek = { version = "2", features = ["zeroize"] }
+zeroize = "1"
 
 # --- Error handling ---
 thiserror = "2"
