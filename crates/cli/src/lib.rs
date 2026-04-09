@@ -6,6 +6,7 @@ pub mod call;
 pub mod checks;
 pub mod config;
 pub mod deploy;
+pub mod dev_keys;
 pub mod error;
 pub mod init;
 pub mod keys;

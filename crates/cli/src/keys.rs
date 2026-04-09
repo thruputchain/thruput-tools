@@ -270,6 +270,10 @@ fn load_key_info(name: &str) -> Result<KeyInfo, CliError> {
 /// Private key material is zeroized from the temporary keypair buffer
 /// after construction. Used by deploy and call to sign transactions.
 pub fn load_local_signer(name: &str) -> Result<LocalSigner, CliError> {
+    if crate::dev_keys::is_dev_key(name) {
+        return crate::dev_keys::load_dev_signer(name);
+    }
+
     let contents = fs::read_to_string(key_path(name)?)?;
     let keyfile: KeyFile =
         serde_json::from_str(&contents).map_err(|e| CliError::Other(e.to_string()))?;
