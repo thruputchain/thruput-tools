@@ -8,7 +8,10 @@ fn main() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 
     // Rerun if wallet source changes.
-    println!("cargo:rerun-if-changed={}", wallet_dir.join("src").display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        wallet_dir.join("src").display()
+    );
     println!(
         "cargo:rerun-if-changed={}",
         wallet_dir.join("Cargo.toml").display()
@@ -27,20 +30,18 @@ fn main() {
         .status()
         .expect("failed to run cargo for dev-wallet build");
 
-    if !status.success() {
-        panic!("dev-wallet WASM build failed");
-    }
+    assert!(status.success(), "dev-wallet WASM build failed");
 
     // Copy the WASM output to OUT_DIR so include_bytes! can find it.
-    let wasm_src = wallet_dir.join("target/wasm32-unknown-unknown/release/groundhog_dev_wallet.wasm");
+    let wasm_src =
+        wallet_dir.join("target/wasm32-unknown-unknown/release/groundhog_dev_wallet.wasm");
     let wasm_dst = out_dir.join("dev_wallet.wasm");
 
-    if !wasm_src.exists() {
-        panic!(
-            "dev-wallet WASM not found at {}",
-            wasm_src.display()
-        );
-    }
+    assert!(
+        wasm_src.exists(),
+        "dev-wallet WASM not found at {}",
+        wasm_src.display()
+    );
 
     std::fs::copy(&wasm_src, &wasm_dst).expect("failed to copy dev-wallet WASM");
 

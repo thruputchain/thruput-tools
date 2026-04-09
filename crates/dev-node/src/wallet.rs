@@ -4,5 +4,4 @@
 //! `crates/dev-wallet/` and embedded here as a constant.
 
 /// Dev-wallet WASM bytecode, compiled from `crates/dev-wallet/`.
-pub const DEV_WALLET_WASM: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/dev_wallet.wasm"));
+pub const DEV_WALLET_WASM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/dev_wallet.wasm"));

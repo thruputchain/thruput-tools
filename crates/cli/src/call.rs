@@ -3,12 +3,16 @@ use groundhog_rpc_api_types::transaction::TxHash;
 use groundhog_signing::{
     BuildCallTransaction, SignTransactionParams, Signer, build_call_transaction, sign_transaction,
 };
+use groundhog_xdr::auth_claim::AuthClaim;
 use serde_json::json;
 
 use crate::config::{resolve_default_key, resolve_profile};
 use crate::keys::load_local_signer;
 use crate::result::CommandResult;
 use crate::{CliError, Print};
+
+/// Wallet `do_action` entrypoint ID (from dev-wallet WASM exports).
+const WALLET_DO_ACTION_ENTRYPOINT: [u8; 8] = 0xF4F9_E647_4A30_D2CF_u64.to_be_bytes();
 
 /// Call a method on a deployed contract.
 #[allow(clippy::too_many_lines)]
@@ -52,21 +56,42 @@ pub fn run(
         "Calling {method} on {contract_address_hex} via {rpc_url}..."
     ));
 
-    // Build and sign
+    // Build and sign — invokes the sender's wallet contract with do_action.
     let pubkey = signer.public_key();
     let account = groundhog_signing::PubkeyAccount::new(
         pubkey,
         groundhog_signing::DEFAULT_PUBKEY_ACCOUNT_NONCE,
     );
+    let wallet_address = account
+        .address()
+        .map_err(|e| CliError::Other(e.to_string()))?;
 
-    let auth_claims = vec![account.auth_claim()]
+    // Encode the inner invocation as calldata for the wallet's do_action:
+    // (contract_address, method_entrypoint, gas_limit, raw_calldata)
+    let inner_gas_limit: u64 = 10_000_000;
+    let do_action_calldata = xdrs::txs::encode(&(
+        contract_address,
+        entrypoint,
+        inner_gas_limit,
+        calldata.as_slice(),
+    ))
+    .map_err(|e| CliError::Other(format!("failed to encode do_action calldata: {e}")))?;
+
+    // Auth claim: kInvokedAddressSignature at key slot 0.
+    let auth_claims: groundhog_xdr::auth_claim::AuthClaimData =
+        vec![AuthClaim::kInvokedAddressSignature {
+            invoked_address_signature_id: 0,
+        }]
         .try_into()
         .map_err(|e: xdr_common::Error| CliError::Other(e.to_string()))?;
 
+    let wallet_entrypoint =
+        groundhog_xdr::contract::ContractEntrypointID::from(WALLET_DO_ACTION_ENTRYPOINT);
+
     let tx = build_call_transaction(BuildCallTransaction {
-        invoked_address: contract_address,
-        entrypoint,
-        calldata,
+        invoked_address: wallet_address,
+        entrypoint: wallet_entrypoint,
+        calldata: do_action_calldata,
         gas_limit: 10_000_000,
         block_expiry_height: 1_000_000,
         nonce: nonce_from_timestamp(),

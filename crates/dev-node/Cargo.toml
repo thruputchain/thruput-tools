@@ -13,6 +13,7 @@ groundhog-rpc-api-types = { path = "../api-types" }
 groundhog-signing = { path = "../signing" }
 groundhog-xdr = { workspace = true }
 xdrs = { workspace = true }
+xdr-common = { workspace = true }
 groundhog-native-exec = { workspace = true }
 jsonrpsee = { workspace = true }
 async-trait = { workspace = true }

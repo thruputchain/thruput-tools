@@ -35,28 +35,102 @@ pub struct DevBackend {
 
 impl DevBackend {
     /// Initialize with pre-funded accounts.
+    ///
+    /// Replicates Groundhog's genesis setup:
+    /// 1. Register the dev-wallet WASM contract
+    /// 2. Deploy the wallet at each dev account address and grant storage tokens
+    /// 3. Initialize each wallet with its owner's ed25519 public key
     pub fn new(account_count: usize, storage_tokens: u64) -> Self {
         let env = TestEnvironment::new(None);
         let accounts = accounts::derive_dev_accounts(account_count, storage_tokens);
 
-        // Grant storage tokens to each pre-funded account address.
-        // The pubkey-account auth system handles signature verification
-        // implicitly; no explicit contract deployment needed.
+        // 1. Register the dev-wallet contract (makes WASM available for deployment).
+        let wallet_wasm = crate::wallet::DEV_WALLET_WASM;
+        let wallet_contract = groundhog_xdr::contract::Contract::kWasmi {
+            wasmi_contract: groundhog_xdr::contract::ContractBlob {
+                wasm: xdr_common::BytesM(wallet_wasm.to_vec()),
+            },
+        };
+        let _wallet_hash = env.setup_create_contract(&wallet_contract);
+
+        // 2. Deploy the wallet at each account address and grant storage tokens.
         for account in &accounts {
             let addr = account.address.0;
+            env.setup_create_deployment(&addr, &wallet_contract);
             #[allow(clippy::cast_possible_wrap)]
             env.setup_grant_storage_tokens(&addr, storage_tokens as i64);
         }
 
-        // Advance past the setup block.
+        // Advance past the deployment block so contracts are visible.
         env.advance_block();
+
+        // 3. Initialize each wallet with its owner's ed25519 public key.
+        //    This calls the wallet's `initialize` entrypoint which sets up
+        //    AddressAuthData so the wallet accepts ed25519 signatures.
+        let initialize_entrypoint = groundhog_xdr::contract::ContractEntrypointID::from(
+            0x1984_6D75_0FAD_81D6_u64.to_be_bytes(),
+        );
+
+        for account in &accounts {
+            let addr = account.address.0;
+
+            // Encode the public key as calldata (XDR Ed25519PublicKey).
+            let pubkey_bytes: [u8; 32] = account
+                .public_key
+                .0
+                .clone()
+                .try_into()
+                .expect("bug: dev account public key is not 32 bytes");
+            let pubkey = groundhog_xdr::types::Ed25519PublicKey::from(pubkey_bytes);
+            let calldata =
+                xdrs::txs::encode(&pubkey).expect("bug: failed to XDR-encode public key");
+
+            // Construct a minimal unsigned transaction to call initialize.
+            // Auth is not checked because the wallet has no auth data yet.
+            let stx = SignedTransaction {
+                signatures: xdr_common::VecM(vec![]),
+                tx: groundhog_xdr::transaction::Transaction {
+                    uniquifier: groundhog_xdr::transaction::Uniquifier {
+                        block_expiry_height: groundhog_xdr::types::BlockHeight::from(i64::MAX),
+                        nonce: 0,
+                    },
+                    auth_claims: xdr_common::VecM(vec![]),
+                    gas_claims: xdr_common::VecM(vec![]),
+                    invocation: groundhog_xdr::transaction::Invocation {
+                        invoked_address: addr,
+                        entrypoint: initialize_entrypoint,
+                        gas_limit: u64::MAX,
+                        calldata: xdr_common::BytesM(calldata),
+                    },
+                    contracts_to_deploy: xdr_common::VecM(vec![]),
+                },
+            };
+
+            let mut handler = TransactionHandler::new(env.clone(), &stx);
+            let result = handler.root_invoke();
+            let exec = handler.try_commit_transaction();
+
+            assert!(
+                exec.0 == groundhog_xdr::exec_result::ExecResult::ExecResultOK.0,
+                "bug: wallet initialize failed for account {}: exec={exec:?}, output={:?}",
+                hex::encode(addr.as_ref()),
+                result.output,
+            );
+
+            env.advance_block();
+        }
 
         Self {
             env,
             receipts: HashMap::new(),
             events: Vec::new(),
-            tip_height: 1,
-            block_txs: vec![vec![]], // block 0 is the setup block
+            #[allow(clippy::cast_possible_wrap)]
+            tip_height: 1 + account_count as i64,
+            block_txs: {
+                let mut v = Vec::new();
+                v.resize(2 + account_count, vec![]);
+                v
+            },
             accounts,
             storage_tokens,
         }
@@ -74,7 +148,7 @@ impl DevBackend {
         let hash_bytes: [u8; 32] = Sha256::digest(&tx_xdr).into();
         let tx_hash = TxHash(Hex0x(SHA256Hash::from(hash_bytes)));
 
-        // 3. Verify auth — 0 means success, any other value is an error
+        // 3. Verify auth — 0 means success, any other value is an error.
         let auth_result = self.env.verify_signed_transaction_auth(&signed_tx);
         if auth_result.0 != 0 {
             return Err(DevNodeError::AuthFailed(format!("{auth_result}")));
