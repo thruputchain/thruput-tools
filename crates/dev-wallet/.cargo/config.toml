@@ -1,0 +1,2 @@
+[registries.groundhog]
+index = "sparse+https://groundhog.dev/crates/api/v1/crates/"

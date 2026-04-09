@@ -1,0 +1,25 @@
+[package]
+name = "groundhog-dev-wallet"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Dev-mode wallet contract for the Groundhog local dev node"
+
+# Standalone crate — not part of the workspace (different target).
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["entrypoints"]
+entrypoints = []
+
+[dependencies]
+sdk = { version = "0.9", registry = "groundhog", features = ["alloc"] }
+xdrs = { version = "0.5", registry = "groundhog", features = ["alloc"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = false
