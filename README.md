@@ -1,52 +1,48 @@
-# groundhog-rpc
+# Groundhog Developer Tools
 
-Standalone JSON-RPC 2.0 gateway for the [Groundhog](https://groundhog.dev) blockchain. Communicates with the validator stack (hogd indexer, hogd scheduler, chuckd coordinator) exclusively over x23 RPC.
-
-This repo is currently a design/scaffolding workspace for shaping the gateway
-architecture, backend boundaries, and public RPC types. It is not yet intended
-to be treated as a finished compile-first implementation.
-
-`groundhog_sendRawTransaction` is intentionally configurable to submit
-through either `hogd` or `chuckd`. That choice is a deployment/topology
-decision, not a consensus decision; the gateway remains the primary
-public admission-control boundary in either mode.
+Off-chain developer tooling for the Groundhog smart contract
+platform. Monorepo containing the CLI, RPC gateway, transaction
+signing library, and typed client.
 
 ## Crates
 
 | Crate | Description |
 |-------|-------------|
-| `api-types` | Shared RPC types (receipts, status, block info, events, errors) |
-| `gateway` | jsonrpsee server binary — handlers, middleware, config |
-| `client` | Typed JSON-RPC client generated from the same trait as the server |
+| [`cli`](crates/cli/) | `groundhog` CLI for the contract dev workflow |
+| [`gateway`](crates/gateway/) | JSON-RPC 2.0 gateway server |
+| [`signing`](crates/signing/) | Off-chain transaction signing and construction |
+| [`client`](crates/client/) | Typed JSON-RPC client |
+| [`api-types`](crates/api-types/) | Shared RPC types |
+| [`tx-builder`](crates/tx-builder/) | Thin CLI wrapper for tx construction |
 
-## Phase 1 API (7 methods)
-
-```
-groundhog_sendRawTransaction(bytes)            → TxHash
-groundhog_getTransactionReceipt(hash)          → Option<TransactionReceipt>
-groundhog_getTransactionStatus(hash)           → TransactionStatus
-groundhog_chainTip()                           → ChainTip
-groundhog_getBlockByNumber(height)             → Option<BlockInfo>
-groundhog_pendingTransactionCount()            → u64
-groundhog_getContractEvents(addr, from, to)    → Vec<IdentifiedEvent>
-```
-
-## Building
-
-The eventual build uses the private Groundhog registry configured in
-`.cargo/config.toml`, but the repo is still being used primarily as a stubbing
-exercise to settle architecture and types.
+## Quick Start
 
 ```bash
-cargo build
-cargo test
-cargo clippy -- -D warnings
-cargo fmt --check
+cargo build -p groundhog-cli
+cargo run -p groundhog-cli -- init
+cargo run -p groundhog-cli -- new my-counter
+```
+
+See [`crates/cli/README.md`](crates/cli/README.md) for full CLI
+documentation.
+
+## Development
+
+```bash
+cargo build                             # build all crates
+cargo test --workspace                  # run all tests
+cargo clippy --workspace -- -D warnings # lint
+cargo fmt --check                       # format check
 ```
 
 ## Documentation
 
-- [System Design](docs/system-design.md) — architecture, data flows, open questions
-- [API Sketch](docs/api-sketch.md) — trait definition, types, handler examples
-- [Transaction Ingress and Proposer-Local Races](docs/tx-ingress-and-proposer-race.md) — code-verified threat model framing
-- [Roadmap](docs/roadmap.md) — v1 testnet scope and later ingress evolution
+- [CLI documentation](crates/cli/README.md)
+- [CLI roadmap](docs/cli/roadmap.md)
+- [Gateway system design](docs/gateway/system-design.md)
+- [Gateway API sketch](docs/gateway/api-sketch.md)
+- [Gateway roadmap](docs/gateway/roadmap.md)
+
+## License
+
+Apache-2.0

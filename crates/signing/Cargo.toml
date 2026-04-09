@@ -1,0 +1,24 @@
+[package]
+name = "groundhog-signing"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[features]
+default = ["std"]
+std = []
+
+[lints]
+workspace = true
+
+[dependencies]
+groundhog-xdr = { workspace = true }
+xdrs = { workspace = true }
+xdr-common = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+ed25519-dalek = { workspace = true }
+zeroize = { workspace = true }
+
+[dev-dependencies]
+hex = { workspace = true }

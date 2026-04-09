@@ -34,7 +34,7 @@ pub async fn get_transaction_receipt(
         .clone()
         .ok_or_else(|| GatewayError::BackendUnavailable("indexer not connected".into()))?;
 
-    let hash = SignedTransactionHash::from(tx_hash.0 .0.into_inner());
+    let hash = SignedTransactionHash::from(tx_hash.0.0.into_inner());
     let result = client
         .get_transaction_info(&hash)
         .await
@@ -82,12 +82,12 @@ pub async fn get_transaction_status(
     // 1. Check scheduler (best-effort).
     let maybe_scheduler = ctx.scheduler.read().await.clone();
     if let Some(client) = maybe_scheduler.as_ref() {
-        let hash = SignedTransactionHash::from(tx_hash.0 .0.into_inner());
+        let hash = SignedTransactionHash::from(tx_hash.0.0.into_inner());
         let batch: VecM<SignedTransactionHash> = VecM(vec![hash]);
 
         match client.schedcoord_lookup_transactions(&batch).await {
             Ok(results) => {
-                if results.iter().next().is_some_and(|opt| opt.is_some()) {
+                if results.iter().next().is_some_and(Option::is_some) {
                     return Ok(TransactionStatus::Pending);
                 }
             }
@@ -102,7 +102,7 @@ pub async fn get_transaction_status(
     // 2. Check indexer (authoritative).
     let maybe_indexer = ctx.indexer.read().await.clone();
     if let Some(client) = maybe_indexer.as_ref() {
-        let hash = SignedTransactionHash::from(tx_hash.0 .0.into_inner());
+        let hash = SignedTransactionHash::from(tx_hash.0.0.into_inner());
         match client.get_transaction_info(&hash).await {
             Ok(result) => {
                 if let TxInfoResult::TxInfoFound { info } = result {

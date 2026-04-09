@@ -11,7 +11,7 @@ use crate::{BlockHeight, ContractAddress};
 /// `topic0 (32B) || topic1 (32B) || ... || data (remaining bytes)`.
 /// `num_topics` (0–3) determines the split point. Max total 1024 bytes.
 ///
-/// See `docs/system-design.md` "Event Parsing" for details.
+/// See `docs/gateway/system-design.md` "Event Parsing" for details.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EmittedEvent {

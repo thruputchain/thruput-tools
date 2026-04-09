@@ -1,18 +1,19 @@
 [package]
 name = "groundhog-tx-builder"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 license = "Apache-2.0"
 
 [[bin]]
 name = "tx-builder"
 path = "src/main.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 groundhog-xdr = { workspace = true }
-xdrs = { workspace = true }
-xdr-common = { workspace = true }
+groundhog-signing = { path = "../signing" }
 hex = { workspace = true }
 sha2 = { workspace = true }
 clap = { workspace = true }
-ed25519-compact = { workspace = true }

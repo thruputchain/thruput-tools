@@ -4,7 +4,7 @@
 //! `0x`-prefixed lowercase hex strings, following the Ethereum
 //! convention (e.g., `"0xa1b2c3"`).
 //!
-//! See `docs/system-design.md` "Wire Format Conventions" for the full
+//! See `docs/gateway/system-design.md` "Wire Format Conventions" for the full
 //! serialization table.
 
 use std::fmt;

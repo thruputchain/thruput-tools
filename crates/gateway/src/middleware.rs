@@ -1,7 +1,7 @@
 //! Tower middleware stack: CORS and request timeout.
 //!
 //! Request-level tracing is handled by jsonrpsee's built-in logger
-//! rather than tower-http's TraceLayer, which wraps the response body
+//! rather than tower-http's `TraceLayer`, which wraps the response body
 //! in a type incompatible with jsonrpsee's HTTP body constraints.
 //!
 //! Phase 4 adds:

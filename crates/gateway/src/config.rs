@@ -44,7 +44,7 @@ pub struct GatewayConfig {
     ///
     /// Also used for tx submission when `submission_backend=chuckd_coordinator`.
     /// Optional if block data comes from indexer and tx submission goes direct
-    /// to hogd scheduler. See `docs/system-design.md`.
+    /// to hogd scheduler. See `docs/gateway/system-design.md`.
     pub coordinator_address: Option<String>,
 
     /// Maximum height range for `getContractEvents` queries.

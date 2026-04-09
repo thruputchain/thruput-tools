@@ -1,2 +1,4 @@
-#rust target
-target/
+/target
+.DS_Store
+docs/plans/
+docs/superpowers/

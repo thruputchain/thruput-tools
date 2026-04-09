@@ -1,9 +1,9 @@
 //! `groundhog_chainTip`, `groundhog_getBlockByNumber`, and
 //! `groundhog_pendingTransactionCount` handlers.
 
+use groundhog_rpc_api_types::BlockHeight;
 use groundhog_rpc_api_types::block::{BlockInfo, ChainTip};
 use groundhog_rpc_api_types::hex::Hex0x;
-use groundhog_rpc_api_types::BlockHeight;
 use groundhog_scheduler::sched_coord::SchedulerGetTipResult;
 
 use crate::context::GatewayContext;
@@ -38,7 +38,7 @@ pub async fn chain_tip(ctx: &GatewayContext) -> Result<ChainTip, GatewayError> {
 /// Block data at a given height.
 ///
 /// **Deferred** — data source is an open question.
-/// See `docs/system-design.md` question #1.
+/// See `docs/gateway/system-design.md` question #1.
 #[tracing::instrument(skip_all, fields(height))]
 pub async fn get_block_by_number(
     _ctx: &GatewayContext,

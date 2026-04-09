@@ -4,11 +4,11 @@ use jsonrpsee::core::RpcResult;
 use jsonrpsee::proc_macros::rpc;
 
 use groundhog_rpc_api_types::{
+    BlockHeight, ContractAddress,
     block::{BlockInfo, ChainTip},
     events::IdentifiedEvent,
     receipt::TransactionReceipt,
     transaction::{TransactionStatus, TxHash},
-    BlockHeight, ContractAddress,
 };
 
 use crate::context::GatewayContext;

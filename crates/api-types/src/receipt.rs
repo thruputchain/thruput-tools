@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
+use crate::BlockHeight;
 use crate::events::EmittedEvent;
 use crate::transaction::TxHash;
-use crate::BlockHeight;
 
 /// Full transaction receipt. Returned by `getTransactionReceipt`.
 ///

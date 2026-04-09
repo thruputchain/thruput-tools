@@ -1,4 +1,4 @@
-//! Gateway error types — maps internal errors to JSON-RPC ErrorObject.
+//! Gateway error types — maps internal errors to JSON-RPC `ErrorObject`.
 //! See api-types/src/error.rs for error code constants.
 
 use groundhog_rpc_api_types::error::codes;

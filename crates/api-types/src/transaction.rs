@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{BlockHeight, SHA256Hash};
 
-/// Canonical transaction hash: sha256(xdr_serialize(signed_tx.tx)).
+/// Canonical transaction hash: `sha256(xdr_serialize(signed_tx.tx))`.
 /// Covers the inner Transaction body (not signatures), matching
 /// the scheduler's lookup key and the indexer's primary key.
 ///
@@ -13,7 +13,7 @@ pub struct TxHash(pub SHA256Hash);
 /// Lightweight status — the result of checking mempool then indexer.
 ///
 /// Lookup order: scheduler (Pending) → indexer (Committed) → Unknown.
-/// See `docs/system-design.md` "Transaction Status Lookup Order" for
+/// See `docs/gateway/system-design.md` "Transaction Status Lookup Order" for
 /// degraded-mode behavior when a backend is unavailable.
 ///
 /// New variants may be added in future phases.

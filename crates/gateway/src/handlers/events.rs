@@ -35,6 +35,7 @@ pub async fn get_contract_events(
     }
 
     let span = (*to_height).saturating_sub(*from_height);
+    #[allow(clippy::cast_possible_wrap)]
     if span > ctx.config.max_event_height_range as i64 {
         return Err(GatewayError::RangeTooLarge(format!(
             "height range {} exceeds maximum {}",

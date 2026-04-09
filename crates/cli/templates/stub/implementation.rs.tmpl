@@ -1,0 +1,18 @@
+use sdk::*;
+
+#[allow(dead_code)]
+#[contract_error]
+pub enum Error {
+    NotAuthorized = 1,
+}
+
+#[derive(Debug)]
+#[sdk::storage]
+pub struct Contract {
+}
+
+#[contract(throws = Error)]
+impl Contract {
+    pub fn initialize(&mut self) {
+    }
+}

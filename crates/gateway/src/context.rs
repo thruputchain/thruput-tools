@@ -63,8 +63,8 @@ impl GatewayContext {
     /// Attempts to connect to scheduler and indexer. If either is
     /// unreachable, starts in degraded mode (that backend = None).
     ///
-    /// TODO: if config.submission_backend == ChuckdCoordinator,
-    /// require coordinator_address to be set.
+    /// TODO: if `config.submission_backend` == `ChuckdCoordinator`,
+    /// require `coordinator_address` to be set.
     pub async fn new(config: GatewayConfig) -> Result<Self, GatewayStartupError> {
         let config = Arc::new(config);
 

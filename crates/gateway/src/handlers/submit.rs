@@ -12,13 +12,13 @@
 //! the transaction was accepted by the authoritative downstream mempool path,
 //! not merely queued by an intermediate relay.
 //!
-//! TODO: implement chuckd_coordinator path when chuckd x23 submit surface
+//! TODO: implement `chuckd_coordinator` path when chuckd x23 submit surface
 //! is defined in protocol-rs.
 
 use groundhog_rpc_api_types::hex::Hex0x;
 use groundhog_rpc_api_types::transaction::TxHash;
-use groundhog_scheduler::parallel::ParallelSignedTransactionBatch;
 use groundhog_scheduler::ParallelBatch;
+use groundhog_scheduler::parallel::ParallelSignedTransactionBatch;
 use sha2::Digest;
 use xdr_common::{BytesM, VecM};
 
