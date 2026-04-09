@@ -10,6 +10,7 @@ pub mod error;
 pub mod init;
 pub mod keys;
 pub mod new;
+pub mod node;
 pub mod print;
 pub mod result;
 pub mod scaffold;

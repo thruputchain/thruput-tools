@@ -62,6 +62,10 @@ pub enum CliError {
     NotImplemented,
     #[error("status check found warnings")]
     StatusHasWarnings,
+    #[error("dev node error: {0}")]
+    DevNode(String),
+    #[error("could not connect to {0}")]
+    RpcConnect(String),
     #[error("{0}")]
     Other(String),
 }
@@ -91,6 +95,8 @@ impl CliError {
             Self::JsonUnsupported(_) => "json_unsupported",
             Self::NotImplemented => "not_implemented",
             Self::StatusHasWarnings => "status_has_warnings",
+            Self::DevNode(_) => "dev_node_error",
+            Self::RpcConnect(_) => "rpc_connect",
             Self::Other(_) => "other",
         }
     }
@@ -122,6 +128,11 @@ impl CliError {
             Self::UnknownTemplate(_) => {
                 Some(Cow::Borrowed("available templates: `counter`, `stub`"))
             }
+            Self::DevNode(_) => Some(Cow::Borrowed("check the dev node output for details")),
+            Self::RpcConnect(url) => Some(Cow::Owned(format!(
+                "run `groundhog node` in another terminal, or check that \
+                 the RPC endpoint at {url} is running"
+            ))),
             Self::Io(_) | Self::Other(_) | Self::StatusHasWarnings => None,
             Self::ProfileNotFound(_) => Some(Cow::Borrowed(
                 "add the profile to `groundhog.toml`, or switch to \
