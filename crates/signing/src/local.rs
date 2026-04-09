@@ -4,6 +4,9 @@ use crate::SigningError;
 use ed25519_dalek::Signer as DalekSigner;
 
 /// Local signer using an in-memory Ed25519 key.
+///
+/// Secret key material is owned by `ed25519-dalek::SigningKey`, which
+/// zeroizes on drop.
 #[derive(Debug)]
 pub struct LocalSigner {
     signing_key: ed25519_dalek::SigningKey,

@@ -14,4 +14,3 @@ groundhog-signing = { path = "../signing" }
 hex = { workspace = true }
 sha2 = { workspace = true }
 clap = { workspace = true }
-ed25519-dalek = { workspace = true }

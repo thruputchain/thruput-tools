@@ -26,7 +26,13 @@ pub use signer::Signer;
 mod tests {
     use super::*;
     use groundhog_xdr::contract::ContractEntrypointID;
+    use groundhog_xdr::transaction::SignedTransaction;
     use sha2::{Digest, Sha256};
+
+    // These pinned vectors currently come from the pre-refactor tx-builder
+    // output path. Replace or supplement them with runtime-generated
+    // canonical vectors when those become available in a shared fixture
+    // source.
 
     fn test_signer() -> LocalSigner {
         let mut hasher = Sha256::new();
@@ -71,11 +77,14 @@ mod tests {
             .expect("bug: transaction should sign");
         let signed_tx_xdr =
             encode_signed_transaction_xdr(&signed_tx).expect("bug: signed tx should encode");
+        let decoded_signed_tx: SignedTransaction =
+            xdrs::txs::decode(&signed_tx_xdr).expect("bug: signed tx should roundtrip through XDR");
 
         assert_eq!(
             hex::encode(tx_hash.as_ref()),
             "6e94695b6af0fbc13d96876f7fb8e940cd9db4d247e53614a45da252b3a7853a"
         );
+        assert_eq!(decoded_signed_tx, signed_tx);
         assert_eq!(
             hex::encode(signed_tx_xdr),
             "bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7000000000000000000000000000f42400000000000000000000f424000000000000000010000000000000001000000040000000050ec72dbafd4898c5df0e15ea6ba3e46240945b7210fe2d63dde1e896f42107a00000000000000000000000000000001000000000000000000000000706f58acd087550f315030db4beeb1527e86f0e12d9781957cdcc522f33e5d719b93c200381cff5bfb26a1ee8ce7874ffd485322cd5a0806605d2ffa51c8cf0f"
