@@ -6,6 +6,7 @@ members = [
     "crates/client",
     "crates/signing",
     "crates/tx-builder",
+    "crates/cli",
 ]
 
 [workspace.dependencies]
