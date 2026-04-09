@@ -16,8 +16,8 @@ env:
   HOGD_FFI_PASSWORD: ${{ secrets.HOGD_FFI_PASSWORD }}
 
 jobs:
-  check:
-    name: Format + Lint
+  ci:
+    name: Format + Lint + Test
     runs-on: namespace-profile-chuckd-rs-linux
     permissions:
       contents: read
@@ -34,28 +34,7 @@ jobs:
         run: cargo fmt --check
 
       - name: Clippy
-        run: cargo clippy --workspace -- -D warnings
-
-  test:
-    name: Build + Test
-    needs: check
-    runs-on: namespace-profile-chuckd-rs-linux
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout
-        uses: namespacelabs/nscloud-checkout-action@v8
-
-      - name: Configure Namespace Cache
-        uses: namespacelabs/nscloud-cache-action@v1
-        with:
-          cache: rust
-
-      - name: Fetch dependencies
-        run: cargo fetch
-
-      - name: Build
-        run: cargo build --all-targets --locked
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Test
         run: cargo test --workspace --locked
