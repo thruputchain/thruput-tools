@@ -47,13 +47,13 @@ pub fn run(
 
 /// Build the current project and return the artifact metadata without
 /// printing a final command payload.
+#[allow(clippy::similar_names)] // cwd and cmd are clear
 pub fn build_project(
     optimize: bool,
     cargo_args: &[String],
     explicit_profile: Option<&str>,
     print: &Print,
 ) -> Result<BuildResult, CliError> {
-    #[allow(clippy::similar_names)] // cwd and cmd are clear
     let cwd = std::env::current_dir()?;
     let (root, name) = find_project(&cwd)?;
 
