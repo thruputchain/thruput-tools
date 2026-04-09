@@ -6,7 +6,7 @@ Rust/WASM build and test workflow into a single binary.
 ## Install
 
 ```bash
-cargo install --path .
+cargo install --path crates/cli
 ```
 
 Requires the nightly Rust toolchain (pinned via `rust-toolchain.toml`
@@ -197,7 +197,7 @@ global — not per-profile.
 
 ## AI-Assisted Development
 
-This repo includes a skill file at `docs/SKILL.md` for use with AI coding
+This repo includes a skill file at `docs/cli/SKILL.md` for use with AI coding
 assistants. It provides guidance on storage type selection, SDK macros, test
 patterns, and concurrency guardrails specific to Groundhog contracts.
 
