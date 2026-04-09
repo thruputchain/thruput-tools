@@ -46,7 +46,7 @@ cargo fmt --check
 
 ## Documentation
 
-- [System Design](docs/system-design.md) — architecture, data flows, open questions
-- [API Sketch](docs/api-sketch.md) — trait definition, types, handler examples
-- [Transaction Ingress and Proposer-Local Races](docs/tx-ingress-and-proposer-race.md) — code-verified threat model framing
-- [Roadmap](docs/roadmap.md) — v1 testnet scope and later ingress evolution
+- [System Design](docs/gateway/system-design.md) — architecture, data flows, open questions
+- [API Sketch](docs/gateway/api-sketch.md) — trait definition, types, handler examples
+- [Transaction Ingress and Proposer-Local Races](docs/gateway/tx-ingress-and-proposer-race.md) — code-verified threat model framing
+- [Roadmap](docs/gateway/roadmap.md) — v1 testnet scope and later ingress evolution

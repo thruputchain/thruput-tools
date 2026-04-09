@@ -38,7 +38,7 @@ pub async fn chain_tip(ctx: &GatewayContext) -> Result<ChainTip, GatewayError> {
 /// Block data at a given height.
 ///
 /// **Deferred** — data source is an open question.
-/// See `docs/system-design.md` question #1.
+/// See `docs/gateway/system-design.md` question #1.
 #[tracing::instrument(skip_all, fields(height))]
 pub async fn get_block_by_number(
     _ctx: &GatewayContext,

@@ -10,7 +10,7 @@ forcing the scaffold to compile at every intermediate checkpoint.
 
 ## Architecture
 
-See `docs/system-design.md` for full design and `docs/api-sketch.md`
+See `docs/gateway/system-design.md` for full design and `docs/gateway/api-sketch.md`
 for the jsonrpsee trait definition and type sketches.
 
 Three crates:
@@ -25,7 +25,7 @@ Data flows:
 - **Tx submission** → configurable: hogd scheduler or chuckd coordinator (`submit_unvetted`) via x23
 - **Receipts/events** → hogd indexer (`get_transaction_info`, `get_contract_events`) via x23
 - **Chain state** → hogd scheduler (`get_tip`, `find_tx`, `size`) via x23
-- **Block data** → coordinator storage (TBD — open question in system-design.md)
+- **Block data** → coordinator storage (TBD — open question in docs/gateway/system-design.md)
 
 The submit target is a topology choice, not a change in external
 gateway semantics. `groundhog_sendRawTransaction` should only return
@@ -56,7 +56,7 @@ runtime), `tower`/`tower-http` (middleware), `clap` (CLI), `prometheus`
   tagged serialization (`#[serde(tag = "...")]`).
 - Wire format: `0x`-prefixed lowercase hex for all byte values
   (hashes, addresses, topics, event data). Decimal JSON numbers for
-  heights, counts, and other quantities. See system-design.md
+  heights, counts, and other quantities. See docs/gateway/system-design.md
   "Wire Format Conventions".
 - Byte fields use `HexBytes` (variable-length) or `Topic` (32-byte
   fixed) from `api-types/src/hex.rs` — never raw `Vec<u8>` in
@@ -65,7 +65,7 @@ runtime), `tower`/`tower-http` (middleware), `clap` (CLI), `prometheus`
   (`TransactionStatus`, `ExecStatus`).
 - The jsonrpsee trait in `gateway/src/api.rs` is the source of truth
   for the RPC surface. `#[rpc(client, server)]` generates both sides.
-  (May move to `api-types` — see system-design.md "Client Crate Trait
+  (May move to `api-types` — see docs/gateway/system-design.md "Client Crate Trait
   Location".)
 - Handler implementations go in `gateway/src/handlers/`, one file per
   logical group (submit, receipt, blocks, events).
@@ -75,7 +75,7 @@ runtime), `tower`/`tower-http` (middleware), `clap` (CLI), `prometheus`
 - Error codes follow Substrate's per-module range pattern. Constants
   live in `api-types/src/error.rs`.
 - Method prefix is `groundhog_` (may change — see open questions in
-  system-design.md).
+  docs/gateway/system-design.md).
 
 ## Build Commands
 
