@@ -8,6 +8,9 @@ license = "Apache-2.0"
 default = ["std"]
 std = []
 
+[lints]
+workspace = true
+
 [dependencies]
 groundhog-xdr = { workspace = true }
 xdrs = { workspace = true }

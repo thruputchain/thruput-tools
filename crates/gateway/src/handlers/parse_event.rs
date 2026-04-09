@@ -16,8 +16,8 @@ const MAX_TOPICS: u32 = 3;
 
 /// Parse a `TxEmittedEvent` into an `EmittedEvent` with split topics + data.
 ///
-/// Returns `None` if the event is malformed (num_topics > 3, or
-/// serialized_event too short for the declared number of topics).
+/// Returns `None` if the event is malformed (`num_topics` > 3, or
+/// `serialized_event` too short for the declared number of topics).
 pub fn parse_emitted_event(raw: &TxEmittedEvent) -> Option<EmittedEvent> {
     let num_topics = raw.num_topics;
     if num_topics > MAX_TOPICS {

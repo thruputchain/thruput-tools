@@ -87,7 +87,7 @@ pub async fn get_transaction_status(
 
         match client.schedcoord_lookup_transactions(&batch).await {
             Ok(results) => {
-                if results.iter().next().is_some_and(|opt| opt.is_some()) {
+                if results.iter().next().is_some_and(Option::is_some) {
                     return Ok(TransactionStatus::Pending);
                 }
             }

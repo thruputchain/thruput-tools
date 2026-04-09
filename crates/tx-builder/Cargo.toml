@@ -8,6 +8,9 @@ license = "Apache-2.0"
 name = "tx-builder"
 path = "src/main.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 groundhog-xdr = { workspace = true }
 groundhog-signing = { path = "../signing" }

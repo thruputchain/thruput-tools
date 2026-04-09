@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{BlockHeight, SHA256Hash};
 
-/// Canonical transaction hash: sha256(xdr_serialize(signed_tx.tx)).
+/// Canonical transaction hash: `sha256(xdr_serialize(signed_tx.tx))`.
 /// Covers the inner Transaction body (not signatures), matching
 /// the scheduler's lookup key and the indexer's primary key.
 ///

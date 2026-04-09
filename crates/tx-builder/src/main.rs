@@ -1,13 +1,13 @@
 //! Minimal transaction builder for end-to-end testing.
 //!
 //! Constructs a signed Groundhog transaction and prints the 0x-prefixed
-//! hex-encoded XDR to stdout. Adapted from the wallet crate in sdk_rs.
+//! hex-encoded XDR to stdout. Adapted from the wallet crate in `sdk_rs`.
 //!
 //! Usage:
 //!   tx-builder --seed "my secret" --account "alice"
 //!
-//! Prints to stdout: 0x-prefixed hex XDR of a SignedTransaction
-//! Prints to stderr: tx_hash and account address (for use in queries)
+//! Prints to stdout: 0x-prefixed hex XDR of a `SignedTransaction`
+//! Prints to stderr: `tx_hash` and account address (for use in queries)
 
 use clap::Parser;
 use groundhog_signing::{
