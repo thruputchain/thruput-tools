@@ -56,6 +56,7 @@ pub async fn get_transaction_receipt(
                 // Currently TxInfo only has height + events, no exec result.
                 status: ExecStatus::Ok,
                 events,
+                return_data: None,
             }))
         }
         _ => Ok(None),

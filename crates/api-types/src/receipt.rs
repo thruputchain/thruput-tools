@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::BlockHeight;
 use crate::events::EmittedEvent;
+use crate::hex::HexBytes;
 use crate::transaction::TxHash;
 
 /// Full transaction receipt. Returned by `getTransactionReceipt`.
@@ -28,6 +29,14 @@ pub struct TransactionReceipt {
 
     /// Events emitted during execution.
     pub events: Vec<EmittedEvent>,
+
+    /// Raw return data from contract execution.
+    ///
+    /// Populated by the dev node from `InvocationFrameOutput::Return`.
+    /// May be `None` for production receipts if the indexer does not
+    /// store return data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub return_data: Option<HexBytes>,
 }
 
 /// Execution result. Maps to hogd's `ExecResult` variants.
