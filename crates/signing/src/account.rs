@@ -26,6 +26,16 @@ impl PubkeyAccount {
         Self { public_key, nonce }
     }
 
+    /// Constructs an Ed25519 pubkey account from raw public key bytes.
+    pub fn from_public_key_bytes(public_key: [u8; 32], nonce: u64) -> Self {
+        Self::new(
+            PublicKey::Ed25519 {
+                ed25519: groundhog_xdr::types::Ed25519PublicKey::from(public_key),
+            },
+            nonce,
+        )
+    }
+
     /// Returns the canonical pubkey-account preimage.
     pub fn preimage(&self) -> PubkeyAccountPreimage {
         PubkeyAccountPreimage {
