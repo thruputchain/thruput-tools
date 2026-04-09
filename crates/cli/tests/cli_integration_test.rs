@@ -375,22 +375,32 @@ fn new_json_failure_is_structured() {
 }
 
 #[test]
-fn deploy_returns_not_implemented() {
-    let output = groundhog().arg("deploy").output().unwrap();
+fn deploy_fails_without_config() {
+    let tmp = TempDir::new().unwrap();
+    let output = groundhog()
+        .arg("deploy")
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("not yet implemented"));
-    assert!(stderr.contains("hint:"));
+    assert!(stderr.contains("no rpc_url") || stderr.contains("no signing key"));
 }
 
 #[test]
-fn deploy_json_returns_structured_error() {
-    let output = groundhog().arg("--json").arg("deploy").output().unwrap();
+fn deploy_json_fails_without_config() {
+    let tmp = TempDir::new().unwrap();
+    let output = groundhog()
+        .arg("--json")
+        .arg("deploy")
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
     assert!(!output.status.success());
     let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(stderr["ok"], false);
     assert_eq!(stderr["command"], "deploy");
-    assert_eq!(stderr["error"]["code"], "not_implemented");
+    assert_eq!(stderr["error"]["code"], "other");
 }
 
 #[test]

@@ -23,11 +23,16 @@ hex = { workspace = true }
 sha2 = { workspace = true }
 zeroize = { workspace = true }
 groundhog-signing = { path = "../signing" }
+groundhog-rpc-client = { path = "../client" }
+groundhog-rpc-api-types = { path = "../api-types" }
+groundhog-xdr = { workspace = true }
+xdrs = { workspace = true }
+xdr-common = { workspace = true }
+tokio = { workspace = true }
 groundhog-dev-node = { path = "../dev-node", optional = true }
-tokio = { workspace = true, optional = true }
 
 [features]
-dev-node = ["dep:groundhog-dev-node", "dep:tokio"]
+dev-node = ["dep:groundhog-dev-node"]
 
 [dev-dependencies]
 tempfile = "3"

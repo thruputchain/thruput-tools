@@ -17,7 +17,7 @@ pub fn is_dev_key(name: &str) -> bool {
     name.starts_with("dev-") && name[4..].parse::<usize>().is_ok()
 }
 
-/// Derive a LocalSigner for a dev key name like "dev-0".
+/// Derive a `LocalSigner` for a dev key name like "dev-0".
 ///
 /// Returns `Err` if the name doesn't match the `dev-N` pattern.
 pub fn load_dev_signer(name: &str) -> Result<LocalSigner, CliError> {
