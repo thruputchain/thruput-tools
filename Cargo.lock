@@ -757,6 +757,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "groundhog-rpc-api"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "groundhog-rpc-api-types",
+ "jsonrpsee",
+]
+
+[[package]]
 name = "groundhog-rpc-api-types"
 version = "0.1.0"
 dependencies = [
@@ -773,6 +782,7 @@ dependencies = [
 name = "groundhog-rpc-client"
 version = "0.1.0"
 dependencies = [
+ "groundhog-rpc-api",
  "groundhog-rpc-api-types",
  "jsonrpsee",
  "serde",
@@ -787,6 +797,7 @@ dependencies = [
  "axum",
  "bytes",
  "clap",
+ "groundhog-rpc-api",
  "groundhog-rpc-api-types",
  "groundhog-xdr",
  "groundhog_indexer",

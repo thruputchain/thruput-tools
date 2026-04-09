@@ -10,9 +10,10 @@ use std::sync::Arc;
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
-use crate::api::{GroundhogApiImpl, GroundhogApiServer};
+use crate::api::GroundhogApiImpl;
 use crate::config::GatewayConfig;
 use crate::context::GatewayContext;
+use groundhog_rpc_api::GroundhogApiServer;
 
 /// Groundhog JSON-RPC gateway.
 #[derive(Parser)]

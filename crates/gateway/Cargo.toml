@@ -12,6 +12,7 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
+groundhog-rpc-api = { path = "../rpc-api" }
 groundhog-rpc-api-types = { path = "../api-types" }
 groundhog-xdr = { workspace = true }
 groundhog_indexer = { workspace = true }
