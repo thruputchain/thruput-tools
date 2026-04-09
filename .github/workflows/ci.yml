@@ -1,16 +1,17 @@
-name: Rust CI
+name: CI
 
 on:
   workflow_dispatch:
   push:
-    branches: ["main"]
+    branches: [main]
   pull_request:
-    branches: ["main"]
+    branches: [main]
 
 env:
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
   CARGO_REGISTRIES_GROUNDHOG_TOKEN: ${{ secrets.GROUNDHOG_REGISTRY_TOKEN }}
   CARGO_REGISTRY_GLOBAL_CREDENTIAL_PROVIDERS: cargo:token
+  HOGD_FFI_PASSWORD: ${{ secrets.HOGD_FFI_PASSWORD }}
 
 jobs:
   check:
@@ -31,7 +32,7 @@ jobs:
         run: cargo fmt --check
 
       - name: Clippy
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --workspace -- -D warnings
 
   test:
     name: Build + Test
@@ -54,4 +55,7 @@ jobs:
         run: cargo build --all-targets --locked
 
       - name: Test
-        run: cargo test
+        run: cargo test --workspace --locked
+
+      - name: Scaffold smoke test
+        run: scripts/test-scaffold.sh
