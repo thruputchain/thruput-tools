@@ -8,6 +8,7 @@ members = [
     "crates/signing",
     "crates/tx-builder",
     "crates/cli",
+    "crates/groundhog-sys",
 ]
 
 [workspace.dependencies]
@@ -70,3 +71,6 @@ missing-panics-doc = "allow"
 
 [profile.release]
 overflow-checks = true
+
+[patch.groundhog]
+groundhog-sys = { path = "crates/groundhog-sys" }
