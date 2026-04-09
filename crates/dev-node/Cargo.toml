@@ -1,0 +1,23 @@
+[package]
+name = "groundhog-dev-node"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[lints]
+workspace = true
+
+[dependencies]
+groundhog-rpc-api = { path = "../rpc-api" }
+groundhog-rpc-api-types = { path = "../api-types" }
+groundhog-signing = { path = "../signing" }
+groundhog-xdr = { workspace = true }
+xdrs = { workspace = true }
+groundhog-native-exec = { workspace = true }
+jsonrpsee = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }

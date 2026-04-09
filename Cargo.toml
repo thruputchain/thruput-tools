@@ -9,6 +9,7 @@ members = [
     "crates/tx-builder",
     "crates/cli",
     "crates/groundhog-sys",
+    "crates/dev-node",
 ]
 
 [workspace.dependencies]
@@ -19,6 +20,7 @@ groundhog_scheduler = { version = "0.7.7", registry = "groundhog" }
 xdrs = { version = "0.5.3", registry = "groundhog", features = ["alloc"] }
 xdr-common = { version = "0.5.3", registry = "groundhog" }
 rpc_driver = { version = "0.8", registry = "groundhog" }
+groundhog-native-exec = { version = "0.9", registry = "groundhog" }
 
 # --- Async ---
 async-trait = "0.1"

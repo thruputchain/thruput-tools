@@ -55,3 +55,15 @@ pub trait GroundhogApi {
         to_height: BlockHeight,
     ) -> RpcResult<Vec<IdentifiedEvent>>;
 }
+
+/// Dev-only RPC methods. Only implemented by the dev node.
+#[rpc(server, namespace = "groundhog_dev")]
+pub trait GroundhogDevApi {
+    /// Reset the dev node to its initial state.
+    #[method(name = "reset")]
+    async fn reset(&self) -> RpcResult<()>;
+
+    /// List pre-funded dev accounts with addresses and keys.
+    #[method(name = "getAccounts")]
+    async fn get_accounts(&self) -> RpcResult<Vec<groundhog_rpc_api_types::dev::DevAccount>>;
+}
