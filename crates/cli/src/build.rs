@@ -53,6 +53,7 @@ pub fn build_project(
     explicit_profile: Option<&str>,
     print: &Print,
 ) -> Result<BuildResult, CliError> {
+    #[allow(clippy::similar_names)] // cwd and cmd are clear
     let cwd = std::env::current_dir()?;
     let (root, name) = find_project(&cwd)?;
 
