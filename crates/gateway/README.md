@@ -2,9 +2,8 @@
 
 Standalone JSON-RPC 2.0 gateway for the [Groundhog](https://groundhog.dev) blockchain. Communicates with the validator stack (hogd indexer, hogd scheduler, chuckd coordinator) exclusively over x23 RPC.
 
-This repo is currently a design/scaffolding workspace for shaping the gateway
-architecture, backend boundaries, and public RPC types. It is not yet intended
-to be treated as a finished compile-first implementation.
+JSON-RPC gateway crate within the Groundhog developer tools workspace.
+Shapes the gateway architecture, backend boundaries, and public RPC types.
 
 `groundhog_sendRawTransaction` is intentionally configurable to submit
 through either `hogd` or `chuckd`. That choice is a deployment/topology

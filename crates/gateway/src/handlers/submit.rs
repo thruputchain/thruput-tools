@@ -17,8 +17,8 @@
 
 use groundhog_rpc_api_types::hex::Hex0x;
 use groundhog_rpc_api_types::transaction::TxHash;
-use groundhog_scheduler::parallel::ParallelSignedTransactionBatch;
 use groundhog_scheduler::ParallelBatch;
+use groundhog_scheduler::parallel::ParallelSignedTransactionBatch;
 use sha2::Digest;
 use xdr_common::{BytesM, VecM};
 

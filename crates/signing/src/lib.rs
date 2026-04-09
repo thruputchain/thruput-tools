@@ -10,10 +10,10 @@ pub mod indices;
 pub mod local;
 pub mod signer;
 
-pub use account::{PubkeyAccount, DEFAULT_PUBKEY_ACCOUNT_NONCE, PUBKEY_ACCOUNT_TAG_STR};
+pub use account::{DEFAULT_PUBKEY_ACCOUNT_NONCE, PUBKEY_ACCOUNT_TAG_STR, PubkeyAccount};
 pub use build::{
-    build_call_transaction, build_deploy_transaction, sign_transaction, BuildCallTransaction,
-    BuildDeployTransaction, SignTransactionParams,
+    BuildCallTransaction, BuildDeployTransaction, SignTransactionParams, build_call_transaction,
+    build_deploy_transaction, sign_transaction,
 };
 pub use encode::{encode_signed_transaction_xdr, encode_transaction_xdr};
 pub use error::SigningError;
