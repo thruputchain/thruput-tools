@@ -13,9 +13,10 @@ Six crates in `crates/`:
   scheduler over x23 RPC.
 - **client** — typed JSON-RPC client generated from the same
   `#[rpc(client)]` trait as the server. Wraps api-types.
-- **signing** — Ed25519 key management, XDG key storage, zeroize-backed
-  secret handling.
-- **tx-builder** — transaction construction and XDR serialization.
+- **signing** — off-chain transaction signing and construction. Signer
+  trait, local Ed25519 signer, canonical address derivation, tx builders
+  for deploy and call, XDR encoding.
+- **tx-builder** — thin CLI wrapper over signing (temporary).
 - **cli** — `groundhog` binary. Wraps the Rust/WASM build and test
   workflow. Lib/bin split: all logic in the library crate, `main.rs` is
   pure dispatch. Subcommand functions take plain Rust types, not clap
@@ -81,7 +82,7 @@ cargo run -p groundhog-cli -- keys ls
 ## Code Style
 
 - **Edition 2024**, stable Rust.
-- **79-column max width** (`rustfmt.toml` enforces this).
+- **100-column max width** (rustfmt community default).
 - **`thiserror`** for all error enums. **No `anyhow` in this project.**
 - **No `.unwrap()` in library code.** Return `Result`. `.unwrap()` is
   fine in tests.
