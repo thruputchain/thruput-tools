@@ -202,12 +202,12 @@ fn write_key(name: &str, signing_key: &LocalSigner) -> Result<KeyInfo, CliError>
         fs::create_dir_all(parent)?;
     }
 
-    let keypair_bytes = signing_key.to_keypair_bytes();
+    let keypair_bytes = zeroize::Zeroizing::new(signing_key.to_keypair_bytes());
     let public_bytes = signing_key.verifying_key_bytes();
     let keyfile = KeyFile {
         version: 1,
         scheme: "ed25519".into(),
-        keypair_hex: hex::encode(keypair_bytes),
+        keypair_hex: hex::encode(keypair_bytes.as_ref()),
         public_key_hex: Some(hex::encode(public_bytes)),
     };
 

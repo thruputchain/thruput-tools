@@ -215,6 +215,9 @@ fn is_valid_address(addr: &str) -> bool {
 fn atomic_write(path: &Path, data: &[u8]) -> Result<(), CliError> {
     let tmp = path.with_extension("toml.tmp");
     std::fs::write(&tmp, data)?;
-    std::fs::rename(&tmp, path)?;
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e.into());
+    }
     Ok(())
 }
