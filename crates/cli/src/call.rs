@@ -16,7 +16,9 @@ use crate::config::{find_project_config, resolve_default_key, resolve_profile};
 use crate::contract_spec::{FullMethodSpec, TypeSpec, load_full_spec, load_interface_sidecar};
 use crate::keys::load_local_signer;
 use crate::result::CommandResult;
-use crate::tx_utils::{format_tx_hash, nonce_from_timestamp, submit_and_poll};
+use crate::tx_utils::{
+    format_tx_hash, nonce_from_timestamp, resolve_block_expiry_height, submit_and_poll,
+};
 use crate::{CliError, Print};
 
 /// Wallet `do_action` entrypoint ID (from dev-wallet WASM exports).
@@ -116,12 +118,15 @@ pub fn run(
     let wallet_entrypoint =
         groundhog_xdr::contract::ContractEntrypointID::from(WALLET_DO_ACTION_ENTRYPOINT);
 
+    let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
+    let block_expiry_height = rt.block_on(async { resolve_block_expiry_height(rpc_url).await })?;
+
     let tx = build_call_transaction(BuildCallTransaction {
         invoked_address: wallet_address,
         entrypoint: wallet_entrypoint,
         calldata: do_action_calldata,
         gas_limit: DEFAULT_TX_GAS_LIMIT,
-        block_expiry_height: 1_000_000,
+        block_expiry_height,
         nonce: nonce_from_timestamp(),
         auth_claims,
     });
@@ -133,7 +138,6 @@ pub fn run(
     let tx_hex = format!("0x{}", hex::encode(&tx_xdr));
 
     // Submit via JSON-RPC
-    let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
     let (tx_hash, receipt) = rt.block_on(async { submit_and_poll(rpc_url, &tx_hex).await })?;
     let tx_hash_formatted = format_tx_hash(&tx_hash);
     let status_summary = summarize_exec_status(&receipt.status);
@@ -517,7 +521,19 @@ fn parse_contract_attr_value(attr: &str, key: &str) -> Option<String> {
 }
 
 fn parse_method_metadata(body: &str, method: &str) -> Option<MethodMetadata> {
-    let fn_start = body.find(&format!("fn {method}"))?;
+    let target = format!("fn {method}");
+    let mut search_offset = 0;
+    let fn_start = loop {
+        let rel = body[search_offset..].find(&target)?;
+        let abs = search_offset + rel;
+        let after = abs + target.len();
+        match body.as_bytes().get(after) {
+            Some(b) if b.is_ascii_alphanumeric() || *b == b'_' => {
+                search_offset = after;
+            }
+            _ => break abs,
+        }
+    };
     let signature = &body[fn_start..];
     let open_paren = signature.find('(')?;
     let close_paren = find_matching_delimiter(signature, open_paren, '(', ')')?;
@@ -1129,6 +1145,26 @@ mod tests {
         assert_eq!(metadata.len(), 1);
         assert_eq!(metadata[0].interface_name, "Counter");
         assert_eq!(metadata[0].version, "0.1.0");
+        assert_eq!(metadata[0].method.arg_types, Vec::<String>::new());
+        assert_eq!(metadata[0].method.return_type.as_deref(), Some("u64"));
+    }
+
+    #[test]
+    fn method_metadata_does_not_match_prefix_methods() {
+        let source = r"
+            #[contract(throws = Error, client = CounterClient)]
+            impl Counter {
+                pub fn get_all(&self, count: u64) -> Vec<u64> { vec![] }
+                pub fn get(&self) -> u64 { 0 }
+            }
+        ";
+        let metadata = contract_metadata_from_source(
+            source,
+            Path::new("/tmp/implementation.rs"),
+            "get",
+            "0.1.0",
+        );
+        assert_eq!(metadata.len(), 1);
         assert_eq!(metadata[0].method.arg_types, Vec::<String>::new());
         assert_eq!(metadata[0].method.return_type.as_deref(), Some("u64"));
     }

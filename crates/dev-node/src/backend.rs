@@ -216,8 +216,11 @@ impl DevBackend {
             "transaction committed"
         );
 
-        let receipt_events: Vec<EmittedEvent> =
-            invoke_result.events.iter().map(parse_event).collect();
+        let receipt_events: Vec<EmittedEvent> = invoke_result
+            .events
+            .iter()
+            .filter_map(parse_event)
+            .collect();
 
         let receipt = TransactionReceipt {
             tx_hash,
@@ -348,10 +351,24 @@ fn compute_deploy_address(
 ///
 /// The `serialized_event` field packs topics and data:
 /// first `num_topics * 32` bytes are topics, remaining bytes are data.
-fn parse_event(e: &TxEmittedEvent) -> EmittedEvent {
+fn parse_event(e: &TxEmittedEvent) -> Option<EmittedEvent> {
     let num_topics = e.num_topics as usize;
     let bytes = &e.serialized_event.0;
-    let topic_bytes = num_topics * 32;
+    let Some(topic_bytes) = num_topics.checked_mul(32) else {
+        tracing::warn!(
+            num_topics,
+            "event topic size overflow, skipping malformed event"
+        );
+        return None;
+    };
+    if bytes.len() < topic_bytes {
+        tracing::warn!(
+            num_topics,
+            actual_bytes = bytes.len(),
+            "event serialized_event too short for claimed num_topics, skipping malformed event"
+        );
+        return None;
+    }
     let topics: Vec<Topic> = (0..num_topics)
         .map(|i| {
             let start = i * 32;
@@ -361,11 +378,11 @@ fn parse_event(e: &TxEmittedEvent) -> EmittedEvent {
         })
         .collect();
     let data = HexBytes(bytes[topic_bytes..].to_vec());
-    EmittedEvent {
+    Some(EmittedEvent {
         contract_address: Hex0x(e.contract_address),
         topics,
         data,
-    }
+    })
 }
 
 /// Map `ExecResult` and `RootInvokeResult` to gateway status and return data.
@@ -416,6 +433,7 @@ mod tests {
     };
     use groundhog_xdr::auth_claim::{AuthClaim, AuthClaimData};
     use groundhog_xdr::contract::{Contract, ContractBlob, ContractEntrypointID};
+    use groundhog_xdr::event::TxEmittedEvent;
     use groundhog_xdr::types::SHA256Hash;
     use sha2::{Digest, Sha256};
     use xdr_common::{BytesM, VecM};
@@ -424,6 +442,17 @@ mod tests {
     fn initializes_wallet_auth_data_for_dev_accounts() {
         let backend = DevBackend::new(1, DEFAULT_STORAGE_TOKENS);
         assert_eq!(backend.accounts().len(), 1);
+    }
+
+    #[test]
+    fn parse_event_skips_malformed_topic_payload() {
+        let raw = TxEmittedEvent {
+            contract_address: groundhog_xdr::types::ContractAddress::from([0xAA; 32]),
+            num_topics: 2,
+            serialized_event: BytesM(vec![0x11; 32]),
+        };
+
+        assert!(super::parse_event(&raw).is_none());
     }
 
     #[test]

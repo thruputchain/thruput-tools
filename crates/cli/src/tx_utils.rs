@@ -3,6 +3,8 @@ use groundhog_rpc_api_types::transaction::TxHash;
 
 use crate::CliError;
 
+const DEFAULT_BLOCK_EXPIRY_OFFSET: i64 = 1_000;
+
 pub fn nonce_from_timestamp() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -20,6 +22,22 @@ pub fn format_tx_hash(tx_hash: &TxHash) -> String {
 
 pub fn poll_exhausted_error() -> CliError {
     CliError::ReceiptPollingExhausted
+}
+
+pub async fn resolve_block_expiry_height(rpc_url: &str) -> Result<i64, CliError> {
+    use groundhog_rpc_client::{GroundhogApiClient, HttpClientBuilder};
+
+    let client = HttpClientBuilder::default()
+        .build(rpc_url)
+        .map_err(|e| CliError::RpcConnect(format!("{rpc_url}: {e}")))?;
+    let tip = client
+        .chain_tip()
+        .await
+        .map_err(|e| CliError::RpcMethodFailed {
+            method: "chainTip",
+            message: e.to_string(),
+        })?;
+    Ok((*tip.height).saturating_add(DEFAULT_BLOCK_EXPIRY_OFFSET))
 }
 
 pub async fn submit_and_poll(
