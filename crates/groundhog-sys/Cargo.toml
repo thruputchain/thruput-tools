@@ -1,6 +1,6 @@
 [package]
 name = "groundhog-sys"
-version = "0.7.0"
+version = "0.9.0"
 edition = "2024"
 license = "Apache-2.0"
 description = "Bindings for the external Groundhog test environment"
