@@ -145,6 +145,72 @@ fn shared_lib_name() -> String {
     format!("{prefix}test_ffi{suffix}")
 }
 
+fn emit_link_config(lib_dir: &Path) {
+    println!("cargo:rustc-link-search=native={}", lib_dir.display());
+    println!("cargo:rustc-link-lib=dylib=test_ffi");
+    println!("cargo:metadata=lib_dir={}", lib_dir.display());
+}
+
+fn rewrite_macos_dylib_install_names(lib_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    if target_os() != "macos" {
+        return Ok(());
+    }
+
+    let unified_lib = lib_dir.join("libunified_lib.dylib");
+    let test_ffi = lib_dir.join("libtest_ffi.dylib");
+    if !unified_lib.exists() || !test_ffi.exists() {
+        return Ok(());
+    }
+
+    let output = Command::new("otool").arg("-L").arg(&test_ffi).output()?;
+    if !output.status.success() {
+        return Err(format!(
+            "failed to inspect dylib dependencies for {}",
+            test_ffi.display()
+        )
+        .into());
+    }
+
+    let stdout = String::from_utf8(output.stdout)?;
+    let current_unified_dep = stdout
+        .lines()
+        .map(str::trim)
+        .find(|line| {
+            line.ends_with(
+                "libunified_lib.dylib (compatibility version 0.0.0, current version 0.0.0)",
+            )
+        })
+        .and_then(|line| line.split_whitespace().next())
+        .filter(|path| *path != "@loader_path/libunified_lib.dylib");
+
+    let id_status = Command::new("install_name_tool")
+        .arg("-id")
+        .arg("@rpath/libunified_lib.dylib")
+        .arg(&unified_lib)
+        .status()?;
+    if !id_status.success() {
+        return Err(format!("failed to rewrite install id for {}", unified_lib.display()).into());
+    }
+
+    if let Some(old_dep) = current_unified_dep {
+        let change_status = Command::new("install_name_tool")
+            .arg("-change")
+            .arg(old_dep)
+            .arg("@loader_path/libunified_lib.dylib")
+            .arg(&test_ffi)
+            .status()?;
+        if !change_status.success() {
+            return Err(format!(
+                "failed to rewrite unified lib dependency for {}",
+                test_ffi.display()
+            )
+            .into());
+        }
+    }
+
+    Ok(())
+}
+
 /// Find and copy prebuilt `bindings.rs` from the extracted tarball directory.
 /// Returns an error if `bindings.rs` is not found in the tarball.
 fn find_prebuilt_bindings(
@@ -379,8 +445,8 @@ fn use_prebuilt_lib(lib_dir: &str) -> Result<(), Box<dyn std::error::Error>> {
         .into());
     }
 
-    println!("cargo:rustc-link-search=native={lib_dir}");
-    println!("cargo:rustc-link-lib=dylib=test_ffi");
+    rewrite_macos_dylib_install_names(&lib_path)?;
+    emit_link_config(&lib_path);
     println!("cargo:warning=Using prebuilt library from: {lib_dir} (found: {expected_lib})",);
 
     Ok(())
@@ -612,8 +678,8 @@ fn download_and_extract(
 
     find_prebuilt_bindings(&extract_dir, out_dir)?;
 
-    println!("cargo:rustc-link-search=native={}", extract_dir.display());
-    println!("cargo:rustc-link-lib=dylib=test_ffi");
+    rewrite_macos_dylib_install_names(&extract_dir)?;
+    emit_link_config(&extract_dir);
 
     Ok(())
 }
@@ -642,11 +708,9 @@ fn build_from_cmake(hogd_src: &str) {
     let dst = cfg.build();
 
     // Tell Rust where to find the built library
-    println!(
-        "cargo:rustc-link-search=native={}/build/hogd/test_ffi/",
-        dst.display()
-    );
-    println!("cargo:rustc-link-lib=dylib=test_ffi");
+    let lib_dir = dst.join("build/hogd/test_ffi");
+    rewrite_macos_dylib_install_names(&lib_dir).ok();
+    emit_link_config(&lib_dir);
     println!(
         "cargo:warning=Built library from source at: {}",
         dst.display()

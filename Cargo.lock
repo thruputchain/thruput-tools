@@ -887,6 +887,7 @@ dependencies = [
  "groundhog-rpc-api-types",
  "groundhog-rpc-client",
  "groundhog-signing",
+ "groundhog-sys",
  "groundhog-xdr",
  "hex",
  "rpassword",

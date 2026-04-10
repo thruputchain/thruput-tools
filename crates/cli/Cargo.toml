@@ -30,9 +30,10 @@ xdrs = { workspace = true }
 xdr-common = { workspace = true }
 tokio = { workspace = true }
 groundhog-dev-node = { path = "../dev-node", optional = true }
+groundhog-sys = { path = "../groundhog-sys", optional = true }
 
 [features]
-dev-node = ["dep:groundhog-dev-node"]
+dev-node = ["dep:groundhog-dev-node", "dep:groundhog-sys"]
 
 [dev-dependencies]
 tempfile = "3"
