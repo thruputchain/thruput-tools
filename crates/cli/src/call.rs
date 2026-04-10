@@ -630,8 +630,7 @@ fn parse_rust_ident(input: &str) -> Option<String> {
 fn last_ident(input: &str) -> Option<String> {
     input
         .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
-        .filter(|part| !part.is_empty())
-        .next_back()
+        .rfind(|part| !part.is_empty())
         .map(str::to_string)
 }
 
@@ -924,7 +923,6 @@ fn decode_typespec_from_reader(
     }
 
     match typespec.kind.as_str() {
-        "void" => None,
         "unsigned hyper" => read_xdr_value::<u64>(reader).map(serde_json::Value::from),
         "hyper" => read_xdr_value::<i64>(reader).map(serde_json::Value::from),
         "unsigned int" => read_xdr_value::<u32>(reader).map(serde_json::Value::from),

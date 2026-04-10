@@ -294,10 +294,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-{}
-{} = {{ path = {}, features = ["spec"] }}
+{sdk_dep}
+{package_name} = {{ path = {project_path}, features = ["spec"] }}
 "#,
-        sdk_dep, package_name, project_path,
     ) + &patch_block
 }
 

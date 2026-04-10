@@ -316,7 +316,6 @@ fn status_label(status: &ExecStatus) -> &'static str {
         ExecStatus::DeterministicError { .. } => "deterministic_error",
         ExecStatus::NonDeterministicError => "nondeterministic_error",
         ExecStatus::FailedGasSponsorship => "failed_gas_sponsorship",
-        ExecStatus::Other => "other",
         _ => "other",
     }
 }

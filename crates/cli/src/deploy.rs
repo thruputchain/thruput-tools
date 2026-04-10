@@ -121,7 +121,7 @@ pub fn run(
     // Extract the deployed contract address from the receipt.
     let (contract_addr_hex, address_source): (String, DeployAddressSource) = match &receipt.status {
         groundhog_rpc_api_types::receipt::ExecStatus::Ok => {
-            resolve_deployed_address(&receipt.return_data, &predicted_address)?
+            resolve_deployed_address(receipt.return_data.as_ref(), &predicted_address)?
         }
         _ => (String::new(), DeployAddressSource::Derived),
     };
@@ -217,7 +217,7 @@ fn find_and_read_wasm(cwd: &Path) -> Result<Vec<u8>, CliError> {
 }
 
 fn resolve_deployed_address(
-    return_data: &Option<HexBytes>,
+    return_data: Option<&HexBytes>,
     predicted_address: &ContractAddress,
 ) -> Result<(String, DeployAddressSource), CliError> {
     if let Some(return_data) = return_data {
@@ -248,7 +248,7 @@ mod tests {
     #[test]
     fn deploy_address_resolution_falls_back_to_prediction() {
         let predicted = ContractAddress::from([0x11; 32]);
-        let resolved = resolve_deployed_address(&None, &predicted)
+        let resolved = resolve_deployed_address(None, &predicted)
             .expect("bug: predicted address fallback should succeed");
         assert_eq!(resolved.0, format!("0x{}", "11".repeat(32)));
         assert_eq!(resolved.1, DeployAddressSource::Derived);
@@ -257,7 +257,7 @@ mod tests {
     #[test]
     fn deploy_address_resolution_prefers_receipt_return_data() {
         let predicted = ContractAddress::from([0x11; 32]);
-        let resolved = resolve_deployed_address(&Some(HexBytes(vec![0x22; 32])), &predicted)
+        let resolved = resolve_deployed_address(Some(&HexBytes(vec![0x22; 32])), &predicted)
             .expect("bug: receipt return_data should be accepted");
         assert_eq!(resolved.0, format!("0x{}", "22".repeat(32)));
         assert_eq!(resolved.1, DeployAddressSource::Receipt);

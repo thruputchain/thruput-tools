@@ -160,15 +160,17 @@ impl CliError {
             Self::MissingSigningKey => Some(Cow::Borrowed(
                 "set `default_key` in `groundhog.toml`, or run `groundhog keys generate`",
             )),
-            Self::RuntimeInit(_) => None,
             Self::RpcMethodFailed { .. } => Some(Cow::Borrowed(
                 "check the RPC endpoint and node logs for details",
             )),
             Self::ReceiptTimeout { .. } => Some(Cow::Borrowed(
                 "check the node logs, then rerun the command once the transaction is committed or rejected",
             )),
-            Self::ReceiptPollingExhausted => None,
-            Self::Io(_) | Self::Other(_) | Self::StatusHasWarnings => None,
+            Self::RuntimeInit(_)
+            | Self::ReceiptPollingExhausted
+            | Self::Io(_)
+            | Self::Other(_)
+            | Self::StatusHasWarnings => None,
             Self::ProfileNotFound(_) => Some(Cow::Borrowed(
                 "add the profile to `groundhog.toml`, or switch to \
                  an existing one with `--profile` or \
