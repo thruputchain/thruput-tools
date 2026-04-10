@@ -143,42 +143,58 @@ pub fn run(
     // Submit via JSON-RPC
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::Other(e.to_string()))?;
     let (tx_hash, receipt) = rt.block_on(async { submit_and_poll(rpc_url, &tx_hex).await })?;
+    let tx_hash_formatted = format_tx_hash(&tx_hash);
+    let status_summary = summarize_exec_status(&receipt.status);
+    let decoded_return = receipt
+        .return_data
+        .as_ref()
+        .and_then(|data| decode_return_value(data.0.as_slice(), metadata.as_ref()));
 
     // Print result
     match &receipt.status {
         ExecStatus::Ok => {
-            print.status(format_args!("Call succeeded at height {}", *receipt.height));
-            if let Some(ref data) = receipt.return_data
-                && let Some(value) = decode_return_value(data.0.as_slice(), metadata.as_ref())
-            {
-                print.status(format_args!("  value: {value}"));
+            if let Some(ref value) = decoded_return {
+                print.status(format_args!("Call succeeded: {method} -> {value}"));
+            } else {
+                print.status(format_args!("Call succeeded: {method}"));
             }
-            if let Some(ref data) = receipt.return_data {
+            print.status(format_args!("  contract: {contract_address_hex}"));
+            print.status(format_args!("  tx: {tx_hash_formatted}"));
+            print.status(format_args!("  height: {}", *receipt.height));
+            if decoded_return.is_none()
+                && let Some(ref data) = receipt.return_data
+                && !data.0.is_empty()
+            {
                 print.status(format_args!("  return: 0x{}", hex::encode(&data.0)));
             }
         }
-        ExecStatus::Reverted { message } => {
-            let msg = message.as_deref().unwrap_or("(no message)");
-            print.warn(format_args!("Call reverted: {msg}"));
+        ExecStatus::Reverted { .. } => {
+            print.warn(format_args!("Call {status_summary}"));
+            print.status(format_args!("  method: {method}"));
+            print.status(format_args!("  contract: {contract_address_hex}"));
+            print.status(format_args!("  tx: {tx_hash_formatted}"));
+            print.status(format_args!("  height: {}", *receipt.height));
         }
         other => {
-            print.warn(format_args!("Call failed: {other:?}"));
+            print.warn(format_args!("Call {}", summarize_exec_status(other)));
+            print.status(format_args!("  method: {method}"));
+            print.status(format_args!("  contract: {contract_address_hex}"));
+            print.status(format_args!("  tx: {tx_hash_formatted}"));
+            print.status(format_args!("  height: {}", *receipt.height));
         }
     }
 
     print.json(&CommandResult::new(
         cmd,
         json!({
-            "tx_hash": format_tx_hash(&tx_hash),
+            "tx_hash": tx_hash_formatted,
             "contract": contract_address_hex,
             "method": method,
             "height": receipt.height,
             "status": receipt.status,
+            "status_summary": status_summary,
             "return_data": receipt.return_data,
-            "return_value": receipt
-                .return_data
-                .as_ref()
-                .and_then(|data| decode_return_value(data.0.as_slice(), metadata.as_ref())),
+            "return_value": decoded_return,
         }),
     ))?;
 
@@ -1106,6 +1122,27 @@ fn format_tx_hash(tx_hash: &TxHash) -> String {
         .to_string()
 }
 
+fn summarize_exec_status(status: &ExecStatus) -> String {
+    match status {
+        ExecStatus::Ok => "succeeded".into(),
+        ExecStatus::Reverted {
+            message: Some(message),
+        } => format!("reverted: {message}"),
+        ExecStatus::Reverted { message: None } => {
+            "reverted without abort data".into()
+        }
+        ExecStatus::DeterministicError { kind } => {
+            format!("failed with deterministic execution error ({kind})")
+        }
+        ExecStatus::NonDeterministicError => {
+            "failed with nondeterministic commit error".into()
+        }
+        ExecStatus::FailedGasSponsorship => "failed gas sponsorship".into(),
+        ExecStatus::Other => "failed with unknown execution result".into(),
+        _ => "failed with unsupported execution result".into(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;
@@ -1114,8 +1151,9 @@ mod tests {
         ContractMetadata, MethodMetadata, ResolvedMethodMetadata, contract_entrypoint_id,
         contract_metadata_from_source, decode_return_value, encode_calldata,
         explicit_entrypoint_id, filter_candidates_by_interface_spec, major_version,
-        parse_contract_attr_value,
+        parse_contract_attr_value, summarize_exec_status,
     };
+    use groundhog_rpc_api_types::receipt::ExecStatus;
 
     #[test]
     fn parses_contract_attr_values() {
@@ -1262,5 +1300,13 @@ mod tests {
         let filtered = filter_candidates_by_interface_spec(candidates, Some(&spec));
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].interface_name, "Counter");
+    }
+
+    #[test]
+    fn summarizes_revert_without_message() {
+        assert_eq!(
+            summarize_exec_status(&ExecStatus::Reverted { message: None }),
+            "reverted without abort data"
+        );
     }
 }

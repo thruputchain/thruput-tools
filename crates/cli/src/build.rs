@@ -104,6 +104,9 @@ pub fn build_project(
     let size = fs::metadata(&wasm)?.len();
     print.status(format_args!("Built {} ({size} bytes)", wasm.display()));
     let spec_json = crate::contract_spec::maybe_generate_sidecar(&root, &name, &wasm, print)?;
+    if let Some(ref spec_json) = spec_json {
+        print.status(format_args!("Spec {}", spec_json.display()));
+    }
 
     Ok(BuildResult {
         project_name: name,

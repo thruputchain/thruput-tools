@@ -1,11 +1,14 @@
 use std::path::Path;
 
+use groundhog_rpc_api_types::hex::HexBytes;
 use groundhog_rpc_api_types::transaction::TxHash;
 use groundhog_signing::{
     BuildDeployTransaction, SignTransactionParams, Signer, build_deploy_transaction,
     sign_transaction,
 };
 use groundhog_xdr::auth_claim::AuthClaim;
+use groundhog_xdr::contract::ContractDeploymentHashPreimage;
+use groundhog_xdr::types::ContractAddress;
 use groundhog_xdr::types::SHA256Hash;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -18,6 +21,12 @@ use crate::{CliError, Print};
 
 /// Wallet `deploy` entrypoint ID (from dev-wallet WASM exports).
 const WALLET_DEPLOY_ENTRYPOINT: [u8; 8] = 0xADAC_4982_2214_8E4F_u64.to_be_bytes();
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeployAddressSource {
+    Receipt,
+    Derived,
+}
 
 /// Deploy a contract to the network.
 #[allow(clippy::too_many_lines)]
@@ -82,6 +91,7 @@ pub fn run(
     let deploy_nonce_val = nonce_from_timestamp();
     let deploy_nonce_bytes: [u8; 32] = Sha256::digest(deploy_nonce_val.to_le_bytes()).into();
     let deploy_nonce = SHA256Hash::from(deploy_nonce_bytes);
+    let predicted_address = derive_deploy_address(&wallet_address, &deploy_nonce, &contract_hash)?;
 
     // Calldata = CXS-encoded (nonce, contract_hash) — matches wallet deploy signature.
     // Must use CXS encoding (not txs) because the #[contract] macro
@@ -121,24 +131,23 @@ pub fn run(
     let (tx_hash, receipt) = rt.block_on(async { submit_and_poll(rpc_url, &tx_hex).await })?;
 
     // Extract the deployed contract address from the receipt.
-    let contract_addr_hex = match &receipt.status {
+    let (contract_addr_hex, address_source): (String, DeployAddressSource) = match &receipt.status {
         groundhog_rpc_api_types::receipt::ExecStatus::Ok => {
-            let return_data = receipt.return_data.as_ref().ok_or_else(|| {
-                CliError::Other(
-                    "deploy succeeded but receipt has no return_data \
-                     (cannot determine contract address)"
-                        .into(),
-                )
-            })?;
-            format!("0x{}", hex::encode(&return_data.0))
+            resolve_deployed_address(&receipt.return_data, &predicted_address)?
         }
-        _ => String::new(),
+        _ => (String::new(), DeployAddressSource::Derived),
     };
 
     // Print result
     match &receipt.status {
         groundhog_rpc_api_types::receipt::ExecStatus::Ok => {
             print.status(format_args!("Deployed at {contract_addr_hex}"));
+            if matches!(address_source, DeployAddressSource::Derived) {
+                print.warn(
+                    "receipt omitted deploy return_data; address was derived locally from \
+                     deployer, nonce, and contract hash",
+                );
+            }
             print.status(format_args!("  tx: {}", format_tx_hash(&tx_hash)));
             print.status(format_args!("  height: {}", *receipt.height));
         }
@@ -175,6 +184,10 @@ pub fn run(
         json!({
             "tx_hash": format_tx_hash(&tx_hash),
             "address": contract_addr_hex,
+            "address_source": match address_source {
+                DeployAddressSource::Receipt => "receipt",
+                DeployAddressSource::Derived => "derived",
+            },
             "height": receipt.height,
             "status": receipt.status,
         }),
@@ -268,4 +281,83 @@ fn format_tx_hash(tx_hash: &TxHash) -> String {
         .unwrap_or_default()
         .trim_matches('"')
         .to_string()
+}
+
+fn derive_deploy_address(
+    deployer_address: &ContractAddress,
+    nonce: &SHA256Hash,
+    contract_hash: &SHA256Hash,
+) -> Result<ContractAddress, CliError> {
+    let preimage = ContractDeploymentHashPreimage {
+        deployer_address: *deployer_address,
+        nonce: *nonce,
+        contract_hash: *contract_hash,
+    };
+    let preimage = xdrs::txs::encode(&preimage)
+        .map_err(|e| CliError::Other(format!("failed to XDR-encode deploy preimage: {e}")))?;
+    let addr: [u8; 32] = Sha256::digest(preimage).into();
+    Ok(ContractAddress::from(addr))
+}
+
+fn resolve_deployed_address(
+    return_data: &Option<HexBytes>,
+    predicted_address: &ContractAddress,
+) -> Result<(String, DeployAddressSource), CliError> {
+    if let Some(return_data) = return_data {
+        if return_data.0.len() == 32 {
+            return Ok((
+                format!("0x{}", hex::encode(&return_data.0)),
+                DeployAddressSource::Receipt,
+            ));
+        }
+        return Err(CliError::Other(format!(
+            "deploy receipt return_data had {} bytes, expected 32-byte contract address",
+            return_data.0.len()
+        )));
+    }
+
+    Ok((
+        format!("0x{}", hex::encode(predicted_address.as_ref())),
+        DeployAddressSource::Derived,
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DeployAddressSource, derive_deploy_address, resolve_deployed_address};
+    use groundhog_rpc_api_types::hex::HexBytes;
+    use groundhog_xdr::types::{ContractAddress, SHA256Hash};
+
+    #[test]
+    fn deploy_address_resolution_falls_back_to_prediction() {
+        let predicted = ContractAddress::from([0x11; 32]);
+        let resolved = resolve_deployed_address(&None, &predicted)
+            .expect("bug: predicted address fallback should succeed");
+        assert_eq!(resolved.0, format!("0x{}", "11".repeat(32)));
+        assert_eq!(resolved.1, DeployAddressSource::Derived);
+    }
+
+    #[test]
+    fn deploy_address_resolution_prefers_receipt_return_data() {
+        let predicted = ContractAddress::from([0x11; 32]);
+        let resolved = resolve_deployed_address(&Some(HexBytes(vec![0x22; 32])), &predicted)
+            .expect("bug: receipt return_data should be accepted");
+        assert_eq!(resolved.0, format!("0x{}", "22".repeat(32)));
+        assert_eq!(resolved.1, DeployAddressSource::Receipt);
+    }
+
+    #[test]
+    fn deploy_address_derivation_is_deterministic() {
+        let deployer = ContractAddress::from([0xAB; 32]);
+        let nonce = SHA256Hash::from([0xCD; 32]);
+        let contract_hash = SHA256Hash::from([0xEF; 32]);
+
+        let first = derive_deploy_address(&deployer, &nonce, &contract_hash)
+            .expect("bug: derivation should succeed");
+        let second = derive_deploy_address(&deployer, &nonce, &contract_hash)
+            .expect("bug: derivation should succeed");
+
+        assert_eq!(first, second);
+        assert_ne!(first, deployer);
+    }
 }
