@@ -12,7 +12,10 @@ const DEV_SEED: &str = "groundhog-dev-accounts";
 pub const DEFAULT_ACCOUNT_COUNT: usize = 10;
 
 /// Default storage tokens per account.
-pub const DEFAULT_STORAGE_TOKENS: u64 = 1000;
+///
+/// Must cover wallet bootstrap plus ordinary local deployments and calls
+/// under the default storage cost model.
+pub const DEFAULT_STORAGE_TOKENS: u64 = 1_000_000_000;
 
 /// Derive a deterministic ed25519 keypair for dev account N.
 pub fn derive_dev_signer(index: usize) -> LocalSigner {

@@ -5,6 +5,7 @@ pub mod build;
 pub mod call;
 pub mod checks;
 pub mod config;
+pub mod contract_spec;
 pub mod deploy;
 pub mod dev_keys;
 pub mod error;

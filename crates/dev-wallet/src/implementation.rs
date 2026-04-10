@@ -47,10 +47,16 @@ impl DevWallet for DevWalletContract {
             &[u8],
         ) = xdrs::txs::decode(invocation_bytes).unwrap();
 
-        let mut return_len = 0;
-        let method_id = u64::from_be_bytes(entrypoint.into_inner());
-
-        sdk::sys::raw_Invoke(&addr, method_id, gas_limit, calldata, 0, &mut return_len).unwrap();
+        match sdk::call::contract_call(&addr, entrypoint, gas_limit, calldata)
+        {
+            Ok(Ok(return_buf)) => sdk::contract_return(return_buf.as_ref()),
+            Ok(Err(sdk::call::ContractError::Abort(abort_buf))) => {
+                sdk::contract_abort(abort_buf.as_ref())
+            }
+            Ok(Err(sdk::call::ContractError::Fault(_))) | Err(_) => {
+                trap();
+            }
+        }
     }
 
     fn deploy(&self, nonce: &SHA256Hash, contract_hash: &SHA256Hash) -> ContractAddress {

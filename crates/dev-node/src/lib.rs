@@ -25,7 +25,7 @@ pub struct DevNodeConfig {
     pub listen_address: String,
     /// Number of pre-funded accounts (default: 10).
     pub account_count: usize,
-    /// Storage tokens per account (default: 1000).
+    /// Storage tokens per account (default: 1_000_000_000).
     pub storage_tokens: u64,
 }
 

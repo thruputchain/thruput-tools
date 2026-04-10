@@ -13,14 +13,18 @@ use groundhog_rpc_api_types::events::{EmittedEvent, IdentifiedEvent};
 use groundhog_rpc_api_types::hex::{Hex0x, HexBytes, Topic};
 use groundhog_rpc_api_types::receipt::{ExecStatus, TransactionReceipt};
 use groundhog_rpc_api_types::transaction::{TransactionStatus, TxHash};
+use groundhog_xdr::contract::ContractDeploymentHashPreimage;
 use groundhog_xdr::event::TxEmittedEvent;
 use groundhog_xdr::exec_result::ExecResult;
 use groundhog_xdr::transaction::{InvocationFrameOutput, SignedTransaction};
-use groundhog_xdr::types::SHA256Hash;
+use groundhog_xdr::types::{ContractAddress, SHA256Hash};
 use sha2::{Digest, Sha256};
 
 use crate::accounts;
 use crate::error::DevNodeError;
+
+/// Wallet `deploy` entrypoint ID (from dev-wallet WASM exports).
+const WALLET_DEPLOY_ENTRYPOINT: [u8; 8] = 0xADAC_4982_2214_8E4F_u64.to_be_bytes();
 
 /// In-memory dev node state.
 pub struct DevBackend {
@@ -124,16 +128,8 @@ impl DevBackend {
 
             let exec = handler.try_commit_transaction();
 
-            // Accept ExecResultOK or ExecResultTxNonDeterministicError.
-            // The nondeterministic error can occur because our setup
-            // transactions have no gas claims, which the commit validation
-            // may flag. The auth data changes still persist because the
-            // invocation succeeded.
-            let ok = exec.0 == groundhog_xdr::exec_result::ExecResult::ExecResultOK.0
-                || exec.0
-                    == groundhog_xdr::exec_result::ExecResult::ExecResultTxNonDeterministicError.0;
             assert!(
-                ok,
+                exec.0 == groundhog_xdr::exec_result::ExecResult::ExecResultOK.0,
                 "bug: wallet initialize commit failed for account {}: exec={exec:?}",
                 hex::encode(addr.as_ref()),
             );
@@ -178,6 +174,14 @@ impl DevBackend {
         // 4. Register contracts to deploy
         for contract in signed_tx.tx.contracts_to_deploy.iter() {
             self.env.setup_create_contract(contract);
+        }
+
+        // Local-dev semantics: wallet deploys should "just work" without
+        // separately pre-funding the derived contract address.
+        if let Some(addr) = predicted_wallet_deploy_address(&signed_tx) {
+            #[allow(clippy::cast_possible_wrap)]
+            self.env
+                .setup_grant_storage_tokens(&addr, self.storage_tokens as i64);
         }
 
         // 5. Execute
@@ -269,6 +273,36 @@ impl DevBackend {
     }
 }
 
+fn predicted_wallet_deploy_address(signed_tx: &SignedTransaction) -> Option<ContractAddress> {
+    if signed_tx.tx.invocation.entrypoint.into_inner() != WALLET_DEPLOY_ENTRYPOINT {
+        return None;
+    }
+
+    let (deploy_nonce, contract_hash): (SHA256Hash, SHA256Hash) =
+        xdrs::cxs::decode(&signed_tx.tx.invocation.calldata.0).ok()?;
+
+    Some(compute_deploy_address(
+        &signed_tx.tx.invocation.invoked_address,
+        &deploy_nonce,
+        &contract_hash,
+    ))
+}
+
+fn compute_deploy_address(
+    deployer_address: &ContractAddress,
+    deploy_nonce: &SHA256Hash,
+    contract_hash: &SHA256Hash,
+) -> ContractAddress {
+    let preimage = ContractDeploymentHashPreimage {
+        deployer_address: *deployer_address,
+        nonce: *deploy_nonce,
+        contract_hash: *contract_hash,
+    };
+    let preimage = xdrs::txs::encode(&preimage).expect("bug: deploy preimage should encode");
+    let addr: [u8; 32] = Sha256::digest(&preimage).into();
+    ContractAddress::from(addr)
+}
+
 /// Parse a `TxEmittedEvent` into a gateway `EmittedEvent`.
 ///
 /// The `serialized_event` field packs topics and data:
@@ -317,6 +351,8 @@ fn map_exec_result(
         ExecStatus::DeterministicError {
             kind: "deterministic_error".to_string(),
         }
+    } else if exec_result.0 == ExecResult::ExecResultTxNonDeterministicError.0 {
+        ExecStatus::NonDeterministicError
     } else if exec_result.0 == ExecResult::ExecResultFailedGasSponsorship.0 {
         ExecStatus::FailedGasSponsorship
     } else {
@@ -324,4 +360,87 @@ fn map_exec_result(
     };
 
     (status, return_data)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DevBackend;
+    use crate::accounts::DEFAULT_STORAGE_TOKENS;
+    use crate::wallet::DEV_WALLET_WASM;
+    use groundhog_rpc_api_types::receipt::ExecStatus;
+    use groundhog_signing::{
+        BuildDeployTransaction, DEFAULT_PUBKEY_ACCOUNT_NONCE, PubkeyAccount, SignTransactionParams,
+        Signer, build_deploy_transaction, encode_signed_transaction_xdr, sign_transaction,
+    };
+    use groundhog_xdr::auth_claim::{AuthClaim, AuthClaimData};
+    use groundhog_xdr::contract::{Contract, ContractBlob, ContractEntrypointID};
+    use groundhog_xdr::types::SHA256Hash;
+    use sha2::{Digest, Sha256};
+    use xdr_common::{BytesM, VecM};
+
+    #[test]
+    fn initializes_wallet_auth_data_for_dev_accounts() {
+        let backend = DevBackend::new(1, DEFAULT_STORAGE_TOKENS);
+        assert_eq!(backend.accounts().len(), 1);
+    }
+
+    #[test]
+    fn deploy_transaction_prefunds_predicted_address() {
+        let mut backend = DevBackend::new(1, DEFAULT_STORAGE_TOKENS);
+        let signer = crate::accounts::derive_dev_signer(0);
+        let wallet_address = PubkeyAccount::new(signer.public_key(), DEFAULT_PUBKEY_ACCOUNT_NONCE)
+            .address()
+            .expect("bug: dev wallet address derivation should succeed");
+
+        let contract = Contract::kWasmi {
+            wasmi_contract: ContractBlob {
+                wasm: BytesM(DEV_WALLET_WASM.to_vec()),
+            },
+        };
+        let contract_xdr = xdrs::txs::encode(&contract).expect("bug: contract should encode");
+        let contract_hash = SHA256Hash::from(<[u8; 32]>::from(Sha256::digest(&contract_xdr)));
+
+        let deploy_nonce =
+            SHA256Hash::from(<[u8; 32]>::from(Sha256::digest(1234_u64.to_le_bytes())));
+        let expected_address =
+            super::compute_deploy_address(&wallet_address, &deploy_nonce, &contract_hash);
+        let calldata = xdrs::cxs::encode(&(&deploy_nonce, &contract_hash))
+            .expect("bug: deploy calldata should encode");
+        let auth_claims: AuthClaimData = vec![AuthClaim::kInvokedAddressSignature {
+            invoked_address_signature_id: 0,
+        }]
+        .try_into()
+        .expect("bug: auth claim should fit");
+
+        let tx = build_deploy_transaction(BuildDeployTransaction {
+            invoked_address: wallet_address,
+            entrypoint: ContractEntrypointID::from(super::WALLET_DEPLOY_ENTRYPOINT),
+            calldata,
+            gas_limit: 10_000_000,
+            block_expiry_height: i64::MAX,
+            nonce: 1234,
+            contracts_to_deploy: VecM(vec![contract]),
+            auth_claims,
+        });
+        let signed_tx = sign_transaction(tx, &signer, SignTransactionParams::default())
+            .expect("bug: deploy tx should sign");
+        let tx_bytes =
+            encode_signed_transaction_xdr(&signed_tx).expect("bug: deploy tx should encode");
+
+        let tx_hash = backend
+            .send_raw_transaction(&tx_bytes)
+            .expect("bug: deploy should commit in dev backend");
+        let receipt = backend
+            .get_transaction_receipt(&tx_hash)
+            .expect("bug: committed tx should have receipt");
+
+        assert!(matches!(receipt.status, ExecStatus::Ok));
+        assert_eq!(
+            receipt
+                .return_data
+                .expect("bug: deploy should return address")
+                .0,
+            expected_address.as_ref()
+        );
+    }
 }

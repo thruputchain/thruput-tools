@@ -10,6 +10,8 @@ pub struct BuildResult {
     pub project_name: String,
     pub project_root: PathBuf,
     pub wasm: PathBuf,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spec_json: Option<PathBuf>,
     pub size_bytes: u64,
     pub optimized: bool,
     pub profile: crate::config::ResolvedProfile,
@@ -35,6 +37,7 @@ pub fn run(
             "project_name": result.project_name,
             "project_root": result.project_root,
             "wasm": result.wasm,
+            "spec_json": result.spec_json,
             "size_bytes": result.size_bytes,
             "optimized": result.optimized,
             "profile": result.profile,
@@ -100,11 +103,13 @@ pub fn build_project(
 
     let size = fs::metadata(&wasm)?.len();
     print.status(format_args!("Built {} ({size} bytes)", wasm.display()));
+    let spec_json = crate::contract_spec::maybe_generate_sidecar(&root, &name, &wasm, print)?;
 
     Ok(BuildResult {
         project_name: name,
         project_root: root,
         wasm,
+        spec_json,
         size_bytes: size,
         optimized: optimize,
         profile,

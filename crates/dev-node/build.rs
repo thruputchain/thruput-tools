@@ -30,12 +30,7 @@ fn main() {
         .current_dir(&wallet_dir)
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
         .env_remove("RUSTFLAGS")
-        .args([
-            "build",
-            "--target",
-            "wasm32-unknown-unknown",
-            "--release",
-        ])
+        .args(["build", "--target", "wasm32-unknown-unknown", "--release"])
         .status()
         .expect("failed to run cargo for dev-wallet build");
 

@@ -1,8 +1,12 @@
 use sdk::storage::NNInt;
 use sdk::*;
 
+#[cfg(feature = "spec")]
+use sdk::XDR;
+
 #[contract_error]
-pub enum Error {
+#[cfg_attr(feature = "spec", derive(XDR))]
+pub enum CounterError {
     NotAuthorized = 1,
 }
 
@@ -16,7 +20,7 @@ pub struct Counter {
     value: NNInt,
 }
 
-#[contract(throws = Error)]
+#[contract(throws = CounterError)]
 impl Counter {
     pub fn initialize(&mut self, initial_value: u64) {
         self.value.strict_inc(initial_value as i128);
@@ -35,6 +39,6 @@ impl Counter {
     }
 
     pub fn error(&self) -> u64 {
-        throw(Error::NotAuthorized);
+        throw(CounterError::NotAuthorized);
     }
 }

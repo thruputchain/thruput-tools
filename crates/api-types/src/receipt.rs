@@ -63,6 +63,9 @@ pub enum ExecStatus {
         kind: String,
     },
 
+    /// Commit failed due to a race or other proposal-time storage conflict.
+    NonDeterministicError,
+
     /// Gas sponsorship failed.
     FailedGasSponsorship,
 
@@ -71,4 +74,16 @@ pub enum ExecStatus {
     /// it doesn't know about. Check for gateway updates.
     #[serde(other)]
     Other,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ExecStatus;
+
+    #[test]
+    fn serializes_nondeterministic_error_variant() {
+        let json = serde_json::to_string(&ExecStatus::NonDeterministicError)
+            .expect("bug: nondeterministic status should serialize");
+        assert_eq!(json, r#"{"result":"nonDeterministicError"}"#);
+    }
 }

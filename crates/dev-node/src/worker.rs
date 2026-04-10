@@ -140,3 +140,19 @@ pub fn spawn_worker(account_count: usize, storage_tokens: u64) -> WorkerHandle {
 
     WorkerHandle { tx }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::spawn_worker;
+    use crate::accounts::DEFAULT_STORAGE_TOKENS;
+
+    #[tokio::test]
+    async fn worker_initializes_backend_on_dedicated_thread() {
+        let worker = spawn_worker(1, DEFAULT_STORAGE_TOKENS);
+        let accounts = worker
+            .get_accounts()
+            .await
+            .expect("bug: worker should start");
+        assert_eq!(accounts.len(), 1);
+    }
+}
