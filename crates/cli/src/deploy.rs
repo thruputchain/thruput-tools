@@ -3,11 +3,10 @@ use std::path::Path;
 use groundhog_rpc_api_types::hex::HexBytes;
 use groundhog_rpc_api_types::transaction::TxHash;
 use groundhog_signing::{
-    BuildDeployTransaction, SignTransactionParams, Signer, build_deploy_transaction,
-    sign_transaction,
+    BuildDeployTransaction, DEFAULT_TX_GAS_LIMIT, SignTransactionParams, Signer,
+    WALLET_DEPLOY_ENTRYPOINT, build_deploy_transaction, derive_deploy_address, sign_transaction,
 };
 use groundhog_xdr::auth_claim::AuthClaim;
-use groundhog_xdr::contract::ContractDeploymentHashPreimage;
 use groundhog_xdr::types::ContractAddress;
 use groundhog_xdr::types::SHA256Hash;
 use serde_json::json;
@@ -17,10 +16,8 @@ use xdr_common::VecM;
 use crate::config::{resolve_default_key, resolve_profile};
 use crate::keys::load_local_signer;
 use crate::result::CommandResult;
+use crate::tx_utils::{format_tx_hash, nonce_from_timestamp};
 use crate::{CliError, Print};
-
-/// Wallet `deploy` entrypoint ID (from dev-wallet WASM exports).
-const WALLET_DEPLOY_ENTRYPOINT: [u8; 8] = 0xADAC_4982_2214_8E4F_u64.to_be_bytes();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DeployAddressSource {
@@ -91,7 +88,8 @@ pub fn run(
     let deploy_nonce_val = nonce_from_timestamp();
     let deploy_nonce_bytes: [u8; 32] = Sha256::digest(deploy_nonce_val.to_le_bytes()).into();
     let deploy_nonce = SHA256Hash::from(deploy_nonce_bytes);
-    let predicted_address = derive_deploy_address(&wallet_address, &deploy_nonce, &contract_hash)?;
+    let predicted_address = derive_deploy_address(&wallet_address, &deploy_nonce, &contract_hash)
+        .map_err(|e| CliError::Other(e.to_string()))?;
 
     // Calldata = CXS-encoded (nonce, contract_hash) — matches wallet deploy signature.
     // Must use CXS encoding (not txs) because the #[contract] macro
@@ -113,7 +111,7 @@ pub fn run(
         invoked_address: wallet_address,
         entrypoint,
         calldata,
-        gas_limit: 10_000_000,
+        gas_limit: DEFAULT_TX_GAS_LIMIT,
         block_expiry_height: 1_000_000,
         nonce: deploy_nonce_val,
         contracts_to_deploy: VecM(vec![contract]),
@@ -233,7 +231,9 @@ async fn submit_and_poll(
             }
         }
     }
-    unreachable!()
+    Err(CliError::Other(
+        "internal error: receipt polling exhausted unexpectedly".into(),
+    ))
 }
 
 fn find_and_read_wasm(cwd: &Path) -> Result<Vec<u8>, CliError> {
@@ -266,37 +266,6 @@ fn find_and_read_wasm(cwd: &Path) -> Result<Vec<u8>, CliError> {
         .expect("bug: wasm_files is non-empty")
         .path();
     std::fs::read(&wasm_path).map_err(CliError::from)
-}
-
-fn nonce_from_timestamp() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()
-        .and_then(|d| u64::try_from(d.as_nanos()).ok())
-        .unwrap_or(1)
-}
-
-fn format_tx_hash(tx_hash: &TxHash) -> String {
-    serde_json::to_string(tx_hash)
-        .unwrap_or_default()
-        .trim_matches('"')
-        .to_string()
-}
-
-fn derive_deploy_address(
-    deployer_address: &ContractAddress,
-    nonce: &SHA256Hash,
-    contract_hash: &SHA256Hash,
-) -> Result<ContractAddress, CliError> {
-    let preimage = ContractDeploymentHashPreimage {
-        deployer_address: *deployer_address,
-        nonce: *nonce,
-        contract_hash: *contract_hash,
-    };
-    let preimage = xdrs::txs::encode(&preimage)
-        .map_err(|e| CliError::Other(format!("failed to XDR-encode deploy preimage: {e}")))?;
-    let addr: [u8; 32] = Sha256::digest(preimage).into();
-    Ok(ContractAddress::from(addr))
 }
 
 fn resolve_deployed_address(

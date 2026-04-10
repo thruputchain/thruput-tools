@@ -18,6 +18,7 @@ pub mod result;
 pub mod scaffold;
 pub mod status;
 pub mod test_cmd;
+pub mod tx_utils;
 pub use error::CliError;
 pub use print::Print;
 

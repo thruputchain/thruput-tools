@@ -3,11 +3,12 @@ use std::path::{Path, PathBuf};
 use groundhog_rpc_api_types::receipt::ExecStatus;
 use groundhog_rpc_api_types::transaction::TxHash;
 use groundhog_signing::{
-    BuildCallTransaction, SignTransactionParams, Signer, build_call_transaction, sign_transaction,
+    BuildCallTransaction, DEFAULT_TX_GAS_LIMIT, SignTransactionParams, Signer,
+    build_call_transaction, sign_transaction,
 };
-use groundhog_xdr::types::{ContractAddress, Ed25519PublicKey, SHA256Hash};
 use groundhog_xdr::auth_claim::AuthClaim;
 use groundhog_xdr::contract::ContractEntrypointID;
+use groundhog_xdr::types::{ContractAddress, Ed25519PublicKey, SHA256Hash};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
@@ -16,6 +17,7 @@ use crate::config::{find_project_config, resolve_default_key, resolve_profile};
 use crate::contract_spec::{FullMethodSpec, TypeSpec, load_full_spec, load_interface_sidecar};
 use crate::keys::load_local_signer;
 use crate::result::CommandResult;
+use crate::tx_utils::{format_tx_hash, nonce_from_timestamp, poll_exhausted_error};
 use crate::{CliError, Print};
 
 /// Wallet `do_action` entrypoint ID (from dev-wallet WASM exports).
@@ -99,7 +101,7 @@ pub fn run(
 
     // Encode the inner invocation (TXS format, matching wallet's txs::decode):
     // (contract_address, method_entrypoint, gas_limit, raw_calldata)
-    let inner_gas_limit: u64 = 10_000_000;
+    let inner_gas_limit: u64 = DEFAULT_TX_GAS_LIMIT;
     let inner_invocation = xdrs::txs::encode(&(
         contract_address,
         entrypoint,
@@ -128,7 +130,7 @@ pub fn run(
         invoked_address: wallet_address,
         entrypoint: wallet_entrypoint,
         calldata: do_action_calldata,
-        gas_limit: 10_000_000,
+        gas_limit: DEFAULT_TX_GAS_LIMIT,
         block_expiry_height: 1_000_000,
         nonce: nonce_from_timestamp(),
         auth_claims,
@@ -239,12 +241,10 @@ async fn submit_and_poll(
             }
         }
     }
-    unreachable!()
+    Err(poll_exhausted_error())
 }
 
-fn parse_contract_address(
-    hex_str: &str,
-) -> Result<ContractAddress, CliError> {
+fn parse_contract_address(hex_str: &str) -> Result<ContractAddress, CliError> {
     Ok(ContractAddress::from(parse_fixed_hex::<32>(
         hex_str,
         "contract address",
@@ -873,11 +873,15 @@ fn decode_single_value(ty: &str, bytes: &[u8]) -> Option<serde_json::Value> {
         "u16" => decode_xdr_value::<u16>(bytes).map(serde_json::Value::from),
         "u32" => decode_xdr_value::<u32>(bytes).map(serde_json::Value::from),
         "u64" => decode_xdr_value::<u64>(bytes).map(serde_json::Value::from),
-        "u128" => decode_xdr_value::<u128>(bytes).map(|value| serde_json::Value::from(value.to_string())),
+        "u128" => {
+            decode_xdr_value::<u128>(bytes).map(|value| serde_json::Value::from(value.to_string()))
+        }
         "i16" => decode_xdr_value::<i16>(bytes).map(serde_json::Value::from),
         "i32" => decode_xdr_value::<i32>(bytes).map(serde_json::Value::from),
         "i64" => decode_xdr_value::<i64>(bytes).map(serde_json::Value::from),
-        "i128" => decode_xdr_value::<i128>(bytes).map(|value| serde_json::Value::from(value.to_string())),
+        "i128" => {
+            decode_xdr_value::<i128>(bytes).map(|value| serde_json::Value::from(value.to_string()))
+        }
         "bool" => decode_xdr_value::<bool>(bytes).map(serde_json::Value::from),
         "String" | "&str" => decode_xdr_value::<String>(bytes).map(serde_json::Value::from),
         "ContractAddress" => decode_xdr_value::<ContractAddress>(bytes).map(hex_json_value),
@@ -977,8 +981,12 @@ fn decode_typespec_from_reader(
         "unsigned int" => read_xdr_value::<u32>(reader).map(serde_json::Value::from),
         "int" => read_xdr_value::<i32>(reader).map(serde_json::Value::from),
         "unsigned" => read_xdr_value::<u16>(reader).map(serde_json::Value::from),
-        "U128" => read_xdr_value::<u128>(reader).map(|value| serde_json::Value::from(value.to_string())),
-        "I128" => read_xdr_value::<i128>(reader).map(|value| serde_json::Value::from(value.to_string())),
+        "U128" => {
+            read_xdr_value::<u128>(reader).map(|value| serde_json::Value::from(value.to_string()))
+        }
+        "I128" => {
+            read_xdr_value::<i128>(reader).map(|value| serde_json::Value::from(value.to_string()))
+        }
         "bool" => read_xdr_value::<bool>(reader).map(serde_json::Value::from),
         "string" => read_xdr_value::<String>(reader).map(serde_json::Value::from),
         "ContractAddress" => read_xdr_value::<ContractAddress>(reader).map(hex_json_value),
@@ -1054,12 +1062,12 @@ fn encode_json_typespec_value(
         serde_json::Value::Null => Err(CliError::Other(
             "null is not supported for this contract argument type".into(),
         )),
-        serde_json::Value::Array(_) | serde_json::Value::Object(_) => Err(CliError::Other(
-            format!(
+        serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
+            Err(CliError::Other(format!(
                 "nested JSON value is not supported for scalar contract type `{}`",
                 typespec.kind
-            ),
-        )),
+            )))
+        }
     }
 }
 
@@ -1086,8 +1094,8 @@ fn normalize_type_name(ty: &str) -> String {
 
 fn parse_fixed_hex<const N: usize>(value: &str, label: &str) -> Result<[u8; N], CliError> {
     let stripped = value.strip_prefix("0x").unwrap_or(value);
-    let bytes = hex::decode(stripped)
-        .map_err(|e| CliError::Other(format!("invalid {label} hex: {e}")))?;
+    let bytes =
+        hex::decode(stripped).map_err(|e| CliError::Other(format!("invalid {label} hex: {e}")))?;
     bytes
         .try_into()
         .map_err(|_| CliError::Other(format!("{label} must be {N} bytes")))
@@ -1107,36 +1115,17 @@ where
     serde_json::Value::from(format!("0x{}", hex::encode(value.as_ref())))
 }
 
-fn nonce_from_timestamp() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()
-        .and_then(|d| u64::try_from(d.as_nanos()).ok())
-        .unwrap_or(1)
-}
-
-fn format_tx_hash(tx_hash: &TxHash) -> String {
-    serde_json::to_string(tx_hash)
-        .unwrap_or_default()
-        .trim_matches('"')
-        .to_string()
-}
-
 fn summarize_exec_status(status: &ExecStatus) -> String {
     match status {
         ExecStatus::Ok => "succeeded".into(),
         ExecStatus::Reverted {
             message: Some(message),
         } => format!("reverted: {message}"),
-        ExecStatus::Reverted { message: None } => {
-            "reverted without abort data".into()
-        }
+        ExecStatus::Reverted { message: None } => "reverted without abort data".into(),
         ExecStatus::DeterministicError { kind } => {
             format!("failed with deterministic execution error ({kind})")
         }
-        ExecStatus::NonDeterministicError => {
-            "failed with nondeterministic commit error".into()
-        }
+        ExecStatus::NonDeterministicError => "failed with nondeterministic commit error".into(),
         ExecStatus::FailedGasSponsorship => "failed gas sponsorship".into(),
         ExecStatus::Other => "failed with unknown execution result".into(),
         _ => "failed with unsupported execution result".into(),

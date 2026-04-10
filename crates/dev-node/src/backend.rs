@@ -13,7 +13,7 @@ use groundhog_rpc_api_types::events::{EmittedEvent, IdentifiedEvent};
 use groundhog_rpc_api_types::hex::{Hex0x, HexBytes, Topic};
 use groundhog_rpc_api_types::receipt::{ExecStatus, TransactionReceipt};
 use groundhog_rpc_api_types::transaction::{TransactionStatus, TxHash};
-use groundhog_xdr::contract::ContractDeploymentHashPreimage;
+use groundhog_signing::{DEFAULT_TX_GAS_LIMIT, WALLET_DEPLOY_ENTRYPOINT, derive_deploy_address};
 use groundhog_xdr::event::TxEmittedEvent;
 use groundhog_xdr::exec_result::ExecResult;
 use groundhog_xdr::transaction::{InvocationFrameOutput, SignedTransaction};
@@ -22,9 +22,6 @@ use sha2::{Digest, Sha256};
 
 use crate::accounts;
 use crate::error::DevNodeError;
-
-/// Wallet `deploy` entrypoint ID (from dev-wallet WASM exports).
-const WALLET_DEPLOY_ENTRYPOINT: [u8; 8] = 0xADAC_4982_2214_8E4F_u64.to_be_bytes();
 
 /// In-memory dev node state.
 pub struct DevBackend {
@@ -105,7 +102,7 @@ impl DevBackend {
                     invocation: groundhog_xdr::transaction::Invocation {
                         invoked_address: addr,
                         entrypoint: initialize_entrypoint,
-                        gas_limit: u64::MAX,
+                        gas_limit: DEFAULT_TX_GAS_LIMIT,
                         calldata: xdr_common::BytesM(calldata),
                     },
                     contracts_to_deploy: xdr_common::VecM(vec![]),
@@ -293,14 +290,8 @@ fn compute_deploy_address(
     deploy_nonce: &SHA256Hash,
     contract_hash: &SHA256Hash,
 ) -> ContractAddress {
-    let preimage = ContractDeploymentHashPreimage {
-        deployer_address: *deployer_address,
-        nonce: *deploy_nonce,
-        contract_hash: *contract_hash,
-    };
-    let preimage = xdrs::txs::encode(&preimage).expect("bug: deploy preimage should encode");
-    let addr: [u8; 32] = Sha256::digest(&preimage).into();
-    ContractAddress::from(addr)
+    derive_deploy_address(deployer_address, deploy_nonce, contract_hash)
+        .expect("bug: deploy preimage should encode")
 }
 
 /// Parse a `TxEmittedEvent` into a gateway `EmittedEvent`.
@@ -369,8 +360,9 @@ mod tests {
     use crate::wallet::DEV_WALLET_WASM;
     use groundhog_rpc_api_types::receipt::ExecStatus;
     use groundhog_signing::{
-        BuildDeployTransaction, DEFAULT_PUBKEY_ACCOUNT_NONCE, PubkeyAccount, SignTransactionParams,
-        Signer, build_deploy_transaction, encode_signed_transaction_xdr, sign_transaction,
+        BuildDeployTransaction, DEFAULT_PUBKEY_ACCOUNT_NONCE, DEFAULT_TX_GAS_LIMIT,
+        PubkeyAccount, SignTransactionParams, Signer, build_deploy_transaction,
+        encode_signed_transaction_xdr, sign_transaction,
     };
     use groundhog_xdr::auth_claim::{AuthClaim, AuthClaimData};
     use groundhog_xdr::contract::{Contract, ContractBlob, ContractEntrypointID};
@@ -416,7 +408,7 @@ mod tests {
             invoked_address: wallet_address,
             entrypoint: ContractEntrypointID::from(super::WALLET_DEPLOY_ENTRYPOINT),
             calldata,
-            gas_limit: 10_000_000,
+            gas_limit: DEFAULT_TX_GAS_LIMIT,
             block_expiry_height: i64::MAX,
             nonce: 1234,
             contracts_to_deploy: VecM(vec![contract]),

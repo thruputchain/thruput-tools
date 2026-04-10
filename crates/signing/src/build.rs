@@ -2,12 +2,19 @@
 
 use crate::{AuthClaimIndex, PublicKeyId, Signer, SigningError};
 use groundhog_xdr::auth_claim::AuthClaimData;
-use groundhog_xdr::contract::ContractEntrypointID;
+use groundhog_xdr::contract::{ContractDeploymentHashPreimage, ContractEntrypointID};
 use groundhog_xdr::transaction::{
     DecoratedSignature, Invocation, SignedTransaction, Transaction, Uniquifier,
 };
-use groundhog_xdr::types::{BlockHeight, ContractAddress};
+use groundhog_xdr::types::{BlockHeight, ContractAddress, SHA256Hash};
+use sha2::{Digest, Sha256};
 use xdr_common::{BytesM, VecM};
+
+/// Wallet `deploy` entrypoint ID (from dev-wallet WASM exports).
+pub const WALLET_DEPLOY_ENTRYPOINT: [u8; 8] = 0xADAC_4982_2214_8E4F_u64.to_be_bytes();
+
+/// Default gas limit used by the CLI/dev-node wallet invocation flow.
+pub const DEFAULT_TX_GAS_LIMIT: u64 = 10_000_000;
 
 /// Parameters controlling how a signature is annotated in a signed
 /// transaction.
@@ -103,6 +110,23 @@ pub fn build_deploy_transaction(args: BuildDeployTransaction) -> Transaction {
         auth_claims: args.auth_claims,
         gas_claims: VecM(vec![]),
     }
+}
+
+/// Compute the deployed contract address from the canonical deployment preimage.
+pub fn derive_deploy_address(
+    deployer_address: &ContractAddress,
+    deploy_nonce: &SHA256Hash,
+    contract_hash: &SHA256Hash,
+) -> Result<ContractAddress, SigningError> {
+    let preimage = ContractDeploymentHashPreimage {
+        deployer_address: *deployer_address,
+        nonce: *deploy_nonce,
+        contract_hash: *contract_hash,
+    };
+    let preimage =
+        xdrs::txs::encode(&preimage).map_err(|e| SigningError::XdrEncode(e.to_string()))?;
+    let addr: [u8; 32] = Sha256::digest(&preimage).into();
+    Ok(ContractAddress::from(addr))
 }
 
 /// Signs a transaction and returns the canonical signed transaction.
