@@ -29,6 +29,7 @@ groundhog-xdr = { workspace = true }
 xdrs = { workspace = true }
 xdr-common = { workspace = true }
 tokio = { workspace = true }
+tracing-subscriber = { workspace = true }
 groundhog-dev-node = { path = "../dev-node", optional = true }
 groundhog-sys = { path = "../groundhog-sys", optional = true }
 

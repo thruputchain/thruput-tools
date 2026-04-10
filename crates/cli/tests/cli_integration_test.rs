@@ -400,7 +400,7 @@ fn deploy_json_fails_without_config() {
     let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(stderr["ok"], false);
     assert_eq!(stderr["command"], "deploy");
-    assert_eq!(stderr["error"]["code"], "other");
+    assert_eq!(stderr["error"]["code"], "missing_rpc_url");
 }
 
 #[test]
@@ -413,7 +413,7 @@ fn call_json_fails_without_config() {
     let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(stderr["ok"], false);
     assert_eq!(stderr["command"], "call");
-    assert_eq!(stderr["error"]["code"], "other");
+    assert_eq!(stderr["error"]["code"], "missing_rpc_url");
 }
 
 #[test]

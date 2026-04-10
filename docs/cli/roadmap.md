@@ -111,9 +111,9 @@ Maintenance rules:
 - [x] Minimal project config: active profile selection, `rpc_url`,
   default key name, per-profile contract aliases / addresses, and
   environment override
-- [ ] Wire contract spec / IDL generation into the CLI workflow
-- [ ] Clarify the contract spec / IDL path needed for `call`
-- [ ] Signing / tx-building: depend on a shared signing library
+- [x] Wire contract spec / IDL generation into the CLI workflow
+- [x] Clarify the contract spec / IDL path needed for `call`
+- [x] Signing / tx-building: depend on a shared signing library
   extracted from `groundhog-rpc/crates/tx-builder`.
   Current direction: extract a dedicated `groundhog-signing` crate,
   keep `sdk_rs` separate, and consolidate CLI + RPC gateway into one
@@ -124,11 +124,11 @@ Maintenance rules:
   with canonical `PubkeyAccountPreimage` XDR, and bridge `keys.rs` key
   loading to the shared signing library.
 - [x] Command result envelope for consistent JSON shape
-- [ ] Implement `groundhog deploy`
-- [ ] Implement `groundhog call`
-- [ ] Add real `--json` payloads for `deploy` and `call`
-- [ ] Wire deploy to persist/update alias in `groundhog.toml`
-- [ ] Start deploy/call integration once the RPC client path is ready
+- [x] Implement `groundhog deploy`
+- [x] Implement `groundhog call`
+- [x] Add real `--json` payloads for `deploy` and `call`
+- [x] Wire deploy to persist/update alias in `groundhog.toml`
+- [x] Start deploy/call integration once the RPC client path is ready
 
 ### Phase 2
 

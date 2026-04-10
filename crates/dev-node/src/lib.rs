@@ -16,7 +16,13 @@ use jsonrpsee::server::{RpcModule, Server};
 
 use crate::accounts::{DEFAULT_ACCOUNT_COUNT, DEFAULT_STORAGE_TOKENS};
 use crate::rpc::DevNodeRpc;
-use crate::worker::spawn_worker;
+use crate::worker::{WorkerHandle, spawn_worker};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DevNodeStats {
+    pub block_count: u64,
+    pub tx_count: usize,
+}
 
 /// Configuration for the dev node server.
 #[derive(Debug, Clone)]
@@ -47,6 +53,13 @@ impl Default for DevNodeConfig {
 pub async fn start_server(
     config: DevNodeConfig,
 ) -> Result<DevNodeHandle, Box<dyn std::error::Error + Send + Sync>> {
+    tracing::info!(
+        listen_address = %config.listen_address,
+        account_count = config.account_count,
+        storage_tokens = config.storage_tokens,
+        "starting dev node"
+    );
+
     let worker = spawn_worker(config.account_count, config.storage_tokens);
     let accounts = worker
         .get_accounts()
@@ -58,7 +71,7 @@ pub async fn start_server(
     // DevNodeRpc implements both GroundhogApiServer and GroundhogDevApiServer.
     // jsonrpsee's into_rpc() only picks up one trait. Use RpcModule::merge
     // to combine both namespaces into a single module.
-    let rpc = DevNodeRpc::new(worker);
+    let rpc = DevNodeRpc::new(worker.clone());
     let mut module = RpcModule::new(());
     module.merge(GroundhogApiServer::into_rpc(rpc.clone()))?;
     module.merge(GroundhogDevApiServer::into_rpc(rpc))?;
@@ -66,23 +79,37 @@ pub async fn start_server(
     let addr = server.local_addr()?;
     let handle = server.start(module);
 
+    tracing::info!(%addr, account_count = accounts.len(), "dev node listening");
+
     Ok(DevNodeHandle {
         accounts,
         addr,
+        worker,
         handle,
     })
 }
 
 /// Running dev node server.
+#[derive(Debug)]
 pub struct DevNodeHandle {
     /// Pre-funded dev accounts.
     pub accounts: Vec<groundhog_rpc_api_types::dev::DevAccount>,
     /// Actual bound address (useful when binding to port 0).
     pub addr: std::net::SocketAddr,
+    worker: WorkerHandle,
     handle: jsonrpsee::server::ServerHandle,
 }
 
 impl DevNodeHandle {
+    /// Current dev-node summary stats.
+    pub async fn stats(&self) -> Result<DevNodeStats, crate::error::DevNodeError> {
+        let stats = self.worker.stats().await?;
+        Ok(DevNodeStats {
+            block_count: stats.block_count,
+            tx_count: stats.tx_count,
+        })
+    }
+
     /// Wait until the server stops.
     pub async fn stopped(&self) {
         self.handle.clone().stopped().await;

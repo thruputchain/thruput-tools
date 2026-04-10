@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 
 use groundhog_rpc_api_types::receipt::ExecStatus;
-use groundhog_rpc_api_types::transaction::TxHash;
 use groundhog_signing::{
     BuildCallTransaction, DEFAULT_TX_GAS_LIMIT, SignTransactionParams, Signer,
     build_call_transaction, sign_transaction,
@@ -17,7 +16,7 @@ use crate::config::{find_project_config, resolve_default_key, resolve_profile};
 use crate::contract_spec::{FullMethodSpec, TypeSpec, load_full_spec, load_interface_sidecar};
 use crate::keys::load_local_signer;
 use crate::result::CommandResult;
-use crate::tx_utils::{format_tx_hash, nonce_from_timestamp, poll_exhausted_error};
+use crate::tx_utils::{format_tx_hash, nonce_from_timestamp, submit_and_poll};
 use crate::{CliError, Print};
 
 /// Wallet `do_action` entrypoint ID (from dev-wallet WASM exports).
@@ -49,23 +48,14 @@ pub fn run(
     let cwd = std::env::current_dir()?;
     let resolved = resolve_profile(&cwd, Some(profile))?;
 
-    let rpc_url = resolved
-        .rpc_url
-        .as_deref()
-        .ok_or_else(|| CliError::Other("no rpc_url in profile".into()))?;
+    let rpc_url = resolved.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
 
     // Resolve contract address (alias or literal)
     let contract_address_hex = resolved.resolve_contract(contract);
     let contract_address = parse_contract_address(&contract_address_hex)?;
 
     // Resolve signing key
-    let key_name = resolve_default_key(&cwd, Some(profile))?.ok_or_else(|| {
-        CliError::Other(
-            "no signing key configured — set default_key in \
-             groundhog.toml or run `groundhog keys generate`"
-                .into(),
-        )
-    })?;
+    let key_name = resolve_default_key(&cwd, Some(profile))?.ok_or(CliError::MissingSigningKey)?;
     let signer = load_local_signer(&key_name)?;
 
     // Resolve the SDK selector from local project source when possible.
@@ -143,7 +133,7 @@ pub fn run(
     let tx_hex = format!("0x{}", hex::encode(&tx_xdr));
 
     // Submit via JSON-RPC
-    let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::Other(e.to_string()))?;
+    let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
     let (tx_hash, receipt) = rt.block_on(async { submit_and_poll(rpc_url, &tx_hex).await })?;
     let tx_hash_formatted = format_tx_hash(&tx_hash);
     let status_summary = summarize_exec_status(&receipt.status);
@@ -201,47 +191,6 @@ pub fn run(
     ))?;
 
     Ok(())
-}
-
-async fn submit_and_poll(
-    rpc_url: &str,
-    tx_hex: &str,
-) -> Result<(TxHash, groundhog_rpc_api_types::receipt::TransactionReceipt), CliError> {
-    use groundhog_rpc_client::{GroundhogApiClient, HttpClientBuilder};
-
-    let client = HttpClientBuilder::default()
-        .build(rpc_url)
-        .map_err(|e| CliError::RpcConnect(format!("{rpc_url}: {e}")))?;
-
-    let tx_hash = client
-        .send_raw_transaction(tx_hex.to_string())
-        .await
-        .map_err(|e| CliError::Other(format!("sendRawTransaction failed: {e}")))?;
-
-    // Poll for receipt — same pattern as deploy
-    let max_attempts = 30;
-    let poll_interval = std::time::Duration::from_secs(1);
-    for attempt in 0..max_attempts {
-        match client.get_transaction_receipt(tx_hash).await {
-            Ok(Some(receipt)) => return Ok((tx_hash, receipt)),
-            Ok(None) if attempt < max_attempts - 1 => {
-                tokio::time::sleep(poll_interval).await;
-            }
-            Ok(None) => {
-                return Err(CliError::Other(format!(
-                    "transaction {} submitted but no receipt after {max_attempts}s — \
-                     check the node logs",
-                    format_tx_hash(&tx_hash),
-                )));
-            }
-            Err(e) => {
-                return Err(CliError::Other(format!(
-                    "getTransactionReceipt failed: {e}"
-                )));
-            }
-        }
-    }
-    Err(poll_exhausted_error())
 }
 
 fn parse_contract_address(hex_str: &str) -> Result<ContractAddress, CliError> {
@@ -1082,14 +1031,22 @@ fn parse_entrypoint_hex(hex_str: &str) -> Result<ContractEntrypointID, CliError>
 }
 
 fn normalize_type_name(ty: &str) -> String {
-    let ty = ty.trim();
-    if let Some(stripped) = ty.strip_prefix("&str") {
-        return format!("str{stripped}");
+    let mut ty = ty.trim();
+
+    while let Some(stripped) = ty.strip_prefix('&') {
+        ty = stripped.trim_start();
+        if let Some(lifetime_rest) = ty.strip_prefix('\'') {
+            ty = lifetime_rest
+                .find(char::is_whitespace)
+                .map_or(lifetime_rest, |idx| &lifetime_rest[idx..])
+                .trim_start();
+        }
+        if let Some(stripped) = ty.strip_prefix("mut ") {
+            ty = stripped.trim_start();
+        }
     }
-    ty.trim_start_matches('&')
-        .trim_start_matches("mut ")
-        .trim()
-        .to_string()
+
+    ty.to_string()
 }
 
 fn parse_fixed_hex<const N: usize>(value: &str, label: &str) -> Result<[u8; N], CliError> {
@@ -1297,5 +1254,14 @@ mod tests {
             summarize_exec_status(&ExecStatus::Reverted { message: None }),
             "reverted without abort data"
         );
+    }
+
+    #[test]
+    fn normalize_type_name_strips_references_without_clobbering_prefixes() {
+        assert_eq!(super::normalize_type_name("&str"), "str");
+        assert_eq!(super::normalize_type_name("&mut str"), "str");
+        assert_eq!(super::normalize_type_name("&'a str"), "str");
+        assert_eq!(super::normalize_type_name("&String"), "String");
+        assert_eq!(super::normalize_type_name("&strange"), "strange");
     }
 }

@@ -1,3 +1,4 @@
+use groundhog_rpc_api_types::receipt::TransactionReceipt;
 use groundhog_rpc_api_types::transaction::TxHash;
 
 use crate::CliError;
@@ -18,5 +19,49 @@ pub fn format_tx_hash(tx_hash: &TxHash) -> String {
 }
 
 pub fn poll_exhausted_error() -> CliError {
-    CliError::Other("internal error: receipt polling exhausted unexpectedly".into())
+    CliError::ReceiptPollingExhausted
+}
+
+pub async fn submit_and_poll(
+    rpc_url: &str,
+    tx_hex: &str,
+) -> Result<(TxHash, TransactionReceipt), CliError> {
+    use groundhog_rpc_client::{GroundhogApiClient, HttpClientBuilder};
+
+    let client = HttpClientBuilder::default()
+        .build(rpc_url)
+        .map_err(|e| CliError::RpcConnect(format!("{rpc_url}: {e}")))?;
+
+    let tx_hash = client
+        .send_raw_transaction(tx_hex.to_string())
+        .await
+        .map_err(|e| CliError::RpcMethodFailed {
+            method: "sendRawTransaction",
+            message: e.to_string(),
+        })?;
+
+    let max_attempts = 30;
+    let poll_interval = std::time::Duration::from_secs(1);
+    for attempt in 0..max_attempts {
+        match client.get_transaction_receipt(tx_hash).await {
+            Ok(Some(receipt)) => return Ok((tx_hash, receipt)),
+            Ok(None) if attempt < max_attempts - 1 => {
+                tokio::time::sleep(poll_interval).await;
+            }
+            Ok(None) => {
+                return Err(CliError::ReceiptTimeout {
+                    tx_hash: format_tx_hash(&tx_hash),
+                    seconds: max_attempts,
+                });
+            }
+            Err(e) => {
+                return Err(CliError::RpcMethodFailed {
+                    method: "getTransactionReceipt",
+                    message: e.to_string(),
+                });
+            }
+        }
+    }
+
+    Err(poll_exhausted_error())
 }

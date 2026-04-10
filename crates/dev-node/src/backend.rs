@@ -34,6 +34,12 @@ pub struct DevBackend {
     storage_tokens: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BackendStats {
+    pub block_count: u64,
+    pub tx_count: usize,
+}
+
 impl DevBackend {
     /// Initialize with pre-funded accounts.
     ///
@@ -42,6 +48,11 @@ impl DevBackend {
     /// 2. Deploy the wallet at each dev account address and grant storage tokens
     /// 3. Initialize each wallet with its owner's ed25519 public key
     pub fn new(account_count: usize, storage_tokens: u64) -> Self {
+        tracing::info!(
+            account_count,
+            storage_tokens,
+            "initializing dev node backend"
+        );
         let env = TestEnvironment::new(None);
         let accounts = accounts::derive_dev_accounts(account_count, storage_tokens);
 
@@ -161,10 +172,16 @@ impl DevBackend {
             .map_err(|e| DevNodeError::TxInvalid(format!("cannot re-encode tx: {e}")))?;
         let hash_bytes: [u8; 32] = Sha256::digest(&tx_xdr).into();
         let tx_hash = TxHash(Hex0x(SHA256Hash::from(hash_bytes)));
+        tracing::info!(tx_hash = %format_tx_hash(&tx_hash), "received transaction");
 
         // 3. Verify auth — 0 means success, any other value is an error.
         let auth_result = self.env.verify_signed_transaction_auth(&signed_tx);
         if auth_result.0 != 0 {
+            tracing::warn!(
+                tx_hash = %format_tx_hash(&tx_hash),
+                auth_result = auth_result.0,
+                "transaction auth failed"
+            );
             return Err(DevNodeError::AuthFailed(format!("{auth_result}")));
         }
 
@@ -190,6 +207,14 @@ impl DevBackend {
         let new_height = self.tip_height + 1;
 
         let (status, return_data) = map_exec_result(exec_result, &invoke_result);
+        let event_count = invoke_result.events.len();
+        tracing::info!(
+            tx_hash = %format_tx_hash(&tx_hash),
+            height = new_height,
+            status = %status_label(&status),
+            event_count,
+            "transaction committed"
+        );
 
         let receipt_events: Vec<EmittedEvent> =
             invoke_result.events.iter().map(parse_event).collect();
@@ -265,8 +290,34 @@ impl DevBackend {
 
     /// Reset all state and re-initialize accounts.
     pub fn reset(&mut self) {
+        tracing::info!("resetting dev node backend");
         let count = self.accounts.len();
         *self = Self::new(count, self.storage_tokens);
+    }
+
+    pub fn stats(&self) -> BackendStats {
+        let block_count = u64::try_from(self.tip_height + 1)
+            .expect("bug: dev node block count should not be negative");
+        BackendStats {
+            block_count,
+            tx_count: self.receipts.len(),
+        }
+    }
+}
+
+fn format_tx_hash(tx_hash: &TxHash) -> String {
+    format!("0x{}", hex::encode(tx_hash.0.0.as_ref()))
+}
+
+fn status_label(status: &ExecStatus) -> &'static str {
+    match status {
+        ExecStatus::Ok => "ok",
+        ExecStatus::Reverted { .. } => "reverted",
+        ExecStatus::DeterministicError { .. } => "deterministic_error",
+        ExecStatus::NonDeterministicError => "nondeterministic_error",
+        ExecStatus::FailedGasSponsorship => "failed_gas_sponsorship",
+        ExecStatus::Other => "other",
+        _ => "other",
     }
 }
 
@@ -360,9 +411,9 @@ mod tests {
     use crate::wallet::DEV_WALLET_WASM;
     use groundhog_rpc_api_types::receipt::ExecStatus;
     use groundhog_signing::{
-        BuildDeployTransaction, DEFAULT_PUBKEY_ACCOUNT_NONCE, DEFAULT_TX_GAS_LIMIT,
-        PubkeyAccount, SignTransactionParams, Signer, build_deploy_transaction,
-        encode_signed_transaction_xdr, sign_transaction,
+        BuildDeployTransaction, DEFAULT_PUBKEY_ACCOUNT_NONCE, DEFAULT_TX_GAS_LIMIT, PubkeyAccount,
+        SignTransactionParams, Signer, build_deploy_transaction, encode_signed_transaction_xdr,
+        sign_transaction,
     };
     use groundhog_xdr::auth_claim::{AuthClaim, AuthClaimData};
     use groundhog_xdr::contract::{Contract, ContractBlob, ContractEntrypointID};

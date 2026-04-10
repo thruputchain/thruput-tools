@@ -5,6 +5,7 @@ use jsonrpsee::types::ErrorObjectOwned;
 
 /// Errors returned by the dev node backend.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum DevNodeError {
     /// Transaction XDR was malformed.
     #[error("invalid transaction: {0}")]

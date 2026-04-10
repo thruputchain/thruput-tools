@@ -1,7 +1,6 @@
 use std::path::Path;
 
 use groundhog_rpc_api_types::hex::HexBytes;
-use groundhog_rpc_api_types::transaction::TxHash;
 use groundhog_signing::{
     BuildDeployTransaction, DEFAULT_TX_GAS_LIMIT, SignTransactionParams, Signer,
     WALLET_DEPLOY_ENTRYPOINT, build_deploy_transaction, derive_deploy_address, sign_transaction,
@@ -16,7 +15,7 @@ use xdr_common::VecM;
 use crate::config::{resolve_default_key, resolve_profile};
 use crate::keys::load_local_signer;
 use crate::result::CommandResult;
-use crate::tx_utils::{format_tx_hash, nonce_from_timestamp};
+use crate::tx_utils::{format_tx_hash, nonce_from_timestamp, submit_and_poll};
 use crate::{CliError, Print};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,19 +35,10 @@ pub fn run(
     let cwd = std::env::current_dir()?;
     let resolved = resolve_profile(&cwd, Some(profile))?;
 
-    let rpc_url = resolved
-        .rpc_url
-        .as_deref()
-        .ok_or_else(|| CliError::Other("no rpc_url in profile".into()))?;
+    let rpc_url = resolved.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
 
     // Resolve signing key
-    let key_name = resolve_default_key(&cwd, Some(profile))?.ok_or_else(|| {
-        CliError::Other(
-            "no signing key configured — set default_key in \
-             groundhog.toml or run `groundhog keys generate`"
-                .into(),
-        )
-    })?;
+    let key_name = resolve_default_key(&cwd, Some(profile))?.ok_or(CliError::MissingSigningKey)?;
     let signer = load_local_signer(&key_name)?;
 
     // Find WASM binary
@@ -125,7 +115,7 @@ pub fn run(
     let tx_hex = format!("0x{}", hex::encode(&tx_xdr));
 
     // Submit via JSON-RPC
-    let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::Other(e.to_string()))?;
+    let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
     let (tx_hash, receipt) = rt.block_on(async { submit_and_poll(rpc_url, &tx_hex).await })?;
 
     // Extract the deployed contract address from the receipt.
@@ -192,48 +182,6 @@ pub fn run(
     ))?;
 
     Ok(())
-}
-
-async fn submit_and_poll(
-    rpc_url: &str,
-    tx_hex: &str,
-) -> Result<(TxHash, groundhog_rpc_api_types::receipt::TransactionReceipt), CliError> {
-    use groundhog_rpc_client::{GroundhogApiClient, HttpClientBuilder};
-
-    let client = HttpClientBuilder::default()
-        .build(rpc_url)
-        .map_err(|e| CliError::RpcConnect(format!("{rpc_url}: {e}")))?;
-
-    let tx_hash = client
-        .send_raw_transaction(tx_hex.to_string())
-        .await
-        .map_err(|e| CliError::Other(format!("sendRawTransaction failed: {e}")))?;
-
-    let max_attempts = 30;
-    let poll_interval = std::time::Duration::from_secs(1);
-    for attempt in 0..max_attempts {
-        match client.get_transaction_receipt(tx_hash).await {
-            Ok(Some(receipt)) => return Ok((tx_hash, receipt)),
-            Ok(None) if attempt < max_attempts - 1 => {
-                tokio::time::sleep(poll_interval).await;
-            }
-            Ok(None) => {
-                return Err(CliError::Other(format!(
-                    "transaction {} submitted but no receipt after {max_attempts}s — \
-                     check the node logs",
-                    format_tx_hash(&tx_hash),
-                )));
-            }
-            Err(e) => {
-                return Err(CliError::Other(format!(
-                    "getTransactionReceipt failed: {e}"
-                )));
-            }
-        }
-    }
-    Err(CliError::Other(
-        "internal error: receipt polling exhausted unexpectedly".into(),
-    ))
 }
 
 fn find_and_read_wasm(cwd: &Path) -> Result<Vec<u8>, CliError> {

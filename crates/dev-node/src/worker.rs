@@ -9,7 +9,7 @@ use groundhog_rpc_api_types::receipt::TransactionReceipt;
 use groundhog_rpc_api_types::transaction::{TransactionStatus, TxHash};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::backend::DevBackend;
+use crate::backend::{BackendStats, DevBackend};
 use crate::error::DevNodeError;
 
 /// Commands sent from RPC handlers to the worker thread.
@@ -32,13 +32,16 @@ pub enum DevCommand {
     GetAccounts {
         reply: oneshot::Sender<Vec<DevAccount>>,
     },
+    Stats {
+        reply: oneshot::Sender<BackendStats>,
+    },
     Reset {
         reply: oneshot::Sender<()>,
     },
 }
 
 /// Handle for sending commands to the worker thread.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct WorkerHandle {
     tx: mpsc::UnboundedSender<DevCommand>,
 }
@@ -95,6 +98,14 @@ impl WorkerHandle {
         rx.await.map_err(|_| DevNodeError::WorkerStopped)
     }
 
+    pub async fn stats(&self) -> Result<BackendStats, DevNodeError> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(DevCommand::Stats { reply })
+            .map_err(|_| DevNodeError::WorkerStopped)?;
+        rx.await.map_err(|_| DevNodeError::WorkerStopped)
+    }
+
     /// Reset all state to initial conditions.
     pub async fn reset(&self) -> Result<(), DevNodeError> {
         let (reply, rx) = oneshot::channel();
@@ -109,36 +120,64 @@ impl WorkerHandle {
 pub fn spawn_worker(account_count: usize, storage_tokens: u64) -> WorkerHandle {
     let (tx, mut rx) = mpsc::unbounded_channel::<DevCommand>();
 
-    std::thread::spawn(move || {
-        let mut backend = DevBackend::new(account_count, storage_tokens);
+    std::thread::Builder::new()
+        .name("groundhog-dev-node-worker".into())
+        .spawn(move || {
+            tracing::info!(account_count, storage_tokens, "dev node worker started");
 
-        while let Some(cmd) = rx.blocking_recv() {
-            match cmd {
-                DevCommand::SendRawTransaction { tx_bytes, reply } => {
-                    let result = backend.send_raw_transaction(&tx_bytes);
-                    let _ = reply.send(result);
+            let worker_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut backend = DevBackend::new(account_count, storage_tokens);
+
+                while let Some(cmd) = rx.blocking_recv() {
+                    match cmd {
+                        DevCommand::SendRawTransaction { tx_bytes, reply } => {
+                            let result = backend.send_raw_transaction(&tx_bytes);
+                            let _ = reply.send(result);
+                        }
+                        DevCommand::GetTransactionReceipt { tx_hash, reply } => {
+                            let _ = reply.send(backend.get_transaction_receipt(&tx_hash));
+                        }
+                        DevCommand::GetTransactionStatus { tx_hash, reply } => {
+                            let _ = reply.send(backend.get_transaction_status(&tx_hash));
+                        }
+                        DevCommand::ChainTip { reply } => {
+                            let _ = reply.send(backend.chain_tip());
+                        }
+                        DevCommand::GetAccounts { reply } => {
+                            let _ = reply.send(backend.accounts().to_vec());
+                        }
+                        DevCommand::Stats { reply } => {
+                            let _ = reply.send(backend.stats());
+                        }
+                        DevCommand::Reset { reply } => {
+                            backend.reset();
+                            let _ = reply.send(());
+                        }
+                    }
                 }
-                DevCommand::GetTransactionReceipt { tx_hash, reply } => {
-                    let _ = reply.send(backend.get_transaction_receipt(&tx_hash));
-                }
-                DevCommand::GetTransactionStatus { tx_hash, reply } => {
-                    let _ = reply.send(backend.get_transaction_status(&tx_hash));
-                }
-                DevCommand::ChainTip { reply } => {
-                    let _ = reply.send(backend.chain_tip());
-                }
-                DevCommand::GetAccounts { reply } => {
-                    let _ = reply.send(backend.accounts().to_vec());
-                }
-                DevCommand::Reset { reply } => {
-                    backend.reset();
-                    let _ = reply.send(());
-                }
+            }));
+
+            match worker_result {
+                Ok(()) => tracing::info!("dev node worker stopped"),
+                Err(payload) => tracing::error!(
+                    panic = %panic_payload_message(&payload),
+                    "dev node worker panicked"
+                ),
             }
-        }
-    });
+        })
+        .expect("bug: failed to spawn dev node worker thread");
 
     WorkerHandle { tx }
+}
+
+fn panic_payload_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(msg) = payload.downcast_ref::<&str>() {
+        (*msg).to_string()
+    } else if let Some(msg) = payload.downcast_ref::<String>() {
+        msg.clone()
+    } else {
+        "unknown panic payload".into()
+    }
 }
 
 #[cfg(test)]
