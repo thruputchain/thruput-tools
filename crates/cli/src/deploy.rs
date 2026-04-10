@@ -15,7 +15,9 @@ use xdr_common::VecM;
 use crate::config::{resolve_default_key, resolve_profile};
 use crate::keys::load_local_signer;
 use crate::result::CommandResult;
-use crate::tx_utils::{format_tx_hash, nonce_from_timestamp, submit_and_poll};
+use crate::tx_utils::{
+    format_tx_hash, nonce_from_timestamp, resolve_block_expiry_height, submit_and_poll,
+};
 use crate::{CliError, Print};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,12 +99,15 @@ pub fn run(
 
     let entrypoint = groundhog_xdr::contract::ContractEntrypointID::from(WALLET_DEPLOY_ENTRYPOINT);
 
+    let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
+    let block_expiry_height = rt.block_on(async { resolve_block_expiry_height(rpc_url).await })?;
+
     let tx = build_deploy_transaction(BuildDeployTransaction {
         invoked_address: wallet_address,
         entrypoint,
         calldata,
         gas_limit: DEFAULT_TX_GAS_LIMIT,
-        block_expiry_height: 1_000_000,
+        block_expiry_height,
         nonce: deploy_nonce_val,
         contracts_to_deploy: VecM(vec![contract]),
         auth_claims,
@@ -115,22 +120,27 @@ pub fn run(
     let tx_hex = format!("0x{}", hex::encode(&tx_xdr));
 
     // Submit via JSON-RPC
-    let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
     let (tx_hash, receipt) = rt.block_on(async { submit_and_poll(rpc_url, &tx_hex).await })?;
 
     // Extract the deployed contract address from the receipt.
-    let (contract_addr_hex, address_source): (String, DeployAddressSource) = match &receipt.status {
-        groundhog_rpc_api_types::receipt::ExecStatus::Ok => {
-            resolve_deployed_address(receipt.return_data.as_ref(), &predicted_address)?
-        }
-        _ => (String::new(), DeployAddressSource::Derived),
-    };
+    let (contract_addr_hex, address_source): (Option<String>, Option<DeployAddressSource>) =
+        match &receipt.status {
+            groundhog_rpc_api_types::receipt::ExecStatus::Ok => {
+                let (address, source) =
+                    resolve_deployed_address(receipt.return_data.as_ref(), &predicted_address)?;
+                (Some(address), Some(source))
+            }
+            _ => (None, None),
+        };
 
     // Print result
     match &receipt.status {
         groundhog_rpc_api_types::receipt::ExecStatus::Ok => {
+            let contract_addr_hex = contract_addr_hex
+                .as_deref()
+                .expect("bug: successful deploy must resolve a contract address");
             print.status(format_args!("Deployed at {contract_addr_hex}"));
-            if matches!(address_source, DeployAddressSource::Derived) {
+            if matches!(address_source, Some(DeployAddressSource::Derived)) {
                 print.warn(
                     "receipt omitted deploy return_data; address was derived locally from \
                      deployer, nonce, and contract hash",
@@ -154,12 +164,13 @@ pub fn run(
             .and_then(|p| p.parent().map(Path::to_path_buf));
         if let Some(root) = project_root
             && let Some(name) = root.file_name().and_then(|n| n.to_str())
+            && let Some(contract_addr_hex) = contract_addr_hex.as_deref()
         {
             let _ = crate::config::save_profile_contract_alias(
                 &root,
                 Some(profile),
                 name,
-                &contract_addr_hex,
+                contract_addr_hex,
             );
             print.status(format_args!(
                 "  alias: {name} -> {contract_addr_hex} (saved to groundhog.toml)"
@@ -173,8 +184,9 @@ pub fn run(
             "tx_hash": format_tx_hash(&tx_hash),
             "address": contract_addr_hex,
             "address_source": match address_source {
-                DeployAddressSource::Receipt => "receipt",
-                DeployAddressSource::Derived => "derived",
+                Some(DeployAddressSource::Receipt) => Some("receipt"),
+                Some(DeployAddressSource::Derived) => Some("derived"),
+                None => None,
             },
             "height": receipt.height,
             "status": receipt.status,
