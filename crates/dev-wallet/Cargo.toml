@@ -12,7 +12,8 @@ description = "Dev-mode wallet contract for the Groundhog local dev node"
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default = ["entrypoints"]
+default = ["dev", "entrypoints"]
+dev = []
 entrypoints = []
 
 [dependencies]

@@ -1114,12 +1114,12 @@ mod tests {
 
     #[test]
     fn extracts_metadata_from_bare_impl() {
-        let source = r#"
+        let source = r"
             #[contract(throws = Error, client = CounterClient)]
             impl Counter {
                 pub fn get(&self) -> u64 { 0 }
             }
-        "#;
+        ";
         let metadata = contract_metadata_from_source(
             source,
             Path::new("/tmp/implementation.rs"),
