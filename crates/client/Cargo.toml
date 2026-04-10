@@ -8,7 +8,8 @@ license = "Apache-2.0"
 workspace = true
 
 [dependencies]
+groundhog-rpc-api = { path = "../rpc-api" }
 groundhog-rpc-api-types = { path = "../api-types" }
-jsonrpsee = { workspace = true, features = ["client", "macros"] }
+jsonrpsee = { workspace = true, features = ["client", "macros", "http-client"] }
 tokio = { workspace = true }
 serde = { workspace = true }

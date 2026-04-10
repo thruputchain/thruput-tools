@@ -32,9 +32,10 @@ groundhog_getContractEvents(addr, from, to)    → Vec<IdentifiedEvent>
 
 ## Building
 
-The eventual build uses the private Groundhog registry configured in
-`.cargo/config.toml`, but the repo is still being used primarily as a stubbing
-exercise to settle architecture and types.
+Builds against the private Groundhog registry configured in
+`.cargo/config.toml`. The gateway now shares its public JSON-RPC trait
+definitions with the client and local dev node through the `rpc-api`
+crate.
 
 ```bash
 cargo build

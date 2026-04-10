@@ -12,8 +12,9 @@ pub mod signer;
 
 pub use account::{DEFAULT_PUBKEY_ACCOUNT_NONCE, PUBKEY_ACCOUNT_TAG_STR, PubkeyAccount};
 pub use build::{
-    BuildCallTransaction, BuildDeployTransaction, SignTransactionParams, build_call_transaction,
-    build_deploy_transaction, sign_transaction,
+    BuildCallTransaction, BuildDeployTransaction, DEFAULT_TX_GAS_LIMIT, SignTransactionParams,
+    WALLET_DEPLOY_ENTRYPOINT, build_call_transaction, build_deploy_transaction,
+    derive_deploy_address, sign_transaction,
 };
 pub use encode::{encode_signed_transaction_xdr, encode_transaction_xdr};
 pub use error::SigningError;

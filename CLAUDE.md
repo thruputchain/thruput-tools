@@ -5,10 +5,12 @@ gateway, typed client, transaction building, key management, and CLI.
 
 ## Architecture
 
-Six crates in `crates/`:
+Workspace crates in `crates/`:
 
 - **api-types** — shared RPC types (receipt, status, block info, events,
   errors). Consumed by gateway, client, CLI, and external tools.
+- **rpc-api** — shared jsonrpsee trait definitions used by the gateway,
+  dev node, and client crate.
 - **gateway** — jsonrpsee server binary. Handlers call hogd indexer and
   scheduler over x23 RPC.
 - **client** — typed JSON-RPC client generated from the same
@@ -18,9 +20,13 @@ Six crates in `crates/`:
   for deploy and call, XDR encoding.
 - **tx-builder** — thin CLI wrapper over signing (temporary).
 - **cli** — `groundhog` binary. Wraps the Rust/WASM build and test
-  workflow. Lib/bin split: all logic in the library crate, `main.rs` is
-  pure dispatch. Subcommand functions take plain Rust types, not clap
-  structs.
+  workflow plus deploy/call and local dev-node control. Lib/bin split:
+  all logic in the library crate, `main.rs` is pure dispatch.
+  Subcommand functions take plain Rust types, not clap structs.
+- **dev-node** — feature-gated local JSON-RPC dev node backed by the SDK
+  `native_exec` executor on a dedicated worker thread.
+- **groundhog-sys** — local patched FFI bindings crate overriding the
+  registry version for native executor integration and packaging fixes.
 
 See `docs/gateway/system-design.md` for full gateway design and
 `docs/gateway/api-sketch.md` for the jsonrpsee trait definition.
@@ -75,8 +81,18 @@ cargo run -p groundhog-cli -- new my-counter
 cargo run -p groundhog-cli -- new my-stub --template stub
 cargo run -p groundhog-cli -- build        # from inside a project
 cargo run -p groundhog-cli -- test         # requires login first
+cargo run -p groundhog-cli -- deploy       # from inside a project
+cargo run -p groundhog-cli -- call my-counter get
 cargo run -p groundhog-cli -- keys generate alice
 cargo run -p groundhog-cli -- keys ls
+# Local dev node is feature-gated
+cargo run -p groundhog-cli --features dev-node -- node
+# Typical local loop
+# 1. cargo run -p groundhog-cli -- new my-counter && cd my-counter
+# 2. cargo run -p groundhog-cli -- build
+# 3. cargo run -p groundhog-cli --features dev-node -- node
+# 4. cargo run -p groundhog-cli -- deploy
+# 5. cargo run -p groundhog-cli -- call my-counter get
 ```
 
 ## Code Style
@@ -134,7 +150,7 @@ cargo run -p groundhog-cli -- keys ls
   RPC-facing types.
 - `#[non_exhaustive]` on public enums that will gain variants
   (`TransactionStatus`, `ExecStatus`).
-- The jsonrpsee trait in `gateway/src/api.rs` is the source of truth
+- The jsonrpsee trait in `rpc-api/src/lib.rs` is the source of truth
   for the RPC surface. `#[rpc(client, server)]` generates both sides.
 - Handler implementations go in `gateway/src/handlers/`, one file per
   logical group (submit, receipt, blocks, events).

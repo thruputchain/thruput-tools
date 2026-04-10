@@ -13,6 +13,9 @@ signing library, and typed client.
 | [`signing`](crates/signing/) | Off-chain transaction signing and construction |
 | [`client`](crates/client/) | Typed JSON-RPC client |
 | [`api-types`](crates/api-types/) | Shared RPC types |
+| [`rpc-api`](crates/rpc-api/) | Shared jsonrpsee trait definitions |
+| [`dev-node`](crates/dev-node/) | Local JSON-RPC dev node backed by `native_exec` |
+| [`groundhog-sys`](crates/groundhog-sys/) | Local patched FFI bindings override |
 | [`tx-builder`](crates/tx-builder/) | Thin CLI wrapper for tx construction |
 
 ## Quick Start
@@ -21,6 +24,28 @@ signing library, and typed client.
 cargo build -p groundhog-cli
 cargo run -p groundhog-cli -- init
 cargo run -p groundhog-cli -- new my-counter
+```
+
+For the local dev node:
+
+```bash
+cargo run -p groundhog-cli --features dev-node -- node
+```
+
+Or install the CLI with local dev-node support:
+
+```bash
+cargo install --path crates/cli --features dev-node
+```
+
+Typical local contract loop:
+
+```bash
+groundhog new my-counter && cd my-counter
+groundhog build
+groundhog node
+groundhog deploy
+groundhog call my-counter get
 ```
 
 See [`crates/cli/README.md`](crates/cli/README.md) for full CLI

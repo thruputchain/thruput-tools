@@ -20,8 +20,21 @@ rpassword = "7"
 clap_complete = "4.5.66"
 getrandom = "0.2.17"
 hex = { workspace = true }
+sha2 = { workspace = true }
 zeroize = { workspace = true }
 groundhog-signing = { path = "../signing" }
+groundhog-rpc-client = { path = "../client" }
+groundhog-rpc-api-types = { path = "../api-types" }
+groundhog-xdr = { workspace = true }
+xdrs = { workspace = true }
+xdr-common = { workspace = true }
+tokio = { workspace = true }
+tracing-subscriber = { workspace = true }
+groundhog-dev-node = { path = "../dev-node", optional = true }
+groundhog-sys = { path = "../groundhog-sys", optional = true }
+
+[features]
+dev-node = ["dep:groundhog-dev-node", "dep:groundhog-sys"]
 
 [dev-dependencies]
 tempfile = "3"

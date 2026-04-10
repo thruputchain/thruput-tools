@@ -1,0 +1,7 @@
+[registries.groundhog]
+index = "sparse+https://groundhog.dev/crates/api/v1/crates/"
+
+[target.wasm32-unknown-unknown]
+rustflags = [
+    "-C", "link-args=-zstack-size=30000",
+]

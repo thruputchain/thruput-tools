@@ -136,6 +136,15 @@ enum Command {
         )]
         profile: String,
     },
+    /// Start a local development node
+    Node {
+        /// Port to listen on
+        #[arg(long, default_value = "9545")]
+        port: u16,
+        /// Number of pre-funded dev accounts
+        #[arg(long, default_value = "10")]
+        accounts: usize,
+    },
     /// Manage signing keys
     #[command(long_about = "Ed25519 signing keys stored in \
                       ~/.config/groundhog/keys/. Keys are \
@@ -196,6 +205,7 @@ impl Command {
             Self::Test { .. } => "test",
             Self::Deploy { .. } => "deploy",
             Self::Call { .. } => "call",
+            Self::Node { .. } => "node",
             Self::Keys { command } => command.command_name(),
             Self::Login => "login",
             Self::Logout => "logout",
@@ -250,6 +260,9 @@ fn main() {
             args,
             profile,
         } => groundhog_cli::call::run(&contract, &method, &args, &profile, cmd_name, &print),
+        Command::Node { port, accounts } => {
+            groundhog_cli::node::run(port, accounts, cmd_name, &print)
+        }
         Command::Keys { command } => match command {
             KeysCommand::Generate { name, fund } => {
                 groundhog_cli::keys::generate(&name, fund, cmd_name, &print)

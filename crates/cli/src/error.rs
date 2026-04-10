@@ -62,6 +62,25 @@ pub enum CliError {
     NotImplemented,
     #[error("status check found warnings")]
     StatusHasWarnings,
+    #[error("dev node error: {0}")]
+    DevNode(String),
+    #[error("could not connect to {0}")]
+    RpcConnect(String),
+    #[error("no rpc_url configured for the selected profile")]
+    MissingRpcUrl,
+    #[error("no signing key configured")]
+    MissingSigningKey,
+    #[error("failed to initialize async runtime: {0}")]
+    RuntimeInit(String),
+    #[error("{method} failed: {message}")]
+    RpcMethodFailed {
+        method: &'static str,
+        message: String,
+    },
+    #[error("transaction {tx_hash} submitted but no receipt after {seconds}s")]
+    ReceiptTimeout { tx_hash: String, seconds: u64 },
+    #[error("internal error: receipt polling exhausted unexpectedly")]
+    ReceiptPollingExhausted,
     #[error("{0}")]
     Other(String),
 }
@@ -91,6 +110,14 @@ impl CliError {
             Self::JsonUnsupported(_) => "json_unsupported",
             Self::NotImplemented => "not_implemented",
             Self::StatusHasWarnings => "status_has_warnings",
+            Self::DevNode(_) => "dev_node_error",
+            Self::RpcConnect(_) => "rpc_connect",
+            Self::MissingRpcUrl => "missing_rpc_url",
+            Self::MissingSigningKey => "missing_signing_key",
+            Self::RuntimeInit(_) => "runtime_init_failed",
+            Self::RpcMethodFailed { .. } => "rpc_method_failed",
+            Self::ReceiptTimeout { .. } => "receipt_timeout",
+            Self::ReceiptPollingExhausted => "receipt_polling_exhausted",
             Self::Other(_) => "other",
         }
     }
@@ -122,7 +149,28 @@ impl CliError {
             Self::UnknownTemplate(_) => {
                 Some(Cow::Borrowed("available templates: `counter`, `stub`"))
             }
-            Self::Io(_) | Self::Other(_) | Self::StatusHasWarnings => None,
+            Self::DevNode(_) => Some(Cow::Borrowed("check the dev node output for details")),
+            Self::RpcConnect(url) => Some(Cow::Owned(format!(
+                "run `groundhog node` in another terminal, or check that \
+                 the RPC endpoint at {url} is running"
+            ))),
+            Self::MissingRpcUrl => Some(Cow::Borrowed(
+                "set `rpc_url` in the selected profile in `groundhog.toml`",
+            )),
+            Self::MissingSigningKey => Some(Cow::Borrowed(
+                "set `default_key` in `groundhog.toml`, or run `groundhog keys generate`",
+            )),
+            Self::RpcMethodFailed { .. } => Some(Cow::Borrowed(
+                "check the RPC endpoint and node logs for details",
+            )),
+            Self::ReceiptTimeout { .. } => Some(Cow::Borrowed(
+                "check the node logs, then rerun the command once the transaction is committed or rejected",
+            )),
+            Self::RuntimeInit(_)
+            | Self::ReceiptPollingExhausted
+            | Self::Io(_)
+            | Self::Other(_)
+            | Self::StatusHasWarnings => None,
             Self::ProfileNotFound(_) => Some(Cow::Borrowed(
                 "add the profile to `groundhog.toml`, or switch to \
                  an existing one with `--profile` or \

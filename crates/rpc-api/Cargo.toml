@@ -1,0 +1,13 @@
+[package]
+name = "groundhog-rpc-api"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[lints]
+workspace = true
+
+[dependencies]
+groundhog-rpc-api-types = { path = "../api-types" }
+jsonrpsee = { workspace = true, features = ["server", "client", "macros"] }
+async-trait = { workspace = true }

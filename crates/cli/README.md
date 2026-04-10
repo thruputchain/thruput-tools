@@ -9,6 +9,18 @@ Rust/WASM build and test workflow into a single binary.
 cargo install --path crates/cli
 ```
 
+To include the local dev node:
+
+```bash
+cargo install --path crates/cli --features dev-node
+```
+
+For local development without installing:
+
+```bash
+cargo run -p groundhog-cli --features dev-node -- node
+```
+
 Requires the nightly Rust toolchain (pinned via `rust-toolchain.toml`
 in generated projects).
 
@@ -29,7 +41,18 @@ groundhog build
 
 # Run contract's tests against the WASM executor
 groundhog test
+
+# Start the local dev node (optional, requires --features dev-node)
+groundhog node
+
+# Deploy and call against the active profile
+groundhog deploy
+groundhog call my-counter get
 ```
+
+If you installed the CLI without `--features dev-node`, `groundhog node`
+is unavailable. `deploy` and `call` work either way against any RPC URL;
+the feature gate only affects the embedded local node.
 
 ## Using cargo directly
 
@@ -95,7 +118,8 @@ groundhog build --profile testnet   # resolve profile from groundhog.toml
 groundhog build -- --verbose   # pass extra args to cargo
 ```
 
-Outputs the `.wasm` file path and size on success.
+Outputs the `.wasm` file path and size on success. When spec generation
+is available, also emits a `*.spec.json` sidecar next to the built WASM.
 
 ### `groundhog test`
 
@@ -130,11 +154,50 @@ The first generated key automatically becomes the default.
 
 ### `groundhog deploy`
 
-Deploy a contract to the network. Not yet implemented.
+Deploy a contract to the active profile's RPC URL. Resolves the WASM
+artifact automatically unless `--wasm` is provided, submits a signed
+deploy transaction, polls for the receipt, prints the deployed address,
+and saves a contract alias into the active profile when running inside a
+project.
+
+```bash
+groundhog deploy
+groundhog deploy --profile testnet
+groundhog deploy --json
+```
 
 ### `groundhog call`
 
-Call a deployed contract method. Not yet implemented.
+Call a deployed contract method using either a literal address or a
+contract alias from the active profile. The CLI resolves entrypoints
+from generated spec sidecars and local metadata when available, submits
+the invocation transaction, and prints returned values plus receipt
+status.
+
+```bash
+groundhog call my-counter get
+groundhog call my-counter increment 5
+groundhog call 0xabc123... get
+groundhog call my-counter get --json
+```
+
+`--dry-run` is not implemented yet.
+
+### `groundhog node`
+
+Start the local development node backed by the same `native_exec`
+executor used by SDK tests. Requires installing or building the CLI with
+the `dev-node` feature.
+
+```bash
+groundhog node
+groundhog node --port 9546
+groundhog node --accounts 20
+```
+
+Human output prints the prefunded accounts and private keys for local
+testing. `groundhog node --json` emits the startup payload with
+`rpc_url` and `accounts` for scripting.
 
 ### `groundhog login`
 
@@ -162,6 +225,7 @@ support:
 ```toml
 [profile.default]
 rpc_url = "http://localhost:9545"
+default_key = "dev-0"
 
 [profile.default.contracts]
 # counter = "0x..."
@@ -173,9 +237,8 @@ rpc_url = "https://testnet.groundhog.network"
 Select a profile via `--profile`, `GROUNDHOG_PROFILE`, or
 the `default` profile is used automatically.
 
-Contract aliases map names to addresses per profile. The `call`
-and `deploy` commands (when implemented) will resolve aliases
-from the active profile.
+Contract aliases map names to addresses per profile. `deploy` and `call`
+resolve aliases from the active profile.
 
 ## Global Flags
 
