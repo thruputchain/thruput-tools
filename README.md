@@ -32,6 +32,22 @@ For the local dev node:
 cargo run -p groundhog-cli --features dev-node -- node
 ```
 
+Or install the CLI with local dev-node support:
+
+```bash
+cargo install --path crates/cli --features dev-node
+```
+
+Typical local contract loop:
+
+```bash
+groundhog new my-counter && cd my-counter
+groundhog build
+groundhog node
+groundhog deploy
+groundhog call my-counter get
+```
+
 See [`crates/cli/README.md`](crates/cli/README.md) for full CLI
 documentation.
 

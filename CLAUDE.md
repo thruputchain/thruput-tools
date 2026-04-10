@@ -85,7 +85,14 @@ cargo run -p groundhog-cli -- deploy       # from inside a project
 cargo run -p groundhog-cli -- call my-counter get
 cargo run -p groundhog-cli -- keys generate alice
 cargo run -p groundhog-cli -- keys ls
+# Local dev node is feature-gated
 cargo run -p groundhog-cli --features dev-node -- node
+# Typical local loop
+# 1. cargo run -p groundhog-cli -- new my-counter && cd my-counter
+# 2. cargo run -p groundhog-cli -- build
+# 3. cargo run -p groundhog-cli --features dev-node -- node
+# 4. cargo run -p groundhog-cli -- deploy
+# 5. cargo run -p groundhog-cli -- call my-counter get
 ```
 
 ## Code Style

@@ -15,6 +15,12 @@ To include the local dev node:
 cargo install --path crates/cli --features dev-node
 ```
 
+For local development without installing:
+
+```bash
+cargo run -p groundhog-cli --features dev-node -- node
+```
+
 Requires the nightly Rust toolchain (pinned via `rust-toolchain.toml`
 in generated projects).
 
@@ -43,6 +49,10 @@ groundhog node
 groundhog deploy
 groundhog call my-counter get
 ```
+
+If you installed the CLI without `--features dev-node`, `groundhog node`
+is unavailable. `deploy` and `call` work either way against any RPC URL;
+the feature gate only affects the embedded local node.
 
 ## Using cargo directly
 
@@ -184,6 +194,10 @@ groundhog node
 groundhog node --port 9546
 groundhog node --accounts 20
 ```
+
+Human output prints the prefunded accounts and private keys for local
+testing. `groundhog node --json` emits the startup payload with
+`rpc_url` and `accounts` for scripting.
 
 ### `groundhog login`
 
