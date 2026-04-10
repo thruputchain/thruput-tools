@@ -1,6 +1,6 @@
 # Groundhog CLI Roadmap
 
-Execution roadmap for the Groundhog CLI as of 2026-04-08.
+Execution roadmap for the Groundhog CLI as of 2026-04-09.
 
 `docs/foundry.md` is the benchmark/reference document. This file is the
 working plan we should actually execute against.
@@ -26,6 +26,9 @@ What exists today:
 - `groundhog new`
 - `groundhog build`
 - `groundhog test`
+- `groundhog deploy`
+- `groundhog call`
+- `groundhog node` (feature-gated behind `dev-node`)
 - `groundhog init` (interactive first-run wizard)
 - `groundhog status` (non-interactive diagnostic)
 - `groundhog keys`
@@ -36,18 +39,25 @@ What exists today:
 - clean lib/bin split, central `Print`, XDG config, test coverage for
   current commands
 
-What is still stubbed:
-
-- `groundhog deploy`
-- `groundhog call`
-
 What that means:
 
 - The local build/test loop exists.
-- The network interaction loop does not.
+- The network interaction loop now exists.
+- A local dev node backed by the same native executor as SDK tests exists.
 - The first-run experience is solid (`init` wizard + `status`).
-- The roadmap should focus on closing the transaction loop before
-  expanding the command surface.
+- The next work should focus on polishing invocation UX and testing DX
+  rather than unblocking the basic transaction loop.
+
+Implementation status:
+
+- Phase 1 is effectively complete: deploy/call work, `--json` works, and
+  contract-spec-aware invocation is in place through generated sidecars plus
+  local metadata.
+- Phase 2 is partially complete: `groundhog node` ships and shares execution
+  semantics with the SDK/native executor, but richer observability and some
+  secondary RPC methods are still pending.
+- Still intentionally deferred: `groundhog call --dry-run`, `groundhog inspect`,
+  and the SDK embedded-spec follow-up.
 
 ## Execution Tracker
 
@@ -67,6 +77,9 @@ Maintenance rules:
 - [x] `groundhog new`
 - [x] `groundhog build`
 - [x] `groundhog test`
+- [x] `groundhog deploy`
+- [x] `groundhog call`
+- [x] `groundhog node` (feature-gated)
 - [x] `groundhog init`
 - [x] `groundhog status`
 - [x] `groundhog keys`
@@ -74,8 +87,6 @@ Maintenance rules:
 - [x] shell completions
 - [x] `--quiet`, `--json`, `--profile`
 - [x] `groundhog.toml` with profiles and contract aliases
-- [ ] `groundhog deploy`
-- [ ] `groundhog call`
 
 ### Phase 0
 
@@ -121,8 +132,8 @@ Maintenance rules:
 
 ### Phase 2
 
-- [ ] Local dev node via RPC gateway dev backend
-- [ ] Ensure local node and test environment share execution
+- [x] Local dev node via RPC/native executor backend
+- [x] Ensure local node and test environment share execution
 - [ ] Local-node observability (deltas, snapshots, events)
 
 ### Phase 3
@@ -252,12 +263,14 @@ Goal: eliminate dependency on a remote network for the main inner loop.
 ### Deliverables
 
 1. **Dev backend in the RPC gateway**
-   - Same RPC interface as the real service.
+   - Shipped as a standalone `dev-node` crate implementing the same RPC
+     interface as the real service.
    - Backed by the SDK/native executor.
 
 2. **Local node command**
-   - Prefer a gateway `--dev` mode first.
-   - The CLI can wrap or auto-start it later if that improves DX.
+   - Shipped as `groundhog node` behind the `dev-node` feature.
+   - Keep the UX aligned with the standalone dev node rather than reviving
+     an older gateway `--dev` plan.
 
 3. **Core local-node features**
    - deterministic funded accounts
