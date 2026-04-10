@@ -83,8 +83,10 @@ pub fn run(
     let deploy_nonce_bytes: [u8; 32] = Sha256::digest(deploy_nonce_val.to_le_bytes()).into();
     let deploy_nonce = SHA256Hash::from(deploy_nonce_bytes);
 
-    // Calldata = XDR-encoded (nonce, contract_hash) — matches wallet deploy signature.
-    let calldata = xdrs::txs::encode(&(&deploy_nonce, &contract_hash))
+    // Calldata = CXS-encoded (nonce, contract_hash) — matches wallet deploy signature.
+    // Must use CXS encoding (not txs) because the #[contract] macro
+    // deserializes calldata with xdrs::cxs::decode.
+    let calldata = xdrs::cxs::encode(&(&deploy_nonce, &contract_hash))
         .map_err(|e| CliError::Other(format!("failed to encode deploy calldata: {e}")))?;
 
     // Auth claim: kInvokedAddressSignature at key slot 0.

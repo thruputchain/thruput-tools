@@ -12,7 +12,7 @@ use crate::result::CommandResult;
 use crate::{CliError, Print};
 
 /// Wallet `do_action` entrypoint ID (from dev-wallet WASM exports).
-const WALLET_DO_ACTION_ENTRYPOINT: [u8; 8] = 0xF4F9_E647_4A30_D2CF_u64.to_be_bytes();
+const WALLET_DO_ACTION_ENTRYPOINT: [u8; 8] = 0x1984_6D75_0FAD_81D6_u64.to_be_bytes();
 
 /// Call a method on a deployed contract.
 #[allow(clippy::too_many_lines)]
@@ -66,16 +66,21 @@ pub fn run(
         .address()
         .map_err(|e| CliError::Other(e.to_string()))?;
 
-    // Encode the inner invocation as calldata for the wallet's do_action:
+    // Encode the inner invocation (TXS format, matching wallet's txs::decode):
     // (contract_address, method_entrypoint, gas_limit, raw_calldata)
     let inner_gas_limit: u64 = 10_000_000;
-    let do_action_calldata = xdrs::txs::encode(&(
+    let inner_invocation = xdrs::txs::encode(&(
         contract_address,
         entrypoint,
         inner_gas_limit,
         calldata.as_slice(),
     ))
-    .map_err(|e| CliError::Other(format!("failed to encode do_action calldata: {e}")))?;
+    .map_err(|e| CliError::Other(format!("failed to encode inner invocation: {e}")))?;
+
+    // Outer calldata is CXS-encoded — the #[contract] macro deserializes
+    // do_action's &[u8] parameter with xdrs::cxs::decode.
+    let do_action_calldata = xdrs::cxs::encode(&inner_invocation.as_slice())
+        .map_err(|e| CliError::Other(format!("failed to CXS-encode do_action calldata: {e}")))?;
 
     // Auth claim: kInvokedAddressSignature at key slot 0.
     let auth_claims: groundhog_xdr::auth_claim::AuthClaimData =
