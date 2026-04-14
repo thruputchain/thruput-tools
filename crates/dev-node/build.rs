@@ -1,25 +1,58 @@
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+
+// Recursively copy a directory, skipping `target/` subtrees.
+fn copy_dir(src: &Path, dst: &Path) {
+    std::fs::create_dir_all(dst).expect("failed to create dir");
+    for entry in std::fs::read_dir(src).expect("failed to read dir") {
+        let entry = entry.expect("failed to read entry");
+        let name = entry.file_name();
+        if name == "target" {
+            continue;
+        }
+        let src_path = entry.path();
+        let dst_path = dst.join(&name);
+        if src_path.is_dir() {
+            copy_dir(&src_path, &dst_path);
+        } else {
+            std::fs::copy(&src_path, &dst_path).expect("failed to copy file");
+        }
+    }
+}
 
 fn main() {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
-    let wallet_dir = PathBuf::from(&manifest_dir).join("../dev-wallet");
+    let wallet_src = PathBuf::from(&manifest_dir).join("dev-wallet");
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 
     // Rerun if wallet source or config changes.
     println!(
         "cargo:rerun-if-changed={}",
-        wallet_dir.join("src").display()
+        wallet_src.join("src").display()
     );
     println!(
         "cargo:rerun-if-changed={}",
-        wallet_dir.join("Cargo.toml").display()
+        wallet_src.join("Cargo.toml.bundled").display()
     );
     println!(
         "cargo:rerun-if-changed={}",
-        wallet_dir.join(".cargo").display()
+        wallet_src.join(".cargo").display()
     );
+
+    // Copy the dev-wallet source to OUT_DIR so the cross-compile runs
+    // outside the parent workspace tree (avoids workspace detection
+    // issues).  Also handles published crates where the manifest is
+    // shipped as Cargo.toml.bundled.
+    let wallet_dir = out_dir.join("dev-wallet");
+    copy_dir(&wallet_src, &wallet_dir);
+
+    // Restore Cargo.toml from the bundled copy.  The bundled manifest
+    // includes [workspace] to prevent cargo from attaching to any
+    // parent workspace discovered via OUT_DIR.
+    let manifest = wallet_dir.join("Cargo.toml");
+    let bundled = wallet_dir.join("Cargo.toml.bundled");
+    std::fs::copy(&bundled, &manifest).expect("failed to restore dev-wallet Cargo.toml");
 
     // Cross-compile the dev-wallet contract to WASM.
     // Run from the wallet directory so .cargo/config.toml is picked up
@@ -40,12 +73,6 @@ fn main() {
     let wasm_src =
         wallet_dir.join("target/wasm32-unknown-unknown/release/groundhog_dev_wallet.wasm");
     let wasm_dst = out_dir.join("dev_wallet.wasm");
-
-    assert!(
-        wasm_src.exists(),
-        "dev-wallet WASM not found at {}",
-        wasm_src.display()
-    );
 
     // Run wasm-opt if available to shrink the binary.
     // Feature flags must match the Groundhog VM feature set.
@@ -83,6 +110,6 @@ fn main() {
 
     println!(
         "cargo:warning=Dev wallet WASM: {} bytes (instrumented)",
-        std::fs::metadata(&wasm_dst).unwrap().len()
+        instrumented.len()
     );
 }

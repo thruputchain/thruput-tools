@@ -5,7 +5,8 @@ edition = "2024"
 license = "Apache-2.0"
 description = "Dev-mode wallet contract for the Groundhog local dev node"
 
-# Standalone crate — not part of the workspace (different target).
+# Prevent cargo from attaching to any parent workspace when
+# cross-compiled inside a build script's OUT_DIR.
 [workspace]
 
 [lib]

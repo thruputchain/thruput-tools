@@ -11,8 +11,13 @@ keywords.workspace = true
 categories.workspace = true
 description = "Local development node for Groundhog"
 
-exclude = [
-    "tests/",
+include = [
+    "src/",
+    "build.rs",
+    "dev-wallet/src/",
+    "dev-wallet/Cargo.toml.bundled",
+    "dev-wallet/Cargo.lock",
+    "dev-wallet/.cargo/",
 ]
 
 [build-dependencies]
