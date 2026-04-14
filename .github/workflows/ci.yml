@@ -16,18 +16,6 @@ env:
   HOGD_FFI_PASSWORD: ${{ secrets.HOGD_FFI_PASSWORD }}
 
 jobs:
-  fmt:
-    name: Format
-    runs-on: namespace-profile-chuckd-rs-linux
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout
-        uses: namespacelabs/nscloud-checkout-action@v8
-
-      - name: Format
-        run: cargo fmt --check
-
   clippy:
     name: Clippy
     runs-on: namespace-profile-chuckd-rs-linux
@@ -64,6 +52,9 @@ jobs:
 
       - name: Install wasm target
         run: rustup target add wasm32-unknown-unknown
+
+      - name: Format
+        run: cargo fmt --check
 
       - name: Test
         run: cargo test --workspace --locked
