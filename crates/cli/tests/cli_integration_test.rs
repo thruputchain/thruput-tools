@@ -279,9 +279,7 @@ fn build_fails_outside_project() {
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("not a groundhog project"));
-    assert!(stderr.contains("hint:"));
-    assert!(stderr.contains("groundhog new my-project"));
+    assert!(stderr.contains("cargo metadata failed"));
 }
 
 #[test]
@@ -298,13 +296,7 @@ fn build_json_failure_is_structured() {
     let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(stderr["ok"], false);
     assert_eq!(stderr["command"], "build");
-    assert_eq!(stderr["error"]["code"], "not_a_project");
-    assert!(
-        stderr["error"]["hint"]
-            .as_str()
-            .unwrap()
-            .contains("groundhog new my-project")
-    );
+    assert_eq!(stderr["error"]["code"], "cargo_metadata_failed");
 }
 
 #[test]
@@ -351,7 +343,7 @@ fn test_json_failure_is_structured() {
     let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(stderr["ok"], false);
     assert_eq!(stderr["command"], "test");
-    assert_eq!(stderr["error"]["code"], "not_a_project");
+    assert_eq!(stderr["error"]["code"], "cargo_metadata_failed");
 }
 
 #[test]

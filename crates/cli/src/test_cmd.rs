@@ -10,6 +10,7 @@ use std::process::Command;
 /// faults in WASM execution are real aborts — the same
 /// as what would happen on-chain.
 pub fn run(
+    package: Option<&str>,
     cargo_args: &[String],
     explicit_profile: Option<&str>,
     cmd: &'static str,
@@ -17,7 +18,7 @@ pub fn run(
 ) -> Result<(), CliError> {
     // Build the WASM contract (validates project root,
     // checks for cargo on PATH, etc.)
-    let build = crate::build::build_project(false, &[], explicit_profile, print)?;
+    let build = crate::build::build_project(package, false, &[], explicit_profile, print)?;
 
     // Run only the WASM test target
     let root = build.project_root.clone();
@@ -39,6 +40,8 @@ pub fn run(
     cargo_cmd
         .current_dir(&root)
         .arg("test")
+        .arg("-p")
+        .arg(&build.project_name)
         .arg("--test")
         .arg("test_wasm")
         .arg("--target")

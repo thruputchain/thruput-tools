@@ -1,8 +1,19 @@
 [package]
 name = "groundhog-signing"
-version = "0.1.0"
-edition = "2024"
-license = "Apache-2.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Off-chain transaction signing and construction for Groundhog"
+
+exclude = [
+    "tests/",
+]
 
 [features]
 default = ["std"]

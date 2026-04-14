@@ -3,7 +3,7 @@ use std::env;
 use tempfile::TempDir;
 
 /// Verify that `test_cmd::run` fails when run outside
-/// a groundhog project (no Cargo.toml with sdk dep).
+/// a cargo project (cargo metadata fails).
 #[test]
 #[serial]
 fn test_fails_outside_project() {
@@ -12,13 +12,14 @@ fn test_fails_outside_project() {
 
     env::set_current_dir(tmp.path()).unwrap();
 
-    let result = groundhog_cli::test_cmd::run(&[], None, "test", &groundhog_cli::Print::quiet());
+    let result =
+        groundhog_cli::test_cmd::run(None, &[], None, "test", &groundhog_cli::Print::quiet());
 
     env::set_current_dir(prev_dir).unwrap();
 
     let err = result.unwrap_err().to_string();
     assert!(
-        err.contains("not a groundhog project"),
-        "expected NotAProject, got: {err}"
+        err.contains("cargo metadata failed"),
+        "expected CargoMetadataFailed, got: {err}"
     );
 }

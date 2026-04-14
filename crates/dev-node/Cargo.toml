@@ -1,16 +1,27 @@
 [package]
 name = "groundhog-dev-node"
-version = "0.1.0"
-edition = "2024"
-license = "Apache-2.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Local development node for Groundhog"
+
+exclude = [
+    "tests/",
+]
 
 [lints]
 workspace = true
 
 [dependencies]
-groundhog-rpc-api = { path = "../rpc-api" }
-groundhog-rpc-api-types = { path = "../api-types" }
-groundhog-signing = { path = "../signing" }
+groundhog-rpc-api = { workspace = true }
+groundhog-rpc-api-types = { workspace = true }
+groundhog-signing = { workspace = true }
 groundhog-xdr = { workspace = true }
 xdrs = { workspace = true }
 xdr-common = { workspace = true }

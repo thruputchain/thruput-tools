@@ -1,28 +1,108 @@
 use std::path::PathBuf;
-use tempfile::TempDir;
 
 #[test]
-fn find_project_root_from_src_subdir() {
-    let tmp = TempDir::new().unwrap();
-    groundhog_cli::scaffold::generate(tmp.path(), "test-proj", "counter").unwrap();
-
-    let src_dir = tmp.path().join("src");
-    let root = groundhog_cli::build::find_project_root(&src_dir).unwrap();
-    assert_eq!(root, tmp.path());
+fn resolve_package_with_explicit_name() {
+    let meta = groundhog_cli::build::CargoMetadata {
+        workspace_root: PathBuf::from("/ws"),
+        target_directory: PathBuf::from("/ws/target"),
+        packages: vec![
+            groundhog_cli::build::MetadataPackage {
+                name: "alpha".into(),
+                manifest_path: PathBuf::from("/ws/alpha/Cargo.toml"),
+            },
+            groundhog_cli::build::MetadataPackage {
+                name: "beta".into(),
+                manifest_path: PathBuf::from("/ws/beta/Cargo.toml"),
+            },
+        ],
+    };
+    let name =
+        groundhog_cli::build::resolve_package(&meta, Some("beta"), &PathBuf::from("/ws")).unwrap();
+    assert_eq!(name, "beta");
 }
 
 #[test]
-fn find_project_root_fails_outside_project() {
-    let tmp = TempDir::new().unwrap();
-    let result = groundhog_cli::build::find_project_root(tmp.path());
-    assert!(result.is_err());
+fn resolve_package_explicit_name_not_found() {
+    let meta = groundhog_cli::build::CargoMetadata {
+        workspace_root: PathBuf::from("/ws"),
+        target_directory: PathBuf::from("/ws/target"),
+        packages: vec![groundhog_cli::build::MetadataPackage {
+            name: "alpha".into(),
+            manifest_path: PathBuf::from("/ws/alpha/Cargo.toml"),
+        }],
+    };
+    let err = groundhog_cli::build::resolve_package(&meta, Some("nope"), &PathBuf::from("/ws"))
+        .unwrap_err();
+    assert!(err.to_string().contains("nope"));
 }
 
 #[test]
-fn wasm_output_path_derives_from_name() {
-    let path = groundhog_cli::build::wasm_output_path("my-counter");
-    assert_eq!(
-        path,
-        PathBuf::from("target/wasm32-unknown-unknown/release/my_counter.wasm")
-    );
+fn resolve_package_from_member_dir() {
+    let meta = groundhog_cli::build::CargoMetadata {
+        workspace_root: PathBuf::from("/ws"),
+        target_directory: PathBuf::from("/ws/target"),
+        packages: vec![
+            groundhog_cli::build::MetadataPackage {
+                name: "alpha".into(),
+                manifest_path: PathBuf::from("/ws/alpha/Cargo.toml"),
+            },
+            groundhog_cli::build::MetadataPackage {
+                name: "beta".into(),
+                manifest_path: PathBuf::from("/ws/beta/Cargo.toml"),
+            },
+        ],
+    };
+    let name = groundhog_cli::build::resolve_package(&meta, None, &PathBuf::from("/ws/alpha/src"))
+        .unwrap();
+    assert_eq!(name, "alpha");
+}
+
+#[test]
+fn resolve_package_from_workspace_root_errors() {
+    let meta = groundhog_cli::build::CargoMetadata {
+        workspace_root: PathBuf::from("/ws"),
+        target_directory: PathBuf::from("/ws/target"),
+        packages: vec![
+            groundhog_cli::build::MetadataPackage {
+                name: "alpha".into(),
+                manifest_path: PathBuf::from("/ws/alpha/Cargo.toml"),
+            },
+            groundhog_cli::build::MetadataPackage {
+                name: "beta".into(),
+                manifest_path: PathBuf::from("/ws/beta/Cargo.toml"),
+            },
+        ],
+    };
+    let err =
+        groundhog_cli::build::resolve_package(&meta, None, &PathBuf::from("/ws")).unwrap_err();
+    assert!(err.to_string().contains("-p"));
+}
+
+#[test]
+fn resolve_package_standalone_project() {
+    let meta = groundhog_cli::build::CargoMetadata {
+        workspace_root: PathBuf::from("/proj"),
+        target_directory: PathBuf::from("/proj/target"),
+        packages: vec![groundhog_cli::build::MetadataPackage {
+            name: "my-contract".into(),
+            manifest_path: PathBuf::from("/proj/Cargo.toml"),
+        }],
+    };
+    let name =
+        groundhog_cli::build::resolve_package(&meta, None, &PathBuf::from("/proj/src")).unwrap();
+    assert_eq!(name, "my-contract");
+}
+
+#[test]
+fn resolve_package_standalone_from_root() {
+    let meta = groundhog_cli::build::CargoMetadata {
+        workspace_root: PathBuf::from("/proj"),
+        target_directory: PathBuf::from("/proj/target"),
+        packages: vec![groundhog_cli::build::MetadataPackage {
+            name: "my-contract".into(),
+            manifest_path: PathBuf::from("/proj/Cargo.toml"),
+        }],
+    };
+    let name = groundhog_cli::build::resolve_package(&meta, None, &PathBuf::from("/proj")).unwrap();
+    assert_eq!(name, "my-contract");
 }

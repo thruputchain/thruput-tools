@@ -1,15 +1,26 @@
 [package]
 name = "groundhog-rpc-client"
-version = "0.1.0"
-edition = "2024"
-license = "Apache-2.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Typed JSON-RPC client for the Groundhog gateway"
+
+exclude = [
+    "tests/",
+]
 
 [lints]
 workspace = true
 
 [dependencies]
-groundhog-rpc-api = { path = "../rpc-api" }
-groundhog-rpc-api-types = { path = "../api-types" }
+groundhog-rpc-api = { workspace = true }
+groundhog-rpc-api-types = { workspace = true }
 jsonrpsee = { workspace = true, features = ["client", "macros", "http-client"] }
 tokio = { workspace = true }
 serde = { workspace = true }
