@@ -48,8 +48,16 @@ fn main() {
     );
 
     // Run wasm-opt if available to shrink the binary.
+    // Feature flags must match the Groundhog VM feature set.
+    // Keep in sync with crates/cli/src/build.rs.
     let wasm_opt_result = Command::new("wasm-opt")
-        .args(["-Oz", "-o"])
+        .arg("-mvp")
+        .arg("--enable-bulk-memory")
+        .arg("--enable-sign-ext")
+        .arg("--enable-mutable-globals")
+        .arg("--enable-simd")
+        .arg("-Oz")
+        .arg("-o")
         .arg(&wasm_dst)
         .arg(&wasm_src)
         .status();

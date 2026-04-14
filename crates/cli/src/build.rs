@@ -102,6 +102,11 @@ pub fn build_project(
     if optimize {
         print.status("Optimizing with wasm-opt...");
         let status = Command::new("wasm-opt")
+            .arg("-mvp")
+            .arg("--enable-bulk-memory")
+            .arg("--enable-sign-ext")
+            .arg("--enable-mutable-globals")
+            .arg("--enable-simd")
             .arg("-Oz")
             .arg(&wasm)
             .arg("-o")
@@ -111,6 +116,9 @@ pub fn build_project(
             return Err(CliError::WasmOptFailed);
         }
     }
+
+    print.status("Instrumenting WASM...");
+    crate::wasm_instrument::instrument(&wasm)?;
 
     let size = fs::metadata(&wasm)?.len();
     print.status(format_args!("Built {} ({size} bytes)", wasm.display()));
