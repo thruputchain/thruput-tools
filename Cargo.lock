@@ -696,6 +696,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fslock"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "04412b8935272e3a9bae6f48c7bfff74c2911f60525404edfdd28e49884c3bfb"
+dependencies = [
+ "libc",
+ "winapi",
+]
+
+[[package]]
 name = "futures"
 version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -942,9 +952,9 @@ dependencies = [
 
 [[package]]
 name = "groundhog-event"
-version = "0.9.0"
+version = "0.11.2"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "57dbddf49da45e215a1413eaf5b54f1c1cbeef987a816c6cc54eae2240fff0e3"
+checksum = "d5e6194b132fa20c230e3280753c6a9d22d5f8d8cd8f45934ade3e3d9af5d361"
 dependencies = [
  "groundhog-xdr",
  "xdrs",
@@ -952,9 +962,9 @@ dependencies = [
 
 [[package]]
 name = "groundhog-native-exec"
-version = "0.9.0"
+version = "0.11.2"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "4862d33ddca81ca26bd85663b357ca2d1ed324658acc4cd50af1a1f165e7216b"
+checksum = "ef93a8843e511f9d869214b82694cc811eee8b48790c033c996607044dc68e66"
 dependencies = [
  "groundhog-event",
  "groundhog-storage-cost",
@@ -1057,9 +1067,9 @@ dependencies = [
 
 [[package]]
 name = "groundhog-storage-cost"
-version = "0.9.0"
+version = "0.11.2"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "55ab8e6332cca1c447f1788521151b5c06781a1a141a082ec56681ceb351d8f8"
+checksum = "ffa073b88d65c205da3c12eeab9fcb0ab9679a7f1550b00e567a6d2dbfa0b266"
 dependencies = [
  "groundhog-xdr",
  "xdrs",
@@ -1067,13 +1077,14 @@ dependencies = [
 
 [[package]]
 name = "groundhog-sys"
-version = "0.9.0"
+version = "0.11.2"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "6015bb0d22bcca0e52e53814c2f4bb40c33b6f7b955a862f39fbfb3abe245abc"
+checksum = "fde95d0bf34f264f216926442acefd84ba9203f07951df5c00b981e241b1c4f3"
 dependencies = [
  "bindgen",
  "cmake",
  "flate2",
+ "fslock",
  "reqwest",
  "sha2",
  "tar",
@@ -3597,6 +3608,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "winapi"
+version = "0.3.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c839a674fcd7a98952e593242ea400abe93992746761e38641405d28b00f419"
+dependencies = [
+ "winapi-i686-pc-windows-gnu",
+ "winapi-x86_64-pc-windows-gnu",
+]
+
+[[package]]
+name = "winapi-i686-pc-windows-gnu"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac3b87c63620426dd9b991e5ce0329eff545bccbbb34f3be09ff6fb6ab51b7b6"
+
+[[package]]
 name = "winapi-util"
 version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3604,6 +3631,12 @@ checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "winapi-x86_64-pc-windows-gnu"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
 
 [[package]]
 name = "windows-core"
