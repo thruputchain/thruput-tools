@@ -65,8 +65,19 @@ fn main() {
         }
     }
 
+    // Run the wasm-meter instrumentation pass to add stack limiting.
+    // Required by groundhog-native-exec for contract verification.
+    let raw = std::fs::read(&wasm_dst).expect("failed to read dev-wallet WASM for instrumentation");
+    let instrumented = groundhog_wasm_meter::instrument(
+        &raw,
+        &groundhog_wasm_meter::Config::default(),
+    )
+    .expect("wasm-meter instrumentation failed on dev-wallet WASM");
+    std::fs::write(&wasm_dst, &instrumented)
+        .expect("failed to write instrumented dev-wallet WASM");
+
     println!(
-        "cargo:warning=Dev wallet WASM: {} bytes",
+        "cargo:warning=Dev wallet WASM: {} bytes (instrumented)",
         std::fs::metadata(&wasm_dst).unwrap().len()
     );
 }

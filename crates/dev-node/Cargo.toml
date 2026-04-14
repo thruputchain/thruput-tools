@@ -15,6 +15,9 @@ exclude = [
     "tests/",
 ]
 
+[build-dependencies]
+groundhog-wasm-meter = { version = "0.2.0", registry = "groundhog" }
+
 [lints]
 workspace = true
 
