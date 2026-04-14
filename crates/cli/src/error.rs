@@ -48,6 +48,8 @@ pub enum CliError {
     UnsupportedOs(String),
     #[error("wasm-opt optimization failed")]
     WasmOptFailed,
+    #[error("WASM instrumentation failed: {0}")]
+    WasmInstrumentFailed(#[from] groundhog_wasm_meter::Error),
     #[error("key `{0}` already exists")]
     KeyExists(String),
     #[error("key `{0}` not found")]
@@ -109,6 +111,7 @@ impl CliError {
             Self::RegistryLoginFailed => "registry_login_failed",
             Self::UnsupportedOs(_) => "unsupported_os",
             Self::WasmOptFailed => "wasm_opt_failed",
+            Self::WasmInstrumentFailed(_) => "wasm_instrument_failed",
             Self::KeyExists(_) => "key_exists",
             Self::KeyNotFound(_) => "key_not_found",
             Self::KeyNameEmpty => "key_name_empty",
@@ -216,6 +219,9 @@ impl CliError {
                 "check the wasm-opt output above; the WASM binary \
                  may be invalid",
             )),
+            Self::WasmInstrumentFailed(_) => {
+                Some(Cow::Borrowed("the WASM binary may be invalid or too large"))
+            }
             Self::KeyExists(name) => Some(Cow::Owned(format!(
                 "use a different name, or remove the existing key \
                  with `groundhog keys rm {name}`"
