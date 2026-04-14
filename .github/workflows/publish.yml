@@ -1,0 +1,83 @@
+name: Release package
+
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  CARGO_REGISTRIES_GROUNDHOG_TOKEN: ${{ secrets.GROUNDHOG_REGISTRY_TOKEN }}
+  CARGO_REGISTRY_GLOBAL_CREDENTIAL_PROVIDERS: cargo:token
+  CARGO_REGISTRIES_GROUNDHOG_INDEX: sparse+https://groundhog.dev/crates/api/v1/crates/
+  CARGO_REGISTRIES_GROUNDHOG_SOURCE: sparse+https://groundhog.dev/crates/api/v1/crates/
+  HOGD_FFI_PASSWORD: ${{ secrets.HOGD_FFI_PASSWORD }}
+
+jobs:
+  publish:
+    permissions:
+      contents: write
+    runs-on: hog1
+
+    steps:
+      - name: Clean up .gitconfig
+        run: |
+            echo "Cleaning up .gitconfig"
+            rm -f /home/hogci/.gitconfig
+
+      - name: Setup SSH Agent
+        uses: webfactory/ssh-agent@v0.9.1
+        with:
+          ssh-private-key: |
+            ${{ secrets.ACTIONS_KEY }}
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: Configure git to use SSH
+        run: |
+          git config --global url."git@github.com:".insteadOf "https://github.com/"
+
+      - name: Checkout actions repository
+        uses: actions/checkout@v4
+        with:
+          repository: groundhogchain/actions
+          path: actions
+          ref: main
+
+      - name: dry run
+        uses: ./actions/cargo-publish-dry-run
+
+      - name: tag commit with version
+        id: publish-tag
+        uses: ./actions/cargo-version-tag
+
+      - name: push tag
+        run: |
+          git remote set-url origin https://${{ github.actor }}:${{ github.token }}@github.com/${{ github.repository }}.git
+          TAG="${{ steps.publish-tag.outputs.tag }}"
+          LOCAL_COMMIT=$(git rev-parse "$TAG")
+          # Check if tag exists on remote and get its commit SHA
+          REMOTE_TAG_REF=$(git ls-remote origin "refs/tags/$TAG" | cut -f1)
+          if [ -n "$REMOTE_TAG_REF" ]; then
+            # Tag exists on remote, verify it points to the same commit
+            if [ "$REMOTE_TAG_REF" = "$LOCAL_COMMIT" ]; then
+              echo "Tag $TAG already exists on remote and points to the same commit ($LOCAL_COMMIT). Skipping push."
+            else
+              echo "Error: Tag $TAG exists on remote but points to different commit!"
+              echo "Remote: $REMOTE_TAG_REF"
+              echo "Local: $LOCAL_COMMIT"
+              exit 1
+            fi
+          else
+            # Tag doesn't exist on remote, push it
+            git push origin "$TAG"
+          fi
+          git remote set-url origin git@github.com:${{ github.repository }}.git
+
+      - name: publish
+        uses: ./actions/cargo-publish
+        with:
+          git-tag: ${{ steps.publish-tag.outputs.tag }}
+          registry-name: groundhog
+          registry-token: ${{ secrets.GROUNDHOG_REGISTRY_TOKEN }}

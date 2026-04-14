@@ -11,7 +11,7 @@ use groundhog_xdr::types::{ContractAddress, Ed25519PublicKey, SHA256Hash};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-use crate::build::{find_project, wasm_output_path};
+use crate::build::{cargo_metadata, resolve_package};
 use crate::config::{find_project_config, resolve_default_key, resolve_profile};
 use crate::contract_spec::{FullMethodSpec, TypeSpec, load_full_spec, load_interface_sidecar};
 use crate::keys::load_local_signer;
@@ -267,10 +267,17 @@ fn resolve_full_contract_metadata(
     cwd: &Path,
     method: &str,
 ) -> Result<Option<FullMethodMetadata>, CliError> {
-    let Ok((project_root, package_name)) = find_project(cwd) else {
+    let Ok(metadata) = cargo_metadata() else {
         return Ok(None);
     };
-    let wasm = project_root.join(wasm_output_path(&package_name));
+    let Ok(pkg_name) = resolve_package(&metadata, None, cwd) else {
+        return Ok(None);
+    };
+    let snake_name = crate::scaffold::to_snake(pkg_name);
+    let wasm = metadata
+        .target_directory
+        .join("wasm32-unknown-unknown/release")
+        .join(format!("{snake_name}.wasm"));
     let Some(spec) = load_full_spec(&wasm)? else {
         return Ok(None);
     };
@@ -352,8 +359,13 @@ fn resolve_local_contract_metadata(
 fn load_project_interface_spec(
     project_root: &Path,
 ) -> Result<Option<crate::contract_spec::InterfaceSpecFile>, CliError> {
-    let (_, package_name) = find_project(project_root)?;
-    let wasm = project_root.join(wasm_output_path(&package_name));
+    let metadata = cargo_metadata()?;
+    let pkg_name = resolve_package(&metadata, None, project_root)?;
+    let snake_name = crate::scaffold::to_snake(pkg_name);
+    let wasm = metadata
+        .target_directory
+        .join("wasm32-unknown-unknown/release")
+        .join(format!("{snake_name}.wasm"));
     load_interface_sidecar(&wasm)
 }
 

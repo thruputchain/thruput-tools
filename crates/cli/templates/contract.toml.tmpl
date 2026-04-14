@@ -1,5 +1,7 @@
 [target.wasm32-unknown-unknown]
 rustflags = [
+    # Required for -C panic=immediate-abort on nightly
+    "-Z", "unstable-options",
     "-C", "panic=immediate-abort",
     ]
 

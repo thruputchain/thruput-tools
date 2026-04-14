@@ -9,11 +9,14 @@ pub enum CliError {
     CargoNotFound,
     #[error("wasm-opt not found on PATH")]
     WasmOptNotFound,
-    #[error(
-        "not a groundhog project \
-         (no Cargo.toml with sdk dependency)"
-    )]
-    NotAProject,
+    #[error("`.cargo/contract.toml` not found in {0}")]
+    ContractTomlNotFound(String),
+    #[error("package `{0}` not found in workspace")]
+    PackageNotFound(String),
+    #[error("could not determine package — specify one with `-p <name>`")]
+    PackageRequired,
+    #[error("cargo metadata failed: {0}")]
+    CargoMetadataFailed(String),
     #[error("cargo failed with exit code {0}")]
     CargoFailed(i32),
     #[error("cargo failed with exit code {code}")]
@@ -91,7 +94,10 @@ impl CliError {
         match self {
             Self::CargoNotFound => "cargo_not_found",
             Self::WasmOptNotFound => "wasm_opt_not_found",
-            Self::NotAProject => "not_a_project",
+            Self::ContractTomlNotFound(_) => "contract_toml_not_found",
+            Self::PackageNotFound(_) => "package_not_found",
+            Self::PackageRequired => "package_required",
+            Self::CargoMetadataFailed(_) => "cargo_metadata_failed",
             Self::CargoFailed(_) | Self::CargoFailedWithOutput { .. } => "cargo_failed",
             Self::DirExists(_) => "dir_exists",
             Self::DirNotEmpty => "dir_not_empty",
@@ -123,6 +129,7 @@ impl CliError {
     }
 
     /// Optional actionable hint for the user.
+    #[allow(clippy::too_many_lines)]
     pub fn hint(&self) -> Option<Cow<'static, str>> {
         match self {
             Self::CargoNotFound => Some(Cow::Borrowed(
@@ -132,9 +139,22 @@ impl CliError {
                 "install Binaryen (`brew install binaryen`), or \
                  rerun without `--optimize`",
             )),
-            Self::NotAProject => Some(Cow::Borrowed(
-                "run `groundhog new my-project`, or change into an \
-                 existing Groundhog project root",
+            Self::ContractTomlNotFound(_) => Some(Cow::Borrowed(
+                "create `.cargo/contract.toml` with WASM build flags, \
+                 or run `groundhog new` to scaffold a project",
+            )),
+            Self::PackageNotFound(name) => Some(Cow::Owned(format!(
+                "available packages can be listed with \
+                 `cargo metadata --no-deps`; \
+                 check that `{name}` is spelled correctly"
+            ))),
+            Self::PackageRequired => Some(Cow::Borrowed(
+                "run from inside a package directory, or pass \
+                 `-p <package>` to select one",
+            )),
+            Self::CargoMetadataFailed(_) => Some(Cow::Borrowed(
+                "ensure `cargo` is on PATH and you are inside \
+                 a Cargo project or workspace",
             )),
             Self::CargoFailed(_) | Self::CargoFailedWithOutput { .. } => Some(Cow::Borrowed(
                 "see the cargo output above for the underlying build \

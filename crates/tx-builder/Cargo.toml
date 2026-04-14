@@ -1,8 +1,19 @@
 [package]
 name = "groundhog-tx-builder"
-version = "0.1.0"
-edition = "2024"
-license = "Apache-2.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "CLI transaction builder for Groundhog"
+
+exclude = [
+    "tests/",
+]
 
 [[bin]]
 name = "tx-builder"
@@ -13,7 +24,7 @@ workspace = true
 
 [dependencies]
 groundhog-xdr = { workspace = true }
-groundhog-signing = { path = "../signing" }
+groundhog-signing = { workspace = true }
 hex = { workspace = true }
 sha2 = { workspace = true }
 clap = { workspace = true }

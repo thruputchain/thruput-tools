@@ -8,19 +8,40 @@ members = [
     "crates/signing",
     "crates/tx-builder",
     "crates/cli",
-    "crates/groundhog-sys",
     "crates/dev-node",
 ]
 
+[workspace.package]
+version = "0.2.1"
+edition = "2024"
+authors = ["Groundhog Team"]
+license = "Apache-2.0"
+publish = ["groundhog"]
+repository = "https://github.com/groundhogchain/groundhog-rpc"
+homepage = "https://github.com/groundhogchain/groundhog-rpc"
+keywords = ["groundhog"]
+categories = ["development-tools"]
+
 [workspace.dependencies]
+# --- Workspace crates ---
+# The version must be duplicated here despite workspace.package.version
+# above.  Cargo requires explicit versions for dependencies when
+# publishing, as path specifications are stripped out.  Remember to
+# keep this in sync.
+groundhog-rpc-api-types = { path = "crates/api-types", version = "=0.2.1", registry = "groundhog" }
+groundhog-rpc-api = { path = "crates/rpc-api", version = "=0.2.1", registry = "groundhog" }
+groundhog-rpc-client = { path = "crates/client", version = "=0.2.1", registry = "groundhog" }
+groundhog-signing = { path = "crates/signing", version = "=0.2.1", registry = "groundhog" }
+groundhog-dev-node = { path = "crates/dev-node", version = "=0.2.1", registry = "groundhog" }
+
 # --- Groundhog (private registry) ---
-groundhog-xdr = { version = "0.7.7", registry = "groundhog", features = ["serde", "xdrs"] }
-groundhog_indexer = { version = "0.7.7", registry = "groundhog" }
-groundhog_scheduler = { version = "0.7.7", registry = "groundhog" }
+groundhog-xdr = { version = "0.7.9", registry = "groundhog", features = ["serde", "xdrs"] }
+groundhog_indexer = { version = "0.7.9", registry = "groundhog" }
+groundhog_scheduler = { version = "0.7.9", registry = "groundhog" }
 xdrs = { version = "0.5.3", registry = "groundhog", features = ["alloc"] }
 xdr-common = { version = "0.5.3", registry = "groundhog" }
 rpc_driver = { version = "0.8", registry = "groundhog" }
-groundhog-native-exec = { version = "0.9", registry = "groundhog" }
+groundhog-native-exec = { version = "0.11.2", registry = "groundhog" }
 
 # --- Async ---
 async-trait = "0.1"
@@ -73,6 +94,3 @@ missing-panics-doc = "allow"
 
 [profile.release]
 overflow-checks = true
-
-[patch.groundhog]
-groundhog-sys = { path = "crates/groundhog-sys" }

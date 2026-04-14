@@ -76,6 +76,9 @@ enum Command {
                       --optimize requires wasm-opt \
                       (install via `brew install binaryen`).")]
     Build {
+        /// Package to build (required in workspaces)
+        #[arg(short, long)]
+        package: Option<String>,
         /// Run wasm-opt after compilation (requires wasm-opt)
         #[arg(long)]
         optimize: bool,
@@ -96,6 +99,9 @@ enum Command {
                       are real WASM aborts — the same behavior \
                       as on-chain execution.")]
     Test {
+        /// Package to test (required in workspaces)
+        #[arg(short, long)]
+        package: Option<String>,
         /// Config profile to use
         #[arg(
             long = "profile",
@@ -225,6 +231,7 @@ impl KeysCommand {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn main() {
     let cli = Cli::parse();
     let print = Print::new(cli.global.quiet, cli.global.json);
@@ -243,14 +250,29 @@ fn main() {
             groundhog_cli::status::run(&cwd, Some(&profile), cmd_name, &print)
         }
         Command::Build {
+            package,
             optimize,
             profile,
             cargo_args,
-        } => groundhog_cli::build::run(optimize, &cargo_args, Some(&profile), cmd_name, &print),
+        } => groundhog_cli::build::run(
+            package.as_deref(),
+            optimize,
+            &cargo_args,
+            Some(&profile),
+            cmd_name,
+            &print,
+        ),
         Command::Test {
+            package,
             profile,
             cargo_args,
-        } => groundhog_cli::test_cmd::run(&cargo_args, Some(&profile), cmd_name, &print),
+        } => groundhog_cli::test_cmd::run(
+            package.as_deref(),
+            &cargo_args,
+            Some(&profile),
+            cmd_name,
+            &print,
+        ),
         Command::Deploy { wasm, profile } => {
             groundhog_cli::deploy::run(&wasm, &profile, cmd_name, &print)
         }
