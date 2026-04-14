@@ -201,7 +201,7 @@ pub fn cargo_metadata() -> Result<CargoMetadata, CliError> {
 /// Check that `.cargo/contract.toml` exists at the workspace root.
 fn require_contract_toml(workspace_root: &Path) -> Result<PathBuf, CliError> {
     let path = workspace_root.join(".cargo/contract.toml");
-    if path.exists() {
+    if path.try_exists()? {
         Ok(path)
     } else {
         Err(CliError::ContractTomlNotFound(

@@ -36,8 +36,8 @@ groundhog-dev-node = { path = "crates/dev-node", version = "=0.2.1", registry = 
 
 # --- Groundhog (private registry) ---
 groundhog-xdr = { version = "0.7.9", registry = "groundhog", features = ["serde", "xdrs"] }
-groundhog_indexer = { version = "0.7.7", registry = "groundhog" }
-groundhog_scheduler = { version = "0.7.7", registry = "groundhog" }
+groundhog_indexer = { version = "0.7.9", registry = "groundhog" }
+groundhog_scheduler = { version = "0.7.9", registry = "groundhog" }
 xdrs = { version = "0.5.3", registry = "groundhog", features = ["alloc"] }
 xdr-common = { version = "0.5.3", registry = "groundhog" }
 rpc_driver = { version = "0.8", registry = "groundhog" }
