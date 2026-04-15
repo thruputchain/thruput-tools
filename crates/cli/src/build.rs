@@ -11,6 +11,8 @@ pub struct BuildResult {
     pub project_root: PathBuf,
     pub wasm: PathBuf,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub spec: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub spec_json: Option<PathBuf>,
     pub size_bytes: u64,
     pub optimized: bool,
@@ -38,12 +40,13 @@ pub fn run(
             "project_name": result.project_name,
             "project_root": result.project_root,
             "wasm": result.wasm,
-            "spec_json": result.spec_json,
             "size_bytes": result.size_bytes,
             "optimized": result.optimized,
             "profile": result.profile,
             "cargo_stdout": result.cargo_stdout,
             "cargo_stderr": result.cargo_stderr,
+            "spec": result.spec,
+            "spec_json": result.spec_json,
         }),
     ))?;
     Ok(())
@@ -117,28 +120,23 @@ pub fn build_project(
         }
     }
 
+    print.status("Checking for contract spec...");
+    let (spec, spec_json) = crate::contract_spec::finalize_spec(&wasm, print)?;
+
     print.status("Instrumenting WASM...");
     crate::wasm_instrument::instrument(&wasm)?;
 
     let size = fs::metadata(&wasm)?.len();
     print.status(format_args!("Built {} ({size} bytes)", wasm.display()));
-    let spec_json = crate::contract_spec::maybe_generate_sidecar(
-        &metadata.workspace_root,
-        pkg_name,
-        &wasm,
-        print,
-    )?;
-    if let Some(ref spec_json) = spec_json {
-        print.status(format_args!("Spec {}", spec_json.display()));
-    }
 
     Ok(BuildResult {
         project_name: pkg_name.to_string(),
         project_root: metadata.workspace_root,
         wasm,
-        spec_json,
         size_bytes: size,
         optimized: optimize,
+        spec,
+        spec_json,
         profile,
         cargo_stdout,
         cargo_stderr,

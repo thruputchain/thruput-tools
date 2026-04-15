@@ -36,6 +36,7 @@ sha2 = { workspace = true }
 zeroize = { workspace = true }
 groundhog-signing = { workspace = true }
 groundhog-wasm-meter = { workspace = true }
+groundhog-spec-tool = { workspace = true }
 groundhog-rpc-client = { workspace = true }
 groundhog-rpc-api-types = { workspace = true }
 groundhog-xdr = { workspace = true }
