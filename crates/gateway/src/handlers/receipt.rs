@@ -2,11 +2,11 @@
 //! handlers.
 
 use groundhog_indexer::indexer::TxInfoResult;
-use groundhog_rpc_api_types::hex::Hex0x;
 use groundhog_rpc_api_types::{
     receipt::{ExecStatus, TransactionReceipt},
     transaction::{TransactionStatus, TxHash},
 };
+use groundhog_xdr::exec_result::ExecResult;
 use groundhog_xdr::transaction::SignedTransactionHash;
 use xdr_common::VecM;
 
@@ -14,6 +14,25 @@ use crate::context::GatewayContext;
 use crate::error::GatewayError;
 
 use super::parse_event::parse_emitted_event;
+
+/// Map hogd's `ExecResult` (XDR int enum) to the gateway's `ExecStatus`.
+fn map_exec_result(r: ExecResult) -> ExecStatus {
+    if r == ExecResult::ExecResultOK {
+        ExecStatus::Ok
+    } else if r == ExecResult::ExecResultTxRootFrameReverted {
+        ExecStatus::Reverted { message: None }
+    } else if r == ExecResult::ExecResultTxDeterministicError {
+        ExecStatus::DeterministicError {
+            kind: "deterministic".into(),
+        }
+    } else if r == ExecResult::ExecResultTxNonDeterministicError {
+        ExecStatus::NonDeterministicError
+    } else if r == ExecResult::ExecResultFailedGasSponsorship {
+        ExecStatus::FailedGasSponsorship
+    } else {
+        ExecStatus::Other
+    }
+}
 
 /// Full receipt for a committed transaction.
 ///
@@ -52,9 +71,7 @@ pub async fn get_transaction_receipt(
             Ok(Some(TransactionReceipt {
                 tx_hash,
                 height: info.height,
-                // TODO: map ExecResult → ExecStatus when indexer provides it.
-                // Currently TxInfo only has height + events, no exec result.
-                status: ExecStatus::Ok,
+                status: map_exec_result(info.events.exec_result),
                 events,
                 return_data: None,
             }))
@@ -67,7 +84,7 @@ pub async fn get_transaction_receipt(
 ///
 /// Lookup order:
 /// 1. **Scheduler (mempool)** -> if found, return `Pending`
-/// 2. **Indexer** -> if found, return `Committed { height, block_hash }`
+/// 2. **Indexer** -> if found, return `Committed { height }`
 /// 3. **Neither** -> return `Unknown`
 ///
 /// Degraded-mode behavior:
@@ -107,11 +124,8 @@ pub async fn get_transaction_status(
         match client.get_transaction_info(&hash).await {
             Ok(result) => {
                 if let TxInfoResult::TxInfoFound { info } = result {
-                    // TODO: include block_hash when indexer provides it.
-                    // Currently TxInfo only has height, not block hash.
                     return Ok(TransactionStatus::Committed {
                         height: info.height,
-                        block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0u8; 32])),
                     });
                 }
             }

@@ -7,11 +7,12 @@ use crate::transaction::TxHash;
 
 /// Full transaction receipt. Returned by `getTransactionReceipt`.
 ///
-/// Diverges from EVM receipts intentionally:
-/// - No `gasUsed`/`gasPrice` (gas bounds computation but costs zero)
-/// - No `transactionIndex` (not stored in indexer)
-/// - No `logsBloom` (events are directly indexed)
-/// - `ExecStatus` is richer than EVM's binary 0/1
+/// Design notes:
+/// - `status` maps from `TxEventLog.exec_result` in the indexer.
+///   Committed blocks include both successful and deterministically-failed
+///   txs (reverts, OOG). If a receipt exists, the tx was committed.
+/// - No `blockHash`: SCP instant finality, height is sufficient.
+/// - No `gasUsed`/`gasPrice`, `transactionIndex`, `logsBloom`.
 ///
 /// `storage_delta` (net HOG locked/unlocked) is deferred — hogd's
 /// `TxInfo` doesn't include it. Will be added when indexer support lands.

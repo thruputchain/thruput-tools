@@ -25,10 +25,9 @@ pub enum TransactionStatus {
     Pending,
 
     /// Included in a committed block. SCP finality = done.
-    Committed {
-        height: BlockHeight,
-        block_hash: SHA256Hash,
-    },
+    /// No `block_hash`: SCP instant finality means no forks/reorgs,
+    /// so height alone is sufficient for confirmation.
+    Committed { height: BlockHeight },
 
     /// Scheduler rejected the transaction.
     Invalid { reason: String },
