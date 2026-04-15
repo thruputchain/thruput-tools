@@ -152,11 +152,14 @@ pub fn finalize_spec(
 
     let xdr_bytes = xdrs::txs::encode(&spec)
         .map_err(|e| CliError::SpecFailed(format!("XDR encoding failed: {e}")))?;
-    std::fs::write(&spec_path, &xdr_bytes)?;
+    std::fs::write(&spec_path, &xdr_bytes)
+        .map_err(|e| CliError::Other(format!("failed to write {}: {e}", spec_path.display())))?;
     print.status(format_args!("Wrote {}", spec_path.display()));
 
     let json_str = render_spec_json(&spec);
-    std::fs::write(&spec_json_path, json_str.as_bytes())?;
+    std::fs::write(&spec_json_path, json_str.as_bytes()).map_err(|e| {
+        CliError::Other(format!("failed to write {}: {e}", spec_json_path.display()))
+    })?;
     print.status(format_args!("Wrote {}", spec_json_path.display()));
 
     Ok((Some(spec_path), Some(spec_json_path)))
