@@ -22,9 +22,9 @@ fn copy_dir(src: &Path, dst: &Path) {
 }
 
 fn main() {
-    let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+    let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("bug: CARGO_MANIFEST_DIR not set");
     let wallet_src = PathBuf::from(&manifest_dir).join("dev-wallet");
-    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+    let out_dir = PathBuf::from(env::var("OUT_DIR").expect("bug: OUT_DIR not set"));
 
     // Rerun if wallet source or config changes.
     println!(
@@ -67,7 +67,13 @@ fn main() {
         .current_dir(&wallet_dir)
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
         .env_remove("RUSTFLAGS")
-        .args(["build", "--target", "wasm32-unknown-unknown", "--release"])
+        .args([
+            "build",
+            "--target",
+            "wasm32-unknown-unknown",
+            "--release",
+            "--locked",
+        ])
         .status()
         .expect("bug: failed to run cargo for dev-wallet build");
 
