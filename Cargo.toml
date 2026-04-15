@@ -43,7 +43,7 @@ xdr-common = { version = "0.5.3", registry = "groundhog" }
 rpc_driver = { version = "0.8", registry = "groundhog" }
 groundhog-native-exec = { version = "0.11.2", registry = "groundhog" }
 groundhog-wasm-meter = { version = "0.2.0", registry = "groundhog" }
-groundhog-spec-tool = { version = "0.11.1", registry = "groundhog" }
+groundhog-spec-tool = { version = "0.11.2", registry = "groundhog" }
 
 # --- Async ---
 async-trait = "0.1"
