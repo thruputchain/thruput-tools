@@ -54,6 +54,9 @@ jobs:
           path: actions
           ref: main
 
+      - name: Add wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+
       - name: dry run
         uses: ./actions/cargo-publish-dry-run
         with:
