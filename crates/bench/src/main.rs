@@ -11,14 +11,15 @@
 //!   # Against real gateway (load):
 //!   groundhog-bench --url http://127.0.0.1:8545 --rate 10000 --duration 60
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use clap::Parser;
 use groundhog_signing::{
-    build_call_transaction, encode_signed_transaction_xdr, sign_transaction, BuildCallTransaction,
-    LocalSigner, PubkeyAccount, SignTransactionParams, Signer, DEFAULT_PUBKEY_ACCOUNT_NONCE,
+    BuildCallTransaction, DEFAULT_PUBKEY_ACCOUNT_NONCE, LocalSigner, PubkeyAccount,
+    SignTransactionParams, Signer, build_call_transaction, encode_signed_transaction_xdr,
+    sign_transaction,
 };
 use groundhog_xdr::contract::ContractEntrypointID;
 use hdrhistogram::Histogram;

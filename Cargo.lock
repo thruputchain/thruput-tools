@@ -1183,17 +1183,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "groundhog-tx-builder"
-version = "0.2.2"
-dependencies = [
- "clap",
- "groundhog-signing",
- "groundhog-xdr",
- "hex",
- "sha2",
-]
-
-[[package]]
 name = "groundhog-wasm-meter"
 version = "0.2.0"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
