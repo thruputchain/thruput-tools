@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use groundhog_rpc_api_types::hex::HexBytes;
 use groundhog_signing::{
@@ -44,9 +44,12 @@ pub fn run(
     let signer = load_local_signer(&key_name)?;
 
     // Find WASM binary
-    let wasm_bytes = match wasm_path {
-        Some(path) => std::fs::read(path)?,
-        None => find_and_read_wasm(&cwd)?,
+    let wasm_bytes = if let Some(path) = wasm_path {
+        std::fs::read(path)?
+    } else {
+        let resolved_wasm = resolve_wasm_path(&cwd)?;
+        warn_if_stale(&resolved_wasm, &cwd, print);
+        std::fs::read(&resolved_wasm)?
     };
 
     print.status(format_args!(
@@ -196,36 +199,57 @@ pub fn run(
     Ok(())
 }
 
-fn find_and_read_wasm(cwd: &Path) -> Result<Vec<u8>, CliError> {
-    let wasm_dir = cwd.join("target/wasm32-unknown-unknown/release");
-    if !wasm_dir.exists() {
-        return Err(CliError::Other(
-            "no WASM build output found — run `groundhog build` first".into(),
-        ));
-    }
-    let mut wasm_files: Vec<_> = std::fs::read_dir(&wasm_dir)?
-        .filter_map(Result::ok)
-        .filter(|e| e.path().extension().is_some_and(|ext| ext == "wasm"))
-        .collect();
+fn resolve_wasm_path(cwd: &Path) -> Result<PathBuf, CliError> {
+    let metadata = crate::build::cargo_metadata()?;
+    let pkg_name = crate::build::resolve_package(&metadata, None, cwd)?;
+    let snake_name = crate::scaffold::to_snake(pkg_name);
+    let wasm = metadata
+        .target_directory
+        .join("wasm32-unknown-unknown/release")
+        .join(format!("{snake_name}.wasm"));
 
-    if wasm_files.is_empty() {
-        return Err(CliError::Other(
-            "no .wasm files in target/wasm32-unknown-unknown/release/ \
-             — run `groundhog build` first"
-                .into(),
-        ));
+    if !wasm.try_exists()? {
+        return Err(CliError::WasmNotFound(wasm.display().to_string()));
     }
+    Ok(wasm)
+}
 
-    wasm_files.sort_by_key(|e| {
-        e.metadata()
-            .and_then(|m| m.modified())
-            .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
-    });
-    let wasm_path = wasm_files
-        .last()
-        .expect("bug: wasm_files is non-empty")
-        .path();
-    std::fs::read(&wasm_path).map_err(CliError::from)
+fn warn_if_stale(wasm: &Path, project_start: &Path, print: &Print) {
+    let Ok(wasm_mtime) = std::fs::metadata(wasm).and_then(|m| m.modified()) else {
+        return;
+    };
+    let src_dir = match crate::config::find_project_config(project_start)
+        .and_then(|p| p.parent().map(|d| d.join("src")))
+    {
+        Some(d) if d.is_dir() => d,
+        _ => return,
+    };
+    if newest_source_mtime(&src_dir).is_some_and(|t| t > wasm_mtime) {
+        print.warn(
+            "source files are newer than the WASM artifact — \
+             run `groundhog build` to avoid deploying stale code",
+        );
+    }
+}
+
+fn newest_source_mtime(dir: &Path) -> Option<std::time::SystemTime> {
+    let mut newest = None;
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return None;
+    };
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        if path.is_dir() {
+            if let Some(t) = newest_source_mtime(&path) {
+                newest = Some(newest.map_or(t, |n: std::time::SystemTime| n.max(t)));
+            }
+        } else if path.extension().and_then(|e| e.to_str()) == Some("rs")
+            && let Ok(t) = std::fs::metadata(&path).and_then(|m| m.modified())
+        {
+            newest = Some(newest.map_or(t, |n: std::time::SystemTime| n.max(t)));
+        }
+    }
+    newest
 }
 
 fn resolve_deployed_address(

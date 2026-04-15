@@ -18,7 +18,7 @@ pub fn run(
 ) -> Result<(), CliError> {
     // Build the WASM contract (validates project root,
     // checks for cargo on PATH, etc.)
-    let build = crate::build::build_project(package, false, &[], explicit_profile, print)?;
+    let build = crate::build::build_project(package, false, cargo_args, explicit_profile, print)?;
 
     // Run only the WASM test target
     let root = build.project_root.clone();

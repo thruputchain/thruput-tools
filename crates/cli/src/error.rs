@@ -17,6 +17,8 @@ pub enum CliError {
     PackageRequired,
     #[error("cargo metadata failed: {0}")]
     CargoMetadataFailed(String),
+    #[error("expected WASM artifact not found at {0}")]
+    WasmNotFound(String),
     #[error("cargo failed with exit code {0}")]
     CargoFailed(i32),
     #[error("cargo failed with exit code {code}")]
@@ -46,8 +48,8 @@ pub enum CliError {
     RegistryLoginFailed,
     #[error("unsupported OS: {0}")]
     UnsupportedOs(String),
-    #[error("wasm-opt optimization failed")]
-    WasmOptFailed,
+    #[error("wasm-opt optimization failed{}", if .0.is_empty() { String::new() } else { format!(": {}", .0) })]
+    WasmOptFailed(String),
     #[error("WASM instrumentation failed: {0}")]
     WasmInstrumentFailed(#[from] groundhog_wasm_meter::Error),
     #[error("contract spec finalization failed: {0}")]
@@ -102,6 +104,7 @@ impl CliError {
             Self::PackageNotFound(_) => "package_not_found",
             Self::PackageRequired => "package_required",
             Self::CargoMetadataFailed(_) => "cargo_metadata_failed",
+            Self::WasmNotFound(_) => "wasm_not_found",
             Self::CargoFailed(_) | Self::CargoFailedWithOutput { .. } => "cargo_failed",
             Self::DirExists(_) => "dir_exists",
             Self::DirNotEmpty => "dir_not_empty",
@@ -112,7 +115,7 @@ impl CliError {
             Self::CredentialsEmpty => "credentials_empty",
             Self::RegistryLoginFailed => "registry_login_failed",
             Self::UnsupportedOs(_) => "unsupported_os",
-            Self::WasmOptFailed => "wasm_opt_failed",
+            Self::WasmOptFailed(_) => "wasm_opt_failed",
             Self::WasmInstrumentFailed(_) => "wasm_instrument_failed",
             Self::SpecFailed(_) => "spec_failed",
             Self::KeyExists(_) => "key_exists",
@@ -161,6 +164,10 @@ impl CliError {
             Self::CargoMetadataFailed(_) => Some(Cow::Borrowed(
                 "ensure `cargo` is on PATH and you are inside \
                  a Cargo project or workspace",
+            )),
+            Self::WasmNotFound(_) => Some(Cow::Borrowed(
+                "run `groundhog build` first, or check that the crate \
+                 does not use a custom [lib] name in Cargo.toml",
             )),
             Self::CargoFailed(_) | Self::CargoFailedWithOutput { .. } => Some(Cow::Borrowed(
                 "see the cargo output above for the underlying build \
@@ -218,7 +225,7 @@ impl CliError {
                 "`groundhog test` currently supports macOS and \
                  Linux host targets",
             )),
-            Self::WasmOptFailed => Some(Cow::Borrowed(
+            Self::WasmOptFailed(_) => Some(Cow::Borrowed(
                 "check the wasm-opt output above; the WASM binary \
                  may be invalid",
             )),

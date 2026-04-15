@@ -109,7 +109,7 @@ enum Command {
             default_value = DEFAULT_PROFILE
         )]
         profile: String,
-        /// Extra arguments forwarded to the test harness (after --)
+        /// Extra arguments forwarded to cargo (after --)
         #[arg(last = true)]
         cargo_args: Vec<String>,
     },
@@ -241,14 +241,12 @@ fn main() {
         Command::New { name, template } => {
             groundhog_cli::new::run(&name, &template, cmd_name, &print)
         }
-        Command::Init => {
-            let cwd = std::env::current_dir().unwrap_or_default();
-            groundhog_cli::init::run(&cwd, cmd_name, &print)
-        }
-        Command::Status { profile } => {
-            let cwd = std::env::current_dir().unwrap_or_default();
-            groundhog_cli::status::run(&cwd, Some(&profile), cmd_name, &print)
-        }
+        Command::Init => std::env::current_dir()
+            .map_err(groundhog_cli::CliError::Io)
+            .and_then(|cwd| groundhog_cli::init::run(&cwd, cmd_name, &print)),
+        Command::Status { profile } => std::env::current_dir()
+            .map_err(groundhog_cli::CliError::Io)
+            .and_then(|cwd| groundhog_cli::status::run(&cwd, Some(&profile), cmd_name, &print)),
         Command::Build {
             package,
             optimize,
