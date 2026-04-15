@@ -50,6 +50,8 @@ pub enum CliError {
     WasmOptFailed,
     #[error("WASM instrumentation failed: {0}")]
     WasmInstrumentFailed(#[from] groundhog_wasm_meter::Error),
+    #[error("contract spec finalization failed: {0}")]
+    SpecFailed(String),
     #[error("key `{0}` already exists")]
     KeyExists(String),
     #[error("key `{0}` not found")]
@@ -112,6 +114,7 @@ impl CliError {
             Self::UnsupportedOs(_) => "unsupported_os",
             Self::WasmOptFailed => "wasm_opt_failed",
             Self::WasmInstrumentFailed(_) => "wasm_instrument_failed",
+            Self::SpecFailed(_) => "spec_failed",
             Self::KeyExists(_) => "key_exists",
             Self::KeyNotFound(_) => "key_not_found",
             Self::KeyNameEmpty => "key_name_empty",
@@ -222,6 +225,10 @@ impl CliError {
             Self::WasmInstrumentFailed(_) => {
                 Some(Cow::Borrowed("the WASM binary may be invalid or too large"))
             }
+            Self::SpecFailed(_) => Some(Cow::Borrowed(
+                "check that your contract uses `#[contract]` and \
+                 `#[contracttype]` attributes correctly",
+            )),
             Self::KeyExists(name) => Some(Cow::Owned(format!(
                 "use a different name, or remove the existing key \
                  with `groundhog keys rm {name}`"
