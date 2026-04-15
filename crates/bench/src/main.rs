@@ -1,18 +1,18 @@
 //! Groundhog JSON-RPC benchmark harness.
 //!
-//! Pre-generates signed transactions, then fires them at a configurable rate
-//! (open-loop) against a running JSON-RPC server. Reports latency percentiles
-//! and throughput.
+//! Multi-worker open-loop load generator. Each worker owns its own HTTP
+//! connection pool and fires requests on a pre-computed schedule.  If
+//! the harness cannot sustain the target rate it panics rather than
+//! silently degrading to closed-loop.
 //!
 //! Usage:
 //!   # Against dev-node (smoke):
-//!   groundhog-bench --url http://127.0.0.1:9545 --rate 100 --duration 5
+//!   groundhog-bench --url http://127.0.0.1:9545 --rate 1000 --duration 5
 //!
 //!   # Against real gateway (load):
-//!   groundhog-bench --url http://127.0.0.1:8545 --rate 10000 --duration 60
+//!   groundhog-bench --url http://127.0.0.1:8545 --rate 100000 --duration 60 --workers 16
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use clap::Parser;
@@ -24,7 +24,6 @@ use groundhog_signing::{
 use groundhog_xdr::contract::ContractEntrypointID;
 use hdrhistogram::Histogram;
 use sha2::{Digest, Sha256};
-use tokio::sync::Mutex;
 
 /// Groundhog JSON-RPC benchmark harness.
 #[derive(Parser)]
@@ -53,6 +52,18 @@ struct Cli {
     /// Warmup seconds (results discarded).
     #[arg(long, default_value = "2")]
     warmup: u64,
+
+    /// Number of worker tasks (each with its own connection pool).
+    #[arg(long, default_value = "1")]
+    workers: usize,
+
+    /// Max idle connections per worker. Auto-sized from calibration if 0.
+    #[arg(long, default_value = "0")]
+    connections_per_worker: usize,
+
+    /// Max accumulated scheduling skew before aborting (seconds).
+    #[arg(long, default_value = "1.0")]
+    max_skew: f64,
 }
 
 /// Derive a dev-node account signer (matches dev-node's derivation).
@@ -66,7 +77,6 @@ fn dev_signer(index: usize) -> LocalSigner {
 
 /// Pre-generate a batch of hex-encoded signed transactions.
 fn generate_tx_batch(count: usize, num_accounts: usize) -> Vec<String> {
-    // Pre-compute signers so we do key derivation once per account, not once per tx.
     let signers: Vec<_> = (0..num_accounts).map(dev_signer).collect();
     let accounts: Vec<_> = signers
         .iter()
@@ -125,13 +135,199 @@ fn make_request(method: &str, tx_hex: &str, id: u64) -> serde_json::Value {
     }
 }
 
+/// Calibrate connection pool size by measuring RTT with a small burst.
+async fn calibrate_rtt(client: &reqwest::Client, url: &str, method: &str) -> Duration {
+    let body = make_request(method, "", 0);
+    let mut rtts = Vec::with_capacity(20);
+
+    for _ in 0..20 {
+        let start = Instant::now();
+        let result = client.post(url).json(&body).send().await;
+        let rtt = start.elapsed();
+        if let Ok(resp) = result
+            && resp.status().is_success()
+        {
+            rtts.push(rtt);
+        }
+    }
+
+    if rtts.is_empty() {
+        panic!("calibration failed: no successful responses from {url}");
+    }
+
+    rtts.sort();
+    // Use p50 as the representative RTT
+    rtts[rtts.len() / 2]
+}
+
+/// Per-worker state. Each worker owns its own histogram to avoid lock
+/// contention on the hot path.
+struct WorkerResult {
+    histogram: Histogram<u64>,
+    successes: u64,
+    errors: u64,
+}
+
+/// Parameters shared across all workers.
+struct WorkerConfig {
+    url: String,
+    method: String,
+    tx_batch: Arc<Vec<String>>,
+    start: Instant,
+    warmup_duration: Duration,
+    total_run_duration: Duration,
+    interval: Duration,
+    max_skew: Duration,
+    num_workers: usize,
+}
+
+/// Latency sample sent from a spawned request task back to its worker.
+enum Sample {
+    Success(u64), // latency in microseconds
+    Error,
+}
+
+/// A single worker task. Fires requests on its slice of the global
+/// schedule and panics if it falls behind by more than `max_skew`.
+async fn run_worker(
+    worker_id: usize,
+    cfg: &WorkerConfig,
+    client: reqwest::Client,
+    inflight_sem: Arc<tokio::sync::Semaphore>,
+) -> WorkerResult {
+    let mut histogram =
+        Histogram::<u64>::new_with_bounds(1, 60_000_000, 3).expect("bug: histogram");
+    let mut successes = 0u64;
+    let mut errors = 0u64;
+
+    // Channel for spawned tasks to send latency samples back.
+    // Bounded to avoid unbounded memory if we're faster than we can drain.
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<Sample>(8192);
+
+    // Each worker fires every `num_workers` intervals, offset by worker_id.
+    let worker_interval = cfg.interval * cfg.num_workers as u32;
+    let mut next_fire = cfg.start + cfg.interval * worker_id as u32;
+    let end_time = cfg.start + cfg.total_run_duration;
+    let mut dispatched = 0u64;
+
+    // Don't check skew until connections are established and JIT is warm.
+    let skew_check_after = cfg.start + Duration::from_secs(1).min(cfg.warmup_duration);
+
+    loop {
+        // Drain any completed samples without blocking the dispatch loop.
+        while let Ok(sample) = rx.try_recv() {
+            match sample {
+                Sample::Success(us) => {
+                    histogram.record(us).ok();
+                    successes += 1;
+                }
+                Sample::Error => errors += 1,
+            }
+        }
+
+        if Instant::now() >= end_time {
+            break;
+        }
+
+        let now = Instant::now();
+        if now < next_fire {
+            tokio::time::sleep(next_fire - now).await;
+        } else if now > skew_check_after {
+            let skew = now - next_fire;
+            if skew > cfg.max_skew {
+                let elapsed = (now - cfg.start).as_secs_f64();
+                let dispatch_rate = dispatched as f64 / elapsed * cfg.num_workers as f64;
+                panic!(
+                    "worker {worker_id}: overloaded — {skew:.1?} behind schedule \
+                     (limit: {:.1?}). Dispatched ~{dispatch_rate:.0} req/s across \
+                     all workers. Reduce --rate or increase --workers.",
+                    cfg.max_skew,
+                );
+            }
+        }
+
+        let scheduled_time = next_fire;
+        next_fire += worker_interval;
+
+        let in_warmup = scheduled_time < cfg.start + cfg.warmup_duration;
+
+        let tick = ((scheduled_time - cfg.start).as_nanos() / cfg.interval.as_nanos()) as u64;
+
+        let tx_hex: String = if cfg.tx_batch.is_empty() {
+            String::new()
+        } else {
+            cfg.tx_batch[tick as usize % cfg.tx_batch.len()].clone()
+        };
+        let body = make_request(&cfg.method, &tx_hex, tick);
+
+        let permit = inflight_sem
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("bug: semaphore closed");
+
+        let client = client.clone();
+        let url = cfg.url.clone();
+        let tx = tx.clone();
+
+        tokio::spawn(async move {
+            let req_start = Instant::now();
+            let result = client.post(&url).json(&body).send().await;
+            let latency_us = req_start.elapsed().as_micros() as u64;
+            drop(permit);
+
+            if in_warmup {
+                return;
+            }
+
+            let sample = match result {
+                Ok(resp) if resp.status().is_success() => Sample::Success(latency_us),
+                _ => Sample::Error,
+            };
+            // Best-effort send; if the channel is full we drop the sample
+            // rather than block the response task.
+            tx.send(sample).await.ok();
+        });
+
+        dispatched += 1;
+    }
+
+    // Drop the sender so rx.recv() will return None once all spawned
+    // tasks complete (they hold clones of tx).
+    drop(tx);
+
+    // Drain remaining in-flight samples.
+    while let Some(sample) = rx.recv().await {
+        match sample {
+            Sample::Success(us) => {
+                histogram.record(us).ok();
+                successes += 1;
+            }
+            Sample::Error => errors += 1,
+        }
+    }
+
+    WorkerResult {
+        histogram,
+        successes,
+        errors,
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
+
+    assert!(cli.workers > 0, "--workers must be >= 1");
+    assert!(cli.rate > 0, "--rate must be >= 1");
+
     let total_duration = Duration::from_secs(cli.duration);
     let warmup_duration = Duration::from_secs(cli.warmup);
+    let total_run_duration = total_duration + warmup_duration;
     let interval = Duration::from_secs_f64(1.0 / cli.rate as f64);
+    let max_skew = Duration::from_secs_f64(cli.max_skew);
 
+    // --- Transaction pre-generation ---
     let tx_batch = if cli.method == "sendRawTransaction" {
         eprintln!("Generating transactions...");
         let batch = generate_tx_batch(
@@ -139,106 +335,130 @@ async fn main() {
             cli.accounts,
         );
         eprintln!("Generated {} transactions", batch.len());
-        batch
+        Arc::new(batch)
     } else {
-        vec![]
+        Arc::new(vec![])
     };
 
-    let client = reqwest::Client::builder()
-        .pool_max_idle_per_host(128)
+    // --- Calibrate RTT to size connection pools ---
+    let probe_client = reqwest::Client::builder()
+        .pool_max_idle_per_host(4)
         .build()
         .expect("bug: reqwest client");
 
-    let histogram = Arc::new(Mutex::new(
-        Histogram::<u64>::new_with_bounds(1, 60_000_000, 3).expect("bug: histogram"),
-    ));
-    let errors = Arc::new(AtomicU64::new(0));
-    let total_sent = Arc::new(AtomicU64::new(0));
+    eprintln!("Calibrating RTT...");
+    let median_rtt = calibrate_rtt(&probe_client, &cli.url, &cli.method).await;
+    eprintln!("Median RTT: {median_rtt:.1?}");
+    drop(probe_client);
 
+    // Little's Law: connections = rate * rtt / workers, with a floor.
+    let connections_per_worker = if cli.connections_per_worker > 0 {
+        cli.connections_per_worker
+    } else {
+        let per_worker_rate = cli.rate as f64 / cli.workers as f64;
+        let needed = (per_worker_rate * median_rtt.as_secs_f64()).ceil() as usize;
+        needed.clamp(4, 2048)
+    };
+
+    // Bound total in-flight requests to avoid OOM. Each worker gets its
+    // own semaphore with capacity = 2x its connection pool (allow some
+    // queuing inside reqwest but not unbounded growth).
+    let max_inflight_per_worker = connections_per_worker * 2;
+
+    eprintln!(
+        "Config: {} workers x {} connections ({} max in-flight each)",
+        cli.workers, connections_per_worker, max_inflight_per_worker,
+    );
     eprintln!(
         "Benchmarking {} at {} req/s for {}s ({}s warmup)...",
         cli.method, cli.rate, cli.duration, cli.warmup
     );
 
+    // --- Launch workers ---
     let start = Instant::now();
-    let mut tx_idx = 0u64;
-    let mut next_fire = start;
+    let cfg = Arc::new(WorkerConfig {
+        url: cli.url.clone(),
+        method: cli.method.clone(),
+        tx_batch,
+        start,
+        warmup_duration,
+        total_run_duration,
+        interval,
+        max_skew,
+        num_workers: cli.workers,
+    });
 
-    loop {
-        let elapsed = start.elapsed();
-        if elapsed > total_duration + warmup_duration {
-            break;
-        }
+    let mut handles = Vec::with_capacity(cli.workers);
 
-        // Wait until next fire time (open-loop: fire at fixed rate).
-        let now = Instant::now();
-        if now < next_fire {
-            tokio::time::sleep(next_fire - now).await;
-        }
-        next_fire += interval;
+    for worker_id in 0..cli.workers {
+        let client = reqwest::Client::builder()
+            .pool_max_idle_per_host(connections_per_worker)
+            .build()
+            .expect("bug: reqwest client");
 
-        let in_warmup = elapsed < warmup_duration;
-        let tx_hex = if tx_batch.is_empty() {
-            ""
-        } else {
-            &tx_batch[tx_idx as usize % tx_batch.len()]
-        };
-        let body = make_request(&cli.method, tx_hex, tx_idx);
-        tx_idx += 1;
+        let sem = Arc::new(tokio::sync::Semaphore::new(max_inflight_per_worker));
+        let cfg = cfg.clone();
 
-        let client = client.clone();
-        let url = cli.url.clone();
-        let histogram = histogram.clone();
-        let errors = errors.clone();
-        let total_sent = total_sent.clone();
-
-        tokio::spawn(async move {
-            let req_start = Instant::now();
-            let result = client.post(&url).json(&body).send().await;
-
-            let latency_us = req_start.elapsed().as_micros() as u64;
-
-            match result {
-                Ok(resp) if resp.status().is_success() => {
-                    if !in_warmup {
-                        histogram.lock().await.record(latency_us).ok();
-                        total_sent.fetch_add(1, Ordering::Relaxed);
-                    }
-                }
-                _ => {
-                    if !in_warmup {
-                        errors.fetch_add(1, Ordering::Relaxed);
-                        total_sent.fetch_add(1, Ordering::Relaxed);
-                    }
-                }
-            }
-        });
+        handles.push(tokio::spawn(async move {
+            run_worker(worker_id, &cfg, client, sem).await
+        }));
     }
 
-    // Wait for in-flight requests to finish.
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    // --- Collect results ---
+    let mut merged_hist =
+        Histogram::<u64>::new_with_bounds(1, 60_000_000, 3).expect("bug: histogram");
+    let mut total_successes = 0u64;
+    let mut total_errors = 0u64;
 
-    let hist = histogram.lock().await;
-    let sent = total_sent.load(Ordering::Relaxed);
-    let errs = errors.load(Ordering::Relaxed);
+    for handle in handles {
+        let result = handle.await.expect("worker panicked");
+        merged_hist.add(&result.histogram).ok();
+        total_successes += result.successes;
+        total_errors += result.errors;
+    }
+
+    let total_sent = total_successes + total_errors;
     let actual_duration = total_duration.as_secs_f64();
 
     println!("\n=== Groundhog RPC Benchmark Results ===");
-    println!("Method:     {}", cli.method);
-    println!("Target:     {} req/s", cli.rate);
-    println!("Duration:   {}s ({}s warmup)", cli.duration, cli.warmup);
-    println!("Requests:   {} ({} errors)", sent, errs);
+    println!("Method:      {}", cli.method);
+    println!("Target:      {} req/s", cli.rate);
     println!(
-        "Throughput: {:.1} req/s",
-        (sent - errs) as f64 / actual_duration
+        "Achieved:    {:.0} req/s ({:.1}% of target)",
+        total_sent as f64 / actual_duration,
+        (total_sent as f64 / actual_duration) / cli.rate as f64 * 100.0,
     );
+    println!("Duration:    {}s ({}s warmup)", cli.duration, cli.warmup);
+    println!(
+        "Workers:     {} x {} connections",
+        cli.workers, connections_per_worker,
+    );
+    println!(
+        "Requests:    {} ({} errors, {:.1}%)",
+        total_sent,
+        total_errors,
+        if total_sent > 0 {
+            total_errors as f64 / total_sent as f64 * 100.0
+        } else {
+            0.0
+        },
+    );
+    println!(
+        "Throughput:  {:.0} successful req/s",
+        total_successes as f64 / actual_duration,
+    );
+    println!("Median RTT:  {median_rtt:.1?} (from calibration)");
     println!();
     println!("Latency (microseconds):");
-    println!("  p50:  {}", hist.value_at_percentile(50.0));
-    println!("  p90:  {}", hist.value_at_percentile(90.0));
-    println!("  p95:  {}", hist.value_at_percentile(95.0));
-    println!("  p99:  {}", hist.value_at_percentile(99.0));
-    println!("  p999: {}", hist.value_at_percentile(99.9));
-    println!("  max:  {}", hist.max());
-    println!("  mean: {:.0}", hist.mean());
+    if merged_hist.is_empty() {
+        println!("  (no samples recorded)");
+    } else {
+        println!("  p50:  {}", merged_hist.value_at_percentile(50.0));
+        println!("  p90:  {}", merged_hist.value_at_percentile(90.0));
+        println!("  p95:  {}", merged_hist.value_at_percentile(95.0));
+        println!("  p99:  {}", merged_hist.value_at_percentile(99.0));
+        println!("  p999: {}", merged_hist.value_at_percentile(99.9));
+        println!("  max:  {}", merged_hist.max());
+        println!("  mean: {:.0}", merged_hist.mean());
+    }
 }
