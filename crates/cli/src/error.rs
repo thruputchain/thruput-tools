@@ -226,8 +226,8 @@ impl CliError {
                  Linux host targets",
             )),
             Self::WasmOptFailed(_) => Some(Cow::Borrowed(
-                "check the wasm-opt output above; the WASM binary \
-                 may be invalid",
+                "see the wasm-opt error above; the WASM binary \
+                 may be invalid or malformed",
             )),
             Self::WasmInstrumentFailed(_) => {
                 Some(Cow::Borrowed("the WASM binary may be invalid or too large"))

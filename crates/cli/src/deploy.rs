@@ -239,7 +239,7 @@ fn newest_source_mtime(dir: &Path) -> Option<std::time::SystemTime> {
     };
     for entry in entries.filter_map(Result::ok) {
         let path = entry.path();
-        if path.is_dir() {
+        if entry.file_type().map_or(false, |ft| ft.is_dir()) {
             if let Some(t) = newest_source_mtime(&path) {
                 newest = Some(newest.map_or(t, |n: std::time::SystemTime| n.max(t)));
             }

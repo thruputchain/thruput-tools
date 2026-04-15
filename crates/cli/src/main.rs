@@ -109,7 +109,7 @@ enum Command {
             default_value = DEFAULT_PROFILE
         )]
         profile: String,
-        /// Extra arguments forwarded to cargo (after --)
+        /// Extra arguments forwarded to the test harness (after --)
         #[arg(last = true)]
         cargo_args: Vec<String>,
     },
