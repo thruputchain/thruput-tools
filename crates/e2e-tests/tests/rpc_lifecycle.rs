@@ -21,7 +21,7 @@ fn rpc_url() -> String {
 
 fn client() -> impl GroundhogApiClient {
     HttpClientBuilder::default()
-        .build(&rpc_url())
+        .build(rpc_url())
         .expect("bug: HTTP client should build")
 }
 
