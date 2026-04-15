@@ -9,6 +9,7 @@ members = [
     "crates/tx-builder",
     "crates/cli",
     "crates/dev-node",
+    "crates/e2e-tests",
 ]
 
 [workspace.package]
