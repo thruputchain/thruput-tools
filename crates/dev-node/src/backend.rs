@@ -263,14 +263,9 @@ impl DevBackend {
     /// Lightweight status check.
     pub fn get_transaction_status(&self, tx_hash: &TxHash) -> TransactionStatus {
         match self.receipts.get(tx_hash) {
-            Some(receipt) => {
-                let block_hash_bytes: [u8; 32] =
-                    Sha256::digest(format!("dev-block-{}", *receipt.height).as_bytes()).into();
-                TransactionStatus::Committed {
-                    height: receipt.height.clone(),
-                    block_hash: Hex0x(SHA256Hash::from(block_hash_bytes)),
-                }
-            }
+            Some(receipt) => TransactionStatus::Committed {
+                height: receipt.height.clone(),
+            },
             None => TransactionStatus::Unknown,
         }
     }

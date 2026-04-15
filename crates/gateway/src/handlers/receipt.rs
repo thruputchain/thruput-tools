@@ -22,8 +22,11 @@ fn map_exec_result(r: ExecResult) -> ExecStatus {
     } else if r == ExecResult::ExecResultTxRootFrameReverted {
         ExecStatus::Reverted { message: None }
     } else if r == ExecResult::ExecResultTxDeterministicError {
+        // TODO: ExecResult int-enum doesn't carry a sub-type; use "unknown"
+        // until the indexer exposes finer-grained error codes (e.g.
+        // "out_of_gas", "stack_overflow").
         ExecStatus::DeterministicError {
-            kind: "deterministic".into(),
+            kind: "unknown".into(),
         }
     } else if r == ExecResult::ExecResultTxNonDeterministicError {
         ExecStatus::NonDeterministicError
