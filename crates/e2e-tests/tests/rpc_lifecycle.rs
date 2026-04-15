@@ -7,10 +7,9 @@
 //!   cargo run -p groundhog-cli --features dev-node -- node
 //!
 //! Then run:
-//!   cargo test -p groundhog-e2e-tests
+//!   cargo test -p groundhog-e2e-tests -- --ignored
 //!
-//! Tests are marked #[ignore] so they don't run in `cargo test --workspace`
-//! without an explicit `--ignored` flag or `-p groundhog-e2e-tests`.
+//! Tests are marked #[ignore] so they don't run in `cargo test --workspace`.
 
 use groundhog_rpc_api_types::transaction::TransactionStatus;
 use groundhog_rpc_client::{GroundhogApiClient, HttpClientBuilder};
