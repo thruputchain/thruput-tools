@@ -23,3 +23,6 @@ pub type ContractAddress = Hex0x<groundhog_xdr::types::ContractAddress>;
 pub type BlockHash = Hex0x<groundhog_xdr::types::SHA256Hash>;
 pub type DbHash = Hex0x<groundhog_xdr::types::DbHash>;
 pub type Ed25519PublicKey = Hex0x<groundhog_xdr::types::Ed25519PublicKey>;
+
+#[cfg(test)]
+mod tests;

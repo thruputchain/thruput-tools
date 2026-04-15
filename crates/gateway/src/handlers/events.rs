@@ -61,10 +61,7 @@ pub async fn get_contract_events(
             let event = parse_emitted_event(&identified.emitted_event)?;
             Some(IdentifiedEvent {
                 tx_hash: TxHash(Hex0x(identified.proposed_tx_hash)),
-                // TODO: IdentifiedEvent XDR doesn't carry block_height per event.
-                // The indexer contract_index key contains it, but it's not in
-                // the returned struct. Using 0 as placeholder.
-                block_height: BlockHeight::from(0i64),
+                block_height: identified.block_height.clone(),
                 sequence_number: identified.sequence_number,
                 event,
             })

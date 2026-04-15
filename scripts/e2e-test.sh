@@ -69,6 +69,8 @@ echo "  (tip height: $TIP_HEIGHT)"
 echo ""
 
 # 2. pendingTransactionCount (expected: NotImplemented)
+# TODO: once the scheduler RPC (groundhog_scheduler) is published, this
+# will return a number instead of NotImplemented.
 echo "--- pendingTransactionCount ---"
 RESP=$(rpc pendingTransactionCount)
 check "returns error" '.error != null' "$RESP"
@@ -119,6 +121,12 @@ if [ -n "${TX_HASH:-}" ]; then
   check "has status field" '.result.status != null' "$RESP"
   STATUS=$(echo "$RESP" | jq -r '.result.status')
   echo "  (status: $STATUS)"
+  # Committed status should NOT include blockHash (SCP instant finality,
+  # height alone is sufficient).
+  if [ "$STATUS" = "committed" ]; then
+    check "committed has height" '.result.height != null' "$RESP"
+    check "committed has no blockHash" '.result.blockHash == null' "$RESP"
+  fi
 else
   # Use a zero hash to test the basic path
   ZERO_HASH="0x0000000000000000000000000000000000000000000000000000000000000000"
