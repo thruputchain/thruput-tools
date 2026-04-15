@@ -952,6 +952,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "groundhog-e2e-tests"
+version = "0.0.0"
+dependencies = [
+ "groundhog-rpc-api-types",
+ "groundhog-rpc-client",
+ "groundhog-signing",
+ "groundhog-xdr",
+ "hex",
+ "jsonrpsee",
+ "tokio",
+]
+
+[[package]]
 name = "groundhog-event"
 version = "0.11.2"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"

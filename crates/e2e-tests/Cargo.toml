@@ -1,0 +1,19 @@
+[package]
+name = "groundhog-e2e-tests"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# This crate exists only for integration tests.
+# It does not produce a library.
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+groundhog-rpc-client = { workspace = true }
+groundhog-rpc-api-types = { workspace = true }
+groundhog-signing = { workspace = true }
+groundhog-xdr = { workspace = true }
+hex = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+jsonrpsee = { workspace = true }
