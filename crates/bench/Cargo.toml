@@ -1,0 +1,23 @@
+[package]
+name = "groundhog-bench"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "groundhog-bench"
+path = "src/main.rs"
+
+[dependencies]
+groundhog-rpc-api-types = { workspace = true }
+groundhog-signing = { workspace = true }
+groundhog-xdr = { workspace = true }
+xdrs = { workspace = true }
+hex = { workspace = true }
+sha2 = { workspace = true }
+clap = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+reqwest = { version = "0.12", features = ["json"] }
+hdrhistogram = "7"
+serde = { workspace = true }
+serde_json = { workspace = true }
