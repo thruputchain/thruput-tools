@@ -1,25 +1,62 @@
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
+// Recursively copy a directory, skipping `target/` subtrees.
+fn copy_dir(src: &Path, dst: &Path) {
+    std::fs::create_dir_all(dst).expect("bug: failed to create dir");
+    for entry in std::fs::read_dir(src).expect("bug: failed to read dir") {
+        let entry = entry.expect("bug: failed to read entry");
+        let name = entry.file_name();
+        if name == "target" {
+            continue;
+        }
+        let src_path = entry.path();
+        let dst_path = dst.join(&name);
+        if src_path.is_dir() {
+            copy_dir(&src_path, &dst_path);
+        } else {
+            std::fs::copy(&src_path, &dst_path).expect("bug: failed to copy file");
+        }
+    }
+}
+
 fn main() {
-    let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
-    let wallet_dir = PathBuf::from(&manifest_dir).join("../dev-wallet");
-    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+    let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("bug: CARGO_MANIFEST_DIR not set");
+    let wallet_src = PathBuf::from(&manifest_dir).join("dev-wallet");
+    let out_dir = PathBuf::from(env::var("OUT_DIR").expect("bug: OUT_DIR not set"));
 
     // Rerun if wallet source or config changes.
     println!(
         "cargo:rerun-if-changed={}",
-        wallet_dir.join("src").display()
+        wallet_src.join("src").display()
     );
     println!(
         "cargo:rerun-if-changed={}",
-        wallet_dir.join("Cargo.toml").display()
+        wallet_src.join("Cargo.toml.bundled").display()
     );
     println!(
         "cargo:rerun-if-changed={}",
-        wallet_dir.join(".cargo").display()
+        wallet_src.join(".cargo").display()
     );
+    println!(
+        "cargo:rerun-if-changed={}",
+        wallet_src.join("Cargo.lock").display()
+    );
+
+    // Copy the dev-wallet source to OUT_DIR so the cross-compile runs
+    // outside the parent workspace tree (avoids workspace detection
+    // issues).  Also handles published crates where the manifest is
+    // shipped as Cargo.toml.bundled.
+    let wallet_dir = out_dir.join("dev-wallet");
+    copy_dir(&wallet_src, &wallet_dir);
+
+    // Restore Cargo.toml from the bundled copy.  The bundled manifest
+    // includes [workspace] to prevent cargo from attaching to any
+    // parent workspace discovered via OUT_DIR.
+    let manifest = wallet_dir.join("Cargo.toml");
+    let bundled = wallet_dir.join("Cargo.toml.bundled");
+    std::fs::copy(&bundled, &manifest).expect("bug: failed to restore dev-wallet Cargo.toml");
 
     // Cross-compile the dev-wallet contract to WASM.
     // Run from the wallet directory so .cargo/config.toml is picked up
@@ -30,9 +67,15 @@ fn main() {
         .current_dir(&wallet_dir)
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
         .env_remove("RUSTFLAGS")
-        .args(["build", "--target", "wasm32-unknown-unknown", "--release"])
+        .args([
+            "build",
+            "--target",
+            "wasm32-unknown-unknown",
+            "--release",
+            "--locked",
+        ])
         .status()
-        .expect("failed to run cargo for dev-wallet build");
+        .expect("bug: failed to run cargo for dev-wallet build");
 
     assert!(status.success(), "dev-wallet WASM build failed");
 
@@ -40,12 +83,6 @@ fn main() {
     let wasm_src =
         wallet_dir.join("target/wasm32-unknown-unknown/release/groundhog_dev_wallet.wasm");
     let wasm_dst = out_dir.join("dev_wallet.wasm");
-
-    assert!(
-        wasm_src.exists(),
-        "dev-wallet WASM not found at {}",
-        wasm_src.display()
-    );
 
     // Run wasm-opt if available to shrink the binary.
     // Feature flags must match the Groundhog VM feature set.
@@ -66,23 +103,30 @@ fn main() {
         Ok(s) if s.success() => {
             println!("cargo:warning=wasm-opt applied successfully");
         }
-        _ => {
+        Ok(s) => {
+            // wasm-opt found but exited with an error — use unoptimized WASM.
+            std::fs::copy(&wasm_src, &wasm_dst).expect("bug: failed to copy dev-wallet WASM");
+            println!("cargo:warning=wasm-opt failed (exit: {s}), using unoptimized WASM");
+        }
+        Err(_) => {
             // wasm-opt not available — use unoptimized WASM.
-            std::fs::copy(&wasm_src, &wasm_dst).expect("failed to copy dev-wallet WASM");
+            std::fs::copy(&wasm_src, &wasm_dst).expect("bug: failed to copy dev-wallet WASM");
             println!("cargo:warning=wasm-opt not found, using unoptimized WASM");
         }
     }
 
     // Run the wasm-meter instrumentation pass to add stack limiting.
     // Required by groundhog-native-exec for contract verification.
-    let raw = std::fs::read(&wasm_dst).expect("failed to read dev-wallet WASM for instrumentation");
+    let raw =
+        std::fs::read(&wasm_dst).expect("bug: failed to read dev-wallet WASM for instrumentation");
     let instrumented =
         groundhog_wasm_meter::instrument(&raw, &groundhog_wasm_meter::Config::default())
-            .expect("wasm-meter instrumentation failed on dev-wallet WASM");
-    std::fs::write(&wasm_dst, &instrumented).expect("failed to write instrumented dev-wallet WASM");
+            .expect("bug: wasm-meter instrumentation failed on dev-wallet WASM");
+    std::fs::write(&wasm_dst, &instrumented)
+        .expect("bug: failed to write instrumented dev-wallet WASM");
 
     println!(
         "cargo:warning=Dev wallet WASM: {} bytes (instrumented)",
-        std::fs::metadata(&wasm_dst).unwrap().len()
+        instrumented.len()
     );
 }
