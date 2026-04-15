@@ -100,11 +100,15 @@ pub fn build_project(
         .join("wasm32-unknown-unknown/release")
         .join(format!("{snake_name}.wasm"));
 
+    if !wasm.try_exists()? {
+        return Err(CliError::WasmNotFound(wasm.display().to_string()));
+    }
+
     let profile = crate::config::resolve_profile(&metadata.workspace_root, explicit_profile)?;
 
     if optimize {
         print.status("Optimizing with wasm-opt...");
-        let status = Command::new("wasm-opt")
+        let output = Command::new("wasm-opt")
             .arg("-mvp")
             .arg("--enable-bulk-memory")
             .arg("--enable-sign-ext")
@@ -114,9 +118,10 @@ pub fn build_project(
             .arg(&wasm)
             .arg("-o")
             .arg(&wasm)
-            .status()?;
-        if !status.success() {
-            return Err(CliError::WasmOptFailed);
+            .output()?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            return Err(CliError::WasmOptFailed(stderr));
         }
     }
 
