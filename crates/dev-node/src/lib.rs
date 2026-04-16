@@ -60,7 +60,8 @@ pub async fn start_server(
         "starting dev node"
     );
 
-    let worker = spawn_worker(config.account_count, config.storage_tokens);
+    let worker = spawn_worker(config.account_count, config.storage_tokens)
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
     let accounts = worker
         .get_accounts()
         .await

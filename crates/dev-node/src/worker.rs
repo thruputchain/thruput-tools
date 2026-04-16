@@ -117,17 +117,38 @@ impl WorkerHandle {
 }
 
 /// Spawn the worker thread and return a handle for sending commands.
-pub fn spawn_worker(account_count: usize, storage_tokens: u64) -> WorkerHandle {
+pub fn spawn_worker(
+    account_count: usize,
+    storage_tokens: u64,
+) -> Result<WorkerHandle, DevNodeError> {
     let (tx, mut rx) = mpsc::unbounded_channel::<DevCommand>();
+    let (init_tx, init_rx) =
+        std::sync::mpsc::sync_channel::<Result<Vec<DevAccount>, DevNodeError>>(1);
 
     std::thread::Builder::new()
         .name("groundhog-dev-node-worker".into())
         .spawn(move || {
             tracing::info!(account_count, storage_tokens, "dev node worker started");
 
-            let worker_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let mut backend = DevBackend::new(account_count, storage_tokens);
+            let backend_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                DevBackend::new(account_count, storage_tokens)
+            }));
 
+            let mut backend = match backend_result {
+                Ok(backend) => {
+                    let accounts = backend.accounts().to_vec();
+                    let _ = init_tx.send(Ok(accounts));
+                    backend
+                }
+                Err(payload) => {
+                    let message = startup_failure_message(&payload);
+                    let _ = init_tx.send(Err(DevNodeError::WorkerInit(message.clone())));
+                    tracing::error!(panic = %message, "dev node worker panicked during startup");
+                    return;
+                }
+            };
+
+            let worker_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 while let Some(cmd) = rx.blocking_recv() {
                     match cmd {
                         DevCommand::SendRawTransaction { tx_bytes, reply } => {
@@ -167,7 +188,9 @@ pub fn spawn_worker(account_count: usize, storage_tokens: u64) -> WorkerHandle {
         })
         .expect("bug: failed to spawn dev node worker thread");
 
-    WorkerHandle { tx }
+    init_rx.recv().map_err(|_| DevNodeError::WorkerStopped)??;
+
+    Ok(WorkerHandle { tx })
 }
 
 fn panic_payload_message(payload: &Box<dyn std::any::Any + Send>) -> String {
@@ -180,6 +203,18 @@ fn panic_payload_message(payload: &Box<dyn std::any::Any + Send>) -> String {
     }
 }
 
+fn startup_failure_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+    let message = panic_payload_message(payload);
+    if message.contains("failed to create db: 5") {
+        return "native_exec failed to initialize its embedded test database \
+                (FFI error 5: unrecoverable). This commonly happens in \
+                restricted sandbox or process-isolation environments; rerun \
+                `groundhog node` from a normal local shell outside the sandbox."
+            .into();
+    }
+    message
+}
+
 #[cfg(test)]
 mod tests {
     use super::spawn_worker;
@@ -187,11 +222,20 @@ mod tests {
 
     #[tokio::test]
     async fn worker_initializes_backend_on_dedicated_thread() {
-        let worker = spawn_worker(1, DEFAULT_STORAGE_TOKENS);
+        let worker = spawn_worker(1, DEFAULT_STORAGE_TOKENS).expect("bug: worker should start");
         let accounts = worker
             .get_accounts()
             .await
             .expect("bug: worker should start");
         assert_eq!(accounts.len(), 1);
+    }
+
+    #[test]
+    fn startup_failure_message_adds_sandbox_hint_for_db_init_failure() {
+        let payload: Box<dyn std::any::Any + Send> =
+            Box::new(String::from("failed to create db: 5"));
+        let message = super::startup_failure_message(&payload);
+        assert!(message.contains("sandbox"));
+        assert!(message.contains("FFI error 5"));
     }
 }

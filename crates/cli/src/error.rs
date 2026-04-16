@@ -185,7 +185,15 @@ impl CliError {
             Self::UnknownTemplate(_) => {
                 Some(Cow::Borrowed("available templates: `counter`, `stub`"))
             }
-            Self::DevNode(_) => Some(Cow::Borrowed("check the dev node output for details")),
+            Self::DevNode(message) => {
+                if message.contains("sandbox") {
+                    Some(Cow::Borrowed(
+                        "rerun `groundhog node` outside the sandbox or process-isolation environment",
+                    ))
+                } else {
+                    Some(Cow::Borrowed("check the dev node output for details"))
+                }
+            }
             Self::RpcConnect(url) => Some(Cow::Owned(format!(
                 "run `groundhog node` in another terminal, or check that \
                  the RPC endpoint at {url} is running"
