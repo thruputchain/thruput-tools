@@ -10,11 +10,14 @@ use crate::CliError;
 /// Instrument a WASM binary with stack limiting in place.
 ///
 /// Must run after `wasm-opt` optimization (if any) and before
-/// deployment.
+/// deployment.  Runs a verification pass after instrumentation as
+/// a defensive check.
 pub fn instrument(wasm: &Path) -> Result<(), CliError> {
     let raw = std::fs::read(wasm)?;
-    let instrumented =
-        groundhog_wasm_meter::instrument(&raw, &groundhog_wasm_meter::Config::default())?;
+    let config = groundhog_wasm_meter::Config::default();
+    let instrumented = groundhog_wasm_meter::instrument(&raw, &config)?;
+    groundhog_wasm_meter::verify(&instrumented, &config)
+        .map_err(|e| CliError::WasmVerifyFailed(e.to_string()))?;
     std::fs::write(wasm, &instrumented)?;
     Ok(())
 }
