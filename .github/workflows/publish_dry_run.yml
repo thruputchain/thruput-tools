@@ -16,7 +16,6 @@ env:
     groundhog-rpc-gateway
     groundhog-rpc-client
     groundhog-signing
-    groundhog-tx-builder
     groundhog-dev-node
     groundhog-cli
 
