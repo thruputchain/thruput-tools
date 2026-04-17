@@ -35,10 +35,17 @@ impl ArtifactOptions {
     }
 }
 
-/// Return the expected WASM output path for a package in the given target directory.
-pub fn wasm_output_path(target_dir: &Path, package_name: &str) -> PathBuf {
+/// Return the raw Cargo-produced WASM output path for a package in the given target directory.
+pub fn cargo_wasm_output_path(target_dir: &Path, package_name: &str) -> PathBuf {
     target_dir
         .join("wasm32-unknown-unknown/release")
+        .join(format!("{}.wasm", crate::scaffold::to_snake(package_name)))
+}
+
+/// Return the Groundhog-owned processed WASM output path for a package in the given target directory.
+pub fn groundhog_wasm_output_path(target_dir: &Path, package_name: &str) -> PathBuf {
+    target_dir
+        .join("groundhog")
         .join(format!("{}.wasm", crate::scaffold::to_snake(package_name)))
 }
 
@@ -134,19 +141,28 @@ fn normalize_path_components(path: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{ArtifactOptions, ensure_no_target_dir_passthrough_conflicts, wasm_output_path};
+    use super::{
+        ArtifactOptions, cargo_wasm_output_path, ensure_no_target_dir_passthrough_conflicts,
+        groundhog_wasm_output_path,
+    };
     use crate::CliError;
     use std::path::PathBuf;
     use std::process::Command;
     use tempfile::TempDir;
 
     #[test]
-    fn wasm_output_path_uses_custom_target_directory() {
-        let path = wasm_output_path(PathBuf::from("/tmp/out").as_path(), "demo-contract");
+    fn cargo_wasm_output_path_uses_cargo_layout() {
+        let path = cargo_wasm_output_path(PathBuf::from("/tmp/out").as_path(), "demo-contract");
         assert_eq!(
             path,
             PathBuf::from("/tmp/out/wasm32-unknown-unknown/release/demo_contract.wasm")
         );
+    }
+
+    #[test]
+    fn groundhog_wasm_output_path_uses_flat_groundhog_layout() {
+        let path = groundhog_wasm_output_path(PathBuf::from("/tmp/out").as_path(), "demo-contract");
+        assert_eq!(path, PathBuf::from("/tmp/out/groundhog/demo_contract.wasm"));
     }
 
     #[test]

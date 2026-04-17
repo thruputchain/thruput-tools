@@ -204,7 +204,7 @@ pub fn run(
 fn resolve_wasm_path(cwd: &Path, artifacts: &ArtifactOptions) -> Result<PathBuf, CliError> {
     let metadata = crate::build::cargo_metadata_with_artifacts(artifacts)?;
     let pkg_name = crate::build::resolve_package(&metadata, None, cwd)?;
-    let wasm = crate::artifacts::wasm_output_path(&metadata.target_directory, pkg_name);
+    let wasm = crate::artifacts::groundhog_wasm_output_path(&metadata.target_directory, pkg_name);
 
     if !wasm.try_exists()? {
         return Err(CliError::WasmNotFound(wasm.display().to_string()));
@@ -326,9 +326,7 @@ mod tests {
         let project_root =
             std::fs::canonicalize(project.path()).expect("bug: project path should canonicalize");
         let custom_target = project_root.join("custom-target");
-        let expected_wasm = custom_target
-            .join("wasm32-unknown-unknown/release")
-            .join("demo_contract.wasm");
+        let expected_wasm = custom_target.join("groundhog").join("demo_contract.wasm");
         std::fs::create_dir_all(
             expected_wasm
                 .parent()
