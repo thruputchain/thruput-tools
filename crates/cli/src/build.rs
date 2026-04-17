@@ -111,8 +111,7 @@ pub fn build_project(
 
     let (cargo_stdout, cargo_stderr) = crate::run_cargo(&mut cmd, print)?;
 
-    let snake_name = crate::scaffold::to_snake(pkg_name);
-    let wasm = artifacts::wasm_output_path(&metadata.target_directory, &snake_name);
+    let wasm = artifacts::wasm_output_path(&metadata.target_directory, pkg_name);
 
     if !wasm.try_exists()? {
         return Err(CliError::WasmNotFound(wasm.display().to_string()));

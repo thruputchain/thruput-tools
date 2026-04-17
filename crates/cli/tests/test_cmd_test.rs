@@ -1,6 +1,8 @@
 use serial_test::serial;
 use std::env;
+use std::ffi::{OsStr, OsString};
 use std::fs;
+use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 /// Verify that `test_cmd::run` fails when run outside
@@ -9,9 +11,7 @@ use tempfile::TempDir;
 #[serial]
 fn test_fails_outside_project() {
     let tmp = TempDir::new().unwrap();
-    let prev_dir = env::current_dir().unwrap();
-
-    env::set_current_dir(tmp.path()).unwrap();
+    let _cwd = CurrentDirGuard::enter(tmp.path());
 
     let result = groundhog_cli::test_cmd::run(
         None,
@@ -21,8 +21,6 @@ fn test_fails_outside_project() {
         "test",
         &groundhog_cli::Print::quiet(),
     );
-
-    env::set_current_dir(prev_dir).unwrap();
 
     let err = result.unwrap_err().to_string();
     assert!(
@@ -75,10 +73,8 @@ fn test_rejects_conflicting_target_dir_passthrough() {
         fs::set_permissions(&cargo, perms).unwrap();
     }
 
-    let prev_dir = env::current_dir().unwrap();
-    let prev_path = env::var_os("PATH");
-    env::set_current_dir(tmp.path()).unwrap();
-    unsafe { env::set_var("PATH", fake_bin.as_os_str()) };
+    let _cwd = CurrentDirGuard::enter(tmp.path());
+    let _path = PathGuard::set(fake_bin.as_os_str());
 
     let artifacts =
         groundhog_cli::artifacts::ArtifactOptions::new(Some(tmp.path().join("explicit-target")));
@@ -91,12 +87,6 @@ fn test_rejects_conflicting_target_dir_passthrough() {
         &groundhog_cli::Print::quiet(),
     )
     .unwrap_err();
-
-    env::set_current_dir(prev_dir).unwrap();
-    match prev_path {
-        Some(path) => unsafe { env::set_var("PATH", path) },
-        None => unsafe { env::remove_var("PATH") },
-    }
 
     assert!(
         matches!(err, groundhog_cli::CliError::TargetDirConflict),
@@ -133,10 +123,8 @@ fn test_prefers_metadata_failure_over_redundant_target_dir_precheck() {
         fs::set_permissions(&cargo, perms).unwrap();
     }
 
-    let prev_dir = env::current_dir().unwrap();
-    let prev_path = env::var_os("PATH");
-    env::set_current_dir(tmp.path()).unwrap();
-    unsafe { env::set_var("PATH", fake_bin.as_os_str()) };
+    let _cwd = CurrentDirGuard::enter(tmp.path());
+    let _path = PathGuard::set(fake_bin.as_os_str());
 
     let artifacts =
         groundhog_cli::artifacts::ArtifactOptions::new(Some(tmp.path().join("explicit-target")));
@@ -149,12 +137,6 @@ fn test_prefers_metadata_failure_over_redundant_target_dir_precheck() {
         &groundhog_cli::Print::quiet(),
     )
     .unwrap_err();
-
-    env::set_current_dir(prev_dir).unwrap();
-    match prev_path {
-        Some(path) => unsafe { env::set_var("PATH", path) },
-        None => unsafe { env::remove_var("PATH") },
-    }
 
     assert!(
         matches!(err, groundhog_cli::CliError::CargoMetadataFailed(_)),
@@ -212,10 +194,8 @@ fn test_resolves_relative_config_conflicts_from_project_root() {
         fs::set_permissions(&cargo, perms).unwrap();
     }
 
-    let prev_dir = env::current_dir().unwrap();
-    let prev_path = env::var_os("PATH");
-    env::set_current_dir(tmp.path().join("src/bin")).unwrap();
-    unsafe { env::set_var("PATH", fake_bin.as_os_str()) };
+    let _cwd = CurrentDirGuard::enter(&tmp.path().join("src/bin"));
+    let _path = PathGuard::set(fake_bin.as_os_str());
 
     let artifacts =
         groundhog_cli::artifacts::ArtifactOptions::new(Some(tmp.path().join("explicit-target")));
@@ -229,14 +209,45 @@ fn test_resolves_relative_config_conflicts_from_project_root() {
     )
     .unwrap_err();
 
-    env::set_current_dir(prev_dir).unwrap();
-    match prev_path {
-        Some(path) => unsafe { env::set_var("PATH", path) },
-        None => unsafe { env::remove_var("PATH") },
-    }
-
     assert!(
         matches!(err, groundhog_cli::CliError::TargetDirConflict),
         "expected TargetDirConflict, got: {err:?}"
     );
+}
+
+struct CurrentDirGuard {
+    previous: PathBuf,
+}
+
+impl CurrentDirGuard {
+    fn enter(path: &Path) -> Self {
+        let previous = env::current_dir().expect("bug: current dir should be readable");
+        env::set_current_dir(path).expect("bug: current dir should be set");
+        Self { previous }
+    }
+}
+
+impl Drop for CurrentDirGuard {
+    fn drop(&mut self) {
+        env::set_current_dir(&self.previous).expect("bug: current dir should be restored");
+    }
+}
+
+struct PathGuard(Option<OsString>);
+
+impl PathGuard {
+    fn set(new: &OsStr) -> Self {
+        let previous = env::var_os("PATH");
+        unsafe { env::set_var("PATH", new) };
+        Self(previous)
+    }
+}
+
+impl Drop for PathGuard {
+    fn drop(&mut self) {
+        match &self.0 {
+            Some(path) => unsafe { env::set_var("PATH", path) },
+            None => unsafe { env::remove_var("PATH") },
+        }
+    }
 }
