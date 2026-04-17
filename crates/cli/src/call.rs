@@ -11,6 +11,7 @@ use groundhog_xdr::types::{ContractAddress, Ed25519PublicKey, SHA256Hash};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
+use crate::artifacts::ArtifactOptions;
 use crate::build::{cargo_metadata_with_artifacts, resolve_package};
 use crate::config::{find_project_config, resolve_default_key, resolve_profile};
 use crate::contract_spec::{FullMethodSpec, TypeSpec, load_full_spec, load_interface_sidecar};
@@ -19,7 +20,6 @@ use crate::result::CommandResult;
 use crate::tx_utils::{
     format_tx_hash, nonce_from_timestamp, resolve_block_expiry_height, submit_and_poll,
 };
-use crate::artifacts::ArtifactOptions;
 use crate::{CliError, Print};
 
 /// Wallet `do_action` entrypoint ID (from dev-wallet WASM exports).

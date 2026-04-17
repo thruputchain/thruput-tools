@@ -12,13 +12,13 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use xdr_common::VecM;
 
+use crate::artifacts::ArtifactOptions;
 use crate::config::{resolve_default_key, resolve_profile};
 use crate::keys::load_local_signer;
 use crate::result::CommandResult;
 use crate::tx_utils::{
     format_tx_hash, nonce_from_timestamp, resolve_block_expiry_height, submit_and_poll,
 };
-use crate::artifacts::ArtifactOptions;
 use crate::{CliError, Print};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -329,8 +329,12 @@ mod tests {
         let expected_wasm = custom_target
             .join("wasm32-unknown-unknown/release")
             .join("demo_contract.wasm");
-        std::fs::create_dir_all(expected_wasm.parent().expect("bug: wasm parent should exist"))
-            .expect("bug: custom target dir should be created");
+        std::fs::create_dir_all(
+            expected_wasm
+                .parent()
+                .expect("bug: wasm parent should exist"),
+        )
+        .expect("bug: custom target dir should be created");
         std::fs::write(&expected_wasm, b"\0asm").expect("bug: wasm fixture should be written");
 
         let artifacts = ArtifactOptions::new(Some(custom_target));
