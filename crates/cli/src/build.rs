@@ -1,3 +1,4 @@
+use crate::artifacts::{self, ArtifactOptions};
 use crate::{CliError, Print};
 use serde::Serialize;
 use serde_json::json;
@@ -29,11 +30,19 @@ pub fn run(
     package: Option<&str>,
     optimize: bool,
     cargo_args: &[String],
+    artifacts: &ArtifactOptions,
     explicit_profile: Option<&str>,
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    let result = build_project(package, optimize, cargo_args, explicit_profile, print)?;
+    let result = build_project(
+        package,
+        optimize,
+        cargo_args,
+        artifacts,
+        explicit_profile,
+        print,
+    )?;
     print.json(&crate::result::CommandResult::new(
         cmd,
         json!({
@@ -58,13 +67,14 @@ pub fn build_project(
     package: Option<&str>,
     optimize: bool,
     cargo_args: &[String],
+    artifacts: &ArtifactOptions,
     explicit_profile: Option<&str>,
     print: &Print,
 ) -> Result<BuildResult, CliError> {
     crate::require_cargo()?;
 
-    let metadata = cargo_metadata()?;
     let cwd = std::env::current_dir()?;
+    let metadata = cargo_metadata_with_artifacts(artifacts)?;
     let pkg_name = resolve_package(&metadata, package, &cwd)?;
     let contract_toml = require_contract_toml(&metadata.workspace_root)?;
 
@@ -88,17 +98,20 @@ pub fn build_project(
         .arg("-p")
         .arg(pkg_name);
 
+    artifacts::ensure_no_target_dir_passthrough_conflicts(
+        artifacts,
+        &metadata.workspace_root,
+        cargo_args,
+    )?;
+    artifacts.apply_to_command(&mut cmd);
+
     for arg in cargo_args {
         cmd.arg(arg);
     }
 
     let (cargo_stdout, cargo_stderr) = crate::run_cargo(&mut cmd, print)?;
 
-    let snake_name = crate::scaffold::to_snake(pkg_name);
-    let wasm = metadata
-        .target_directory
-        .join("wasm32-unknown-unknown/release")
-        .join(format!("{snake_name}.wasm"));
+    let wasm = artifacts::wasm_output_path(&metadata.target_directory, pkg_name);
 
     if !wasm.try_exists()? {
         return Err(CliError::WasmNotFound(wasm.display().to_string()));
@@ -193,11 +206,21 @@ pub fn resolve_package<'a>(
 
 /// Run `cargo metadata` and parse the result.
 pub fn cargo_metadata() -> Result<CargoMetadata, CliError> {
-    let output = Command::new("cargo")
+    cargo_metadata_with_artifacts(&ArtifactOptions::default())
+}
+
+pub fn cargo_metadata_with_artifacts(
+    artifacts: &ArtifactOptions,
+) -> Result<CargoMetadata, CliError> {
+    let mut command = Command::new("cargo");
+    command
         .arg("metadata")
         .arg("--format-version")
         .arg("1")
-        .arg("--no-deps")
+        .arg("--no-deps");
+    artifacts.apply_to_command(&mut command);
+
+    let output = command
         .output()
         .map_err(|e| CliError::CargoMetadataFailed(e.to_string()))?;
 
@@ -208,7 +231,6 @@ pub fn cargo_metadata() -> Result<CargoMetadata, CliError> {
 
     serde_json::from_slice(&output.stdout).map_err(|e| CliError::CargoMetadataFailed(e.to_string()))
 }
-
 /// Check that `.cargo/contract.toml` exists at the workspace root.
 fn require_contract_toml(workspace_root: &Path) -> Result<PathBuf, CliError> {
     let path = workspace_root.join(".cargo/contract.toml");

@@ -11,7 +11,8 @@ use groundhog_xdr::types::{ContractAddress, Ed25519PublicKey, SHA256Hash};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-use crate::build::{cargo_metadata, resolve_package};
+use crate::artifacts::ArtifactOptions;
+use crate::build::{cargo_metadata_with_artifacts, resolve_package};
 use crate::config::{find_project_config, resolve_default_key, resolve_profile};
 use crate::contract_spec::{FullMethodSpec, TypeSpec, load_full_spec, load_interface_sidecar};
 use crate::keys::load_local_signer;
@@ -43,6 +44,7 @@ pub fn run(
     contract: &str,
     method: &str,
     args: &[String],
+    artifacts: &ArtifactOptions,
     profile: &str,
     cmd: &'static str,
     print: &Print,
@@ -61,7 +63,7 @@ pub fn run(
     let signer = load_local_signer(&key_name)?;
 
     // Resolve the SDK selector from local project source when possible.
-    let selector = resolve_method_entrypoint(&cwd, method)?;
+    let selector = resolve_method_entrypoint(&cwd, method, artifacts)?;
     let (entrypoint, metadata) = match selector {
         SelectorSource::Full(metadata) => (
             parse_entrypoint_hex(&metadata.method.entrypoint)?,
@@ -224,14 +226,18 @@ fn explicit_entrypoint_id(method: &str) -> Result<Option<ContractEntrypointID>, 
     Ok(Some(ContractEntrypointID::from(id)))
 }
 
-fn resolve_method_entrypoint(cwd: &Path, method: &str) -> Result<SelectorSource, CliError> {
+fn resolve_method_entrypoint(
+    cwd: &Path,
+    method: &str,
+    artifacts: &ArtifactOptions,
+) -> Result<SelectorSource, CliError> {
     if let Some(entrypoint) = explicit_entrypoint_id(method)? {
         return Ok(SelectorSource::Explicit(entrypoint));
     }
-    if let Some(metadata) = resolve_full_contract_metadata(cwd, method)? {
+    if let Some(metadata) = resolve_full_contract_metadata(cwd, method, artifacts)? {
         return Ok(SelectorSource::Full(metadata));
     }
-    match resolve_local_contract_metadata(cwd, method)? {
+    match resolve_local_contract_metadata(cwd, method, artifacts)? {
         Some(metadata) => Ok(SelectorSource::Local(metadata)),
         None => Err(CliError::Other(
             "cannot resolve contract method metadata locally. Run `groundhog call` from inside \
@@ -266,18 +272,15 @@ struct MethodMetadata {
 fn resolve_full_contract_metadata(
     cwd: &Path,
     method: &str,
+    artifacts: &ArtifactOptions,
 ) -> Result<Option<FullMethodMetadata>, CliError> {
-    let Ok(metadata) = cargo_metadata() else {
+    let Ok(metadata) = cargo_metadata_with_artifacts(artifacts) else {
         return Ok(None);
     };
     let Ok(pkg_name) = resolve_package(&metadata, None, cwd) else {
         return Ok(None);
     };
-    let snake_name = crate::scaffold::to_snake(pkg_name);
-    let wasm = metadata
-        .target_directory
-        .join("wasm32-unknown-unknown/release")
-        .join(format!("{snake_name}.wasm"));
+    let wasm = crate::artifacts::wasm_output_path(&metadata.target_directory, pkg_name);
     let Some(spec) = load_full_spec(&wasm)? else {
         return Ok(None);
     };
@@ -307,6 +310,7 @@ fn resolve_full_contract_metadata(
 fn resolve_local_contract_metadata(
     cwd: &Path,
     method: &str,
+    artifacts: &ArtifactOptions,
 ) -> Result<Option<ContractMetadata>, CliError> {
     let Some(config_path) = find_project_config(cwd) else {
         return Ok(None);
@@ -315,7 +319,7 @@ fn resolve_local_contract_metadata(
         return Ok(None);
     };
     let package_version = load_package_version(project_root)?;
-    let interface_spec = load_project_interface_spec(project_root)?;
+    let interface_spec = load_project_interface_spec(project_root, artifacts)?;
     let src_root = project_root.join("src");
     if !src_root.exists() {
         return Ok(None);
@@ -358,14 +362,11 @@ fn resolve_local_contract_metadata(
 
 fn load_project_interface_spec(
     project_root: &Path,
+    artifacts: &ArtifactOptions,
 ) -> Result<Option<crate::contract_spec::InterfaceSpecFile>, CliError> {
-    let metadata = cargo_metadata()?;
+    let metadata = cargo_metadata_with_artifacts(artifacts)?;
     let pkg_name = resolve_package(&metadata, None, project_root)?;
-    let snake_name = crate::scaffold::to_snake(pkg_name);
-    let wasm = metadata
-        .target_directory
-        .join("wasm32-unknown-unknown/release")
-        .join(format!("{snake_name}.wasm"));
+    let wasm = crate::artifacts::wasm_output_path(&metadata.target_directory, pkg_name);
     load_interface_sidecar(&wasm)
 }
 
@@ -1122,10 +1123,13 @@ mod tests {
     use super::{
         ContractMetadata, MethodMetadata, ResolvedMethodMetadata, contract_entrypoint_id,
         contract_metadata_from_source, decode_return_value, encode_calldata,
-        explicit_entrypoint_id, filter_candidates_by_interface_spec, major_version,
-        parse_contract_attr_value, summarize_exec_status,
+        explicit_entrypoint_id, filter_candidates_by_interface_spec, load_project_interface_spec,
+        major_version, parse_contract_attr_value, summarize_exec_status,
     };
+    use crate::artifacts::ArtifactOptions;
     use groundhog_rpc_api_types::receipt::ExecStatus;
+    use serial_test::serial;
+    use tempfile::TempDir;
 
     #[test]
     fn parses_contract_attr_values() {
@@ -1309,5 +1313,80 @@ mod tests {
         assert_eq!(super::normalize_type_name("&'a str"), "str");
         assert_eq!(super::normalize_type_name("&String"), "String");
         assert_eq!(super::normalize_type_name("&strange"), "strange");
+    }
+
+    #[test]
+    #[serial]
+    fn load_project_interface_spec_uses_explicit_target_dir() {
+        let project = create_temp_project("demo-contract");
+        let project_root =
+            std::fs::canonicalize(project.path()).expect("bug: project path should canonicalize");
+        let custom_target = project_root.join("custom-target");
+        let wasm = custom_target
+            .join("wasm32-unknown-unknown/release")
+            .join("demo_contract.wasm");
+        std::fs::create_dir_all(wasm.parent().expect("bug: wasm parent should exist"))
+            .expect("bug: custom target dir should be created");
+        std::fs::write(&wasm, b"\0asm").expect("bug: wasm fixture should be written");
+        std::fs::write(
+            crate::contract_spec::sidecar_path_for_wasm(&wasm),
+            r#"{"format":"gh_iface_v1","interfaces":[{"interface_name":"Counter","interface_version":"0.1.0"}]}"#,
+        )
+        .expect("bug: sidecar fixture should be written");
+
+        let artifacts = ArtifactOptions::new(Some(custom_target));
+        let _cwd = CurrentDirGuard::enter(&project_root);
+        let spec = load_project_interface_spec(&project_root, &artifacts)
+            .expect("bug: interface spec lookup should succeed")
+            .expect("bug: interface spec should resolve from explicit target dir");
+
+        assert_eq!(
+            spec,
+            crate::contract_spec::InterfaceSpecFile {
+                format: "gh_iface_v1".into(),
+                interfaces: vec![crate::contract_spec::InterfaceSpec {
+                    interface_name: "Counter".into(),
+                    interface_version: "0.1.0".into(),
+                }],
+            }
+        );
+    }
+
+    fn create_temp_project(package_name: &str) -> TempDir {
+        let project = tempfile::tempdir().expect("bug: temp dir should be created");
+        write_project_manifest(project.path(), package_name);
+        std::fs::create_dir_all(project.path().join("src"))
+            .expect("bug: src dir should be created");
+        std::fs::write(project.path().join("src/lib.rs"), "pub fn demo() {}\n")
+            .expect("bug: lib.rs should be written");
+        project
+    }
+
+    fn write_project_manifest(project_root: &Path, package_name: &str) {
+        std::fs::write(
+            project_root.join("Cargo.toml"),
+            format!(
+                "[package]\nname = \"{package_name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n"
+            ),
+        )
+        .expect("bug: Cargo.toml should be written");
+    }
+
+    struct CurrentDirGuard {
+        previous: std::path::PathBuf,
+    }
+
+    impl CurrentDirGuard {
+        fn enter(path: &Path) -> Self {
+            let previous = std::env::current_dir().expect("bug: current dir should resolve");
+            std::env::set_current_dir(path).expect("bug: current dir should change");
+            Self { previous }
+        }
+    }
+
+    impl Drop for CurrentDirGuard {
+        fn drop(&mut self) {
+            std::env::set_current_dir(&self.previous).expect("bug: current dir should restore");
+        }
     }
 }
