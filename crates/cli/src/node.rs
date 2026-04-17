@@ -45,9 +45,7 @@ pub fn run(
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
 
     rt.block_on(async {
-        let handle = start_server(config)
-            .await
-            .map_err(|e| CliError::DevNode(e.to_string()))?;
+        let handle = start_server(config).await.map_err(map_start_error)?;
 
         if print.is_json() {
             print.json(&CommandResult::new(
@@ -127,6 +125,19 @@ pub fn run(
 }
 
 #[cfg(feature = "dev-node")]
+fn map_start_error(err: Box<dyn std::error::Error + Send + Sync>) -> CliError {
+    use groundhog_dev_node::error::DevNodeError;
+
+    match err.downcast::<DevNodeError>() {
+        Ok(devnode) => match *devnode {
+            DevNodeError::SandboxInit(msg) => CliError::DevNodeSandbox(msg),
+            other => CliError::DevNode(other.to_string()),
+        },
+        Err(boxed) => CliError::DevNode(boxed.to_string()),
+    }
+}
+
+#[cfg(feature = "dev-node")]
 fn startup_payload(addr: std::net::SocketAddr, accounts: &[DevAccount]) -> serde_json::Value {
     json!({
         "chain": "groundhog-local",
@@ -138,10 +149,41 @@ fn startup_payload(addr: std::net::SocketAddr, accounts: &[DevAccount]) -> serde
 
 #[cfg(all(test, feature = "dev-node"))]
 mod tests {
-    use super::startup_payload;
+    use super::{map_start_error, startup_payload};
+    use crate::CliError;
+    use groundhog_dev_node::error::DevNodeError;
     use groundhog_rpc_api_types::dev::DevAccount;
     use groundhog_rpc_api_types::hex::{Hex0x, HexBytes};
     use groundhog_xdr::types::ContractAddress;
+
+    #[test]
+    fn map_start_error_routes_sandbox_init_to_typed_variant() {
+        let err: Box<dyn std::error::Error + Send + Sync> =
+            Box::new(DevNodeError::SandboxInit("boom".into()));
+        match map_start_error(err) {
+            CliError::DevNodeSandbox(msg) => assert_eq!(msg, "boom"),
+            other => panic!("expected DevNodeSandbox, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_start_error_routes_other_devnode_errors_to_devnode_variant() {
+        let err: Box<dyn std::error::Error + Send + Sync> =
+            Box::new(DevNodeError::WorkerInit("bad".into()));
+        match map_start_error(err) {
+            CliError::DevNode(msg) => assert!(msg.contains("bad")),
+            other => panic!("expected DevNode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_start_error_falls_back_for_non_devnode_errors() {
+        let err: Box<dyn std::error::Error + Send + Sync> = "io oops".into();
+        match map_start_error(err) {
+            CliError::DevNode(msg) => assert_eq!(msg, "io oops"),
+            other => panic!("expected DevNode fallback, got {other:?}"),
+        }
+    }
 
     #[test]
     fn startup_payload_includes_rpc_url_and_accounts() {
