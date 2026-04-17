@@ -122,8 +122,7 @@ pub fn spawn_worker(
     storage_tokens: u64,
 ) -> Result<WorkerHandle, DevNodeError> {
     let (tx, mut rx) = mpsc::unbounded_channel::<DevCommand>();
-    let (init_tx, init_rx) =
-        std::sync::mpsc::sync_channel::<Result<Vec<DevAccount>, DevNodeError>>(1);
+    let (init_tx, init_rx) = std::sync::mpsc::sync_channel::<Result<(), DevNodeError>>(1);
 
     std::thread::Builder::new()
         .name("groundhog-dev-node-worker".into())
@@ -131,19 +130,17 @@ pub fn spawn_worker(
             tracing::info!(account_count, storage_tokens, "dev node worker started");
 
             let backend_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                DevBackend::new(account_count, storage_tokens)
+                let backend = DevBackend::new(account_count, storage_tokens);
+                let _ = init_tx.send(Ok(()));
+                backend
             }));
 
             let mut backend = match backend_result {
-                Ok(backend) => {
-                    let accounts = backend.accounts().to_vec();
-                    let _ = init_tx.send(Ok(accounts));
-                    backend
-                }
+                Ok(backend) => backend,
                 Err(payload) => {
-                    let message = startup_failure_message(&payload);
-                    let _ = init_tx.send(Err(DevNodeError::WorkerInit(message.clone())));
-                    tracing::error!(panic = %message, "dev node worker panicked during startup");
+                    let err = startup_failure_error(&payload);
+                    tracing::error!(error = %err, "dev node worker panicked during startup");
+                    let _ = init_tx.send(Err(err));
                     return;
                 }
             };
@@ -203,16 +200,19 @@ fn panic_payload_message(payload: &Box<dyn std::any::Any + Send>) -> String {
     }
 }
 
-fn startup_failure_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+fn startup_failure_error(payload: &Box<dyn std::any::Any + Send>) -> DevNodeError {
     let message = panic_payload_message(payload);
     if message.contains("failed to create db: 5") {
-        return "native_exec failed to initialize its embedded test database \
-                (FFI error 5: unrecoverable). This commonly happens in \
-                restricted sandbox or process-isolation environments; rerun \
-                `groundhog node` from a normal local shell outside the sandbox."
-            .into();
+        DevNodeError::SandboxInit(
+            "native_exec failed to initialize its embedded test database \
+             (FFI error 5: unrecoverable). This commonly happens in \
+             restricted sandbox or process-isolation environments; rerun \
+             `groundhog node` from a normal local shell outside the sandbox."
+                .into(),
+        )
+    } else {
+        DevNodeError::WorkerInit(message)
     }
-    message
 }
 
 #[cfg(test)]
@@ -231,11 +231,21 @@ mod tests {
     }
 
     #[test]
-    fn startup_failure_message_adds_sandbox_hint_for_db_init_failure() {
+    fn startup_failure_classifies_db_init_failure_as_sandbox() {
         let payload: Box<dyn std::any::Any + Send> =
             Box::new(String::from("failed to create db: 5"));
-        let message = super::startup_failure_message(&payload);
-        assert!(message.contains("sandbox"));
-        assert!(message.contains("FFI error 5"));
+        match super::startup_failure_error(&payload) {
+            crate::error::DevNodeError::SandboxInit(msg) => assert!(msg.contains("FFI error 5")),
+            other => panic!("expected SandboxInit, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn startup_failure_classifies_unknown_panic_as_worker_init() {
+        let payload: Box<dyn std::any::Any + Send> = Box::new(String::from("totally unrelated"));
+        match super::startup_failure_error(&payload) {
+            crate::error::DevNodeError::WorkerInit(msg) => assert_eq!(msg, "totally unrelated"),
+            other => panic!("expected WorkerInit, got {other:?}"),
+        }
     }
 }

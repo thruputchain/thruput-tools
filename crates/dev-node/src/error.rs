@@ -27,6 +27,12 @@ pub enum DevNodeError {
     #[error("dev node worker failed to initialize: {0}")]
     WorkerInit(String),
 
+    /// Worker startup failed because the host environment (sandbox /
+    /// process isolation) blocks `native_exec` from opening its embedded
+    /// database.
+    #[error("dev node worker failed to initialize: {0}")]
+    SandboxInit(String),
+
     /// Worker thread has stopped.
     #[error("dev node worker stopped")]
     WorkerStopped,
@@ -40,9 +46,9 @@ impl From<DevNodeError> for ErrorObjectOwned {
             }
             DevNodeError::ExecFailed(_) => (codes::TX_REJECTED, err.to_string()),
             DevNodeError::TxNotFound => (codes::TX_NOT_FOUND, err.to_string()),
-            DevNodeError::WorkerInit(_) | DevNodeError::WorkerStopped => {
-                (codes::BACKEND_UNAVAILABLE, err.to_string())
-            }
+            DevNodeError::WorkerInit(_)
+            | DevNodeError::SandboxInit(_)
+            | DevNodeError::WorkerStopped => (codes::BACKEND_UNAVAILABLE, err.to_string()),
         };
         ErrorObjectOwned::owned(code, msg, None::<()>)
     }

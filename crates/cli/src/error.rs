@@ -75,6 +75,8 @@ pub enum CliError {
     StatusHasWarnings,
     #[error("dev node error: {0}")]
     DevNode(String),
+    #[error("dev node could not start in this environment: {0}")]
+    DevNodeSandbox(String),
     #[error("could not connect to {0}")]
     RpcConnect(String),
     #[error("no rpc_url configured for the selected profile")]
@@ -129,6 +131,7 @@ impl CliError {
             Self::NotImplemented => "not_implemented",
             Self::StatusHasWarnings => "status_has_warnings",
             Self::DevNode(_) => "dev_node_error",
+            Self::DevNodeSandbox(_) => "dev_node_sandbox",
             Self::RpcConnect(_) => "rpc_connect",
             Self::MissingRpcUrl => "missing_rpc_url",
             Self::MissingSigningKey => "missing_signing_key",
@@ -185,15 +188,10 @@ impl CliError {
             Self::UnknownTemplate(_) => {
                 Some(Cow::Borrowed("available templates: `counter`, `stub`"))
             }
-            Self::DevNode(message) => {
-                if message.contains("sandbox") {
-                    Some(Cow::Borrowed(
-                        "rerun `groundhog node` outside the sandbox or process-isolation environment",
-                    ))
-                } else {
-                    Some(Cow::Borrowed("check the dev node output for details"))
-                }
-            }
+            Self::DevNode(_) => Some(Cow::Borrowed("check the dev node output for details")),
+            Self::DevNodeSandbox(_) => Some(Cow::Borrowed(
+                "rerun `groundhog node` outside the sandbox or process-isolation environment",
+            )),
             Self::RpcConnect(url) => Some(Cow::Owned(format!(
                 "run `groundhog node` in another terminal, or check that \
                  the RPC endpoint at {url} is running"
