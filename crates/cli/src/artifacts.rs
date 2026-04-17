@@ -93,9 +93,14 @@ fn config_arg_sets_target_dir(arg: &str, config_base_dir: &Path) -> Result<bool,
 }
 
 fn config_file_sets_target_dir(path: &Path) -> Result<bool, CliError> {
-    let contents = fs::read_to_string(path)?;
-    let value: toml::Value =
-        toml::from_str(&contents).map_err(|err| CliError::Other(err.to_string()))?;
+    let contents = match fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(_) => return Ok(false),
+    };
+    let value: toml::Value = match toml::from_str(&contents) {
+        Ok(value) => value,
+        Err(_) => return Ok(false),
+    };
 
     Ok(value
         .get("build")
@@ -317,5 +322,35 @@ mod tests {
         );
 
         assert!(matches!(result, Err(CliError::TargetDirConflict)));
+    }
+
+    #[test]
+    fn missing_config_file_does_not_error_or_conflict() {
+        let tmp = TempDir::new().expect("bug: temp dir should be created");
+        let options = ArtifactOptions::new(Some(PathBuf::from("out")));
+        let result = ensure_no_target_dir_passthrough_conflicts(
+            &options,
+            tmp.path(),
+            &["--config".into(), "missing.toml".into()],
+        );
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn invalid_toml_config_file_does_not_error_or_conflict() {
+        let tmp = TempDir::new().expect("bug: temp dir should be created");
+        let config_path = tmp.path().join("invalid.toml");
+        std::fs::write(&config_path, "[build\n target-dir = \"nested\"\n")
+            .expect("bug: config file should be written");
+
+        let options = ArtifactOptions::new(Some(PathBuf::from("out")));
+        let result = ensure_no_target_dir_passthrough_conflicts(
+            &options,
+            tmp.path(),
+            &["--config".into(), "invalid.toml".into()],
+        );
+
+        assert!(result.is_ok());
     }
 }
