@@ -18,8 +18,7 @@ pub fn run(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    let cwd = std::env::current_dir()?;
-    artifacts::ensure_no_target_dir_passthrough_conflicts(artifacts, &cwd, cargo_args)?;
+    crate::build::ensure_immediate_target_dir_passthrough_conflicts(artifacts, cargo_args)?;
 
     // Build the WASM contract (validates project root,
     // checks for cargo on PATH, etc.)

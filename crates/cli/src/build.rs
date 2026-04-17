@@ -73,9 +73,9 @@ pub fn build_project(
 ) -> Result<BuildResult, CliError> {
     crate::require_cargo()?;
 
-    let cwd = std::env::current_dir()?;
-    artifacts::ensure_no_target_dir_passthrough_conflicts(artifacts, &cwd, cargo_args)?;
+    ensure_immediate_target_dir_passthrough_conflicts(artifacts, cargo_args)?;
 
+    let cwd = std::env::current_dir()?;
     let metadata = cargo_metadata_with_artifacts(artifacts)?;
     let pkg_name = resolve_package(&metadata, package, &cwd)?;
     let contract_toml = require_contract_toml(&metadata.workspace_root)?;
@@ -233,6 +233,58 @@ pub fn cargo_metadata_with_artifacts(
     }
 
     serde_json::from_slice(&output.stdout).map_err(|e| CliError::CargoMetadataFailed(e.to_string()))
+}
+
+pub(crate) fn ensure_immediate_target_dir_passthrough_conflicts(
+    artifacts: &ArtifactOptions,
+    cargo_args: &[String],
+) -> Result<(), CliError> {
+    if !artifacts_has_explicit_target_dir(artifacts) {
+        return Ok(());
+    }
+
+    let mut index = 0;
+    while index < cargo_args.len() {
+        let arg = &cargo_args[index];
+
+        if arg == "--target-dir" || arg.starts_with("--target-dir=") {
+            return Err(CliError::TargetDirConflict);
+        }
+
+        if arg == "--config" {
+            if let Some(value) = cargo_args.get(index + 1) {
+                if value.contains('=')
+                    && value
+                        .split_once('=')
+                        .is_some_and(|(key, _)| key.trim() == "build.target-dir")
+                {
+                    return Err(CliError::TargetDirConflict);
+                }
+            }
+            index += 2;
+            continue;
+        }
+
+        if let Some(value) = arg.strip_prefix("--config=")
+            && value
+                .split_once('=')
+                .is_some_and(|(key, _)| key.trim() == "build.target-dir")
+        {
+            return Err(CliError::TargetDirConflict);
+        }
+
+        index += 1;
+    }
+
+    Ok(())
+}
+
+fn artifacts_has_explicit_target_dir(artifacts: &ArtifactOptions) -> bool {
+    let mut command = Command::new("cargo");
+    artifacts.apply_to_command(&mut command);
+    command
+        .get_envs()
+        .any(|(key, value)| key == "CARGO_TARGET_DIR" && value.is_some())
 }
 
 /// Check that `.cargo/contract.toml` exists at the workspace root.
