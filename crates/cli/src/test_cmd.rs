@@ -1,3 +1,4 @@
+use crate::artifacts::{self, ArtifactOptions};
 use crate::{CliError, Print};
 use serde_json::json;
 use std::env;
@@ -12,13 +13,18 @@ use std::process::Command;
 pub fn run(
     package: Option<&str>,
     cargo_args: &[String],
+    artifacts: &ArtifactOptions,
     explicit_profile: Option<&str>,
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
+    let cwd = std::env::current_dir()?;
+    artifacts::ensure_no_target_dir_passthrough_conflicts(artifacts, &cwd, cargo_args)?;
+
     // Build the WASM contract (validates project root,
     // checks for cargo on PATH, etc.)
-    let build = crate::build::build_project(package, false, &[], explicit_profile, print)?;
+    let build =
+        crate::build::build_project(package, false, &[], artifacts, explicit_profile, print)?;
 
     // Run only the WASM test target
     let root = build.project_root.clone();
@@ -50,6 +56,9 @@ pub fn run(
         .arg("dev")
         .arg("--")
         .arg("--include-ignored");
+
+    artifacts::ensure_no_target_dir_passthrough_conflicts(artifacts, &root, cargo_args)?;
+    artifacts.apply_to_command(&mut cargo_cmd);
 
     for arg in cargo_args {
         cargo_cmd.arg(arg);

@@ -4,6 +4,7 @@ use groundhog_cli::Print;
 use groundhog_cli::config::DEFAULT_PROFILE;
 use groundhog_cli::result::CommandResult;
 use serde_json::json;
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(
@@ -27,6 +28,13 @@ struct GlobalArgs {
     /// Emit structured JSON output
     #[arg(long, global = true)]
     json: bool,
+}
+
+#[derive(Parser, Debug, Clone)]
+struct ArtifactArgs {
+    /// Directory for cargo build artifacts
+    #[arg(long)]
+    target_dir: Option<PathBuf>,
 }
 
 #[derive(Subcommand)]
@@ -89,6 +97,8 @@ enum Command {
             default_value = DEFAULT_PROFILE
         )]
         profile: String,
+        #[command(flatten)]
+        artifacts: ArtifactArgs,
         /// Extra arguments passed to cargo
         #[arg(last = true)]
         cargo_args: Vec<String>,
@@ -109,6 +119,8 @@ enum Command {
             default_value = DEFAULT_PROFILE
         )]
         profile: String,
+        #[command(flatten)]
+        artifacts: ArtifactArgs,
         /// Extra arguments forwarded to the test harness (after --)
         #[arg(last = true)]
         cargo_args: Vec<String>,
@@ -125,6 +137,8 @@ enum Command {
             default_value = DEFAULT_PROFILE
         )]
         profile: String,
+        #[command(flatten)]
+        artifacts: ArtifactArgs,
     },
     /// Call a deployed contract method
     Call {
@@ -141,6 +155,8 @@ enum Command {
             default_value = DEFAULT_PROFILE
         )]
         profile: String,
+        #[command(flatten)]
+        artifacts: ArtifactArgs,
     },
     /// Start a local development node
     Node {
@@ -251,34 +267,47 @@ fn main() {
             package,
             optimize,
             profile,
+            artifacts,
             cargo_args,
-        } => groundhog_cli::build::run(
-            package.as_deref(),
-            optimize,
-            &cargo_args,
-            Some(&profile),
-            cmd_name,
-            &print,
-        ),
+        } => {
+            let artifacts = groundhog_cli::artifacts::ArtifactOptions::new(artifacts.target_dir);
+            groundhog_cli::build::run(
+                package.as_deref(),
+                optimize,
+                &cargo_args,
+                &artifacts,
+                Some(&profile),
+                cmd_name,
+                &print,
+            )
+        }
         Command::Test {
             package,
             profile,
+            artifacts,
             cargo_args,
-        } => groundhog_cli::test_cmd::run(
-            package.as_deref(),
-            &cargo_args,
-            Some(&profile),
-            cmd_name,
-            &print,
-        ),
-        Command::Deploy { wasm, profile } => {
-            groundhog_cli::deploy::run(&wasm, &profile, cmd_name, &print)
+        } => {
+            let artifacts = groundhog_cli::artifacts::ArtifactOptions::new(artifacts.target_dir);
+            groundhog_cli::test_cmd::run(
+                package.as_deref(),
+                &cargo_args,
+                &artifacts,
+                Some(&profile),
+                cmd_name,
+                &print,
+            )
         }
+        Command::Deploy {
+            wasm,
+            profile,
+            artifacts: _artifacts,
+        } => groundhog_cli::deploy::run(&wasm, &profile, cmd_name, &print),
         Command::Call {
             contract,
             method,
             args,
             profile,
+            artifacts: _artifacts,
         } => groundhog_cli::call::run(&contract, &method, &args, &profile, cmd_name, &print),
         Command::Node { port, accounts } => {
             groundhog_cli::node::run(port, accounts, cmd_name, &print)
