@@ -46,16 +46,17 @@ fn test_rejects_conflicting_target_dir_passthrough() {
     let fake_bin = tmp.path().join("bin");
     fs::create_dir_all(&fake_bin).unwrap();
     let cargo = fake_bin.join("cargo");
+    let metadata_json = format!(
+        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract","manifest_path":"{}"}}]}}"#,
+        tmp.path().display(),
+        tmp.path().join("target").display(),
+        tmp.path().join("Cargo.toml").display()
+    );
     fs::write(
         &cargo,
         format!(
             "#!/bin/sh\nif [ \"$1\" = \"metadata\" ]; then\n  printf '%s' '{}'\n  exit 0\nfi\nif [ \"$1\" = \"--config\" ]; then\n  shift 2\nfi\nif [ \"$1\" = \"build\" ]; then\n  /bin/mkdir -p '{}'\n  printf '\\000asm\\001\\000\\000\\000' > '{}'\n  exit 0\nfi\nexit 0\n",
-            format!(
-                r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract","manifest_path":"{}"}}]}}"#,
-                tmp.path().display(),
-                tmp.path().join("target").display(),
-                tmp.path().join("Cargo.toml").display()
-            ),
+            metadata_json,
             tmp.path()
                 .join("target/wasm32-unknown-unknown/release")
                 .display(),
@@ -182,16 +183,17 @@ fn test_resolves_relative_config_conflicts_from_project_root() {
     let fake_bin = tmp.path().join("bin");
     fs::create_dir_all(&fake_bin).unwrap();
     let cargo = fake_bin.join("cargo");
+    let metadata_json = format!(
+        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract","manifest_path":"{}"}}]}}"#,
+        tmp.path().display(),
+        tmp.path().join("target").display(),
+        tmp.path().join("Cargo.toml").display()
+    );
     fs::write(
         &cargo,
         format!(
             "#!/bin/sh\nif [ \"$1\" = \"metadata\" ]; then\n  printf '%s' '{}'\n  exit 0\nfi\nif [ \"$1\" = \"--config\" ]; then\n  shift 2\nfi\nif [ \"$1\" = \"build\" ]; then\n  /bin/mkdir -p '{}'\n  printf '\\000asm\\001\\000\\000\\000' > '{}'\n  exit 0\nfi\nexit 0\n",
-            format!(
-                r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract","manifest_path":"{}"}}]}}"#,
-                tmp.path().display(),
-                tmp.path().join("target").display(),
-                tmp.path().join("Cargo.toml").display()
-            ),
+            metadata_json,
             tmp.path()
                 .join("target/wasm32-unknown-unknown/release")
                 .display(),

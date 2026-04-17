@@ -61,19 +61,19 @@ pub fn ensure_no_target_dir_passthrough_conflicts(
         }
 
         if arg == "--config" {
-            if let Some(path) = passthrough_args.get(index + 1) {
-                if config_arg_sets_target_dir(path, config_base_dir)? {
-                    return Err(CliError::TargetDirConflict);
-                }
+            if let Some(path) = passthrough_args.get(index + 1)
+                && config_arg_sets_target_dir(path, config_base_dir)
+            {
+                return Err(CliError::TargetDirConflict);
             }
             index += 2;
             continue;
         }
 
-        if let Some(path) = arg.strip_prefix("--config=") {
-            if config_arg_sets_target_dir(path, config_base_dir)? {
-                return Err(CliError::TargetDirConflict);
-            }
+        if let Some(path) = arg.strip_prefix("--config=")
+            && config_arg_sets_target_dir(path, config_base_dir)
+        {
+            return Err(CliError::TargetDirConflict);
         }
 
         index += 1;
@@ -82,30 +82,28 @@ pub fn ensure_no_target_dir_passthrough_conflicts(
     Ok(())
 }
 
-fn config_arg_sets_target_dir(arg: &str, config_base_dir: &Path) -> Result<bool, CliError> {
+fn config_arg_sets_target_dir(arg: &str, config_base_dir: &Path) -> bool {
     if arg.contains('=') {
         let (key, _) = arg.split_once('=').expect("bug: arg contains '='");
-        return Ok(key.trim() == "build.target-dir");
+        return key.trim() == "build.target-dir";
     }
 
     let config_path = config_base_dir.join(arg);
     config_file_sets_target_dir(config_path.as_path())
 }
 
-fn config_file_sets_target_dir(path: &Path) -> Result<bool, CliError> {
-    let contents = match fs::read_to_string(path) {
-        Ok(contents) => contents,
-        Err(_) => return Ok(false),
+fn config_file_sets_target_dir(path: &Path) -> bool {
+    let Ok(contents) = fs::read_to_string(path) else {
+        return false;
     };
-    let value: toml::Value = match toml::from_str(&contents) {
-        Ok(value) => value,
-        Err(_) => return Ok(false),
+    let Ok(value) = toml::from_str::<toml::Value>(&contents) else {
+        return false;
     };
 
-    Ok(value
+    value
         .get("build")
         .and_then(|build| build.get("target-dir"))
-        .is_some())
+        .is_some()
 }
 
 fn normalize_target_dir(target_dir: PathBuf, invocation_cwd: &Path) -> PathBuf {
@@ -115,10 +113,10 @@ fn normalize_target_dir(target_dir: PathBuf, invocation_cwd: &Path) -> PathBuf {
         invocation_cwd.join(target_dir)
     };
 
-    normalize_path_components(absolute)
+    normalize_path_components(&absolute)
 }
 
-fn normalize_path_components(path: PathBuf) -> PathBuf {
+fn normalize_path_components(path: &Path) -> PathBuf {
     use std::path::Component;
 
     let mut normalized = PathBuf::new();

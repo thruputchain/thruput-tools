@@ -171,17 +171,15 @@ fn build_rejects_conflicting_target_dir_passthrough() {
     let fake_bin = tmp.path().join("bin");
     fs::create_dir_all(&fake_bin).unwrap();
     let cargo = fake_bin.join("cargo");
+    let metadata_json = format!(
+        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract","manifest_path":"{}"}}]}}"#,
+        tmp.path().display(),
+        tmp.path().join("target").display(),
+        tmp.path().join("Cargo.toml").display()
+    );
     fs::write(
         &cargo,
-        format!(
-            "#!/bin/sh\nprintf '%s' '{}'\n",
-            format!(
-                r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract","manifest_path":"{}"}}]}}"#,
-                tmp.path().display(),
-                tmp.path().join("target").display(),
-                tmp.path().join("Cargo.toml").display()
-            )
-        ),
+        format!("#!/bin/sh\nprintf '%s' '{metadata_json}'\n"),
     )
     .unwrap();
 
@@ -301,17 +299,15 @@ fn build_resolves_relative_config_conflicts_from_workspace_root() {
     let fake_bin = tmp.path().join("bin");
     fs::create_dir_all(&fake_bin).unwrap();
     let cargo = fake_bin.join("cargo");
+    let metadata_json = format!(
+        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract","manifest_path":"{}"}}]}}"#,
+        tmp.path().display(),
+        tmp.path().join("target").display(),
+        tmp.path().join("Cargo.toml").display()
+    );
     fs::write(
         &cargo,
-        format!(
-            "#!/bin/sh\nprintf '%s' '{}'\n",
-            format!(
-                r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract","manifest_path":"{}"}}]}}"#,
-                tmp.path().display(),
-                tmp.path().join("target").display(),
-                tmp.path().join("Cargo.toml").display()
-            )
-        ),
+        format!("#!/bin/sh\nprintf '%s' '{metadata_json}'\n"),
     )
     .unwrap();
 

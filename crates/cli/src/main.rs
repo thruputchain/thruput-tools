@@ -314,11 +314,11 @@ fn main() {
         } => std::env::current_dir()
             .map_err(groundhog_cli::CliError::Io)
             .and_then(|cwd| {
-                let _artifacts = groundhog_cli::artifacts::ArtifactOptions::from_invocation_cwd(
+                let artifacts = groundhog_cli::artifacts::ArtifactOptions::from_invocation_cwd(
                     artifacts.target_dir,
                     &cwd,
                 );
-                groundhog_cli::deploy::run(&wasm, &_artifacts, &profile, cmd_name, &print)
+                groundhog_cli::deploy::run(&wasm, &artifacts, &profile, cmd_name, &print)
             }),
         Command::Call {
             contract,
@@ -329,18 +329,12 @@ fn main() {
         } => std::env::current_dir()
             .map_err(groundhog_cli::CliError::Io)
             .and_then(|cwd| {
-                let _artifacts = groundhog_cli::artifacts::ArtifactOptions::from_invocation_cwd(
+                let artifacts = groundhog_cli::artifacts::ArtifactOptions::from_invocation_cwd(
                     artifacts.target_dir,
                     &cwd,
                 );
                 groundhog_cli::call::run(
-                    &contract,
-                    &method,
-                    &args,
-                    &_artifacts,
-                    &profile,
-                    cmd_name,
-                    &print,
+                    &contract, &method, &args, &artifacts, &profile, cmd_name, &print,
                 )
             }),
         Command::Node { port, accounts } => {
