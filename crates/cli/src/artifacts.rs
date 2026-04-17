@@ -33,6 +33,7 @@ pub fn wasm_output_path(target_dir: &Path, package_name: &str) -> PathBuf {
 /// Ensure passthrough cargo arguments do not override the CLI target directory.
 pub fn ensure_no_target_dir_passthrough_conflicts(
     options: &ArtifactOptions,
+    config_base_dir: &Path,
     passthrough_args: &[String],
 ) -> Result<(), CliError> {
     if options.target_dir.is_none() {
@@ -49,7 +50,7 @@ pub fn ensure_no_target_dir_passthrough_conflicts(
 
         if arg == "--config" {
             if let Some(path) = passthrough_args.get(index + 1) {
-                if config_arg_sets_target_dir(path)? {
+                if config_arg_sets_target_dir(path, config_base_dir)? {
                     return Err(CliError::TargetDirConflict);
                 }
             }
@@ -58,7 +59,7 @@ pub fn ensure_no_target_dir_passthrough_conflicts(
         }
 
         if let Some(path) = arg.strip_prefix("--config=") {
-            if config_arg_sets_target_dir(path)? {
+            if config_arg_sets_target_dir(path, config_base_dir)? {
                 return Err(CliError::TargetDirConflict);
             }
         }
@@ -69,16 +70,13 @@ pub fn ensure_no_target_dir_passthrough_conflicts(
     Ok(())
 }
 
-fn config_arg_sets_target_dir(arg: &str) -> Result<bool, CliError> {
-    if is_inline_target_dir_config(arg) {
-        return Ok(true);
+fn config_arg_sets_target_dir(arg: &str, config_base_dir: &Path) -> Result<bool, CliError> {
+    if arg.contains('=') {
+        return Ok(arg.trim_start().starts_with("build.target-dir="));
     }
 
-    config_file_sets_target_dir(Path::new(arg))
-}
-
-fn is_inline_target_dir_config(arg: &str) -> bool {
-    arg.trim_start().starts_with("build.target-dir")
+    let config_path = config_base_dir.join(arg);
+    config_file_sets_target_dir(config_path.as_path())
 }
 
 fn config_file_sets_target_dir(path: &Path) -> Result<bool, CliError> {
@@ -130,8 +128,10 @@ mod tests {
     #[test]
     fn detects_cli_target_dir_conflict_in_passthrough_args() {
         let options = ArtifactOptions::new(Some(PathBuf::from("out")));
+        let base_dir = PathBuf::from("/tmp");
         let err = ensure_no_target_dir_passthrough_conflicts(
             &options,
+            &base_dir,
             &["--target-dir".into(), "nested".into()],
         )
         .unwrap_err();
@@ -149,6 +149,7 @@ mod tests {
         let options = ArtifactOptions::new(Some(PathBuf::from("out")));
         let err = ensure_no_target_dir_passthrough_conflicts(
             &options,
+            tmp.path(),
             &["--config".into(), config_path.display().to_string()],
         )
         .unwrap_err();
@@ -159,8 +160,10 @@ mod tests {
     #[test]
     fn detects_inline_config_target_dir_conflict_with_separate_arg() {
         let options = ArtifactOptions::new(Some(PathBuf::from("out")));
+        let base_dir = PathBuf::from("/tmp");
         let err = ensure_no_target_dir_passthrough_conflicts(
             &options,
+            &base_dir,
             &["--config".into(), "build.target-dir=\"nested\"".into()],
         )
         .unwrap_err();
@@ -171,12 +174,59 @@ mod tests {
     #[test]
     fn detects_inline_config_target_dir_conflict_with_equals_form() {
         let options = ArtifactOptions::new(Some(PathBuf::from("out")));
+        let base_dir = PathBuf::from("/tmp");
         let err = ensure_no_target_dir_passthrough_conflicts(
             &options,
+            &base_dir,
             &["--config=build.target-dir=\"nested\"".into()],
         )
         .unwrap_err();
 
         assert!(matches!(err, CliError::TargetDirConflict));
+    }
+
+    #[test]
+    fn allows_inline_config_without_target_dir() {
+        let options = ArtifactOptions::new(Some(PathBuf::from("out")));
+        let base_dir = PathBuf::from("/tmp");
+        let result = ensure_no_target_dir_passthrough_conflicts(
+            &options,
+            &base_dir,
+            &["--config".into(), "term.color=always".into()],
+        );
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn returns_ok_when_target_dir_option_is_disabled() {
+        let options = ArtifactOptions::new(None);
+        let base_dir = PathBuf::from("/tmp");
+        let result = ensure_no_target_dir_passthrough_conflicts(
+            &options,
+            &base_dir,
+            &["--target-dir".into(), "nested".into()],
+        );
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn resolves_relative_config_path_against_explicit_base_directory() {
+        let tmp = TempDir::new().expect("bug: temp dir should be created");
+        let config_path = tmp.path().join("nested/config.toml");
+        std::fs::create_dir_all(config_path.parent().expect("bug: parent should exist"))
+            .expect("bug: config dir should be created");
+        std::fs::write(&config_path, "[build]\ntarget-dir = \"nested\"\n")
+            .expect("bug: config file should be written");
+
+        let options = ArtifactOptions::new(Some(PathBuf::from("out")));
+        let result = ensure_no_target_dir_passthrough_conflicts(
+            &options,
+            tmp.path(),
+            &["--config".into(), "nested/config.toml".into()],
+        );
+
+        assert!(matches!(result, Err(CliError::TargetDirConflict)));
     }
 }
