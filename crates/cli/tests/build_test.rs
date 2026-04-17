@@ -317,6 +317,76 @@ fn build_resolves_relative_config_conflicts_from_workspace_root() {
     );
 }
 
+#[test]
+#[serial]
+fn build_project_reports_groundhog_processed_wasm_path() {
+    let tmp = TempDir::new().unwrap();
+    let project_root =
+        std::fs::canonicalize(tmp.path()).expect("bug: project path should canonicalize");
+    fs::write(
+        project_root.join("Cargo.toml"),
+        "[package]\nname = \"demo-contract\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+    fs::create_dir_all(project_root.join(".cargo")).unwrap();
+    fs::write(project_root.join(".cargo/contract.toml"), "").unwrap();
+    fs::create_dir_all(project_root.join("src")).unwrap();
+    fs::write(project_root.join("src/lib.rs"), "pub fn demo() {}\n").unwrap();
+
+    let target_dir = project_root.join("target");
+    let raw_wasm = target_dir
+        .join("wasm32-unknown-unknown/release")
+        .join("demo_contract.wasm");
+    let processed_wasm = target_dir.join("groundhog").join("demo_contract.wasm");
+    let metadata_json = format!(
+        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract","manifest_path":"{}"}}]}}"#,
+        project_root.display(),
+        target_dir.display(),
+        project_root.join("Cargo.toml").display()
+    );
+
+    let fake_bin = project_root.join("bin");
+    fs::create_dir_all(&fake_bin).unwrap();
+    let cargo = fake_bin.join("cargo");
+    fs::write(
+        &cargo,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = \"metadata\" ]; then\n  printf '%s' '{metadata_json}'\n  exit 0\nfi\n/bin/mkdir -p '{}'\nprintf '\\000asm\\001\\000\\000\\000' > '{}'\n",
+            raw_wasm
+                .parent()
+                .expect("bug: raw wasm parent should exist")
+                .display(),
+            raw_wasm.display()
+        ),
+    )
+    .unwrap();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&cargo).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&cargo, perms).unwrap();
+    }
+
+    let _cwd = CurrentDirGuard::enter(&project_root);
+    let _path = PathGuard::set(fake_bin.as_os_str());
+
+    let result = groundhog_cli::build::build_project(
+        Some("demo-contract"),
+        false,
+        &[],
+        &groundhog_cli::artifacts::ArtifactOptions::default(),
+        None,
+        &groundhog_cli::Print::quiet(),
+    )
+    .expect("bug: build should succeed");
+
+    assert_eq!(result.wasm, processed_wasm);
+    assert!(processed_wasm.exists());
+    assert_eq!(fs::read(&raw_wasm).unwrap(), b"\0asm\x01\0\0\0");
+}
+
 struct CurrentDirGuard {
     previous: PathBuf,
 }

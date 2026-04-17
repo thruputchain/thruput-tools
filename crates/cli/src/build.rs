@@ -111,11 +111,16 @@ pub fn build_project(
 
     let (cargo_stdout, cargo_stderr) = crate::run_cargo(&mut cmd, print)?;
 
-    let wasm = artifacts::wasm_output_path(&metadata.target_directory, pkg_name);
-
-    if !wasm.try_exists()? {
-        return Err(CliError::WasmNotFound(wasm.display().to_string()));
+    let raw_wasm = artifacts::cargo_wasm_output_path(&metadata.target_directory, pkg_name);
+    if !raw_wasm.try_exists()? {
+        return Err(CliError::WasmNotFound(raw_wasm.display().to_string()));
     }
+
+    let wasm = artifacts::groundhog_wasm_output_path(&metadata.target_directory, pkg_name);
+    if let Some(parent) = wasm.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::copy(&raw_wasm, &wasm)?;
 
     let profile = crate::config::resolve_profile(&metadata.workspace_root, explicit_profile)?;
 

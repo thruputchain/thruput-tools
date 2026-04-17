@@ -49,11 +49,6 @@ pub fn groundhog_wasm_output_path(target_dir: &Path, package_name: &str) -> Path
         .join(format!("{}.wasm", crate::scaffold::to_snake(package_name)))
 }
 
-/// Temporary compatibility shim while call sites migrate to the split helpers.
-pub fn wasm_output_path(target_dir: &Path, package_name: &str) -> PathBuf {
-    cargo_wasm_output_path(target_dir, package_name)
-}
-
 /// Ensure passthrough cargo arguments do not override the CLI target directory.
 pub fn ensure_no_target_dir_passthrough_conflicts(
     options: &ArtifactOptions,
