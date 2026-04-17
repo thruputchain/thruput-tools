@@ -15,11 +15,23 @@ impl ArtifactOptions {
         Self { target_dir }
     }
 
+    /// Create artifact options from the original invocation cwd.
+    pub fn from_invocation_cwd(target_dir: Option<PathBuf>, invocation_cwd: &Path) -> Self {
+        Self {
+            target_dir: target_dir.map(|path| normalize_target_dir(path, invocation_cwd)),
+        }
+    }
+
     /// Apply artifact settings to a cargo command.
     pub fn apply_to_command(&self, command: &mut Command) {
         if let Some(target_dir) = &self.target_dir {
             command.env("CARGO_TARGET_DIR", target_dir);
         }
+    }
+
+    /// Return the configured target directory, if any.
+    pub fn target_dir(&self) -> Option<&Path> {
+        self.target_dir.as_deref()
     }
 }
 
@@ -91,6 +103,32 @@ fn config_file_sets_target_dir(path: &Path) -> Result<bool, CliError> {
         .is_some())
 }
 
+fn normalize_target_dir(target_dir: PathBuf, invocation_cwd: &Path) -> PathBuf {
+    let absolute = if target_dir.is_absolute() {
+        target_dir
+    } else {
+        invocation_cwd.join(target_dir)
+    };
+
+    normalize_path_components(absolute)
+}
+
+fn normalize_path_components(path: PathBuf) -> PathBuf {
+    use std::path::Component;
+
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ArtifactOptions, ensure_no_target_dir_passthrough_conflicts, wasm_output_path};
@@ -123,6 +161,29 @@ mod tests {
                 .expect("bug: env value should be present")
                 .to_string_lossy(),
             "/tmp/out"
+        );
+    }
+
+    #[test]
+    fn normalizes_relative_target_dir_against_invocation_cwd() {
+        let invocation_cwd = PathBuf::from("/tmp/project/contracts/demo");
+        let options = ArtifactOptions::from_invocation_cwd(
+            Some(PathBuf::from("../artifacts/out")),
+            &invocation_cwd,
+        );
+
+        let mut command = Command::new("cargo");
+        options.apply_to_command(&mut command);
+
+        let envs = command.get_envs().collect::<Vec<_>>();
+        assert_eq!(envs.len(), 1);
+        assert_eq!(envs[0].0.to_string_lossy(), "CARGO_TARGET_DIR");
+        assert_eq!(
+            envs[0]
+                .1
+                .expect("bug: env value should be present")
+                .to_string_lossy(),
+            "/tmp/project/contracts/artifacts/out"
         );
     }
 

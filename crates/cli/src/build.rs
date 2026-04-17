@@ -280,11 +280,7 @@ pub(crate) fn ensure_immediate_target_dir_passthrough_conflicts(
 }
 
 fn artifacts_has_explicit_target_dir(artifacts: &ArtifactOptions) -> bool {
-    let mut command = Command::new("cargo");
-    artifacts.apply_to_command(&mut command);
-    command
-        .get_envs()
-        .any(|(key, value)| key == "CARGO_TARGET_DIR" && value.is_some())
+    artifacts.target_dir().is_some()
 }
 
 /// Check that `.cargo/contract.toml` exists at the workspace root.
