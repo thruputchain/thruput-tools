@@ -318,7 +318,7 @@ fn main() {
                     artifacts.target_dir,
                     &cwd,
                 );
-                groundhog_cli::deploy::run(&wasm, &profile, cmd_name, &print)
+                groundhog_cli::deploy::run(&wasm, &_artifacts, &profile, cmd_name, &print)
             }),
         Command::Call {
             contract,
@@ -333,7 +333,15 @@ fn main() {
                     artifacts.target_dir,
                     &cwd,
                 );
-                groundhog_cli::call::run(&contract, &method, &args, &profile, cmd_name, &print)
+                groundhog_cli::call::run(
+                    &contract,
+                    &method,
+                    &args,
+                    &_artifacts,
+                    &profile,
+                    cmd_name,
+                    &print,
+                )
             }),
         Command::Node { port, accounts } => {
             groundhog_cli::node::run(port, accounts, cmd_name, &print)

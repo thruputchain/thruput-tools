@@ -18,6 +18,7 @@ use crate::result::CommandResult;
 use crate::tx_utils::{
     format_tx_hash, nonce_from_timestamp, resolve_block_expiry_height, submit_and_poll,
 };
+use crate::artifacts::ArtifactOptions;
 use crate::{CliError, Print};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,6 +31,7 @@ enum DeployAddressSource {
 #[allow(clippy::too_many_lines)]
 pub fn run(
     wasm_path: &Option<String>,
+    artifacts: &ArtifactOptions,
     profile: &str,
     cmd: &'static str,
     print: &Print,
@@ -47,7 +49,7 @@ pub fn run(
     let wasm_bytes = if let Some(path) = wasm_path {
         std::fs::read(path)?
     } else {
-        let resolved_wasm = resolve_wasm_path(&cwd)?;
+        let resolved_wasm = resolve_wasm_path(&cwd, artifacts)?;
         warn_if_stale(&resolved_wasm, &cwd, print);
         std::fs::read(&resolved_wasm)?
     };
@@ -199,14 +201,10 @@ pub fn run(
     Ok(())
 }
 
-fn resolve_wasm_path(cwd: &Path) -> Result<PathBuf, CliError> {
-    let metadata = crate::build::cargo_metadata()?;
+fn resolve_wasm_path(cwd: &Path, artifacts: &ArtifactOptions) -> Result<PathBuf, CliError> {
+    let metadata = crate::build::cargo_metadata_with_artifacts(artifacts)?;
     let pkg_name = crate::build::resolve_package(&metadata, None, cwd)?;
-    let snake_name = crate::scaffold::to_snake(pkg_name);
-    let wasm = metadata
-        .target_directory
-        .join("wasm32-unknown-unknown/release")
-        .join(format!("{snake_name}.wasm"));
+    let wasm = crate::artifacts::wasm_output_path(&metadata.target_directory, pkg_name);
 
     if !wasm.try_exists()? {
         return Err(CliError::WasmNotFound(wasm.display().to_string()));
@@ -277,9 +275,16 @@ fn resolve_deployed_address(
 
 #[cfg(test)]
 mod tests {
-    use super::{DeployAddressSource, derive_deploy_address, resolve_deployed_address};
+    use std::path::Path;
+
+    use super::{
+        DeployAddressSource, derive_deploy_address, resolve_deployed_address, resolve_wasm_path,
+    };
+    use crate::artifacts::ArtifactOptions;
     use groundhog_rpc_api_types::hex::HexBytes;
     use groundhog_xdr::types::{ContractAddress, SHA256Hash};
+    use serial_test::serial;
+    use tempfile::TempDir;
 
     #[test]
     fn deploy_address_resolution_falls_back_to_prediction() {
@@ -312,5 +317,65 @@ mod tests {
 
         assert_eq!(first, second);
         assert_ne!(first, deployer);
+    }
+
+    #[test]
+    #[serial]
+    fn resolve_wasm_path_uses_explicit_target_dir() {
+        let project = create_temp_project("demo-contract");
+        let project_root =
+            std::fs::canonicalize(project.path()).expect("bug: project path should canonicalize");
+        let custom_target = project_root.join("custom-target");
+        let expected_wasm = custom_target
+            .join("wasm32-unknown-unknown/release")
+            .join("demo_contract.wasm");
+        std::fs::create_dir_all(expected_wasm.parent().expect("bug: wasm parent should exist"))
+            .expect("bug: custom target dir should be created");
+        std::fs::write(&expected_wasm, b"\0asm").expect("bug: wasm fixture should be written");
+
+        let artifacts = ArtifactOptions::new(Some(custom_target));
+        let _cwd = CurrentDirGuard::enter(&project_root);
+        let resolved = resolve_wasm_path(&project_root, &artifacts)
+            .expect("bug: wasm should resolve from explicit target dir");
+
+        assert_eq!(resolved, expected_wasm);
+    }
+
+    fn create_temp_project(package_name: &str) -> TempDir {
+        let project = tempfile::tempdir().expect("bug: temp dir should be created");
+        write_project_manifest(project.path(), package_name);
+        std::fs::create_dir_all(project.path().join("src"))
+            .expect("bug: src dir should be created");
+        std::fs::write(project.path().join("src/lib.rs"), "pub fn demo() {}\n")
+            .expect("bug: lib.rs should be written");
+        project
+    }
+
+    fn write_project_manifest(project_root: &Path, package_name: &str) {
+        std::fs::write(
+            project_root.join("Cargo.toml"),
+            format!(
+                "[package]\nname = \"{package_name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n"
+            ),
+        )
+        .expect("bug: Cargo.toml should be written");
+    }
+
+    struct CurrentDirGuard {
+        previous: std::path::PathBuf,
+    }
+
+    impl CurrentDirGuard {
+        fn enter(path: &Path) -> Self {
+            let previous = std::env::current_dir().expect("bug: current dir should resolve");
+            std::env::set_current_dir(path).expect("bug: current dir should change");
+            Self { previous }
+        }
+    }
+
+    impl Drop for CurrentDirGuard {
+        fn drop(&mut self) {
+            std::env::set_current_dir(&self.previous).expect("bug: current dir should restore");
+        }
     }
 }
