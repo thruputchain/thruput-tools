@@ -18,8 +18,6 @@ pub fn run(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    crate::build::ensure_immediate_target_dir_passthrough_conflicts(artifacts, cargo_args)?;
-
     // Build the WASM contract (validates project root,
     // checks for cargo on PATH, etc.)
     let build =

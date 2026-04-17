@@ -73,8 +73,6 @@ pub fn build_project(
 ) -> Result<BuildResult, CliError> {
     crate::require_cargo()?;
 
-    ensure_immediate_target_dir_passthrough_conflicts(artifacts, cargo_args)?;
-
     let cwd = std::env::current_dir()?;
     let metadata = cargo_metadata_with_artifacts(artifacts)?;
     let pkg_name = resolve_package(&metadata, package, &cwd)?;
@@ -234,55 +232,6 @@ pub fn cargo_metadata_with_artifacts(
 
     serde_json::from_slice(&output.stdout).map_err(|e| CliError::CargoMetadataFailed(e.to_string()))
 }
-
-pub(crate) fn ensure_immediate_target_dir_passthrough_conflicts(
-    artifacts: &ArtifactOptions,
-    cargo_args: &[String],
-) -> Result<(), CliError> {
-    if !artifacts_has_explicit_target_dir(artifacts) {
-        return Ok(());
-    }
-
-    let mut index = 0;
-    while index < cargo_args.len() {
-        let arg = &cargo_args[index];
-
-        if arg == "--target-dir" || arg.starts_with("--target-dir=") {
-            return Err(CliError::TargetDirConflict);
-        }
-
-        if arg == "--config" {
-            if let Some(value) = cargo_args.get(index + 1) {
-                if value.contains('=')
-                    && value
-                        .split_once('=')
-                        .is_some_and(|(key, _)| key.trim() == "build.target-dir")
-                {
-                    return Err(CliError::TargetDirConflict);
-                }
-            }
-            index += 2;
-            continue;
-        }
-
-        if let Some(value) = arg.strip_prefix("--config=")
-            && value
-                .split_once('=')
-                .is_some_and(|(key, _)| key.trim() == "build.target-dir")
-        {
-            return Err(CliError::TargetDirConflict);
-        }
-
-        index += 1;
-    }
-
-    Ok(())
-}
-
-fn artifacts_has_explicit_target_dir(artifacts: &ArtifactOptions) -> bool {
-    artifacts.target_dir().is_some()
-}
-
 /// Check that `.cargo/contract.toml` exists at the workspace root.
 fn require_contract_toml(workspace_root: &Path) -> Result<PathBuf, CliError> {
     let path = workspace_root.join(".cargo/contract.toml");

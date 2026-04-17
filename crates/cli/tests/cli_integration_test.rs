@@ -336,7 +336,7 @@ fn call_help_mentions_target_dir() {
 }
 
 #[test]
-fn build_json_reports_target_dir_conflict() {
+fn build_json_prefers_metadata_failure_outside_project() {
     let tmp = TempDir::new().unwrap();
     let output = groundhog()
         .args([
@@ -356,7 +356,7 @@ fn build_json_reports_target_dir_conflict() {
     let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(stderr["ok"], false);
     assert_eq!(stderr["command"], "build");
-    assert_eq!(stderr["error"]["code"], "target_dir_conflict");
+    assert_eq!(stderr["error"]["code"], "cargo_metadata_failed");
 }
 
 #[test]
@@ -407,7 +407,7 @@ fn test_json_failure_is_structured() {
 }
 
 #[test]
-fn test_json_reports_target_dir_conflict() {
+fn test_json_prefers_metadata_failure_outside_project() {
     let tmp = TempDir::new().unwrap();
     let output = groundhog()
         .args([
@@ -427,7 +427,7 @@ fn test_json_reports_target_dir_conflict() {
     let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(stderr["ok"], false);
     assert_eq!(stderr["command"], "test");
-    assert_eq!(stderr["error"]["code"], "target_dir_conflict");
+    assert_eq!(stderr["error"]["code"], "cargo_metadata_failed");
 }
 
 #[test]
