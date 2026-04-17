@@ -13,7 +13,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.3"
+version = "0.2.4"
 edition = "2024"
 authors = ["Groundhog Team"]
 license = "Apache-2.0"
@@ -29,11 +29,11 @@ categories = ["development-tools"]
 # above.  Cargo requires explicit versions for dependencies when
 # publishing, as path specifications are stripped out.  Remember to
 # keep this in sync.
-groundhog-rpc-api-types = { path = "crates/api-types", version = "=0.2.3", registry = "groundhog" }
-groundhog-rpc-api = { path = "crates/rpc-api", version = "=0.2.3", registry = "groundhog" }
-groundhog-rpc-client = { path = "crates/client", version = "=0.2.3", registry = "groundhog" }
-groundhog-signing = { path = "crates/signing", version = "=0.2.3", registry = "groundhog" }
-groundhog-dev-node = { path = "crates/dev-node", version = "=0.2.3", registry = "groundhog" }
+groundhog-rpc-api-types = { path = "crates/api-types", version = "=0.2.4", registry = "groundhog" }
+groundhog-rpc-api = { path = "crates/rpc-api", version = "=0.2.4", registry = "groundhog" }
+groundhog-rpc-client = { path = "crates/client", version = "=0.2.4", registry = "groundhog" }
+groundhog-signing = { path = "crates/signing", version = "=0.2.4", registry = "groundhog" }
+groundhog-dev-node = { path = "crates/dev-node", version = "=0.2.4", registry = "groundhog" }
 
 # --- Groundhog (private registry) ---
 groundhog-xdr = { version = "0.7.9", registry = "groundhog", features = ["serde", "xdrs"] }
