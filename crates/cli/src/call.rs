@@ -280,8 +280,7 @@ fn resolve_full_contract_metadata(
     let Ok(pkg_name) = resolve_package(&metadata, None, cwd) else {
         return Ok(None);
     };
-    let wasm =
-        crate::artifacts::groundhog_wasm_output_path(&metadata.target_directory, pkg_name);
+    let wasm = crate::artifacts::groundhog_wasm_output_path(&metadata.target_directory, pkg_name);
     let Some(spec) = load_full_spec(&wasm)? else {
         return Ok(None);
     };
@@ -367,8 +366,7 @@ fn load_project_interface_spec(
 ) -> Result<Option<crate::contract_spec::InterfaceSpecFile>, CliError> {
     let metadata = cargo_metadata_with_artifacts(artifacts)?;
     let pkg_name = resolve_package(&metadata, None, project_root)?;
-    let wasm =
-        crate::artifacts::groundhog_wasm_output_path(&metadata.target_directory, pkg_name);
+    let wasm = crate::artifacts::groundhog_wasm_output_path(&metadata.target_directory, pkg_name);
     load_interface_sidecar(&wasm)
 }
 
