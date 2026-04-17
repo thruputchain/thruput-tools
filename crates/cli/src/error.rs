@@ -19,6 +19,8 @@ pub enum CliError {
     CargoMetadataFailed(String),
     #[error("expected WASM artifact not found at {0}")]
     WasmNotFound(String),
+    #[error("target dir conflicts with CLI passthrough args or config")]
+    TargetDirConflict,
     #[error("cargo failed with exit code {0}")]
     CargoFailed(i32),
     #[error("cargo failed with exit code {code}")]
@@ -109,6 +111,7 @@ impl CliError {
             Self::PackageRequired => "package_required",
             Self::CargoMetadataFailed(_) => "cargo_metadata_failed",
             Self::WasmNotFound(_) => "wasm_not_found",
+            Self::TargetDirConflict => "target_dir_conflict",
             Self::CargoFailed(_) | Self::CargoFailedWithOutput { .. } => "cargo_failed",
             Self::DirExists(_) => "dir_exists",
             Self::DirNotEmpty => "dir_not_empty",
@@ -174,6 +177,10 @@ impl CliError {
             Self::WasmNotFound(_) => Some(Cow::Borrowed(
                 "run `groundhog build` first, or check that the crate \
                  does not use a custom [lib] name in Cargo.toml",
+            )),
+            Self::TargetDirConflict => Some(Cow::Borrowed(
+                "remove `--target-dir` from passthrough args or \
+                 config when using the CLI target directory option",
             )),
             Self::CargoFailed(_) | Self::CargoFailedWithOutput { .. } => Some(Cow::Borrowed(
                 "see the cargo output above for the underlying build \
