@@ -49,7 +49,7 @@ pub fn ensure_no_target_dir_passthrough_conflicts(
 
         if arg == "--config" {
             if let Some(path) = passthrough_args.get(index + 1) {
-                if config_file_sets_target_dir(Path::new(path))? {
+                if config_arg_sets_target_dir(path)? {
                     return Err(CliError::TargetDirConflict);
                 }
             }
@@ -58,7 +58,7 @@ pub fn ensure_no_target_dir_passthrough_conflicts(
         }
 
         if let Some(path) = arg.strip_prefix("--config=") {
-            if config_file_sets_target_dir(Path::new(path))? {
+            if config_arg_sets_target_dir(path)? {
                 return Err(CliError::TargetDirConflict);
             }
         }
@@ -67,6 +67,18 @@ pub fn ensure_no_target_dir_passthrough_conflicts(
     }
 
     Ok(())
+}
+
+fn config_arg_sets_target_dir(arg: &str) -> Result<bool, CliError> {
+    if is_inline_target_dir_config(arg) {
+        return Ok(true);
+    }
+
+    config_file_sets_target_dir(Path::new(arg))
+}
+
+fn is_inline_target_dir_config(arg: &str) -> bool {
+    arg.trim_start().starts_with("build.target-dir")
 }
 
 fn config_file_sets_target_dir(path: &Path) -> Result<bool, CliError> {
@@ -138,6 +150,30 @@ mod tests {
         let err = ensure_no_target_dir_passthrough_conflicts(
             &options,
             &["--config".into(), config_path.display().to_string()],
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, CliError::TargetDirConflict));
+    }
+
+    #[test]
+    fn detects_inline_config_target_dir_conflict_with_separate_arg() {
+        let options = ArtifactOptions::new(Some(PathBuf::from("out")));
+        let err = ensure_no_target_dir_passthrough_conflicts(
+            &options,
+            &["--config".into(), "build.target-dir=\"nested\"".into()],
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, CliError::TargetDirConflict));
+    }
+
+    #[test]
+    fn detects_inline_config_target_dir_conflict_with_equals_form() {
+        let options = ArtifactOptions::new(Some(PathBuf::from("out")));
+        let err = ensure_no_target_dir_passthrough_conflicts(
+            &options,
+            &["--config=build.target-dir=\"nested\"".into()],
         )
         .unwrap_err();
 
