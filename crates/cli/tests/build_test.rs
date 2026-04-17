@@ -471,6 +471,9 @@ fn build_project_recopies_raw_wasm_before_reprocessing_on_repeated_runs() {
     assert_eq!(fs::read(&raw_wasm).unwrap(), raw_bytes);
     let rebuilt_processed = fs::read(&processed_wasm).unwrap();
     assert_ne!(rebuilt_processed, corrupted_processed);
+    // Both runs start from the same raw bytes, so the processed output should
+    // be byte-for-byte identical. That also verifies the pipeline stays
+    // deterministic for identical input.
     assert_eq!(rebuilt_processed, first_processed);
 }
 
