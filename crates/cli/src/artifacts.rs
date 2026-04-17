@@ -72,7 +72,8 @@ pub fn ensure_no_target_dir_passthrough_conflicts(
 
 fn config_arg_sets_target_dir(arg: &str, config_base_dir: &Path) -> Result<bool, CliError> {
     if arg.contains('=') {
-        return Ok(arg.trim_start().starts_with("build.target-dir="));
+        let (key, _) = arg.split_once('=').expect("bug: arg contains '='");
+        return Ok(key.trim() == "build.target-dir");
     }
 
     let config_path = config_base_dir.join(arg);
@@ -193,6 +194,33 @@ mod tests {
             &options,
             &base_dir,
             &["--config".into(), "term.color=always".into()],
+        );
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn detects_spaced_inline_config_target_dir_conflict() {
+        let options = ArtifactOptions::new(Some(PathBuf::from("out")));
+        let base_dir = PathBuf::from("/tmp");
+        let err = ensure_no_target_dir_passthrough_conflicts(
+            &options,
+            &base_dir,
+            &["--config".into(), "build.target-dir = \"nested\"".into()],
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, CliError::TargetDirConflict));
+    }
+
+    #[test]
+    fn allows_spaced_inline_config_without_target_dir() {
+        let options = ArtifactOptions::new(Some(PathBuf::from("out")));
+        let base_dir = PathBuf::from("/tmp");
+        let result = ensure_no_target_dir_passthrough_conflicts(
+            &options,
+            &base_dir,
+            &["--config".into(), "term.color = \"always\"".into()],
         );
 
         assert!(result.is_ok());
