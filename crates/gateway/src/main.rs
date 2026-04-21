@@ -4,6 +4,8 @@ mod context;
 mod error;
 mod handlers;
 mod middleware;
+mod submitter;
+mod tip_coalescer;
 
 use std::sync::Arc;
 

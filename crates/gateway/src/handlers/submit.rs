@@ -1,26 +1,29 @@
 //! `groundhog_sendRawTransaction` handler.
 //!
 //! Receives raw signed transaction bytes, computes the canonical tx hash
-//! (`sha256(xdrs::txs::encode(signed_tx.tx))`), and forwards to the configured
-//! private-network submission backend.
+//! (`sha256(xdrs::txs::encode(signed_tx.tx))`), and hands off to the
+//! per-gateway `BatchSubmitter` for adaptive batching.  The submitter
+//! aggregates concurrent client submissions into a single
+//! `schedulercoord_submit_unvetted` RPC per flush, amortizing the
+//! per-call overhead (RPC framing, mempool lock acquire, downstream
+//! coordinator notify).
+//!
+//! See `crate::submitter` for the batching design.
 //!
 //! The backend choice is a deployment/topology decision:
 //! - `hogd_scheduler`: gateway talks directly to mempool admission
 //! - `chuckd_coordinator`: gateway talks to chuckd, which relays to hogd
 //!
-//! Client-facing semantics should stay the same in both modes: success means
-//! the transaction was accepted by the authoritative downstream mempool path,
-//! not merely queued by an intermediate relay.
+//! Client-facing semantics are unchanged by batching: a returned
+//! `TxHash` means the submission was accepted into the mempool's
+//! batch-ingest path, exactly as before.
 //!
 //! TODO: implement `chuckd_coordinator` path when chuckd x23 submit surface
 //! is defined in protocol-rs.
 
 use groundhog_rpc_api_types::hex::Hex0x;
 use groundhog_rpc_api_types::transaction::TxHash;
-use groundhog_scheduler::ParallelBatch;
-use groundhog_scheduler::parallel::ParallelSignedTransactionBatch;
 use sha2::Digest;
-use xdr_common::{BytesM, VecM};
 
 use crate::context::GatewayContext;
 use crate::error::GatewayError;
@@ -30,7 +33,7 @@ use crate::error::GatewayError;
 /// Flow:
 /// 1. XDR-deserialize `tx_bytes` as `SignedTransaction`
 /// 2. Compute `sha256(xdrs::txs::encode(signed_tx.tx))` -> `TxHash`
-/// 3. Forward to configured submission backend via `submit_unvetted`
+/// 3. Hand to `BatchSubmitter` for adaptive batching; await the fanout
 /// 4. Return `TxHash` on mempool acceptance
 #[tracing::instrument(skip_all, fields(tx_bytes_len = tx_bytes.len()))]
 pub async fn send_raw_transaction(
@@ -47,31 +50,16 @@ pub async fn send_raw_transaction(
     let hash_bytes: [u8; 32] = sha2::Sha256::digest(&tx_xdr).into();
     let tx_hash = TxHash(Hex0x(groundhog_xdr::types::SHA256Hash::from(hash_bytes)));
 
-    // 3. Forward to scheduler (hogd_scheduler backend).
-    // TODO: branch on ctx.config.submission_backend for chuckd_coordinator path.
-    let client = ctx
-        .scheduler
-        .read()
-        .await
-        .clone()
-        .ok_or_else(|| GatewayError::BackendUnavailable("scheduler not connected".into()))?;
+    // 3. Early-reject oversized txs so we don't push them into a batch
+    //    that will later fail to encode.
+    if u32::try_from(tx_bytes.len()).is_err() {
+        return Err(GatewayError::TxInvalid("transaction too large".into()));
+    }
 
-    let tx_len: u32 = tx_bytes
-        .len()
-        .try_into()
-        .map_err(|_| GatewayError::TxInvalid("transaction too large".into()))?;
-    let batch = ParallelSignedTransactionBatch::new(ParallelBatch {
-        segment_tokens: VecM(vec![1]),
-        segment_bytes: VecM(vec![tx_len]),
-        xdr: BytesM(tx_bytes.to_vec()),
-    });
-
-    // submit_unvetted returns () on success; any RpcError is a transport or
-    // protocol failure, not an application-level rejection of the transaction.
-    client
-        .schedulercoord_submit_unvetted(&batch)
-        .await
-        .map_err(|e| GatewayError::BackendUnavailable(format!("scheduler: {e}")))?;
+    // 4. Forward to the batch submitter.
+    ctx.batch_submitter
+        .submit(tx_bytes.to_vec(), tx_hash)
+        .await?;
 
     Ok(tx_hash)
 }

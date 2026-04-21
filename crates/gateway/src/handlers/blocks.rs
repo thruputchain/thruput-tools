@@ -3,36 +3,18 @@
 
 use groundhog_rpc_api_types::BlockHeight;
 use groundhog_rpc_api_types::block::{BlockInfo, ChainTip};
-use groundhog_rpc_api_types::hex::Hex0x;
-use groundhog_scheduler::sched_coord::SchedulerGetTipResult;
 
 use crate::context::GatewayContext;
 use crate::error::{self, GatewayError};
 
 /// Current chain tip: height + block hash.
+///
+/// Routes through the per-gateway `TipCoalescer` so that concurrent
+/// client requests share a single in-flight `schedcoord_get_tip` RPC.
+/// See `crate::tip_coalescer` for the linearizable coalescing design.
 #[tracing::instrument(skip_all)]
 pub async fn chain_tip(ctx: &GatewayContext) -> Result<ChainTip, GatewayError> {
-    let client = ctx
-        .scheduler
-        .read()
-        .await
-        .clone()
-        .ok_or_else(|| GatewayError::BackendUnavailable("scheduler not connected".into()))?;
-
-    let result = client
-        .schedcoord_get_tip()
-        .await
-        .map_err(|e| GatewayError::BackendUnavailable(e.to_string()))?;
-
-    match result {
-        SchedulerGetTipResult::SchedulerGetTipOK { db_tip } => Ok(ChainTip {
-            height: db_tip.height,
-            block_hash: Hex0x(db_tip.block_hash.into_inner()),
-        }),
-        _ => Err(GatewayError::BackendUnavailable(
-            "no committed blocks yet".into(),
-        )),
-    }
+    ctx.tip_coalescer.chain_tip().await
 }
 
 /// Block data at a given height.

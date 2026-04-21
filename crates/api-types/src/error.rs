@@ -32,4 +32,11 @@ pub mod codes {
 
     /// Method exists but is not yet implemented in this gateway version.
     pub const NOT_IMPLEMENTED: i32 = -32052;
+
+    /// Gateway or backend is overloaded; clients should retry with backoff.
+    ///
+    /// Distinct from `BACKEND_UNAVAILABLE` (connection gone) and
+    /// `BACKEND_TIMEOUT` (ambiguous outcome). `OVERLOADED` always means
+    /// "the request never reached the backend, retrying is safe."
+    pub const OVERLOADED: i32 = -32053;
 }
