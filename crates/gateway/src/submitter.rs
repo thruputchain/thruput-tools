@@ -43,7 +43,9 @@ pub struct SchedulerSink {
 }
 
 impl SchedulerSink {
-    pub fn new(scheduler: Arc<RwLock<Option<SchedulerCoord_SchedulerCoord1_Client>>>) -> Self {
+    pub(crate) fn new(
+        scheduler: Arc<RwLock<Option<SchedulerCoord_SchedulerCoord1_Client>>>,
+    ) -> Self {
         Self { scheduler }
     }
 }
@@ -68,8 +70,12 @@ impl SubmitSink for SchedulerSink {
 ///
 /// v1 is intentionally conservative: the `rpc_driver::RpcError` shape
 /// isn't stable enough to commit to timeout/overload detection yet, so
-/// all transport failures map to `BackendUnavailable`.  Refine once
-/// we've observed real error variants under saturation.
+/// all transport failures map to `BackendUnavailable`.
+///
+/// TODO(gateway-coalescing): once we observe the real error variants
+/// produced under sustained saturation, split this into
+/// `BackendTimeout` for explicit timeouts and `Overloaded` for
+/// server-reported backpressure signals.
 fn classify_rpc_error(e: &rpc_driver::RpcError) -> GatewayError {
     GatewayError::BackendUnavailable(format!("scheduler: {e}"))
 }

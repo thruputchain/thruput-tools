@@ -38,10 +38,10 @@ use crate::error::GatewayError;
 #[tracing::instrument(skip_all, fields(tx_bytes_len = tx_bytes.len()))]
 pub async fn send_raw_transaction(
     ctx: &GatewayContext,
-    tx_bytes: &[u8],
+    tx_bytes: Vec<u8>,
 ) -> Result<TxHash, GatewayError> {
     // 1. Deserialize to validate and extract the inner Transaction.
-    let signed_tx: groundhog_xdr::transaction::SignedTransaction = xdrs::txs::decode(tx_bytes)
+    let signed_tx: groundhog_xdr::transaction::SignedTransaction = xdrs::txs::decode(&tx_bytes)
         .map_err(|e| GatewayError::TxInvalid(format!("invalid XDR: {e}")))?;
 
     // 2. Compute TxHash = sha256(xdrs::txs::encode(signed_tx.tx)).
@@ -56,10 +56,8 @@ pub async fn send_raw_transaction(
         return Err(GatewayError::TxInvalid("transaction too large".into()));
     }
 
-    // 4. Forward to the batch submitter.
-    ctx.batch_submitter
-        .submit(tx_bytes.to_vec(), tx_hash)
-        .await?;
+    // 4. Forward to the batch submitter, moving ownership to avoid a copy.
+    ctx.batch_submitter.submit(tx_bytes, tx_hash).await?;
 
     Ok(tx_hash)
 }

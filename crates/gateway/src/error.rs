@@ -44,8 +44,9 @@ pub enum GatewayError {
     #[error("backend timeout")]
     BackendTimeout,
 
-    /// Gateway or backend is overloaded; the request never reached the
-    /// backend. Clients should retry with backoff.
+    /// Gateway or backend is overloaded.  The gateway did not admit this
+    /// request far enough for it to have any side effect, so retrying
+    /// with backoff is always safe.
     #[error("overloaded: {0}")]
     Overloaded(String),
 

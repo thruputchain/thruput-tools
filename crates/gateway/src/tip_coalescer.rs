@@ -37,7 +37,9 @@ pub struct SchedulerTipSink {
 }
 
 impl SchedulerTipSink {
-    pub fn new(scheduler: Arc<RwLock<Option<SchedulerCoord_SchedulerCoord1_Client>>>) -> Self {
+    pub(crate) fn new(
+        scheduler: Arc<RwLock<Option<SchedulerCoord_SchedulerCoord1_Client>>>,
+    ) -> Self {
         Self { scheduler }
     }
 }
@@ -213,13 +215,13 @@ mod tests {
         fn seen(&self) -> u32 {
             *self.seen.lock().unwrap()
         }
+    }
 
-        fn default_tip(height: i64) -> ChainTip {
-            let bytes = [0u8; 32];
-            ChainTip {
-                height: BlockHeight::new(height),
-                block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from(bytes)),
-            }
+    fn default_tip(height: i64) -> ChainTip {
+        let bytes = [0u8; 32];
+        ChainTip {
+            height: BlockHeight::new(height),
+            block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from(bytes)),
         }
     }
 
@@ -232,7 +234,7 @@ mod tests {
             }
             let next = self.responses.lock().unwrap().pop_front();
             match next {
-                None => Ok(Self::default_tip(self.default_height)),
+                None => Ok(default_tip(self.default_height)),
                 Some(MockResponse::Immediate(r)) => r,
                 Some(MockResponse::Gate(rx)) => rx.await.unwrap_or_else(|_| {
                     Err(GatewayError::BackendUnavailable("test gate dropped".into()))
@@ -293,7 +295,7 @@ mod tests {
         assert_eq!(mock.seen(), 1, "pile-up not yet fired");
 
         // Release the first RPC; the piled-up 10 drain as a single RPC.
-        let _ = gate.send(Ok(MockSink::default_tip(7)));
+        let _ = gate.send(Ok(default_tip(7)));
         let r1 = w1.await.unwrap().unwrap();
         assert_eq!(r1.height, BlockHeight::new(7));
         for w in more {
@@ -334,12 +336,12 @@ mod tests {
         settle().await;
         assert_eq!(mock.seen(), 2, "third held until one completes");
 
-        let _ = gate_a.send(Ok(MockSink::default_tip(1)));
+        let _ = gate_a.send(Ok(default_tip(1)));
         w1.await.unwrap().unwrap();
         settle().await;
         assert_eq!(mock.seen(), 3, "third fires on completion");
 
-        let _ = gate_b.send(Ok(MockSink::default_tip(1)));
+        let _ = gate_b.send(Ok(default_tip(1)));
         w2.await.unwrap().unwrap();
         w3.await.unwrap().unwrap();
     }
@@ -364,14 +366,14 @@ mod tests {
         settle().await;
 
         // Release the first RPC with height 10.
-        let _ = gate_first.send(Ok(MockSink::default_tip(10)));
+        let _ = gate_first.send(Ok(default_tip(10)));
         let r1 = first.await.unwrap().unwrap();
         assert_eq!(r1.height, BlockHeight::new(10));
         settle().await;
 
         // Now queue a new response of height 20 and submit a fresh waiter.
         // It must be served by a newly-initiated RPC, not a cached value.
-        mock.queue_response(Ok(MockSink::default_tip(20)));
+        mock.queue_response(Ok(default_tip(20)));
         let r2 = coalescer.chain_tip().await.unwrap();
         assert_eq!(
             r2.height,
