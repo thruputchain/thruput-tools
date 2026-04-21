@@ -5,7 +5,7 @@ use groundhog_rpc_api_types::error::codes;
 use jsonrpsee::types::ErrorObjectOwned;
 
 /// Top-level gateway error.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum GatewayError {
     /// Transaction was malformed (bad XDR, missing fields).
     #[error("invalid transaction: {0}")]
@@ -36,8 +36,18 @@ pub enum GatewayError {
     BackendUnavailable(String),
 
     /// Request timed out waiting for backend response.
+    ///
+    /// The call left the gateway; outcome at the backend is ambiguous.
+    /// For the idempotent submit path this is still retry-safe (the
+    /// mempool dedupes by tx hash), but clients may prefer to poll
+    /// `getTransactionStatus` first.
     #[error("backend timeout")]
     BackendTimeout,
+
+    /// Gateway or backend is overloaded; the request never reached the
+    /// backend. Clients should retry with backoff.
+    #[error("overloaded: {0}")]
+    Overloaded(String),
 
     /// Method exists but is not yet implemented in this gateway version.
     #[error("not implemented: {0}")]
@@ -60,6 +70,7 @@ impl From<GatewayError> for ErrorObjectOwned {
             GatewayError::RangeTooLarge(_) => (codes::RANGE_TOO_LARGE, err.to_string()),
             GatewayError::BackendUnavailable(_) => (codes::BACKEND_UNAVAILABLE, err.to_string()),
             GatewayError::BackendTimeout => (codes::BACKEND_TIMEOUT, err.to_string()),
+            GatewayError::Overloaded(_) => (codes::OVERLOADED, err.to_string()),
             GatewayError::NotImplemented(_) => (codes::NOT_IMPLEMENTED, err.to_string()),
         };
         ErrorObjectOwned::owned(code, msg, None::<()>)

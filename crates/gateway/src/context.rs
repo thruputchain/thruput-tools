@@ -6,6 +6,8 @@ use rpc_driver::FixedSerialPool;
 use tokio::sync::RwLock;
 
 use crate::config::GatewayConfig;
+use crate::submitter::{BatchSubmitter, SchedulerSink, SubmitSink};
+use crate::tip_coalescer::{SchedulerTipSink, TipCoalescer, TipSink};
 
 /// Startup errors for the gateway context.
 #[derive(Debug, thiserror::Error)]
@@ -26,21 +28,31 @@ pub enum GatewayStartupError {
 
 /// Shared state injected into every handler.
 ///
-/// Backend connections are behind `RwLock<Option<...>>` to support
-/// lazy connection and reconnection. Handlers clone the client out of
-/// the lock before making RPC calls, so the read guard is not held
-/// across `.await`.
+/// Backend connections are behind `Arc<RwLock<Option<...>>>` to
+/// support lazy connection and reconnection, and to let long-lived
+/// submitter/coalescer tasks observe the same state. Handlers clone
+/// the client out of the lock before making RPC calls, so the read
+/// guard is not held across `.await`.
 pub struct GatewayContext {
     /// x23 RPC client to hogd scheduler.
     /// Used for: `submit_unvetted`, `get_tip`, `lookup_transactions`, `size`.
     ///
     /// Even when tx submission is routed through chuckd, read paths still use
     /// the scheduler directly.
-    pub scheduler: RwLock<Option<SchedulerCoord_SchedulerCoord1_Client>>,
+    pub scheduler: Arc<RwLock<Option<SchedulerCoord_SchedulerCoord1_Client>>>,
 
     /// x23 RPC client to hogd indexer.
     /// Used for: `get_transaction_info`, `get_contract_events`.
-    pub indexer: RwLock<Option<IndexerBlockExplorer_IndexerBlockExplorer1_Client>>,
+    pub indexer: Arc<RwLock<Option<IndexerBlockExplorer_IndexerBlockExplorer1_Client>>>,
+
+    /// Adaptive batching submitter for `sendRawTransaction`. Accumulates
+    /// incoming client submissions and packs them into `submit_unvetted`
+    /// RPCs to amortize per-call overhead at high load.
+    pub batch_submitter: BatchSubmitter,
+
+    /// Request coalescer for `chainTip`. One in-flight `get_tip` RPC
+    /// can satisfy many concurrent client requests.
+    pub tip_coalescer: TipCoalescer,
 
     /// x23 RPC client to coordinator storage (optional).
     /// Used for: block/CV queries and optional tx submission relay path.
@@ -68,13 +80,25 @@ impl GatewayContext {
     pub async fn new(config: GatewayConfig) -> Result<Self, GatewayStartupError> {
         let config = Arc::new(config);
 
-        let scheduler = try_connect("scheduler", &config.scheduler_address, 4).await?;
+        let scheduler = Arc::new(RwLock::new(
+            try_connect("scheduler", &config.scheduler_address, 4).await?,
+        ));
 
-        let indexer = try_connect("indexer", &config.indexer_address, 4).await?;
+        let indexer = Arc::new(RwLock::new(
+            try_connect("indexer", &config.indexer_address, 4).await?,
+        ));
+
+        let submit_sink: Arc<dyn SubmitSink> = Arc::new(SchedulerSink::new(scheduler.clone()));
+        let batch_submitter = BatchSubmitter::spawn(&config.batch, &submit_sink);
+
+        let tip_sink: Arc<dyn TipSink> = Arc::new(SchedulerTipSink::new(scheduler.clone()));
+        let tip_coalescer = TipCoalescer::spawn(&config.tip, &tip_sink);
 
         Ok(Self {
-            scheduler: RwLock::new(scheduler),
-            indexer: RwLock::new(indexer),
+            scheduler,
+            indexer,
+            batch_submitter,
+            tip_coalescer,
             config,
         })
     }
