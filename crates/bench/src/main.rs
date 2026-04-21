@@ -136,8 +136,17 @@ fn make_request(method: &str, tx_hex: &str, id: u64) -> serde_json::Value {
 }
 
 /// Calibrate connection pool size by measuring RTT with a small burst.
-async fn calibrate_rtt(client: &reqwest::Client, url: &str, method: &str) -> Duration {
-    let body = make_request(method, "", 0);
+///
+/// Always probes with `chainTip` — it's cheap, read-only, always valid,
+/// and avoids the trap of sending a dummy empty payload through
+/// `sendRawTransaction`'s validator. The result is only a rough sizing
+/// hint for Little's Law; server-side processing time on the real
+/// benchmark method may be larger, which is why the caller inflates
+/// the connection count before clamping. An HTTP/2 origin (or a
+/// reverse proxy fronting the gateway) would obsolete this heuristic
+/// entirely by making per-connection serialization a non-issue.
+async fn calibrate_rtt(client: &reqwest::Client, url: &str) -> Duration {
+    let body = make_request("chainTip", "", 0);
     let mut rtts = Vec::with_capacity(20);
 
     for _ in 0..20 {
@@ -187,6 +196,22 @@ enum Sample {
     Error,
 }
 
+/// Fold a sample into the per-worker counters.
+fn record_sample(
+    sample: Sample,
+    histogram: &mut Histogram<u64>,
+    successes: &mut u64,
+    errors: &mut u64,
+) {
+    match sample {
+        Sample::Success(us) => {
+            histogram.record(us).ok();
+            *successes += 1;
+        }
+        Sample::Error => *errors += 1,
+    }
+}
+
 /// A single worker task. Fires requests on its slice of the global
 /// schedule and panics if it falls behind by more than `max_skew`.
 async fn run_worker(
@@ -200,9 +225,16 @@ async fn run_worker(
     let mut successes = 0u64;
     let mut errors = 0u64;
 
-    // Channel for spawned tasks to send latency samples back.
-    // Bounded to avoid unbounded memory if we're faster than we can drain.
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<Sample>(8192);
+    // Spawned tasks send latency samples back over this channel so the
+    // worker can record them into its own histogram without a shared
+    // mutex on the hot path. Unbounded — sends are non-blocking and
+    // infallible. In steady state the queue stays near-empty because
+    // we drain at the top of every tick and while awaiting the
+    // inflight semaphore (see the select below). The overall bench
+    // rate is bounded by the inflight semaphore and the schedule, so
+    // sample accumulation is bounded in practice even without a
+    // channel cap.
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Sample>();
 
     // Each worker fires every `num_workers` intervals, offset by worker_id.
     let worker_interval = cfg.interval * cfg.num_workers as u32;
@@ -216,13 +248,7 @@ async fn run_worker(
     loop {
         // Drain any completed samples without blocking the dispatch loop.
         while let Ok(sample) = rx.try_recv() {
-            match sample {
-                Sample::Success(us) => {
-                    histogram.record(us).ok();
-                    successes += 1;
-                }
-                Sample::Error => errors += 1,
-            }
+            record_sample(sample, &mut histogram, &mut successes, &mut errors);
         }
 
         if Instant::now() >= end_time {
@@ -260,11 +286,23 @@ async fn run_worker(
         };
         let body = make_request(&cfg.method, &tx_hex, tick);
 
-        let permit = inflight_sem
-            .clone()
-            .acquire_owned()
-            .await
-            .expect("bug: semaphore closed");
+        // Acquire a permit, but keep draining samples while we wait so
+        // the channel stays shallow under bursty completion timing.
+        // The inflight semaphore is the only real backpressure point;
+        // the select is pure telemetry hygiene.
+        let permit = loop {
+            tokio::select! {
+                biased;
+                sample = rx.recv() => {
+                    if let Some(s) = sample {
+                        record_sample(s, &mut histogram, &mut successes, &mut errors);
+                    }
+                }
+                permit = inflight_sem.clone().acquire_owned() => {
+                    break permit.expect("bug: semaphore closed");
+                }
+            }
+        };
 
         let client = client.clone();
         let url = cfg.url.clone();
@@ -284,9 +322,12 @@ async fn run_worker(
                 Ok(resp) if resp.status().is_success() => Sample::Success(latency_us),
                 _ => Sample::Error,
             };
-            // Best-effort send; if the channel is full we drop the sample
-            // rather than block the response task.
-            tx.send(sample).await.ok();
+            // Unbounded send — infallible unless the worker has dropped
+            // its receiver (which only happens after the dispatch loop
+            // exits, at which point in-flight tasks we spawned are
+            // still valid; any stragglers that return here after that
+            // simply lose their sample, which is fine).
+            let _ = tx.send(sample);
         });
 
         dispatched += 1;
@@ -298,13 +339,7 @@ async fn run_worker(
 
     // Drain remaining in-flight samples.
     while let Some(sample) = rx.recv().await {
-        match sample {
-            Sample::Success(us) => {
-                histogram.record(us).ok();
-                successes += 1;
-            }
-            Sample::Error => errors += 1,
-        }
+        record_sample(sample, &mut histogram, &mut successes, &mut errors);
     }
 
     WorkerResult {
@@ -320,6 +355,7 @@ async fn main() {
 
     assert!(cli.workers > 0, "--workers must be >= 1");
     assert!(cli.rate > 0, "--rate must be >= 1");
+    assert!(cli.duration > 0, "--duration must be >= 1");
 
     let total_duration = Duration::from_secs(cli.duration);
     let warmup_duration = Duration::from_secs(cli.warmup);
@@ -346,18 +382,24 @@ async fn main() {
         .build()
         .expect("bug: reqwest client");
 
-    eprintln!("Calibrating RTT...");
-    let median_rtt = calibrate_rtt(&probe_client, &cli.url, &cli.method).await;
+    eprintln!("Calibrating RTT (via chainTip)...");
+    let median_rtt = calibrate_rtt(&probe_client, &cli.url).await;
     eprintln!("Median RTT: {median_rtt:.1?}");
     drop(probe_client);
 
-    // Little's Law: connections = rate * rtt / workers, with a floor.
+    // Little's Law: connections = rate * rtt / workers. We calibrate
+    // with chainTip, which is cheaper than the benchmark method, so
+    // the naive result undersizes the pool (HTTP/1.1 serializes one
+    // request per connection, and the real method's server-side
+    // processing adds latency the calibration doesn't see). Inflate
+    // by 4x to cover that gap; floor of 16 prevents pathological
+    // undersizing at very low rates.
     let connections_per_worker = if cli.connections_per_worker > 0 {
         cli.connections_per_worker
     } else {
         let per_worker_rate = cli.rate as f64 / cli.workers as f64;
-        let needed = (per_worker_rate * median_rtt.as_secs_f64()).ceil() as usize;
-        needed.clamp(4, 2048)
+        let needed = (per_worker_rate * median_rtt.as_secs_f64() * 4.0).ceil() as usize;
+        needed.clamp(16, 2048)
     };
 
     // Bound total in-flight requests to avoid OOM. Each worker gets its
