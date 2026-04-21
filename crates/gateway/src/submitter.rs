@@ -215,8 +215,10 @@ impl BatchSubmitter {
     /// Submit one tx.  Routes to a shard by tx hash; returns when the
     /// fanout completes.  Returns `Overloaded` if the target shard's
     /// ingress is full (client should retry with backoff).
+    #[tracing::instrument(skip_all, fields(shard_idx, tx_bytes_len = tx_bytes.len()))]
     pub async fn submit(&self, tx_bytes: Vec<u8>, hash: TxHash) -> Result<(), GatewayError> {
         let shard_idx = shard_index(&hash, self.shards.len());
+        tracing::Span::current().record("shard_idx", shard_idx);
         let (reply_tx, reply_rx) = oneshot::channel();
         self.shards[shard_idx]
             .sender
@@ -516,36 +518,40 @@ mod tests {
             &(mock.clone() as Arc<dyn SubmitSink>),
         );
 
-        // First tx opens the gated batch.
-        let w1 = {
+        // Spawn four submissions back-to-back with no intervening yield.
+        // On `current_thread` (the default `#[tokio::test]` runtime), all
+        // four tasks run to their `try_send` + `await reply_rx` yield
+        // point before the submitter task gets to poll — so all four
+        // items land in the shard's mpsc, and the submitter drains them
+        // into one batch on its first ingress pull.  That batch is the
+        // one gated on `err_gate`, so every waiter in the batch will
+        // receive the same error.
+        let mut waiters = vec![];
+        for i in 0..4u32 {
             let s = submitter.clone();
-            tokio::spawn(async move { s.submit(vec![0x01], hash_from_u32(0)).await })
-        };
-        settle().await;
-
-        // Pile up more into the same eventual batch drain.
-        let mut more = vec![];
-        for i in 1..=3u32 {
-            let s = submitter.clone();
-            more.push(tokio::spawn(async move {
+            waiters.push(tokio::spawn(async move {
                 s.submit(vec![u8::try_from(i).unwrap()], hash_from_u32(i))
                     .await
             }));
         }
         settle().await;
 
-        // Fail the gated batch — all four waiters should see the same error.
+        // Fail the one batch that holds all four items.
         let _ = err_gate.send(Err(GatewayError::BackendUnavailable("mock".into())));
-        let r1 = w1.await.unwrap();
-        assert!(
-            matches!(r1, Err(GatewayError::BackendUnavailable(_))),
-            "w1: {r1:?}"
-        );
-        // The remaining three were in the queue — they'll be in the *next*
-        // batch (which has no gate queued in the mock), so they'll succeed.
-        for m in more {
-            m.await.unwrap().unwrap();
+        for (i, w) in waiters.into_iter().enumerate() {
+            let r = w.await.unwrap();
+            assert!(
+                matches!(r, Err(GatewayError::BackendUnavailable(_))),
+                "waiter {i}: expected BackendUnavailable, got {r:?}"
+            );
         }
+
+        // And verify the batch really was size 4 (one call, four items).
+        assert_eq!(
+            mock.seen(),
+            vec![4],
+            "all four waiters should have shared a single batch"
+        );
     }
 
     #[tokio::test]
