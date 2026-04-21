@@ -80,12 +80,11 @@ impl GatewayContext {
     pub async fn new(config: GatewayConfig) -> Result<Self, GatewayStartupError> {
         let config = Arc::new(config);
 
-        // Each x23 connection serves one in-flight RPC at a time (no HTTP/2-style
-        // multiplexing).  The scheduler sees concurrent calls from both the
-        // batch submitter (up to `max_inflight_batches` per shard × shards)
-        // and the tip coalescer (up to `max_inflight_tips`), so size the pool
-        // to cover the sum plus a small slack for unrelated RPCs on the same
-        // client (lookup_transactions, pending_transaction_count).
+        // `FixedSerialPool` is 1 in-flight per connection by choice (FIFO
+        // dispatch per connection, modeling x23 sync RPC; the x23 wire
+        // protocol itself multiplexes via xid).  Size the pool to cover the
+        // batch submitter (`max_inflight_batches` × shards) plus the tip
+        // coalescer (`max_inflight_tips`) plus slack for ad-hoc RPCs.
         let sched_pool_size = scheduler_pool_size(&config);
         let scheduler = Arc::new(RwLock::new(
             try_connect("scheduler", &config.scheduler_address, sched_pool_size).await?,
