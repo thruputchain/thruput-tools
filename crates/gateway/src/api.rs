@@ -35,7 +35,7 @@ impl GroundhogApiServer for GroundhogApiImpl {
             .unwrap_or(&tx_hex);
         let tx_bytes = hex::decode(hex_str)
             .map_err(|e| error::GatewayError::TxInvalid(format!("invalid hex: {e}")))?;
-        Ok(handlers::submit::send_raw_transaction(&self.ctx, &tx_bytes).await?)
+        Ok(handlers::submit::send_raw_transaction(&self.ctx, tx_bytes).await?)
     }
 
     async fn get_transaction_receipt(

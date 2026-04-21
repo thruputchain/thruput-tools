@@ -80,8 +80,15 @@ impl GatewayContext {
     pub async fn new(config: GatewayConfig) -> Result<Self, GatewayStartupError> {
         let config = Arc::new(config);
 
+        // Each x23 connection serves one in-flight RPC at a time (no HTTP/2-style
+        // multiplexing).  The scheduler sees concurrent calls from both the
+        // batch submitter (up to `max_inflight_batches` per shard × shards)
+        // and the tip coalescer (up to `max_inflight_tips`), so size the pool
+        // to cover the sum plus a small slack for unrelated RPCs on the same
+        // client (lookup_transactions, pending_transaction_count).
+        let sched_pool_size = scheduler_pool_size(&config);
         let scheduler = Arc::new(RwLock::new(
-            try_connect("scheduler", &config.scheduler_address, 4).await?,
+            try_connect("scheduler", &config.scheduler_address, sched_pool_size).await?,
         ));
 
         let indexer = Arc::new(RwLock::new(
@@ -102,6 +109,20 @@ impl GatewayContext {
             config,
         })
     }
+}
+
+/// Pick a scheduler pool size that covers every concurrent RPC the gateway
+/// may have in flight against it.  x23 serializes one RPC per connection.
+/// Slack covers ad-hoc calls (`lookup_transactions`, `pending_transaction_count`).
+fn scheduler_pool_size(config: &GatewayConfig) -> usize {
+    const SLACK: usize = 4;
+    let batcher = config
+        .batch
+        .shards
+        .max(1)
+        .saturating_mul(config.batch.max_inflight_batches.max(1) as usize);
+    let tip = config.tip.max_inflight_tips.max(1) as usize;
+    batcher.saturating_add(tip).saturating_add(SLACK)
 }
 
 /// Try to connect to a backend.
