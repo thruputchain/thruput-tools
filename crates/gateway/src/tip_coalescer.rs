@@ -145,6 +145,7 @@ impl TipCoalescer {
     /// Ask for the current chain tip.  Returns `Overloaded` if the
     /// coalescer's ingress is full; otherwise awaits the fanout from
     /// the next completed backend RPC.
+    #[tracing::instrument(skip_all)]
     pub async fn chain_tip(&self) -> Result<ChainTip, GatewayError> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.sender.try_send(reply_tx).map_err(|e| match e {
@@ -432,33 +433,33 @@ mod tests {
             &(mock.clone() as Arc<dyn TipSink>),
         );
 
-        let w1 = {
+        // Spawn four chain_tip calls back-to-back with no intervening
+        // yield.  On `current_thread` (the default `#[tokio::test]`
+        // runtime) all four tasks run to their `try_send` + `await
+        // reply_rx` yield before the coalescer task gets to poll, so
+        // all four waiters land in the coalescer's mpsc.  The coalescer
+        // drains them into one fanout on its first ingress pull, which
+        // is the RPC gated on `err_gate`.
+        let mut waiters = vec![];
+        for _ in 0..4 {
             let c = coalescer.clone();
-            tokio::spawn(async move { c.chain_tip().await })
-        };
-        settle().await;
-
-        // Pile up 3 more behind the gated RPC.  These will land in the
-        // *second* RPC (no gate), so to exercise fanout-on-error we have
-        // to fail the gated one and check the first waiter.
-        let mut more = vec![];
-        for _ in 0..3 {
-            let c = coalescer.clone();
-            more.push(tokio::spawn(async move { c.chain_tip().await }));
+            waiters.push(tokio::spawn(async move { c.chain_tip().await }));
         }
         settle().await;
 
+        // Fail the single RPC that holds all four waiters.
         let _ = err_gate.send(Err(GatewayError::BackendUnavailable("mock".into())));
-        let r1 = w1.await.unwrap();
-        assert!(
-            matches!(r1, Err(GatewayError::BackendUnavailable(_))),
-            "w1: {r1:?}"
-        );
-
-        // The 3 piled-up waiters go through the next RPC (no gate, default Ok).
-        for w in more {
-            let tip = w.await.unwrap().unwrap();
-            assert_eq!(tip.height, BlockHeight::new(0));
+        for (i, w) in waiters.into_iter().enumerate() {
+            let r = w.await.unwrap();
+            assert!(
+                matches!(r, Err(GatewayError::BackendUnavailable(_))),
+                "waiter {i}: expected BackendUnavailable, got {r:?}"
+            );
         }
+        assert_eq!(
+            mock.seen(),
+            1,
+            "all four waiters should have shared a single get_tip call"
+        );
     }
 }

@@ -40,21 +40,22 @@ pub async fn send_raw_transaction(
     ctx: &GatewayContext,
     tx_bytes: Vec<u8>,
 ) -> Result<TxHash, GatewayError> {
-    // 1. Deserialize to validate and extract the inner Transaction.
+    // 1. Early-reject oversized txs before any XDR decode / hash work.
+    //    The downstream batcher packs byte lengths into u32s, so anything
+    //    exceeding that is out of range regardless of content.
+    if u32::try_from(tx_bytes.len()).is_err() {
+        return Err(GatewayError::TxInvalid("transaction too large".into()));
+    }
+
+    // 2. Deserialize to validate and extract the inner Transaction.
     let signed_tx: groundhog_xdr::transaction::SignedTransaction = xdrs::txs::decode(&tx_bytes)
         .map_err(|e| GatewayError::TxInvalid(format!("invalid XDR: {e}")))?;
 
-    // 2. Compute TxHash = sha256(xdrs::txs::encode(signed_tx.tx)).
+    // 3. Compute TxHash = sha256(xdrs::txs::encode(signed_tx.tx)).
     let tx_xdr = xdrs::txs::encode(&signed_tx.tx)
         .map_err(|e| GatewayError::TxInvalid(format!("cannot re-encode tx: {e}")))?;
     let hash_bytes: [u8; 32] = sha2::Sha256::digest(&tx_xdr).into();
     let tx_hash = TxHash(Hex0x(groundhog_xdr::types::SHA256Hash::from(hash_bytes)));
-
-    // 3. Early-reject oversized txs so we don't push them into a batch
-    //    that will later fail to encode.
-    if u32::try_from(tx_bytes.len()).is_err() {
-        return Err(GatewayError::TxInvalid("transaction too large".into()));
-    }
 
     // 4. Forward to the batch submitter, moving ownership to avoid a copy.
     ctx.batch_submitter.submit(tx_bytes, tx_hash).await?;
