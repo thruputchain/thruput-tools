@@ -891,9 +891,10 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        contract_entrypoint_id, contract_metadata_from_source, explicit_entrypoint_id,
-        filter_candidates_by_interfaces, load_project_registered_interfaces, major_version,
-        parse_contract_attr_value, resolve_spec_method, summarize_exec_status,
+        ResolvedCall, contract_entrypoint_id, contract_metadata_from_source,
+        explicit_entrypoint_id, filter_candidates_by_interfaces, format_entrypoint_id,
+        load_project_registered_interfaces, major_version, parse_contract_attr_value,
+        resolve_spec_method, selector_json, selector_summary, summarize_exec_status,
     };
     use crate::CliError;
     use crate::artifacts::ArtifactOptions;
@@ -995,6 +996,81 @@ mod tests {
         assert_eq!(major_version("1.2.3-alpha"), "1");
         assert_eq!(major_version("0.9.2"), "0.9");
         assert_eq!(major_version("0.0.2"), "0.0.2");
+    }
+
+    #[test]
+    fn formats_entrypoint_ids_as_prefixed_hex() {
+        let entrypoint = explicit_entrypoint_id("0x0123456789abcdef")
+            .expect("bug: valid entrypoint hex should parse")
+            .expect("bug: explicit entrypoint should be returned");
+        assert_eq!(format_entrypoint_id(entrypoint), "0x0123456789abcdef");
+    }
+
+    #[test]
+    fn selector_helpers_report_explicit_entrypoint_resolution() {
+        let resolved = ResolvedCall {
+            entrypoint: contract_entrypoint_id("Counter", "0.1.0", "get"),
+            metadata: None,
+        };
+
+        assert_eq!(selector_summary(&resolved), "explicit entrypoint");
+        assert_eq!(
+            selector_json(&resolved),
+            json!({
+                "source": "explicit_entrypoint",
+                "interface": null,
+            })
+        );
+    }
+
+    #[test]
+    fn selector_helpers_report_embedded_spec_resolution() {
+        let metadata = sample_single_arg_spec_metadata(ContractType::U32);
+        let resolved = ResolvedCall {
+            entrypoint: contract_entrypoint_id("Counter", "0.1.0", "call"),
+            metadata: Some(CallMetadata::Spec(metadata)),
+        };
+
+        assert_eq!(selector_summary(&resolved), "embedded spec Counter v0.1.0");
+        assert_eq!(
+            selector_json(&resolved),
+            json!({
+                "source": "embedded_spec",
+                "interface": {
+                    "name": "Counter",
+                    "version": "0.1.0",
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn selector_helpers_report_local_metadata_resolution() {
+        let resolved = ResolvedCall {
+            entrypoint: contract_entrypoint_id("Counter", "0.1.0", "get"),
+            metadata: Some(CallMetadata::Local(ContractMetadata {
+                interface_name: "Counter".into(),
+                version: "0.1.0".into(),
+                source: Path::new("/tmp/local.rs").to_path_buf(),
+                method: MethodMetadata {
+                    arg_types: vec!["u64".into()],
+                    return_type: Some("u64".into()),
+                },
+            })),
+        };
+
+        assert_eq!(selector_summary(&resolved), "local metadata Counter v0.1.0");
+        assert_eq!(
+            selector_json(&resolved),
+            json!({
+                "source": "local_metadata",
+                "interface": {
+                    "name": "Counter",
+                    "version": "0.1.0",
+                },
+                "source_path": "/tmp/local.rs",
+            })
+        );
     }
 
     #[test]
