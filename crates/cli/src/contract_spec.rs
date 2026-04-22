@@ -12,7 +12,7 @@ pub struct InterfaceSpec {
 }
 
 /// Path to the JSON sidecar next to the compiled WASM.
-pub fn sidecar_path_for_wasm(wasm: &Path) -> PathBuf {
+fn sidecar_path_for_wasm(wasm: &Path) -> PathBuf {
     wasm.with_extension("spec.json")
 }
 
@@ -32,9 +32,7 @@ fn load_embedded_contract_spec(wasm: &Path) -> Result<Option<ContractSpec>, CliE
 }
 
 /// Extract the embedded `groundhogspecv0` custom section from raw WASM bytes.
-pub fn load_embedded_contract_spec_from_bytes(
-    bytes: &[u8],
-) -> Result<Option<ContractSpec>, CliError> {
+fn load_embedded_contract_spec_from_bytes(bytes: &[u8]) -> Result<Option<ContractSpec>, CliError> {
     let rewritten = groundhog_spec_tool::rewrite::rewrite_wasm_with_spec(bytes)
         .map_err(|e| CliError::SpecFailed(format!("failed to read wasm contract spec: {e}")))?;
     Ok(rewritten.spec)
@@ -49,7 +47,7 @@ pub fn load_registered_interfaces(wasm: &Path) -> Result<Option<Vec<InterfaceSpe
 }
 
 /// Return the registered interfaces declared by a contract spec.
-pub fn registered_interfaces(spec: &ContractSpec) -> Result<Vec<InterfaceSpec>, CliError> {
+fn registered_interfaces(spec: &ContractSpec) -> Result<Vec<InterfaceSpec>, CliError> {
     spec.interfaces.iter().map(interface_spec).collect()
 }
 

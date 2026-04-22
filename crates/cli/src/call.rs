@@ -1702,7 +1702,10 @@ fn vector_contains_u8(element: Option<&ContractType>) -> bool {
 }
 
 fn encode_value_error(path: &str, message: impl Into<String>) -> CliError {
-    CliError::Other(format!("{path}: {}", message.into()))
+    CliError::CallEncode {
+        path: path.to_owned(),
+        message: message.into(),
+    }
 }
 
 fn field_path(path: &str, field: &str) -> String {
@@ -2165,11 +2168,12 @@ mod tests {
     use super::{
         ContractMetadata, MethodMetadata, ResolvedMethodMetadata, SpecMethodMetadata,
         build_type_def_index, contract_entrypoint_id, contract_metadata_from_source,
-        decode_return_value, decode_spec_value_from_reader, encode_calldata,
+        decode_return_value, decode_spec_value, decode_spec_value_from_reader, encode_calldata,
         explicit_entrypoint_id, filter_candidates_by_interfaces,
         load_project_registered_interfaces, major_version, parse_contract_attr_value,
         resolve_spec_method, summarize_exec_status,
     };
+    use crate::CliError;
     use crate::artifacts::ArtifactOptions;
     use crate::contract_spec::InterfaceSpec;
     use groundhog_contract_spec::{
@@ -2477,6 +2481,210 @@ mod tests {
             decode_return_value(&empty_bytes, Some(&ResolvedMethodMetadata::Spec(metadata)))
                 .expect("bug: void union return should decode");
         assert_eq!(decoded_empty, json!({"case": "Empty"}));
+    }
+
+    #[test]
+    fn encodes_and_decodes_embedded_spec_large_integers() {
+        let u128_value = u128::MAX.to_string();
+        let u128_metadata = sample_single_arg_spec_metadata(ContractType::U128);
+        let u128_bytes = encode_calldata(
+            std::slice::from_ref(&u128_value),
+            Some(&ResolvedMethodMetadata::Spec(u128_metadata.clone())),
+        )
+        .expect("bug: embedded spec u128 should encode");
+        assert_eq!(
+            decode_spec_arguments(&u128_metadata, &u128_bytes),
+            vec![json!(u128_value.clone())]
+        );
+        assert_eq!(
+            decode_return_value(
+                &u128_bytes,
+                Some(&ResolvedMethodMetadata::Spec(u128_metadata))
+            )
+            .expect("bug: embedded spec u128 return should decode"),
+            json!(u128_value)
+        );
+
+        let i128_value = i128::MIN.to_string();
+        let i128_metadata = sample_single_arg_spec_metadata(ContractType::I128);
+        let i128_bytes = encode_calldata(
+            std::slice::from_ref(&i128_value),
+            Some(&ResolvedMethodMetadata::Spec(i128_metadata.clone())),
+        )
+        .expect("bug: embedded spec i128 should encode");
+        assert_eq!(
+            decode_spec_arguments(&i128_metadata, &i128_bytes),
+            vec![json!(i128_value.clone())]
+        );
+        assert_eq!(
+            decode_return_value(
+                &i128_bytes,
+                Some(&ResolvedMethodMetadata::Spec(i128_metadata))
+            )
+            .expect("bug: embedded spec i128 return should decode"),
+            json!(i128_value)
+        );
+    }
+
+    #[test]
+    fn encodes_and_decodes_embedded_spec_addresses() {
+        let address = format!("0x{}", "11".repeat(32));
+        let metadata = sample_single_arg_spec_metadata(ContractType::Address);
+        let encoded = encode_calldata(
+            std::slice::from_ref(&address),
+            Some(&ResolvedMethodMetadata::Spec(metadata.clone())),
+        )
+        .expect("bug: embedded spec address should encode");
+
+        assert_eq!(
+            decode_spec_arguments(&metadata, &encoded),
+            vec![json!(address.clone())]
+        );
+        assert_eq!(
+            decode_return_value(&encoded, Some(&ResolvedMethodMetadata::Spec(metadata)))
+                .expect("bug: embedded spec address return should decode"),
+            json!(address)
+        );
+    }
+
+    #[test]
+    fn rejects_byte_vectors_exceeding_max_length() {
+        let metadata = sample_single_arg_spec_metadata(ContractType::Vector {
+            vector: ContractVectorType {
+                element: Some(Box::new(ContractType::U8)),
+                max_len: 2,
+            },
+        });
+        let err = encode_calldata(
+            &["0x010203".into()],
+            Some(&ResolvedMethodMetadata::Spec(metadata)),
+        )
+        .expect_err("bug: oversized byte vectors should fail");
+        assert_call_encode_error(
+            err,
+            "argument 1 (`value`)",
+            "byte vector exceeds max length 2 (got 3)",
+        );
+    }
+
+    #[test]
+    fn rejects_array_length_mismatches() {
+        let metadata = sample_single_arg_spec_metadata(ContractType::Array {
+            array: ContractArrayType {
+                element: Some(Box::new(ContractType::Bool)),
+                len: 2,
+            },
+        });
+        let err = encode_calldata(
+            &["[true]".into()],
+            Some(&ResolvedMethodMetadata::Spec(metadata)),
+        )
+        .expect_err("bug: array length mismatches should fail");
+        assert_call_encode_error(
+            err,
+            "argument 1 (`value`)",
+            "array expects length 2 but got 1",
+        );
+    }
+
+    #[test]
+    fn rejects_struct_array_field_count_mismatches() {
+        let metadata = sample_structured_spec_metadata(
+            vec![contract_field("payload", named_type("Payload"))],
+            ContractType::Void,
+        );
+        let err = encode_calldata(
+            &["[7]".into()],
+            Some(&ResolvedMethodMetadata::Spec(metadata)),
+        )
+        .expect_err("bug: struct tuple field count mismatches should fail");
+        assert_call_encode_error(
+            err,
+            "argument 1 (`payload`)",
+            "expected 2 field value(s) but got 1",
+        );
+    }
+
+    #[test]
+    fn rejects_unexpected_struct_fields() {
+        let metadata = sample_structured_spec_metadata(
+            vec![contract_field("payload", named_type("Payload"))],
+            ContractType::Void,
+        );
+        let err = encode_calldata(
+            &[r#"{"count":7,"bytes":"hi","extra":1}"#.into()],
+            Some(&ResolvedMethodMetadata::Spec(metadata)),
+        )
+        .expect_err("bug: unexpected struct fields should fail");
+        assert_call_encode_error(err, "argument 1 (`payload`)", "unexpected field `extra`");
+    }
+
+    #[test]
+    fn rejects_missing_struct_fields() {
+        let metadata = sample_structured_spec_metadata(
+            vec![contract_field("payload", named_type("Payload"))],
+            ContractType::Void,
+        );
+        let err = encode_calldata(
+            &[r#"{"count":7}"#.into()],
+            Some(&ResolvedMethodMetadata::Spec(metadata)),
+        )
+        .expect_err("bug: missing struct fields should fail");
+        assert_call_encode_error(err, "argument 1 (`payload`)", "missing field `bytes`");
+    }
+
+    #[test]
+    fn rejects_payloads_for_void_union_cases() {
+        let metadata = sample_structured_spec_metadata(
+            vec![contract_field("envelope", named_type("Envelope"))],
+            ContractType::Void,
+        );
+        let err = encode_calldata(
+            &[r#"{"case":"Empty","value":true}"#.into()],
+            Some(&ResolvedMethodMetadata::Spec(metadata)),
+        )
+        .expect_err("bug: void union cases should reject payloads");
+        assert_call_encode_error(
+            err,
+            "argument 1 (`envelope`)",
+            "union case `Empty` does not take a payload",
+        );
+    }
+
+    #[test]
+    fn rejects_trailing_bytes_in_decoded_spec_returns() {
+        let metadata = sample_single_arg_spec_metadata(ContractType::U32);
+        let type_defs =
+            build_type_def_index(&metadata.type_defs).expect("bug: typedef index should build");
+        let mut bytes = xdrs::cxs::encode(&7_u32).expect("bug: u32 should encode");
+        bytes.push(0);
+
+        let err = decode_spec_value(&metadata.method.return_type, &bytes, &type_defs)
+            .expect_err("bug: trailing return bytes should fail");
+        assert_eq!(
+            err.to_string(),
+            "return value: 1 unread byte(s) remain after decoding"
+        );
+    }
+
+    #[test]
+    fn rejects_decoded_vectors_exceeding_max_length() {
+        let metadata = sample_single_arg_spec_metadata(ContractType::Vector {
+            vector: ContractVectorType {
+                element: Some(Box::new(ContractType::Bool)),
+                max_len: 1,
+            },
+        });
+        let type_defs =
+            build_type_def_index(&metadata.type_defs).expect("bug: typedef index should build");
+        let bytes = xdrs::cxs::encode(&2_u32).expect("bug: vector length should encode");
+
+        let err = decode_spec_value(&metadata.method.return_type, &bytes, &type_defs)
+            .expect_err("bug: oversized decoded vectors should fail");
+        assert_eq!(
+            err.to_string(),
+            "return value: decoded vector length 2 exceeds max 1"
+        );
     }
 
     #[test]
@@ -2825,6 +3033,21 @@ mod tests {
         }
     }
 
+    fn sample_single_arg_spec_metadata(arg_type: ContractType) -> SpecMethodMetadata {
+        SpecMethodMetadata {
+            interface_name: "Counter".into(),
+            version: "0.1.0".into(),
+            method: ContractSpecMethod {
+                name: spec_string_bytes("call"),
+                args: vec![contract_field("value", arg_type.clone())]
+                    .try_into()
+                    .unwrap(),
+                return_type: arg_type,
+            },
+            type_defs: vec![],
+        }
+    }
+
     fn decode_spec_arguments(
         metadata: &SpecMethodMetadata,
         encoded: &[u8],
@@ -2849,6 +3072,19 @@ mod tests {
             .collect();
         assert_eq!(reader.remaining(), 0);
         values
+    }
+
+    fn assert_call_encode_error(err: CliError, path: &str, expected_message: &str) {
+        match err {
+            CliError::CallEncode {
+                path: actual_path,
+                message,
+            } => {
+                assert_eq!(actual_path, path);
+                assert_eq!(message, expected_message);
+            }
+            other => panic!("bug: expected CliError::CallEncode, got {other:?}"),
+        }
     }
 
     fn contract_field(name: &str, ty: ContractType) -> ContractField {
