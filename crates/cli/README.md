@@ -119,7 +119,9 @@ groundhog build -- --verbose   # pass extra args to cargo
 ```
 
 Outputs the `.wasm` file path and size on success. When spec generation
-is available, also emits a `*.spec.json` sidecar next to the built WASM.
+is available, also emits a human-readable `*.spec.json` sidecar next to
+the built WASM. The embedded WASM section remains the source of truth;
+the JSON file is for inspection and external tooling.
 
 ### `groundhog test`
 
@@ -170,7 +172,7 @@ groundhog deploy --json
 
 Call a deployed contract method using either a literal address or a
 contract alias from the active profile. The CLI resolves entrypoints
-from generated spec sidecars and local metadata when available, submits
+from embedded contract specs and local metadata when available, submits
 the invocation transaction, and prints returned values plus receipt
 status.
 

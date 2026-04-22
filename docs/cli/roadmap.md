@@ -51,13 +51,14 @@ What that means:
 Implementation status:
 
 - Phase 1 is effectively complete: deploy/call work, `--json` works, and
-  contract-spec-aware invocation is in place through generated sidecars plus
-  local metadata.
+  contract-spec-aware invocation is in place through embedded contract specs
+  plus local metadata. The CLI now emits `.spec.json` as an inspection/export
+  artifact, not as runtime input.
 - Phase 2 is partially complete: `groundhog node` ships and shares execution
   semantics with the SDK/native executor, but richer observability and some
   secondary RPC methods are still pending.
-- Still intentionally deferred: `groundhog call --dry-run`, `groundhog inspect`,
-  and the SDK embedded-spec follow-up.
+- Still intentionally deferred: `groundhog call --dry-run` and
+  `groundhog inspect`.
 
 ## Execution Tracker
 
