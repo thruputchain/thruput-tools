@@ -851,6 +851,25 @@ fn spawn_chain_tip_rpc(height: i64) -> (String, thread::JoinHandle<()>) {
         .unwrap();
         stream.write_all(&response_body).unwrap();
         stream.flush().unwrap();
+
+        let follow_up_deadline = Instant::now() + Duration::from_millis(200);
+        loop {
+            match listener.accept() {
+                Ok(_) => {
+                    panic!(
+                        "unexpected additional RPC request after groundhog_chainTip; dry-run \
+                         should not broadcast"
+                    );
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= follow_up_deadline {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(err) => panic!("failed to accept follow-up mock RPC connection: {err}"),
+            }
+        }
     });
 
     (format!("http://{addr}"), handle)

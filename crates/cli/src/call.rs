@@ -19,9 +19,7 @@ use crate::codec::{
     parse_contract_address, spec_string_text,
 };
 use crate::config::{find_project_config, resolve_default_key, resolve_profile};
-use crate::contract_spec::{
-    InterfaceSpec, find_method_interfaces, load_contract_spec, load_registered_interfaces,
-};
+use crate::contract_spec::{InterfaceSpec, load_contract_spec, load_registered_interfaces};
 use crate::keys::load_local_signer;
 use crate::result::CommandResult;
 use crate::tx_utils::{
@@ -406,14 +404,39 @@ fn resolve_spec_method(
         return Ok(None);
     };
 
-    let interface_matches = find_method_interfaces(&spec, method)?;
+    let mut interface_matches = Vec::new();
+
+    for interface in spec.interfaces.iter() {
+        let matched_methods = interface
+            .methods
+            .iter()
+            .filter_map(|candidate| match spec_string_text(&candidate.name) {
+                Ok(name) if name == method => Some(Ok(candidate.clone())),
+                Ok(_) => None,
+                Err(err) => Some(Err(err)),
+            })
+            .collect::<Result<Vec<_>, CliError>>()?;
+        if matched_methods.is_empty() {
+            continue;
+        }
+
+        interface_matches.push((
+            InterfaceSpec {
+                interface_name: spec_string_text(&interface.name)?.to_owned(),
+                interface_version: spec_string_text(&interface.vers)?.to_owned(),
+            },
+            matched_methods,
+        ));
+    }
+
     if interface_matches.is_empty() {
         return Ok(None);
     }
+    interface_matches.sort_by(|(left, _), (right, _)| left.cmp(right));
     if interface_matches.len() > 1 {
         let descriptions = interface_matches
             .iter()
-            .map(|candidate| {
+            .map(|(candidate, _)| {
                 format!(
                     "{} v{}",
                     candidate.interface_name, candidate.interface_version
@@ -427,32 +450,10 @@ fn resolve_spec_method(
         )));
     }
 
-    let matched = interface_matches
+    let (matched, mut methods) = interface_matches
         .into_iter()
         .next()
         .expect("bug: interface match count should be non-zero");
-    let mut methods = Vec::new();
-
-    for interface in spec.interfaces.iter() {
-        let interface_name = spec_string_text(&interface.name)?;
-        let version = spec_string_text(&interface.vers)?;
-        if interface_name != matched.interface_name || version != matched.interface_version {
-            continue;
-        }
-        for candidate in interface.methods.iter() {
-            if spec_string_text(&candidate.name)? == method {
-                methods.push(candidate.clone());
-            }
-        }
-    }
-
-    if methods.is_empty() {
-        return Err(CliError::SpecFailed(format!(
-            "embedded contract spec advertised `{}` v{} for method `{method}` but the method was \
-             not found",
-            matched.interface_name, matched.interface_version
-        )));
-    }
     if methods.len() > 1 {
         return Err(CliError::SpecFailed(format!(
             "embedded contract spec defines `{}` v{}::{method} multiple times",
@@ -1151,6 +1152,27 @@ mod tests {
         let decoded = decode_return_value(&encoded, Some(&CallMetadata::Local(metadata)))
             .expect("bug: local string return should decode");
         assert_eq!(decoded, serde_json::json!("hello"));
+    }
+
+    #[test]
+    fn reports_unsupported_local_type_name_in_encode_error() {
+        let metadata = ContractMetadata {
+            interface_name: "Counter".into(),
+            version: "0.1.0".into(),
+            source: Path::new("/tmp/implementation.rs").to_path_buf(),
+            method: MethodMetadata {
+                arg_types: vec!["Vec<String>".into()],
+                return_type: None,
+            },
+        };
+        let err = encode_calldata(&["hello".into()], Some(&CallMetadata::Local(metadata)))
+            .expect_err("bug: unsupported local type should fail");
+        assert_call_encode_error(
+            err,
+            "argument 1",
+            "typed call encoding for `Vec<String>` is not implemented yet; pass an explicit \
+             0x-prefixed entrypoint ID and raw calldata instead",
+        );
     }
 
     #[test]

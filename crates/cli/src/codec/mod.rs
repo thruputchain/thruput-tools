@@ -947,8 +947,10 @@ fn encode_single_value(ty: &str, value: &str, path: &str) -> Result<Vec<u8>, Cli
         ),
         _ => Err(encode_value_error(
             path,
-            "typed call encoding for `{ty}` is not implemented yet; pass an explicit 0x-prefixed \
-             entrypoint ID and raw calldata instead",
+            format!(
+                "typed call encoding for `{ty}` is not implemented yet; pass an explicit \
+                 0x-prefixed entrypoint ID and raw calldata instead"
+            ),
         )),
     }
 }
