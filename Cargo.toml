@@ -36,14 +36,14 @@ groundhog-signing = { path = "crates/signing", version = "=0.2.4", registry = "g
 groundhog-dev-node = { path = "crates/dev-node", version = "=0.2.4", registry = "groundhog" }
 
 # --- Groundhog (private registry) ---
-groundhog-xdr = { version = "0.7.9", registry = "groundhog", features = ["serde", "xdrs"] }
-groundhog_indexer = { version = "0.7.9", registry = "groundhog" }
-groundhog_scheduler = { version = "0.7.9", registry = "groundhog" }
-xdrs = { version = "0.5.3", registry = "groundhog", features = ["alloc"] }
-xdr-common = { version = "0.5.3", registry = "groundhog" }
+groundhog-xdr = { version = "0.7.11", registry = "groundhog", features = ["serde", "xdrs"] }
+groundhog_indexer = { version = "0.7.11", registry = "groundhog" }
+groundhog_scheduler = { version = "0.7.11", registry = "groundhog" }
+xdrs = { version = "0.5.6", registry = "groundhog", features = ["alloc"] }
+xdr-common = { version = "0.5.6", registry = "groundhog" }
 rpc_driver = { version = "0.8", registry = "groundhog" }
 groundhog-native-exec = { version = "0.11.3", registry = "groundhog" }
-groundhog-wasm-meter = { version = "0.2.0", registry = "groundhog" }
+groundhog-wasm-meter = { version = "0.3.0", registry = "groundhog" }
 groundhog-spec-tool = { version = "0.11.3", registry = "groundhog" }
 groundhog-contract-spec = { version = "0.11.3", registry = "groundhog" }
 
