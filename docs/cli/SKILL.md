@@ -36,7 +36,7 @@ When generating or editing a contract, default to this workflow:
 2. Keep all contract logic in `src/implementation.rs`.
 3. Keep `src/lib.rs` minimal: `no_std` gate, mock registration macro,
    module declaration, and public re-exports.
-4. Prefer `#[contract_error]` for contract-facing errors.
+4. Prefer `#[contract_exception]` for contract-facing errors.
 5. Prefer `NNInt` or `Map<_, NNInt>` for counters and balances.
 6. Write native tests that use `register_mock_contract(&env)`,
    `test_contract.as_hash().clone()`, and `contract_exec(...)`.
@@ -110,11 +110,12 @@ test = false
 
 [features]
 entrypoints = []
+spec = ["sdk/spec"]
 default = ["dev"]
 dev = ["sdk/dev"]
 
 [dependencies]
-sdk = { version = "0.9.0", registry = "groundhog", features = ["storage"] }
+sdk = { version = "0.11.3", registry = "groundhog", features = ["storage"] }
 
 [dev-dependencies]
 my-contract = { path = ".", features = ["dev"] }
@@ -129,12 +130,12 @@ Guidance:
 
 ## Error Types
 
-Prefer `#[contract_error]` for contract-facing errors:
+Prefer `#[contract_exception]` for contract-facing errors:
 
 ```rust
 use sdk::*;
 
-#[contract_error]
+#[contract_exception]
 pub enum Error {
     NotAuthorized = 1,
     InsufficientBalance = 2,
@@ -142,8 +143,8 @@ pub enum Error {
 ```
 
 Rules:
-- Prefer `#[contract_error]` over manually deriving `ReadXDR` and
-  `WriteXDR` for the common case.
+- Prefer `#[contract_exception]` over manually deriving `ReadXDR`,
+  `WriteXDR`, and `Exn` for the common case.
 - Use explicit discriminants starting at `1`.
 - Keep contract-facing error enums small and stable.
 - Use `throw(Error::Variant)` for contract-level aborts.

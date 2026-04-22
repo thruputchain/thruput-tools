@@ -1,11 +1,7 @@
 use sdk::storage::NNInt;
 use sdk::*;
 
-#[cfg(feature = "spec")]
-use sdk::XDR;
-
-#[contract_error]
-#[cfg_attr(feature = "spec", derive(XDR))]
+#[contract_exception]
 pub enum CounterError {
     NotAuthorized = 1,
 }

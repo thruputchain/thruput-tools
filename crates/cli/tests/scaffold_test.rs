@@ -21,12 +21,15 @@ fn scaffold_counter_creates_expected_files() {
     let cargo = fs::read_to_string(dir.join("Cargo.toml")).unwrap();
     assert!(cargo.contains(r#"name = "my-counter""#));
     assert!(cargo.contains("registry = \"groundhog\""));
+    assert!(cargo.contains(r#"sdk = { version = "0.11.3""#));
 
     let lib = fs::read_to_string(dir.join("src/lib.rs")).unwrap();
     assert!(lib.contains("mod implementation"));
 
     let imp = fs::read_to_string(dir.join("src/implementation.rs")).unwrap();
     assert!(imp.contains("pub struct Counter"));
+    assert!(imp.contains("#[contract_exception]"));
+    assert!(!imp.contains("#[contract_error]"));
 
     let test = fs::read_to_string(dir.join("tests/test.rs")).unwrap();
     assert!(test.contains("register_mock_contract"));
@@ -56,6 +59,7 @@ fn scaffold_stub_has_empty_contract() {
     let imp = fs::read_to_string(dir.join("src/implementation.rs")).unwrap();
     assert!(imp.contains("pub struct Contract"));
     assert!(!imp.contains("increment"));
+    assert!(imp.contains("#[contract_exception]"));
 
     assert!(dir.join("tests/test_wasm.rs").exists());
     let test_wasm = fs::read_to_string(dir.join("tests/test_wasm.rs")).unwrap();
