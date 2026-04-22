@@ -180,6 +180,7 @@ status.
 groundhog call my-counter get
 groundhog call my-counter increment 5
 groundhog call 0xabc123... get
+groundhog call my-counter get --dry-run
 groundhog call my-counter get --json
 ```
 
@@ -189,12 +190,17 @@ scalars, structs, enums, unions, options, tuples, vectors, arrays, and
 byte blobs (`Vec<u8>` / `[u8; N]`) via plain args, JSON, or hex where it
 fits the underlying type.
 
-Follow-up before `--dry-run` should depend on this heavily: cache
-repeated embedded-spec loads, tighten the union/structured CLI UX, and
-remove the remaining local-source fallback once the spec-driven path has
-soaked.
+`groundhog call --dry-run` now resolves selectors, encodes calldata,
+fetches the current chain tip to set expiry, signs the transaction, and
+prints or emits the prepared invocation without submitting it. This
+first pass is intentionally signed and RPC-backed; a later follow-up can
+split payload assembly from signing if we want a no-key-required dry
+run.
 
-`--dry-run` is not implemented yet.
+Remaining follow-up after this first pass: cache repeated
+embedded-spec loads, tighten the union/structured CLI UX, and remove
+the remaining local-source fallback once the spec-driven path has
+soaked.
 
 ### `groundhog node`
 

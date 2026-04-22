@@ -51,16 +51,21 @@ pub(crate) struct PreparedCall {
 }
 
 /// Call a method on a deployed contract.
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     contract: &str,
     method: &str,
     args: &[String],
+    dry_run: bool,
     artifacts: &ArtifactOptions,
     profile: &str,
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
     let prepared = prepare_call(contract, method, args, artifacts, profile)?;
+    if dry_run {
+        return print_dry_run(&prepared, cmd, print);
+    }
 
     print.status(format_args!(
         "Calling {} on {} via {}...",
@@ -136,6 +141,95 @@ pub fn run(
     ))?;
 
     Ok(())
+}
+
+fn print_dry_run(
+    prepared: &PreparedCall,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
+    let entrypoint_id = format_entrypoint_id(prepared.resolved.entrypoint);
+    let calldata_hex = format_hex_bytes(&prepared.calldata);
+
+    print.status(format_args!(
+        "Prepared dry-run call {} on {} via {}.",
+        prepared.method, prepared.contract_address_hex, prepared.rpc_url
+    ));
+    print.status(format_args!(
+        "  selector: {}",
+        selector_summary(&prepared.resolved)
+    ));
+    print.status(format_args!("  entrypoint: {entrypoint_id}"));
+    print.status(format_args!("  calldata: {calldata_hex}"));
+    print.status(format_args!("  signed tx: {}", prepared.tx_hex));
+    print.status("  submitted: no (--dry-run)");
+
+    print.json(&CommandResult::new(
+        cmd,
+        json!({
+            "dry_run": true,
+            "submitted": false,
+            "rpc_url": prepared.rpc_url,
+            "contract": prepared.contract_address_hex,
+            "method": prepared.method,
+            "entrypoint_id": entrypoint_id,
+            "calldata": calldata_hex,
+            "signed_tx": prepared.tx_hex,
+            "selector": selector_json(&prepared.resolved),
+        }),
+    ))?;
+
+    Ok(())
+}
+
+fn format_entrypoint_id(entrypoint: ContractEntrypointID) -> String {
+    format!("0x{}", hex::encode(entrypoint.into_inner()))
+}
+
+fn format_hex_bytes(bytes: &[u8]) -> String {
+    format!("0x{}", hex::encode(bytes))
+}
+
+fn selector_summary(resolved: &ResolvedCall) -> String {
+    match &resolved.metadata {
+        Some(CallMetadata::Spec(metadata)) => {
+            format!(
+                "embedded spec {} v{}",
+                metadata.interface_name, metadata.version
+            )
+        }
+        Some(CallMetadata::Local(metadata)) => {
+            format!(
+                "local metadata {} v{}",
+                metadata.interface_name, metadata.version
+            )
+        }
+        None => "explicit entrypoint".into(),
+    }
+}
+
+fn selector_json(resolved: &ResolvedCall) -> serde_json::Value {
+    match &resolved.metadata {
+        Some(CallMetadata::Spec(metadata)) => json!({
+            "source": "embedded_spec",
+            "interface": {
+                "name": metadata.interface_name,
+                "version": metadata.version,
+            },
+        }),
+        Some(CallMetadata::Local(metadata)) => json!({
+            "source": "local_metadata",
+            "interface": {
+                "name": metadata.interface_name,
+                "version": metadata.version,
+            },
+            "source_path": metadata.source.display().to_string(),
+        }),
+        None => json!({
+            "source": "explicit_entrypoint",
+            "interface": serde_json::Value::Null,
+        }),
+    }
 }
 
 /// Resolve, encode, and sign a call transaction without submitting it.

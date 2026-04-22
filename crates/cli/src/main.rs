@@ -148,6 +148,9 @@ enum Command {
         method: String,
         /// Method arguments
         args: Vec<String>,
+        /// Resolve, encode, and sign the transaction without submitting it
+        #[arg(long)]
+        dry_run: bool,
         /// Config profile to use
         #[arg(
             long = "profile",
@@ -324,6 +327,7 @@ fn main() {
             contract,
             method,
             args,
+            dry_run,
             profile,
             artifacts,
         } => std::env::current_dir()
@@ -334,7 +338,7 @@ fn main() {
                     &cwd,
                 );
                 groundhog_cli::call::run(
-                    &contract, &method, &args, &artifacts, &profile, cmd_name, &print,
+                    &contract, &method, &args, dry_run, &artifacts, &profile, cmd_name, &print,
                 )
             }),
         Command::Node { port, accounts } => {

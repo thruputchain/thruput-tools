@@ -57,15 +57,19 @@ Implementation status:
 - Embedded specs now drive first-pass typed invocation too: scalars,
   structs, enums, unions, options, tuples, vectors, arrays, and byte
   blobs all round-trip without relying on the old JSON sidecar shape.
-- Remaining follow-up before `groundhog call --dry-run` leans on this:
-  cache repeated embedded-spec parsing, tighten union/structured CLI
-  ergonomics and diagnostics, and keep proving out the spec-driven path
-  so the remaining local-source fallback can eventually be removed.
+- `groundhog call --dry-run` now exists as a signed, RPC-backed first
+  pass: it resolves selectors, encodes calldata, fetches tip-derived
+  expiry, signs the transaction, and returns the prepared invocation
+  without broadcasting it.
+- Remaining follow-up after that first pass: cache repeated
+  embedded-spec parsing, tighten union/structured CLI ergonomics and
+  diagnostics, and keep proving out the spec-driven path so the
+  remaining local-source fallback can eventually be removed.
 - Phase 2 is partially complete: `groundhog node` ships and shares execution
   semantics with the SDK/native executor, but richer observability and some
   secondary RPC methods are still pending.
-- Still intentionally deferred: `groundhog call --dry-run` and
-  `groundhog inspect`.
+- Still intentionally deferred: `groundhog deploy --dry-run`, a
+  no-key-required call dry-run / inspect split, and `groundhog inspect`.
 
 ## Execution Tracker
 
