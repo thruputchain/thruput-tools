@@ -1,14 +1,14 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use groundhog_contract_spec::{
+    ContractEnumDef, ContractField, ContractSpecMethod, ContractSpecString, ContractStructDef,
+    ContractType, ContractTypeDef, ContractUnionCase, ContractUnionCaseType, ContractUnionDef,
+};
 use groundhog_rpc_api_types::receipt::ExecStatus;
 use groundhog_signing::{
     BuildCallTransaction, DEFAULT_TX_GAS_LIMIT, SignTransactionParams, Signer,
     build_call_transaction, sign_transaction,
-};
-use groundhog_spec_tool::{
-    ContractEnumDef, ContractField, ContractSpecMethod, ContractSpecString, ContractStructDef,
-    ContractType, ContractTypeDef, ContractUnionCase, ContractUnionCaseType, ContractUnionDef,
 };
 use groundhog_xdr::auth_claim::AuthClaim;
 use groundhog_xdr::contract::ContractEntrypointID;
@@ -369,26 +369,6 @@ fn resolve_local_contract_metadata(
     };
     let interface_specs = load_project_registered_interfaces(project_root, artifacts)?;
     resolve_local_contract_metadata_in_project(project_root, method, interface_specs.as_deref())
-}
-
-#[cfg(test)]
-fn resolve_local_contract_metadata_for_interface(
-    cwd: &Path,
-    method: &str,
-    interface_name: &str,
-    version: &str,
-) -> Result<Option<ContractMetadata>, CliError> {
-    let Some(config_path) = find_project_config(cwd) else {
-        return Ok(None);
-    };
-    let Some(project_root) = config_path.parent() else {
-        return Ok(None);
-    };
-    let interface_specs = [InterfaceSpec {
-        interface_name: interface_name.to_owned(),
-        interface_version: version.to_owned(),
-    }];
-    resolve_local_contract_metadata_in_project(project_root, method, Some(&interface_specs))
 }
 
 fn resolve_local_contract_metadata_in_project(
@@ -905,6 +885,10 @@ fn encode_cli_spec_value(
     path: &str,
 ) -> Result<Vec<u8>, CliError> {
     match ty {
+        ContractType::Void => Err(encode_value_error(
+            path,
+            "void is not a valid contract argument type",
+        )),
         ContractType::Option { option_inner } => {
             let inner = option_inner.as_deref().ok_or_else(|| {
                 CliError::SpecFailed(
@@ -1255,19 +1239,18 @@ fn encode_enum_json_value(
     path: &str,
 ) -> Result<Vec<u8>, CliError> {
     let discriminant = match value {
-        serde_json::Value::String(name) => match name.parse::<i32>() {
-            Ok(discriminant) => discriminant,
-            Err(_) => enum_def
-                .variants
-                .iter()
-                .find_map(|variant| {
-                    let variant_name = spec_string_text(&variant.name).ok()?;
-                    (variant_name == name).then_some(variant.value)
-                })
-                .ok_or_else(|| {
+        serde_json::Value::String(name) => {
+            if let Some(discriminant) = enum_def.variants.iter().find_map(|variant| {
+                let variant_name = spec_string_text(&variant.name).ok()?;
+                (variant_name == name).then_some(variant.value)
+            }) {
+                discriminant
+            } else {
+                name.parse::<i32>().map_err(|_| {
                     encode_value_error(path, format!("unknown enum variant `{name}`"))
-                })?,
-        },
+                })?
+            }
+        }
         serde_json::Value::Number(number) => number
             .as_i64()
             .and_then(|value| i32::try_from(value).ok())
@@ -1339,7 +1322,13 @@ fn resolve_union_case<'a>(
 ) -> Result<&'a ContractUnionCase, CliError> {
     match value {
         serde_json::Value::String(name) => {
-            if let Ok(discriminant) = name.parse::<i32>() {
+            if let Some(case) = union_def
+                .cases
+                .iter()
+                .find(|case| spec_string_text(&case.name).ok() == Some(name.as_str()))
+            {
+                Ok(case)
+            } else if let Ok(discriminant) = name.parse::<i32>() {
                 union_def
                     .cases
                     .iter()
@@ -2076,17 +2065,17 @@ mod tests {
         decode_return_value, decode_spec_value_from_reader, encode_calldata,
         explicit_entrypoint_id, filter_candidates_by_interfaces,
         load_project_registered_interfaces, major_version, parse_contract_attr_value,
-        resolve_local_contract_metadata_for_interface, resolve_spec_method, summarize_exec_status,
+        resolve_spec_method, summarize_exec_status,
     };
     use crate::artifacts::ArtifactOptions;
     use crate::contract_spec::InterfaceSpec;
-    use groundhog_contract_spec::{ContractArrayType, ContractVectorType};
-    use groundhog_rpc_api_types::receipt::ExecStatus;
-    use groundhog_spec_tool::{
-        ContractEnumDef, ContractEnumVariant, ContractField, ContractSpec, ContractSpecInterface,
-        ContractSpecMethod, ContractType, ContractTypeDef, ContractUnionCase,
-        ContractUnionCaseType, ContractUnionDef,
+    use groundhog_contract_spec::{
+        ContractArrayType, ContractEnumDef, ContractEnumVariant, ContractField, ContractSpec,
+        ContractSpecInterface, ContractSpecMethod, ContractSpecString, ContractStructDef,
+        ContractType, ContractTypeDef, ContractUnionCase, ContractUnionCaseType, ContractUnionDef,
+        ContractVectorType,
     };
+    use groundhog_rpc_api_types::receipt::ExecStatus;
     use serde_json::json;
     use serial_test::serial;
     use tempfile::TempDir;
@@ -2233,6 +2222,27 @@ mod tests {
         let decoded = decode_return_value(&bytes, Some(&ResolvedMethodMetadata::Local(metadata)))
             .expect("bug: simple return value should decode");
         assert_eq!(decoded, serde_json::json!(7));
+    }
+
+    #[test]
+    fn encodes_and_decodes_local_str_values() {
+        let metadata = ContractMetadata {
+            interface_name: "Counter".into(),
+            version: "0.1.0".into(),
+            source: Path::new("/tmp/implementation.rs").to_path_buf(),
+            method: MethodMetadata {
+                arg_types: vec!["&str".into()],
+                return_type: Some("&str".into()),
+            },
+        };
+        let encoded = encode_calldata(
+            &["hello".into()],
+            Some(&ResolvedMethodMetadata::Local(metadata.clone())),
+        )
+        .expect("bug: local string calldata should encode");
+        let decoded = decode_return_value(&encoded, Some(&ResolvedMethodMetadata::Local(metadata)))
+            .expect("bug: local string return should decode");
+        assert_eq!(decoded, serde_json::json!("hello"));
     }
 
     #[test]
@@ -2421,6 +2431,34 @@ mod tests {
     }
 
     #[test]
+    fn prefers_named_enum_variants_over_numeric_string_discriminants() {
+        let metadata = sample_numeric_name_spec_metadata(named_type("NumericEnum"));
+        let encoded = encode_calldata(
+            &[r#""1""#.into()],
+            Some(&ResolvedMethodMetadata::Spec(metadata.clone())),
+        )
+        .expect("bug: numeric-string enum variant should encode by name");
+
+        let decoded = decode_return_value(&encoded, Some(&ResolvedMethodMetadata::Spec(metadata)))
+            .expect("bug: numeric-string enum variant should decode");
+        assert_eq!(decoded, json!("1"));
+    }
+
+    #[test]
+    fn prefers_named_union_cases_over_numeric_string_discriminants() {
+        let metadata = sample_numeric_name_spec_metadata(named_type("NumericUnion"));
+        let encoded = encode_calldata(
+            &[r#""1""#.into()],
+            Some(&ResolvedMethodMetadata::Spec(metadata.clone())),
+        )
+        .expect("bug: numeric-string union case should encode by name");
+
+        let decoded = decode_return_value(&encoded, Some(&ResolvedMethodMetadata::Spec(metadata)))
+            .expect("bug: numeric-string union case should decode");
+        assert_eq!(decoded, json!({"case": "1"}));
+    }
+
+    #[test]
     fn filters_candidates_by_interfaces() {
         let candidates = vec![
             ContractMetadata {
@@ -2508,39 +2546,6 @@ mod tests {
     }
 
     #[test]
-    fn resolve_local_contract_metadata_for_interface_filters_to_requested_interface() {
-        let project = create_temp_project("demo-contract");
-        let project_root =
-            std::fs::canonicalize(project.path()).expect("bug: project path should canonicalize");
-        write_project_config(&project_root);
-        std::fs::write(
-            project_root.join("src/lib.rs"),
-            r#"
-            #[contract(interface = "Counter", version = "0.1.0")]
-            impl Counter {
-                pub fn get(&self) -> u64 { 0 }
-            }
-
-            #[contract(interface = "Other", version = "0.1.0")]
-            impl Other {
-                pub fn get(&self) -> u64 { 1 }
-            }
-            "#,
-        )
-        .expect("bug: lib.rs should be written");
-
-        let metadata =
-            resolve_local_contract_metadata_for_interface(&project_root, "get", "Other", "0.1.0")
-                .expect("bug: local metadata lookup should succeed")
-                .expect("bug: matching interface metadata should exist");
-
-        assert_eq!(metadata.interface_name, "Other");
-        assert_eq!(metadata.version, "0.1.0");
-        assert_eq!(metadata.method.arg_types, Vec::<String>::new());
-        assert_eq!(metadata.method.return_type.as_deref(), Some("u64"));
-    }
-
-    #[test]
     fn summarizes_revert_without_message() {
         assert_eq!(
             summarize_exec_status(&ExecStatus::Reverted { message: None }),
@@ -2575,11 +2580,6 @@ mod tests {
             ),
         )
         .expect("bug: Cargo.toml should be written");
-    }
-
-    fn write_project_config(project_root: &Path) {
-        std::fs::write(project_root.join("groundhog.toml"), "")
-            .expect("bug: groundhog.toml should be written");
     }
 
     fn sample_contract_spec() -> ContractSpec {
@@ -2650,7 +2650,7 @@ mod tests {
             },
             type_defs: vec![
                 ContractTypeDef::TypeDefStruct {
-                    struct_def: groundhog_spec_tool::ContractStructDef {
+                    struct_def: ContractStructDef {
                         name: spec_string_bytes("Payload"),
                         fields: vec![
                             contract_field("count", ContractType::U32),
@@ -2724,6 +2724,58 @@ mod tests {
         }
     }
 
+    fn sample_numeric_name_spec_metadata(return_type: ContractType) -> SpecMethodMetadata {
+        SpecMethodMetadata {
+            interface_name: "Counter".into(),
+            version: "0.1.0".into(),
+            method: ContractSpecMethod {
+                name: spec_string_bytes("call"),
+                args: vec![contract_field("value", return_type.clone())]
+                    .try_into()
+                    .unwrap(),
+                return_type,
+            },
+            type_defs: vec![
+                ContractTypeDef::TypeDefEnum {
+                    enum_def: ContractEnumDef {
+                        name: spec_string_bytes("NumericEnum"),
+                        variants: vec![
+                            ContractEnumVariant {
+                                name: spec_string_bytes("1"),
+                                value: 7,
+                            },
+                            ContractEnumVariant {
+                                name: spec_string_bytes("2"),
+                                value: 8,
+                            },
+                        ]
+                        .try_into()
+                        .unwrap(),
+                    },
+                },
+                ContractTypeDef::TypeDefUnion {
+                    union_def: ContractUnionDef {
+                        name: spec_string_bytes("NumericUnion"),
+                        cases: vec![
+                            ContractUnionCase {
+                                name: spec_string_bytes("1"),
+                                discriminant: 7,
+                                case_type: ContractUnionCaseType::UnionCaseVoid,
+                            },
+                            ContractUnionCase {
+                                name: spec_string_bytes("2"),
+                                discriminant: 8,
+                                case_type: ContractUnionCaseType::UnionCaseVoid,
+                            },
+                        ]
+                        .try_into()
+                        .unwrap(),
+                    },
+                },
+            ],
+        }
+    }
+
     fn contract_field(name: &str, ty: ContractType) -> ContractField {
         ContractField {
             name: spec_string_bytes(name),
@@ -2737,7 +2789,7 @@ mod tests {
         }
     }
 
-    fn spec_string_bytes(value: &str) -> groundhog_spec_tool::ContractSpecString {
+    fn spec_string_bytes(value: &str) -> ContractSpecString {
         value.try_into().expect("bug: test string should fit")
     }
 

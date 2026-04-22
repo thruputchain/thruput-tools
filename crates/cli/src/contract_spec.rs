@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use groundhog_spec_tool::{ContractSpec, ContractSpecInterface, ContractSpecString};
+use groundhog_contract_spec::{ContractSpec, ContractSpecInterface, ContractSpecString};
 
 use crate::{CliError, Print};
 
@@ -135,7 +135,7 @@ pub fn finalize_spec(wasm: &Path, print: &Print) -> Result<Option<PathBuf>, CliE
 mod tests {
     use std::path::Path;
 
-    use groundhog_spec_tool::{
+    use groundhog_contract_spec::{
         ContractField, ContractSpec, ContractSpecInterface, ContractSpecMethod, ContractType,
     };
 

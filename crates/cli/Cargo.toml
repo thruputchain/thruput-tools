@@ -36,6 +36,7 @@ sha2 = { workspace = true }
 zeroize = { workspace = true }
 groundhog-signing = { workspace = true }
 groundhog-wasm-meter = { workspace = true }
+groundhog-contract-spec = { workspace = true }
 groundhog-spec-tool = { workspace = true }
 groundhog-rpc-client = { workspace = true }
 groundhog-rpc-api-types = { workspace = true }
@@ -52,7 +53,6 @@ dev-node = ["dep:groundhog-dev-node"]
 [dev-dependencies]
 tempfile = "3"
 serial_test = "3"
-groundhog-contract-spec = { workspace = true }
 
 [lints]
 workspace = true
