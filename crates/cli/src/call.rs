@@ -2,8 +2,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use groundhog_contract_spec::{
-    ContractEnumDef, ContractField, ContractSpecMethod, ContractSpecString, ContractStructDef,
-    ContractType, ContractTypeDef, ContractUnionCase, ContractUnionCaseType, ContractUnionDef,
+    ContractArrayType, ContractEnumDef, ContractField, ContractSpecMethod, ContractSpecString,
+    ContractStructDef, ContractType, ContractTypeDef, ContractUnionCase, ContractUnionCaseType,
+    ContractUnionDef, ContractVectorType,
 };
 use groundhog_rpc_api_types::receipt::ExecStatus;
 use groundhog_signing::{
@@ -928,7 +929,7 @@ fn encode_cli_spec_value(
                     ),
                 ));
             }
-            encode_fixed_bytes(bytes, path)
+            encode_fixed_bytes(&bytes, path)
         }
         ContractType::Tuple { .. } | ContractType::Vector { .. } | ContractType::Array { .. } => {
             let json = parse_json_argument(argument, path)?;
@@ -959,155 +960,207 @@ fn encode_json_spec_value(
     type_defs: &TypeDefIndex<'_>,
     path: &str,
 ) -> Result<Vec<u8>, CliError> {
+    if let Some(encoded) = encode_json_scalar_value(ty, value, path) {
+        return encoded;
+    }
+
     match ty {
-        ContractType::Void => match value {
-            serde_json::Value::Null => Ok(vec![]),
-            _ => Err(encode_value_error(path, "expected null for a void value")),
-        },
-        ContractType::Bool => encode_xdr_value(parse_json_bool(value, path)?)
-            .map_err(|e| encode_value_error(path, e.to_string())),
-        ContractType::U8 => {
-            encode_xdr_value(u32::from(parse_json_numeric::<u8>(value, "u8", path)?))
-                .map_err(|e| encode_value_error(path, e.to_string()))
-        }
-        ContractType::U32 => encode_xdr_value(parse_json_numeric::<u32>(value, "u32", path)?)
-            .map_err(|e| encode_value_error(path, e.to_string())),
-        ContractType::I32 => encode_xdr_value(parse_json_numeric::<i32>(value, "i32", path)?)
-            .map_err(|e| encode_value_error(path, e.to_string())),
-        ContractType::U64 => encode_xdr_value(parse_json_numeric::<u64>(value, "u64", path)?)
-            .map_err(|e| encode_value_error(path, e.to_string())),
-        ContractType::I64 => encode_xdr_value(parse_json_numeric::<i64>(value, "i64", path)?)
-            .map_err(|e| encode_value_error(path, e.to_string())),
-        ContractType::U128 => encode_xdr_value(parse_json_numeric::<u128>(value, "u128", path)?)
-            .map_err(|e| encode_value_error(path, e.to_string())),
-        ContractType::I128 => encode_xdr_value(parse_json_numeric::<i128>(value, "i128", path)?)
-            .map_err(|e| encode_value_error(path, e.to_string())),
-        ContractType::String => encode_xdr_value(parse_json_string(value, path)?.to_owned())
-            .map_err(|e| encode_value_error(path, e.to_string())),
-        ContractType::Bytes => encode_variable_bytes(parse_bytes_json_value(value, path)?, path),
-        ContractType::Address => {
-            encode_xdr_value(parse_contract_address(parse_json_string(value, path)?)?)
-                .map_err(|e| encode_value_error(path, e.to_string()))
-        }
         ContractType::Option { option_inner } => {
-            let inner = option_inner.as_deref().ok_or_else(|| {
-                CliError::SpecFailed(
-                    "embedded contract spec is missing an option inner type".into(),
-                )
-            })?;
-            let mut encoded = encode_xdr_value(!value.is_null())
-                .map_err(|e| encode_value_error(path, e.to_string()))?;
-            if !value.is_null() {
-                encoded.extend(encode_json_spec_value(inner, value, type_defs, path)?);
-            }
-            Ok(encoded)
+            encode_option_json_value(option_inner.as_deref(), value, type_defs, path)
         }
-        ContractType::Vector { vector } => {
-            let inner = vector.element.as_deref().ok_or_else(|| {
-                CliError::SpecFailed(
-                    "embedded contract spec is missing a vector element type".into(),
-                )
-            })?;
-            if vector_contains_u8(Some(inner)) {
-                let bytes = parse_bytes_json_value(value, path)?;
-                if bytes.len() > vector.max_len as usize {
-                    return Err(encode_value_error(
-                        path,
-                        format!(
-                            "byte vector exceeds max length {} (got {})",
-                            vector.max_len,
-                            bytes.len()
-                        ),
-                    ));
-                }
-                return encode_variable_bytes(bytes, path);
-            }
-
-            let items = parse_json_array(value, path)?;
-            if items.len() > vector.max_len as usize {
-                return Err(encode_value_error(
-                    path,
-                    format!(
-                        "vector exceeds max length {} (got {})",
-                        vector.max_len,
-                        items.len()
-                    ),
-                ));
-            }
-
-            let mut encoded = encode_xdr_value(u32::try_from(items.len()).map_err(|_| {
-                encode_value_error(path, "vector length exceeds the supported u32 range")
-            })?)
-            .map_err(|e| encode_value_error(path, e.to_string()))?;
-            for (index, item) in items.iter().enumerate() {
-                encoded.extend(encode_json_spec_value(
-                    inner,
-                    item,
-                    type_defs,
-                    &index_path(path, index),
-                )?);
-            }
-            Ok(encoded)
-        }
+        ContractType::Vector { vector } => encode_vector_json_value(vector, value, type_defs, path),
         ContractType::Tuple { tuple } => encode_tuple_json_items(tuple, value, type_defs, path),
-        ContractType::Named { named } => match resolve_named_type_def(named, type_defs)? {
-            ContractTypeDef::TypeDefStruct { struct_def } => {
-                encode_struct_json_value(struct_def, value, type_defs, path)
-            }
-            ContractTypeDef::TypeDefEnum { enum_def } => {
-                encode_enum_json_value(enum_def, value, path)
-            }
-            ContractTypeDef::TypeDefUnion { union_def } => {
-                encode_union_json_value(union_def, value, type_defs, path)
-            }
-            _ => Err(CliError::SpecFailed(
-                "embedded contract spec contains an unsupported type definition kind".into(),
-            )),
-        },
-        ContractType::Array { array } => {
-            let inner = array.element.as_deref().ok_or_else(|| {
-                CliError::SpecFailed(
-                    "embedded contract spec is missing an array element type".into(),
-                )
-            })?;
-            if vector_contains_u8(Some(inner)) {
-                let bytes = parse_bytes_json_value(value, path)?;
-                if bytes.len() != array.len as usize {
-                    return Err(encode_value_error(
-                        path,
-                        format!(
-                            "byte array expects length {} but got {}",
-                            array.len,
-                            bytes.len()
-                        ),
-                    ));
-                }
-                return encode_fixed_bytes(bytes, path);
-            }
-
-            let items = parse_json_array(value, path)?;
-            if items.len() != array.len as usize {
-                return Err(encode_value_error(
-                    path,
-                    format!("array expects length {} but got {}", array.len, items.len()),
-                ));
-            }
-
-            let mut encoded = Vec::new();
-            for (index, item) in items.iter().enumerate() {
-                encoded.extend(encode_json_spec_value(
-                    inner,
-                    item,
-                    type_defs,
-                    &index_path(path, index),
-                )?);
-            }
-            Ok(encoded)
-        }
+        ContractType::Named { named } => encode_named_json_value(named, value, type_defs, path),
+        ContractType::Array { array } => encode_array_json_value(array, value, type_defs, path),
         _ => Err(CliError::SpecFailed(
             "embedded contract spec contains an unsupported contract type".into(),
         )),
     }
+}
+
+fn encode_json_scalar_value(
+    ty: &ContractType,
+    value: &serde_json::Value,
+    path: &str,
+) -> Option<Result<Vec<u8>, CliError>> {
+    match ty {
+        ContractType::Void => Some(match value {
+            serde_json::Value::Null => Ok(vec![]),
+            _ => Err(encode_value_error(path, "expected null for a void value")),
+        }),
+        ContractType::Bool => Some(parse_json_bool(value, path).and_then(|value| {
+            encode_xdr_value(value).map_err(|e| encode_value_error(path, e.to_string()))
+        })),
+        ContractType::U8 => Some(
+            parse_json_numeric::<u8>(value, "u8", path).and_then(|value| {
+                encode_xdr_value(u32::from(value))
+                    .map_err(|e| encode_value_error(path, e.to_string()))
+            }),
+        ),
+        ContractType::U32 => Some(parse_json_numeric::<u32>(value, "u32", path).and_then(
+            |value| encode_xdr_value(value).map_err(|e| encode_value_error(path, e.to_string())),
+        )),
+        ContractType::I32 => Some(parse_json_numeric::<i32>(value, "i32", path).and_then(
+            |value| encode_xdr_value(value).map_err(|e| encode_value_error(path, e.to_string())),
+        )),
+        ContractType::U64 => Some(parse_json_numeric::<u64>(value, "u64", path).and_then(
+            |value| encode_xdr_value(value).map_err(|e| encode_value_error(path, e.to_string())),
+        )),
+        ContractType::I64 => Some(parse_json_numeric::<i64>(value, "i64", path).and_then(
+            |value| encode_xdr_value(value).map_err(|e| encode_value_error(path, e.to_string())),
+        )),
+        ContractType::U128 => Some(parse_json_numeric::<u128>(value, "u128", path).and_then(
+            |value| encode_xdr_value(value).map_err(|e| encode_value_error(path, e.to_string())),
+        )),
+        ContractType::I128 => Some(parse_json_numeric::<i128>(value, "i128", path).and_then(
+            |value| encode_xdr_value(value).map_err(|e| encode_value_error(path, e.to_string())),
+        )),
+        ContractType::String => Some(parse_json_string(value, path).and_then(|value| {
+            encode_xdr_value(value.to_owned()).map_err(|e| encode_value_error(path, e.to_string()))
+        })),
+        ContractType::Bytes => Some(
+            parse_bytes_json_value(value, path)
+                .and_then(|bytes| encode_variable_bytes(bytes, path)),
+        ),
+        ContractType::Address => Some(parse_json_string(value, path).and_then(|value| {
+            let address = parse_contract_address(value)?;
+            encode_xdr_value(address).map_err(|e| encode_value_error(path, e.to_string()))
+        })),
+        _ => None,
+    }
+}
+
+fn encode_option_json_value(
+    inner: Option<&ContractType>,
+    value: &serde_json::Value,
+    type_defs: &TypeDefIndex<'_>,
+    path: &str,
+) -> Result<Vec<u8>, CliError> {
+    let inner = inner.ok_or_else(|| {
+        CliError::SpecFailed("embedded contract spec is missing an option inner type".into())
+    })?;
+    let mut encoded =
+        encode_xdr_value(!value.is_null()).map_err(|e| encode_value_error(path, e.to_string()))?;
+    if !value.is_null() {
+        encoded.extend(encode_json_spec_value(inner, value, type_defs, path)?);
+    }
+    Ok(encoded)
+}
+
+fn encode_vector_json_value(
+    vector: &ContractVectorType,
+    value: &serde_json::Value,
+    type_defs: &TypeDefIndex<'_>,
+    path: &str,
+) -> Result<Vec<u8>, CliError> {
+    let inner = vector.element.as_deref().ok_or_else(|| {
+        CliError::SpecFailed("embedded contract spec is missing a vector element type".into())
+    })?;
+    if vector_contains_u8(Some(inner)) {
+        let bytes = parse_bytes_json_value(value, path)?;
+        if bytes.len() > vector.max_len as usize {
+            return Err(encode_value_error(
+                path,
+                format!(
+                    "byte vector exceeds max length {} (got {})",
+                    vector.max_len,
+                    bytes.len()
+                ),
+            ));
+        }
+        return encode_variable_bytes(bytes, path);
+    }
+
+    let items = parse_json_array(value, path)?;
+    if items.len() > vector.max_len as usize {
+        return Err(encode_value_error(
+            path,
+            format!(
+                "vector exceeds max length {} (got {})",
+                vector.max_len,
+                items.len()
+            ),
+        ));
+    }
+
+    let mut encoded =
+        encode_xdr_value(u32::try_from(items.len()).map_err(|_| {
+            encode_value_error(path, "vector length exceeds the supported u32 range")
+        })?)
+        .map_err(|e| encode_value_error(path, e.to_string()))?;
+    for (index, item) in items.iter().enumerate() {
+        encoded.extend(encode_json_spec_value(
+            inner,
+            item,
+            type_defs,
+            &index_path(path, index),
+        )?);
+    }
+    Ok(encoded)
+}
+
+fn encode_named_json_value(
+    named: &ContractSpecString,
+    value: &serde_json::Value,
+    type_defs: &TypeDefIndex<'_>,
+    path: &str,
+) -> Result<Vec<u8>, CliError> {
+    match resolve_named_type_def(named, type_defs)? {
+        ContractTypeDef::TypeDefStruct { struct_def } => {
+            encode_struct_json_value(struct_def, value, type_defs, path)
+        }
+        ContractTypeDef::TypeDefEnum { enum_def } => encode_enum_json_value(enum_def, value, path),
+        ContractTypeDef::TypeDefUnion { union_def } => {
+            encode_union_json_value(union_def, value, type_defs, path)
+        }
+        _ => Err(CliError::SpecFailed(
+            "embedded contract spec contains an unsupported type definition kind".into(),
+        )),
+    }
+}
+
+fn encode_array_json_value(
+    array: &ContractArrayType,
+    value: &serde_json::Value,
+    type_defs: &TypeDefIndex<'_>,
+    path: &str,
+) -> Result<Vec<u8>, CliError> {
+    let inner = array.element.as_deref().ok_or_else(|| {
+        CliError::SpecFailed("embedded contract spec is missing an array element type".into())
+    })?;
+    if vector_contains_u8(Some(inner)) {
+        let bytes = parse_bytes_json_value(value, path)?;
+        if bytes.len() != array.len as usize {
+            return Err(encode_value_error(
+                path,
+                format!(
+                    "byte array expects length {} but got {}",
+                    array.len,
+                    bytes.len()
+                ),
+            ));
+        }
+        return encode_fixed_bytes(&bytes, path);
+    }
+
+    let items = parse_json_array(value, path)?;
+    if items.len() != array.len as usize {
+        return Err(encode_value_error(
+            path,
+            format!("array expects length {} but got {}", array.len, items.len()),
+        ));
+    }
+
+    let mut encoded = Vec::new();
+    for (index, item) in items.iter().enumerate() {
+        encoded.extend(encode_json_spec_value(
+            inner,
+            item,
+            type_defs,
+            &index_path(path, index),
+        )?);
+    }
+    Ok(encoded)
 }
 
 fn encode_struct_json_value(
@@ -1340,11 +1393,10 @@ fn resolve_union_case<'a>(
                         )
                     })
             } else {
-                union_def
-                    .cases
-                    .iter()
-                    .find(|case| spec_string_text(&case.name).ok() == Some(name.as_str()))
-                    .ok_or_else(|| encode_value_error(path, format!("unknown union case `{name}`")))
+                Err(encode_value_error(
+                    path,
+                    format!("unknown union case `{name}`"),
+                ))
             }
         }
         serde_json::Value::Number(number) => {
@@ -1494,10 +1546,10 @@ fn encode_variable_bytes(bytes: Vec<u8>, path: &str) -> Result<Vec<u8>, CliError
     encode_xdr_value(bytes).map_err(|e| encode_value_error(path, e.to_string()))
 }
 
-fn encode_fixed_bytes(bytes: Vec<u8>, path: &str) -> Result<Vec<u8>, CliError> {
+fn encode_fixed_bytes(bytes: &[u8], path: &str) -> Result<Vec<u8>, CliError> {
     let mut writer = xdrs::cxs::buf_writer::BufWriter::with_capacity(bytes.len());
     writer
-        .write_opaque_fixed(&bytes)
+        .write_opaque_fixed(bytes)
         .map_err(|e| encode_value_error(path, format!("failed to encode fixed bytes: {e}")))?;
     Ok(writer.into())
 }
@@ -1702,76 +1754,16 @@ fn decode_spec_value_from_reader(
     type_defs: &TypeDefIndex<'_>,
     path: &str,
 ) -> Result<serde_json::Value, CliError> {
+    if let Some(decoded) = decode_spec_scalar_value_from_reader(ty, reader, path) {
+        return decoded;
+    }
+
     match ty {
-        ContractType::Void => Ok(serde_json::Value::Null),
-        ContractType::Bool => read_xdr_value::<bool>(reader, path).map(serde_json::Value::from),
-        ContractType::U8 => {
-            let value = read_xdr_value::<u32>(reader, path)?;
-            let value: u8 = value.try_into().map_err(|_| {
-                CliError::Other(format!("{path}: decoded u8 value is out of range"))
-            })?;
-            Ok(serde_json::Value::from(value))
-        }
-        ContractType::U32 => read_xdr_value::<u32>(reader, path).map(serde_json::Value::from),
-        ContractType::I32 => read_xdr_value::<i32>(reader, path).map(serde_json::Value::from),
-        ContractType::U64 => read_xdr_value::<u64>(reader, path).map(serde_json::Value::from),
-        ContractType::I64 => read_xdr_value::<i64>(reader, path).map(serde_json::Value::from),
-        ContractType::U128 => read_xdr_value::<u128>(reader, path)
-            .map(|value| serde_json::Value::from(value.to_string())),
-        ContractType::I128 => read_xdr_value::<i128>(reader, path)
-            .map(|value| serde_json::Value::from(value.to_string())),
-        ContractType::String => read_xdr_value::<String>(reader, path).map(serde_json::Value::from),
-        ContractType::Bytes => reader
-            .read_opaque_variable_owned(u32::MAX)
-            .map(hex_json_value)
-            .map_err(|e| CliError::Other(format!("{path}: failed to decode bytes: {e}"))),
-        ContractType::Address => {
-            read_xdr_value::<ContractAddress>(reader, path).map(hex_json_value)
-        }
         ContractType::Option { option_inner } => {
-            let inner = option_inner.as_deref().ok_or_else(|| {
-                CliError::SpecFailed(
-                    "embedded contract spec is missing an option inner type".into(),
-                )
-            })?;
-            if read_xdr_value::<bool>(reader, path)? {
-                decode_spec_value_from_reader(inner, reader, type_defs, path)
-            } else {
-                Ok(serde_json::Value::Null)
-            }
+            decode_option_value_from_reader(option_inner.as_deref(), reader, type_defs, path)
         }
         ContractType::Vector { vector } => {
-            let inner = vector.element.as_deref().ok_or_else(|| {
-                CliError::SpecFailed(
-                    "embedded contract spec is missing a vector element type".into(),
-                )
-            })?;
-            if vector_contains_u8(Some(inner)) {
-                return reader
-                    .read_opaque_variable_owned(vector.max_len)
-                    .map(hex_json_value)
-                    .map_err(|e| {
-                        CliError::Other(format!("{path}: failed to decode byte vector: {e}"))
-                    });
-            }
-
-            let len = read_xdr_value::<u32>(reader, path)? as usize;
-            if len > vector.max_len as usize {
-                return Err(CliError::Other(format!(
-                    "{path}: decoded vector length {len} exceeds max {}",
-                    vector.max_len
-                )));
-            }
-            let mut values = Vec::with_capacity(len);
-            for index in 0..len {
-                values.push(decode_spec_value_from_reader(
-                    inner,
-                    reader,
-                    type_defs,
-                    &index_path(path, index),
-                )?);
-            }
-            Ok(serde_json::Value::Array(values))
+            decode_vector_value_from_reader(vector, reader, type_defs, path)
         }
         ContractType::Tuple { tuple } => {
             let mut values = Vec::with_capacity(tuple.len());
@@ -1785,48 +1777,159 @@ fn decode_spec_value_from_reader(
             }
             Ok(serde_json::Value::Array(values))
         }
-        ContractType::Named { named } => match resolve_named_type_def(named, type_defs)? {
-            ContractTypeDef::TypeDefStruct { struct_def } => {
-                decode_struct_value(struct_def, reader, type_defs, path)
-            }
-            ContractTypeDef::TypeDefEnum { enum_def } => decode_enum_value(enum_def, reader, path),
-            ContractTypeDef::TypeDefUnion { union_def } => {
-                decode_union_value(union_def, reader, type_defs, path)
-            }
-            _ => Err(CliError::SpecFailed(
-                "embedded contract spec contains an unsupported type definition kind".into(),
-            )),
-        },
+        ContractType::Named { named } => {
+            decode_named_value_from_reader(named, reader, type_defs, path)
+        }
         ContractType::Array { array } => {
-            let inner = array.element.as_deref().ok_or_else(|| {
-                CliError::SpecFailed(
-                    "embedded contract spec is missing an array element type".into(),
-                )
-            })?;
-            if vector_contains_u8(Some(inner)) {
-                return reader
-                    .read_opaque_fixed_owned(array.len)
-                    .map(hex_json_value)
-                    .map_err(|e| {
-                        CliError::Other(format!("{path}: failed to decode byte array: {e}"))
-                    });
-            }
-
-            let mut values = Vec::with_capacity(array.len as usize);
-            for index in 0..array.len as usize {
-                values.push(decode_spec_value_from_reader(
-                    inner,
-                    reader,
-                    type_defs,
-                    &index_path(path, index),
-                )?);
-            }
-            Ok(serde_json::Value::Array(values))
+            decode_array_value_from_reader(array, reader, type_defs, path)
         }
         _ => Err(CliError::SpecFailed(
             "embedded contract spec contains an unsupported contract type".into(),
         )),
     }
+}
+
+fn decode_spec_scalar_value_from_reader(
+    ty: &ContractType,
+    reader: &mut xdrs::cxs::buf_reader::BufReader<'_>,
+    path: &str,
+) -> Option<Result<serde_json::Value, CliError>> {
+    match ty {
+        ContractType::Void => Some(Ok(serde_json::Value::Null)),
+        ContractType::Bool => {
+            Some(read_xdr_value::<bool>(reader, path).map(serde_json::Value::from))
+        }
+        ContractType::U8 => Some(read_xdr_value::<u32>(reader, path).and_then(|value| {
+            let value: u8 = value.try_into().map_err(|_| {
+                CliError::Other(format!("{path}: decoded u8 value is out of range"))
+            })?;
+            Ok(serde_json::Value::from(value))
+        })),
+        ContractType::U32 => Some(read_xdr_value::<u32>(reader, path).map(serde_json::Value::from)),
+        ContractType::I32 => Some(read_xdr_value::<i32>(reader, path).map(serde_json::Value::from)),
+        ContractType::U64 => Some(read_xdr_value::<u64>(reader, path).map(serde_json::Value::from)),
+        ContractType::I64 => Some(read_xdr_value::<i64>(reader, path).map(serde_json::Value::from)),
+        ContractType::U128 => Some(
+            read_xdr_value::<u128>(reader, path)
+                .map(|value| serde_json::Value::from(value.to_string())),
+        ),
+        ContractType::I128 => Some(
+            read_xdr_value::<i128>(reader, path)
+                .map(|value| serde_json::Value::from(value.to_string())),
+        ),
+        ContractType::String => {
+            Some(read_xdr_value::<String>(reader, path).map(serde_json::Value::from))
+        }
+        ContractType::Bytes => Some(
+            reader
+                .read_opaque_variable_owned(u32::MAX)
+                .map(hex_json_value)
+                .map_err(|e| CliError::Other(format!("{path}: failed to decode bytes: {e}"))),
+        ),
+        ContractType::Address => {
+            Some(read_xdr_value::<ContractAddress>(reader, path).map(hex_json_value))
+        }
+        _ => None,
+    }
+}
+
+fn decode_option_value_from_reader(
+    inner: Option<&ContractType>,
+    reader: &mut xdrs::cxs::buf_reader::BufReader<'_>,
+    type_defs: &TypeDefIndex<'_>,
+    path: &str,
+) -> Result<serde_json::Value, CliError> {
+    let inner = inner.ok_or_else(|| {
+        CliError::SpecFailed("embedded contract spec is missing an option inner type".into())
+    })?;
+    if read_xdr_value::<bool>(reader, path)? {
+        decode_spec_value_from_reader(inner, reader, type_defs, path)
+    } else {
+        Ok(serde_json::Value::Null)
+    }
+}
+
+fn decode_vector_value_from_reader(
+    vector: &ContractVectorType,
+    reader: &mut xdrs::cxs::buf_reader::BufReader<'_>,
+    type_defs: &TypeDefIndex<'_>,
+    path: &str,
+) -> Result<serde_json::Value, CliError> {
+    let inner = vector.element.as_deref().ok_or_else(|| {
+        CliError::SpecFailed("embedded contract spec is missing a vector element type".into())
+    })?;
+    if vector_contains_u8(Some(inner)) {
+        return reader
+            .read_opaque_variable_owned(vector.max_len)
+            .map(hex_json_value)
+            .map_err(|e| CliError::Other(format!("{path}: failed to decode byte vector: {e}")));
+    }
+
+    let len = read_xdr_value::<u32>(reader, path)? as usize;
+    if len > vector.max_len as usize {
+        return Err(CliError::Other(format!(
+            "{path}: decoded vector length {len} exceeds max {}",
+            vector.max_len
+        )));
+    }
+    let mut values = Vec::with_capacity(len);
+    for index in 0..len {
+        values.push(decode_spec_value_from_reader(
+            inner,
+            reader,
+            type_defs,
+            &index_path(path, index),
+        )?);
+    }
+    Ok(serde_json::Value::Array(values))
+}
+
+fn decode_named_value_from_reader(
+    named: &ContractSpecString,
+    reader: &mut xdrs::cxs::buf_reader::BufReader<'_>,
+    type_defs: &TypeDefIndex<'_>,
+    path: &str,
+) -> Result<serde_json::Value, CliError> {
+    match resolve_named_type_def(named, type_defs)? {
+        ContractTypeDef::TypeDefStruct { struct_def } => {
+            decode_struct_value(struct_def, reader, type_defs, path)
+        }
+        ContractTypeDef::TypeDefEnum { enum_def } => decode_enum_value(enum_def, reader, path),
+        ContractTypeDef::TypeDefUnion { union_def } => {
+            decode_union_value(union_def, reader, type_defs, path)
+        }
+        _ => Err(CliError::SpecFailed(
+            "embedded contract spec contains an unsupported type definition kind".into(),
+        )),
+    }
+}
+
+fn decode_array_value_from_reader(
+    array: &ContractArrayType,
+    reader: &mut xdrs::cxs::buf_reader::BufReader<'_>,
+    type_defs: &TypeDefIndex<'_>,
+    path: &str,
+) -> Result<serde_json::Value, CliError> {
+    let inner = array.element.as_deref().ok_or_else(|| {
+        CliError::SpecFailed("embedded contract spec is missing an array element type".into())
+    })?;
+    if vector_contains_u8(Some(inner)) {
+        return reader
+            .read_opaque_fixed_owned(array.len)
+            .map(hex_json_value)
+            .map_err(|e| CliError::Other(format!("{path}: failed to decode byte array: {e}")));
+    }
+
+    let mut values = Vec::with_capacity(array.len as usize);
+    for index in 0..array.len as usize {
+        values.push(decode_spec_value_from_reader(
+            inner,
+            reader,
+            type_defs,
+            &index_path(path, index),
+        )?);
+    }
+    Ok(serde_json::Value::Array(values))
 }
 
 fn decode_struct_value(
@@ -2300,71 +2403,17 @@ mod tests {
         )
         .expect("bug: embedded spec calldata should encode");
 
-        let type_defs =
-            build_type_def_index(&metadata.type_defs).expect("bug: typedef index should build");
-        let mut reader = xdrs::cxs::buf_reader::BufReader::new(&encoded);
-
         assert_eq!(
-            decode_spec_value_from_reader(
-                &metadata.method.args[0].ty,
-                &mut reader,
-                &type_defs,
-                "arg0",
-            )
-            .expect("bug: struct arg should decode"),
-            json!({"count": 7, "bytes": "0x6869"})
+            decode_spec_arguments(&metadata, &encoded),
+            vec![
+                json!({"count": 7, "bytes": "0x6869"}),
+                json!("Ready"),
+                json!(5),
+                json!("0x01020304"),
+                json!([true, false, true]),
+                json!([7, "ok"]),
+            ]
         );
-        assert_eq!(
-            decode_spec_value_from_reader(
-                &metadata.method.args[1].ty,
-                &mut reader,
-                &type_defs,
-                "arg1",
-            )
-            .expect("bug: enum arg should decode"),
-            json!("Ready")
-        );
-        assert_eq!(
-            decode_spec_value_from_reader(
-                &metadata.method.args[2].ty,
-                &mut reader,
-                &type_defs,
-                "arg2",
-            )
-            .expect("bug: option arg should decode"),
-            json!(5)
-        );
-        assert_eq!(
-            decode_spec_value_from_reader(
-                &metadata.method.args[3].ty,
-                &mut reader,
-                &type_defs,
-                "arg3",
-            )
-            .expect("bug: fixed byte array should decode"),
-            json!("0x01020304")
-        );
-        assert_eq!(
-            decode_spec_value_from_reader(
-                &metadata.method.args[4].ty,
-                &mut reader,
-                &type_defs,
-                "arg4",
-            )
-            .expect("bug: vector arg should decode"),
-            json!([true, false, true])
-        );
-        assert_eq!(
-            decode_spec_value_from_reader(
-                &metadata.method.args[5].ty,
-                &mut reader,
-                &type_defs,
-                "arg5",
-            )
-            .expect("bug: tuple arg should decode"),
-            json!([7, "ok"])
-        );
-        assert_eq!(reader.remaining(), 0);
     }
 
     #[test]
@@ -2776,6 +2825,32 @@ mod tests {
         }
     }
 
+    fn decode_spec_arguments(
+        metadata: &SpecMethodMetadata,
+        encoded: &[u8],
+    ) -> Vec<serde_json::Value> {
+        let type_defs =
+            build_type_def_index(&metadata.type_defs).expect("bug: typedef index should build");
+        let mut reader = xdrs::cxs::buf_reader::BufReader::new(encoded);
+        let values = metadata
+            .method
+            .args
+            .iter()
+            .enumerate()
+            .map(|(index, field)| {
+                decode_spec_value_from_reader(
+                    &field.ty,
+                    &mut reader,
+                    &type_defs,
+                    &format!("arg{index}"),
+                )
+                .expect("bug: spec argument should decode")
+            })
+            .collect();
+        assert_eq!(reader.remaining(), 0);
+        values
+    }
+
     fn contract_field(name: &str, ty: ContractType) -> ContractField {
         ContractField {
             name: spec_string_bytes(name),
@@ -2814,7 +2889,7 @@ mod tests {
 
     fn encode_uleb128(mut value: usize, out: &mut Vec<u8>) {
         loop {
-            let mut byte = (value & 0x7f) as u8;
+            let mut byte = u8::try_from(value & 0x7f).expect("bug: uleb128 byte should fit");
             value >>= 7;
             if value != 0 {
                 byte |= 0x80;

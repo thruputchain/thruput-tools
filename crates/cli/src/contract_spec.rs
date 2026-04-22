@@ -313,7 +313,7 @@ mod tests {
 
     fn encode_uleb128(mut value: usize, out: &mut Vec<u8>) {
         loop {
-            let mut byte = (value & 0x7f) as u8;
+            let mut byte = u8::try_from(value & 0x7f).expect("bug: uleb128 byte should fit");
             value >>= 7;
             if value != 0 {
                 byte |= 0x80;
