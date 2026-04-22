@@ -119,7 +119,9 @@ groundhog build -- --verbose   # pass extra args to cargo
 ```
 
 Outputs the `.wasm` file path and size on success. When spec generation
-is available, also emits a `*.spec.json` sidecar next to the built WASM.
+is available, also emits a human-readable `*.spec.json` sidecar next to
+the built WASM. The embedded WASM section remains the source of truth;
+the JSON file is for inspection and external tooling.
 
 ### `groundhog test`
 
@@ -170,7 +172,7 @@ groundhog deploy --json
 
 Call a deployed contract method using either a literal address or a
 contract alias from the active profile. The CLI resolves entrypoints
-from generated spec sidecars and local metadata when available, submits
+from embedded contract specs and local metadata when available, submits
 the invocation transaction, and prints returned values plus receipt
 status.
 
@@ -178,10 +180,27 @@ status.
 groundhog call my-counter get
 groundhog call my-counter increment 5
 groundhog call 0xabc123... get
+groundhog call my-counter get --dry-run
 groundhog call my-counter get --json
 ```
 
-`--dry-run` is not implemented yet.
+Embedded contract specs now drive selector resolution plus first-pass
+typed argument encoding / return decoding. The spec-driven path supports
+scalars, structs, enums, unions, options, tuples, vectors, arrays, and
+byte blobs (`Vec<u8>` / `[u8; N]`) via plain args, JSON, or hex where it
+fits the underlying type.
+
+`groundhog call --dry-run` now resolves selectors, encodes calldata,
+fetches the current chain tip to set expiry, signs the transaction, and
+prints or emits the prepared invocation without submitting it. This
+first pass is intentionally signed and RPC-backed; a later follow-up can
+split payload assembly from signing if we want a no-key-required dry
+run.
+
+Remaining follow-up after this first pass: cache repeated
+embedded-spec loads, tighten the union/structured CLI UX, and remove
+the remaining local-source fallback once the spec-driven path has
+soaked.
 
 ### `groundhog node`
 

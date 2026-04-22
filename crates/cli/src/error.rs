@@ -96,6 +96,10 @@ pub enum CliError {
     ReceiptTimeout { tx_hash: String, seconds: u64 },
     #[error("internal error: receipt polling exhausted unexpectedly")]
     ReceiptPollingExhausted,
+    #[error("{path}: {message}")]
+    CallEncode { path: String, message: String },
+    #[error("{path}: {message}")]
+    CallDecode { path: String, message: String },
     #[error("{0}")]
     Other(String),
 }
@@ -142,6 +146,8 @@ impl CliError {
             Self::RpcMethodFailed { .. } => "rpc_method_failed",
             Self::ReceiptTimeout { .. } => "receipt_timeout",
             Self::ReceiptPollingExhausted => "receipt_polling_exhausted",
+            Self::CallEncode { .. } => "call_encode",
+            Self::CallDecode { .. } => "call_decode",
             Self::Other(_) => "other",
         }
     }
@@ -215,6 +221,12 @@ impl CliError {
             Self::ReceiptTimeout { .. } => Some(Cow::Borrowed(
                 "check the node logs, then rerun the command once the transaction is committed or rejected",
             )),
+            Self::CallEncode { .. } => Some(Cow::Borrowed(
+                "check the reported argument path and use structured JSON for composite contract values",
+            )),
+            Self::CallDecode { .. } => Some(Cow::Borrowed(
+                "check the reported return-value path and verify the resolved contract types match the on-chain value",
+            )),
             Self::RuntimeInit(_)
             | Self::ReceiptPollingExhausted
             | Self::Io(_)
@@ -283,6 +295,12 @@ impl CliError {
                 "stdout": stdout,
                 "stderr": stderr,
             })),
+            Self::CallEncode { path, message } | Self::CallDecode { path, message } => {
+                Some(json!({
+                    "path": path,
+                    "message": message,
+                }))
+            }
             _ => None,
         }
     }

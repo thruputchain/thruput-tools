@@ -1,20 +1,25 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use groundhog_rpc_api_types::receipt::ExecStatus;
+use groundhog_rpc_api_types::receipt::TransactionReceipt;
+use groundhog_rpc_api_types::transaction::TxHash;
 use groundhog_signing::{
     BuildCallTransaction, DEFAULT_TX_GAS_LIMIT, SignTransactionParams, Signer,
     build_call_transaction, sign_transaction,
 };
 use groundhog_xdr::auth_claim::AuthClaim;
 use groundhog_xdr::contract::ContractEntrypointID;
-use groundhog_xdr::types::{ContractAddress, Ed25519PublicKey, SHA256Hash};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use crate::artifacts::ArtifactOptions;
 use crate::build::{cargo_metadata_with_artifacts, resolve_package};
+use crate::codec::{
+    CallMetadata, ContractMetadata, MethodMetadata, SpecMethodMetadata, decode_return, encode_args,
+    parse_contract_address, spec_string_text,
+};
 use crate::config::{find_project_config, resolve_default_key, resolve_profile};
-use crate::contract_spec::{FullMethodSpec, TypeSpec, load_full_spec, load_interface_sidecar};
+use crate::contract_spec::{InterfaceSpec, load_contract_spec, load_registered_interfaces};
 use crate::keys::load_local_signer;
 use crate::result::CommandResult;
 use crate::tx_utils::{
@@ -25,65 +30,243 @@ use crate::{CliError, Print};
 /// Wallet `do_action` entrypoint ID (from dev-wallet WASM exports).
 const WALLET_DO_ACTION_ENTRYPOINT: [u8; 8] = 0x1984_6D75_0FAD_81D6_u64.to_be_bytes();
 
+/// Resolved contract entrypoint plus any metadata used for codec work.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum SelectorSource {
-    Full(FullMethodMetadata),
-    Local(ContractMetadata),
-    Explicit(ContractEntrypointID),
+pub(crate) struct ResolvedCall {
+    pub(crate) entrypoint: ContractEntrypointID,
+    pub(crate) metadata: Option<CallMetadata>,
 }
 
+/// Fully prepared call submission inputs shared by live execution and dry-run flows.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum ResolvedMethodMetadata {
-    Full(FullMethodMetadata),
-    Local(ContractMetadata),
+pub(crate) struct PreparedCall {
+    pub(crate) rpc_url: String,
+    pub(crate) contract_address_hex: String,
+    pub(crate) method: String,
+    pub(crate) resolved: ResolvedCall,
+    pub(crate) calldata: Vec<u8>,
+    pub(crate) tx_hex: String,
 }
 
 /// Call a method on a deployed contract.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     contract: &str,
     method: &str,
     args: &[String],
+    dry_run: bool,
     artifacts: &ArtifactOptions,
     profile: &str,
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
+    let prepared = prepare_call(contract, method, args, artifacts, profile)?;
+    if dry_run {
+        return print_dry_run(&prepared, cmd, print);
+    }
+
+    print.status(format_args!(
+        "Calling {} on {} via {}...",
+        prepared.method, prepared.contract_address_hex, prepared.rpc_url
+    ));
+
+    let (tx_hash, receipt) = submit_prepared_call(&prepared)?;
+    let tx_hash_formatted = format_tx_hash(&tx_hash);
+    let status_summary = summarize_exec_status(&receipt.status);
+    let decoded_return = receipt
+        .return_data
+        .as_ref()
+        .and_then(|data| decode_return(data.0.as_slice(), prepared.resolved.metadata.as_ref()));
+
+    // Print result
+    match &receipt.status {
+        ExecStatus::Ok => {
+            if let Some(ref value) = decoded_return {
+                print.status(format_args!(
+                    "Call succeeded: {} -> {value}",
+                    prepared.method
+                ));
+            } else {
+                print.status(format_args!("Call succeeded: {}", prepared.method));
+            }
+            print.status(format_args!(
+                "  contract: {}",
+                prepared.contract_address_hex
+            ));
+            print.status(format_args!("  tx: {tx_hash_formatted}"));
+            print.status(format_args!("  height: {}", *receipt.height));
+            if decoded_return.is_none()
+                && let Some(ref data) = receipt.return_data
+                && !data.0.is_empty()
+            {
+                print.status(format_args!("  return: 0x{}", hex::encode(&data.0)));
+            }
+        }
+        ExecStatus::Reverted { .. } => {
+            print.warn(format_args!("Call {status_summary}"));
+            print.status(format_args!("  method: {}", prepared.method));
+            print.status(format_args!(
+                "  contract: {}",
+                prepared.contract_address_hex
+            ));
+            print.status(format_args!("  tx: {tx_hash_formatted}"));
+            print.status(format_args!("  height: {}", *receipt.height));
+        }
+        other => {
+            print.warn(format_args!("Call {}", summarize_exec_status(other)));
+            print.status(format_args!("  method: {}", prepared.method));
+            print.status(format_args!(
+                "  contract: {}",
+                prepared.contract_address_hex
+            ));
+            print.status(format_args!("  tx: {tx_hash_formatted}"));
+            print.status(format_args!("  height: {}", *receipt.height));
+        }
+    }
+
+    print.json(&CommandResult::new(
+        cmd,
+        json!({
+            "tx_hash": tx_hash_formatted,
+            "contract": prepared.contract_address_hex,
+            "method": prepared.method,
+            "height": receipt.height,
+            "status": receipt.status,
+            "status_summary": status_summary,
+            "return_data": receipt.return_data,
+            "return_value": decoded_return,
+        }),
+    ))?;
+
+    Ok(())
+}
+
+fn print_dry_run(
+    prepared: &PreparedCall,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
+    let entrypoint_id = format_entrypoint_id(prepared.resolved.entrypoint);
+    let calldata_hex = format_hex_bytes(&prepared.calldata);
+
+    print.status(format_args!(
+        "Prepared dry-run call {} on {} via {}.",
+        prepared.method, prepared.contract_address_hex, prepared.rpc_url
+    ));
+    print.status(format_args!(
+        "  selector: {}",
+        selector_summary(&prepared.resolved)
+    ));
+    print.status(format_args!("  entrypoint: {entrypoint_id}"));
+    print.status(format_args!("  calldata: {calldata_hex}"));
+    print.status(format_args!("  signed tx: {}", prepared.tx_hex));
+    print.status("  submitted: no (--dry-run)");
+
+    print.json(&CommandResult::new(
+        cmd,
+        json!({
+            "dry_run": true,
+            "submitted": false,
+            "rpc_url": prepared.rpc_url,
+            "contract": prepared.contract_address_hex,
+            "method": prepared.method,
+            "entrypoint_id": entrypoint_id,
+            "calldata": calldata_hex,
+            "signed_tx": prepared.tx_hex,
+            "selector": selector_json(&prepared.resolved),
+        }),
+    ))?;
+
+    Ok(())
+}
+
+fn format_entrypoint_id(entrypoint: ContractEntrypointID) -> String {
+    format!("0x{}", hex::encode(entrypoint.into_inner()))
+}
+
+fn format_hex_bytes(bytes: &[u8]) -> String {
+    format!("0x{}", hex::encode(bytes))
+}
+
+fn selector_summary(resolved: &ResolvedCall) -> String {
+    match &resolved.metadata {
+        Some(CallMetadata::Spec(metadata)) => {
+            format!(
+                "embedded spec {} v{}",
+                metadata.interface_name, metadata.version
+            )
+        }
+        Some(CallMetadata::Local(metadata)) => {
+            format!(
+                "local metadata {} v{}",
+                metadata.interface_name, metadata.version
+            )
+        }
+        None => "explicit entrypoint".into(),
+    }
+}
+
+fn selector_json(resolved: &ResolvedCall) -> serde_json::Value {
+    match &resolved.metadata {
+        Some(CallMetadata::Spec(metadata)) => json!({
+            "source": "embedded_spec",
+            "interface": {
+                "name": metadata.interface_name,
+                "version": metadata.version,
+            },
+        }),
+        Some(CallMetadata::Local(metadata)) => json!({
+            "source": "local_metadata",
+            "interface": {
+                "name": metadata.interface_name,
+                "version": metadata.version,
+            },
+            "source_path": metadata.source.display().to_string(),
+        }),
+        None => json!({
+            "source": "explicit_entrypoint",
+            "interface": serde_json::Value::Null,
+        }),
+    }
+}
+
+/// Resolve, encode, and sign a call transaction without submitting it.
+pub(crate) fn prepare_call(
+    contract: &str,
+    method: &str,
+    args: &[String],
+    artifacts: &ArtifactOptions,
+    profile: &str,
+) -> Result<PreparedCall, CliError> {
+    let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
+    prepare_call_with_runtime(contract, method, args, artifacts, profile, &rt)
+}
+
+#[allow(clippy::too_many_lines)]
+fn prepare_call_with_runtime(
+    contract: &str,
+    method: &str,
+    args: &[String],
+    artifacts: &ArtifactOptions,
+    profile: &str,
+    rt: &tokio::runtime::Runtime,
+) -> Result<PreparedCall, CliError> {
     let cwd = std::env::current_dir()?;
-    let resolved = resolve_profile(&cwd, Some(profile))?;
+    let resolved_profile = resolve_profile(&cwd, Some(profile))?;
+    let rpc_url = resolved_profile
+        .rpc_url
+        .as_deref()
+        .ok_or(CliError::MissingRpcUrl)?;
 
-    let rpc_url = resolved.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
-
-    // Resolve contract address (alias or literal)
-    let contract_address_hex = resolved.resolve_contract(contract);
+    let contract_address_hex = resolved_profile.resolve_contract(contract);
     let contract_address = parse_contract_address(&contract_address_hex)?;
 
-    // Resolve signing key
     let key_name = resolve_default_key(&cwd, Some(profile))?.ok_or(CliError::MissingSigningKey)?;
     let signer = load_local_signer(&key_name)?;
 
-    // Resolve the SDK selector from local project source when possible.
-    let selector = resolve_method_entrypoint(&cwd, method, artifacts)?;
-    let (entrypoint, metadata) = match selector {
-        SelectorSource::Full(metadata) => (
-            parse_entrypoint_hex(&metadata.method.entrypoint)?,
-            Some(ResolvedMethodMetadata::Full(metadata)),
-        ),
-        SelectorSource::Local(metadata) => (
-            contract_entrypoint_id(&metadata.interface_name, &metadata.version, method),
-            Some(ResolvedMethodMetadata::Local(metadata)),
-        ),
-        SelectorSource::Explicit(entrypoint) => (entrypoint, None),
-    };
+    let resolved = resolve_call(&cwd, method, artifacts)?;
+    let calldata = encode_args(args, resolved.metadata.as_ref())?;
 
-    // Encode calldata
-    let calldata = encode_calldata(args, metadata.as_ref())?;
-
-    print.status(format_args!(
-        "Calling {method} on {contract_address_hex} via {rpc_url}..."
-    ));
-
-    // Build and sign — invokes the sender's wallet contract with do_action.
     let pubkey = signer.public_key();
     let account = groundhog_signing::PubkeyAccount::new(
         pubkey,
@@ -93,23 +276,17 @@ pub fn run(
         .address()
         .map_err(|e| CliError::Other(e.to_string()))?;
 
-    // Encode the inner invocation (TXS format, matching wallet's txs::decode):
-    // (contract_address, method_entrypoint, gas_limit, raw_calldata)
-    let inner_gas_limit: u64 = DEFAULT_TX_GAS_LIMIT;
     let inner_invocation = xdrs::txs::encode(&(
         contract_address,
-        entrypoint,
-        inner_gas_limit,
+        resolved.entrypoint,
+        DEFAULT_TX_GAS_LIMIT,
         calldata.as_slice(),
     ))
     .map_err(|e| CliError::Other(format!("failed to encode inner invocation: {e}")))?;
 
-    // Outer calldata is CXS-encoded — the #[contract] macro deserializes
-    // do_action's &[u8] parameter with xdrs::cxs::decode.
     let do_action_calldata = xdrs::cxs::encode(&inner_invocation.as_slice())
         .map_err(|e| CliError::Other(format!("failed to CXS-encode do_action calldata: {e}")))?;
 
-    // Auth claim: kInvokedAddressSignature at key slot 0.
     let auth_claims: groundhog_xdr::auth_claim::AuthClaimData =
         vec![AuthClaim::kInvokedAddressSignature {
             invoked_address_signature_id: 0,
@@ -117,10 +294,7 @@ pub fn run(
         .try_into()
         .map_err(|e: xdr_common::Error| CliError::Other(e.to_string()))?;
 
-    let wallet_entrypoint =
-        groundhog_xdr::contract::ContractEntrypointID::from(WALLET_DO_ACTION_ENTRYPOINT);
-
-    let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
+    let wallet_entrypoint = ContractEntrypointID::from(WALLET_DO_ACTION_ENTRYPOINT);
     let block_expiry_height = rt.block_on(async { resolve_block_expiry_height(rpc_url).await })?;
 
     let tx = build_call_transaction(BuildCallTransaction {
@@ -137,73 +311,30 @@ pub fn run(
         .map_err(|e| CliError::Other(e.to_string()))?;
     let tx_xdr = groundhog_signing::encode_signed_transaction_xdr(&signed_tx)
         .map_err(|e| CliError::Other(e.to_string()))?;
-    let tx_hex = format!("0x{}", hex::encode(&tx_xdr));
 
-    // Submit via JSON-RPC
-    let (tx_hash, receipt) = rt.block_on(async { submit_and_poll(rpc_url, &tx_hex).await })?;
-    let tx_hash_formatted = format_tx_hash(&tx_hash);
-    let status_summary = summarize_exec_status(&receipt.status);
-    let decoded_return = receipt
-        .return_data
-        .as_ref()
-        .and_then(|data| decode_return_value(data.0.as_slice(), metadata.as_ref()));
-
-    // Print result
-    match &receipt.status {
-        ExecStatus::Ok => {
-            if let Some(ref value) = decoded_return {
-                print.status(format_args!("Call succeeded: {method} -> {value}"));
-            } else {
-                print.status(format_args!("Call succeeded: {method}"));
-            }
-            print.status(format_args!("  contract: {contract_address_hex}"));
-            print.status(format_args!("  tx: {tx_hash_formatted}"));
-            print.status(format_args!("  height: {}", *receipt.height));
-            if decoded_return.is_none()
-                && let Some(ref data) = receipt.return_data
-                && !data.0.is_empty()
-            {
-                print.status(format_args!("  return: 0x{}", hex::encode(&data.0)));
-            }
-        }
-        ExecStatus::Reverted { .. } => {
-            print.warn(format_args!("Call {status_summary}"));
-            print.status(format_args!("  method: {method}"));
-            print.status(format_args!("  contract: {contract_address_hex}"));
-            print.status(format_args!("  tx: {tx_hash_formatted}"));
-            print.status(format_args!("  height: {}", *receipt.height));
-        }
-        other => {
-            print.warn(format_args!("Call {}", summarize_exec_status(other)));
-            print.status(format_args!("  method: {method}"));
-            print.status(format_args!("  contract: {contract_address_hex}"));
-            print.status(format_args!("  tx: {tx_hash_formatted}"));
-            print.status(format_args!("  height: {}", *receipt.height));
-        }
-    }
-
-    print.json(&CommandResult::new(
-        cmd,
-        json!({
-            "tx_hash": tx_hash_formatted,
-            "contract": contract_address_hex,
-            "method": method,
-            "height": receipt.height,
-            "status": receipt.status,
-            "status_summary": status_summary,
-            "return_data": receipt.return_data,
-            "return_value": decoded_return,
-        }),
-    ))?;
-
-    Ok(())
+    Ok(PreparedCall {
+        rpc_url: rpc_url.to_owned(),
+        contract_address_hex,
+        method: method.to_owned(),
+        resolved,
+        calldata,
+        tx_hex: format!("0x{}", hex::encode(&tx_xdr)),
+    })
 }
 
-fn parse_contract_address(hex_str: &str) -> Result<ContractAddress, CliError> {
-    Ok(ContractAddress::from(parse_fixed_hex::<32>(
-        hex_str,
-        "contract address",
-    )?))
+/// Submit a previously prepared call transaction and wait for its receipt.
+pub(crate) fn submit_prepared_call(
+    prepared: &PreparedCall,
+) -> Result<(TxHash, TransactionReceipt), CliError> {
+    let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
+    submit_prepared_call_with_runtime(prepared, &rt)
+}
+
+fn submit_prepared_call_with_runtime(
+    prepared: &PreparedCall,
+    rt: &tokio::runtime::Runtime,
+) -> Result<(TxHash, TransactionReceipt), CliError> {
+    rt.block_on(async { submit_and_poll(&prepared.rpc_url, &prepared.tx_hex).await })
 }
 
 fn explicit_entrypoint_id(method: &str) -> Result<Option<ContractEntrypointID>, CliError> {
@@ -226,54 +357,42 @@ fn explicit_entrypoint_id(method: &str) -> Result<Option<ContractEntrypointID>, 
     Ok(Some(ContractEntrypointID::from(id)))
 }
 
-fn resolve_method_entrypoint(
+fn resolve_call(
     cwd: &Path,
     method: &str,
     artifacts: &ArtifactOptions,
-) -> Result<SelectorSource, CliError> {
+) -> Result<ResolvedCall, CliError> {
     if let Some(entrypoint) = explicit_entrypoint_id(method)? {
-        return Ok(SelectorSource::Explicit(entrypoint));
+        return Ok(ResolvedCall {
+            entrypoint,
+            metadata: None,
+        });
     }
-    if let Some(metadata) = resolve_full_contract_metadata(cwd, method, artifacts)? {
-        return Ok(SelectorSource::Full(metadata));
+    if let Some(metadata) = resolve_spec_method(cwd, method, artifacts)? {
+        return Ok(ResolvedCall {
+            entrypoint: contract_entrypoint_id(&metadata.interface_name, &metadata.version, method),
+            metadata: Some(CallMetadata::Spec(metadata)),
+        });
     }
     match resolve_local_contract_metadata(cwd, method, artifacts)? {
-        Some(metadata) => Ok(SelectorSource::Local(metadata)),
+        Some(metadata) => Ok(ResolvedCall {
+            entrypoint: contract_entrypoint_id(&metadata.interface_name, &metadata.version, method),
+            metadata: Some(CallMetadata::Local(metadata)),
+        }),
         None => Err(CliError::Other(
-            "cannot resolve contract method metadata locally. Run `groundhog call` from inside \
-             the project that defines the contract, or pass an explicit 0x-prefixed 8-byte \
-             entrypoint ID."
+            "cannot resolve the contract method from the local project or embedded contract spec. \
+             Run `groundhog build` from inside the project that defines the contract, or pass an \
+             explicit 0x-prefixed 8-byte entrypoint ID."
                 .into(),
         )),
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ContractMetadata {
-    interface_name: String,
-    version: String,
-    source: PathBuf,
-    method: MethodMetadata,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct FullMethodMetadata {
-    interface_name: String,
-    version: String,
-    method: FullMethodSpec,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct MethodMetadata {
-    arg_types: Vec<String>,
-    return_type: Option<String>,
-}
-
-fn resolve_full_contract_metadata(
+fn resolve_spec_method(
     cwd: &Path,
     method: &str,
     artifacts: &ArtifactOptions,
-) -> Result<Option<FullMethodMetadata>, CliError> {
+) -> Result<Option<SpecMethodMetadata>, CliError> {
     let Ok(metadata) = cargo_metadata_with_artifacts(artifacts) else {
         return Ok(None);
     };
@@ -281,29 +400,72 @@ fn resolve_full_contract_metadata(
         return Ok(None);
     };
     let wasm = crate::artifacts::groundhog_wasm_output_path(&metadata.target_directory, pkg_name);
-    let Some(spec) = load_full_spec(&wasm)? else {
+    let Some(spec) = load_contract_spec(&wasm)? else {
         return Ok(None);
     };
 
-    let mut matches = spec
-        .methods
-        .into_iter()
-        .filter(|candidate| candidate.name == method)
-        .collect::<Vec<_>>();
+    let mut interface_matches = Vec::new();
 
-    if matches.is_empty() {
+    for interface in spec.interfaces.iter() {
+        let matched_methods = interface
+            .methods
+            .iter()
+            .filter_map(|candidate| match spec_string_text(&candidate.name) {
+                Ok(name) if name == method => Some(Ok(candidate.clone())),
+                Ok(_) => None,
+                Err(err) => Some(Err(err)),
+            })
+            .collect::<Result<Vec<_>, CliError>>()?;
+        if matched_methods.is_empty() {
+            continue;
+        }
+
+        interface_matches.push((
+            InterfaceSpec {
+                interface_name: spec_string_text(&interface.name)?.to_owned(),
+                interface_version: spec_string_text(&interface.vers)?.to_owned(),
+            },
+            matched_methods,
+        ));
+    }
+
+    if interface_matches.is_empty() {
         return Ok(None);
     }
-    if matches.len() > 1 {
+    interface_matches.sort_by(|(left, _), (right, _)| left.cmp(right));
+    if interface_matches.len() > 1 {
+        let descriptions = interface_matches
+            .iter()
+            .map(|(candidate, _)| {
+                format!(
+                    "{} v{}",
+                    candidate.interface_name, candidate.interface_version
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
         return Err(CliError::Other(format!(
-            "method `{method}` matches multiple entries in the generated contract spec"
+            "method `{method}` matches multiple interfaces in the embedded contract spec: \
+             {descriptions}"
         )));
     }
 
-    Ok(Some(FullMethodMetadata {
-        interface_name: spec.interface,
-        version: spec.version,
-        method: matches.remove(0),
+    let (matched, mut methods) = interface_matches
+        .into_iter()
+        .next()
+        .expect("bug: interface match count should be non-zero");
+    if methods.len() > 1 {
+        return Err(CliError::SpecFailed(format!(
+            "embedded contract spec defines `{}` v{}::{method} multiple times",
+            matched.interface_name, matched.interface_version
+        )));
+    }
+
+    Ok(Some(SpecMethodMetadata {
+        interface_name: matched.interface_name,
+        version: matched.interface_version,
+        method: methods.remove(0),
+        type_defs: spec.type_defs.iter().cloned().collect(),
     }))
 }
 
@@ -318,8 +480,16 @@ fn resolve_local_contract_metadata(
     let Some(project_root) = config_path.parent() else {
         return Ok(None);
     };
+    let interface_specs = load_project_registered_interfaces(project_root, artifacts)?;
+    resolve_local_contract_metadata_in_project(project_root, method, interface_specs.as_deref())
+}
+
+fn resolve_local_contract_metadata_in_project(
+    project_root: &Path,
+    method: &str,
+    interface_specs: Option<&[InterfaceSpec]>,
+) -> Result<Option<ContractMetadata>, CliError> {
     let package_version = load_package_version(project_root)?;
-    let interface_spec = load_project_interface_spec(project_root, artifacts)?;
     let src_root = project_root.join("src");
     if !src_root.exists() {
         return Ok(None);
@@ -327,7 +497,7 @@ fn resolve_local_contract_metadata(
 
     let mut candidates = Vec::new();
     collect_contract_metadata(&src_root, method, &package_version, &mut candidates)?;
-    candidates = filter_candidates_by_interface_spec(candidates, interface_spec.as_ref());
+    candidates = filter_candidates_by_interfaces(candidates, interface_specs);
 
     if candidates.is_empty() {
         return Ok(None);
@@ -360,29 +530,29 @@ fn resolve_local_contract_metadata(
     )))
 }
 
-fn load_project_interface_spec(
+fn load_project_registered_interfaces(
     project_root: &Path,
     artifacts: &ArtifactOptions,
-) -> Result<Option<crate::contract_spec::InterfaceSpecFile>, CliError> {
+) -> Result<Option<Vec<crate::contract_spec::InterfaceSpec>>, CliError> {
     let metadata = cargo_metadata_with_artifacts(artifacts)?;
     let pkg_name = resolve_package(&metadata, None, project_root)?;
     let wasm = crate::artifacts::groundhog_wasm_output_path(&metadata.target_directory, pkg_name);
-    load_interface_sidecar(&wasm)
+    load_registered_interfaces(&wasm)
 }
 
-fn filter_candidates_by_interface_spec(
+fn filter_candidates_by_interfaces(
     mut candidates: Vec<ContractMetadata>,
-    interface_spec: Option<&crate::contract_spec::InterfaceSpecFile>,
+    interface_specs: Option<&[crate::contract_spec::InterfaceSpec]>,
 ) -> Vec<ContractMetadata> {
-    let Some(interface_spec) = interface_spec else {
+    let Some(interface_specs) = interface_specs else {
         return candidates;
     };
-    if interface_spec.interfaces.is_empty() {
+    if interface_specs.is_empty() {
         return candidates;
     }
 
     candidates.retain(|candidate| {
-        interface_spec.interfaces.iter().any(|interface| {
+        interface_specs.iter().any(|interface| {
             interface.interface_name == candidate.interface_name
                 && interface.interface_version == candidate.version
         })
@@ -700,405 +870,6 @@ fn major_version(version: &str) -> &str {
     }
 }
 
-fn encode_calldata(
-    args: &[String],
-    metadata: Option<&ResolvedMethodMetadata>,
-) -> Result<Vec<u8>, CliError> {
-    if let Some(metadata) = metadata {
-        return match metadata {
-            ResolvedMethodMetadata::Full(metadata) => {
-                encode_full_spec_calldata(args, &metadata.method)
-            }
-            ResolvedMethodMetadata::Local(metadata) => {
-                encode_local_typed_calldata(args, &metadata.method)
-            }
-        };
-    }
-    if args.is_empty() {
-        return Ok(vec![]);
-    }
-    if args.len() == 1 {
-        let stripped = args[0].strip_prefix("0x").unwrap_or(&args[0]);
-        return hex::decode(stripped)
-            .map_err(|e| CliError::Other(format!("invalid calldata hex: {e}")));
-    }
-    Err(CliError::Other(
-        "multiple call arguments require contract spec support \
-         (not yet implemented) — pass a single hex-encoded calldata \
-         argument for now"
-            .into(),
-    ))
-}
-
-fn encode_local_typed_calldata(
-    args: &[String],
-    method: &MethodMetadata,
-) -> Result<Vec<u8>, CliError> {
-    if args.len() != method.arg_types.len() {
-        return Err(CliError::Other(format!(
-            "method expects {} argument(s) but {} were provided",
-            method.arg_types.len(),
-            args.len(),
-        )));
-    }
-    if method.arg_types.is_empty() {
-        return Ok(vec![]);
-    }
-
-    let mut encoded = Vec::new();
-    for (arg, ty) in args.iter().zip(&method.arg_types) {
-        encoded.extend(encode_single_value(ty, arg)?);
-    }
-    Ok(encoded)
-}
-
-fn encode_full_spec_calldata(
-    args: &[String],
-    method: &FullMethodSpec,
-) -> Result<Vec<u8>, CliError> {
-    if args.len() != method.args.len() {
-        return Err(CliError::Other(format!(
-            "method expects {} argument(s) but {} were provided",
-            method.args.len(),
-            args.len(),
-        )));
-    }
-    if method.args.is_empty() {
-        return Ok(vec![]);
-    }
-
-    let mut encoded = Vec::new();
-    for (arg, spec) in args.iter().zip(&method.args) {
-        encoded.extend(encode_typespec_value(&spec.typespec, arg)?);
-    }
-    Ok(encoded)
-}
-
-fn encode_single_value(ty: &str, value: &str) -> Result<Vec<u8>, CliError> {
-    let ty = normalize_type_name(ty);
-    match ty.as_str() {
-        "u16" => encode_xdr_value::<u16>(parse_numeric(value, &ty)?),
-        "u32" => encode_xdr_value::<u32>(parse_numeric(value, &ty)?),
-        "u64" => encode_xdr_value::<u64>(parse_numeric(value, &ty)?),
-        "u128" => encode_xdr_value::<u128>(parse_numeric(value, &ty)?),
-        "i16" => encode_xdr_value::<i16>(parse_numeric(value, &ty)?),
-        "i32" => encode_xdr_value::<i32>(parse_numeric(value, &ty)?),
-        "i64" => encode_xdr_value::<i64>(parse_numeric(value, &ty)?),
-        "i128" => encode_xdr_value::<i128>(parse_numeric(value, &ty)?),
-        "bool" => {
-            let parsed = value
-                .parse::<bool>()
-                .map_err(|e| CliError::Other(format!("invalid bool `{value}`: {e}")))?;
-            encode_xdr_value(parsed)
-        }
-        "String" | "&str" => encode_xdr_value(value.to_string()),
-        "ContractAddress" => encode_xdr_value(parse_contract_address(value)?),
-        "Ed25519PublicKey" => encode_xdr_value(Ed25519PublicKey::from(parse_fixed_hex::<32>(
-            value,
-            "ed25519 public key",
-        )?)),
-        "SHA256Hash" => encode_xdr_value(SHA256Hash::from(parse_fixed_hex::<32>(
-            value,
-            "sha256 hash",
-        )?)),
-        "ContractEntrypointID" => encode_xdr_value(ContractEntrypointID::from(
-            parse_fixed_hex::<8>(value, "contract entrypoint")?,
-        )),
-        _ => Err(CliError::Other(format!(
-            "typed call encoding for `{ty}` is not implemented yet; pass an explicit 0x-prefixed \
-             entrypoint ID and raw calldata instead"
-        ))),
-    }
-}
-
-fn parse_numeric<T>(value: &str, ty: &str) -> Result<T, CliError>
-where
-    T: std::str::FromStr,
-    T::Err: std::fmt::Display,
-{
-    value
-        .parse::<T>()
-        .map_err(|e| CliError::Other(format!("invalid {ty} `{value}`: {e}")))
-}
-
-fn encode_xdr_value<T>(value: T) -> Result<Vec<u8>, CliError>
-where
-    T: xdrs::WriteXDR,
-{
-    xdrs::cxs::encode(&value)
-        .map_err(|e| CliError::Other(format!("failed to encode calldata: {e}")))
-}
-
-fn decode_return_value(
-    bytes: &[u8],
-    metadata: Option<&ResolvedMethodMetadata>,
-) -> Option<serde_json::Value> {
-    match metadata? {
-        ResolvedMethodMetadata::Full(metadata) => {
-            decode_typespec_value(&metadata.method.return_spec, bytes)
-        }
-        ResolvedMethodMetadata::Local(metadata) => {
-            let ty = metadata.method.return_type.as_deref()?;
-            decode_single_value(ty, bytes)
-        }
-    }
-}
-
-fn decode_single_value(ty: &str, bytes: &[u8]) -> Option<serde_json::Value> {
-    let ty = normalize_type_name(ty);
-    match ty.as_str() {
-        "u16" => decode_xdr_value::<u16>(bytes).map(serde_json::Value::from),
-        "u32" => decode_xdr_value::<u32>(bytes).map(serde_json::Value::from),
-        "u64" => decode_xdr_value::<u64>(bytes).map(serde_json::Value::from),
-        "u128" => {
-            decode_xdr_value::<u128>(bytes).map(|value| serde_json::Value::from(value.to_string()))
-        }
-        "i16" => decode_xdr_value::<i16>(bytes).map(serde_json::Value::from),
-        "i32" => decode_xdr_value::<i32>(bytes).map(serde_json::Value::from),
-        "i64" => decode_xdr_value::<i64>(bytes).map(serde_json::Value::from),
-        "i128" => {
-            decode_xdr_value::<i128>(bytes).map(|value| serde_json::Value::from(value.to_string()))
-        }
-        "bool" => decode_xdr_value::<bool>(bytes).map(serde_json::Value::from),
-        "String" | "&str" => decode_xdr_value::<String>(bytes).map(serde_json::Value::from),
-        "ContractAddress" => decode_xdr_value::<ContractAddress>(bytes).map(hex_json_value),
-        "Ed25519PublicKey" => decode_xdr_value::<Ed25519PublicKey>(bytes).map(hex_json_value),
-        "SHA256Hash" => decode_xdr_value::<SHA256Hash>(bytes).map(hex_json_value),
-        "ContractEntrypointID" => {
-            decode_xdr_value::<ContractEntrypointID>(bytes).map(hex_json_value)
-        }
-        _ => None,
-    }
-}
-
-fn decode_xdr_value<T>(bytes: &[u8]) -> Option<T>
-where
-    T: xdrs::ReadXDROwned,
-{
-    xdrs::cxs::decode(bytes).ok()
-}
-
-fn encode_typespec_value(typespec: &TypeSpec, value: &str) -> Result<Vec<u8>, CliError> {
-    if !typespec.fields.is_empty() {
-        let parsed = serde_json::from_str::<serde_json::Value>(value).map_err(|e| {
-            CliError::Other(format!(
-                "structured contract argument must be valid JSON: {e}"
-            ))
-        })?;
-        return encode_structured_typespec_value(typespec, &parsed);
-    }
-
-    match typespec.kind.as_str() {
-        "unsigned hyper" => encode_xdr_value::<u64>(parse_numeric(value, &typespec.kind)?),
-        "hyper" => encode_xdr_value::<i64>(parse_numeric(value, &typespec.kind)?),
-        "unsigned int" => encode_xdr_value::<u32>(parse_numeric(value, &typespec.kind)?),
-        "int" => encode_xdr_value::<i32>(parse_numeric(value, &typespec.kind)?),
-        "unsigned" => encode_xdr_value::<u16>(parse_numeric(value, &typespec.kind)?),
-        "U128" => encode_xdr_value::<u128>(parse_numeric(value, &typespec.kind)?),
-        "I128" => encode_xdr_value::<i128>(parse_numeric(value, &typespec.kind)?),
-        "bool" => {
-            let parsed = value
-                .parse::<bool>()
-                .map_err(|e| CliError::Other(format!("invalid bool `{value}`: {e}")))?;
-            encode_xdr_value(parsed)
-        }
-        "string" => encode_xdr_value(value.to_string()),
-        "ContractAddress" => encode_xdr_value(parse_contract_address(value)?),
-        "Ed25519PublicKey" => encode_xdr_value(Ed25519PublicKey::from(parse_fixed_hex::<32>(
-            value,
-            "ed25519 public key",
-        )?)),
-        "SHA256Hash" => encode_xdr_value(SHA256Hash::from(parse_fixed_hex::<32>(
-            value,
-            "sha256 hash",
-        )?)),
-        "ContractEntrypointID" => encode_xdr_value(ContractEntrypointID::from(
-            parse_fixed_hex::<8>(value, "contract entrypoint")?,
-        )),
-        other => Err(CliError::Other(format!(
-            "generated contract spec type `{other}` is not implemented yet"
-        ))),
-    }
-}
-
-fn decode_typespec_value(typespec: &TypeSpec, bytes: &[u8]) -> Option<serde_json::Value> {
-    let mut reader = xdrs::cxs::buf_reader::BufReader::new(bytes);
-    let value = decode_typespec_from_reader(typespec, &mut reader)?;
-    (reader.remaining() == 0).then_some(value)
-}
-
-fn decode_typespec_from_reader(
-    typespec: &TypeSpec,
-    reader: &mut xdrs::cxs::buf_reader::BufReader<'_>,
-) -> Option<serde_json::Value> {
-    if !typespec.fields.is_empty() {
-        let values = typespec
-            .fields
-            .iter()
-            .map(|field| decode_typespec_from_reader(&field.element_type, reader))
-            .collect::<Option<Vec<_>>>()?;
-        if typespec
-            .fields
-            .iter()
-            .all(|field| !field.name.is_empty() && field.name.parse::<usize>().is_err())
-        {
-            let mut object = serde_json::Map::with_capacity(typespec.fields.len());
-            for (field, value) in typespec.fields.iter().zip(values) {
-                object.insert(field.name.clone(), value);
-            }
-            return Some(serde_json::Value::Object(object));
-        }
-        return Some(serde_json::Value::Array(values));
-    }
-
-    match typespec.kind.as_str() {
-        "unsigned hyper" => read_xdr_value::<u64>(reader).map(serde_json::Value::from),
-        "hyper" => read_xdr_value::<i64>(reader).map(serde_json::Value::from),
-        "unsigned int" => read_xdr_value::<u32>(reader).map(serde_json::Value::from),
-        "int" => read_xdr_value::<i32>(reader).map(serde_json::Value::from),
-        "unsigned" => read_xdr_value::<u16>(reader).map(serde_json::Value::from),
-        "U128" => {
-            read_xdr_value::<u128>(reader).map(|value| serde_json::Value::from(value.to_string()))
-        }
-        "I128" => {
-            read_xdr_value::<i128>(reader).map(|value| serde_json::Value::from(value.to_string()))
-        }
-        "bool" => read_xdr_value::<bool>(reader).map(serde_json::Value::from),
-        "string" => read_xdr_value::<String>(reader).map(serde_json::Value::from),
-        "ContractAddress" => read_xdr_value::<ContractAddress>(reader).map(hex_json_value),
-        "Ed25519PublicKey" => read_xdr_value::<Ed25519PublicKey>(reader).map(hex_json_value),
-        "SHA256Hash" => read_xdr_value::<SHA256Hash>(reader).map(hex_json_value),
-        "ContractEntrypointID" => {
-            read_xdr_value::<ContractEntrypointID>(reader).map(hex_json_value)
-        }
-        _ => None,
-    }
-}
-
-fn encode_structured_typespec_value(
-    typespec: &TypeSpec,
-    value: &serde_json::Value,
-) -> Result<Vec<u8>, CliError> {
-    let values = match value {
-        serde_json::Value::Array(values) => values,
-        serde_json::Value::Object(object) => {
-            return encode_structured_typespec_object(typespec, object);
-        }
-        _ => {
-            return Err(CliError::Other(
-                "structured contract argument must be a JSON array or object".into(),
-            ));
-        }
-    };
-
-    if values.len() != typespec.fields.len() {
-        return Err(CliError::Other(format!(
-            "structured contract argument expects {} field(s) but {} were provided",
-            typespec.fields.len(),
-            values.len(),
-        )));
-    }
-
-    let mut encoded = Vec::new();
-    for (field, value) in typespec.fields.iter().zip(values) {
-        encoded.extend(encode_json_typespec_value(&field.element_type, value)?);
-    }
-    Ok(encoded)
-}
-
-fn encode_structured_typespec_object(
-    typespec: &TypeSpec,
-    object: &serde_json::Map<String, serde_json::Value>,
-) -> Result<Vec<u8>, CliError> {
-    let mut encoded = Vec::new();
-    for field in &typespec.fields {
-        let value = object.get(&field.name).ok_or_else(|| {
-            CliError::Other(format!(
-                "structured contract argument is missing field `{}`",
-                field.name
-            ))
-        })?;
-        encoded.extend(encode_json_typespec_value(&field.element_type, value)?);
-    }
-    Ok(encoded)
-}
-
-fn encode_json_typespec_value(
-    typespec: &TypeSpec,
-    value: &serde_json::Value,
-) -> Result<Vec<u8>, CliError> {
-    if !typespec.fields.is_empty() {
-        return encode_structured_typespec_value(typespec, value);
-    }
-
-    match value {
-        serde_json::Value::String(value) => encode_typespec_value(typespec, value),
-        serde_json::Value::Number(value) => encode_typespec_value(typespec, &value.to_string()),
-        serde_json::Value::Bool(value) => encode_typespec_value(typespec, &value.to_string()),
-        serde_json::Value::Null => Err(CliError::Other(
-            "null is not supported for this contract argument type".into(),
-        )),
-        serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
-            Err(CliError::Other(format!(
-                "nested JSON value is not supported for scalar contract type `{}`",
-                typespec.kind
-            )))
-        }
-    }
-}
-
-fn parse_entrypoint_hex(hex_str: &str) -> Result<ContractEntrypointID, CliError> {
-    let stripped = hex_str.strip_prefix("0x").unwrap_or(hex_str);
-    let bytes = hex::decode(stripped)
-        .map_err(|e| CliError::Other(format!("invalid entrypoint hex in contract spec: {e}")))?;
-    let id: [u8; 8] = bytes
-        .try_into()
-        .map_err(|_| CliError::Other("contract spec entrypoint must be 8 bytes".into()))?;
-    Ok(ContractEntrypointID::from(id))
-}
-
-fn normalize_type_name(ty: &str) -> String {
-    let mut ty = ty.trim();
-
-    while let Some(stripped) = ty.strip_prefix('&') {
-        ty = stripped.trim_start();
-        if let Some(lifetime_rest) = ty.strip_prefix('\'') {
-            ty = lifetime_rest
-                .find(char::is_whitespace)
-                .map_or(lifetime_rest, |idx| &lifetime_rest[idx..])
-                .trim_start();
-        }
-        if let Some(stripped) = ty.strip_prefix("mut ") {
-            ty = stripped.trim_start();
-        }
-    }
-
-    ty.to_string()
-}
-
-fn parse_fixed_hex<const N: usize>(value: &str, label: &str) -> Result<[u8; N], CliError> {
-    let stripped = value.strip_prefix("0x").unwrap_or(value);
-    let bytes =
-        hex::decode(stripped).map_err(|e| CliError::Other(format!("invalid {label} hex: {e}")))?;
-    bytes
-        .try_into()
-        .map_err(|_| CliError::Other(format!("{label} must be {N} bytes")))
-}
-
-fn read_xdr_value<T>(reader: &mut xdrs::cxs::buf_reader::BufReader<'_>) -> Option<T>
-where
-    T: for<'a> xdrs::ReadXDR<'a>,
-{
-    xdrs::read_xdr(reader).ok()
-}
-
-fn hex_json_value<T>(value: T) -> serde_json::Value
-where
-    T: AsRef<[u8]>,
-{
-    serde_json::Value::from(format!("0x{}", hex::encode(value.as_ref())))
-}
-
 fn summarize_exec_status(status: &ExecStatus) -> String {
     match status {
         ExecStatus::Ok => "succeeded".into(),
@@ -1121,13 +892,27 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        ContractMetadata, MethodMetadata, ResolvedMethodMetadata, contract_entrypoint_id,
-        contract_metadata_from_source, decode_return_value, encode_calldata,
-        explicit_entrypoint_id, filter_candidates_by_interface_spec, load_project_interface_spec,
-        major_version, parse_contract_attr_value, summarize_exec_status,
+        ResolvedCall, contract_entrypoint_id, contract_metadata_from_source,
+        explicit_entrypoint_id, filter_candidates_by_interfaces, format_entrypoint_id,
+        load_project_registered_interfaces, major_version, parse_contract_attr_value,
+        resolve_spec_method, selector_json, selector_summary, summarize_exec_status,
     };
+    use crate::CliError;
     use crate::artifacts::ArtifactOptions;
+    use crate::codec::{
+        CallMetadata, ContractMetadata, MethodMetadata, SpecMethodMetadata, build_type_def_index,
+        decode_return as decode_return_value, decode_spec_value, decode_spec_value_from_reader,
+        encode_args as encode_calldata, normalize_type_name,
+    };
+    use crate::contract_spec::InterfaceSpec;
+    use groundhog_contract_spec::{
+        ContractArrayType, ContractEnumDef, ContractEnumVariant, ContractField, ContractSpec,
+        ContractSpecInterface, ContractSpecMethod, ContractSpecString, ContractStructDef,
+        ContractType, ContractTypeDef, ContractUnionCase, ContractUnionCaseType, ContractUnionDef,
+        ContractVectorType,
+    };
     use groundhog_rpc_api_types::receipt::ExecStatus;
+    use serde_json::json;
     use serial_test::serial;
     use tempfile::TempDir;
 
@@ -1215,6 +1000,81 @@ mod tests {
     }
 
     #[test]
+    fn formats_entrypoint_ids_as_prefixed_hex() {
+        let entrypoint = explicit_entrypoint_id("0x0123456789abcdef")
+            .expect("bug: valid entrypoint hex should parse")
+            .expect("bug: explicit entrypoint should be returned");
+        assert_eq!(format_entrypoint_id(entrypoint), "0x0123456789abcdef");
+    }
+
+    #[test]
+    fn selector_helpers_report_explicit_entrypoint_resolution() {
+        let resolved = ResolvedCall {
+            entrypoint: contract_entrypoint_id("Counter", "0.1.0", "get"),
+            metadata: None,
+        };
+
+        assert_eq!(selector_summary(&resolved), "explicit entrypoint");
+        assert_eq!(
+            selector_json(&resolved),
+            json!({
+                "source": "explicit_entrypoint",
+                "interface": null,
+            })
+        );
+    }
+
+    #[test]
+    fn selector_helpers_report_embedded_spec_resolution() {
+        let metadata = sample_single_arg_spec_metadata(ContractType::U32);
+        let resolved = ResolvedCall {
+            entrypoint: contract_entrypoint_id("Counter", "0.1.0", "call"),
+            metadata: Some(CallMetadata::Spec(metadata)),
+        };
+
+        assert_eq!(selector_summary(&resolved), "embedded spec Counter v0.1.0");
+        assert_eq!(
+            selector_json(&resolved),
+            json!({
+                "source": "embedded_spec",
+                "interface": {
+                    "name": "Counter",
+                    "version": "0.1.0",
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn selector_helpers_report_local_metadata_resolution() {
+        let resolved = ResolvedCall {
+            entrypoint: contract_entrypoint_id("Counter", "0.1.0", "get"),
+            metadata: Some(CallMetadata::Local(ContractMetadata {
+                interface_name: "Counter".into(),
+                version: "0.1.0".into(),
+                source: Path::new("/tmp/local.rs").to_path_buf(),
+                method: MethodMetadata {
+                    arg_types: vec!["u64".into()],
+                    return_type: Some("u64".into()),
+                },
+            })),
+        };
+
+        assert_eq!(selector_summary(&resolved), "local metadata Counter v0.1.0");
+        assert_eq!(
+            selector_json(&resolved),
+            json!({
+                "source": "local_metadata",
+                "interface": {
+                    "name": "Counter",
+                    "version": "0.1.0",
+                },
+                "source_path": "/tmp/local.rs",
+            })
+        );
+    }
+
+    #[test]
     fn parses_explicit_entrypoint_id() {
         let entrypoint = explicit_entrypoint_id("0x0123456789abcdef")
             .expect("bug: valid entrypoint hex should parse")
@@ -1236,14 +1096,24 @@ mod tests {
                 return_type: None,
             },
         };
-        let encoded = encode_calldata(
-            &["5".into()],
-            Some(&ResolvedMethodMetadata::Local(metadata)),
-        )
-        .expect("bug: typed calldata should encode");
+        let encoded = encode_calldata(&["5".into()], Some(&CallMetadata::Local(metadata)))
+            .expect("bug: typed calldata should encode");
         let decoded: u64 =
             xdrs::cxs::decode(&encoded).expect("bug: encoded calldata should decode as u64");
         assert_eq!(decoded, 5);
+    }
+
+    #[test]
+    fn rejects_multiple_raw_arguments_without_local_metadata() {
+        let err = encode_calldata(&["0x01".into(), "0x02".into()], None)
+            .expect_err("bug: multiple raw arguments should fail without metadata");
+        assert_call_encode_error(
+            err,
+            "arguments",
+            "multiple call arguments require local contract metadata — run `groundhog call` from \
+             inside the project that defines the contract, or pass a single hex-encoded calldata \
+             argument",
+        );
     }
 
     #[test]
@@ -1258,13 +1128,398 @@ mod tests {
             },
         };
         let bytes = xdrs::cxs::encode(&7_u64).expect("bug: u64 should encode");
-        let decoded = decode_return_value(&bytes, Some(&ResolvedMethodMetadata::Local(metadata)))
+        let decoded = decode_return_value(&bytes, Some(&CallMetadata::Local(metadata)))
             .expect("bug: simple return value should decode");
         assert_eq!(decoded, serde_json::json!(7));
     }
 
     #[test]
-    fn filters_candidates_by_interface_sidecar() {
+    fn encodes_and_decodes_local_str_values() {
+        let metadata = ContractMetadata {
+            interface_name: "Counter".into(),
+            version: "0.1.0".into(),
+            source: Path::new("/tmp/implementation.rs").to_path_buf(),
+            method: MethodMetadata {
+                arg_types: vec!["&str".into()],
+                return_type: Some("&str".into()),
+            },
+        };
+        let encoded = encode_calldata(
+            &["hello".into()],
+            Some(&CallMetadata::Local(metadata.clone())),
+        )
+        .expect("bug: local string calldata should encode");
+        let decoded = decode_return_value(&encoded, Some(&CallMetadata::Local(metadata)))
+            .expect("bug: local string return should decode");
+        assert_eq!(decoded, serde_json::json!("hello"));
+    }
+
+    #[test]
+    fn reports_unsupported_local_type_name_in_encode_error() {
+        let metadata = ContractMetadata {
+            interface_name: "Counter".into(),
+            version: "0.1.0".into(),
+            source: Path::new("/tmp/implementation.rs").to_path_buf(),
+            method: MethodMetadata {
+                arg_types: vec!["Vec<String>".into()],
+                return_type: None,
+            },
+        };
+        let err = encode_calldata(&["hello".into()], Some(&CallMetadata::Local(metadata)))
+            .expect_err("bug: unsupported local type should fail");
+        assert_call_encode_error(
+            err,
+            "argument 1",
+            "typed call encoding for `Vec<String>` is not implemented yet; pass an explicit \
+             0x-prefixed entrypoint ID and raw calldata instead",
+        );
+    }
+
+    #[test]
+    fn encodes_and_decodes_embedded_spec_structured_arguments() {
+        let metadata = sample_structured_spec_metadata(
+            vec![
+                contract_field("payload", named_type("Payload")),
+                contract_field("mode", named_type("Mode")),
+                contract_field(
+                    "maybe_count",
+                    ContractType::Option {
+                        option_inner: Some(Box::new(ContractType::U32)),
+                    },
+                ),
+                contract_field(
+                    "digest",
+                    ContractType::Array {
+                        array: ContractArrayType {
+                            element: Some(Box::new(ContractType::U8)),
+                            len: 4,
+                        },
+                    },
+                ),
+                contract_field(
+                    "flags",
+                    ContractType::Vector {
+                        vector: ContractVectorType {
+                            element: Some(Box::new(ContractType::Bool)),
+                            max_len: 8,
+                        },
+                    },
+                ),
+                contract_field(
+                    "pair",
+                    ContractType::Tuple {
+                        tuple: vec![ContractType::U32, ContractType::String]
+                            .try_into()
+                            .unwrap(),
+                    },
+                ),
+            ],
+            ContractType::Void,
+        );
+
+        let encoded = encode_calldata(
+            &[
+                r#"{"count":7,"bytes":"hi"}"#.into(),
+                "Ready".into(),
+                "5".into(),
+                "0x01020304".into(),
+                "[true,false,true]".into(),
+                r#"[7,"ok"]"#.into(),
+            ],
+            Some(&CallMetadata::Spec(metadata.clone())),
+        )
+        .expect("bug: embedded spec calldata should encode");
+
+        assert_eq!(
+            decode_spec_arguments(&metadata, &encoded),
+            vec![
+                json!({"count": 7, "bytes": "0x6869"}),
+                json!("Ready"),
+                json!(5),
+                json!("0x01020304"),
+                json!([true, false, true]),
+                json!([7, "ok"]),
+            ]
+        );
+    }
+
+    #[test]
+    fn encodes_and_decodes_embedded_spec_unions() {
+        let metadata = sample_structured_spec_metadata(
+            vec![contract_field("envelope", named_type("Envelope"))],
+            named_type("Envelope"),
+        );
+
+        let full_case = json!({
+            "case": "Full",
+            "value": {
+                "payload": {
+                    "count": 9,
+                    "bytes": "0xaabb"
+                },
+                "enabled": true
+            }
+        });
+        let encoded = encode_calldata(
+            &[full_case.to_string()],
+            Some(&CallMetadata::Spec(metadata.clone())),
+        )
+        .expect("bug: union calldata should encode");
+
+        let type_defs =
+            build_type_def_index(&metadata.type_defs).expect("bug: typedef index should build");
+        let mut reader = xdrs::cxs::buf_reader::BufReader::new(&encoded);
+        let decoded = decode_spec_value_from_reader(
+            &metadata.method.args[0].ty,
+            &mut reader,
+            &type_defs,
+            "arg0",
+        )
+        .expect("bug: union arg should decode");
+        assert_eq!(decoded, full_case);
+        assert_eq!(reader.remaining(), 0);
+
+        let pair_case = json!({
+            "case": "Pair",
+            "value": ["Busy", 9]
+        });
+        let pair_bytes = encode_calldata(
+            &[pair_case.to_string()],
+            Some(&CallMetadata::Spec(metadata.clone())),
+        )
+        .expect("bug: tuple union case should encode");
+        let decoded_pair =
+            decode_return_value(&pair_bytes, Some(&CallMetadata::Spec(metadata.clone())))
+                .expect("bug: union return should decode");
+        assert_eq!(decoded_pair, pair_case);
+
+        let empty_bytes = encode_calldata(
+            &["Empty".into()],
+            Some(&CallMetadata::Spec(metadata.clone())),
+        )
+        .expect("bug: void union shorthand should encode");
+        let decoded_empty = decode_return_value(&empty_bytes, Some(&CallMetadata::Spec(metadata)))
+            .expect("bug: void union return should decode");
+        assert_eq!(decoded_empty, json!({"case": "Empty"}));
+    }
+
+    #[test]
+    fn encodes_and_decodes_embedded_spec_large_integers() {
+        let u128_value = u128::MAX.to_string();
+        let u128_metadata = sample_single_arg_spec_metadata(ContractType::U128);
+        let u128_bytes = encode_calldata(
+            std::slice::from_ref(&u128_value),
+            Some(&CallMetadata::Spec(u128_metadata.clone())),
+        )
+        .expect("bug: embedded spec u128 should encode");
+        assert_eq!(
+            decode_spec_arguments(&u128_metadata, &u128_bytes),
+            vec![json!(u128_value.clone())]
+        );
+        assert_eq!(
+            decode_return_value(&u128_bytes, Some(&CallMetadata::Spec(u128_metadata)))
+                .expect("bug: embedded spec u128 return should decode"),
+            json!(u128_value)
+        );
+
+        let i128_value = i128::MIN.to_string();
+        let i128_metadata = sample_single_arg_spec_metadata(ContractType::I128);
+        let i128_bytes = encode_calldata(
+            std::slice::from_ref(&i128_value),
+            Some(&CallMetadata::Spec(i128_metadata.clone())),
+        )
+        .expect("bug: embedded spec i128 should encode");
+        assert_eq!(
+            decode_spec_arguments(&i128_metadata, &i128_bytes),
+            vec![json!(i128_value.clone())]
+        );
+        assert_eq!(
+            decode_return_value(&i128_bytes, Some(&CallMetadata::Spec(i128_metadata)))
+                .expect("bug: embedded spec i128 return should decode"),
+            json!(i128_value)
+        );
+    }
+
+    #[test]
+    fn encodes_and_decodes_embedded_spec_addresses() {
+        let address = format!("0x{}", "11".repeat(32));
+        let metadata = sample_single_arg_spec_metadata(ContractType::Address);
+        let encoded = encode_calldata(
+            std::slice::from_ref(&address),
+            Some(&CallMetadata::Spec(metadata.clone())),
+        )
+        .expect("bug: embedded spec address should encode");
+
+        assert_eq!(
+            decode_spec_arguments(&metadata, &encoded),
+            vec![json!(address.clone())]
+        );
+        assert_eq!(
+            decode_return_value(&encoded, Some(&CallMetadata::Spec(metadata)))
+                .expect("bug: embedded spec address return should decode"),
+            json!(address)
+        );
+    }
+
+    #[test]
+    fn rejects_byte_vectors_exceeding_max_length() {
+        let metadata = sample_single_arg_spec_metadata(ContractType::Vector {
+            vector: ContractVectorType {
+                element: Some(Box::new(ContractType::U8)),
+                max_len: 2,
+            },
+        });
+        let err = encode_calldata(&["0x010203".into()], Some(&CallMetadata::Spec(metadata)))
+            .expect_err("bug: oversized byte vectors should fail");
+        assert_call_encode_error(
+            err,
+            "argument 1 (`value`)",
+            "byte vector exceeds max length 2 (got 3)",
+        );
+    }
+
+    #[test]
+    fn rejects_array_length_mismatches() {
+        let metadata = sample_single_arg_spec_metadata(ContractType::Array {
+            array: ContractArrayType {
+                element: Some(Box::new(ContractType::Bool)),
+                len: 2,
+            },
+        });
+        let err = encode_calldata(&["[true]".into()], Some(&CallMetadata::Spec(metadata)))
+            .expect_err("bug: array length mismatches should fail");
+        assert_call_encode_error(
+            err,
+            "argument 1 (`value`)",
+            "array expects length 2 but got 1",
+        );
+    }
+
+    #[test]
+    fn rejects_struct_array_field_count_mismatches() {
+        let metadata = sample_structured_spec_metadata(
+            vec![contract_field("payload", named_type("Payload"))],
+            ContractType::Void,
+        );
+        let err = encode_calldata(&["[7]".into()], Some(&CallMetadata::Spec(metadata)))
+            .expect_err("bug: struct tuple field count mismatches should fail");
+        assert_call_encode_error(
+            err,
+            "argument 1 (`payload`)",
+            "expected 2 field value(s) but got 1",
+        );
+    }
+
+    #[test]
+    fn rejects_unexpected_struct_fields() {
+        let metadata = sample_structured_spec_metadata(
+            vec![contract_field("payload", named_type("Payload"))],
+            ContractType::Void,
+        );
+        let err = encode_calldata(
+            &[r#"{"count":7,"bytes":"hi","extra":1}"#.into()],
+            Some(&CallMetadata::Spec(metadata)),
+        )
+        .expect_err("bug: unexpected struct fields should fail");
+        assert_call_encode_error(err, "argument 1 (`payload`)", "unexpected field `extra`");
+    }
+
+    #[test]
+    fn rejects_missing_struct_fields() {
+        let metadata = sample_structured_spec_metadata(
+            vec![contract_field("payload", named_type("Payload"))],
+            ContractType::Void,
+        );
+        let err = encode_calldata(
+            &[r#"{"count":7}"#.into()],
+            Some(&CallMetadata::Spec(metadata)),
+        )
+        .expect_err("bug: missing struct fields should fail");
+        assert_call_encode_error(err, "argument 1 (`payload`)", "missing field `bytes`");
+    }
+
+    #[test]
+    fn rejects_payloads_for_void_union_cases() {
+        let metadata = sample_structured_spec_metadata(
+            vec![contract_field("envelope", named_type("Envelope"))],
+            ContractType::Void,
+        );
+        let err = encode_calldata(
+            &[r#"{"case":"Empty","value":true}"#.into()],
+            Some(&CallMetadata::Spec(metadata)),
+        )
+        .expect_err("bug: void union cases should reject payloads");
+        assert_call_encode_error(
+            err,
+            "argument 1 (`envelope`)",
+            "union case `Empty` does not take a payload",
+        );
+    }
+
+    #[test]
+    fn rejects_trailing_bytes_in_decoded_spec_returns() {
+        let metadata = sample_single_arg_spec_metadata(ContractType::U32);
+        let type_defs =
+            build_type_def_index(&metadata.type_defs).expect("bug: typedef index should build");
+        let mut bytes = xdrs::cxs::encode(&7_u32).expect("bug: u32 should encode");
+        bytes.push(0);
+
+        let err = decode_spec_value(&metadata.method.return_type, &bytes, &type_defs)
+            .expect_err("bug: trailing return bytes should fail");
+        assert_call_decode_error(
+            err,
+            "return value",
+            "1 unread byte(s) remain after decoding",
+        );
+    }
+
+    #[test]
+    fn rejects_decoded_vectors_exceeding_max_length() {
+        let metadata = sample_single_arg_spec_metadata(ContractType::Vector {
+            vector: ContractVectorType {
+                element: Some(Box::new(ContractType::Bool)),
+                max_len: 1,
+            },
+        });
+        let type_defs =
+            build_type_def_index(&metadata.type_defs).expect("bug: typedef index should build");
+        let bytes = xdrs::cxs::encode(&2_u32).expect("bug: vector length should encode");
+
+        let err = decode_spec_value(&metadata.method.return_type, &bytes, &type_defs)
+            .expect_err("bug: oversized decoded vectors should fail");
+        assert_call_decode_error(err, "return value", "decoded vector length 2 exceeds max 1");
+    }
+
+    #[test]
+    fn prefers_named_enum_variants_over_numeric_string_discriminants() {
+        let metadata = sample_numeric_name_spec_metadata(named_type("NumericEnum"));
+        let encoded = encode_calldata(
+            &[r#""1""#.into()],
+            Some(&CallMetadata::Spec(metadata.clone())),
+        )
+        .expect("bug: numeric-string enum variant should encode by name");
+
+        let decoded = decode_return_value(&encoded, Some(&CallMetadata::Spec(metadata)))
+            .expect("bug: numeric-string enum variant should decode");
+        assert_eq!(decoded, json!("1"));
+    }
+
+    #[test]
+    fn prefers_named_union_cases_over_numeric_string_discriminants() {
+        let metadata = sample_numeric_name_spec_metadata(named_type("NumericUnion"));
+        let encoded = encode_calldata(
+            &[r#""1""#.into()],
+            Some(&CallMetadata::Spec(metadata.clone())),
+        )
+        .expect("bug: numeric-string union case should encode by name");
+
+        let decoded = decode_return_value(&encoded, Some(&CallMetadata::Spec(metadata)))
+            .expect("bug: numeric-string union case should decode");
+        assert_eq!(decoded, json!({"case": "1"}));
+    }
+
+    #[test]
+    fn filters_candidates_by_interfaces() {
         let candidates = vec![
             ContractMetadata {
                 interface_name: "Counter".into(),
@@ -1285,17 +1540,69 @@ mod tests {
                 },
             },
         ];
-        let spec = crate::contract_spec::InterfaceSpecFile {
-            format: "groundhogspecv0".into(),
-            interfaces: vec![crate::contract_spec::InterfaceSpec {
-                interface_name: "Counter".into(),
-                interface_version: "0.1.0".into(),
-            }],
-        };
+        let interfaces = vec![InterfaceSpec {
+            interface_name: "Counter".into(),
+            interface_version: "0.1.0".into(),
+        }];
 
-        let filtered = filter_candidates_by_interface_spec(candidates, Some(&spec));
+        let filtered = filter_candidates_by_interfaces(candidates, Some(&interfaces));
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].interface_name, "Counter");
+    }
+
+    #[test]
+    #[serial]
+    fn load_project_registered_interfaces_uses_explicit_target_dir() {
+        let project = create_temp_project("demo-contract");
+        let project_root =
+            std::fs::canonicalize(project.path()).expect("bug: project path should canonicalize");
+        let custom_target = project_root.join("custom-target");
+        let wasm = custom_target.join("groundhog").join("demo_contract.wasm");
+        std::fs::create_dir_all(wasm.parent().expect("bug: wasm parent should exist"))
+            .expect("bug: custom target dir should be created");
+        std::fs::write(&wasm, wasm_with_embedded_spec(&sample_contract_spec()))
+            .expect("bug: wasm fixture should be written");
+
+        let artifacts = ArtifactOptions::new(Some(custom_target));
+        let _cwd = CurrentDirGuard::enter(&project_root);
+        let interfaces = load_project_registered_interfaces(&project_root, &artifacts)
+            .expect("bug: registered interface lookup should succeed")
+            .expect("bug: registered interfaces should resolve from explicit target dir");
+
+        assert_eq!(
+            interfaces,
+            vec![InterfaceSpec {
+                interface_name: "Counter".into(),
+                interface_version: "0.1.0".into(),
+            }]
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn resolve_spec_method_reports_multiple_interface_matches() {
+        let project = create_temp_project("demo-contract");
+        let project_root =
+            std::fs::canonicalize(project.path()).expect("bug: project path should canonicalize");
+        let custom_target = project_root.join("custom-target");
+        let wasm = custom_target.join("groundhog").join("demo_contract.wasm");
+        std::fs::create_dir_all(wasm.parent().expect("bug: wasm parent should exist"))
+            .expect("bug: custom target dir should be created");
+        std::fs::write(
+            &wasm,
+            wasm_with_embedded_spec(&sample_multi_interface_contract_spec()),
+        )
+        .expect("bug: wasm fixture should be written");
+
+        let artifacts = ArtifactOptions::new(Some(custom_target));
+        let _cwd = CurrentDirGuard::enter(&project_root);
+        let err = resolve_spec_method(&project_root, "get", &artifacts)
+            .expect_err("bug: ambiguous embedded interface matches should fail");
+        assert_eq!(
+            err.to_string(),
+            "method `get` matches multiple interfaces in the embedded contract spec: Counter \
+             v0.1.0, Other v0.1.0"
+        );
     }
 
     #[test]
@@ -1308,46 +1615,11 @@ mod tests {
 
     #[test]
     fn normalize_type_name_strips_references_without_clobbering_prefixes() {
-        assert_eq!(super::normalize_type_name("&str"), "str");
-        assert_eq!(super::normalize_type_name("&mut str"), "str");
-        assert_eq!(super::normalize_type_name("&'a str"), "str");
-        assert_eq!(super::normalize_type_name("&String"), "String");
-        assert_eq!(super::normalize_type_name("&strange"), "strange");
-    }
-
-    #[test]
-    #[serial]
-    fn load_project_interface_spec_uses_explicit_target_dir() {
-        let project = create_temp_project("demo-contract");
-        let project_root =
-            std::fs::canonicalize(project.path()).expect("bug: project path should canonicalize");
-        let custom_target = project_root.join("custom-target");
-        let wasm = custom_target.join("groundhog").join("demo_contract.wasm");
-        std::fs::create_dir_all(wasm.parent().expect("bug: wasm parent should exist"))
-            .expect("bug: custom target dir should be created");
-        std::fs::write(&wasm, b"\0asm").expect("bug: wasm fixture should be written");
-        std::fs::write(
-            crate::contract_spec::sidecar_path_for_wasm(&wasm),
-            r#"{"format":"gh_iface_v1","interfaces":[{"interface_name":"Counter","interface_version":"0.1.0"}]}"#,
-        )
-        .expect("bug: sidecar fixture should be written");
-
-        let artifacts = ArtifactOptions::new(Some(custom_target));
-        let _cwd = CurrentDirGuard::enter(&project_root);
-        let spec = load_project_interface_spec(&project_root, &artifacts)
-            .expect("bug: interface spec lookup should succeed")
-            .expect("bug: interface spec should resolve from explicit target dir");
-
-        assert_eq!(
-            spec,
-            crate::contract_spec::InterfaceSpecFile {
-                format: "gh_iface_v1".into(),
-                interfaces: vec![crate::contract_spec::InterfaceSpec {
-                    interface_name: "Counter".into(),
-                    interface_version: "0.1.0".into(),
-                }],
-            }
-        );
+        assert_eq!(normalize_type_name("&str"), "str");
+        assert_eq!(normalize_type_name("&mut str"), "str");
+        assert_eq!(normalize_type_name("&'a str"), "str");
+        assert_eq!(normalize_type_name("&String"), "String");
+        assert_eq!(normalize_type_name("&strange"), "strange");
     }
 
     fn create_temp_project(package_name: &str) -> TempDir {
@@ -1368,6 +1640,317 @@ mod tests {
             ),
         )
         .expect("bug: Cargo.toml should be written");
+    }
+
+    fn sample_contract_spec() -> ContractSpec {
+        ContractSpec {
+            interfaces: vec![ContractSpecInterface {
+                name: spec_string_bytes("Counter"),
+                vers: spec_string_bytes("0.1.0"),
+                throws: vec![].try_into().unwrap(),
+                methods: vec![ContractSpecMethod {
+                    name: spec_string_bytes("get"),
+                    args: vec![].try_into().unwrap(),
+                    return_type: ContractType::U64,
+                }]
+                .try_into()
+                .unwrap(),
+            }]
+            .try_into()
+            .unwrap(),
+            type_defs: vec![].try_into().unwrap(),
+        }
+    }
+
+    fn sample_multi_interface_contract_spec() -> ContractSpec {
+        ContractSpec {
+            interfaces: vec![
+                ContractSpecInterface {
+                    name: spec_string_bytes("Other"),
+                    vers: spec_string_bytes("0.1.0"),
+                    throws: vec![].try_into().unwrap(),
+                    methods: vec![ContractSpecMethod {
+                        name: spec_string_bytes("get"),
+                        args: vec![].try_into().unwrap(),
+                        return_type: ContractType::U64,
+                    }]
+                    .try_into()
+                    .unwrap(),
+                },
+                ContractSpecInterface {
+                    name: spec_string_bytes("Counter"),
+                    vers: spec_string_bytes("0.1.0"),
+                    throws: vec![].try_into().unwrap(),
+                    methods: vec![ContractSpecMethod {
+                        name: spec_string_bytes("get"),
+                        args: vec![].try_into().unwrap(),
+                        return_type: ContractType::U64,
+                    }]
+                    .try_into()
+                    .unwrap(),
+                },
+            ]
+            .try_into()
+            .unwrap(),
+            type_defs: vec![].try_into().unwrap(),
+        }
+    }
+
+    fn sample_structured_spec_metadata(
+        args: Vec<ContractField>,
+        return_type: ContractType,
+    ) -> SpecMethodMetadata {
+        SpecMethodMetadata {
+            interface_name: "Counter".into(),
+            version: "0.1.0".into(),
+            method: ContractSpecMethod {
+                name: spec_string_bytes("call"),
+                args: args.try_into().unwrap(),
+                return_type,
+            },
+            type_defs: vec![
+                ContractTypeDef::TypeDefStruct {
+                    struct_def: ContractStructDef {
+                        name: spec_string_bytes("Payload"),
+                        fields: vec![
+                            contract_field("count", ContractType::U32),
+                            contract_field(
+                                "bytes",
+                                ContractType::Vector {
+                                    vector: ContractVectorType {
+                                        element: Some(Box::new(ContractType::U8)),
+                                        max_len: u32::MAX,
+                                    },
+                                },
+                            ),
+                        ]
+                        .try_into()
+                        .unwrap(),
+                    },
+                },
+                ContractTypeDef::TypeDefEnum {
+                    enum_def: ContractEnumDef {
+                        name: spec_string_bytes("Mode"),
+                        variants: vec![
+                            ContractEnumVariant {
+                                name: spec_string_bytes("Ready"),
+                                value: 1,
+                            },
+                            ContractEnumVariant {
+                                name: spec_string_bytes("Busy"),
+                                value: 2,
+                            },
+                        ]
+                        .try_into()
+                        .unwrap(),
+                    },
+                },
+                ContractTypeDef::TypeDefUnion {
+                    union_def: ContractUnionDef {
+                        name: spec_string_bytes("Envelope"),
+                        cases: vec![
+                            ContractUnionCase {
+                                name: spec_string_bytes("Empty"),
+                                discriminant: 0,
+                                case_type: ContractUnionCaseType::UnionCaseVoid,
+                            },
+                            ContractUnionCase {
+                                name: spec_string_bytes("Full"),
+                                discriminant: 1,
+                                case_type: ContractUnionCaseType::UnionCaseStruct {
+                                    struct_fields: vec![
+                                        contract_field("payload", named_type("Payload")),
+                                        contract_field("enabled", ContractType::Bool),
+                                    ]
+                                    .try_into()
+                                    .unwrap(),
+                                },
+                            },
+                            ContractUnionCase {
+                                name: spec_string_bytes("Pair"),
+                                discriminant: 2,
+                                case_type: ContractUnionCaseType::UnionCaseTuple {
+                                    tuple: vec![named_type("Mode"), ContractType::U32]
+                                        .try_into()
+                                        .unwrap(),
+                                },
+                            },
+                        ]
+                        .try_into()
+                        .unwrap(),
+                    },
+                },
+            ],
+        }
+    }
+
+    fn sample_numeric_name_spec_metadata(return_type: ContractType) -> SpecMethodMetadata {
+        SpecMethodMetadata {
+            interface_name: "Counter".into(),
+            version: "0.1.0".into(),
+            method: ContractSpecMethod {
+                name: spec_string_bytes("call"),
+                args: vec![contract_field("value", return_type.clone())]
+                    .try_into()
+                    .unwrap(),
+                return_type,
+            },
+            type_defs: vec![
+                ContractTypeDef::TypeDefEnum {
+                    enum_def: ContractEnumDef {
+                        name: spec_string_bytes("NumericEnum"),
+                        variants: vec![
+                            ContractEnumVariant {
+                                name: spec_string_bytes("1"),
+                                value: 7,
+                            },
+                            ContractEnumVariant {
+                                name: spec_string_bytes("2"),
+                                value: 8,
+                            },
+                        ]
+                        .try_into()
+                        .unwrap(),
+                    },
+                },
+                ContractTypeDef::TypeDefUnion {
+                    union_def: ContractUnionDef {
+                        name: spec_string_bytes("NumericUnion"),
+                        cases: vec![
+                            ContractUnionCase {
+                                name: spec_string_bytes("1"),
+                                discriminant: 7,
+                                case_type: ContractUnionCaseType::UnionCaseVoid,
+                            },
+                            ContractUnionCase {
+                                name: spec_string_bytes("2"),
+                                discriminant: 8,
+                                case_type: ContractUnionCaseType::UnionCaseVoid,
+                            },
+                        ]
+                        .try_into()
+                        .unwrap(),
+                    },
+                },
+            ],
+        }
+    }
+
+    fn sample_single_arg_spec_metadata(arg_type: ContractType) -> SpecMethodMetadata {
+        SpecMethodMetadata {
+            interface_name: "Counter".into(),
+            version: "0.1.0".into(),
+            method: ContractSpecMethod {
+                name: spec_string_bytes("call"),
+                args: vec![contract_field("value", arg_type.clone())]
+                    .try_into()
+                    .unwrap(),
+                return_type: arg_type,
+            },
+            type_defs: vec![],
+        }
+    }
+
+    fn decode_spec_arguments(
+        metadata: &SpecMethodMetadata,
+        encoded: &[u8],
+    ) -> Vec<serde_json::Value> {
+        let type_defs =
+            build_type_def_index(&metadata.type_defs).expect("bug: typedef index should build");
+        let mut reader = xdrs::cxs::buf_reader::BufReader::new(encoded);
+        let values = metadata
+            .method
+            .args
+            .iter()
+            .enumerate()
+            .map(|(index, field)| {
+                decode_spec_value_from_reader(
+                    &field.ty,
+                    &mut reader,
+                    &type_defs,
+                    &format!("arg{index}"),
+                )
+                .expect("bug: spec argument should decode")
+            })
+            .collect();
+        assert_eq!(reader.remaining(), 0);
+        values
+    }
+
+    fn assert_call_encode_error(err: CliError, path: &str, expected_message: &str) {
+        match err {
+            CliError::CallEncode {
+                path: actual_path,
+                message,
+            } => {
+                assert_eq!(actual_path, path);
+                assert_eq!(message, expected_message);
+            }
+            other => panic!("bug: expected CliError::CallEncode, got {other:?}"),
+        }
+    }
+
+    fn assert_call_decode_error(err: CliError, path: &str, expected_message: &str) {
+        match err {
+            CliError::CallDecode {
+                path: actual_path,
+                message,
+            } => {
+                assert_eq!(actual_path, path);
+                assert_eq!(message, expected_message);
+            }
+            other => panic!("bug: expected CliError::CallDecode, got {other:?}"),
+        }
+    }
+
+    fn contract_field(name: &str, ty: ContractType) -> ContractField {
+        ContractField {
+            name: spec_string_bytes(name),
+            ty,
+        }
+    }
+
+    fn named_type(name: &str) -> ContractType {
+        ContractType::Named {
+            named: spec_string_bytes(name),
+        }
+    }
+
+    fn spec_string_bytes(value: &str) -> ContractSpecString {
+        value.try_into().expect("bug: test string should fit")
+    }
+
+    fn wasm_with_embedded_spec(spec: &ContractSpec) -> Vec<u8> {
+        wasm_with_custom_section(
+            groundhog_spec_tool::FINAL_SECTION_NAME,
+            &xdrs::txs::encode(spec).expect("bug: contract spec fixture should encode"),
+        )
+    }
+
+    fn wasm_with_custom_section(name: &str, data: &[u8]) -> Vec<u8> {
+        let mut payload = Vec::new();
+        encode_uleb128(name.len(), &mut payload);
+        payload.extend_from_slice(name.as_bytes());
+        payload.extend_from_slice(data);
+
+        let mut wasm = vec![0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x00];
+        encode_uleb128(payload.len(), &mut wasm);
+        wasm.extend_from_slice(&payload);
+        wasm
+    }
+
+    fn encode_uleb128(mut value: usize, out: &mut Vec<u8>) {
+        loop {
+            let mut byte = u8::try_from(value & 0x7f).expect("bug: uleb128 byte should fit");
+            value >>= 7;
+            if value != 0 {
+                byte |= 0x80;
+            }
+            out.push(byte);
+            if value == 0 {
+                break;
+            }
+        }
     }
 
     struct CurrentDirGuard {

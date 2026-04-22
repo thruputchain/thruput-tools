@@ -12,8 +12,6 @@ pub struct BuildResult {
     pub project_root: PathBuf,
     pub wasm: PathBuf,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub spec: Option<PathBuf>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub spec_json: Option<PathBuf>,
     pub size_bytes: u64,
     pub optimized: bool,
@@ -54,7 +52,6 @@ pub fn run(
             "profile": result.profile,
             "cargo_stdout": result.cargo_stdout,
             "cargo_stderr": result.cargo_stderr,
-            "spec": result.spec,
             "spec_json": result.spec_json,
         }),
     ))?;
@@ -144,7 +141,7 @@ pub fn build_project(
     }
 
     print.status("Checking for contract spec...");
-    let (spec, spec_json) = crate::contract_spec::finalize_spec(&wasm, print)?;
+    let spec_json = crate::contract_spec::finalize_spec(&wasm, print)?;
 
     print.status("Instrumenting WASM...");
     crate::wasm_instrument::instrument(&wasm)?;
@@ -158,7 +155,6 @@ pub fn build_project(
         wasm,
         size_bytes: size,
         optimized: optimize,
-        spec,
         spec_json,
         profile,
         cargo_stdout,
