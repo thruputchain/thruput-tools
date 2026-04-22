@@ -1,7 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use groundhog_contract_spec::{ContractSpec, ContractSpecInterface, ContractSpecString};
+use groundhog_contract_spec::{ContractSpec, ContractSpecInterface};
 
+use crate::codec::spec_string_text;
 use crate::{CliError, Print};
 
 /// One registered interface in the embedded contract spec.
@@ -17,6 +18,9 @@ fn sidecar_path_for_wasm(wasm: &Path) -> PathBuf {
 }
 
 /// Load the canonical contract spec from the built WASM.
+///
+/// Spec model types come from `groundhog_contract_spec`; this module uses
+/// `groundhog_spec_tool` only to extract or render them from compiled WASM.
 pub fn load_contract_spec(wasm: &Path) -> Result<Option<ContractSpec>, CliError> {
     load_embedded_contract_spec(wasm)
 }
@@ -61,7 +65,7 @@ pub fn find_method_interfaces(
     for interface in spec.interfaces.iter() {
         let mut exports_method = false;
         for candidate in interface.methods.iter() {
-            if decode_spec_string(&candidate.name)? == method {
+            if spec_string_text(&candidate.name)? == method {
                 exports_method = true;
                 break;
             }
@@ -78,14 +82,9 @@ pub fn find_method_interfaces(
 
 fn interface_spec(interface: &ContractSpecInterface) -> Result<InterfaceSpec, CliError> {
     Ok(InterfaceSpec {
-        interface_name: decode_spec_string(&interface.name)?.to_owned(),
-        interface_version: decode_spec_string(&interface.vers)?.to_owned(),
+        interface_name: spec_string_text(&interface.name)?.to_owned(),
+        interface_version: spec_string_text(&interface.vers)?.to_owned(),
     })
-}
-
-fn decode_spec_string(value: &ContractSpecString) -> Result<&str, CliError> {
-    std::str::from_utf8(value.as_ref())
-        .map_err(|e| CliError::SpecFailed(format!("contract spec contains invalid UTF-8: {e}")))
 }
 
 /// Finalize the contract spec embedded in the WASM binary.

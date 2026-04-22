@@ -1,3 +1,5 @@
+//! Call argument and return-value codecs for embedded specs and local source metadata.
+
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -13,12 +15,14 @@ use xdrs::{Reader as _, Writer as _};
 
 use crate::CliError;
 
+/// Type metadata used to encode arguments and decode return values.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CallMetadata {
     Spec(SpecMethodMetadata),
     Local(ContractMetadata),
 }
 
+/// Locally parsed method metadata recovered from project source files.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ContractMetadata {
     pub(crate) interface_name: String,
@@ -27,12 +31,14 @@ pub(crate) struct ContractMetadata {
     pub(crate) method: MethodMetadata,
 }
 
+/// Local argument and return type names parsed from a Rust method signature.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MethodMetadata {
     pub(crate) arg_types: Vec<String>,
     pub(crate) return_type: Option<String>,
 }
 
+/// Embedded spec metadata for one resolved contract method.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SpecMethodMetadata {
     pub(crate) interface_name: String,
@@ -41,8 +47,10 @@ pub(crate) struct SpecMethodMetadata {
     pub(crate) type_defs: Vec<ContractTypeDef>,
 }
 
+/// Named embedded type definitions keyed by contract type name.
 pub(crate) type TypeDefIndex<'a> = BTreeMap<String, &'a ContractTypeDef>;
 
+/// Encode CLI argument strings into contract calldata using the resolved metadata.
 pub(crate) fn encode_args(
     args: &[String],
     metadata: Option<&CallMetadata>,
@@ -70,6 +78,7 @@ pub(crate) fn encode_args(
     ))
 }
 
+/// Decode contract return bytes into JSON using the resolved metadata when available.
 pub(crate) fn decode_return(bytes: &[u8], metadata: Option<&CallMetadata>) -> Option<Value> {
     match metadata? {
         CallMetadata::Spec(metadata) => {
@@ -86,6 +95,7 @@ pub(crate) fn decode_return(bytes: &[u8], metadata: Option<&CallMetadata>) -> Op
     }
 }
 
+/// Parse a hex-encoded contract address.
 pub(crate) fn parse_contract_address(hex_str: &str) -> Result<ContractAddress, CliError> {
     Ok(ContractAddress::from(parse_fixed_hex::<32>(
         hex_str,
@@ -93,11 +103,13 @@ pub(crate) fn parse_contract_address(hex_str: &str) -> Result<ContractAddress, C
     )?))
 }
 
+/// Decode a spec string as UTF-8 text.
 pub(crate) fn spec_string_text(value: &ContractSpecString) -> Result<&str, CliError> {
     std::str::from_utf8(value.as_ref())
         .map_err(|e| CliError::SpecFailed(format!("contract spec contains invalid UTF-8: {e}")))
 }
 
+/// Build an index of named embedded type definitions.
 pub(crate) fn build_type_def_index(
     type_defs: &[ContractTypeDef],
 ) -> Result<TypeDefIndex<'_>, CliError> {
@@ -115,6 +127,7 @@ pub(crate) fn build_type_def_index(
     Ok(index)
 }
 
+/// Decode one top-level embedded spec value from a byte slice.
 pub(crate) fn decode_spec_value(
     ty: &ContractType,
     bytes: &[u8],
@@ -123,14 +136,18 @@ pub(crate) fn decode_spec_value(
     let mut reader = xdrs::cxs::buf_reader::BufReader::new(bytes);
     let value = decode_spec_value_from_reader(ty, &mut reader, type_defs, "return value")?;
     if reader.remaining() != 0 {
-        return Err(CliError::Other(format!(
-            "return value: {} unread byte(s) remain after decoding",
-            reader.remaining()
-        )));
+        return Err(decode_value_error(
+            "return value",
+            format!(
+                "{} unread byte(s) remain after decoding",
+                reader.remaining()
+            ),
+        ));
     }
     Ok(value)
 }
 
+/// Decode one embedded spec value from the current XDR reader position.
 pub(crate) fn decode_spec_value_from_reader(
     ty: &ContractType,
     reader: &mut xdrs::cxs::buf_reader::BufReader<'_>,
@@ -172,6 +189,7 @@ pub(crate) fn decode_spec_value_from_reader(
     }
 }
 
+/// Strip Rust reference and lifetime syntax from locally parsed type names.
 pub(crate) fn normalize_type_name(ty: &str) -> String {
     let mut ty = ty.trim();
 
@@ -1122,6 +1140,13 @@ fn encode_value_error(path: &str, message: impl Into<String>) -> CliError {
     }
 }
 
+fn decode_value_error(path: &str, message: impl Into<String>) -> CliError {
+    CliError::CallDecode {
+        path: path.to_owned(),
+        message: message.into(),
+    }
+}
+
 fn field_path(path: &str, field: &str) -> String {
     format!("{path}.{field}")
 }
@@ -1139,9 +1164,9 @@ fn decode_spec_scalar_value_from_reader(
         ContractType::Void => Some(Ok(Value::Null)),
         ContractType::Bool => Some(read_xdr_value::<bool>(reader, path).map(Value::from)),
         ContractType::U8 => Some(read_xdr_value::<u32>(reader, path).and_then(|value| {
-            let value: u8 = value.try_into().map_err(|_| {
-                CliError::Other(format!("{path}: decoded u8 value is out of range"))
-            })?;
+            let value: u8 = value
+                .try_into()
+                .map_err(|_| decode_value_error(path, "decoded u8 value is out of range"))?;
             Ok(Value::from(value))
         })),
         ContractType::U32 => Some(read_xdr_value::<u32>(reader, path).map(Value::from)),
@@ -1159,7 +1184,7 @@ fn decode_spec_scalar_value_from_reader(
             reader
                 .read_opaque_variable_owned(u32::MAX)
                 .map(hex_json_value)
-                .map_err(|e| CliError::Other(format!("{path}: failed to decode bytes: {e}"))),
+                .map_err(|e| decode_value_error(path, format!("failed to decode bytes: {e}"))),
         ),
         ContractType::Address => {
             Some(read_xdr_value::<ContractAddress>(reader, path).map(hex_json_value))
@@ -1197,15 +1222,15 @@ fn decode_vector_value_from_reader(
         return reader
             .read_opaque_variable_owned(vector.max_len)
             .map(hex_json_value)
-            .map_err(|e| CliError::Other(format!("{path}: failed to decode byte vector: {e}")));
+            .map_err(|e| decode_value_error(path, format!("failed to decode byte vector: {e}")));
     }
 
     let len = read_xdr_value::<u32>(reader, path)? as usize;
     if len > vector.max_len as usize {
-        return Err(CliError::Other(format!(
-            "{path}: decoded vector length {len} exceeds max {}",
-            vector.max_len
-        )));
+        return Err(decode_value_error(
+            path,
+            format!("decoded vector length {len} exceeds max {}", vector.max_len),
+        ));
     }
     let mut values = Vec::with_capacity(len);
     for index in 0..len {
@@ -1252,7 +1277,7 @@ fn decode_array_value_from_reader(
         return reader
             .read_opaque_fixed_owned(array.len)
             .map(hex_json_value)
-            .map_err(|e| CliError::Other(format!("{path}: failed to decode byte array: {e}")));
+            .map_err(|e| decode_value_error(path, format!("failed to decode byte array: {e}")));
     }
 
     let mut values = Vec::with_capacity(array.len as usize);
@@ -1346,9 +1371,7 @@ fn decode_union_value(
         .iter()
         .find(|case| case.discriminant == discriminant)
         .ok_or_else(|| {
-            CliError::Other(format!(
-                "{path}: unknown union discriminant `{discriminant}`"
-            ))
+            decode_value_error(path, format!("unknown union discriminant `{discriminant}`"))
         })?;
 
     let mut object = serde_json::Map::new();
@@ -1432,7 +1455,7 @@ where
     T: xdrs::ReadXDROwned,
 {
     xdrs::read_xdr(reader)
-        .map_err(|e| CliError::Other(format!("{path}: failed to decode value: {e}")))
+        .map_err(|e| decode_value_error(path, format!("failed to decode value: {e}")))
 }
 
 fn parse_fixed_hex<const N: usize>(value: &str, label: &str) -> Result<[u8; N], CliError> {

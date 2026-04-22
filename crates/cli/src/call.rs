@@ -32,12 +32,14 @@ use crate::{CliError, Print};
 /// Wallet `do_action` entrypoint ID (from dev-wallet WASM exports).
 const WALLET_DO_ACTION_ENTRYPOINT: [u8; 8] = 0x1984_6D75_0FAD_81D6_u64.to_be_bytes();
 
+/// Resolved contract entrypoint plus any metadata used for codec work.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ResolvedCall {
     pub(crate) entrypoint: ContractEntrypointID,
     pub(crate) metadata: Option<CallMetadata>,
 }
 
+/// Fully prepared call submission inputs shared by live execution and dry-run flows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PreparedCall {
     pub(crate) rpc_url: String,
@@ -136,6 +138,7 @@ pub fn run(
     Ok(())
 }
 
+/// Resolve, encode, and sign a call transaction without submitting it.
 pub(crate) fn prepare_call(
     contract: &str,
     method: &str,
@@ -227,6 +230,7 @@ fn prepare_call_with_runtime(
     })
 }
 
+/// Submit a previously prepared call transaction and wait for its receipt.
 pub(crate) fn submit_prepared_call(
     prepared: &PreparedCall,
 ) -> Result<(TxHash, TransactionReceipt), CliError> {
@@ -800,10 +804,9 @@ mod tests {
     use crate::CliError;
     use crate::artifacts::ArtifactOptions;
     use crate::codec::{
-        CallMetadata as ResolvedMethodMetadata, ContractMetadata, MethodMetadata,
-        SpecMethodMetadata, build_type_def_index, decode_return as decode_return_value,
-        decode_spec_value, decode_spec_value_from_reader, encode_args as encode_calldata,
-        normalize_type_name,
+        CallMetadata, ContractMetadata, MethodMetadata, SpecMethodMetadata, build_type_def_index,
+        decode_return as decode_return_value, decode_spec_value, decode_spec_value_from_reader,
+        encode_args as encode_calldata, normalize_type_name,
     };
     use crate::contract_spec::InterfaceSpec;
     use groundhog_contract_spec::{
@@ -922,11 +925,8 @@ mod tests {
                 return_type: None,
             },
         };
-        let encoded = encode_calldata(
-            &["5".into()],
-            Some(&ResolvedMethodMetadata::Local(metadata)),
-        )
-        .expect("bug: typed calldata should encode");
+        let encoded = encode_calldata(&["5".into()], Some(&CallMetadata::Local(metadata)))
+            .expect("bug: typed calldata should encode");
         let decoded: u64 =
             xdrs::cxs::decode(&encoded).expect("bug: encoded calldata should decode as u64");
         assert_eq!(decoded, 5);
@@ -957,7 +957,7 @@ mod tests {
             },
         };
         let bytes = xdrs::cxs::encode(&7_u64).expect("bug: u64 should encode");
-        let decoded = decode_return_value(&bytes, Some(&ResolvedMethodMetadata::Local(metadata)))
+        let decoded = decode_return_value(&bytes, Some(&CallMetadata::Local(metadata)))
             .expect("bug: simple return value should decode");
         assert_eq!(decoded, serde_json::json!(7));
     }
@@ -975,10 +975,10 @@ mod tests {
         };
         let encoded = encode_calldata(
             &["hello".into()],
-            Some(&ResolvedMethodMetadata::Local(metadata.clone())),
+            Some(&CallMetadata::Local(metadata.clone())),
         )
         .expect("bug: local string calldata should encode");
-        let decoded = decode_return_value(&encoded, Some(&ResolvedMethodMetadata::Local(metadata)))
+        let decoded = decode_return_value(&encoded, Some(&CallMetadata::Local(metadata)))
             .expect("bug: local string return should decode");
         assert_eq!(decoded, serde_json::json!("hello"));
     }
@@ -1034,7 +1034,7 @@ mod tests {
                 "[true,false,true]".into(),
                 r#"[7,"ok"]"#.into(),
             ],
-            Some(&ResolvedMethodMetadata::Spec(metadata.clone())),
+            Some(&CallMetadata::Spec(metadata.clone())),
         )
         .expect("bug: embedded spec calldata should encode");
 
@@ -1070,7 +1070,7 @@ mod tests {
         });
         let encoded = encode_calldata(
             &[full_case.to_string()],
-            Some(&ResolvedMethodMetadata::Spec(metadata.clone())),
+            Some(&CallMetadata::Spec(metadata.clone())),
         )
         .expect("bug: union calldata should encode");
 
@@ -1093,24 +1093,21 @@ mod tests {
         });
         let pair_bytes = encode_calldata(
             &[pair_case.to_string()],
-            Some(&ResolvedMethodMetadata::Spec(metadata.clone())),
+            Some(&CallMetadata::Spec(metadata.clone())),
         )
         .expect("bug: tuple union case should encode");
-        let decoded_pair = decode_return_value(
-            &pair_bytes,
-            Some(&ResolvedMethodMetadata::Spec(metadata.clone())),
-        )
-        .expect("bug: union return should decode");
+        let decoded_pair =
+            decode_return_value(&pair_bytes, Some(&CallMetadata::Spec(metadata.clone())))
+                .expect("bug: union return should decode");
         assert_eq!(decoded_pair, pair_case);
 
         let empty_bytes = encode_calldata(
             &["Empty".into()],
-            Some(&ResolvedMethodMetadata::Spec(metadata.clone())),
+            Some(&CallMetadata::Spec(metadata.clone())),
         )
         .expect("bug: void union shorthand should encode");
-        let decoded_empty =
-            decode_return_value(&empty_bytes, Some(&ResolvedMethodMetadata::Spec(metadata)))
-                .expect("bug: void union return should decode");
+        let decoded_empty = decode_return_value(&empty_bytes, Some(&CallMetadata::Spec(metadata)))
+            .expect("bug: void union return should decode");
         assert_eq!(decoded_empty, json!({"case": "Empty"}));
     }
 
@@ -1120,7 +1117,7 @@ mod tests {
         let u128_metadata = sample_single_arg_spec_metadata(ContractType::U128);
         let u128_bytes = encode_calldata(
             std::slice::from_ref(&u128_value),
-            Some(&ResolvedMethodMetadata::Spec(u128_metadata.clone())),
+            Some(&CallMetadata::Spec(u128_metadata.clone())),
         )
         .expect("bug: embedded spec u128 should encode");
         assert_eq!(
@@ -1128,11 +1125,8 @@ mod tests {
             vec![json!(u128_value.clone())]
         );
         assert_eq!(
-            decode_return_value(
-                &u128_bytes,
-                Some(&ResolvedMethodMetadata::Spec(u128_metadata))
-            )
-            .expect("bug: embedded spec u128 return should decode"),
+            decode_return_value(&u128_bytes, Some(&CallMetadata::Spec(u128_metadata)))
+                .expect("bug: embedded spec u128 return should decode"),
             json!(u128_value)
         );
 
@@ -1140,7 +1134,7 @@ mod tests {
         let i128_metadata = sample_single_arg_spec_metadata(ContractType::I128);
         let i128_bytes = encode_calldata(
             std::slice::from_ref(&i128_value),
-            Some(&ResolvedMethodMetadata::Spec(i128_metadata.clone())),
+            Some(&CallMetadata::Spec(i128_metadata.clone())),
         )
         .expect("bug: embedded spec i128 should encode");
         assert_eq!(
@@ -1148,11 +1142,8 @@ mod tests {
             vec![json!(i128_value.clone())]
         );
         assert_eq!(
-            decode_return_value(
-                &i128_bytes,
-                Some(&ResolvedMethodMetadata::Spec(i128_metadata))
-            )
-            .expect("bug: embedded spec i128 return should decode"),
+            decode_return_value(&i128_bytes, Some(&CallMetadata::Spec(i128_metadata)))
+                .expect("bug: embedded spec i128 return should decode"),
             json!(i128_value)
         );
     }
@@ -1163,7 +1154,7 @@ mod tests {
         let metadata = sample_single_arg_spec_metadata(ContractType::Address);
         let encoded = encode_calldata(
             std::slice::from_ref(&address),
-            Some(&ResolvedMethodMetadata::Spec(metadata.clone())),
+            Some(&CallMetadata::Spec(metadata.clone())),
         )
         .expect("bug: embedded spec address should encode");
 
@@ -1172,7 +1163,7 @@ mod tests {
             vec![json!(address.clone())]
         );
         assert_eq!(
-            decode_return_value(&encoded, Some(&ResolvedMethodMetadata::Spec(metadata)))
+            decode_return_value(&encoded, Some(&CallMetadata::Spec(metadata)))
                 .expect("bug: embedded spec address return should decode"),
             json!(address)
         );
@@ -1186,11 +1177,8 @@ mod tests {
                 max_len: 2,
             },
         });
-        let err = encode_calldata(
-            &["0x010203".into()],
-            Some(&ResolvedMethodMetadata::Spec(metadata)),
-        )
-        .expect_err("bug: oversized byte vectors should fail");
+        let err = encode_calldata(&["0x010203".into()], Some(&CallMetadata::Spec(metadata)))
+            .expect_err("bug: oversized byte vectors should fail");
         assert_call_encode_error(
             err,
             "argument 1 (`value`)",
@@ -1206,11 +1194,8 @@ mod tests {
                 len: 2,
             },
         });
-        let err = encode_calldata(
-            &["[true]".into()],
-            Some(&ResolvedMethodMetadata::Spec(metadata)),
-        )
-        .expect_err("bug: array length mismatches should fail");
+        let err = encode_calldata(&["[true]".into()], Some(&CallMetadata::Spec(metadata)))
+            .expect_err("bug: array length mismatches should fail");
         assert_call_encode_error(
             err,
             "argument 1 (`value`)",
@@ -1224,11 +1209,8 @@ mod tests {
             vec![contract_field("payload", named_type("Payload"))],
             ContractType::Void,
         );
-        let err = encode_calldata(
-            &["[7]".into()],
-            Some(&ResolvedMethodMetadata::Spec(metadata)),
-        )
-        .expect_err("bug: struct tuple field count mismatches should fail");
+        let err = encode_calldata(&["[7]".into()], Some(&CallMetadata::Spec(metadata)))
+            .expect_err("bug: struct tuple field count mismatches should fail");
         assert_call_encode_error(
             err,
             "argument 1 (`payload`)",
@@ -1244,7 +1226,7 @@ mod tests {
         );
         let err = encode_calldata(
             &[r#"{"count":7,"bytes":"hi","extra":1}"#.into()],
-            Some(&ResolvedMethodMetadata::Spec(metadata)),
+            Some(&CallMetadata::Spec(metadata)),
         )
         .expect_err("bug: unexpected struct fields should fail");
         assert_call_encode_error(err, "argument 1 (`payload`)", "unexpected field `extra`");
@@ -1258,7 +1240,7 @@ mod tests {
         );
         let err = encode_calldata(
             &[r#"{"count":7}"#.into()],
-            Some(&ResolvedMethodMetadata::Spec(metadata)),
+            Some(&CallMetadata::Spec(metadata)),
         )
         .expect_err("bug: missing struct fields should fail");
         assert_call_encode_error(err, "argument 1 (`payload`)", "missing field `bytes`");
@@ -1272,7 +1254,7 @@ mod tests {
         );
         let err = encode_calldata(
             &[r#"{"case":"Empty","value":true}"#.into()],
-            Some(&ResolvedMethodMetadata::Spec(metadata)),
+            Some(&CallMetadata::Spec(metadata)),
         )
         .expect_err("bug: void union cases should reject payloads");
         assert_call_encode_error(
@@ -1292,9 +1274,10 @@ mod tests {
 
         let err = decode_spec_value(&metadata.method.return_type, &bytes, &type_defs)
             .expect_err("bug: trailing return bytes should fail");
-        assert_eq!(
-            err.to_string(),
-            "return value: 1 unread byte(s) remain after decoding"
+        assert_call_decode_error(
+            err,
+            "return value",
+            "1 unread byte(s) remain after decoding",
         );
     }
 
@@ -1312,10 +1295,7 @@ mod tests {
 
         let err = decode_spec_value(&metadata.method.return_type, &bytes, &type_defs)
             .expect_err("bug: oversized decoded vectors should fail");
-        assert_eq!(
-            err.to_string(),
-            "return value: decoded vector length 2 exceeds max 1"
-        );
+        assert_call_decode_error(err, "return value", "decoded vector length 2 exceeds max 1");
     }
 
     #[test]
@@ -1323,11 +1303,11 @@ mod tests {
         let metadata = sample_numeric_name_spec_metadata(named_type("NumericEnum"));
         let encoded = encode_calldata(
             &[r#""1""#.into()],
-            Some(&ResolvedMethodMetadata::Spec(metadata.clone())),
+            Some(&CallMetadata::Spec(metadata.clone())),
         )
         .expect("bug: numeric-string enum variant should encode by name");
 
-        let decoded = decode_return_value(&encoded, Some(&ResolvedMethodMetadata::Spec(metadata)))
+        let decoded = decode_return_value(&encoded, Some(&CallMetadata::Spec(metadata)))
             .expect("bug: numeric-string enum variant should decode");
         assert_eq!(decoded, json!("1"));
     }
@@ -1337,11 +1317,11 @@ mod tests {
         let metadata = sample_numeric_name_spec_metadata(named_type("NumericUnion"));
         let encoded = encode_calldata(
             &[r#""1""#.into()],
-            Some(&ResolvedMethodMetadata::Spec(metadata.clone())),
+            Some(&CallMetadata::Spec(metadata.clone())),
         )
         .expect("bug: numeric-string union case should encode by name");
 
-        let decoded = decode_return_value(&encoded, Some(&ResolvedMethodMetadata::Spec(metadata)))
+        let decoded = decode_return_value(&encoded, Some(&CallMetadata::Spec(metadata)))
             .expect("bug: numeric-string union case should decode");
         assert_eq!(decoded, json!({"case": "1"}));
     }
@@ -1715,6 +1695,19 @@ mod tests {
                 assert_eq!(message, expected_message);
             }
             other => panic!("bug: expected CliError::CallEncode, got {other:?}"),
+        }
+    }
+
+    fn assert_call_decode_error(err: CliError, path: &str, expected_message: &str) {
+        match err {
+            CliError::CallDecode {
+                path: actual_path,
+                message,
+            } => {
+                assert_eq!(actual_path, path);
+                assert_eq!(message, expected_message);
+            }
+            other => panic!("bug: expected CliError::CallDecode, got {other:?}"),
         }
     }
 
