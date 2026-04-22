@@ -45,6 +45,7 @@ rpc_driver = { version = "0.8", registry = "groundhog" }
 groundhog-native-exec = { version = "0.11.3", registry = "groundhog" }
 groundhog-wasm-meter = { version = "0.2.0", registry = "groundhog" }
 groundhog-spec-tool = { version = "0.11.3", registry = "groundhog" }
+groundhog-contract-spec = { version = "0.11.3", registry = "groundhog" }
 
 # --- Async ---
 async-trait = "0.1"

@@ -54,6 +54,13 @@ Implementation status:
   contract-spec-aware invocation is in place through embedded contract specs
   plus local metadata. The CLI now emits `.spec.json` as an inspection/export
   artifact, not as runtime input.
+- Embedded specs now drive first-pass typed invocation too: scalars,
+  structs, enums, unions, options, tuples, vectors, arrays, and byte
+  blobs all round-trip without relying on the old JSON sidecar shape.
+- Remaining follow-up before `groundhog call --dry-run` leans on this:
+  cache repeated embedded-spec parsing, tighten union/structured CLI
+  ergonomics and diagnostics, and keep proving out the spec-driven path
+  so the remaining local-source fallback can eventually be removed.
 - Phase 2 is partially complete: `groundhog node` ships and shares execution
   semantics with the SDK/native executor, but richer observability and some
   secondary RPC methods are still pending.
@@ -239,7 +246,13 @@ Goal: ship the minimum complete network workflow.
    - Build and submit invocation transactions.
    - Resolve contract aliases from `groundhog.toml`.
    - Prefer contract spec-driven invocation over hardcoded endpoint IDs.
+   - First pass of spec-driven typed invocation should cover custom
+     structs/enums/unions plus composite containers, not just scalars.
+   - Byte vectors / byte arrays must follow `xdrs` opaque encodings
+     exactly, because dry-run and live call should share one invocation layer.
    - Print returned value, status, and relevant receipt data.
+   - After the first pass, cache spec loads and tighten CLI ergonomics
+     before adding `--dry-run`.
    - Add a basic `--dry-run` mode if the SDK support is easy to wire.
    - If dry-run adds too much drag, ship live call first.
 

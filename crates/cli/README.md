@@ -183,6 +183,17 @@ groundhog call 0xabc123... get
 groundhog call my-counter get --json
 ```
 
+Embedded contract specs now drive selector resolution plus first-pass
+typed argument encoding / return decoding. The spec-driven path supports
+scalars, structs, enums, unions, options, tuples, vectors, arrays, and
+byte blobs (`Vec<u8>` / `[u8; N]`) via plain args, JSON, or hex where it
+fits the underlying type.
+
+Follow-up before `--dry-run` should depend on this heavily: cache
+repeated embedded-spec loads, tighten the union/structured CLI UX, and
+remove the remaining local-source fallback once the spec-driven path has
+soaked.
+
 `--dry-run` is not implemented yet.
 
 ### `groundhog node`

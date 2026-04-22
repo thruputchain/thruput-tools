@@ -22,7 +22,7 @@ pub fn load_contract_spec(wasm: &Path) -> Result<Option<ContractSpec>, CliError>
 }
 
 /// Load the embedded `groundhogspecv0` custom section from a WASM file.
-pub fn load_embedded_contract_spec(wasm: &Path) -> Result<Option<ContractSpec>, CliError> {
+fn load_embedded_contract_spec(wasm: &Path) -> Result<Option<ContractSpec>, CliError> {
     let bytes = match std::fs::read(wasm) {
         Ok(bytes) => bytes,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -63,7 +63,7 @@ pub fn find_method_interfaces(
     for interface in spec.interfaces.iter() {
         let mut exports_method = false;
         for candidate in interface.methods.iter() {
-            if spec_string(&candidate.name)? == method {
+            if decode_spec_string(&candidate.name)? == method {
                 exports_method = true;
                 break;
             }
@@ -80,12 +80,12 @@ pub fn find_method_interfaces(
 
 fn interface_spec(interface: &ContractSpecInterface) -> Result<InterfaceSpec, CliError> {
     Ok(InterfaceSpec {
-        interface_name: spec_string(&interface.name)?.to_owned(),
-        interface_version: spec_string(&interface.vers)?.to_owned(),
+        interface_name: decode_spec_string(&interface.name)?.to_owned(),
+        interface_version: decode_spec_string(&interface.vers)?.to_owned(),
     })
 }
 
-fn spec_string(value: &ContractSpecString) -> Result<&str, CliError> {
+fn decode_spec_string(value: &ContractSpecString) -> Result<&str, CliError> {
     std::str::from_utf8(value.as_ref())
         .map_err(|e| CliError::SpecFailed(format!("contract spec contains invalid UTF-8: {e}")))
 }
@@ -210,6 +210,25 @@ mod tests {
         );
     }
 
+    #[test]
+    fn finds_multiple_interfaces_for_method_in_sorted_order() {
+        let matches = find_method_interfaces(&sample_multi_interface_contract_spec(), "get")
+            .expect("bug: method interfaces should resolve");
+        assert_eq!(
+            matches,
+            vec![
+                InterfaceSpec {
+                    interface_name: "Counter".into(),
+                    interface_version: "0.1.0".into(),
+                },
+                InterfaceSpec {
+                    interface_name: "Other".into(),
+                    interface_version: "0.1.0".into(),
+                },
+            ]
+        );
+    }
+
     fn sample_contract_spec() -> ContractSpec {
         ContractSpec {
             interfaces: vec![ContractSpecInterface {
@@ -236,6 +255,40 @@ mod tests {
                 .try_into()
                 .unwrap(),
             }]
+            .try_into()
+            .unwrap(),
+            type_defs: vec![].try_into().unwrap(),
+        }
+    }
+
+    fn sample_multi_interface_contract_spec() -> ContractSpec {
+        ContractSpec {
+            interfaces: vec![
+                ContractSpecInterface {
+                    name: spec_string_bytes("Other"),
+                    vers: spec_string_bytes("0.1.0"),
+                    throws: vec![].try_into().unwrap(),
+                    methods: vec![ContractSpecMethod {
+                        name: spec_string_bytes("get"),
+                        args: vec![].try_into().unwrap(),
+                        return_type: ContractType::U64,
+                    }]
+                    .try_into()
+                    .unwrap(),
+                },
+                ContractSpecInterface {
+                    name: spec_string_bytes("Counter"),
+                    vers: spec_string_bytes("0.1.0"),
+                    throws: vec![].try_into().unwrap(),
+                    methods: vec![ContractSpecMethod {
+                        name: spec_string_bytes("get"),
+                        args: vec![].try_into().unwrap(),
+                        return_type: ContractType::U64,
+                    }]
+                    .try_into()
+                    .unwrap(),
+                },
+            ]
             .try_into()
             .unwrap(),
             type_defs: vec![].try_into().unwrap(),
