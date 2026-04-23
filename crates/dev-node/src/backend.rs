@@ -8,7 +8,7 @@ use groundhog_native_exec::test_environment::{TestEnvironment, TestEnvironmentHa
 use groundhog_native_exec::transaction_handler::{RootInvokeResult, TransactionHandler};
 use groundhog_rpc_api_types::BlockHeight;
 use groundhog_rpc_api_types::block::ChainTip;
-use groundhog_rpc_api_types::dev::{DevAccount, TransactionDetail};
+use groundhog_rpc_api_types::dev::{DevAccount, StorageItemInfo, TransactionDetail};
 use groundhog_rpc_api_types::events::{EmittedEvent, IdentifiedEvent};
 use groundhog_rpc_api_types::hex::{Hex0x, HexBytes, Topic};
 use groundhog_rpc_api_types::receipt::{ExecStatus, TransactionReceipt};
@@ -19,7 +19,7 @@ use groundhog_xdr::event::TxEmittedEvent;
 use groundhog_xdr::exec_result::ExecResult;
 use groundhog_xdr::storage_item::{FlaggedStorageDelta, StorageDelta, StorageDeltaFlags};
 use groundhog_xdr::transaction::{InvocationFrameOutput, SignedTransaction};
-use groundhog_xdr::types::{ContractAddress, SHA256Hash};
+use groundhog_xdr::types::{ContractAddress, SHA256Hash, StorageKeyContractData};
 use sha2::{Digest, Sha256};
 
 use crate::accounts;
@@ -312,6 +312,53 @@ impl DevBackend {
     /// Full retained execution detail.
     pub fn get_transaction_detail(&self, tx_hash: &TxHash) -> Option<TransactionDetail> {
         transaction_detail_lookup(&self.transactions, tx_hash)
+    }
+
+    /// Latest-state point read for a contract storage key.
+    pub fn get_storage_at(
+        &self,
+        address: &ContractAddress,
+        key: &[u8; 32],
+    ) -> Option<StorageItemInfo> {
+        let key = StorageKeyContractData::new(*key);
+        self.env
+            .get_snapshot_storage_item(address, &key)
+            .map(Into::into)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn seed_bytestring(&self, address: &ContractAddress, key: &[u8; 32], value: &[u8]) {
+        let key = StorageKeyContractData::new(*key);
+
+        #[allow(clippy::cast_possible_wrap)]
+        self.env
+            .setup_grant_storage_tokens(address, self.storage_tokens as i64);
+
+        let result = self.env.transact(|tx| {
+            tx.call(address).run(|| {
+                groundhog_xdr::syscalls::raw_BytestringSet(&key, value, StorageDeltaFlags::None.0)
+                    .expect("bug: bytestring write should succeed");
+            })
+        });
+        result.assert_success();
+        self.env.advance_block();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn seed_deployed_bytestring(
+        &self,
+        address: &ContractAddress,
+        key: &[u8; 32],
+        value: &[u8],
+    ) {
+        self.env.setup_create_deployment(
+            address,
+            &groundhog_xdr::contract::Contract::kNative {
+                native_contract_id:
+                    groundhog_xdr::precompiles::HogexecPrecompiledNativeContracts::kNativeContractHogToken,
+            },
+        );
+        self.seed_bytestring(address, key, value);
     }
 
     /// Lightweight status check.
@@ -741,14 +788,16 @@ mod tests {
     use groundhog_rpc_api_types::receipt::ExecStatus;
     use groundhog_rpc_api_types::transaction::{TransactionStatus, TxHash};
     use groundhog_signing::{
-        BuildDeployTransaction, DEFAULT_PUBKEY_ACCOUNT_NONCE, DEFAULT_TX_GAS_LIMIT, PubkeyAccount,
-        SignTransactionParams, Signer, build_deploy_transaction, encode_signed_transaction_xdr,
-        sign_transaction,
+        BuildCallTransaction, BuildDeployTransaction, DEFAULT_PUBKEY_ACCOUNT_NONCE,
+        DEFAULT_TX_GAS_LIMIT, PubkeyAccount, SignTransactionParams, Signer, build_call_transaction,
+        build_deploy_transaction, encode_signed_transaction_xdr, sign_transaction,
     };
     use groundhog_xdr::auth_claim::{AuthClaim, AuthClaimData};
     use groundhog_xdr::contract::{Contract, ContractBlob, ContractEntrypointID};
     use groundhog_xdr::event::TxEmittedEvent;
-    use groundhog_xdr::storage_item::{FlaggedStorageDelta, StorageDelta};
+    use groundhog_xdr::storage_item::{
+        FlaggedStorageDelta, StorageDelta, StorageDeltaFlags, WireStorageItem,
+    };
     use groundhog_xdr::types::{
         AddressAndKey, ContractAddress, SHA256Hash, StorageKey, StorageKeyContractData, int128_xdr,
     };
@@ -839,6 +888,104 @@ mod tests {
                 .0,
             expected_address.as_ref()
         );
+    }
+
+    #[test]
+    fn get_storage_at_after_real_wasm_deploy_and_call() {
+        let wasm_path = std::env::var("GROUNDHOG_SMOKE_WASM").unwrap_or_else(|_| {
+            "/tmp/gh-storage-smoke-target/groundhog/gh_storage_smoke.wasm".into()
+        });
+        if !std::path::Path::new(&wasm_path).exists() {
+            eprintln!("skipping real wasm reproduction; missing {wasm_path}");
+            return;
+        }
+
+        let mut backend = DevBackend::new(
+            1,
+            DEFAULT_STORAGE_TOKENS,
+            DEFAULT_TRANSACTION_RETENTION_LIMIT,
+        );
+        let signer = crate::accounts::derive_dev_signer(0);
+        let wallet_address = PubkeyAccount::new(signer.public_key(), DEFAULT_PUBKEY_ACCOUNT_NONCE)
+            .address()
+            .expect("bug: dev wallet address derivation should succeed");
+        let wasm_bytes = std::fs::read(&wasm_path).expect("bug: smoke wasm should be readable");
+
+        let contract = Contract::kWasmi {
+            wasmi_contract: ContractBlob {
+                wasm: BytesM(wasm_bytes),
+            },
+        };
+        let contract_xdr = xdrs::txs::encode(&contract).expect("bug: contract should encode");
+        let contract_hash = SHA256Hash::from(<[u8; 32]>::from(Sha256::digest(&contract_xdr)));
+        let deploy_nonce =
+            SHA256Hash::from(<[u8; 32]>::from(Sha256::digest(1234_u64.to_le_bytes())));
+        let deployed_address =
+            super::compute_deploy_address(&wallet_address, &deploy_nonce, &contract_hash);
+        let deploy_calldata = xdrs::cxs::encode(&(&deploy_nonce, &contract_hash))
+            .expect("bug: deploy calldata should encode");
+        let auth_claims: AuthClaimData = vec![AuthClaim::kInvokedAddressSignature {
+            invoked_address_signature_id: 0,
+        }]
+        .try_into()
+        .expect("bug: auth claim should fit");
+
+        let deploy_tx = build_deploy_transaction(BuildDeployTransaction {
+            invoked_address: wallet_address,
+            entrypoint: ContractEntrypointID::from(super::WALLET_DEPLOY_ENTRYPOINT),
+            calldata: deploy_calldata,
+            gas_limit: DEFAULT_TX_GAS_LIMIT,
+            block_expiry_height: i64::MAX,
+            nonce: 1234,
+            contracts_to_deploy: VecM(vec![contract]),
+            auth_claims: auth_claims.clone(),
+        });
+        let signed_deploy = sign_transaction(deploy_tx, &signer, SignTransactionParams::default())
+            .expect("bug: deploy tx should sign");
+        let deploy_tx_bytes =
+            encode_signed_transaction_xdr(&signed_deploy).expect("bug: deploy tx should encode");
+
+        backend
+            .send_raw_transaction(&deploy_tx_bytes)
+            .expect("bug: deploy should commit");
+
+        let set_entrypoint = contract_entrypoint_id("SmokeStorage", "0.1.0", "set");
+        let set_calldata =
+            xdrs::cxs::encode(&"cafebabe".to_string()).expect("bug: set calldata should encode");
+        let inner_invocation = xdrs::txs::encode(&(
+            deployed_address,
+            set_entrypoint,
+            DEFAULT_TX_GAS_LIMIT,
+            set_calldata.as_slice(),
+        ))
+        .expect("bug: inner invocation should encode");
+        let do_action_calldata = xdrs::cxs::encode(&inner_invocation.as_slice())
+            .expect("bug: wallet calldata should encode");
+
+        let set_tx = build_call_transaction(BuildCallTransaction {
+            invoked_address: wallet_address,
+            entrypoint: ContractEntrypointID::from(0x1984_6D75_0FAD_81D6_u64.to_be_bytes()),
+            calldata: do_action_calldata,
+            gas_limit: DEFAULT_TX_GAS_LIMIT,
+            block_expiry_height: i64::MAX,
+            nonce: 1235,
+            auth_claims,
+        });
+        let signed_set = sign_transaction(set_tx, &signer, SignTransactionParams::default())
+            .expect("bug: set tx should sign");
+        let set_tx_bytes =
+            encode_signed_transaction_xdr(&signed_set).expect("bug: set tx should encode");
+
+        backend
+            .send_raw_transaction(&set_tx_bytes)
+            .expect("bug: set should commit");
+
+        let item = backend
+            .get_storage_at(&deployed_address, &[0x42; 32])
+            .expect("bug: committed bytestring should be readable after real wasm call");
+
+        assert_eq!(item.kind, "bytestring");
+        assert_eq!(item.summary, "Bytestring = 0x6361666562616265");
     }
 
     #[test]
@@ -973,6 +1120,102 @@ mod tests {
     }
 
     #[test]
+    fn get_storage_at_reads_latest_committed_bytestring() {
+        let backend = DevBackend::new(
+            0,
+            DEFAULT_STORAGE_TOKENS,
+            DEFAULT_TRANSACTION_RETENTION_LIMIT,
+        );
+        let address = ContractAddress::from([0x11; 32]);
+        let key_bytes = [0x22; 32];
+        let key = StorageKeyContractData::new(key_bytes);
+
+        #[allow(clippy::cast_possible_wrap)]
+        backend
+            .env
+            .setup_grant_storage_tokens(&address, DEFAULT_STORAGE_TOKENS as i64);
+
+        let result = backend.env.transact(|tx| {
+            tx.call(&address).run(|| {
+                groundhog_xdr::syscalls::raw_BytestringSet(
+                    &key,
+                    b"hello",
+                    StorageDeltaFlags::None.0,
+                )
+                .expect("bug: bytestring write should succeed");
+            })
+        });
+        result.assert_success();
+        backend.env.advance_block();
+
+        let item = backend
+            .get_storage_at(&address, &key_bytes)
+            .expect("bug: committed bytestring should be readable");
+        let expected = WireStorageItem::kItemTypeBytestring {
+            bytestring: BytesM(b"hello".to_vec()),
+        };
+
+        assert_eq!(item.kind, "bytestring");
+        assert_eq!(item.summary, "Bytestring = 0x68656c6c6f");
+        assert_eq!(
+            item.item_xdr,
+            HexBytes(xdrs::txs::encode(&expected).unwrap())
+        );
+    }
+
+    #[test]
+    fn get_storage_at_reads_latest_committed_bytestring_on_wasmi_wallet_address() {
+        let backend = DevBackend::new(
+            1,
+            DEFAULT_STORAGE_TOKENS,
+            DEFAULT_TRANSACTION_RETENTION_LIMIT,
+        );
+        let address = backend.accounts()[0].address.0;
+        let key_bytes = [0x24; 32];
+        let key = StorageKeyContractData::new(key_bytes);
+
+        let result = backend.env.transact(|tx| {
+            tx.call(&address).run(|| {
+                groundhog_xdr::syscalls::raw_BytestringSet(
+                    &key,
+                    b"hello",
+                    StorageDeltaFlags::None.0,
+                )
+                .expect("bug: bytestring write should succeed");
+            })
+        });
+        result.assert_success();
+        backend.env.advance_block();
+
+        let item = backend
+            .get_storage_at(&address, &key_bytes)
+            .expect("bug: committed bytestring on wasmi wallet should be readable");
+        let expected = WireStorageItem::kItemTypeBytestring {
+            bytestring: BytesM(b"hello".to_vec()),
+        };
+
+        assert_eq!(item.kind, "bytestring");
+        assert_eq!(item.summary, "Bytestring = 0x68656c6c6f");
+        assert_eq!(
+            item.item_xdr,
+            HexBytes(xdrs::txs::encode(&expected).unwrap())
+        );
+    }
+
+    #[test]
+    fn get_storage_at_returns_none_for_missing_key() {
+        let backend = DevBackend::new(
+            0,
+            DEFAULT_STORAGE_TOKENS,
+            DEFAULT_TRANSACTION_RETENTION_LIMIT,
+        );
+        let address = ContractAddress::from([0x33; 32]);
+        let key = [0x44; 32];
+
+        assert!(backend.get_storage_at(&address, &key).is_none());
+    }
+
+    #[test]
     fn transaction_summary_includes_key_sections() {
         let tx_hash = tx_hash(0x44);
         let storage_address = ContractAddress::from([0x99; 32]);
@@ -1048,6 +1291,43 @@ mod tests {
 
     fn tx_hash(discriminator: u8) -> TxHash {
         TxHash(Hex0x(SHA256Hash::from([discriminator; 32])))
+    }
+
+    fn contract_entrypoint_id(
+        interface_name: &str,
+        version_str: &str,
+        method: &str,
+    ) -> ContractEntrypointID {
+        let mut hasher = Sha256::new();
+        hasher.update(interface_name.as_bytes());
+        hasher.update(major_version(version_str).as_bytes());
+        hasher.update(method.as_bytes());
+        let hash = hasher.finalize();
+        let mut id = [0u8; 8];
+        id.copy_from_slice(&hash[..8]);
+        ContractEntrypointID::from(id)
+    }
+
+    fn major_version(version: &str) -> &str {
+        let normalized = version.split_once('+').map_or(version, |(base, _)| base);
+        let normalized = normalized
+            .split_once('-')
+            .map_or(normalized, |(base, _)| base);
+
+        let mut parts = normalized.split('.');
+        let major = parts.next().unwrap_or(normalized);
+        let minor = parts.next().unwrap_or("0");
+        let patch = parts.next().unwrap_or("0");
+
+        if major != "0" {
+            major
+        } else if minor != "0" {
+            &normalized[..major.len() + 1 + minor.len()]
+        } else if patch != "0" {
+            &normalized[..major.len() + 1 + minor.len() + 1 + patch.len()]
+        } else {
+            normalized
+        }
     }
 
     fn sample_identified_event(

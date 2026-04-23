@@ -4,7 +4,7 @@
 //! keeps it on a single `std::thread` and bridges to async via channels.
 
 use groundhog_rpc_api_types::block::ChainTip;
-use groundhog_rpc_api_types::dev::{DevAccount, TransactionDetail};
+use groundhog_rpc_api_types::dev::{DevAccount, StorageItemInfo, TransactionDetail};
 use groundhog_rpc_api_types::events::IdentifiedEvent;
 use groundhog_rpc_api_types::receipt::TransactionReceipt;
 use groundhog_rpc_api_types::transaction::{TransactionStatus, TxHash};
@@ -28,6 +28,11 @@ pub enum DevCommand {
         tx_hash: TxHash,
         reply: oneshot::Sender<Option<TransactionDetail>>,
     },
+    GetStorageAt {
+        address: ContractAddress,
+        key: [u8; 32],
+        reply: oneshot::Sender<Option<StorageItemInfo>>,
+    },
     GetTransactionStatus {
         tx_hash: TxHash,
         reply: oneshot::Sender<TransactionStatus>,
@@ -48,6 +53,20 @@ pub enum DevCommand {
         reply: oneshot::Sender<BackendStats>,
     },
     Reset {
+        reply: oneshot::Sender<()>,
+    },
+    #[cfg(test)]
+    SeedBytestring {
+        address: ContractAddress,
+        key: [u8; 32],
+        value: Vec<u8>,
+        reply: oneshot::Sender<()>,
+    },
+    #[cfg(test)]
+    SeedDeployedBytestring {
+        address: ContractAddress,
+        key: [u8; 32],
+        value: Vec<u8>,
         reply: oneshot::Sender<()>,
     },
 }
@@ -88,6 +107,23 @@ impl WorkerHandle {
         let (reply, rx) = oneshot::channel();
         self.tx
             .send(DevCommand::GetTransactionDetail { tx_hash, reply })
+            .map_err(|_| DevNodeError::WorkerStopped)?;
+        rx.await.map_err(|_| DevNodeError::WorkerStopped)
+    }
+
+    /// Latest-state point read for a contract storage key.
+    pub async fn get_storage_at(
+        &self,
+        address: ContractAddress,
+        key: [u8; 32],
+    ) -> Result<Option<StorageItemInfo>, DevNodeError> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(DevCommand::GetStorageAt {
+                address,
+                key,
+                reply,
+            })
             .map_err(|_| DevNodeError::WorkerStopped)?;
         rx.await.map_err(|_| DevNodeError::WorkerStopped)
     }
@@ -157,6 +193,44 @@ impl WorkerHandle {
             .map_err(|_| DevNodeError::WorkerStopped)?;
         rx.await.map_err(|_| DevNodeError::WorkerStopped)
     }
+
+    #[cfg(test)]
+    pub async fn seed_bytestring(
+        &self,
+        address: ContractAddress,
+        key: [u8; 32],
+        value: Vec<u8>,
+    ) -> Result<(), DevNodeError> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(DevCommand::SeedBytestring {
+                address,
+                key,
+                value,
+                reply,
+            })
+            .map_err(|_| DevNodeError::WorkerStopped)?;
+        rx.await.map_err(|_| DevNodeError::WorkerStopped)
+    }
+
+    #[cfg(test)]
+    pub async fn seed_deployed_bytestring(
+        &self,
+        address: ContractAddress,
+        key: [u8; 32],
+        value: Vec<u8>,
+    ) -> Result<(), DevNodeError> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(DevCommand::SeedDeployedBytestring {
+                address,
+                key,
+                value,
+                reply,
+            })
+            .map_err(|_| DevNodeError::WorkerStopped)?;
+        rx.await.map_err(|_| DevNodeError::WorkerStopped)
+    }
 }
 
 /// Spawn the worker thread and return a handle for sending commands.
@@ -208,6 +282,13 @@ pub fn spawn_worker(
                         DevCommand::GetTransactionDetail { tx_hash, reply } => {
                             let _ = reply.send(backend.get_transaction_detail(&tx_hash));
                         }
+                        DevCommand::GetStorageAt {
+                            address,
+                            key,
+                            reply,
+                        } => {
+                            let _ = reply.send(backend.get_storage_at(&address.0, &key));
+                        }
                         DevCommand::GetTransactionStatus { tx_hash, reply } => {
                             let _ = reply.send(backend.get_transaction_status(&tx_hash));
                         }
@@ -234,6 +315,26 @@ pub fn spawn_worker(
                         }
                         DevCommand::Reset { reply } => {
                             backend.reset();
+                            let _ = reply.send(());
+                        }
+                        #[cfg(test)]
+                        DevCommand::SeedBytestring {
+                            address,
+                            key,
+                            value,
+                            reply,
+                        } => {
+                            backend.seed_bytestring(&address.0, &key, &value);
+                            let _ = reply.send(());
+                        }
+                        #[cfg(test)]
+                        DevCommand::SeedDeployedBytestring {
+                            address,
+                            key,
+                            value,
+                            reply,
+                        } => {
+                            backend.seed_deployed_bytestring(&address.0, &key, &value);
                             let _ = reply.send(());
                         }
                     }

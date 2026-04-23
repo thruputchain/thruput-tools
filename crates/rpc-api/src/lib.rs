@@ -11,8 +11,9 @@ use jsonrpsee::proc_macros::rpc;
 use groundhog_rpc_api_types::{
     BlockHeight, ContractAddress,
     block::{BlockInfo, ChainTip},
-    dev::{DevAccount, TransactionDetail},
+    dev::{DevAccount, StorageItemInfo, TransactionDetail},
     events::IdentifiedEvent,
+    hex::HexBytes,
     receipt::TransactionReceipt,
     transaction::{TransactionStatus, TxHash},
 };
@@ -72,4 +73,12 @@ pub trait GroundhogDevApi {
     #[method(name = "getTransactionDetail")]
     async fn get_transaction_detail(&self, tx_hash: TxHash)
     -> RpcResult<Option<TransactionDetail>>;
+
+    /// Read the latest storage item at an address/key pair.
+    #[method(name = "getStorageAt")]
+    async fn get_storage_at(
+        &self,
+        address: ContractAddress,
+        key: HexBytes,
+    ) -> RpcResult<Option<StorageItemInfo>>;
 }

@@ -8,4 +8,4 @@ Active batch only. Canonical roadmap remains `docs/cli/roadmap.md`.
 - [x] Phase 2a: add backend / RPC coverage for retention and event queries
 - [x] Phase 2b: generate and re-export `GroundhogDevApiClient`
 - [x] Phase 2b: add `getTransactionDetail` and CLI enrichment
-- [ ] Phase 2c: add `getStorageAt` once the FFI binding lands
+- [x] Phase 2c: add `getStorageAt`

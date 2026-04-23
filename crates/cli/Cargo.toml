@@ -47,9 +47,10 @@ tokio = { workspace = true }
 tracing-subscriber = { workspace = true }
 groundhog-dev-node = { workspace = true, optional = true }
 jsonrpsee = { workspace = true, features = ["client", "http-client"] }
+groundhog-sys = { workspace = true, optional = true }
 
 [features]
-dev-node = ["dep:groundhog-dev-node"]
+dev-node = ["dep:groundhog-dev-node", "dep:groundhog-sys"]
 
 [dev-dependencies]
 tempfile = "3"

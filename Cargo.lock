@@ -626,7 +626,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-cli"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "clap",
  "clap_complete",
@@ -939,6 +939,7 @@ dependencies = [
  "groundhog-rpc-client",
  "groundhog-signing",
  "groundhog-spec-tool",
+ "groundhog-sys",
  "groundhog-wasm-meter 0.3.0",
  "groundhog-xdr",
  "hex",
@@ -962,9 +963,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-contract-spec"
-version = "0.11.3"
-source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "cd6c2d046de71e6674b0a268e6e4fb4facfa911c9997bf4a0397083889b6f53b"
+version = "0.11.4"
 dependencies = [
  "groundhog-spec",
  "groundhog-xdr",
@@ -973,7 +972,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-dev-node"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "async-trait",
  "groundhog-native-exec",
@@ -1008,9 +1007,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-event"
-version = "0.11.3"
-source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "1916d83d96996a765e54a7b5e5e31a03d617d0b145abb0719fbf7ac94d61c9a9"
+version = "0.11.4"
 dependencies = [
  "groundhog-xdr",
  "xdrs",
@@ -1018,9 +1015,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-native-exec"
-version = "0.11.3"
-source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "1c9dad9a7679471f34efebec2bd0504423fbe41bc71cc6ed8c431af6bb2ac178"
+version = "0.11.4"
 dependencies = [
  "groundhog-event",
  "groundhog-storage-cost",
@@ -1036,7 +1031,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-rpc-api"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "async-trait",
  "groundhog-rpc-api-types",
@@ -1045,7 +1040,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-rpc-api-types"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "bytes",
  "groundhog-trace",
@@ -1060,7 +1055,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-rpc-client"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "groundhog-rpc-api",
  "groundhog-rpc-api-types",
@@ -1071,7 +1066,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-rpc-gateway"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "async-trait",
  "axum",
@@ -1111,7 +1106,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-signing"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "ed25519-dalek",
  "groundhog-xdr",
@@ -1137,9 +1132,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-spec-tool"
-version = "0.11.3"
-source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "64c594f61a0254c73a06232518a7945e555940f8d9a9e135508c732d56708c60"
+version = "0.11.4"
 dependencies = [
  "groundhog-contract-spec",
  "serde_json",
@@ -1151,9 +1144,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-storage-cost"
-version = "0.11.3"
-source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "7eb427efbce04a4b619e4f194f3c5a3d0f90bf51aa40ffc19698ef7839d7c423"
+version = "0.11.4"
 dependencies = [
  "groundhog-xdr",
  "xdrs",
@@ -1161,9 +1152,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-sys"
-version = "0.11.3"
-source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "1abee54f35a6fd7a461349faa4506fe36d01916d26920d7df2ce75b0f935d905"
+version = "0.11.4"
 dependencies = [
  "bindgen",
  "cmake",
@@ -2096,7 +2085,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2583,7 +2572,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3117,7 +3106,7 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3734,7 +3723,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

@@ -6,8 +6,9 @@
 use groundhog_rpc_api::GroundhogApiServer;
 use groundhog_rpc_api::GroundhogDevApiServer;
 use groundhog_rpc_api_types::block::{BlockInfo, ChainTip};
-use groundhog_rpc_api_types::dev::{DevAccount, TransactionDetail};
+use groundhog_rpc_api_types::dev::{DevAccount, StorageItemInfo, TransactionDetail};
 use groundhog_rpc_api_types::events::IdentifiedEvent;
+use groundhog_rpc_api_types::hex::HexBytes;
 use groundhog_rpc_api_types::receipt::TransactionReceipt;
 use groundhog_rpc_api_types::transaction::{TransactionStatus, TxHash};
 use groundhog_rpc_api_types::{BlockHeight, ContractAddress};
@@ -106,5 +107,21 @@ impl GroundhogDevApiServer for DevNodeRpc {
         tx_hash: TxHash,
     ) -> RpcResult<Option<TransactionDetail>> {
         Ok(self.worker.get_transaction_detail(tx_hash).await?)
+    }
+
+    async fn get_storage_at(
+        &self,
+        address: ContractAddress,
+        key: HexBytes,
+    ) -> RpcResult<Option<StorageItemInfo>> {
+        let key: [u8; 32] = key.0.as_slice().try_into().map_err(|_| {
+            ErrorObjectOwned::owned(
+                groundhog_rpc_api_types::error::codes::INVALID_PARAMS,
+                "storage key must be exactly 32 bytes",
+                None::<()>,
+            )
+        })?;
+
+        Ok(self.worker.get_storage_at(address, key).await?)
     }
 }
