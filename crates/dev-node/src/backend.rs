@@ -2,20 +2,22 @@
 //!
 //! Lives on a dedicated `std::thread`. Never crosses thread boundaries.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use groundhog_native_exec::test_environment::{TestEnvironment, TestEnvironmentHandle};
 use groundhog_native_exec::transaction_handler::{RootInvokeResult, TransactionHandler};
 use groundhog_rpc_api_types::BlockHeight;
 use groundhog_rpc_api_types::block::ChainTip;
-use groundhog_rpc_api_types::dev::DevAccount;
+use groundhog_rpc_api_types::dev::{DevAccount, TransactionDetail};
 use groundhog_rpc_api_types::events::{EmittedEvent, IdentifiedEvent};
 use groundhog_rpc_api_types::hex::{Hex0x, HexBytes, Topic};
 use groundhog_rpc_api_types::receipt::{ExecStatus, TransactionReceipt};
 use groundhog_rpc_api_types::transaction::{TransactionStatus, TxHash};
 use groundhog_signing::{DEFAULT_TX_GAS_LIMIT, WALLET_DEPLOY_ENTRYPOINT, derive_deploy_address};
+use groundhog_trace::InvocationFrameTrace;
 use groundhog_xdr::event::TxEmittedEvent;
 use groundhog_xdr::exec_result::ExecResult;
+use groundhog_xdr::storage_item::{FlaggedStorageDelta, StorageDelta, StorageDeltaFlags};
 use groundhog_xdr::transaction::{InvocationFrameOutput, SignedTransaction};
 use groundhog_xdr::types::{ContractAddress, SHA256Hash};
 use sha2::{Digest, Sha256};
@@ -23,15 +25,27 @@ use sha2::{Digest, Sha256};
 use crate::accounts;
 use crate::error::DevNodeError;
 
+#[derive(Debug, Clone)]
+struct TransactionRecord {
+    receipt: TransactionReceipt,
+    gas_consumed: u64,
+    gas_limit: Option<u64>,
+    storage_deltas: Vec<FlaggedStorageDelta>,
+    syscall_trace: Option<InvocationFrameTrace>,
+}
+
 /// In-memory dev node state.
 pub struct DevBackend {
     env: TestEnvironmentHandle,
-    receipts: HashMap<TxHash, TransactionReceipt>,
+    transactions: HashMap<TxHash, TransactionRecord>,
+    committed_heights: HashMap<TxHash, BlockHeight>,
+    transaction_order: VecDeque<TxHash>,
     events: Vec<IdentifiedEvent>,
     tip_height: i64,
     block_txs: Vec<Vec<TxHash>>,
     accounts: Vec<DevAccount>,
     storage_tokens: u64,
+    transaction_retention_limit: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,10 +61,15 @@ impl DevBackend {
     /// 1. Register the dev-wallet WASM contract
     /// 2. Deploy the wallet at each dev account address and grant storage tokens
     /// 3. Initialize each wallet with its owner's ed25519 public key
-    pub fn new(account_count: usize, storage_tokens: u64) -> Self {
+    pub fn new(
+        account_count: usize,
+        storage_tokens: u64,
+        transaction_retention_limit: usize,
+    ) -> Self {
         tracing::info!(
             account_count,
             storage_tokens,
+            transaction_retention_limit,
             "initializing dev node backend"
         );
         let env = TestEnvironment::new(None);
@@ -147,7 +166,9 @@ impl DevBackend {
 
         Self {
             env,
-            receipts: HashMap::new(),
+            transactions: HashMap::new(),
+            committed_heights: HashMap::new(),
+            transaction_order: VecDeque::new(),
             events: Vec::new(),
             #[allow(clippy::cast_possible_wrap)]
             tip_height: 1 + account_count as i64,
@@ -158,6 +179,7 @@ impl DevBackend {
             },
             accounts,
             storage_tokens,
+            transaction_retention_limit,
         }
     }
 
@@ -207,15 +229,6 @@ impl DevBackend {
         let new_height = self.tip_height + 1;
 
         let (status, return_data) = map_exec_result(exec_result, &invoke_result);
-        let event_count = invoke_result.events.len();
-        tracing::info!(
-            tx_hash = %format_tx_hash(&tx_hash),
-            height = new_height,
-            status = %status_label(&status),
-            event_count,
-            "transaction committed"
-        );
-
         let receipt_events: Vec<EmittedEvent> = invoke_result
             .events
             .iter()
@@ -230,8 +243,41 @@ impl DevBackend {
             return_data,
         };
 
+        let gas_limit = configured_gas_limit(signed_tx.tx.invocation.gas_limit);
+        let storage_deltas = invoke_result
+            .trace
+            .as_ref()
+            .map(|trace| trace.storage_writes.iter().cloned().collect())
+            .unwrap_or_default();
+        let record = TransactionRecord {
+            receipt: receipt.clone(),
+            gas_consumed: invoke_result.gas_consumed,
+            gas_limit,
+            storage_deltas,
+            syscall_trace: invoke_result.trace.clone(),
+        };
+
+        let deployed_contract = predicted_wallet_deploy_address(&signed_tx);
+        let event_count = receipt.events.len();
+        let summary = format_transaction_summary(&tx_hash, &record, deployed_contract.as_ref());
+        tracing::info!(
+            tx_hash = %format_tx_hash(&tx_hash),
+            height = new_height,
+            status = %format_status_summary(&record.receipt.status),
+            event_count,
+            storage_delta_count = record.storage_deltas.len(),
+            syscall_count = record
+                .syscall_trace
+                .as_ref()
+                .map_or(0, |trace| trace.system_calls.len()),
+            "\n{summary}"
+        );
+
         // 7. Store
-        self.receipts.insert(tx_hash, receipt);
+        self.transactions.insert(tx_hash, record);
+        self.committed_heights
+            .insert(tx_hash, BlockHeight::from(new_height));
+        self.transaction_order.push_back(tx_hash);
 
         for (idx, event) in receipt_events.into_iter().enumerate() {
             self.events.push(IdentifiedEvent {
@@ -251,23 +297,38 @@ impl DevBackend {
             self.block_txs.push(vec![]);
         }
         self.block_txs[height_idx].push(tx_hash);
+        self.evict_old_transactions();
 
         Ok(tx_hash)
     }
 
     /// Look up a receipt by hash.
     pub fn get_transaction_receipt(&self, tx_hash: &TxHash) -> Option<TransactionReceipt> {
-        self.receipts.get(tx_hash).cloned()
+        self.transactions
+            .get(tx_hash)
+            .map(|record| record.receipt.clone())
+    }
+
+    /// Full retained execution detail.
+    pub fn get_transaction_detail(&self, tx_hash: &TxHash) -> Option<TransactionDetail> {
+        self.transactions
+            .get(tx_hash)
+            .map(transaction_detail_from_record)
     }
 
     /// Lightweight status check.
     pub fn get_transaction_status(&self, tx_hash: &TxHash) -> TransactionStatus {
-        match self.receipts.get(tx_hash) {
-            Some(receipt) => TransactionStatus::Committed {
-                height: receipt.height.clone(),
-            },
-            None => TransactionStatus::Unknown,
-        }
+        status_from_index(&self.committed_heights, tx_hash)
+    }
+
+    /// Contract events filtered by address and inclusive block-height range.
+    pub fn get_contract_events(
+        &self,
+        address: &ContractAddress,
+        from_height: &BlockHeight,
+        to_height: &BlockHeight,
+    ) -> Vec<IdentifiedEvent> {
+        filter_contract_events(&self.events, address, from_height, to_height)
     }
 
     /// Current chain tip.
@@ -290,7 +351,7 @@ impl DevBackend {
     pub fn reset(&mut self) {
         tracing::info!("resetting dev node backend");
         let count = self.accounts.len();
-        *self = Self::new(count, self.storage_tokens);
+        *self = Self::new(count, self.storage_tokens, self.transaction_retention_limit);
     }
 
     pub fn stats(&self) -> BackendStats {
@@ -298,13 +359,76 @@ impl DevBackend {
             .expect("bug: dev node block count should not be negative");
         BackendStats {
             block_count,
-            tx_count: self.receipts.len(),
+            tx_count: self.committed_heights.len(),
         }
+    }
+
+    fn evict_old_transactions(&mut self) {
+        evict_transactions(
+            &mut self.transactions,
+            &mut self.transaction_order,
+            &mut self.events,
+            self.transaction_retention_limit,
+        );
     }
 }
 
 fn format_tx_hash(tx_hash: &TxHash) -> String {
     format!("0x{}", hex::encode(tx_hash.0.0.as_ref()))
+}
+
+fn transaction_detail_from_record(record: &TransactionRecord) -> TransactionDetail {
+    TransactionDetail {
+        receipt: record.receipt.clone(),
+        gas_consumed: record.gas_consumed,
+        gas_limit: record.gas_limit,
+        storage_deltas: record.storage_deltas.iter().map(Into::into).collect(),
+        trace: record.syscall_trace.as_ref().map(Into::into),
+    }
+}
+
+fn status_from_index(
+    committed_heights: &HashMap<TxHash, BlockHeight>,
+    tx_hash: &TxHash,
+) -> TransactionStatus {
+    match committed_heights.get(tx_hash) {
+        Some(height) => TransactionStatus::Committed {
+            height: height.clone(),
+        },
+        None => TransactionStatus::Unknown,
+    }
+}
+
+fn filter_contract_events(
+    events: &[IdentifiedEvent],
+    address: &ContractAddress,
+    from_height: &BlockHeight,
+    to_height: &BlockHeight,
+) -> Vec<IdentifiedEvent> {
+    events
+        .iter()
+        .filter(|identified| {
+            identified.event.contract_address.0 == *address
+                && identified.block_height >= *from_height
+                && identified.block_height <= *to_height
+        })
+        .cloned()
+        .collect()
+}
+
+fn evict_transactions(
+    transactions: &mut HashMap<TxHash, TransactionRecord>,
+    transaction_order: &mut VecDeque<TxHash>,
+    events: &mut Vec<IdentifiedEvent>,
+    transaction_retention_limit: usize,
+) {
+    while transactions.len() > transaction_retention_limit {
+        let Some(evicted_hash) = transaction_order.pop_front() else {
+            break;
+        };
+        transactions.remove(&evicted_hash);
+        events.retain(|event| event.tx_hash != evicted_hash);
+    }
 }
 
 fn status_label(status: &ExecStatus) -> &'static str {
@@ -315,6 +439,188 @@ fn status_label(status: &ExecStatus) -> &'static str {
         ExecStatus::NonDeterministicError => "nondeterministic_error",
         ExecStatus::FailedGasSponsorship => "failed_gas_sponsorship",
         _ => "other",
+    }
+}
+
+fn format_status_summary(status: &ExecStatus) -> String {
+    match status {
+        ExecStatus::Reverted {
+            message: Some(message),
+        } if !message.is_empty() => format!("reverted ({message})"),
+        ExecStatus::DeterministicError { kind } => format!("deterministic_error ({kind})"),
+        other => status_label(other).to_string(),
+    }
+}
+
+fn configured_gas_limit(gas_limit: u64) -> Option<u64> {
+    (gas_limit != u64::MAX).then_some(gas_limit)
+}
+
+fn format_transaction_summary(
+    tx_hash: &TxHash,
+    record: &TransactionRecord,
+    deployed_contract: Option<&ContractAddress>,
+) -> String {
+    let mut lines = vec![
+        format!("Transaction: {}", format_tx_hash(tx_hash)),
+        format!(
+            "  Status: {}",
+            format_status_summary(&record.receipt.status)
+        ),
+        format!("  Block: {}", *record.receipt.height),
+    ];
+
+    if let Some(address) = deployed_contract {
+        lines.push(format!("  Contract: {}", format_contract_address(address)));
+    }
+
+    if !record.storage_deltas.is_empty() {
+        lines.push(String::new());
+        lines.push(format!(
+            "  Storage deltas ({}):",
+            record.storage_deltas.len()
+        ));
+        lines.extend(
+            record
+                .storage_deltas
+                .iter()
+                .map(|delta| format!("    {}", format_storage_delta(delta))),
+        );
+    }
+
+    if !record.receipt.events.is_empty() {
+        lines.push(String::new());
+        lines.push(format!("  Events ({}):", record.receipt.events.len()));
+        lines.extend(
+            record
+                .receipt
+                .events
+                .iter()
+                .enumerate()
+                .map(|(index, event)| format!("    [{}] {}", index, format_event(event))),
+        );
+    }
+
+    if let Some(return_data) = record.receipt.return_data.as_ref()
+        && !return_data.0.is_empty()
+    {
+        lines.push(String::new());
+        lines.push(format!("  Return: 0x{}", hex::encode(&return_data.0)));
+    }
+
+    lines.push(format!(
+        "  Gas: {}",
+        format_gas_summary(record.gas_consumed, record.gas_limit)
+    ));
+
+    lines.join("\n")
+}
+
+fn format_storage_delta(delta: &FlaggedStorageDelta) -> String {
+    let key = format_storage_key(&delta.addrkey.key);
+    let body = match &delta.delta {
+        StorageDelta::kDeltaTypeBytestringSet { bytestring } => {
+            format!("BytestringSet -> 0x{}", hex::encode(&bytestring.0))
+        }
+        StorageDelta::kDeltaTypeNonnegativeIntSetAdd { nnint } => format!(
+            "NonnegativeIntSetAdd set={} add={}",
+            format_i128_xdr(&nnint.set_value),
+            format_i128_xdr(&nnint.add_value),
+        ),
+        StorageDelta::kDeltaTypeNonnegativeIntAdd { nnint_add } => {
+            format!("NonnegativeIntAdd {:+}", int128_to_i128(nnint_add))
+        }
+        StorageDelta::kDeltaTypeDelete => "Delete".to_string(),
+        StorageDelta::kDeltaTypeRetrocausalQueue { retrocausal_queue } => {
+            format!("RetrocausalQueue -> {}", format_xdr_hex(retrocausal_queue))
+        }
+        StorageDelta::kDeltaTypeAuthDataChange { auth_data_change } => {
+            format!("AuthDataChange -> {}", format_xdr_hex(auth_data_change))
+        }
+        StorageDelta::kDeltaTypeDeployContract {
+            deployed_contract_hash,
+        } => format!(
+            "DeployContract -> 0x{}",
+            hex::encode(deployed_contract_hash.hash.as_ref())
+        ),
+        StorageDelta::kDeltaTypeConsumeUniquifier {
+            consume_uniquifier_args,
+        } => format!(
+            "ConsumeUniquifier nonce={} expiry={}",
+            consume_uniquifier_args.uniquifier.nonce,
+            *consume_uniquifier_args.uniquifier.block_expiry_height,
+        ),
+        other => format!("{} -> {}", other.type_(), format_xdr_hex(other)),
+    };
+
+    let flags = format_storage_delta_flags(delta.flags);
+    format!("{key}  {body}{flags}")
+}
+
+fn format_storage_delta_flags(flags: i32) -> String {
+    if flags == StorageDeltaFlags::None.0 {
+        String::new()
+    } else {
+        format!(" [{}]", StorageDeltaFlags(flags))
+    }
+}
+
+fn format_storage_key(key: &groundhog_xdr::types::StorageKey) -> String {
+    format_xdr_hex(key)
+}
+
+fn format_event(event: &EmittedEvent) -> String {
+    let mut parts = vec![format_contract_address(&event.contract_address.0)];
+    parts.extend(
+        event
+            .topics
+            .iter()
+            .enumerate()
+            .map(|(index, topic)| format!("topic{index}=0x{}", hex::encode(topic.0))),
+    );
+    parts.push(format!("data=0x{}", hex::encode(&event.data.0)));
+    parts.join(" ")
+}
+
+fn format_gas_summary(consumed: u64, gas_limit: Option<u64>) -> String {
+    let consumed = format_number(consumed);
+    match gas_limit {
+        Some(limit) => format!("{consumed} / {}", format_number(limit)),
+        None => consumed,
+    }
+}
+
+fn format_number(value: u64) -> String {
+    let digits = value.to_string();
+    let mut formatted = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, ch) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index) % 3 == 0 {
+            formatted.push(',');
+        }
+        formatted.push(ch);
+    }
+    formatted
+}
+
+fn format_i128_xdr(value: &groundhog_xdr::types::int128_xdr) -> String {
+    int128_to_i128(value).to_string()
+}
+
+fn int128_to_i128(value: &groundhog_xdr::types::int128_xdr) -> i128 {
+    ((value.highbits as i128) << 64) | i128::from(value.lowbits)
+}
+
+fn format_contract_address(address: &ContractAddress) -> String {
+    format!("0x{}", hex::encode(address.as_ref()))
+}
+
+fn format_xdr_hex<T>(value: &T) -> String
+where
+    T: xdrs::WriteXDR,
+{
+    match xdrs::txs::encode(value) {
+        Ok(bytes) => format!("0x{}", hex::encode(bytes)),
+        Err(err) => format!("<xdr encode error: {err}>"),
     }
 }
 
@@ -417,10 +723,15 @@ fn map_exec_result(
 
 #[cfg(test)]
 mod tests {
-    use super::DevBackend;
+    use super::{DevBackend, TransactionRecord, format_transaction_summary};
+    use crate::DEFAULT_TRANSACTION_RETENTION_LIMIT;
     use crate::accounts::DEFAULT_STORAGE_TOKENS;
     use crate::wallet::DEV_WALLET_WASM;
+    use groundhog_rpc_api_types::BlockHeight;
+    use groundhog_rpc_api_types::events::{EmittedEvent, IdentifiedEvent};
+    use groundhog_rpc_api_types::hex::{Hex0x, HexBytes, Topic};
     use groundhog_rpc_api_types::receipt::ExecStatus;
+    use groundhog_rpc_api_types::transaction::{TransactionStatus, TxHash};
     use groundhog_signing::{
         BuildDeployTransaction, DEFAULT_PUBKEY_ACCOUNT_NONCE, DEFAULT_TX_GAS_LIMIT, PubkeyAccount,
         SignTransactionParams, Signer, build_deploy_transaction, encode_signed_transaction_xdr,
@@ -429,13 +740,21 @@ mod tests {
     use groundhog_xdr::auth_claim::{AuthClaim, AuthClaimData};
     use groundhog_xdr::contract::{Contract, ContractBlob, ContractEntrypointID};
     use groundhog_xdr::event::TxEmittedEvent;
-    use groundhog_xdr::types::SHA256Hash;
+    use groundhog_xdr::storage_item::{FlaggedStorageDelta, StorageDelta};
+    use groundhog_xdr::types::{
+        AddressAndKey, ContractAddress, SHA256Hash, StorageKey, StorageKeyContractData, int128_xdr,
+    };
     use sha2::{Digest, Sha256};
+    use std::collections::{HashMap, VecDeque};
     use xdr_common::{BytesM, VecM};
 
     #[test]
     fn initializes_wallet_auth_data_for_dev_accounts() {
-        let backend = DevBackend::new(1, DEFAULT_STORAGE_TOKENS);
+        let backend = DevBackend::new(
+            1,
+            DEFAULT_STORAGE_TOKENS,
+            DEFAULT_TRANSACTION_RETENTION_LIMIT,
+        );
         assert_eq!(backend.accounts().len(), 1);
     }
 
@@ -452,7 +771,11 @@ mod tests {
 
     #[test]
     fn deploy_transaction_prefunds_predicted_address() {
-        let mut backend = DevBackend::new(1, DEFAULT_STORAGE_TOKENS);
+        let mut backend = DevBackend::new(
+            1,
+            DEFAULT_STORAGE_TOKENS,
+            DEFAULT_TRANSACTION_RETENTION_LIMIT,
+        );
         let signer = crate::accounts::derive_dev_signer(0);
         let wallet_address = PubkeyAccount::new(signer.public_key(), DEFAULT_PUBKEY_ACCOUNT_NONCE)
             .address()
@@ -508,5 +831,208 @@ mod tests {
                 .0,
             expected_address.as_ref()
         );
+    }
+
+    #[test]
+    fn status_survives_heavy_record_eviction() {
+        let first = tx_hash(0x11);
+        let second = tx_hash(0x22);
+        let mut transactions = HashMap::from([
+            (first, sample_record(first, 10)),
+            (second, sample_record(second, 11)),
+        ]);
+        let committed_heights = HashMap::from([
+            (first, BlockHeight::from(10)),
+            (second, BlockHeight::from(11)),
+        ]);
+        let mut transaction_order = VecDeque::from([first, second]);
+        let mut events = Vec::new();
+
+        super::evict_transactions(&mut transactions, &mut transaction_order, &mut events, 1);
+
+        assert!(!transactions.contains_key(&first));
+        assert!(transactions.contains_key(&second));
+        assert!(matches!(
+            super::status_from_index(&committed_heights, &first),
+            TransactionStatus::Committed { height } if *height == 10
+        ));
+        assert!(matches!(
+            super::status_from_index(&committed_heights, &second),
+            TransactionStatus::Committed { height } if *height == 11
+        ));
+    }
+
+    #[test]
+    fn get_contract_events_filters_by_address_and_height() {
+        let address_a = ContractAddress::from([0xAA; 32]);
+        let address_b = ContractAddress::from([0xBB; 32]);
+        let expected = sample_identified_event(0x33, 12, address_a, 1);
+        let events = vec![
+            sample_identified_event(0x11, 10, address_a, 0),
+            sample_identified_event(0x22, 11, address_b, 0),
+            sample_identified_event(0x33, 12, address_a, 1),
+        ];
+
+        let filtered = super::filter_contract_events(
+            &events,
+            &address_a,
+            &BlockHeight::from(11),
+            &BlockHeight::from(12),
+        );
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].tx_hash, expected.tx_hash);
+        assert_eq!(*filtered[0].block_height, *expected.block_height);
+        assert_eq!(filtered[0].sequence_number, expected.sequence_number);
+        assert_eq!(
+            filtered[0].event.contract_address,
+            expected.event.contract_address
+        );
+        assert_eq!(filtered[0].event.topics, expected.event.topics);
+        assert_eq!(filtered[0].event.data, expected.event.data);
+    }
+
+    #[test]
+    fn evicting_heavy_records_prunes_events() {
+        let address = ContractAddress::from([0xAB; 32]);
+        let first = tx_hash(0x11);
+        let second = tx_hash(0x22);
+        let mut transactions = HashMap::from([
+            (first, sample_record(first, 10)),
+            (second, sample_record(second, 11)),
+        ]);
+        let mut transaction_order = VecDeque::from([first, second]);
+        let mut events = vec![
+            sample_identified_event(0x11, 10, address, 0),
+            sample_identified_event(0x22, 11, address, 1),
+        ];
+
+        super::evict_transactions(&mut transactions, &mut transaction_order, &mut events, 1);
+        let filtered = super::filter_contract_events(
+            &events,
+            &address,
+            &BlockHeight::from(0),
+            &BlockHeight::from(20),
+        );
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].tx_hash, tx_hash(0x22));
+    }
+
+    #[test]
+    fn get_transaction_detail_maps_retained_record() {
+        let tx_hash = tx_hash(0x33);
+        let mut record = sample_record(tx_hash, 12);
+        record.storage_deltas = vec![FlaggedStorageDelta {
+            addrkey: AddressAndKey {
+                address: ContractAddress::from([0xAA; 32]),
+                key: StorageKey::ContractData {
+                    contract_data_key: StorageKeyContractData::from([0xBB; 32]),
+                },
+            },
+            delta: StorageDelta::kDeltaTypeBytestringSet {
+                bytestring: BytesM(vec![0xCC]),
+            },
+            flags: 0,
+        }];
+
+        let detail = super::transaction_detail_from_record(&record);
+
+        assert_eq!(detail.gas_consumed, 7);
+        assert_eq!(detail.gas_limit, Some(100));
+        assert_eq!(detail.storage_deltas.len(), 1);
+        assert_eq!(detail.storage_deltas[0].kind, "bytestringSet");
+        assert!(detail.trace.is_none());
+    }
+
+    #[test]
+    fn transaction_summary_includes_key_sections() {
+        let tx_hash = tx_hash(0x44);
+        let receipt = receipt(tx_hash, 7);
+        let record = TransactionRecord {
+            receipt: groundhog_rpc_api_types::receipt::TransactionReceipt {
+                events: vec![EmittedEvent {
+                    contract_address: Hex0x(ContractAddress::from([0x55; 32])),
+                    topics: vec![Topic([0x66; 32])],
+                    data: HexBytes(vec![0x77, 0x88]),
+                }],
+                return_data: Some(HexBytes(vec![0x01, 0x02])),
+                ..receipt
+            },
+            gas_consumed: 12_450,
+            gas_limit: Some(1_000_000_000),
+            storage_deltas: vec![FlaggedStorageDelta {
+                addrkey: AddressAndKey {
+                    address: ContractAddress::from([0x99; 32]),
+                    key: StorageKey::ContractData {
+                        contract_data_key: StorageKeyContractData::from([0xAB; 32]),
+                    },
+                },
+                delta: StorageDelta::kDeltaTypeNonnegativeIntAdd {
+                    nnint_add: int128_xdr {
+                        highbits: 0,
+                        lowbits: 42,
+                    },
+                },
+                flags: 0,
+            }],
+            syscall_trace: None,
+        };
+
+        let summary =
+            format_transaction_summary(&tx_hash, &record, Some(&ContractAddress::from([0x88; 32])));
+
+        assert!(summary.contains("Transaction: 0x"));
+        assert!(summary.contains("Contract: 0x"));
+        assert!(summary.contains("Storage deltas (1):"));
+        assert!(summary.contains("NonnegativeIntAdd +42"));
+        assert!(summary.contains("Events (1):"));
+        assert!(summary.contains("Return: 0x0102"));
+        assert!(summary.contains("Gas: 12,450 / 1,000,000,000"));
+    }
+
+    fn sample_record(tx_hash: TxHash, height: i64) -> TransactionRecord {
+        TransactionRecord {
+            receipt: receipt(tx_hash, height),
+            gas_consumed: 7,
+            gas_limit: Some(100),
+            storage_deltas: Vec::new(),
+            syscall_trace: None,
+        }
+    }
+
+    fn receipt(
+        tx_hash: TxHash,
+        height: i64,
+    ) -> groundhog_rpc_api_types::receipt::TransactionReceipt {
+        groundhog_rpc_api_types::receipt::TransactionReceipt {
+            tx_hash,
+            height: BlockHeight::from(height),
+            status: ExecStatus::Ok,
+            events: Vec::new(),
+            return_data: None,
+        }
+    }
+
+    fn tx_hash(discriminator: u8) -> TxHash {
+        TxHash(Hex0x(SHA256Hash::from([discriminator; 32])))
+    }
+
+    fn sample_identified_event(
+        discriminator: u8,
+        height: i64,
+        address: ContractAddress,
+        sequence_number: u32,
+    ) -> IdentifiedEvent {
+        IdentifiedEvent {
+            tx_hash: tx_hash(discriminator),
+            block_height: BlockHeight::from(height),
+            sequence_number,
+            event: EmittedEvent {
+                contract_address: Hex0x(address),
+                topics: vec![Topic([discriminator; 32])],
+                data: HexBytes(vec![discriminator]),
+            },
+        }
     }
 }

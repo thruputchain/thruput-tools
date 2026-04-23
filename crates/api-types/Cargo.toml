@@ -19,6 +19,7 @@ exclude = [
 workspace = true
 
 [dependencies]
+groundhog-trace = { workspace = true }
 groundhog-xdr = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -26,3 +27,4 @@ jsonrpsee-types = { workspace = true }
 bytes = { workspace = true }
 hex = { workspace = true }
 thiserror = { workspace = true }
+xdrs = { workspace = true }

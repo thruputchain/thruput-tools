@@ -9,6 +9,7 @@ pub(crate) mod codec;
 pub mod config;
 pub mod contract_spec;
 pub mod deploy;
+pub(crate) mod dev_detail;
 pub mod dev_keys;
 pub mod error;
 pub mod init;

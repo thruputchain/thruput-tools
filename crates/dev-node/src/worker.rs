@@ -4,9 +4,11 @@
 //! keeps it on a single `std::thread` and bridges to async via channels.
 
 use groundhog_rpc_api_types::block::ChainTip;
-use groundhog_rpc_api_types::dev::DevAccount;
+use groundhog_rpc_api_types::dev::{DevAccount, TransactionDetail};
+use groundhog_rpc_api_types::events::IdentifiedEvent;
 use groundhog_rpc_api_types::receipt::TransactionReceipt;
 use groundhog_rpc_api_types::transaction::{TransactionStatus, TxHash};
+use groundhog_rpc_api_types::{BlockHeight, ContractAddress};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::backend::{BackendStats, DevBackend};
@@ -22,9 +24,19 @@ pub enum DevCommand {
         tx_hash: TxHash,
         reply: oneshot::Sender<Option<TransactionReceipt>>,
     },
+    GetTransactionDetail {
+        tx_hash: TxHash,
+        reply: oneshot::Sender<Option<TransactionDetail>>,
+    },
     GetTransactionStatus {
         tx_hash: TxHash,
         reply: oneshot::Sender<TransactionStatus>,
+    },
+    GetContractEvents {
+        address: ContractAddress,
+        from_height: BlockHeight,
+        to_height: BlockHeight,
+        reply: oneshot::Sender<Vec<IdentifiedEvent>>,
     },
     ChainTip {
         reply: oneshot::Sender<ChainTip>,
@@ -68,6 +80,18 @@ impl WorkerHandle {
         rx.await.map_err(|_| DevNodeError::WorkerStopped)
     }
 
+    /// Full retained execution detail.
+    pub async fn get_transaction_detail(
+        &self,
+        tx_hash: TxHash,
+    ) -> Result<Option<TransactionDetail>, DevNodeError> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(DevCommand::GetTransactionDetail { tx_hash, reply })
+            .map_err(|_| DevNodeError::WorkerStopped)?;
+        rx.await.map_err(|_| DevNodeError::WorkerStopped)
+    }
+
     /// Lightweight status lookup.
     pub async fn get_transaction_status(
         &self,
@@ -76,6 +100,25 @@ impl WorkerHandle {
         let (reply, rx) = oneshot::channel();
         self.tx
             .send(DevCommand::GetTransactionStatus { tx_hash, reply })
+            .map_err(|_| DevNodeError::WorkerStopped)?;
+        rx.await.map_err(|_| DevNodeError::WorkerStopped)
+    }
+
+    /// Contract events filtered by address and height range.
+    pub async fn get_contract_events(
+        &self,
+        address: ContractAddress,
+        from_height: BlockHeight,
+        to_height: BlockHeight,
+    ) -> Result<Vec<IdentifiedEvent>, DevNodeError> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(DevCommand::GetContractEvents {
+                address,
+                from_height,
+                to_height,
+                reply,
+            })
             .map_err(|_| DevNodeError::WorkerStopped)?;
         rx.await.map_err(|_| DevNodeError::WorkerStopped)
     }
@@ -120,6 +163,7 @@ impl WorkerHandle {
 pub fn spawn_worker(
     account_count: usize,
     storage_tokens: u64,
+    transaction_retention_limit: usize,
 ) -> Result<WorkerHandle, DevNodeError> {
     let (tx, mut rx) = mpsc::unbounded_channel::<DevCommand>();
     let (init_tx, init_rx) = std::sync::mpsc::sync_channel::<Result<(), DevNodeError>>(1);
@@ -127,10 +171,16 @@ pub fn spawn_worker(
     std::thread::Builder::new()
         .name("groundhog-dev-node-worker".into())
         .spawn(move || {
-            tracing::info!(account_count, storage_tokens, "dev node worker started");
+            tracing::info!(
+                account_count,
+                storage_tokens,
+                transaction_retention_limit,
+                "dev node worker started"
+            );
 
             let backend_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let backend = DevBackend::new(account_count, storage_tokens);
+                let backend =
+                    DevBackend::new(account_count, storage_tokens, transaction_retention_limit);
                 let _ = init_tx.send(Ok(()));
                 backend
             }));
@@ -155,8 +205,23 @@ pub fn spawn_worker(
                         DevCommand::GetTransactionReceipt { tx_hash, reply } => {
                             let _ = reply.send(backend.get_transaction_receipt(&tx_hash));
                         }
+                        DevCommand::GetTransactionDetail { tx_hash, reply } => {
+                            let _ = reply.send(backend.get_transaction_detail(&tx_hash));
+                        }
                         DevCommand::GetTransactionStatus { tx_hash, reply } => {
                             let _ = reply.send(backend.get_transaction_status(&tx_hash));
+                        }
+                        DevCommand::GetContractEvents {
+                            address,
+                            from_height,
+                            to_height,
+                            reply,
+                        } => {
+                            let _ = reply.send(backend.get_contract_events(
+                                &address.0,
+                                &from_height,
+                                &to_height,
+                            ));
                         }
                         DevCommand::ChainTip { reply } => {
                             let _ = reply.send(backend.chain_tip());
@@ -218,11 +283,17 @@ fn startup_failure_error(payload: &Box<dyn std::any::Any + Send>) -> DevNodeErro
 #[cfg(test)]
 mod tests {
     use super::spawn_worker;
+    use crate::DEFAULT_TRANSACTION_RETENTION_LIMIT;
     use crate::accounts::DEFAULT_STORAGE_TOKENS;
 
     #[tokio::test]
     async fn worker_initializes_backend_on_dedicated_thread() {
-        let worker = spawn_worker(1, DEFAULT_STORAGE_TOKENS).expect("bug: worker should start");
+        let worker = spawn_worker(
+            1,
+            DEFAULT_STORAGE_TOKENS,
+            DEFAULT_TRANSACTION_RETENTION_LIMIT,
+        )
+        .expect("bug: worker should start");
         let accounts = worker
             .get_accounts()
             .await

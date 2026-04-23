@@ -16,6 +16,7 @@ use xdr_common::VecM;
 
 use crate::artifacts::ArtifactOptions;
 use crate::config::{resolve_default_key, resolve_profile};
+use crate::dev_detail::{fetch_transaction_detail_blocking, print_transaction_detail};
 use crate::keys::load_local_signer;
 use crate::result::CommandResult;
 use crate::tx_utils::{
@@ -59,6 +60,7 @@ pub fn run(
     ));
 
     let (tx_hash, receipt) = submit_prepared_deploy(&prepared)?;
+    let transaction_detail = fetch_transaction_detail_blocking(&prepared.rpc_url, tx_hash)?;
 
     let predicted_address = ContractAddress::from(hex_to_32_bytes(&prepared.predicted_address)?);
 
@@ -120,6 +122,10 @@ pub fn run(
         }
     }
 
+    if let Some(detail) = transaction_detail.as_ref() {
+        print_transaction_detail(detail, print);
+    }
+
     print.json(&CommandResult::new(
         cmd,
         json!({
@@ -132,6 +138,7 @@ pub fn run(
             },
             "height": receipt.height,
             "status": receipt.status,
+            "transaction_detail": transaction_detail,
         }),
     ))?;
 

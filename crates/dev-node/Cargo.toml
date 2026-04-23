@@ -34,6 +34,7 @@ groundhog-xdr = { workspace = true }
 xdrs = { workspace = true }
 xdr-common = { workspace = true }
 groundhog-native-exec = { workspace = true }
+groundhog-trace = { workspace = true }
 jsonrpsee = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true }

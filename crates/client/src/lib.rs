@@ -4,4 +4,5 @@
 pub use groundhog_rpc_api_types as types;
 
 pub use groundhog_rpc_api::GroundhogApiClient;
+pub use groundhog_rpc_api::GroundhogDevApiClient;
 pub use jsonrpsee::http_client::HttpClientBuilder;

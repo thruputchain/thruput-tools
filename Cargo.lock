@@ -942,6 +942,7 @@ dependencies = [
  "groundhog-wasm-meter 0.3.0",
  "groundhog-xdr",
  "hex",
+ "jsonrpsee",
  "rpassword",
  "serde",
  "serde_json",
@@ -979,6 +980,7 @@ dependencies = [
  "groundhog-rpc-api",
  "groundhog-rpc-api-types",
  "groundhog-signing",
+ "groundhog-trace",
  "groundhog-wasm-meter 0.2.0",
  "groundhog-xdr",
  "hex",
@@ -1046,12 +1048,14 @@ name = "groundhog-rpc-api-types"
 version = "0.2.4"
 dependencies = [
  "bytes",
+ "groundhog-trace",
  "groundhog-xdr",
  "hex",
  "jsonrpsee-types",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "xdrs",
 ]
 
 [[package]]

@@ -18,6 +18,9 @@ use crate::accounts::{DEFAULT_ACCOUNT_COUNT, DEFAULT_STORAGE_TOKENS};
 use crate::rpc::DevNodeRpc;
 use crate::worker::{WorkerHandle, spawn_worker};
 
+/// Default number of committed transactions to retain with full execution detail.
+pub const DEFAULT_TRANSACTION_RETENTION_LIMIT: usize = 1_000;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DevNodeStats {
     pub block_count: u64,
@@ -33,6 +36,8 @@ pub struct DevNodeConfig {
     pub account_count: usize,
     /// Storage tokens per account (default: `1_000_000_000`).
     pub storage_tokens: u64,
+    /// Number of committed transactions to retain with full receipt/trace data.
+    pub transaction_retention_limit: usize,
 }
 
 impl Default for DevNodeConfig {
@@ -41,6 +46,7 @@ impl Default for DevNodeConfig {
             listen_address: "127.0.0.1:9545".to_string(),
             account_count: DEFAULT_ACCOUNT_COUNT,
             storage_tokens: DEFAULT_STORAGE_TOKENS,
+            transaction_retention_limit: DEFAULT_TRANSACTION_RETENTION_LIMIT,
         }
     }
 }
@@ -57,11 +63,16 @@ pub async fn start_server(
         listen_address = %config.listen_address,
         account_count = config.account_count,
         storage_tokens = config.storage_tokens,
+        transaction_retention_limit = config.transaction_retention_limit,
         "starting dev node"
     );
 
-    let worker = spawn_worker(config.account_count, config.storage_tokens)
-        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+    let worker = spawn_worker(
+        config.account_count,
+        config.storage_tokens,
+        config.transaction_retention_limit,
+    )
+    .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
     let accounts = worker
         .get_accounts()
         .await
