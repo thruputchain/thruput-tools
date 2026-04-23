@@ -1,9 +1,27 @@
-use groundhog_rpc_api_types::receipt::TransactionReceipt;
+use groundhog_rpc_api_types::receipt::{ExecStatus, TransactionReceipt};
 use groundhog_rpc_api_types::transaction::TxHash;
 
 use crate::CliError;
 
 const DEFAULT_BLOCK_EXPIRY_OFFSET: i64 = 1_000;
+
+/// Human-readable one-line summary of an execution status.
+pub fn summarize_exec_status(status: &ExecStatus) -> String {
+    match status {
+        ExecStatus::Ok => "succeeded".into(),
+        ExecStatus::Reverted {
+            message: Some(message),
+        } => format!("reverted: {message}"),
+        ExecStatus::Reverted { message: None } => "reverted without abort data".into(),
+        ExecStatus::DeterministicError { kind } => {
+            format!("failed with deterministic execution error ({kind})")
+        }
+        ExecStatus::NonDeterministicError => "failed with nondeterministic commit error".into(),
+        ExecStatus::FailedGasSponsorship => "failed gas sponsorship".into(),
+        ExecStatus::Other => "failed with unknown execution result".into(),
+        _ => "failed with unsupported execution result".into(),
+    }
+}
 
 pub fn nonce_from_timestamp() -> u64 {
     std::time::SystemTime::now()

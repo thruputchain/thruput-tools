@@ -130,6 +130,9 @@ enum Command {
         /// Path to compiled .wasm (default: auto-detect)
         #[arg(long)]
         wasm: Option<String>,
+        /// Build and sign the deploy transaction without submitting it
+        #[arg(long)]
+        dry_run: bool,
         /// Config profile to use
         #[arg(
             long = "profile",
@@ -312,6 +315,7 @@ fn main() {
             }),
         Command::Deploy {
             wasm,
+            dry_run,
             profile,
             artifacts,
         } => std::env::current_dir()
@@ -321,7 +325,7 @@ fn main() {
                     artifacts.target_dir,
                     &cwd,
                 );
-                groundhog_cli::deploy::run(&wasm, &artifacts, &profile, cmd_name, &print)
+                groundhog_cli::deploy::run(&wasm, dry_run, &artifacts, &profile, cmd_name, &print)
             }),
         Command::Call {
             contract,

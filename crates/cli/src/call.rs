@@ -24,6 +24,7 @@ use crate::keys::load_local_signer;
 use crate::result::CommandResult;
 use crate::tx_utils::{
     format_tx_hash, nonce_from_timestamp, resolve_block_expiry_height, submit_and_poll,
+    summarize_exec_status,
 };
 use crate::{CliError, Print};
 
@@ -870,23 +871,6 @@ fn major_version(version: &str) -> &str {
     }
 }
 
-fn summarize_exec_status(status: &ExecStatus) -> String {
-    match status {
-        ExecStatus::Ok => "succeeded".into(),
-        ExecStatus::Reverted {
-            message: Some(message),
-        } => format!("reverted: {message}"),
-        ExecStatus::Reverted { message: None } => "reverted without abort data".into(),
-        ExecStatus::DeterministicError { kind } => {
-            format!("failed with deterministic execution error ({kind})")
-        }
-        ExecStatus::NonDeterministicError => "failed with nondeterministic commit error".into(),
-        ExecStatus::FailedGasSponsorship => "failed gas sponsorship".into(),
-        ExecStatus::Other => "failed with unknown execution result".into(),
-        _ => "failed with unsupported execution result".into(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::Path;
@@ -895,7 +879,7 @@ mod tests {
         ResolvedCall, contract_entrypoint_id, contract_metadata_from_source,
         explicit_entrypoint_id, filter_candidates_by_interfaces, format_entrypoint_id,
         load_project_registered_interfaces, major_version, parse_contract_attr_value,
-        resolve_spec_method, selector_json, selector_summary, summarize_exec_status,
+        resolve_spec_method, selector_json, selector_summary,
     };
     use crate::CliError;
     use crate::artifacts::ArtifactOptions;
@@ -905,6 +889,7 @@ mod tests {
         encode_args as encode_calldata, normalize_type_name,
     };
     use crate::contract_spec::InterfaceSpec;
+    use crate::tx_utils::summarize_exec_status;
     use groundhog_contract_spec::{
         ContractArrayType, ContractEnumDef, ContractEnumVariant, ContractField, ContractSpec,
         ContractSpecInterface, ContractSpecMethod, ContractSpecString, ContractStructDef,

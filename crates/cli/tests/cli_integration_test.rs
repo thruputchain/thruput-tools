@@ -322,12 +322,13 @@ fn test_help_mentions_target_dir() {
 }
 
 #[test]
-fn deploy_help_mentions_target_dir() {
+fn deploy_help_mentions_target_dir_and_dry_run() {
     let output = groundhog().args(["deploy", "--help"]).output().unwrap();
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("--target-dir"));
+    assert!(stdout.contains("--dry-run"));
 }
 
 #[test]
@@ -482,6 +483,143 @@ fn deploy_json_fails_without_config() {
     assert_eq!(stderr["ok"], false);
     assert_eq!(stderr["command"], "deploy");
     assert_eq!(stderr["error"]["code"], "missing_rpc_url");
+}
+
+#[test]
+fn deploy_dry_run_json_outputs_prepared_transaction() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
+    )
+    .unwrap();
+
+    let generate = groundhog()
+        .args(["keys", "generate", "alice"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    assert!(
+        generate.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&generate.stderr)
+    );
+
+    // Write a minimal WASM file for the deploy to read.
+    let wasm_path = tmp.path().join("test.wasm");
+    std::fs::write(&wasm_path, b"\0asm\x01\0\0\0").unwrap();
+
+    let output = groundhog()
+        .args([
+            "--json",
+            "deploy",
+            "--dry-run",
+            "--wasm",
+            wasm_path.to_str().unwrap(),
+        ])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["ok"], true);
+    assert_eq!(stdout["command"], "deploy");
+    assert_eq!(stdout["warnings"], serde_json::json!([]));
+    assert_eq!(stdout["data"]["dry_run"], true);
+    assert_eq!(stdout["data"]["submitted"], false);
+    assert_eq!(stdout["data"]["rpc_url"], rpc_url);
+    assert_eq!(stdout["data"]["wasm_bytes"], 8);
+    assert!(
+        stdout["data"]["predicted_address"]
+            .as_str()
+            .unwrap()
+            .starts_with("0x")
+    );
+    assert!(
+        stdout["data"]["signed_tx"]
+            .as_str()
+            .unwrap()
+            .starts_with("0x")
+    );
+}
+
+#[test]
+fn deploy_live_json_submits_and_returns_receipt() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let (rpc_url, rpc_server) = spawn_deploy_rpc(42);
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
+    )
+    .unwrap();
+
+    let generate = groundhog()
+        .args(["keys", "generate", "alice"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    assert!(
+        generate.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&generate.stderr)
+    );
+
+    // Write a minimal WASM file for the deploy to read.
+    let wasm_path = tmp.path().join("test.wasm");
+    std::fs::write(&wasm_path, b"\0asm\x01\0\0\0").unwrap();
+
+    let output = groundhog()
+        .args(["--json", "deploy", "--wasm", wasm_path.to_str().unwrap()])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["ok"], true);
+    assert_eq!(stdout["command"], "deploy");
+    assert_eq!(stdout["warnings"], serde_json::json!([]));
+
+    // The mock returns 0xbb..bb as the deployed address via return_data.
+    let expected_address = format!("0x{}", "bb".repeat(32));
+    assert_eq!(stdout["data"]["address"], expected_address);
+    assert_eq!(stdout["data"]["address_source"], "receipt");
+    assert_eq!(stdout["data"]["height"], 42);
+    assert_eq!(stdout["data"]["status"]["result"], "ok");
+    assert!(
+        stdout["data"]["tx_hash"]
+            .as_str()
+            .unwrap()
+            .starts_with("0x")
+    );
 }
 
 #[test]
@@ -794,6 +932,69 @@ fn keys_rm_nonexistent_fails() {
     assert_eq!(stderr["error"]["code"], "key_not_found");
 }
 
+/// Read one HTTP POST request from a TCP stream and return the parsed JSON body.
+fn read_jsonrpc_request(
+    listener: &TcpListener,
+    deadline: Instant,
+    label: &str,
+) -> (std::net::TcpStream, serde_json::Value) {
+    let (stream, _) = loop {
+        match listener.accept() {
+            Ok(connection) => break connection,
+            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                assert!(
+                    Instant::now() < deadline,
+                    "timed out waiting for {label} request"
+                );
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(err) => panic!("failed to accept mock RPC connection for {label}: {err}"),
+        }
+    };
+
+    let mut reader = BufReader::new(stream.try_clone().unwrap());
+    let mut content_length = 0usize;
+    loop {
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        if line == "\r\n" || line.is_empty() {
+            break;
+        }
+        let lower = line.to_ascii_lowercase();
+        if let Some(value) = lower.strip_prefix("content-length:") {
+            content_length = value.trim().parse().unwrap();
+        }
+    }
+
+    let mut body = vec![0; content_length];
+    reader.read_exact(&mut body).unwrap();
+    let request: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    (stream, request)
+}
+
+/// Send a JSON-RPC response and close the connection.
+#[allow(clippy::needless_pass_by_value)]
+fn send_jsonrpc_response(
+    mut stream: std::net::TcpStream,
+    request_id: &serde_json::Value,
+    result: serde_json::Value,
+) {
+    let response = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": request_id.clone(),
+        "result": result,
+    });
+    let response_body = serde_json::to_vec(&response).unwrap();
+    write!(
+        stream,
+        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+        response_body.len()
+    )
+    .unwrap();
+    stream.write_all(&response_body).unwrap();
+    stream.flush().unwrap();
+}
+
 fn spawn_chain_tip_rpc(height: i64) -> (String, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
@@ -801,57 +1002,19 @@ fn spawn_chain_tip_rpc(height: i64) -> (String, thread::JoinHandle<()>) {
 
     let handle = thread::spawn(move || {
         let deadline = Instant::now() + Duration::from_secs(5);
-        let (mut stream, _) = loop {
-            match listener.accept() {
-                Ok(connection) => break connection,
-                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                    assert!(
-                        Instant::now() < deadline,
-                        "timed out waiting for chainTip request"
-                    );
-                    thread::sleep(Duration::from_millis(10));
-                }
-                Err(err) => panic!("failed to accept mock RPC connection: {err}"),
-            }
-        };
-
-        let mut reader = BufReader::new(stream.try_clone().unwrap());
-        let mut content_length = 0usize;
-        loop {
-            let mut line = String::new();
-            reader.read_line(&mut line).unwrap();
-            if line == "\r\n" || line.is_empty() {
-                break;
-            }
-            let lower = line.to_ascii_lowercase();
-            if let Some(value) = lower.strip_prefix("content-length:") {
-                content_length = value.trim().parse().unwrap();
-            }
-        }
-
-        let mut body = vec![0; content_length];
-        reader.read_exact(&mut body).unwrap();
-        let request: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let (stream, request) = read_jsonrpc_request(&listener, deadline, "chainTip");
         assert_eq!(request["method"], "groundhog_chainTip");
 
-        let response = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": request["id"].clone(),
-            "result": {
+        send_jsonrpc_response(
+            stream,
+            &request["id"],
+            serde_json::json!({
                 "height": height,
                 "blockHash": format!("0x{}", "00".repeat(32)),
-            },
-        });
-        let response_body = serde_json::to_vec(&response).unwrap();
-        write!(
-            stream,
-            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
-            response_body.len()
-        )
-        .unwrap();
-        stream.write_all(&response_body).unwrap();
-        stream.flush().unwrap();
+            }),
+        );
 
+        // Verify no additional requests arrive (dry-run must not broadcast).
         let follow_up_deadline = Instant::now() + Duration::from_millis(200);
         loop {
             match listener.accept() {
@@ -870,6 +1033,62 @@ fn spawn_chain_tip_rpc(height: i64) -> (String, thread::JoinHandle<()>) {
                 Err(err) => panic!("failed to accept follow-up mock RPC connection: {err}"),
             }
         }
+    });
+
+    (format!("http://{addr}"), handle)
+}
+
+/// Mock RPC server that handles the full deploy flow:
+/// `chainTip` → `sendRawTransaction` → `getTransactionReceipt`.
+///
+/// Returns a 32-byte dummy address (`0xbb..bb`) as the deploy `return_data` so the live
+/// path exercises the receipt-based address extraction.
+fn spawn_deploy_rpc(height: i64) -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+
+    let tx_hash = format!("0x{}", "aa".repeat(32));
+
+    let handle = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+
+        // 1. chainTip
+        let (stream, request) = read_jsonrpc_request(&listener, deadline, "chainTip");
+        assert_eq!(request["method"], "groundhog_chainTip");
+        send_jsonrpc_response(
+            stream,
+            &request["id"],
+            serde_json::json!({
+                "height": height,
+                "blockHash": format!("0x{}", "00".repeat(32)),
+            }),
+        );
+
+        // 2. sendRawTransaction
+        let (stream, request) = read_jsonrpc_request(&listener, deadline, "sendRawTransaction");
+        assert_eq!(request["method"], "groundhog_sendRawTransaction");
+        assert!(
+            request["params"][0].as_str().unwrap().starts_with("0x"),
+            "sendRawTransaction should receive 0x-prefixed tx hex"
+        );
+        send_jsonrpc_response(stream, &request["id"], serde_json::json!(tx_hash));
+
+        // 3. getTransactionReceipt
+        let (stream, request) = read_jsonrpc_request(&listener, deadline, "getTransactionReceipt");
+        assert_eq!(request["method"], "groundhog_getTransactionReceipt");
+        let contract_address = format!("0x{}", "bb".repeat(32));
+        send_jsonrpc_response(
+            stream,
+            &request["id"],
+            serde_json::json!({
+                "txHash": tx_hash,
+                "height": height,
+                "status": { "result": "ok" },
+                "events": [],
+                "returnData": contract_address,
+            }),
+        );
     });
 
     (format!("http://{addr}"), handle)
