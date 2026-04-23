@@ -111,6 +111,7 @@ pub struct SyscallStatusInfo {
 
 /// Frame completion status with raw buffers preserved as hex.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 #[serde(tag = "result", rename_all = "camelCase")]
 pub enum FrameOutputInfo {
     Return { buffer: HexBytes },

@@ -311,9 +311,7 @@ impl DevBackend {
 
     /// Full retained execution detail.
     pub fn get_transaction_detail(&self, tx_hash: &TxHash) -> Option<TransactionDetail> {
-        self.transactions
-            .get(tx_hash)
-            .map(transaction_detail_from_record)
+        transaction_detail_lookup(&self.transactions, tx_hash)
     }
 
     /// Lightweight status check.
@@ -385,6 +383,15 @@ fn transaction_detail_from_record(record: &TransactionRecord) -> TransactionDeta
         storage_deltas: record.storage_deltas.iter().map(Into::into).collect(),
         trace: record.syscall_trace.as_ref().map(Into::into),
     }
+}
+
+fn transaction_detail_lookup(
+    transactions: &HashMap<TxHash, TransactionRecord>,
+    tx_hash: &TxHash,
+) -> Option<TransactionDetail> {
+    transactions
+        .get(tx_hash)
+        .map(transaction_detail_from_record)
 }
 
 fn status_from_index(
@@ -517,6 +524,7 @@ fn format_transaction_summary(
 }
 
 fn format_storage_delta(delta: &FlaggedStorageDelta) -> String {
+    let address = format_contract_address(&delta.addrkey.address);
     let key = format_storage_key(&delta.addrkey.key);
     let body = match &delta.delta {
         StorageDelta::kDeltaTypeBytestringSet { bytestring } => {
@@ -554,7 +562,7 @@ fn format_storage_delta(delta: &FlaggedStorageDelta) -> String {
     };
 
     let flags = format_storage_delta_flags(delta.flags);
-    format!("{key}  {body}{flags}")
+    format!("{address}:{key}  {body}{flags}")
 }
 
 fn format_storage_delta_flags(flags: i32) -> String {
@@ -936,7 +944,9 @@ mod tests {
             flags: 0,
         }];
 
-        let detail = super::transaction_detail_from_record(&record);
+        let detail =
+            super::transaction_detail_lookup(&HashMap::from([(tx_hash, record)]), &tx_hash)
+                .expect("bug: retained record should map to detail");
 
         assert_eq!(detail.gas_consumed, 7);
         assert_eq!(detail.gas_limit, Some(100));
@@ -946,8 +956,26 @@ mod tests {
     }
 
     #[test]
+    fn get_transaction_detail_returns_none_after_eviction() {
+        let first = tx_hash(0x11);
+        let second = tx_hash(0x22);
+        let mut transactions = HashMap::from([
+            (first, sample_record(first, 10)),
+            (second, sample_record(second, 11)),
+        ]);
+        let mut transaction_order = VecDeque::from([first, second]);
+        let mut events = Vec::new();
+
+        super::evict_transactions(&mut transactions, &mut transaction_order, &mut events, 1);
+
+        assert!(super::transaction_detail_lookup(&transactions, &first).is_none());
+        assert!(super::transaction_detail_lookup(&transactions, &second).is_some());
+    }
+
+    #[test]
     fn transaction_summary_includes_key_sections() {
         let tx_hash = tx_hash(0x44);
+        let storage_address = ContractAddress::from([0x99; 32]);
         let receipt = receipt(tx_hash, 7);
         let record = TransactionRecord {
             receipt: groundhog_rpc_api_types::receipt::TransactionReceipt {
@@ -963,7 +991,7 @@ mod tests {
             gas_limit: Some(1_000_000_000),
             storage_deltas: vec![FlaggedStorageDelta {
                 addrkey: AddressAndKey {
-                    address: ContractAddress::from([0x99; 32]),
+                    address: storage_address,
                     key: StorageKey::ContractData {
                         contract_data_key: StorageKeyContractData::from([0xAB; 32]),
                     },
@@ -985,6 +1013,10 @@ mod tests {
         assert!(summary.contains("Transaction: 0x"));
         assert!(summary.contains("Contract: 0x"));
         assert!(summary.contains("Storage deltas (1):"));
+        assert!(summary.contains(&format!(
+            "{}:",
+            super::format_contract_address(&storage_address)
+        )));
         assert!(summary.contains("NonnegativeIntAdd +42"));
         assert!(summary.contains("Events (1):"));
         assert!(summary.contains("Return: 0x0102"));
