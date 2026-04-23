@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use groundhog_rpc_api_types::hex::HexBytes;
+use groundhog_rpc_api_types::receipt::TransactionReceipt;
+use groundhog_rpc_api_types::transaction::TxHash;
 use groundhog_signing::{
     BuildDeployTransaction, DEFAULT_TX_GAS_LIMIT, SignTransactionParams, Signer,
     WALLET_DEPLOY_ENTRYPOINT, build_deploy_transaction, derive_deploy_address, sign_transaction,
@@ -18,6 +20,7 @@ use crate::keys::load_local_signer;
 use crate::result::CommandResult;
 use crate::tx_utils::{
     format_tx_hash, nonce_from_timestamp, resolve_block_expiry_height, submit_and_poll,
+    summarize_exec_status,
 };
 use crate::{CliError, Print};
 
@@ -27,15 +30,161 @@ enum DeployAddressSource {
     Derived,
 }
 
+/// Fully prepared deploy submission inputs shared by live execution and dry-run flows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PreparedDeploy {
+    pub(crate) rpc_url: String,
+    pub(crate) wasm_bytes_len: usize,
+    pub(crate) predicted_address: String,
+    pub(crate) tx_hex: String,
+}
+
 /// Deploy a contract to the network.
-#[allow(clippy::too_many_lines)]
 pub fn run(
     wasm_path: &Option<String>,
+    dry_run: bool,
     artifacts: &ArtifactOptions,
     profile: &str,
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
+    let prepared = prepare_deploy(wasm_path.as_deref(), artifacts, profile, print)?;
+    if dry_run {
+        return print_dry_run(&prepared, cmd, print);
+    }
+
+    print.status(format_args!(
+        "Deploying contract ({} bytes) to {}...",
+        prepared.wasm_bytes_len, prepared.rpc_url
+    ));
+
+    let (tx_hash, receipt) = submit_prepared_deploy(&prepared)?;
+
+    let predicted_address = ContractAddress::from(hex_to_32_bytes(&prepared.predicted_address)?);
+
+    // Extract the deployed contract address from the receipt.
+    let (contract_addr_hex, address_source): (Option<String>, Option<DeployAddressSource>) =
+        match &receipt.status {
+            groundhog_rpc_api_types::receipt::ExecStatus::Ok => {
+                let (address, source) =
+                    resolve_deployed_address(receipt.return_data.as_ref(), &predicted_address)?;
+                (Some(address), Some(source))
+            }
+            _ => (None, None),
+        };
+
+    // Print result
+    let cwd = std::env::current_dir()?;
+    let tx_hash_formatted = format_tx_hash(&tx_hash);
+    match &receipt.status {
+        groundhog_rpc_api_types::receipt::ExecStatus::Ok => {
+            let contract_addr_hex = contract_addr_hex
+                .as_deref()
+                .expect("bug: successful deploy must resolve a contract address");
+            print.status(format_args!("Deployed at {contract_addr_hex}"));
+            if matches!(address_source, Some(DeployAddressSource::Derived)) {
+                print.warn(
+                    "receipt omitted deploy return_data; address was derived locally from \
+                     deployer, nonce, and contract hash",
+                );
+            }
+            print.status(format_args!("  tx: {tx_hash_formatted}"));
+            print.status(format_args!("  height: {}", *receipt.height));
+        }
+        other => {
+            print.warn(format_args!("Deploy {}", summarize_exec_status(other)));
+            print.status(format_args!("  tx: {tx_hash_formatted}"));
+        }
+    }
+
+    // Save contract alias
+    if matches!(
+        &receipt.status,
+        groundhog_rpc_api_types::receipt::ExecStatus::Ok
+    ) {
+        let project_root = crate::config::find_project_config(&cwd)
+            .and_then(|p| p.parent().map(Path::to_path_buf));
+        if let Some(root) = project_root
+            && let Some(name) = root.file_name().and_then(|n| n.to_str())
+            && let Some(contract_addr_hex) = contract_addr_hex.as_deref()
+        {
+            let _ = crate::config::save_profile_contract_alias(
+                &root,
+                Some(profile),
+                name,
+                contract_addr_hex,
+            );
+            print.status(format_args!(
+                "  alias: {name} -> {contract_addr_hex} (saved to groundhog.toml)"
+            ));
+        }
+    }
+
+    print.json(&CommandResult::new(
+        cmd,
+        json!({
+            "tx_hash": tx_hash_formatted,
+            "address": contract_addr_hex,
+            "address_source": match address_source {
+                Some(DeployAddressSource::Receipt) => Some("receipt"),
+                Some(DeployAddressSource::Derived) => Some("derived"),
+                None => None,
+            },
+            "height": receipt.height,
+            "status": receipt.status,
+        }),
+    ))?;
+
+    Ok(())
+}
+
+fn print_dry_run(
+    prepared: &PreparedDeploy,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
+    print.status(format_args!(
+        "Prepared dry-run deploy ({} bytes) to {}.",
+        prepared.wasm_bytes_len, prepared.rpc_url
+    ));
+    print.status(format_args!(
+        "  predicted address: {}",
+        prepared.predicted_address
+    ));
+    print.status(format_args!("  signed tx: {}", prepared.tx_hex));
+    print.status("  submitted: no (--dry-run)");
+
+    print.json(&CommandResult::new(
+        cmd,
+        json!({
+            "dry_run": true,
+            "submitted": false,
+            "rpc_url": prepared.rpc_url,
+            "wasm_bytes": prepared.wasm_bytes_len,
+            "predicted_address": prepared.predicted_address,
+            "signed_tx": prepared.tx_hex,
+        }),
+    ))?;
+
+    Ok(())
+}
+
+/// Submit a previously prepared deploy transaction and wait for its receipt.
+pub(crate) fn submit_prepared_deploy(
+    prepared: &PreparedDeploy,
+) -> Result<(TxHash, TransactionReceipt), CliError> {
+    let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
+    rt.block_on(async { submit_and_poll(&prepared.rpc_url, &prepared.tx_hex).await })
+}
+
+/// Resolve WASM, build and sign a deploy transaction without submitting it.
+#[allow(clippy::too_many_lines)]
+pub(crate) fn prepare_deploy(
+    wasm_path: Option<&str>,
+    artifacts: &ArtifactOptions,
+    profile: &str,
+    print: &Print,
+) -> Result<PreparedDeploy, CliError> {
     let cwd = std::env::current_dir()?;
     let resolved = resolve_profile(&cwd, Some(profile))?;
 
@@ -53,11 +202,7 @@ pub fn run(
         warn_if_stale(&resolved_wasm, &cwd, print);
         std::fs::read(&resolved_wasm)?
     };
-
-    print.status(format_args!(
-        "Deploying contract ({} bytes) to {rpc_url}...",
-        wasm_bytes.len()
-    ));
+    let wasm_bytes_len = wasm_bytes.len();
 
     // Build the deploy transaction — invokes the sender's wallet contract.
     let pubkey = signer.public_key();
@@ -122,83 +267,22 @@ pub fn run(
         .map_err(|e| CliError::Other(e.to_string()))?;
     let tx_xdr = groundhog_signing::encode_signed_transaction_xdr(&signed_tx)
         .map_err(|e| CliError::Other(e.to_string()))?;
-    let tx_hex = format!("0x{}", hex::encode(&tx_xdr));
 
-    // Submit via JSON-RPC
-    let (tx_hash, receipt) = rt.block_on(async { submit_and_poll(rpc_url, &tx_hex).await })?;
+    Ok(PreparedDeploy {
+        rpc_url: rpc_url.to_owned(),
+        wasm_bytes_len,
+        predicted_address: format!("0x{}", hex::encode(predicted_address.as_ref())),
+        tx_hex: format!("0x{}", hex::encode(&tx_xdr)),
+    })
+}
 
-    // Extract the deployed contract address from the receipt.
-    let (contract_addr_hex, address_source): (Option<String>, Option<DeployAddressSource>) =
-        match &receipt.status {
-            groundhog_rpc_api_types::receipt::ExecStatus::Ok => {
-                let (address, source) =
-                    resolve_deployed_address(receipt.return_data.as_ref(), &predicted_address)?;
-                (Some(address), Some(source))
-            }
-            _ => (None, None),
-        };
-
-    // Print result
-    match &receipt.status {
-        groundhog_rpc_api_types::receipt::ExecStatus::Ok => {
-            let contract_addr_hex = contract_addr_hex
-                .as_deref()
-                .expect("bug: successful deploy must resolve a contract address");
-            print.status(format_args!("Deployed at {contract_addr_hex}"));
-            if matches!(address_source, Some(DeployAddressSource::Derived)) {
-                print.warn(
-                    "receipt omitted deploy return_data; address was derived locally from \
-                     deployer, nonce, and contract hash",
-                );
-            }
-            print.status(format_args!("  tx: {}", format_tx_hash(&tx_hash)));
-            print.status(format_args!("  height: {}", *receipt.height));
-        }
-        other => {
-            print.warn(format_args!("Deploy failed: {other:?}"));
-            print.status(format_args!("  tx: {}", format_tx_hash(&tx_hash)));
-        }
-    }
-
-    // Save contract alias
-    if matches!(
-        &receipt.status,
-        groundhog_rpc_api_types::receipt::ExecStatus::Ok
-    ) {
-        let project_root = crate::config::find_project_config(&cwd)
-            .and_then(|p| p.parent().map(Path::to_path_buf));
-        if let Some(root) = project_root
-            && let Some(name) = root.file_name().and_then(|n| n.to_str())
-            && let Some(contract_addr_hex) = contract_addr_hex.as_deref()
-        {
-            let _ = crate::config::save_profile_contract_alias(
-                &root,
-                Some(profile),
-                name,
-                contract_addr_hex,
-            );
-            print.status(format_args!(
-                "  alias: {name} -> {contract_addr_hex} (saved to groundhog.toml)"
-            ));
-        }
-    }
-
-    print.json(&CommandResult::new(
-        cmd,
-        json!({
-            "tx_hash": format_tx_hash(&tx_hash),
-            "address": contract_addr_hex,
-            "address_source": match address_source {
-                Some(DeployAddressSource::Receipt) => Some("receipt"),
-                Some(DeployAddressSource::Derived) => Some("derived"),
-                None => None,
-            },
-            "height": receipt.height,
-            "status": receipt.status,
-        }),
-    ))?;
-
-    Ok(())
+/// Parse a `0x`-prefixed hex string into a 32-byte array.
+fn hex_to_32_bytes(hex_str: &str) -> Result<[u8; 32], CliError> {
+    let stripped = hex_str.strip_prefix("0x").unwrap_or(hex_str);
+    let bytes = hex::decode(stripped)
+        .map_err(|e| CliError::Other(format!("invalid predicted address hex: {e}")))?;
+    <[u8; 32]>::try_from(bytes.as_slice())
+        .map_err(|_| CliError::Other("predicted address must be exactly 32 bytes".into()))
 }
 
 fn resolve_wasm_path(cwd: &Path, artifacts: &ArtifactOptions) -> Result<PathBuf, CliError> {
@@ -278,13 +362,40 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        DeployAddressSource, derive_deploy_address, resolve_deployed_address, resolve_wasm_path,
+        DeployAddressSource, derive_deploy_address, hex_to_32_bytes, resolve_deployed_address,
+        resolve_wasm_path,
     };
     use crate::artifacts::ArtifactOptions;
     use groundhog_rpc_api_types::hex::HexBytes;
     use groundhog_xdr::types::{ContractAddress, SHA256Hash};
     use serial_test::serial;
     use tempfile::TempDir;
+
+    #[test]
+    fn hex_to_32_bytes_parses_prefixed_hex() {
+        let input = format!("0x{}", "ab".repeat(32));
+        let bytes = hex_to_32_bytes(&input).expect("bug: valid prefixed hex should parse");
+        assert_eq!(bytes, [0xab; 32]);
+    }
+
+    #[test]
+    fn hex_to_32_bytes_parses_unprefixed_hex() {
+        let input = "cd".repeat(32);
+        let bytes = hex_to_32_bytes(&input).expect("bug: valid unprefixed hex should parse");
+        assert_eq!(bytes, [0xcd; 32]);
+    }
+
+    #[test]
+    fn hex_to_32_bytes_rejects_wrong_length() {
+        let short = format!("0x{}", "ab".repeat(16));
+        assert!(hex_to_32_bytes(&short).is_err());
+    }
+
+    #[test]
+    fn hex_to_32_bytes_rejects_invalid_hex() {
+        let bad = format!("0x{}", "zz".repeat(32));
+        assert!(hex_to_32_bytes(&bad).is_err());
+    }
 
     #[test]
     fn deploy_address_resolution_falls_back_to_prediction() {

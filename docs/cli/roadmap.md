@@ -61,6 +61,9 @@ Implementation status:
   pass: it resolves selectors, encodes calldata, fetches tip-derived
   expiry, signs the transaction, and returns the prepared invocation
   without broadcasting it.
+- `groundhog deploy --dry-run` resolves the WASM artifact, builds and
+  signs the deploy transaction, computes the predicted contract address,
+  and returns all of that without broadcasting.
 - Remaining follow-up after that first pass: cache repeated
   embedded-spec parsing, tighten union/structured CLI ergonomics and
   diagnostics, and keep proving out the spec-driven path so the
@@ -68,8 +71,8 @@ Implementation status:
 - Phase 2 is partially complete: `groundhog node` ships and shares execution
   semantics with the SDK/native executor, but richer observability and some
   secondary RPC methods are still pending.
-- Still intentionally deferred: `groundhog deploy --dry-run`, a
-  no-key-required call dry-run / inspect split, and `groundhog inspect`.
+- Still intentionally deferred: a no-key-required call dry-run / inspect
+  split, and `groundhog inspect`.
 
 ## Execution Tracker
 
