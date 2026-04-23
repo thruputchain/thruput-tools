@@ -1041,7 +1041,7 @@ fn spawn_chain_tip_rpc(height: i64) -> (String, thread::JoinHandle<()>) {
 /// Mock RPC server that handles the full deploy flow:
 /// `chainTip` → `sendRawTransaction` → `getTransactionReceipt`.
 ///
-/// Returns a 32-byte zero address as the deploy `return_data` so the live
+/// Returns a 32-byte dummy address (`0xbb..bb`) as the deploy `return_data` so the live
 /// path exercises the receipt-based address extraction.
 fn spawn_deploy_rpc(height: i64) -> (String, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
