@@ -221,13 +221,26 @@ loading the private key.
 
 - [ ] `cargo test --workspace` — all tests pass
 - [ ] `cargo build --workspace` — no compiler warnings
-- [ ] `cargo clippy --workspace -- -D warnings` — clean
+- [ ] `cargo clippy --workspace --all-targets -- -D warnings` — clean
 - [ ] `cargo fmt --check` — formatted
 - [ ] No `.unwrap()` added outside of tests
 - [ ] No `.expect()` on untrusted input
 - [ ] New `.expect()` messages use `bug:` prefix
 - [ ] No `dbg!()` or debug print statements
 - [ ] All new public items have doc comments
+
+## Before Opening a PR
+
+Run the full CI-equivalent check locally before pushing:
+
+```bash
+cargo fmt --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
+All three must pass. CI runs clippy with `--all-targets` (which
+includes test and bench code), so always use that flag locally too.
 
 ## Git Workflow
 
