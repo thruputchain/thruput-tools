@@ -1,6 +1,6 @@
 # Groundhog CLI Roadmap
 
-Execution roadmap for the Groundhog CLI as of 2026-04-09.
+Execution roadmap for the Groundhog CLI as of 2026-04-24.
 
 `docs/foundry.md` is the benchmark/reference document. This file is the
 working plan we should actually execute against.
@@ -64,15 +64,16 @@ Implementation status:
 - `groundhog deploy --dry-run` resolves the WASM artifact, builds and
   signs the deploy transaction, computes the predicted contract address,
   and returns all of that without broadcasting.
-- Remaining follow-up after that first pass: cache repeated
-  embedded-spec parsing, tighten union/structured CLI ergonomics and
-  diagnostics, and keep proving out the spec-driven path so the
-  remaining local-source fallback can eventually be removed.
-- Phase 2 is partially complete: `groundhog node` ships and shares execution
-  semantics with the SDK/native executor, but richer observability and some
-  secondary RPC methods are still pending.
+- Remaining Phase 1 follow-up: cache repeated embedded-spec parsing,
+  tighten union/structured CLI ergonomics and diagnostics, and keep
+  proving out the spec-driven path so the remaining local-source fallback
+  can eventually be removed.
+- Phase 2 is complete for the current local-dev scope: `groundhog node`
+  ships, shares execution semantics with the SDK/native executor, retains
+  transaction detail, exposes events, and supports latest-state storage
+  reads through `groundhog_dev_getStorageAt`.
 - Still intentionally deferred: a no-key-required call dry-run / inspect
-  split, and `groundhog inspect`.
+  split, richer storage-cost reporting, and `groundhog inspect`.
 
 ## Execution Tracker
 
@@ -149,7 +150,7 @@ Maintenance rules:
 
 - [x] Local dev node via RPC/native executor backend
 - [x] Ensure local node and test environment share execution
-- [ ] Local-node observability (deltas, snapshots, events)
+- [x] Local-node observability (deltas, snapshots, events)
 
 ### Phase 3
 
@@ -301,8 +302,9 @@ Goal: eliminate dependency on a remote network for the main inner loop.
 
 4. **Groundhog-specific observability**
    - delta logging
-   - snapshot browsing
-   - storage cost visibility
+   - snapshot browsing / latest-state storage reads
+   - event queries
+   - storage cost visibility remains part of Phase 3 reporting work
 
 ### Exit Criteria
 
@@ -367,22 +369,25 @@ but the contract-spec work in Phase 1 should preserve a clean path to it.
 
 ## Immediate Next Steps
 
-The next concrete batch should be:
+The next concrete batch should focus on Phase 3 testing DX:
 
-1. Clarify the contract spec / IDL path needed for `call`.
-2. Add a shared command-result envelope for consistent JSON shape
-   (CLI-only, no cross-repo dependency).
-3. Signing / tx-building: blocked on extracting a shared library
-   from `groundhog-rpc/crates/tx-builder`. The CLI should not
-   duplicate that code. Current direction: add a dedicated
-   `groundhog-signing` crate first, then consolidate CLI + RPC
-   gateway into one off-chain tools workspace. See
-   `docs/signing-reorg-plan.md` and `docs/signing-crate-api.md`.
-   The CLI work is: depend on the shared lib, bridge `keys.rs`
-   loading, converge on one ed25519 crate across the Rust stack,
-   and replace hand-rolled address derivation with canonical XDR.
-4. Start deploy/call integration once signing and RPC client are
-   available.
+1. Add cheap `groundhog test` selectors:
+   - `--match-test`
+   - `--fail-fast`
+   - `--rerun`
+2. Add `groundhog test --integration` on top of the local dev node:
+   - start a local node
+   - deploy the target contract
+   - run integration tests against its RPC URL
+   - clean up unless persistence is requested
+3. Add better test output controls:
+   - human verbosity levels
+   - optional machine-readable output
+   - event / delta snippets on failures
+4. Define the first storage-cost reporting surface:
+   - CLI output shape
+   - JSON fields
+   - relationship to existing transaction detail and storage deltas
 
 ## Decision Rules
 
