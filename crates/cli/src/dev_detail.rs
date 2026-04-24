@@ -10,9 +10,25 @@ use crate::{CliError, Print};
 pub fn fetch_transaction_detail_blocking(
     rpc_url: &str,
     tx_hash: TxHash,
-) -> Result<Option<TransactionDetail>, CliError> {
-    let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
-    rt.block_on(async { fetch_transaction_detail(rpc_url, tx_hash).await })
+    print: &Print,
+) -> Option<TransactionDetail> {
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(error) => {
+            print.warn(format_args!(
+                "transaction detail unavailable: failed to start runtime: {error}"
+            ));
+            return None;
+        }
+    };
+
+    match rt.block_on(async { fetch_transaction_detail(rpc_url, tx_hash).await }) {
+        Ok(detail) => detail,
+        Err(error) => {
+            print.warn(format_args!("transaction detail unavailable: {error}"));
+            None
+        }
+    }
 }
 
 pub fn print_transaction_detail(detail: &TransactionDetail, print: &Print) {
@@ -111,7 +127,7 @@ fn format_number(value: u64) -> String {
     let digits = value.to_string();
     let mut formatted = String::with_capacity(digits.len() + digits.len() / 3);
     for (index, ch) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index) % 3 == 0 {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
             formatted.push(',');
         }
         formatted.push(ch);

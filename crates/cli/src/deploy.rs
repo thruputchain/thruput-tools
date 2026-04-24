@@ -60,7 +60,7 @@ pub fn run(
     ));
 
     let (tx_hash, receipt) = submit_prepared_deploy(&prepared)?;
-    let transaction_detail = fetch_transaction_detail_blocking(&prepared.rpc_url, tx_hash)?;
+    let transaction_detail = fetch_transaction_detail_blocking(&prepared.rpc_url, tx_hash, print);
 
     let predicted_address = ContractAddress::from(hex_to_32_bytes(&prepared.predicted_address)?);
 

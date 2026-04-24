@@ -649,7 +649,7 @@ fn format_number(value: u64) -> String {
     let digits = value.to_string();
     let mut formatted = String::with_capacity(digits.len() + digits.len() / 3);
     for (index, ch) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index) % 3 == 0 {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
             formatted.push(',');
         }
         formatted.push(ch);
@@ -662,7 +662,7 @@ fn format_i128_xdr(value: &groundhog_xdr::types::int128_xdr) -> String {
 }
 
 fn int128_to_i128(value: &groundhog_xdr::types::int128_xdr) -> i128 {
-    ((value.highbits as i128) << 64) | i128::from(value.lowbits)
+    (i128::from(value.highbits) << 64) | i128::from(value.lowbits)
 }
 
 fn format_contract_address(address: &ContractAddress) -> String {

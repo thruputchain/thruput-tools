@@ -239,121 +239,136 @@ pub fn spawn_worker(
     storage_tokens: u64,
     transaction_retention_limit: usize,
 ) -> Result<WorkerHandle, DevNodeError> {
-    let (tx, mut rx) = mpsc::unbounded_channel::<DevCommand>();
+    let (tx, rx) = mpsc::unbounded_channel::<DevCommand>();
     let (init_tx, init_rx) = std::sync::mpsc::sync_channel::<Result<(), DevNodeError>>(1);
 
     std::thread::Builder::new()
         .name("groundhog-dev-node-worker".into())
         .spawn(move || {
-            tracing::info!(
+            run_worker_thread(
                 account_count,
                 storage_tokens,
                 transaction_retention_limit,
-                "dev node worker started"
+                &init_tx,
+                rx,
             );
-
-            let backend_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let backend =
-                    DevBackend::new(account_count, storage_tokens, transaction_retention_limit);
-                let _ = init_tx.send(Ok(()));
-                backend
-            }));
-
-            let mut backend = match backend_result {
-                Ok(backend) => backend,
-                Err(payload) => {
-                    let err = startup_failure_error(&payload);
-                    tracing::error!(error = %err, "dev node worker panicked during startup");
-                    let _ = init_tx.send(Err(err));
-                    return;
-                }
-            };
-
-            let worker_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                while let Some(cmd) = rx.blocking_recv() {
-                    match cmd {
-                        DevCommand::SendRawTransaction { tx_bytes, reply } => {
-                            let result = backend.send_raw_transaction(&tx_bytes);
-                            let _ = reply.send(result);
-                        }
-                        DevCommand::GetTransactionReceipt { tx_hash, reply } => {
-                            let _ = reply.send(backend.get_transaction_receipt(&tx_hash));
-                        }
-                        DevCommand::GetTransactionDetail { tx_hash, reply } => {
-                            let _ = reply.send(backend.get_transaction_detail(&tx_hash));
-                        }
-                        DevCommand::GetStorageAt {
-                            address,
-                            key,
-                            reply,
-                        } => {
-                            let _ = reply.send(backend.get_storage_at(&address.0, &key));
-                        }
-                        DevCommand::GetTransactionStatus { tx_hash, reply } => {
-                            let _ = reply.send(backend.get_transaction_status(&tx_hash));
-                        }
-                        DevCommand::GetContractEvents {
-                            address,
-                            from_height,
-                            to_height,
-                            reply,
-                        } => {
-                            let _ = reply.send(backend.get_contract_events(
-                                &address.0,
-                                &from_height,
-                                &to_height,
-                            ));
-                        }
-                        DevCommand::ChainTip { reply } => {
-                            let _ = reply.send(backend.chain_tip());
-                        }
-                        DevCommand::GetAccounts { reply } => {
-                            let _ = reply.send(backend.accounts().to_vec());
-                        }
-                        DevCommand::Stats { reply } => {
-                            let _ = reply.send(backend.stats());
-                        }
-                        DevCommand::Reset { reply } => {
-                            backend.reset();
-                            let _ = reply.send(());
-                        }
-                        #[cfg(test)]
-                        DevCommand::SeedBytestring {
-                            address,
-                            key,
-                            value,
-                            reply,
-                        } => {
-                            backend.seed_bytestring(&address.0, &key, &value);
-                            let _ = reply.send(());
-                        }
-                        #[cfg(test)]
-                        DevCommand::SeedDeployedBytestring {
-                            address,
-                            key,
-                            value,
-                            reply,
-                        } => {
-                            backend.seed_deployed_bytestring(&address.0, &key, &value);
-                            let _ = reply.send(());
-                        }
-                    }
-                }
-            }));
-
-            match worker_result {
-                Ok(()) => tracing::info!("dev node worker stopped"),
-                Err(payload) => tracing::error!(
-                    panic = %panic_payload_message(&payload),
-                    "dev node worker panicked"
-                ),
-            }
         })
         .expect("bug: failed to spawn dev node worker thread");
 
     init_rx.recv().map_err(|_| DevNodeError::WorkerStopped)??;
 
     Ok(WorkerHandle { tx })
+}
+
+fn run_worker_thread(
+    account_count: usize,
+    storage_tokens: u64,
+    transaction_retention_limit: usize,
+    init_tx: &std::sync::mpsc::SyncSender<Result<(), DevNodeError>>,
+    mut rx: mpsc::UnboundedReceiver<DevCommand>,
+) {
+    tracing::info!(
+        account_count,
+        storage_tokens,
+        transaction_retention_limit,
+        "dev node worker started"
+    );
+
+    let backend_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let backend = DevBackend::new(account_count, storage_tokens, transaction_retention_limit);
+        let _ = init_tx.send(Ok(()));
+        backend
+    }));
+
+    let mut backend = match backend_result {
+        Ok(backend) => backend,
+        Err(payload) => {
+            let err = startup_failure_error(&payload);
+            tracing::error!(error = %err, "dev node worker panicked during startup");
+            let _ = init_tx.send(Err(err));
+            return;
+        }
+    };
+
+    let worker_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        while let Some(cmd) = rx.blocking_recv() {
+            handle_command(&mut backend, cmd);
+        }
+    }));
+
+    match worker_result {
+        Ok(()) => tracing::info!("dev node worker stopped"),
+        Err(payload) => tracing::error!(
+            panic = %panic_payload_message(&payload),
+            "dev node worker panicked"
+        ),
+    }
+}
+
+fn handle_command(backend: &mut DevBackend, cmd: DevCommand) {
+    match cmd {
+        DevCommand::SendRawTransaction { tx_bytes, reply } => {
+            let result = backend.send_raw_transaction(&tx_bytes);
+            let _ = reply.send(result);
+        }
+        DevCommand::GetTransactionReceipt { tx_hash, reply } => {
+            let _ = reply.send(backend.get_transaction_receipt(&tx_hash));
+        }
+        DevCommand::GetTransactionDetail { tx_hash, reply } => {
+            let _ = reply.send(backend.get_transaction_detail(&tx_hash));
+        }
+        DevCommand::GetStorageAt {
+            address,
+            key,
+            reply,
+        } => {
+            let _ = reply.send(backend.get_storage_at(&address.0, &key));
+        }
+        DevCommand::GetTransactionStatus { tx_hash, reply } => {
+            let _ = reply.send(backend.get_transaction_status(&tx_hash));
+        }
+        DevCommand::GetContractEvents {
+            address,
+            from_height,
+            to_height,
+            reply,
+        } => {
+            let _ = reply.send(backend.get_contract_events(&address.0, &from_height, &to_height));
+        }
+        DevCommand::ChainTip { reply } => {
+            let _ = reply.send(backend.chain_tip());
+        }
+        DevCommand::GetAccounts { reply } => {
+            let _ = reply.send(backend.accounts().to_vec());
+        }
+        DevCommand::Stats { reply } => {
+            let _ = reply.send(backend.stats());
+        }
+        DevCommand::Reset { reply } => {
+            backend.reset();
+            let _ = reply.send(());
+        }
+        #[cfg(test)]
+        DevCommand::SeedBytestring {
+            address,
+            key,
+            value,
+            reply,
+        } => {
+            backend.seed_bytestring(&address.0, &key, &value);
+            let _ = reply.send(());
+        }
+        #[cfg(test)]
+        DevCommand::SeedDeployedBytestring {
+            address,
+            key,
+            value,
+            reply,
+        } => {
+            backend.seed_deployed_bytestring(&address.0, &key, &value);
+            let _ = reply.send(());
+        }
+    }
 }
 
 fn panic_payload_message(payload: &Box<dyn std::any::Any + Send>) -> String {

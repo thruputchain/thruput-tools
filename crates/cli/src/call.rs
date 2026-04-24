@@ -73,7 +73,7 @@ pub fn run(
     ));
 
     let (tx_hash, receipt) = submit_prepared_call(&prepared)?;
-    let transaction_detail = fetch_transaction_detail_blocking(&prepared.rpc_url, tx_hash)?;
+    let transaction_detail = fetch_transaction_detail_blocking(&prepared.rpc_url, tx_hash, print);
     let tx_hash_formatted = format_tx_hash(&tx_hash);
     let status_summary = summarize_exec_status(&receipt.status);
     let decoded_return = receipt

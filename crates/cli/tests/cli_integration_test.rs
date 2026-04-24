@@ -816,6 +816,60 @@ fn call_live_human_appends_transaction_detail_sections() {
 }
 
 #[test]
+fn call_live_human_warns_when_transaction_detail_fails() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let (rpc_url, rpc_server) = spawn_transaction_rpc(
+        42,
+        sample_call_receipt(42),
+        DevDetailRpcResponse::Error {
+            code: -32000,
+            message: "detail backend unavailable",
+        },
+    );
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
+    )
+    .unwrap();
+
+    let generate = groundhog()
+        .args(["keys", "generate", "alice"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    assert!(
+        generate.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&generate.stderr)
+    );
+
+    let contract = format!("0x{}", "11".repeat(32));
+    let output = groundhog()
+        .args(["call", &contract, "0x0123456789abcdef", "0x0102"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Call succeeded"));
+    assert!(stderr.contains("warning: transaction detail unavailable"));
+    assert!(stderr.contains("detail backend unavailable"));
+}
+
+#[test]
 fn call_fails_without_config() {
     let output = groundhog()
         .arg("call")
@@ -1176,6 +1230,7 @@ fn spawn_chain_tip_rpc(height: i64) -> (String, thread::JoinHandle<()>) {
 
 enum DevDetailRpcResponse {
     MethodNotFound,
+    Error { code: i32, message: &'static str },
     Result(serde_json::Value),
 }
 
@@ -1248,6 +1303,9 @@ fn spawn_transaction_rpc(
             DevDetailRpcResponse::MethodNotFound => {
                 send_jsonrpc_error_response(stream, &request["id"], -32601, "Method not found");
             }
+            DevDetailRpcResponse::Error { code, message } => {
+                send_jsonrpc_error_response(stream, &request["id"], code, message);
+            }
             DevDetailRpcResponse::Result(result) => {
                 send_jsonrpc_response(stream, &request["id"], result);
             }
@@ -1287,7 +1345,7 @@ fn sample_detail_result(height: i64) -> serde_json::Value {
     serde_json::json!({
         "receipt": sample_call_receipt(height),
         "gasConsumed": 12450,
-        "gasLimit": 1000000000_u64,
+        "gasLimit": 1_000_000_000_u64,
         "storageDeltas": [{
             "address": contract_address,
             "key": "0xabcdef",
@@ -1300,7 +1358,7 @@ fn sample_detail_result(height: i64) -> serde_json::Value {
             "invocation": {
                 "address": contract_address,
                 "entrypoint": "0x0123456789abcdef",
-                "gasLimit": 1000000000_u64,
+                "gasLimit": 1_000_000_000_u64,
                 "calldata": "0x0102",
             },
             "systemCalls": [],

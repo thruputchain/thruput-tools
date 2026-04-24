@@ -244,7 +244,6 @@ impl From<&InvocationFrameOutput> for FrameOutputInfo {
             InvocationFrameOutput::Abort { abort_buffer } => Self::Abort {
                 buffer: HexBytes(abort_buffer.0.clone()),
             },
-            InvocationFrameOutput::Fault => Self::Fault,
             _ => Self::Fault,
         }
     }
@@ -399,7 +398,6 @@ fn syscall_name(body: &SyscallTraceBody) -> &'static str {
         }
         SyscallTraceBody::kGetBlockHeight { .. } => "getBlockHeight",
         SyscallTraceBody::kRetrocausalQueuePeekLen { .. } => "retrocausalQueuePeekLen",
-        SyscallTraceBody::Default { .. } => "unknown",
         _ => "unknown",
     }
 }
@@ -434,7 +432,7 @@ fn format_i128_xdr(value: &groundhog_xdr::types::int128_xdr) -> String {
 }
 
 fn int128_to_i128(value: &groundhog_xdr::types::int128_xdr) -> i128 {
-    ((value.highbits as i128) << 64) | i128::from(value.lowbits)
+    (i128::from(value.highbits) << 64) | i128::from(value.lowbits)
 }
 
 fn syscall_error_label(code: groundhog_xdr::syscall_error::SyscallErrorCode) -> String {
