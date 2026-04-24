@@ -1,4 +1,4 @@
-use groundhog_rpc_api_types::dev::{StorageDeltaInfo, TransactionDetail};
+use groundhog_rpc_api_types::dev::{StorageDeltaInfo, TransactionDetail, format_gas_summary};
 use groundhog_rpc_api_types::events::EmittedEvent;
 use groundhog_rpc_api_types::hex::HexBytes;
 use groundhog_rpc_api_types::transaction::TxHash;
@@ -113,26 +113,6 @@ fn format_event(event: &EmittedEvent) -> String {
     );
     parts.push(format!("data={}", format_hex_bytes(&event.data)));
     parts.join(" ")
-}
-
-fn format_gas_summary(consumed: u64, gas_limit: Option<u64>) -> String {
-    let consumed = format_number(consumed);
-    match gas_limit {
-        Some(limit) => format!("{consumed} / {}", format_number(limit)),
-        None => consumed,
-    }
-}
-
-fn format_number(value: u64) -> String {
-    let digits = value.to_string();
-    let mut formatted = String::with_capacity(digits.len() + digits.len() / 3);
-    for (index, ch) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index).is_multiple_of(3) {
-            formatted.push(',');
-        }
-        formatted.push(ch);
-    }
-    formatted
 }
 
 fn format_contract_address(address: &groundhog_xdr::types::ContractAddress) -> String {

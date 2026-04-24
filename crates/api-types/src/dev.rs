@@ -249,7 +249,7 @@ impl From<&InvocationFrameOutput> for FrameOutputInfo {
     }
 }
 
-fn configured_gas_limit(gas_limit: u64) -> Option<u64> {
+pub fn configured_gas_limit(gas_limit: u64) -> Option<u64> {
     (gas_limit != u64::MAX).then_some(gas_limit)
 }
 
@@ -427,11 +427,31 @@ where
     format!("0x{}", hex::encode(&xdr_hex_bytes(value).0))
 }
 
-fn format_i128_xdr(value: &groundhog_xdr::types::int128_xdr) -> String {
+pub fn format_gas_summary(consumed: u64, gas_limit: Option<u64>) -> String {
+    let consumed = format_number(consumed);
+    match gas_limit {
+        Some(limit) => format!("{consumed} / {}", format_number(limit)),
+        None => consumed,
+    }
+}
+
+fn format_number(value: u64) -> String {
+    let digits = value.to_string();
+    let mut formatted = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, ch) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            formatted.push(',');
+        }
+        formatted.push(ch);
+    }
+    formatted
+}
+
+pub fn format_i128_xdr(value: &groundhog_xdr::types::int128_xdr) -> String {
     int128_to_i128(value).to_string()
 }
 
-fn int128_to_i128(value: &groundhog_xdr::types::int128_xdr) -> i128 {
+pub fn int128_to_i128(value: &groundhog_xdr::types::int128_xdr) -> i128 {
     (i128::from(value.highbits) << 64) | i128::from(value.lowbits)
 }
 

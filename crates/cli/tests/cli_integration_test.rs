@@ -1116,6 +1116,7 @@ fn read_jsonrpc_request(
         }
     };
 
+    stream.set_nonblocking(false).unwrap();
     let mut reader = BufReader::new(stream.try_clone().unwrap());
     let mut content_length = 0usize;
     loop {

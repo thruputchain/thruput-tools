@@ -8,7 +8,10 @@ use groundhog_native_exec::test_environment::{TestEnvironment, TestEnvironmentHa
 use groundhog_native_exec::transaction_handler::{RootInvokeResult, TransactionHandler};
 use groundhog_rpc_api_types::BlockHeight;
 use groundhog_rpc_api_types::block::ChainTip;
-use groundhog_rpc_api_types::dev::{DevAccount, StorageItemInfo, TransactionDetail};
+use groundhog_rpc_api_types::dev::{
+    DevAccount, StorageItemInfo, TransactionDetail, configured_gas_limit, format_gas_summary,
+    format_i128_xdr, int128_to_i128,
+};
 use groundhog_rpc_api_types::events::{EmittedEvent, IdentifiedEvent};
 use groundhog_rpc_api_types::hex::{Hex0x, HexBytes, Topic};
 use groundhog_rpc_api_types::receipt::{ExecStatus, TransactionReceipt};
@@ -506,10 +509,6 @@ fn format_status_summary(status: &ExecStatus) -> String {
     }
 }
 
-fn configured_gas_limit(gas_limit: u64) -> Option<u64> {
-    (gas_limit != u64::MAX).then_some(gas_limit)
-}
-
 fn format_transaction_summary(
     tx_hash: &TxHash,
     record: &TransactionRecord,
@@ -635,34 +634,6 @@ fn format_event(event: &EmittedEvent) -> String {
     );
     parts.push(format!("data=0x{}", hex::encode(&event.data.0)));
     parts.join(" ")
-}
-
-fn format_gas_summary(consumed: u64, gas_limit: Option<u64>) -> String {
-    let consumed = format_number(consumed);
-    match gas_limit {
-        Some(limit) => format!("{consumed} / {}", format_number(limit)),
-        None => consumed,
-    }
-}
-
-fn format_number(value: u64) -> String {
-    let digits = value.to_string();
-    let mut formatted = String::with_capacity(digits.len() + digits.len() / 3);
-    for (index, ch) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index).is_multiple_of(3) {
-            formatted.push(',');
-        }
-        formatted.push(ch);
-    }
-    formatted
-}
-
-fn format_i128_xdr(value: &groundhog_xdr::types::int128_xdr) -> String {
-    int128_to_i128(value).to_string()
-}
-
-fn int128_to_i128(value: &groundhog_xdr::types::int128_xdr) -> i128 {
-    (i128::from(value.highbits) << 64) | i128::from(value.lowbits)
 }
 
 fn format_contract_address(address: &ContractAddress) -> String {
