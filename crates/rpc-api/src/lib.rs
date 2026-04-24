@@ -11,7 +11,9 @@ use jsonrpsee::proc_macros::rpc;
 use groundhog_rpc_api_types::{
     BlockHeight, ContractAddress,
     block::{BlockInfo, ChainTip},
+    dev::{DevAccount, StorageItemInfo, TransactionDetail},
     events::IdentifiedEvent,
+    hex::HexBytes,
     receipt::TransactionReceipt,
     transaction::{TransactionStatus, TxHash},
 };
@@ -57,7 +59,7 @@ pub trait GroundhogApi {
 }
 
 /// Dev-only RPC methods. Only implemented by the dev node.
-#[rpc(server, namespace = "groundhog_dev")]
+#[rpc(client, server, namespace = "groundhog_dev")]
 pub trait GroundhogDevApi {
     /// Reset the dev node to its initial state.
     #[method(name = "reset")]
@@ -65,5 +67,18 @@ pub trait GroundhogDevApi {
 
     /// List pre-funded dev accounts with addresses and keys.
     #[method(name = "getAccounts")]
-    async fn get_accounts(&self) -> RpcResult<Vec<groundhog_rpc_api_types::dev::DevAccount>>;
+    async fn get_accounts(&self) -> RpcResult<Vec<DevAccount>>;
+
+    /// Full retained execution detail for a committed transaction.
+    #[method(name = "getTransactionDetail")]
+    async fn get_transaction_detail(&self, tx_hash: TxHash)
+    -> RpcResult<Option<TransactionDetail>>;
+
+    /// Read the latest storage item at an address/key pair.
+    #[method(name = "getStorageAt")]
+    async fn get_storage_at(
+        &self,
+        address: ContractAddress,
+        key: HexBytes,
+    ) -> RpcResult<Option<StorageItemInfo>>;
 }

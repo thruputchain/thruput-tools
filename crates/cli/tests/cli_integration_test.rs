@@ -614,11 +614,68 @@ fn deploy_live_json_submits_and_returns_receipt() {
     assert_eq!(stdout["data"]["address_source"], "receipt");
     assert_eq!(stdout["data"]["height"], 42);
     assert_eq!(stdout["data"]["status"]["result"], "ok");
+    assert!(stdout["data"]["transaction_detail"].is_null());
     assert!(
         stdout["data"]["tx_hash"]
             .as_str()
             .unwrap()
             .starts_with("0x")
+    );
+}
+
+#[test]
+fn deploy_live_json_includes_transaction_detail_when_dev_method_exists() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let (rpc_url, rpc_server) =
+        spawn_deploy_rpc_with_detail(42, DevDetailRpcResponse::Result(sample_detail_result(42)));
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
+    )
+    .unwrap();
+
+    let generate = groundhog()
+        .args(["keys", "generate", "alice"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    assert!(
+        generate.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&generate.stderr)
+    );
+
+    let wasm_path = tmp.path().join("test.wasm");
+    std::fs::write(&wasm_path, b"\0asm\x01\0\0\0").unwrap();
+
+    let output = groundhog()
+        .args(["--json", "deploy", "--wasm", wasm_path.to_str().unwrap()])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["data"]["transaction_detail"]["gasConsumed"], 12450);
+    assert_eq!(
+        stdout["data"]["transaction_detail"]["storageDeltas"][0]["kind"],
+        "bytestringSet"
+    );
+    assert_eq!(
+        stdout["data"]["transaction_detail"]["trace"]["status"]["result"],
+        "return"
     );
 }
 
@@ -703,6 +760,113 @@ fn call_dry_run_json_outputs_prepared_transaction() {
             .unwrap()
             .starts_with("0x")
     );
+}
+
+#[test]
+fn call_live_human_appends_transaction_detail_sections() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let (rpc_url, rpc_server) = spawn_transaction_rpc(
+        42,
+        sample_call_receipt(42),
+        DevDetailRpcResponse::Result(sample_detail_result(42)),
+    );
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
+    )
+    .unwrap();
+
+    let generate = groundhog()
+        .args(["keys", "generate", "alice"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    assert!(
+        generate.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&generate.stderr)
+    );
+
+    let contract = format!("0x{}", "11".repeat(32));
+    let output = groundhog()
+        .args(["call", &contract, "0x0123456789abcdef", "0x0102"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Call succeeded"));
+    assert!(stderr.contains("Storage deltas (1):"));
+    assert!(stderr.contains("Events (1):"));
+    assert!(stderr.contains("Return: 0x0102"));
+    assert!(stderr.contains("Gas: 12,450 / 1,000,000,000"));
+}
+
+#[test]
+fn call_live_human_warns_when_transaction_detail_fails() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let (rpc_url, rpc_server) = spawn_transaction_rpc(
+        42,
+        sample_call_receipt(42),
+        DevDetailRpcResponse::Error {
+            code: -32000,
+            message: "detail backend unavailable",
+        },
+    );
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
+    )
+    .unwrap();
+
+    let generate = groundhog()
+        .args(["keys", "generate", "alice"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    assert!(
+        generate.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&generate.stderr)
+    );
+
+    let contract = format!("0x{}", "11".repeat(32));
+    let output = groundhog()
+        .args(["call", &contract, "0x0123456789abcdef", "0x0102"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Call succeeded"));
+    assert!(stderr.contains("warning: transaction detail unavailable"));
+    assert!(stderr.contains("detail backend unavailable"));
 }
 
 #[test]
@@ -952,6 +1116,7 @@ fn read_jsonrpc_request(
         }
     };
 
+    stream.set_nonblocking(false).unwrap();
     let mut reader = BufReader::new(stream.try_clone().unwrap());
     let mut content_length = 0usize;
     loop {
@@ -983,6 +1148,32 @@ fn send_jsonrpc_response(
         "jsonrpc": "2.0",
         "id": request_id.clone(),
         "result": result,
+    });
+    let response_body = serde_json::to_vec(&response).unwrap();
+    write!(
+        stream,
+        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+        response_body.len()
+    )
+    .unwrap();
+    stream.write_all(&response_body).unwrap();
+    stream.flush().unwrap();
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn send_jsonrpc_error_response(
+    mut stream: std::net::TcpStream,
+    request_id: &serde_json::Value,
+    code: i32,
+    message: &str,
+) {
+    let response = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": request_id.clone(),
+        "error": {
+            "code": code,
+            "message": message,
+        },
     });
     let response_body = serde_json::to_vec(&response).unwrap();
     write!(
@@ -1038,17 +1229,42 @@ fn spawn_chain_tip_rpc(height: i64) -> (String, thread::JoinHandle<()>) {
     (format!("http://{addr}"), handle)
 }
 
+enum DevDetailRpcResponse {
+    MethodNotFound,
+    Error { code: i32, message: &'static str },
+    Result(serde_json::Value),
+}
+
+fn mock_tx_hash() -> String {
+    format!("0x{}", "aa".repeat(32))
+}
+
 /// Mock RPC server that handles the full deploy flow:
 /// `chainTip` → `sendRawTransaction` → `getTransactionReceipt`.
 ///
 /// Returns a 32-byte dummy address (`0xbb..bb`) as the deploy `return_data` so the live
 /// path exercises the receipt-based address extraction.
 fn spawn_deploy_rpc(height: i64) -> (String, thread::JoinHandle<()>) {
+    spawn_deploy_rpc_with_detail(height, DevDetailRpcResponse::MethodNotFound)
+}
+
+fn spawn_deploy_rpc_with_detail(
+    height: i64,
+    detail_response: DevDetailRpcResponse,
+) -> (String, thread::JoinHandle<()>) {
+    spawn_transaction_rpc(height, sample_deploy_receipt(height), detail_response)
+}
+
+fn spawn_transaction_rpc(
+    height: i64,
+    receipt: serde_json::Value,
+    detail_response: DevDetailRpcResponse,
+) -> (String, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
 
-    let tx_hash = format!("0x{}", "aa".repeat(32));
+    let tx_hash = mock_tx_hash();
 
     let handle = thread::spawn(move || {
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -1077,19 +1293,81 @@ fn spawn_deploy_rpc(height: i64) -> (String, thread::JoinHandle<()>) {
         // 3. getTransactionReceipt
         let (stream, request) = read_jsonrpc_request(&listener, deadline, "getTransactionReceipt");
         assert_eq!(request["method"], "groundhog_getTransactionReceipt");
-        let contract_address = format!("0x{}", "bb".repeat(32));
-        send_jsonrpc_response(
-            stream,
-            &request["id"],
-            serde_json::json!({
-                "txHash": tx_hash,
-                "height": height,
-                "status": { "result": "ok" },
-                "events": [],
-                "returnData": contract_address,
-            }),
-        );
+        assert_eq!(request["params"][0], tx_hash);
+        send_jsonrpc_response(stream, &request["id"], receipt);
+
+        // 4. groundhog_dev_getTransactionDetail
+        let (stream, request) = read_jsonrpc_request(&listener, deadline, "getTransactionDetail");
+        assert_eq!(request["method"], "groundhog_dev_getTransactionDetail");
+        assert_eq!(request["params"][0], tx_hash);
+        match detail_response {
+            DevDetailRpcResponse::MethodNotFound => {
+                send_jsonrpc_error_response(stream, &request["id"], -32601, "Method not found");
+            }
+            DevDetailRpcResponse::Error { code, message } => {
+                send_jsonrpc_error_response(stream, &request["id"], code, message);
+            }
+            DevDetailRpcResponse::Result(result) => {
+                send_jsonrpc_response(stream, &request["id"], result);
+            }
+        }
     });
 
     (format!("http://{addr}"), handle)
+}
+
+fn sample_deploy_receipt(height: i64) -> serde_json::Value {
+    serde_json::json!({
+        "txHash": mock_tx_hash(),
+        "height": height,
+        "status": { "result": "ok" },
+        "events": [],
+        "returnData": format!("0x{}", "bb".repeat(32)),
+    })
+}
+
+fn sample_call_receipt(height: i64) -> serde_json::Value {
+    let contract_address = format!("0x{}", "11".repeat(32));
+    serde_json::json!({
+        "txHash": mock_tx_hash(),
+        "height": height,
+        "status": { "result": "ok" },
+        "events": [{
+            "contractAddress": contract_address,
+            "topics": [format!("0x{}", "22".repeat(32))],
+            "data": "0x1234",
+        }],
+        "returnData": "0x0102",
+    })
+}
+
+fn sample_detail_result(height: i64) -> serde_json::Value {
+    let contract_address = format!("0x{}", "11".repeat(32));
+    serde_json::json!({
+        "receipt": sample_call_receipt(height),
+        "gasConsumed": 12450,
+        "gasLimit": 1_000_000_000_u64,
+        "storageDeltas": [{
+            "address": contract_address,
+            "key": "0xabcdef",
+            "kind": "bytestringSet",
+            "summary": "BytestringSet -> 0x9876",
+            "flags": 0,
+            "deltaXdr": "0x9876",
+        }],
+        "trace": {
+            "invocation": {
+                "address": contract_address,
+                "entrypoint": "0x0123456789abcdef",
+                "gasLimit": 1_000_000_000_u64,
+                "calldata": "0x0102",
+            },
+            "systemCalls": [],
+            "storageWrites": [],
+            "status": {
+                "result": "return",
+                "buffer": "0x0102",
+            },
+        },
+    })
 }

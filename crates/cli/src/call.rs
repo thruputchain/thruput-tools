@@ -20,6 +20,7 @@ use crate::codec::{
 };
 use crate::config::{find_project_config, resolve_default_key, resolve_profile};
 use crate::contract_spec::{InterfaceSpec, load_contract_spec, load_registered_interfaces};
+use crate::dev_detail::{fetch_transaction_detail_blocking, print_transaction_detail};
 use crate::keys::load_local_signer;
 use crate::result::CommandResult;
 use crate::tx_utils::{
@@ -72,6 +73,7 @@ pub fn run(
     ));
 
     let (tx_hash, receipt) = submit_prepared_call(&prepared)?;
+    let transaction_detail = fetch_transaction_detail_blocking(&prepared.rpc_url, tx_hash, print);
     let tx_hash_formatted = format_tx_hash(&tx_hash);
     let status_summary = summarize_exec_status(&receipt.status);
     let decoded_return = receipt
@@ -125,6 +127,10 @@ pub fn run(
         }
     }
 
+    if let Some(detail) = transaction_detail.as_ref() {
+        print_transaction_detail(detail, print);
+    }
+
     print.json(&CommandResult::new(
         cmd,
         json!({
@@ -136,6 +142,7 @@ pub fn run(
             "status_summary": status_summary,
             "return_data": receipt.return_data,
             "return_value": decoded_return,
+            "transaction_detail": transaction_detail,
         }),
     ))?;
 
