@@ -9,13 +9,13 @@ use std::process::Command;
 pub struct TestOptions {
     /// Run only tests whose names contain this substring.
     pub match_test: Option<String>,
-    /// Do not start new tests after the first failure.
+    /// Stop the WASM test harness after the first test failure.
     pub fail_fast: bool,
     /// Show captured stdout for successful tests.
     pub show_output: bool,
     /// Do not capture stdout/stderr from tests.
     pub no_capture: bool,
-    /// Number of test threads to use.
+    /// Number of WASM test harness threads to use.
     pub test_threads: Option<usize>,
     /// Skip tests whose names contain these substrings.
     pub skip: Vec<String>,
@@ -118,6 +118,8 @@ pub fn run_with_options(
 }
 
 fn apply_harness_options(cargo_cmd: &mut Command, options: &TestOptions) {
+    // Everything here is appended after cargo's `--` separator and is
+    // therefore scoped to the `test_wasm` libtest harness.
     if options.fail_fast {
         cargo_cmd.arg("--fail-fast");
     }
@@ -130,11 +132,11 @@ fn apply_harness_options(cargo_cmd: &mut Command, options: &TestOptions) {
     if let Some(threads) = options.test_threads {
         cargo_cmd.arg("--test-threads").arg(threads.to_string());
     }
-    for skip in &options.skip {
-        cargo_cmd.arg("--skip").arg(skip);
-    }
     if let Some(filter) = &options.match_test {
         cargo_cmd.arg(filter);
+    }
+    for skip in &options.skip {
+        cargo_cmd.arg("--skip").arg(skip);
     }
 }
 
@@ -178,11 +180,11 @@ mod tests {
                 "--no-capture",
                 "--test-threads",
                 "1",
+                "counter",
                 "--skip",
                 "slow",
                 "--skip",
                 "flaky",
-                "counter",
             ]
         );
     }

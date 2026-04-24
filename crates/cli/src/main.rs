@@ -115,7 +115,7 @@ enum Command {
         /// Run only tests whose names contain this substring
         #[arg(long = "match-test")]
         match_test: Option<String>,
-        /// Do not start new tests after the first failure
+        /// Stop the WASM test harness after the first test failure
         #[arg(long)]
         fail_fast: bool,
         /// Show captured stdout for successful tests
@@ -124,7 +124,7 @@ enum Command {
         /// Do not capture stdout/stderr from tests
         #[arg(long = "no-capture", alias = "nocapture")]
         no_capture: bool,
-        /// Number of test threads to use
+        /// Number of WASM test harness threads to use
         #[arg(long = "test-threads")]
         test_threads: Option<usize>,
         /// Skip tests whose names contain this substring
