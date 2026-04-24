@@ -14,7 +14,7 @@ signing library, and typed client.
 | [`client`](crates/client/) | Typed JSON-RPC client |
 | [`api-types`](crates/api-types/) | Shared RPC types |
 | [`rpc-api`](crates/rpc-api/) | Shared jsonrpsee trait definitions |
-| [`dev-node`](crates/dev-node/) | Local JSON-RPC dev node backed by `native_exec` |
+| [`dev-node`](crates/dev-node/) | Experimental local JSON-RPC dev node (`native_exec` prototype backend) |
 | [`groundhog-sys`](crates/groundhog-sys/) | Local patched FFI bindings override |
 | [`tx-builder`](crates/tx-builder/) | Thin CLI wrapper for tx construction |
 
@@ -26,13 +26,13 @@ cargo run -p groundhog-cli -- init
 cargo run -p groundhog-cli -- new my-counter
 ```
 
-For the local dev node:
+For the experimental local dev node:
 
 ```bash
 cargo run -p groundhog-cli --features dev-node -- node
 ```
 
-Or install the CLI with local dev-node support:
+Or install the CLI with experimental local dev-node support:
 
 ```bash
 cargo install --path crates/cli --features dev-node
@@ -43,7 +43,7 @@ Typical local contract loop:
 ```bash
 groundhog new my-counter && cd my-counter
 groundhog build
-groundhog node
+groundhog node  # in another terminal
 groundhog deploy
 groundhog call my-counter get
 ```
@@ -56,7 +56,7 @@ documentation.
 ```bash
 cargo build                             # build all crates
 cargo test --workspace                  # run all tests
-cargo clippy --workspace -- -D warnings # lint
+cargo clippy --workspace --all-targets -- -D warnings # lint
 cargo fmt --check                       # format check
 ```
 
@@ -64,6 +64,9 @@ cargo fmt --check                       # format check
 
 - [CLI documentation](crates/cli/README.md)
 - [CLI roadmap](docs/cli/roadmap.md)
+- [Local dev-node prototype](docs/cli/localdev-rpc-node.md)
+- [Embedded dev-node backend spec](docs/cli/specs/2026-04-24-embedded-dev-node-backend.md)
+- [Embedded dev-node backend plan](docs/cli/plans/2026-04-24-embedded-dev-node-backend.md)
 - [Gateway system design](docs/gateway/system-design.md)
 - [Gateway API sketch](docs/gateway/api-sketch.md)
 - [Gateway roadmap](docs/gateway/roadmap.md)
