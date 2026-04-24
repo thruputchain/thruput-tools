@@ -23,8 +23,11 @@ Workspace crates in `crates/`:
   workflow plus deploy/call and local dev-node control. Lib/bin split:
   all logic in the library crate, `main.rs` is pure dispatch.
   Subcommand functions take plain Rust types, not clap structs.
-- **dev-node** — feature-gated local JSON-RPC dev node backed by the SDK
-  `native_exec` executor on a dedicated worker thread.
+- **dev-node** — feature-gated experimental local JSON-RPC dev node
+  backed by the SDK `native_exec` / hogd `test_ffi` prototype on a
+  dedicated worker thread. It shares execution semantics with SDK tests,
+  but the durable backend direction is a hogd-side embedded execution
+  library; see the CLI planning docs.
 - **groundhog-sys** — local patched FFI bindings crate overriding the
   registry version for native executor integration and packaging fixes.
 
@@ -85,12 +88,12 @@ cargo run -p groundhog-cli -- deploy       # from inside a project
 cargo run -p groundhog-cli -- call my-counter get
 cargo run -p groundhog-cli -- keys generate alice
 cargo run -p groundhog-cli -- keys ls
-# Local dev node is feature-gated
+# Experimental local dev node is feature-gated
 cargo run -p groundhog-cli --features dev-node -- node
 # Typical local loop
 # 1. cargo run -p groundhog-cli -- new my-counter && cd my-counter
 # 2. cargo run -p groundhog-cli -- build
-# 3. cargo run -p groundhog-cli --features dev-node -- node
+# 3. cargo run -p groundhog-cli --features dev-node -- node  # separate terminal
 # 4. cargo run -p groundhog-cli -- deploy
 # 5. cargo run -p groundhog-cli -- call my-counter get
 ```
@@ -249,6 +252,11 @@ includes test and bench code), so always use that flag locally too.
 ## Planning Docs
 
 - `docs/cli/roadmap.md` — CLI backlog, sequencing, and completion state.
+- `docs/cli/localdev-rpc-node.md` — current dev-node prototype shape.
+- `docs/cli/specs/2026-04-24-embedded-dev-node-backend.md` — durable
+  embedded dev-node backend decision.
+- `docs/cli/plans/2026-04-24-embedded-dev-node-backend.md` — phased
+  backend implementation plan and PR boundaries.
 - `docs/gateway/roadmap.md` — gateway backlog and sequencing.
 - `docs/gateway/system-design.md` — full gateway architecture and open
   questions.

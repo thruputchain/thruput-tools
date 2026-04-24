@@ -42,7 +42,7 @@ groundhog build
 # Run contract's tests against the WASM executor
 groundhog test
 
-# Start the local dev node (optional, requires --features dev-node)
+# Start the experimental local dev node (optional, requires --features dev-node)
 groundhog node
 
 # Deploy and call against the active profile
@@ -131,9 +131,13 @@ library. Injects download credentials as environment variables
 and targets the host platform so tests run natively.
 
 ```bash
-groundhog test                           # run all tests
-groundhog test -- --test test_counter    # run specific test
-groundhog test -- -- test_deposit        # filter by test name
+groundhog test                              # run all tests
+groundhog test --match-test test_deposit    # filter by test name
+groundhog test --skip slow                  # skip matching tests
+groundhog test --fail-fast                  # stop the WASM harness on first failure
+groundhog test --show-output                # show captured stdout for passing tests
+groundhog test --no-capture                 # stream test stdout/stderr
+groundhog test --test-threads 1             # set WASM harness thread count
 ```
 
 > **Note:** Plain `cargo test` also works for unit tests that
@@ -204,9 +208,11 @@ soaked.
 
 ### `groundhog node`
 
-Start the local development node backed by the same `native_exec`
-executor used by SDK tests. Requires installing or building the CLI with
-the `dev-node` feature.
+Start the experimental local development node. The current backend uses
+the SDK `native_exec` / hogd `test_ffi` prototype path, so execution
+semantics match SDK tests, but durable lifecycle features such as
+snapshot, revert, and time travel are not supported yet. Requires
+installing or building the CLI with the `dev-node` feature.
 
 ```bash
 groundhog node
@@ -216,7 +222,11 @@ groundhog node --accounts 20
 
 Human output prints the prefunded accounts and private keys for local
 testing. `groundhog node --json` emits the startup payload with
-`rpc_url` and `accounts` for scripting.
+`rpc_url`, `accounts`, and backend stability metadata for scripting.
+
+See `../../docs/cli/localdev-rpc-node.md` for the current prototype and
+`../../docs/cli/specs/2026-04-24-embedded-dev-node-backend.md` for the
+durable backend direction.
 
 ### `groundhog login`
 
