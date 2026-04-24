@@ -7,6 +7,23 @@ production. For CLI and RPC gateway development.
 
 ---
 
+## Status Update: Backend Strategy
+
+This document describes the first local dev-node prototype: a JSON-RPC
+server backed by the SDK `native_exec` / hogd `test_ffi` path.
+
+As of 2026-04-24, the durable backend direction is documented in
+`docs/cli/specs/2026-04-24-embedded-dev-node-backend.md` and
+`docs/cli/plans/2026-04-24-embedded-dev-node-backend.md`.
+
+The important distinction: the prototype is not a mock executor. It reaches
+the real hogd execution machinery. The weak point is the test-harness
+lifecycle contract: current `test_ffi` lacks durable local-node semantics
+such as snapshot/revert, time travel, and arbitrary historical state reads.
+Future work should replace the backend aperture with a hogd-side embedded
+execution library, while keeping this prototype useful for near-term DX
+experiments.
+
 ## Goal
 
 An RPC-accessible local node for `groundhog deploy`, `groundhog
@@ -22,11 +39,16 @@ call`, and interactive development. No remote testnet needed.
 
 **A exists** — SDK unit tests use it today.
 
-**B is the target** — same executor, exposed over the standard
-`GroundhogApi` JSON-RPC interface. This is what Anvil is for EVM.
+**B was the first prototype target** — same executor, exposed over the
+standard `GroundhogApi` JSON-RPC interface. This is the backend that
+proved the Anvil-style DX surface is valuable, but it should not ossify as
+the durable backend aperture.
 
 **C is out of scope here** — needed eventually for CI and
 pre-deploy validation, not for the dev loop.
+
+The durable target is the embedded hogd execution library described in
+`docs/cli/specs/2026-04-24-embedded-dev-node-backend.md`.
 
 ## What Is Real vs Simulated
 
@@ -48,7 +70,7 @@ The simulated parts are exactly the parts that are trivial in
 Groundhog (instant finality, no gas auctions, no reorgs). The
 real parts are the parts that affect correctness.
 
-## Why B Is Enough
+## Why B Was Enough For The Prototype
 
 - Snapshot isolation and delta merges happen in the executor. B
   is faithful.
@@ -61,6 +83,10 @@ real parts are the parts that affect correctness.
 Level C is only needed for concurrent submission ordering,
 multi-validator consensus, indexer load, and admission control.
 None of these matter much during development.
+
+What B does not provide is a supported long-lived local-node lifecycle:
+snapshot/revert, time travel, durable block controls, and honest historical
+state reads still need a hogd-side embedded backend.
 
 ## Where the Code Lives
 

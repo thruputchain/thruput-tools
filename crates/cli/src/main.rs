@@ -112,6 +112,24 @@ enum Command {
         /// Package to test (required in workspaces)
         #[arg(short, long)]
         package: Option<String>,
+        /// Run only tests whose names contain this substring
+        #[arg(long = "match-test")]
+        match_test: Option<String>,
+        /// Do not start new tests after the first failure
+        #[arg(long)]
+        fail_fast: bool,
+        /// Show captured stdout for successful tests
+        #[arg(long)]
+        show_output: bool,
+        /// Do not capture stdout/stderr from tests
+        #[arg(long = "no-capture", alias = "nocapture")]
+        no_capture: bool,
+        /// Number of test threads to use
+        #[arg(long = "test-threads")]
+        test_threads: Option<usize>,
+        /// Skip tests whose names contain this substring
+        #[arg(long)]
+        skip: Vec<String>,
         /// Config profile to use
         #[arg(
             long = "profile",
@@ -164,7 +182,13 @@ enum Command {
         #[command(flatten)]
         artifacts: ArtifactArgs,
     },
-    /// Start a local development node
+    /// Start an experimental local development node
+    #[command(long_about = "Start an experimental local development node \
+                      backed by the current native_exec/test_ffi \
+                      prototype backend. This shares execution semantics \
+                      with SDK tests, but does not yet provide durable \
+                      local-node lifecycle features such as snapshot, \
+                      revert, or time travel.")]
     Node {
         /// Port to listen on
         #[arg(long, default_value = "9545")]
@@ -294,6 +318,12 @@ fn main() {
             }),
         Command::Test {
             package,
+            match_test,
+            fail_fast,
+            show_output,
+            no_capture,
+            test_threads,
+            skip,
             profile,
             artifacts,
             cargo_args,
@@ -304,8 +334,17 @@ fn main() {
                     artifacts.target_dir,
                     &cwd,
                 );
-                groundhog_cli::test_cmd::run(
+                let options = groundhog_cli::test_cmd::TestOptions {
+                    match_test,
+                    fail_fast,
+                    show_output,
+                    no_capture,
+                    test_threads,
+                    skip,
+                };
+                groundhog_cli::test_cmd::run_with_options(
                     package.as_deref(),
+                    &options,
                     &cargo_args,
                     &artifacts,
                     Some(&profile),

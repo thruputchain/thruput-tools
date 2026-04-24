@@ -72,6 +72,11 @@ Implementation status:
   ships, shares execution semantics with the SDK/native executor, retains
   transaction detail, exposes events, and supports latest-state storage
   reads through `groundhog_dev_getStorageAt`.
+- The current local-node backend is prototype infrastructure, not the
+  durable backend contract. The next backend direction is a hogd-side
+  embedded execution library consumed from Rust, documented in
+  `docs/cli/specs/2026-04-24-embedded-dev-node-backend.md` and
+  `docs/cli/plans/2026-04-24-embedded-dev-node-backend.md`.
 - Still intentionally deferred: a no-key-required call dry-run / inspect
   split, richer storage-cost reporting, and `groundhog inspect`.
 
@@ -150,13 +155,21 @@ Maintenance rules:
 
 - [x] Local dev node via RPC/native executor backend
 - [x] Ensure local node and test environment share execution
-- [x] Local-node observability (deltas, snapshots, events)
+- [x] Local-node observability (transaction detail, events, latest-state
+  storage reads)
+- [ ] Extract current dev-node backend behind a swappable backend trait
+- [ ] Replace prototype `test_ffi` backend with supported embedded hogd
+  execution library when available
 
 ### Phase 3
 
 - [ ] `groundhog test --integration`
-- [ ] `groundhog test --fail-fast`
-- [ ] `groundhog test --match-test`
+- [x] `groundhog test --fail-fast`
+- [x] `groundhog test --match-test`
+- [x] `groundhog test --show-output`
+- [x] `groundhog test --no-capture`
+- [x] `groundhog test --test-threads`
+- [x] `groundhog test --skip`
 - [ ] `groundhog test --rerun`
 - [ ] `groundhog test --watch`
 - [ ] Better test output controls / machine-readable output
@@ -319,11 +332,17 @@ Goal: make `groundhog test` fast, inspectable, and CI-friendly.
 ### Deliverables
 
 1. **Cheap CLI wins**
-   - `--integration`
-   - `--fail-fast`
+   - Shipped:
    - `--match-test`
+   - `--fail-fast`
+   - `--show-output`
+   - `--no-capture`
+   - `--test-threads`
+   - `--skip`
+   - Remaining:
    - `--rerun`
    - `--watch`
+   - `--integration`
    - When the local node exists, `--integration` should orchestrate:
    - start local node
    - deploy contract(s)
@@ -369,22 +388,26 @@ but the contract-spec work in Phase 1 should preserve a clean path to it.
 
 ## Immediate Next Steps
 
-The next concrete batch should focus on Phase 3 testing DX:
+The next concrete batch should continue Phase 3 testing DX:
 
-1. Add cheap `groundhog test` selectors:
-   - `--match-test`
-   - `--fail-fast`
-   - `--rerun`
-2. Add `groundhog test --integration` on top of the local dev node:
+1. Add `groundhog test --rerun`:
+   - store the previous failing test names in a project-local cache
+   - rerun only those names on the next invocation
+   - clear or update the cache after each run
+2. Add `groundhog test --watch`:
+   - watch contract source, tests, and config files
+   - rerun `groundhog test` with debounce
+   - optionally pair with `--rerun` once the failure cache exists
+3. Add `groundhog test --integration` on top of the local dev node:
    - start a local node
    - deploy the target contract
    - run integration tests against its RPC URL
    - clean up unless persistence is requested
-3. Add better test output controls:
+4. Add better test output controls:
    - human verbosity levels
    - optional machine-readable output
    - event / delta snippets on failures
-4. Define the first storage-cost reporting surface:
+5. Define the first storage-cost reporting surface:
    - CLI output shape
    - JSON fields
    - relationship to existing transaction detail and storage deltas
