@@ -134,11 +134,16 @@ and targets the host platform so tests run natively.
 groundhog test                              # run all tests
 groundhog test --match-test test_deposit    # filter by test name
 groundhog test --skip slow                  # skip matching tests
+groundhog test --rerun                      # rerun tests that failed last time
 groundhog test --fail-fast                  # stop the WASM harness on first failure
 groundhog test --show-output                # show captured stdout for passing tests
 groundhog test --no-capture                 # stream test stdout/stderr
 groundhog test --test-threads 1             # set WASM harness thread count
 ```
+
+`groundhog test` records failing libtest names under the package's Cargo
+target directory. `--rerun` reads that cache and runs each previous
+failure as an explicit test filter; successful runs clear the cache.
 
 > **Note:** Plain `cargo test` also works for unit tests that
 > don't need the executor. `groundhog test` is required for

@@ -10,6 +10,8 @@ use std::process::Command;
 pub struct BuildResult {
     pub project_name: String,
     pub project_root: PathBuf,
+    #[serde(skip_serializing)]
+    pub target_directory: PathBuf,
     pub wasm: PathBuf,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spec_json: Option<PathBuf>,
@@ -152,6 +154,7 @@ pub fn build_project(
     Ok(BuildResult {
         project_name: pkg_name.to_string(),
         project_root: metadata.workspace_root,
+        target_directory: metadata.target_directory,
         wasm,
         size_bytes: size,
         optimized: optimize,

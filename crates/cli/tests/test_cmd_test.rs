@@ -215,6 +215,78 @@ fn test_resolves_relative_config_conflicts_from_project_root() {
     );
 }
 
+#[test]
+#[serial]
+fn test_failed_wasm_tests_update_rerun_cache() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(
+        tmp.path().join("Cargo.toml"),
+        "[package]\nname = \"demo-contract\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+    fs::create_dir_all(tmp.path().join(".cargo")).unwrap();
+    fs::write(tmp.path().join(".cargo/contract.toml"), "").unwrap();
+
+    let fake_bin = tmp.path().join("bin");
+    fs::create_dir_all(&fake_bin).unwrap();
+    let cargo = fake_bin.join("cargo");
+    let metadata_json = format!(
+        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract","manifest_path":"{}"}}]}}"#,
+        tmp.path().display(),
+        tmp.path().join("target").display(),
+        tmp.path().join("Cargo.toml").display()
+    );
+    fs::write(
+        &cargo,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = \"metadata\" ]; then\n  printf '%s' '{}'\n  exit 0\nfi\nif [ \"$1\" = \"--config\" ]; then\n  shift 2\nfi\nif [ \"$1\" = \"build\" ]; then\n  /bin/mkdir -p '{}'\n  printf '\\000asm\\001\\000\\000\\000' > '{}'\n  exit 0\nfi\nif [ \"$1\" = \"test\" ]; then\n  printf 'running 1 test\\n'\n  printf 'test tests::fails ... FAILED\\n'\n  exit 101\nfi\nexit 0\n",
+            metadata_json,
+            tmp.path()
+                .join("target/wasm32-unknown-unknown/release")
+                .display(),
+            tmp.path()
+                .join("target/wasm32-unknown-unknown/release/demo_contract.wasm")
+                .display()
+        ),
+    )
+    .unwrap();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&cargo).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&cargo, perms).unwrap();
+    }
+
+    let _cwd = CurrentDirGuard::enter(tmp.path());
+    let _path = PathGuard::set(fake_bin.as_os_str());
+
+    let err = groundhog_cli::test_cmd::run(
+        Some("demo-contract"),
+        &[],
+        &groundhog_cli::artifacts::ArtifactOptions::default(),
+        None,
+        "test",
+        &groundhog_cli::Print::new(true, true),
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(
+            err,
+            groundhog_cli::CliError::CargoFailedWithOutput { code: 101, .. }
+        ),
+        "expected CargoFailedWithOutput(101), got: {err:?}"
+    );
+    let cache_path = tmp
+        .path()
+        .join("target/groundhog/test-failures/demo-contract.json");
+    let cache = fs::read_to_string(cache_path).unwrap();
+    assert!(cache.contains("\"package\": \"demo-contract\""));
+    assert!(cache.contains("\"tests::fails\""));
+}
+
 struct CurrentDirGuard {
     previous: PathBuf,
 }

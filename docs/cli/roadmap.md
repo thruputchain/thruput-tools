@@ -170,7 +170,7 @@ Maintenance rules:
 - [x] `groundhog test --no-capture`
 - [x] `groundhog test --test-threads`
 - [x] `groundhog test --skip`
-- [ ] `groundhog test --rerun`
+- [x] `groundhog test --rerun`
 - [ ] `groundhog test --watch`
 - [ ] Better test output controls / machine-readable output
 - [ ] Storage cost reporting
@@ -332,22 +332,12 @@ Goal: make `groundhog test` fast, inspectable, and CI-friendly.
 ### Deliverables
 
 1. **Cheap CLI wins**
-   - Shipped:
-   - `--match-test`
-   - `--fail-fast`
-   - `--show-output`
-   - `--no-capture`
-   - `--test-threads`
-   - `--skip`
-   - Remaining:
-   - `--rerun`
-   - `--watch`
-   - `--integration`
+   - Shipped: `--match-test`, `--fail-fast`, `--show-output`,
+     `--no-capture`, `--test-threads`, `--skip`, `--rerun`
+   - Remaining: `--watch`, `--integration`
    - When the local node exists, `--integration` should orchestrate:
-   - start local node
-   - deploy contract(s)
-   - run integration tests
-   - clean up local state unless persistence is requested
+     start local node, deploy contract(s), run integration tests, and
+     clean up local state unless persistence is requested
 
 2. **Output controls**
    - verbosity levels
@@ -390,24 +380,20 @@ but the contract-spec work in Phase 1 should preserve a clean path to it.
 
 The next concrete batch should continue Phase 3 testing DX:
 
-1. Add `groundhog test --rerun`:
-   - store the previous failing test names in a project-local cache
-   - rerun only those names on the next invocation
-   - clear or update the cache after each run
-2. Add `groundhog test --watch`:
+1. Add `groundhog test --watch`:
    - watch contract source, tests, and config files
    - rerun `groundhog test` with debounce
    - optionally pair with `--rerun` once the failure cache exists
-3. Add `groundhog test --integration` on top of the local dev node:
+2. Add `groundhog test --integration` on top of the local dev node:
    - start a local node
    - deploy the target contract
    - run integration tests against its RPC URL
    - clean up unless persistence is requested
-4. Add better test output controls:
+3. Add better test output controls:
    - human verbosity levels
    - optional machine-readable output
    - event / delta snippets on failures
-5. Define the first storage-cost reporting surface:
+4. Define the first storage-cost reporting surface:
    - CLI output shape
    - JSON fields
    - relationship to existing transaction detail and storage deltas
