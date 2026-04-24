@@ -1,4 +1,4 @@
-//! `groundhog node` — start the local dev node.
+//! `groundhog node` — start the experimental local dev node.
 
 use crate::{CliError, Print};
 
@@ -9,7 +9,7 @@ use groundhog_rpc_api_types::dev::DevAccount;
 #[cfg(feature = "dev-node")]
 use serde_json::json;
 
-/// Start the dev node server.
+/// Start the experimental dev node server.
 ///
 /// Requires the `dev-node` feature.
 #[cfg(feature = "dev-node")]
@@ -54,8 +54,13 @@ pub fn run(
             ))?;
         } else {
             // Print startup banner
-            print.status("Groundhog Dev Node v0.1.0");
+            print.status("Groundhog Dev Node v0.1.0 (experimental)");
             print.status("Chain: groundhog-local (dev mode)");
+            print.warn(
+                "prototype backend: native_exec/test_ffi. \
+                 Latest-state reads are supported; snapshot, revert, \
+                 and time travel are not yet supported.",
+            );
             print.status("");
             print.status("Available Accounts");
             print.status("==================");
@@ -142,6 +147,16 @@ fn startup_payload(addr: std::net::SocketAddr, accounts: &[DevAccount]) -> serde
     json!({
         "chain": "groundhog-local",
         "mode": "dev",
+        "experimental": true,
+        "backend": {
+            "kind": "native_exec_test_ffi",
+            "stability": "prototype",
+            "limitations": [
+                "latest-state reads only",
+                "snapshot/revert not supported",
+                "time travel not supported"
+            ],
+        },
         "rpc_url": format!("http://{addr}"),
         "accounts": accounts,
     })
@@ -197,6 +212,8 @@ mod tests {
 
         let payload = startup_payload(addr, &[account]);
         assert_eq!(payload["rpc_url"], "http://127.0.0.1:9545");
+        assert_eq!(payload["experimental"], true);
+        assert_eq!(payload["backend"]["kind"], "native_exec_test_ffi");
         assert_eq!(
             payload["accounts"]
                 .as_array()

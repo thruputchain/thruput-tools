@@ -4,6 +4,23 @@ use serde_json::json;
 use std::env;
 use std::process::Command;
 
+/// Explicit controls for the `test_wasm` harness invocation.
+#[derive(Debug, Clone, Default)]
+pub struct TestOptions {
+    /// Run only tests whose names contain this substring.
+    pub match_test: Option<String>,
+    /// Stop the WASM test harness after the first test failure.
+    pub fail_fast: bool,
+    /// Show captured stdout for successful tests.
+    pub show_output: bool,
+    /// Do not capture stdout/stderr from tests.
+    pub no_capture: bool,
+    /// Number of WASM test harness threads to use.
+    pub test_threads: Option<usize>,
+    /// Skip tests whose names contain these substrings.
+    pub skip: Vec<String>,
+}
+
 /// Build the contract to WASM, then run WASM tests
 /// against the mock executor with real abort semantics.
 ///
@@ -12,6 +29,28 @@ use std::process::Command;
 /// as what would happen on-chain.
 pub fn run(
     package: Option<&str>,
+    cargo_args: &[String],
+    artifacts: &ArtifactOptions,
+    explicit_profile: Option<&str>,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
+    run_with_options(
+        package,
+        &TestOptions::default(),
+        cargo_args,
+        artifacts,
+        explicit_profile,
+        cmd,
+        print,
+    )
+}
+
+/// Build the contract to WASM, then run WASM tests with explicit
+/// harness controls.
+pub fn run_with_options(
+    package: Option<&str>,
+    options: &TestOptions,
     cargo_args: &[String],
     artifacts: &ArtifactOptions,
     explicit_profile: Option<&str>,
@@ -54,6 +93,8 @@ pub fn run(
         .arg("--")
         .arg("--include-ignored");
 
+    apply_harness_options(&mut cargo_cmd, options);
+
     artifacts::ensure_no_target_dir_passthrough_conflicts(artifacts, &root, cargo_args)?;
     artifacts.apply_to_command(&mut cargo_cmd);
 
@@ -74,4 +115,77 @@ pub fn run(
         }),
     ))?;
     Ok(())
+}
+
+fn apply_harness_options(cargo_cmd: &mut Command, options: &TestOptions) {
+    // Everything here is appended after cargo's `--` separator and is
+    // therefore scoped to the `test_wasm` libtest harness.
+    if options.fail_fast {
+        cargo_cmd.arg("--fail-fast");
+    }
+    if options.show_output {
+        cargo_cmd.arg("--show-output");
+    }
+    if options.no_capture {
+        cargo_cmd.arg("--no-capture");
+    }
+    if let Some(threads) = options.test_threads {
+        cargo_cmd.arg("--test-threads").arg(threads.to_string());
+    }
+    if let Some(filter) = &options.match_test {
+        cargo_cmd.arg(filter);
+    }
+    for skip in &options.skip {
+        cargo_cmd.arg("--skip").arg(skip);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TestOptions, apply_harness_options};
+    use std::process::Command;
+
+    #[test]
+    fn default_harness_options_add_no_args() {
+        let mut command = Command::new("cargo");
+
+        apply_harness_options(&mut command, &TestOptions::default());
+
+        assert_eq!(command.get_args().count(), 0);
+    }
+
+    #[test]
+    fn harness_options_map_to_libtest_args() {
+        let mut command = Command::new("cargo");
+        let options = TestOptions {
+            match_test: Some("counter".into()),
+            fail_fast: true,
+            show_output: true,
+            no_capture: true,
+            test_threads: Some(1),
+            skip: vec!["slow".into(), "flaky".into()],
+        };
+
+        apply_harness_options(&mut command, &options);
+
+        let args: Vec<_> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            args,
+            vec![
+                "--fail-fast",
+                "--show-output",
+                "--no-capture",
+                "--test-threads",
+                "1",
+                "counter",
+                "--skip",
+                "slow",
+                "--skip",
+                "flaky",
+            ]
+        );
+    }
 }
