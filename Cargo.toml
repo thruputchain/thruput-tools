@@ -102,9 +102,9 @@ missing-panics-doc = "allow"
 overflow-checks = true
 
 [patch."sparse+https://groundhog.dev/crates/api/v1/crates/"]
-groundhog-native-exec = { path = "../sdk_rs/native_exec" }
-groundhog-sys = { path = "../sdk_rs/groundhog-sys" }
-groundhog-contract-spec = { path = "../sdk_rs/groundhog-contract-spec" }
-groundhog-spec-tool = { path = "../sdk_rs/groundhog-spec-tool" }
-groundhog-event = { path = "../sdk_rs/groundhog-event" }
-groundhog-storage-cost = { path = "../sdk_rs/storage-cost" }
+groundhog-native-exec = { git = "https://github.com/groundhogchain/sdk_rs", branch = "mm/sdk-0.11.4-storage-read" }
+groundhog-sys = { git = "https://github.com/groundhogchain/sdk_rs", branch = "mm/sdk-0.11.4-storage-read" }
+groundhog-contract-spec = { git = "https://github.com/groundhogchain/sdk_rs", branch = "mm/sdk-0.11.4-storage-read" }
+groundhog-spec-tool = { git = "https://github.com/groundhogchain/sdk_rs", branch = "mm/sdk-0.11.4-storage-read" }
+groundhog-event = { git = "https://github.com/groundhogchain/sdk_rs", branch = "mm/sdk-0.11.4-storage-read" }
+groundhog-storage-cost = { git = "https://github.com/groundhogchain/sdk_rs", branch = "mm/sdk-0.11.4-storage-read" }
