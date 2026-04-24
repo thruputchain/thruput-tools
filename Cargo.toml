@@ -100,11 +100,3 @@ missing-panics-doc = "allow"
 
 [profile.release]
 overflow-checks = true
-
-[patch."sparse+https://groundhog.dev/crates/api/v1/crates/"]
-groundhog-native-exec = { git = "https://github.com/groundhogchain/sdk_rs", branch = "mm/sdk-0.11.4-storage-read" }
-groundhog-sys = { git = "https://github.com/groundhogchain/sdk_rs", branch = "mm/sdk-0.11.4-storage-read" }
-groundhog-contract-spec = { git = "https://github.com/groundhogchain/sdk_rs", branch = "mm/sdk-0.11.4-storage-read" }
-groundhog-spec-tool = { git = "https://github.com/groundhogchain/sdk_rs", branch = "mm/sdk-0.11.4-storage-read" }
-groundhog-event = { git = "https://github.com/groundhogchain/sdk_rs", branch = "mm/sdk-0.11.4-storage-read" }
-groundhog-storage-cost = { git = "https://github.com/groundhogchain/sdk_rs", branch = "mm/sdk-0.11.4-storage-read" }

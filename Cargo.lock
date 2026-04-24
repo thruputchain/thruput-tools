@@ -983,7 +983,8 @@ dependencies = [
 [[package]]
 name = "groundhog-contract-spec"
 version = "0.11.4"
-source = "git+https://github.com/groundhogchain/sdk_rs?branch=mm%2Fsdk-0.11.4-storage-read#c161821a5242b9b6ca7bcb9c99e4633040aab2dc"
+source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
+checksum = "c0c1ebe9bdd72aede5bc7065da70d35b14f9f0ab9d64d11ce33cee51d6a65b83"
 dependencies = [
  "groundhog-spec",
  "groundhog-xdr",
@@ -1028,7 +1029,8 @@ dependencies = [
 [[package]]
 name = "groundhog-event"
 version = "0.11.4"
-source = "git+https://github.com/groundhogchain/sdk_rs?branch=mm%2Fsdk-0.11.4-storage-read#c161821a5242b9b6ca7bcb9c99e4633040aab2dc"
+source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
+checksum = "9099d80abb5151389a1aae30429400e7f18d0b731963b86bf20170810e0bc547"
 dependencies = [
  "groundhog-xdr",
  "xdrs",
@@ -1037,7 +1039,8 @@ dependencies = [
 [[package]]
 name = "groundhog-native-exec"
 version = "0.11.4"
-source = "git+https://github.com/groundhogchain/sdk_rs?branch=mm%2Fsdk-0.11.4-storage-read#c161821a5242b9b6ca7bcb9c99e4633040aab2dc"
+source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
+checksum = "3713337958a7e9a0f8b17cd26284556074d2cb2eb86a6a38229152ae397230a9"
 dependencies = [
  "groundhog-event",
  "groundhog-storage-cost",
@@ -1155,7 +1158,8 @@ dependencies = [
 [[package]]
 name = "groundhog-spec-tool"
 version = "0.11.4"
-source = "git+https://github.com/groundhogchain/sdk_rs?branch=mm%2Fsdk-0.11.4-storage-read#c161821a5242b9b6ca7bcb9c99e4633040aab2dc"
+source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
+checksum = "6faad0dc0f7dd2c263c5b981b2cb4ba06670b44dc59dd47360de39821a30da0e"
 dependencies = [
  "groundhog-contract-spec",
  "serde_json",
@@ -1168,7 +1172,8 @@ dependencies = [
 [[package]]
 name = "groundhog-storage-cost"
 version = "0.11.4"
-source = "git+https://github.com/groundhogchain/sdk_rs?branch=mm%2Fsdk-0.11.4-storage-read#c161821a5242b9b6ca7bcb9c99e4633040aab2dc"
+source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
+checksum = "458c47dceb6ef5cc2412826fcd042c04b9dd0b85ea57b063fd6e6e3fc55baada"
 dependencies = [
  "groundhog-xdr",
  "xdrs",
@@ -1177,7 +1182,8 @@ dependencies = [
 [[package]]
 name = "groundhog-sys"
 version = "0.11.4"
-source = "git+https://github.com/groundhogchain/sdk_rs?branch=mm%2Fsdk-0.11.4-storage-read#c161821a5242b9b6ca7bcb9c99e4633040aab2dc"
+source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
+checksum = "8128552fe83892cebc479f996e83849ac1cd1a6b242d74349255f3b18039a059"
 dependencies = [
  "bindgen",
  "cmake",
