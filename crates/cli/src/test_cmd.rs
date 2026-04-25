@@ -2,14 +2,19 @@ use crate::artifacts::{self, ArtifactOptions};
 use crate::{CliError, Print};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::env;
+use std::ffi::OsStr;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
+use std::time::{Duration, SystemTime};
 
 const FAILURE_CACHE_VERSION: u8 = 1;
+const WATCH_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const WATCH_DEBOUNCE: Duration = Duration::from_millis(350);
 
 /// Explicit controls for the `test_wasm` harness invocation.
 #[derive(Debug, Clone, Default)]
@@ -22,6 +27,8 @@ pub struct TestOptions {
     pub skip: Vec<String>,
     /// Rerun tests that failed in the previous WASM test run.
     pub rerun: bool,
+    /// Keep rerunning WASM tests when project files change.
+    pub watch: bool,
     /// Boolean controls forwarded to the WASM test harness.
     pub harness: TestHarnessOptions,
 }
@@ -68,6 +75,23 @@ struct TestCommandContext<'a> {
     print: &'a Print,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WatchSnapshot {
+    files: BTreeMap<PathBuf, WatchFileFingerprint>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WatchFileFingerprint {
+    len: u64,
+    modified: Option<SystemTime>,
+}
+
+#[derive(Debug, Clone)]
+struct WatchContext {
+    root: PathBuf,
+    ignored_dirs: Vec<PathBuf>,
+}
+
 /// Build the contract to WASM, then run WASM tests
 /// against the mock executor with real abort semantics.
 ///
@@ -104,6 +128,74 @@ pub fn run_with_options(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
+    if options.watch {
+        return run_watch(
+            package,
+            options,
+            cargo_args,
+            artifacts,
+            explicit_profile,
+            cmd,
+            print,
+        );
+    }
+
+    run_once_with_options(
+        package,
+        options,
+        cargo_args,
+        artifacts,
+        explicit_profile,
+        cmd,
+        print,
+    )
+}
+
+fn run_watch(
+    package: Option<&str>,
+    options: &TestOptions,
+    cargo_args: &[String],
+    artifacts: &ArtifactOptions,
+    explicit_profile: Option<&str>,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
+    let watch = initial_watch_context(artifacts)?;
+
+    print.status(format_args!(
+        "Watching {} for changes. Press Ctrl-C to stop.",
+        watch.root.display()
+    ));
+
+    loop {
+        if let Err(error) = run_once_with_options(
+            package,
+            options,
+            cargo_args,
+            artifacts,
+            explicit_profile,
+            cmd,
+            print,
+        ) {
+            print.command_error(cmd, &error)?;
+        }
+        let mut snapshot = watch_snapshot(&watch)?;
+
+        print.status("Waiting for changes...");
+        wait_for_watch_change(&watch, &mut snapshot, WATCH_POLL_INTERVAL, WATCH_DEBOUNCE)?;
+        print.status("Change detected; rerunning WASM tests...");
+    }
+}
+
+fn run_once_with_options(
+    package: Option<&str>,
+    options: &TestOptions,
+    cargo_args: &[String],
+    artifacts: &ArtifactOptions,
+    explicit_profile: Option<&str>,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
     // Build the WASM contract (validates project root,
     // checks for cargo on PATH, etc.)
     let build =
@@ -117,7 +209,15 @@ pub fn run_with_options(
     let rerun_filters = filter_rerun_tests(options, &cached_tests);
 
     if options.rerun && rerun_filters.is_empty() {
-        return finish_empty_rerun(cmd, &build, &profile, &cache_path, &cached_tests, print);
+        return finish_empty_rerun(
+            cmd,
+            &build,
+            &profile,
+            &cache_path,
+            &cached_tests,
+            options.watch,
+            print,
+        );
     }
     print_test_status(options, rerun_filters.len(), print);
 
@@ -181,9 +281,180 @@ pub fn run_with_options(
                 "executed_tests": executed_tests,
                 "failed_tests": failed_tests,
             },
+            "watch": {
+                "enabled": options.watch,
+            },
         }),
     ))?;
     Ok(())
+}
+
+fn initial_watch_context(artifacts: &ArtifactOptions) -> Result<WatchContext, CliError> {
+    let cwd = std::env::current_dir()?;
+    let metadata = crate::build::cargo_metadata_with_artifacts(artifacts);
+    let root = match &metadata {
+        Ok(metadata) => metadata.workspace_root.clone(),
+        Err(_) => cwd,
+    };
+    let mut ignored_dirs = vec![root.join("target")];
+    if let Ok(metadata) = metadata {
+        push_ignored_dir(&root, &mut ignored_dirs, metadata.target_directory);
+    }
+    if let Some(target_dir) = artifacts.target_dir() {
+        push_ignored_dir(&root, &mut ignored_dirs, target_dir.to_path_buf());
+    }
+    Ok(WatchContext { root, ignored_dirs })
+}
+
+fn push_ignored_dir(root: &Path, ignored_dirs: &mut Vec<PathBuf>, path: PathBuf) {
+    let absolute = if path.is_absolute() {
+        path
+    } else {
+        root.join(path)
+    };
+    if !ignored_dirs.contains(&absolute) {
+        ignored_dirs.push(absolute);
+    }
+}
+
+fn wait_for_watch_change(
+    watch: &WatchContext,
+    previous: &mut WatchSnapshot,
+    poll_interval: Duration,
+    debounce: Duration,
+) -> Result<(), CliError> {
+    loop {
+        thread::sleep(poll_interval);
+        let current = watch_snapshot(watch)?;
+        if current == *previous {
+            continue;
+        }
+
+        let mut stable = current;
+        loop {
+            thread::sleep(debounce);
+            let next = watch_snapshot(watch)?;
+            if next == stable {
+                *previous = next;
+                return Ok(());
+            }
+            stable = next;
+        }
+    }
+}
+
+fn watch_snapshot(watch: &WatchContext) -> Result<WatchSnapshot, CliError> {
+    let mut snapshot = WatchSnapshot {
+        files: BTreeMap::new(),
+    };
+    collect_watch_files(watch, &watch.root, &mut snapshot)?;
+    Ok(snapshot)
+}
+
+fn collect_watch_files(
+    watch: &WatchContext,
+    dir: &Path,
+    snapshot: &mut WatchSnapshot,
+) -> Result<(), CliError> {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
+        };
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
+        };
+        if file_type.is_symlink() {
+            continue;
+        }
+        let path = entry.path();
+        if file_type.is_dir() {
+            if !is_ignored_watch_dir(&entry.file_name()) && !is_ignored_watch_path(watch, &path) {
+                collect_watch_files(watch, &path, snapshot)?;
+            }
+        } else if file_type.is_file() && should_watch_file(&watch.root, &path) {
+            let metadata = match entry.metadata() {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error.into()),
+            };
+            let relative = path
+                .strip_prefix(&watch.root)
+                .unwrap_or(&path)
+                .to_path_buf();
+            snapshot.files.insert(
+                relative,
+                WatchFileFingerprint {
+                    len: metadata.len(),
+                    modified: metadata.modified().ok(),
+                },
+            );
+        }
+    }
+    Ok(())
+}
+
+fn is_ignored_watch_dir(name: &OsStr) -> bool {
+    matches!(
+        name.to_str(),
+        Some("target" | ".git" | ".hg" | ".svn" | ".direnv" | "node_modules")
+    )
+}
+
+fn is_ignored_watch_path(watch: &WatchContext, path: &Path) -> bool {
+    watch.ignored_dirs.iter().any(|ignored| path == ignored)
+}
+
+fn should_watch_file(root: &Path, path: &Path) -> bool {
+    let relative = path.strip_prefix(root).unwrap_or(path);
+    if starts_with_dir(relative, ".cargo") {
+        return extension_is(relative, "toml");
+    }
+    if starts_with_dir(relative, "src")
+        || starts_with_dir(relative, "tests")
+        || starts_with_dir(relative, "benches")
+        || starts_with_dir(relative, "examples")
+    {
+        return true;
+    }
+    if matches!(
+        relative.file_name().and_then(OsStr::to_str),
+        Some(
+            "Cargo.toml"
+                | "Cargo.lock"
+                | "groundhog.toml"
+                | "rust-toolchain"
+                | "rust-toolchain.toml"
+        )
+    ) {
+        return true;
+    }
+    extension_is(relative, "rs")
+        || extension_is(relative, "toml")
+        || extension_is(relative, "lock")
+        || extension_is(relative, "json")
+}
+
+fn starts_with_dir(path: &Path, name: &str) -> bool {
+    path.components()
+        .next()
+        .and_then(|component| component.as_os_str().to_str())
+        .is_some_and(|component| component == name)
+}
+
+fn extension_is(path: &Path, expected: &str) -> bool {
+    path.extension()
+        .and_then(OsStr::to_str)
+        .is_some_and(|extension| extension == expected)
 }
 
 fn filter_rerun_tests(options: &TestOptions, cached_tests: &[String]) -> Vec<String> {
@@ -200,6 +471,7 @@ fn finish_empty_rerun(
     profile: &crate::config::ResolvedProfile,
     cache_path: &Path,
     cached_tests: &[String],
+    watch_enabled: bool,
     print: &Print,
 ) -> Result<(), CliError> {
     if cached_tests.is_empty() {
@@ -220,8 +492,12 @@ fn finish_empty_rerun(
                 "enabled": true,
                 "cache_path": cache_path,
                 "cached_tests": cached_tests,
+                "cached_tests_after": cached_tests,
                 "executed_tests": [],
                 "failed_tests": [],
+            },
+            "watch": {
+                "enabled": watch_enabled,
             },
         }),
     ))?;
@@ -588,14 +864,22 @@ fn dedup_tests(tests: impl IntoIterator<Item = String>) -> Vec<String> {
 mod tests {
     use super::{
         FAILURE_CACHE_VERSION, FailureCache, SelectedFilter, TestHarnessOptions, TestOptions,
-        TestRunOutput, apply_harness_options, combined_output, extract_failed_tests,
+        TestRunOutput, WatchContext, apply_harness_options, combined_output, extract_failed_tests,
         failure_cache_path, filter_cached_tests, next_cached_failures, read_failure_cache,
-        should_stop_rerun, update_failure_cache, write_failure_cache,
+        should_stop_rerun, should_watch_file, update_failure_cache, watch_snapshot,
+        write_failure_cache,
     };
     use std::fs;
     use std::path::PathBuf;
     use std::process::Command;
     use tempfile::TempDir;
+
+    fn test_watch_context(root: &std::path::Path) -> WatchContext {
+        WatchContext {
+            root: root.to_path_buf(),
+            ignored_dirs: vec![root.join("target")],
+        }
+    }
 
     #[test]
     fn default_harness_options_add_no_args() {
@@ -621,6 +905,7 @@ mod tests {
             test_threads: Some(1),
             skip: vec!["slow".into(), "flaky".into()],
             rerun: false,
+            watch: false,
             harness: TestHarnessOptions {
                 fail_fast: true,
                 show_output: true,
@@ -680,6 +965,101 @@ mod tests {
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect();
         assert_eq!(args, vec!["--exact", "tests::failed_case"]);
+    }
+
+    #[test]
+    fn watch_filter_includes_sources_tests_and_config() {
+        let root = PathBuf::from("/project");
+
+        assert!(should_watch_file(&root, &root.join("src/lib.rs")));
+        assert!(should_watch_file(
+            &root,
+            &root.join("tests/fixtures/input.txt")
+        ));
+        assert!(should_watch_file(&root, &root.join(".cargo/contract.toml")));
+        assert!(should_watch_file(&root, &root.join("groundhog.toml")));
+        assert!(!should_watch_file(&root, &root.join("README.md")));
+    }
+
+    #[test]
+    fn watch_snapshot_ignores_target_and_tracks_changes() {
+        let tmp = TempDir::new().expect("bug: temp dir should be created");
+        fs::create_dir_all(tmp.path().join("src")).expect("bug: src dir should be created");
+        fs::create_dir_all(tmp.path().join("target")).expect("bug: target dir should be created");
+        fs::write(tmp.path().join("src/lib.rs"), "pub fn old() {}\n")
+            .expect("bug: source should write");
+        fs::write(tmp.path().join("target/generated.rs"), "ignored\n")
+            .expect("bug: target file should write");
+
+        let watch = test_watch_context(tmp.path());
+        let first = watch_snapshot(&watch).expect("bug: watch snapshot should succeed");
+        fs::write(tmp.path().join("src/lib.rs"), "pub fn changed() {}\n")
+            .expect("bug: source should update");
+        let second = watch_snapshot(&watch).expect("bug: watch snapshot should succeed");
+
+        assert!(
+            first
+                .files
+                .contains_key(PathBuf::from("src/lib.rs").as_path())
+        );
+        assert!(
+            !first
+                .files
+                .contains_key(PathBuf::from("target/generated.rs").as_path())
+        );
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn watch_snapshot_ignores_custom_target_dir() {
+        let tmp = TempDir::new().expect("bug: temp dir should be created");
+        fs::create_dir_all(tmp.path().join("src")).expect("bug: src dir should be created");
+        fs::create_dir_all(tmp.path().join("out")).expect("bug: out dir should be created");
+        fs::write(tmp.path().join("src/lib.rs"), "pub fn source() {}\n")
+            .expect("bug: source should write");
+        fs::write(tmp.path().join("out/generated.rs"), "ignored\n")
+            .expect("bug: target file should write");
+        let watch = WatchContext {
+            root: tmp.path().to_path_buf(),
+            ignored_dirs: vec![tmp.path().join("out")],
+        };
+
+        let snapshot = watch_snapshot(&watch).expect("bug: watch snapshot should succeed");
+
+        assert!(
+            snapshot
+                .files
+                .contains_key(PathBuf::from("src/lib.rs").as_path())
+        );
+        assert!(
+            !snapshot
+                .files
+                .contains_key(PathBuf::from("out/generated.rs").as_path())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn watch_snapshot_skips_symlinked_directories() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = TempDir::new().expect("bug: temp dir should be created");
+        let linked_target = tmp.path().join("linked-target");
+        fs::create_dir_all(linked_target.join("src"))
+            .expect("bug: linked target src dir should be created");
+        fs::write(linked_target.join("src/lib.rs"), "pub fn linked() {}\n")
+            .expect("bug: linked source should write");
+        symlink(&linked_target, tmp.path().join("linked"))
+            .expect("bug: directory symlink should be created");
+        let watch = test_watch_context(tmp.path());
+
+        let snapshot = watch_snapshot(&watch).expect("bug: watch snapshot should succeed");
+
+        assert!(
+            !snapshot
+                .files
+                .contains_key(PathBuf::from("linked/src/lib.rs").as_path())
+        );
     }
 
     #[test]

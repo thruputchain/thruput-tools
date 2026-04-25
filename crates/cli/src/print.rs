@@ -90,6 +90,24 @@ impl Print {
         }))
     }
 
+    /// Write a command error using the active output mode.
+    ///
+    /// This is used by long-running commands that need to report
+    /// multiple failures without returning immediately.
+    pub fn command_error(&self, command: &str, error: &CliError) -> Result<(), CliError> {
+        if self.json {
+            return self.error(command, error);
+        }
+
+        let mut stderr = io::stderr();
+        writeln!(stderr, "error: {error}")?;
+        if let Some(hint) = error.hint() {
+            writeln!(stderr)?;
+            writeln!(stderr, "  hint: {hint}")?;
+        }
+        Ok(())
+    }
+
     #[allow(clippy::unused_self)]
     fn write_json_to_stderr(&self, value: &impl Serialize) -> Result<(), CliError> {
         let mut stderr = io::stderr();
