@@ -130,6 +130,9 @@ enum Command {
         /// Skip tests whose names contain this substring
         #[arg(long)]
         skip: Vec<String>,
+        /// Rerun tests that failed in the previous WASM test run
+        #[arg(long)]
+        rerun: bool,
         /// Config profile to use
         #[arg(
             long = "profile",
@@ -324,6 +327,7 @@ fn main() {
             no_capture,
             test_threads,
             skip,
+            rerun,
             profile,
             artifacts,
             cargo_args,
@@ -336,11 +340,14 @@ fn main() {
                 );
                 let options = groundhog_cli::test_cmd::TestOptions {
                     match_test,
-                    fail_fast,
-                    show_output,
-                    no_capture,
                     test_threads,
                     skip,
+                    rerun,
+                    harness: groundhog_cli::test_cmd::TestHarnessOptions {
+                        fail_fast,
+                        show_output,
+                        no_capture,
+                    },
                 };
                 groundhog_cli::test_cmd::run_with_options(
                     package.as_deref(),
