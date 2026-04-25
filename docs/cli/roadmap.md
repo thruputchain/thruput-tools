@@ -171,7 +171,7 @@ Maintenance rules:
 - [x] `groundhog test --test-threads`
 - [x] `groundhog test --skip`
 - [x] `groundhog test --rerun`
-- [ ] `groundhog test --watch`
+- [x] `groundhog test --watch`
 - [ ] Better test output controls / machine-readable output
 - [ ] Storage cost reporting
 - [ ] `groundhog inspect`
@@ -333,8 +333,9 @@ Goal: make `groundhog test` fast, inspectable, and CI-friendly.
 
 1. **Cheap CLI wins**
    - Shipped: `--match-test`, `--fail-fast`, `--show-output`,
-     `--no-capture`, `--test-threads`, `--skip`, `--rerun`
-   - Remaining: `--watch`, `--integration`
+     `--no-capture`, `--test-threads`, `--skip`, `--rerun`,
+     `--watch`
+   - Remaining: `--integration`
    - When the local node exists, `--integration` should orchestrate:
      start local node, deploy contract(s), run integration tests, and
      clean up local state unless persistence is requested
@@ -380,20 +381,16 @@ but the contract-spec work in Phase 1 should preserve a clean path to it.
 
 The next concrete batch should continue Phase 3 testing DX:
 
-1. Add `groundhog test --watch`:
-   - watch contract source, tests, and config files
-   - rerun `groundhog test` with debounce
-   - optionally pair with `--rerun` once the failure cache exists
-2. Add `groundhog test --integration` on top of the local dev node:
+1. Add `groundhog test --integration` on top of the local dev node:
    - start a local node
    - deploy the target contract
    - run integration tests against its RPC URL
    - clean up unless persistence is requested
-3. Add better test output controls:
+2. Add better test output controls:
    - human verbosity levels
    - optional machine-readable output
    - event / delta snippets on failures
-4. Define the first storage-cost reporting surface:
+3. Define the first storage-cost reporting surface:
    - CLI output shape
    - JSON fields
    - relationship to existing transaction detail and storage deltas

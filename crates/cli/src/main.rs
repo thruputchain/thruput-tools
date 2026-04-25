@@ -133,6 +133,11 @@ enum Command {
         /// Rerun tests that failed in the previous WASM test run
         #[arg(long)]
         rerun: bool,
+        /// Rerun WASM tests when project files change.
+        ///
+        /// With --json, emits one newline-delimited JSON record per run.
+        #[arg(long)]
+        watch: bool,
         /// Config profile to use
         #[arg(
             long = "profile",
@@ -328,6 +333,7 @@ fn main() {
             test_threads,
             skip,
             rerun,
+            watch,
             profile,
             artifacts,
             cargo_args,
@@ -343,6 +349,7 @@ fn main() {
                     test_threads,
                     skip,
                     rerun,
+                    watch,
                     harness: groundhog_cli::test_cmd::TestHarnessOptions {
                         fail_fast,
                         show_output,
@@ -427,16 +434,8 @@ fn main() {
         if matches!(e, groundhog_cli::CliError::StatusHasWarnings) {
             std::process::exit(1);
         }
-        if print.is_json() {
-            if let Err(json_error) = print.error(cmd_name, &e) {
-                eprintln!("error: {json_error}");
-            }
-        } else {
-            eprintln!("error: {e}");
-            if let Some(hint) = e.hint() {
-                eprintln!();
-                eprintln!("  hint: {hint}");
-            }
+        if let Err(print_error) = print.command_error(cmd_name, &e) {
+            eprintln!("error: {print_error}");
         }
         std::process::exit(1);
     }

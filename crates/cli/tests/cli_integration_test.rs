@@ -319,6 +319,7 @@ fn test_help_mentions_target_dir() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("--target-dir"));
+    assert!(stdout.contains("--watch"));
 }
 
 #[test]
