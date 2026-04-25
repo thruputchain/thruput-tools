@@ -16,6 +16,13 @@ As of 2026-04-24, the durable backend direction is documented in
 `docs/cli/specs/2026-04-24-embedded-dev-node-backend.md` and
 `docs/cli/plans/2026-04-24-embedded-dev-node-backend.md`.
 
+The Rust-side aperture that ties the dev-node to the chuckd-rs coordinator,
+the gateway, and any future embedded backend is captured in
+[`2026-04-24-dev-node-layering.md`](2026-04-24-dev-node-layering.md). That
+companion doc proposes consuming `chuckd_scheduler::SchedulerClient` as
+the dev-node's backend trait, with three swappable implementations (TCP
+against `hogd --no-chuckd`, embedded over libhogdev, and a testkit mock).
+
 The important distinction: the prototype is not a mock executor. It reaches
 the real hogd execution machinery. The weak point is the test-harness
 lifecycle contract: current `test_ffi` lacks durable local-node semantics
