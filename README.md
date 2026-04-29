@@ -16,6 +16,7 @@ server layer, transaction signing library, and typed client.
 | [`rpc-api`](crates/rpc-api/) | Shared jsonrpsee trait definitions |
 | [`rpc-server`](crates/rpc-server/) | Shared server-side JSON-RPC implementation and validation |
 | [`dev-node`](crates/dev-node/) | Experimental local JSON-RPC dev node (`native_exec` prototype backend) |
+| [`node-supervisor`](crates/node-supervisor/) | Scaffold for the future hogd-dev-backed local node supervisor |
 | [`e2e-tests`](crates/e2e-tests/) | Process-level JSON-RPC smoke tests |
 | [`bench`](crates/bench/) | Benchmark harnesses |
 
@@ -66,6 +67,8 @@ cargo fmt --check                       # format check
 - [CLI documentation](crates/cli/README.md)
 - [CLI roadmap](docs/cli/roadmap.md)
 - [Local dev-node prototype](docs/cli/localdev-rpc-node.md)
+- [Local node hogd-dev supervisor plan](docs/cli/plans/2026-04-29-local-node-hogd-dev-supervisor.md)
+- [Hogd-dev process contract proposal](docs/cli/specs/2026-04-29-hogd-dev-process-contract.md)
 - [Embedded dev-node backend spec](docs/cli/specs/2026-04-24-embedded-dev-node-backend.md)
 - [Embedded dev-node backend plan](docs/cli/plans/2026-04-24-embedded-dev-node-backend.md)
 - [RPC server extraction plan](docs/cli/plans/2026-04-28-rpc-server-extraction.md)
