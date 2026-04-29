@@ -37,8 +37,10 @@ The Rust side keeps the public JSON-RPC surface. The hogd side owns local
 execution, mempool, auth/replay, HogDB lifecycle, event/indexer read state,
 and dev-only state controls.
 
-This is a process boundary, not an FFI boundary. It preserves crash isolation
-and avoids a C ABI while still giving users a single `groundhog node` command.
+The idea here is a process boundary, not an FFI boundary. It preserves crash
+isolation and avoids a C ABI while still giving users a single `groundhog node`
+command without havingt to be a full multi-process supervisor. In theory, this
+might be the sweet spot?
 
 The "single process" claim is about the hogd-dev packaging boundary that Rust
 supervises. Internally, hogd-dev still contains multiple hogd components with
@@ -92,14 +94,12 @@ That is much closer to "local node" than `NativeContractTestFramework` or
 
 ## Non-decisions
 
-This document intentionally does **not** decide whether `chuckd-rs` should be
-merged into this repository. That may still be the right maintenance move, but
-it is separate from the runtime boundary.
-
 This document also does **not** rule out a future `libhogdev` FFI backend. It
 argues that the first durable dev-node target can be a hogd-owned subprocess.
 FFI should remain contingent on a real need such as high-frequency per-test
-embedding or a hard single-binary distribution requirement.
+embedding or a hard single-binary distribution requirement. Or perhaps a
+proof point that is a better trade off of where the complexity boundary
+lives.
 
 ## The gateway relationship
 
@@ -204,8 +204,18 @@ coordinator/mempool write path:
 - `validate`
 - `commit`
 
-But it is not the entire dev-node backend. The public JSON-RPC surface also
-needs reads and dev controls.
+This implies promoting `chuckd_scheduler` from a chuckd-rs internal crate to
+a shareable Rust crate consumed by groundhog-rpc (dev-node and gateway), the
+chuckd-rs coordinator, and any future embedded backend. The trait, the
+`TcpSchedulerClient` impl, and the testkit mock should all be reachable from
+one dependency. The crate's long-term home is open — it can stay in chuckd-rs
+with groundhog-rpc taking a dep, move into groundhog-rpc if this becomes the
+canonical Rust home for hogd-facing protocol code, or live in a shared
+workspace crate. Short-term default: leave it in chuckd-rs and depend on it
+from here. See the open question below.
+
+But `SchedulerClient` is not the entire dev-node backend. The public JSON-RPC
+surface also needs reads and dev controls.
 
 The Rust server should depend on a small set of backend traits:
 
@@ -468,6 +478,13 @@ observable node state, not just storage.
 - Keep current `native_exec` dev-node behavior behind adapters so users lose
   no functionality while the hogd-dev backend is built.
 
+Stage 1 stands on its own merits. Even if hogd-dev never ships, extracting
+the shared RPC server and backend traits removes the duplicated
+`GroundhogApiServer` implementation across `crates/gateway` and
+`crates/dev-node`, and gives the production gateway a cleaner internal seam
+between handler logic and backend adapters. The work de-risks the overall
+proposal: at worst, the codebase ends up with a better-factored gateway.
+
 ### Stage 2 — Build hogd-dev prototype
 
 - Extract `MempoolTestInfra` wiring into supported non-test hogd code.
@@ -535,47 +552,61 @@ boundary without requiring users to manually install hogd.
 
 ## Open questions
 
-1. **Name and ownership.**
+1. **Hogd-dev lifecycle commitment. (Gating.)**
+   Which hogd owners sign up for the supported startup/shutdown/readiness
+   contract, and what cleanup is required before it can be exposed to CLI
+   users? This is the single largest external dependency in the proposal —
+   without an answer here, Stages 2 and 4 are aspirational.
+
+2. **Name and ownership.**
    Is the child process `hogd-dev`, `hogd dev-node`, or a mode of an existing
    hogd binary?
 
-2. **Read-plane implementation.**
+3. **Read-plane implementation.**
    Should hogd-dev expose one composite dev-read endpoint backed by HogDB for
    latest state and an indexer-like store for committed receipts/events, or
    should those stay as separate internal APIs?
 
-3. **`sendRawTransaction` dev semantics.**
+4. **`sendRawTransaction` dev semantics.**
    Default should preserve production-style submit-and-poll semantics. Is an
    explicit `--strict-advance` mode worth adding for fast local feedback?
 
-4. **Genesis and accounts.**
+5. **Genesis and accounts.**
    Proposed default: Rust generates deterministic account keys and passes
    account/genesis config to hogd-dev. Confirm hogd owners are comfortable
    with that split.
 
-5. **Snapshot scope.**
+6. **Snapshot scope.**
    Are snapshots whole-node observable state, or only HogDB state?
 
-6. **State persistence.**
+7. **State persistence.**
    Is v1 ephemeral only, or should the hogd-dev process support a ledger/state
    directory from the beginning?
 
-7. **Backend trait granularity.**
+8. **Backend trait granularity.**
    Should `SubmitPlane`, `ChainPlane`, and `ReadPlane` be separate traits, or
    one `NodeBackend` trait with grouped methods?
 
-8. **Production gateway reuse.**
+9. **Production gateway reuse.**
    How much of `crates/gateway` should become `crates/rpc-server` before the
    dev backend exists?
 
-9. **Conformance tests.**
-   Where do tests live that assert the same JSON-RPC behavior against:
-   production gateway mocks, current native-exec backend, and hogd-dev?
+10. **Conformance tests.**
+    Where do tests live that assert the same JSON-RPC behavior against:
+    production gateway mocks, current native-exec backend, and hogd-dev?
 
-10. **Hogd-dev lifecycle commitment.**
-    Which hogd owners sign up for the supported startup/shutdown/readiness
-    contract, and what cleanup is required before it can be exposed to CLI
-    users?
+11. **Long-term home for `chuckd_scheduler`.**
+    - Option A: stays in chuckd-rs; groundhog-rpc takes a registry/path dep.
+      Simplest; tightest coupling to chuckd-rs's release cadence.
+    - Option B: moves to groundhog-rpc; chuckd-rs takes a dep. Sensible if
+      groundhog-rpc becomes the canonical Rust-side home for hogd-facing
+      protocol code.
+    - Option C: moves to a shared workspace crate outside both repos.
+      Cleanest ownership story; most upfront packaging work.
+
+    Short-term default: A. Revisit when the trait shape needs to change in
+    lockstep with both consumers, or when a third consumer (gateway,
+    embedded backend) makes shared ownership the obvious shape.
 
 ## Decision points before implementation
 
