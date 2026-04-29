@@ -1,7 +1,7 @@
 //! `groundhog_getContractEvents` handler.
 //!
 //! Queries hogd indexer (`get_contract_events`) via x23 RPC.
-//! The gateway enforces height range limits since hogd has none.
+//! Shared RPC-layer code validates height ranges before dispatching here.
 
 use groundhog_rpc_api_types::events::IdentifiedEvent;
 use groundhog_rpc_api_types::hex::Hex0x;
@@ -27,22 +27,6 @@ pub async fn get_contract_events(
     from_height: BlockHeight,
     to_height: BlockHeight,
 ) -> Result<Vec<IdentifiedEvent>, GatewayError> {
-    // Validate range.
-    if to_height < from_height {
-        return Err(GatewayError::InvalidParam(
-            "to_height must be >= from_height".into(),
-        ));
-    }
-
-    let span = (*to_height).saturating_sub(*from_height);
-    #[allow(clippy::cast_possible_wrap)]
-    if span > ctx.config.max_event_height_range as i64 {
-        return Err(GatewayError::RangeTooLarge(format!(
-            "height range {} exceeds maximum {}",
-            span, ctx.config.max_event_height_range,
-        )));
-    }
-
     let client = ctx
         .indexer
         .read()

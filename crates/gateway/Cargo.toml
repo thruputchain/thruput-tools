@@ -25,15 +25,14 @@ workspace = true
 [dependencies]
 groundhog-rpc-api = { workspace = true }
 groundhog-rpc-api-types = { workspace = true }
+groundhog-rpc-server = { workspace = true }
 groundhog-xdr = { workspace = true }
 groundhog_indexer = { workspace = true }
 groundhog_scheduler = { workspace = true }
 rpc_driver = { workspace = true }
-xdrs = { workspace = true }
 xdr-common = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
-hex = { workspace = true }
 jsonrpsee = { workspace = true }
 axum = { workspace = true }
 tokio = { workspace = true }
@@ -46,5 +45,4 @@ tracing-subscriber = { workspace = true }
 prometheus = { workspace = true }
 clap = { workspace = true }
 toml = { workspace = true }
-sha2 = { workspace = true }
 thiserror = { workspace = true }
