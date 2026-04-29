@@ -51,6 +51,7 @@ const MAX_EVENT_RANGE: u64 = 100;
 #[derive(Clone, Default)]
 struct ScriptedBackend {
     submitted: Arc<Mutex<Vec<ValidatedTransaction>>>,
+    contract_events_calls: Arc<Mutex<u32>>,
     /// `Some(n)` makes `pending_transaction_count` answer `n`; `None`
     /// makes it return `NotImplemented`. Mirrors the gateway/dev-node
     /// capability split.
@@ -130,6 +131,7 @@ impl ReadPlane for ScriptedBackend {
         _from_height: BlockHeight,
         _to_height: BlockHeight,
     ) -> Result<Vec<IdentifiedEvent>, RpcServerError> {
+        *self.contract_events_calls.lock().await += 1;
         Ok(vec![])
     }
 }
@@ -224,6 +226,7 @@ async fn unknown_receipt_returns_none_for_all_shapes() {
 #[tokio::test]
 async fn event_range_validation_runs_before_dispatch_for_all_shapes() {
     for backend in all_shapes() {
+        let calls = backend.contract_events_calls.clone();
         let svc = server(backend);
 
         let inverted = svc
@@ -249,6 +252,39 @@ async fn event_range_validation_runs_before_dispatch_for_all_shapes() {
             .await
             .expect_err("bug: negative from must be rejected");
         assert_eq!(negative.code(), codes::INVALID_PARAMS);
+
+        assert_eq!(
+            *calls.lock().await,
+            0,
+            "validation must short-circuit before backend dispatch"
+        );
+    }
+}
+
+#[tokio::test]
+async fn chain_tip_dispatches_through_chain_plane_for_all_shapes() {
+    for backend in all_shapes() {
+        let tip = server(backend)
+            .chain_tip()
+            .await
+            .expect("bug: chain_tip must dispatch through chain plane");
+
+        // The mock returns BlockHeight::from(0); asserting against that
+        // value confirms dispatch landed in the configured plane rather
+        // than short-circuiting in the shared server.
+        assert_eq!(*tip.height, 0);
+    }
+}
+
+#[tokio::test]
+async fn get_block_by_number_is_not_implemented_for_all_shapes() {
+    for backend in all_shapes() {
+        let err = server(backend)
+            .get_block_by_number(BlockHeight::from(0))
+            .await
+            .expect_err("bug: getBlockByNumber is not yet implemented");
+
+        assert_eq!(err.code(), codes::NOT_IMPLEMENTED);
     }
 }
 
