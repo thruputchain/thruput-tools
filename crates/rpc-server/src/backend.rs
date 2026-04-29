@@ -1,3 +1,74 @@
+//! Backend traits for the shared JSON-RPC server.
+//!
+//! # Design intent
+//!
+//! These traits speak the JSON-RPC consumer's mental model — per-call,
+//! `Option<T>` for missing data, semantic enums for outcomes — not the XDR
+//! wire shape used by hogd's x23 services. The protocol-rs surface
+//! batches submission (`ParallelSignedTransactionBatch`), paginates events
+//! (`EventQuery` / `EventPage`), and tags every read response with an
+//! outcome enum (`TxInfoResult`, `SchedulerGetTipResult`, ...). Adapters
+//! collapse those to the trait shapes here. Surfacing the XDR shape on the
+//! traits would push wire-format concerns into JSON-RPC handler code and
+//! is explicitly avoided.
+//!
+//! # Plane split vs backend topology
+//!
+//! The XDR backend cleaves into scheduler and indexer x23 services. The
+//! plane split is Submit / Chain / Read. The two do not align cleanly:
+//!
+//! - `SubmitPlane`                            → scheduler
+//! - `ChainPlane::chain_tip`                  → scheduler
+//! - `ChainPlane::get_block_by_number`        → coordinator (TBD)
+//! - `ChainPlane::pending_transaction_count`  → scheduler
+//! - `ReadPlane::transaction_receipt`         → indexer
+//! - `ReadPlane::transaction_status`          → **both** (scheduler for
+//!   `Pending`, indexer for `Committed`) — the adapter owns this
+//!   orchestration; the shared server calls the trait method once.
+//! - `ReadPlane::contract_events`             → indexer
+//!
+//! `GroundhogRpcServer::new` accepts per-plane adapter types, so a future
+//! composition (e.g. the hogd-dev supervisor wiring distinct x23 clients)
+//! can supply different concrete types per plane. `transaction_status`
+//! will still need scheduler + indexer reach regardless of which plane
+//! conceptually owns it.
+//!
+//! # Capability divergence is `NotImplemented`, for now
+//!
+//! Methods a given backend cannot answer return
+//! `RpcServerError::NotImplemented`. Today this is rare
+//! (`pendingTransactionCount` on gateway, `getBlockByNumber` on the
+//! current dev-node). If the trait accumulates several more capability
+//! asymmetries, a richer capability descriptor — or an `Option<T>` return
+//! mapped to `NotImplemented` in the shared server — may earn its keep.
+//! Until then, concrete error returns are simpler than typed capability
+//! checks.
+//!
+//! # Known places the trait shape will need to grow
+//!
+//! - `contract_events` is narrow: single address, fixed inclusive range,
+//!   no topic filtering, no pagination. The indexer's underlying
+//!   `get_events(EventQuery) -> EventPage` already supports topic-position
+//!   filters, OR-across-filters, anchor selection, and cursor pagination.
+//!   When the JSON-RPC surface grows toward Soroban-`getEvents` shape,
+//!   re-export the XDR `EventQuery`/`EventPage` through `api-types` rather
+//!   than inventing parallel JSON-shaped variants — duplicated query
+//!   schemas drift.
+//!
+//! - `chain_tip` cannot distinguish "chain not yet initialized" from a
+//!   real tip. Production never hits the case; pre-genesis hogd-dev will.
+//!   Add a dedicated error variant or sentinel when wiring that backend.
+//!
+//! # Things to leave alone
+//!
+//! - Per-call submit shape. Batching is a gateway-internal performance
+//!   concern; future single-shot backends call `submit_unvetted` with a
+//!   one-element batch.
+//! - `Option<T>` / semantic enums on read paths. Translating XDR outcome-
+//!   tag enums once per call inside the adapter is correct; pushing those
+//!   tags into the trait would couple the JSON-RPC presentation layer to
+//!   the wire protocol.
+
 use async_trait::async_trait;
 use groundhog_rpc_api_types::{
     BlockHeight, ContractAddress,
