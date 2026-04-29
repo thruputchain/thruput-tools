@@ -125,63 +125,54 @@ impl From<DevNodeError> for RpcServerError {
 mod tests {
     use super::*;
 
-    fn assert_maps_to(err: DevNodeError, expected: &RpcServerError) {
-        let actual: RpcServerError = err.into();
-        // Compare by Display output to keep this test resilient to additions
-        // of internal variants without `PartialEq` on either error enum.
-        assert_eq!(actual.to_string(), expected.to_string());
-    }
-
     #[test]
     fn tx_invalid_maps_to_tx_invalid() {
-        assert_maps_to(
-            DevNodeError::TxInvalid("bad xdr".into()),
-            &RpcServerError::TxInvalid("bad xdr".into()),
-        );
+        let actual: RpcServerError = DevNodeError::TxInvalid("bad xdr".into()).into();
+
+        assert!(matches!(actual, RpcServerError::TxInvalid(msg) if msg == "bad xdr"));
     }
 
     #[test]
     fn auth_failed_maps_to_tx_invalid() {
-        assert_maps_to(
-            DevNodeError::AuthFailed("bad sig".into()),
-            &RpcServerError::TxInvalid("bad sig".into()),
-        );
+        let actual: RpcServerError = DevNodeError::AuthFailed("bad sig".into()).into();
+
+        assert!(matches!(actual, RpcServerError::TxInvalid(msg) if msg == "bad sig"));
     }
 
     #[test]
     fn exec_failed_maps_to_tx_rejected() {
-        assert_maps_to(
-            DevNodeError::ExecFailed("revert".into()),
-            &RpcServerError::TxRejected("revert".into()),
-        );
+        let actual: RpcServerError = DevNodeError::ExecFailed("revert".into()).into();
+
+        assert!(matches!(actual, RpcServerError::TxRejected(msg) if msg == "revert"));
     }
 
     #[test]
     fn tx_not_found_maps_to_tx_not_found() {
-        assert_maps_to(DevNodeError::TxNotFound, &RpcServerError::TxNotFound);
+        let actual: RpcServerError = DevNodeError::TxNotFound.into();
+
+        assert!(matches!(actual, RpcServerError::TxNotFound));
     }
 
     #[test]
     fn worker_init_maps_to_backend_unavailable() {
-        assert_maps_to(
-            DevNodeError::WorkerInit("boom".into()),
-            &RpcServerError::BackendUnavailable("boom".into()),
-        );
+        let actual: RpcServerError = DevNodeError::WorkerInit("boom".into()).into();
+
+        assert!(matches!(actual, RpcServerError::BackendUnavailable(msg) if msg == "boom"));
     }
 
     #[test]
     fn sandbox_init_maps_to_backend_unavailable() {
-        assert_maps_to(
-            DevNodeError::SandboxInit("denied".into()),
-            &RpcServerError::BackendUnavailable("denied".into()),
-        );
+        let actual: RpcServerError = DevNodeError::SandboxInit("denied".into()).into();
+
+        assert!(matches!(actual, RpcServerError::BackendUnavailable(msg) if msg == "denied"));
     }
 
     #[test]
     fn worker_stopped_maps_to_backend_unavailable() {
-        assert_maps_to(
-            DevNodeError::WorkerStopped,
-            &RpcServerError::BackendUnavailable("dev node worker stopped".into()),
+        let actual: RpcServerError = DevNodeError::WorkerStopped.into();
+
+        assert!(
+            matches!(actual, RpcServerError::BackendUnavailable(msg) if msg == "dev node worker stopped")
         );
     }
 }

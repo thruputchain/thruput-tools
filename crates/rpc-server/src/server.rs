@@ -159,6 +159,19 @@ f0e12d9781957cdcc522f33e5d719b93c200381cff5bfb26a1ee8ce7874ffd485322cd5a0806605d
         event_calls: Mutex<u32>,
     }
 
+    #[derive(Clone)]
+    struct SubmitOnly {
+        submitted: Arc<Mutex<Vec<ValidatedTransaction>>>,
+    }
+
+    #[derive(Clone, Copy)]
+    struct ChainOnly;
+
+    #[derive(Clone)]
+    struct ReadOnly {
+        event_calls: Arc<Mutex<u32>>,
+    }
+
     fn server(
         mock: Arc<MockBackend>,
     ) -> GroundhogRpcServer<Arc<MockBackend>, Arc<MockBackend>, Arc<MockBackend>> {
@@ -170,6 +183,17 @@ f0e12d9781957cdcc522f33e5d719b93c200381cff5bfb26a1ee8ce7874ffd485322cd5a0806605d
 
     #[async_trait::async_trait]
     impl SubmitPlane for Arc<MockBackend> {
+        async fn submit_raw_transaction(
+            &self,
+            tx: ValidatedTransaction,
+        ) -> Result<(), RpcServerError> {
+            self.submitted.lock().await.push(tx);
+            Ok(())
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl SubmitPlane for SubmitOnly {
         async fn submit_raw_transaction(
             &self,
             tx: ValidatedTransaction,
@@ -200,7 +224,55 @@ f0e12d9781957cdcc522f33e5d719b93c200381cff5bfb26a1ee8ce7874ffd485322cd5a0806605d
     }
 
     #[async_trait::async_trait]
+    impl ChainPlane for ChainOnly {
+        async fn chain_tip(&self) -> Result<ChainTip, RpcServerError> {
+            Ok(ChainTip {
+                height: BlockHeight::from(42),
+                block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0u8; 32])),
+            })
+        }
+
+        async fn get_block_by_number(
+            &self,
+            _height: BlockHeight,
+        ) -> Result<Option<BlockInfo>, RpcServerError> {
+            Ok(None)
+        }
+
+        async fn pending_transaction_count(&self) -> Result<u64, RpcServerError> {
+            Ok(7)
+        }
+    }
+
+    #[async_trait::async_trait]
     impl ReadPlane for Arc<MockBackend> {
+        async fn transaction_receipt(
+            &self,
+            _tx_hash: TxHash,
+        ) -> Result<Option<TransactionReceipt>, RpcServerError> {
+            Ok(None)
+        }
+
+        async fn transaction_status(
+            &self,
+            _tx_hash: TxHash,
+        ) -> Result<TransactionStatus, RpcServerError> {
+            Ok(TransactionStatus::Unknown)
+        }
+
+        async fn contract_events(
+            &self,
+            _address: ContractAddress,
+            _from_height: BlockHeight,
+            _to_height: BlockHeight,
+        ) -> Result<Vec<IdentifiedEvent>, RpcServerError> {
+            *self.event_calls.lock().await += 1;
+            Ok(vec![])
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ReadPlane for ReadOnly {
         async fn transaction_receipt(
             &self,
             _tx_hash: TxHash,
@@ -241,6 +313,47 @@ f0e12d9781957cdcc522f33e5d719b93c200381cff5bfb26a1ee8ce7874ffd485322cd5a0806605d
             "6e94695b6af0fbc13d96876f7fb8e940cd9db4d247e53614a45da252b3a7853a"
         );
         assert_eq!(mock.submitted.lock().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn distinct_backend_plane_types_are_accepted() {
+        let submitted = Arc::new(Mutex::new(Vec::new()));
+        let event_calls = Arc::new(Mutex::new(0));
+        let server = GroundhogRpcServer::new(
+            SubmitOnly {
+                submitted: submitted.clone(),
+            },
+            ChainOnly,
+            ReadOnly {
+                event_calls: event_calls.clone(),
+            },
+            RpcServerConfig::default().with_max_event_height_range(10),
+        );
+
+        let tx_hash = server
+            .send_raw_transaction(format!("0x{SIGNED_TX_XDR}"))
+            .await
+            .expect("bug: valid signed tx should submit through submit plane");
+
+        assert_eq!(
+            hex::encode(tx_hash.0.0.as_ref()),
+            "6e94695b6af0fbc13d96876f7fb8e940cd9db4d247e53614a45da252b3a7853a"
+        );
+        assert_eq!(submitted.lock().await.len(), 1);
+        assert_eq!(
+            server
+                .pending_transaction_count()
+                .await
+                .expect("bug: chain plane should answer pending count"),
+            7
+        );
+
+        server
+            .get_contract_events(address(), BlockHeight::from(1), BlockHeight::from(2))
+            .await
+            .expect("bug: read plane should answer contract events");
+
+        assert_eq!(*event_calls.lock().await, 1);
     }
 
     #[tokio::test]
