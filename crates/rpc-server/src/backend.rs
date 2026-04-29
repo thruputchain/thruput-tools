@@ -10,6 +10,9 @@ use groundhog_rpc_api_types::{
 use crate::error::RpcServerError;
 
 /// A transaction that has passed shared RPC-layer validation.
+///
+/// Obtain instances via `tx::validate_raw_transaction`.
+/// No public constructor is provided so callers do not bypass validation.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct ValidatedTransaction {
@@ -17,15 +20,6 @@ pub struct ValidatedTransaction {
     pub bytes: Vec<u8>,
     /// Canonical transaction hash over the inner `Transaction`.
     pub hash: TxHash,
-}
-
-impl ValidatedTransaction {
-    /// Construct a `ValidatedTransaction` from validated bytes and its
-    /// canonical hash. Callers outside `rpc-server` should obtain instances
-    /// via `tx::validate_raw_transaction` rather than calling this directly.
-    pub fn new(bytes: Vec<u8>, hash: TxHash) -> Self {
-        Self { bytes, hash }
-    }
 }
 
 /// Backend plane for accepted raw transaction submission.

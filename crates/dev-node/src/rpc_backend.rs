@@ -56,9 +56,7 @@ impl ChainPlane for DevNodeBackend {
         &self,
         _height: BlockHeight,
     ) -> Result<Option<BlockInfo>, RpcServerError> {
-        Err(RpcServerError::NotImplemented(
-            "getBlockByNumber is not yet implemented in the dev node".into(),
-        ))
+        Err(RpcServerError::NotImplemented("getBlockByNumber".into()))
     }
 
     #[tracing::instrument(skip_all)]
@@ -125,54 +123,59 @@ impl From<DevNodeError> for RpcServerError {
 mod tests {
     use super::*;
 
-    #[test]
-    fn tx_invalid_maps_to_tx_invalid() {
-        let actual: RpcServerError = DevNodeError::TxInvalid("bad xdr".into()).into();
+    /// Expected shape after `DevNodeError -> RpcServerError` conversion.
+    enum Expected {
+        TxInvalid(&'static str),
+        TxRejected(&'static str),
+        TxNotFound,
+        BackendUnavailable(&'static str),
+    }
 
-        assert!(matches!(actual, RpcServerError::TxInvalid(msg) if msg == "bad xdr"));
+    fn assert_maps(input: DevNodeError, expected: Expected) {
+        let actual: RpcServerError = input.into();
+        match (actual, expected) {
+            (RpcServerError::TxInvalid(got), Expected::TxInvalid(want))
+            | (RpcServerError::TxRejected(got), Expected::TxRejected(want))
+            | (RpcServerError::BackendUnavailable(got), Expected::BackendUnavailable(want)) => {
+                assert_eq!(got, want);
+            }
+            (RpcServerError::TxNotFound, Expected::TxNotFound) => {}
+            (got, _) => panic!("unexpected mapping: {got:?}"),
+        }
     }
 
     #[test]
-    fn auth_failed_maps_to_tx_invalid() {
-        let actual: RpcServerError = DevNodeError::AuthFailed("bad sig".into()).into();
+    fn dev_node_error_maps_to_public_variant_per_case() {
+        let cases = [
+            (
+                DevNodeError::TxInvalid("bad xdr".into()),
+                Expected::TxInvalid("bad xdr"),
+            ),
+            (
+                DevNodeError::AuthFailed("bad sig".into()),
+                Expected::TxInvalid("bad sig"),
+            ),
+            (
+                DevNodeError::ExecFailed("revert".into()),
+                Expected::TxRejected("revert"),
+            ),
+            (DevNodeError::TxNotFound, Expected::TxNotFound),
+            (
+                DevNodeError::WorkerInit("boom".into()),
+                Expected::BackendUnavailable("boom"),
+            ),
+            (
+                DevNodeError::SandboxInit("denied".into()),
+                Expected::BackendUnavailable("denied"),
+            ),
+            (
+                DevNodeError::WorkerStopped,
+                Expected::BackendUnavailable("dev node worker stopped"),
+            ),
+        ];
 
-        assert!(matches!(actual, RpcServerError::TxInvalid(msg) if msg == "bad sig"));
-    }
-
-    #[test]
-    fn exec_failed_maps_to_tx_rejected() {
-        let actual: RpcServerError = DevNodeError::ExecFailed("revert".into()).into();
-
-        assert!(matches!(actual, RpcServerError::TxRejected(msg) if msg == "revert"));
-    }
-
-    #[test]
-    fn tx_not_found_maps_to_tx_not_found() {
-        let actual: RpcServerError = DevNodeError::TxNotFound.into();
-
-        assert!(matches!(actual, RpcServerError::TxNotFound));
-    }
-
-    #[test]
-    fn worker_init_maps_to_backend_unavailable() {
-        let actual: RpcServerError = DevNodeError::WorkerInit("boom".into()).into();
-
-        assert!(matches!(actual, RpcServerError::BackendUnavailable(msg) if msg == "boom"));
-    }
-
-    #[test]
-    fn sandbox_init_maps_to_backend_unavailable() {
-        let actual: RpcServerError = DevNodeError::SandboxInit("denied".into()).into();
-
-        assert!(matches!(actual, RpcServerError::BackendUnavailable(msg) if msg == "denied"));
-    }
-
-    #[test]
-    fn worker_stopped_maps_to_backend_unavailable() {
-        let actual: RpcServerError = DevNodeError::WorkerStopped.into();
-
-        assert!(
-            matches!(actual, RpcServerError::BackendUnavailable(msg) if msg == "dev node worker stopped")
-        );
+        for (input, expected) in cases {
+            assert_maps(input, expected);
+        }
     }
 }

@@ -110,6 +110,7 @@ fn validate_event_range(
     to_height: &BlockHeight,
     max_event_height_range: u64,
 ) -> Result<(), RpcServerError> {
+    // `BlockHeight` is `Hex0x<i64>`; the double deref reaches the inner i64.
     let from = **from_height;
     let to = **to_height;
     if from < 0 || to < 0 {

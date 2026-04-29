@@ -39,18 +39,17 @@ pub async fn get_contract_events(
         .await
         .map_err(|e| GatewayError::BackendUnavailable(format!("indexer: {e}")))?;
 
-    let events = result
-        .iter()
-        .filter_map(|identified| {
-            let event = parse_emitted_event(&identified.emitted_event)?;
-            Some(IdentifiedEvent {
+    let mut events = Vec::with_capacity(result.len());
+    for identified in result.iter() {
+        if let Some(event) = parse_emitted_event(&identified.emitted_event) {
+            events.push(IdentifiedEvent {
                 tx_hash: TxHash(Hex0x(identified.proposed_tx_hash)),
                 block_height: identified.block_height.clone(),
                 sequence_number: identified.sequence_number,
                 event,
-            })
-        })
-        .collect();
+            });
+        }
+    }
 
     Ok(events)
 }
