@@ -63,3 +63,42 @@ impl From<RpcServerError> for ErrorObjectOwned {
         ErrorObjectOwned::owned(code, msg, None::<()>)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_variant_maps_to_its_documented_code() {
+        let cases = [
+            (RpcServerError::TxInvalid("x".into()), codes::TX_INVALID),
+            (RpcServerError::TxRejected("x".into()), codes::TX_REJECTED),
+            (RpcServerError::TxNotFound, codes::TX_NOT_FOUND),
+            (RpcServerError::BlockNotFound, codes::BLOCK_NOT_FOUND),
+            (
+                RpcServerError::InvalidParam("x".into()),
+                codes::INVALID_PARAMS,
+            ),
+            (
+                RpcServerError::RangeTooLarge("x".into()),
+                codes::RANGE_TOO_LARGE,
+            ),
+            (
+                RpcServerError::BackendUnavailable("x".into()),
+                codes::BACKEND_UNAVAILABLE,
+            ),
+            (RpcServerError::BackendTimeout, codes::BACKEND_TIMEOUT),
+            (RpcServerError::Overloaded("x".into()), codes::OVERLOADED),
+            (
+                RpcServerError::NotImplemented("x".into()),
+                codes::NOT_IMPLEMENTED,
+            ),
+        ];
+
+        for (err, expected_code) in cases {
+            let label = err.to_string();
+            let obj: ErrorObjectOwned = err.into();
+            assert_eq!(obj.code(), expected_code, "wrong code for `{label}`");
+        }
+    }
+}

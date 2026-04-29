@@ -11,11 +11,21 @@ use crate::error::RpcServerError;
 
 /// A transaction that has passed shared RPC-layer validation.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ValidatedTransaction {
     /// Raw signed transaction XDR bytes supplied by the client.
     pub bytes: Vec<u8>,
     /// Canonical transaction hash over the inner `Transaction`.
     pub hash: TxHash,
+}
+
+impl ValidatedTransaction {
+    /// Construct a `ValidatedTransaction` from validated bytes and its
+    /// canonical hash. Callers outside `rpc-server` should obtain instances
+    /// via `tx::validate_raw_transaction` rather than calling this directly.
+    pub fn new(bytes: Vec<u8>, hash: TxHash) -> Self {
+        Self { bytes, hash }
+    }
 }
 
 /// Backend plane for accepted raw transaction submission.
@@ -68,8 +78,3 @@ pub trait ReadPlane: Send + Sync + 'static {
         to_height: BlockHeight,
     ) -> Result<Vec<IdentifiedEvent>, RpcServerError>;
 }
-
-/// Complete backend contract for the public Groundhog JSON-RPC API.
-pub trait GroundhogBackend: SubmitPlane + ChainPlane + ReadPlane {}
-
-impl<T> GroundhogBackend for T where T: SubmitPlane + ChainPlane + ReadPlane {}

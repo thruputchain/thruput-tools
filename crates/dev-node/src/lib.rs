@@ -85,14 +85,11 @@ pub async fn start_server(
 
     // The core API uses the shared RPC server. Dev-only methods still live in
     // this crate until the optional DevControl extraction.
-    let core_rpc = GroundhogRpcServer::new(
-        DevNodeBackend::new(worker.clone()),
-        RpcServerConfig {
-            // The native-exec prototype historically rejected inverted event
-            // ranges but did not impose the production gateway range cap.
-            max_event_height_range: i64::MAX as u64,
-        },
-    );
+    //
+    // The native-exec prototype historically rejected inverted event ranges but
+    // did not impose the production gateway range cap.
+    let rpc_config = RpcServerConfig::default().with_max_event_height_range(i64::MAX as u64);
+    let core_rpc = GroundhogRpcServer::unified(DevNodeBackend::new(worker.clone()), rpc_config);
     let dev_rpc = DevNodeRpc::new(worker.clone());
     let mut module = RpcModule::new(());
     module.merge(GroundhogApiServer::into_rpc(core_rpc))?;

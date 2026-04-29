@@ -74,4 +74,23 @@ f0e12d9781957cdcc522f33e5d719b93c200381cff5bfb26a1ee8ce7874ffd485322cd5a0806605d
             "6e94695b6af0fbc13d96876f7fb8e940cd9db4d247e53614a45da252b3a7853a"
         );
     }
+
+    #[test]
+    fn uppercase_0x_prefix_is_accepted() {
+        let tx = validate_raw_transaction(&format!("0X{SIGNED_TX_XDR}"))
+            .expect("bug: uppercase 0X prefix should be accepted");
+
+        assert_eq!(
+            hex::encode(tx.hash.0.0.as_ref()),
+            "6e94695b6af0fbc13d96876f7fb8e940cd9db4d247e53614a45da252b3a7853a"
+        );
+    }
+
+    #[test]
+    fn empty_hex_input_is_rejected() {
+        let err =
+            validate_raw_transaction("").expect_err("bug: empty hex input should fail XDR decode");
+
+        assert!(matches!(err, RpcServerError::TxInvalid(_)));
+    }
 }

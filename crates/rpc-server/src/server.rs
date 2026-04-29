@@ -9,32 +9,56 @@ use groundhog_rpc_api_types::{
     transaction::{TransactionStatus, TxHash},
 };
 
-use crate::{GroundhogBackend, RpcServerConfig, RpcServerError, tx::validate_raw_transaction};
+use crate::{
+    ChainPlane, ReadPlane, RpcServerConfig, RpcServerError, SubmitPlane,
+    tx::validate_raw_transaction,
+};
 
-/// Generic implementation of the public Groundhog JSON-RPC API.
+/// Generic implementation of the public Groundhog JSON-RPC API over
+/// independently-typed submit, chain, and read backend planes.
 #[derive(Debug, Clone)]
-pub struct GroundhogRpcServer<B> {
-    backend: B,
+pub struct GroundhogRpcServer<S, C, R> {
+    submit: S,
+    chain: C,
+    read: R,
     config: RpcServerConfig,
 }
 
-impl<B> GroundhogRpcServer<B> {
-    /// Create a server wrapper around a concrete backend adapter.
-    pub fn new(backend: B, config: RpcServerConfig) -> Self {
-        Self { backend, config }
+impl<S, C, R> GroundhogRpcServer<S, C, R> {
+    /// Create a server wrapper around independent backend planes.
+    pub fn new(submit: S, chain: C, read: R, config: RpcServerConfig) -> Self {
+        Self {
+            submit,
+            chain,
+            read,
+            config,
+        }
+    }
+}
+
+impl<B> GroundhogRpcServer<B, B, B>
+where
+    B: Clone,
+{
+    /// Convenience constructor for backends that implement all three planes
+    /// on a single type.
+    pub fn unified(backend: B, config: RpcServerConfig) -> Self {
+        Self::new(backend.clone(), backend.clone(), backend, config)
     }
 }
 
 #[async_trait::async_trait]
-impl<B> GroundhogApiServer for GroundhogRpcServer<B>
+impl<S, C, R> GroundhogApiServer for GroundhogRpcServer<S, C, R>
 where
-    B: GroundhogBackend,
+    S: SubmitPlane,
+    C: ChainPlane,
+    R: ReadPlane,
 {
     #[tracing::instrument(skip_all, fields(tx_hex_len = tx_hex.len()))]
     async fn send_raw_transaction(&self, tx_hex: String) -> RpcResult<TxHash> {
         let tx = validate_raw_transaction(&tx_hex)?;
         let tx_hash = tx.hash;
-        self.backend.submit_raw_transaction(tx).await?;
+        self.submit.submit_raw_transaction(tx).await?;
         Ok(tx_hash)
     }
 
@@ -43,27 +67,27 @@ where
         &self,
         tx_hash: TxHash,
     ) -> RpcResult<Option<TransactionReceipt>> {
-        Ok(self.backend.transaction_receipt(tx_hash).await?)
+        Ok(self.read.transaction_receipt(tx_hash).await?)
     }
 
     #[tracing::instrument(skip_all, fields(?tx_hash))]
     async fn get_transaction_status(&self, tx_hash: TxHash) -> RpcResult<TransactionStatus> {
-        Ok(self.backend.transaction_status(tx_hash).await?)
+        Ok(self.read.transaction_status(tx_hash).await?)
     }
 
     #[tracing::instrument(skip_all)]
     async fn chain_tip(&self) -> RpcResult<ChainTip> {
-        Ok(self.backend.chain_tip().await?)
+        Ok(self.chain.chain_tip().await?)
     }
 
     #[tracing::instrument(skip_all, fields(?height))]
     async fn get_block_by_number(&self, height: BlockHeight) -> RpcResult<Option<BlockInfo>> {
-        Ok(self.backend.get_block_by_number(height).await?)
+        Ok(self.chain.get_block_by_number(height).await?)
     }
 
     #[tracing::instrument(skip_all)]
     async fn pending_transaction_count(&self) -> RpcResult<u64> {
-        Ok(self.backend.pending_transaction_count().await?)
+        Ok(self.chain.pending_transaction_count().await?)
     }
 
     #[tracing::instrument(skip_all, fields(?address, ?from_height, ?to_height))]
@@ -75,7 +99,7 @@ where
     ) -> RpcResult<Vec<IdentifiedEvent>> {
         validate_event_range(&from_height, &to_height, self.config.max_event_height_range)?;
         Ok(self
-            .backend
+            .read
             .contract_events(address, from_height, to_height)
             .await?)
     }
@@ -88,12 +112,19 @@ fn validate_event_range(
 ) -> Result<(), RpcServerError> {
     let from = **from_height;
     let to = **to_height;
+    if from < 0 || to < 0 {
+        return Err(RpcServerError::InvalidParam(
+            "block height must be non-negative".into(),
+        ));
+    }
     if to < from {
         return Err(RpcServerError::InvalidParam(
             "to_height must be >= from_height".into(),
         ));
     }
 
+    // Both `to` and `from` are non-negative i64 with `to >= from`,
+    // so the subtraction is in `[0, i64::MAX]` and fits in `u64`.
     let span = (to - from).cast_unsigned();
     if span > max_event_height_range {
         return Err(RpcServerError::RangeTooLarge(format!(
@@ -111,7 +142,7 @@ mod tests {
     use tokio::sync::Mutex;
 
     use super::*;
-    use crate::{ChainPlane, ReadPlane, SubmitPlane, ValidatedTransaction};
+    use crate::ValidatedTransaction;
     use groundhog_rpc_api_types::hex::Hex0x;
 
     const SIGNED_TX_XDR: &str = "\
@@ -128,15 +159,13 @@ f0e12d9781957cdcc522f33e5d719b93c200381cff5bfb26a1ee8ce7874ffd485322cd5a0806605d
         event_calls: Mutex<u32>,
     }
 
-    impl MockBackend {
-        fn server(self) -> GroundhogRpcServer<Arc<Self>> {
-            GroundhogRpcServer::new(
-                Arc::new(self),
-                RpcServerConfig {
-                    max_event_height_range: 10,
-                },
-            )
-        }
+    fn server(
+        mock: Arc<MockBackend>,
+    ) -> GroundhogRpcServer<Arc<MockBackend>, Arc<MockBackend>, Arc<MockBackend>> {
+        GroundhogRpcServer::unified(
+            mock,
+            RpcServerConfig::default().with_max_event_height_range(10),
+        )
     }
 
     #[async_trait::async_trait]
@@ -199,7 +228,8 @@ f0e12d9781957cdcc522f33e5d719b93c200381cff5bfb26a1ee8ce7874ffd485322cd5a0806605d
 
     #[tokio::test]
     async fn valid_submit_calls_backend_and_returns_hash() {
-        let server = MockBackend::default().server();
+        let mock = Arc::new(MockBackend::default());
+        let server = server(mock.clone());
 
         let tx_hash = server
             .send_raw_transaction(format!("0x{SIGNED_TX_XDR}"))
@@ -210,12 +240,13 @@ f0e12d9781957cdcc522f33e5d719b93c200381cff5bfb26a1ee8ce7874ffd485322cd5a0806605d
             hex::encode(tx_hash.0.0.as_ref()),
             "6e94695b6af0fbc13d96876f7fb8e940cd9db4d247e53614a45da252b3a7853a"
         );
-        assert_eq!(server.backend.submitted.lock().await.len(), 1);
+        assert_eq!(mock.submitted.lock().await.len(), 1);
     }
 
     #[tokio::test]
     async fn inverted_event_range_is_rejected_before_backend_dispatch() {
-        let server = MockBackend::default().server();
+        let mock = Arc::new(MockBackend::default());
+        let server = server(mock.clone());
 
         let err = server
             .get_contract_events(address(), BlockHeight::from(2), BlockHeight::from(1))
@@ -226,12 +257,13 @@ f0e12d9781957cdcc522f33e5d719b93c200381cff5bfb26a1ee8ce7874ffd485322cd5a0806605d
             err.code(),
             groundhog_rpc_api_types::error::codes::INVALID_PARAMS
         );
-        assert_eq!(*server.backend.event_calls.lock().await, 0);
+        assert_eq!(*mock.event_calls.lock().await, 0);
     }
 
     #[tokio::test]
     async fn excessive_event_range_is_rejected_before_backend_dispatch() {
-        let server = MockBackend::default().server();
+        let mock = Arc::new(MockBackend::default());
+        let server = server(mock.clone());
 
         let err = server
             .get_contract_events(address(), BlockHeight::from(1), BlockHeight::from(12))
@@ -242,12 +274,74 @@ f0e12d9781957cdcc522f33e5d719b93c200381cff5bfb26a1ee8ce7874ffd485322cd5a0806605d
             err.code(),
             groundhog_rpc_api_types::error::codes::RANGE_TOO_LARGE
         );
-        assert_eq!(*server.backend.event_calls.lock().await, 0);
+        assert_eq!(*mock.event_calls.lock().await, 0);
+    }
+
+    #[tokio::test]
+    async fn exact_max_event_range_passes_to_backend() {
+        let mock = Arc::new(MockBackend::default());
+        let server = server(mock.clone());
+
+        // Span of 10 is the configured maximum and must be accepted.
+        server
+            .get_contract_events(address(), BlockHeight::from(1), BlockHeight::from(11))
+            .await
+            .expect("bug: span of exactly max should succeed");
+
+        assert_eq!(*mock.event_calls.lock().await, 1);
+    }
+
+    #[tokio::test]
+    async fn zero_span_event_range_passes_to_backend() {
+        let mock = Arc::new(MockBackend::default());
+        let server = server(mock.clone());
+
+        server
+            .get_contract_events(address(), BlockHeight::from(5), BlockHeight::from(5))
+            .await
+            .expect("bug: zero-span range should succeed");
+
+        assert_eq!(*mock.event_calls.lock().await, 1);
+    }
+
+    #[tokio::test]
+    async fn negative_from_height_is_rejected_as_invalid_param() {
+        let mock = Arc::new(MockBackend::default());
+        let server = server(mock.clone());
+
+        let err = server
+            .get_contract_events(address(), BlockHeight::from(-1), BlockHeight::from(5))
+            .await
+            .expect_err("bug: negative from_height should fail");
+
+        assert_eq!(
+            err.code(),
+            groundhog_rpc_api_types::error::codes::INVALID_PARAMS
+        );
+        assert_eq!(*mock.event_calls.lock().await, 0);
+    }
+
+    #[tokio::test]
+    async fn negative_to_height_is_rejected_as_invalid_param() {
+        let mock = Arc::new(MockBackend::default());
+        let server = server(mock.clone());
+
+        let err = server
+            .get_contract_events(address(), BlockHeight::from(0), BlockHeight::from(-1))
+            .await
+            .expect_err("bug: negative to_height should fail");
+
+        assert_eq!(
+            err.code(),
+            groundhog_rpc_api_types::error::codes::INVALID_PARAMS
+        );
+        assert_eq!(*mock.event_calls.lock().await, 0);
     }
 
     #[tokio::test]
     async fn backend_not_implemented_maps_to_public_code() {
-        let server = MockBackend::default().server();
+        let mock = Arc::new(MockBackend::default());
+        let server = server(mock);
 
         let err = server
             .pending_transaction_count()

@@ -90,10 +90,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build(&ctx.config.listen_address)
         .await?;
 
-    let rpc_config = RpcServerConfig {
-        max_event_height_range: ctx.config.max_event_height_range,
-    };
-    let api_impl = GroundhogRpcServer::new(GatewayBackend::new(ctx), rpc_config);
+    let rpc_config =
+        RpcServerConfig::default().with_max_event_height_range(ctx.config.max_event_height_range);
+    let api_impl = GroundhogRpcServer::unified(GatewayBackend::new(ctx), rpc_config);
     let handle = server.start(api_impl.into_rpc());
 
     tracing::info!("groundhog-rpc gateway listening");

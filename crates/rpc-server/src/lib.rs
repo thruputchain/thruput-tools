@@ -11,7 +11,7 @@ pub mod error;
 pub mod server;
 pub mod tx;
 
-pub use backend::{ChainPlane, GroundhogBackend, ReadPlane, SubmitPlane, ValidatedTransaction};
+pub use backend::{ChainPlane, ReadPlane, SubmitPlane, ValidatedTransaction};
 pub use config::RpcServerConfig;
 pub use error::RpcServerError;
 pub use server::GroundhogRpcServer;
