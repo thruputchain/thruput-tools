@@ -586,9 +586,10 @@ to be supported.
 
 ## Current Review Positions
 
-1. Keep `SubmitPlane`, `ChainPlane`, and `ReadPlane` separate, plus the marker
-   `GroundhogBackend` super-trait. This keeps mocks and future partial
-   backends simpler than one large trait.
+1. Keep `SubmitPlane`, `ChainPlane`, and `ReadPlane` separate, and
+   parameterize `GroundhogRpcServer<S, C, R>` over those planes. This keeps
+   mocks simple while allowing the future `hogd-dev` supervisor to wire
+   independent submit, chain, and read clients.
 
 2. Defer `DevControl`. The load-bearing change is the core
    `GroundhogApiServer` extraction; dev-only methods currently have one
