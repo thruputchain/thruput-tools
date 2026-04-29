@@ -11,8 +11,12 @@ Workspace crates in `crates/`:
   errors). Consumed by gateway, client, CLI, and external tools.
 - **rpc-api** — shared jsonrpsee trait definitions used by the gateway,
   dev node, and client crate.
-- **gateway** — jsonrpsee server binary. Handlers call hogd indexer and
-  scheduler over x23 RPC.
+- **rpc-server** — reusable server-side `GroundhogApiServer`
+  implementation. Owns shared request validation, public error mapping,
+  and submit/chain/read backend traits used by gateway, dev-node, and
+  future hogd-dev compositions.
+- **gateway** — jsonrpsee server binary. Its backend adapter implements
+  the rpc-server planes over hogd indexer and scheduler x23 RPCs.
 - **client** — typed JSON-RPC client generated from the same
   `#[rpc(client)]` trait as the server. Wraps api-types.
 - **signing** — off-chain transaction signing and construction. Signer
@@ -25,11 +29,13 @@ Workspace crates in `crates/`:
   Subcommand functions take plain Rust types, not clap structs.
 - **dev-node** — feature-gated experimental local JSON-RPC dev node
   backed by the SDK `native_exec` / hogd `test_ffi` prototype on a
-  dedicated worker thread. It shares execution semantics with SDK tests,
-  but the durable backend direction is a hogd-side embedded execution
-  library; see the CLI planning docs.
-- **groundhog-sys** — local patched FFI bindings crate overriding the
-  registry version for native executor integration and packaging fixes.
+  dedicated worker thread. It exposes the public Groundhog API through
+  rpc-server and keeps `groundhog_dev_*` controls local to dev-node. It
+  shares execution semantics with SDK tests, but the durable backend
+  direction is a hogd-side embedded execution library; see the CLI
+  planning docs.
+- **e2e-tests** — ignored process-level JSON-RPC lifecycle smoke tests.
+- **bench** — benchmark harnesses.
 
 See `docs/gateway/system-design.md` for full gateway design and
 `docs/gateway/api-sketch.md` for the jsonrpsee trait definition.
@@ -64,7 +70,7 @@ runtime), `tower`/`tower-http` (middleware), `clap` (CLI), `prometheus`
 ```bash
 cargo build --workspace          # build everything
 cargo test --workspace           # run all tests
-cargo clippy --workspace -- -D warnings   # lint (must be clean)
+cargo clippy --workspace --all-targets -- -D warnings   # lint (must be clean)
 cargo fmt --check                # format check (must pass)
 ```
 
@@ -155,11 +161,19 @@ cargo run -p groundhog-cli --features dev-node -- node
   (`TransactionStatus`, `ExecStatus`).
 - The jsonrpsee trait in `rpc-api/src/lib.rs` is the source of truth
   for the RPC surface. `#[rpc(client, server)]` generates both sides.
-- Handler implementations go in `gateway/src/handlers/`, one file per
-  logical group (submit, receipt, blocks, events).
-- The gateway enforces query bounds (e.g., max height range for
-  `getContractEvents`) since hogd has none. Limits are in
-  `GatewayConfig`.
+- The public `GroundhogApiServer` implementation lives in `rpc-server`.
+  Concrete binaries provide submit/chain/read backend adapters instead
+  of implementing the public RPC trait directly.
+- Shared transaction hex/XDR validation and canonical hash computation
+  live in `rpc-server::tx`; do not duplicate that logic in gateway or
+  dev-node adapters.
+- Gateway handler modules are production backend helpers grouped by
+  subsystem (receipt, blocks, events, parsing). Do not add new public
+  JSON-RPC handler implementations there.
+- `rpc-server` enforces shared request bounds, including
+  `getContractEvents` height range validation. Gateway supplies the
+  production limit from `GatewayConfig`; dev-node may choose a different
+  compatibility limit.
 - Error codes follow Substrate's per-module range pattern. Constants
   live in `api-types/src/error.rs`.
 - Method prefix is `groundhog_` (may change — see open questions in
@@ -257,6 +271,8 @@ includes test and bench code), so always use that flag locally too.
   embedded dev-node backend decision.
 - `docs/cli/plans/2026-04-24-embedded-dev-node-backend.md` — phased
   backend implementation plan and PR boundaries.
+- `docs/cli/plans/2026-04-28-rpc-server-extraction.md` — shared
+  rpc-server extraction and follow-up PR plan.
 - `docs/gateway/roadmap.md` — gateway backlog and sequencing.
 - `docs/gateway/system-design.md` — full gateway architecture and open
   questions.

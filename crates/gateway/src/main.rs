@@ -1,4 +1,4 @@
-mod api;
+mod backend;
 mod config;
 mod context;
 mod error;
@@ -12,10 +12,11 @@ use std::sync::Arc;
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
-use crate::api::GroundhogApiImpl;
+use crate::backend::GatewayBackend;
 use crate::config::GatewayConfig;
 use crate::context::GatewayContext;
 use groundhog_rpc_api::GroundhogApiServer;
+use groundhog_rpc_server::{GroundhogRpcServer, RpcServerConfig};
 
 /// Groundhog JSON-RPC gateway.
 #[derive(Parser)]
@@ -89,7 +90,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build(&ctx.config.listen_address)
         .await?;
 
-    let api_impl = GroundhogApiImpl::new(ctx);
+    let rpc_config =
+        RpcServerConfig::default().with_max_event_height_range(ctx.config.max_event_height_range);
+    let api_impl = GroundhogRpcServer::unified(GatewayBackend::new(ctx), rpc_config);
     let handle = server.start(api_impl.into_rpc());
 
     tracing::info!("groundhog-rpc gateway listening");

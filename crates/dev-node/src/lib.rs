@@ -8,14 +8,17 @@ pub mod accounts;
 pub mod backend;
 pub mod error;
 pub mod rpc;
+pub mod rpc_backend;
 pub mod wallet;
 pub mod worker;
 
 use groundhog_rpc_api::{GroundhogApiServer, GroundhogDevApiServer};
+use groundhog_rpc_server::{GroundhogRpcServer, RpcServerConfig};
 use jsonrpsee::server::{RpcModule, Server};
 
 use crate::accounts::{DEFAULT_ACCOUNT_COUNT, DEFAULT_STORAGE_TOKENS};
 use crate::rpc::DevNodeRpc;
+use crate::rpc_backend::DevNodeBackend;
 use crate::worker::{WorkerHandle, spawn_worker};
 
 /// Default number of committed transactions to retain with full execution detail.
@@ -80,13 +83,17 @@ pub async fn start_server(
 
     let server = Server::builder().build(&config.listen_address).await?;
 
-    // DevNodeRpc implements both GroundhogApiServer and GroundhogDevApiServer.
-    // jsonrpsee's into_rpc() only picks up one trait. Use RpcModule::merge
-    // to combine both namespaces into a single module.
-    let rpc = DevNodeRpc::new(worker.clone());
+    // The core API uses the shared RPC server. Dev-only methods still live in
+    // this crate until the optional DevControl extraction.
+    //
+    // The native-exec prototype historically rejected inverted event ranges but
+    // did not impose the production gateway range cap.
+    let rpc_config = RpcServerConfig::default().with_max_event_height_range(i64::MAX as u64);
+    let core_rpc = GroundhogRpcServer::unified(DevNodeBackend::new(worker.clone()), rpc_config);
+    let dev_rpc = DevNodeRpc::new(worker.clone());
     let mut module = RpcModule::new(());
-    module.merge(GroundhogApiServer::into_rpc(rpc.clone()))?;
-    module.merge(GroundhogDevApiServer::into_rpc(rpc))?;
+    module.merge(GroundhogApiServer::into_rpc(core_rpc))?;
+    module.merge(GroundhogDevApiServer::into_rpc(dev_rpc))?;
 
     let addr = server.local_addr()?;
     let handle = server.start(module);

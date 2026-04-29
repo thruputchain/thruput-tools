@@ -1,7 +1,7 @@
 //! `groundhog_getContractEvents` handler.
 //!
 //! Queries hogd indexer (`get_contract_events`) via x23 RPC.
-//! The gateway enforces height range limits since hogd has none.
+//! Shared RPC-layer code validates height ranges before dispatching here.
 
 use groundhog_rpc_api_types::events::IdentifiedEvent;
 use groundhog_rpc_api_types::hex::Hex0x;
@@ -27,22 +27,6 @@ pub async fn get_contract_events(
     from_height: BlockHeight,
     to_height: BlockHeight,
 ) -> Result<Vec<IdentifiedEvent>, GatewayError> {
-    // Validate range.
-    if to_height < from_height {
-        return Err(GatewayError::InvalidParam(
-            "to_height must be >= from_height".into(),
-        ));
-    }
-
-    let span = (*to_height).saturating_sub(*from_height);
-    #[allow(clippy::cast_possible_wrap)]
-    if span > ctx.config.max_event_height_range as i64 {
-        return Err(GatewayError::RangeTooLarge(format!(
-            "height range {} exceeds maximum {}",
-            span, ctx.config.max_event_height_range,
-        )));
-    }
-
     let client = ctx
         .indexer
         .read()
@@ -55,18 +39,17 @@ pub async fn get_contract_events(
         .await
         .map_err(|e| GatewayError::BackendUnavailable(format!("indexer: {e}")))?;
 
-    let events = result
-        .iter()
-        .filter_map(|identified| {
-            let event = parse_emitted_event(&identified.emitted_event)?;
-            Some(IdentifiedEvent {
+    let mut events = Vec::with_capacity(result.len());
+    for identified in result.iter() {
+        if let Some(event) = parse_emitted_event(&identified.emitted_event) {
+            events.push(IdentifiedEvent {
                 tx_hash: TxHash(Hex0x(identified.proposed_tx_hash)),
                 block_height: identified.block_height.clone(),
                 sequence_number: identified.sequence_number,
                 event,
-            })
-        })
-        .collect();
+            });
+        }
+    }
 
     Ok(events)
 }

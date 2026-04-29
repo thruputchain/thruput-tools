@@ -999,6 +999,7 @@ dependencies = [
  "groundhog-native-exec",
  "groundhog-rpc-api",
  "groundhog-rpc-api-types",
+ "groundhog-rpc-server",
  "groundhog-signing",
  "groundhog-trace",
  "groundhog-wasm-meter 0.2.0",
@@ -1099,16 +1100,15 @@ dependencies = [
  "clap",
  "groundhog-rpc-api",
  "groundhog-rpc-api-types",
+ "groundhog-rpc-server",
  "groundhog-xdr",
  "groundhog_indexer",
  "groundhog_scheduler",
- "hex",
  "jsonrpsee",
  "prometheus",
  "rpc_driver",
  "serde",
  "serde_json",
- "sha2",
  "thiserror 2.0.18",
  "tokio",
  "toml",
@@ -1117,6 +1117,22 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "xdr-common",
+]
+
+[[package]]
+name = "groundhog-rpc-server"
+version = "0.2.5"
+dependencies = [
+ "async-trait",
+ "groundhog-rpc-api",
+ "groundhog-rpc-api-types",
+ "groundhog-xdr",
+ "hex",
+ "jsonrpsee",
+ "sha2",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
  "xdrs",
 ]
 

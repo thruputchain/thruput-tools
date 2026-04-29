@@ -1,8 +1,8 @@
 # Groundhog Developer Tools
 
 Off-chain developer tooling for the Groundhog smart contract
-platform. Monorepo containing the CLI, RPC gateway, transaction
-signing library, and typed client.
+platform. Monorepo containing the CLI, RPC gateway, reusable RPC
+server layer, transaction signing library, and typed client.
 
 ## Crates
 
@@ -14,9 +14,10 @@ signing library, and typed client.
 | [`client`](crates/client/) | Typed JSON-RPC client |
 | [`api-types`](crates/api-types/) | Shared RPC types |
 | [`rpc-api`](crates/rpc-api/) | Shared jsonrpsee trait definitions |
+| [`rpc-server`](crates/rpc-server/) | Shared server-side JSON-RPC implementation and validation |
 | [`dev-node`](crates/dev-node/) | Experimental local JSON-RPC dev node (`native_exec` prototype backend) |
-| [`groundhog-sys`](crates/groundhog-sys/) | Local patched FFI bindings override |
-| [`tx-builder`](crates/tx-builder/) | Thin CLI wrapper for tx construction |
+| [`e2e-tests`](crates/e2e-tests/) | Process-level JSON-RPC smoke tests |
+| [`bench`](crates/bench/) | Benchmark harnesses |
 
 ## Quick Start
 
@@ -67,6 +68,7 @@ cargo fmt --check                       # format check
 - [Local dev-node prototype](docs/cli/localdev-rpc-node.md)
 - [Embedded dev-node backend spec](docs/cli/specs/2026-04-24-embedded-dev-node-backend.md)
 - [Embedded dev-node backend plan](docs/cli/plans/2026-04-24-embedded-dev-node-backend.md)
+- [RPC server extraction plan](docs/cli/plans/2026-04-28-rpc-server-extraction.md)
 - [Gateway system design](docs/gateway/system-design.md)
 - [Gateway API sketch](docs/gateway/api-sketch.md)
 - [Gateway roadmap](docs/gateway/roadmap.md)
