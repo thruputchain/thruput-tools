@@ -29,6 +29,7 @@ impl GatewayBackend {
 
 #[async_trait]
 impl SubmitPlane for GatewayBackend {
+    #[tracing::instrument(skip_all, fields(tx_hash = ?tx.hash, tx_bytes_len = tx.bytes.len()))]
     async fn submit_raw_transaction(&self, tx: ValidatedTransaction) -> Result<(), RpcServerError> {
         self.ctx
             .batch_submitter
@@ -40,12 +41,14 @@ impl SubmitPlane for GatewayBackend {
 
 #[async_trait]
 impl ChainPlane for GatewayBackend {
+    #[tracing::instrument(skip_all)]
     async fn chain_tip(&self) -> Result<ChainTip, RpcServerError> {
         handlers::blocks::chain_tip(&self.ctx)
             .await
             .map_err(Into::into)
     }
 
+    #[tracing::instrument(skip_all, fields(?height))]
     async fn get_block_by_number(
         &self,
         height: BlockHeight,
@@ -55,6 +58,7 @@ impl ChainPlane for GatewayBackend {
             .map_err(Into::into)
     }
 
+    #[tracing::instrument(skip_all)]
     async fn pending_transaction_count(&self) -> Result<u64, RpcServerError> {
         handlers::blocks::pending_transaction_count(&self.ctx)
             .await
@@ -64,6 +68,7 @@ impl ChainPlane for GatewayBackend {
 
 #[async_trait]
 impl ReadPlane for GatewayBackend {
+    #[tracing::instrument(skip_all, fields(?tx_hash))]
     async fn transaction_receipt(
         &self,
         tx_hash: TxHash,
@@ -73,6 +78,7 @@ impl ReadPlane for GatewayBackend {
             .map_err(Into::into)
     }
 
+    #[tracing::instrument(skip_all, fields(?tx_hash))]
     async fn transaction_status(
         &self,
         tx_hash: TxHash,
@@ -82,6 +88,7 @@ impl ReadPlane for GatewayBackend {
             .map_err(Into::into)
     }
 
+    #[tracing::instrument(skip_all, fields(?address, ?from_height, ?to_height))]
     async fn contract_events(
         &self,
         address: ContractAddress,
