@@ -547,6 +547,7 @@ mod tests {
         env,
         ffi::OsString,
         fs,
+        io::Write,
         os::unix::fs::PermissionsExt,
         path::PathBuf,
         sync::Mutex,
@@ -748,7 +749,7 @@ mod tests {
         let binary = executable_script(
             tmp.path(),
             "fake-hogd-dev",
-            "read genesis\ndd if=/dev/zero bs=70000 count=1 2>/dev/null | tr '\\000' x\nsleep 60\n",
+            "read genesis\nawk 'BEGIN { for (i = 0; i < 70000; i++) printf \"x\" }'\nsleep 60\n",
         );
         let config = HogdDevConfig::default().with_startup_timeout(Duration::from_secs(2));
 
@@ -761,7 +762,11 @@ mod tests {
 
     fn executable_script(dir: &std::path::Path, name: &str, body: &str) -> std::path::PathBuf {
         let path = dir.join(name);
-        fs::write(&path, format!("#!/bin/sh\n{body}\n")).expect("bug: script should be written");
+        {
+            let mut file = fs::File::create(&path).expect("bug: script should be created");
+            write!(file, "#!/bin/sh\n{body}\n").expect("bug: script should be written");
+            file.sync_all().expect("bug: script should be synced");
+        }
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
             .expect("bug: permissions should be set");
         path
