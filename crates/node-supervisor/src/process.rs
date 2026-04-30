@@ -309,11 +309,14 @@ impl SupervisedChild {
 
 #[cfg(all(test, unix))]
 mod tests {
+    use crate::test_support::{FAKE_HOGD_DEV_MODE_ENV, fake_hogd_dev_binary};
+
     use super::{ChildProcessSpec, ChildSupervisor};
 
     #[tokio::test]
     async fn wait_reports_child_exit_status() {
-        let spec = ChildProcessSpec::new("/bin/sh").args(["-c", "exit 7"]);
+        let spec =
+            ChildProcessSpec::new(fake_hogd_dev_binary()).env(FAKE_HOGD_DEV_MODE_ENV, "exit-7");
         let supervisor = ChildSupervisor::new(spec);
         let mut child = supervisor
             .spawn()
@@ -329,7 +332,8 @@ mod tests {
 
     #[tokio::test]
     async fn kill_and_wait_stops_running_child() {
-        let spec = ChildProcessSpec::new("/bin/sleep").arg("60");
+        let spec =
+            ChildProcessSpec::new(fake_hogd_dev_binary()).env(FAKE_HOGD_DEV_MODE_ENV, "hang");
         let supervisor = ChildSupervisor::new(spec);
         let mut child = supervisor
             .spawn()

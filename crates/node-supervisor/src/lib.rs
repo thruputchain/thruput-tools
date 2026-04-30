@@ -11,6 +11,9 @@ pub mod hogd_dev;
 pub mod process;
 pub mod server;
 
+#[cfg(test)]
+mod test_support;
+
 pub use config::{HogdDevConfig, NodeSupervisorConfig};
 pub use error::NodeSupervisorError;
 pub use hogd_dev::{

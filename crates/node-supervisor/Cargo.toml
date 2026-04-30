@@ -24,3 +24,7 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
+
+[[example]]
+name = "fake_hogd_dev"
+path = "tests/fixtures/fake_hogd_dev.rs"

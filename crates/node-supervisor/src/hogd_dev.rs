@@ -95,6 +95,14 @@ impl HogdDevProcess {
         genesis_payload: impl AsRef<[u8]>,
     ) -> Result<Self, NodeSupervisorError> {
         let spec = build_hogd_dev_spec(binary.as_ref(), config);
+        Self::start_with_spec(config, spec, genesis_payload).await
+    }
+
+    async fn start_with_spec(
+        config: &HogdDevConfig,
+        spec: ChildProcessSpec,
+        genesis_payload: impl AsRef<[u8]>,
+    ) -> Result<Self, NodeSupervisorError> {
         let mut child = ChildSupervisor::new(spec).spawn()?;
         let program = child.program().to_string();
         let mut stdin = child
@@ -547,7 +555,6 @@ mod tests {
         env,
         ffi::OsString,
         fs,
-        io::Write,
         os::unix::fs::PermissionsExt,
         path::PathBuf,
         sync::Mutex,
@@ -560,7 +567,10 @@ mod tests {
         DEFAULT_HOGD_DEV_BINARY, HOGD_DEV_BINARY_ENV, HogdDevProcess, build_hogd_dev_spec,
         parse_readiness_line, resolve_hogd_dev_binary,
     };
-    use crate::{HogdDevConfig, NodeSupervisorError};
+    use crate::{
+        HogdDevConfig, NodeSupervisorError,
+        test_support::{FAKE_HOGD_DEV_MODE_ENV, fake_hogd_dev_binary},
+    };
 
     const READY: &str = r#"{"status":"ready","network_id":"groundhog-local","endpoints":{"scheduler":"127.0.0.1:12345","read":"127.0.0.1:12346","control":"127.0.0.1:12347"}}"#;
     static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -634,7 +644,7 @@ mod tests {
     fn configured_binary_must_be_executable() {
         let tmp = TempDir::new().expect("bug: temp dir should be created");
         let path = tmp.path().join(DEFAULT_HOGD_DEV_BINARY);
-        fs::write(&path, "#!/bin/sh\n").expect("bug: file should be written");
+        fs::write(&path, b"").expect("bug: file should be written");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644))
             .expect("bug: permissions should be set");
         let config = HogdDevConfig::default().with_binary_path(path);
@@ -650,7 +660,7 @@ mod tests {
     #[test]
     fn explicit_binary_path_resolves() {
         let tmp = TempDir::new().expect("bug: temp dir should be created");
-        let path = executable_script(tmp.path(), DEFAULT_HOGD_DEV_BINARY, "exit 0");
+        let path = executable_file(tmp.path(), DEFAULT_HOGD_DEV_BINARY);
         let config = HogdDevConfig::default().with_binary_path(path.clone());
 
         assert_eq!(
@@ -661,20 +671,11 @@ mod tests {
 
     #[tokio::test]
     async fn fake_child_reports_readiness_and_stops_cleanly() {
-        let tmp = TempDir::new().expect("bug: temp dir should be created");
-        let ready = READY;
-        let binary = executable_script(
-            tmp.path(),
-            "fake-hogd-dev",
-            &format!(
-                "trap 'echo \"{{\\\"level\\\":\\\"info\\\",\\\"target\\\":\\\"hogd_dev\\\",\\\"message\\\":\\\"stopping\\\"}}\" >&2; exit 0' TERM\nread genesis\nprintf '%s\\n' '{ready}'\necho '{{\"level\":\"info\",\"target\":\"hogd_dev\",\"message\":\"ready\"}}' >&2\nwhile :; do sleep 1 & wait $!; done\n"
-            ),
-        );
         let config = HogdDevConfig::default()
             .with_startup_timeout(Duration::from_secs(2))
             .with_shutdown_grace(Duration::from_millis(500));
 
-        let mut process = start_fake_hogd_dev(&config, &binary, b"genesis\n")
+        let mut process = start_fake_hogd_dev(&config, "ready", b"genesis\n")
             .await
             .expect("bug: fake hogd-dev should start");
 
@@ -686,20 +687,11 @@ mod tests {
 
     #[tokio::test]
     async fn fake_child_ignoring_sigterm_is_killed_after_grace() {
-        let tmp = TempDir::new().expect("bug: temp dir should be created");
-        let ready = READY;
-        let binary = executable_script(
-            tmp.path(),
-            "fake-hogd-dev",
-            &format!(
-                "trap '' TERM\nread genesis\nprintf '%s\\n' '{ready}'\nwhile :; do sleep 1 & wait $!; done\n"
-            ),
-        );
         let config = HogdDevConfig::default()
             .with_startup_timeout(Duration::from_secs(2))
             .with_shutdown_grace(Duration::from_millis(100));
 
-        let mut process = start_fake_hogd_dev(&config, &binary, b"genesis\n")
+        let mut process = start_fake_hogd_dev(&config, "ignore-term", b"genesis\n")
             .await
             .expect("bug: fake hogd-dev should start");
 
@@ -712,11 +704,9 @@ mod tests {
 
     #[tokio::test]
     async fn fake_child_exit_before_readiness_is_typed() {
-        let tmp = TempDir::new().expect("bug: temp dir should be created");
-        let binary = executable_script(tmp.path(), "fake-hogd-dev", "exit 9");
         let config = HogdDevConfig::default().with_startup_timeout(Duration::from_secs(2));
 
-        let err = start_fake_hogd_dev(&config, &binary, b"genesis\n")
+        let err = start_fake_hogd_dev(&config, "exit-before-ready", b"genesis\n")
             .await
             .expect_err("bug: early child exit should fail");
 
@@ -728,15 +718,9 @@ mod tests {
 
     #[tokio::test]
     async fn startup_timeout_kills_fake_child() {
-        let tmp = TempDir::new().expect("bug: temp dir should be created");
-        let binary = executable_script(
-            tmp.path(),
-            "fake-hogd-dev",
-            "read genesis\necho '{\"level\":\"info\",\"message\":\"waiting\"}' >&2\nwhile :; do :; done\n",
-        );
         let config = HogdDevConfig::default().with_startup_timeout(Duration::from_millis(100));
 
-        let err = start_fake_hogd_dev(&config, &binary, b"genesis\n")
+        let err = start_fake_hogd_dev(&config, "timeout", b"genesis\n")
             .await
             .expect_err("bug: startup should time out");
 
@@ -748,15 +732,9 @@ mod tests {
 
     #[tokio::test]
     async fn oversized_readiness_line_is_rejected() {
-        let tmp = TempDir::new().expect("bug: temp dir should be created");
-        let binary = executable_script(
-            tmp.path(),
-            "fake-hogd-dev",
-            "read genesis\nawk 'BEGIN { for (i = 0; i < 70000; i++) printf \"x\" }'\nsleep 60\n",
-        );
         let config = HogdDevConfig::default().with_startup_timeout(Duration::from_secs(2));
 
-        let err = start_fake_hogd_dev(&config, &binary, b"genesis\n")
+        let err = start_fake_hogd_dev(&config, "oversized-readiness", b"genesis\n")
             .await
             .expect_err("bug: oversized readiness should fail");
 
@@ -768,30 +746,17 @@ mod tests {
 
     async fn start_fake_hogd_dev(
         config: &HogdDevConfig,
-        binary: &std::path::Path,
+        mode: &str,
         genesis_payload: &[u8],
     ) -> Result<HogdDevProcess, NodeSupervisorError> {
-        let mut attempt = 0;
-        loop {
-            match HogdDevProcess::start_with_binary(config, binary, genesis_payload).await {
-                Err(NodeSupervisorError::Spawn { source, .. })
-                    if source.raw_os_error() == Some(libc::ETXTBSY) && attempt < 20 =>
-                {
-                    attempt += 1;
-                    tokio::time::sleep(Duration::from_millis(25)).await;
-                }
-                result => return result,
-            }
-        }
+        let spec =
+            build_hogd_dev_spec(fake_hogd_dev_binary(), config).env(FAKE_HOGD_DEV_MODE_ENV, mode);
+        HogdDevProcess::start_with_spec(config, spec, genesis_payload).await
     }
 
-    fn executable_script(dir: &std::path::Path, name: &str, body: &str) -> std::path::PathBuf {
+    fn executable_file(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
         let path = dir.join(name);
-        {
-            let mut file = fs::File::create(&path).expect("bug: script should be created");
-            write!(file, "#!/bin/sh\n{body}\n").expect("bug: script should be written");
-            file.sync_all().expect("bug: script should be synced");
-        }
+        fs::write(&path, b"").expect("bug: executable file should be written");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
             .expect("bug: permissions should be set");
         path
@@ -849,7 +814,7 @@ mod tests {
             .lock()
             .expect("bug: env lock should not be poisoned");
         let tmp = TempDir::new().expect("bug: temp dir should be created");
-        let path = executable_script(tmp.path(), DEFAULT_HOGD_DEV_BINARY, "exit 0");
+        let path = executable_file(tmp.path(), DEFAULT_HOGD_DEV_BINARY);
         let _guard = EnvGuard::set(HOGD_DEV_BINARY_ENV, &path);
 
         assert_eq!(
@@ -865,7 +830,7 @@ mod tests {
             .lock()
             .expect("bug: env lock should not be poisoned");
         let tmp = TempDir::new().expect("bug: temp dir should be created");
-        let path = executable_script(tmp.path(), DEFAULT_HOGD_DEV_BINARY, "exit 0");
+        let path = executable_file(tmp.path(), DEFAULT_HOGD_DEV_BINARY);
         let _env_guard = EnvGuard::remove(HOGD_DEV_BINARY_ENV);
         let _path_guard = EnvGuard::set("PATH", tmp.path());
 
@@ -891,7 +856,7 @@ mod tests {
             "test would clobber existing sibling hogd-dev at {}",
             sibling.display()
         );
-        fs::write(&sibling, "#!/bin/sh\nexit 0\n").expect("bug: sibling script should be written");
+        fs::write(&sibling, b"").expect("bug: sibling file should be written");
         fs::set_permissions(&sibling, fs::Permissions::from_mode(0o755))
             .expect("bug: sibling permissions should be set");
         let _file_guard = FileGuard {
