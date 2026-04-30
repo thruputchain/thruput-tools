@@ -84,9 +84,36 @@ impl NodeSupervisorHandle {
         self.hogd.child_id()
     }
 
-    /// Wait until the JSON-RPC server stops accepting requests.
-    pub async fn rpc_stopped(&self) {
-        self.rpc_handle.clone().stopped().await;
+    /// Wait until either hogd-dev exits or the JSON-RPC server stops, then
+    /// tear the other side down.
+    ///
+    /// This is the supervisor-level "run until something ends" entry point.
+    /// If hogd-dev dies after readiness, the public JSON-RPC facade keeps
+    /// answering but every backend call would fail; this method observes that
+    /// and shuts the facade down so the CLI sees a clean stop instead of
+    /// silent malfunction. If the JSON-RPC server stops first (e.g. via an
+    /// external `stop()` call), hogd-dev is shut down with the configured
+    /// grace timeout.
+    ///
+    /// Returns the hogd-dev exit status either way.
+    #[tracing::instrument(skip_all)]
+    pub async fn stopped(&mut self) -> Result<ExitStatus, NodeSupervisorError> {
+        let rpc_done = self.rpc_handle.clone().stopped();
+        tokio::select! {
+            result = self.hogd.stopped() => {
+                let status = result?;
+                tracing::warn!(?status, "hogd-dev exited; stopping JSON-RPC server");
+                if let Err(error) = self.rpc_handle.stop() {
+                    tracing::debug!(%error, "JSON-RPC server already stopped");
+                }
+                self.rpc_handle.clone().stopped().await;
+                Ok(status)
+            }
+            () = rpc_done => {
+                tracing::info!("JSON-RPC server stopped; stopping hogd-dev");
+                self.hogd.stop().await
+            }
+        }
     }
 
     /// Stop the JSON-RPC server and shut hogd-dev down with the configured
@@ -94,7 +121,7 @@ impl NodeSupervisorHandle {
     #[tracing::instrument(skip_all)]
     pub async fn stop(&mut self) -> Result<ExitStatus, NodeSupervisorError> {
         if let Err(error) = self.rpc_handle.stop() {
-            tracing::warn!(%error, "JSON-RPC server already stopped");
+            tracing::debug!(%error, "JSON-RPC server already stopped");
         }
         self.rpc_handle.clone().stopped().await;
         self.hogd.stop().await
@@ -130,6 +157,7 @@ mod tests {
     use std::time::Duration;
 
     use groundhog_rpc_api::GroundhogApiClient;
+    use groundhog_rpc_api_types::error::codes;
     use jsonrpsee::core::ClientError;
     use jsonrpsee::http_client::HttpClientBuilder;
     use serial_test::serial;
@@ -196,11 +224,11 @@ mod tests {
         let ClientError::Call(call_err) = err else {
             panic!("bug: expected JSON-RPC call error, got {err:?}");
         };
-        // 16004 == codes::NOT_IMPLEMENTED; we assert via the public message
-        // contract rather than re-importing the constant from rpc-server.
-        assert!(
-            call_err.message().contains("not implemented"),
-            "expected NotImplemented message, got: {}",
+        assert_eq!(
+            call_err.code(),
+            codes::NOT_IMPLEMENTED,
+            "stub backend should map to NOT_IMPLEMENTED ({}); got message: {}",
+            codes::NOT_IMPLEMENTED,
             call_err.message()
         );
 
@@ -209,5 +237,45 @@ mod tests {
             !status.success() || status.code() == Some(0),
             "fake hogd-dev should exit cleanly after SIGTERM",
         );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn start_rolls_back_hogd_dev_when_rpc_bind_fails() {
+        let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "ready");
+
+        // Occupy a loopback port so the supervisor's RPC bind hits EADDRINUSE.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bug: ephemeral bind succeeds");
+        let occupied = listener
+            .local_addr()
+            .expect("bug: bound listener has local addr");
+
+        let hogd = HogdDevConfig::default()
+            .with_binary_path(fake_hogd_dev_binary())
+            .with_startup_timeout(Duration::from_secs(5))
+            .with_shutdown_grace(Duration::from_secs(2));
+        let config = NodeSupervisorConfig::default()
+            .with_rpc_listen_address(occupied.to_string())
+            .with_hogd_dev(hogd);
+
+        // The rollback path awaits hogd-dev shutdown before returning. If
+        // that hangs, the timeout fires and the test fails — proving the
+        // hogd-dev child was reaped synchronously.
+        let result = tokio::time::timeout(
+            Duration::from_secs(10),
+            NodeSupervisorHandle::start(config, b""),
+        )
+        .await
+        .expect("bug: start should roll back and return promptly on rpc bind failure");
+
+        let err = result.expect_err("bug: occupied port should fail rpc bind");
+        assert!(
+            matches!(err, NodeSupervisorError::RpcBind { .. }),
+            "expected RpcBind, got {err:?}",
+        );
+
+        drop(listener);
     }
 }
