@@ -345,7 +345,12 @@ async fn read_readiness_line(
     match read_result {
         Ok(Ok(CappedLine::Eof)) => {
             abort_stderr_task(stderr_task);
-            if let Some(status) = child.try_wait()? {
+            // EOF on stdout means the child has either already exited or is
+            // about to. `try_wait()` polls `waitpid`, which races SIGCHLD
+            // delivery on Linux — so a tight EOF→try_wait sequence can see
+            // `None` and misclassify a clean exit as `ReadinessRead`. Bridge
+            // the race with a short `wait()` before giving up.
+            if let Some(status) = wait_briefly_for_exit(child).await? {
                 return Err(NodeSupervisorError::ExitedBeforeReady { program, status });
             }
             kill_unready_child(child).await;
@@ -386,6 +391,25 @@ async fn read_readiness_line(
             abort_stderr_task(stderr_task);
             Err(NodeSupervisorError::ReadinessTimeout { program, timeout })
         }
+    }
+}
+
+/// Bridge the EOF→`try_wait` race after the child closes stdout.
+///
+/// Tries `try_wait()` first. If the child has not been reaped yet, awaits
+/// `wait()` with a short cap — long enough to outlast any SIGCHLD delivery
+/// jitter, short enough that a genuinely-stuck child still hits the cap and
+/// gets force-killed by the caller.
+async fn wait_briefly_for_exit(
+    child: &mut SupervisedChild,
+) -> Result<Option<ExitStatus>, NodeSupervisorError> {
+    if let Some(status) = child.try_wait()? {
+        return Ok(Some(status));
+    }
+    match time::timeout(Duration::from_millis(100), child.wait()).await {
+        Ok(Ok(status)) => Ok(Some(status)),
+        Ok(Err(error)) => Err(error),
+        Err(_) => Ok(None),
     }
 }
 
