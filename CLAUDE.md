@@ -281,6 +281,8 @@ includes test and bench code), so always use that flag locally too.
   the hogd-owned subprocess local-node backend (subprocess over FFI).
 - `docs/cli/plans/2026-04-29-local-node-hogd-dev-supervisor.md` —
   node-supervisor implementation plan and PR boundaries.
+- `docs/cli/plans/2026-04-30-hogd-dev-binary-bootstrap.md` — hogd-side
+  bootstrap plan for the smallest credible `hogd-dev` v1 binary.
 - `docs/cli/specs/2026-04-29-hogd-dev-process-contract.md` — draft
   hogd-dev subprocess contract.
 - `docs/cli/specs/2026-04-29-node-supervisor-x23-client-boundary.md` —

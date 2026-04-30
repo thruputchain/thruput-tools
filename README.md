@@ -69,6 +69,7 @@ cargo fmt --check                       # format check
 - [CLI roadmap](docs/cli/roadmap.md)
 - [Hogd-dev hybrid dev-node design](docs/cli/2026-04-25-hogd-dev-node-hybrid.md)
 - [Local node hogd-dev supervisor plan](docs/cli/plans/2026-04-29-local-node-hogd-dev-supervisor.md)
+- [Hogd-dev binary bootstrap plan](docs/cli/plans/2026-04-30-hogd-dev-binary-bootstrap.md)
 - [Hogd-dev process contract proposal](docs/cli/specs/2026-04-29-hogd-dev-process-contract.md)
 - [Node-supervisor x23 client boundary](docs/cli/specs/2026-04-29-node-supervisor-x23-client-boundary.md)
 - [Gateway system design](docs/gateway/system-design.md)

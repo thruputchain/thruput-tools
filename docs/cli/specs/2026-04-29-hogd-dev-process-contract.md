@@ -19,6 +19,40 @@ agreement before depending on a real binary.
 path, read APIs, and dev-control APIs. Rust owns only process lifecycle, dev
 account/genesis input, JSON-RPC facade wiring, log forwarding, and shutdown.
 
+## v1 Reduced Contract
+
+The full contract below describes the long-term shape. **The first hogd-dev
+binary (gating PR 4a) implements a deliberately reduced subset.** When this
+spec disagrees with the v1-reduced subset, the reduced subset wins for the
+v1 binary; the long-form contract describes the target the binary grows
+toward.
+
+v1 reductions:
+
+- **Endpoints.** Only `scheduler` (`SchedulerCoord1`) is bound and
+  advertised in the readiness JSON. `read` and `control` are absent in v1
+  and are *optional* in the readiness `endpoints` map. The supervisor
+  treats absent keys as "stub plane stays NotImplemented in JSON-RPC,"
+  not a startup failure.
+- **CLI flags.** v1 accepts `--listen-host`, `--scheduler-port`, and
+  `--readiness stdout`. **No `--read-port`, `--control-port`, or
+  `--genesis-stdin` flags in v1.** They are added when the corresponding
+  capabilities exist.
+- **Genesis.** v1 hogd-dev does **not** load genesis itself. The
+  supervisor loads genesis over `schedcoord_load_genesis_configuration`
+  after readiness, lifted from chuckd-rs. See
+  [`../plans/2026-04-30-hogd-dev-binary-bootstrap.md`](../plans/2026-04-30-hogd-dev-binary-bootstrap.md)
+  for the rationale and provenance.
+- **Logging.** v1 stderr is free-form text via existing
+  `hogd::info/warn/error`. NDJSON formatter is a follow-up.
+- **Shutdown.** v1 SIGTERM handler sets a `sig_atomic_t` flag; the main
+  thread observes it and terminates the process directly. v1 does **not**
+  promise clean component teardown — the supervisor's SIGKILL escalation
+  is the safety net.
+
+When v1 is replaced by a richer hogd-dev, this section can be deleted and
+the long-form contract takes over verbatim.
+
 ## Contract Checks Before PR 2
 
 This document intentionally leaves some implementation choices as proposed
@@ -53,7 +87,8 @@ The supervisor resolves the child binary, named `hogd-dev`, in this order:
 4. `PATH`;
 5. typed startup error.
 
-Proposed v1 invocation shape:
+Target invocation shape (long-form contract; see "v1 Reduced Contract"
+above for what the first hogd-dev binary actually accepts):
 
 ```bash
 hogd-dev \
@@ -65,8 +100,11 @@ hogd-dev \
   --readiness stdout
 ```
 
-Rust writes the dev genesis payload to stdin. v1 is ephemeral; no state
-directory is part of the contract until hogd-dev persistence is real.
+In the target shape Rust writes the dev genesis payload to stdin. v1 is
+ephemeral; no state directory is part of the contract until hogd-dev
+persistence is real. **The v1 binary does not accept `--read-port`,
+`--control-port`, or `--genesis-stdin`** — they are added when the
+matching capabilities exist (see the v1-reduced section).
 
 ## Readiness
 
