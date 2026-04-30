@@ -16,25 +16,42 @@ use serde_json::json;
 pub fn run(
     port: u16,
     account_count: usize,
+    hogd_dev_binary: Option<std::path::PathBuf>,
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    use groundhog_dev_node::{DevNodeConfig, start_server};
-    use tracing_subscriber::EnvFilter;
-
-    let default_filter = if print.is_json() {
+    let default_filter = if hogd_dev_binary.is_some() {
+        if print.is_json() {
+            "groundhog_node_supervisor=warn"
+        } else {
+            "groundhog_node_supervisor=info"
+        }
+    } else if print.is_json() {
         "groundhog_dev_node=warn"
     } else {
         "groundhog_dev_node=info"
     };
+    init_tracing(default_filter);
 
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_filter)),
-        )
-        .with_target(false)
-        .without_time()
-        .try_init();
+    let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
+
+    rt.block_on(async {
+        if let Some(binary) = hogd_dev_binary {
+            return run_hogd_dev(port, binary, cmd, print).await;
+        }
+
+        run_native_exec(port, account_count, cmd, print).await
+    })
+}
+
+#[cfg(feature = "dev-node")]
+async fn run_native_exec(
+    port: u16,
+    account_count: usize,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
+    use groundhog_dev_node::{DevNodeConfig, start_server};
 
     let config = DevNodeConfig {
         listen_address: format!("127.0.0.1:{port}"),
@@ -42,19 +59,17 @@ pub fn run(
         ..Default::default()
     };
 
-    let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
-
-    rt.block_on(async {
+    {
         let handle = start_server(config).await.map_err(map_start_error)?;
 
         if print.is_json() {
             print.json(&CommandResult::new(
                 cmd,
-                startup_payload(handle.addr, &handle.accounts),
+                native_startup_payload(handle.addr, &handle.accounts),
             ))?;
         } else {
             // Print startup banner
-            print.status("Groundhog Dev Node v0.1.0 (experimental)");
+            print.status("Groundhog Dev Node v0.1.0 (experimental, legacy prototype)");
             print.status("Chain: groundhog-local (dev mode)");
             print.warn(
                 "prototype backend: native_exec/test_ffi. \
@@ -111,13 +126,94 @@ pub fn run(
             ));
         }
         Ok(())
-    })
+    }
+}
+
+#[cfg(feature = "dev-node")]
+async fn run_hogd_dev(
+    port: u16,
+    binary: std::path::PathBuf,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
+    use groundhog_node_supervisor::{
+        HogdDevConfig, NodeSupervisorConfig, NodeSupervisorError, NodeSupervisorHandle,
+        SupervisorStop,
+    };
+
+    let hogd = HogdDevConfig::default().with_binary_path(binary);
+    let config = NodeSupervisorConfig::default()
+        .with_rpc_listen_address(format!("127.0.0.1:{port}"))
+        .with_hogd_dev(hogd);
+
+    // PR 4a will replace this empty payload with deterministic dev genesis.
+    let handle = NodeSupervisorHandle::start(config, b"")
+        .await
+        .map_err(|err| CliError::NodeSupervisor(err.to_string()))?;
+    let rpc_addr = handle.rpc_addr();
+    let readiness = handle.hogd_readiness().clone();
+
+    if print.is_json() {
+        print.json(&CommandResult::new(
+            cmd,
+            hogd_dev_startup_payload(rpc_addr, &readiness),
+        ))?;
+    } else {
+        print.status("Groundhog Local Node (experimental)");
+        print.status(format_args!("Chain: {}", readiness.network_id));
+        print.warn("backend: hogd-dev (planes stubbed; JSON-RPC methods return NOT_IMPLEMENTED)");
+        print.status(format_args!("Listening on http://{rpc_addr}"));
+        print.status(format_args!(
+            "hogd-dev scheduler: {}",
+            readiness.endpoints.scheduler
+        ));
+        print.status(format_args!("hogd-dev read: {}", readiness.endpoints.read));
+        print.status(format_args!(
+            "hogd-dev control: {}",
+            readiness.endpoints.control
+        ));
+    }
+
+    let stop_signal = async {
+        tokio::signal::ctrl_c()
+            .await
+            .map_err(|source| NodeSupervisorError::StopSignal { source })?;
+        if !print.is_json() {
+            print.status("");
+            print.status("Shutting down...");
+        }
+        Ok(())
+    };
+
+    let outcome = handle
+        .run_until(stop_signal)
+        .await
+        .map_err(|err| CliError::NodeSupervisor(err.to_string()))?;
+    match outcome {
+        SupervisorStop::HogdExited(status) => {
+            if !print.is_json() {
+                print.status(format_args!("hogd-dev exited with status {status}"));
+            }
+            if status.success() {
+                Ok(())
+            } else {
+                Err(CliError::NodeSupervisor(format!(
+                    "hogd-dev exited with status {status}"
+                )))
+            }
+        }
+        SupervisorStop::RpcStopped(_) | SupervisorStop::StopRequested(_) => Ok(()),
+        other => Err(CliError::NodeSupervisor(format!(
+            "unexpected supervisor stop state: {other:?}"
+        ))),
+    }
 }
 
 #[cfg(not(feature = "dev-node"))]
 pub fn run(
     _port: u16,
     _account_count: usize,
+    _hogd_dev_binary: Option<std::path::PathBuf>,
     _cmd: &'static str,
     _print: &Print,
 ) -> Result<(), CliError> {
@@ -127,6 +223,20 @@ pub fn run(
          cargo install groundhog-cli --features dev-node"
             .into(),
     ))
+}
+
+#[cfg(feature = "dev-node")]
+fn init_tracing(default_filter: &str) {
+    use tracing_subscriber::EnvFilter;
+
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_filter)),
+        )
+        .with_writer(std::io::stderr)
+        .with_target(false)
+        .without_time()
+        .try_init();
 }
 
 #[cfg(feature = "dev-node")]
@@ -143,7 +253,10 @@ fn map_start_error(err: Box<dyn std::error::Error + Send + Sync>) -> CliError {
 }
 
 #[cfg(feature = "dev-node")]
-fn startup_payload(addr: std::net::SocketAddr, accounts: &[DevAccount]) -> serde_json::Value {
+fn native_startup_payload(
+    addr: std::net::SocketAddr,
+    accounts: &[DevAccount],
+) -> serde_json::Value {
     json!({
         "chain": "groundhog-local",
         "mode": "dev",
@@ -162,11 +275,43 @@ fn startup_payload(addr: std::net::SocketAddr, accounts: &[DevAccount]) -> serde
     })
 }
 
+#[cfg(feature = "dev-node")]
+fn hogd_dev_startup_payload(
+    addr: std::net::SocketAddr,
+    readiness: &groundhog_node_supervisor::HogdDevReadiness,
+) -> serde_json::Value {
+    json!({
+        "chain": readiness.network_id,
+        "mode": "dev",
+        "experimental": true,
+        "backend": {
+            "kind": "hogd_dev",
+            "stability": "experimental",
+            "planes": {
+                "submit": "stub",
+                "chain": "stub",
+                "read": "stub",
+            },
+            "limitations": [
+                "JSON-RPC methods return NOT_IMPLEMENTED until hogd-dev x23 adapters land"
+            ],
+            "endpoints": {
+                "scheduler": readiness.endpoints.scheduler.to_string(),
+                "read": readiness.endpoints.read.to_string(),
+                "control": readiness.endpoints.control.to_string(),
+            },
+        },
+        "rpc_url": format!("http://{addr}"),
+        "accounts": [],
+    })
+}
+
 #[cfg(all(test, feature = "dev-node"))]
 mod tests {
-    use super::{map_start_error, startup_payload};
+    use super::{hogd_dev_startup_payload, map_start_error, native_startup_payload};
     use crate::CliError;
     use groundhog_dev_node::error::DevNodeError;
+    use groundhog_node_supervisor::parse_readiness_line;
     use groundhog_rpc_api_types::dev::DevAccount;
     use groundhog_rpc_api_types::hex::{Hex0x, HexBytes};
     use groundhog_xdr::types::ContractAddress;
@@ -210,7 +355,7 @@ mod tests {
             storage_tokens: 42,
         };
 
-        let payload = startup_payload(addr, &[account]);
+        let payload = native_startup_payload(addr, &[account]);
         assert_eq!(payload["rpc_url"], "http://127.0.0.1:9545");
         assert_eq!(payload["experimental"], true);
         assert_eq!(payload["backend"]["kind"], "native_exec_test_ffi");
@@ -221,5 +366,28 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn hogd_dev_startup_payload_includes_readiness_endpoints() {
+        let addr = "127.0.0.1:9545".parse().expect("bug: valid socket addr");
+        let readiness = parse_readiness_line(
+            "hogd-dev",
+            r#"{"status":"ready","network_id":"groundhog-local","endpoints":{"scheduler":"127.0.0.1:12345","read":"127.0.0.1:12346","control":"127.0.0.1:12347"}}"#,
+        )
+        .expect("bug: readiness should parse");
+
+        let payload = hogd_dev_startup_payload(addr, &readiness);
+        assert_eq!(payload["rpc_url"], "http://127.0.0.1:9545");
+        assert_eq!(payload["chain"], "groundhog-local");
+        assert_eq!(payload["backend"]["kind"], "hogd_dev");
+        assert_eq!(payload["backend"]["planes"]["submit"], "stub");
+        assert_eq!(payload["backend"]["planes"]["chain"], "stub");
+        assert_eq!(payload["backend"]["planes"]["read"], "stub");
+        assert_eq!(
+            payload["backend"]["endpoints"]["scheduler"],
+            "127.0.0.1:12345"
+        );
+        assert!(payload["accounts"].as_array().unwrap().is_empty());
     }
 }

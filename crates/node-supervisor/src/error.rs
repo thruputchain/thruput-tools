@@ -227,4 +227,12 @@ pub enum NodeSupervisorError {
         #[source]
         source: io::Error,
     },
+
+    /// The supervisor stop signal failed.
+    #[error("failed to wait for supervisor stop signal: {source}")]
+    StopSignal {
+        /// Underlying I/O error.
+        #[source]
+        source: io::Error,
+    },
 }
