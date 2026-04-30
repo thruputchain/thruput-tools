@@ -180,9 +180,50 @@ impl ChildSupervisor {
                 program: program.clone(),
                 source,
             })?;
+        #[cfg(unix)]
+        let process_group = resolve_process_group(self.spec.process_group, child.id(), &program)?;
 
-        Ok(SupervisedChild { program, child })
+        Ok(SupervisedChild {
+            program,
+            child,
+            #[cfg(unix)]
+            process_group,
+        })
     }
+}
+
+#[cfg(unix)]
+fn resolve_process_group(
+    configured_process_group: Option<i32>,
+    child_id: Option<u32>,
+    program: &str,
+) -> Result<Option<i32>, NodeSupervisorError> {
+    match configured_process_group {
+        Some(0) => child_id_to_i32(child_id, program).map(Some),
+        Some(process_group) => Ok(Some(process_group)),
+        None => Ok(None),
+    }
+}
+
+#[cfg(unix)]
+fn child_id_to_i32(child_id: Option<u32>, program: &str) -> Result<i32, NodeSupervisorError> {
+    let Some(child_id) = child_id else {
+        return Err(NodeSupervisorError::Status {
+            program: program.to_string(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "child process id is unavailable",
+            ),
+        });
+    };
+
+    i32::try_from(child_id).map_err(|_| NodeSupervisorError::Status {
+        program: program.to_string(),
+        source: std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "child pid does not fit in pid_t",
+        ),
+    })
 }
 
 /// Running child process owned by the supervisor.
@@ -190,6 +231,8 @@ impl ChildSupervisor {
 pub struct SupervisedChild {
     program: String,
     child: Child,
+    #[cfg(unix)]
+    process_group: Option<i32>,
 }
 
 impl SupervisedChild {
@@ -271,25 +314,41 @@ impl SupervisedChild {
         self.signal_process_group(libc::SIGKILL)
     }
 
+    /// Return true when the child's process group still has live members.
+    #[cfg(unix)]
+    pub fn process_group_exists(&self) -> Result<bool, NodeSupervisorError> {
+        let Some(target) = self.process_group_signal_target()? else {
+            return Ok(false);
+        };
+
+        // SAFETY: kill(2) with signal 0 performs existence/permission checks
+        // for the process group and does not deliver a signal.
+        let result = unsafe { libc::kill(target, 0) };
+        if result == 0 {
+            return Ok(true);
+        }
+
+        let source = std::io::Error::last_os_error();
+        match source.raw_os_error() {
+            Some(libc::ESRCH) => Ok(false),
+            Some(libc::EPERM) => Ok(true),
+            _ => Err(NodeSupervisorError::Signal {
+                program: self.program.clone(),
+                signal: ChildSignal::from_raw(0),
+                source,
+            }),
+        }
+    }
+
     #[cfg(unix)]
     fn signal_process_group(&self, signal: i32) -> Result<(), NodeSupervisorError> {
-        let Some(pid) = self.id() else {
+        let Some(target) = self.process_group_signal_target()? else {
             return Ok(());
         };
-        let Ok(pid) = i32::try_from(pid) else {
-            return Err(NodeSupervisorError::Signal {
-                program: self.program.clone(),
-                signal: ChildSignal::from_raw(signal),
-                source: std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "child pid does not fit in pid_t",
-                ),
-            });
-        };
-        let pgroup = -pid;
+
         // SAFETY: kill(2) is called with the child's process-group id and a
         // signal constant. It does not alias memory or retain pointers.
-        let result = unsafe { libc::kill(pgroup, signal) };
+        let result = unsafe { libc::kill(target, signal) };
         if result == 0 {
             return Ok(());
         }
@@ -304,6 +363,19 @@ impl SupervisedChild {
             signal: ChildSignal::from_raw(signal),
             source,
         })
+    }
+
+    #[cfg(unix)]
+    fn process_group_signal_target(&self) -> Result<Option<i32>, NodeSupervisorError> {
+        let process_group = match self.process_group {
+            Some(process_group) => process_group,
+            None => match self.id() {
+                Some(_) => child_id_to_i32(self.id(), &self.program)?,
+                None => return Ok(None),
+            },
+        };
+
+        Ok(Some(-process_group))
     }
 }
 

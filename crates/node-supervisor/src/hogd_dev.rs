@@ -120,7 +120,7 @@ impl HogdDevProcess {
             .ok_or_else(|| NodeSupervisorError::MissingStderr {
                 program: program.clone(),
             })?;
-        let stderr_task = Some(spawn_stderr_forwarder(stderr));
+        let mut stderr_task = Some(spawn_stderr_forwarder(stderr));
 
         if let Err(source) = stdin.write_all(genesis_payload.as_ref()).await {
             if let Some(status) = child.try_wait()? {
@@ -133,13 +133,20 @@ impl HogdDevProcess {
         }
         drop(stdin);
 
-        let readiness = read_readiness_line(
+        let readiness_result = read_readiness_line(
             &mut child,
             stdout,
             config.startup_timeout,
             stderr_task.as_ref(),
         )
-        .await?;
+        .await;
+        let readiness = match readiness_result {
+            Ok(readiness) => readiness,
+            Err(error) => {
+                wait_for_stderr_task(stderr_task.take()).await;
+                return Err(error);
+            }
+        };
 
         Ok(Self {
             readiness,
@@ -170,6 +177,7 @@ impl HogdDevProcess {
     /// Gracefully stop hogd-dev, escalating after the configured timeout.
     #[tracing::instrument(skip_all, fields(shutdown_grace = ?self.shutdown_grace))]
     pub async fn stop(&mut self) -> Result<ExitStatus, NodeSupervisorError> {
+        #[cfg(not(unix))]
         if let Some(status) = self.child.try_wait()? {
             self.wait_for_stderr_task().await;
             return Ok(status);
@@ -179,19 +187,42 @@ impl HogdDevProcess {
         self.child.terminate_process_group()?;
 
         #[cfg(unix)]
-        let status = if let Ok(result) = time::timeout(self.shutdown_grace, self.child.wait()).await
-        {
-            result?
-        } else {
-            self.child.kill_process_group()?;
-            self.child.wait().await?
-        };
+        let status = self.stop_process_group().await?;
 
         #[cfg(not(unix))]
         let status = self.child.kill_and_wait().await?;
 
         self.wait_for_stderr_task().await;
         Ok(status)
+    }
+
+    #[cfg(unix)]
+    async fn stop_process_group(&mut self) -> Result<ExitStatus, NodeSupervisorError> {
+        let deadline = time::Instant::now() + self.shutdown_grace;
+        let mut status = None;
+
+        loop {
+            if status.is_none() {
+                status = self.child.try_wait()?;
+            }
+
+            if !self.child.process_group_exists()? {
+                break;
+            }
+
+            let now = time::Instant::now();
+            if now >= deadline {
+                self.child.kill_process_group()?;
+                break;
+            }
+
+            time::sleep((deadline - now).min(Duration::from_millis(10))).await;
+        }
+
+        match status {
+            Some(status) => Ok(status),
+            None => self.child.wait().await,
+        }
     }
 
     async fn wait_for_stderr_task(&mut self) {
@@ -557,10 +588,10 @@ mod tests {
         fs,
         os::unix::fs::PermissionsExt,
         path::PathBuf,
-        sync::Mutex,
         time::{Duration, SystemTime, UNIX_EPOCH},
     };
 
+    use serial_test::serial;
     use tempfile::TempDir;
 
     use super::{
@@ -573,7 +604,6 @@ mod tests {
     };
 
     const READY: &str = r#"{"status":"ready","network_id":"groundhog-local","endpoints":{"scheduler":"127.0.0.1:12345","read":"127.0.0.1:12346","control":"127.0.0.1:12347"}}"#;
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn command_shape_matches_contract() {
@@ -703,6 +733,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn fake_child_helper_is_killed_after_leader_exits() {
+        let config = HogdDevConfig::default()
+            .with_startup_timeout(Duration::from_secs(2))
+            .with_shutdown_grace(Duration::from_millis(100));
+
+        let mut process = start_fake_hogd_dev(&config, "spawn-helper-ignore-term", b"genesis\n")
+            .await
+            .expect("bug: fake hogd-dev should start");
+        let process_group = i32::try_from(process.child_id().expect("bug: child should have pid"))
+            .expect("bug: child pid should fit in pid_t");
+
+        let status = process.stop().await.expect("bug: fake child should stop");
+        assert!(status.success());
+        assert_process_group_exits(process_group).await;
+    }
+
+    #[tokio::test]
     async fn fake_child_exit_before_readiness_is_typed() {
         let config = HogdDevConfig::default().with_startup_timeout(Duration::from_secs(2));
 
@@ -752,6 +799,24 @@ mod tests {
         let spec =
             build_hogd_dev_spec(fake_hogd_dev_binary(), config).env(FAKE_HOGD_DEV_MODE_ENV, mode);
         HogdDevProcess::start_with_spec(config, spec, genesis_payload).await
+    }
+
+    async fn assert_process_group_exits(process_group: i32) {
+        for _ in 0..50 {
+            if !process_group_exists(process_group) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        panic!("bug: process group {process_group} should exit");
+    }
+
+    fn process_group_exists(process_group: i32) -> bool {
+        // SAFETY: kill(2) with signal 0 only checks for process-group
+        // existence and does not deliver a signal.
+        let result = unsafe { libc::kill(-process_group, 0) };
+        result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
     }
 
     fn executable_file(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
@@ -809,10 +874,8 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn env_binary_path_resolves() {
-        let _lock = ENV_LOCK
-            .lock()
-            .expect("bug: env lock should not be poisoned");
         let tmp = TempDir::new().expect("bug: temp dir should be created");
         let path = executable_file(tmp.path(), DEFAULT_HOGD_DEV_BINARY);
         let _guard = EnvGuard::set(HOGD_DEV_BINARY_ENV, &path);
@@ -825,10 +888,8 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn path_binary_resolves() {
-        let _lock = ENV_LOCK
-            .lock()
-            .expect("bug: env lock should not be poisoned");
         let tmp = TempDir::new().expect("bug: temp dir should be created");
         let path = executable_file(tmp.path(), DEFAULT_HOGD_DEV_BINARY);
         let _env_guard = EnvGuard::remove(HOGD_DEV_BINARY_ENV);
@@ -842,10 +903,8 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn sibling_binary_path_resolves() {
-        let _lock = ENV_LOCK
-            .lock()
-            .expect("bug: env lock should not be poisoned");
         let current_exe = env::current_exe().expect("bug: current exe should resolve");
         let sibling_dir = current_exe
             .parent()
@@ -874,10 +933,8 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn missing_binary_returns_typed_error() {
-        let _lock = ENV_LOCK
-            .lock()
-            .expect("bug: env lock should not be poisoned");
         let tmp = TempDir::new().expect("bug: temp dir should be created");
         let _env_guard = EnvGuard::remove(HOGD_DEV_BINARY_ENV);
         let _path_guard = EnvGuard::set("PATH", tmp.path());

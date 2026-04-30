@@ -1,7 +1,7 @@
 use std::{
     env,
     io::{self, Read, Write},
-    process,
+    process::{self, Command},
     sync::atomic::{AtomicBool, Ordering},
     thread,
     time::Duration,
@@ -18,6 +18,8 @@ extern "C" fn handle_sigterm(_: i32) {
 fn main() {
     match env::var(MODE_ENV).as_deref() {
         Ok("ready") => run_ready(),
+        Ok("spawn-helper-ignore-term") => run_with_helper(),
+        Ok("helper-ignore-term") => run_ignore_term_loop(),
         Ok("ignore-term") => run_ignore_term(),
         Ok("exit-before-ready") => {
             read_genesis();
@@ -67,6 +69,29 @@ fn run_ignore_term() {
     ignore_sigterm();
     read_genesis();
     println!("{READY}");
+    run_ignore_term_loop();
+}
+
+#[allow(clippy::zombie_processes)]
+fn run_with_helper() {
+    install_sigterm_handler();
+    let current_exe = env::current_exe().expect("bug: fake child binary path should resolve");
+    // The parent intentionally exits without waiting so the supervisor test can
+    // prove process-group SIGKILL reaches descendants after leader exit.
+    let _helper = Command::new(current_exe)
+        .env(MODE_ENV, "helper-ignore-term")
+        .spawn()
+        .expect("bug: helper process should spawn");
+
+    read_genesis();
+    println!("{READY}");
+
+    while !TERMINATED.load(Ordering::SeqCst) {
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn run_ignore_term_loop() {
     loop {
         thread::sleep(Duration::from_secs(60));
     }
@@ -81,11 +106,10 @@ fn read_genesis() {
 
 fn install_sigterm_handler() {
     // SAFETY: installs a process-local handler that only stores to an atomic.
+    #[allow(function_casts_as_integer)]
+    let handler = handle_sigterm as libc::sighandler_t;
     unsafe {
-        libc::signal(
-            libc::SIGTERM,
-            handle_sigterm as *const () as libc::sighandler_t,
-        );
+        libc::signal(libc::SIGTERM, handler);
     }
 }
 
