@@ -21,6 +21,7 @@ extern "C" fn handle_sigterm(_: i32) {
 fn main() {
     match env::var(MODE_ENV).as_deref() {
         Ok("ready") => run_ready(),
+        Ok("ready-then-exit") => run_ready_then_exit(),
         Ok("spawn-helper-ignore-term") => run_with_helper(),
         Ok("helper-ignore-term") => run_ignore_term_loop(),
         Ok("ignore-term") => run_ignore_term(),
@@ -53,6 +54,18 @@ fn main() {
         },
         _ => {}
     }
+}
+
+fn run_ready_then_exit() {
+    write_pid_file_if_requested();
+    read_genesis();
+    println!("{READY}");
+    eprintln!(r#"{{"level":"info","target":"hogd_dev","message":"ready-then-exit"}}"#);
+    // Flush stdout/stderr so the supervisor sees readiness before the
+    // process disappears.
+    let _ = io::stdout().flush();
+    let _ = io::stderr().flush();
+    process::exit(0);
 }
 
 fn run_ready() {

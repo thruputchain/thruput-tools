@@ -321,6 +321,63 @@ mod tests {
 
     #[tokio::test]
     #[serial]
+    async fn stopped_observes_hogd_dev_exit_and_tears_down_rpc() {
+        let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "ready-then-exit");
+
+        let hogd = HogdDevConfig::default()
+            .with_binary_path(fake_hogd_dev_binary())
+            .with_startup_timeout(Duration::from_secs(5))
+            .with_shutdown_grace(Duration::from_secs(2));
+        let config = NodeSupervisorConfig::default()
+            .with_rpc_listen_address("127.0.0.1:0")
+            .with_hogd_dev(hogd);
+        let handle = NodeSupervisorHandle::start(config, b"")
+            .await
+            .expect("bug: supervisor should start against fake hogd-dev");
+
+        // Capture the bound RPC address before consuming the handle.
+        let rpc_addr = handle.rpc_addr();
+
+        // The fake reports readiness then immediately exits with code 0.
+        // `stopped()` should observe the child exit, tear down the RPC
+        // server, and return HogdExited.
+        let outcome = tokio::time::timeout(Duration::from_secs(5), handle.stopped())
+            .await
+            .expect("bug: stopped() should observe hogd-dev exit promptly")
+            .expect("bug: stopped() should not error on clean child exit");
+
+        match outcome {
+            SupervisorStop::HogdExited(status) => {
+                assert!(
+                    status.success(),
+                    "fake should exit cleanly with code 0, got {status:?}",
+                );
+            }
+            SupervisorStop::RpcStopped(_) => {
+                panic!("expected HogdExited, got RpcStopped — race lost the wrong way");
+            }
+        }
+
+        // RPC facade should be torn down: a fresh connect attempt must fail.
+        // (HttpClientBuilder::build is lazy; the call is what hits the wire.)
+        let url = format!("http://{rpc_addr}");
+        let client = HttpClientBuilder::default()
+            .build(&url)
+            .expect("bug: jsonrpsee http client builds");
+        let err = client
+            .chain_tip()
+            .await
+            .expect_err("bug: RPC facade should be down after hogd-dev exit");
+        // Any client error here is correct (transport closed, refused, etc.).
+        // We only assert it's not a successful call mapped to NotImplemented.
+        assert!(
+            !matches!(err, ClientError::Call(_)),
+            "expected transport-level error after RPC shutdown, got JSON-RPC call error: {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
     async fn start_rolls_back_hogd_dev_when_rpc_bind_fails() {
         let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "ready");
         let pid_dir = TempDir::new().expect("bug: tempdir creates");
