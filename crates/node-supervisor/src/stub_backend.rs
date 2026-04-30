@@ -1,0 +1,99 @@
+//! Stub backend planes that always return `NotImplemented`.
+//!
+//! The node supervisor wires the JSON-RPC facade up before any real x23
+//! adapter exists. The stub backend lets `groundhog node` start a working
+//! JSON-RPC server today; PR 4a/4b/4c will swap individual planes out for
+//! real adapters as they land.
+//!
+//! The stub is intentionally `pub(crate)`. It is not a long-term API; once
+//! every plane has a real adapter the type goes away.
+
+use async_trait::async_trait;
+use groundhog_rpc_api_types::{
+    BlockHeight, ContractAddress,
+    block::{BlockInfo, ChainTip},
+    events::IdentifiedEvent,
+    receipt::TransactionReceipt,
+    transaction::{TransactionStatus, TxHash},
+};
+use groundhog_rpc_server::{
+    ChainPlane, ReadPlane, RpcServerError, SubmitPlane, ValidatedTransaction,
+};
+
+/// Backend that returns `NotImplemented` for every method.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct StubBackend;
+
+impl StubBackend {
+    pub(crate) fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait]
+impl SubmitPlane for StubBackend {
+    async fn submit_raw_transaction(
+        &self,
+        _tx: ValidatedTransaction,
+    ) -> Result<(), RpcServerError> {
+        Err(RpcServerError::NotImplemented(
+            "sendRawTransaction (hogd-dev backend not yet wired)".into(),
+        ))
+    }
+}
+
+#[async_trait]
+impl ChainPlane for StubBackend {
+    async fn chain_tip(&self) -> Result<ChainTip, RpcServerError> {
+        Err(RpcServerError::NotImplemented(
+            "chainTip (hogd-dev backend not yet wired)".into(),
+        ))
+    }
+
+    async fn get_block_by_number(
+        &self,
+        _height: BlockHeight,
+    ) -> Result<Option<BlockInfo>, RpcServerError> {
+        Err(RpcServerError::NotImplemented(
+            "getBlockByNumber (hogd-dev backend not yet wired)".into(),
+        ))
+    }
+
+    async fn pending_transaction_count(&self) -> Result<u64, RpcServerError> {
+        Err(RpcServerError::NotImplemented(
+            "pendingTransactionCount (hogd-dev backend not yet wired)".into(),
+        ))
+    }
+}
+
+#[async_trait]
+impl ReadPlane for StubBackend {
+    async fn transaction_receipt(
+        &self,
+        _tx_hash: TxHash,
+    ) -> Result<Option<TransactionReceipt>, RpcServerError> {
+        Err(RpcServerError::NotImplemented(
+            "transactionReceipt (hogd-dev backend not yet wired)".into(),
+        ))
+    }
+
+    async fn transaction_status(
+        &self,
+        _tx_hash: TxHash,
+    ) -> Result<TransactionStatus, RpcServerError> {
+        Err(RpcServerError::NotImplemented(
+            "transactionStatus (hogd-dev backend not yet wired)".into(),
+        ))
+    }
+
+    async fn contract_events(
+        &self,
+        _address: ContractAddress,
+        _from_height: BlockHeight,
+        _to_height: BlockHeight,
+    ) -> Result<Vec<IdentifiedEvent>, RpcServerError> {
+        Err(RpcServerError::NotImplemented(
+            "contractEvents (hogd-dev backend not yet wired)".into(),
+        ))
+    }
+}

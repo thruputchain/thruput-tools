@@ -10,6 +10,7 @@ pub mod error;
 pub mod hogd_dev;
 pub mod process;
 pub mod server;
+mod stub_backend;
 
 #[cfg(test)]
 mod test_support;
