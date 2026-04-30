@@ -16,10 +16,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use groundhog_rpc_api::GroundhogApiServer;
 use groundhog_rpc_api_types::{
-    BlockHeight, ContractAddress,
+    BlockHeight,
     block::{BlockInfo, ChainTip},
     error::codes,
-    events::IdentifiedEvent,
+    events::{BlockAnchor, EventFilter, EventPage, EventQuery, EventTopicFilter, IterationOrder},
     hex::Hex0x,
     receipt::TransactionReceipt,
     transaction::{TransactionStatus, TxHash},
@@ -29,6 +29,7 @@ use groundhog_rpc_server::{
     ValidatedTransaction,
 };
 use tokio::sync::Mutex;
+use xdr_common::{BytesM, VecM};
 
 const SIGNED_TX_XDR: &str = "\
 bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7\
@@ -41,7 +42,8 @@ f0e12d9781957cdcc522f33e5d719b93c200381cff5bfb26a1ee8ce7874ffd485322cd5a0806605d
 const CANONICAL_TX_HASH_HEX: &str =
     "6e94695b6af0fbc13d96876f7fb8e940cd9db4d247e53614a45da252b3a7853a";
 
-const MAX_EVENT_RANGE: u64 = 100;
+const MAX_EVENTS_PER_PAGE: u32 = 50;
+const MAX_CURSOR_BYTES: usize = 64;
 
 /// Mock backend that emulates a chosen production capability profile.
 ///
@@ -125,14 +127,14 @@ impl ReadPlane for ScriptedBackend {
         Ok(TransactionStatus::Unknown)
     }
 
-    async fn contract_events(
-        &self,
-        _address: ContractAddress,
-        _from_height: BlockHeight,
-        _to_height: BlockHeight,
-    ) -> Result<Vec<IdentifiedEvent>, RpcServerError> {
+    async fn contract_events(&self, _query: EventQuery) -> Result<EventPage, RpcServerError> {
         *self.contract_events_calls.lock().await += 1;
-        Ok(vec![])
+        Ok(EventPage {
+            events: vec![],
+            cursor: BytesM(vec![]),
+            latest_block: BlockHeight::from(0),
+            oldest_block: BlockHeight::from(0),
+        })
     }
 }
 
@@ -141,12 +143,27 @@ type ScriptedServer = GroundhogRpcServer<ScriptedBackend, ScriptedBackend, Scrip
 fn server(backend: ScriptedBackend) -> ScriptedServer {
     GroundhogRpcServer::unified(
         backend,
-        RpcServerConfig::default().with_max_event_height_range(MAX_EVENT_RANGE),
+        RpcServerConfig::default()
+            .with_max_events_per_page(MAX_EVENTS_PER_PAGE)
+            .with_max_cursor_bytes(MAX_CURSOR_BYTES),
     )
 }
 
-fn zero_address() -> ContractAddress {
-    Hex0x(groundhog_xdr::types::ContractAddress::from([0u8; 32]))
+fn simple_query() -> EventQuery {
+    EventQuery {
+        filters: VecM(vec![EventFilter {
+            contract_addresses: VecM(vec![groundhog_xdr::types::ContractAddress::from([0u8; 32])]),
+            topics: EventTopicFilter {
+                topic0: VecM(vec![]),
+                topic1: VecM(vec![]),
+                topic2: VecM(vec![]),
+            },
+        }]),
+        order: IterationOrder::IterationOrderAscending,
+        anchor: BlockAnchor::AnchorAtBeginning,
+        cursor: BytesM(vec![]),
+        limit: 0,
+    }
 }
 
 fn opaque_hash() -> TxHash {
@@ -224,34 +241,26 @@ async fn unknown_receipt_returns_none_for_all_shapes() {
 }
 
 #[tokio::test]
-async fn event_range_validation_runs_before_dispatch_for_all_shapes() {
+async fn event_query_validation_runs_before_dispatch_for_all_shapes() {
     for backend in all_shapes() {
         let calls = backend.contract_events_calls.clone();
         let svc = server(backend);
 
-        let inverted = svc
-            .get_contract_events(zero_address(), BlockHeight::from(5), BlockHeight::from(2))
+        let mut over_limit = simple_query();
+        over_limit.limit = MAX_EVENTS_PER_PAGE + 1;
+        let limit_err = svc
+            .get_events(over_limit)
             .await
-            .expect_err("bug: inverted range must be rejected");
-        assert_eq!(inverted.code(), codes::INVALID_PARAMS);
+            .expect_err("bug: excessive limit must be rejected");
+        assert_eq!(limit_err.code(), codes::INVALID_PARAMS);
 
-        let too_large_span = MAX_EVENT_RANGE + 1;
-        let excessive = svc
-            .get_contract_events(
-                zero_address(),
-                BlockHeight::from(0),
-                #[allow(clippy::cast_possible_wrap)]
-                BlockHeight::from(too_large_span as i64),
-            )
+        let mut over_cursor = simple_query();
+        over_cursor.cursor = BytesM(vec![0u8; MAX_CURSOR_BYTES + 1]);
+        let cursor_err = svc
+            .get_events(over_cursor)
             .await
-            .expect_err("bug: excessive range must be rejected");
-        assert_eq!(excessive.code(), codes::RANGE_TOO_LARGE);
-
-        let negative = svc
-            .get_contract_events(zero_address(), BlockHeight::from(-1), BlockHeight::from(5))
-            .await
-            .expect_err("bug: negative from must be rejected");
-        assert_eq!(negative.code(), codes::INVALID_PARAMS);
+            .expect_err("bug: oversized cursor must be rejected");
+        assert_eq!(cursor_err.code(), codes::INVALID_PARAMS);
 
         assert_eq!(
             *calls.lock().await,

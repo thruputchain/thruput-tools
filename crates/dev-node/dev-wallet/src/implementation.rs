@@ -47,8 +47,13 @@ impl DevWallet for DevWalletContract {
             &[u8],
         ) = xdrs::txs::decode(invocation_bytes).unwrap();
 
-        match sdk::call::contract_call(&addr, entrypoint, gas_limit, calldata)
-        {
+        match sdk::call::contract_call(
+            &addr,
+            entrypoint,
+            gas_limit,
+            calldata,
+            &sdk::collect_auth_handles::AuthHandleBuf::new(),
+        ) {
             Ok(Ok(return_buf)) => sdk::contract_return(return_buf.as_ref()),
             Ok(Err(sdk::call::ContractError::Abort(abort_buf))) => {
                 sdk::contract_abort(abort_buf.as_ref())

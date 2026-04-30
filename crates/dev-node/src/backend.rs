@@ -369,16 +369,6 @@ impl DevBackend {
         status_from_index(&self.committed_heights, tx_hash)
     }
 
-    /// Contract events filtered by address and inclusive block-height range.
-    pub fn get_contract_events(
-        &self,
-        address: &ContractAddress,
-        from_height: &BlockHeight,
-        to_height: &BlockHeight,
-    ) -> Vec<IdentifiedEvent> {
-        filter_contract_events(&self.events, address, from_height, to_height)
-    }
-
     /// Current chain tip.
     pub fn chain_tip(&self) -> ChainTip {
         let hash_bytes: [u8; 32] =
@@ -454,23 +444,6 @@ fn status_from_index(
         },
         None => TransactionStatus::Unknown,
     }
-}
-
-fn filter_contract_events(
-    events: &[IdentifiedEvent],
-    address: &ContractAddress,
-    from_height: &BlockHeight,
-    to_height: &BlockHeight,
-) -> Vec<IdentifiedEvent> {
-    events
-        .iter()
-        .filter(|identified| {
-            identified.event.contract_address.0 == *address
-                && identified.block_height >= *from_height
-                && identified.block_height <= *to_height
-        })
-        .cloned()
-        .collect()
 }
 
 fn evict_transactions(
@@ -989,36 +962,6 @@ mod tests {
     }
 
     #[test]
-    fn get_contract_events_filters_by_address_and_height() {
-        let address_a = ContractAddress::from([0xAA; 32]);
-        let address_b = ContractAddress::from([0xBB; 32]);
-        let expected = sample_identified_event(0x33, 12, address_a, 1);
-        let events = vec![
-            sample_identified_event(0x11, 10, address_a, 0),
-            sample_identified_event(0x22, 11, address_b, 0),
-            sample_identified_event(0x33, 12, address_a, 1),
-        ];
-
-        let filtered = super::filter_contract_events(
-            &events,
-            &address_a,
-            &BlockHeight::from(11),
-            &BlockHeight::from(12),
-        );
-
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].tx_hash, expected.tx_hash);
-        assert_eq!(*filtered[0].block_height, *expected.block_height);
-        assert_eq!(filtered[0].sequence_number, expected.sequence_number);
-        assert_eq!(
-            filtered[0].event.contract_address,
-            expected.event.contract_address
-        );
-        assert_eq!(filtered[0].event.topics, expected.event.topics);
-        assert_eq!(filtered[0].event.data, expected.event.data);
-    }
-
-    #[test]
     fn evicting_heavy_records_prunes_events() {
         let address = ContractAddress::from([0xAB; 32]);
         let first = tx_hash(0x11);
@@ -1034,15 +977,9 @@ mod tests {
         ];
 
         super::evict_transactions(&mut transactions, &mut transaction_order, &mut events, 1);
-        let filtered = super::filter_contract_events(
-            &events,
-            &address,
-            &BlockHeight::from(0),
-            &BlockHeight::from(20),
-        );
 
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].tx_hash, tx_hash(0x22));
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].tx_hash, tx_hash(0x22));
     }
 
     #[test]

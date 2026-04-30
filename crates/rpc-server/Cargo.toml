@@ -18,6 +18,7 @@ workspace = true
 groundhog-rpc-api = { workspace = true }
 groundhog-rpc-api-types = { workspace = true }
 groundhog-xdr = { workspace = true }
+xdr-common = { workspace = true }
 xdrs = { workspace = true }
 async-trait = { workspace = true }
 hex = { workspace = true }

@@ -18,8 +18,16 @@ dev = []
 entrypoints = []
 
 [dependencies]
-sdk = { version = "0.9", registry = "groundhog", features = ["alloc"] }
+sdk = { version = "0.13", registry = "groundhog", features = ["alloc"] }
 xdrs = { version = "0.5", registry = "groundhog", features = ["alloc"] }
+
+# sdk 0.13.0 was built against groundhog-xdr 0.9.3 (its 2-arg
+# raw_Return ABI).  protocol-rs 0.9.4 added a third arg.  Force the
+# 0.9.3 resolution so the dev-wallet WASM compiles cleanly until sdk
+# bumps to follow protocol-rs.
+[dependencies.groundhog-xdr]
+version = "=0.9.3"
+registry = "groundhog"
 
 [profile.release]
 opt-level = 3

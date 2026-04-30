@@ -46,15 +46,6 @@
 //!
 //! # Known places the trait shape will need to grow
 //!
-//! - `contract_events` is narrow: single address, fixed inclusive range,
-//!   no topic filtering, no pagination. The indexer's underlying
-//!   `get_events(EventQuery) -> EventPage` already supports topic-position
-//!   filters, OR-across-filters, anchor selection, and cursor pagination.
-//!   When the JSON-RPC surface grows toward Soroban-`getEvents` shape,
-//!   re-export the XDR `EventQuery`/`EventPage` through `api-types` rather
-//!   than inventing parallel JSON-shaped variants — duplicated query
-//!   schemas drift.
-//!
 //! - `chain_tip` cannot distinguish "chain not yet initialized" from a
 //!   real tip. Production never hits the case; pre-genesis hogd-dev will.
 //!   Add a dedicated error variant or sentinel when wiring that backend.
@@ -71,9 +62,9 @@
 
 use async_trait::async_trait;
 use groundhog_rpc_api_types::{
-    BlockHeight, ContractAddress,
+    BlockHeight,
     block::{BlockInfo, ChainTip},
-    events::IdentifiedEvent,
+    events::{EventPage, EventQuery},
     receipt::TransactionReceipt,
     transaction::{TransactionStatus, TxHash},
 };
@@ -135,11 +126,15 @@ pub trait ReadPlane: Send + Sync + 'static {
         tx_hash: TxHash,
     ) -> Result<TransactionStatus, RpcServerError>;
 
-    /// Return contract events filtered by address and inclusive height range.
-    async fn contract_events(
-        &self,
-        address: ContractAddress,
-        from_height: BlockHeight,
-        to_height: BlockHeight,
-    ) -> Result<Vec<IdentifiedEvent>, RpcServerError>;
+    /// Return paginated, filterable contract events.
+    ///
+    /// `query` carries the full Soroban-style filter surface: filter
+    /// array (OR across filters, AND within), positional topic filters,
+    /// anchor selection (begin / end / explicit height), iteration
+    /// order, opaque cursor for resumption, and per-page limit.  See
+    /// `groundhog_indexer::indexer::EventQuery` for field semantics.
+    ///
+    /// Returns one page; clients walk via `EventPage::cursor` until it
+    /// is empty (stream exhausted in the requested direction).
+    async fn contract_events(&self, query: EventQuery) -> Result<EventPage, RpcServerError>;
 }

@@ -21,6 +21,7 @@ workspace = true
 [dependencies]
 groundhog-trace = { workspace = true }
 groundhog-xdr = { workspace = true }
+groundhog_indexer = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 jsonrpsee-types = { workspace = true }

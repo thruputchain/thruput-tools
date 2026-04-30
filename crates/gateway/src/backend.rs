@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use groundhog_rpc_api_types::{
-    BlockHeight, ContractAddress,
+    BlockHeight,
     block::{BlockInfo, ChainTip},
-    events::IdentifiedEvent,
+    events::{EventPage, EventQuery},
     receipt::TransactionReceipt,
     transaction::{TransactionStatus, TxHash},
 };
@@ -88,14 +88,9 @@ impl ReadPlane for GatewayBackend {
             .map_err(Into::into)
     }
 
-    #[tracing::instrument(skip_all, fields(?address, ?from_height, ?to_height))]
-    async fn contract_events(
-        &self,
-        address: ContractAddress,
-        from_height: BlockHeight,
-        to_height: BlockHeight,
-    ) -> Result<Vec<IdentifiedEvent>, RpcServerError> {
-        handlers::events::get_contract_events(&self.ctx, address, from_height, to_height)
+    #[tracing::instrument(skip_all, fields(filters_len = query.filters.0.len(), limit = query.limit))]
+    async fn contract_events(&self, query: EventQuery) -> Result<EventPage, RpcServerError> {
+        handlers::events::get_events(&self.ctx, query)
             .await
             .map_err(Into::into)
     }

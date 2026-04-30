@@ -83,12 +83,14 @@ pub async fn start_server(
 
     let server = Server::builder().build(&config.listen_address).await?;
 
-    // The core API uses the shared RPC server. Dev-only methods still live in
-    // this crate until the optional DevControl extraction.
+    // The core API uses the shared RPC server. Dev-only methods still
+    // live in this crate until the optional DevControl extraction.
     //
-    // The native-exec prototype historically rejected inverted event ranges but
-    // did not impose the production gateway range cap.
-    let rpc_config = RpcServerConfig::default().with_max_event_height_range(i64::MAX as u64);
+    // Native-exec dev-node returns NotImplemented for `getEvents`
+    // (real testing happens through the production gateway against a
+    // real hogd cluster), so the rpc-server limit/cursor caps are
+    // moot here.  Use the defaults.
+    let rpc_config = RpcServerConfig::default();
     let core_rpc = GroundhogRpcServer::unified(DevNodeBackend::new(worker.clone()), rpc_config);
     let dev_rpc = DevNodeRpc::new(worker.clone());
     let mut module = RpcModule::new(());

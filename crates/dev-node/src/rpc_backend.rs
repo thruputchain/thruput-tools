@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use groundhog_rpc_api_types::{
-    BlockHeight, ContractAddress,
+    BlockHeight,
     block::{BlockInfo, ChainTip},
-    events::IdentifiedEvent,
+    events::{EventPage, EventQuery},
     receipt::TransactionReceipt,
     transaction::{TransactionStatus, TxHash},
 };
@@ -89,17 +89,16 @@ impl ReadPlane for DevNodeBackend {
             .map_err(Into::into)
     }
 
-    #[tracing::instrument(skip_all, fields(?address, ?from_height, ?to_height))]
-    async fn contract_events(
-        &self,
-        address: ContractAddress,
-        from_height: BlockHeight,
-        to_height: BlockHeight,
-    ) -> Result<Vec<IdentifiedEvent>, RpcServerError> {
-        self.worker
-            .get_contract_events(address, from_height, to_height)
-            .await
-            .map_err(Into::into)
+    #[tracing::instrument(skip_all)]
+    async fn contract_events(&self, _query: EventQuery) -> Result<EventPage, RpcServerError> {
+        // Native-exec dev-node is being retired in favor of the
+        // hogd-dev supervisor (per
+        // docs/cli/2026-04-25-hogd-dev-node-hybrid.md).  Building a
+        // faithful in-memory `EventQuery` implementation that mirrors
+        // hogd's anchor / topic / cursor semantics is throwaway work;
+        // surface NotImplemented and route real `getEvents` testing
+        // through the production gateway against a real hogd cluster.
+        Err(RpcServerError::NotImplemented("getEvents".into()))
     }
 }
 

@@ -12,7 +12,7 @@ use groundhog_rpc_api_types::{
     BlockHeight, ContractAddress,
     block::{BlockInfo, ChainTip},
     dev::{DevAccount, StorageItemInfo, TransactionDetail},
-    events::IdentifiedEvent,
+    events::{EventPage, EventQuery},
     hex::HexBytes,
     receipt::TransactionReceipt,
     transaction::{TransactionStatus, TxHash},
@@ -48,14 +48,11 @@ pub trait GroundhogApi {
     #[method(name = "pendingTransactionCount")]
     async fn pending_transaction_count(&self) -> RpcResult<u64>;
 
-    /// Contract events filtered by address and height range.
-    #[method(name = "getContractEvents")]
-    async fn get_contract_events(
-        &self,
-        address: ContractAddress,
-        from_height: BlockHeight,
-        to_height: BlockHeight,
-    ) -> RpcResult<Vec<IdentifiedEvent>>;
+    /// Paginated, filterable contract events.  See `EventQuery` /
+    /// `EventPage` (re-exported from `groundhog_indexer`) for the
+    /// Soroban-shaped filter / cursor / topic surface.
+    #[method(name = "getEvents")]
+    async fn get_events(&self, query: EventQuery) -> RpcResult<EventPage>;
 }
 
 /// Dev-only RPC methods. Only implemented by the dev node.

@@ -3,12 +3,11 @@
 //! `DevBackend` owns `Rc<TestEnvironment>` which is `!Send`. This module
 //! keeps it on a single `std::thread` and bridges to async via channels.
 
+use groundhog_rpc_api_types::ContractAddress;
 use groundhog_rpc_api_types::block::ChainTip;
 use groundhog_rpc_api_types::dev::{DevAccount, StorageItemInfo, TransactionDetail};
-use groundhog_rpc_api_types::events::IdentifiedEvent;
 use groundhog_rpc_api_types::receipt::TransactionReceipt;
 use groundhog_rpc_api_types::transaction::{TransactionStatus, TxHash};
-use groundhog_rpc_api_types::{BlockHeight, ContractAddress};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::backend::{BackendStats, DevBackend};
@@ -36,12 +35,6 @@ pub enum DevCommand {
     GetTransactionStatus {
         tx_hash: TxHash,
         reply: oneshot::Sender<TransactionStatus>,
-    },
-    GetContractEvents {
-        address: ContractAddress,
-        from_height: BlockHeight,
-        to_height: BlockHeight,
-        reply: oneshot::Sender<Vec<IdentifiedEvent>>,
     },
     ChainTip {
         reply: oneshot::Sender<ChainTip>,
@@ -136,25 +129,6 @@ impl WorkerHandle {
         let (reply, rx) = oneshot::channel();
         self.tx
             .send(DevCommand::GetTransactionStatus { tx_hash, reply })
-            .map_err(|_| DevNodeError::WorkerStopped)?;
-        rx.await.map_err(|_| DevNodeError::WorkerStopped)
-    }
-
-    /// Contract events filtered by address and height range.
-    pub async fn get_contract_events(
-        &self,
-        address: ContractAddress,
-        from_height: BlockHeight,
-        to_height: BlockHeight,
-    ) -> Result<Vec<IdentifiedEvent>, DevNodeError> {
-        let (reply, rx) = oneshot::channel();
-        self.tx
-            .send(DevCommand::GetContractEvents {
-                address,
-                from_height,
-                to_height,
-                reply,
-            })
             .map_err(|_| DevNodeError::WorkerStopped)?;
         rx.await.map_err(|_| DevNodeError::WorkerStopped)
     }
@@ -326,14 +300,6 @@ fn handle_command(backend: &mut DevBackend, cmd: DevCommand) {
         }
         DevCommand::GetTransactionStatus { tx_hash, reply } => {
             let _ = reply.send(backend.get_transaction_status(&tx_hash));
-        }
-        DevCommand::GetContractEvents {
-            address,
-            from_height,
-            to_height,
-            reply,
-        } => {
-            let _ = reply.send(backend.get_contract_events(&address.0, &from_height, &to_height));
         }
         DevCommand::ChainTip { reply } => {
             let _ = reply.send(backend.chain_tip());

@@ -1,32 +1,34 @@
-//! `groundhog_getContractEvents` handler.
+//! `groundhog_getEvents` handler.
 //!
-//! Queries hogd indexer (`get_contract_events`) via x23 RPC.
-//! Shared RPC-layer code validates height ranges before dispatching here.
+//! Forwards a paginated `EventQuery` to hogd's
+//! `IndexerBlockExplorer1::get_events` over x23 and re-parses the
+//! returned events into the api-types-flavored `EventPage`.
 
-use groundhog_rpc_api_types::events::IdentifiedEvent;
+use groundhog_rpc_api_types::events::{EventPage, EventQuery, IdentifiedEvent};
 use groundhog_rpc_api_types::hex::Hex0x;
 use groundhog_rpc_api_types::transaction::TxHash;
-use groundhog_rpc_api_types::{BlockHeight, ContractAddress};
 
 use crate::context::GatewayContext;
 use crate::error::GatewayError;
 
 use super::parse_event::parse_emitted_event;
 
-/// Contract events filtered by address and height range.
+/// Query paginated, filterable contract events through the gateway.
 ///
 /// Flow:
-/// 1. Validate `to_height >= from_height` and enforce max range
-/// 2. Query hogd indexer `get_contract_events(address, from, to)`
-/// 3. Parse each `TxEmittedEvent.serialized_event` into topics + data
-/// 4. Return `Vec<IdentifiedEvent>`
-#[tracing::instrument(skip_all, fields(?address, from_height, to_height))]
-pub async fn get_contract_events(
+/// 1. The shared rpc-server has already enforced limit/cursor `DoS`
+///    guards before dispatching here.
+/// 2. Hand the `EventQuery` to the indexer; it owns filtering, anchor
+///    seek, ordering, and per-page assembly.
+/// 3. Parse each `TxEmittedEvent.serialized_event` into the
+///    api-types `IdentifiedEvent` shape (topics + data split out)
+///    so JSON consumers don't see raw wire bytes.
+/// 4. Surface `cursor`, `latest_block`, `oldest_block` verbatim.
+#[tracing::instrument(skip_all, fields(filters_len = query.filters.0.len(), limit = query.limit))]
+pub async fn get_events(
     ctx: &GatewayContext,
-    address: ContractAddress,
-    from_height: BlockHeight,
-    to_height: BlockHeight,
-) -> Result<Vec<IdentifiedEvent>, GatewayError> {
+    query: EventQuery,
+) -> Result<EventPage, GatewayError> {
     let client = ctx
         .indexer
         .read()
@@ -34,22 +36,30 @@ pub async fn get_contract_events(
         .clone()
         .ok_or_else(|| GatewayError::BackendUnavailable("indexer not connected".into()))?;
 
-    let result = client
-        .get_contract_events(&address.0, &from_height, &to_height)
+    let page = client
+        .get_events(&query)
         .await
         .map_err(|e| GatewayError::BackendUnavailable(format!("indexer: {e}")))?;
 
-    let mut events = Vec::with_capacity(result.len());
-    for identified in result.iter() {
-        if let Some(event) = parse_emitted_event(&identified.emitted_event) {
-            events.push(IdentifiedEvent {
+    let events: Vec<IdentifiedEvent> = page
+        .events
+        .0
+        .iter()
+        .filter_map(|identified| {
+            let event = parse_emitted_event(&identified.emitted_event)?;
+            Some(IdentifiedEvent {
                 tx_hash: TxHash(Hex0x(identified.proposed_tx_hash)),
                 block_height: identified.block_height.clone(),
                 sequence_number: identified.sequence_number,
                 event,
-            });
-        }
-    }
+            })
+        })
+        .collect();
 
-    Ok(events)
+    Ok(EventPage {
+        events,
+        cursor: page.cursor,
+        latest_block: page.latest_block,
+        oldest_block: page.oldest_block,
+    })
 }

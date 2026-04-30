@@ -2,9 +2,9 @@ use jsonrpsee::core::RpcResult;
 
 use groundhog_rpc_api::GroundhogApiServer;
 use groundhog_rpc_api_types::{
-    BlockHeight, ContractAddress,
+    BlockHeight,
     block::{BlockInfo, ChainTip},
-    events::IdentifiedEvent,
+    events::{EventPage, EventQuery},
     receipt::TransactionReceipt,
     transaction::{TransactionStatus, TxHash},
 };
@@ -90,49 +90,32 @@ where
         Ok(self.chain.pending_transaction_count().await?)
     }
 
-    #[tracing::instrument(skip_all, fields(?address, ?from_height, ?to_height))]
-    async fn get_contract_events(
-        &self,
-        address: ContractAddress,
-        from_height: BlockHeight,
-        to_height: BlockHeight,
-    ) -> RpcResult<Vec<IdentifiedEvent>> {
-        validate_event_range(&from_height, &to_height, self.config.max_event_height_range)?;
-        Ok(self
-            .read
-            .contract_events(address, from_height, to_height)
-            .await?)
+    #[tracing::instrument(skip_all, fields(filters_len = query.filters.0.len(), limit = query.limit))]
+    async fn get_events(&self, query: EventQuery) -> RpcResult<EventPage> {
+        validate_event_query(&query, &self.config)?;
+        Ok(self.read.contract_events(query).await?)
     }
 }
 
-fn validate_event_range(
-    from_height: &BlockHeight,
-    to_height: &BlockHeight,
-    max_event_height_range: u64,
+/// Pre-XDR `DoS` guard.  The indexer also enforces these server-side; this
+/// just rejects clearly-bogus inputs before we even encode.
+fn validate_event_query(
+    query: &EventQuery,
+    config: &RpcServerConfig,
 ) -> Result<(), RpcServerError> {
-    // `BlockHeight` is `Hex0x<i64>`; the double deref reaches the inner i64.
-    let from = **from_height;
-    let to = **to_height;
-    if from < 0 || to < 0 {
-        return Err(RpcServerError::InvalidParam(
-            "block height must be non-negative".into(),
-        ));
-    }
-    if to < from {
-        return Err(RpcServerError::InvalidParam(
-            "to_height must be >= from_height".into(),
-        ));
-    }
-
-    // Both `to` and `from` are non-negative i64 with `to >= from`,
-    // so the subtraction is in `[0, i64::MAX]` and fits in `u64`.
-    let span = (to - from).cast_unsigned();
-    if span > max_event_height_range {
-        return Err(RpcServerError::RangeTooLarge(format!(
-            "height range {span} exceeds maximum {max_event_height_range}"
+    if query.limit > config.max_events_per_page {
+        return Err(RpcServerError::InvalidParam(format!(
+            "limit {} exceeds maximum {}",
+            query.limit, config.max_events_per_page
         )));
     }
-
+    if query.cursor.0.len() > config.max_cursor_bytes {
+        return Err(RpcServerError::InvalidParam(format!(
+            "cursor length {} exceeds maximum {}",
+            query.cursor.0.len(),
+            config.max_cursor_bytes
+        )));
+    }
     Ok(())
 }
 
@@ -144,7 +127,11 @@ mod tests {
 
     use super::*;
     use crate::ValidatedTransaction;
+    use groundhog_rpc_api_types::events::{
+        BlockAnchor, EventFilter, EventTopicFilter, IterationOrder,
+    };
     use groundhog_rpc_api_types::hex::Hex0x;
+    use xdr_common::{BytesM, VecM};
 
     const SIGNED_TX_XDR: &str = "\
 bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7\
@@ -176,10 +163,7 @@ f0e12d9781957cdcc522f33e5d719b93c200381cff5bfb26a1ee8ce7874ffd485322cd5a0806605d
     fn server(
         mock: Arc<MockBackend>,
     ) -> GroundhogRpcServer<Arc<MockBackend>, Arc<MockBackend>, Arc<MockBackend>> {
-        GroundhogRpcServer::unified(
-            mock,
-            RpcServerConfig::default().with_max_event_height_range(10),
-        )
+        GroundhogRpcServer::unified(mock, RpcServerConfig::default())
     }
 
     #[async_trait::async_trait]
@@ -261,14 +245,9 @@ f0e12d9781957cdcc522f33e5d719b93c200381cff5bfb26a1ee8ce7874ffd485322cd5a0806605d
             Ok(TransactionStatus::Unknown)
         }
 
-        async fn contract_events(
-            &self,
-            _address: ContractAddress,
-            _from_height: BlockHeight,
-            _to_height: BlockHeight,
-        ) -> Result<Vec<IdentifiedEvent>, RpcServerError> {
+        async fn contract_events(&self, _query: EventQuery) -> Result<EventPage, RpcServerError> {
             *self.event_calls.lock().await += 1;
-            Ok(vec![])
+            Ok(empty_page())
         }
     }
 
@@ -288,14 +267,9 @@ f0e12d9781957cdcc522f33e5d719b93c200381cff5bfb26a1ee8ce7874ffd485322cd5a0806605d
             Ok(TransactionStatus::Unknown)
         }
 
-        async fn contract_events(
-            &self,
-            _address: ContractAddress,
-            _from_height: BlockHeight,
-            _to_height: BlockHeight,
-        ) -> Result<Vec<IdentifiedEvent>, RpcServerError> {
+        async fn contract_events(&self, _query: EventQuery) -> Result<EventPage, RpcServerError> {
             *self.event_calls.lock().await += 1;
-            Ok(vec![])
+            Ok(empty_page())
         }
     }
 
@@ -328,7 +302,7 @@ f0e12d9781957cdcc522f33e5d719b93c200381cff5bfb26a1ee8ce7874ffd485322cd5a0806605d
             ReadOnly {
                 event_calls: event_calls.clone(),
             },
-            RpcServerConfig::default().with_max_event_height_range(10),
+            RpcServerConfig::default(),
         );
 
         let tx_hash = server
@@ -350,22 +324,29 @@ f0e12d9781957cdcc522f33e5d719b93c200381cff5bfb26a1ee8ce7874ffd485322cd5a0806605d
         );
 
         server
-            .get_contract_events(address(), BlockHeight::from(1), BlockHeight::from(2))
+            .get_events(simple_query())
             .await
-            .expect("bug: read plane should answer contract events");
+            .expect("bug: read plane should answer events");
 
         assert_eq!(*event_calls.lock().await, 1);
     }
 
     #[tokio::test]
-    async fn inverted_event_range_is_rejected_before_backend_dispatch() {
+    async fn excessive_limit_is_rejected_before_backend_dispatch() {
         let mock = Arc::new(MockBackend::default());
-        let server = server(mock.clone());
+        let cap = 5;
+        let server = GroundhogRpcServer::unified(
+            mock.clone(),
+            RpcServerConfig::default().with_max_events_per_page(cap),
+        );
+
+        let mut q = simple_query();
+        q.limit = cap + 1;
 
         let err = server
-            .get_contract_events(address(), BlockHeight::from(2), BlockHeight::from(1))
+            .get_events(q)
             .await
-            .expect_err("bug: inverted event range should fail");
+            .expect_err("bug: excessive limit should fail");
 
         assert_eq!(
             err.code(),
@@ -375,81 +356,42 @@ f0e12d9781957cdcc522f33e5d719b93c200381cff5bfb26a1ee8ce7874ffd485322cd5a0806605d
     }
 
     #[tokio::test]
-    async fn excessive_event_range_is_rejected_before_backend_dispatch() {
+    async fn oversized_cursor_is_rejected_before_backend_dispatch() {
         let mock = Arc::new(MockBackend::default());
-        let server = server(mock.clone());
+        let cap = 16;
+        let server = GroundhogRpcServer::unified(
+            mock.clone(),
+            RpcServerConfig::default().with_max_cursor_bytes(cap),
+        );
+
+        let mut q = simple_query();
+        q.cursor = BytesM(vec![0u8; cap + 1]);
 
         let err = server
-            .get_contract_events(address(), BlockHeight::from(1), BlockHeight::from(12))
+            .get_events(q)
             .await
-            .expect_err("bug: excessive event range should fail");
+            .expect_err("bug: oversized cursor should fail");
 
         assert_eq!(
             err.code(),
-            groundhog_rpc_api_types::error::codes::RANGE_TOO_LARGE
+            groundhog_rpc_api_types::error::codes::INVALID_PARAMS
         );
         assert_eq!(*mock.event_calls.lock().await, 0);
     }
 
     #[tokio::test]
-    async fn exact_max_event_range_passes_to_backend() {
+    async fn limit_zero_passes_through_as_server_default_marker() {
         let mock = Arc::new(MockBackend::default());
         let server = server(mock.clone());
 
-        // Span of 10 is the configured maximum and must be accepted.
+        // limit=0 is the XDR convention for "use server default"; the
+        // rpc-server layer must let it through unchanged.
         server
-            .get_contract_events(address(), BlockHeight::from(1), BlockHeight::from(11))
+            .get_events(simple_query())
             .await
-            .expect("bug: span of exactly max should succeed");
+            .expect("bug: limit=0 should pass through");
 
         assert_eq!(*mock.event_calls.lock().await, 1);
-    }
-
-    #[tokio::test]
-    async fn zero_span_event_range_passes_to_backend() {
-        let mock = Arc::new(MockBackend::default());
-        let server = server(mock.clone());
-
-        server
-            .get_contract_events(address(), BlockHeight::from(5), BlockHeight::from(5))
-            .await
-            .expect("bug: zero-span range should succeed");
-
-        assert_eq!(*mock.event_calls.lock().await, 1);
-    }
-
-    #[tokio::test]
-    async fn negative_from_height_is_rejected_as_invalid_param() {
-        let mock = Arc::new(MockBackend::default());
-        let server = server(mock.clone());
-
-        let err = server
-            .get_contract_events(address(), BlockHeight::from(-1), BlockHeight::from(5))
-            .await
-            .expect_err("bug: negative from_height should fail");
-
-        assert_eq!(
-            err.code(),
-            groundhog_rpc_api_types::error::codes::INVALID_PARAMS
-        );
-        assert_eq!(*mock.event_calls.lock().await, 0);
-    }
-
-    #[tokio::test]
-    async fn negative_to_height_is_rejected_as_invalid_param() {
-        let mock = Arc::new(MockBackend::default());
-        let server = server(mock.clone());
-
-        let err = server
-            .get_contract_events(address(), BlockHeight::from(0), BlockHeight::from(-1))
-            .await
-            .expect_err("bug: negative to_height should fail");
-
-        assert_eq!(
-            err.code(),
-            groundhog_rpc_api_types::error::codes::INVALID_PARAMS
-        );
-        assert_eq!(*mock.event_calls.lock().await, 0);
     }
 
     #[tokio::test]
@@ -468,7 +410,31 @@ f0e12d9781957cdcc522f33e5d719b93c200381cff5bfb26a1ee8ce7874ffd485322cd5a0806605d
         );
     }
 
-    fn address() -> ContractAddress {
-        Hex0x(groundhog_xdr::types::ContractAddress::from([0u8; 32]))
+    fn simple_query() -> EventQuery {
+        EventQuery {
+            filters: VecM(vec![EventFilter {
+                contract_addresses: VecM(vec![groundhog_xdr::types::ContractAddress::from(
+                    [0u8; 32],
+                )]),
+                topics: EventTopicFilter {
+                    topic0: VecM(vec![]),
+                    topic1: VecM(vec![]),
+                    topic2: VecM(vec![]),
+                },
+            }]),
+            order: IterationOrder::IterationOrderAscending,
+            anchor: BlockAnchor::AnchorAtBeginning,
+            cursor: BytesM(vec![]),
+            limit: 0,
+        }
+    }
+
+    fn empty_page() -> EventPage {
+        EventPage {
+            events: vec![],
+            cursor: BytesM(vec![]),
+            latest_block: BlockHeight::from(0),
+            oldest_block: BlockHeight::from(0),
+        }
     }
 }

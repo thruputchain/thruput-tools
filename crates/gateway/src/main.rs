@@ -90,8 +90,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build(&ctx.config.listen_address)
         .await?;
 
-    let rpc_config =
-        RpcServerConfig::default().with_max_event_height_range(ctx.config.max_event_height_range);
+    let rpc_config = RpcServerConfig::default()
+        .with_max_events_per_page(ctx.config.max_events_per_page)
+        .with_max_cursor_bytes(ctx.config.max_cursor_bytes);
     let api_impl = GroundhogRpcServer::unified(GatewayBackend::new(ctx), rpc_config);
     let handle = server.start(api_impl.into_rpc());
 

@@ -15,9 +15,9 @@
 
 use async_trait::async_trait;
 use groundhog_rpc_api_types::{
-    BlockHeight, ContractAddress,
+    BlockHeight,
     block::{BlockInfo, ChainTip},
-    events::IdentifiedEvent,
+    events::{EventPage, EventQuery},
     receipt::TransactionReceipt,
     transaction::{TransactionStatus, TxHash},
 };
@@ -81,12 +81,7 @@ impl ReadPlane for StubBackend {
         Err(RpcServerError::NotImplemented("transactionStatus".into()))
     }
 
-    async fn contract_events(
-        &self,
-        _address: ContractAddress,
-        _from_height: BlockHeight,
-        _to_height: BlockHeight,
-    ) -> Result<Vec<IdentifiedEvent>, RpcServerError> {
-        Err(RpcServerError::NotImplemented("contractEvents".into()))
+    async fn contract_events(&self, _query: EventQuery) -> Result<EventPage, RpcServerError> {
+        Err(RpcServerError::NotImplemented("getEvents".into()))
     }
 }

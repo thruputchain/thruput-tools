@@ -119,10 +119,15 @@ pub struct GatewayConfig {
     /// to hogd scheduler. See `docs/gateway/system-design.md`.
     pub coordinator_address: Option<String>,
 
-    /// Maximum height range for `getContractEvents` queries.
-    /// Requests exceeding this return `RANGE_TOO_LARGE` (-32011).
-    /// Hogd has no built-in limits, so the gateway must enforce bounds.
-    pub max_event_height_range: u64,
+    /// Maximum events the gateway will return per `getEvents` page
+    /// before rejecting the request as `INVALID_PARAMS`.  Indexer-side
+    /// `IndexDB::clamp_events_limit` (currently 200) is the underlying
+    /// cap; this is a defensive pre-XDR limit at the gateway boundary.
+    pub max_events_per_page: u32,
+
+    /// Maximum byte length of a `PaginationCursor` accepted on
+    /// `getEvents`.  Mirrors hogd-internal `kMaxCursorBytes` (256).
+    pub max_cursor_bytes: usize,
 
     /// Adaptive batching for `sendRawTransaction`.
     pub batch: BatchConfig,
@@ -141,7 +146,8 @@ impl Default for GatewayConfig {
             scheduler_address: "127.0.0.1:9000".into(),
             indexer_address: "127.0.0.1:9001".into(),
             coordinator_address: None,
-            max_event_height_range: 1000,
+            max_events_per_page: 200,
+            max_cursor_bytes: 256,
             batch: BatchConfig::default(),
             tip: TipConfig::default(),
         }
