@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use groundhog_indexer::IndexerBlockExplorer_IndexerBlockExplorer1_Client;
-use groundhog_rpc_transport::{ConnectError, try_connect};
 use groundhog_scheduler::sched_coord::SchedulerCoord_SchedulerCoord1_Client;
+use groundhog_x23_transport::{ConnectError, try_connect};
 use tokio::sync::RwLock;
 
 use crate::config::GatewayConfig;
