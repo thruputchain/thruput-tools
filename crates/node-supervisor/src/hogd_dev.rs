@@ -674,7 +674,7 @@ mod tests {
             .with_startup_timeout(Duration::from_secs(2))
             .with_shutdown_grace(Duration::from_millis(500));
 
-        let mut process = HogdDevProcess::start_with_binary(&config, &binary, b"genesis\n")
+        let mut process = start_fake_hogd_dev(&config, &binary, b"genesis\n")
             .await
             .expect("bug: fake hogd-dev should start");
 
@@ -699,7 +699,7 @@ mod tests {
             .with_startup_timeout(Duration::from_secs(2))
             .with_shutdown_grace(Duration::from_millis(100));
 
-        let mut process = HogdDevProcess::start_with_binary(&config, &binary, b"genesis\n")
+        let mut process = start_fake_hogd_dev(&config, &binary, b"genesis\n")
             .await
             .expect("bug: fake hogd-dev should start");
 
@@ -716,7 +716,7 @@ mod tests {
         let binary = executable_script(tmp.path(), "fake-hogd-dev", "exit 9");
         let config = HogdDevConfig::default().with_startup_timeout(Duration::from_secs(2));
 
-        let err = HogdDevProcess::start_with_binary(&config, &binary, b"genesis\n")
+        let err = start_fake_hogd_dev(&config, &binary, b"genesis\n")
             .await
             .expect_err("bug: early child exit should fail");
 
@@ -732,11 +732,11 @@ mod tests {
         let binary = executable_script(
             tmp.path(),
             "fake-hogd-dev",
-            "read genesis\necho '{\"level\":\"info\",\"message\":\"waiting\"}' >&2\nawk 'BEGIN { for (;;) system(\"sleep 1\") }'\n",
+            "read genesis\necho '{\"level\":\"info\",\"message\":\"waiting\"}' >&2\nwhile :; do :; done\n",
         );
         let config = HogdDevConfig::default().with_startup_timeout(Duration::from_millis(100));
 
-        let err = HogdDevProcess::start_with_binary(&config, &binary, b"genesis\n")
+        let err = start_fake_hogd_dev(&config, &binary, b"genesis\n")
             .await
             .expect_err("bug: startup should time out");
 
@@ -756,11 +756,33 @@ mod tests {
         );
         let config = HogdDevConfig::default().with_startup_timeout(Duration::from_secs(2));
 
-        let err = HogdDevProcess::start_with_binary(&config, &binary, b"genesis\n")
+        let err = start_fake_hogd_dev(&config, &binary, b"genesis\n")
             .await
             .expect_err("bug: oversized readiness should fail");
 
-        assert!(matches!(err, NodeSupervisorError::ReadinessTooLarge { .. }));
+        assert!(
+            matches!(err, NodeSupervisorError::ReadinessTooLarge { .. }),
+            "unexpected oversized readiness error: {err:?}"
+        );
+    }
+
+    async fn start_fake_hogd_dev(
+        config: &HogdDevConfig,
+        binary: &std::path::Path,
+        genesis_payload: &[u8],
+    ) -> Result<HogdDevProcess, NodeSupervisorError> {
+        let mut attempt = 0;
+        loop {
+            match HogdDevProcess::start_with_binary(config, binary, genesis_payload).await {
+                Err(NodeSupervisorError::Spawn { source, .. })
+                    if source.raw_os_error() == Some(libc::ETXTBSY) && attempt < 20 =>
+                {
+                    attempt += 1;
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                }
+                result => return result,
+            }
+        }
     }
 
     fn executable_script(dir: &std::path::Path, name: &str, body: &str) -> std::path::PathBuf {
