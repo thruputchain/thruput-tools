@@ -76,8 +76,9 @@ impl ChildProcessSpec {
             .args(&self.args)
             // TODO(PR 2): pipe stdin when hogd-dev needs the genesis payload.
             .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            // TODO(PR 2): pipe and drain stdout/stderr for readiness and log forwarding.
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit());
 
         for (key, value) in &self.envs {
             command.env(key, value);
