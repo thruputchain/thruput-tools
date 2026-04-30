@@ -75,6 +75,7 @@ where
                 source: e,
             })?,
     );
+    tracing::info!(addr, service, "connected");
     Ok(build(pool))
 }
 
@@ -91,10 +92,7 @@ where
     F: FnOnce(Arc<dyn RpcSender>) -> C,
 {
     match connect(service, addr, pool_size, build).await {
-        Ok(client) => {
-            tracing::info!(addr, service, "connected");
-            Ok(Some(client))
-        }
+        Ok(client) => Ok(Some(client)),
         Err(e @ ConnectError::BadAddress { .. }) => Err(e),
         Err(e) => {
             tracing::warn!(addr, service, error = %e, "unreachable, starting in degraded mode");
@@ -132,9 +130,27 @@ mod tests {
 
     #[tokio::test]
     async fn try_connect_returns_none_on_unreachable() {
-        // 127.0.0.1:1 is reserved and rejects connections; a fresh process
-        // should not have anything listening there.
-        let result = try_connect("dummy", "127.0.0.1:1", 1, build_dummy).await;
+        use std::time::Duration;
+
+        // Bind an ephemeral loopback port and drop the listener so the
+        // kernel refuses subsequent connections at that address. More
+        // reliable than assuming a fixed port (e.g. 1) refuses, since
+        // sandboxed CI runners and local firewalls vary on those.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bug: ephemeral bind should succeed");
+        let addr = listener
+            .local_addr()
+            .expect("bug: bound listener should have a local addr")
+            .to_string();
+        drop(listener);
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            try_connect("dummy", &addr, 1, build_dummy),
+        )
+        .await
+        .expect("bug: try_connect should return promptly on ECONNREFUSED");
         assert!(matches!(result, Ok(None)));
     }
 }
