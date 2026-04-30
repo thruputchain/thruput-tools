@@ -151,9 +151,20 @@ Maintenance rules:
 - [x] Ensure local node and test environment share execution
 - [x] Local-node observability (transaction detail, events, latest-state
   storage reads)
-- [ ] Extract current dev-node backend behind a swappable backend trait
-- [ ] Replace prototype `test_ffi` backend with supported embedded hogd
-  execution library when available
+- [x] Extract a swappable backend behind plane traits
+  (`SubmitPlane`/`ChainPlane`/`ReadPlane` in `crates/rpc-server`,
+  consumed by `crates/node-supervisor` over `crates/x23-transport`).
+- Durable local-node backend: `groundhog-node-supervisor` around a
+  hogd-owned `hogd-dev` subprocess. See
+  `docs/cli/plans/2026-04-29-local-node-hogd-dev-supervisor.md` for
+  the per-PR plan.
+  - [x] PR 1 — supervisor crate scaffold (#30)
+  - [x] PR 2 — hogd-dev process adapter (#31)
+  - [x] PR 3 — CLI integration behind experimental flag (#35)
+  - [ ] PR 4a — first real hogd-dev chain RPC (`groundhog_chainTip`)
+  - [ ] PR 4b — submit RPC
+  - [ ] PR 4c — read RPC (receipts, events, status, blocks)
+  - [ ] PR 5 — dev control + native-exec retirement
 
 ### Phase 3
 

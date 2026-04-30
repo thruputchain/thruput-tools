@@ -1,7 +1,7 @@
 # Local Node Hogd-Dev Supervisor Implementation Plan
 
 **Date:** 2026-04-29
-**Status:** Draft implementation plan.
+**Status:** Implementation in progress. PRs 1–3 shipped; PRs 4a/4b/4c/5 ahead.
 
 **Companion to:**
 
@@ -255,6 +255,8 @@ Listening on http://127.0.0.1:9545
 
 ### PR 1 - Contract and Crate Scaffold
 
+**Status:** ✅ Shipped in PR #30.
+
 - Add this plan and any hogd-dev subprocess contract doc needed for review.
 - Add `crates/node-supervisor` to the workspace.
 - Define `NodeSupervisorConfig`, `NodeSupervisorHandle`, and error types.
@@ -272,6 +274,8 @@ cargo fmt --check
 
 ### PR 2 - Hogd-Dev Process Adapter Skeleton
 
+**Status:** ✅ Shipped in PR #31.
+
 - Add `hogd_dev.rs` that builds the child command line and parses readiness.
 - Implement the agreed binary lookup order.
 - Add tests for command construction, readiness parsing, startup timeout, and
@@ -286,6 +290,11 @@ Acceptance:
 - logs are captured or forwarded predictably.
 
 ### PR 3 - CLI Integration Behind Experimental Path
+
+**Status:** ✅ Shipped in PR #35. Includes interim PR #34 (supervisor JSON-RPC
+startup with stub backend) which the CLI integration sits on top of, plus
+the supporting `groundhog-x23-transport` extraction in PR #33 and the
+client-boundary decision in PR #32.
 
 - Add a `groundhog node` path that starts `groundhog-node-supervisor` when the
   required hogd-dev binary is configured.
