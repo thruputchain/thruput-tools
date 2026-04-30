@@ -303,6 +303,38 @@ mod tests {
             .and_then(|raw| raw.trim().parse().ok())
     }
 
+    async fn start_fake_supervisor_expect_error(mode: &str) -> NodeSupervisorError {
+        let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, mode);
+        let pid_dir = TempDir::new().expect("bug: tempdir creates");
+        let pid_path = pid_dir.path().join("hogd.pid");
+        let _pid_guard = EnvGuard::set(
+            FAKE_HOGD_DEV_PID_FILE_ENV,
+            pid_path.to_str().expect("bug: tempdir path is utf-8"),
+        );
+
+        let hogd = HogdDevConfig::default()
+            .with_binary_path(fake_hogd_dev_binary())
+            .with_startup_timeout(Duration::from_secs(5))
+            .with_shutdown_grace(Duration::from_secs(2));
+        let config = NodeSupervisorConfig::default()
+            .with_rpc_listen_address("127.0.0.1:0")
+            .with_hogd_dev(hogd);
+
+        let result =
+            tokio::time::timeout(Duration::from_secs(10), NodeSupervisorHandle::start(config))
+                .await
+                .expect("bug: startup error should return promptly");
+
+        let err = result.expect_err("bug: fake mode should fail startup");
+        let pid =
+            read_pid_file(&pid_path).expect("bug: fake should have written pid before readiness");
+        assert!(
+            wait_pid_gone(pid, Instant::now() + Duration::from_secs(2)).await,
+            "startup failure leaked fake hogd-dev pid {pid}",
+        );
+        err
+    }
+
     #[tokio::test]
     #[serial]
     async fn start_serves_json_rpc_with_scheduler_chain_backend() {
@@ -359,6 +391,68 @@ mod tests {
         assert!(
             wait_pid_gone(pid, Instant::now() + Duration::from_secs(2)).await,
             "fake hogd-dev pid {pid} still alive after stop()",
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn start_rolls_back_hogd_dev_when_scheduler_connect_fails() {
+        let err = start_fake_supervisor_expect_error("dead-scheduler").await;
+
+        assert!(
+            matches!(err, NodeSupervisorError::SchedulerConnect { .. }),
+            "expected SchedulerConnect, got {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn start_rolls_back_hogd_dev_when_scheduler_get_tip_rpc_fails() {
+        let err = start_fake_supervisor_expect_error("scheduler-get-tip-error").await;
+
+        assert!(
+            matches!(
+                err,
+                NodeSupervisorError::SchedulerRpc {
+                    op: "schedcoord_get_tip",
+                    ..
+                }
+            ),
+            "expected SchedulerRpc for get_tip, got {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn start_rolls_back_hogd_dev_when_genesis_load_is_rejected() {
+        let err = start_fake_supervisor_expect_error("scheduler-load-rejected").await;
+
+        assert!(
+            matches!(
+                err,
+                NodeSupervisorError::SchedulerRejected {
+                    op: "schedcoord_load_genesis_configuration",
+                    ..
+                }
+            ),
+            "expected SchedulerRejected for load_genesis, got {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn start_rolls_back_hogd_dev_when_retip_still_has_no_genesis() {
+        let err = start_fake_supervisor_expect_error("scheduler-load-no-effect").await;
+
+        assert!(
+            matches!(
+                err,
+                NodeSupervisorError::SchedulerRejected {
+                    op: "schedcoord_get_tip",
+                    ..
+                }
+            ),
+            "expected SchedulerRejected for re-tip, got {err:?}",
         );
     }
 

@@ -1,7 +1,7 @@
 use std::{
     env, fs,
     io::{self, Write},
-    net::SocketAddr,
+    net::{SocketAddr, TcpListener as StdTcpListener},
     process::{self, Command},
     sync::{
         Arc, Mutex,
@@ -37,6 +37,12 @@ extern "C" fn handle_sigterm(_: i32) {
 fn main() {
     match env::var(MODE_ENV).as_deref() {
         Ok("ready") => run_ready(),
+        Ok("dead-scheduler") => run_dead_scheduler(),
+        Ok("scheduler-get-tip-error") => run_ready_with_scheduler(FakeSchedulerMode::GetTipError),
+        Ok("scheduler-load-rejected") => run_ready_with_scheduler(FakeSchedulerMode::LoadRejected),
+        Ok("scheduler-load-no-effect") => {
+            run_ready_with_scheduler(FakeSchedulerMode::LoadNoEffect);
+        }
         Ok("ready-then-exit") => run_ready_then_exit(),
         Ok("spawn-helper-ignore-term") => run_with_helper(),
         Ok("helper-ignore-term") => run_ignore_term_loop(),
@@ -69,7 +75,7 @@ fn main() {
 
 fn run_ready_then_exit() {
     write_pid_file_if_requested();
-    let scheduler = start_fake_scheduler();
+    let scheduler = start_fake_scheduler(FakeSchedulerMode::Normal);
     println!("{}", readiness(scheduler.addr));
     eprintln!(r#"{{"level":"info","target":"hogd_dev","message":"ready-then-exit"}}"#);
     // Flush stdout/stderr so the supervisor sees readiness before the
@@ -81,9 +87,13 @@ fn run_ready_then_exit() {
 }
 
 fn run_ready() {
+    run_ready_with_scheduler(FakeSchedulerMode::Normal);
+}
+
+fn run_ready_with_scheduler(mode: FakeSchedulerMode) {
     install_sigterm_handler();
     write_pid_file_if_requested();
-    let scheduler = start_fake_scheduler();
+    let scheduler = start_fake_scheduler(mode);
     println!("{}", readiness(scheduler.addr));
     eprintln!(r#"{{"level":"info","target":"hogd_dev","message":"ready"}}"#);
 
@@ -94,9 +104,19 @@ fn run_ready() {
     eprintln!(r#"{{"level":"info","target":"hogd_dev","message":"stopping"}}"#);
 }
 
+fn run_dead_scheduler() {
+    install_sigterm_handler();
+    write_pid_file_if_requested();
+    println!("{}", readiness(dead_loopback_addr()));
+
+    while !TERMINATED.load(Ordering::SeqCst) {
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
 fn run_ignore_term() {
     ignore_sigterm();
-    let scheduler = start_fake_scheduler();
+    let scheduler = start_fake_scheduler(FakeSchedulerMode::Normal);
     println!("{}", readiness(scheduler.addr));
     run_ignore_term_loop();
 }
@@ -112,7 +132,7 @@ fn run_with_helper() {
         .spawn()
         .expect("bug: helper process should spawn");
 
-    let scheduler = start_fake_scheduler();
+    let scheduler = start_fake_scheduler(FakeSchedulerMode::Normal);
     println!("{}", readiness(scheduler.addr));
 
     while !TERMINATED.load(Ordering::SeqCst) {
@@ -155,12 +175,22 @@ fn readiness(scheduler: SocketAddr) -> String {
     )
 }
 
+fn dead_loopback_addr() -> SocketAddr {
+    let listener =
+        StdTcpListener::bind("127.0.0.1:0").expect("bug: dead scheduler port should bind");
+    let addr = listener
+        .local_addr()
+        .expect("bug: dead scheduler listener should have local addr");
+    drop(listener);
+    addr
+}
+
 struct FakeSchedulerRuntime {
     _runtime: Runtime,
     addr: SocketAddr,
 }
 
-fn start_fake_scheduler() -> FakeSchedulerRuntime {
+fn start_fake_scheduler(mode: FakeSchedulerMode) -> FakeSchedulerRuntime {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(1)
         .enable_all()
@@ -175,7 +205,7 @@ fn start_fake_scheduler() -> FakeSchedulerRuntime {
             .expect("bug: fake scheduler should have local addr");
         let mut services = ServiceMap::new();
         services.add_service(Box::new(SchedulerCoord_SchedulerCoord1_Dispatcher::new(
-            Box::new(FakeScheduler::default()),
+            Box::new(FakeScheduler::new(mode)),
         )));
         let server = RpcServer::new(listener, services);
         let _server_handle = server.start().await;
@@ -187,12 +217,28 @@ fn start_fake_scheduler() -> FakeSchedulerRuntime {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FakeSchedulerMode {
+    Normal,
+    GetTipError,
+    LoadRejected,
+    LoadNoEffect,
+}
+
+#[derive(Debug)]
 struct FakeScheduler {
     tip: Arc<Mutex<Option<DbTip>>>,
+    mode: FakeSchedulerMode,
 }
 
 impl FakeScheduler {
+    fn new(mode: FakeSchedulerMode) -> Self {
+        Self {
+            tip: Arc::new(Mutex::new(None)),
+            mode,
+        }
+    }
+
     fn genesis_tip() -> DbTip {
         DbTip {
             height: 0.into(),
@@ -255,6 +301,10 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
     }
 
     async fn schedcoord_get_tip(&self) -> Result<SchedulerGetTipResult, ProgramError> {
+        if self.mode == FakeSchedulerMode::GetTipError {
+            return Err(ProgramError::msg("fake get_tip failure"));
+        }
+
         match self
             .tip
             .lock()
@@ -270,6 +320,13 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
         &self,
         _config: GenesisConfiguration,
     ) -> Result<DbSchedResult, ProgramError> {
+        if self.mode == FakeSchedulerMode::LoadRejected {
+            return Ok(DbSchedResult::DbSchedResultError);
+        }
+        if self.mode == FakeSchedulerMode::LoadNoEffect {
+            return Ok(DbSchedResult::DbSchedResultOK);
+        }
+
         *self.tip.lock().expect("bug: fake tip mutex poisoned") = Some(Self::genesis_tip());
         Ok(DbSchedResult::DbSchedResultOK)
     }

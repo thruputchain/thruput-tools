@@ -19,8 +19,8 @@ use std::{fmt, net::SocketAddr};
 
 use crate::{NodeSupervisorError, genesis::ensure_dev_genesis};
 
-// One lane can serve chainTip today; two leaves room for the startup
-// get-tip/load/re-tip sequence without making PR 4a a pool-tuning exercise.
+// chainTip only needs one lane today; two gives the near-term PR 4b/4c
+// scheduler-sharing path room without making PR 4a a pool-tuning exercise.
 const SCHEDULER_POOL_SIZE: usize = 2;
 
 /// Chain-plane adapter backed by hogd-dev's scheduler endpoint.
