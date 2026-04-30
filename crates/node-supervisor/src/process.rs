@@ -74,6 +74,7 @@ impl ChildProcessSpec {
         let mut command = Command::new(&self.program);
         command
             .args(&self.args)
+            // TODO(PR 2): pipe stdin when hogd-dev needs the genesis payload.
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
