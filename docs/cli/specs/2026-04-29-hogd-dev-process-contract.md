@@ -46,9 +46,16 @@ v1 reductions:
 - **Logging.** v1 stderr is free-form text via existing
   `hogd::info/warn/error`. NDJSON formatter is a follow-up.
 - **Shutdown.** v1 SIGTERM handler sets a `sig_atomic_t` flag; the main
-  thread observes it and terminates the process directly. v1 does **not**
-  promise clean component teardown — the supervisor's SIGKILL escalation
-  is the safety net.
+  thread observes it via `sigprocmask` + `sigsuspend` (race-free) and
+  returns normally from `main`, allowing RAII destructors to run —
+  `HogdDevNode` performs `MempoolTestInfra`-style component teardown
+  and `HogdDevTmpDir` removes the RAMDB temp directory. The destructor
+  body is wrapped in `try/catch + CHECK(false)` so any throw becomes a
+  loud abort. The supervisor contract treats clean teardown as
+  best-effort: the supervisor's 5s SIGKILL escalation remains the
+  safety net for destructor hangs (which the `try/catch` cannot
+  catch). Net: the happy path cleans up after itself; the unhappy
+  path is loudly killed within the grace window.
 
 When v1 is replaced by a richer hogd-dev, this section can be deleted and
 the long-form contract takes over verbatim.

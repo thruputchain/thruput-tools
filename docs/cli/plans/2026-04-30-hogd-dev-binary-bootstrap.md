@@ -67,17 +67,19 @@ class into a long-running binary surface.
 - `RAMDB`-backed ephemeral state. Uses production-safe
   `Directory::open_temporary()` from `hogd/base/io.cc:361-371`
   (`mkdtemp`-based) — **not** the test-only `TmpDir` from
-  `hogd/base/test.h`. See "Temp directory lifecycle" below for the
-  SIGTERM cleanup tradeoff.
+  `hogd/base/test.h`. The `HogdDevTmpDir` RAII wrapper handles cleanup
+  on shutdown; see "Temp directory lifecycle" below.
 - Readiness JSON line on stdout matching the v1-reduced supervisor
   contract (scheduler endpoint only).
 - Stderr logs via existing `hogd::info/warn/error` (free-form text in v1
   — the contract spec already tolerates non-JSON during bring-up).
-- SIGTERM → set `sig_atomic_t` flag; main thread observes and terminates
-  the process directly without invoking component teardown. Supervisor's
-  SIGKILL escalation is the safety net. Normal RAII teardown on
-  *non-signal* exits is allowed but **not** part of the supervisor
-  contract.
+- SIGTERM → handler sets a `sig_atomic_t` flag; main thread observes
+  via `sigsuspend(2)` (race-free vs. the older `pause()` pattern) and
+  returns normally from `hogd_dev_init`. RAII destructors then run —
+  including `HogdDevNode`'s teardown sequence and the `HogdDevTmpDir`
+  cleanup — so the temp dir and RAMDB contents are removed. The
+  supervisor's 5s SIGKILL escalation remains the safety net for any
+  destructor hang or exception, not the primary mechanism.
 
 Genesis is **not** loaded inside hogd-dev. The supervisor (Rust side)
 loads genesis after the readiness handshake — see "Genesis ownership"
@@ -118,12 +120,16 @@ below.
   Total expected size ~50-80 lines. If hogd grows a stable
   `event-server` library that's appropriate for non-test use, hogd-dev
   can switch to it later without supervisor-contract changes.
-- **No clean-shutdown promise.** MempoolTestInfra's destructor sequence
-  is documented as fragile (jhumphri: "particularly prone to
-  exceptions"). The v1 supervisor contract does not depend on it.
-  HogdDevNode's destructor exists for normal program exit (e.g.,
-  scope-end in a future test fixture), but on SIGTERM the process
-  terminates without invoking it.
+- **No clean-shutdown promise to the supervisor.** v1 hogd-dev *does*
+  attempt clean teardown on SIGTERM (the `HogdDevNode` destructor runs,
+  inheriting `MempoolTestInfra`'s ordering), but the **supervisor
+  contract does not depend on that succeeding**. MempoolTestInfra's
+  destructor is documented as fragile (jhumphri: "particularly prone to
+  exceptions"). The destructor's `try/catch + CHECK(false)` makes any
+  failure loud and immediate (process aborts on uncaught exception);
+  the supervisor's 5s SIGKILL escalation handles hangs. Net: the happy
+  path cleans up after itself; the unhappy path is loudly killed
+  within the grace window.
 - **No NDJSON log formatter.** The supervisor contract already says it
   tolerates non-JSON during bring-up. NDJSON can come later as a polish
   PR alongside whatever logging-formatter work makes sense for hogd as a
@@ -153,9 +159,10 @@ hogd/hogd/hogd_dev/
                            # (~50-80 lines; no-op success returns) —
                            # replaces the test-util TestEventAggregator
                            # dependency from MempoolTestInfra
-  hogd_dev_tmp_dir.h       # tiny RAII temp-dir wrapper for normal-exit
-                           # cleanup; SIGTERM path intentionally bypasses
-                           # this — see "Temp directory lifecycle"
+  hogd_dev_tmp_dir.h       # tiny RAII temp-dir wrapper; cleans up on
+  hogd_dev_tmp_dir.cc      # both normal exit and SIGTERM (since SIGTERM
+                           # returns from main and runs destructors).
+                           # See "Temp directory lifecycle"
 ```
 
 `hogd/hogd/CMakeLists.txt` gains exactly one line:
@@ -185,31 +192,32 @@ the v1 supervisor contract — see shutdown semantics below.
 
 ## Temp directory lifecycle
 
-`Directory::open_temporary()` (`hogd/base/io.cc:361-371`) creates the
+`Directory::open_temporary()` (`hogd/base/io.cc:361-371`) creates a
 `/tmp/ramdb_XXXXXX` directory via `mkdtemp` but **does not remove it on
-destruction**. The SIGTERM path explicitly bypasses RAII teardown
-(see shutdown semantics above), so the temp directory and its RAMDB
-contents leak per-run on every SIGTERM exit.
+destruction**. v1 ships a tiny `HogdDevTmpDir` RAII wrapper in
+`hogd/hogd_dev/hogd_dev_tmp_dir.{h,cc}` that owns the path and calls
+`std::filesystem::remove_all` from its destructor (with the
+`error_code` overload, so a failed cleanup logs a warning rather than
+throws).
 
-v1 contract: this is **acceptable**. `/tmp` is reaped at boot on every
-supported dev platform, and per-session-leak-on-SIGTERM is a safer
-default than running `std::filesystem::remove_all` from a signal
-handler (which is not async-signal-safe).
+Because the SIGTERM path returns normally from `hogd_dev_init` (rather
+than calling `_Exit`), the `HogdDevTmpDir` destructor runs on every
+exit path the supervisor exercises in practice. Net: **no temp-dir
+leak under normal operation**.
 
-To avoid leaks on **non-signal exits** (e.g., normal program return,
-test fixtures driving `HogdDevNode` outside the supervisor), v1 ships
-a tiny `HogdDevTmpDir` RAII wrapper in `hogd/hogd_dev/hogd_dev_tmp_dir.h`
-that owns the `Directory` and calls `std::filesystem::remove_all` from
-its destructor. The destructor runs on normal exit but is intentionally
-not invoked on the SIGTERM path. This mirrors what the test-only
-`TmpDir` does, without depending on `hogd/base/test.h` from a shipped
-binary.
+The remaining leak windows are:
 
-If accumulation in `/tmp` becomes a problem in practice (e.g., long
-dev sessions on systems where `/tmp` isn't tmpfs), follow-up options
-include: (a) a startup sweep that removes `/tmp/ramdb_*` directories
-older than N hours, or (b) using `O_TMPFILE`-style auto-unlink-on-
-close patterns. Neither is in v1 scope.
+- A destructor hang during shutdown that triggers the supervisor's
+  SIGKILL escalation. SIGKILL skips the destructor, so the temp dir
+  is left behind. The same applies to crash-by-uncaught-exception
+  paths after the destructor's `CHECK(false)` aborts.
+- A `kill -9` from the developer or OOM killer.
+
+In all of those, `/tmp` reaping at boot bounds the leak. If
+accumulation in `/tmp` becomes a problem on systems where `/tmp` isn't
+tmpfs, follow-up options include: (a) a startup sweep that removes
+`/tmp/ramdb_*` directories older than N hours, or (b) `O_TMPFILE`-style
+auto-unlink-on-close patterns. Neither is in v1 scope.
 
 ## Code style discipline
 
@@ -344,11 +352,17 @@ Per the shutdown-semantics section above, the SIGTERM handler is
 restricted to async-signal-safe operations:
 
 - `volatile sig_atomic_t shutdown_requested` flag write — fine.
-- `std::atomic<bool>` store with relaxed ordering — fine in practice
-  on POSIX, but `sig_atomic_t` is the conservative choice and matches
-  what hogd's existing signal handling pattern would use.
 - **No** logging, allocation, or coroutine work inside the handler.
   Logging happens on the main thread after observing the flag.
+
+The main-thread observer uses `sigprocmask(SIG_BLOCK, ...)` +
+`sigsuspend(2)` rather than `pause(2)`. The `pause()` form has a
+TOCTOU window between checking the flag and entering the kernel-side
+sleep — if SIGTERM arrives in that window, `pause()` blocks
+indefinitely and only the supervisor's SIGKILL escalation breaks the
+wait. The `sigsuspend` pattern atomically swaps the signal mask and
+sleeps, so flag-check and sleep are race-free with respect to
+SIGTERM. This is the canonically-correct shape and what v1 ships.
 
 ### Linting
 
@@ -398,34 +412,44 @@ support the plane.
 
 ## Shutdown semantics
 
-The v1 supervisor contract does **not** depend on hogd-dev tearing
-components down cleanly. Specifically:
+v1 hogd-dev attempts a clean teardown on SIGTERM, but the **supervisor
+contract treats clean teardown as best-effort, not load-bearing**.
+Specifically:
 
 - A SIGTERM handler sets a `volatile sig_atomic_t shutdown_requested`
   flag. The handler does no work beyond setting the flag — async-signal
   safety only.
-- The main thread observes the flag (e.g., `pause()` loop or a
-  `signalfd`/`sigwait` thread) and terminates the process directly.
-  Optional cheap log flush before terminating; **no** attempt to drain
-  executors, schedulers, or db servers; **no** invocation of the
-  `HogdDevNode` destructor on the SIGTERM path.
-- Non-signal termination paths (e.g., a future test harness embedding
-  `HogdDevNode` and letting the object go out of scope) MAY invoke the
-  destructor and run RAII teardown. That is allowed but is **not**
-  part of the v1 supervisor contract — the supervisor must not rely
-  on it. (A future SIGINT handler may choose to opt into normal
-  teardown for friendlier interactive `^C` behavior; v1 does not
-  install one.)
-- The supervisor sends SIGKILL after the 5s grace if the child is still
-  running. v1 ephemeral state means there is nothing to flush, so this
-  is a safe fallback.
+- The main thread observes the flag via the `sigprocmask` +
+  `sigsuspend` pattern (race-free vs. the older `pause()` form, which
+  has a TOCTOU window between the flag check and the kernel-side
+  sleep). When `sigsuspend` returns and the flag is set,
+  `hogd_dev_init` **returns normally** from main.
+- C++ runtime then runs RAII destructors: `HogdDevNode` performs the
+  same scheduler-reset / scheduler-shutdown / executor-shutdown /
+  reverse-declaration teardown sequence as `MempoolTestInfra`, and
+  `HogdDevTmpDir` removes the RAMDB temp directory.
+- The destructor body is wrapped in `try { ... } catch (const
+  std::exception &e) { error(...); CHECK(false); }`. Any exception
+  during teardown is logged loudly and aborts the process —
+  exception-during-shutdown becomes a visible failure rather than a
+  silent corruption.
+- The supervisor sends SIGKILL after the 5s grace if the child is
+  still running. This is the safety net for destructor hangs (which
+  the `try/catch` cannot catch).
 
-Why this matters: MempoolTestInfra's destructor explicitly documents
-its ordering as fragile (jhumphri: "particularly prone to exceptions").
-v1 does not promote that ordering into a long-running binary contract.
-When hogd grows a real component-shutdown story (which it will need
-for production reasons, not just hogd-dev), the v1 path can be
-replaced with proper teardown without changing the supervisor contract.
+Why this is the right tradeoff: MempoolTestInfra's destructor is
+documented as fragile (jhumphri: "particularly prone to exceptions").
+The original v1 plan responded by skipping the destructor entirely on
+SIGTERM via `_Exit`, accepting a temp-dir leak per session as the
+cost. Running the destructor in practice avoids that user-facing leak,
+and the existing `try/catch + CHECK(false)` already turns
+destructor-fragility into a loud, supervisor-killable failure mode
+rather than silent corruption. The supervisor's 5s SIGKILL handles
+the remaining hang case. When hogd grows a real component-shutdown
+story (which it will need for production reasons, not just hogd-dev),
+hogd-dev's destructor can be replaced with that proper teardown
+without changing the supervisor contract — the supervisor still just
+sends SIGTERM and waits up to 5s.
 
 ## Genesis ownership
 
