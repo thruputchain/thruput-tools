@@ -15,6 +15,11 @@ Workspace crates in `crates/`:
   implementation. Owns shared request validation, public error mapping,
   and submit/chain/read backend traits used by gateway, dev-node, and
   future hogd-dev compositions.
+- **x23-transport** — shared x23 connection-pool helpers
+  (`FixedSerialPool` setup, address parsing, typed `ConnectError`).
+  Consumed by gateway and node-supervisor; backend-agnostic. Named for
+  the x23 wire protocol to keep it distinct from the JSON-RPC `rpc-*`
+  family of crates.
 - **gateway** — jsonrpsee server binary. Its backend adapter implements
   the rpc-server planes over hogd indexer and scheduler x23 RPCs.
 - **client** — typed JSON-RPC client generated from the same

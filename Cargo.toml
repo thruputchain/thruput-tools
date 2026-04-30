@@ -4,6 +4,7 @@ members = [
     "crates/api-types",
     "crates/rpc-api",
     "crates/rpc-server",
+    "crates/x23-transport",
     "crates/gateway",
     "crates/client",
     "crates/signing",
@@ -34,6 +35,7 @@ categories = ["development-tools"]
 groundhog-rpc-api-types = { path = "crates/api-types", version = "=0.2.5", registry = "groundhog" }
 groundhog-rpc-api = { path = "crates/rpc-api", version = "=0.2.5", registry = "groundhog" }
 groundhog-rpc-server = { path = "crates/rpc-server", version = "=0.2.5", registry = "groundhog" }
+groundhog-x23-transport = { path = "crates/x23-transport", version = "=0.2.5", registry = "groundhog" }
 groundhog-rpc-client = { path = "crates/client", version = "=0.2.5", registry = "groundhog" }
 groundhog-signing = { path = "crates/signing", version = "=0.2.5", registry = "groundhog" }
 groundhog-dev-node = { path = "crates/dev-node", version = "=0.2.5", registry = "groundhog" }
