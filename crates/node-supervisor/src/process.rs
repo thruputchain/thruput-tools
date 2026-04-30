@@ -4,9 +4,26 @@ use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 use std::process::{ExitStatus, Stdio};
 
-use tokio::process::{Child, Command};
+use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 
-use crate::NodeSupervisorError;
+use crate::error::{ChildSignal, NodeSupervisorError};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChildStdio {
+    Null,
+    Piped,
+    Inherit,
+}
+
+impl ChildStdio {
+    fn into_stdio(self) -> Stdio {
+        match self {
+            Self::Null => Stdio::null(),
+            Self::Piped => Stdio::piped(),
+            Self::Inherit => Stdio::inherit(),
+        }
+    }
+}
 
 /// Command specification for a supervised child process.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,6 +33,11 @@ pub struct ChildProcessSpec {
     args: Vec<OsString>,
     envs: Vec<(OsString, OsString)>,
     current_dir: Option<PathBuf>,
+    stdin: ChildStdio,
+    stdout: ChildStdio,
+    stderr: ChildStdio,
+    #[cfg(unix)]
+    process_group: Option<i32>,
 }
 
 impl ChildProcessSpec {
@@ -26,6 +48,11 @@ impl ChildProcessSpec {
             args: Vec::new(),
             envs: Vec::new(),
             current_dir: None,
+            stdin: ChildStdio::Null,
+            stdout: ChildStdio::Inherit,
+            stderr: ChildStdio::Inherit,
+            #[cfg(unix)]
+            process_group: None,
         }
     }
 
@@ -61,9 +88,43 @@ impl ChildProcessSpec {
         self
     }
 
+    /// Pipe child stdin so the supervisor can write to it after spawn.
+    #[must_use]
+    pub fn stdin_piped(mut self) -> Self {
+        self.stdin = ChildStdio::Piped;
+        self
+    }
+
+    /// Pipe child stdout so the supervisor can read readiness output.
+    #[must_use]
+    pub fn stdout_piped(mut self) -> Self {
+        self.stdout = ChildStdio::Piped;
+        self
+    }
+
+    /// Pipe child stderr so the supervisor can forward log output.
+    #[must_use]
+    pub fn stderr_piped(mut self) -> Self {
+        self.stderr = ChildStdio::Piped;
+        self
+    }
+
+    /// Run the child in the requested Unix process group.
+    #[cfg(unix)]
+    #[must_use]
+    pub fn process_group(mut self, process_group: i32) -> Self {
+        self.process_group = Some(process_group);
+        self
+    }
+
     /// Program path or name.
     pub fn program(&self) -> &OsStr {
         &self.program
+    }
+
+    /// Command-line arguments.
+    pub fn program_args(&self) -> &[OsString] {
+        &self.args
     }
 
     fn program_label(&self) -> String {
@@ -74,11 +135,14 @@ impl ChildProcessSpec {
         let mut command = Command::new(&self.program);
         command
             .args(&self.args)
-            // TODO(PR 2): pipe stdin when hogd-dev needs the genesis payload.
-            .stdin(Stdio::null())
-            // TODO(PR 2): pipe and drain stdout/stderr for readiness and log forwarding.
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit());
+            .stdin(self.stdin.into_stdio())
+            .stdout(self.stdout.into_stdio())
+            .stderr(self.stderr.into_stdio());
+
+        #[cfg(unix)]
+        if let Some(process_group) = self.process_group {
+            command.process_group(process_group);
+        }
 
         for (key, value) in &self.envs {
             command.env(key, value);
@@ -116,9 +180,50 @@ impl ChildSupervisor {
                 program: program.clone(),
                 source,
             })?;
+        #[cfg(unix)]
+        let process_group = resolve_process_group(self.spec.process_group, child.id(), &program)?;
 
-        Ok(SupervisedChild { program, child })
+        Ok(SupervisedChild {
+            program,
+            child,
+            #[cfg(unix)]
+            process_group,
+        })
     }
+}
+
+#[cfg(unix)]
+fn resolve_process_group(
+    configured_process_group: Option<i32>,
+    child_id: Option<u32>,
+    program: &str,
+) -> Result<Option<i32>, NodeSupervisorError> {
+    match configured_process_group {
+        Some(0) => child_id_to_i32(child_id, program).map(Some),
+        Some(process_group) => Ok(Some(process_group)),
+        None => Ok(None),
+    }
+}
+
+#[cfg(unix)]
+fn child_id_to_i32(child_id: Option<u32>, program: &str) -> Result<i32, NodeSupervisorError> {
+    let Some(child_id) = child_id else {
+        return Err(NodeSupervisorError::Status {
+            program: program.to_string(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "child process id is unavailable",
+            ),
+        });
+    };
+
+    i32::try_from(child_id).map_err(|_| NodeSupervisorError::Status {
+        program: program.to_string(),
+        source: std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "child pid does not fit in pid_t",
+        ),
+    })
 }
 
 /// Running child process owned by the supervisor.
@@ -126,12 +231,34 @@ impl ChildSupervisor {
 pub struct SupervisedChild {
     program: String,
     child: Child,
+    #[cfg(unix)]
+    process_group: Option<i32>,
 }
 
 impl SupervisedChild {
+    /// Program path or name used to spawn the child.
+    pub fn program(&self) -> &str {
+        &self.program
+    }
+
     /// Operating-system process id, if the child has started and is still known.
     pub fn id(&self) -> Option<u32> {
         self.child.id()
+    }
+
+    /// Take the child's stdin pipe.
+    pub fn take_stdin(&mut self) -> Option<ChildStdin> {
+        self.child.stdin.take()
+    }
+
+    /// Take the child's stdout pipe.
+    pub fn take_stdout(&mut self) -> Option<ChildStdout> {
+        self.child.stdout.take()
+    }
+
+    /// Take the child's stderr pipe.
+    pub fn take_stderr(&mut self) -> Option<ChildStderr> {
+        self.child.stderr.take()
     }
 
     /// Return the child exit status if it has already exited.
@@ -174,15 +301,94 @@ impl SupervisedChild {
             })?;
         self.wait().await
     }
+
+    /// Send SIGTERM to the child's process group.
+    #[cfg(unix)]
+    pub fn terminate_process_group(&self) -> Result<(), NodeSupervisorError> {
+        self.signal_process_group(libc::SIGTERM)
+    }
+
+    /// Send SIGKILL to the child's process group.
+    #[cfg(unix)]
+    pub fn kill_process_group(&self) -> Result<(), NodeSupervisorError> {
+        self.signal_process_group(libc::SIGKILL)
+    }
+
+    /// Return true when the child's process group still has live members.
+    #[cfg(unix)]
+    pub fn process_group_exists(&self) -> Result<bool, NodeSupervisorError> {
+        let Some(target) = self.process_group_signal_target()? else {
+            return Ok(false);
+        };
+
+        // SAFETY: kill(2) with signal 0 performs existence/permission checks
+        // for the process group and does not deliver a signal.
+        let result = unsafe { libc::kill(target, 0) };
+        if result == 0 {
+            return Ok(true);
+        }
+
+        let source = std::io::Error::last_os_error();
+        match source.raw_os_error() {
+            Some(libc::ESRCH) => Ok(false),
+            Some(libc::EPERM) => Ok(true),
+            _ => Err(NodeSupervisorError::Signal {
+                program: self.program.clone(),
+                signal: ChildSignal::from_raw(0),
+                source,
+            }),
+        }
+    }
+
+    #[cfg(unix)]
+    fn signal_process_group(&self, signal: i32) -> Result<(), NodeSupervisorError> {
+        let Some(target) = self.process_group_signal_target()? else {
+            return Ok(());
+        };
+
+        // SAFETY: kill(2) is called with the child's process-group id and a
+        // signal constant. It does not alias memory or retain pointers.
+        let result = unsafe { libc::kill(target, signal) };
+        if result == 0 {
+            return Ok(());
+        }
+
+        let source = std::io::Error::last_os_error();
+        if source.raw_os_error() == Some(libc::ESRCH) {
+            return Ok(());
+        }
+
+        Err(NodeSupervisorError::Signal {
+            program: self.program.clone(),
+            signal: ChildSignal::from_raw(signal),
+            source,
+        })
+    }
+
+    #[cfg(unix)]
+    fn process_group_signal_target(&self) -> Result<Option<i32>, NodeSupervisorError> {
+        let process_group = match self.process_group {
+            Some(process_group) => process_group,
+            None => match self.id() {
+                Some(_) => child_id_to_i32(self.id(), &self.program)?,
+                None => return Ok(None),
+            },
+        };
+
+        Ok(Some(-process_group))
+    }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
+    use crate::test_support::{FAKE_HOGD_DEV_MODE_ENV, fake_hogd_dev_binary};
+
     use super::{ChildProcessSpec, ChildSupervisor};
 
     #[tokio::test]
     async fn wait_reports_child_exit_status() {
-        let spec = ChildProcessSpec::new("/bin/sh").args(["-c", "exit 7"]);
+        let spec =
+            ChildProcessSpec::new(fake_hogd_dev_binary()).env(FAKE_HOGD_DEV_MODE_ENV, "exit-7");
         let supervisor = ChildSupervisor::new(spec);
         let mut child = supervisor
             .spawn()
@@ -198,7 +404,8 @@ mod tests {
 
     #[tokio::test]
     async fn kill_and_wait_stops_running_child() {
-        let spec = ChildProcessSpec::new("/bin/sleep").arg("60");
+        let spec =
+            ChildProcessSpec::new(fake_hogd_dev_binary()).env(FAKE_HOGD_DEV_MODE_ENV, "hang");
         let supervisor = ChildSupervisor::new(spec);
         let mut child = supervisor
             .spawn()

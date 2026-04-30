@@ -1,9 +1,9 @@
 # Hogd-Dev Process Contract
 
 **Date:** 2026-04-29
-**Status:** Draft contract proposal. PR 2 of the node-supervisor plan should not
-implement against this until hogd owners agree to the binary name, readiness
-mechanism, endpoint listing, and shutdown behavior.
+**Status:** Draft contract proposal. PR 2 implements a fake-child adapter
+against these v1 choices; real hogd-dev integration still requires hogd-owner
+agreement before depending on a real binary.
 
 **Companion to:**
 
@@ -22,31 +22,34 @@ account/genesis input, JSON-RPC facade wiring, log forwarding, and shutdown.
 ## Contract Checks Before PR 2
 
 This document intentionally leaves some implementation choices as proposed
-defaults. Before implementing the fake-child adapter in PR 2, agree on these
+defaults. Before replacing the fake child with real hogd-dev, confirm these
 checks with hogd owners:
 
-- binary name and invocation shape;
+- binary name and invocation shape: recommended v1 binary is `hogd-dev`;
 - readiness transport and JSON schema;
 - endpoint names, address format, and whether read state is one endpoint or
   several named endpoints;
-- shutdown grace timeout and when the supervisor escalates to `SIGKILL`;
-- whether hogd-dev stderr is stable NDJSON and whether timestamps are produced
-  by hogd-dev or added by the Rust supervisor;
-- supervisor log-forwarding model: parse and re-emit through tracing, or
-  pass-through with a stable prefix;
-- v1 platform target, with Unix-only acceptable until SDK developer demand says
-  otherwise;
-- exact meaning of "sibling path next to `groundhog`" for bundled releases;
+- shutdown grace timeout: v1 default is 5s, then the supervisor escalates to
+  `SIGKILL`;
+- whether hogd-dev stderr is stable NDJSON. Timestamps may be emitted by
+  hogd-dev, but are not required by the v1 supervisor contract because tracing
+  output already carries receipt-time metadata;
+- supervisor log-forwarding model: v1 parses stderr NDJSON and re-emits through
+  tracing, while tolerating non-JSON lines during bring-up;
+- v1 platform target: Unix-only until SDK developer demand says otherwise;
+- exact meaning of "sibling path next to `groundhog`" for bundled releases:
+  v1 uses `std::env::current_exe().parent()`;
 - typed startup errors for not found, configured path missing, and configured
   path not executable.
 
 ## Startup
 
-The supervisor resolves the child binary in this order:
+The supervisor resolves the child binary, named `hogd-dev`, in this order:
 
 1. explicit `--hogd-dev-binary`;
 2. `GROUNDHOG_HOGD_DEV_BINARY`;
-3. sibling path next to the `groundhog` binary;
+3. sibling path next to the `groundhog` binary, using
+   `std::env::current_exe().parent()`;
 4. `PATH`;
 5. typed startup error.
 
@@ -94,14 +97,18 @@ Stderr should use newline-delimited JSON records:
 {"level":"info","target":"hogd_dev","message":"scheduler listening","fields":{"addr":"127.0.0.1:12345"}}
 ```
 
-The supervisor may forward these into its tracing/log output. Human formatting
-belongs in the Rust CLI layer, not in the child process protocol.
+The supervisor forwards these into its tracing/log output. Human formatting
+belongs in the Rust CLI layer, not in the child process protocol. Timestamp
+fields are allowed but not required; tracing output provides receipt-time
+metadata.
 
 ## Shutdown
 
 `SIGTERM` asks hogd-dev to stop accepting new requests, drain or fail in-flight
-internal tasks deterministically, and exit within the documented grace timeout.
-The supervisor sends `SIGKILL` to the process group only after that timeout.
+internal tasks deterministically, and exit within the configured grace timeout.
+The v1 default grace is 5s. Because v1 hogd-dev is ephemeral, shutdown grace
+exists for log drain and clean SIGTERM handling, not state persistence. The
+supervisor sends `SIGKILL` to the process group only after that timeout.
 
 On Linux, the supervisor may set `PR_SET_PDEATHSIG` for best-effort cleanup if
 the parent dies. macOS has no direct equivalent; v1 documents that orphaned
@@ -120,6 +127,7 @@ The ready endpoints must be sufficient for:
 - contract event queries;
 - dev-control methods needed for reset and transaction detail.
 
-If pending and committed state live behind separate endpoints, the Rust adapter
-owns the composite transaction-status orchestration described in the shared
-RPC-server backend contract.
+For v1, the Rust adapter owns the composite transaction-status orchestration
+described in the shared RPC-server backend contract: scheduler pending state
+first, then committed read state. If hogd-dev later exposes a unified status
+RPC, the adapter can collapse to that.

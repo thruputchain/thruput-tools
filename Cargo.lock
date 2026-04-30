@@ -1059,6 +1059,11 @@ dependencies = [
 name = "groundhog-node-supervisor"
 version = "0.2.5"
 dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+ "serial_test",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
