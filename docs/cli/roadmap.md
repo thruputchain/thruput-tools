@@ -72,11 +72,11 @@ Implementation status:
   ships, shares execution semantics with the SDK/native executor, retains
   transaction detail, exposes events, and supports latest-state storage
   reads through `groundhog_dev_getStorageAt`.
-- The current local-node backend is prototype infrastructure, not the
-  durable backend contract. The next backend direction is a hogd-side
-  embedded execution library consumed from Rust, documented in
-  `docs/cli/specs/2026-04-24-embedded-dev-node-backend.md` and
-  `docs/cli/plans/2026-04-24-embedded-dev-node-backend.md`.
+- The current native-exec local-node backend is prototype infrastructure,
+  not the durable backend contract. The durable direction is a Rust
+  supervisor (`groundhog-node-supervisor`) around a hogd-owned `hogd-dev`
+  subprocess; see `docs/cli/2026-04-25-hogd-dev-node-hybrid.md` and
+  `docs/cli/plans/2026-04-29-local-node-hogd-dev-supervisor.md`.
 - Still intentionally deferred: a no-key-required call dry-run / inspect
   split, richer storage-cost reporting, and `groundhog inspect`.
 
@@ -134,16 +134,10 @@ Maintenance rules:
   environment override
 - [x] Wire contract spec / IDL generation into the CLI workflow
 - [x] Clarify the contract spec / IDL path needed for `call`
-- [x] Signing / tx-building: depend on a shared signing library
-  extracted from `groundhog-rpc/crates/tx-builder`.
-  Current direction: extract a dedicated `groundhog-signing` crate,
-  keep `sdk_rs` separate, and consolidate CLI + RPC gateway into one
-  off-chain tools workspace. See `docs/signing-reorg-plan.md` and
-  `docs/signing-crate-api.md`.
-  Includes: converge on one ed25519 crate, preferably aligned with the
-  wider Groundhog Rust stack, replace hand-rolled address derivation
-  with canonical `PubkeyAccountPreimage` XDR, and bridge `keys.rs` key
-  loading to the shared signing library.
+- [x] Signing / tx-building: shared `groundhog-signing` crate landed at
+  `crates/signing/`. Canonical `PubkeyAccountPreimage` XDR address
+  derivation, bridged from `keys.rs`. CLI and RPC gateway now share the
+  one off-chain tools workspace.
 - [x] Command result envelope for consistent JSON shape
 - [x] Implement `groundhog deploy`
 - [x] Implement `groundhog call`

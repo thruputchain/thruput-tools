@@ -10,10 +10,6 @@
 - [`../2026-04-25-hogd-dev-node-hybrid.md`](../2026-04-25-hogd-dev-node-hybrid.md)
   — hybrid dev-node design; this decision picks among the alternatives that
   doc surfaced.
-- [`../2026-04-24-dev-node-layering.md`](../2026-04-24-dev-node-layering.md)
-  — argues for `chuckd_scheduler::SchedulerClient` as the dev-node aperture.
-  This decision deliberately differs; see "Relationship to the layering doc"
-  below.
 
 ## Decision
 
@@ -74,13 +70,13 @@ idiomatic and shared, not copy-pasted.
   (`crates/gateway/src/context.rs:113-125`). node-supervisor's needs are
   smaller and can start with a fixed default.
 
-## Relationship to the layering doc
+## Alternative we considered: `chuckd_scheduler::SchedulerClient`
 
-`2026-04-24-dev-node-layering.md` argued that
-`chuckd_scheduler::SchedulerClient` is the right Rust-side aperture across
-dev-node, the chuckd-rs coordinator, and a future embedded backend. That
-case is well made. This decision deliberately stops short of acting on it
-because:
+There is a defensible argument that `chuckd_scheduler::SchedulerClient`
+should be the Rust-side aperture across dev-node, the chuckd-rs coordinator,
+and a future embedded backend — one trait, three impls (TCP, mock, embedded),
+swappable behind the same dependency. This decision deliberately stops short
+of taking that path because:
 
 - the unifying-aperture argument requires gateway, supervisor, and
   chuckd-rs coordinator to all consume the trait. Today only chuckd-rs

@@ -7,10 +7,6 @@
 
 - [`../2026-04-25-hogd-dev-node-hybrid.md`](../2026-04-25-hogd-dev-node-hybrid.md)
   - durable hogd-owned subprocess architecture.
-- [`2026-04-28-rpc-server-extraction.md`](2026-04-28-rpc-server-extraction.md)
-  - shared JSON-RPC server extraction already completed.
-- [`../localdev-rpc-node.md`](../localdev-rpc-node.md)
-  - current native-exec prototype behavior.
 - [`../specs/2026-04-29-hogd-dev-process-contract.md`](../specs/2026-04-29-hogd-dev-process-contract.md)
   - draft hogd-dev subprocess contract proposal.
 
