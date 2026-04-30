@@ -732,7 +732,7 @@ mod tests {
         let binary = executable_script(
             tmp.path(),
             "fake-hogd-dev",
-            "read genesis\necho '{\"level\":\"info\",\"message\":\"waiting\"}' >&2\nsleep 60\n",
+            "read genesis\necho '{\"level\":\"info\",\"message\":\"waiting\"}' >&2\nawk 'BEGIN { for (;;) system(\"sleep 1\") }'\n",
         );
         let config = HogdDevConfig::default().with_startup_timeout(Duration::from_millis(100));
 
@@ -740,7 +740,10 @@ mod tests {
             .await
             .expect_err("bug: startup should time out");
 
-        assert!(matches!(err, NodeSupervisorError::ReadinessTimeout { .. }));
+        assert!(
+            matches!(err, NodeSupervisorError::ReadinessTimeout { .. }),
+            "unexpected startup error: {err:?}"
+        );
     }
 
     #[tokio::test]
