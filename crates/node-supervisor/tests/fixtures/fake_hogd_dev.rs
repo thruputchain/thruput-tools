@@ -1,5 +1,5 @@
 use std::{
-    env,
+    env, fs,
     io::{self, Read, Write},
     process::{self, Command},
     sync::atomic::{AtomicBool, Ordering},
@@ -8,6 +8,9 @@ use std::{
 };
 
 const MODE_ENV: &str = "GROUNDHOG_FAKE_HOGD_DEV_MODE";
+/// Optional path the fake writes its PID to before printing readiness.
+/// Tests use this to verify cleanup (poll `kill(pid, 0)` until ESRCH).
+const PID_FILE_ENV: &str = "GROUNDHOG_FAKE_HOGD_DEV_PID_FILE";
 const READY: &str = r#"{"status":"ready","network_id":"groundhog-local","endpoints":{"scheduler":"127.0.0.1:12345","read":"127.0.0.1:12346","control":"127.0.0.1:12347"}}"#;
 static TERMINATED: AtomicBool = AtomicBool::new(false);
 
@@ -54,6 +57,7 @@ fn main() {
 
 fn run_ready() {
     install_sigterm_handler();
+    write_pid_file_if_requested();
     read_genesis();
     println!("{READY}");
     eprintln!(r#"{{"level":"info","target":"hogd_dev","message":"ready"}}"#);
@@ -94,6 +98,13 @@ fn run_with_helper() {
 fn run_ignore_term_loop() {
     loop {
         thread::sleep(Duration::from_secs(60));
+    }
+}
+
+fn write_pid_file_if_requested() {
+    if let Ok(path) = env::var(PID_FILE_ENV) {
+        fs::write(&path, process::id().to_string())
+            .expect("bug: fake child should be able to write its pid file");
     }
 }
 

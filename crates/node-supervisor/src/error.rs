@@ -227,12 +227,4 @@ pub enum NodeSupervisorError {
         #[source]
         source: io::Error,
     },
-
-    /// The supervisor could not register the JSON-RPC method module.
-    #[error("failed to register JSON-RPC methods: {source}")]
-    RpcModule {
-        /// jsonrpsee registration error.
-        #[source]
-        source: jsonrpsee::core::RegisterMethodError,
-    },
 }

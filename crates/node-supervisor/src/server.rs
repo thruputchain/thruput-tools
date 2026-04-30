@@ -16,11 +16,32 @@ use crate::{
     stub_backend::StubBackend,
 };
 
+/// Why a [`NodeSupervisorHandle::stopped`] call returned.
+///
+/// Callers (CLI exit codes, supervisors-of-supervisors) need to distinguish
+/// "hogd-dev died on us" from "we were asked to stop and hogd-dev is now
+/// down because we asked it to". Both branches return an `ExitStatus`, but
+/// the meaning is different.
+#[derive(Debug)]
+pub enum SupervisorStop {
+    /// hogd-dev exited on its own; the supervisor reacted by stopping the
+    /// JSON-RPC server. The contained status is hogd-dev's own exit status.
+    HogdExited(ExitStatus),
+    /// The JSON-RPC server stopped (typically via an external `stop()`
+    /// call), and the supervisor then shut hogd-dev down with the
+    /// configured grace timeout. The contained status is hogd-dev's exit
+    /// status from that shutdown.
+    RpcStopped(ExitStatus),
+}
+
 /// Running node supervisor.
 ///
-/// Owns the supervised hogd-dev child and the JSON-RPC server. Drop semantics
-/// are intentionally not relied on for shutdown; callers should `stop()`
-/// explicitly so the JSON-RPC server and hogd-dev tear down in order.
+/// Owns the supervised hogd-dev child and the JSON-RPC server. The handle
+/// does no proactive supervision in the background: callers are responsible
+/// for awaiting [`NodeSupervisorHandle::stopped`] (the supervisor-level
+/// "run until something ends" entry point) or driving [`NodeSupervisorHandle::stop`]
+/// directly. Both consume the handle so a single instance cannot be torn
+/// down twice.
 #[derive(Debug)]
 pub struct NodeSupervisorHandle {
     hogd: HogdDevProcess,
@@ -87,17 +108,16 @@ impl NodeSupervisorHandle {
     /// Wait until either hogd-dev exits or the JSON-RPC server stops, then
     /// tear the other side down.
     ///
-    /// This is the supervisor-level "run until something ends" entry point.
     /// If hogd-dev dies after readiness, the public JSON-RPC facade keeps
-    /// answering but every backend call would fail; this method observes that
-    /// and shuts the facade down so the CLI sees a clean stop instead of
-    /// silent malfunction. If the JSON-RPC server stops first (e.g. via an
-    /// external `stop()` call), hogd-dev is shut down with the configured
-    /// grace timeout.
+    /// answering but every backend call would fail; this method observes
+    /// that and shuts the facade down so the CLI sees a clean stop instead
+    /// of silent malfunction. If the JSON-RPC server stops first (e.g. via
+    /// an external [`NodeSupervisorHandle::stop`] call), hogd-dev is shut
+    /// down with the configured grace timeout.
     ///
-    /// Returns the hogd-dev exit status either way.
+    /// Returns a [`SupervisorStop`] describing which side ended first.
     #[tracing::instrument(skip_all)]
-    pub async fn stopped(&mut self) -> Result<ExitStatus, NodeSupervisorError> {
+    pub async fn stopped(mut self) -> Result<SupervisorStop, NodeSupervisorError> {
         let rpc_done = self.rpc_handle.clone().stopped();
         tokio::select! {
             result = self.hogd.stopped() => {
@@ -107,19 +127,20 @@ impl NodeSupervisorHandle {
                     tracing::debug!(%error, "JSON-RPC server already stopped");
                 }
                 self.rpc_handle.clone().stopped().await;
-                Ok(status)
+                Ok(SupervisorStop::HogdExited(status))
             }
             () = rpc_done => {
                 tracing::info!("JSON-RPC server stopped; stopping hogd-dev");
-                self.hogd.stop().await
+                let status = self.hogd.stop().await?;
+                Ok(SupervisorStop::RpcStopped(status))
             }
         }
     }
 
     /// Stop the JSON-RPC server and shut hogd-dev down with the configured
-    /// grace timeout.
+    /// grace timeout. Consumes the handle.
     #[tracing::instrument(skip_all)]
-    pub async fn stop(&mut self) -> Result<ExitStatus, NodeSupervisorError> {
+    pub async fn stop(mut self) -> Result<ExitStatus, NodeSupervisorError> {
         if let Err(error) = self.rpc_handle.stop() {
             tracing::debug!(%error, "JSON-RPC server already stopped");
         }
@@ -142,11 +163,20 @@ async fn start_rpc_server(
         .local_addr()
         .map_err(|source| NodeSupervisorError::RpcLocalAddr { source })?;
 
+    tracing::warn!(
+        "node supervisor is using StubBackend; \
+         all JSON-RPC methods will return NOT_IMPLEMENTED until the hogd-dev \
+         x23 adapters land (PR 4a/4b/4c)"
+    );
+
     let core_rpc = GroundhogRpcServer::unified(StubBackend::new(), RpcServerConfig::default());
     let mut module = RpcModule::new(());
+    // `merge` only fails on duplicate method names, which is a compile-time
+    // invariant of the macro-generated `GroundhogApiServer` trait — the
+    // module starts empty and gets one trait merged in.
     module
         .merge(GroundhogApiServer::into_rpc(core_rpc))
-        .map_err(|source| NodeSupervisorError::RpcModule { source })?;
+        .expect("bug: rpc-server methods register without conflicts");
 
     let rpc_handle = server.start(module);
     Ok((rpc_handle, rpc_addr))
@@ -154,19 +184,24 @@ async fn start_rpc_server(
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use groundhog_rpc_api::GroundhogApiClient;
     use groundhog_rpc_api_types::error::codes;
     use jsonrpsee::core::ClientError;
     use jsonrpsee::http_client::HttpClientBuilder;
     use serial_test::serial;
+    use tempfile::TempDir;
 
     use super::*;
     use crate::{
         HogdDevConfig,
         test_support::{FAKE_HOGD_DEV_MODE_ENV, fake_hogd_dev_binary},
     };
+
+    /// Env var the fake hogd-dev reads to write its PID before printing
+    /// readiness. Tests use this to verify cleanup via `kill(pid, 0)`.
+    const FAKE_HOGD_DEV_PID_FILE_ENV: &str = "GROUNDHOG_FAKE_HOGD_DEV_PID_FILE";
 
     /// Set an env var for the duration of a test that needs the fake child
     /// to enter `ready` mode. Restored on drop. `#[serial]` ensures we are
@@ -196,10 +231,39 @@ mod tests {
         }
     }
 
+    /// Poll `kill(pid, 0)` until ESRCH or until `deadline` passes. Returns
+    /// `true` if the OS confirmed the process is gone within the deadline.
+    async fn wait_pid_gone(pid: i32, deadline: Instant) -> bool {
+        loop {
+            // SAFETY: `kill(pid, 0)` does not deliver a signal; it only
+            // tests whether `pid` is a known process. Always safe.
+            let rc = unsafe { libc::kill(pid, 0) };
+            if rc == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    fn read_pid_file(path: &std::path::Path) -> Option<i32> {
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|raw| raw.trim().parse().ok())
+    }
+
     #[tokio::test]
     #[serial]
     async fn start_serves_json_rpc_with_stub_backend() {
         let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "ready");
+        let pid_dir = TempDir::new().expect("bug: tempdir creates");
+        let pid_path = pid_dir.path().join("hogd.pid");
+        let _pid_guard = EnvGuard::set(
+            FAKE_HOGD_DEV_PID_FILE_ENV,
+            pid_path.to_str().expect("bug: tempdir path is utf-8"),
+        );
 
         let hogd = HogdDevConfig::default()
             .with_binary_path(fake_hogd_dev_binary())
@@ -208,7 +272,7 @@ mod tests {
         let config = NodeSupervisorConfig::default()
             .with_rpc_listen_address("127.0.0.1:0")
             .with_hogd_dev(hogd);
-        let mut handle = NodeSupervisorHandle::start(config, b"")
+        let handle = NodeSupervisorHandle::start(config, b"")
             .await
             .expect("bug: supervisor should start against fake hogd-dev");
 
@@ -232,10 +296,26 @@ mod tests {
             call_err.message()
         );
 
+        let pid = read_pid_file(&pid_path).expect("bug: fake should have written pid");
         let status = handle.stop().await.expect("bug: clean shutdown");
+
+        // Tighter than `!success() || code == 0`: a clean SIGTERM-handled
+        // exit either returns code 0 or the SIGTERM signal. Anything else
+        // (SIGKILL, abnormal exit) means the supervisor escalated past
+        // graceful shutdown.
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            let clean = status.code() == Some(0) || status.signal() == Some(libc::SIGTERM);
+            assert!(
+                clean,
+                "fake hogd-dev should exit on code 0 or SIGTERM, got {status:?}"
+            );
+        }
+
         assert!(
-            !status.success() || status.code() == Some(0),
-            "fake hogd-dev should exit cleanly after SIGTERM",
+            wait_pid_gone(pid, Instant::now() + Duration::from_secs(2)).await,
+            "fake hogd-dev pid {pid} still alive after stop()",
         );
     }
 
@@ -243,6 +323,12 @@ mod tests {
     #[serial]
     async fn start_rolls_back_hogd_dev_when_rpc_bind_fails() {
         let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "ready");
+        let pid_dir = TempDir::new().expect("bug: tempdir creates");
+        let pid_path = pid_dir.path().join("hogd.pid");
+        let _pid_guard = EnvGuard::set(
+            FAKE_HOGD_DEV_PID_FILE_ENV,
+            pid_path.to_str().expect("bug: tempdir path is utf-8"),
+        );
 
         // Occupy a loopback port so the supervisor's RPC bind hits EADDRINUSE.
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -260,9 +346,6 @@ mod tests {
             .with_rpc_listen_address(occupied.to_string())
             .with_hogd_dev(hogd);
 
-        // The rollback path awaits hogd-dev shutdown before returning. If
-        // that hangs, the timeout fires and the test fails — proving the
-        // hogd-dev child was reaped synchronously.
         let result = tokio::time::timeout(
             Duration::from_secs(10),
             NodeSupervisorHandle::start(config, b""),
@@ -274,6 +357,16 @@ mod tests {
         assert!(
             matches!(err, NodeSupervisorError::RpcBind { .. }),
             "expected RpcBind, got {err:?}",
+        );
+
+        // The fake wrote its PID before the readiness line; if the rollback
+        // path didn't actually reap the child, the OS would still know
+        // about this pid.
+        let pid =
+            read_pid_file(&pid_path).expect("bug: fake should have written pid before readiness");
+        assert!(
+            wait_pid_gone(pid, Instant::now() + Duration::from_secs(2)).await,
+            "rollback leaked fake hogd-dev pid {pid}",
         );
 
         drop(listener);
