@@ -277,6 +277,12 @@ includes test and bench code), so always use that flag locally too.
   backend implementation plan and PR boundaries.
 - `docs/cli/plans/2026-04-28-rpc-server-extraction.md` — shared
   rpc-server extraction and follow-up PR plan.
+- `docs/cli/plans/2026-04-29-local-node-hogd-dev-supervisor.md` —
+  node-supervisor implementation plan and PR boundaries.
+- `docs/cli/specs/2026-04-29-hogd-dev-process-contract.md` — draft
+  hogd-dev subprocess contract.
+- `docs/cli/specs/2026-04-29-node-supervisor-x23-client-boundary.md` —
+  node-supervisor x23 client wiring decision.
 - `docs/gateway/roadmap.md` — gateway backlog and sequencing.
 - `docs/gateway/system-design.md` — full gateway architecture and open
   questions.
