@@ -4,16 +4,18 @@
 **Status:** Design proposal, not a decision.
 
 **Companion to:**
-- [`localdev-rpc-node.md`](localdev-rpc-node.md) — original Level B
-  `native_exec` / `test_ffi` prototype design
-- [`2026-04-24-dev-node-layering.md`](2026-04-24-dev-node-layering.md) —
-  `SchedulerClient` as the Rust-side coordinator/mempool aperture
-- [`specs/2026-04-24-embedded-dev-node-backend.md`](specs/2026-04-24-embedded-dev-node-backend.md)
-  — earlier embedded `libhogdev` direction
 - [`plans/2026-04-29-local-node-hogd-dev-supervisor.md`](plans/2026-04-29-local-node-hogd-dev-supervisor.md)
   — focused Rust local-node supervisor implementation plan
 - [`specs/2026-04-29-hogd-dev-process-contract.md`](specs/2026-04-29-hogd-dev-process-contract.md)
   — draft hogd-dev subprocess contract proposal
+- [`specs/2026-04-29-node-supervisor-x23-client-boundary.md`](specs/2026-04-29-node-supervisor-x23-client-boundary.md)
+  — x23 client wiring decision (deliberately deferred adopting
+  `chuckd_scheduler::SchedulerClient` as a unifying aperture)
+
+This doc supersedes earlier proposals that argued for an embedded
+`libhogdev` FFI backend (the durable target named here is a hogd-owned
+subprocess) and the original `native_exec` / `test_ffi` Level B prototype
+(now legacy / kept only until hogd-dev covers the development loop).
 
 ## Short version
 
@@ -156,9 +158,9 @@ The dev-node should not keep a duplicate implementation of
 adapters.
 
 This also removes the earlier "gateway `--dev` mode" question from
-`localdev-rpc-node.md`. The production gateway stays the production gateway.
-The local dev-node is its own composition target that reuses the same
-`rpc-server` library.
+prototype-era discussions. The production gateway stays the production
+gateway. The local dev-node is its own composition target that reuses
+the same `rpc-server` library.
 
 ## Process topology
 

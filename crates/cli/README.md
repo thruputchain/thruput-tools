@@ -235,9 +235,11 @@ Human output prints the prefunded accounts and private keys for local
 testing. `groundhog node --json` emits the startup payload with
 `rpc_url`, `accounts`, and backend stability metadata for scripting.
 
-See `../../docs/cli/localdev-rpc-node.md` for the current prototype and
-`../../docs/cli/specs/2026-04-24-embedded-dev-node-backend.md` for the
-durable backend direction.
+See `../../docs/cli/2026-04-25-hogd-dev-node-hybrid.md` for the
+durable backend direction (Rust supervisor around a hogd-owned
+`hogd-dev` subprocess), and
+`../../docs/cli/plans/2026-04-29-local-node-hogd-dev-supervisor.md`
+for the implementation plan.
 
 ### `groundhog login`
 
