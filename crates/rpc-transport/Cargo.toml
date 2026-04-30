@@ -1,0 +1,23 @@
+[package]
+name = "groundhog-rpc-transport"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Shared x23 RPC transport helpers for Groundhog Rust binaries"
+
+[lints]
+workspace = true
+
+[dependencies]
+rpc_driver = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

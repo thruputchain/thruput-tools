@@ -1,30 +1,13 @@
 use std::sync::Arc;
 
 use groundhog_indexer::IndexerBlockExplorer_IndexerBlockExplorer1_Client;
+use groundhog_rpc_transport::{ConnectError, try_connect};
 use groundhog_scheduler::sched_coord::SchedulerCoord_SchedulerCoord1_Client;
-use rpc_driver::FixedSerialPool;
 use tokio::sync::RwLock;
 
 use crate::config::GatewayConfig;
 use crate::submitter::{BatchSubmitter, SchedulerSink, SubmitSink};
 use crate::tip_coalescer::{SchedulerTipSink, TipCoalescer, TipSink};
-
-/// Startup errors for the gateway context.
-#[derive(Debug, thiserror::Error)]
-pub enum GatewayStartupError {
-    #[error("invalid address '{addr}': {source}")]
-    BadAddress {
-        addr: String,
-        source: std::net::AddrParseError,
-    },
-
-    #[error("failed to connect to {service} at {addr}: {source}")]
-    ConnectFailed {
-        service: &'static str,
-        addr: String,
-        source: rpc_driver::RpcError,
-    },
-}
 
 /// Shared state injected into every handler.
 ///
@@ -77,7 +60,7 @@ impl GatewayContext {
     ///
     /// TODO: if `config.submission_backend` == `ChuckdCoordinator`,
     /// require `coordinator_address` to be set.
-    pub async fn new(config: GatewayConfig) -> Result<Self, GatewayStartupError> {
+    pub async fn new(config: GatewayConfig) -> Result<Self, ConnectError> {
         let config = Arc::new(config);
 
         // `FixedSerialPool` is 1 in-flight per connection by choice (FIFO
@@ -87,11 +70,23 @@ impl GatewayContext {
         // coalescer (`max_inflight_tips`) plus slack for ad-hoc RPCs.
         let sched_pool_size = scheduler_pool_size(&config);
         let scheduler = Arc::new(RwLock::new(
-            try_connect("scheduler", &config.scheduler_address, sched_pool_size).await?,
+            try_connect(
+                "scheduler",
+                &config.scheduler_address,
+                sched_pool_size,
+                SchedulerCoord_SchedulerCoord1_Client::new,
+            )
+            .await?,
         ));
 
         let indexer = Arc::new(RwLock::new(
-            try_connect("indexer", &config.indexer_address, 4).await?,
+            try_connect(
+                "indexer",
+                &config.indexer_address,
+                4,
+                IndexerBlockExplorer_IndexerBlockExplorer1_Client::new,
+            )
+            .await?,
         ));
 
         let submit_sink: Arc<dyn SubmitSink> = Arc::new(SchedulerSink::new(scheduler.clone()));
@@ -122,65 +117,4 @@ fn scheduler_pool_size(config: &GatewayConfig) -> usize {
         .saturating_mul(config.batch.max_inflight_batches.max(1) as usize);
     let tip = config.tip.max_inflight_tips.max(1) as usize;
     batcher.saturating_add(tip).saturating_add(SLACK)
-}
-
-/// Try to connect to a backend.
-///
-/// Fails hard on configuration errors (bad address). Tolerates transient
-/// connection failures (returns None, logs warning).
-async fn try_connect<C: FromPool>(
-    service: &'static str,
-    addr: &str,
-    pool_size: usize,
-) -> Result<Option<C>, GatewayStartupError> {
-    match connect(service, addr, pool_size).await {
-        Ok(client) => {
-            tracing::info!(addr, service, "connected");
-            Ok(Some(client))
-        }
-        Err(e @ GatewayStartupError::BadAddress { .. }) => Err(e),
-        Err(e) => {
-            tracing::warn!(addr, service, error = %e, "unreachable, starting in degraded mode");
-            Ok(None)
-        }
-    }
-}
-
-async fn connect<C: FromPool>(
-    service: &'static str,
-    addr: &str,
-    pool_size: usize,
-) -> Result<C, GatewayStartupError> {
-    let socket_addr: std::net::SocketAddr =
-        addr.parse().map_err(|e| GatewayStartupError::BadAddress {
-            addr: addr.to_string(),
-            source: e,
-        })?;
-    let pool = Arc::new(
-        FixedSerialPool::connect(&socket_addr, pool_size)
-            .await
-            .map_err(|e| GatewayStartupError::ConnectFailed {
-                service,
-                addr: addr.to_string(),
-                source: e,
-            })?,
-    );
-    Ok(C::from_pool(pool))
-}
-
-/// Trait to construct an RPC client from a connection pool.
-trait FromPool {
-    fn from_pool(pool: Arc<FixedSerialPool>) -> Self;
-}
-
-impl FromPool for SchedulerCoord_SchedulerCoord1_Client {
-    fn from_pool(pool: Arc<FixedSerialPool>) -> Self {
-        Self::new(pool)
-    }
-}
-
-impl FromPool for IndexerBlockExplorer_IndexerBlockExplorer1_Client {
-    fn from_pool(pool: Arc<FixedSerialPool>) -> Self {
-        Self::new(pool)
-    }
 }
