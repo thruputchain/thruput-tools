@@ -180,10 +180,12 @@ Required shutdown contract:
 - `SIGTERM` requests graceful shutdown;
 - hogd-dev stops accepting new requests;
 - in-flight internal tasks drain or fail deterministically;
-- process exits within a documented timeout;
+- process exits within the configured shutdown grace timeout, default 5s;
 - Rust sends `SIGKILL` only after that timeout;
 - Rust starts hogd-dev in its own process group and stops the group, not just
   the direct child.
+- v1 is ephemeral, so shutdown grace exists for log drain and clean SIGTERM
+  handling rather than state persistence.
 - On Linux, use `prctl(PR_SET_PDEATHSIG, SIGTERM)` if it is cheap to add. On
   macOS there is no equivalent; document orphan-child risk for v1 rather than
   building a persistent agent.
@@ -231,7 +233,8 @@ Binary lookup order:
 
 1. explicit `--hogd-dev-binary`;
 2. `GROUNDHOG_HOGD_DEV_BINARY`;
-3. sibling path next to the `groundhog` binary, for bundled releases;
+3. sibling path next to the `groundhog` binary
+   (`std::env::current_exe().parent()`), for bundled releases;
 4. `PATH`;
 5. typed startup error with install/build guidance.
 
@@ -368,13 +371,9 @@ end-to-end or be explicitly removed/deferred from the public local-node promise.
 
 ## Open Questions
 
-1. What is the first concrete hogd-dev binary name: `hogd-dev`, `hogd dev-node`,
-   or another mode?
-2. Does hogd-dev expose one composite read endpoint or separate scheduler/read
-   endpoints?
-3. Which Rust x23 client crate should node-supervisor depend on for scheduler/read
+1. Which Rust x23 client crate should node-supervisor depend on for scheduler/read
    calls: chuckd-rs, a new shared crate, or local groundhog-rpc code?
-4. Is `getStorageAt` required for native-exec retirement, or should it be
+2. Is `getStorageAt` required for native-exec retirement, or should it be
    explicitly deferred from the first hogd-dev local-node milestone?
 
 ## Recommended Next Action
