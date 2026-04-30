@@ -141,7 +141,7 @@ Required v1 inputs:
 
 - listen host, default `127.0.0.1`;
 - port assignment strategy, preferably `0`/auto for internal x23 ports;
-- dev genesis payload on stdin, so no temp genesis file is required;
+- v1 genesis bootstrap over the scheduler x23 endpoint after readiness;
 - account count and storage-token amount;
 - v1 state is ephemeral; add a state directory flag only when persistence is
   real;
@@ -151,7 +151,8 @@ Required v1 inputs:
 Required v1 outputs:
 
 - machine-readable readiness signal;
-- endpoint list for scheduler/submit, read, and control services;
+- endpoint list for scheduler/submit, with read and control added when those
+  services exist;
 - child exit status;
 - clear startup failure messages.
 

@@ -19,8 +19,12 @@ async-trait = { workspace = true }
 groundhog-rpc-api = { workspace = true }
 groundhog-rpc-api-types = { workspace = true }
 groundhog-rpc-server = { workspace = true }
+groundhog-x23-transport = { workspace = true }
+groundhog-xdr = { workspace = true }
+groundhog_scheduler = { workspace = true }
 jsonrpsee = { workspace = true }
 libc = { workspace = true }
+rpc_driver = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -31,6 +35,7 @@ tracing = { workspace = true }
 jsonrpsee = { workspace = true, features = ["http-client"] }
 serial_test = { workspace = true }
 tempfile = { workspace = true }
+xdr-common = { workspace = true }
 
 [[example]]
 name = "fake_hogd_dev"

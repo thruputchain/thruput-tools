@@ -1,9 +1,8 @@
 //! Stub backend planes that always return `NotImplemented`.
 //!
-//! The node supervisor wires the JSON-RPC facade up before any real x23
-//! adapter exists. The stub backend lets `groundhog node` start a working
-//! JSON-RPC server today; PR 4a/4b/4c will swap individual planes out for
-//! real adapters as they land.
+//! The node supervisor wires backend planes incrementally. `chainTip` now
+//! has a real hogd-dev scheduler adapter; submit/read methods still use this
+//! stub until PR 4b/4c land the corresponding x23 adapters.
 //!
 //! Wire-error strings carry only the JSON-RPC method name (matching
 //! `crates/dev-node`), so the public protocol surface is stable. The
@@ -12,7 +11,7 @@
 //! into the wire error.
 //!
 //! The stub is intentionally `pub(crate)`. It is not a long-term API; once
-//! every plane has a real adapter the type goes away.
+//! submit and read have real adapters the type goes away.
 
 use async_trait::async_trait;
 use groundhog_rpc_api_types::{
@@ -26,7 +25,7 @@ use groundhog_rpc_server::{
     ChainPlane, ReadPlane, RpcServerError, SubmitPlane, ValidatedTransaction,
 };
 
-/// Backend that returns `NotImplemented` for every method.
+/// Backend that returns `NotImplemented` for unwired planes.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct StubBackend;
 

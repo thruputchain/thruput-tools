@@ -2,6 +2,8 @@
 
 use std::{fmt, io, path::PathBuf, process::ExitStatus, time::Duration};
 
+use groundhog_x23_transport::ConnectError;
+
 /// Unix child-process signal used by the supervisor.
 #[cfg(unix)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,16 +80,6 @@ pub enum NodeSupervisorError {
         source: io::Error,
     },
 
-    /// The supervisor could not write the genesis payload to the child.
-    #[error("failed to write genesis payload to child process `{program}`: {source}")]
-    Stdin {
-        /// Program path or name.
-        program: String,
-        /// Underlying I/O error.
-        #[source]
-        source: io::Error,
-    },
-
     /// The child process was spawned without a stdout pipe.
     #[error("child process `{program}` did not expose stdout")]
     MissingStdout {
@@ -98,13 +90,6 @@ pub enum NodeSupervisorError {
     /// The child process was spawned without a stderr pipe.
     #[error("child process `{program}` did not expose stderr")]
     MissingStderr {
-        /// Program path or name.
-        program: String,
-    },
-
-    /// The child process was spawned without a stdin pipe.
-    #[error("child process `{program}` did not expose stdin")]
-    MissingStdin {
         /// Program path or name.
         program: String,
     },
@@ -234,5 +219,34 @@ pub enum NodeSupervisorError {
         /// Underlying I/O error.
         #[source]
         source: io::Error,
+    },
+
+    /// The supervisor could not connect to hogd-dev's scheduler x23 endpoint.
+    #[error("failed to connect hogd-dev scheduler endpoint {endpoint}: {source}")]
+    SchedulerConnect {
+        /// Scheduler endpoint advertised by hogd-dev readiness.
+        endpoint: std::net::SocketAddr,
+        /// x23 connection error.
+        #[source]
+        source: ConnectError,
+    },
+
+    /// A hogd-dev scheduler RPC failed.
+    #[error("hogd-dev scheduler RPC `{op}` failed: {source}")]
+    SchedulerRpc {
+        /// Scheduler RPC operation name.
+        op: &'static str,
+        /// x23 RPC error.
+        #[source]
+        source: rpc_driver::RpcError,
+    },
+
+    /// The scheduler rejected a startup operation.
+    #[error("hogd-dev scheduler rejected `{op}`: {result}")]
+    SchedulerRejected {
+        /// Scheduler RPC operation name.
+        op: &'static str,
+        /// Scheduler result value.
+        result: String,
     },
 }

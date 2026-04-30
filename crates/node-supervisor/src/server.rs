@@ -1,9 +1,8 @@
 //! Top-level node supervisor orchestration.
 //!
 //! Owns hogd-dev process supervision and the public JSON-RPC server. Backend
-//! adapters land in subsequent PRs; until then the JSON-RPC surface is
-//! served by [`StubBackend`], which returns `NotImplemented` for every
-//! method.
+//! adapters land by plane: PR 4a wires `chainTip` to hogd-dev's scheduler
+//! endpoint while submit/read remain stubbed.
 
 use std::{future::Future, net::SocketAddr, process::ExitStatus};
 
@@ -13,7 +12,7 @@ use jsonrpsee::server::{RpcModule, Server, ServerHandle};
 
 use crate::{
     HogdDevProcess, HogdDevReadiness, NodeSupervisorConfig, NodeSupervisorError,
-    stub_backend::StubBackend,
+    rpc_backend::HogdDevChainBackend, stub_backend::StubBackend,
 };
 
 /// Why a [`NodeSupervisorHandle::stopped`] call returned.
@@ -55,23 +54,17 @@ pub struct NodeSupervisorHandle {
 }
 
 impl NodeSupervisorHandle {
-    /// Spawn hogd-dev, wait for readiness, and start the JSON-RPC server.
-    ///
-    /// `genesis_payload` is written to hogd-dev's stdin per the v1 process
-    /// contract. v1 is ephemeral, so callers typically build a deterministic
-    /// dev genesis here.
+    /// Spawn hogd-dev, wait for readiness, connect the scheduler x23 client,
+    /// and start the JSON-RPC server.
     ///
     /// On any failure after hogd-dev has started, the child is stopped before
     /// the error is returned, so a failed `start` does not leave a hogd-dev
     /// process behind.
     #[tracing::instrument(skip_all, fields(rpc_listen = %config.rpc_listen_address))]
-    pub async fn start(
-        config: NodeSupervisorConfig,
-        genesis_payload: impl AsRef<[u8]>,
-    ) -> Result<Self, NodeSupervisorError> {
-        let mut hogd = HogdDevProcess::start(&config.hogd_dev, genesis_payload).await?;
+    pub async fn start(config: NodeSupervisorConfig) -> Result<Self, NodeSupervisorError> {
+        let mut hogd = HogdDevProcess::start(&config.hogd_dev).await?;
 
-        match start_rpc_server(&config.rpc_listen_address).await {
+        match start_rpc_server(&config.rpc_listen_address, hogd.readiness()).await {
             Ok((rpc_handle, rpc_addr)) => {
                 tracing::info!(%rpc_addr, "node supervisor JSON-RPC ready");
                 Ok(Self {
@@ -200,7 +193,11 @@ impl NodeSupervisorHandle {
 
 async fn start_rpc_server(
     listen_address: &str,
+    readiness: &HogdDevReadiness,
 ) -> Result<(ServerHandle, SocketAddr), NodeSupervisorError> {
+    let chain_backend = HogdDevChainBackend::connect(readiness.endpoints.scheduler).await?;
+    chain_backend.ensure_dev_genesis().await?;
+
     let server = Server::builder()
         .build(listen_address)
         .await
@@ -213,12 +210,16 @@ async fn start_rpc_server(
         .map_err(|source| NodeSupervisorError::RpcLocalAddr { source })?;
 
     tracing::warn!(
-        "node supervisor is using StubBackend; \
-         all JSON-RPC methods will return NOT_IMPLEMENTED until the hogd-dev \
-         x23 adapters land (PR 4a/4b/4c)"
+        "node supervisor submit/read planes are stubbed; \
+         chainTip is backed by hogd-dev scheduler"
     );
 
-    let core_rpc = GroundhogRpcServer::unified(StubBackend::new(), RpcServerConfig::default());
+    let core_rpc = GroundhogRpcServer::new(
+        StubBackend::new(),
+        chain_backend,
+        StubBackend::new(),
+        RpcServerConfig::default(),
+    );
     let mut module = RpcModule::new(());
     // `merge` only fails on duplicate method names, which is a compile-time
     // invariant of the macro-generated `GroundhogApiServer` trait — the
@@ -236,7 +237,6 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use groundhog_rpc_api::GroundhogApiClient;
-    use groundhog_rpc_api_types::error::codes;
     use jsonrpsee::core::ClientError;
     use jsonrpsee::http_client::HttpClientBuilder;
     use serial_test::serial;
@@ -305,7 +305,7 @@ mod tests {
 
     #[tokio::test]
     #[serial]
-    async fn start_serves_json_rpc_with_stub_backend() {
+    async fn start_serves_json_rpc_with_scheduler_chain_backend() {
         let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "ready");
         let pid_dir = TempDir::new().expect("bug: tempdir creates");
         let pid_path = pid_dir.path().join("hogd.pid");
@@ -321,7 +321,7 @@ mod tests {
         let config = NodeSupervisorConfig::default()
             .with_rpc_listen_address("127.0.0.1:0")
             .with_hogd_dev(hogd);
-        let handle = NodeSupervisorHandle::start(config, b"")
+        let handle = NodeSupervisorHandle::start(config)
             .await
             .expect("bug: supervisor should start against fake hogd-dev");
 
@@ -330,19 +330,13 @@ mod tests {
             .build(&url)
             .expect("bug: jsonrpsee http client builds");
 
-        let err = client
+        let tip = client
             .chain_tip()
             .await
-            .expect_err("bug: stub backend returns NotImplemented for chainTip");
-        let ClientError::Call(call_err) = err else {
-            panic!("bug: expected JSON-RPC call error, got {err:?}");
-        };
+            .expect("bug: chainTip should dispatch to fake scheduler");
         assert_eq!(
-            call_err.code(),
-            codes::NOT_IMPLEMENTED,
-            "stub backend should map to NOT_IMPLEMENTED ({}); got message: {}",
-            codes::NOT_IMPLEMENTED,
-            call_err.message()
+            *tip.height, 0,
+            "chainTip should report the genesis block loaded during startup"
         );
 
         let pid = read_pid_file(&pid_path).expect("bug: fake should have written pid");
@@ -386,7 +380,7 @@ mod tests {
         let config = NodeSupervisorConfig::default()
             .with_rpc_listen_address("127.0.0.1:0")
             .with_hogd_dev(hogd);
-        let handle = NodeSupervisorHandle::start(config, b"")
+        let handle = NodeSupervisorHandle::start(config)
             .await
             .expect("bug: supervisor should start against fake hogd-dev");
         let pid = read_pid_file(&pid_path).expect("bug: fake should have written pid");
@@ -421,7 +415,7 @@ mod tests {
         let config = NodeSupervisorConfig::default()
             .with_rpc_listen_address("127.0.0.1:0")
             .with_hogd_dev(hogd);
-        let handle = NodeSupervisorHandle::start(config, b"")
+        let handle = NodeSupervisorHandle::start(config)
             .await
             .expect("bug: supervisor should start against fake hogd-dev");
 
@@ -496,12 +490,10 @@ mod tests {
             .with_rpc_listen_address(occupied.to_string())
             .with_hogd_dev(hogd);
 
-        let result = tokio::time::timeout(
-            Duration::from_secs(10),
-            NodeSupervisorHandle::start(config, b""),
-        )
-        .await
-        .expect("bug: start should roll back and return promptly on rpc bind failure");
+        let result =
+            tokio::time::timeout(Duration::from_secs(10), NodeSupervisorHandle::start(config))
+                .await
+                .expect("bug: start should roll back and return promptly on rpc bind failure");
 
         let err = result.expect_err("bug: occupied port should fail rpc bind");
         assert!(

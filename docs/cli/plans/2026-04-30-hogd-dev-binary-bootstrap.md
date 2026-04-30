@@ -15,8 +15,8 @@ this until the hogd team agrees on shape.
 
 ## Why this doc exists
 
-The Rust node-supervisor is shipped through PR 3 with stub backend planes.
-The next planned PR (4a, `groundhog_chainTip` end-to-end) needs a real x23
+The Rust node-supervisor shipped through PR 3 with stub backend planes.
+The follow-up PR 4a (`groundhog_chainTip` end-to-end) needs a real x23
 endpoint to talk to. We considered building a fake `RpcSender` test fixture
 in groundhog-rpc instead, but that locks in guesses about a wire contract
 hogd owns. Better to build the smallest real `hogd-dev` binary in hogd and
