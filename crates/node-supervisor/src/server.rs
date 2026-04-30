@@ -5,7 +5,7 @@
 //! served by [`StubBackend`], which returns `NotImplemented` for every
 //! method.
 
-use std::{net::SocketAddr, process::ExitStatus};
+use std::{future::Future, net::SocketAddr, process::ExitStatus};
 
 use groundhog_rpc_api::GroundhogApiServer;
 use groundhog_rpc_server::{GroundhogRpcServer, RpcServerConfig};
@@ -33,6 +33,10 @@ pub enum SupervisorStop {
     /// configured grace timeout. The contained status is hogd-dev's exit
     /// status from that shutdown.
     RpcStopped(ExitStatus),
+    /// An external stop signal was received, and the supervisor then shut
+    /// hogd-dev down with the configured grace timeout. The contained status
+    /// is hogd-dev's exit status from that requested shutdown.
+    StopRequested(ExitStatus),
 }
 
 /// Running node supervisor.
@@ -119,6 +123,34 @@ impl NodeSupervisorHandle {
     /// Returns a [`SupervisorStop`] describing which side ended first.
     #[tracing::instrument(skip_all)]
     pub async fn stopped(mut self) -> Result<SupervisorStop, NodeSupervisorError> {
+        self.run_until_inner(std::future::pending::<Result<(), NodeSupervisorError>>())
+            .await
+    }
+
+    /// Wait until hogd-dev exits, the JSON-RPC server stops, or an external
+    /// stop signal completes, then tear the remaining side down.
+    ///
+    /// This is the CLI-friendly variant of [`NodeSupervisorHandle::stopped`]:
+    /// callers pass a future for Ctrl-C or another stop request without
+    /// losing the ability to shut hogd-dev down cleanly.
+    #[tracing::instrument(skip_all)]
+    pub async fn run_until<F>(
+        mut self,
+        stop_signal: F,
+    ) -> Result<SupervisorStop, NodeSupervisorError>
+    where
+        F: Future<Output = Result<(), NodeSupervisorError>>,
+    {
+        self.run_until_inner(stop_signal).await
+    }
+
+    async fn run_until_inner<F>(
+        &mut self,
+        stop_signal: F,
+    ) -> Result<SupervisorStop, NodeSupervisorError>
+    where
+        F: Future<Output = Result<(), NodeSupervisorError>>,
+    {
         let rpc_done = self.rpc_handle.clone().stopped();
         tokio::select! {
             result = self.hogd.stopped() => {
@@ -132,8 +164,20 @@ impl NodeSupervisorHandle {
             }
             () = rpc_done => {
                 tracing::info!("JSON-RPC server stopped; stopping hogd-dev");
-                let status = self.hogd.stop().await?;
+                let status = self.stop_inner().await?;
                 Ok(SupervisorStop::RpcStopped(status))
+            }
+            result = stop_signal => {
+                if let Err(error) = result {
+                    tracing::warn!(%error, "stop signal failed; stopping node supervisor");
+                    if let Err(stop_error) = self.stop_inner().await {
+                        tracing::warn!(%stop_error, "failed to stop node supervisor after stop signal error");
+                    }
+                    return Err(error);
+                }
+                tracing::info!("stop signal received; stopping node supervisor");
+                let status = self.stop_inner().await?;
+                Ok(SupervisorStop::StopRequested(status))
             }
         }
     }
@@ -142,6 +186,10 @@ impl NodeSupervisorHandle {
     /// grace timeout. Consumes the handle.
     #[tracing::instrument(skip_all)]
     pub async fn stop(mut self) -> Result<ExitStatus, NodeSupervisorError> {
+        self.stop_inner().await
+    }
+
+    async fn stop_inner(&mut self) -> Result<ExitStatus, NodeSupervisorError> {
         if let Err(error) = self.rpc_handle.stop() {
             tracing::debug!(%error, "JSON-RPC server already stopped");
         }
@@ -322,6 +370,47 @@ mod tests {
 
     #[tokio::test]
     #[serial]
+    async fn run_until_stop_signal_error_stops_hogd_dev() {
+        let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "ready");
+        let pid_dir = TempDir::new().expect("bug: tempdir creates");
+        let pid_path = pid_dir.path().join("hogd.pid");
+        let _pid_guard = EnvGuard::set(
+            FAKE_HOGD_DEV_PID_FILE_ENV,
+            pid_path.to_str().expect("bug: tempdir path is utf-8"),
+        );
+
+        let hogd = HogdDevConfig::default()
+            .with_binary_path(fake_hogd_dev_binary())
+            .with_startup_timeout(Duration::from_secs(5))
+            .with_shutdown_grace(Duration::from_secs(2));
+        let config = NodeSupervisorConfig::default()
+            .with_rpc_listen_address("127.0.0.1:0")
+            .with_hogd_dev(hogd);
+        let handle = NodeSupervisorHandle::start(config, b"")
+            .await
+            .expect("bug: supervisor should start against fake hogd-dev");
+        let pid = read_pid_file(&pid_path).expect("bug: fake should have written pid");
+
+        let err = handle
+            .run_until(async {
+                Err(NodeSupervisorError::StopSignal {
+                    source: std::io::Error::other("ctrl-c registration failed"),
+                })
+            })
+            .await
+            .expect_err("bug: stop signal error should be returned");
+        assert!(
+            matches!(err, NodeSupervisorError::StopSignal { .. }),
+            "expected StopSignal error, got {err:?}",
+        );
+        assert!(
+            wait_pid_gone(pid, Instant::now() + Duration::from_secs(2)).await,
+            "fake hogd-dev pid {pid} still alive after stop signal error",
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
     async fn stopped_observes_hogd_dev_exit_and_tears_down_rpc() {
         let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "ready-then-exit");
 
@@ -356,6 +445,9 @@ mod tests {
             }
             SupervisorStop::RpcStopped(_) => {
                 panic!("expected HogdExited, got RpcStopped — race lost the wrong way");
+            }
+            SupervisorStop::StopRequested(_) => {
+                panic!("expected HogdExited, got StopRequested");
             }
         }
 

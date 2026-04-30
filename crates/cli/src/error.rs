@@ -79,6 +79,8 @@ pub enum CliError {
     DevNode(String),
     #[error("dev node could not start in this environment: {0}")]
     DevNodeSandbox(String),
+    #[error("node supervisor error: {0}")]
+    NodeSupervisor(String),
     #[error("could not connect to {0}")]
     RpcConnect(String),
     #[error("no rpc_url configured for the selected profile")]
@@ -139,6 +141,7 @@ impl CliError {
             Self::StatusHasWarnings => "status_has_warnings",
             Self::DevNode(_) => "dev_node_error",
             Self::DevNodeSandbox(_) => "dev_node_sandbox",
+            Self::NodeSupervisor(_) => "node_supervisor_error",
             Self::RpcConnect(_) => "rpc_connect",
             Self::MissingRpcUrl => "missing_rpc_url",
             Self::MissingSigningKey => "missing_signing_key",
@@ -204,6 +207,9 @@ impl CliError {
             Self::DevNode(_) => Some(Cow::Borrowed("check the dev node output for details")),
             Self::DevNodeSandbox(_) => Some(Cow::Borrowed(
                 "rerun `groundhog node` outside the sandbox or process-isolation environment",
+            )),
+            Self::NodeSupervisor(_) => Some(Cow::Borrowed(
+                "check `--hogd-dev-binary`, the hogd-dev process output, and the local node logs",
             )),
             Self::RpcConnect(url) => Some(Cow::Owned(format!(
                 "run `groundhog node` in another terminal, or check that \

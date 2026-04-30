@@ -1,12 +1,142 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::process::Command;
+#[cfg(all(feature = "dev-node", unix))]
+use std::process::{ExitStatus, Stdio};
+#[cfg(all(feature = "dev-node", unix))]
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 fn groundhog() -> Command {
     Command::new(env!("CARGO_BIN_EXE_groundhog"))
+}
+
+#[cfg(feature = "dev-node")]
+fn workspace_root() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("bug: cli crate has parent")
+        .parent()
+        .expect("bug: crates dir has workspace parent")
+        .to_path_buf()
+}
+
+#[cfg(feature = "dev-node")]
+fn target_dir() -> std::path::PathBuf {
+    let root = workspace_root();
+    match std::env::var_os("CARGO_TARGET_DIR") {
+        Some(raw) => {
+            let path = std::path::PathBuf::from(raw);
+            if path.is_absolute() {
+                path
+            } else {
+                root.join(path)
+            }
+        }
+        None => root.join("target"),
+    }
+}
+
+#[cfg(feature = "dev-node")]
+fn fake_hogd_dev_binary() -> std::path::PathBuf {
+    let binary = target_dir()
+        .join("debug")
+        .join("examples")
+        .join(format!("fake_hogd_dev{}", std::env::consts::EXE_SUFFIX));
+    if binary.is_file() {
+        return binary;
+    }
+
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let status = Command::new(cargo)
+        .args([
+            "build",
+            "--quiet",
+            "-p",
+            "groundhog-node-supervisor",
+            "--example",
+            "fake_hogd_dev",
+        ])
+        .current_dir(workspace_root())
+        .status()
+        .expect("bug: cargo should run to build fake_hogd_dev example");
+    assert!(
+        status.success(),
+        "failed to build fake_hogd_dev example; status: {status}",
+    );
+    assert!(
+        binary.is_file(),
+        "fake_hogd_dev example missing after build at {}",
+        binary.display(),
+    );
+    binary
+}
+
+#[cfg(all(feature = "dev-node", unix))]
+fn send_sigint(child: &std::process::Child) {
+    let pid = i32::try_from(child.id()).expect("bug: child pid should fit i32");
+    // SAFETY: sends SIGINT to the spawned CLI process id.
+    let rc = unsafe { libc::kill(pid, libc::SIGINT) };
+    assert_eq!(rc, 0, "failed to send SIGINT to child pid {pid}");
+}
+
+#[cfg(all(feature = "dev-node", unix))]
+fn wait_child(mut child: std::process::Child, timeout: Duration) -> ExitStatus {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(status) = child.try_wait().expect("bug: child status is readable") {
+            return status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            panic!("child did not exit within {timeout:?}");
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[cfg(all(feature = "dev-node", unix))]
+fn read_pid_file(path: &std::path::Path) -> i32 {
+    std::fs::read_to_string(path)
+        .expect("bug: fake hogd-dev should write pid file")
+        .trim()
+        .parse()
+        .expect("bug: fake hogd-dev pid should parse")
+}
+
+#[cfg(all(feature = "dev-node", unix))]
+fn wait_pid_gone(pid: i32, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        // SAFETY: `kill(pid, 0)` does not deliver a signal; it only checks
+        // whether the process still exists.
+        let rc = unsafe { libc::kill(pid, 0) };
+        if rc == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[cfg(all(feature = "dev-node", unix))]
+fn read_line_with_timeout(
+    stdout: std::process::ChildStdout,
+    timeout: Duration,
+) -> std::io::Result<String> {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut reader = BufReader::new(stdout);
+        let mut line = String::new();
+        let result = reader.read_line(&mut line).map(|_| line);
+        let _ = tx.send(result);
+    });
+    rx.recv_timeout(timeout)
+        .expect("timed out waiting for child stdout line")
 }
 
 #[test]
@@ -32,6 +162,93 @@ fn version_flag_works() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("groundhog"));
+}
+
+#[cfg(all(feature = "dev-node", unix))]
+#[test]
+fn node_hogd_dev_binary_json_starts_supervisor() {
+    let fake = fake_hogd_dev_binary();
+    let pid_dir = TempDir::new().unwrap();
+    let pid_path = pid_dir.path().join("hogd.pid");
+    let mut child = groundhog()
+        .arg("--json")
+        .arg("node")
+        .arg("--port")
+        .arg("0")
+        .arg("--hogd-dev-binary")
+        .arg(fake)
+        .env("GROUNDHOG_FAKE_HOGD_DEV_MODE", "ready")
+        .env("GROUNDHOG_FAKE_HOGD_DEV_PID_FILE", &pid_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("bug: groundhog node should spawn");
+
+    let stdout = child.stdout.take().expect("bug: stdout should be piped");
+    let line = read_line_with_timeout(stdout, Duration::from_secs(10))
+        .expect("bug: startup JSON should be readable");
+    let payload: serde_json::Value =
+        serde_json::from_str(&line).expect("bug: startup line should be JSON");
+
+    assert_eq!(payload["ok"], true);
+    assert_eq!(payload["command"], "node");
+    assert_eq!(payload["data"]["backend"]["kind"], "hogd_dev");
+    assert_eq!(payload["data"]["backend"]["planes"]["submit"], "stub");
+    assert_eq!(payload["data"]["backend"]["planes"]["chain"], "stub");
+    assert_eq!(payload["data"]["backend"]["planes"]["read"], "stub");
+    assert_eq!(
+        payload["data"]["backend"]["endpoints"]["scheduler"],
+        "127.0.0.1:12345"
+    );
+    assert!(
+        payload["data"]["rpc_url"]
+            .as_str()
+            .expect("bug: rpc_url string")
+            .starts_with("http://127.0.0.1:")
+    );
+
+    let pid = read_pid_file(&pid_path);
+    send_sigint(&child);
+    let status = wait_child(child, Duration::from_secs(10));
+    assert!(status.success(), "groundhog node should stop cleanly");
+    assert!(
+        wait_pid_gone(pid, Duration::from_secs(2)),
+        "fake hogd-dev pid {pid} still alive after CLI exit",
+    );
+}
+
+#[cfg(feature = "dev-node")]
+#[test]
+fn node_hogd_dev_missing_binary_fails_without_native_fallback() {
+    let tmp = TempDir::new().unwrap();
+    let missing = tmp.path().join("missing-hogd-dev");
+    let output = groundhog()
+        .arg("--json")
+        .arg("node")
+        .arg("--port")
+        .arg("0")
+        .arg("--hogd-dev-binary")
+        .arg(&missing)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(
+        output.stdout.is_empty(),
+        "startup failure should not print success JSON: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stderr: serde_json::Value =
+        serde_json::from_slice(&output.stderr).expect("bug: error should be JSON");
+    assert_eq!(stderr["ok"], false);
+    assert_eq!(stderr["command"], "node");
+    assert_eq!(stderr["error"]["code"], "node_supervisor_error");
+    assert!(
+        stderr["error"]["message"]
+            .as_str()
+            .expect("bug: message string")
+            .contains("configured hogd-dev binary path does not exist"),
+    );
 }
 
 #[test]

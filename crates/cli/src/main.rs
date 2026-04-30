@@ -204,6 +204,9 @@ enum Command {
         /// Number of pre-funded dev accounts
         #[arg(long, default_value = "10")]
         accounts: usize,
+        /// Start the experimental hogd-dev supervisor path with this binary
+        #[arg(long, hide = true)]
+        hogd_dev_binary: Option<std::path::PathBuf>,
     },
     /// Manage signing keys
     #[command(long_about = "Ed25519 signing keys stored in \
@@ -398,9 +401,11 @@ fn main() {
                     &contract, &method, &args, dry_run, &artifacts, &profile, cmd_name, &print,
                 )
             }),
-        Command::Node { port, accounts } => {
-            groundhog_cli::node::run(port, accounts, cmd_name, &print)
-        }
+        Command::Node {
+            port,
+            accounts,
+            hogd_dev_binary,
+        } => groundhog_cli::node::run(port, accounts, hogd_dev_binary, cmd_name, &print),
         Command::Keys { command } => match command {
             KeysCommand::Generate { name, fund } => {
                 groundhog_cli::keys::generate(&name, fund, cmd_name, &print)
