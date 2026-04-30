@@ -371,8 +371,14 @@ end-to-end or be explicitly removed/deferred from the public local-node promise.
 
 ## Open Questions
 
-1. Which Rust x23 client crate should node-supervisor depend on for scheduler/read
-   calls: chuckd-rs, a new shared crate, or local groundhog-rpc code?
+1. ~~Which Rust x23 client crate should node-supervisor depend on for scheduler/read
+   calls: chuckd-rs, a new shared crate, or local groundhog-rpc code?~~
+   **Resolved 2026-04-29:** node-supervisor depends directly on the codegen
+   x23 client crates over `rpc_driver`, matching gateway. See
+   [`../specs/2026-04-29-node-supervisor-x23-client-boundary.md`](../specs/2026-04-29-node-supervisor-x23-client-boundary.md).
+   PR 4a should hoist the `FromPool`/`connect` helpers in
+   `crates/gateway/src/context.rs` into a shared internal module so gateway
+   and node-supervisor share one transport-wiring pattern.
 2. Is `getStorageAt` required for native-exec retirement, or should it be
    explicitly deferred from the first hogd-dev local-node milestone?
 
