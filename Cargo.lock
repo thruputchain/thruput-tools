@@ -1059,6 +1059,11 @@ dependencies = [
 name = "groundhog-node-supervisor"
 version = "0.2.5"
 dependencies = [
+ "async-trait",
+ "groundhog-rpc-api",
+ "groundhog-rpc-api-types",
+ "groundhog-rpc-server",
+ "jsonrpsee",
  "libc",
  "serde",
  "serde_json",

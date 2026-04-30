@@ -39,10 +39,12 @@ Workspace crates in `crates/`:
   shares execution semantics with SDK tests, but the durable backend
   direction is a hogd-side embedded execution library; see the CLI
   planning docs.
-- **node-supervisor** — scaffold for the future `groundhog node`
-  supervisor/facade around a hogd-owned `hogd-dev` subprocess. It is the
-  durable local-node path; `dev-node` remains the native-exec prototype
-  until hogd-dev covers the normal local development loop.
+- **node-supervisor** — `groundhog node` facade. Supervises a hogd-owned
+  `hogd-dev` subprocess and embeds `rpc-server` to serve the public
+  JSON-RPC. Backend planes are stubbed (NotImplemented) until PR
+  4a/4b/4c land their x23 adapters. Durable local-node path; `dev-node`
+  remains the native-exec prototype until hogd-dev covers the normal
+  local development loop.
 - **e2e-tests** — ignored process-level JSON-RPC lifecycle smoke tests.
 - **bench** — benchmark harnesses.
 
@@ -167,7 +169,7 @@ cargo run -p groundhog-cli --features dev-node -- node
   fixed) from `api-types/src/hex.rs` — never raw `Vec<u8>` in
   RPC-facing types.
 - `#[non_exhaustive]` on public enums that will gain variants
-  (`TransactionStatus`, `ExecStatus`).
+  (`TransactionStatus`, `ExecStatus`, `SupervisorStop`).
 - The jsonrpsee trait in `rpc-api/src/lib.rs` is the source of truth
   for the RPC surface. `#[rpc(client, server)]` generates both sides.
 - The public `GroundhogApiServer` implementation lives in `rpc-server`.

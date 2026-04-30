@@ -47,6 +47,13 @@ impl NodeSupervisorConfig {
         self.hogd_dev.binary_path = Some(binary_path.into());
         self
     }
+
+    /// Return a copy with the supplied hogd-dev configuration.
+    #[must_use]
+    pub fn with_hogd_dev(mut self, hogd_dev: HogdDevConfig) -> Self {
+        self.hogd_dev = hogd_dev;
+        self
+    }
 }
 
 /// Configuration for the supervised hogd-dev process.

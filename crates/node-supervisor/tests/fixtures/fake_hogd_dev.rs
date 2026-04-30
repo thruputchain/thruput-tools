@@ -1,5 +1,5 @@
 use std::{
-    env,
+    env, fs,
     io::{self, Read, Write},
     process::{self, Command},
     sync::atomic::{AtomicBool, Ordering},
@@ -8,6 +8,9 @@ use std::{
 };
 
 const MODE_ENV: &str = "GROUNDHOG_FAKE_HOGD_DEV_MODE";
+/// Optional path the fake writes its PID to before printing readiness.
+/// Tests use this to verify cleanup (poll `kill(pid, 0)` until ESRCH).
+const PID_FILE_ENV: &str = "GROUNDHOG_FAKE_HOGD_DEV_PID_FILE";
 const READY: &str = r#"{"status":"ready","network_id":"groundhog-local","endpoints":{"scheduler":"127.0.0.1:12345","read":"127.0.0.1:12346","control":"127.0.0.1:12347"}}"#;
 static TERMINATED: AtomicBool = AtomicBool::new(false);
 
@@ -18,6 +21,7 @@ extern "C" fn handle_sigterm(_: i32) {
 fn main() {
     match env::var(MODE_ENV).as_deref() {
         Ok("ready") => run_ready(),
+        Ok("ready-then-exit") => run_ready_then_exit(),
         Ok("spawn-helper-ignore-term") => run_with_helper(),
         Ok("helper-ignore-term") => run_ignore_term_loop(),
         Ok("ignore-term") => run_ignore_term(),
@@ -52,8 +56,21 @@ fn main() {
     }
 }
 
+fn run_ready_then_exit() {
+    write_pid_file_if_requested();
+    read_genesis();
+    println!("{READY}");
+    eprintln!(r#"{{"level":"info","target":"hogd_dev","message":"ready-then-exit"}}"#);
+    // Flush stdout/stderr so the supervisor sees readiness before the
+    // process disappears.
+    let _ = io::stdout().flush();
+    let _ = io::stderr().flush();
+    process::exit(0);
+}
+
 fn run_ready() {
     install_sigterm_handler();
+    write_pid_file_if_requested();
     read_genesis();
     println!("{READY}");
     eprintln!(r#"{{"level":"info","target":"hogd_dev","message":"ready"}}"#);
@@ -94,6 +111,13 @@ fn run_with_helper() {
 fn run_ignore_term_loop() {
     loop {
         thread::sleep(Duration::from_secs(60));
+    }
+}
+
+fn write_pid_file_if_requested() {
+    if let Ok(path) = env::var(PID_FILE_ENV) {
+        fs::write(&path, process::id().to_string())
+            .expect("bug: fake child should be able to write its pid file");
     }
 }
 

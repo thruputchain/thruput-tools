@@ -10,6 +10,7 @@ pub mod error;
 pub mod hogd_dev;
 pub mod process;
 pub mod server;
+mod stub_backend;
 
 #[cfg(test)]
 mod test_support;
@@ -21,4 +22,4 @@ pub use hogd_dev::{
     HogdDevReadiness, build_hogd_dev_spec, parse_readiness_line, resolve_hogd_dev_binary,
 };
 pub use process::{ChildProcessSpec, ChildSupervisor, SupervisedChild};
-pub use server::NodeSupervisorHandle;
+pub use server::{NodeSupervisorHandle, SupervisorStop};

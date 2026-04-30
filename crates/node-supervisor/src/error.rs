@@ -209,4 +209,22 @@ pub enum NodeSupervisorError {
         #[source]
         source: io::Error,
     },
+
+    /// The supervisor could not bind the JSON-RPC server to its listen address.
+    #[error("failed to bind JSON-RPC server to {address}: {source}")]
+    RpcBind {
+        /// Configured listen address.
+        address: String,
+        /// Underlying I/O error.
+        #[source]
+        source: io::Error,
+    },
+
+    /// The supervisor could not read the JSON-RPC server's bound address.
+    #[error("failed to read JSON-RPC bound address: {source}")]
+    RpcLocalAddr {
+        /// Underlying I/O error.
+        #[source]
+        source: io::Error,
+    },
 }

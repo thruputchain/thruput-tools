@@ -137,7 +137,16 @@ impl ChildProcessSpec {
             .args(&self.args)
             .stdin(self.stdin.into_stdio())
             .stdout(self.stdout.into_stdio())
-            .stderr(self.stderr.into_stdio());
+            .stderr(self.stderr.into_stdio())
+            // Backstop for `start()` cancellation: if the supervisor's
+            // future is dropped between spawning hogd-dev and finishing
+            // startup (Ctrl-C, outer timeout, racing select!), Tokio
+            // SIGKILLs the direct child so it does not become an orphan
+            // parented to init/launchd. Note: this only reaps the direct
+            // child; on macOS, descendants of hogd-dev can still leak.
+            // See `2026-04-29-local-node-hogd-dev-supervisor.md` for the
+            // PR_SET_PDEATHSIG / process-group orphan caveat.
+            .kill_on_drop(true);
 
         #[cfg(unix)]
         if let Some(process_group) = self.process_group {
