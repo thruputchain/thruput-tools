@@ -171,7 +171,7 @@ impl NodeSupervisorHandle {
                 if let Err(error) = result {
                     tracing::warn!(%error, "stop signal failed; stopping node supervisor");
                     if let Err(stop_error) = self.stop_inner().await {
-                        tracing::warn!(%stop_error, "failed to stop node supervisor after stop signal error");
+                        tracing::error!(%stop_error, "failed to stop node supervisor after stop signal error");
                     }
                     return Err(error);
                 }

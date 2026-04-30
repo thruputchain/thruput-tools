@@ -98,6 +98,38 @@ fn wait_child(mut child: std::process::Child, timeout: Duration) -> ExitStatus {
 }
 
 #[cfg(all(feature = "dev-node", unix))]
+struct ChildGuard(Option<std::process::Child>);
+
+#[cfg(all(feature = "dev-node", unix))]
+impl ChildGuard {
+    fn new(child: std::process::Child) -> Self {
+        Self(Some(child))
+    }
+
+    fn child(&self) -> &std::process::Child {
+        self.0.as_ref().expect("bug: child guard is armed")
+    }
+
+    fn child_mut(&mut self) -> &mut std::process::Child {
+        self.0.as_mut().expect("bug: child guard is armed")
+    }
+
+    fn into_inner(mut self) -> std::process::Child {
+        self.0.take().expect("bug: child guard is armed")
+    }
+}
+
+#[cfg(all(feature = "dev-node", unix))]
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        if let Some(child) = self.0.as_mut() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+#[cfg(all(feature = "dev-node", unix))]
 fn read_pid_file(path: &std::path::Path) -> i32 {
     std::fs::read_to_string(path)
         .expect("bug: fake hogd-dev should write pid file")
@@ -170,7 +202,7 @@ fn node_hogd_dev_binary_json_starts_supervisor() {
     let fake = fake_hogd_dev_binary();
     let pid_dir = TempDir::new().unwrap();
     let pid_path = pid_dir.path().join("hogd.pid");
-    let mut child = groundhog()
+    let child = groundhog()
         .arg("--json")
         .arg("node")
         .arg("--port")
@@ -183,8 +215,13 @@ fn node_hogd_dev_binary_json_starts_supervisor() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("bug: groundhog node should spawn");
+    let mut child = ChildGuard::new(child);
 
-    let stdout = child.stdout.take().expect("bug: stdout should be piped");
+    let stdout = child
+        .child_mut()
+        .stdout
+        .take()
+        .expect("bug: stdout should be piped");
     let line = read_line_with_timeout(stdout, Duration::from_secs(10))
         .expect("bug: startup JSON should be readable");
     let payload: serde_json::Value =
@@ -208,8 +245,8 @@ fn node_hogd_dev_binary_json_starts_supervisor() {
     );
 
     let pid = read_pid_file(&pid_path);
-    send_sigint(&child);
-    let status = wait_child(child, Duration::from_secs(10));
+    send_sigint(child.child());
+    let status = wait_child(child.into_inner(), Duration::from_secs(10));
     assert!(status.success(), "groundhog node should stop cleanly");
     assert!(
         wait_pid_gone(pid, Duration::from_secs(2)),
