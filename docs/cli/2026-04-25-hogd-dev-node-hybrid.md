@@ -10,6 +10,10 @@
   `SchedulerClient` as the Rust-side coordinator/mempool aperture
 - [`specs/2026-04-24-embedded-dev-node-backend.md`](specs/2026-04-24-embedded-dev-node-backend.md)
   — earlier embedded `libhogdev` direction
+- [`plans/2026-04-29-local-node-hogd-dev-supervisor.md`](plans/2026-04-29-local-node-hogd-dev-supervisor.md)
+  — focused Rust local-node supervisor implementation plan
+- [`specs/2026-04-29-hogd-dev-process-contract.md`](specs/2026-04-29-hogd-dev-process-contract.md)
+  — draft hogd-dev subprocess contract proposal
 
 ## Short version
 

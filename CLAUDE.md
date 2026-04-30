@@ -34,6 +34,10 @@ Workspace crates in `crates/`:
   shares execution semantics with SDK tests, but the durable backend
   direction is a hogd-side embedded execution library; see the CLI
   planning docs.
+- **node-supervisor** — scaffold for the future `groundhog node`
+  supervisor/facade around a hogd-owned `hogd-dev` subprocess. It is the
+  durable local-node path; `dev-node` remains the native-exec prototype
+  until hogd-dev covers the normal local development loop.
 - **e2e-tests** — ignored process-level JSON-RPC lifecycle smoke tests.
 - **bench** — benchmark harnesses.
 
