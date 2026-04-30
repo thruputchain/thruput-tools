@@ -23,6 +23,7 @@ use crate::{
 /// down because we asked it to". Both branches return an `ExitStatus`, but
 /// the meaning is different.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum SupervisorStop {
     /// hogd-dev exited on its own; the supervisor reacted by stopping the
     /// JSON-RPC server. The contained status is hogd-dev's own exit status.
