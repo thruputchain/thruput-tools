@@ -93,11 +93,9 @@ async fn pending_transaction_count_returns_stub_or_value() {
     // Not asserting on success/failure — both are valid depending on backend.
 }
 
-/// Build a permissive `getEvents` query: single filter, address-only,
-/// no topic constraints.  `addr` matches any zero-filled contract
-/// address by default — callers point it at a real ERC20 deployment
-/// when validating end-to-end against a populated indexer.
-fn permissive_query(
+/// Build a `getEvents` query that fetches every event emitted by
+/// `addr`, regardless of topic.
+fn events_for_address(
     addr: [u8; 32],
     anchor: BlockAnchor,
     order: IterationOrder,
@@ -123,7 +121,7 @@ fn permissive_query(
 #[ignore = "requires running gateway with populated indexer"]
 async fn get_events_returns_well_formed_page() {
     let c = client();
-    let query = permissive_query(
+    let query = events_for_address(
         [0u8; 32],
         BlockAnchor::AnchorAtEnd,
         IterationOrder::IterationOrderDescending,
@@ -162,7 +160,7 @@ async fn get_events_returns_well_formed_page() {
 #[ignore = "requires running gateway with populated indexer"]
 async fn get_events_cursor_walks_or_terminates() {
     let c = client();
-    let mut query = permissive_query(
+    let mut query = events_for_address(
         [0u8; 32],
         BlockAnchor::AnchorAtEnd,
         IterationOrder::IterationOrderDescending,
