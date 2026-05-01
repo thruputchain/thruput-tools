@@ -134,8 +134,12 @@ async fn get_events_returns_well_formed_page() {
         "page must respect requested limit, got {}",
         page.events.len()
     );
-    assert!(*page.latest_block >= 0, "latestBlock must be non-negative");
-    assert!(*page.oldest_block >= 0, "oldestBlock must be non-negative");
+    assert!(
+        *page.oldest_block <= *page.latest_block,
+        "oldestBlock {} must not exceed latestBlock {}",
+        *page.oldest_block,
+        *page.latest_block,
+    );
     for ev in &page.events {
         assert!(
             ev.event.topics.len() <= 3,
