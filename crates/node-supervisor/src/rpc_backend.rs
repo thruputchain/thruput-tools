@@ -62,11 +62,11 @@ impl HogdDevSchedulerBackend {
 impl SubmitPlane for HogdDevSchedulerBackend {
     #[tracing::instrument(skip_all, fields(tx_hash = ?tx.hash, tx_bytes_len = tx.bytes.len()))]
     async fn submit_raw_transaction(&self, tx: ValidatedTransaction) -> Result<(), RpcServerError> {
-        let batch = single_transaction_batch(&tx.bytes);
+        let batch = single_transaction_batch(&tx.bytes)?;
         self.scheduler
             .schedulercoord_submit_unvetted(&batch)
             .await
-            .map_err(classify_submit_rpc_error)
+            .map_err(|error| classify_submit_rpc_error(&error))
     }
 }
 
@@ -111,21 +111,25 @@ impl ChainPlane for HogdDevSchedulerBackend {
     }
 }
 
-fn single_transaction_batch(tx_bytes: &[u8]) -> ParallelSignedTransactionBatch {
-    let tx_len =
-        u32::try_from(tx_bytes.len()).expect("bug: validated transaction length exceeds u32::MAX");
-    ParallelSignedTransactionBatch::new(ParallelBatch {
+fn single_transaction_batch(
+    tx_bytes: &[u8],
+) -> Result<ParallelSignedTransactionBatch, RpcServerError> {
+    let tx_len = u32::try_from(tx_bytes.len())
+        .map_err(|_| RpcServerError::TxInvalid("transaction too large".into()))?;
+    Ok(ParallelSignedTransactionBatch::new(ParallelBatch {
         segment_tokens: VecM(vec![1]),
         segment_bytes: VecM(vec![tx_len]),
         xdr: BytesM(tx_bytes.to_vec()),
-    })
+    }))
 }
 
-fn classify_submit_rpc_error(error: rpc_driver::RpcError) -> RpcServerError {
+fn classify_submit_rpc_error(error: &rpc_driver::RpcError) -> RpcServerError {
     // protocol-rs currently exposes `submit_unvetted` as `void`, and the
     // generated dispatcher maps server-side `ProgramError` into a generic
     // x23 `SystemError`. Until the XDR grows a typed submit result, we cannot
     // distinguish semantic rejection from backend failure here.
+    // TODO(protocol-rs-submit-result): map typed scheduler rejection to
+    // `TxRejected` once submit returns an accepted/rejected result.
     RpcServerError::BackendUnavailable(format!("hogd-dev scheduler submit failed: {error}"))
 }
 
@@ -151,7 +155,7 @@ mod tests {
     #[test]
     fn single_transaction_batch_packs_one_segment() {
         let tx_bytes = vec![0xaa, 0xbb, 0xcc];
-        let batch = single_transaction_batch(&tx_bytes);
+        let batch = single_transaction_batch(&tx_bytes).expect("bug: test tx should pack");
 
         assert_eq!(batch.segment_tokens.0, vec![1]);
         assert_eq!(batch.segment_bytes.0, vec![3]);
