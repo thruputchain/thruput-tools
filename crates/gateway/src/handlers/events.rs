@@ -42,6 +42,13 @@ pub async fn get_events(
                 sequence_number: identified.sequence_number,
                 event,
             });
+        } else {
+            tracing::warn!(
+                tx_hash = ?identified.proposed_tx_hash,
+                block_height = ?identified.block_height,
+                sequence_number = identified.sequence_number,
+                "dropped malformed event from indexer",
+            );
         }
     }
 
