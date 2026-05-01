@@ -1,8 +1,8 @@
 //! hogd-dev x23 backend adapters for the public JSON-RPC facade.
 //!
-//! PR 4a intentionally starts with the scheduler-backed chain plane only.
-//! Submit, read, and dev-control adapters stay stubbed until hogd-dev exposes
-//! the corresponding stable x23 surfaces.
+//! Chain and submit both use hogd-dev's advertised scheduler endpoint. Read
+//! and dev-control adapters stay stubbed until hogd-dev exposes the
+//! corresponding stable x23 surfaces.
 
 use async_trait::async_trait;
 use groundhog_rpc_api_types::{
@@ -10,33 +10,36 @@ use groundhog_rpc_api_types::{
     block::{BlockInfo, ChainTip},
     hex::Hex0x,
 };
-use groundhog_rpc_server::{ChainPlane, RpcServerError};
+use groundhog_rpc_server::{ChainPlane, RpcServerError, SubmitPlane, ValidatedTransaction};
 use groundhog_scheduler::{
-    DbTip, SchedulerGetTipResult, sched_coord::SchedulerCoord_SchedulerCoord1_Client,
+    DbTip, ParallelBatch, SchedulerGetTipResult, parallel::ParallelSignedTransactionBatch,
+    sched_coord::SchedulerCoord_SchedulerCoord1_Client,
 };
 use groundhog_x23_transport::connect;
 use std::{fmt, net::SocketAddr};
+use xdr_common::{BytesM, VecM};
 
 use crate::{NodeSupervisorError, genesis::ensure_dev_genesis};
 
-// chainTip only needs one lane today; two gives the near-term PR 4b/4c
-// scheduler-sharing path room without making PR 4a a pool-tuning exercise.
+// chainTip and submit share the scheduler endpoint. Keep a small pool so a
+// long-running submit does not block tip checks during local-node startup and
+// smoke tests.
 const SCHEDULER_POOL_SIZE: usize = 2;
 
-/// Chain-plane adapter backed by hogd-dev's scheduler endpoint.
+/// Scheduler-backed adapter for hogd-dev chain and submit planes.
 #[derive(Clone)]
-pub(crate) struct HogdDevChainBackend {
+pub(crate) struct HogdDevSchedulerBackend {
     scheduler: SchedulerCoord_SchedulerCoord1_Client,
 }
 
-impl fmt::Debug for HogdDevChainBackend {
+impl fmt::Debug for HogdDevSchedulerBackend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("HogdDevChainBackend")
+        f.debug_struct("HogdDevSchedulerBackend")
             .finish_non_exhaustive()
     }
 }
 
-impl HogdDevChainBackend {
+impl HogdDevSchedulerBackend {
     pub(crate) async fn connect(endpoint: SocketAddr) -> Result<Self, NodeSupervisorError> {
         let scheduler = connect(
             "hogd-dev scheduler",
@@ -56,7 +59,19 @@ impl HogdDevChainBackend {
 }
 
 #[async_trait]
-impl ChainPlane for HogdDevChainBackend {
+impl SubmitPlane for HogdDevSchedulerBackend {
+    #[tracing::instrument(skip_all, fields(tx_hash = ?tx.hash, tx_bytes_len = tx.bytes.len()))]
+    async fn submit_raw_transaction(&self, tx: ValidatedTransaction) -> Result<(), RpcServerError> {
+        let batch = single_transaction_batch(&tx.bytes)?;
+        self.scheduler
+            .schedulercoord_submit_unvetted(&batch)
+            .await
+            .map_err(|error| classify_submit_rpc_error(&error))
+    }
+}
+
+#[async_trait]
+impl ChainPlane for HogdDevSchedulerBackend {
     #[tracing::instrument(skip_all)]
     async fn chain_tip(&self) -> Result<ChainTip, RpcServerError> {
         let result = self
@@ -96,6 +111,28 @@ impl ChainPlane for HogdDevChainBackend {
     }
 }
 
+fn single_transaction_batch(
+    tx_bytes: &[u8],
+) -> Result<ParallelSignedTransactionBatch, RpcServerError> {
+    let tx_len = u32::try_from(tx_bytes.len())
+        .map_err(|_| RpcServerError::TxInvalid("transaction too large".into()))?;
+    Ok(ParallelSignedTransactionBatch::new(ParallelBatch {
+        segment_tokens: VecM(vec![1]),
+        segment_bytes: VecM(vec![tx_len]),
+        xdr: BytesM(tx_bytes.to_vec()),
+    }))
+}
+
+fn classify_submit_rpc_error(error: &rpc_driver::RpcError) -> RpcServerError {
+    // protocol-rs currently exposes `submit_unvetted` as `void`, and the
+    // generated dispatcher maps server-side `ProgramError` into a generic
+    // x23 `SystemError`. Until the XDR grows a typed submit result, we cannot
+    // distinguish semantic rejection from backend failure here.
+    // TODO(protocol-rs-submit-result): map typed scheduler rejection to
+    // `TxRejected` once submit returns an accepted/rejected result.
+    RpcServerError::BackendUnavailable(format!("hogd-dev scheduler submit failed: {error}"))
+}
+
 fn chain_tip_from_db_tip(
     DbTip {
         height,
@@ -108,5 +145,20 @@ fn chain_tip_from_db_tip(
     ChainTip {
         height,
         block_hash: Hex0x(block_hash.into_inner()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn single_transaction_batch_packs_one_segment() {
+        let tx_bytes = vec![0xaa, 0xbb, 0xcc];
+        let batch = single_transaction_batch(&tx_bytes).expect("bug: test tx should pack");
+
+        assert_eq!(batch.segment_tokens.0, vec![1]);
+        assert_eq!(batch.segment_bytes.0, vec![3]);
+        assert_eq!(batch.xdr.0, tx_bytes);
     }
 }

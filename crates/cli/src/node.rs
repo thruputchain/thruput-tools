@@ -160,7 +160,9 @@ async fn run_hogd_dev(
     } else {
         print.status("Groundhog Local Node (experimental)");
         print.status(format_args!("Chain: {}", readiness.network_id));
-        print.warn("backend: hogd-dev (chainTip live; submit/read methods return NOT_IMPLEMENTED)");
+        print.warn(
+            "backend: hogd-dev (chainTip and submit live; read methods return NOT_IMPLEMENTED)",
+        );
         print.status(format_args!("Listening on http://{rpc_addr}"));
         print.status(format_args!(
             "hogd-dev scheduler: {}",
@@ -288,12 +290,12 @@ fn hogd_dev_startup_payload(
             "kind": "hogd_dev",
             "stability": "experimental",
             "planes": {
-                "submit": "stub",
+                "submit": "scheduler",
                 "chain": "scheduler",
                 "read": "stub",
             },
             "limitations": [
-                "sendRawTransaction and read methods return NOT_IMPLEMENTED until more hogd-dev x23 adapters land"
+                "read methods return NOT_IMPLEMENTED until more hogd-dev x23 adapters land"
             ],
             "endpoints": hogd_dev_endpoints_payload(readiness),
         },
@@ -398,7 +400,7 @@ mod tests {
         assert_eq!(payload["rpc_url"], "http://127.0.0.1:9545");
         assert_eq!(payload["chain"], "groundhog-local");
         assert_eq!(payload["backend"]["kind"], "hogd_dev");
-        assert_eq!(payload["backend"]["planes"]["submit"], "stub");
+        assert_eq!(payload["backend"]["planes"]["submit"], "scheduler");
         assert_eq!(payload["backend"]["planes"]["chain"], "scheduler");
         assert_eq!(payload["backend"]["planes"]["read"], "stub");
         assert_eq!(
