@@ -131,7 +131,7 @@ embedding it in chuckd or chuckd-rs. Reasons:
 | Data | Source | Existing RPC | Notes |
 |------|--------|-------------|-------|
 | Transaction receipt (events, height, status) | hogd indexer | `get_transaction_info(tx_hash)` | Returns `TxInfo { height, TxEventLog }` |
-| Contract events by address + height range | hogd indexer | `get_contract_events(start, end, addr)` | No built-in limits — gateway must enforce bounds |
+| Contract events (paginated, filterable) | hogd indexer | `get_events(EventQuery)` | Returns `EventPage` with cursor + page metadata |
 | Chain tip (height, hash) | hogd scheduler | `get_tip()` | |
 | Transaction submission | configurable: hogd scheduler or chuckd coordinator | `submit_unvetted(batch)` | Gateway config selects the private-network ingress path |
 | Transaction lookup (pending) | hogd scheduler | `lookup_transactions(hashes)` | Returns `Option<SignedTransaction>` per hash |
@@ -354,17 +354,16 @@ request fails rather than returning potentially misleading results.
 
 ## Event Query Bounds
 
-Hogd's `get_contract_events(start, end, addr)` has **no built-in limits**
-on height range or result count. A single query could return the entire
-event history for a contract and OOM the gateway.
+`get_events` is paginated server-side (the indexer clamps page size to
+its own cap), but the gateway adds a defensive pre-XDR check before
+encoding so clearly-bogus inputs fail at the JSON-RPC boundary:
 
-The gateway enforces bounds:
-
-- **Max height range:** Configurable, default 1000 blocks. Requests
-  exceeding this return `RANGE_TOO_LARGE` (-32011).
-- **Validation:** `to_height >= from_height` (else `RANGE_TOO_LARGE`).
-
-Phase 4 adds cursor-based pagination for large result sets.
+- **Per-page limit:** Configurable, default 200.  Requests with
+  `limit` above this return `INVALID_PARAMS`.
+- **Cursor length:** Configurable, default 256 bytes.  Longer opaque
+  cursors return `INVALID_PARAMS`.
+- **`limit == 0`** passes through unchanged — the indexer treats it
+  as "use server default".
 
 ---
 
@@ -396,7 +395,7 @@ groundhog-rpc/                          NEW workspace
 │   │   │   │   ├── submit.rs          sendRawTransaction
 │   │   │   │   ├── receipt.rs         getTransactionReceipt, getTransactionStatus
 │   │   │   │   ├── blocks.rs          chainTip, getBlockByNumber
-│   │   │   │   └── events.rs          getContractEvents
+│   │   │   │   └── events.rs          getEvents
 │   │   │   ├── middleware.rs          timeout, metrics, CORS
 │   │   │   └── error.rs              GatewayError → jsonrpsee ErrorObject
 │   │   └── Cargo.toml                 deps: api-types, rpc_driver, jsonrpsee, axum, tokio
@@ -505,7 +504,7 @@ transport only (no WebSocket).
 | `groundhog_getTransactionStatus(hash) → Status` | scheduler `find_tx` + indexer | See lookup order above |
 | `groundhog_chainTip() → TipInfo` | scheduler `get_tip` | |
 | `groundhog_getBlockByNumber(height) → BlockInfo` | **TBD** (question #1) | May defer |
-| `groundhog_getContractEvents(addr, from, to) → Events` | indexer `get_contract_events` | Gateway enforces height range limit |
+| `groundhog_getEvents(EventQuery) → EventPage` | indexer `get_events` | Gateway enforces per-page limit and cursor length |
 | `groundhog_pendingTransactionCount() → u64` | scheduler `size()` | Includes runqueue + stranded |
 
 Plus `rpc.discover` for free from jsonrpsee's OpenRPC generation.

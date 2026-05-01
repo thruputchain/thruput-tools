@@ -92,16 +92,11 @@ pub trait GroundhogApi {
 
     // --- Event Queries ---
 
-    /// Contract events filtered by address and height range.
-    /// Returns RANGE_TOO_LARGE (-32011) if height span exceeds
-    /// the gateway's configured maximum (default: 1000 blocks).
-    #[method(name = "getContractEvents")]
-    async fn get_contract_events(
-        &self,
-        address: ContractAddress,
-        from_height: BlockHeight,
-        to_height: BlockHeight,
-    ) -> RpcResult<Vec<IdentifiedEvent>>;
+    /// One page of contract events matching the query.  Walk further
+    /// pages by sending the same query back with `cursor` set to the
+    /// value from the previous page.
+    #[method(name = "getEvents")]
+    async fn get_events(&self, query: EventQuery) -> RpcResult<EventPage>;
 
     // --- Phase 2: Subscriptions (WebSocket) ---
 
@@ -305,7 +300,6 @@ pub mod codes {
     pub const TX_REJECTED: i32 = -32001;
     pub const TX_NOT_FOUND: i32 = -32002;
     pub const BLOCK_NOT_FOUND: i32 = -32010;
-    pub const RANGE_TOO_LARGE: i32 = -32011;
     pub const BACKEND_UNAVAILABLE: i32 = -32050;
     pub const BACKEND_TIMEOUT: i32 = -32051;
 }
@@ -326,7 +320,7 @@ pub struct GatewayContext {
     pub scheduler: Arc<groundhog_scheduler::SchedulerCoord_SchedulerCoord1_Client>,
 
     /// x23 RPC client to hogd indexer.
-    /// Used for: get_transaction_info, get_contract_events.
+    /// Used for: get_transaction_info, get_events.
     pub indexer: Arc<IndexerClient>,
 
     /// x23 RPC client to coordinator storage (optional).
