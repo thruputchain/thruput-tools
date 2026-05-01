@@ -1,13 +1,14 @@
-//! Shared JSON-RPC server configuration.
-
-/// Server-side bounds enforced before dispatching to a backend.
+/// Server-wide bounds on JSON-RPC requests.  The shared dispatcher
+/// rejects requests that exceed these before they reach a backend.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct RpcServerConfig {
-    /// Maximum events returned per `getEvents` page.
+    /// Per-page cap on `getEvents` responses; requests with `limit`
+    /// above this are rejected as `InvalidParam`.
     pub max_events_per_page: u32,
 
-    /// Maximum byte length of a `getEvents` pagination cursor.
+    /// Maximum length of the opaque `getEvents` pagination cursor;
+    /// longer cursors are rejected as `InvalidParam`.
     pub max_cursor_bytes: usize,
 }
 

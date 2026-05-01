@@ -9,12 +9,13 @@ use crate::error::GatewayError;
 
 use super::parse_event::parse_emitted_event;
 
-/// Forward a paginated event query to the indexer and return a page
-/// of parsed events.
+/// Implementation of the `groundhog_getEvents` JSON-RPC method.
+/// Forwards the paginated `EventQuery` to the hogd indexer and
+/// returns one page of parsed events to the caller.
 ///
-/// Events whose payload disagrees with `num_topics` are dropped (with
-/// a warning per drop).  Pagination metadata still reflects the
-/// indexer view, so cursor walks continue past the gap.
+/// Events whose payload disagrees with `num_topics` are dropped
+/// (with a warning per drop) — pagination metadata still reflects
+/// the indexer view, so cursor walks continue past the gap.
 #[tracing::instrument(skip_all, fields(filters_len = query.filters.0.len(), limit = query.limit))]
 pub async fn get_events(
     ctx: &GatewayContext,

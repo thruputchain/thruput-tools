@@ -97,9 +97,12 @@ where
     }
 }
 
-/// Reject queries with limit or cursor beyond the configured bounds.
-/// `limit == 0` and empty `filters` pass through; the indexer owns
-/// those defaults.
+/// Bounds-check a `getEvents` query before the JSON-RPC dispatcher
+/// hands it to the read backend.  Rejects requests whose `limit` or
+/// opaque `cursor` exceed the per-server caps in `RpcServerConfig`.
+///
+/// `limit == 0` and empty `filters` pass through unchanged; the
+/// indexer owns those defaults.
 fn validate_event_query(
     query: &EventQuery,
     config: &RpcServerConfig,

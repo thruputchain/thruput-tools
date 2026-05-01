@@ -1,4 +1,5 @@
-//! Event-query types for the `getEvents` JSON-RPC method.
+//! Event request and response types for the `getEvents` JSON-RPC
+//! method.
 //!
 //! Request types are re-exported from the indexer wire types so the
 //! JSON shape never drifts from the wire shape.  Responses use a
@@ -57,9 +58,9 @@ pub struct IdentifiedEvent {
 
 /// One page of events returned by `getEvents`.
 ///
-/// To fetch the next page, send the same query back with `cursor` set
-/// to the value returned here.  An empty `cursor` means the stream is
-/// exhausted in the requested direction.
+/// To fetch the next page, send the same query back with `cursor`
+/// set to the value returned here.  An empty `cursor` means the
+/// stream is exhausted in the requested direction.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EventPage {

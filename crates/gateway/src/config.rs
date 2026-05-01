@@ -119,10 +119,12 @@ pub struct GatewayConfig {
     /// to hogd scheduler. See `docs/gateway/system-design.md`.
     pub coordinator_address: Option<String>,
 
-    /// Maximum events returned per `getEvents` page.
+    /// Per-page cap on `getEvents` responses; requests with `limit`
+    /// above this are rejected as `InvalidParam`.
     pub max_events_per_page: u32,
 
-    /// Maximum byte length of a `getEvents` pagination cursor.
+    /// Maximum length of the opaque `getEvents` pagination cursor;
+    /// longer cursors are rejected as `InvalidParam`.
     pub max_cursor_bytes: usize,
 
     /// Adaptive batching for `sendRawTransaction`.

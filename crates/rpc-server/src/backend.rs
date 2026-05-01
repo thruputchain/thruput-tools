@@ -126,7 +126,7 @@ pub trait ReadPlane: Send + Sync + 'static {
         tx_hash: TxHash,
     ) -> Result<TransactionStatus, RpcServerError>;
 
-    /// Return one page of events matching the query.
+    /// Return one page of events matching `query`.
     ///
     /// Walk further pages by sending the same query back with `cursor`
     /// set to the value from the previous page.

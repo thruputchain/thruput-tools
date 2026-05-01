@@ -93,8 +93,8 @@ async fn pending_transaction_count_returns_stub_or_value() {
     // Not asserting on success/failure — both are valid depending on backend.
 }
 
-/// Build a `getEvents` query that fetches every event emitted by
-/// `addr`, regardless of topic.
+/// `getEvents` query that fetches every event emitted by `addr`,
+/// with no topic filter applied.
 fn events_for_address(
     addr: [u8; 32],
     anchor: BlockAnchor,
