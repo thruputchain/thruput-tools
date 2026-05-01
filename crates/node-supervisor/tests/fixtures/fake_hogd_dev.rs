@@ -265,8 +265,28 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
 
     async fn schedulercoord_submit_unvetted(
         &self,
-        _batch: ParallelSignedTransactionBatch,
+        batch: ParallelSignedTransactionBatch,
     ) -> Result<(), ProgramError> {
+        if batch.segment_tokens.0 != vec![1] {
+            return Err(ProgramError::msg(
+                "fake scheduler expected one token segment for single transaction submit",
+            ));
+        }
+        if batch.segment_bytes.0.len() != 1 {
+            return Err(ProgramError::msg(
+                "fake scheduler expected one byte segment for single transaction submit",
+            ));
+        }
+        if batch.segment_bytes.0[0] as usize != batch.xdr.0.len() {
+            return Err(ProgramError::msg(
+                "fake scheduler byte segment length did not match xdr payload",
+            ));
+        }
+        if batch.xdr.0.is_empty() {
+            return Err(ProgramError::msg(
+                "fake scheduler expected non-empty signed transaction xdr",
+            ));
+        }
         Ok(())
     }
 

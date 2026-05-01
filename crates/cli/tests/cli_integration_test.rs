@@ -233,7 +233,7 @@ fn node_hogd_dev_binary_json_starts_supervisor() {
     assert_eq!(payload["ok"], true);
     assert_eq!(payload["command"], "node");
     assert_eq!(payload["data"]["backend"]["kind"], "hogd_dev");
-    assert_eq!(payload["data"]["backend"]["planes"]["submit"], "stub");
+    assert_eq!(payload["data"]["backend"]["planes"]["submit"], "scheduler");
     assert_eq!(payload["data"]["backend"]["planes"]["chain"], "scheduler");
     assert_eq!(payload["data"]["backend"]["planes"]["read"], "stub");
     let scheduler = payload["data"]["backend"]["endpoints"]["scheduler"]

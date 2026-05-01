@@ -1,8 +1,9 @@
 //! Stub backend planes that always return `NotImplemented`.
 //!
-//! The node supervisor wires backend planes incrementally. `chainTip` now
-//! has a real hogd-dev scheduler adapter; submit/read methods still use this
-//! stub until PR 4b/4c land the corresponding x23 adapters.
+//! The node supervisor wires backend planes incrementally. `chainTip` and
+//! `sendRawTransaction` now have a real hogd-dev scheduler adapter; read
+//! methods still use this stub until PR 4c lands the corresponding x23
+//! adapters.
 //!
 //! Wire-error strings carry only the JSON-RPC method name (matching
 //! `crates/dev-node`), so the public protocol surface is stable. The

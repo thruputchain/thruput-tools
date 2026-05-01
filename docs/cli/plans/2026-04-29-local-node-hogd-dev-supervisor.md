@@ -1,7 +1,8 @@
 # Local Node Hogd-Dev Supervisor Implementation Plan
 
 **Date:** 2026-04-29
-**Status:** Implementation in progress. PRs 1–3 shipped; PRs 4a/4b/4c/5 ahead.
+**Status:** Implementation in progress. PRs 1–4a shipped; PR 4b in progress;
+PRs 4c/5 ahead.
 
 **Companion to:**
 
@@ -312,6 +313,9 @@ not silently fall back to native-exec once the supervisor path is selected.
 
 ### PR 4a - First Real Hogd-Dev Chain RPC
 
+**Status:** ✅ Shipped. `groundhog_chainTip` is backed by hogd-dev's scheduler
+endpoint, with supervisor-owned dev genesis bootstrap.
+
 - Decide the Rust x23 client crate boundary.
 - Add the minimal client needed for `ChainPlane::chain_tip`.
 - Add the supervisor-side genesis bootstrap: copy
@@ -329,6 +333,16 @@ Acceptance:
 
 ### PR 4b - Submit RPC
 
+**Status:** In progress. The current Rust-side path can use
+`schedulercoord_submit_unvetted(ParallelSignedTransactionBatch)` on the
+advertised scheduler endpoint. Typed rejection mapping is limited by the
+current x23/protocol-rs shape; see protocol notes below.
+
+- Confirm or add the minimal hogd-dev submit contract first: the x23 method
+  that accepts signed transaction bytes, its accepted/rejected outcomes, and
+  whether it returns any data beyond acceptance.
+- Extend hogd-dev just enough to route submissions through the scheduler/mempool
+  path if the scheduler endpoint does not already expose the needed behavior.
 - Implement `SubmitPlane` over the hogd-dev scheduler/submit endpoint.
 - Preserve shared transaction validation and hash computation through
   `groundhog-rpc-server`.
@@ -337,6 +351,19 @@ Acceptance:
 
 - invalid transaction input still fails through shared validation;
 - accepted transactions return the canonical hash.
+
+Protocol shape notes to discuss with hogd/protocol-rs owners:
+
+- `schedulercoord_submit_unvetted` returns `void`; acceptance is inferred from
+  absence of an x23/RPC error. A typed submit result would let the JSON-RPC
+  facade distinguish accepted, rejected, duplicate, and retryable outcomes.
+- The generated x23 dispatcher maps handler `ProgramError` to generic
+  `RpcError::SystemError`, so semantic scheduler rejection is currently
+  indistinguishable from backend failure at the Rust client boundary.
+- `ParallelSignedTransactionBatch` is the right scheduler-oriented batch
+  transport, but callers must manually construct `segment_tokens`,
+  `segment_bytes`, and concatenated `xdr` even for a single transaction.
+  protocol-rs helper constructors would reduce adapter drift.
 
 ### PR 4c - Read RPC
 
@@ -390,15 +417,14 @@ end-to-end or be explicitly removed/deferred from the public local-node promise.
    **Resolved 2026-04-29:** node-supervisor depends directly on the codegen
    x23 client crates over `rpc_driver`, matching gateway. See
    [`../specs/2026-04-29-node-supervisor-x23-client-boundary.md`](../specs/2026-04-29-node-supervisor-x23-client-boundary.md).
-   PR 4a should hoist the `FromPool`/`connect` helpers in
-   `crates/gateway/src/context.rs` into a shared internal module so gateway
-   and node-supervisor share one transport-wiring pattern.
+   The shared transport-wiring helper now lives in `crates/x23-transport`.
 2. Is `getStorageAt` required for native-exec retirement, or should it be
    explicitly deferred from the first hogd-dev local-node milestone?
 
 ## Recommended Next Action
 
-Start PR 1 with `crates/node-supervisor` plus a fake-child process supervisor
-test and the draft hogd-dev process contract. That gives us useful Rust-side
-structure immediately without blocking on hogd code changes, while making PR 2
-explicitly wait for process-contract agreement.
+Validate the `SubmitPlane` wiring against a real hogd-dev binary, not only the
+fake scheduler fixture. If real semantic rejection still reaches Rust as a
+generic x23 `SystemError`, agree a typed protocol-rs submit result before
+depending on fine-grained `TxRejected`/retryable error behavior. Once accepted
+submit is proven end to end, move on to PR 4c read/status coverage.

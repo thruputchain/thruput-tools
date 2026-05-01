@@ -1,8 +1,8 @@
 //! Top-level node supervisor orchestration.
 //!
 //! Owns hogd-dev process supervision and the public JSON-RPC server. Backend
-//! adapters land by plane: PR 4a wires `chainTip` to hogd-dev's scheduler
-//! endpoint while submit/read remain stubbed.
+//! adapters land by plane: chain and submit are backed by hogd-dev's scheduler
+//! endpoint while read remains stubbed.
 
 use std::{future::Future, net::SocketAddr, process::ExitStatus};
 
@@ -12,7 +12,7 @@ use jsonrpsee::server::{RpcModule, Server, ServerHandle};
 
 use crate::{
     HogdDevProcess, HogdDevReadiness, NodeSupervisorConfig, NodeSupervisorError,
-    rpc_backend::HogdDevChainBackend, stub_backend::StubBackend,
+    rpc_backend::HogdDevSchedulerBackend, stub_backend::StubBackend,
 };
 
 /// Why a [`NodeSupervisorHandle::stopped`] call returned.
@@ -195,8 +195,8 @@ async fn start_rpc_server(
     listen_address: &str,
     readiness: &HogdDevReadiness,
 ) -> Result<(ServerHandle, SocketAddr), NodeSupervisorError> {
-    let chain_backend = HogdDevChainBackend::connect(readiness.endpoints.scheduler).await?;
-    chain_backend.ensure_dev_genesis().await?;
+    let scheduler_backend = HogdDevSchedulerBackend::connect(readiness.endpoints.scheduler).await?;
+    scheduler_backend.ensure_dev_genesis().await?;
 
     let server = Server::builder()
         .build(listen_address)
@@ -210,13 +210,13 @@ async fn start_rpc_server(
         .map_err(|source| NodeSupervisorError::RpcLocalAddr { source })?;
 
     tracing::warn!(
-        "node supervisor submit/read planes are stubbed; \
-         chainTip is backed by hogd-dev scheduler"
+        "node supervisor read plane is stubbed; \
+         chainTip and sendRawTransaction are backed by hogd-dev scheduler"
     );
 
     let core_rpc = GroundhogRpcServer::new(
-        StubBackend::new(),
-        chain_backend,
+        scheduler_backend.clone(),
+        scheduler_backend,
         StubBackend::new(),
         RpcServerConfig::default(),
     );
@@ -237,6 +237,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use groundhog_rpc_api::GroundhogApiClient;
+    use groundhog_rpc_api_types::error::codes;
     use jsonrpsee::core::ClientError;
     use jsonrpsee::http_client::HttpClientBuilder;
     use serial_test::serial;
@@ -251,6 +252,15 @@ mod tests {
     /// Env var the fake hogd-dev reads to write its PID before printing
     /// readiness. Tests use this to verify cleanup via `kill(pid, 0)`.
     const FAKE_HOGD_DEV_PID_FILE_ENV: &str = "GROUNDHOG_FAKE_HOGD_DEV_PID_FILE";
+    const SIGNED_TX_XDR: &str = "\
+bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7\
+000000000000000000000000000f42400000000000000000000f424000000000000000010000000000000001\
+000000040000000050ec72dbafd4898c5df0e15ea6ba3e46240945b7210fe2d63dde1e896f42107a000000\
+00000000000000000000000001000000000000000000000000706f58acd087550f315030db4beeb1527e86\
+f0e12d9781957cdcc522f33e5d719b93c200381cff5bfb26a1ee8ce7874ffd485322cd5a0806605d2ffa\
+51c8cf0f";
+    const CANONICAL_TX_HASH_JSON: &str =
+        "0x6e94695b6af0fbc13d96876f7fb8e940cd9db4d247e53614a45da252b3a7853a";
 
     /// Set an env var for the duration of a test that needs the fake child
     /// to enter `ready` mode. Restored on drop. `#[serial]` ensures we are
@@ -369,6 +379,24 @@ mod tests {
         assert_eq!(
             *tip.height, 0,
             "chainTip should report the genesis block loaded during startup"
+        );
+
+        let tx_hash = client
+            .send_raw_transaction(format!("0x{SIGNED_TX_XDR}"))
+            .await
+            .expect("bug: sendRawTransaction should dispatch to fake scheduler");
+        assert_eq!(
+            serde_json::to_value(tx_hash).expect("bug: tx hash should serialize"),
+            CANONICAL_TX_HASH_JSON
+        );
+
+        let err = client
+            .send_raw_transaction("not-valid-hex".into())
+            .await
+            .expect_err("bug: invalid hex should fail before fake scheduler dispatch");
+        assert!(
+            matches!(&err, ClientError::Call(object) if object.code() == codes::TX_INVALID),
+            "expected TX_INVALID JSON-RPC error, got {err:?}",
         );
 
         let pid = read_pid_file(&pid_path).expect("bug: fake should have written pid");
