@@ -119,14 +119,10 @@ pub struct GatewayConfig {
     /// to hogd scheduler. See `docs/gateway/system-design.md`.
     pub coordinator_address: Option<String>,
 
-    /// Maximum events the gateway will return per `getEvents` page
-    /// before rejecting the request as `INVALID_PARAMS`.  Indexer-side
-    /// `IndexDB::clamp_events_limit` (currently 200) is the underlying
-    /// cap; this is a defensive pre-XDR limit at the gateway boundary.
+    /// Maximum events returned per `getEvents` page.
     pub max_events_per_page: u32,
 
-    /// Maximum byte length of a `PaginationCursor` accepted on
-    /// `getEvents`.  Mirrors hogd-internal `kMaxCursorBytes` (256).
+    /// Maximum byte length of a `getEvents` pagination cursor.
     pub max_cursor_bytes: usize,
 
     /// Adaptive batching for `sendRawTransaction`.

@@ -1,16 +1,13 @@
-/// Shared JSON-RPC server configuration.
+//! Shared JSON-RPC server configuration.
+
+/// Server-side bounds enforced before dispatching to a backend.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct RpcServerConfig {
-    /// Maximum number of events the server will return per `getEvents`
-    /// page.  The indexer also caps server-side; this is a defensive
-    /// pre-XDR check.  See `IndexDB::clamp_events_limit` on the
-    /// hogd side (currently 200).
+    /// Maximum events returned per `getEvents` page.
     pub max_events_per_page: u32,
 
-    /// Maximum byte length for a `PaginationCursor` value accepted by
-    /// `getEvents`.  Mirrors the hogd-internal `kMaxCursorBytes`
-    /// (currently 256).  Pre-XDR `DoS` guard against absurd inputs.
+    /// Maximum byte length of a `getEvents` pagination cursor.
     pub max_cursor_bytes: usize,
 }
 

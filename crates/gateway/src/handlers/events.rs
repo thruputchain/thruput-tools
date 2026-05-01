@@ -1,8 +1,4 @@
 //! `groundhog_getEvents` handler.
-//!
-//! Forwards a paginated `EventQuery` to hogd's
-//! `IndexerBlockExplorer1::get_events` over x23 and re-parses the
-//! returned events into the api-types-flavored `EventPage`.
 
 use groundhog_rpc_api_types::events::{EventPage, EventQuery, IdentifiedEvent};
 use groundhog_rpc_api_types::hex::Hex0x;
@@ -13,17 +9,12 @@ use crate::error::GatewayError;
 
 use super::parse_event::parse_emitted_event;
 
-/// Query paginated, filterable contract events through the gateway.
+/// Forward a paginated event query to the indexer and return a page
+/// of parsed events.
 ///
-/// Flow:
-/// 1. The shared rpc-server has already enforced limit/cursor `DoS`
-///    guards before dispatching here.
-/// 2. Hand the `EventQuery` to the indexer; it owns filtering, anchor
-///    seek, ordering, and per-page assembly.
-/// 3. Parse each `TxEmittedEvent.serialized_event` into the
-///    api-types `IdentifiedEvent` shape (topics + data split out)
-///    so JSON consumers don't see raw wire bytes.
-/// 4. Surface `cursor`, `latest_block`, `oldest_block` verbatim.
+/// Events whose payload disagrees with `num_topics` are dropped (with
+/// a warning per drop).  Pagination metadata still reflects the
+/// indexer view, so cursor walks continue past the gap.
 #[tracing::instrument(skip_all, fields(filters_len = query.filters.0.len(), limit = query.limit))]
 pub async fn get_events(
     ctx: &GatewayContext,

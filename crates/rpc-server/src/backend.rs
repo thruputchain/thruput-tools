@@ -126,15 +126,9 @@ pub trait ReadPlane: Send + Sync + 'static {
         tx_hash: TxHash,
     ) -> Result<TransactionStatus, RpcServerError>;
 
-    /// Return paginated, filterable contract events.
+    /// Return one page of events matching the query.
     ///
-    /// `query` carries the full Soroban-style filter surface: filter
-    /// array (OR across filters, AND within), positional topic filters,
-    /// anchor selection (begin / end / explicit height), iteration
-    /// order, opaque cursor for resumption, and per-page limit.  See
-    /// `groundhog_indexer::indexer::EventQuery` for field semantics.
-    ///
-    /// Returns one page; clients walk via `EventPage::cursor` until it
-    /// is empty (stream exhausted in the requested direction).
+    /// Walk further pages by sending the same query back with `cursor`
+    /// set to the value from the previous page.
     async fn contract_events(&self, query: EventQuery) -> Result<EventPage, RpcServerError>;
 }

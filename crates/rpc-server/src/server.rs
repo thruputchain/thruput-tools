@@ -97,8 +97,9 @@ where
     }
 }
 
-/// Pre-XDR `DoS` guard.  The indexer also enforces these server-side; this
-/// just rejects clearly-bogus inputs before we even encode.
+/// Reject queries with limit or cursor beyond the configured bounds.
+/// `limit == 0` and empty `filters` pass through; the indexer owns
+/// those defaults.
 fn validate_event_query(
     query: &EventQuery,
     config: &RpcServerConfig,

@@ -1,17 +1,9 @@
-//! Event-query types for the JSON-RPC `getEvents` method.
+//! Event-query types for the `getEvents` JSON-RPC method.
 //!
-//! Request shape (`EventQuery`, `EventFilter`, `EventTopicFilter`,
-//! `BlockAnchor`, `IterationOrder`, `PaginationCursor`) is the indexer's
-//! XDR shape, re-exported verbatim per the design note in
-//! `rpc-server/src/backend.rs::ReadPlane` doc comment ("re-export the
-//! XDR `EventQuery`/`EventPage` through `api-types` rather than
-//! inventing parallel JSON-shaped variants — duplicated query schemas
-//! drift").
-//!
-//! Response shape stays api-types-flavored: `EventPage::events` holds
-//! parsed `IdentifiedEvent` entries (topics + data split out from
-//! `TxEmittedEvent.serialized_event`) so JSON consumers don't have to
-//! reverse the wire layout themselves.
+//! Request types are re-exported from the indexer wire types so the
+//! JSON shape never drifts from the wire shape.  Responses use a
+//! parsed `IdentifiedEvent` so consumers receive topics and data
+//! already split out, not raw on-wire bytes.
 
 use serde::{Deserialize, Serialize};
 
@@ -63,11 +55,11 @@ pub struct IdentifiedEvent {
     pub event: EmittedEvent,
 }
 
-/// Paginated `getEvents` response.
+/// One page of events returned by `getEvents`.
 ///
-/// Mirrors `groundhog_indexer::indexer::EventPage` but uses api-types'
-/// parsed `IdentifiedEvent` so JSON consumers get topics/data split,
-/// not raw `serialized_event` bytes.
+/// To fetch the next page, send the same query back with `cursor` set
+/// to the value returned here.  An empty `cursor` means the stream is
+/// exhausted in the requested direction.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EventPage {
