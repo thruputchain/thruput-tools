@@ -11,8 +11,12 @@
 //!
 //! Tests are marked #[ignore] so they don't run in `cargo test --workspace`.
 
+use groundhog_rpc_api_types::events::{
+    BlockAnchor, EventFilter, EventQuery, EventTopicFilter, IterationOrder,
+};
 use groundhog_rpc_api_types::transaction::TransactionStatus;
 use groundhog_rpc_client::{GroundhogApiClient, HttpClientBuilder};
+use xdr_common::{BytesM, VecM};
 
 fn rpc_url() -> String {
     std::env::var("RPC_URL").unwrap_or_else(|_| "http://127.0.0.1:9545".to_string())
@@ -87,6 +91,110 @@ async fn pending_transaction_count_returns_stub_or_value() {
     // Either is acceptable.
     let _result = c.pending_transaction_count().await;
     // Not asserting on success/failure — both are valid depending on backend.
+}
+
+/// Build a permissive `getEvents` query: single filter, address-only,
+/// no topic constraints.  `addr` matches any zero-filled contract
+/// address by default — callers point it at a real ERC20 deployment
+/// when validating end-to-end against a populated indexer.
+fn permissive_query(
+    addr: [u8; 32],
+    anchor: BlockAnchor,
+    order: IterationOrder,
+    limit: u32,
+) -> EventQuery {
+    EventQuery {
+        filters: VecM(vec![EventFilter {
+            contract_addresses: VecM(vec![groundhog_xdr::types::ContractAddress::from(addr)]),
+            topics: EventTopicFilter {
+                topic0: VecM(vec![]),
+                topic1: VecM(vec![]),
+                topic2: VecM(vec![]),
+            },
+        }]),
+        order,
+        anchor,
+        cursor: BytesM(vec![]),
+        limit,
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires running gateway with populated indexer"]
+async fn get_events_returns_well_formed_page() {
+    let c = client();
+    let query = permissive_query(
+        [0u8; 32],
+        BlockAnchor::AnchorAtEnd,
+        IterationOrder::IterationOrderDescending,
+        10,
+    );
+    let page = c.get_events(query).await.expect("getEvents should succeed");
+
+    assert!(
+        page.events.len() <= 10,
+        "page must respect requested limit, got {}",
+        page.events.len()
+    );
+    assert!(*page.latest_block >= 0, "latestBlock must be non-negative");
+    assert!(*page.oldest_block >= 0, "oldestBlock must be non-negative");
+    for ev in &page.events {
+        assert!(
+            ev.event.topics.len() <= 3,
+            "events expose at most 3 topics, got {}",
+            ev.event.topics.len()
+        );
+        assert!(
+            *ev.block_height >= *page.oldest_block && *ev.block_height <= *page.latest_block,
+            "event block_height {} outside [oldest={}, latest={}]",
+            *ev.block_height,
+            *page.oldest_block,
+            *page.latest_block
+        );
+    }
+}
+
+/// Walk pagination cursor with `limit=1` and confirm the cursor either
+/// advances or terminates (empty).  Pass criterion: at least two
+/// non-overlapping pages OR an empty stream — never a stuck cursor that
+/// returns the same page repeatedly.
+#[tokio::test]
+#[ignore = "requires running gateway with populated indexer"]
+async fn get_events_cursor_walks_or_terminates() {
+    let c = client();
+    let mut query = permissive_query(
+        [0u8; 32],
+        BlockAnchor::AnchorAtEnd,
+        IterationOrder::IterationOrderDescending,
+        1,
+    );
+
+    let first = c.get_events(query.clone()).await.expect("first page");
+    assert!(
+        first.events.len() <= 1,
+        "limit=1 must cap first page, got {}",
+        first.events.len()
+    );
+
+    if first.cursor.0.is_empty() {
+        // Stream is exhausted in one page — either no events at all, or
+        // exactly one event matched.  Nothing to walk; that is itself a
+        // valid `getEvents` outcome and the test passes.
+        return;
+    }
+
+    query.cursor = BytesM(first.cursor.0.clone());
+    let second = c.get_events(query).await.expect("second page");
+
+    if let (Some(a), Some(b)) = (first.events.first(), second.events.first()) {
+        assert!(
+            a.tx_hash != b.tx_hash || a.sequence_number != b.sequence_number,
+            "cursor must advance: page1 and page2 returned the same event \
+             (tx={:?} seq={})",
+            a.tx_hash,
+            a.sequence_number,
+        );
+    }
 }
 
 // TODO: add submit_and_query_receipt test once we can construct valid
