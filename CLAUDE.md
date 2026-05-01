@@ -41,10 +41,10 @@ Workspace crates in `crates/`:
   planning docs.
 - **node-supervisor** — `groundhog node` facade. Supervises a hogd-owned
   `hogd-dev` subprocess and embeds `rpc-server` to serve the public
-  JSON-RPC. `chainTip` is backed by hogd-dev's scheduler endpoint;
-  submit/read remain stubbed (NotImplemented) until PR 4b/4c land their
-  x23 adapters. Durable local-node path; `dev-node` remains the
-  native-exec prototype until hogd-dev covers the normal local
+  JSON-RPC. `chainTip` and `sendRawTransaction` are backed by hogd-dev's
+  scheduler endpoint; read remains stubbed (NotImplemented) until PR 4c
+  lands its x23 adapters. Durable local-node path; `dev-node` remains
+  the native-exec prototype until hogd-dev covers the normal local
   development loop.
 - **e2e-tests** — ignored process-level JSON-RPC lifecycle smoke tests.
 - **bench** — benchmark harnesses.

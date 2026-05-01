@@ -151,11 +151,12 @@ async fn run_hogd_dev(
         .map_err(|err| CliError::NodeSupervisor(err.to_string()))?;
     let rpc_addr = handle.rpc_addr();
     let readiness = handle.hogd_readiness().clone();
+    let backend_planes = handle.backend_planes();
 
     if print.is_json() {
         print.json(&CommandResult::new(
             cmd,
-            hogd_dev_startup_payload(rpc_addr, &readiness),
+            hogd_dev_startup_payload(rpc_addr, &readiness, backend_planes),
         ))?;
     } else {
         print.status("Groundhog Local Node (experimental)");
@@ -281,6 +282,7 @@ fn native_startup_payload(
 fn hogd_dev_startup_payload(
     addr: std::net::SocketAddr,
     readiness: &groundhog_node_supervisor::HogdDevReadiness,
+    backend_planes: groundhog_node_supervisor::BackendPlanes,
 ) -> serde_json::Value {
     json!({
         "chain": readiness.network_id,
@@ -289,11 +291,7 @@ fn hogd_dev_startup_payload(
         "backend": {
             "kind": "hogd_dev",
             "stability": "experimental",
-            "planes": {
-                "submit": "scheduler",
-                "chain": "scheduler",
-                "read": "stub",
-            },
+            "planes": backend_planes,
             "limitations": [
                 "read methods return NOT_IMPLEMENTED until more hogd-dev x23 adapters land"
             ],
@@ -330,7 +328,7 @@ mod tests {
     use super::{hogd_dev_startup_payload, map_start_error, native_startup_payload};
     use crate::CliError;
     use groundhog_dev_node::error::DevNodeError;
-    use groundhog_node_supervisor::parse_readiness_line;
+    use groundhog_node_supervisor::{BackendPlanes, parse_readiness_line};
     use groundhog_rpc_api_types::dev::DevAccount;
     use groundhog_rpc_api_types::hex::{Hex0x, HexBytes};
     use groundhog_xdr::types::ContractAddress;
@@ -396,13 +394,14 @@ mod tests {
         )
         .expect("bug: readiness should parse");
 
-        let payload = hogd_dev_startup_payload(addr, &readiness);
+        let payload =
+            hogd_dev_startup_payload(addr, &readiness, BackendPlanes::hogd_dev_scheduler_only());
         assert_eq!(payload["rpc_url"], "http://127.0.0.1:9545");
         assert_eq!(payload["chain"], "groundhog-local");
         assert_eq!(payload["backend"]["kind"], "hogd_dev");
-        assert_eq!(payload["backend"]["planes"]["submit"], "scheduler");
-        assert_eq!(payload["backend"]["planes"]["chain"], "scheduler");
-        assert_eq!(payload["backend"]["planes"]["read"], "stub");
+        let expected_planes = serde_json::to_value(BackendPlanes::hogd_dev_scheduler_only())
+            .expect("bug: backend planes should serialize");
+        assert_eq!(payload["backend"]["planes"], expected_planes);
         assert_eq!(
             payload["backend"]["endpoints"]["scheduler"],
             "127.0.0.1:12345"
@@ -424,7 +423,8 @@ mod tests {
         )
         .expect("bug: v1 readiness should parse");
 
-        let payload = hogd_dev_startup_payload(addr, &readiness);
+        let payload =
+            hogd_dev_startup_payload(addr, &readiness, BackendPlanes::hogd_dev_scheduler_only());
         assert_eq!(
             payload["backend"]["endpoints"]["scheduler"],
             "127.0.0.1:12345"

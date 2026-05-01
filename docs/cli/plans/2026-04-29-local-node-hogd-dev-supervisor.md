@@ -367,9 +367,9 @@ Protocol shape notes to discuss with hogd/protocol-rs owners:
 
 ### PR 4c - Read RPC
 
-- Hoist backend plane-status reporting into a typed `PlaneStatus` /
-  `BackendPlanes` shape owned by `groundhog-node-supervisor` before changing
-  the CLI read-plane strings again.
+- Backend plane-status reporting is now owned by `groundhog-node-supervisor`
+  through typed `PlaneStatus` / `BackendPlanes` startup metadata, so the CLI
+  does not produce submit/chain/read plane strings itself.
 - Implement receipts, events, block lookup, and transaction status.
 - If hogd-dev has separate pending and committed sources, make the supervisor
   read adapter own the composite status flow: scheduler pending state first,
