@@ -128,7 +128,19 @@ cargo run -p groundhog-cli --features dev-node -- node
 - **No `.expect()` on untrusted input.** Return `Result` or log and
   drop instead.
 - **No `dbg!()` or debug prints** in committed code.
-- **`///` doc comments on public items.** Obvious one-liners are exempt.
+- **`///` doc comments on public items.**  Lead with a sentence
+  describing what the thing is or does for the consumer; follow with
+  any non-obvious behavior (edge cases, contracts, drop semantics).
+  Cut sentences whose entire content is the identifier's words —
+  those are noise.  Skip the comment entirely only when the name and
+  signature already say everything a consumer needs.
+- Names express what something *does* or *is*, not its implementation
+  shape.  Avoid shape adjectives like "permissive", "narrow",
+  "strict".
+- Until the codebase has external consumers locked into wire
+  stability, delete unused code rather than preserving it as
+  "reserved for future use".  Stale stubs invite new code to stack
+  on semantics that are not there yet.
 - Derive `Debug` on all public types.
 - Add `Serialize, Deserialize` for types that cross the RPC boundary.
 - Prefer `&str` and `&[u8]` over owned types in function parameters.
@@ -182,10 +194,9 @@ cargo run -p groundhog-cli --features dev-node -- node
 - Gateway handler modules are production backend helpers grouped by
   subsystem (receipt, blocks, events, parsing). Do not add new public
   JSON-RPC handler implementations there.
-- `rpc-server` enforces shared request bounds, including
-  `getContractEvents` height range validation. Gateway supplies the
-  production limit from `GatewayConfig`; dev-node may choose a different
-  compatibility limit.
+- `rpc-server` enforces shared request bounds — currently `getEvents`
+  per-page limit and pagination cursor length.  Gateway supplies the
+  production limits from `GatewayConfig`.
 - Error codes follow Substrate's per-module range pattern. Constants
   live in `api-types/src/error.rs`.
 - Method prefix is `groundhog_` (may change — see open questions in
@@ -274,6 +285,10 @@ includes test and bench code), so always use that flag locally too.
 ## Git Workflow
 
 - Use feature branches and PRs — never commit directly to main.
+- Commit messages: title plus a short body covering what changed and
+  why.  No review-process narrative, no exhaustive file or type
+  lists (the diff has those), no references to out-of-tree state.
+  Title plus 2–6 lines of body is the right shape for most commits.
 
 ## Planning Docs
 
