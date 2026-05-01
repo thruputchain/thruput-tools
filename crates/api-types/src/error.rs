@@ -21,9 +21,6 @@ pub mod codes {
     /// Block height out of range (negative, or beyond current tip).
     pub const BLOCK_NOT_FOUND: i32 = -32010;
 
-    /// Height range too large for getContractEvents.
-    pub const RANGE_TOO_LARGE: i32 = -32011;
-
     /// Backend (hogd indexer or scheduler) unavailable.
     pub const BACKEND_UNAVAILABLE: i32 = -32050;
 

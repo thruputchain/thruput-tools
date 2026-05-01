@@ -104,7 +104,6 @@ impl From<GatewayError> for RpcServerError {
             GatewayError::TxNotFound => Self::TxNotFound,
             GatewayError::BlockNotFound => Self::BlockNotFound,
             GatewayError::InvalidParam(msg) => Self::InvalidParam(msg),
-            GatewayError::RangeTooLarge(msg) => Self::RangeTooLarge(msg),
             GatewayError::BackendUnavailable(msg) => Self::BackendUnavailable(msg),
             GatewayError::BackendTimeout => Self::BackendTimeout,
             GatewayError::Overloaded(msg) => Self::Overloaded(msg),

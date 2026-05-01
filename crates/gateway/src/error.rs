@@ -27,10 +27,6 @@ pub enum GatewayError {
     #[error("invalid params: {0}")]
     InvalidParam(String),
 
-    /// Height range too large for event queries.
-    #[error("range too large: {0}")]
-    RangeTooLarge(String),
-
     /// Backend (hogd indexer or scheduler) unavailable.
     #[error("backend unavailable: {0}")]
     BackendUnavailable(String),
@@ -68,7 +64,6 @@ impl From<GatewayError> for ErrorObjectOwned {
             GatewayError::TxNotFound => (codes::TX_NOT_FOUND, err.to_string()),
             GatewayError::BlockNotFound => (codes::BLOCK_NOT_FOUND, err.to_string()),
             GatewayError::InvalidParam(_) => (codes::INVALID_PARAMS, err.to_string()),
-            GatewayError::RangeTooLarge(_) => (codes::RANGE_TOO_LARGE, err.to_string()),
             GatewayError::BackendUnavailable(_) => (codes::BACKEND_UNAVAILABLE, err.to_string()),
             GatewayError::BackendTimeout => (codes::BACKEND_TIMEOUT, err.to_string()),
             GatewayError::Overloaded(_) => (codes::OVERLOADED, err.to_string()),

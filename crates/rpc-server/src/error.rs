@@ -25,10 +25,6 @@ pub enum RpcServerError {
     #[error("invalid params: {0}")]
     InvalidParam(String),
 
-    /// Requested height range is too large.
-    #[error("range too large: {0}")]
-    RangeTooLarge(String),
-
     /// Backend is unavailable.
     #[error("backend unavailable: {0}")]
     BackendUnavailable(String),
@@ -54,7 +50,6 @@ impl From<RpcServerError> for ErrorObjectOwned {
             RpcServerError::TxNotFound => (codes::TX_NOT_FOUND, err.to_string()),
             RpcServerError::BlockNotFound => (codes::BLOCK_NOT_FOUND, err.to_string()),
             RpcServerError::InvalidParam(_) => (codes::INVALID_PARAMS, err.to_string()),
-            RpcServerError::RangeTooLarge(_) => (codes::RANGE_TOO_LARGE, err.to_string()),
             RpcServerError::BackendUnavailable(_) => (codes::BACKEND_UNAVAILABLE, err.to_string()),
             RpcServerError::BackendTimeout => (codes::BACKEND_TIMEOUT, err.to_string()),
             RpcServerError::Overloaded(_) => (codes::OVERLOADED, err.to_string()),
@@ -78,10 +73,6 @@ mod tests {
             (
                 RpcServerError::InvalidParam("x".into()),
                 codes::INVALID_PARAMS,
-            ),
-            (
-                RpcServerError::RangeTooLarge("x".into()),
-                codes::RANGE_TOO_LARGE,
             ),
             (
                 RpcServerError::BackendUnavailable("x".into()),
