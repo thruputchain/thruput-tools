@@ -25,7 +25,7 @@ pub struct GatewayContext {
     pub scheduler: Arc<RwLock<Option<SchedulerCoord_SchedulerCoord1_Client>>>,
 
     /// x23 RPC client to hogd indexer.
-    /// Used for: `get_transaction_info`, `get_contract_events`.
+    /// Used for: `get_transaction_info`, `get_events` (paginated).
     pub indexer: Arc<RwLock<Option<IndexerBlockExplorer_IndexerBlockExplorer1_Client>>>,
 
     /// Adaptive batching submitter for `sendRawTransaction`. Accumulates

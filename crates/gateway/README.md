@@ -27,7 +27,7 @@ groundhog_getTransactionStatus(hash)           → TransactionStatus
 groundhog_chainTip()                           → ChainTip
 groundhog_getBlockByNumber(height)             → Option<BlockInfo>
 groundhog_pendingTransactionCount()            → u64
-groundhog_getContractEvents(addr, from, to)    → Vec<IdentifiedEvent>
+groundhog_getEvents(EventQuery)                → EventPage
 ```
 
 ## Building
