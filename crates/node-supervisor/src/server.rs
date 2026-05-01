@@ -9,6 +9,7 @@ use std::{future::Future, net::SocketAddr, process::ExitStatus};
 use groundhog_rpc_api::GroundhogApiServer;
 use groundhog_rpc_server::{GroundhogRpcServer, RpcServerConfig};
 use jsonrpsee::server::{RpcModule, Server, ServerHandle};
+use serde::Serialize;
 
 use crate::{
     HogdDevProcess, HogdDevReadiness, NodeSupervisorConfig, NodeSupervisorError,
@@ -38,6 +39,39 @@ pub enum SupervisorStop {
     StopRequested(ExitStatus),
 }
 
+/// Backend implementation currently serving a public RPC plane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum PlaneStatus {
+    /// The plane is backed by hogd-dev's scheduler x23 endpoint.
+    Scheduler,
+    /// The plane is intentionally stubbed and returns `NotImplemented`.
+    Stub,
+}
+
+/// Backend plane status advertised by the node supervisor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct BackendPlanes {
+    /// Transaction submission plane.
+    pub submit: PlaneStatus,
+    /// Chain metadata plane.
+    pub chain: PlaneStatus,
+    /// Committed-state read plane.
+    pub read: PlaneStatus,
+}
+
+impl BackendPlanes {
+    /// Current hogd-dev v1 wiring: scheduler-backed submit/chain with stubbed reads.
+    pub const fn hogd_dev_scheduler_only() -> Self {
+        Self {
+            submit: PlaneStatus::Scheduler,
+            chain: PlaneStatus::Scheduler,
+            read: PlaneStatus::Stub,
+        }
+    }
+}
+
 /// Running node supervisor.
 ///
 /// Owns the supervised hogd-dev child and the JSON-RPC server. The handle
@@ -51,6 +85,7 @@ pub struct NodeSupervisorHandle {
     hogd: HogdDevProcess,
     rpc_handle: ServerHandle,
     rpc_addr: SocketAddr,
+    backend_planes: BackendPlanes,
 }
 
 impl NodeSupervisorHandle {
@@ -65,12 +100,13 @@ impl NodeSupervisorHandle {
         let mut hogd = HogdDevProcess::start(&config.hogd_dev).await?;
 
         match start_rpc_server(&config.rpc_listen_address, hogd.readiness()).await {
-            Ok((rpc_handle, rpc_addr)) => {
-                tracing::info!(%rpc_addr, "node supervisor JSON-RPC ready");
+            Ok(started) => {
+                tracing::info!(rpc_addr = %started.addr, "node supervisor JSON-RPC ready");
                 Ok(Self {
                     hogd,
-                    rpc_handle,
-                    rpc_addr,
+                    rpc_handle: started.handle,
+                    rpc_addr: started.addr,
+                    backend_planes: started.backend_planes,
                 })
             }
             Err(error) => {
@@ -96,6 +132,11 @@ impl NodeSupervisorHandle {
     /// Parsed hogd-dev readiness payload.
     pub fn hogd_readiness(&self) -> &HogdDevReadiness {
         self.hogd.readiness()
+    }
+
+    /// Backend plane status for startup reporting.
+    pub fn backend_planes(&self) -> BackendPlanes {
+        self.backend_planes
     }
 
     /// Operating-system process id for hogd-dev, if available.
@@ -194,9 +235,10 @@ impl NodeSupervisorHandle {
 async fn start_rpc_server(
     listen_address: &str,
     readiness: &HogdDevReadiness,
-) -> Result<(ServerHandle, SocketAddr), NodeSupervisorError> {
+) -> Result<StartedRpcServer, NodeSupervisorError> {
     let scheduler_backend = HogdDevSchedulerBackend::connect(readiness.endpoints.scheduler).await?;
     scheduler_backend.ensure_dev_genesis().await?;
+    let backend_planes = BackendPlanes::hogd_dev_scheduler_only();
 
     let server = Server::builder()
         .build(listen_address)
@@ -229,7 +271,18 @@ async fn start_rpc_server(
         .expect("bug: rpc-server methods register without conflicts");
 
     let rpc_handle = server.start(module);
-    Ok((rpc_handle, rpc_addr))
+    Ok(StartedRpcServer {
+        handle: rpc_handle,
+        addr: rpc_addr,
+        backend_planes,
+    })
+}
+
+#[derive(Debug)]
+struct StartedRpcServer {
+    handle: ServerHandle,
+    addr: SocketAddr,
+    backend_planes: BackendPlanes,
 }
 
 #[cfg(test)]
@@ -366,6 +419,10 @@ f0e12d9781957cdcc522f33e5d719b93c200381cff5bfb26a1ee8ce7874ffd485322cd5a0806605d
         let handle = NodeSupervisorHandle::start(config)
             .await
             .expect("bug: supervisor should start against fake hogd-dev");
+        assert_eq!(
+            handle.backend_planes(),
+            BackendPlanes::hogd_dev_scheduler_only()
+        );
 
         let url = format!("http://{}", handle.rpc_addr());
         let client = HttpClientBuilder::default()
