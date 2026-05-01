@@ -17,7 +17,7 @@ server layer, transaction signing library, and typed client.
 | [`rpc-server`](crates/rpc-server/) | Shared server-side JSON-RPC implementation and validation |
 | [`x23-transport`](crates/x23-transport/) | Shared x23 connection-pool helpers (used by gateway and node-supervisor) |
 | [`dev-node`](crates/dev-node/) | Experimental local JSON-RPC dev node (`native_exec` prototype backend) |
-| [`node-supervisor`](crates/node-supervisor/) | `groundhog node` facade: supervises hogd-dev and serves JSON-RPC via `rpc-server` (durable local-node path; backend planes stubbed pending x23 adapters) |
+| [`node-supervisor`](crates/node-supervisor/) | `groundhog node` facade: supervises hogd-dev and serves JSON-RPC via `rpc-server` (durable local-node path; `chainTip` wired to hogd-dev scheduler, submit/read pending x23 adapters) |
 | [`e2e-tests`](crates/e2e-tests/) | Process-level JSON-RPC smoke tests |
 | [`bench`](crates/bench/) | Benchmark harnesses |
 
@@ -69,6 +69,7 @@ cargo fmt --check                       # format check
 - [CLI roadmap](docs/cli/roadmap.md)
 - [Hogd-dev hybrid dev-node design](docs/cli/2026-04-25-hogd-dev-node-hybrid.md)
 - [Local node hogd-dev supervisor plan](docs/cli/plans/2026-04-29-local-node-hogd-dev-supervisor.md)
+- [Hogd-dev binary bootstrap plan](docs/cli/plans/2026-04-30-hogd-dev-binary-bootstrap.md)
 - [Hogd-dev process contract proposal](docs/cli/specs/2026-04-29-hogd-dev-process-contract.md)
 - [Node-supervisor x23 client boundary](docs/cli/specs/2026-04-29-node-supervisor-x23-client-boundary.md)
 - [Gateway system design](docs/gateway/system-design.md)

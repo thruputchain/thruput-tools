@@ -12,7 +12,7 @@ use std::{
 
 use serde::Deserialize;
 use tokio::{
-    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
+    io::{AsyncBufReadExt, AsyncReadExt, BufReader},
     process::{ChildStderr, ChildStdout},
     task::JoinHandle,
     time,
@@ -37,10 +37,12 @@ pub const MAX_READINESS_LINE_BYTES: usize = 64 * 1024;
 pub struct HogdDevEndpoints {
     /// Scheduler/submit endpoint.
     pub scheduler: SocketAddr,
-    /// Read endpoint.
-    pub read: SocketAddr,
-    /// Dev-control endpoint.
-    pub control: SocketAddr,
+    /// Read endpoint. Absent in the v1 reduced contract.
+    #[serde(default)]
+    pub read: Option<SocketAddr>,
+    /// Dev-control endpoint. Absent in the v1 reduced contract.
+    #[serde(default)]
+    pub control: Option<SocketAddr>,
 }
 
 /// hogd-dev readiness payload.
@@ -77,14 +79,11 @@ pub struct HogdDevProcess {
 }
 
 impl HogdDevProcess {
-    /// Start hogd-dev using the configured binary lookup and genesis payload.
+    /// Start hogd-dev using the configured binary lookup.
     #[tracing::instrument(skip_all, fields(listen_host = %config.listen_host))]
-    pub async fn start(
-        config: &HogdDevConfig,
-        genesis_payload: impl AsRef<[u8]>,
-    ) -> Result<Self, NodeSupervisorError> {
+    pub async fn start(config: &HogdDevConfig) -> Result<Self, NodeSupervisorError> {
         let binary = resolve_hogd_dev_binary(config)?;
-        Self::start_with_binary(config, binary, genesis_payload).await
+        Self::start_with_binary(config, binary).await
     }
 
     /// Start hogd-dev from an already-resolved binary path.
@@ -92,24 +91,17 @@ impl HogdDevProcess {
     pub async fn start_with_binary(
         config: &HogdDevConfig,
         binary: impl AsRef<Path>,
-        genesis_payload: impl AsRef<[u8]>,
     ) -> Result<Self, NodeSupervisorError> {
         let spec = build_hogd_dev_spec(binary.as_ref(), config);
-        Self::start_with_spec(config, spec, genesis_payload).await
+        Self::start_with_spec(config, spec).await
     }
 
     async fn start_with_spec(
         config: &HogdDevConfig,
         spec: ChildProcessSpec,
-        genesis_payload: impl AsRef<[u8]>,
     ) -> Result<Self, NodeSupervisorError> {
         let mut child = ChildSupervisor::new(spec).spawn()?;
         let program = child.program().to_string();
-        let mut stdin = child
-            .take_stdin()
-            .ok_or_else(|| NodeSupervisorError::MissingStdin {
-                program: program.clone(),
-            })?;
         let stdout = child
             .take_stdout()
             .ok_or_else(|| NodeSupervisorError::MissingStdout {
@@ -121,17 +113,6 @@ impl HogdDevProcess {
                 program: program.clone(),
             })?;
         let mut stderr_task = Some(spawn_stderr_forwarder(stderr));
-
-        if let Err(source) = stdin.write_all(genesis_payload.as_ref()).await {
-            if let Some(status) = child.try_wait()? {
-                wait_for_stderr_task(stderr_task).await;
-                return Err(NodeSupervisorError::ExitedBeforeReady { program, status });
-            }
-            kill_unready_child(&mut child).await;
-            wait_for_stderr_task(stderr_task).await;
-            return Err(NodeSupervisorError::Stdin { program, source });
-        }
-        drop(stdin);
 
         let readiness_result = read_readiness_line(
             &mut child,
@@ -238,15 +219,9 @@ pub fn build_hogd_dev_spec(binary: impl AsRef<Path>, config: &HogdDevConfig) -> 
             OsString::from(config.listen_host.as_str()),
             OsString::from("--scheduler-port"),
             OsString::from("0"),
-            OsString::from("--read-port"),
-            OsString::from("0"),
-            OsString::from("--control-port"),
-            OsString::from("0"),
-            OsString::from("--genesis-stdin"),
             OsString::from("--readiness"),
             OsString::from("stdout"),
         ])
-        .stdin_piped()
         .stdout_piped()
         .stderr_piped();
 
@@ -628,6 +603,7 @@ mod tests {
     };
 
     const READY: &str = r#"{"status":"ready","network_id":"groundhog-local","endpoints":{"scheduler":"127.0.0.1:12345","read":"127.0.0.1:12346","control":"127.0.0.1:12347"}}"#;
+    const V1_READY: &str = r#"{"status":"ready","network_id":"groundhog-local","endpoints":{"scheduler":"127.0.0.1:12345"}}"#;
 
     #[test]
     fn command_shape_matches_contract() {
@@ -643,11 +619,6 @@ mod tests {
                 OsString::from("127.0.0.2"),
                 OsString::from("--scheduler-port"),
                 OsString::from("0"),
-                OsString::from("--read-port"),
-                OsString::from("0"),
-                OsString::from("--control-port"),
-                OsString::from("0"),
-                OsString::from("--genesis-stdin"),
                 OsString::from("--readiness"),
                 OsString::from("stdout"),
             ]
@@ -667,6 +638,39 @@ mod tests {
                 .parse()
                 .expect("bug: address should parse")
         );
+        assert_eq!(
+            readiness.endpoints.read,
+            Some(
+                "127.0.0.1:12346"
+                    .parse()
+                    .expect("bug: address should parse")
+            )
+        );
+        assert_eq!(
+            readiness.endpoints.control,
+            Some(
+                "127.0.0.1:12347"
+                    .parse()
+                    .expect("bug: address should parse")
+            )
+        );
+    }
+
+    #[test]
+    fn readiness_line_accepts_v1_scheduler_only_endpoint() {
+        let readiness = parse_readiness_line("hogd-dev", V1_READY)
+            .expect("bug: v1 readiness payload should parse");
+
+        assert_eq!(readiness.status, "ready");
+        assert_eq!(readiness.network_id, "groundhog-local");
+        assert_eq!(
+            readiness.endpoints.scheduler,
+            "127.0.0.1:12345"
+                .parse()
+                .expect("bug: address should parse")
+        );
+        assert_eq!(readiness.endpoints.read, None);
+        assert_eq!(readiness.endpoints.control, None);
     }
 
     #[test]
@@ -729,7 +733,7 @@ mod tests {
             .with_startup_timeout(Duration::from_secs(2))
             .with_shutdown_grace(Duration::from_millis(500));
 
-        let mut process = start_fake_hogd_dev(&config, "ready", b"genesis\n")
+        let mut process = start_fake_hogd_dev(&config, "ready")
             .await
             .expect("bug: fake hogd-dev should start");
 
@@ -745,7 +749,7 @@ mod tests {
             .with_startup_timeout(Duration::from_secs(2))
             .with_shutdown_grace(Duration::from_millis(100));
 
-        let mut process = start_fake_hogd_dev(&config, "ignore-term", b"genesis\n")
+        let mut process = start_fake_hogd_dev(&config, "ignore-term")
             .await
             .expect("bug: fake hogd-dev should start");
 
@@ -762,7 +766,7 @@ mod tests {
             .with_startup_timeout(Duration::from_secs(2))
             .with_shutdown_grace(Duration::from_millis(100));
 
-        let mut process = start_fake_hogd_dev(&config, "spawn-helper-ignore-term", b"genesis\n")
+        let mut process = start_fake_hogd_dev(&config, "spawn-helper-ignore-term")
             .await
             .expect("bug: fake hogd-dev should start");
         let process_group = i32::try_from(process.child_id().expect("bug: child should have pid"))
@@ -777,7 +781,7 @@ mod tests {
     async fn fake_child_exit_before_readiness_is_typed() {
         let config = HogdDevConfig::default().with_startup_timeout(Duration::from_secs(2));
 
-        let err = start_fake_hogd_dev(&config, "exit-before-ready", b"genesis\n")
+        let err = start_fake_hogd_dev(&config, "exit-before-ready")
             .await
             .expect_err("bug: early child exit should fail");
 
@@ -791,7 +795,7 @@ mod tests {
     async fn startup_timeout_kills_fake_child() {
         let config = HogdDevConfig::default().with_startup_timeout(Duration::from_millis(100));
 
-        let err = start_fake_hogd_dev(&config, "timeout", b"genesis\n")
+        let err = start_fake_hogd_dev(&config, "timeout")
             .await
             .expect_err("bug: startup should time out");
 
@@ -805,7 +809,7 @@ mod tests {
     async fn oversized_readiness_line_is_rejected() {
         let config = HogdDevConfig::default().with_startup_timeout(Duration::from_secs(2));
 
-        let err = start_fake_hogd_dev(&config, "oversized-readiness", b"genesis\n")
+        let err = start_fake_hogd_dev(&config, "oversized-readiness")
             .await
             .expect_err("bug: oversized readiness should fail");
 
@@ -818,11 +822,10 @@ mod tests {
     async fn start_fake_hogd_dev(
         config: &HogdDevConfig,
         mode: &str,
-        genesis_payload: &[u8],
     ) -> Result<HogdDevProcess, NodeSupervisorError> {
         let spec =
             build_hogd_dev_spec(fake_hogd_dev_binary(), config).env(FAKE_HOGD_DEV_MODE_ENV, mode);
-        HogdDevProcess::start_with_spec(config, spec, genesis_payload).await
+        HogdDevProcess::start_with_spec(config, spec).await
     }
 
     async fn assert_process_group_exits(process_group: i32) {

@@ -146,8 +146,7 @@ async fn run_hogd_dev(
         .with_rpc_listen_address(format!("127.0.0.1:{port}"))
         .with_hogd_dev(hogd);
 
-    // PR 4a will replace this empty payload with deterministic dev genesis.
-    let handle = NodeSupervisorHandle::start(config, b"")
+    let handle = NodeSupervisorHandle::start(config)
         .await
         .map_err(|err| CliError::NodeSupervisor(err.to_string()))?;
     let rpc_addr = handle.rpc_addr();
@@ -161,17 +160,18 @@ async fn run_hogd_dev(
     } else {
         print.status("Groundhog Local Node (experimental)");
         print.status(format_args!("Chain: {}", readiness.network_id));
-        print.warn("backend: hogd-dev (planes stubbed; JSON-RPC methods return NOT_IMPLEMENTED)");
+        print.warn("backend: hogd-dev (chainTip live; submit/read methods return NOT_IMPLEMENTED)");
         print.status(format_args!("Listening on http://{rpc_addr}"));
         print.status(format_args!(
             "hogd-dev scheduler: {}",
             readiness.endpoints.scheduler
         ));
-        print.status(format_args!("hogd-dev read: {}", readiness.endpoints.read));
-        print.status(format_args!(
-            "hogd-dev control: {}",
-            readiness.endpoints.control
-        ));
+        if let Some(read) = readiness.endpoints.read {
+            print.status(format_args!("hogd-dev read: {read}"));
+        }
+        if let Some(control) = readiness.endpoints.control {
+            print.status(format_args!("hogd-dev control: {control}"));
+        }
     }
 
     let stop_signal = async {
@@ -289,21 +289,38 @@ fn hogd_dev_startup_payload(
             "stability": "experimental",
             "planes": {
                 "submit": "stub",
-                "chain": "stub",
+                "chain": "scheduler",
                 "read": "stub",
             },
             "limitations": [
-                "JSON-RPC methods return NOT_IMPLEMENTED until hogd-dev x23 adapters land"
+                "sendRawTransaction and read methods return NOT_IMPLEMENTED until more hogd-dev x23 adapters land"
             ],
-            "endpoints": {
-                "scheduler": readiness.endpoints.scheduler.to_string(),
-                "read": readiness.endpoints.read.to_string(),
-                "control": readiness.endpoints.control.to_string(),
-            },
+            "endpoints": hogd_dev_endpoints_payload(readiness),
         },
         "rpc_url": format!("http://{addr}"),
         "accounts": [],
     })
+}
+
+#[cfg(feature = "dev-node")]
+fn hogd_dev_endpoints_payload(
+    readiness: &groundhog_node_supervisor::HogdDevReadiness,
+) -> serde_json::Value {
+    let mut endpoints = serde_json::Map::new();
+    endpoints.insert(
+        "scheduler".into(),
+        serde_json::Value::String(readiness.endpoints.scheduler.to_string()),
+    );
+    if let Some(read) = readiness.endpoints.read {
+        endpoints.insert("read".into(), serde_json::Value::String(read.to_string()));
+    }
+    if let Some(control) = readiness.endpoints.control {
+        endpoints.insert(
+            "control".into(),
+            serde_json::Value::String(control.to_string()),
+        );
+    }
+    serde_json::Value::Object(endpoints)
 }
 
 #[cfg(all(test, feature = "dev-node"))]
@@ -382,12 +399,35 @@ mod tests {
         assert_eq!(payload["chain"], "groundhog-local");
         assert_eq!(payload["backend"]["kind"], "hogd_dev");
         assert_eq!(payload["backend"]["planes"]["submit"], "stub");
-        assert_eq!(payload["backend"]["planes"]["chain"], "stub");
+        assert_eq!(payload["backend"]["planes"]["chain"], "scheduler");
         assert_eq!(payload["backend"]["planes"]["read"], "stub");
         assert_eq!(
             payload["backend"]["endpoints"]["scheduler"],
             "127.0.0.1:12345"
         );
+        assert_eq!(payload["backend"]["endpoints"]["read"], "127.0.0.1:12346");
+        assert_eq!(
+            payload["backend"]["endpoints"]["control"],
+            "127.0.0.1:12347"
+        );
         assert!(payload["accounts"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn hogd_dev_startup_payload_allows_scheduler_only_readiness() {
+        let addr = "127.0.0.1:9545".parse().expect("bug: valid socket addr");
+        let readiness = parse_readiness_line(
+            "hogd-dev",
+            r#"{"status":"ready","network_id":"groundhog-local","endpoints":{"scheduler":"127.0.0.1:12345"}}"#,
+        )
+        .expect("bug: v1 readiness should parse");
+
+        let payload = hogd_dev_startup_payload(addr, &readiness);
+        assert_eq!(
+            payload["backend"]["endpoints"]["scheduler"],
+            "127.0.0.1:12345"
+        );
+        assert!(payload["backend"]["endpoints"].get("read").is_none());
+        assert!(payload["backend"]["endpoints"].get("control").is_none());
     }
 }

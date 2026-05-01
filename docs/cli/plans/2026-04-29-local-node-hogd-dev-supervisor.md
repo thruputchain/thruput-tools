@@ -9,6 +9,9 @@
   - durable hogd-owned subprocess architecture.
 - [`../specs/2026-04-29-hogd-dev-process-contract.md`](../specs/2026-04-29-hogd-dev-process-contract.md)
   - draft hogd-dev subprocess contract proposal.
+- [`2026-04-30-hogd-dev-binary-bootstrap.md`](2026-04-30-hogd-dev-binary-bootstrap.md)
+  - hogd-side bootstrap plan for the smallest credible `hogd-dev` v1
+    (gating PR 4a).
 
 ## Goal
 
@@ -138,7 +141,7 @@ Required v1 inputs:
 
 - listen host, default `127.0.0.1`;
 - port assignment strategy, preferably `0`/auto for internal x23 ports;
-- dev genesis payload on stdin, so no temp genesis file is required;
+- v1 genesis bootstrap over the scheduler x23 endpoint after readiness;
 - account count and storage-token amount;
 - v1 state is ephemeral; add a state directory flag only when persistence is
   real;
@@ -148,7 +151,8 @@ Required v1 inputs:
 Required v1 outputs:
 
 - machine-readable readiness signal;
-- endpoint list for scheduler/submit, read, and control services;
+- endpoint list for scheduler/submit, with read and control added when those
+  services exist;
 - child exit status;
 - clear startup failure messages.
 
@@ -310,12 +314,17 @@ not silently fall back to native-exec once the supervisor path is selected.
 
 - Decide the Rust x23 client crate boundary.
 - Add the minimal client needed for `ChainPlane::chain_tip`.
-- Start hogd-dev and prove `groundhog_chainTip` works end to end through the
-  JSON-RPC facade.
+- Add the supervisor-side genesis bootstrap: copy
+  `chuckd_scheduler::empty_genesis_config()` and the
+  `get_tip → NoGenesisBlock → load_genesis → re-tip` dance from chuckd-rs
+  (see `2026-04-30-hogd-dev-binary-bootstrap.md` for provenance). No
+  `chuckd-rs` Cargo dep — copy with provenance comments.
+- Start hogd-dev, run the genesis bootstrap, and prove `groundhog_chainTip`
+  works end to end through the JSON-RPC facade.
 
 Acceptance:
 
-- `groundhog node` starts hogd-dev and JSON-RPC;
+- `groundhog node` starts hogd-dev, loads empty genesis, and JSON-RPC;
 - `groundhog_chainTip` works;
 
 ### PR 4b - Submit RPC

@@ -7,6 +7,9 @@ use std::process::{ExitStatus, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
+
+#[cfg(all(feature = "dev-node", unix))]
+use groundhog_rpc_client::{GroundhogApiClient, HttpClientBuilder};
 use tempfile::TempDir;
 
 fn groundhog() -> Command {
@@ -231,18 +234,33 @@ fn node_hogd_dev_binary_json_starts_supervisor() {
     assert_eq!(payload["command"], "node");
     assert_eq!(payload["data"]["backend"]["kind"], "hogd_dev");
     assert_eq!(payload["data"]["backend"]["planes"]["submit"], "stub");
-    assert_eq!(payload["data"]["backend"]["planes"]["chain"], "stub");
+    assert_eq!(payload["data"]["backend"]["planes"]["chain"], "scheduler");
     assert_eq!(payload["data"]["backend"]["planes"]["read"], "stub");
-    assert_eq!(
-        payload["data"]["backend"]["endpoints"]["scheduler"],
-        "127.0.0.1:12345"
-    );
+    let scheduler = payload["data"]["backend"]["endpoints"]["scheduler"]
+        .as_str()
+        .expect("bug: scheduler endpoint should be a string");
     assert!(
-        payload["data"]["rpc_url"]
-            .as_str()
-            .expect("bug: rpc_url string")
-            .starts_with("http://127.0.0.1:")
+        scheduler.starts_with("127.0.0.1:"),
+        "scheduler endpoint should be loopback, got {scheduler}",
     );
+    let rpc_url = payload["data"]["rpc_url"]
+        .as_str()
+        .expect("bug: rpc_url string")
+        .to_string();
+    assert!(rpc_url.starts_with("http://127.0.0.1:"));
+
+    let tip = tokio::runtime::Runtime::new()
+        .expect("bug: tokio runtime should start")
+        .block_on(async {
+            let client = HttpClientBuilder::default()
+                .build(&rpc_url)
+                .expect("bug: JSON-RPC client should build");
+            client
+                .chain_tip()
+                .await
+                .expect("bug: CLI-started supervisor should serve chainTip")
+        });
+    assert_eq!(*tip.height, 0);
 
     let pid = read_pid_file(&pid_path);
     send_sigint(child.child());

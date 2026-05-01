@@ -41,10 +41,11 @@ Workspace crates in `crates/`:
   planning docs.
 - **node-supervisor** — `groundhog node` facade. Supervises a hogd-owned
   `hogd-dev` subprocess and embeds `rpc-server` to serve the public
-  JSON-RPC. Backend planes are stubbed (NotImplemented) until PR
-  4a/4b/4c land their x23 adapters. Durable local-node path; `dev-node`
-  remains the native-exec prototype until hogd-dev covers the normal
-  local development loop.
+  JSON-RPC. `chainTip` is backed by hogd-dev's scheduler endpoint;
+  submit/read remain stubbed (NotImplemented) until PR 4b/4c land their
+  x23 adapters. Durable local-node path; `dev-node` remains the
+  native-exec prototype until hogd-dev covers the normal local
+  development loop.
 - **e2e-tests** — ignored process-level JSON-RPC lifecycle smoke tests.
 - **bench** — benchmark harnesses.
 
@@ -281,6 +282,8 @@ includes test and bench code), so always use that flag locally too.
   the hogd-owned subprocess local-node backend (subprocess over FFI).
 - `docs/cli/plans/2026-04-29-local-node-hogd-dev-supervisor.md` —
   node-supervisor implementation plan and PR boundaries.
+- `docs/cli/plans/2026-04-30-hogd-dev-binary-bootstrap.md` — hogd-side
+  bootstrap plan for the smallest credible `hogd-dev` v1 binary.
 - `docs/cli/specs/2026-04-29-hogd-dev-process-contract.md` — draft
   hogd-dev subprocess contract.
 - `docs/cli/specs/2026-04-29-node-supervisor-x23-client-boundary.md` —

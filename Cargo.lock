@@ -1065,8 +1065,12 @@ dependencies = [
  "groundhog-rpc-api",
  "groundhog-rpc-api-types",
  "groundhog-rpc-server",
+ "groundhog-x23-transport",
+ "groundhog-xdr",
+ "groundhog_scheduler",
  "jsonrpsee",
  "libc",
+ "rpc_driver",
  "serde",
  "serde_json",
  "serial_test",
@@ -1074,6 +1078,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "xdr-common",
 ]
 
 [[package]]
