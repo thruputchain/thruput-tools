@@ -1,8 +1,8 @@
 # Local Node Hogd-Dev Supervisor Implementation Plan
 
 **Date:** 2026-04-29
-**Status:** Implementation in progress. PRs 1–4a shipped; PR 4b in progress;
-PRs 4c/5 ahead.
+**Status:** Implementation in progress. PRs 1–4b and the backend plane-status
+hoist shipped; PR 4c is gated on hogd-dev read endpoint topology; PR 5 ahead.
 
 **Companion to:**
 
@@ -46,6 +46,25 @@ The supervisor crate should own Rust-side lifecycle concerns:
   agent model. One supervised child process is enough for v1.
 - Do not implement snapshot/revert/time travel as Rust-side shims. Those are
   hogd-dev capabilities once the process owns all observable local-node state.
+
+## Coordination Discipline
+
+We can change code anywhere — `groundhog-rpc`, `hogd-dev`, broader hogd,
+`protocol-rs`, `xdrs`, `protocol` — but coordination cost varies sharply with
+reach. The hogd-dev submodule is isolated. Shared hogd code touches other
+teams' work. Protocol XDR changes affect every consumer (native C++,
+protocol-go, protocol-rs). Reason about reach explicitly:
+
+- When a smaller change reveals a desire for a wider one, document the case
+  in the relevant plan or spec doc even if we defer the wider change.
+- Prefer landing the smaller change behind a clean seam — a TODO with a
+  tracking issue, a typed `NotImplemented` return, a stubbed plane — rather
+  than half-building toward a foundation we may want to revisit.
+- Widen scope deliberately, once the design is well enough understood and
+  the right people are looped in.
+
+Goal: avoid encoding a foundation we'll regret without blocking on every
+adjacent improvement.
 
 ## References To Reuse Carefully
 
@@ -176,6 +195,15 @@ otherwise reserved for machine protocol. Ordinary logs go to stderr. If hogd
 owners choose a readiness file or control port instead, change PR 2 before
 writing tests against the fake child.
 
+Default contract: v1 hogd-dev advertises one `read` key multiplexing the
+indexer-side x23 services it exposes, if hogd owners agree that one listener
+can cleanly host the needed indexer service. If hogd-dev v1 needs to listen on
+multiple x23 services for the read plane (e.g., a separate block-store
+endpoint), enumerate them as additional named keys rather than overloading
+`read`. The single-key default matches the existing readiness contract and
+what gateway already consumes
+(`groundhog_indexer::IndexerBlockExplorer_IndexerBlockExplorer1_Client`).
+
 Required shutdown contract:
 
 - `SIGTERM` requests graceful shutdown;
@@ -193,24 +221,31 @@ Required shutdown contract:
 
 ## RPC Adapter Shape
 
-`groundhog-node-supervisor` should consume `groundhog-rpc-server` directly:
+`groundhog-node-supervisor` consumes `groundhog-rpc-server` directly:
 
 ```text
 GroundhogRpcServer<SubmitClient, ChainClient, ReadClient>
 ```
 
-Likely v1 mapping:
+The `SubmitPlane` / `ChainPlane` / `ReadPlane` traits in
+`crates/rpc-server/src/backend.rs` are the codified contract. The mapping
+below documents where each method terminates in hogd-dev's x23 services:
 
 - `SubmitPlane::submit_raw_transaction` -> scheduler/submit endpoint.
 - `ChainPlane::chain_tip` -> scheduler/readiness endpoint.
-- `ChainPlane::pending_transaction_count` -> real hogd-dev mempool count. If
-  hogd-dev cannot expose this, do not pretend parity; return `NotImplemented`
-  until the scheduler API exists.
+- `ChainPlane::pending_transaction_count` -> real hogd-dev mempool count once
+  hogd-dev exposes a count/size RPC. Until then, do not pretend parity; return
+  `NotImplemented`.
 - `ChainPlane::get_block_by_number` -> read endpoint once hogd-dev can answer.
 - `ReadPlane::transaction_receipt` -> read endpoint.
 - `ReadPlane::transaction_status` -> composite read endpoint, or a local
-  adapter that queries scheduler pending state then committed read state.
-- `ReadPlane::contract_events` -> read endpoint.
+  adapter that queries scheduler pending state then committed read state. A
+  scheduler-only pending probe is not enough for the public method because a
+  scheduler miss can mean either unknown or already committed.
+- `ReadPlane::contract_events` -> read/indexer endpoint. PR #39 settled the
+  JSON-RPC shape as paginated `getEvents(EventQuery) -> EventPage`, with
+  bounds validation in `groundhog-rpc-server`, so the supervisor adapter should
+  preserve that shape rather than inventing a local event-query API.
 
 Keep `sendRawTransaction` production-style by default: accepted into the local
 mempool path means the method returns the canonical hash; callers poll status
@@ -333,10 +368,12 @@ Acceptance:
 
 ### PR 4b - Submit RPC
 
-**Status:** In progress. The current Rust-side path can use
-`schedulercoord_submit_unvetted(ParallelSignedTransactionBatch)` on the
-advertised scheduler endpoint. Typed rejection mapping is limited by the
-current x23/protocol-rs shape; see protocol notes below.
+**Status:** ✅ Shipped in PR #40. `groundhog_sendRawTransaction` validates and
+hashes through `groundhog-rpc-server`, submits the signed transaction bytes to
+hogd-dev through `schedulercoord_submit_unvetted(ParallelSignedTransactionBatch)`,
+and returns the canonical transaction hash when the scheduler RPC succeeds.
+Typed rejection mapping is limited by the current x23/protocol-rs shape; see
+the typed-submit follow-up below.
 
 - Confirm or add the minimal hogd-dev submit contract first: the x23 method
   that accepts signed transaction bytes, its accepted/rejected outcomes, and
@@ -367,18 +404,92 @@ Protocol shape notes to discuss with hogd/protocol-rs owners:
 
 ### PR 4c - Read RPC
 
-- Backend plane-status reporting is now owned by `groundhog-node-supervisor`
-  through typed `PlaneStatus` / `BackendPlanes` startup metadata, so the CLI
-  does not produce submit/chain/read plane strings itself.
-- Implement receipts, events, block lookup, and transaction status.
-- If hogd-dev has separate pending and committed sources, make the supervisor
-  read adapter own the composite status flow: scheduler pending state first,
-  committed read state second.
+**Status:** The shared JSON-RPC/gateway read shape is mostly settled, but the
+hogd-dev supervisor path is blocked on hogd-dev advertising a read/indexer
+endpoint. PR #39 replaced the legacy event method with paginated
+`getEvents(EventQuery) -> EventPage`, flowed the indexer query/cursor/limit
+types through `api-types`, and added rpc-server bounds validation. PR #42 moved
+backend plane-status reporting into `groundhog-node-supervisor` through typed
+`PlaneStatus` / `BackendPlanes` startup metadata, so the CLI does not produce
+submit/chain/read plane strings itself.
+
+Per the **Coordination Discipline** section, PR 4c should aim to stay inside
+the hogd-dev submodule on the hogd side and reuse the existing indexer x23
+services unchanged. If a useful v1 read surface needs anything beyond
+`IndexerBlockExplorer_IndexerBlockExplorer1` and the existing scheduler
+`find_tx`, document the case but defer rather than reach into broader hogd
+or protocol XDR.
+
+- Implement receipts, events, and committed transaction status in the
+  supervisor once hogd-dev exposes the corresponding read surface. Events
+  should reuse the PR #39 `EventQuery` / `EventPage` contract directly.
+  Mirror the gateway's existing handlers
+  (`crates/gateway/src/handlers/{receipt,events}.rs`) — the pattern is
+  established.
+- Keep `ReadPlane` methods stubbed until the supervisor can answer the full
+  public semantics. In particular, do not return `Unknown` from
+  `getTransactionStatus` after only checking scheduler pending state; without
+  committed-state reach that result is ambiguous.
+- The supervisor read adapter owns the composite status flow per the
+  `ReadPlane::transaction_status` trait contract: scheduler pending state
+  first, indexer committed state second. Gateway already implements this at
+  `crates/gateway/src/handlers/receipt.rs`.
+- Match gateway degraded-mode semantics: scheduler failure may degrade pending
+  detection, but read/indexer failure is backend unavailable because committed
+  state is authoritative.
+- A scheduler-only `Pending` probe may be useful internally, but it should not
+  be the public `getTransactionStatus` implementation unless the API can also
+  represent "not pending, committed state unavailable".
+- `ChainPlane::get_block_by_number` returns `NotImplemented` in v1. Block
+  materialization in hogd-dev requires either a hogdb block source or a
+  coordinator-style block store, neither of which is in scope for the hogd-dev
+  submodule today. Defer; the public method stays stubbed until hogd grows
+  that surface.
 
 Acceptance:
 
+- receipts, events, and committed transaction status work end to end against a
+  real hogd-dev v1 binary advertising a read endpoint;
 - unknown tx status/receipt behavior matches conformance expectations;
 - current deploy/call loop either works or has a documented blocker.
+
+### Typed Submit Follow-Up
+
+**Status:** Cross-repo design track. Independent of PR 4c. The temporary
+Rust-side behavior maps scheduler submit RPC failure to backend unavailable
+because the current generated client exposes `submit_unvetted` as a `void`
+RPC and collapses semantic scheduler errors into generic x23 failure.
+
+Desired protocol shape:
+
+- Return a typed batch result from scheduler submit instead of `void`.
+- Preserve per-transaction outcomes, aligned with the submitted batch order,
+  because the gateway batches multiple client submissions into one scheduler
+  call and hogd already verifies auth per transaction.
+- Distinguish at least accepted, duplicate/idempotent success, permanent
+  rejection, retryable/backpressure, malformed batch, and internal failure.
+- Carry enough rejection detail to map JSON-RPC errors without treating
+  permanent invalid transactions as retryable backend outages.
+
+Gateway impact:
+
+- `SubmitSink::submit` cannot stay `Result<(), GatewayError>` once the
+  scheduler returns per-transaction outcomes. It needs a per-item result shape
+  so `BatchSubmitter` can fan out mixed accepted/rejected results accurately.
+- Duplicate should likely be treated as idempotent success for
+  `groundhog_sendRawTransaction`, returning the canonical hash.
+- Permanent auth rejection should map to `TxRejected` / `TxInvalid`, while
+  retryable scheduler conditions should remain retryable backend errors.
+- A scheduler result count mismatch is a backend/protocol bug and should map
+  to backend unavailable.
+
+Rollout order:
+
+- XDR/protocol PR to change or version the scheduler submit method.
+- hogd PR with C++ smoke coverage for accepted, mixed accepted/rejected,
+  malformed, and duplicate cases.
+- protocol-rs regeneration.
+- groundhog-rpc PR updating supervisor submit mapping and gateway batch fanout.
 
 ### PR 5 - Dev Control and Prototype Retirement
 
@@ -426,8 +537,24 @@ end-to-end or be explicitly removed/deferred from the public local-node promise.
 
 ## Recommended Next Action
 
-Validate the `SubmitPlane` wiring against a real hogd-dev binary, not only the
-fake scheduler fixture. If real semantic rejection still reaches Rust as a
-generic x23 `SystemError`, agree a typed protocol-rs submit result before
-depending on fine-grained `TxRejected`/retryable error behavior. Once accepted
-submit is proven end to end, move on to PR 4c read/status coverage.
+Track 2 (read plane). PR #39 settled the paginated event surface and read
+conformance shape, and plane-status reporting was hoisted in PR #42, so the
+supervisor side of PR 4c is shovel-ready once hogd-dev v1 advertises a
+read/indexer endpoint.
+
+Concrete next steps:
+
+1. Pin the v1 read-endpoint topology with hogd owners — the contract default
+   is one multiplexed `read` key (see Hogd-Dev Process Contract above).
+2. Grow hogd-dev v1 to listen on the existing hogd indexer x23 services and
+   advertise `read: <addr>` in the readiness JSON. Stay inside the hogd-dev
+   submodule; document any case for reaching into broader hogd before doing
+   so (see Coordination Discipline).
+3. Implement `HogdDevReadBackend` in `node-supervisor` mirroring the gateway's
+   handlers at `crates/gateway/src/handlers/{receipt,events}.rs`.
+4. Confirm `ChainPlane::get_block_by_number` stays stubbed `NotImplemented`
+   for v1; revisit when hogd grows a block source.
+
+Track 3 (typed submit) is independent. Open the Ryan conversation on outcome
+enum / wire shape / migration when there is bandwidth, but do not gate Track 2
+on it.
