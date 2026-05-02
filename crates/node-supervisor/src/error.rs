@@ -249,4 +249,24 @@ pub enum NodeSupervisorError {
         /// Scheduler result value.
         result: String,
     },
+
+    /// The supervisor could not connect to hogd-dev's indexer x23 endpoint.
+    #[error("failed to connect hogd-dev indexer endpoint {endpoint}: {source}")]
+    IndexerConnect {
+        /// Indexer endpoint advertised by hogd-dev readiness.
+        endpoint: std::net::SocketAddr,
+        /// x23 connection error.
+        #[source]
+        source: ConnectError,
+    },
+
+    /// A hogd-dev indexer RPC failed.
+    #[error("hogd-dev indexer RPC `{op}` failed: {source}")]
+    IndexerRpc {
+        /// Indexer RPC operation name.
+        op: &'static str,
+        /// x23 RPC error.
+        #[source]
+        source: rpc_driver::RpcError,
+    },
 }

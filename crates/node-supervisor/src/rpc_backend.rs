@@ -56,6 +56,22 @@ impl HogdDevSchedulerBackend {
     pub(crate) async fn ensure_dev_genesis(&self) -> Result<(), NodeSupervisorError> {
         ensure_dev_genesis(&self.scheduler).await
     }
+
+    /// Borrow the inner scheduler client for use by sibling backends
+    /// (e.g. the read backend's pending-tx probe).
+    // Used in read_backend.rs::HogdDevReadBackend::connect (T3) and server.rs (T4).
+    #[allow(dead_code)]
+    pub(crate) fn scheduler_client(&self) -> &SchedulerCoord_SchedulerCoord1_Client {
+        &self.scheduler
+    }
+
+    /// Construct from a pre-built scheduler client. Used only in unit tests
+    /// that need to pass a `HogdDevSchedulerBackend` without going through
+    /// the full `connect` path.
+    #[cfg(test)]
+    pub(crate) fn _new_for_test(scheduler: SchedulerCoord_SchedulerCoord1_Client) -> Self {
+        Self { scheduler }
+    }
 }
 
 #[async_trait]
