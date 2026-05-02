@@ -1,8 +1,8 @@
-//! hogd-dev x23 backend adapters for the public JSON-RPC facade.
+//! hogd-dev scheduler-backed adapters for the submit and chain planes.
 //!
-//! Chain and submit both use hogd-dev's advertised scheduler endpoint. Read
-//! and dev-control adapters stay stubbed until hogd-dev exposes the
-//! corresponding stable x23 surfaces.
+//! Both planes use hogd-dev's advertised scheduler endpoint. The read plane
+//! is implemented in [`crate::read_backend`] and backed by hogd-dev's indexer
+//! endpoint. Dev-control remains stubbed pending a hogd-dev stable x23 surface.
 
 use async_trait::async_trait;
 use groundhog_rpc_api_types::{
@@ -55,6 +55,20 @@ impl HogdDevSchedulerBackend {
     #[tracing::instrument(skip_all)]
     pub(crate) async fn ensure_dev_genesis(&self) -> Result<(), NodeSupervisorError> {
         ensure_dev_genesis(&self.scheduler).await
+    }
+
+    /// Borrow the inner scheduler client for use by sibling backends
+    /// (e.g. the read backend's pending-tx probe).
+    pub(crate) fn scheduler_client(&self) -> &SchedulerCoord_SchedulerCoord1_Client {
+        &self.scheduler
+    }
+
+    /// Construct from a pre-built scheduler client. Used only in unit tests
+    /// that need to pass a `HogdDevSchedulerBackend` without going through
+    /// the full `connect` path.
+    #[cfg(test)]
+    pub(crate) fn _new_for_test(scheduler: SchedulerCoord_SchedulerCoord1_Client) -> Self {
+        Self { scheduler }
     }
 }
 

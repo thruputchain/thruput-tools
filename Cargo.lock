@@ -1049,6 +1049,7 @@ dependencies = [
  "groundhog-rpc-server",
  "groundhog-x23-transport",
  "groundhog-xdr",
+ "groundhog_indexer",
  "groundhog_scheduler",
  "jsonrpsee",
  "libc",

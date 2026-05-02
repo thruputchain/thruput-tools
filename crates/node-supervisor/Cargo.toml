@@ -21,6 +21,7 @@ groundhog-rpc-api-types = { workspace = true }
 groundhog-rpc-server = { workspace = true }
 groundhog-x23-transport = { workspace = true }
 groundhog-xdr = { workspace = true }
+groundhog_indexer = { workspace = true }
 groundhog_scheduler = { workspace = true }
 jsonrpsee = { workspace = true }
 libc = { workspace = true }
