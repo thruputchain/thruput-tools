@@ -265,8 +265,9 @@ async fn start_rpc_server(
         .await
     } else {
         tracing::warn!(
-            "hogd-dev did not advertise a read endpoint; \
-             read plane is stubbed (getTransactionReceipt / getContractEvents return NotImplemented)"
+            "hogd-dev did not advertise a read endpoint; read plane is stubbed \
+             (getTransactionReceipt / getTransactionStatus / getContractEvents \
+              return NotImplemented)"
         );
         start_rpc_server_with_read(
             listen_address,

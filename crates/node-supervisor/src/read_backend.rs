@@ -129,9 +129,10 @@ impl ReadPlane for HogdDevReadBackend {
         &self,
         tx_hash: TxHash,
     ) -> Result<TransactionStatus, RpcServerError> {
+        let hash = tx_hash_to_signed(tx_hash);
+
         // 1. Check scheduler (best-effort — failure degrades to indexer-only).
-        let sched_hash = tx_hash_to_signed(tx_hash);
-        let batch: VecM<SignedTransactionHash> = VecM(vec![sched_hash]);
+        let batch: VecM<SignedTransactionHash> = VecM(vec![hash]);
         match self.scheduler.schedcoord_lookup_transactions(&batch).await {
             Ok(results) => {
                 if results.iter().next().is_some_and(Option::is_some) {
@@ -147,8 +148,7 @@ impl ReadPlane for HogdDevReadBackend {
         }
 
         // 2. Check indexer (authoritative for committed state).
-        let idx_hash = tx_hash_to_signed(tx_hash);
-        match self.indexer.get_transaction_info(&idx_hash).await {
+        match self.indexer.get_transaction_info(&hash).await {
             Ok(TxInfoResult::TxInfoFound { info }) => {
                 return Ok(TransactionStatus::Committed {
                     height: info.height,
