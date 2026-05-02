@@ -1009,4 +1009,67 @@ f0e12d9781957cdcc522f33e5d719b93c200381cff5bfb26a1ee8ce7874ffd485322cd5a0806605d
             "expected IndexerConnect error, got {err:?}",
         );
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn start_rolls_back_hogd_dev_when_indexer_rpc_fail_at_startup() {
+        // The `indexer-rpc-fail` fake mode returns a ProgramError even for the
+        // intro handshake. With the intro probe in HogdDevReadBackend::connect,
+        // this now fails at startup rather than at the first read call.
+        let err = start_fake_supervisor_expect_error("indexer-rpc-fail").await;
+
+        assert!(
+            matches!(
+                err,
+                NodeSupervisorError::IndexerRpc {
+                    op: "indexer_block_explorer_intro",
+                    ..
+                }
+            ),
+            "expected IndexerRpc error for intro, got {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn transaction_status_indexer_runtime_rpc_fail_surfaces_backend_unavailable() {
+        // The `indexer-runtime-rpc-fail` fake mode lets intro succeed but
+        // returns errors for all data-plane RPCs (get_transaction_info, etc).
+        // Startup should succeed; JSON-RPC calls should return a backend error.
+        let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "indexer-runtime-rpc-fail");
+        let hogd = HogdDevConfig::default()
+            .with_binary_path(fake_hogd_dev_binary())
+            .with_startup_timeout(Duration::from_secs(5))
+            .with_shutdown_grace(Duration::from_secs(2));
+        let config = NodeSupervisorConfig::default()
+            .with_rpc_listen_address("127.0.0.1:0")
+            .with_hogd_dev(hogd);
+
+        let handle = NodeSupervisorHandle::start(config)
+            .await
+            .expect("bug: supervisor should start when indexer intro succeeds");
+
+        let url = format!("http://{}", handle.rpc_addr());
+        let client = HttpClientBuilder::default()
+            .build(&url)
+            .expect("bug: jsonrpsee http client builds");
+
+        // Act: query a tx status; the fake indexer will fail the data-plane call.
+        let err = client
+            .request::<serde_json::Value, _>(
+                "groundhog_getTransactionStatus",
+                jsonrpsee::rpc_params![CANNED_HASH_A_HEX],
+            )
+            .await
+            .expect_err("bug: getTransactionStatus should error when indexer data-plane fails");
+
+        // Assert: error is a JSON-RPC call error (backend unavailable or
+        // internal), not a transport-level failure.
+        assert!(
+            matches!(&err, ClientError::Call(_)),
+            "expected a JSON-RPC call error from backend failure, got {err:?}",
+        );
+
+        handle.stop().await.expect("bug: clean shutdown");
+    }
 }

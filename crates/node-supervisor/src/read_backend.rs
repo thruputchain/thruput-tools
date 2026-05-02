@@ -12,7 +12,10 @@
 use std::{fmt, net::SocketAddr};
 
 use async_trait::async_trait;
-use groundhog_indexer::{IndexerBlockExplorer_IndexerBlockExplorer1_Client, TxInfoResult};
+use groundhog_indexer::{
+    IndexerBlockExplorer_IndexerBlockExplorer1_Client, IndexerBlockExplorerIntroOutcome, Protocol,
+    TxInfoOutcome, TxInfoResult,
+};
 use groundhog_rpc_api_types::{
     events::{EventPage, EventQuery, IdentifiedEvent},
     hex::{Hex0x, HexBytes, Topic},
@@ -23,7 +26,8 @@ use groundhog_rpc_server::{ReadPlane, RpcServerError};
 use groundhog_scheduler::sched_coord::SchedulerCoord_SchedulerCoord1_Client;
 use groundhog_x23_transport::connect;
 use groundhog_xdr::{
-    event::TxEmittedEvent, exec_result::ExecResult, transaction::SignedTransactionHash,
+    PROTOCOL_VERSION, event::TxEmittedEvent, exec_result::ExecResult,
+    transaction::SignedTransactionHash,
 };
 use xdr_common::VecM;
 
@@ -68,6 +72,27 @@ impl HogdDevReadBackend {
         )
         .await
         .map_err(|source| NodeSupervisorError::IndexerConnect { endpoint, source })?;
+
+        // Probe the indexer with an intro handshake to verify the endpoint
+        // is actually the expected indexer service and protocol version.
+        // A wrong endpoint (e.g. wrong port, wrong service) would be reported
+        // as full startup success but fail on every subsequent read call.
+        tracing::debug!(%endpoint, "probing hogd-dev indexer with intro handshake");
+        let protocol: Protocol = xdr_common::StringM(PROTOCOL_VERSION.as_bytes().to_vec());
+        let intro_outcome = indexer
+            .indexer_block_explorer_intro(&protocol)
+            .await
+            .map_err(|e| NodeSupervisorError::IndexerRpc {
+                op: "indexer_block_explorer_intro",
+                error: e.to_string(),
+            })?;
+
+        if intro_outcome != IndexerBlockExplorerIntroOutcome::IntroSuccess {
+            return Err(NodeSupervisorError::IndexerIntroRejected {
+                outcome: intro_outcome.0,
+            });
+        }
+
         Ok(Self {
             indexer,
             scheduler: scheduler_backend.scheduler_client().clone(),
@@ -110,7 +135,21 @@ impl ReadPlane for HogdDevReadBackend {
                     return_data: None,
                 }))
             }
-            _ => Ok(None),
+            TxInfoResult::Default { outcome } if outcome == TxInfoOutcome::TxInfoNotFound.0 => {
+                Ok(None)
+            }
+            TxInfoResult::Default { outcome } => {
+                tracing::warn!(%outcome, "unexpected TxInfoResult outcome from hogd-dev indexer");
+                Err(RpcServerError::BackendUnavailable(format!(
+                    "hogd-dev indexer returned unexpected outcome: {outcome}"
+                )))
+            }
+            _ => {
+                tracing::warn!("unknown TxInfoResult variant from hogd-dev indexer");
+                Err(RpcServerError::BackendUnavailable(
+                    "hogd-dev indexer returned unknown TxInfoResult variant".into(),
+                ))
+            }
         }
     }
 
@@ -154,7 +193,20 @@ impl ReadPlane for HogdDevReadBackend {
                     height: info.height,
                 });
             }
-            Ok(_) => {}
+            Ok(TxInfoResult::Default { outcome }) if outcome == TxInfoOutcome::TxInfoNotFound.0 => {
+            }
+            Ok(TxInfoResult::Default { outcome }) => {
+                tracing::warn!(%outcome, "unexpected TxInfoResult outcome from hogd-dev indexer");
+                return Err(RpcServerError::BackendUnavailable(format!(
+                    "hogd-dev indexer returned unexpected outcome: {outcome}"
+                )));
+            }
+            Ok(_) => {
+                tracing::warn!("unknown TxInfoResult variant from hogd-dev indexer");
+                return Err(RpcServerError::BackendUnavailable(
+                    "hogd-dev indexer returned unknown TxInfoResult variant".into(),
+                ));
+            }
             Err(e) => {
                 return Err(RpcServerError::BackendUnavailable(format!(
                     "hogd-dev indexer: {e}"

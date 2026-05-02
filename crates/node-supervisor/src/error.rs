@@ -259,4 +259,20 @@ pub enum NodeSupervisorError {
         #[source]
         source: ConnectError,
     },
+
+    /// A hogd-dev indexer RPC failed during startup probing.
+    #[error("hogd-dev indexer RPC `{op}` failed: {error}")]
+    IndexerRpc {
+        /// Indexer RPC operation name.
+        op: &'static str,
+        /// x23 RPC error message.
+        error: String,
+    },
+
+    /// The indexer rejected the intro handshake with a non-success outcome.
+    #[error("hogd-dev indexer intro rejected with outcome {outcome}")]
+    IndexerIntroRejected {
+        /// Raw outcome discriminant from the indexer.
+        outcome: i32,
+    },
 }

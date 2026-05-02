@@ -94,6 +94,7 @@ fn main() {
         Ok("ready-with-indexer") => run_with_indexer(FakeIndexerMode::Normal),
         Ok("indexer-connect-fail") => run_indexer_connect_fail(),
         Ok("indexer-rpc-fail") => run_with_indexer(FakeIndexerMode::RpcFail),
+        Ok("indexer-runtime-rpc-fail") => run_with_indexer(FakeIndexerMode::RuntimeRpcFail),
         _ => {}
     }
 }
@@ -471,8 +472,12 @@ fn start_fake_indexer(mode: FakeIndexerMode) -> FakeIndexerRuntime {
 enum FakeIndexerMode {
     /// Normal operation: serve canned committed set and event log.
     Normal,
-    /// Every RPC method returns a `ProgramError`.
+    /// Every RPC method (including intro) returns a `ProgramError`.
     RpcFail,
+    /// Intro succeeds but all data-plane RPCs (`get_transaction_info`,
+    /// `get_events`) return a `ProgramError`. Used to test runtime indexer
+    /// failures that occur after successful startup.
+    RuntimeRpcFail,
 }
 
 /// Committed tx set: maps `SignedTransactionHash` bytes to `TxInfo`.
@@ -607,6 +612,7 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for FakeIndexer {
         if self.mode == FakeIndexerMode::RpcFail {
             return Err(ProgramError::msg("fake indexer rpc-fail mode"));
         }
+        // RuntimeRpcFail: intro succeeds, data-plane RPCs fail.
         Ok(IndexerBlockExplorerIntroOutcome::IntroSuccess)
     }
 
@@ -615,7 +621,7 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for FakeIndexer {
         &self,
         arg0: SignedTransactionHash,
     ) -> Result<TxInfoResult, ProgramError> {
-        if self.mode == FakeIndexerMode::RpcFail {
+        if self.mode == FakeIndexerMode::RpcFail || self.mode == FakeIndexerMode::RuntimeRpcFail {
             return Err(ProgramError::msg("fake indexer rpc-fail mode"));
         }
         let key: [u8; 32] = arg0.into_inner();
@@ -629,7 +635,7 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for FakeIndexer {
 
     #[tracing::instrument(skip_all)]
     async fn get_events(&self, arg0: EventQuery) -> Result<EventPage, ProgramError> {
-        if self.mode == FakeIndexerMode::RpcFail {
+        if self.mode == FakeIndexerMode::RpcFail || self.mode == FakeIndexerMode::RuntimeRpcFail {
             return Err(ProgramError::msg("fake indexer rpc-fail mode"));
         }
         let (events, next_cursor) = self.resolve_event_page(&arg0.cursor.0)?;

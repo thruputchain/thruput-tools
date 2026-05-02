@@ -1,8 +1,8 @@
-//! hogd-dev x23 backend adapters for the public JSON-RPC facade.
+//! hogd-dev scheduler-backed adapters for the submit and chain planes.
 //!
-//! Chain and submit both use hogd-dev's advertised scheduler endpoint. Read
-//! and dev-control adapters stay stubbed until hogd-dev exposes the
-//! corresponding stable x23 surfaces.
+//! Both planes use hogd-dev's advertised scheduler endpoint. The read plane
+//! is implemented in [`crate::read_backend`] and backed by hogd-dev's indexer
+//! endpoint. Dev-control remains stubbed pending a hogd-dev stable x23 surface.
 
 use async_trait::async_trait;
 use groundhog_rpc_api_types::{
