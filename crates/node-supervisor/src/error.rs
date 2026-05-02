@@ -259,14 +259,4 @@ pub enum NodeSupervisorError {
         #[source]
         source: ConnectError,
     },
-
-    /// A hogd-dev indexer RPC failed.
-    #[error("hogd-dev indexer RPC `{op}` failed: {source}")]
-    IndexerRpc {
-        /// Indexer RPC operation name.
-        op: &'static str,
-        /// x23 RPC error.
-        #[source]
-        source: rpc_driver::RpcError,
-    },
 }
