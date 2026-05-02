@@ -54,6 +54,22 @@ pub enum PlaneStatus {
     Stub,
 }
 
+impl PlaneStatus {
+    pub const fn serves_committed_reads(self) -> bool {
+        match self {
+            Self::Indexer => true,
+            Self::Scheduler | Self::Stub => false,
+        }
+    }
+
+    pub const fn returns_not_implemented(self) -> bool {
+        match self {
+            Self::Stub => true,
+            Self::Scheduler | Self::Indexer => false,
+        }
+    }
+}
+
 /// Backend plane status advertised by the node supervisor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct BackendPlanes {
@@ -755,6 +771,16 @@ f0e12d9781957cdcc522f33e5d719b93c200381cff5bfb26a1ee8ce7874ffd485322cd5a0806605d
         let status = PlaneStatus::Stub;
         let json = serde_json::to_value(status).expect("bug: PlaneStatus serializes");
         assert_eq!(json, "stub");
+    }
+
+    #[test]
+    fn plane_status_read_predicates_match_known_planes() {
+        assert!(!PlaneStatus::Scheduler.serves_committed_reads());
+        assert!(!PlaneStatus::Scheduler.returns_not_implemented());
+        assert!(PlaneStatus::Indexer.serves_committed_reads());
+        assert!(!PlaneStatus::Indexer.returns_not_implemented());
+        assert!(!PlaneStatus::Stub.serves_committed_reads());
+        assert!(PlaneStatus::Stub.returns_not_implemented());
     }
 
     #[test]

@@ -138,7 +138,7 @@ async fn run_hogd_dev(
 ) -> Result<(), CliError> {
     use groundhog_node_supervisor::{
         HogdDevConfig, NodeSupervisorConfig, NodeSupervisorError, NodeSupervisorHandle,
-        PlaneStatus, SupervisorStop,
+        SupervisorStop,
     };
 
     let hogd = HogdDevConfig::default().with_binary_path(binary);
@@ -161,7 +161,7 @@ async fn run_hogd_dev(
     } else {
         print.status("Groundhog Local Node (experimental)");
         print.status(format_args!("Chain: {}", readiness.network_id));
-        if backend_planes.read == PlaneStatus::Indexer {
+        if backend_planes.read.serves_committed_reads() {
             print.warn("backend: hogd-dev (chainTip, submit, and reads live)");
         } else {
             print.warn(
@@ -308,8 +308,12 @@ fn hogd_dev_startup_payload(
 fn hogd_dev_limitations(
     backend_planes: groundhog_node_supervisor::BackendPlanes,
 ) -> Vec<&'static str> {
-    let mut limitations = vec!["snapshot/revert not supported", "time travel not supported"];
-    if backend_planes.read == groundhog_node_supervisor::PlaneStatus::Stub {
+    let mut limitations = vec![
+        "snapshot/revert not supported",
+        "time travel not supported",
+        "state is ephemeral; tmp dirs are removed on shutdown",
+    ];
+    if backend_planes.read.returns_not_implemented() {
         limitations.push("read methods return NOT_IMPLEMENTED until hogd-dev exposes read");
     }
     limitations
@@ -435,6 +439,10 @@ mod tests {
             &payload,
             "time travel not supported"
         ));
+        assert!(has_backend_limitation(
+            &payload,
+            "state is ephemeral; tmp dirs are removed on shutdown"
+        ));
         assert!(backend_limitations(&payload).iter().any(|value| {
             value
                 .as_str()
@@ -488,6 +496,10 @@ mod tests {
         assert!(has_backend_limitation(
             &payload,
             "time travel not supported"
+        ));
+        assert!(has_backend_limitation(
+            &payload,
+            "state is ephemeral; tmp dirs are removed on shutdown"
         ));
         assert!(backend_limitations(&payload).iter().all(|value| {
             !value
