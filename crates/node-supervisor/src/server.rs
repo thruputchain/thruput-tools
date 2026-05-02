@@ -254,6 +254,7 @@ async fn start_rpc_server(
 
     // Wire the read plane when hogd-dev advertises an indexer endpoint.
     if let Some(read_addr) = readiness.endpoints.read {
+        tracing::debug!(%read_addr, "connecting to hogd-dev indexer");
         let read = HogdDevReadBackend::connect(read_addr, &scheduler_backend).await?;
         start_rpc_server_with_read(
             listen_address,
