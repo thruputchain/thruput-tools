@@ -212,7 +212,7 @@ fn node_hogd_dev_binary_json_starts_supervisor() {
         .arg("0")
         .arg("--hogd-dev-binary")
         .arg(fake)
-        .env("GROUNDHOG_FAKE_HOGD_DEV_MODE", "ready")
+        .env("GROUNDHOG_FAKE_HOGD_DEV_MODE", "ready-with-indexer")
         .env("GROUNDHOG_FAKE_HOGD_DEV_PID_FILE", &pid_path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -235,7 +235,7 @@ fn node_hogd_dev_binary_json_starts_supervisor() {
     assert_eq!(payload["data"]["backend"]["kind"], "hogd_dev");
     assert_eq!(payload["data"]["backend"]["planes"]["submit"], "scheduler");
     assert_eq!(payload["data"]["backend"]["planes"]["chain"], "scheduler");
-    assert_eq!(payload["data"]["backend"]["planes"]["read"], "stub");
+    assert_eq!(payload["data"]["backend"]["planes"]["read"], "indexer");
     let scheduler = payload["data"]["backend"]["endpoints"]["scheduler"]
         .as_str()
         .expect("bug: scheduler endpoint should be a string");

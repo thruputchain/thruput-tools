@@ -59,8 +59,6 @@ impl HogdDevSchedulerBackend {
 
     /// Borrow the inner scheduler client for use by sibling backends
     /// (e.g. the read backend's pending-tx probe).
-    // Used in read_backend.rs::HogdDevReadBackend::connect (T3) and server.rs (T4).
-    #[allow(dead_code)]
     pub(crate) fn scheduler_client(&self) -> &SchedulerCoord_SchedulerCoord1_Client {
         &self.scheduler
     }

@@ -2,7 +2,8 @@
 //!
 //! Owns hogd-dev process supervision and the public JSON-RPC server. Backend
 //! adapters land by plane: chain and submit are backed by hogd-dev's scheduler
-//! endpoint while read remains stubbed.
+//! endpoint; read is backed by hogd-dev's indexer endpoint when advertised in
+//! readiness.
 
 use std::{future::Future, net::SocketAddr, process::ExitStatus};
 
@@ -13,7 +14,8 @@ use serde::Serialize;
 
 use crate::{
     HogdDevProcess, HogdDevReadiness, NodeSupervisorConfig, NodeSupervisorError,
-    rpc_backend::HogdDevSchedulerBackend, stub_backend::StubBackend,
+    read_backend::HogdDevReadBackend, rpc_backend::HogdDevSchedulerBackend,
+    stub_backend::StubBackend,
 };
 
 /// Why a [`NodeSupervisorHandle::stopped`] call returned.
@@ -249,8 +251,41 @@ async fn start_rpc_server(
 ) -> Result<StartedRpcServer, NodeSupervisorError> {
     let scheduler_backend = HogdDevSchedulerBackend::connect(readiness.endpoints.scheduler).await?;
     scheduler_backend.ensure_dev_genesis().await?;
-    let backend_planes = BackendPlanes::hogd_dev_scheduler_only();
 
+    // Wire the read plane when hogd-dev advertises an indexer endpoint.
+    if let Some(read_addr) = readiness.endpoints.read {
+        let read = HogdDevReadBackend::connect(read_addr, &scheduler_backend).await?;
+        start_rpc_server_with_read(
+            listen_address,
+            scheduler_backend,
+            read,
+            BackendPlanes::hogd_dev_full(),
+        )
+        .await
+    } else {
+        tracing::warn!(
+            "hogd-dev did not advertise a read endpoint; \
+             read plane is stubbed (getTransactionReceipt / getContractEvents return NotImplemented)"
+        );
+        start_rpc_server_with_read(
+            listen_address,
+            scheduler_backend,
+            StubBackend::new(),
+            BackendPlanes::hogd_dev_scheduler_only(),
+        )
+        .await
+    }
+}
+
+async fn start_rpc_server_with_read<R>(
+    listen_address: &str,
+    scheduler_backend: HogdDevSchedulerBackend,
+    read: R,
+    backend_planes: BackendPlanes,
+) -> Result<StartedRpcServer, NodeSupervisorError>
+where
+    R: groundhog_rpc_server::ReadPlane,
+{
     let server = Server::builder()
         .build(listen_address)
         .await
@@ -262,15 +297,10 @@ async fn start_rpc_server(
         .local_addr()
         .map_err(|source| NodeSupervisorError::RpcLocalAddr { source })?;
 
-    tracing::warn!(
-        "node supervisor read plane is stubbed; \
-         chainTip and sendRawTransaction are backed by hogd-dev scheduler"
-    );
-
     let core_rpc = GroundhogRpcServer::new(
         scheduler_backend.clone(),
         scheduler_backend,
-        StubBackend::new(),
+        read,
         RpcServerConfig::default(),
     );
     let mut module = RpcModule::new(());
@@ -302,7 +332,7 @@ mod tests {
 
     use groundhog_rpc_api::GroundhogApiClient;
     use groundhog_rpc_api_types::error::codes;
-    use jsonrpsee::core::ClientError;
+    use jsonrpsee::core::{ClientError, client::ClientT};
     use jsonrpsee::http_client::HttpClientBuilder;
     use serial_test::serial;
     use tempfile::TempDir;
@@ -743,5 +773,238 @@ f0e12d9781957cdcc522f33e5d719b93c200381cff5bfb26a1ee8ce7874ffd485322cd5a0806605d
             "read": "indexer"
         });
         assert_eq!(json, expected);
+    }
+
+    // -----------------------------------------------------------------------
+    // Full read-plane integration tests (requires `ready-with-indexer` mode)
+    // -----------------------------------------------------------------------
+
+    /// Canned tx hashes from the fake indexer's committed set.
+    /// Mirrors the constants in `tests/fixtures/fake_hogd_dev.rs`.
+    const CANNED_HASH_A_HEX: &str =
+        "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const CANNED_HASH_UNKNOWN_HEX: &str =
+        "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+    const CANNED_HEIGHT_A: i64 = 5;
+
+    #[tokio::test]
+    #[serial]
+    async fn start_with_indexer_reports_hogd_dev_full_backend_planes() {
+        let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "ready-with-indexer");
+        let hogd = HogdDevConfig::default()
+            .with_binary_path(fake_hogd_dev_binary())
+            .with_startup_timeout(Duration::from_secs(5))
+            .with_shutdown_grace(Duration::from_secs(2));
+        let config = NodeSupervisorConfig::default()
+            .with_rpc_listen_address("127.0.0.1:0")
+            .with_hogd_dev(hogd);
+        let handle = NodeSupervisorHandle::start(config)
+            .await
+            .expect("bug: supervisor should start against fake hogd-dev with indexer");
+
+        assert_eq!(
+            handle.backend_planes(),
+            BackendPlanes::hogd_dev_full(),
+            "supervisor with indexer should report hogd_dev_full backend planes"
+        );
+
+        handle.stop().await.expect("bug: clean shutdown");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn transaction_status_committed_returns_committed_with_correct_height() {
+        // Arrange: start supervisor against fake that has both scheduler + indexer.
+        // The fake scheduler returns empty (no pending), the fake indexer has
+        // CANNED_TX_HASH_A committed at CANNED_HEIGHT_A.
+        let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "ready-with-indexer");
+        let hogd = HogdDevConfig::default()
+            .with_binary_path(fake_hogd_dev_binary())
+            .with_startup_timeout(Duration::from_secs(5))
+            .with_shutdown_grace(Duration::from_secs(2));
+        let config = NodeSupervisorConfig::default()
+            .with_rpc_listen_address("127.0.0.1:0")
+            .with_hogd_dev(hogd);
+        let handle = NodeSupervisorHandle::start(config)
+            .await
+            .expect("bug: supervisor should start");
+        let url = format!("http://{}", handle.rpc_addr());
+
+        let client = HttpClientBuilder::default()
+            .build(&url)
+            .expect("bug: jsonrpsee http client builds");
+
+        // Act: query status for a canned committed hash.
+        let status: serde_json::Value = client
+            .request(
+                "groundhog_getTransactionStatus",
+                jsonrpsee::rpc_params![CANNED_HASH_A_HEX],
+            )
+            .await
+            .expect("bug: getTransactionStatus should succeed");
+
+        // Assert: status field is "committed", height matches.
+        assert_eq!(
+            status["status"], "committed",
+            "expected committed status for known tx, got {status}"
+        );
+        assert_eq!(
+            status["height"], CANNED_HEIGHT_A,
+            "committed status height should be CANNED_HEIGHT_A"
+        );
+
+        handle.stop().await.expect("bug: clean shutdown");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn transaction_status_unknown_hash_returns_unknown() {
+        // Arrange
+        let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "ready-with-indexer");
+        let hogd = HogdDevConfig::default()
+            .with_binary_path(fake_hogd_dev_binary())
+            .with_startup_timeout(Duration::from_secs(5))
+            .with_shutdown_grace(Duration::from_secs(2));
+        let config = NodeSupervisorConfig::default()
+            .with_rpc_listen_address("127.0.0.1:0")
+            .with_hogd_dev(hogd);
+        let handle = NodeSupervisorHandle::start(config)
+            .await
+            .expect("bug: supervisor should start");
+        let url = format!("http://{}", handle.rpc_addr());
+
+        let client = HttpClientBuilder::default()
+            .build(&url)
+            .expect("bug: jsonrpsee http client builds");
+
+        // Act: query status for an unknown hash.
+        let status: serde_json::Value = client
+            .request(
+                "groundhog_getTransactionStatus",
+                jsonrpsee::rpc_params![CANNED_HASH_UNKNOWN_HEX],
+            )
+            .await
+            .expect("bug: getTransactionStatus should succeed for unknown hash");
+
+        // Assert: status field is "unknown".
+        assert_eq!(
+            status["status"], "unknown",
+            "expected unknown status for non-canned hash, got {status}"
+        );
+
+        handle.stop().await.expect("bug: clean shutdown");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn transaction_receipt_committed_returns_some() {
+        // Arrange
+        let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "ready-with-indexer");
+        let hogd = HogdDevConfig::default()
+            .with_binary_path(fake_hogd_dev_binary())
+            .with_startup_timeout(Duration::from_secs(5))
+            .with_shutdown_grace(Duration::from_secs(2));
+        let config = NodeSupervisorConfig::default()
+            .with_rpc_listen_address("127.0.0.1:0")
+            .with_hogd_dev(hogd);
+        let handle = NodeSupervisorHandle::start(config)
+            .await
+            .expect("bug: supervisor should start");
+        let url = format!("http://{}", handle.rpc_addr());
+
+        let client = HttpClientBuilder::default()
+            .build(&url)
+            .expect("bug: jsonrpsee http client builds");
+
+        // Act: request receipt for a canned committed hash.
+        let receipt: serde_json::Value = client
+            .request(
+                "groundhog_getTransactionReceipt",
+                jsonrpsee::rpc_params![CANNED_HASH_A_HEX],
+            )
+            .await
+            .expect("bug: getTransactionReceipt should succeed");
+
+        // Assert: receipt is non-null, tx_hash and height round-trip correctly.
+        assert!(
+            !receipt.is_null(),
+            "receipt should be non-null for committed tx"
+        );
+        assert_eq!(
+            receipt["height"], CANNED_HEIGHT_A,
+            "receipt height should be CANNED_HEIGHT_A"
+        );
+        assert_eq!(
+            receipt["txHash"].as_str().unwrap_or("").to_lowercase(),
+            CANNED_HASH_A_HEX,
+            "receipt txHash should round-trip"
+        );
+
+        handle.stop().await.expect("bug: clean shutdown");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn contract_events_first_page_returns_two_events() {
+        // Arrange
+        let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "ready-with-indexer");
+        let hogd = HogdDevConfig::default()
+            .with_binary_path(fake_hogd_dev_binary())
+            .with_startup_timeout(Duration::from_secs(5))
+            .with_shutdown_grace(Duration::from_secs(2));
+        let config = NodeSupervisorConfig::default()
+            .with_rpc_listen_address("127.0.0.1:0")
+            .with_hogd_dev(hogd);
+        let handle = NodeSupervisorHandle::start(config)
+            .await
+            .expect("bug: supervisor should start");
+        let url = format!("http://{}", handle.rpc_addr());
+
+        let client = HttpClientBuilder::default()
+            .build(&url)
+            .expect("bug: jsonrpsee http client builds");
+
+        // Build a minimal EventQuery (first page, no filters).
+        // Serialization shapes:
+        //   - `IterationOrder` is a transparent i32 (0 = ascending)
+        //   - `BlockAnchor` unit variants serialize as strings ("AnchorAtBeginning")
+        //   - `PaginationCursor` (BytesM) serializes as hex string; "" = empty
+        let query = serde_json::json!({
+            "filters": [],
+            "order": 0,
+            "anchor": "AnchorAtBeginning",
+            "cursor": "",
+            "limit": 10
+        });
+
+        // Act
+        let page: serde_json::Value = client
+            .request("groundhog_getEvents", jsonrpsee::rpc_params![query])
+            .await
+            .expect("bug: getEvents should succeed");
+
+        // Assert: first page has 2 events and a non-empty cursor.
+        let events = page["events"]
+            .as_array()
+            .expect("bug: events should be array");
+        assert_eq!(events.len(), 2, "first event page should contain 2 events");
+        let cursor = page["cursor"].as_str().unwrap_or("");
+        assert!(
+            cursor.len() > 2,
+            "first page cursor should be non-empty (got {cursor:?})"
+        );
+
+        handle.stop().await.expect("bug: clean shutdown");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn start_rolls_back_hogd_dev_when_indexer_connect_fails() {
+        let err = start_fake_supervisor_expect_error("indexer-connect-fail").await;
+
+        assert!(
+            matches!(err, NodeSupervisorError::IndexerConnect { .. }),
+            "expected IndexerConnect error, got {err:?}",
+        );
     }
 }

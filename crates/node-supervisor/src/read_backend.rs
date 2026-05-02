@@ -29,14 +29,8 @@ use xdr_common::VecM;
 
 use crate::{NodeSupervisorError, rpc_backend::HogdDevSchedulerBackend};
 
-// These items are wired into `server.rs` in the follow-on T4 PR. Silence
-// `dead_code` for this PR so `-D warnings` stays clean without disabling
-// the global lint.
-#[allow(dead_code)]
 const INDEXER_POOL_SIZE: usize = 2;
-#[allow(dead_code)]
 const TOPIC_SIZE: usize = 32;
-#[allow(dead_code)]
 const MAX_TOPICS: u32 = 3;
 
 /// Indexer-backed read plane for hogd-dev.
@@ -44,8 +38,6 @@ const MAX_TOPICS: u32 = 3;
 /// Implements the `ReadPlane` trait: receipts and events come from the indexer;
 /// pending-tx detection for `transaction_status` borrows the shared scheduler
 /// client from the chain/submit backend.
-// Constructed in server.rs in the T4 follow-on PR; suppress dead_code until then.
-#[allow(dead_code)]
 #[derive(Clone)]
 pub(crate) struct HogdDevReadBackend {
     indexer: IndexerBlockExplorer_IndexerBlockExplorer1_Client,
@@ -64,8 +56,6 @@ impl HogdDevReadBackend {
     ///
     /// Fails hard if the indexer endpoint is unreachable — the supervisor
     /// should not start if its child's read endpoint is down.
-    // Called from server.rs in the T4 follow-on PR; suppress dead_code until then.
-    #[allow(dead_code)]
     pub(crate) async fn connect(
         endpoint: SocketAddr,
         scheduler_backend: &HogdDevSchedulerBackend,
