@@ -62,14 +62,6 @@ impl PlaneStatus {
             Self::Scheduler | Self::Stub => false,
         }
     }
-
-    /// Returns true when this plane is intentionally stubbed by the supervisor.
-    pub const fn is_stubbed(self) -> bool {
-        match self {
-            Self::Stub => true,
-            Self::Scheduler | Self::Indexer => false,
-        }
-    }
 }
 
 /// Backend plane status advertised by the node supervisor.
@@ -778,11 +770,8 @@ f0e12d9781957cdcc522f33e5d719b93c200381cff5bfb26a1ee8ce7874ffd485322cd5a0806605d
     #[test]
     fn plane_status_read_predicates_match_known_planes() {
         assert!(!PlaneStatus::Scheduler.is_indexer_backed());
-        assert!(!PlaneStatus::Scheduler.is_stubbed());
         assert!(PlaneStatus::Indexer.is_indexer_backed());
-        assert!(!PlaneStatus::Indexer.is_stubbed());
         assert!(!PlaneStatus::Stub.is_indexer_backed());
-        assert!(PlaneStatus::Stub.is_stubbed());
     }
 
     #[test]
