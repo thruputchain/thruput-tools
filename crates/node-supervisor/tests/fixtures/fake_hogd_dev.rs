@@ -573,26 +573,26 @@ impl FakeIndexer {
     }
 
     /// Find the page to return based on the request cursor.
-    fn resolve_event_page(&self, cursor: &[u8]) -> &(Vec<IdentifiedEvent>, Vec<u8>) {
+    /// Returns an error if the cursor does not match any known page continuation.
+    fn resolve_event_page(
+        &self,
+        cursor: &[u8],
+    ) -> Result<&(Vec<IdentifiedEvent>, Vec<u8>), ProgramError> {
         if cursor.is_empty() {
             // Initial call: return page 0.
-            &self.event_pages[0]
+            Ok(&self.event_pages[0])
         } else {
             // Continuation: find the page whose cursor matches the incoming cursor.
-            // For simplicity, treat any non-empty cursor that isn't the page-2
-            // sentinel as "last page already returned".
             self.event_pages
                 .iter()
                 .enumerate()
                 .find(|(_, (_, next))| !next.is_empty() && next.as_slice() == cursor)
-                .map_or_else(
-                    || {
-                        self.event_pages
-                            .last()
-                            .expect("bug: event_pages is non-empty")
-                    },
-                    |(i, _)| &self.event_pages[i + 1],
-                )
+                .map(|(i, _)| &self.event_pages[i + 1])
+                .ok_or_else(|| {
+                    ProgramError::msg(
+                        "unknown event cursor; fake indexer only handles canned dataset",
+                    )
+                })
         }
     }
 }
@@ -632,7 +632,7 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for FakeIndexer {
         if self.mode == FakeIndexerMode::RpcFail {
             return Err(ProgramError::msg("fake indexer rpc-fail mode"));
         }
-        let (events, next_cursor) = self.resolve_event_page(&arg0.cursor.0);
+        let (events, next_cursor) = self.resolve_event_page(&arg0.cursor.0)?;
         Ok(EventPage {
             events: VecM(events.clone()),
             cursor: BytesM(next_cursor.clone()),
@@ -882,6 +882,25 @@ mod tests {
         assert_eq!(
             *page2.events.0[0].proposed_tx_hash, CANNED_TX_HASH_B,
             "page 2 event should reference tx hash B"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_events_unknown_cursor_returns_rpc_error() {
+        // Arrange
+        let (addr, _handle) = start_test_indexer(FakeIndexerMode::Normal).await;
+        let client = make_client(addr).await;
+        let unknown_cursor = b"unknown-cursor-value";
+
+        // Act: attempt to fetch with a cursor that doesn't match any known page
+        let result = client
+            .get_events(&event_query_with_cursor(unknown_cursor))
+            .await;
+
+        // Assert: should return an RPC error, not silently return the last page
+        assert!(
+            matches!(result, Err(RpcError::SystemError)),
+            "unknown cursor should return RpcError::SystemError, got {result:?}"
         );
     }
 
