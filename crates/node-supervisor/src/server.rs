@@ -46,6 +46,8 @@ pub enum SupervisorStop {
 pub enum PlaneStatus {
     /// The plane is backed by hogd-dev's scheduler x23 endpoint.
     Scheduler,
+    /// The plane is backed by hogd-dev's indexer x23 endpoint.
+    Indexer,
     /// The plane is intentionally stubbed and returns `NotImplemented`.
     Stub,
 }
@@ -68,6 +70,15 @@ impl BackendPlanes {
             submit: PlaneStatus::Scheduler,
             chain: PlaneStatus::Scheduler,
             read: PlaneStatus::Stub,
+        }
+    }
+
+    /// All three planes backed by hogd-dev's scheduler and indexer x23 endpoints.
+    pub const fn hogd_dev_full() -> Self {
+        Self {
+            submit: PlaneStatus::Scheduler,
+            chain: PlaneStatus::Scheduler,
+            read: PlaneStatus::Indexer,
         }
     }
 }
@@ -691,5 +702,46 @@ f0e12d9781957cdcc522f33e5d719b93c200381cff5bfb26a1ee8ce7874ffd485322cd5a0806605d
         );
 
         drop(listener);
+    }
+
+    #[test]
+    fn plane_status_scheduler_serializes_to_scheduler_string() {
+        let status = PlaneStatus::Scheduler;
+        let json = serde_json::to_value(status).expect("bug: PlaneStatus serializes");
+        assert_eq!(json, "scheduler");
+    }
+
+    #[test]
+    fn plane_status_indexer_serializes_to_indexer_string() {
+        let status = PlaneStatus::Indexer;
+        let json = serde_json::to_value(status).expect("bug: PlaneStatus serializes");
+        assert_eq!(json, "indexer");
+    }
+
+    #[test]
+    fn plane_status_stub_serializes_to_stub_string() {
+        let status = PlaneStatus::Stub;
+        let json = serde_json::to_value(status).expect("bug: PlaneStatus serializes");
+        assert_eq!(json, "stub");
+    }
+
+    #[test]
+    fn backend_planes_hogd_dev_full_constructor() {
+        let planes = BackendPlanes::hogd_dev_full();
+        assert_eq!(planes.submit, PlaneStatus::Scheduler);
+        assert_eq!(planes.chain, PlaneStatus::Scheduler);
+        assert_eq!(planes.read, PlaneStatus::Indexer);
+    }
+
+    #[test]
+    fn backend_planes_hogd_dev_full_serializes_correctly() {
+        let planes = BackendPlanes::hogd_dev_full();
+        let json = serde_json::to_value(planes).expect("bug: BackendPlanes serializes");
+        let expected = serde_json::json!({
+            "submit": "scheduler",
+            "chain": "scheduler",
+            "read": "indexer"
+        });
+        assert_eq!(json, expected);
     }
 }
