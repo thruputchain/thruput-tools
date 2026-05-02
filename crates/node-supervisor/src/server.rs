@@ -50,8 +50,18 @@ pub enum PlaneStatus {
     Scheduler,
     /// The plane is backed by hogd-dev's indexer x23 endpoint.
     Indexer,
-    /// The plane is intentionally stubbed and returns `NotImplemented`.
+    /// The plane is intentionally served by the supervisor stub.
     Stub,
+}
+
+impl PlaneStatus {
+    /// Returns true when this plane is backed by hogd-dev's indexer endpoint.
+    pub const fn is_indexer_backed(self) -> bool {
+        match self {
+            Self::Indexer => true,
+            Self::Scheduler | Self::Stub => false,
+        }
+    }
 }
 
 /// Backend plane status advertised by the node supervisor.
@@ -755,6 +765,13 @@ f0e12d9781957cdcc522f33e5d719b93c200381cff5bfb26a1ee8ce7874ffd485322cd5a0806605d
         let status = PlaneStatus::Stub;
         let json = serde_json::to_value(status).expect("bug: PlaneStatus serializes");
         assert_eq!(json, "stub");
+    }
+
+    #[test]
+    fn plane_status_read_predicates_match_known_planes() {
+        assert!(!PlaneStatus::Scheduler.is_indexer_backed());
+        assert!(PlaneStatus::Indexer.is_indexer_backed());
+        assert!(!PlaneStatus::Stub.is_indexer_backed());
     }
 
     #[test]

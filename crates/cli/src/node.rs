@@ -161,9 +161,13 @@ async fn run_hogd_dev(
     } else {
         print.status("Groundhog Local Node (experimental)");
         print.status(format_args!("Chain: {}", readiness.network_id));
-        print.warn(
-            "backend: hogd-dev (chainTip and submit live; read methods return NOT_IMPLEMENTED)",
-        );
+        if backend_planes.read.is_indexer_backed() {
+            print.warn("backend: hogd-dev (chainTip, submit, and reads live)");
+        } else {
+            print.warn(
+                "backend: hogd-dev (chainTip and submit live; read methods return NOT_IMPLEMENTED)",
+            );
+        }
         print.status(format_args!("Listening on http://{rpc_addr}"));
         print.status(format_args!(
             "hogd-dev scheduler: {}",
@@ -292,9 +296,6 @@ fn hogd_dev_startup_payload(
             "kind": "hogd_dev",
             "stability": "experimental",
             "planes": backend_planes,
-            "limitations": [
-                "read methods return NOT_IMPLEMENTED until more hogd-dev x23 adapters land"
-            ],
             "endpoints": hogd_dev_endpoints_payload(readiness),
         },
         "rpc_url": format!("http://{addr}"),
@@ -402,6 +403,7 @@ mod tests {
         let expected_planes = serde_json::to_value(BackendPlanes::hogd_dev_scheduler_only())
             .expect("bug: backend planes should serialize");
         assert_eq!(payload["backend"]["planes"], expected_planes);
+        assert!(payload["backend"].get("limitations").is_none());
         assert_eq!(
             payload["backend"]["endpoints"]["scheduler"],
             "127.0.0.1:12345"
@@ -431,5 +433,21 @@ mod tests {
         );
         assert!(payload["backend"]["endpoints"].get("read").is_none());
         assert!(payload["backend"]["endpoints"].get("control").is_none());
+    }
+
+    #[test]
+    fn hogd_dev_startup_payload_reports_indexer_read_plane() {
+        let addr = "127.0.0.1:9545".parse().expect("bug: valid socket addr");
+        let readiness = parse_readiness_line(
+            "hogd-dev",
+            r#"{"status":"ready","network_id":"groundhog-local","endpoints":{"scheduler":"127.0.0.1:12345","read":"127.0.0.1:12346"}}"#,
+        )
+        .expect("bug: readiness should parse");
+
+        let payload = hogd_dev_startup_payload(addr, &readiness, BackendPlanes::hogd_dev_full());
+        let expected_planes =
+            serde_json::to_value(BackendPlanes::hogd_dev_full()).expect("bug: planes serialize");
+        assert_eq!(payload["backend"]["planes"], expected_planes);
+        assert!(payload["backend"].get("limitations").is_none());
     }
 }
