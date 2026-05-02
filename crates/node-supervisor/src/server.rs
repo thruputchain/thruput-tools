@@ -14,8 +14,8 @@ use serde::Serialize;
 
 use crate::{
     HogdDevProcess, HogdDevReadiness, NodeSupervisorConfig, NodeSupervisorError,
-    read_backend::HogdDevReadBackend, rpc_backend::HogdDevSchedulerBackend,
-    stub_backend::StubBackend,
+    block_driver::BlockDriverTask, read_backend::HogdDevReadBackend,
+    rpc_backend::HogdDevSchedulerBackend, stub_backend::StubBackend,
 };
 
 /// Why a [`NodeSupervisorHandle::stopped`] call returned.
@@ -109,6 +109,7 @@ pub struct NodeSupervisorHandle {
     rpc_handle: ServerHandle,
     rpc_addr: SocketAddr,
     backend_planes: BackendPlanes,
+    block_driver: Option<BlockDriverTask>,
 }
 
 impl NodeSupervisorHandle {
@@ -130,6 +131,7 @@ impl NodeSupervisorHandle {
                     rpc_handle: started.handle,
                     rpc_addr: started.addr,
                     backend_planes: started.backend_planes,
+                    block_driver: Some(started.block_driver),
                 })
             }
             Err(error) => {
@@ -217,6 +219,7 @@ impl NodeSupervisorHandle {
                     tracing::debug!(%error, "JSON-RPC server already stopped");
                 }
                 self.rpc_handle.clone().stopped().await;
+                self.stop_block_driver().await;
                 Ok(SupervisorStop::HogdExited(status))
             }
             () = rpc_done => {
@@ -251,7 +254,14 @@ impl NodeSupervisorHandle {
             tracing::debug!(%error, "JSON-RPC server already stopped");
         }
         self.rpc_handle.clone().stopped().await;
+        self.stop_block_driver().await;
         self.hogd.stop().await
+    }
+
+    async fn stop_block_driver(&mut self) {
+        if let Some(block_driver) = self.block_driver.take() {
+            block_driver.stop().await;
+        }
     }
 }
 
@@ -309,6 +319,8 @@ where
         .local_addr()
         .map_err(|source| NodeSupervisorError::RpcLocalAddr { source })?;
 
+    let block_driver = BlockDriverTask::start(scheduler_backend.scheduler_client().clone());
+    let scheduler_backend = scheduler_backend.with_block_driver(block_driver.trigger());
     let core_rpc = GroundhogRpcServer::new(
         scheduler_backend.clone(),
         scheduler_backend,
@@ -328,6 +340,7 @@ where
         handle: rpc_handle,
         addr: rpc_addr,
         backend_planes,
+        block_driver,
     })
 }
 
@@ -336,6 +349,7 @@ struct StartedRpcServer {
     handle: ServerHandle,
     addr: SocketAddr,
     backend_planes: BackendPlanes,
+    block_driver: BlockDriverTask,
 }
 
 #[cfg(test)]
@@ -530,6 +544,52 @@ f0e12d9781957cdcc522f33e5d719b93c200381cff5bfb26a1ee8ce7874ffd485322cd5a0806605d
             wait_pid_gone(pid, Instant::now() + Duration::from_secs(2)).await,
             "fake hogd-dev pid {pid} still alive after stop()",
         );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn submit_wakes_hogd_dev_block_driver() {
+        let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "automine");
+
+        let hogd = HogdDevConfig::default()
+            .with_binary_path(fake_hogd_dev_binary())
+            .with_startup_timeout(Duration::from_secs(5))
+            .with_shutdown_grace(Duration::from_secs(2));
+        let config = NodeSupervisorConfig::default()
+            .with_rpc_listen_address("127.0.0.1:0")
+            .with_hogd_dev(hogd);
+        let handle = NodeSupervisorHandle::start(config)
+            .await
+            .expect("bug: supervisor should start against fake hogd-dev");
+
+        let url = format!("http://{}", handle.rpc_addr());
+        let client = HttpClientBuilder::default()
+            .build(&url)
+            .expect("bug: jsonrpsee http client builds");
+
+        client
+            .send_raw_transaction(format!("0x{SIGNED_TX_XDR}"))
+            .await
+            .expect("bug: sendRawTransaction should dispatch to fake scheduler");
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let tip = client
+                .chain_tip()
+                .await
+                .expect("bug: chainTip should dispatch to fake scheduler");
+            if *tip.height == 1 {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "block driver did not advance fake scheduler tip before timeout; tip={}",
+                *tip.height
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        handle.stop().await.expect("bug: clean shutdown");
     }
 
     #[tokio::test]

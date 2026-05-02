@@ -448,6 +448,58 @@ binary):
 - unknown tx status/receipt behavior matches conformance expectations;
 - current deploy/call loop either works or has a documented blocker.
 
+### PR 4d - Supervisor Block Driver
+
+**Status:** In progress on the Rust supervisor side. The first real-binary
+smoke after the read endpoint landed showed that `groundhog_sendRawTransaction`
+can reach hogd-dev's scheduler, but the local topology has no chuckd
+coordinator to drive `schedulercoord_nominate` / `schedulercoord_commit_block`.
+Result before this PR: deploy returns a tx hash, receipt polling times out,
+status stays unknown, and `chainTip` remains at genesis.
+
+Design choice: `groundhog node`, not `deploy` or `call`, owns this behavior.
+Client commands should remain ordinary JSON-RPC clients. The local-node
+supervisor supplies the missing single-node coordination policy so all clients
+see the same semantics.
+
+Initial implementation shape:
+
+- add a supervisor-owned coalescing block-driver task in `node-supervisor`;
+- wake it only after `schedulercoord_submit_unvetted` succeeds;
+- one wake drives `schedcoord_get_tip` -> `schedulercoord_nominate` ->
+  `schedulercoord_commit_block`;
+- keep `sendRawTransaction` semantics as "accepted by the local scheduler
+  submit path"; do not wait for commit inside submit;
+- stop the driver before stopping hogd-dev.
+
+Block-driver tests use fake hogd-dev automine mode to prove a successful submit
+wakes the driver and advances `chainTip`. A follow-up real-binary smoke against
+a rebuilt hogd-dev confirmed the same block-production signal: a deploy submit
+still times out waiting for a receipt, but `chainTip` advances from height 0 to
+height 1. The submitted tx remains `unknown`, so the remaining blocker is
+dev-wallet/genesis/auth bootstrap or scheduler inclusion policy for that dev
+transaction, not missing local block production.
+
+Remaining blocker for the default CLI local loop: the current supervisor genesis
+is still empty. The native-exec dev node bootstraps a dev-wallet WASM at each
+`dev-N` address and initializes auth data before `deploy` / `call` can use
+those keys. hogd-dev's current scheduler genesis RPC accepts
+`GenesisConfiguration`, whose `InitialConfigurationEntry` describes preset
+deployment claims by `(contract_hash, nonce, entrypoint, calldata, amount)` but
+does not carry the deployed contract bytes needed to construct or unfurl those
+claims. That is an XDR/process-contract shape issue, not just missing Rust
+plumbing.
+
+Follow-up shape to settle with the team:
+
+- either extend the hogd-dev process contract so Rust can pass dev-wallet
+  contract bytes plus deterministic dev-account initialization data, or
+- make hogd-dev own a built-in dev-wallet bootstrap mode and report the
+  resulting accounts in readiness/control metadata.
+
+Do not retire native-exec until the real-binary smoke reaches:
+`groundhog new` -> `build` -> `deploy` -> receipt -> `call`.
+
 ### Typed Submit Follow-Up
 
 **Status:** Cross-repo design track. Independent of PR 4c. The temporary
@@ -532,28 +584,20 @@ end-to-end or be explicitly removed/deferred from the public local-node promise.
 
 ## Recommended Next Action
 
-Track 2 (read plane). The Rust supervisor side shipped in PR #44:
-`HogdDevReadBackend` is wired, the intro probe gates startup, plane
-status advertises `read: indexer` when the endpoint is present, and the
-fake fixture exercises the full happy and failure paths. The remaining
-work is hogd-side and ours to drive.
+Close PR 4d's Rust-side block driver, then settle dev-wallet genesis/bootstrap
+shape before promising the default CLI local loop against hogd-dev.
 
 Concrete next steps:
 
-1. Real hogd-dev read endpoint inside the hogd-dev submodule (Option B
-   from the bootstrap plan). Connect the existing scheduler/executor
-   event flow into `IndexerEventRpc` so blocks committed by hogd-dev
-   populate IndexDB; advertise `read: <addr>` in readiness JSON. Stay
-   inside the hogd-dev submodule per Coordination Discipline; document
-   and defer if any need surfaces to reach into broader hogd.
-2. Real-binary smoke in groundhog-rpc. Once the hogd-dev binary exposes
-   the read endpoint, run `groundhog node --hogd-dev-binary ...` against
-   it: verify the startup payload reports `planes.read = "indexer"`,
-   submit a tx, and exercise `groundhog_getTransactionStatus` /
-   `groundhog_getTransactionReceipt` / `groundhog_getEvents` against
-   committed data. If hogd-dev's data-production path turns out to lag
-   the indexer feed, document the blocker rather than papering over it.
-3. Typed submit (Track 3) stays deferred until the real read path is
-   proven end to end. Doing typed-submit before real read coverage risks
-   designing the typed-submit shape against topology assumptions that
-   PR 4c integration would surface.
+1. Land the supervisor-owned block driver with fake hogd-dev coverage.
+2. Use the real-binary smoke result as the handoff point for bootstrap work:
+   submits wake nominate/commit and `chainTip` advances, while `dev-0` deploys
+   still need dev-wallet auth/bootstrap support before receipts appear.
+3. Decide the dev-wallet genesis shape with hogd/protocol owners. Prefer a
+   real process/XDR shape over Rust-side ad hoc reconstruction from generated
+   artifacts.
+4. After dev-wallet bootstrap lands, rerun the normal local loop:
+   `groundhog new` -> `build` -> `deploy` -> receipt -> `call`.
+5. Typed submit stays deferred until this real local-node path is proven end to
+   end; otherwise we risk designing the typed-submit shape against incomplete
+   topology assumptions.
