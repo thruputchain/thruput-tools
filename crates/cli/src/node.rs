@@ -138,7 +138,7 @@ async fn run_hogd_dev(
 ) -> Result<(), CliError> {
     use groundhog_node_supervisor::{
         HogdDevConfig, NodeSupervisorConfig, NodeSupervisorError, NodeSupervisorHandle,
-        SupervisorStop,
+        PlaneStatus, SupervisorStop,
     };
 
     let hogd = HogdDevConfig::default().with_binary_path(binary);
@@ -161,9 +161,13 @@ async fn run_hogd_dev(
     } else {
         print.status("Groundhog Local Node (experimental)");
         print.status(format_args!("Chain: {}", readiness.network_id));
-        print.warn(
-            "backend: hogd-dev (chainTip and submit live; read methods return NOT_IMPLEMENTED)",
-        );
+        if backend_planes.read == PlaneStatus::Indexer {
+            print.warn("backend: hogd-dev (chainTip, submit, and reads live)");
+        } else {
+            print.warn(
+                "backend: hogd-dev (chainTip and submit live; read methods return NOT_IMPLEMENTED)",
+            );
+        }
         print.status(format_args!("Listening on http://{rpc_addr}"));
         print.status(format_args!(
             "hogd-dev scheduler: {}",
@@ -292,14 +296,23 @@ fn hogd_dev_startup_payload(
             "kind": "hogd_dev",
             "stability": "experimental",
             "planes": backend_planes,
-            "limitations": [
-                "read methods return NOT_IMPLEMENTED until more hogd-dev x23 adapters land"
-            ],
+            "limitations": hogd_dev_limitations(backend_planes),
             "endpoints": hogd_dev_endpoints_payload(readiness),
         },
         "rpc_url": format!("http://{addr}"),
         "accounts": [],
     })
+}
+
+#[cfg(feature = "dev-node")]
+fn hogd_dev_limitations(
+    backend_planes: groundhog_node_supervisor::BackendPlanes,
+) -> Vec<&'static str> {
+    let mut limitations = vec!["snapshot/revert not supported", "time travel not supported"];
+    if backend_planes.read == groundhog_node_supervisor::PlaneStatus::Stub {
+        limitations.push("read methods return NOT_IMPLEMENTED until hogd-dev exposes read");
+    }
+    limitations
 }
 
 #[cfg(feature = "dev-node")]
@@ -402,6 +415,15 @@ mod tests {
         let expected_planes = serde_json::to_value(BackendPlanes::hogd_dev_scheduler_only())
             .expect("bug: backend planes should serialize");
         assert_eq!(payload["backend"]["planes"], expected_planes);
+        assert!(
+            payload["backend"]["limitations"]
+                .as_array()
+                .expect("bug: limitations should be an array")
+                .iter()
+                .any(|value| value
+                    .as_str()
+                    .is_some_and(|text| text.contains("NOT_IMPLEMENTED")))
+        );
         assert_eq!(
             payload["backend"]["endpoints"]["scheduler"],
             "127.0.0.1:12345"
@@ -431,5 +453,26 @@ mod tests {
         );
         assert!(payload["backend"]["endpoints"].get("read").is_none());
         assert!(payload["backend"]["endpoints"].get("control").is_none());
+    }
+
+    #[test]
+    fn hogd_dev_startup_payload_omits_read_stub_limitation_for_indexer_plane() {
+        let addr = "127.0.0.1:9545".parse().expect("bug: valid socket addr");
+        let readiness = parse_readiness_line(
+            "hogd-dev",
+            r#"{"status":"ready","network_id":"groundhog-local","endpoints":{"scheduler":"127.0.0.1:12345","read":"127.0.0.1:12346"}}"#,
+        )
+        .expect("bug: readiness should parse");
+
+        let payload = hogd_dev_startup_payload(addr, &readiness, BackendPlanes::hogd_dev_full());
+        assert!(
+            payload["backend"]["limitations"]
+                .as_array()
+                .expect("bug: limitations should be an array")
+                .iter()
+                .all(|value| !value
+                    .as_str()
+                    .is_some_and(|text| text.contains("NOT_IMPLEMENTED")))
+        );
     }
 }
