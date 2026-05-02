@@ -346,6 +346,18 @@ mod tests {
     use groundhog_rpc_api_types::hex::{Hex0x, HexBytes};
     use groundhog_xdr::types::ContractAddress;
 
+    fn backend_limitations(payload: &serde_json::Value) -> &Vec<serde_json::Value> {
+        payload["backend"]["limitations"]
+            .as_array()
+            .expect("bug: limitations should be an array")
+    }
+
+    fn has_backend_limitation(payload: &serde_json::Value, expected: &str) -> bool {
+        backend_limitations(payload)
+            .iter()
+            .any(|value| value.as_str().is_some_and(|text| text == expected))
+    }
+
     #[test]
     fn map_start_error_routes_sandbox_init_to_typed_variant() {
         let err: Box<dyn std::error::Error + Send + Sync> =
@@ -415,15 +427,19 @@ mod tests {
         let expected_planes = serde_json::to_value(BackendPlanes::hogd_dev_scheduler_only())
             .expect("bug: backend planes should serialize");
         assert_eq!(payload["backend"]["planes"], expected_planes);
-        assert!(
-            payload["backend"]["limitations"]
-                .as_array()
-                .expect("bug: limitations should be an array")
-                .iter()
-                .any(|value| value
-                    .as_str()
-                    .is_some_and(|text| text.contains("NOT_IMPLEMENTED")))
-        );
+        assert!(has_backend_limitation(
+            &payload,
+            "snapshot/revert not supported"
+        ));
+        assert!(has_backend_limitation(
+            &payload,
+            "time travel not supported"
+        ));
+        assert!(backend_limitations(&payload).iter().any(|value| {
+            value
+                .as_str()
+                .is_some_and(|text| text.contains("NOT_IMPLEMENTED"))
+        }));
         assert_eq!(
             payload["backend"]["endpoints"]["scheduler"],
             "127.0.0.1:12345"
@@ -465,14 +481,18 @@ mod tests {
         .expect("bug: readiness should parse");
 
         let payload = hogd_dev_startup_payload(addr, &readiness, BackendPlanes::hogd_dev_full());
-        assert!(
-            payload["backend"]["limitations"]
-                .as_array()
-                .expect("bug: limitations should be an array")
-                .iter()
-                .all(|value| !value
-                    .as_str()
-                    .is_some_and(|text| text.contains("NOT_IMPLEMENTED")))
-        );
+        assert!(has_backend_limitation(
+            &payload,
+            "snapshot/revert not supported"
+        ));
+        assert!(has_backend_limitation(
+            &payload,
+            "time travel not supported"
+        ));
+        assert!(backend_limitations(&payload).iter().all(|value| {
+            !value
+                .as_str()
+                .is_some_and(|text| text.contains("NOT_IMPLEMENTED"))
+        }));
     }
 }
