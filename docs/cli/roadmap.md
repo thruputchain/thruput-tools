@@ -161,9 +161,11 @@ Maintenance rules:
   - [x] PR 1 — supervisor crate scaffold (#30)
   - [x] PR 2 — hogd-dev process adapter (#31)
   - [x] PR 3 — CLI integration behind experimental flag (#35)
-  - [x] PR 4a — first real hogd-dev chain RPC (`groundhog_chainTip`)
-  - [ ] PR 4b — submit RPC
-  - [ ] PR 4c — read RPC (receipts, events, status, blocks)
+  - [x] PR 4a — first real hogd-dev chain RPC (`groundhog_chainTip`) (#38)
+  - [x] PR 4b — submit RPC (`groundhog_sendRawTransaction`) (#40)
+  - [x] PR 4c — read RPC (receipts, events, composite status) on the
+    Rust supervisor side (#44); end-to-end coverage gated on hogd-dev
+    v1 advertising the indexer endpoint
   - [ ] PR 5 — dev control + native-exec retirement
 
 ### Phase 3

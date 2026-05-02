@@ -1,8 +1,10 @@
 # Local Node Hogd-Dev Supervisor Implementation Plan
 
 **Date:** 2026-04-29
-**Status:** Implementation in progress. PRs 1–4b and the backend plane-status
-hoist shipped; PR 4c is gated on hogd-dev read endpoint topology; PR 5 ahead.
+**Status:** Implementation in progress. PRs 1–4c and the backend plane-status
+hoist shipped on the Rust supervisor side. End-to-end coverage of the read
+plane is gated on the hogd-dev v1 binary exposing the indexer endpoint with
+full event-feed wiring. PR 5 ahead.
 
 **Companion to:**
 
@@ -404,52 +406,45 @@ Protocol shape notes to discuss with hogd/protocol-rs owners:
 
 ### PR 4c - Read RPC
 
-**Status:** The shared JSON-RPC/gateway read shape is mostly settled, but the
-hogd-dev supervisor path is blocked on hogd-dev advertising a read/indexer
-endpoint. PR #39 replaced the legacy event method with paginated
-`getEvents(EventQuery) -> EventPage`, flowed the indexer query/cursor/limit
-types through `api-types`, and added rpc-server bounds validation. PR #42 moved
-backend plane-status reporting into `groundhog-node-supervisor` through typed
-`PlaneStatus` / `BackendPlanes` startup metadata, so the CLI does not produce
-submit/chain/read plane strings itself.
+**Status:** Shipped on the Rust supervisor side in PR #44.
+`HogdDevReadBackend` (in `crates/node-supervisor/src/read_backend.rs`)
+implements `ReadPlane` against hogd-dev's `IndexerBlockExplorer1` endpoint:
+receipts, events, and the composite scheduler-pending-then-indexer-committed
+transaction status. `start_rpc_server` connects to the indexer when
+readiness JSON advertises `read: <addr>` (probing
+`indexer_block_explorer_intro` for service/version) and falls back to
+`StubBackend` otherwise. `BackendPlanes::hogd_dev_full()` advertises
+`{Scheduler, Scheduler, Indexer}` in startup metadata. The fake hogd-dev
+fixture grew an `IndexerBlockExplorer1` server with canned committed-set
+and event log, plus failure modes (`indexer-connect-fail`,
+`indexer-rpc-fail`, `indexer-runtime-rpc-fail`) used by the integration
+tests.
 
-Per the **Coordination Discipline** section, PR 4c should aim to stay inside
-the hogd-dev submodule on the hogd side and reuse the existing indexer x23
-services unchanged. If a useful v1 read surface needs anything beyond
-`IndexerBlockExplorer_IndexerBlockExplorer1` and the existing scheduler
-`find_tx`, document the case but defer rather than reach into broader hogd
-or protocol XDR.
+End-to-end coverage is gated on the hogd-dev v1 binary actually advertising
+the read endpoint with full event-feed wiring (Option B in the bootstrap
+plan: connect the existing scheduler/executor event flow into
+`IndexerEventRpc` so blocks committed by hogd-dev populate IndexDB).
+Until then, the supervisor adapter runs only against the fake fixture.
 
-- Implement receipts, events, and committed transaction status in the
-  supervisor once hogd-dev exposes the corresponding read surface. Events
-  should reuse the PR #39 `EventQuery` / `EventPage` contract directly.
-  Mirror the gateway's existing handlers
-  (`crates/gateway/src/handlers/{receipt,events}.rs`) — the pattern is
-  established.
-- Keep `ReadPlane` methods stubbed until the supervisor can answer the full
-  public semantics. In particular, do not return `Unknown` from
-  `getTransactionStatus` after only checking scheduler pending state; without
-  committed-state reach that result is ambiguous.
+Decisions captured here that survived implementation:
+
 - The supervisor read adapter owns the composite status flow per the
   `ReadPlane::transaction_status` trait contract: scheduler pending state
   first, indexer committed state second. Gateway already implements this at
   `crates/gateway/src/handlers/receipt.rs`.
-- Match gateway degraded-mode semantics: scheduler failure may degrade pending
-  detection, but read/indexer failure is backend unavailable because committed
-  state is authoritative.
-- A scheduler-only `Pending` probe may be useful internally, but it should not
-  be the public `getTransactionStatus` implementation unless the API can also
-  represent "not pending, committed state unavailable".
+- Gateway-style degraded-mode semantics: scheduler failure may degrade
+  pending detection (warn + continue), but indexer failure is backend
+  unavailable because committed state is authoritative.
 - `ChainPlane::get_block_by_number` returns `NotImplemented` in v1. Block
-  materialization in hogd-dev requires either a hogdb block source or a
-  coordinator-style block store, neither of which is in scope for the hogd-dev
-  submodule today. Defer; the public method stays stubbed until hogd grows
-  that surface.
+  materialization in hogd-dev would require a hogdb block source or a
+  coordinator-style block store, neither of which is in scope for the
+  hogd-dev submodule today. Stays stubbed until hogd grows that surface.
 
-Acceptance:
+Acceptance criteria for closing this section out (pending the hogd-dev
+binary):
 
-- receipts, events, and committed transaction status work end to end against a
-  real hogd-dev v1 binary advertising a read endpoint;
+- receipts, events, and committed transaction status work end to end against
+  a real hogd-dev v1 binary advertising a read endpoint;
 - unknown tx status/receipt behavior matches conformance expectations;
 - current deploy/call loop either works or has a documented blocker.
 
@@ -537,24 +532,28 @@ end-to-end or be explicitly removed/deferred from the public local-node promise.
 
 ## Recommended Next Action
 
-Track 2 (read plane). PR #39 settled the paginated event surface and read
-conformance shape, and plane-status reporting was hoisted in PR #42, so the
-supervisor side of PR 4c is shovel-ready once hogd-dev v1 advertises a
-read/indexer endpoint.
+Track 2 (read plane). The Rust supervisor side shipped in PR #44:
+`HogdDevReadBackend` is wired, the intro probe gates startup, plane
+status advertises `read: indexer` when the endpoint is present, and the
+fake fixture exercises the full happy and failure paths. The remaining
+work is hogd-side and ours to drive.
 
 Concrete next steps:
 
-1. Pin the v1 read-endpoint topology with hogd owners — the contract default
-   is one multiplexed `read` key (see Hogd-Dev Process Contract above).
-2. Grow hogd-dev v1 to listen on the existing hogd indexer x23 services and
-   advertise `read: <addr>` in the readiness JSON. Stay inside the hogd-dev
-   submodule; document any case for reaching into broader hogd before doing
-   so (see Coordination Discipline).
-3. Implement `HogdDevReadBackend` in `node-supervisor` mirroring the gateway's
-   handlers at `crates/gateway/src/handlers/{receipt,events}.rs`.
-4. Confirm `ChainPlane::get_block_by_number` stays stubbed `NotImplemented`
-   for v1; revisit when hogd grows a block source.
-
-Track 3 (typed submit) is independent. Open the Ryan conversation on outcome
-enum / wire shape / migration when there is bandwidth, but do not gate Track 2
-on it.
+1. Real hogd-dev read endpoint inside the hogd-dev submodule (Option B
+   from the bootstrap plan). Connect the existing scheduler/executor
+   event flow into `IndexerEventRpc` so blocks committed by hogd-dev
+   populate IndexDB; advertise `read: <addr>` in readiness JSON. Stay
+   inside the hogd-dev submodule per Coordination Discipline; document
+   and defer if any need surfaces to reach into broader hogd.
+2. Real-binary smoke in groundhog-rpc. Once the hogd-dev binary exposes
+   the read endpoint, run `groundhog node --hogd-dev-binary ...` against
+   it: verify the startup payload reports `planes.read = "indexer"`,
+   submit a tx, and exercise `groundhog_getTransactionStatus` /
+   `groundhog_getTransactionReceipt` / `groundhog_getEvents` against
+   committed data. If hogd-dev's data-production path turns out to lag
+   the indexer feed, document the blocker rather than papering over it.
+3. Typed submit (Track 3) stays deferred until the real read path is
+   proven end to end. Doing typed-submit before real read coverage risks
+   designing the typed-submit shape against topology assumptions that
+   PR 4c integration would surface.
