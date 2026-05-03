@@ -18,8 +18,7 @@ fn ts_type_ref(ty: &ContractType) -> Result<String, CliError> {
         ContractType::Void => Ok("void".into()),
         ContractType::Bool => Ok("boolean".into()),
         ContractType::U8 => Err(CliError::SpecFailed(
-            "bare U8 is not a valid contract type — U8 must be wrapped in Vector or Array"
-                .into(),
+            "bare U8 is not a valid contract type — U8 must be wrapped in Vector or Array".into(),
         )),
         ContractType::U32
         | ContractType::I32
