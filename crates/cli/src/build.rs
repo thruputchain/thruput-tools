@@ -15,6 +15,8 @@ pub struct BuildResult {
     pub wasm: PathBuf,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spec_json: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bindings_ts: Option<PathBuf>,
     pub size_bytes: u64,
     pub optimized: bool,
     pub profile: crate::config::ResolvedProfile,
@@ -26,9 +28,11 @@ pub struct BuildResult {
 
 /// Build the contract to WASM via `cargo build` with
 /// cross-compilation to `wasm32-unknown-unknown`.
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     package: Option<&str>,
     optimize: bool,
+    bindings: &[String],
     cargo_args: &[String],
     artifacts: &ArtifactOptions,
     explicit_profile: Option<&str>,
@@ -41,6 +45,7 @@ pub fn run(
         cargo_args,
         artifacts,
         explicit_profile,
+        bindings,
         print,
     )?;
     print.json(&crate::result::CommandResult::new(
@@ -55,6 +60,7 @@ pub fn run(
             "cargo_stdout": result.cargo_stdout,
             "cargo_stderr": result.cargo_stderr,
             "spec_json": result.spec_json,
+            "bindings_ts": result.bindings_ts,
         }),
     ))?;
     Ok(())
@@ -68,6 +74,7 @@ pub fn build_project(
     cargo_args: &[String],
     artifacts: &ArtifactOptions,
     explicit_profile: Option<&str>,
+    bindings: &[String],
     print: &Print,
 ) -> Result<BuildResult, CliError> {
     crate::require_cargo()?;
@@ -145,6 +152,25 @@ pub fn build_project(
     print.status("Checking for contract spec...");
     let spec_json = crate::contract_spec::finalize_spec(&wasm, print)?;
 
+    let bindings_ts = if bindings.iter().any(|b| b == "ts") {
+        if let Some(spec) = crate::contract_spec::load_contract_spec(&wasm)? {
+            let ts_path = wasm.with_extension("ts");
+            let source_name = wasm
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown");
+            let ts = crate::codegen::generate_ts_bindings(&spec, source_name)?;
+            fs::write(&ts_path, ts.as_bytes())?;
+            print.status(format_args!("Wrote {}", ts_path.display()));
+            Some(ts_path)
+        } else {
+            print.warn("no contract spec found — skipping TypeScript bindings");
+            None
+        }
+    } else {
+        None
+    };
+
     print.status("Instrumenting WASM...");
     crate::wasm_instrument::instrument(&wasm)?;
 
@@ -159,6 +185,7 @@ pub fn build_project(
         size_bytes: size,
         optimized: optimize,
         spec_json,
+        bindings_ts,
         profile,
         cargo_stdout,
         cargo_stderr,

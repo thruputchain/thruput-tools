@@ -199,7 +199,7 @@ fn run_once_with_options(
     // Build the WASM contract (validates project root,
     // checks for cargo on PATH, etc.)
     let build =
-        crate::build::build_project(package, false, &[], artifacts, explicit_profile, print)?;
+        crate::build::build_project(package, false, &[], artifacts, explicit_profile, &[], print)?;
 
     // Run only the WASM test target
     let root = build.project_root.clone();

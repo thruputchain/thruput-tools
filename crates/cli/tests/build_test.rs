@@ -195,6 +195,7 @@ fn build_rejects_conflicting_target_dir_passthrough() {
         &["--target-dir".into(), "nested".into()],
         &artifacts,
         None,
+        &[],
         &groundhog_cli::Print::quiet(),
     )
     .unwrap_err();
@@ -245,6 +246,7 @@ fn build_prefers_metadata_failure_over_redundant_target_dir_precheck() {
         &["--target-dir".into(), "nested".into()],
         &artifacts,
         None,
+        &[],
         &groundhog_cli::Print::quiet(),
     )
     .unwrap_err();
@@ -307,6 +309,7 @@ fn build_resolves_relative_config_conflicts_from_workspace_root() {
         &["--config".into(), "target-config.toml".into()],
         &artifacts,
         None,
+        &[],
         &groundhog_cli::Print::quiet(),
     )
     .unwrap_err();
@@ -378,6 +381,7 @@ fn build_project_reports_groundhog_processed_wasm_path() {
         &[],
         &groundhog_cli::artifacts::ArtifactOptions::default(),
         None,
+        &[],
         &groundhog_cli::Print::quiet(),
     )
     .expect("bug: build should succeed");
@@ -450,6 +454,7 @@ fn build_project_recopies_raw_wasm_before_reprocessing_on_repeated_runs() {
         &[],
         &groundhog_cli::artifacts::ArtifactOptions::default(),
         None,
+        &[],
         &groundhog_cli::Print::quiet(),
     )
     .expect("bug: first build should succeed");
@@ -463,6 +468,7 @@ fn build_project_recopies_raw_wasm_before_reprocessing_on_repeated_runs() {
         &[],
         &groundhog_cli::artifacts::ArtifactOptions::default(),
         None,
+        &[],
         &groundhog_cli::Print::quiet(),
     )
     .expect("bug: second build should succeed");

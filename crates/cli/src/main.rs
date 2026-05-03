@@ -90,6 +90,9 @@ enum Command {
         /// Run wasm-opt after compilation (requires wasm-opt)
         #[arg(long)]
         optimize: bool,
+        /// Generate typed bindings after build (e.g. `ts`)
+        #[arg(long)]
+        bindings: Vec<String>,
         /// Config profile to use
         #[arg(
             long = "profile",
@@ -333,6 +336,7 @@ fn main() {
         Command::Build {
             package,
             optimize,
+            bindings,
             profile,
             artifacts,
             cargo_args,
@@ -346,6 +350,7 @@ fn main() {
                 groundhog_cli::build::run(
                     package.as_deref(),
                     optimize,
+                    &bindings,
                     &cargo_args,
                     &artifacts,
                     Some(&profile),
