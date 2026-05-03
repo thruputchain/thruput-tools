@@ -42,7 +42,12 @@ fn ts_type_ref(ty: &ContractType) -> Result<String, CliError> {
             if matches!(element, ContractType::U8) {
                 return Ok("Uint8Array".into());
             }
-            Ok(format!("{}[]", ts_type_ref(element)?))
+            let inner = ts_type_ref(element)?;
+            if inner.contains('|') {
+                Ok(format!("({inner})[]"))
+            } else {
+                Ok(format!("{inner}[]"))
+            }
         }
         ContractType::Array { array } => {
             let element = array.element.as_deref().ok_or_else(|| {
@@ -51,7 +56,12 @@ fn ts_type_ref(ty: &ContractType) -> Result<String, CliError> {
             if matches!(element, ContractType::U8) {
                 return Ok("Uint8Array".into());
             }
-            Ok(format!("{}[]", ts_type_ref(element)?))
+            let inner = ts_type_ref(element)?;
+            if inner.contains('|') {
+                Ok(format!("({inner})[]"))
+            } else {
+                Ok(format!("{inner}[]"))
+            }
         }
         ContractType::Tuple { tuple } => {
             let items: Vec<String> = tuple.iter().map(ts_type_ref).collect::<Result<_, _>>()?;
@@ -595,7 +605,7 @@ fn spec_type_to_ts_literal(ty: &ContractType) -> Result<String, CliError> {
             let elem_lit = spec_type_to_ts_literal(elem)?;
             Ok(format!(
                 "{{ v: ContractTypeKind.Vector, vector: \
-                 {{ element: {elem_lit}, max_len: {} }} }}",
+                 {{ element: {elem_lit}, max_len: {}n }} }}",
                 vector.max_len,
             ))
         }
@@ -606,7 +616,7 @@ fn spec_type_to_ts_literal(ty: &ContractType) -> Result<String, CliError> {
             let elem_lit = spec_type_to_ts_literal(elem)?;
             Ok(format!(
                 "{{ v: ContractTypeKind.Array, array: \
-                 {{ element: {elem_lit}, len: {} }} }}",
+                 {{ element: {elem_lit}, len: {}n }} }}",
                 array.len,
             ))
         }
@@ -758,6 +768,19 @@ mod tests {
             },
         };
         assert_eq!(ts_type_ref(&ty).unwrap(), "boolean[]");
+    }
+
+    #[test]
+    fn maps_vector_of_option_with_parens() {
+        let ty = ContractType::Vector {
+            vector: ContractVectorType {
+                element: Some(Box::new(ContractType::Option {
+                    option_inner: Some(Box::new(ContractType::U64)),
+                })),
+                max_len: 100,
+            },
+        };
+        assert_eq!(ts_type_ref(&ty).unwrap(), "(bigint | null)[]");
     }
 
     #[test]
