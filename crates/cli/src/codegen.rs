@@ -17,8 +17,11 @@ fn ts_type_ref(ty: &ContractType) -> Result<String, CliError> {
     match ty {
         ContractType::Void => Ok("void".into()),
         ContractType::Bool => Ok("boolean".into()),
-        ContractType::U8
-        | ContractType::U32
+        ContractType::U8 => Err(CliError::SpecFailed(
+            "bare U8 is not a valid contract type — U8 must be wrapped in Vector or Array"
+                .into(),
+        )),
+        ContractType::U32
         | ContractType::I32
         | ContractType::U64
         | ContractType::I64
@@ -37,12 +40,18 @@ fn ts_type_ref(ty: &ContractType) -> Result<String, CliError> {
             let element = vector.element.as_deref().ok_or_else(|| {
                 CliError::SpecFailed("contract spec is missing a vector element type".into())
             })?;
+            if matches!(element, ContractType::U8) {
+                return Ok("Uint8Array".into());
+            }
             Ok(format!("{}[]", ts_type_ref(element)?))
         }
         ContractType::Array { array } => {
             let element = array.element.as_deref().ok_or_else(|| {
                 CliError::SpecFailed("contract spec is missing an array element type".into())
             })?;
+            if matches!(element, ContractType::U8) {
+                return Ok("Uint8Array".into());
+            }
             Ok(format!("{}[]", ts_type_ref(element)?))
         }
         ContractType::Tuple { tuple } => {
@@ -754,10 +763,14 @@ mod tests {
     }
 
     #[test]
+    fn bare_u8_is_an_error() {
+        assert!(ts_type_ref(&ContractType::U8).is_err());
+    }
+
+    #[test]
     fn maps_scalar_types_to_ts() {
         assert_eq!(ts_type_ref(&ContractType::Void).unwrap(), "void");
         assert_eq!(ts_type_ref(&ContractType::Bool).unwrap(), "boolean");
-        assert_eq!(ts_type_ref(&ContractType::U8).unwrap(), "bigint");
         assert_eq!(ts_type_ref(&ContractType::U32).unwrap(), "bigint");
         assert_eq!(ts_type_ref(&ContractType::I32).unwrap(), "bigint");
         assert_eq!(ts_type_ref(&ContractType::U64).unwrap(), "bigint");
@@ -792,11 +805,33 @@ mod tests {
     }
 
     #[test]
-    fn maps_array_type() {
+    fn maps_vector_of_u8_to_uint8array() {
+        let ty = ContractType::Vector {
+            vector: ContractVectorType {
+                element: Some(Box::new(ContractType::U8)),
+                max_len: 1024,
+            },
+        };
+        assert_eq!(ts_type_ref(&ty).unwrap(), "Uint8Array");
+    }
+
+    #[test]
+    fn maps_array_of_u8_to_uint8array() {
         let ty = ContractType::Array {
             array: ContractArrayType {
                 element: Some(Box::new(ContractType::U8)),
                 len: 32,
+            },
+        };
+        assert_eq!(ts_type_ref(&ty).unwrap(), "Uint8Array");
+    }
+
+    #[test]
+    fn maps_array_of_non_u8_to_array() {
+        let ty = ContractType::Array {
+            array: ContractArrayType {
+                element: Some(Box::new(ContractType::U32)),
+                len: 4,
             },
         };
         assert_eq!(ts_type_ref(&ty).unwrap(), "bigint[]");
