@@ -102,6 +102,8 @@ pub enum CliError {
     CallEncode { path: String, message: String },
     #[error("{path}: {message}")]
     CallDecode { path: String, message: String },
+    #[error("codegen failed: {0}")]
+    CodegenFailed(String),
     #[error("{0}")]
     Other(String),
 }
@@ -151,6 +153,7 @@ impl CliError {
             Self::ReceiptPollingExhausted => "receipt_polling_exhausted",
             Self::CallEncode { .. } => "call_encode",
             Self::CallDecode { .. } => "call_decode",
+            Self::CodegenFailed(_) => "codegen_failed",
             Self::Other(_) => "other",
         }
     }
@@ -232,6 +235,9 @@ impl CliError {
             )),
             Self::CallDecode { .. } => Some(Cow::Borrowed(
                 "check the reported return-value path and verify the resolved contract types match the on-chain value",
+            )),
+            Self::CodegenFailed(_) => Some(Cow::Borrowed(
+                "check that the file contains a valid embedded contract spec",
             )),
             Self::RuntimeInit(_)
             | Self::ReceiptPollingExhausted

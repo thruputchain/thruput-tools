@@ -699,6 +699,7 @@ fn emit_method_function(
 
 /// Check whether any method argument or return type in the spec satisfies
 /// the predicate.
+#[allow(dead_code)]
 fn spec_uses_type(spec: &ContractSpec, predicate: fn(&ContractType) -> bool) -> bool {
     for iface in spec.interfaces.iter() {
         for method in iface.methods.iter() {
@@ -717,6 +718,7 @@ fn spec_uses_type(spec: &ContractSpec, predicate: fn(&ContractType) -> bool) -> 
 
 /// Recursively check whether a type or any of its children match the
 /// predicate.
+#[allow(dead_code)]
 fn type_matches(ty: &ContractType, predicate: &dyn Fn(&ContractType) -> bool) -> bool {
     if predicate(ty) {
         return true;

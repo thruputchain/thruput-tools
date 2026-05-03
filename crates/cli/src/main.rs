@@ -222,6 +222,11 @@ enum Command {
     Login,
     /// Remove stored credentials
     Logout,
+    /// Generate typed bindings from a contract spec
+    Codegen {
+        #[command(subcommand)]
+        command: CodegenCommand,
+    },
     /// Generate shell completions
     Completion {
         /// Shell to generate completions for
@@ -254,6 +259,26 @@ enum KeysCommand {
     },
 }
 
+#[derive(Subcommand)]
+enum CodegenCommand {
+    /// Generate TypeScript bindings
+    Ts {
+        /// Path to .wasm or .spec.xdr file
+        source: std::path::PathBuf,
+        /// Output file path (default: stdout)
+        #[arg(long, short)]
+        output: Option<std::path::PathBuf>,
+    },
+}
+
+impl CodegenCommand {
+    fn command_name(&self) -> &'static str {
+        match self {
+            Self::Ts { .. } => "codegen.ts",
+        }
+    }
+}
+
 impl Command {
     /// Canonical command name for JSON envelopes.
     ///
@@ -270,6 +295,7 @@ impl Command {
             Self::Call { .. } => "call",
             Self::Node { .. } => "node",
             Self::Keys { command } => command.command_name(),
+            Self::Codegen { command } => command.command_name(),
             Self::Login => "login",
             Self::Logout => "logout",
             Self::Completion { .. } => "completion",
@@ -413,6 +439,11 @@ fn main() {
             KeysCommand::Ls => groundhog_cli::keys::list(cmd_name, &print),
             KeysCommand::Use { name } => groundhog_cli::keys::use_key(&name, cmd_name, &print),
             KeysCommand::Rm { name } => groundhog_cli::keys::remove(&name, cmd_name, &print),
+        },
+        Command::Codegen { command } => match command {
+            CodegenCommand::Ts { source, output } => {
+                groundhog_cli::codegen_cmd::run(&source, output.as_deref(), cmd_name, &print)
+            }
         },
         Command::Login => groundhog_cli::auth::login(cmd_name, &print),
         Command::Logout => groundhog_cli::auth::logout(cmd_name, &print),
