@@ -113,20 +113,31 @@ fn interface_spec(interface: &ContractSpecInterface) -> Result<InterfaceSpec, Cl
     })
 }
 
+/// Result of spec finalization when the contract contains a spec.
+#[derive(Debug)]
+pub struct FinalizedSpec {
+    /// The parsed contract spec.
+    pub spec: ContractSpec,
+    /// Path to the `.spec.json` sidecar.
+    pub json_path: PathBuf,
+    /// Path to the `.spec.xdr` sidecar.
+    pub xdr_path: PathBuf,
+}
+
 /// Finalize the contract spec embedded in the WASM binary.
 ///
 /// Rewrites the WASM in-place (replacing raw spec fragments with a
-/// canonical `groundhogspecv0` section) and writes a `.spec.json`
-/// sidecar alongside the WASM for inspection and external tooling.
+/// canonical `groundhogspecv0` section) and writes `.spec.json` and
+/// `.spec.xdr` sidecars alongside the WASM.
 ///
-/// The WASM is rewritten before the sidecar file is written. If the
+/// The WASM is rewritten before the sidecar files are written. If a
 /// sidecar write fails, a re-run is safe because
 /// `rewrite_wasm_with_spec` can extract the spec from an
 /// already-canonical WASM.
 ///
-/// Returns `Some(json_path)` on success, or `None` when the contract
-/// contains no spec fragments.
-pub fn finalize_spec(wasm: &Path, print: &Print) -> Result<Option<PathBuf>, CliError> {
+/// Returns `Some(FinalizedSpec)` on success, or `None` when the
+/// contract contains no spec fragments.
+pub fn finalize_spec(wasm: &Path, print: &Print) -> Result<Option<FinalizedSpec>, CliError> {
     use groundhog_spec_tool::{render_spec_json, rewrite::rewrite_wasm_with_spec};
 
     let bytes = std::fs::read(wasm)
@@ -159,7 +170,11 @@ pub fn finalize_spec(wasm: &Path, print: &Print) -> Result<Option<PathBuf>, CliE
     })?;
     print.status(format_args!("Wrote {}", spec_xdr_path.display()));
 
-    Ok(Some(spec_json_path))
+    Ok(Some(FinalizedSpec {
+        spec,
+        json_path: spec_json_path,
+        xdr_path: spec_xdr_path,
+    }))
 }
 
 #[cfg(test)]

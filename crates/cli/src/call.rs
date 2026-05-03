@@ -962,6 +962,12 @@ mod tests {
     }
 
     #[test]
+    fn method_entrypoint_id_produces_known_hash() {
+        let id = method_entrypoint_id("ERC20", "0.1.0", "transfer");
+        assert_eq!(format_entrypoint_id(id), "0x3799fd1c3d9b098f");
+    }
+
+    #[test]
     fn selector_helpers_report_explicit_entrypoint_resolution() {
         let resolved = ResolvedCall {
             entrypoint: method_entrypoint_id("Counter", "0.1.0", "get"),
