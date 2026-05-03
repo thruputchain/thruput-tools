@@ -68,6 +68,9 @@ fn main() {
             run_ready_with_scheduler(FakeSchedulerMode::LoadNoEffect);
         }
         Ok("automine") => run_ready_with_scheduler(FakeSchedulerMode::Automine),
+        Ok("automine-slow-commit") => {
+            run_ready_with_scheduler(FakeSchedulerMode::AutomineSlowCommit);
+        }
         Ok("ready-then-exit") => run_ready_then_exit(),
         Ok("spawn-helper-ignore-term") => run_with_helper(),
         Ok("helper-ignore-term") => run_ignore_term_loop(),
@@ -295,6 +298,7 @@ fn start_fake_scheduler(mode: FakeSchedulerMode) -> FakeSchedulerRuntime {
 enum FakeSchedulerMode {
     Normal,
     Automine,
+    AutomineSlowCommit,
     GetTipError,
     LoadRejected,
     LoadNoEffect,
@@ -369,7 +373,10 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
                 "fake scheduler expected non-empty signed transaction xdr",
             ));
         }
-        if self.mode == FakeSchedulerMode::Automine {
+        if matches!(
+            self.mode,
+            FakeSchedulerMode::Automine | FakeSchedulerMode::AutomineSlowCommit
+        ) {
             self.pending_submits.fetch_add(1, Ordering::SeqCst);
         }
         Ok(())
@@ -387,7 +394,10 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
         &self,
         _onto: DbTip,
     ) -> Result<SchedulerNominationResult, ProgramError> {
-        if self.mode != FakeSchedulerMode::Automine {
+        if !matches!(
+            self.mode,
+            FakeSchedulerMode::Automine | FakeSchedulerMode::AutomineSlowCommit
+        ) {
             return Err(ProgramError::msg("not implemented in fake hogd-dev"));
         }
         if self.pending_submits.load(Ordering::SeqCst) == 0 {
@@ -447,8 +457,14 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
         &self,
         block_id: groundhog_scheduler::BlockID,
     ) -> Result<SchedulerCommitOutcome, ProgramError> {
-        if self.mode != FakeSchedulerMode::Automine {
+        if !matches!(
+            self.mode,
+            FakeSchedulerMode::Automine | FakeSchedulerMode::AutomineSlowCommit
+        ) {
             return Err(ProgramError::msg("not implemented in fake hogd-dev"));
+        }
+        if self.mode == FakeSchedulerMode::AutomineSlowCommit {
+            tokio::time::sleep(Duration::from_millis(75)).await;
         }
         if self.pending_submits.swap(0, Ordering::SeqCst) == 0 {
             return Ok(SchedulerCommitOutcome::SchedulerCommitBlockNotFound);

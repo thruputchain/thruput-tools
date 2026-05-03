@@ -38,9 +38,9 @@
 //! Methods a given backend cannot answer return
 //! `RpcServerError::NotImplemented`. Today this is rare
 //! (`pendingTransactionCount` on gateway, `getBlockByNumber` on the
-//! current dev-node). If the trait accumulates several more capability
-//! asymmetries, a richer capability descriptor — or an `Option<T>` return
-//! mapped to `NotImplemented` in the shared server — may earn its keep.
+//! current hogd-dev node supervisor). If the trait accumulates several more
+//! capability asymmetries, a richer capability descriptor — or an `Option<T>`
+//! return mapped to `NotImplemented` in the shared server — may earn its keep.
 //! Until then, concrete error returns are simpler than typed capability
 //! checks.
 //!

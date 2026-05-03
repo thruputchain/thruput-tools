@@ -67,7 +67,7 @@ impl HogdDevSchedulerBackend {
         &self.scheduler
     }
 
-    /// Return a copy that wakes the local block driver after accepted submits.
+    /// Return a copy that wakes the local block driver after submit RPC success.
     pub(crate) fn with_block_driver(mut self, block_driver: BlockDriverTrigger) -> Self {
         self.block_driver = Some(block_driver);
         self

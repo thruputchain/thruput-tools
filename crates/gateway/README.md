@@ -34,7 +34,7 @@ groundhog_getEvents(EventQuery)                → EventPage
 
 Builds against the private Groundhog registry configured in
 `.cargo/config.toml`. The gateway now shares its public JSON-RPC trait
-definitions with the client and local dev node through the `rpc-api`
+definitions with the client and local node through the `rpc-api`
 crate.
 
 ```bash

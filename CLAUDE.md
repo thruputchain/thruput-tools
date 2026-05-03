@@ -10,11 +10,11 @@ Workspace crates in `crates/`:
 - **api-types** — shared RPC types (receipt, status, block info, events,
   errors). Consumed by gateway, client, CLI, and external tools.
 - **rpc-api** — shared jsonrpsee trait definitions used by the gateway,
-  dev node, and client crate.
+  local node, and client crate.
 - **rpc-server** — reusable server-side `GroundhogApiServer`
   implementation. Owns shared request validation, public error mapping,
-  and submit/chain/read backend traits used by gateway, dev-node, and
-  future hogd-dev compositions.
+  and submit/chain/read backend traits used by gateway and hogd-dev
+  supervisor compositions.
 - **x23-transport** — shared x23 connection-pool helpers
   (`FixedSerialPool` setup, address parsing, typed `ConnectError`).
   Consumed by gateway and node-supervisor; backend-agnostic. Named for
@@ -103,12 +103,12 @@ cargo run -p groundhog-cli -- deploy       # from inside a project
 cargo run -p groundhog-cli -- call my-counter get
 cargo run -p groundhog-cli -- keys generate alice
 cargo run -p groundhog-cli -- keys ls
-# Experimental local dev node is feature-gated
-cargo run -p groundhog-cli --features dev-node -- node
+# Experimental local node backed by hogd-dev (Cargo feature is still dev-node)
+cargo run -p groundhog-cli --features dev-node -- node --hogd-dev-binary /path/to/hogd-dev
 # Typical local loop
 # 1. cargo run -p groundhog-cli -- new my-counter && cd my-counter
 # 2. cargo run -p groundhog-cli -- build
-# 3. cargo run -p groundhog-cli --features dev-node -- node  # separate terminal
+# 3. cargo run -p groundhog-cli --features dev-node -- node --hogd-dev-binary /path/to/hogd-dev  # separate terminal
 # 4. cargo run -p groundhog-cli -- deploy
 # 5. cargo run -p groundhog-cli -- call my-counter get
 ```
@@ -187,7 +187,7 @@ cargo run -p groundhog-cli --features dev-node -- node
   of implementing the public RPC trait directly.
 - Shared transaction hex/XDR validation and canonical hash computation
   live in `rpc-server::tx`; do not duplicate that logic in gateway or
-  dev-node adapters.
+  node-supervisor adapters.
 - Gateway handler modules are production backend helpers grouped by
   subsystem (receipt, blocks, events, parsing). Do not add new public
   JSON-RPC handler implementations there.
@@ -301,7 +301,7 @@ includes test and bench code), so always use that flag locally too.
 - `docs/cli/specs/2026-04-29-node-supervisor-x23-client-boundary.md` —
   node-supervisor x23 client wiring decision.
 - `docs/cli/plans/2026-04-14-bundled-wasm-opt.md` — bundled wasm-opt
-  rollout (dev-node done; CLI still shells out as of 2026-04-30).
+  rollout; CLI still shells out as of 2026-04-30.
 - `docs/gateway/roadmap.md` — gateway backlog and sequencing.
 - `docs/gateway/system-design.md` — full gateway architecture and open
   questions.

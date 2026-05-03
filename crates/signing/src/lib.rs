@@ -31,9 +31,10 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     // These pinned vectors currently come from the pre-refactor tx-builder
-    // output path. Replace or supplement them with runtime-generated
-    // canonical vectors when those become available in a shared fixture
-    // source.
+    // output path. They are canonical XDR/hash vectors only; the signed
+    // transaction is not auth-valid against empty hogd-dev genesis.
+    // Replace or supplement them with runtime-generated canonical vectors when
+    // those become available in a shared fixture source.
 
     fn test_signer() -> LocalSigner {
         let mut hasher = Sha256::new();
@@ -58,7 +59,7 @@ mod tests {
     }
 
     #[test]
-    fn produces_expected_signed_xdr_and_hash() {
+    fn produces_expected_canonical_xdr_and_hash_vector() {
         let signer = test_signer();
         let account = PubkeyAccount::new(signer.public_key(), DEFAULT_PUBKEY_ACCOUNT_NONCE);
         let tx = build_call_transaction(BuildCallTransaction {

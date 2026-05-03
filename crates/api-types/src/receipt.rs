@@ -33,7 +33,7 @@ pub struct TransactionReceipt {
 
     /// Raw return data from contract execution.
     ///
-    /// Populated by the dev node from `InvocationFrameOutput::Return`.
+    /// Populated by local-node backends from `InvocationFrameOutput::Return`.
     /// May be `None` for production receipts if the indexer does not
     /// store return data.
     #[serde(default, skip_serializing_if = "Option::is_none")]

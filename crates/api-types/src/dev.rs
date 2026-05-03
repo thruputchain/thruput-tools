@@ -74,7 +74,7 @@ pub struct StorageItemInfo {
     pub item_xdr: HexBytes,
 }
 
-/// Serializable frame trace for dev-node debugging.
+/// Serializable frame trace for local-node debugging.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TraceInfo {

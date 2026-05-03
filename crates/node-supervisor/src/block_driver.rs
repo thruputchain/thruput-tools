@@ -33,7 +33,7 @@ impl BlockDriverTrigger {
         Self { notify }
     }
 
-    /// Wake the block driver after a transaction is accepted by the scheduler.
+    /// Wake the block driver after the scheduler submit RPC succeeds.
     pub(crate) fn trigger_after_submit(&self) {
         self.notify.notify_one();
     }
@@ -108,12 +108,12 @@ fn log_drive_result(result: Result<DriveOutcome, BlockDriverError>) {
         Ok(DriveOutcome::Committed {
             block_id,
             height,
-            tx_bytes,
+            batch_xdr_bytes,
         }) => {
-            tracing::debug!(
+            tracing::info!(
                 block_id,
                 height,
-                tx_bytes,
+                batch_xdr_bytes,
                 "hogd-dev block driver committed block"
             );
         }
@@ -131,7 +131,7 @@ enum DriveOutcome {
     Committed {
         block_id: BlockID,
         height: i64,
-        tx_bytes: usize,
+        batch_xdr_bytes: usize,
     },
     NoGenesis,
 }
@@ -191,7 +191,7 @@ async fn commit_nominated_block(
     nominated_block: SchedulerNominatedBlock,
 ) -> Result<DriveOutcome, BlockDriverError> {
     let block_id = nominated_block.block_id;
-    let tx_bytes = nominated_block.txs.xdr.0.len();
+    let batch_xdr_bytes = nominated_block.txs.xdr.0.len();
     let height = nominated_block.nomination.block_height;
 
     let outcome = scheduler
@@ -205,7 +205,7 @@ async fn commit_nominated_block(
         return Ok(DriveOutcome::Committed {
             block_id,
             height: *height,
-            tx_bytes,
+            batch_xdr_bytes,
         });
     }
 

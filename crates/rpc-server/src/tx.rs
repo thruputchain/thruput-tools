@@ -41,7 +41,10 @@ pub fn validate_raw_transaction_bytes(
 mod tests {
     use super::*;
 
-    const SIGNED_TX_XDR: &str = "\
+    // Canonical XDR/hash vector only. This transaction is structurally valid
+    // and has a stable hash, but it is not auth-valid against empty hogd-dev
+    // genesis.
+    const CANONICAL_HASH_VECTOR_SIGNED_TX_XDR: &str = "\
 bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7\
 000000000000000000000000000f42400000000000000000000f424000000000000000010000000000000001\
 0000000050ec72dbafd4898c5df0e15ea6ba3e46240945b7210fe2d63dde1e896f42107a000000000000\
@@ -65,8 +68,8 @@ bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7\
 
     #[test]
     fn computes_canonical_hash_from_inner_transaction() {
-        let tx = validate_raw_transaction(SIGNED_TX_XDR)
-            .expect("bug: signed tx fixture should validate");
+        let tx = validate_raw_transaction(CANONICAL_HASH_VECTOR_SIGNED_TX_XDR)
+            .expect("bug: canonical hash vector should validate as XDR");
 
         assert_eq!(
             hex::encode(tx.hash.0.0.as_ref()),
@@ -76,7 +79,7 @@ bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7\
 
     #[test]
     fn uppercase_0x_prefix_is_accepted() {
-        let tx = validate_raw_transaction(&format!("0X{SIGNED_TX_XDR}"))
+        let tx = validate_raw_transaction(&format!("0X{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}"))
             .expect("bug: uppercase 0X prefix should be accepted");
 
         assert_eq!(

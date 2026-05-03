@@ -1,4 +1,4 @@
-//! `groundhog node` — start the experimental local dev node.
+//! `groundhog node` — start the experimental hogd-dev local node.
 
 use crate::{CliError, Print};
 
@@ -7,7 +7,7 @@ use crate::result::CommandResult;
 #[cfg(feature = "dev-node")]
 use serde_json::json;
 
-/// Start the experimental dev node server.
+/// Start the experimental hogd-dev local node server.
 ///
 /// Requires the `dev-node` feature.
 #[cfg(feature = "dev-node")]

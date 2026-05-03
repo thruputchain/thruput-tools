@@ -6,7 +6,7 @@
 //! silently degrading to closed-loop.
 //!
 //! Usage:
-//!   # Against dev-node (smoke):
+//!   # Against a local JSON-RPC endpoint (smoke):
 //!   groundhog-bench --url http://127.0.0.1:9545 --rate 1000 --duration 5
 //!
 //!   # Against real gateway (load):
@@ -66,7 +66,10 @@ struct Cli {
     max_skew: f64,
 }
 
-/// Derive a dev-node account signer (matches dev-node's derivation).
+/// Derive a deterministic local-node dev account signer.
+///
+/// The resulting transactions are only auth-valid against endpoints whose
+/// genesis bootstraps matching dev accounts.
 fn dev_signer(index: usize) -> LocalSigner {
     let mut hasher = Sha256::new();
     hasher.update(b"groundhog-dev-accounts:");

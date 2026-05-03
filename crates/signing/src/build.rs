@@ -13,7 +13,7 @@ use xdr_common::{BytesM, VecM};
 /// Wallet `deploy` entrypoint ID (from dev-wallet WASM exports).
 pub const WALLET_DEPLOY_ENTRYPOINT: [u8; 8] = 0xADAC_4982_2214_8E4F_u64.to_be_bytes();
 
-/// Default gas limit used by the CLI/dev-node wallet invocation flow.
+/// Default gas limit used by the CLI local-node wallet invocation flow.
 pub const DEFAULT_TX_GAS_LIMIT: u64 = 10_000_000;
 
 /// Parameters controlling how a signature is annotated in a signed

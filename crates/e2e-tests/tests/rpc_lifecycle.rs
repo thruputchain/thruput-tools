@@ -4,7 +4,7 @@
 //! Set `RPC_URL` env var to override the default (http://127.0.0.1:9545).
 //!
 //! Start a local node first:
-//!   cargo run -p groundhog-cli --features dev-node -- node
+//!   cargo run -p groundhog-cli --features dev-node -- node --hogd-dev-binary /path/to/hogd-dev
 //!
 //! Then run:
 //!   cargo test -p groundhog-e2e-tests -- --ignored
@@ -200,5 +200,5 @@ async fn get_events_cursor_walks_or_terminates() {
 
 // TODO: add submit_and_query_receipt test once we can construct valid
 // transactions against the running node's genesis state. Requires
-// knowing the pre-funded account keys (dev-node provides them via
-// groundhog_dev_getAccounts, gateway doesn't).
+// the local node to expose pre-funded account keys via
+// groundhog_dev_getAccounts.

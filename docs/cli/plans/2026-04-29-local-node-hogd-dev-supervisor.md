@@ -1,10 +1,9 @@
 # Local Node Hogd-Dev Supervisor Implementation Plan
 
 **Date:** 2026-04-29
-**Status:** Implementation in progress. PRs 1–4c and the backend plane-status
-hoist shipped on the Rust supervisor side. End-to-end coverage of the read
-plane is gated on the hogd-dev v1 binary exposing the indexer endpoint with
-full event-feed wiring. PR 5 ahead.
+**Status:** PRs 1–4c and the backend plane-status hoist shipped on the Rust
+supervisor side. PR 4d's block driver is ready for review; the remaining
+default local-loop blocker is dev-wallet/genesis/auth bootstrap. PR 5 ahead.
 
 **Companion to:**
 
@@ -450,12 +449,12 @@ binary):
 
 ### PR 4d - Supervisor Block Driver
 
-**Status:** In progress on the Rust supervisor side. The first real-binary
+**Status:** Ready for PR on the Rust supervisor side. The first real-binary
 smoke after the read endpoint landed showed that `groundhog_sendRawTransaction`
-can reach hogd-dev's scheduler, but the local topology has no chuckd
+can reach hogd-dev's scheduler, but the local topology had no chuckd
 coordinator to drive `schedulercoord_nominate` / `schedulercoord_commit_block`.
-Result before this PR: deploy returns a tx hash, receipt polling times out,
-status stays unknown, and `chainTip` remains at genesis.
+Result before this PR: deploy returned a tx hash, receipt polling timed out,
+status stayed unknown, and `chainTip` remained at genesis.
 
 Design choice: `groundhog node`, not `deploy` or `call`, owns this behavior.
 Client commands should remain ordinary JSON-RPC clients. The local-node

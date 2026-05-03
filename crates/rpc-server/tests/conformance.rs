@@ -30,14 +30,16 @@ use groundhog_rpc_server::{
 use tokio::sync::Mutex;
 use xdr_common::{BytesM, VecM};
 
-const SIGNED_TX_XDR: &str = "\
+// Canonical XDR/hash vector only. This transaction is structurally valid and
+// has a stable hash, but it is not auth-valid against empty hogd-dev genesis.
+const CANONICAL_HASH_VECTOR_SIGNED_TX_XDR: &str = "\
 bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7\
 000000000000000000000000000f42400000000000000000000f424000000000000000010000000000000001\
 0000000050ec72dbafd4898c5df0e15ea6ba3e46240945b7210fe2d63dde1e896f42107a00000000000000\
 0000000001000000000000000041d0144af2776cae9804ed899018a6bc17a5705d74c84e02556b9695031\
 c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
-const CANONICAL_TX_HASH_HEX: &str =
+const CANONICAL_HASH_VECTOR_TX_HASH_HEX: &str =
     "9dc7ad0fc4f74a43a62e047c0d6885c8e4df2d4840298ecd52cf157681157ed3";
 
 const MAX_EVENTS_PER_PAGE: u32 = 50;
@@ -191,14 +193,17 @@ async fn invalid_xdr_is_rejected_with_tx_invalid_for_all_shapes() {
 }
 
 #[tokio::test]
-async fn valid_submit_returns_canonical_hash_for_all_shapes() {
+async fn canonical_hash_vector_submit_returns_hash_for_all_shapes() {
     for backend in all_shapes() {
         let tx_hash = server(backend.clone())
-            .send_raw_transaction(format!("0x{SIGNED_TX_XDR}"))
+            .send_raw_transaction(format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}"))
             .await
-            .expect("bug: valid signed tx should submit");
+            .expect("bug: canonical hash vector should submit to scripted backend");
 
-        assert_eq!(hex::encode(tx_hash.0.0.as_ref()), CANONICAL_TX_HASH_HEX);
+        assert_eq!(
+            hex::encode(tx_hash.0.0.as_ref()),
+            CANONICAL_HASH_VECTOR_TX_HASH_HEX
+        );
         assert_eq!(backend.submitted.lock().await.len(), 1);
     }
 }
