@@ -744,8 +744,9 @@ fn type_matches(ty: &ContractType, predicate: &dyn Fn(&ContractType) -> bool) ->
 mod tests {
     use super::*;
     use groundhog_contract_spec::{
-        ContractArrayType, ContractEnumVariant, ContractSpec, ContractSpecInterface,
-        ContractSpecMethod, ContractSpecString, ContractUnionCase, ContractVectorType,
+        ContractArrayType, ContractEnumDef, ContractEnumVariant, ContractSpec,
+        ContractSpecInterface, ContractSpecMethod, ContractSpecString, ContractStructDef,
+        ContractUnionCase, ContractVectorType,
     };
 
     fn spec_string(s: &str) -> ContractSpecString {
@@ -1018,6 +1019,263 @@ export type Result =
         assert_eq!(
             opens, closes,
             "braces must be balanced: {opens} opens vs {closes} closes"
+        );
+    }
+
+    /// ERC20-shaped contract with error enum, throws, and multiple methods.
+    fn erc20_spec() -> ContractSpec {
+        ContractSpec {
+            interfaces: vec![ContractSpecInterface {
+                name: spec_string("ERC20"),
+                vers: spec_string("0.1.0"),
+                throws: vec![ContractExceptionType {
+                    selector: 0xb199_47ac_b2fa_14ff,
+                    ty: ContractType::Named {
+                        named: spec_string("ERC20Error"),
+                    },
+                }]
+                .try_into()
+                .unwrap(),
+                methods: vec![
+                    ContractSpecMethod {
+                        name: spec_string("transfer"),
+                        args: vec![
+                            ContractField {
+                                name: spec_string("to"),
+                                ty: ContractType::Address,
+                            },
+                            ContractField {
+                                name: spec_string("amount"),
+                                ty: ContractType::U128,
+                            },
+                        ]
+                        .try_into()
+                        .unwrap(),
+                        return_type: ContractType::Void,
+                    },
+                    ContractSpecMethod {
+                        name: spec_string("get_balance"),
+                        args: vec![].try_into().unwrap(),
+                        return_type: ContractType::U128,
+                    },
+                    ContractSpecMethod {
+                        name: spec_string("get_balance_of"),
+                        args: vec![ContractField {
+                            name: spec_string("addr"),
+                            ty: ContractType::Address,
+                        }]
+                        .try_into()
+                        .unwrap(),
+                        return_type: ContractType::U128,
+                    },
+                ]
+                .try_into()
+                .unwrap(),
+            }]
+            .try_into()
+            .unwrap(),
+            type_defs: vec![ContractTypeDef::TypeDefEnum {
+                enum_def: ContractEnumDef {
+                    name: spec_string("ERC20Error"),
+                    variants: vec![
+                        ContractEnumVariant {
+                            name: spec_string("AlreadyInitialized"),
+                            value: 1,
+                        },
+                        ContractEnumVariant {
+                            name: spec_string("MustBeContractOwner"),
+                            value: 2,
+                        },
+                        ContractEnumVariant {
+                            name: spec_string("TooLarge"),
+                            value: 3,
+                        },
+                        ContractEnumVariant {
+                            name: spec_string("Internal"),
+                            value: 100,
+                        },
+                    ]
+                    .try_into()
+                    .unwrap(),
+                },
+            }]
+            .try_into()
+            .unwrap(),
+        }
+    }
+
+    #[test]
+    fn generates_erc20_bindings() {
+        let spec = erc20_spec();
+        let output = generate_ts_bindings(&spec, "erc20.wasm").unwrap();
+
+        // Entrypoint hashes
+        assert!(
+            output.contains("3799fd1c3d9b098f"),
+            "transfer entrypoint hash missing"
+        );
+        assert!(
+            output.contains("7a44649d55cabda8"),
+            "get_balance entrypoint hash missing"
+        );
+        assert!(
+            output.contains("73c9aac12bd15a84"),
+            "get_balance_of entrypoint hash missing"
+        );
+
+        // Enum declaration
+        assert!(
+            output.contains("export enum ERC20Error"),
+            "ERC20Error enum declaration missing"
+        );
+        assert!(
+            output.contains("AlreadyInitialized = 1"),
+            "AlreadyInitialized variant missing"
+        );
+        assert!(
+            output.contains("Internal = 100"),
+            "Internal variant missing"
+        );
+
+        // Function declarations with camelCase names
+        assert!(
+            output.contains("export function transfer("),
+            "transfer function missing"
+        );
+        assert!(
+            output.contains("export function getBalance("),
+            "getBalance function missing"
+        );
+        assert!(
+            output.contains("export function getBalanceOf("),
+            "getBalanceOf function missing"
+        );
+
+        // Typed arguments
+        let transfer_fn = output.split("export function transfer(").nth(1).unwrap();
+        let transfer_sig = &transfer_fn[..transfer_fn.find("): Invocation").unwrap()];
+        assert!(
+            transfer_sig.contains("to: ContractAddress"),
+            "transfer 'to' arg type mismatch"
+        );
+        assert!(
+            transfer_sig.contains("amount: bigint"),
+            "transfer 'amount' arg type mismatch"
+        );
+
+        let get_balance_of_fn = output
+            .split("export function getBalanceOf(")
+            .nth(1)
+            .unwrap();
+        let get_balance_of_sig =
+            &get_balance_of_fn[..get_balance_of_fn.find("): Invocation").unwrap()];
+        assert!(
+            get_balance_of_sig.contains("addr: ContractAddress"),
+            "getBalanceOf 'addr' arg type mismatch"
+        );
+
+        // Spec literal contains exception selector
+        assert!(
+            output.contains("selector: 0xb19947acb2fa14ffn"),
+            "exception selector missing from spec literal"
+        );
+
+        // Braces balanced
+        let opens = output.chars().filter(|&c| c == '{').count();
+        let closes = output.chars().filter(|&c| c == '}').count();
+        assert_eq!(
+            opens, closes,
+            "braces must be balanced: {opens} opens vs {closes} closes"
+        );
+    }
+
+    /// Contract with recursive type (Tree with optional left/right children).
+    fn recursive_type_spec() -> ContractSpec {
+        ContractSpec {
+            interfaces: vec![ContractSpecInterface {
+                name: spec_string("RecursiveTypeContract"),
+                vers: spec_string("0.1.0"),
+                throws: vec![].try_into().unwrap(),
+                methods: vec![ContractSpecMethod {
+                    name: spec_string("depth"),
+                    args: vec![ContractField {
+                        name: spec_string("tree"),
+                        ty: ContractType::Named {
+                            named: spec_string("Tree"),
+                        },
+                    }]
+                    .try_into()
+                    .unwrap(),
+                    return_type: ContractType::U32,
+                }]
+                .try_into()
+                .unwrap(),
+            }]
+            .try_into()
+            .unwrap(),
+            type_defs: vec![ContractTypeDef::TypeDefStruct {
+                struct_def: ContractStructDef {
+                    name: spec_string("Tree"),
+                    fields: vec![
+                        ContractField {
+                            name: spec_string("value"),
+                            ty: ContractType::U32,
+                        },
+                        ContractField {
+                            name: spec_string("left"),
+                            ty: ContractType::Option {
+                                option_inner: Some(Box::new(ContractType::Named {
+                                    named: spec_string("Tree"),
+                                })),
+                            },
+                        },
+                        ContractField {
+                            name: spec_string("right"),
+                            ty: ContractType::Option {
+                                option_inner: Some(Box::new(ContractType::Named {
+                                    named: spec_string("Tree"),
+                                })),
+                            },
+                        },
+                    ]
+                    .try_into()
+                    .unwrap(),
+                },
+            }]
+            .try_into()
+            .unwrap(),
+        }
+    }
+
+    #[test]
+    fn generates_recursive_type_bindings() {
+        let spec = recursive_type_spec();
+        let output = generate_ts_bindings(&spec, "recursive.wasm").unwrap();
+
+        // Tree struct emitted as TypeScript interface
+        assert!(
+            output.contains("export interface Tree"),
+            "Tree interface declaration missing"
+        );
+        assert!(
+            output.contains("value: bigint;"),
+            "Tree.value field missing"
+        );
+        assert!(
+            output.contains("left: Tree | null;"),
+            "Tree.left field missing"
+        );
+        assert!(
+            output.contains("right: Tree | null;"),
+            "Tree.right field missing"
+        );
+
+        // depth function uses Named("Tree") argument
+        let depth_fn = output.split("export function depth(").nth(1).unwrap();
+        let depth_sig = &depth_fn[..depth_fn.find("): Invocation").unwrap()];
+        assert!(
+            depth_sig.contains("tree: Tree"),
+            "depth 'tree' arg type mismatch"
         );
     }
 }
