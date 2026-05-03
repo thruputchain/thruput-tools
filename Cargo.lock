@@ -934,6 +934,7 @@ dependencies = [
  "clap_complete",
  "getrandom 0.2.17",
  "groundhog-contract-spec",
+ "groundhog-contract-util",
  "groundhog-dev-node",
  "groundhog-node-supervisor",
  "groundhog-rpc-api-types",
@@ -971,6 +972,18 @@ checksum = "ae9a10a473ed39f290a6c9a4304d2e17f0b264abc88c13377e898979ab0f3bed"
 dependencies = [
  "groundhog-spec",
  "groundhog-xdr",
+ "xdrs",
+]
+
+[[package]]
+name = "groundhog-contract-util"
+version = "0.13.0"
+source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
+checksum = "287a6722b81110779a74f8c4b906a3c5e3b49caf9a2d1572381a3a739a56f5fd"
+dependencies = [
+ "groundhog-xdr",
+ "semver",
+ "sha2",
  "xdrs",
 ]
 

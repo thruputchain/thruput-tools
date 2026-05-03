@@ -7,10 +7,10 @@ use groundhog_signing::{
     BuildCallTransaction, DEFAULT_TX_GAS_LIMIT, SignTransactionParams, Signer,
     build_call_transaction, sign_transaction,
 };
+use groundhog_contract_util::{NormalizedMethodSignature, contract_entrypoint_id};
 use groundhog_xdr::auth_claim::AuthClaim;
 use groundhog_xdr::contract::ContractEntrypointID;
 use serde_json::json;
-use sha2::{Digest, Sha256};
 
 use crate::artifacts::ArtifactOptions;
 use crate::build::{cargo_metadata_with_artifacts, resolve_package};
@@ -377,16 +377,28 @@ fn resolve_call(
         });
     }
     if let Some(metadata) = resolve_spec_method(cwd, method, artifacts)? {
+        let sig = NormalizedMethodSignature::new(method);
         return Ok(ResolvedCall {
-            entrypoint: contract_entrypoint_id(&metadata.interface_name, &metadata.version, method),
+            entrypoint: contract_entrypoint_id(
+                Some(&metadata.interface_name),
+                &metadata.version,
+                &sig,
+            ),
             metadata: Some(CallMetadata::Spec(metadata)),
         });
     }
     match resolve_local_contract_metadata(cwd, method, artifacts)? {
-        Some(metadata) => Ok(ResolvedCall {
-            entrypoint: contract_entrypoint_id(&metadata.interface_name, &metadata.version, method),
-            metadata: Some(CallMetadata::Local(metadata)),
-        }),
+        Some(metadata) => {
+            let sig = NormalizedMethodSignature::new(method);
+            Ok(ResolvedCall {
+                entrypoint: contract_entrypoint_id(
+                    Some(&metadata.interface_name),
+                    &metadata.version,
+                    &sig,
+                ),
+                metadata: Some(CallMetadata::Local(metadata)),
+            })
+        }
         None => Err(CliError::Other(
             "cannot resolve the contract method from the local project or embedded contract spec. \
              Run `groundhog build` from inside the project that defines the contract, or pass an \
@@ -841,53 +853,16 @@ fn last_ident(input: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-fn contract_entrypoint_id(
-    interface_name: &str,
-    version_str: &str,
-    method: &str,
-) -> ContractEntrypointID {
-    let mut hasher = Sha256::new();
-    hasher.update(interface_name.as_bytes());
-    hasher.update(major_version(version_str).as_bytes());
-    hasher.update(method.as_bytes());
-    let hash = hasher.finalize();
-    let mut id = [0u8; 8];
-    id.copy_from_slice(&hash[..8]);
-    ContractEntrypointID::from(id)
-}
-
-fn major_version(version: &str) -> &str {
-    let normalized = version.split_once('+').map_or(version, |(base, _)| base);
-    let normalized = normalized
-        .split_once('-')
-        .map_or(normalized, |(base, _)| base);
-
-    let mut parts = normalized.split('.');
-    let major = parts.next().unwrap_or(normalized);
-    let minor = parts.next().unwrap_or("0");
-    let patch = parts.next().unwrap_or("0");
-
-    if major != "0" {
-        major
-    } else if minor != "0" {
-        &normalized[..major.len() + 1 + minor.len()]
-    } else if patch != "0" {
-        &normalized[..major.len() + 1 + minor.len() + 1 + patch.len()]
-    } else {
-        normalized
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::Path;
 
     use super::{
-        ResolvedCall, contract_entrypoint_id, contract_metadata_from_source,
-        explicit_entrypoint_id, filter_candidates_by_interfaces, format_entrypoint_id,
-        load_project_registered_interfaces, major_version, parse_contract_attr_value,
-        resolve_spec_method, selector_json, selector_summary,
+        ResolvedCall, contract_metadata_from_source, explicit_entrypoint_id,
+        filter_candidates_by_interfaces, format_entrypoint_id, load_project_registered_interfaces,
+        parse_contract_attr_value, resolve_spec_method, selector_json, selector_summary,
     };
+    use groundhog_contract_util::{NormalizedMethodSignature, contract_entrypoint_id};
     use crate::CliError;
     use crate::artifacts::ArtifactOptions;
     use crate::codec::{
@@ -984,14 +959,6 @@ mod tests {
     }
 
     #[test]
-    fn selector_uses_interface_and_major_version() {
-        let _id = contract_entrypoint_id("Counter", "0.1.0", "get");
-        assert_eq!(major_version("1.2.3-alpha"), "1");
-        assert_eq!(major_version("0.9.2"), "0.9");
-        assert_eq!(major_version("0.0.2"), "0.0.2");
-    }
-
-    #[test]
     fn formats_entrypoint_ids_as_prefixed_hex() {
         let entrypoint = explicit_entrypoint_id("0x0123456789abcdef")
             .expect("bug: valid entrypoint hex should parse")
@@ -1001,8 +968,9 @@ mod tests {
 
     #[test]
     fn selector_helpers_report_explicit_entrypoint_resolution() {
+        let sig = NormalizedMethodSignature::new("get");
         let resolved = ResolvedCall {
-            entrypoint: contract_entrypoint_id("Counter", "0.1.0", "get"),
+            entrypoint: contract_entrypoint_id(Some("Counter"), "0.1.0", &sig),
             metadata: None,
         };
 
@@ -1019,8 +987,9 @@ mod tests {
     #[test]
     fn selector_helpers_report_embedded_spec_resolution() {
         let metadata = sample_single_arg_spec_metadata(ContractType::U32);
+        let sig = NormalizedMethodSignature::new("call");
         let resolved = ResolvedCall {
-            entrypoint: contract_entrypoint_id("Counter", "0.1.0", "call"),
+            entrypoint: contract_entrypoint_id(Some("Counter"), "0.1.0", &sig),
             metadata: Some(CallMetadata::Spec(metadata)),
         };
 
@@ -1039,8 +1008,9 @@ mod tests {
 
     #[test]
     fn selector_helpers_report_local_metadata_resolution() {
+        let sig = NormalizedMethodSignature::new("get");
         let resolved = ResolvedCall {
-            entrypoint: contract_entrypoint_id("Counter", "0.1.0", "get"),
+            entrypoint: contract_entrypoint_id(Some("Counter"), "0.1.0", &sig),
             metadata: Some(CallMetadata::Local(ContractMetadata {
                 interface_name: "Counter".into(),
                 version: "0.1.0".into(),

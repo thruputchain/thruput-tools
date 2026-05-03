@@ -53,6 +53,7 @@ groundhog-sys = { version = "0.13.0", registry = "groundhog" }
 groundhog-wasm-meter = { version = "0.3.0", registry = "groundhog" }
 groundhog-spec-tool = { version = "0.13.0", registry = "groundhog" }
 groundhog-contract-spec = { version = "0.13.0", registry = "groundhog" }
+groundhog-contract-util = { version = "0.13.0", registry = "groundhog" }
 groundhog-trace = { version = "=0.9.4", registry = "groundhog" }
 
 # --- Async ---
