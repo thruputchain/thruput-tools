@@ -11,6 +11,7 @@ pub mod contract_spec;
 pub mod deploy;
 pub(crate) mod dev_detail;
 pub mod dev_keys;
+pub mod entrypoint_id;
 pub mod error;
 pub mod init;
 pub mod keys;

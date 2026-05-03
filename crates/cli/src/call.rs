@@ -10,7 +10,6 @@ use groundhog_signing::{
 use groundhog_xdr::auth_claim::AuthClaim;
 use groundhog_xdr::contract::ContractEntrypointID;
 use serde_json::json;
-use sha2::{Digest, Sha256};
 
 use crate::artifacts::ArtifactOptions;
 use crate::build::{cargo_metadata_with_artifacts, resolve_package};
@@ -21,6 +20,7 @@ use crate::codec::{
 use crate::config::{find_project_config, resolve_default_key, resolve_profile};
 use crate::contract_spec::{InterfaceSpec, load_contract_spec, load_registered_interfaces};
 use crate::dev_detail::{fetch_transaction_detail_blocking, print_transaction_detail};
+use crate::entrypoint_id::contract_entrypoint_id;
 use crate::keys::load_local_signer;
 use crate::result::CommandResult;
 use crate::tx_utils::{
@@ -841,52 +841,14 @@ fn last_ident(input: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-fn contract_entrypoint_id(
-    interface_name: &str,
-    version_str: &str,
-    method: &str,
-) -> ContractEntrypointID {
-    let mut hasher = Sha256::new();
-    hasher.update(interface_name.as_bytes());
-    hasher.update(major_version(version_str).as_bytes());
-    hasher.update(method.as_bytes());
-    let hash = hasher.finalize();
-    let mut id = [0u8; 8];
-    id.copy_from_slice(&hash[..8]);
-    ContractEntrypointID::from(id)
-}
-
-fn major_version(version: &str) -> &str {
-    let normalized = version.split_once('+').map_or(version, |(base, _)| base);
-    let normalized = normalized
-        .split_once('-')
-        .map_or(normalized, |(base, _)| base);
-
-    let mut parts = normalized.split('.');
-    let major = parts.next().unwrap_or(normalized);
-    let minor = parts.next().unwrap_or("0");
-    let patch = parts.next().unwrap_or("0");
-
-    if major != "0" {
-        major
-    } else if minor != "0" {
-        &normalized[..major.len() + 1 + minor.len()]
-    } else if patch != "0" {
-        &normalized[..major.len() + 1 + minor.len() + 1 + patch.len()]
-    } else {
-        normalized
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::Path;
 
     use super::{
-        ResolvedCall, contract_entrypoint_id, contract_metadata_from_source,
-        explicit_entrypoint_id, filter_candidates_by_interfaces, format_entrypoint_id,
-        load_project_registered_interfaces, major_version, parse_contract_attr_value,
-        resolve_spec_method, selector_json, selector_summary,
+        ResolvedCall, contract_metadata_from_source, explicit_entrypoint_id,
+        filter_candidates_by_interfaces, format_entrypoint_id, load_project_registered_interfaces,
+        parse_contract_attr_value, resolve_spec_method, selector_json, selector_summary,
     };
     use crate::CliError;
     use crate::artifacts::ArtifactOptions;
@@ -896,6 +858,7 @@ mod tests {
         encode_args as encode_calldata, normalize_type_name,
     };
     use crate::contract_spec::InterfaceSpec;
+    use crate::entrypoint_id::contract_entrypoint_id;
     use crate::tx_utils::summarize_exec_status;
     use groundhog_contract_spec::{
         ContractArrayType, ContractEnumDef, ContractEnumVariant, ContractField, ContractSpec,
@@ -981,14 +944,6 @@ mod tests {
         assert_eq!(metadata[0].version, "1.2.3");
         assert_eq!(metadata[0].method.arg_types, Vec::<String>::new());
         assert_eq!(metadata[0].method.return_type.as_deref(), Some("u32"));
-    }
-
-    #[test]
-    fn selector_uses_interface_and_major_version() {
-        let _id = contract_entrypoint_id("Counter", "0.1.0", "get");
-        assert_eq!(major_version("1.2.3-alpha"), "1");
-        assert_eq!(major_version("0.9.2"), "0.9");
-        assert_eq!(major_version("0.0.2"), "0.0.2");
     }
 
     #[test]
