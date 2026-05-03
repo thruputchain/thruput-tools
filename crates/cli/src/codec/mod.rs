@@ -103,10 +103,23 @@ pub(crate) fn parse_contract_address(hex_str: &str) -> Result<ContractAddress, C
     )?))
 }
 
-/// Decode a spec string as UTF-8 text.
+/// Decode a spec string as UTF-8 text and validate it as a safe identifier.
+///
+/// Spec strings originate from Rust type and method names. A string
+/// containing quotes, backslashes, or whitespace signals a malformed
+/// spec and is rejected rather than propagated into generated output.
 pub(crate) fn spec_string_text(value: &ContractSpecString) -> Result<&str, CliError> {
-    std::str::from_utf8(value.as_ref())
-        .map_err(|e| CliError::SpecFailed(format!("contract spec contains invalid UTF-8: {e}")))
+    let s = std::str::from_utf8(value.as_ref())
+        .map_err(|e| CliError::SpecFailed(format!("contract spec contains invalid UTF-8: {e}")))?;
+    if let Some(bad) = s
+        .chars()
+        .find(|&c| c == '"' || c == '\\' || c.is_whitespace())
+    {
+        return Err(CliError::SpecFailed(format!(
+            "contract spec name `{s}` contains invalid character `{bad}`"
+        )));
+    }
+    Ok(s)
 }
 
 /// Build an index of named embedded type definitions.
@@ -1474,4 +1487,58 @@ where
     T: AsRef<[u8]>,
 {
     Value::from(format!("0x{}", hex::encode(value.as_ref())))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn spec_string(s: &str) -> ContractSpecString {
+        s.try_into().unwrap()
+    }
+
+    #[test]
+    fn spec_string_text_accepts_valid_identifiers() {
+        assert_eq!(
+            spec_string_text(&spec_string("Counter")).unwrap(),
+            "Counter"
+        );
+        assert_eq!(
+            spec_string_text(&spec_string("get_balance")).unwrap(),
+            "get_balance"
+        );
+        assert_eq!(
+            spec_string_text(&spec_string("ERC20Error")).unwrap(),
+            "ERC20Error"
+        );
+        assert_eq!(spec_string_text(&spec_string("0.1.0")).unwrap(), "0.1.0");
+    }
+
+    #[test]
+    fn spec_string_text_rejects_quotes() {
+        let s = spec_string("bad\"name");
+        let err = spec_string_text(&s).unwrap_err();
+        assert!(err.to_string().contains("invalid character"), "{err}");
+    }
+
+    #[test]
+    fn spec_string_text_rejects_backslash() {
+        let s = spec_string("bad\\name");
+        let err = spec_string_text(&s).unwrap_err();
+        assert!(err.to_string().contains("invalid character"), "{err}");
+    }
+
+    #[test]
+    fn spec_string_text_rejects_whitespace() {
+        let s = spec_string("bad name");
+        let err = spec_string_text(&s).unwrap_err();
+        assert!(err.to_string().contains("invalid character"), "{err}");
+    }
+
+    #[test]
+    fn spec_string_text_rejects_tab() {
+        let s = spec_string("bad\tname");
+        let err = spec_string_text(&s).unwrap_err();
+        assert!(err.to_string().contains("invalid character"), "{err}");
+    }
 }

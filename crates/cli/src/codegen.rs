@@ -705,49 +705,6 @@ fn emit_method_function(
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Check whether any method argument or return type in the spec satisfies
-/// the predicate.
-#[allow(dead_code)]
-fn spec_uses_type(spec: &ContractSpec, predicate: fn(&ContractType) -> bool) -> bool {
-    for iface in spec.interfaces.iter() {
-        for method in iface.methods.iter() {
-            if type_matches(&method.return_type, &predicate) {
-                return true;
-            }
-            for arg in method.args.iter() {
-                if type_matches(&arg.ty, &predicate) {
-                    return true;
-                }
-            }
-        }
-    }
-    false
-}
-
-/// Recursively check whether a type or any of its children match the
-/// predicate.
-#[allow(dead_code)]
-fn type_matches(ty: &ContractType, predicate: &dyn Fn(&ContractType) -> bool) -> bool {
-    if predicate(ty) {
-        return true;
-    }
-    match ty {
-        ContractType::Option { option_inner } => option_inner
-            .as_deref()
-            .is_some_and(|inner| type_matches(inner, predicate)),
-        ContractType::Vector { vector } => vector
-            .element
-            .as_deref()
-            .is_some_and(|elem| type_matches(elem, predicate)),
-        ContractType::Array { array } => array
-            .element
-            .as_deref()
-            .is_some_and(|elem| type_matches(elem, predicate)),
-        ContractType::Tuple { tuple } => tuple.iter().any(|elem| type_matches(elem, predicate)),
-        _ => false,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
