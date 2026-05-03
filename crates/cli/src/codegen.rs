@@ -173,27 +173,6 @@ fn emit_inline_struct_fields<'a>(
 }
 
 // ---------------------------------------------------------------------------
-// camelCase conversion
-// ---------------------------------------------------------------------------
-
-/// Convert a `snake_case` identifier to `camelCase`.
-fn to_camel_case(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
-    let mut capitalize_next = false;
-    for ch in s.chars() {
-        if ch == '_' {
-            capitalize_next = true;
-        } else if capitalize_next {
-            result.extend(ch.to_uppercase());
-            capitalize_next = false;
-        } else {
-            result.push(ch);
-        }
-    }
-    result
-}
-
-// ---------------------------------------------------------------------------
 // Full binding file generation
 // ---------------------------------------------------------------------------
 
@@ -649,17 +628,16 @@ fn emit_method_function(
     method: &ContractSpecMethod,
 ) -> Result<(), CliError> {
     let method_name = spec_string_text(&method.name)?;
-    let fn_name = to_camel_case(method_name);
     let has_args = !method.args.is_empty();
 
     // Function signature
     if has_args {
-        let _ = writeln!(out, "export function {fn_name}(");
+        let _ = writeln!(out, "export function {method_name}(");
         let _ = writeln!(out, "  contract: ContractAddress,");
         let _ = writeln!(out, "  gasLimit: GasAmount,");
         let mut args_fields = String::new();
         for (i, arg) in method.args.iter().enumerate() {
-            let arg_name = to_camel_case(spec_string_text(&arg.name)?);
+            let arg_name = spec_string_text(&arg.name)?;
             let ts_ty = ts_type_ref(&arg.ty)?;
             if i > 0 {
                 args_fields.push_str("; ");
@@ -669,7 +647,7 @@ fn emit_method_function(
         let _ = writeln!(out, "  args: {{ {args_fields} }},");
         let _ = writeln!(out, "): Invocation {{");
     } else {
-        let _ = writeln!(out, "export function {fn_name}(");
+        let _ = writeln!(out, "export function {method_name}(");
         let _ = writeln!(out, "  contract: ContractAddress,");
         let _ = writeln!(out, "  gasLimit: GasAmount,");
         let _ = writeln!(out, "): Invocation {{");
@@ -686,7 +664,7 @@ fn emit_method_function(
             .args
             .iter()
             .map(|arg| {
-                let name = to_camel_case(spec_string_text(&arg.name)?);
+                let name = spec_string_text(&arg.name)?;
                 Ok(format!("args.{name}"))
             })
             .collect::<Result<_, CliError>>()?;
@@ -937,15 +915,6 @@ export type Result =
         assert_eq!(emit_type_def(&def).unwrap(), expected);
     }
 
-    #[test]
-    fn converts_snake_case_to_camel_case() {
-        assert_eq!(to_camel_case("get_balance"), "getBalance");
-        assert_eq!(to_camel_case("transfer_from"), "transferFrom");
-        assert_eq!(to_camel_case("get"), "get");
-        assert_eq!(to_camel_case("adjust_allowance"), "adjustAllowance");
-        assert_eq!(to_camel_case("total_supply"), "totalSupply");
-    }
-
     /// Build a minimal counter contract spec: `get() -> U64` and
     /// `increment(amount: U64) -> Void`.
     fn counter_spec() -> ContractSpec {
@@ -1151,18 +1120,18 @@ export type Result =
             "Internal variant missing"
         );
 
-        // Function declarations with camelCase names
+        // Function declarations
         assert!(
             output.contains("export function transfer("),
             "transfer function missing"
         );
         assert!(
-            output.contains("export function getBalance("),
-            "getBalance function missing"
+            output.contains("export function get_balance("),
+            "get_balance function missing"
         );
         assert!(
-            output.contains("export function getBalanceOf("),
-            "getBalanceOf function missing"
+            output.contains("export function get_balance_of("),
+            "get_balance_of function missing"
         );
 
         // Typed arguments
@@ -1178,14 +1147,14 @@ export type Result =
         );
 
         let get_balance_of_fn = output
-            .split("export function getBalanceOf(")
+            .split("export function get_balance_of(")
             .nth(1)
             .unwrap();
         let get_balance_of_sig =
             &get_balance_of_fn[..get_balance_of_fn.find("): Invocation").unwrap()];
         assert!(
             get_balance_of_sig.contains("addr: ContractAddress"),
-            "getBalanceOf 'addr' arg type mismatch"
+            "get_balance_of 'addr' arg type mismatch"
         );
 
         // Spec literal contains exception selector
