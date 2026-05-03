@@ -388,16 +388,14 @@ fn syscall_name(body: &SyscallTraceBody) -> &'static str {
         SyscallTraceBody::kGetTransactionStatistics { .. } => "getTransactionStatistics",
         SyscallTraceBody::kChangePublicKeyRegistration { .. } => "changePublicKeyRegistration",
         SyscallTraceBody::kLogEvent { .. } => "logEvent",
-        SyscallTraceBody::kGetAuthClaimCount { .. } => "getAuthClaimCount",
         SyscallTraceBody::kGetAuthClaim { .. } => "getAuthClaim",
         SyscallTraceBody::kSHA256Update { .. } => "sha256Update",
         SyscallTraceBody::kSHA256Finalize { .. } => "sha256Finalize",
-        SyscallTraceBody::kWriteAddressNonceConfig { .. } => "writeAddressNonceConfig",
-        SyscallTraceBody::kWriteAddressGasPermissionConfigs { .. } => {
-            "writeAddressGasPermissionConfigs"
-        }
+        SyscallTraceBody::kWriteAddressRequiredWeight { .. } => "writeAddressRequiredWeight",
         SyscallTraceBody::kGetBlockHeight { .. } => "getBlockHeight",
         SyscallTraceBody::kRetrocausalQueuePeekLen { .. } => "retrocausalQueuePeekLen",
+        SyscallTraceBody::kMintAuthToken { .. } => "mintAuthToken",
+        SyscallTraceBody::kConsumeAuthToken { .. } => "consumeAuthToken",
         _ => "unknown",
     }
 }

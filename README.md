@@ -16,7 +16,6 @@ server layer, transaction signing library, and typed client.
 | [`rpc-api`](crates/rpc-api/) | Shared jsonrpsee trait definitions |
 | [`rpc-server`](crates/rpc-server/) | Shared server-side JSON-RPC implementation and validation |
 | [`x23-transport`](crates/x23-transport/) | Shared x23 connection-pool helpers (used by gateway and node-supervisor) |
-| [`dev-node`](crates/dev-node/) | Experimental local JSON-RPC dev node (`native_exec` prototype backend) |
 | [`node-supervisor`](crates/node-supervisor/) | `groundhog node` facade: supervises hogd-dev and serves JSON-RPC via `rpc-server` (durable local-node path; chain/submit wired to hogd-dev scheduler, read wired to hogd-dev indexer when advertised; end-to-end read coverage gated on the hogd-dev v1 binary exposing the indexer endpoint) |
 | [`e2e-tests`](crates/e2e-tests/) | Process-level JSON-RPC smoke tests |
 | [`bench`](crates/bench/) | Benchmark harnesses |
@@ -34,6 +33,10 @@ For the experimental local dev node:
 ```bash
 cargo run -p groundhog-cli --features dev-node -- node
 ```
+
+`groundhog node` now uses the hogd-dev supervisor path. The legacy
+`native_exec` prototype source remains in `crates/dev-node/` for reference but
+is no longer part of the workspace or CLI feature.
 
 Or install the CLI with experimental local dev-node support:
 

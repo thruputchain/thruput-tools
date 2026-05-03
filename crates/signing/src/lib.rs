@@ -14,7 +14,7 @@ pub use account::{DEFAULT_PUBKEY_ACCOUNT_NONCE, PUBKEY_ACCOUNT_TAG_STR, PubkeyAc
 pub use build::{
     BuildCallTransaction, BuildDeployTransaction, DEFAULT_TX_GAS_LIMIT, SignTransactionParams,
     WALLET_DEPLOY_ENTRYPOINT, build_call_transaction, build_deploy_transaction,
-    derive_deploy_address, sign_transaction,
+    derive_deploy_address, sign_transaction, source_address_auth_claim,
 };
 pub use encode::{encode_signed_transaction_xdr, encode_transaction_xdr};
 pub use error::SigningError;
@@ -68,9 +68,7 @@ mod tests {
             gas_limit: 1_000_000,
             block_expiry_height: 1_000_000,
             nonce: 1,
-            auth_claims: vec![account.auth_claim()]
-                .try_into()
-                .expect("bug: test auth claims are within bounds"),
+            auth_claim: account.auth_claim(),
         });
 
         let tx_hash = transaction_hash(&tx).expect("bug: tx hash should encode");
@@ -83,12 +81,12 @@ mod tests {
 
         assert_eq!(
             hex::encode(tx_hash.as_ref()),
-            "6e94695b6af0fbc13d96876f7fb8e940cd9db4d247e53614a45da252b3a7853a"
+            "9dc7ad0fc4f74a43a62e047c0d6885c8e4df2d4840298ecd52cf157681157ed3"
         );
         assert_eq!(decoded_signed_tx, signed_tx);
         assert_eq!(
             hex::encode(signed_tx_xdr),
-            "bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7000000000000000000000000000f42400000000000000000000f424000000000000000010000000000000001000000040000000050ec72dbafd4898c5df0e15ea6ba3e46240945b7210fe2d63dde1e896f42107a00000000000000000000000000000001000000000000000000000000706f58acd087550f315030db4beeb1527e86f0e12d9781957cdcc522f33e5d719b93c200381cff5bfb26a1ee8ce7874ffd485322cd5a0806605d2ffa51c8cf0f"
+            "bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7000000000000000000000000000f42400000000000000000000f4240000000000000000100000000000000010000000050ec72dbafd4898c5df0e15ea6ba3e46240945b7210fe2d63dde1e896f42107a000000000000000000000001000000000000000041d0144af2776cae9804ed899018a6bc17a5705d74c84e02556b9695031c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d"
         );
     }
 }

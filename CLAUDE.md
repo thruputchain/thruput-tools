@@ -29,16 +29,9 @@ Workspace crates in `crates/`:
   for deploy and call, XDR encoding.
 - **tx-builder** — thin CLI wrapper over signing (temporary).
 - **cli** — `groundhog` binary. Wraps the Rust/WASM build and test
-  workflow plus deploy/call and local dev-node control. Lib/bin split:
+  workflow plus deploy/call and hogd-dev local-node control. Lib/bin split:
   all logic in the library crate, `main.rs` is pure dispatch.
   Subcommand functions take plain Rust types, not clap structs.
-- **dev-node** — feature-gated experimental local JSON-RPC dev node
-  backed by the SDK `native_exec` / hogd `test_ffi` prototype on a
-  dedicated worker thread. It exposes the public Groundhog API through
-  rpc-server and keeps `groundhog_dev_*` controls local to dev-node. It
-  shares execution semantics with SDK tests, but the durable backend
-  direction is a hogd-side embedded execution library; see the CLI
-  planning docs.
 - **node-supervisor** — `groundhog node` facade. Supervises a hogd-owned
   `hogd-dev` subprocess and embeds `rpc-server` to serve the public
   JSON-RPC. `chainTip` and `sendRawTransaction` are backed by hogd-dev's
@@ -47,9 +40,9 @@ Workspace crates in `crates/`:
   (otherwise the read plane stays stubbed `NotImplemented` per the v1
   reduced contract). End-to-end coverage of the read plane is gated on
   the hogd-dev v1 binary actually exposing the indexer endpoint with
-  full event-feed wiring. Durable local-node path; `dev-node` remains
-  the native-exec prototype until hogd-dev covers the normal local
-  development loop.
+  full event-feed wiring. This is the only CLI local-node backend; the
+  legacy native-exec prototype source is retained outside the workspace for
+  reference only.
 - **e2e-tests** — ignored process-level JSON-RPC lifecycle smoke tests.
 - **bench** — benchmark harnesses.
 

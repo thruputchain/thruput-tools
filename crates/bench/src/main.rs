@@ -97,9 +97,7 @@ fn generate_tx_batch(count: usize, num_accounts: usize) -> Vec<String> {
                 gas_limit: 10_000_000,
                 block_expiry_height: 10_000_000,
                 nonce: i as u64,
-                auth_claims: vec![accounts[idx].auth_claim()]
-                    .try_into()
-                    .expect("bug: auth claims"),
+                auth_claim: accounts[idx].auth_claim(),
             });
 
             let signed = sign_transaction(tx, &signers[idx], SignTransactionParams::default())
