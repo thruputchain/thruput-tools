@@ -1,10 +1,10 @@
 //! End-to-end tests for the Groundhog JSON-RPC API.
 //!
-//! These tests connect to a running server (dev-node or gateway).
+//! These tests connect to a running RPC server (hogd-dev local node or gateway).
 //! Set `RPC_URL` env var to override the default (http://127.0.0.1:9545).
 //!
-//! Start a dev-node first:
-//!   cargo run -p groundhog-cli --features dev-node -- node
+//! Start a local node first:
+//!   cargo run -p groundhog-cli --features dev-node -- node --hogd-dev-binary /path/to/hogd-dev
 //!
 //! Then run:
 //!   cargo test -p groundhog-e2e-tests -- --ignored
@@ -35,7 +35,7 @@ fn zero_hash() -> groundhog_rpc_api_types::transaction::TxHash {
 }
 
 #[tokio::test]
-#[ignore = "requires running dev-node or gateway"]
+#[ignore = "requires running hogd-dev local node or gateway"]
 async fn chain_tip_returns_valid_response() {
     let c = client();
     let tip = c.chain_tip().await.expect("chainTip should succeed");
@@ -50,7 +50,7 @@ async fn chain_tip_returns_valid_response() {
 }
 
 #[tokio::test]
-#[ignore = "requires running dev-node or gateway"]
+#[ignore = "requires running hogd-dev local node or gateway"]
 async fn unknown_tx_returns_unknown_status() {
     let c = client();
     let status = c
@@ -65,7 +65,7 @@ async fn unknown_tx_returns_unknown_status() {
 }
 
 #[tokio::test]
-#[ignore = "requires running dev-node or gateway"]
+#[ignore = "requires running hogd-dev local node or gateway"]
 async fn unknown_tx_receipt_is_none() {
     let c = client();
     let receipt = c
@@ -76,7 +76,7 @@ async fn unknown_tx_receipt_is_none() {
 }
 
 #[tokio::test]
-#[ignore = "requires running dev-node or gateway"]
+#[ignore = "requires running hogd-dev local node or gateway"]
 async fn invalid_hex_is_rejected() {
     let c = client();
     let result = c.send_raw_transaction("not-valid-hex".to_string()).await;
@@ -84,13 +84,12 @@ async fn invalid_hex_is_rejected() {
 }
 
 #[tokio::test]
-#[ignore = "requires running dev-node or gateway"]
+#[ignore = "requires running hogd-dev local node or gateway"]
 async fn pending_transaction_count_returns_stub_or_value() {
     let c = client();
-    // May return NotImplemented (-32052) on gateway or 0 on dev-node.
-    // Either is acceptable.
+    // May return NotImplemented (-32052) until a scheduler size RPC exists.
     let _result = c.pending_transaction_count().await;
-    // Not asserting on success/failure — both are valid depending on backend.
+    // Not asserting on success/failure while backend capabilities are evolving.
 }
 
 /// `getEvents` query that fetches every event emitted by `addr`,
@@ -118,7 +117,7 @@ fn events_for_address(
 }
 
 #[tokio::test]
-#[ignore = "requires running gateway with populated indexer"]
+#[ignore = "requires running RPC server with populated indexer"]
 async fn get_events_returns_well_formed_page() {
     let c = client();
     let query = events_for_address(
@@ -161,7 +160,7 @@ async fn get_events_returns_well_formed_page() {
 /// non-overlapping pages OR an empty stream — never a stuck cursor that
 /// returns the same page repeatedly.
 #[tokio::test]
-#[ignore = "requires running gateway with populated indexer"]
+#[ignore = "requires running RPC server with populated indexer"]
 async fn get_events_cursor_walks_or_terminates() {
     let c = client();
     let mut query = events_for_address(
@@ -201,5 +200,5 @@ async fn get_events_cursor_walks_or_terminates() {
 
 // TODO: add submit_and_query_receipt test once we can construct valid
 // transactions against the running node's genesis state. Requires
-// knowing the pre-funded account keys (dev-node provides them via
-// groundhog_dev_getAccounts, gateway doesn't).
+// the local node to expose pre-funded account keys via
+// groundhog_dev_getAccounts.

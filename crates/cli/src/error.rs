@@ -75,10 +75,6 @@ pub enum CliError {
     NotImplemented,
     #[error("status check found warnings")]
     StatusHasWarnings,
-    #[error("dev node error: {0}")]
-    DevNode(String),
-    #[error("dev node could not start in this environment: {0}")]
-    DevNodeSandbox(String),
     #[error("node supervisor error: {0}")]
     NodeSupervisor(String),
     #[error("could not connect to {0}")]
@@ -141,8 +137,6 @@ impl CliError {
             Self::JsonUnsupported(_) => "json_unsupported",
             Self::NotImplemented => "not_implemented",
             Self::StatusHasWarnings => "status_has_warnings",
-            Self::DevNode(_) => "dev_node_error",
-            Self::DevNodeSandbox(_) => "dev_node_sandbox",
             Self::NodeSupervisor(_) => "node_supervisor_error",
             Self::RpcConnect(_) => "rpc_connect",
             Self::MissingRpcUrl => "missing_rpc_url",
@@ -207,10 +201,6 @@ impl CliError {
             Self::UnknownTemplate(_) => {
                 Some(Cow::Borrowed("available templates: `counter`, `stub`"))
             }
-            Self::DevNode(_) => Some(Cow::Borrowed("check the dev node output for details")),
-            Self::DevNodeSandbox(_) => Some(Cow::Borrowed(
-                "rerun `groundhog node` outside the sandbox or process-isolation environment",
-            )),
             Self::NodeSupervisor(_) => Some(Cow::Borrowed(
                 "check `--hogd-dev-binary`, the hogd-dev process output, and the local node logs",
             )),

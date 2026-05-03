@@ -1,14 +1,13 @@
 use std::path::Path;
 
-use groundhog_contract_util::{NormalizedMethodSignature, contract_entrypoint_id};
+use groundhog_contract_util::NormalizedMethodSignature;
 use groundhog_rpc_api_types::receipt::ExecStatus;
 use groundhog_rpc_api_types::receipt::TransactionReceipt;
 use groundhog_rpc_api_types::transaction::TxHash;
 use groundhog_signing::{
     BuildCallTransaction, DEFAULT_TX_GAS_LIMIT, SignTransactionParams, Signer,
-    build_call_transaction, sign_transaction,
+    build_call_transaction, sign_transaction, source_address_auth_claim,
 };
-use groundhog_xdr::auth_claim::AuthClaim;
 use groundhog_xdr::contract::ContractEntrypointID;
 use serde_json::json;
 
@@ -295,12 +294,7 @@ fn prepare_call_with_runtime(
     let do_action_calldata = xdrs::cxs::encode(&inner_invocation.as_slice())
         .map_err(|e| CliError::Other(format!("failed to CXS-encode do_action calldata: {e}")))?;
 
-    let auth_claims: groundhog_xdr::auth_claim::AuthClaimData =
-        vec![AuthClaim::kInvokedAddressSignature {
-            invoked_address_signature_id: 0,
-        }]
-        .try_into()
-        .map_err(|e: xdr_common::Error| CliError::Other(e.to_string()))?;
+    let auth_claim = source_address_auth_claim();
 
     let wallet_entrypoint = ContractEntrypointID::from(WALLET_DO_ACTION_ENTRYPOINT);
     let block_expiry_height = rt.block_on(async { resolve_block_expiry_height(rpc_url).await })?;
@@ -312,7 +306,7 @@ fn prepare_call_with_runtime(
         gas_limit: DEFAULT_TX_GAS_LIMIT,
         block_expiry_height,
         nonce: nonce_from_timestamp(),
-        auth_claims,
+        auth_claim,
     });
 
     let signed_tx = sign_transaction(tx, &signer, SignTransactionParams::default())
@@ -365,6 +359,19 @@ fn explicit_entrypoint_id(method: &str) -> Result<Option<ContractEntrypointID>, 
     Ok(Some(ContractEntrypointID::from(id)))
 }
 
+/// Compute the canonical entrypoint ID for a method using the shared
+/// `groundhog-contract-util` implementation.  The returned type is from
+/// the workspace `groundhog-xdr` version; the utility crate may lag
+/// behind, so we round-trip through raw bytes.
+fn method_entrypoint_id(interface_name: &str, version: &str, method: &str) -> ContractEntrypointID {
+    let sig = NormalizedMethodSignature::new(method);
+    let id = groundhog_contract_util::contract_entrypoint_id(Some(interface_name), version, &sig);
+    let bytes: [u8; 8] = id.as_ref()[..8]
+        .try_into()
+        .expect("bug: entrypoint ID is always 8 bytes");
+    ContractEntrypointID::from(bytes)
+}
+
 fn resolve_call(
     cwd: &Path,
     method: &str,
@@ -377,28 +384,16 @@ fn resolve_call(
         });
     }
     if let Some(metadata) = resolve_spec_method(cwd, method, artifacts)? {
-        let sig = NormalizedMethodSignature::new(method);
         return Ok(ResolvedCall {
-            entrypoint: contract_entrypoint_id(
-                Some(&metadata.interface_name),
-                &metadata.version,
-                &sig,
-            ),
+            entrypoint: method_entrypoint_id(&metadata.interface_name, &metadata.version, method),
             metadata: Some(CallMetadata::Spec(metadata)),
         });
     }
     match resolve_local_contract_metadata(cwd, method, artifacts)? {
-        Some(metadata) => {
-            let sig = NormalizedMethodSignature::new(method);
-            Ok(ResolvedCall {
-                entrypoint: contract_entrypoint_id(
-                    Some(&metadata.interface_name),
-                    &metadata.version,
-                    &sig,
-                ),
-                metadata: Some(CallMetadata::Local(metadata)),
-            })
-        }
+        Some(metadata) => Ok(ResolvedCall {
+            entrypoint: method_entrypoint_id(&metadata.interface_name, &metadata.version, method),
+            metadata: Some(CallMetadata::Local(metadata)),
+        }),
         None => Err(CliError::Other(
             "cannot resolve the contract method from the local project or embedded contract spec. \
              Run `groundhog build` from inside the project that defines the contract, or pass an \
@@ -860,7 +855,8 @@ mod tests {
     use super::{
         ResolvedCall, contract_metadata_from_source, explicit_entrypoint_id,
         filter_candidates_by_interfaces, format_entrypoint_id, load_project_registered_interfaces,
-        parse_contract_attr_value, resolve_spec_method, selector_json, selector_summary,
+        method_entrypoint_id, parse_contract_attr_value, resolve_spec_method, selector_json,
+        selector_summary,
     };
     use crate::CliError;
     use crate::artifacts::ArtifactOptions;
@@ -877,7 +873,6 @@ mod tests {
         ContractType, ContractTypeDef, ContractUnionCase, ContractUnionCaseType, ContractUnionDef,
         ContractVectorType,
     };
-    use groundhog_contract_util::{NormalizedMethodSignature, contract_entrypoint_id};
     use groundhog_rpc_api_types::receipt::ExecStatus;
     use serde_json::json;
     use serial_test::serial;
@@ -968,9 +963,8 @@ mod tests {
 
     #[test]
     fn selector_helpers_report_explicit_entrypoint_resolution() {
-        let sig = NormalizedMethodSignature::new("get");
         let resolved = ResolvedCall {
-            entrypoint: contract_entrypoint_id(Some("Counter"), "0.1.0", &sig),
+            entrypoint: method_entrypoint_id("Counter", "0.1.0", "get"),
             metadata: None,
         };
 
@@ -987,9 +981,8 @@ mod tests {
     #[test]
     fn selector_helpers_report_embedded_spec_resolution() {
         let metadata = sample_single_arg_spec_metadata(ContractType::U32);
-        let sig = NormalizedMethodSignature::new("call");
         let resolved = ResolvedCall {
-            entrypoint: contract_entrypoint_id(Some("Counter"), "0.1.0", &sig),
+            entrypoint: method_entrypoint_id("Counter", "0.1.0", "call"),
             metadata: Some(CallMetadata::Spec(metadata)),
         };
 
@@ -1008,9 +1001,8 @@ mod tests {
 
     #[test]
     fn selector_helpers_report_local_metadata_resolution() {
-        let sig = NormalizedMethodSignature::new("get");
         let resolved = ResolvedCall {
-            entrypoint: contract_entrypoint_id(Some("Counter"), "0.1.0", &sig),
+            entrypoint: method_entrypoint_id("Counter", "0.1.0", "get"),
             metadata: Some(CallMetadata::Local(ContractMetadata {
                 interface_name: "Counter".into(),
                 version: "0.1.0".into(),

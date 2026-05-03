@@ -5,6 +5,7 @@
 //! It intentionally starts small so the process contract can be settled before
 //! hogd-specific command construction lands.
 
+mod block_driver;
 pub mod config;
 pub mod error;
 mod genesis;

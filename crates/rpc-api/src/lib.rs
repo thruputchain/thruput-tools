@@ -1,6 +1,6 @@
 //! Shared JSON-RPC trait definitions for the Groundhog RPC surface.
 //!
-//! Both the production gateway and the dev node implement
+//! Both the production gateway and local node implement
 //! `GroundhogApiServer`. The client crate uses `GroundhogApiClient`.
 
 pub use groundhog_rpc_api_types as types;
@@ -55,10 +55,10 @@ pub trait GroundhogApi {
     async fn get_events(&self, query: EventQuery) -> RpcResult<EventPage>;
 }
 
-/// Dev-only RPC methods. Only implemented by the dev node.
+/// Dev-only RPC methods. Only implemented by the local node.
 #[rpc(client, server, namespace = "groundhog_dev")]
 pub trait GroundhogDevApi {
-    /// Reset the dev node to its initial state.
+    /// Reset the local node to its initial state.
     #[method(name = "reset")]
     async fn reset(&self) -> RpcResult<()>;
 

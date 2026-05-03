@@ -14,8 +14,8 @@ use serde::Serialize;
 
 use crate::{
     HogdDevProcess, HogdDevReadiness, NodeSupervisorConfig, NodeSupervisorError,
-    read_backend::HogdDevReadBackend, rpc_backend::HogdDevSchedulerBackend,
-    stub_backend::StubBackend,
+    block_driver::BlockDriverTask, read_backend::HogdDevReadBackend,
+    rpc_backend::HogdDevSchedulerBackend, stub_backend::StubBackend,
 };
 
 /// Why a [`NodeSupervisorHandle::stopped`] call returned.
@@ -109,6 +109,7 @@ pub struct NodeSupervisorHandle {
     rpc_handle: ServerHandle,
     rpc_addr: SocketAddr,
     backend_planes: BackendPlanes,
+    block_driver: Option<BlockDriverTask>,
 }
 
 impl NodeSupervisorHandle {
@@ -130,6 +131,7 @@ impl NodeSupervisorHandle {
                     rpc_handle: started.handle,
                     rpc_addr: started.addr,
                     backend_planes: started.backend_planes,
+                    block_driver: Some(started.block_driver),
                 })
             }
             Err(error) => {
@@ -217,6 +219,7 @@ impl NodeSupervisorHandle {
                     tracing::debug!(%error, "JSON-RPC server already stopped");
                 }
                 self.rpc_handle.clone().stopped().await;
+                self.stop_block_driver().await;
                 Ok(SupervisorStop::HogdExited(status))
             }
             () = rpc_done => {
@@ -251,7 +254,14 @@ impl NodeSupervisorHandle {
             tracing::debug!(%error, "JSON-RPC server already stopped");
         }
         self.rpc_handle.clone().stopped().await;
+        self.stop_block_driver().await;
         self.hogd.stop().await
+    }
+
+    async fn stop_block_driver(&mut self) {
+        if let Some(block_driver) = self.block_driver.take() {
+            block_driver.stop().await;
+        }
     }
 }
 
@@ -309,6 +319,8 @@ where
         .local_addr()
         .map_err(|source| NodeSupervisorError::RpcLocalAddr { source })?;
 
+    let block_driver = BlockDriverTask::start(scheduler_backend.scheduler_client().clone());
+    let scheduler_backend = scheduler_backend.with_block_driver(block_driver.trigger());
     let core_rpc = GroundhogRpcServer::new(
         scheduler_backend.clone(),
         scheduler_backend,
@@ -328,6 +340,7 @@ where
         handle: rpc_handle,
         addr: rpc_addr,
         backend_planes,
+        block_driver,
     })
 }
 
@@ -336,6 +349,7 @@ struct StartedRpcServer {
     handle: ServerHandle,
     addr: SocketAddr,
     backend_planes: BackendPlanes,
+    block_driver: BlockDriverTask,
 }
 
 #[cfg(test)]
@@ -358,15 +372,17 @@ mod tests {
     /// Env var the fake hogd-dev reads to write its PID before printing
     /// readiness. Tests use this to verify cleanup via `kill(pid, 0)`.
     const FAKE_HOGD_DEV_PID_FILE_ENV: &str = "GROUNDHOG_FAKE_HOGD_DEV_PID_FILE";
-    const SIGNED_TX_XDR: &str = "\
+    // Canonical XDR/hash vector only. This transaction is structurally valid
+    // and has a stable hash, but it is not auth-valid against empty hogd-dev
+    // genesis.
+    const CANONICAL_HASH_VECTOR_SIGNED_TX_XDR: &str = "\
 bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7\
 000000000000000000000000000f42400000000000000000000f424000000000000000010000000000000001\
-000000040000000050ec72dbafd4898c5df0e15ea6ba3e46240945b7210fe2d63dde1e896f42107a000000\
-00000000000000000000000001000000000000000000000000706f58acd087550f315030db4beeb1527e86\
-f0e12d9781957cdcc522f33e5d719b93c200381cff5bfb26a1ee8ce7874ffd485322cd5a0806605d2ffa\
-51c8cf0f";
-    const CANONICAL_TX_HASH_JSON: &str =
-        "0x6e94695b6af0fbc13d96876f7fb8e940cd9db4d247e53614a45da252b3a7853a";
+0000000050ec72dbafd4898c5df0e15ea6ba3e46240945b7210fe2d63dde1e896f42107a00000000000000\
+0000000001000000000000000041d0144af2776cae9804ed899018a6bc17a5705d74c84e02556b9695031\
+c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
+    const CANONICAL_HASH_VECTOR_TX_HASH_JSON: &str =
+        "0x9dc7ad0fc4f74a43a62e047c0d6885c8e4df2d4840298ecd52cf157681157ed3";
 
     /// Set an env var for the duration of a test that needs the fake child
     /// to enter `ready` mode. Restored on drop. `#[serial]` ensures we are
@@ -492,12 +508,12 @@ f0e12d9781957cdcc522f33e5d719b93c200381cff5bfb26a1ee8ce7874ffd485322cd5a0806605d
         );
 
         let tx_hash = client
-            .send_raw_transaction(format!("0x{SIGNED_TX_XDR}"))
+            .send_raw_transaction(format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}"))
             .await
             .expect("bug: sendRawTransaction should dispatch to fake scheduler");
         assert_eq!(
             serde_json::to_value(tx_hash).expect("bug: tx hash should serialize"),
-            CANONICAL_TX_HASH_JSON
+            CANONICAL_HASH_VECTOR_TX_HASH_JSON
         );
 
         let err = client
@@ -530,6 +546,116 @@ f0e12d9781957cdcc522f33e5d719b93c200381cff5bfb26a1ee8ce7874ffd485322cd5a0806605d
             wait_pid_gone(pid, Instant::now() + Duration::from_secs(2)).await,
             "fake hogd-dev pid {pid} still alive after stop()",
         );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn submit_wakes_hogd_dev_block_driver() {
+        let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "automine");
+
+        let hogd = HogdDevConfig::default()
+            .with_binary_path(fake_hogd_dev_binary())
+            .with_startup_timeout(Duration::from_secs(5))
+            .with_shutdown_grace(Duration::from_secs(2));
+        let config = NodeSupervisorConfig::default()
+            .with_rpc_listen_address("127.0.0.1:0")
+            .with_hogd_dev(hogd);
+        let handle = NodeSupervisorHandle::start(config)
+            .await
+            .expect("bug: supervisor should start against fake hogd-dev");
+
+        let url = format!("http://{}", handle.rpc_addr());
+        let client = HttpClientBuilder::default()
+            .build(&url)
+            .expect("bug: jsonrpsee http client builds");
+
+        client
+            .send_raw_transaction(format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}"))
+            .await
+            .expect("bug: sendRawTransaction should dispatch to fake scheduler");
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let tip = client
+                .chain_tip()
+                .await
+                .expect("bug: chainTip should dispatch to fake scheduler");
+            if *tip.height == 1 {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "block driver did not advance fake scheduler tip before timeout; tip={}",
+                *tip.height
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        handle.stop().await.expect("bug: clean shutdown");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn block_driver_coalesces_rapid_submit_wakes() {
+        let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "automine-slow-commit");
+
+        let hogd = HogdDevConfig::default()
+            .with_binary_path(fake_hogd_dev_binary())
+            .with_startup_timeout(Duration::from_secs(5))
+            .with_shutdown_grace(Duration::from_secs(2));
+        let config = NodeSupervisorConfig::default()
+            .with_rpc_listen_address("127.0.0.1:0")
+            .with_hogd_dev(hogd);
+        let handle = NodeSupervisorHandle::start(config)
+            .await
+            .expect("bug: supervisor should start against fake hogd-dev");
+
+        let url = format!("http://{}", handle.rpc_addr());
+        let client = HttpClientBuilder::default()
+            .build(&url)
+            .expect("bug: jsonrpsee http client builds");
+        let tx_hex = format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}");
+
+        let (a, b, c, d, e) = tokio::join!(
+            client.send_raw_transaction(tx_hex.clone()),
+            client.send_raw_transaction(tx_hex.clone()),
+            client.send_raw_transaction(tx_hex.clone()),
+            client.send_raw_transaction(tx_hex.clone()),
+            client.send_raw_transaction(tx_hex),
+        );
+        for result in [a, b, c, d, e] {
+            result.expect("bug: sendRawTransaction should dispatch to fake scheduler");
+        }
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let tip = client
+                .chain_tip()
+                .await
+                .expect("bug: chainTip should dispatch to fake scheduler");
+            if *tip.height >= 1 {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "block driver did not commit any block before timeout; tip={}",
+                *tip.height
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let final_tip = client
+            .chain_tip()
+            .await
+            .expect("bug: chainTip should dispatch to fake scheduler");
+        assert!(
+            *final_tip.height <= 2,
+            "coalesced submit wakes should not commit one block per submit; tip={}",
+            *final_tip.height
+        );
+
+        handle.stop().await.expect("bug: clean shutdown");
     }
 
     #[tokio::test]

@@ -10,11 +10,11 @@ Workspace crates in `crates/`:
 - **api-types** — shared RPC types (receipt, status, block info, events,
   errors). Consumed by gateway, client, CLI, and external tools.
 - **rpc-api** — shared jsonrpsee trait definitions used by the gateway,
-  dev node, and client crate.
+  local node, and client crate.
 - **rpc-server** — reusable server-side `GroundhogApiServer`
   implementation. Owns shared request validation, public error mapping,
-  and submit/chain/read backend traits used by gateway, dev-node, and
-  future hogd-dev compositions.
+  and submit/chain/read backend traits used by gateway and hogd-dev
+  supervisor compositions.
 - **x23-transport** — shared x23 connection-pool helpers
   (`FixedSerialPool` setup, address parsing, typed `ConnectError`).
   Consumed by gateway and node-supervisor; backend-agnostic. Named for
@@ -29,16 +29,9 @@ Workspace crates in `crates/`:
   for deploy and call, XDR encoding.
 - **tx-builder** — thin CLI wrapper over signing (temporary).
 - **cli** — `groundhog` binary. Wraps the Rust/WASM build and test
-  workflow plus deploy/call and local dev-node control. Lib/bin split:
+  workflow plus deploy/call and hogd-dev local-node control. Lib/bin split:
   all logic in the library crate, `main.rs` is pure dispatch.
   Subcommand functions take plain Rust types, not clap structs.
-- **dev-node** — feature-gated experimental local JSON-RPC dev node
-  backed by the SDK `native_exec` / hogd `test_ffi` prototype on a
-  dedicated worker thread. It exposes the public Groundhog API through
-  rpc-server and keeps `groundhog_dev_*` controls local to dev-node. It
-  shares execution semantics with SDK tests, but the durable backend
-  direction is a hogd-side embedded execution library; see the CLI
-  planning docs.
 - **node-supervisor** — `groundhog node` facade. Supervises a hogd-owned
   `hogd-dev` subprocess and embeds `rpc-server` to serve the public
   JSON-RPC. `chainTip` and `sendRawTransaction` are backed by hogd-dev's
@@ -47,9 +40,9 @@ Workspace crates in `crates/`:
   (otherwise the read plane stays stubbed `NotImplemented` per the v1
   reduced contract). End-to-end coverage of the read plane is gated on
   the hogd-dev v1 binary actually exposing the indexer endpoint with
-  full event-feed wiring. Durable local-node path; `dev-node` remains
-  the native-exec prototype until hogd-dev covers the normal local
-  development loop.
+  full event-feed wiring. This is the only CLI local-node backend; the
+  legacy native-exec prototype source is retained outside the workspace for
+  reference only.
 - **e2e-tests** — ignored process-level JSON-RPC lifecycle smoke tests.
 - **bench** — benchmark harnesses.
 
@@ -110,12 +103,12 @@ cargo run -p groundhog-cli -- deploy       # from inside a project
 cargo run -p groundhog-cli -- call my-counter get
 cargo run -p groundhog-cli -- keys generate alice
 cargo run -p groundhog-cli -- keys ls
-# Experimental local dev node is feature-gated
-cargo run -p groundhog-cli --features dev-node -- node
+# Experimental local node backed by hogd-dev (Cargo feature is still dev-node)
+cargo run -p groundhog-cli --features dev-node -- node --hogd-dev-binary /path/to/hogd-dev
 # Typical local loop
 # 1. cargo run -p groundhog-cli -- new my-counter && cd my-counter
 # 2. cargo run -p groundhog-cli -- build
-# 3. cargo run -p groundhog-cli --features dev-node -- node  # separate terminal
+# 3. cargo run -p groundhog-cli --features dev-node -- node --hogd-dev-binary /path/to/hogd-dev  # separate terminal
 # 4. cargo run -p groundhog-cli -- deploy
 # 5. cargo run -p groundhog-cli -- call my-counter get
 ```
@@ -194,7 +187,7 @@ cargo run -p groundhog-cli --features dev-node -- node
   of implementing the public RPC trait directly.
 - Shared transaction hex/XDR validation and canonical hash computation
   live in `rpc-server::tx`; do not duplicate that logic in gateway or
-  dev-node adapters.
+  node-supervisor adapters.
 - Gateway handler modules are production backend helpers grouped by
   subsystem (receipt, blocks, events, parsing). Do not add new public
   JSON-RPC handler implementations there.
@@ -308,7 +301,7 @@ includes test and bench code), so always use that flag locally too.
 - `docs/cli/specs/2026-04-29-node-supervisor-x23-client-boundary.md` —
   node-supervisor x23 client wiring decision.
 - `docs/cli/plans/2026-04-14-bundled-wasm-opt.md` — bundled wasm-opt
-  rollout (dev-node done; CLI still shells out as of 2026-04-30).
+  rollout; CLI still shells out as of 2026-04-30.
 - `docs/gateway/roadmap.md` — gateway backlog and sequencing.
 - `docs/gateway/system-design.md` — full gateway architecture and open
   questions.

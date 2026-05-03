@@ -1,6 +1,7 @@
 //! Strongly-typed indices used when constructing signatures.
 
-/// Index into the transaction auth-claims vector.
+/// Legacy index type kept for callers that still track pre-0.10 auth-claim
+/// positions out of band.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AuthClaimIndex(pub u32);
 

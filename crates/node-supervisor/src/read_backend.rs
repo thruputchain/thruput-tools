@@ -410,6 +410,7 @@ mod tests {
     /// needs to be `Some(...)` so `Option::is_some()` returns true.
     fn dummy_signed_transaction() -> SignedTransaction {
         use groundhog_scheduler::{ContractEntrypointID, GasAmount};
+        use groundhog_xdr::auth_claim::{AuthClaim, AuthClaim_source_address_claim};
         SignedTransaction {
             tx: Transaction {
                 invocation: Invocation {
@@ -423,8 +424,12 @@ mod tests {
                     nonce: 0,
                 },
                 contracts_to_deploy: VecM(vec![]),
-                auth_claims: VecM(vec![]),
-                gas_claims: VecM(vec![]),
+                auth_claim: AuthClaim::kSourceAddressAuthData {
+                    source_address_claim: AuthClaim_source_address_claim {
+                        allowed_keys: 0,
+                        required_weight: 0,
+                    },
+                },
             },
             signatures: VecM(vec![]),
         }
@@ -1077,7 +1082,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[tokio::test]
-    async fn connect_to_dead_indexer_port_returns_indexer_connect_error() {
+    async fn connect_to_dead_indexer_port_fails_startup_probe() {
         // Arrange: grab a port and immediately drop the listener so it's closed.
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
@@ -1103,9 +1108,13 @@ mod tests {
         assert!(
             matches!(
                 result,
-                Err(crate::NodeSupervisorError::IndexerConnect { .. })
+                Err(crate::NodeSupervisorError::IndexerConnect { .. }
+                    | crate::NodeSupervisorError::IndexerRpc {
+                        op: "indexer_block_explorer_intro",
+                        ..
+                    })
             ),
-            "expected IndexerConnect error, got {result:?}"
+            "expected indexer startup failure, got {result:?}"
         );
     }
 }

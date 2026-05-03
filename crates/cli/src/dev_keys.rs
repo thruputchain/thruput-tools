@@ -9,7 +9,10 @@ use sha2::{Digest, Sha256};
 
 use crate::CliError;
 
-/// Well-known seed — must match `dev-node/src/accounts.rs`.
+/// Well-known seed for deterministic `groundhog node` dev keys.
+///
+/// Keep in sync with the benchmark harness signer derivation in
+/// `crates/bench/src/main.rs`.
 const DEV_SEED: &str = "groundhog-dev-accounts";
 
 /// Check if a key name refers to a dev account.
