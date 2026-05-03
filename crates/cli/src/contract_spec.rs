@@ -17,6 +17,32 @@ fn sidecar_path_for_wasm(wasm: &Path) -> PathBuf {
     wasm.with_extension("spec.json")
 }
 
+/// XDR-decode raw bytes into a `ContractSpec`.
+pub fn load_contract_spec_from_xdr(bytes: &[u8]) -> Result<ContractSpec, CliError> {
+    xdrs::txs::decode(bytes)
+        .map_err(|e| CliError::SpecFailed(format!("failed to decode .spec.xdr: {e}")))
+}
+
+/// Load a contract spec from a file, dispatching by extension.
+///
+/// - `.wasm` — extracts the embedded spec custom section (returns `None`
+///   when there is no spec).
+/// - `.xdr` — XDR-decodes the file contents and returns `Some`.
+/// - Anything else — returns an error.
+pub fn load_contract_spec_from_file(path: &Path) -> Result<Option<ContractSpec>, CliError> {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("wasm") => load_contract_spec(path),
+        Some("xdr") => {
+            let bytes = std::fs::read(path)?;
+            Ok(Some(load_contract_spec_from_xdr(&bytes)?))
+        }
+        _ => Err(CliError::SpecFailed(format!(
+            "unsupported file extension for contract spec: {}",
+            path.display(),
+        ))),
+    }
+}
+
 /// Load the canonical contract spec from the built WASM.
 ///
 /// Spec model types come from `groundhog_contract_spec`; this module uses
@@ -125,6 +151,14 @@ pub fn finalize_spec(wasm: &Path, print: &Print) -> Result<Option<PathBuf>, CliE
     })?;
     print.status(format_args!("Wrote {}", spec_json_path.display()));
 
+    let spec_xdr_path = wasm.with_extension("spec.xdr");
+    let xdr_bytes = xdrs::txs::encode(&spec)
+        .map_err(|e| CliError::SpecFailed(format!("failed to encode .spec.xdr: {e}")))?;
+    std::fs::write(&spec_xdr_path, &xdr_bytes).map_err(|e| {
+        CliError::Other(format!("failed to write {}: {e}", spec_xdr_path.display()))
+    })?;
+    print.status(format_args!("Wrote {}", spec_xdr_path.display()));
+
     Ok(Some(spec_json_path))
 }
 
@@ -137,8 +171,9 @@ mod tests {
     };
 
     use super::{
-        InterfaceSpec, find_method_interfaces, load_contract_spec,
-        load_embedded_contract_spec_from_bytes, registered_interfaces, sidecar_path_for_wasm,
+        InterfaceSpec, find_method_interfaces, load_contract_spec, load_contract_spec_from_file,
+        load_contract_spec_from_xdr, load_embedded_contract_spec_from_bytes, registered_interfaces,
+        sidecar_path_for_wasm,
     };
 
     #[test]
@@ -320,5 +355,26 @@ mod tests {
                 break;
             }
         }
+    }
+
+    #[test]
+    fn loads_contract_spec_from_xdr_bytes() {
+        let spec = sample_contract_spec();
+        let xdr_bytes = xdrs::txs::encode(&spec).expect("bug: spec should encode");
+        let loaded = load_contract_spec_from_xdr(&xdr_bytes).expect("bug: should decode");
+        assert_eq!(loaded, spec);
+    }
+
+    #[test]
+    fn loads_contract_spec_from_xdr_file() {
+        let spec = sample_contract_spec();
+        let dir = tempfile::tempdir().expect("bug: temp dir");
+        let xdr_path = dir.path().join("demo.spec.xdr");
+        let xdr_bytes = xdrs::txs::encode(&spec).expect("bug: should encode");
+        std::fs::write(&xdr_path, &xdr_bytes).expect("bug: should write");
+        let loaded = load_contract_spec_from_file(&xdr_path)
+            .expect("bug: should load")
+            .expect("bug: should exist");
+        assert_eq!(loaded, spec);
     }
 }
