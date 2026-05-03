@@ -42,7 +42,7 @@ groundhog build
 # Run contract's tests against the WASM executor
 groundhog test
 
-# Start the experimental local dev node (optional, requires --features dev-node)
+# Start the experimental hogd-dev-backed local node (optional, requires --features dev-node)
 groundhog node
 
 # Deploy and call against the active profile
@@ -219,25 +219,23 @@ soaked.
 
 ### `groundhog node`
 
-Start the experimental local development node. The current backend uses
-the SDK `native_exec` / hogd `test_ffi` prototype path, so execution
-semantics match SDK tests, but durable lifecycle features such as
-snapshot, revert, and time travel are not supported yet. Requires
-installing or building the CLI with the `dev-node` feature.
+Start the experimental local development node backed by a supervised
+`hogd-dev` process. The legacy SDK `native_exec` / hogd `test_ffi`
+prototype backend is no longer wired into this command. Requires installing or
+building the CLI with the `dev-node` feature.
 
 ```bash
 groundhog node
 groundhog node --port 9546
-groundhog node --accounts 20
+groundhog node --hogd-dev-binary /path/to/hogd-dev
 ```
 
-Human output prints the prefunded accounts and private keys for local
-testing. `groundhog node --json` emits the startup payload with
-`rpc_url`, `accounts`, and backend stability metadata for scripting.
+`groundhog node --json` emits the startup payload with `rpc_url`, hogd-dev
+backend planes, and endpoint metadata for scripting. Deterministic dev accounts
+return once hogd-dev has a dev-wallet bootstrap/control surface.
 
 See `../../docs/cli/2026-04-25-hogd-dev-node-hybrid.md` for the
-durable backend direction (Rust supervisor around a hogd-owned
-`hogd-dev` subprocess), and
+durable backend direction, and
 `../../docs/cli/plans/2026-04-29-local-node-hogd-dev-supervisor.md`
 for the implementation plan.
 

@@ -6,8 +6,8 @@ use groundhog_rpc_api_types::transaction::TxHash;
 use groundhog_signing::{
     BuildDeployTransaction, DEFAULT_TX_GAS_LIMIT, SignTransactionParams, Signer,
     WALLET_DEPLOY_ENTRYPOINT, build_deploy_transaction, derive_deploy_address, sign_transaction,
+    source_address_auth_claim,
 };
-use groundhog_xdr::auth_claim::AuthClaim;
 use groundhog_xdr::types::ContractAddress;
 use groundhog_xdr::types::SHA256Hash;
 use serde_json::json;
@@ -246,13 +246,8 @@ pub(crate) fn prepare_deploy(
     let calldata = xdrs::cxs::encode(&(&deploy_nonce, &contract_hash))
         .map_err(|e| CliError::Other(format!("failed to encode deploy calldata: {e}")))?;
 
-    // Auth claim: kInvokedAddressSignature at key slot 0.
-    let auth_claims: groundhog_xdr::auth_claim::AuthClaimData =
-        vec![AuthClaim::kInvokedAddressSignature {
-            invoked_address_signature_id: 0,
-        }]
-        .try_into()
-        .map_err(|e: xdr_common::Error| CliError::Other(e.to_string()))?;
+    // Auth claim: source-address auth data at key slot 0.
+    let auth_claim = source_address_auth_claim();
 
     let entrypoint = groundhog_xdr::contract::ContractEntrypointID::from(WALLET_DEPLOY_ENTRYPOINT);
 
@@ -267,7 +262,7 @@ pub(crate) fn prepare_deploy(
         block_expiry_height,
         nonce: deploy_nonce_val,
         contracts_to_deploy: VecM(vec![contract]),
-        auth_claims,
+        auth_claim,
     });
 
     let signed_tx = sign_transaction(tx, &signer, SignTransactionParams::default())

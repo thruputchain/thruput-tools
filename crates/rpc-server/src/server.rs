@@ -137,13 +137,17 @@ mod tests {
     use groundhog_rpc_api_types::hex::Hex0x;
     use xdr_common::{BytesM, VecM};
 
-    const SIGNED_TX_XDR: &str = "\
+    // Canonical XDR/hash vector only. This transaction is structurally valid
+    // and has a stable hash, but it is not auth-valid against empty hogd-dev
+    // genesis.
+    const CANONICAL_HASH_VECTOR_SIGNED_TX_XDR: &str = "\
 bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7\
 000000000000000000000000000f42400000000000000000000f424000000000000000010000000000000001\
-000000040000000050ec72dbafd4898c5df0e15ea6ba3e46240945b7210fe2d63dde1e896f42107a000000\
-00000000000000000000000001000000000000000000000000706f58acd087550f315030db4beeb1527e86\
-f0e12d9781957cdcc522f33e5d719b93c200381cff5bfb26a1ee8ce7874ffd485322cd5a0806605d2ffa\
-51c8cf0f";
+0000000050ec72dbafd4898c5df0e15ea6ba3e46240945b7210fe2d63dde1e896f42107a00000000000000\
+0000000001000000000000000041d0144af2776cae9804ed899018a6bc17a5705d74c84e02556b9695031\
+c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
+    const CANONICAL_HASH_VECTOR_TX_HASH_HEX: &str =
+        "9dc7ad0fc4f74a43a62e047c0d6885c8e4df2d4840298ecd52cf157681157ed3";
 
     #[derive(Default)]
     struct MockBackend {
@@ -278,18 +282,18 @@ f0e12d9781957cdcc522f33e5d719b93c200381cff5bfb26a1ee8ce7874ffd485322cd5a0806605d
     }
 
     #[tokio::test]
-    async fn valid_submit_calls_backend_and_returns_hash() {
+    async fn canonical_hash_vector_submit_calls_backend_and_returns_hash() {
         let mock = Arc::new(MockBackend::default());
         let server = server(mock.clone());
 
         let tx_hash = server
-            .send_raw_transaction(format!("0x{SIGNED_TX_XDR}"))
+            .send_raw_transaction(format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}"))
             .await
-            .expect("bug: valid signed tx should submit");
+            .expect("bug: canonical hash vector should submit to mock backend");
 
         assert_eq!(
             hex::encode(tx_hash.0.0.as_ref()),
-            "6e94695b6af0fbc13d96876f7fb8e940cd9db4d247e53614a45da252b3a7853a"
+            CANONICAL_HASH_VECTOR_TX_HASH_HEX
         );
         assert_eq!(mock.submitted.lock().await.len(), 1);
     }
@@ -310,13 +314,13 @@ f0e12d9781957cdcc522f33e5d719b93c200381cff5bfb26a1ee8ce7874ffd485322cd5a0806605d
         );
 
         let tx_hash = server
-            .send_raw_transaction(format!("0x{SIGNED_TX_XDR}"))
+            .send_raw_transaction(format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}"))
             .await
-            .expect("bug: valid signed tx should submit through submit plane");
+            .expect("bug: canonical hash vector should submit through submit plane");
 
         assert_eq!(
             hex::encode(tx_hash.0.0.as_ref()),
-            "6e94695b6af0fbc13d96876f7fb8e940cd9db4d247e53614a45da252b3a7853a"
+            CANONICAL_HASH_VECTOR_TX_HASH_HEX
         );
         assert_eq!(submitted.lock().await.len(), 1);
         assert_eq!(

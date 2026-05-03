@@ -6,7 +6,7 @@ use std::{
     process::{self, Command},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread,
     time::Duration,
@@ -21,15 +21,17 @@ use groundhog_indexer::{
 };
 use groundhog_scheduler::{
     BlockHash, CoordinatorRegistrationOutcome, DbSchedResult, DbTip, GenesisConfiguration,
-    Nomination, OptSignedTransactionBatch, ParallelSignedTransactionBatch, SchedulerCommitOutcome,
-    SchedulerGetTipResult, SchedulerNominationResult, SchedulerValidationResult,
-    SignedTransactionHashBatch, ValidatorID,
+    Nomination, OptSignedTransactionBatch, ParallelBatch,
+    ParallelNondeterministicProposalDataBatch, ParallelSignedTransactionBatch,
+    ParallelSignedTransactionHashBatch, SchedulerCommitOutcome, SchedulerGetTipResult,
+    SchedulerNominatedBlock, SchedulerNominationResult, SchedulerValidationResult,
+    SignedTransactionHashBatch, ValidatorID, ValidatorPublicInfo,
     sched_coord::{SchedulerCoord_SchedulerCoord1, SchedulerCoord_SchedulerCoord1_Dispatcher},
 };
-use groundhog_xdr::types::SHA256Hash;
+use groundhog_xdr::types::{Ed25519PublicKey, SHA256Hash};
 use rpc_driver::{ProgramError, RpcServer, ServiceMap};
 use tokio::{net::TcpListener, runtime::Runtime};
-use xdr_common::{BytesM, VecM};
+use xdr_common::{BytesM, StringM, VecM};
 
 const MODE_ENV: &str = "GROUNDHOG_FAKE_HOGD_DEV_MODE";
 /// Optional path the fake writes its PID to before printing readiness.
@@ -64,6 +66,10 @@ fn main() {
         Ok("scheduler-load-rejected") => run_ready_with_scheduler(FakeSchedulerMode::LoadRejected),
         Ok("scheduler-load-no-effect") => {
             run_ready_with_scheduler(FakeSchedulerMode::LoadNoEffect);
+        }
+        Ok("automine") => run_ready_with_scheduler(FakeSchedulerMode::Automine),
+        Ok("automine-slow-commit") => {
+            run_ready_with_scheduler(FakeSchedulerMode::AutomineSlowCommit);
         }
         Ok("ready-then-exit") => run_ready_then_exit(),
         Ok("spawn-helper-ignore-term") => run_with_helper(),
@@ -291,6 +297,8 @@ fn start_fake_scheduler(mode: FakeSchedulerMode) -> FakeSchedulerRuntime {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FakeSchedulerMode {
     Normal,
+    Automine,
+    AutomineSlowCommit,
     GetTipError,
     LoadRejected,
     LoadNoEffect,
@@ -299,6 +307,7 @@ enum FakeSchedulerMode {
 #[derive(Debug)]
 struct FakeScheduler {
     tip: Arc<Mutex<Option<DbTip>>>,
+    pending_submits: Arc<AtomicU64>,
     mode: FakeSchedulerMode,
 }
 
@@ -306,6 +315,7 @@ impl FakeScheduler {
     fn new(mode: FakeSchedulerMode) -> Self {
         Self {
             tip: Arc::new(Mutex::new(None)),
+            pending_submits: Arc::new(AtomicU64::new(0)),
             mode,
         }
     }
@@ -319,6 +329,11 @@ impl FakeScheduler {
             id: 0,
         }
     }
+}
+
+fn block_hash_for_height(height: i64) -> BlockHash {
+    let byte = u8::try_from(height).unwrap_or(u8::MAX);
+    BlockHash::from(SHA256Hash::from([byte; 32]))
 }
 
 #[async_trait]
@@ -358,6 +373,12 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
                 "fake scheduler expected non-empty signed transaction xdr",
             ));
         }
+        if matches!(
+            self.mode,
+            FakeSchedulerMode::Automine | FakeSchedulerMode::AutomineSlowCommit
+        ) {
+            self.pending_submits.fetch_add(1, Ordering::SeqCst);
+        }
         Ok(())
     }
 
@@ -373,7 +394,55 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
         &self,
         _onto: DbTip,
     ) -> Result<SchedulerNominationResult, ProgramError> {
-        Err(ProgramError::msg("not implemented in fake hogd-dev"))
+        if !matches!(
+            self.mode,
+            FakeSchedulerMode::Automine | FakeSchedulerMode::AutomineSlowCommit
+        ) {
+            return Err(ProgramError::msg("not implemented in fake hogd-dev"));
+        }
+        if self.pending_submits.load(Ordering::SeqCst) == 0 {
+            return Ok(SchedulerNominationResult::SchedulerNominationError);
+        }
+
+        let tip = self
+            .tip
+            .lock()
+            .expect("bug: fake tip mutex poisoned")
+            .clone()
+            .expect("bug: automine should only run after genesis load");
+        let next_height = *tip.height + 1;
+        let block_id = tip.id + 1;
+        let block_hash = block_hash_for_height(next_height);
+        Ok(SchedulerNominationResult::SchedulerNominationOK {
+            nominated_block: SchedulerNominatedBlock {
+                block_id,
+                txs: ParallelSignedTransactionBatch::new(ParallelBatch {
+                    segment_tokens: VecM(vec![1]),
+                    segment_bytes: VecM(vec![1]),
+                    xdr: BytesM(vec![0x01]),
+                }),
+                nomination: Nomination {
+                    proposer: ValidatorPublicInfo {
+                        public_key: Ed25519PublicKey::from([0u8; 32]),
+                        address: StringM(b"fake-validator".to_vec()),
+                    },
+                    block_height: next_height.into(),
+                    block_hash,
+                    prev_block_hash: tip.block_hash,
+                    transactions_hash: ParallelSignedTransactionHashBatch::new(ParallelBatch {
+                        segment_tokens: VecM(vec![]),
+                        segment_bytes: VecM(vec![]),
+                        xdr: BytesM(vec![]),
+                    }),
+                    transactions_nondeterministic_data:
+                        ParallelNondeterministicProposalDataBatch::new(ParallelBatch {
+                            segment_tokens: VecM(vec![]),
+                            segment_bytes: VecM(vec![]),
+                            xdr: BytesM(vec![]),
+                        }),
+                },
+            },
+        })
     }
 
     async fn schedulercoord_validate(
@@ -386,9 +455,32 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
 
     async fn schedulercoord_commit_block(
         &self,
-        _block_id: groundhog_scheduler::BlockID,
+        block_id: groundhog_scheduler::BlockID,
     ) -> Result<SchedulerCommitOutcome, ProgramError> {
-        Err(ProgramError::msg("not implemented in fake hogd-dev"))
+        if !matches!(
+            self.mode,
+            FakeSchedulerMode::Automine | FakeSchedulerMode::AutomineSlowCommit
+        ) {
+            return Err(ProgramError::msg("not implemented in fake hogd-dev"));
+        }
+        if self.mode == FakeSchedulerMode::AutomineSlowCommit {
+            tokio::time::sleep(Duration::from_millis(75)).await;
+        }
+        if self.pending_submits.swap(0, Ordering::SeqCst) == 0 {
+            return Ok(SchedulerCommitOutcome::SchedulerCommitBlockNotFound);
+        }
+
+        let mut guard = self.tip.lock().expect("bug: fake tip mutex poisoned");
+        let tip = guard
+            .as_mut()
+            .expect("bug: automine should only run after genesis load");
+        let next_height = *tip.height + 1;
+        tip.height = next_height.into();
+        tip.block_hash = block_hash_for_height(next_height);
+        let height_byte = u8::try_from(next_height).unwrap_or(u8::MAX);
+        tip.events_hash = SHA256Hash::from([height_byte; 32]);
+        tip.id = block_id;
+        Ok(SchedulerCommitOutcome::SchedulerCommitOK)
     }
 
     async fn schedcoord_get_tip(&self) -> Result<SchedulerGetTipResult, ProgramError> {

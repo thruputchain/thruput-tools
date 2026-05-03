@@ -19,7 +19,7 @@ use groundhog_x23_transport::connect;
 use std::{fmt, net::SocketAddr};
 use xdr_common::{BytesM, VecM};
 
-use crate::{NodeSupervisorError, genesis::ensure_dev_genesis};
+use crate::{NodeSupervisorError, block_driver::BlockDriverTrigger, genesis::ensure_dev_genesis};
 
 // chainTip and submit share the scheduler endpoint. Keep a small pool so a
 // long-running submit does not block tip checks during local-node startup and
@@ -30,6 +30,7 @@ const SCHEDULER_POOL_SIZE: usize = 2;
 #[derive(Clone)]
 pub(crate) struct HogdDevSchedulerBackend {
     scheduler: SchedulerCoord_SchedulerCoord1_Client,
+    block_driver: Option<BlockDriverTrigger>,
 }
 
 impl fmt::Debug for HogdDevSchedulerBackend {
@@ -49,7 +50,10 @@ impl HogdDevSchedulerBackend {
         )
         .await
         .map_err(|source| NodeSupervisorError::SchedulerConnect { endpoint, source })?;
-        Ok(Self { scheduler })
+        Ok(Self {
+            scheduler,
+            block_driver: None,
+        })
     }
 
     #[tracing::instrument(skip_all)]
@@ -63,12 +67,21 @@ impl HogdDevSchedulerBackend {
         &self.scheduler
     }
 
+    /// Return a copy that wakes the local block driver after submit RPC success.
+    pub(crate) fn with_block_driver(mut self, block_driver: BlockDriverTrigger) -> Self {
+        self.block_driver = Some(block_driver);
+        self
+    }
+
     /// Construct from a pre-built scheduler client. Used only in unit tests
     /// that need to pass a `HogdDevSchedulerBackend` without going through
     /// the full `connect` path.
     #[cfg(test)]
     pub(crate) fn _new_for_test(scheduler: SchedulerCoord_SchedulerCoord1_Client) -> Self {
-        Self { scheduler }
+        Self {
+            scheduler,
+            block_driver: None,
+        }
     }
 }
 
@@ -80,7 +93,11 @@ impl SubmitPlane for HogdDevSchedulerBackend {
         self.scheduler
             .schedulercoord_submit_unvetted(&batch)
             .await
-            .map_err(|error| classify_submit_rpc_error(&error))
+            .map_err(|error| classify_submit_rpc_error(&error))?;
+        if let Some(block_driver) = &self.block_driver {
+            block_driver.trigger_after_submit();
+        }
+        Ok(())
     }
 }
 

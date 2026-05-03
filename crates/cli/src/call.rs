@@ -5,9 +5,8 @@ use groundhog_rpc_api_types::receipt::TransactionReceipt;
 use groundhog_rpc_api_types::transaction::TxHash;
 use groundhog_signing::{
     BuildCallTransaction, DEFAULT_TX_GAS_LIMIT, SignTransactionParams, Signer,
-    build_call_transaction, sign_transaction,
+    build_call_transaction, sign_transaction, source_address_auth_claim,
 };
-use groundhog_xdr::auth_claim::AuthClaim;
 use groundhog_xdr::contract::ContractEntrypointID;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -295,12 +294,7 @@ fn prepare_call_with_runtime(
     let do_action_calldata = xdrs::cxs::encode(&inner_invocation.as_slice())
         .map_err(|e| CliError::Other(format!("failed to CXS-encode do_action calldata: {e}")))?;
 
-    let auth_claims: groundhog_xdr::auth_claim::AuthClaimData =
-        vec![AuthClaim::kInvokedAddressSignature {
-            invoked_address_signature_id: 0,
-        }]
-        .try_into()
-        .map_err(|e: xdr_common::Error| CliError::Other(e.to_string()))?;
+    let auth_claim = source_address_auth_claim();
 
     let wallet_entrypoint = ContractEntrypointID::from(WALLET_DO_ACTION_ENTRYPOINT);
     let block_expiry_height = rt.block_on(async { resolve_block_expiry_height(rpc_url).await })?;
@@ -312,7 +306,7 @@ fn prepare_call_with_runtime(
         gas_limit: DEFAULT_TX_GAS_LIMIT,
         block_expiry_height,
         nonce: nonce_from_timestamp(),
-        auth_claims,
+        auth_claim,
     });
 
     let signed_tx = sign_transaction(tx, &signer, SignTransactionParams::default())

@@ -5,8 +5,8 @@
 //! methods still use this stub until PR 4c lands the corresponding x23
 //! adapters.
 //!
-//! Wire-error strings carry only the JSON-RPC method name (matching
-//! `crates/dev-node`), so the public protocol surface is stable. The
+//! Wire-error strings carry only the JSON-RPC method name, so the public
+//! protocol surface is stable. The
 //! "stubbed because hogd-dev adapters aren't wired yet" context goes to
 //! `tracing::warn!` at supervisor startup and to module-level docs, not
 //! into the wire error.

@@ -192,19 +192,17 @@ enum Command {
     },
     /// Start an experimental local development node
     #[command(long_about = "Start an experimental local development node \
-                      backed by the current native_exec/test_ffi \
-                      prototype backend. This shares execution semantics \
-                      with SDK tests, but does not yet provide durable \
-                      local-node lifecycle features such as snapshot, \
-                      revert, or time travel.")]
+                      backed by a supervised hogd-dev process. The \
+                      native_exec/test_ffi prototype backend is no longer \
+                      wired into this command.")]
     Node {
         /// Port to listen on
         #[arg(long, default_value = "9545")]
         port: u16,
-        /// Number of pre-funded dev accounts
-        #[arg(long, default_value = "10")]
+        /// Deprecated: ignored by the hogd-dev backend
+        #[arg(long, default_value = "10", hide = true)]
         accounts: usize,
-        /// Start the experimental hogd-dev supervisor path with this binary
+        /// Explicit hogd-dev binary path
         #[arg(long, hide = true)]
         hogd_dev_binary: Option<std::path::PathBuf>,
     },

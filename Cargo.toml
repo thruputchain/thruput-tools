@@ -9,7 +9,6 @@ members = [
     "crates/client",
     "crates/signing",
     "crates/cli",
-    "crates/dev-node",
     "crates/node-supervisor",
     "crates/e2e-tests",
     "crates/bench",
@@ -38,22 +37,19 @@ groundhog-rpc-server = { path = "crates/rpc-server", version = "=0.2.5", registr
 groundhog-x23-transport = { path = "crates/x23-transport", version = "=0.2.5", registry = "groundhog" }
 groundhog-rpc-client = { path = "crates/client", version = "=0.2.5", registry = "groundhog" }
 groundhog-signing = { path = "crates/signing", version = "=0.2.5", registry = "groundhog" }
-groundhog-dev-node = { path = "crates/dev-node", version = "=0.2.5", registry = "groundhog" }
 groundhog-node-supervisor = { path = "crates/node-supervisor", version = "=0.2.5", registry = "groundhog" }
 
 # --- Groundhog (private registry) ---
-groundhog-xdr = { version = "=0.9.4", registry = "groundhog", features = ["serde", "xdrs"] }
-groundhog_indexer = { version = "=0.9.4", registry = "groundhog", features = ["serde"] }
-groundhog_scheduler = { version = "=0.9.4", registry = "groundhog" }
+groundhog-xdr = { version = "=0.10.1", registry = "groundhog", features = ["serde", "xdrs"] }
+groundhog_indexer = { version = "=0.10.1", registry = "groundhog", features = ["serde"] }
+groundhog_scheduler = { version = "=0.10.1", registry = "groundhog" }
 xdrs = { version = "0.5.6", registry = "groundhog", features = ["alloc"] }
 xdr-common = { version = "0.5.6", registry = "groundhog" }
 rpc_driver = { version = "0.8", registry = "groundhog" }
-groundhog-native-exec = { version = "0.13.0", registry = "groundhog" }
-groundhog-sys = { version = "0.13.0", registry = "groundhog" }
 groundhog-wasm-meter = { version = "0.3.0", registry = "groundhog" }
 groundhog-spec-tool = { version = "0.13.0", registry = "groundhog" }
 groundhog-contract-spec = { version = "0.13.0", registry = "groundhog" }
-groundhog-trace = { version = "=0.9.4", registry = "groundhog" }
+groundhog-trace = { version = "=0.10.1", registry = "groundhog" }
 
 # --- Async ---
 async-trait = "0.1"

@@ -2,7 +2,7 @@
 //!
 //! This crate owns common request validation, public error mapping, and the
 //! `GroundhogApiServer` implementation. Concrete binaries provide backend
-//! adapters for production gateway, local dev-node, or future hogd-dev
+//! adapters for the production gateway and hogd-dev node supervisor
 //! compositions.
 
 pub mod backend;
