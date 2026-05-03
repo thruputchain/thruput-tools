@@ -6,6 +6,8 @@ pub mod build;
 pub mod call;
 pub mod checks;
 pub(crate) mod codec;
+pub(crate) mod codegen;
+pub mod codegen_cmd;
 pub mod config;
 pub mod contract_spec;
 pub mod deploy;
