@@ -4,7 +4,12 @@
 // point added in a later task; suppress dead-code warnings in the interim.
 #![allow(dead_code)]
 
-use groundhog_contract_spec::ContractType;
+use std::fmt::Write as _;
+
+use groundhog_contract_spec::{
+    ContractEnumDef, ContractField, ContractStructDef, ContractType, ContractTypeDef,
+    ContractUnionCaseType, ContractUnionDef,
+};
 
 use crate::CliError;
 use crate::codec::spec_string_text;
@@ -53,11 +58,110 @@ fn ts_type_ref(ty: &ContractType) -> Result<String, CliError> {
     }
 }
 
+/// Emit a TypeScript type declaration for a named contract type definition.
+fn emit_type_def(def: &ContractTypeDef) -> Result<String, CliError> {
+    match def {
+        ContractTypeDef::TypeDefStruct { struct_def } => emit_struct(struct_def),
+        ContractTypeDef::TypeDefEnum { enum_def } => emit_enum(enum_def),
+        ContractTypeDef::TypeDefUnion { union_def } => emit_union(union_def),
+        _ => Err(CliError::SpecFailed(
+            "contract spec contains an unsupported type definition kind".into(),
+        )),
+    }
+}
+
+/// Emit a TypeScript interface for a contract struct definition.
+fn emit_struct(def: &ContractStructDef) -> Result<String, CliError> {
+    let name = spec_string_text(&def.name)?;
+    let mut fields = String::new();
+    for field in def.fields.iter() {
+        let field_name = spec_string_text(&field.name)?;
+        let ts_ty = ts_type_ref(&field.ty)?;
+        if !fields.is_empty() {
+            fields.push(' ');
+        }
+        let _ = write!(fields, "{field_name}: {ts_ty};");
+    }
+    Ok(format!("export interface {name} {{ {fields} }}"))
+}
+
+/// Emit a TypeScript enum for a contract enum definition.
+fn emit_enum(def: &ContractEnumDef) -> Result<String, CliError> {
+    let name = spec_string_text(&def.name)?;
+    let mut variants = String::new();
+    for variant in def.variants.iter() {
+        let variant_name = spec_string_text(&variant.name)?;
+        if !variants.is_empty() {
+            variants.push(' ');
+        }
+        let _ = write!(variants, "{variant_name} = {},", variant.value);
+    }
+    Ok(format!("export enum {name} {{ {variants} }}"))
+}
+
+/// Emit a TypeScript discriminated union for a contract union definition.
+fn emit_union(def: &ContractUnionDef) -> Result<String, CliError> {
+    let name = spec_string_text(&def.name)?;
+    let mut cases: Vec<String> = Vec::new();
+
+    for case in def.cases.iter() {
+        let case_name = spec_string_text(&case.name)?;
+        let arm = match &case.case_type {
+            ContractUnionCaseType::UnionCaseVoid => {
+                format!("{{ case: \"{case_name}\" }}")
+            }
+            ContractUnionCaseType::UnionCaseTuple { tuple } => {
+                let items: Vec<String> = tuple.iter().map(ts_type_ref).collect::<Result<_, _>>()?;
+                format!("{{ case: \"{case_name}\"; value: [{}] }}", items.join(", "))
+            }
+            ContractUnionCaseType::UnionCaseStruct { struct_fields } => {
+                let fields = emit_inline_struct_fields(struct_fields.iter())?;
+                format!("{{ case: \"{case_name}\"; value: {{ {fields} }} }}")
+            }
+            _ => {
+                return Err(CliError::SpecFailed(
+                    "contract spec contains an unsupported union case kind".into(),
+                ));
+            }
+        };
+        cases.push(arm);
+    }
+
+    let mut body = String::new();
+    for (i, arm) in cases.iter().enumerate() {
+        if i == 0 {
+            let _ = write!(body, "\n  {arm}");
+        } else {
+            let _ = write!(body, "\n  | {arm}");
+        }
+    }
+    body.push(';');
+
+    Ok(format!("export type {name} ={body}"))
+}
+
+/// Format struct fields as inline TypeScript object type fields.
+fn emit_inline_struct_fields<'a>(
+    fields: impl Iterator<Item = &'a ContractField>,
+) -> Result<String, CliError> {
+    let mut out = String::new();
+    for field in fields {
+        let field_name = spec_string_text(&field.name)?;
+        let ts_ty = ts_type_ref(&field.ty)?;
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        let _ = write!(out, "{field_name}: {ts_ty};");
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use groundhog_contract_spec::{
-        ContractArrayType, ContractSpecString, ContractVectorType,
+        ContractArrayType, ContractEnumVariant, ContractSpecString, ContractUnionCase,
+        ContractVectorType,
     };
 
     fn spec_string(s: &str) -> ContractSpecString {
@@ -129,5 +233,108 @@ mod tests {
             named: spec_string("ERC20Error"),
         };
         assert_eq!(ts_type_ref(&ty).unwrap(), "ERC20Error");
+    }
+
+    #[test]
+    fn generates_struct_interface() {
+        let def = ContractTypeDef::TypeDefStruct {
+            struct_def: ContractStructDef {
+                name: spec_string("TokenInfo"),
+                fields: vec![
+                    ContractField {
+                        name: spec_string("owner"),
+                        ty: ContractType::Address,
+                    },
+                    ContractField {
+                        name: spec_string("supply"),
+                        ty: ContractType::U128,
+                    },
+                    ContractField {
+                        name: spec_string("frozen"),
+                        ty: ContractType::Bool,
+                    },
+                ]
+                .try_into()
+                .unwrap(),
+            },
+        };
+        assert_eq!(
+            emit_type_def(&def).unwrap(),
+            "export interface TokenInfo { owner: ContractAddress; supply: bigint; frozen: boolean; }"
+        );
+    }
+
+    #[test]
+    fn generates_enum() {
+        let def = ContractTypeDef::TypeDefEnum {
+            enum_def: ContractEnumDef {
+                name: spec_string("ERC20Error"),
+                variants: vec![
+                    ContractEnumVariant {
+                        name: spec_string("AlreadyInitialized"),
+                        value: 1,
+                    },
+                    ContractEnumVariant {
+                        name: spec_string("MustBeContractOwner"),
+                        value: 2,
+                    },
+                ]
+                .try_into()
+                .unwrap(),
+            },
+        };
+        assert_eq!(
+            emit_type_def(&def).unwrap(),
+            "export enum ERC20Error { AlreadyInitialized = 1, MustBeContractOwner = 2, }"
+        );
+    }
+
+    #[test]
+    fn generates_discriminated_union() {
+        let def = ContractTypeDef::TypeDefUnion {
+            union_def: ContractUnionDef {
+                name: spec_string("Result"),
+                cases: vec![
+                    ContractUnionCase {
+                        name: spec_string("Ok"),
+                        discriminant: 0,
+                        case_type: ContractUnionCaseType::UnionCaseTuple {
+                            tuple: vec![ContractType::U64].try_into().unwrap(),
+                        },
+                    },
+                    ContractUnionCase {
+                        name: spec_string("Err"),
+                        discriminant: 1,
+                        case_type: ContractUnionCaseType::UnionCaseVoid,
+                    },
+                    ContractUnionCase {
+                        name: spec_string("Detail"),
+                        discriminant: 2,
+                        case_type: ContractUnionCaseType::UnionCaseStruct {
+                            struct_fields: vec![
+                                ContractField {
+                                    name: spec_string("code"),
+                                    ty: ContractType::U64,
+                                },
+                                ContractField {
+                                    name: spec_string("msg"),
+                                    ty: ContractType::String,
+                                },
+                            ]
+                            .try_into()
+                            .unwrap(),
+                        },
+                    },
+                ]
+                .try_into()
+                .unwrap(),
+            },
+        };
+        let expected = "\
+export type Result =
+  { case: \"Ok\"; value: [bigint] }
+  | { case: \"Err\" }
+  | { case: \"Detail\"; value: { code: bigint; msg: string; } };";
+        assert_eq!(emit_type_def(&def).unwrap(), expected);
     }
 }
