@@ -1,15 +1,13 @@
 //! TypeScript binding code generation from contract specs.
 
-// These functions are consumed by the public `generate_ts_bindings` entry
-// point added in a later task; suppress dead-code warnings in the interim.
-#![allow(dead_code)]
-
 use std::fmt::Write as _;
 
 use groundhog_contract_spec::{
-    ContractEnumDef, ContractField, ContractStructDef, ContractType, ContractTypeDef,
-    ContractUnionCaseType, ContractUnionDef,
+    ContractEnumDef, ContractExceptionType, ContractField, ContractSpec, ContractSpecInterface,
+    ContractSpecMethod, ContractStructDef, ContractType, ContractTypeDef, ContractUnionCaseType,
+    ContractUnionDef,
 };
+use groundhog_contract_util::{NormalizedMethodSignature, contract_entrypoint_id};
 
 use crate::CliError;
 use crate::codec::spec_string_text;
@@ -156,12 +154,596 @@ fn emit_inline_struct_fields<'a>(
     Ok(out)
 }
 
+// ---------------------------------------------------------------------------
+// camelCase conversion
+// ---------------------------------------------------------------------------
+
+/// Convert a `snake_case` identifier to `camelCase`.
+fn to_camel_case(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut capitalize_next = false;
+    for ch in s.chars() {
+        if ch == '_' {
+            capitalize_next = true;
+        } else if capitalize_next {
+            result.extend(ch.to_uppercase());
+            capitalize_next = false;
+        } else {
+            result.push(ch);
+        }
+    }
+    result
+}
+
+// ---------------------------------------------------------------------------
+// Full binding file generation
+// ---------------------------------------------------------------------------
+
+/// Generate a complete, self-contained TypeScript binding file from a
+/// contract spec.
+///
+/// `source_name` is the human-readable origin (e.g. a WASM file name)
+/// embedded in the header comment.
+pub fn generate_ts_bindings(spec: &ContractSpec, source_name: &str) -> Result<String, CliError> {
+    let mut out = String::new();
+
+    // 1. Header
+    let interfaces: Vec<(&str, &str)> = spec
+        .interfaces
+        .iter()
+        .map(|iface| {
+            Ok((
+                spec_string_text(&iface.name)?,
+                spec_string_text(&iface.vers)?,
+            ))
+        })
+        .collect::<Result<_, CliError>>()?;
+    emit_header(&mut out, source_name, &interfaces);
+
+    // 2. Imports
+    emit_imports(&mut out, spec);
+
+    // 3. Entrypoints
+    emit_entrypoints(&mut out, spec)?;
+
+    // 4. Named type declarations
+    for def in spec.type_defs.iter() {
+        let _ = writeln!(out);
+        let _ = writeln!(out, "{}", emit_type_def(def)?);
+    }
+
+    // 5. Spec literal
+    let _ = writeln!(out);
+    emit_spec_literal(&mut out, spec)?;
+
+    // 6. Named codecs
+    let _ = writeln!(out);
+    let _ = writeln!(out, "const namedCodecs = buildNamedCodecs(spec.type_defs);");
+
+    // 7. Per-method functions
+    for iface in spec.interfaces.iter() {
+        let iface_name = spec_string_text(&iface.name)?;
+        for method in iface.methods.iter() {
+            let _ = writeln!(out);
+            emit_method_function(&mut out, iface_name, method)?;
+        }
+    }
+
+    Ok(out)
+}
+
+// ---------------------------------------------------------------------------
+// Section emitters
+// ---------------------------------------------------------------------------
+
+/// Emit the file header comment with source name and interface info.
+fn emit_header(out: &mut String, source_name: &str, interfaces: &[(&str, &str)]) {
+    for (name, vers) in interfaces {
+        let _ = writeln!(
+            out,
+            "// Generated from {source_name} \u{2014} {name} interface v{vers}"
+        );
+    }
+    let _ = writeln!(out, "// DO NOT EDIT. Re-run codegen to update.");
+}
+
+/// Emit the TypeScript import block.
+fn emit_imports(out: &mut String, spec: &ContractSpec) {
+    let _ = writeln!(out);
+
+    // Every generated method function takes `ContractAddress`, so always
+    // import it alongside the other protocol types.
+    let _ = writeln!(
+        out,
+        "import type {{ ContractAddress, GasAmount, Invocation }} \
+         from \"@groundhogchain/protocol\";",
+    );
+    let _ = writeln!(
+        out,
+        "import {{ contractEntrypointID }} from \
+         \"@groundhogchain/protocol\";"
+    );
+    let _ = writeln!(
+        out,
+        "import {{ fromHex }} from \
+         \"@groundhogchain/protocol/utils\";"
+    );
+
+    // @groundhogchain/contract-spec imports
+    let has_unions = spec
+        .type_defs
+        .iter()
+        .any(|d| matches!(d, ContractTypeDef::TypeDefUnion { .. }));
+    let mut cs_imports: Vec<&str> = vec![
+        "ContractTypeKind",
+        "ContractTypeDefKind",
+        "contractSpecString",
+    ];
+    if has_unions {
+        cs_imports.push("ContractUnionCaseKind");
+    }
+    let _ = writeln!(
+        out,
+        "import {{ {} }} from \"@groundhogchain/contract-spec\";",
+        cs_imports.join(", "),
+    );
+
+    // @groundhogchain/client imports
+    let _ = writeln!(
+        out,
+        "import type {{ ContractSpec }} from \"@groundhogchain/client\";"
+    );
+    let _ = writeln!(
+        out,
+        "import {{ encodeCalldata }} from \"@groundhogchain/client\";"
+    );
+    let _ = writeln!(
+        out,
+        "import {{ buildNamedCodecs }} from \"@groundhogchain/client\";"
+    );
+    let _ = writeln!(
+        out,
+        "import {{ createInvocation }} from \"@groundhogchain/client\";"
+    );
+}
+
+/// Emit the `entrypoints` const mapping method names to their IDs.
+fn emit_entrypoints(out: &mut String, spec: &ContractSpec) -> Result<(), CliError> {
+    let _ = writeln!(out);
+    let _ = writeln!(out, "const s = contractSpecString;");
+    let _ = writeln!(out);
+    let _ = writeln!(out, "const entrypoints = {{");
+
+    for iface in spec.interfaces.iter() {
+        let iface_name = spec_string_text(&iface.name)?;
+        let iface_vers = spec_string_text(&iface.vers)?;
+        for method in iface.methods.iter() {
+            let method_name = spec_string_text(&method.name)?;
+            let sig = NormalizedMethodSignature::new(method_name);
+            let id = contract_entrypoint_id(Some(iface_name), iface_vers, &sig);
+            let hex = hex::encode(id.as_ref());
+            let _ = writeln!(
+                out,
+                "  {method_name}: contractEntrypointID(fromHex(\"{hex}\")),",
+            );
+        }
+    }
+
+    let _ = writeln!(out, "}} as const;");
+    Ok(())
+}
+
+/// Emit the full `ContractSpec` object literal.
+fn emit_spec_literal(out: &mut String, spec: &ContractSpec) -> Result<(), CliError> {
+    let _ = writeln!(out, "export const spec: ContractSpec = {{");
+
+    // interfaces
+    let _ = writeln!(out, "  interfaces: [");
+    for iface in spec.interfaces.iter() {
+        emit_spec_interface_literal(out, iface)?;
+    }
+    let _ = writeln!(out, "  ],");
+
+    // type_defs
+    let _ = writeln!(out, "  type_defs: [");
+    for def in spec.type_defs.iter() {
+        emit_spec_type_def_literal(out, def)?;
+    }
+    let _ = writeln!(out, "  ],");
+
+    let _ = writeln!(out, "}};");
+    Ok(())
+}
+
+/// Emit a single interface entry inside the spec literal.
+fn emit_spec_interface_literal(
+    out: &mut String,
+    iface: &ContractSpecInterface,
+) -> Result<(), CliError> {
+    let name = spec_string_text(&iface.name)?;
+    let vers = spec_string_text(&iface.vers)?;
+    let _ = writeln!(out, "    {{");
+    let _ = writeln!(out, "      name: s(\"{name}\"),");
+    let _ = writeln!(out, "      vers: s(\"{vers}\"),");
+
+    // throws
+    let _ = writeln!(out, "      throws: [");
+    for exc in iface.throws.iter() {
+        emit_spec_exception_literal(out, exc)?;
+    }
+    let _ = writeln!(out, "      ],");
+
+    // methods
+    let _ = writeln!(out, "      methods: [");
+    for method in iface.methods.iter() {
+        emit_spec_method_literal(out, method)?;
+    }
+    let _ = writeln!(out, "      ],");
+
+    let _ = writeln!(out, "    }},");
+    Ok(())
+}
+
+/// Emit a single exception type entry inside the spec literal.
+fn emit_spec_exception_literal(
+    out: &mut String,
+    exc: &ContractExceptionType,
+) -> Result<(), CliError> {
+    let ty_lit = spec_type_to_ts_literal(&exc.ty)?;
+    let _ = writeln!(
+        out,
+        "        {{ selector: 0x{:x}n, ty: {} }},",
+        exc.selector, ty_lit,
+    );
+    Ok(())
+}
+
+/// Emit a single method entry inside the spec literal.
+fn emit_spec_method_literal(out: &mut String, method: &ContractSpecMethod) -> Result<(), CliError> {
+    let name = spec_string_text(&method.name)?;
+    let _ = writeln!(out, "        {{");
+    let _ = writeln!(out, "          name: s(\"{name}\"),");
+
+    // args
+    let _ = writeln!(out, "          args: [");
+    for arg in method.args.iter() {
+        let arg_name = spec_string_text(&arg.name)?;
+        let ty_lit = spec_type_to_ts_literal(&arg.ty)?;
+        let _ = writeln!(
+            out,
+            "            {{ name: s(\"{arg_name}\"), ty: {ty_lit} }},",
+        );
+    }
+    let _ = writeln!(out, "          ],");
+
+    // return_type
+    let ret_lit = spec_type_to_ts_literal(&method.return_type)?;
+    let _ = writeln!(out, "          return_type: {ret_lit},");
+
+    let _ = writeln!(out, "        }},");
+    Ok(())
+}
+
+/// Emit a single type-def entry inside the spec literal.
+fn emit_spec_type_def_literal(out: &mut String, def: &ContractTypeDef) -> Result<(), CliError> {
+    match def {
+        ContractTypeDef::TypeDefStruct { struct_def } => {
+            let name = spec_string_text(&struct_def.name)?;
+            let _ = writeln!(out, "    {{");
+            let _ = writeln!(out, "      v: ContractTypeDefKind.TypeDefStruct,");
+            let _ = writeln!(out, "      struct_def: {{");
+            let _ = writeln!(out, "        name: s(\"{name}\"),");
+            let _ = writeln!(out, "        fields: [");
+            for field in struct_def.fields.iter() {
+                let fname = spec_string_text(&field.name)?;
+                let ty_lit = spec_type_to_ts_literal(&field.ty)?;
+                let _ = writeln!(out, "          {{ name: s(\"{fname}\"), ty: {ty_lit} }},",);
+            }
+            let _ = writeln!(out, "        ],");
+            let _ = writeln!(out, "      }},");
+            let _ = writeln!(out, "    }},");
+        }
+        ContractTypeDef::TypeDefEnum { enum_def } => {
+            let name = spec_string_text(&enum_def.name)?;
+            let _ = writeln!(out, "    {{");
+            let _ = writeln!(out, "      v: ContractTypeDefKind.TypeDefEnum,");
+            let _ = writeln!(out, "      enum_def: {{");
+            let _ = writeln!(out, "        name: s(\"{name}\"),");
+            let _ = writeln!(out, "        variants: [");
+            for variant in enum_def.variants.iter() {
+                let vname = spec_string_text(&variant.name)?;
+                let _ = writeln!(
+                    out,
+                    "          {{ name: s(\"{vname}\"), value: {}n }},",
+                    variant.value,
+                );
+            }
+            let _ = writeln!(out, "        ],");
+            let _ = writeln!(out, "      }},");
+            let _ = writeln!(out, "    }},");
+        }
+        ContractTypeDef::TypeDefUnion { union_def } => {
+            let name = spec_string_text(&union_def.name)?;
+            let _ = writeln!(out, "    {{");
+            let _ = writeln!(out, "      v: ContractTypeDefKind.TypeDefUnion,");
+            let _ = writeln!(out, "      union_def: {{");
+            let _ = writeln!(out, "        name: s(\"{name}\"),");
+            let _ = writeln!(out, "        cases: [");
+            for case in union_def.cases.iter() {
+                let cname = spec_string_text(&case.name)?;
+                emit_spec_union_case_literal(out, cname, case.discriminant, &case.case_type)?;
+            }
+            let _ = writeln!(out, "        ],");
+            let _ = writeln!(out, "      }},");
+            let _ = writeln!(out, "    }},");
+        }
+        _ => {
+            return Err(CliError::SpecFailed(
+                "contract spec contains an unsupported type definition \
+                 kind"
+                    .into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Emit a single union case inside the spec literal.
+fn emit_spec_union_case_literal(
+    out: &mut String,
+    name: &str,
+    discriminant: i32,
+    case_type: &ContractUnionCaseType,
+) -> Result<(), CliError> {
+    match case_type {
+        ContractUnionCaseType::UnionCaseVoid => {
+            let _ = writeln!(out, "          {{");
+            let _ = writeln!(out, "            name: s(\"{name}\"),");
+            let _ = writeln!(out, "            discriminant: {discriminant}n,");
+            let _ = writeln!(
+                out,
+                "            case_type: \
+                 {{ v: ContractUnionCaseKind.UnionCaseVoid }},"
+            );
+            let _ = writeln!(out, "          }},");
+        }
+        ContractUnionCaseType::UnionCaseTuple { tuple } => {
+            let _ = writeln!(out, "          {{");
+            let _ = writeln!(out, "            name: s(\"{name}\"),");
+            let _ = writeln!(out, "            discriminant: {discriminant}n,");
+            let items: Vec<String> = tuple
+                .iter()
+                .map(spec_type_to_ts_literal)
+                .collect::<Result<_, _>>()?;
+            let _ = writeln!(
+                out,
+                "            case_type: {{ v: \
+                 ContractUnionCaseKind.UnionCaseTuple, tuple: [{}] }},",
+                items.join(", "),
+            );
+            let _ = writeln!(out, "          }},");
+        }
+        ContractUnionCaseType::UnionCaseStruct { struct_fields } => {
+            let _ = writeln!(out, "          {{");
+            let _ = writeln!(out, "            name: s(\"{name}\"),");
+            let _ = writeln!(out, "            discriminant: {discriminant}n,");
+            let mut fields_str = String::from("[");
+            for (i, field) in struct_fields.iter().enumerate() {
+                if i > 0 {
+                    fields_str.push_str(", ");
+                }
+                let fname = spec_string_text(&field.name)?;
+                let ty_lit = spec_type_to_ts_literal(&field.ty)?;
+                let _ = write!(fields_str, "{{ name: s(\"{fname}\"), ty: {ty_lit} }}",);
+            }
+            fields_str.push(']');
+            let _ = writeln!(
+                out,
+                "            case_type: {{ v: \
+                 ContractUnionCaseKind.UnionCaseStruct, \
+                 struct_fields: {fields_str} }},",
+            );
+            let _ = writeln!(out, "          }},");
+        }
+        _ => {
+            return Err(CliError::SpecFailed(
+                "contract spec contains an unsupported union case kind".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Serialize a `ContractType` as a TypeScript object literal suitable for
+/// the spec constant (e.g. `{ v: ContractTypeKind.U64 }`).
+fn spec_type_to_ts_literal(ty: &ContractType) -> Result<String, CliError> {
+    match ty {
+        ContractType::Void => Ok("{ v: ContractTypeKind.Void }".into()),
+        ContractType::Bool => Ok("{ v: ContractTypeKind.Bool }".into()),
+        ContractType::U8 => Ok("{ v: ContractTypeKind.U8 }".into()),
+        ContractType::U32 => Ok("{ v: ContractTypeKind.U32 }".into()),
+        ContractType::I32 => Ok("{ v: ContractTypeKind.I32 }".into()),
+        ContractType::U64 => Ok("{ v: ContractTypeKind.U64 }".into()),
+        ContractType::I64 => Ok("{ v: ContractTypeKind.I64 }".into()),
+        ContractType::U128 => Ok("{ v: ContractTypeKind.U128 }".into()),
+        ContractType::I128 => Ok("{ v: ContractTypeKind.I128 }".into()),
+        ContractType::String => Ok("{ v: ContractTypeKind.String }".into()),
+        ContractType::Bytes => Ok("{ v: ContractTypeKind.Bytes }".into()),
+        ContractType::Address => Ok("{ v: ContractTypeKind.Address }".into()),
+        ContractType::Option { option_inner } => {
+            let inner = option_inner.as_deref().ok_or_else(|| {
+                CliError::SpecFailed("contract spec is missing an option inner type".into())
+            })?;
+            let inner_lit = spec_type_to_ts_literal(inner)?;
+            Ok(format!(
+                "{{ v: ContractTypeKind.Option, option_inner: \
+                 {inner_lit} }}"
+            ))
+        }
+        ContractType::Vector { vector } => {
+            let elem = vector.element.as_deref().ok_or_else(|| {
+                CliError::SpecFailed("contract spec is missing a vector element type".into())
+            })?;
+            let elem_lit = spec_type_to_ts_literal(elem)?;
+            Ok(format!(
+                "{{ v: ContractTypeKind.Vector, vector: \
+                 {{ element: {elem_lit}, max_len: {} }} }}",
+                vector.max_len,
+            ))
+        }
+        ContractType::Array { array } => {
+            let elem = array.element.as_deref().ok_or_else(|| {
+                CliError::SpecFailed("contract spec is missing an array element type".into())
+            })?;
+            let elem_lit = spec_type_to_ts_literal(elem)?;
+            Ok(format!(
+                "{{ v: ContractTypeKind.Array, array: \
+                 {{ element: {elem_lit}, len: {} }} }}",
+                array.len,
+            ))
+        }
+        ContractType::Tuple { tuple } => {
+            let items: Vec<String> = tuple
+                .iter()
+                .map(spec_type_to_ts_literal)
+                .collect::<Result<_, _>>()?;
+            Ok(format!(
+                "{{ v: ContractTypeKind.Tuple, tuple: [{}] }}",
+                items.join(", "),
+            ))
+        }
+        ContractType::Named { named } => {
+            let name = spec_string_text(named)?;
+            Ok(format!(
+                "{{ v: ContractTypeKind.Named, named: s(\"{name}\") }}"
+            ))
+        }
+        _ => Err(CliError::SpecFailed(
+            "contract spec contains an unsupported contract type".into(),
+        )),
+    }
+}
+
+/// Emit an exported TypeScript function for a single contract method.
+fn emit_method_function(
+    out: &mut String,
+    iface_name: &str,
+    method: &ContractSpecMethod,
+) -> Result<(), CliError> {
+    let method_name = spec_string_text(&method.name)?;
+    let fn_name = to_camel_case(method_name);
+    let has_args = !method.args.is_empty();
+
+    // Function signature
+    if has_args {
+        let _ = writeln!(out, "export function {fn_name}(");
+        let _ = writeln!(out, "  contract: ContractAddress,");
+        let _ = writeln!(out, "  gasLimit: GasAmount,");
+        let mut args_fields = String::new();
+        for (i, arg) in method.args.iter().enumerate() {
+            let arg_name = to_camel_case(spec_string_text(&arg.name)?);
+            let ts_ty = ts_type_ref(&arg.ty)?;
+            if i > 0 {
+                args_fields.push_str("; ");
+            }
+            let _ = write!(args_fields, "{arg_name}: {ts_ty}");
+        }
+        let _ = writeln!(out, "  args: {{ {args_fields} }},");
+        let _ = writeln!(out, "): Invocation {{");
+    } else {
+        let _ = writeln!(out, "export function {fn_name}(");
+        let _ = writeln!(out, "  contract: ContractAddress,");
+        let _ = writeln!(out, "  gasLimit: GasAmount,");
+        let _ = writeln!(out, "): Invocation {{");
+    }
+
+    // Body
+    let _ = writeln!(out, "  return createInvocation({{");
+    let _ = writeln!(out, "    invoked_address: contract,");
+    let _ = writeln!(out, "    entrypoint: entrypoints.{method_name},");
+    let _ = writeln!(out, "    gas_limit: gasLimit,");
+
+    if has_args {
+        let arg_refs: Vec<String> = method
+            .args
+            .iter()
+            .map(|arg| {
+                let name = to_camel_case(spec_string_text(&arg.name)?);
+                Ok(format!("args.{name}"))
+            })
+            .collect::<Result<_, CliError>>()?;
+        let _ = writeln!(
+            out,
+            "    calldata: encodeCalldata(\
+             spec, \"{iface_name}\", \"{method_name}\", \
+             [{}], namedCodecs),",
+            arg_refs.join(", "),
+        );
+    } else {
+        let _ = writeln!(
+            out,
+            "    calldata: encodeCalldata(\
+             spec, \"{iface_name}\", \"{method_name}\", \
+             [], namedCodecs),",
+        );
+    }
+
+    let _ = writeln!(out, "  }});");
+    let _ = writeln!(out, "}}");
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Check whether any method argument or return type in the spec satisfies
+/// the predicate.
+fn spec_uses_type(spec: &ContractSpec, predicate: fn(&ContractType) -> bool) -> bool {
+    for iface in spec.interfaces.iter() {
+        for method in iface.methods.iter() {
+            if type_matches(&method.return_type, &predicate) {
+                return true;
+            }
+            for arg in method.args.iter() {
+                if type_matches(&arg.ty, &predicate) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Recursively check whether a type or any of its children match the
+/// predicate.
+fn type_matches(ty: &ContractType, predicate: &dyn Fn(&ContractType) -> bool) -> bool {
+    if predicate(ty) {
+        return true;
+    }
+    match ty {
+        ContractType::Option { option_inner } => option_inner
+            .as_deref()
+            .is_some_and(|inner| type_matches(inner, predicate)),
+        ContractType::Vector { vector } => vector
+            .element
+            .as_deref()
+            .is_some_and(|elem| type_matches(elem, predicate)),
+        ContractType::Array { array } => array
+            .element
+            .as_deref()
+            .is_some_and(|elem| type_matches(elem, predicate)),
+        ContractType::Tuple { tuple } => tuple.iter().any(|elem| type_matches(elem, predicate)),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use groundhog_contract_spec::{
-        ContractArrayType, ContractEnumVariant, ContractSpecString, ContractUnionCase,
-        ContractVectorType,
+        ContractArrayType, ContractEnumVariant, ContractSpec, ContractSpecInterface,
+        ContractSpecMethod, ContractSpecString, ContractUnionCase, ContractVectorType,
     };
 
     fn spec_string(s: &str) -> ContractSpecString {
@@ -336,5 +918,104 @@ export type Result =
   | { case: \"Err\" }
   | { case: \"Detail\"; value: { code: bigint; msg: string; } };";
         assert_eq!(emit_type_def(&def).unwrap(), expected);
+    }
+
+    #[test]
+    fn converts_snake_case_to_camel_case() {
+        assert_eq!(to_camel_case("get_balance"), "getBalance");
+        assert_eq!(to_camel_case("transfer_from"), "transferFrom");
+        assert_eq!(to_camel_case("get"), "get");
+        assert_eq!(to_camel_case("adjust_allowance"), "adjustAllowance");
+        assert_eq!(to_camel_case("total_supply"), "totalSupply");
+    }
+
+    /// Build a minimal counter contract spec: `get() -> U64` and
+    /// `increment(amount: U64) -> Void`.
+    fn counter_spec() -> ContractSpec {
+        ContractSpec {
+            interfaces: vec![ContractSpecInterface {
+                name: spec_string("Counter"),
+                vers: spec_string("0.1.0"),
+                throws: vec![].try_into().unwrap(),
+                methods: vec![
+                    ContractSpecMethod {
+                        name: spec_string("get"),
+                        args: vec![].try_into().unwrap(),
+                        return_type: ContractType::U64,
+                    },
+                    ContractSpecMethod {
+                        name: spec_string("increment"),
+                        args: vec![ContractField {
+                            name: spec_string("amount"),
+                            ty: ContractType::U64,
+                        }]
+                        .try_into()
+                        .unwrap(),
+                        return_type: ContractType::Void,
+                    },
+                ]
+                .try_into()
+                .unwrap(),
+            }]
+            .try_into()
+            .unwrap(),
+            type_defs: vec![].try_into().unwrap(),
+        }
+    }
+
+    #[test]
+    fn generates_full_binding_for_simple_contract() {
+        let spec = counter_spec();
+        let output = generate_ts_bindings(&spec, "counter.wasm").unwrap();
+
+        // Header
+        assert!(output.contains("DO NOT EDIT"));
+        assert!(output.contains("counter.wasm"));
+        assert!(output.contains("Counter interface v0.1.0"));
+
+        // Imports
+        assert!(output.contains("@groundhogchain/protocol"));
+        assert!(output.contains("@groundhogchain/client"));
+        assert!(output.contains("@groundhogchain/contract-spec"));
+
+        // ContractAddress is always imported (used in function sigs)
+        assert!(output.contains("ContractAddress"));
+
+        // Entrypoints block
+        assert!(output.contains("const entrypoints = {"));
+        assert!(output.contains("} as const;"));
+
+        // Spec literal
+        assert!(output.contains("export const spec: ContractSpec"));
+
+        // Named codecs
+        assert!(output.contains("const namedCodecs = buildNamedCodecs(spec.type_defs);"));
+
+        // Zero-arg function has no args parameter
+        assert!(output.contains("export function get("));
+        let get_fn = output.split("export function get(").nth(1).unwrap();
+        let get_sig = &get_fn[..get_fn.find("): Invocation").unwrap()];
+        assert!(
+            !get_sig.contains("args:"),
+            "zero-arg function should not have args parameter"
+        );
+
+        // Function with args
+        assert!(output.contains("export function increment("));
+        let inc_fn = output.split("export function increment(").nth(1).unwrap();
+        let inc_sig = &inc_fn[..inc_fn.find("): Invocation").unwrap()];
+        assert!(
+            inc_sig.contains("args:"),
+            "function with args should have args parameter"
+        );
+        assert!(inc_sig.contains("amount: bigint"));
+
+        // Braces balanced
+        let opens = output.chars().filter(|&c| c == '{').count();
+        let closes = output.chars().filter(|&c| c == '}').count();
+        assert_eq!(
+            opens, closes,
+            "braces must be balanced: {opens} opens vs {closes} closes"
+        );
     }
 }

@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use groundhog_contract_util::{NormalizedMethodSignature, contract_entrypoint_id};
 use groundhog_rpc_api_types::receipt::ExecStatus;
 use groundhog_rpc_api_types::receipt::TransactionReceipt;
 use groundhog_rpc_api_types::transaction::TxHash;
@@ -7,7 +8,6 @@ use groundhog_signing::{
     BuildCallTransaction, DEFAULT_TX_GAS_LIMIT, SignTransactionParams, Signer,
     build_call_transaction, sign_transaction,
 };
-use groundhog_contract_util::{NormalizedMethodSignature, contract_entrypoint_id};
 use groundhog_xdr::auth_claim::AuthClaim;
 use groundhog_xdr::contract::ContractEntrypointID;
 use serde_json::json;
@@ -862,7 +862,6 @@ mod tests {
         filter_candidates_by_interfaces, format_entrypoint_id, load_project_registered_interfaces,
         parse_contract_attr_value, resolve_spec_method, selector_json, selector_summary,
     };
-    use groundhog_contract_util::{NormalizedMethodSignature, contract_entrypoint_id};
     use crate::CliError;
     use crate::artifacts::ArtifactOptions;
     use crate::codec::{
@@ -878,6 +877,7 @@ mod tests {
         ContractType, ContractTypeDef, ContractUnionCase, ContractUnionCaseType, ContractUnionDef,
         ContractVectorType,
     };
+    use groundhog_contract_util::{NormalizedMethodSignature, contract_entrypoint_id};
     use groundhog_rpc_api_types::receipt::ExecStatus;
     use serde_json::json;
     use serial_test::serial;

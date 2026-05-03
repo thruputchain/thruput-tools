@@ -6,6 +6,7 @@ pub mod build;
 pub mod call;
 pub mod checks;
 pub(crate) mod codec;
+#[allow(dead_code)]
 pub(crate) mod codegen;
 pub mod config;
 pub mod contract_spec;
