@@ -977,6 +977,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "groundhog-open-rpc-macros"
+version = "0.3.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "groundhog-rpc-api"
 version = "0.3.0"
 dependencies = [

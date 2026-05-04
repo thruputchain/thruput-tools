@@ -11,6 +11,7 @@ members = [
     "crates/cli",
     "crates/node-supervisor",
     "crates/open-rpc",
+    "crates/open-rpc-macros",
     "crates/e2e-tests",
     "crates/bench",
 ]
@@ -40,6 +41,7 @@ groundhog-rpc-client = { path = "crates/client", version = "=0.3.0", registry = 
 groundhog-signing = { path = "crates/signing", version = "=0.3.0", registry = "groundhog" }
 groundhog-node-supervisor = { path = "crates/node-supervisor", version = "=0.3.0", registry = "groundhog" }
 groundhog-open-rpc = { path = "crates/open-rpc", version = "=0.3.0", registry = "groundhog" }
+groundhog-open-rpc-macros = { path = "crates/open-rpc-macros", version = "=0.3.0", registry = "groundhog" }
 
 # --- Groundhog (private registry) ---
 groundhog-xdr = { version = "=0.11.0", registry = "groundhog", features = ["serde", "xdrs", "schema"] }
