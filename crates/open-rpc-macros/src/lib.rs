@@ -263,6 +263,12 @@ fn extract_result_type(output: &ReturnType) -> Type {
 
 /// Given a type like `RpcResult<Foo>`, return `Foo`.  If the outermost
 /// type is not recognized as `RpcResult`, return it unchanged.
+///
+/// This matches the last path segment by name — the same approach
+/// jsonrpsee's own proc macro uses. Proc macros see tokens, not
+/// resolved types, so there is no way to structurally verify this is
+/// `jsonrpsee::core::RpcResult`. Safe because this macro is only
+/// applied to `#[rpc]` traits that use jsonrpsee's `RpcResult`.
 fn unwrap_rpc_result(ty: &Type) -> Type {
     if let Type::Path(type_path) = ty
         && let Some(segment) = type_path.path.segments.last()
