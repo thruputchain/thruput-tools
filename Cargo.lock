@@ -988,7 +988,6 @@ dependencies = [
 name = "groundhog-open-rpc"
 version = "0.3.0"
 dependencies = [
- "groundhog-rpc-api",
  "insta",
  "schemars 1.2.1",
  "serde",
@@ -1002,6 +1001,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "groundhog-open-rpc-spec"
+version = "0.3.0"
+dependencies = [
+ "groundhog-open-rpc",
+ "groundhog-rpc-api",
+ "insta",
+ "serde_json",
 ]
 
 [[package]]

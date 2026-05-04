@@ -12,6 +12,7 @@ members = [
     "crates/node-supervisor",
     "crates/open-rpc",
     "crates/open-rpc-macros",
+    "crates/open-rpc-spec",
     "crates/e2e-tests",
     "crates/bench",
 ]

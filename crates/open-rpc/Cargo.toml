@@ -20,6 +20,4 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
-groundhog-rpc-api = { workspace = true }
 insta = { workspace = true }
-serde_json = { workspace = true }
