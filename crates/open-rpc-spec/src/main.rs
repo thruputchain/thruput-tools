@@ -31,5 +31,8 @@ fn canonicalize(value: serde_json::Value) -> serde_json::Value {
 
 fn main() {
     let spec = build_spec();
-    println!("{}", serde_json::to_string_pretty(&spec).unwrap());
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&spec).expect("bug: spec JSON serialization cannot fail")
+    );
 }

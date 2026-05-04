@@ -164,6 +164,7 @@ fn generate_companion(item_trait: &ItemTrait, args: &OpenRpcArgs) -> TokenStream
 
     quote! {
         /// Generated `OpenRPC` metadata for the companion trait.
+        #[derive(Debug)]
         pub struct #struct_name;
 
         impl #struct_name {
