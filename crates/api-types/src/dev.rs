@@ -5,6 +5,7 @@ use groundhog_xdr::storage_item::{
     FlaggedStorageDelta, StorageDelta, StorageDeltaFlags, WireStorageItem,
 };
 use groundhog_xdr::transaction::{Invocation, InvocationFrameOutput};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::ContractAddress;
@@ -12,7 +13,7 @@ use crate::hex::{Hex0x, HexBytes};
 use crate::receipt::TransactionReceipt;
 
 /// A pre-funded dev account, returned by `groundhog_dev_getAccounts`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DevAccount {
     /// Contract address derived from the public key.
@@ -27,7 +28,7 @@ pub struct DevAccount {
 }
 
 /// Dev-only execution detail for a committed transaction.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TransactionDetail {
     /// Full receipt retained within the heavy-data retention window.
@@ -45,7 +46,7 @@ pub struct TransactionDetail {
 }
 
 /// Readable storage delta plus raw encoded value for machine inspection.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct StorageDeltaInfo {
     /// Contract address whose storage was modified.
@@ -63,7 +64,7 @@ pub struct StorageDeltaInfo {
 }
 
 /// Readable latest-state storage item plus raw encoded value for inspection.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct StorageItemInfo {
     /// Stable storage item kind identifier.
@@ -75,7 +76,7 @@ pub struct StorageItemInfo {
 }
 
 /// Serializable frame trace for local-node debugging.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TraceInfo {
     /// Invocation inputs for this frame.
@@ -89,7 +90,7 @@ pub struct TraceInfo {
 }
 
 /// RPC-facing invocation summary with hex-friendly byte fields.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct InvocationInfo {
     pub address: ContractAddress,
@@ -100,7 +101,7 @@ pub struct InvocationInfo {
 }
 
 /// Serializable syscall entry retained inside a frame trace.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SyscallInfo {
     pub name: String,
@@ -116,7 +117,7 @@ pub struct SyscallInfo {
 }
 
 /// Compact syscall completion status.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SyscallStatusInfo {
     pub code: i32,
@@ -124,7 +125,7 @@ pub struct SyscallStatusInfo {
 }
 
 /// Frame completion status with raw buffers preserved as hex.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[non_exhaustive]
 #[serde(tag = "result", rename_all = "camelCase")]
 pub enum FrameOutputInfo {

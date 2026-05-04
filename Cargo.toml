@@ -10,6 +10,9 @@ members = [
     "crates/signing",
     "crates/cli",
     "crates/node-supervisor",
+    "crates/open-rpc",
+    "crates/open-rpc-macros",
+    "crates/open-rpc-spec",
     "crates/e2e-tests",
     "crates/bench",
 ]
@@ -38,11 +41,13 @@ groundhog-x23-transport = { path = "crates/x23-transport", version = "=0.3.0", r
 groundhog-rpc-client = { path = "crates/client", version = "=0.3.0", registry = "groundhog" }
 groundhog-signing = { path = "crates/signing", version = "=0.3.0", registry = "groundhog" }
 groundhog-node-supervisor = { path = "crates/node-supervisor", version = "=0.3.0", registry = "groundhog" }
+groundhog-open-rpc = { path = "crates/open-rpc", version = "=0.3.0", registry = "groundhog" }
+groundhog-open-rpc-macros = { path = "crates/open-rpc-macros", version = "=0.3.0", registry = "groundhog" }
 
 # --- Groundhog (private registry) ---
-groundhog-xdr = { version = "=0.10.1", registry = "groundhog", features = ["serde", "xdrs"] }
-groundhog_indexer = { version = "=0.10.1", registry = "groundhog", features = ["serde"] }
-groundhog_scheduler = { version = "=0.10.1", registry = "groundhog" }
+groundhog-xdr = { version = "=0.11.0", registry = "groundhog", features = ["serde", "xdrs", "schema"] }
+groundhog_indexer = { version = "=0.11.0", registry = "groundhog", features = ["serde"] }
+groundhog_scheduler = { version = "=0.11.0", registry = "groundhog" }
 xdrs = { version = "0.5.6", registry = "groundhog", features = ["alloc"] }
 xdr-common = { version = "0.5.6", registry = "groundhog" }
 rpc_driver = { version = "0.8", registry = "groundhog" }
@@ -50,7 +55,7 @@ groundhog-wasm-meter = { version = "0.3.0", registry = "groundhog" }
 groundhog-spec-tool = { version = "0.13.0", registry = "groundhog" }
 groundhog-contract-spec = { version = "0.13.0", registry = "groundhog" }
 groundhog-contract-util = { version = "0.13.0", registry = "groundhog" }
-groundhog-trace = { version = "=0.10.1", registry = "groundhog" }
+groundhog-trace = { version = "=0.11.0", registry = "groundhog" }
 
 # --- Async ---
 async-trait = "0.1"
@@ -67,11 +72,13 @@ tower-http = { version = "0.6", features = ["cors", "trace", "timeout"] }
 hyper = "1"
 
 # --- Serialization ---
+schemars = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 bytes = "1"
 hex = "0.4"
 libc = "0.2"
+insta = "1"
 serial_test = "3"
 tempfile = "3"
 

@@ -1,4 +1,45 @@
 #[cfg(test)]
+mod schema_generation {
+    use schemars::schema_for;
+
+    use crate::block::{BlockInfo, ChainTip};
+    use crate::dev::{
+        DevAccount, FrameOutputInfo, InvocationInfo, StorageDeltaInfo, StorageItemInfo,
+        SyscallInfo, SyscallStatusInfo, TraceInfo, TransactionDetail,
+    };
+    use crate::events::{EmittedEvent, EventPage, IdentifiedEvent};
+    use crate::receipt::{ExecStatus, TransactionReceipt};
+    use crate::transaction::{TransactionStatus, TxHash};
+
+    #[test]
+    fn schema_generation_succeeds() {
+        // Core RPC types
+        let _ = schema_for!(ChainTip);
+        let _ = schema_for!(BlockInfo);
+        let _ = schema_for!(TxHash);
+        let _ = schema_for!(TransactionStatus);
+        let _ = schema_for!(TransactionReceipt);
+        let _ = schema_for!(ExecStatus);
+
+        // Event types
+        let _ = schema_for!(EmittedEvent);
+        let _ = schema_for!(IdentifiedEvent);
+        let _ = schema_for!(EventPage);
+
+        // Dev types
+        let _ = schema_for!(DevAccount);
+        let _ = schema_for!(TransactionDetail);
+        let _ = schema_for!(StorageDeltaInfo);
+        let _ = schema_for!(StorageItemInfo);
+        let _ = schema_for!(TraceInfo);
+        let _ = schema_for!(InvocationInfo);
+        let _ = schema_for!(SyscallInfo);
+        let _ = schema_for!(SyscallStatusInfo);
+        let _ = schema_for!(FrameOutputInfo);
+    }
+}
+
+#[cfg(test)]
 mod wire_format {
     use serde_json::Value;
 
