@@ -16,6 +16,8 @@ env:
     groundhog-open-rpc-macros
     groundhog-rpc-api
     groundhog-open-rpc-spec
+    groundhog-x23-transport
+    groundhog-rpc-server
     groundhog-rpc-gateway
     groundhog-rpc-client
     groundhog-signing
