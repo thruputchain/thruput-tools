@@ -19,7 +19,7 @@ env:
     groundhog-rpc-gateway
     groundhog-rpc-client
     groundhog-signing
-    groundhog-dev-node
+    groundhog-node-supervisor
     groundhog-cli
 
 jobs:
