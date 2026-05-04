@@ -5,6 +5,7 @@
 
 pub use groundhog_rpc_api_types as types;
 
+use groundhog_open_rpc_macros::open_rpc;
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::proc_macros::rpc;
 
@@ -19,6 +20,7 @@ use groundhog_rpc_api_types::{
 };
 
 /// Phase 1: Core API — submit, query, poll.
+#[open_rpc(namespace = "groundhog", tag = "Core API")]
 #[rpc(client, server, namespace = "groundhog")]
 pub trait GroundhogApi {
     /// Submit a signed transaction (0x-prefixed hex XDR). Returns the canonical tx hash.
@@ -56,6 +58,7 @@ pub trait GroundhogApi {
 }
 
 /// Dev-only RPC methods. Only implemented by the local node.
+#[open_rpc(namespace = "groundhog_dev", tag = "Dev API")]
 #[rpc(client, server, namespace = "groundhog_dev")]
 pub trait GroundhogDevApi {
     /// Reset the local node to its initial state.

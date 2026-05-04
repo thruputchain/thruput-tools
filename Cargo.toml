@@ -77,6 +77,7 @@ serde_json = "1"
 bytes = "1"
 hex = "0.4"
 libc = "0.2"
+insta = "1"
 serial_test = "3"
 tempfile = "3"
 
