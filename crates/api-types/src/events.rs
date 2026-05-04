@@ -6,6 +6,7 @@
 //! parsed `IdentifiedEvent` so consumers receive topics and data
 //! already split out, not raw on-wire bytes.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::hex::{HexBytes, Topic};
@@ -24,7 +25,7 @@ pub use groundhog_indexer::pagination::{BlockAnchor, IterationOrder, PaginationC
 /// `num_topics` (0–3) determines the split point. Max total 1024 bytes.
 ///
 /// See `docs/gateway/system-design.md` "Event Parsing" for details.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct EmittedEvent {
     /// Contract that emitted this event.
@@ -40,7 +41,7 @@ pub struct EmittedEvent {
 
 /// Event with provenance — includes which tx emitted it.
 /// Returned by `getEvents`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct IdentifiedEvent {
     /// Transaction that emitted this event.
@@ -61,7 +62,7 @@ pub struct IdentifiedEvent {
 /// To fetch the next page, send the same query back with `cursor`
 /// set to the value returned here.  An empty `cursor` means the
 /// stream is exhausted in the requested direction.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct EventPage {
     /// Matched events in the requested order.  May be empty even when

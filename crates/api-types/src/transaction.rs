@@ -1,3 +1,4 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{BlockHeight, SHA256Hash};
@@ -7,7 +8,7 @@ use crate::{BlockHeight, SHA256Hash};
 /// the scheduler's lookup key and the indexer's primary key.
 ///
 /// Serializes as `"0x..."` hex string (64 hex chars).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct TxHash(pub SHA256Hash);
 
 /// Lightweight status — the result of checking mempool then indexer.
@@ -17,7 +18,7 @@ pub struct TxHash(pub SHA256Hash);
 /// degraded-mode behavior when a backend is unavailable.
 ///
 /// New variants may be added in future phases.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[non_exhaustive]
 #[serde(tag = "status", rename_all = "camelCase")]
 pub enum TransactionStatus {

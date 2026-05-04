@@ -1,3 +1,4 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::BlockHeight;
@@ -16,7 +17,7 @@ use crate::transaction::TxHash;
 ///
 /// `storage_delta` (net HOG locked/unlocked) is deferred — hogd's
 /// `TxInfo` doesn't include it. Will be added when indexer support lands.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TransactionReceipt {
     /// Canonical transaction hash.
@@ -45,7 +46,7 @@ pub struct TransactionReceipt {
 ///
 /// New variants may be added as hogd's `ExecResult` evolves.
 /// Clients should handle unknown variants gracefully.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[non_exhaustive]
 #[serde(tag = "result", rename_all = "camelCase")]
 pub enum ExecStatus {

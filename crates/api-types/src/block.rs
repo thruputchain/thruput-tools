@@ -1,10 +1,11 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::hex::Hex0x;
 use crate::{BlockHash, BlockHeader, BlockHeight, DbHash, SHA256Hash};
 
 /// Current chain tip. Returned by chainTip.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ChainTip {
     pub height: BlockHeight,
@@ -19,7 +20,7 @@ pub struct ChainTip {
 ///
 /// The `From<BlockHeader>` impl uses exhaustive destructuring so
 /// adding a field to `BlockHeader` causes a compile error here.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct BlockInfo {
     pub network_id: u64,

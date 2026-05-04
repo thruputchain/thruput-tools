@@ -7,9 +7,11 @@
 //! See `docs/gateway/system-design.md` "Wire Format Conventions" for the full
 //! serialization table.
 
+use std::borrow::Cow;
 use std::fmt;
 use std::ops::{Deref, DerefMut};
 
+use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 // ---------------------------------------------------------------------------
@@ -89,6 +91,23 @@ impl TryFromSlice for groundhog_xdr::types::BlockHash {
     }
 }
 
+impl<T: JsonSchema> JsonSchema for Hex0x<T> {
+    fn schema_name() -> Cow<'static, str> {
+        format!("Hex0x_{}", T::schema_name()).into()
+    }
+
+    fn schema_id() -> Cow<'static, str> {
+        format!("{}::Hex0x<{}>", module_path!(), T::schema_id()).into()
+    }
+
+    fn json_schema(_gen: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "type": "string",
+            "pattern": "^0x[0-9a-f]*$"
+        })
+    }
+}
+
 impl<T: fmt::Debug> fmt::Debug for Hex0x<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
@@ -148,6 +167,23 @@ impl<'de> Deserialize<'de> for HexBytes {
     }
 }
 
+impl JsonSchema for HexBytes {
+    fn schema_name() -> Cow<'static, str> {
+        "HexBytes".into()
+    }
+
+    fn schema_id() -> Cow<'static, str> {
+        concat!(module_path!(), "::HexBytes").into()
+    }
+
+    fn json_schema(_gen: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "type": "string",
+            "pattern": "^0x[0-9a-f]*$"
+        })
+    }
+}
+
 impl From<Vec<u8>> for HexBytes {
     fn from(v: Vec<u8>) -> Self {
         Self(v)
@@ -176,6 +212,23 @@ impl AsRef<[u8]> for HexBytes {
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Topic(pub [u8; 32]);
+
+impl JsonSchema for Topic {
+    fn schema_name() -> Cow<'static, str> {
+        "Topic".into()
+    }
+
+    fn schema_id() -> Cow<'static, str> {
+        concat!(module_path!(), "::Topic").into()
+    }
+
+    fn json_schema(_gen: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "type": "string",
+            "pattern": "^0x[0-9a-f]{64}$"
+        })
+    }
+}
 
 impl Serialize for Topic {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
