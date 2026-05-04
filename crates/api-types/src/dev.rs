@@ -16,14 +16,14 @@ use crate::receipt::TransactionReceipt;
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DevAccount {
-    /// Contract address derived from the public key.
+    /// Local dev account/wallet contract address advertised by the backend.
     pub address: ContractAddress,
     /// Ed25519 public key bytes.
     pub public_key: HexBytes,
     /// Ed25519 secret key bytes. Included because these are
     /// well-known dev-only keys.
     pub private_key: HexBytes,
-    /// Storage tokens granted at node startup.
+    /// Storage tokens advertised by the local dev backend after bootstrap.
     pub storage_tokens: u64,
 }
 
