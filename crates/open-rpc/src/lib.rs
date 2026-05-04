@@ -80,10 +80,6 @@ pub struct ProjectInfo {
     pub version: String,
 }
 
-/// Placeholder for collected `$ref` schemas (future use).
-#[derive(Debug, Clone, Default)]
-pub struct ComponentSchemas;
-
 /// Full `OpenRPC` document aggregating one or more modules.
 #[derive(Debug, Clone)]
 pub struct Project {
@@ -127,11 +123,11 @@ impl Project {
 
 /// Build a [`ContentDescriptor`] for a method parameter whose type
 /// implements [`JsonSchema`].
-pub fn param_descriptor<T: JsonSchema>(name: &str, required: bool) -> ContentDescriptor {
+pub fn param_descriptor<T: JsonSchema>(name: &str) -> ContentDescriptor {
     let schema = schemars::schema_for!(T);
     ContentDescriptor {
         name: name.to_owned(),
-        required,
+        required: true,
         schema: serde_json::to_value(&schema)
             .expect("bug: schemars Schema serialization cannot fail"),
     }
@@ -166,7 +162,7 @@ mod tests {
             tags: vec![Tag {
                 name: "Demo".to_owned(),
             }],
-            params: vec![param_descriptor::<String>("input", true)],
+            params: vec![param_descriptor::<String>("input")],
             result: result_descriptor::<u64>("output"),
         });
 
@@ -242,5 +238,11 @@ mod tests {
         assert_eq!(methods.len(), 2);
         assert_eq!(methods[0]["name"], "a");
         assert_eq!(methods[1]["name"], "b");
+    }
+
+    #[test]
+    fn param_descriptor_is_required() {
+        let desc = param_descriptor::<u64>("count");
+        assert!(desc.required);
     }
 }

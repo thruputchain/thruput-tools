@@ -23,5 +23,3 @@ groundhog-open-rpc = { workspace = true }
 groundhog-rpc-api = { workspace = true }
 serde_json = { workspace = true }
 
-[dev-dependencies]
-insta = { workspace = true }

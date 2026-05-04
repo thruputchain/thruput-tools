@@ -33,15 +33,3 @@ fn main() {
     let spec = build_spec();
     println!("{}", serde_json::to_string_pretty(&spec).unwrap());
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    #[ignore = "run explicitly to update the snapshot"]
-    fn openrpc_spec_snapshot() {
-        let json = serde_json::to_string_pretty(&build_spec()).unwrap();
-        insta::assert_snapshot!("openrpc", json);
-    }
-}

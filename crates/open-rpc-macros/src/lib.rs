@@ -132,7 +132,7 @@ fn generate_companion(item_trait: &ItemTrait, args: &OpenRpcArgs) -> TokenStream
                         let name = pat_to_name(&pat_type.pat);
                         let ty = &*pat_type.ty;
                         Some(quote! {
-                            groundhog_open_rpc::param_descriptor::<#ty>(#name, true)
+                            groundhog_open_rpc::param_descriptor::<#ty>(#name)
                         })
                     } else {
                         None // skip self

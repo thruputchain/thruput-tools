@@ -1009,7 +1009,6 @@ version = "0.3.0"
 dependencies = [
  "groundhog-open-rpc",
  "groundhog-rpc-api",
- "insta",
  "serde_json",
 ]
 
