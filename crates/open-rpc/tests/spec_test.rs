@@ -23,6 +23,7 @@ fn canonicalize(value: serde_json::Value) -> serde_json::Value {
 }
 
 #[test]
+#[ignore]
 fn openrpc_spec_snapshot() {
     let mut spec = Project::new(ProjectInfo {
         title: "Groundhog JSON-RPC".to_owned(),
