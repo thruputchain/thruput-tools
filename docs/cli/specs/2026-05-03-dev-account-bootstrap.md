@@ -435,3 +435,24 @@ Two smoke caveats remain outside the dev-account bootstrap shape:
 3. **Rig follow-up**: reuse the bootstrap artifact from a real chuckd/loadgen
    process-suite setup with gateway in front. Write a dedicated future rig spec
    before implementing that track.
+
+## C++ Side Checklist
+
+- Add `built_contracts/integration_test_contracts/dev_wallet` and embed it
+  through the existing built-contract pipeline as `built_contracts/dev_wallet.h`.
+- Implement `hogd/hogd_dev/dev_account_bootstrap.{h,cc}` with the config,
+  metadata, artifact, signer-derivation, and artifact-builder types named
+  above.
+- Add golden coverage for the default seed derivation, including the index-0
+  secret seed and public key pinned in this spec.
+- Wire `--dev-accounts`, `--dev-account-seed`, and `--dev-account-tokens` into
+  `hogd-dev`, rejecting account counts above 1000.
+- Apply the bootstrap artifact internally before readiness: load genesis,
+  commit the deterministic initialization batch, refresh account metadata, then
+  advertise readiness.
+- Extend readiness JSON with public `dev_accounts` metadata and no private key
+  material.
+- Add hogd-dev tests for readiness metadata, account-count rejection, stable
+  bootstrap artifacts, and a CLI-shaped deploy transaction signed by account 0.
+- Rerun the real local-node smoke and call out any remaining SDK-template or
+  receipt-return-data caveats in the PR description.
