@@ -12,10 +12,10 @@ use groundhog_rpc_api_types::dev::{
     DevAccount, TransactionDetail, configured_gas_limit, format_gas_summary, format_i128_xdr,
     int128_to_i128,
 };
-use groundhog_rpc_api_types::state::{StorageItemInfo, StorageItemRead};
 use groundhog_rpc_api_types::events::{EmittedEvent, IdentifiedEvent};
 use groundhog_rpc_api_types::hex::{Hex0x, HexBytes, Topic};
 use groundhog_rpc_api_types::receipt::{ExecStatus, TransactionReceipt};
+use groundhog_rpc_api_types::state::{StorageItemInfo, StorageItemRead};
 use groundhog_rpc_api_types::transaction::{TransactionStatus, TxHash};
 use groundhog_signing::{DEFAULT_TX_GAS_LIMIT, WALLET_DEPLOY_ENTRYPOINT, derive_deploy_address};
 use groundhog_trace::InvocationFrameTrace;
@@ -322,11 +322,7 @@ impl DevBackend {
     /// returned [`StorageItemRead`] always carries the snapshot
     /// `block_height` (current chain tip), even when no item is
     /// present at the key.
-    pub fn get_storage_at(
-        &self,
-        address: &ContractAddress,
-        key: &[u8; 32],
-    ) -> StorageItemRead {
+    pub fn get_storage_at(&self, address: &ContractAddress, key: &[u8; 32]) -> StorageItemRead {
         let key = StorageKeyContractData::new(*key);
         let item: Option<StorageItemInfo> = self
             .env
@@ -731,7 +727,7 @@ fn map_exec_result(
 
 #[cfg(test)]
 mod tests {
-    use super::{DevBackend, TransactionRecord, format_transaction_summary};
+    use super::{DevBackend, StorageItemInfo, TransactionRecord, format_transaction_summary};
     use crate::DEFAULT_TRANSACTION_RETENTION_LIMIT;
     use crate::accounts::DEFAULT_STORAGE_TOKENS;
     use crate::wallet::DEV_WALLET_WASM;
@@ -748,9 +744,7 @@ mod tests {
     use groundhog_xdr::auth_claim::{AuthClaim, AuthClaimData};
     use groundhog_xdr::contract::{Contract, ContractBlob, ContractEntrypointID};
     use groundhog_xdr::event::TxEmittedEvent;
-    use groundhog_xdr::storage_item::{
-        FlaggedStorageDelta, StorageDelta, StorageDeltaFlags, WireStorageItem,
-    };
+    use groundhog_xdr::storage_item::{FlaggedStorageDelta, StorageDelta, StorageDeltaFlags};
     use groundhog_xdr::types::{
         AddressAndKey, ContractAddress, SHA256Hash, StorageKey, StorageKeyContractData, int128_xdr,
     };
@@ -933,12 +927,16 @@ mod tests {
             .send_raw_transaction(&set_tx_bytes)
             .expect("bug: set should commit");
 
-        let item = backend
-            .get_storage_at(&deployed_address, &[0x42; 32])
+        let read = backend.get_storage_at(&deployed_address, &[0x42; 32]);
+        let item = read
+            .item
             .expect("bug: committed bytestring should be readable after real wasm call");
-
-        assert_eq!(item.kind, "bytestring");
-        assert_eq!(item.summary, "Bytestring = 0x6361666562616265");
+        match item {
+            StorageItemInfo::Bytestring { bytes } => {
+                assert_eq!(bytes.0.as_slice(), b"cafebabe");
+            }
+            other => panic!("unexpected storage item variant: {other:?}"),
+        }
     }
 
     #[test]
@@ -1065,19 +1063,16 @@ mod tests {
         result.assert_success();
         backend.env.advance_block();
 
-        let item = backend
-            .get_storage_at(&address, &key_bytes)
+        let read = backend.get_storage_at(&address, &key_bytes);
+        let item = read
+            .item
             .expect("bug: committed bytestring should be readable");
-        let expected = WireStorageItem::kItemTypeBytestring {
-            bytestring: BytesM(b"hello".to_vec()),
-        };
-
-        assert_eq!(item.kind, "bytestring");
-        assert_eq!(item.summary, "Bytestring = 0x68656c6c6f");
-        assert_eq!(
-            item.item_xdr,
-            HexBytes(xdrs::txs::encode(&expected).unwrap())
-        );
+        match item {
+            StorageItemInfo::Bytestring { bytes } => {
+                assert_eq!(bytes.0.as_slice(), b"hello");
+            }
+            other => panic!("unexpected storage item variant: {other:?}"),
+        }
     }
 
     #[test]
@@ -1104,19 +1099,16 @@ mod tests {
         result.assert_success();
         backend.env.advance_block();
 
-        let item = backend
-            .get_storage_at(&address, &key_bytes)
+        let read = backend.get_storage_at(&address, &key_bytes);
+        let item = read
+            .item
             .expect("bug: committed bytestring on wasmi wallet should be readable");
-        let expected = WireStorageItem::kItemTypeBytestring {
-            bytestring: BytesM(b"hello".to_vec()),
-        };
-
-        assert_eq!(item.kind, "bytestring");
-        assert_eq!(item.summary, "Bytestring = 0x68656c6c6f");
-        assert_eq!(
-            item.item_xdr,
-            HexBytes(xdrs::txs::encode(&expected).unwrap())
-        );
+        match item {
+            StorageItemInfo::Bytestring { bytes } => {
+                assert_eq!(bytes.0.as_slice(), b"hello");
+            }
+            other => panic!("unexpected storage item variant: {other:?}"),
+        }
     }
 
     #[test]
@@ -1129,7 +1121,7 @@ mod tests {
         let address = ContractAddress::from([0x33; 32]);
         let key = [0x44; 32];
 
-        assert!(backend.get_storage_at(&address, &key).is_none());
+        assert!(backend.get_storage_at(&address, &key).item.is_none());
     }
 
     #[test]
