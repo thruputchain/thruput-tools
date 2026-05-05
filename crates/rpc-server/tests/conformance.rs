@@ -19,7 +19,7 @@ use groundhog_rpc_api_types::{
     block::{BlockInfo, ChainTip},
     error::codes,
     events::{BlockAnchor, EventFilter, EventPage, EventQuery, EventTopicFilter, IterationOrder},
-    hex::Hex0x,
+    hex::{Hex0x, HexBytes},
     receipt::TransactionReceipt,
     state::StorageItemRead,
     transaction::{TransactionStatus, TxHash},
@@ -55,6 +55,7 @@ const MAX_CURSOR_BYTES: usize = 64;
 struct ScriptedBackend {
     submitted: Arc<Mutex<Vec<ValidatedTransaction>>>,
     contract_events_calls: Arc<Mutex<u32>>,
+    get_storage_at_calls: Arc<Mutex<u32>>,
 }
 
 impl ScriptedBackend {
@@ -132,6 +133,7 @@ impl ReadPlane for ScriptedBackend {
         _address: ContractAddress,
         _key: [u8; 32],
     ) -> Result<StorageItemRead, RpcServerError> {
+        *self.get_storage_at_calls.lock().await += 1;
         Err(RpcServerError::NotImplemented("getStorageAt".into()))
     }
 }
@@ -267,6 +269,39 @@ async fn event_query_validation_runs_before_dispatch_for_all_shapes() {
             *calls.lock().await,
             0,
             "validation must short-circuit before backend dispatch"
+        );
+    }
+}
+
+#[tokio::test]
+async fn get_storage_at_key_length_validated_for_all_shapes() {
+    let address: ContractAddress = Hex0x(groundhog_xdr::types::ContractAddress::from([0u8; 32]));
+    for backend in all_shapes() {
+        let calls = backend.get_storage_at_calls.clone();
+        let svc = server(backend);
+
+        let short_err = svc
+            .get_storage_at(address, HexBytes(vec![0u8; 16]))
+            .await
+            .expect_err("bug: short storage key must be rejected");
+        assert_eq!(short_err.code(), codes::INVALID_PARAMS);
+
+        let long_err = svc
+            .get_storage_at(address, HexBytes(vec![0u8; 33]))
+            .await
+            .expect_err("bug: long storage key must be rejected");
+        assert_eq!(long_err.code(), codes::INVALID_PARAMS);
+
+        let empty_err = svc
+            .get_storage_at(address, HexBytes(vec![]))
+            .await
+            .expect_err("bug: empty storage key must be rejected");
+        assert_eq!(empty_err.code(), codes::INVALID_PARAMS);
+
+        assert_eq!(
+            *calls.lock().await,
+            0,
+            "key-length validation must short-circuit before backend dispatch"
         );
     }
 }

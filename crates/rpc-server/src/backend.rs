@@ -26,6 +26,8 @@
 //!   `Pending`, indexer for `Committed`) — the adapter owns this
 //!   orchestration; the shared server calls the trait method once.
 //! - `ReadPlane::contract_events`             → indexer
+//! - `ReadPlane::get_storage_at`              → `DbGateway1` (TBD; currently
+//!   `NotImplemented` on gateway and supervisor backends, real on dev-node)
 //!
 //! `GroundhogRpcServer::new` accepts per-plane adapter types, so a future
 //! composition (e.g. the hogd-dev supervisor wiring distinct x23 clients)

@@ -7,9 +7,7 @@ use std::sync::Arc;
 
 use groundhog_rpc_api::GroundhogDevApiServer;
 use groundhog_rpc_api_types::{
-    ContractAddress,
-    dev::{DevAccount, StorageItemInfo, TransactionDetail},
-    hex::HexBytes,
+    dev::{DevAccount, TransactionDetail},
     transaction::TxHash,
 };
 use jsonrpsee::{core::RpcResult, types::ErrorObjectOwned};
@@ -50,15 +48,6 @@ impl GroundhogDevApiServer for SupervisorDevRpc {
         _tx_hash: TxHash,
     ) -> RpcResult<Option<TransactionDetail>> {
         Err(method_not_found("groundhog_dev_getTransactionDetail"))
-    }
-
-    #[tracing::instrument(skip_all, fields(method = "groundhog_dev_getStorageAt"))]
-    async fn get_storage_at(
-        &self,
-        _address: ContractAddress,
-        _key: HexBytes,
-    ) -> RpcResult<Option<StorageItemInfo>> {
-        Err(method_not_found("groundhog_dev_getStorageAt"))
     }
 }
 
