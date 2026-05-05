@@ -1,9 +1,11 @@
+mod adaptive_batch;
 mod backend;
 mod config;
 mod context;
 mod error;
 mod handlers;
 mod middleware;
+mod storage_batcher;
 mod submitter;
 mod tip_coalescer;
 

@@ -48,6 +48,7 @@ groundhog-open-rpc-macros = { path = "crates/open-rpc-macros", version = "=0.3.0
 groundhog-xdr = { version = "=0.12.0", registry = "groundhog", features = ["serde", "xdrs", "schema"] }
 groundhog_indexer = { version = "=0.12.0", registry = "groundhog", features = ["serde"] }
 groundhog_scheduler = { version = "=0.12.0", registry = "groundhog" }
+groundhog_db_gateway = { version = "=0.12.0", registry = "groundhog" }
 xdrs = { version = "0.5.6", registry = "groundhog", features = ["alloc"] }
 xdr-common = { version = "0.5.6", registry = "groundhog" }
 rpc_driver = { version = "0.8", registry = "groundhog" }

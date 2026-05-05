@@ -30,6 +30,7 @@ groundhog-x23-transport = { workspace = true }
 groundhog-xdr = { workspace = true }
 groundhog_indexer = { workspace = true }
 groundhog_scheduler = { workspace = true }
+groundhog_db_gateway = { workspace = true }
 rpc_driver = { workspace = true }
 xdr-common = { workspace = true }
 async-trait = { workspace = true }

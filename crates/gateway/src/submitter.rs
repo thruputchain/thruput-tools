@@ -1,17 +1,14 @@
 //! Adaptive batching submitter for `sendRawTransaction`.
 //!
-//! See `BatchConfig` for the design rationale: no timer, BDP-style
-//! in-flight bounding, sharded for low contention.  At low load the
-//! first arrival fires immediately as a batch of 1 (zero added
-//! latency); at high load new arrivals pile up in the bounded ingress
-//! channel while a batch is in flight, and drain together (up to
-//! `max_size`) on completion.
+//! Drives the shared adaptive-batching machinery in `adaptive_batch.rs`
+//! with a tx-submission–specific processor: pack N client tx-byte blobs
+//! into one `ParallelSignedTransactionBatch`, call
+//! `schedulercoord_submit_unvetted`, and fan out the shared result
+//! across every waiter in the batch.
 //!
-//! Backpressure lives in the bounded ingress channel itself: handlers
-//! `try_send` and return `Overloaded` on `Full`.  The submitter task
-//! only pulls items from ingress when it has capacity to fire
-//! (`inflight < max_inflight`), so a saturated backend directly
-//! translates to a full ingress channel at the handler.
+//! See `AdaptiveBatchConfig` for the dispatch policy (no timer,
+//! BDP-style in-flight bounding, sharded for low contention) and
+//! `adaptive_batch.rs` for the shared shard runner.
 
 use std::sync::Arc;
 
@@ -20,10 +17,11 @@ use groundhog_rpc_api_types::transaction::TxHash;
 use groundhog_scheduler::ParallelBatch;
 use groundhog_scheduler::parallel::ParallelSignedTransactionBatch;
 use groundhog_scheduler::sched_coord::SchedulerCoord_SchedulerCoord1_Client;
-use tokio::sync::{RwLock, mpsc, oneshot};
+use tokio::sync::{RwLock, oneshot};
 use xdr_common::{BytesM, VecM};
 
-use crate::config::BatchConfig;
+use crate::adaptive_batch::{AdaptiveBatcher, BatchProcessor, shard_index_by_prefix};
+use crate::config::AdaptiveBatchConfig;
 use crate::error::GatewayError;
 
 /// Backend for batched submissions.  In production this wraps the
@@ -71,11 +69,6 @@ impl SubmitSink for SchedulerSink {
 /// v1 is intentionally conservative: the `rpc_driver::RpcError` shape
 /// isn't stable enough to commit to timeout/overload detection yet, so
 /// all transport failures map to `BackendUnavailable`.
-///
-/// TODO(gateway-coalescing): once we observe the real error variants
-/// produced under sustained saturation, split this into
-/// `BackendTimeout` for explicit timeouts and `Overloaded` for
-/// server-reported backpressure signals.
 fn classify_rpc_error(e: &rpc_driver::RpcError) -> GatewayError {
     GatewayError::BackendUnavailable(format!("scheduler: {e}"))
 }
@@ -86,67 +79,23 @@ struct Item {
     reply: oneshot::Sender<Result<(), GatewayError>>,
 }
 
-/// Per-shard state owned by one submitter task.
-struct Shard {
-    ingress: mpsc::Receiver<Item>,
-    completion_rx: mpsc::UnboundedReceiver<()>,
-    completion_tx: mpsc::UnboundedSender<()>,
-    inflight: u32,
-    max_inflight: u32,
-    max_size: usize,
+/// Per-batch processor: pack, submit, and fan the shared result out
+/// to every waiter in the drained batch.
+struct SubmitProcessor {
     sink: Arc<dyn SubmitSink>,
 }
 
-impl Shard {
-    async fn run(mut self) {
-        loop {
-            tokio::select! {
-                // Prefer completions so `inflight` is decremented before we
-                // consider firing another batch.  Keeps accounting tight.
-                biased;
+#[async_trait]
+impl BatchProcessor for SubmitProcessor {
+    type Item = Item;
 
-                Some(()) = self.completion_rx.recv() => {
-                    self.inflight = self.inflight.saturating_sub(1);
-                }
-
-                // Only read from ingress when we have capacity to fire.
-                // That's the backpressure hinge: when `inflight == max`,
-                // new items pile up in the bounded mpsc until it fills,
-                // at which point handlers see `Overloaded` from `try_send`.
-                maybe_item = self.ingress.recv(), if self.inflight < self.max_inflight => {
-                    let Some(first) = maybe_item else { break; };
-                    let mut items = Vec::with_capacity(self.max_size.min(64));
-                    items.push(first);
-                    // Drain any immediately-available follow-ons into the
-                    // same batch.  This is the amortization step: one RPC
-                    // covers everything the channel happened to be holding.
-                    while items.len() < self.max_size {
-                        match self.ingress.try_recv() {
-                            Ok(item) => items.push(item),
-                            Err(_) => break,
-                        }
-                    }
-                    self.inflight += 1;
-                    let sink = self.sink.clone();
-                    let done = self.completion_tx.clone();
-                    tokio::spawn(submit_one_batch(sink, items, done));
-                }
-            }
+    async fn process(&self, items: Vec<Item>) {
+        let packed = pack(&items);
+        let result = self.sink.submit(packed).await;
+        for item in items {
+            let _ = item.reply.send(result.clone());
         }
     }
-}
-
-async fn submit_one_batch(
-    sink: Arc<dyn SubmitSink>,
-    items: Vec<Item>,
-    done: mpsc::UnboundedSender<()>,
-) {
-    let packed = pack(&items);
-    let result = sink.submit(packed).await;
-    for item in items {
-        let _ = item.reply.send(result.clone());
-    }
-    let _ = done.send(());
 }
 
 /// Pack N client tx-byte blobs into one `ParallelSignedTransactionBatch`.
@@ -179,37 +128,16 @@ fn pack(items: &[Item]) -> ParallelSignedTransactionBatch {
 /// clone shares the same bank of shard channels.
 #[derive(Clone)]
 pub struct BatchSubmitter {
-    shards: Arc<[ShardHandle]>,
-}
-
-struct ShardHandle {
-    sender: mpsc::Sender<Item>,
+    inner: AdaptiveBatcher<Item>,
 }
 
 impl BatchSubmitter {
     /// Spawn one submitter task per shard.  Tasks live until the
     /// `BatchSubmitter` (and thus its shard senders) are dropped.
-    pub fn spawn(config: &BatchConfig, sink: &Arc<dyn SubmitSink>) -> Self {
-        let n_shards = config.shards.max(1);
-        let mut shards = Vec::with_capacity(n_shards);
-        for _ in 0..n_shards {
-            let (sender, ingress) = mpsc::channel(config.ingress_queue_depth.max(1));
-            let (completion_tx, completion_rx) = mpsc::unbounded_channel();
-            let shard = Shard {
-                ingress,
-                completion_tx,
-                completion_rx,
-                inflight: 0,
-                max_inflight: config.max_inflight_batches.max(1),
-                max_size: config.max_size.max(1),
-                sink: sink.clone(),
-            };
-            tokio::spawn(shard.run());
-            shards.push(ShardHandle { sender });
-        }
-        Self {
-            shards: shards.into(),
-        }
+    pub fn spawn(config: &AdaptiveBatchConfig, sink: &Arc<dyn SubmitSink>) -> Self {
+        let processor = Arc::new(SubmitProcessor { sink: sink.clone() });
+        let inner = AdaptiveBatcher::spawn("batch submitter", config, &processor);
+        Self { inner }
     }
 
     /// Submit one tx.  Routes to a shard by tx hash; returns when the
@@ -217,38 +145,21 @@ impl BatchSubmitter {
     /// ingress is full (client should retry with backoff).
     #[tracing::instrument(skip_all, fields(shard_idx, tx_bytes_len = tx_bytes.len()))]
     pub async fn submit(&self, tx_bytes: Vec<u8>, hash: TxHash) -> Result<(), GatewayError> {
-        let shard_idx = shard_index(&hash, self.shards.len());
+        let bytes: &[u8] = hash.0.0.as_ref();
+        let shard_idx = shard_index_by_prefix(bytes, self.inner.n_shards());
         tracing::Span::current().record("shard_idx", shard_idx);
         let (reply_tx, reply_rx) = oneshot::channel();
-        self.shards[shard_idx]
-            .sender
-            .try_send(Item {
+        self.inner.try_send(
+            Item {
                 tx_bytes,
                 reply: reply_tx,
-            })
-            .map_err(|e| match e {
-                mpsc::error::TrySendError::Full(_) => GatewayError::Overloaded(format!(
-                    "gateway ingress queue full (shard {shard_idx})"
-                )),
-                mpsc::error::TrySendError::Closed(_) => {
-                    GatewayError::BackendUnavailable("batch submitter shut down".into())
-                }
-            })?;
+            },
+            shard_idx,
+        )?;
         reply_rx
             .await
             .map_err(|_| GatewayError::BackendUnavailable("batch submitter dropped reply".into()))?
     }
-}
-
-/// Pick a shard by the first four bytes of the tx hash.  Stable per
-/// tx: retries of the same tx hit the same shard.
-fn shard_index(hash: &TxHash, n_shards: usize) -> usize {
-    if n_shards <= 1 {
-        return 0;
-    }
-    let bytes: &[u8] = hash.0.0.as_ref();
-    let prefix = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
-    (prefix as usize) % n_shards
 }
 
 // ---------------------------------------------------------------------------
@@ -315,8 +226,8 @@ mod tests {
         max_inflight: u32,
         max_size: usize,
         ingress: usize,
-    ) -> BatchConfig {
-        BatchConfig {
+    ) -> AdaptiveBatchConfig {
+        AdaptiveBatchConfig {
             shards,
             max_inflight_batches: max_inflight,
             max_size,
@@ -560,7 +471,8 @@ mod tests {
         let mut hits = vec![0usize; n_shards];
         for i in 0..10_000u32 {
             let h = hash_from_u32(i.wrapping_mul(2_654_435_761)); // scatter
-            hits[shard_index(&h, n_shards)] += 1;
+            let bytes: &[u8] = h.0.0.as_ref();
+            hits[shard_index_by_prefix(bytes, n_shards)] += 1;
         }
         for (i, c) in hits.iter().enumerate() {
             assert!(*c > 1500 && *c < 3500, "shard {i} got {c} (expected ~2500)");

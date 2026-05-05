@@ -1,11 +1,13 @@
 use std::sync::Arc;
 
+use groundhog_db_gateway::DbGateway_DbGateway1_Client;
 use groundhog_indexer::IndexerBlockExplorer_IndexerBlockExplorer1_Client;
 use groundhog_scheduler::sched_coord::SchedulerCoord_SchedulerCoord1_Client;
 use groundhog_x23_transport::{ConnectError, try_connect};
 use tokio::sync::RwLock;
 
 use crate::config::GatewayConfig;
+use crate::storage_batcher::{DbGatewaySink, StorageReadBatcher, StorageReadSink};
 use crate::submitter::{BatchSubmitter, SchedulerSink, SubmitSink};
 use crate::tip_coalescer::{SchedulerTipSink, TipCoalescer, TipSink};
 
@@ -32,6 +34,11 @@ pub struct GatewayContext {
     /// incoming client submissions and packs them into `submit_unvetted`
     /// RPCs to amortize per-call overhead at high load.
     pub batch_submitter: BatchSubmitter,
+
+    /// Adaptive batching reader for `getStorageAt`. Accumulates
+    /// concurrent (`address`, `key`) reads and packs them into one
+    /// `dbgateway_get_items` RPC per fired batch.
+    pub storage_batcher: StorageReadBatcher,
 
     /// Request coalescer for `chainTip`. One in-flight `get_tip` RPC
     /// can satisfy many concurrent client requests.
@@ -89,8 +96,18 @@ impl GatewayContext {
             .await?,
         ));
 
+        let db_gateway = Arc::new(RwLock::new(match &config.db_gateway_address {
+            Some(addr) => {
+                try_connect("db_gateway", addr, 4, DbGateway_DbGateway1_Client::new).await?
+            }
+            None => None,
+        }));
+
         let submit_sink: Arc<dyn SubmitSink> = Arc::new(SchedulerSink::new(scheduler.clone()));
         let batch_submitter = BatchSubmitter::spawn(&config.batch, &submit_sink);
+
+        let storage_sink: Arc<dyn StorageReadSink> = Arc::new(DbGatewaySink::new(db_gateway));
+        let storage_batcher = StorageReadBatcher::spawn(&config.storage, &storage_sink);
 
         let tip_sink: Arc<dyn TipSink> = Arc::new(SchedulerTipSink::new(scheduler.clone()));
         let tip_coalescer = TipCoalescer::spawn(&config.tip, &tip_sink);
@@ -99,6 +116,7 @@ impl GatewayContext {
             scheduler,
             indexer,
             batch_submitter,
+            storage_batcher,
             tip_coalescer,
             config,
         })

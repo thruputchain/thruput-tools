@@ -11,9 +11,12 @@
 //!
 //! Tests are marked #[ignore] so they don't run in `cargo test --workspace`.
 
+use groundhog_rpc_api_types::ContractAddress;
 use groundhog_rpc_api_types::events::{
     BlockAnchor, EventFilter, EventQuery, EventTopicFilter, IterationOrder,
 };
+use groundhog_rpc_api_types::hex::{Hex0x, HexBytes};
+use groundhog_rpc_api_types::state::StorageItemInfo;
 use groundhog_rpc_api_types::transaction::TransactionStatus;
 use groundhog_rpc_client::{GroundhogApiClient, HttpClientBuilder};
 use xdr_common::{BytesM, VecM};
@@ -32,6 +35,10 @@ fn zero_hash() -> groundhog_rpc_api_types::transaction::TxHash {
     groundhog_rpc_api_types::transaction::TxHash(groundhog_rpc_api_types::hex::Hex0x(
         groundhog_xdr::types::SHA256Hash::from([0u8; 32]),
     ))
+}
+
+fn zero_address() -> ContractAddress {
+    Hex0x(groundhog_xdr::types::ContractAddress::from([0u8; 32]))
 }
 
 #[tokio::test]
@@ -73,6 +80,50 @@ async fn unknown_tx_receipt_is_none() {
         .await
         .expect("getTransactionReceipt should succeed");
     assert!(receipt.is_none(), "zero hash should return None");
+}
+
+#[tokio::test]
+#[ignore = "requires running hogd-dev local node or gateway"]
+async fn get_storage_at_zero_probe_returns_well_formed_read() {
+    let c = client();
+    let read = c
+        .get_storage_at(zero_address(), HexBytes(vec![0u8; 32]))
+        .await
+        .expect("getStorageAt should succeed");
+
+    assert!(
+        *read.block_height >= 0,
+        "block_height must be non-negative, got {}",
+        *read.block_height
+    );
+    match read.item {
+        // Most likely outcome on a fresh node: the (zero-address, zero-key)
+        // probe maps to a slot that has never been written.
+        None => {}
+        // If something *was* written there, the variant must be one this
+        // build understands; an `Unknown` here would mean the server is
+        // running a newer protocol than the test client.
+        Some(StorageItemInfo::Unknown { type_id }) => {
+            panic!("server returned unrecognized StorageItemInfo type_id={type_id}");
+        }
+        Some(_) => {}
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires running hogd-dev local node or gateway"]
+async fn get_storage_at_short_key_is_rejected() {
+    let c = client();
+    let err = c
+        .get_storage_at(zero_address(), HexBytes(vec![0u8; 16]))
+        .await
+        .expect_err("16-byte key must be rejected");
+    // Server returns -32602 (INVALID_PARAMS) per the rpc-server validation.
+    let s = format!("{err:?}");
+    assert!(
+        s.contains("32 bytes") || s.contains("-32602") || s.contains("InvalidParams"),
+        "expected key-length error, got: {s}"
+    );
 }
 
 #[tokio::test]

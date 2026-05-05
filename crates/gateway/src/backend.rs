@@ -96,19 +96,17 @@ impl ReadPlane for GatewayBackend {
             .map_err(Into::into)
     }
 
-    /// Latest-state storage read.
-    ///
-    /// Returns `NotImplemented` today: `GatewayContext` does not yet
-    /// hold a `DbGateway1` x23 client.  When wired, this should call
-    /// `dbgateway_get_items` with a one-element batch.
     #[tracing::instrument(skip_all, fields(?address))]
     async fn get_storage_at(
         &self,
         address: ContractAddress,
         key: [u8; 32],
     ) -> Result<StorageItemRead, RpcServerError> {
-        let _ = (address, key);
-        Err(RpcServerError::NotImplemented("getStorageAt".into()))
+        self.ctx
+            .storage_batcher
+            .read(address, key)
+            .await
+            .map_err(Into::into)
     }
 }
 
