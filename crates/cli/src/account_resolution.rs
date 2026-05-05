@@ -21,7 +21,10 @@ pub(crate) fn resolve_wallet_address(
         let account = PubkeyAccount::new(signer.public_key(), DEFAULT_PUBKEY_ACCOUNT_NONCE);
         account
             .address()
-            .map_err(|e| CliError::Other(e.to_string()))
+            .map_err(|error| CliError::WalletAddressDerivationFailed {
+                key_name: key_name.to_owned(),
+                message: error.to_string(),
+            })
     }
 }
 

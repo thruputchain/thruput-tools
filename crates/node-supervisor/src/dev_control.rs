@@ -1,8 +1,7 @@
 //! Dev-only JSON-RPC methods served by the node supervisor.
 //!
-//! PR 4e only exposes the account list needed by CLI deploy/call. Other
-//! `groundhog_dev_*` methods remain method-not-found until their backend data
-//! exists in hogd-dev.
+//! `groundhog_dev_getAccounts` is live; other `groundhog_dev_*` methods return
+//! method-not-found until their backend data exists in hogd-dev.
 
 use std::sync::Arc;
 

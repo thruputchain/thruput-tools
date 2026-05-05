@@ -97,6 +97,13 @@ pub enum CliError {
         /// Specific metadata lookup or validation failure.
         message: String,
     },
+    #[error("failed to derive wallet address for key `{key_name}`: {message}")]
+    WalletAddressDerivationFailed {
+        /// Key name whose pubkey-derived wallet address could not be derived.
+        key_name: String,
+        /// Specific derivation failure.
+        message: String,
+    },
     #[error("transaction {tx_hash} submitted but no receipt after {seconds}s")]
     ReceiptTimeout { tx_hash: String, seconds: u64 },
     #[error("internal error: receipt polling exhausted unexpectedly")]
@@ -151,6 +158,7 @@ impl CliError {
             Self::RuntimeInit(_) => "runtime_init_failed",
             Self::RpcMethodFailed { .. } => "rpc_method_failed",
             Self::LocalDevAccountUnavailable { .. } => "local_dev_account_unavailable",
+            Self::WalletAddressDerivationFailed { .. } => "wallet_address_derivation_failed",
             Self::ReceiptTimeout { .. } => "receipt_timeout",
             Self::ReceiptPollingExhausted => "receipt_polling_exhausted",
             Self::CallEncode { .. } => "call_encode",
@@ -227,6 +235,9 @@ impl CliError {
             )),
             Self::LocalDevAccountUnavailable { .. } => Some(Cow::Borrowed(
                 "run `groundhog node` backed by hogd-dev, or use a stored key for non-local endpoints",
+            )),
+            Self::WalletAddressDerivationFailed { .. } => Some(Cow::Borrowed(
+                "check the stored public key material, or regenerate the key",
             )),
             Self::ReceiptTimeout { .. } => Some(Cow::Borrowed(
                 "check the node logs, then rerun the command once the transaction is committed or rejected",

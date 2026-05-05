@@ -19,7 +19,7 @@ pub use build::{
 };
 pub use dev_account::{
     DEFAULT_DEV_ACCOUNT_COUNT, DEFAULT_DEV_ACCOUNT_SEED, DEFAULT_DEV_ACCOUNT_STORAGE_TOKENS,
-    derive_default_dev_account_signer, derive_dev_account_secret, derive_dev_account_signer,
+    derive_default_dev_account_signer, derive_dev_account_signer,
 };
 pub use encode::{encode_signed_transaction_xdr, encode_transaction_xdr};
 pub use error::SigningError;
