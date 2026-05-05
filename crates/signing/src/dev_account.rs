@@ -15,6 +15,9 @@ pub const DEFAULT_DEV_ACCOUNT_SEED: &str = "groundhog-dev-accounts";
 pub const DEFAULT_DEV_ACCOUNT_COUNT: usize = 10;
 
 /// Default storage-token funding target per local-dev account.
+///
+/// Sized for wallet bootstrap plus several deploy/call cycles under the
+/// default hogd-dev cost model; this is not a live-balance promise.
 pub const DEFAULT_DEV_ACCOUNT_STORAGE_TOKENS: u64 = 1_000_000_000;
 
 /// Derive the 32-byte Ed25519 secret-key seed for one local-dev account.

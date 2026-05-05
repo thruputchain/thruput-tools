@@ -257,7 +257,7 @@ fn readiness_dev_accounts() -> String {
             let mut address = [0x70_u8; 32];
             address[31] = u8::try_from(index).expect("bug: default account count fits in u8");
             format!(
-                r#"{{"index":{index},"address":"0x{}","public_key":"0x{}","storage_tokens":{}}}"#,
+                r#"{{"index":{index},"address":"0x{}","public_key":"0x{}","initial_storage_tokens":{}}}"#,
                 hex::encode(address),
                 hex::encode(signer.verifying_key_bytes()),
                 groundhog_signing::DEFAULT_DEV_ACCOUNT_STORAGE_TOKENS,

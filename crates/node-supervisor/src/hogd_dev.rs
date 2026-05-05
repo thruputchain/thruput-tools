@@ -57,8 +57,8 @@ pub struct HogdDevReadyAccount {
     pub address: ContractAddress,
     /// Ed25519 public key authorized by the wallet contract.
     pub public_key: HexBytes,
-    /// Actual post-bootstrap storage-token balance advertised by hogd-dev.
-    pub storage_tokens: u64,
+    /// Storage-token balance at bootstrap; not refreshed thereafter.
+    pub initial_storage_tokens: u64,
 }
 
 /// hogd-dev readiness payload.
@@ -109,7 +109,7 @@ pub fn build_dev_accounts(
                 address: account.address,
                 public_key: account.public_key.clone(),
                 private_key: HexBytes(signer.to_keypair_bytes()[..32].to_vec()),
-                storage_tokens: account.storage_tokens,
+                initial_storage_tokens: account.initial_storage_tokens,
             })
         })
         .collect()
@@ -784,7 +784,7 @@ mod tests {
         let readiness = parse_readiness_line(
             "hogd-dev",
             &format!(
-                r#"{{"status":"ready","network_id":"groundhog-local","endpoints":{{"scheduler":"127.0.0.1:12345"}},"dev_accounts":[{{"index":0,"address":"0x{}","public_key":"0x{}","storage_tokens":1000000000}}]}}"#,
+                r#"{{"status":"ready","network_id":"groundhog-local","endpoints":{{"scheduler":"127.0.0.1:12345"}},"dev_accounts":[{{"index":0,"address":"0x{}","public_key":"0x{}","initial_storage_tokens":1000000000}}]}}"#,
                 "11".repeat(32),
                 hex::encode(signer.verifying_key_bytes()),
             ),
@@ -809,7 +809,7 @@ mod tests {
             accounts[0].private_key.0,
             signer.to_keypair_bytes()[..32].to_vec()
         );
-        assert_eq!(accounts[0].storage_tokens, 1_000_000_000);
+        assert_eq!(accounts[0].initial_storage_tokens, 1_000_000_000);
     }
 
     #[test]
@@ -833,7 +833,7 @@ mod tests {
         let readiness = parse_readiness_line(
             "hogd-dev",
             &format!(
-                r#"{{"status":"ready","network_id":"groundhog-local","endpoints":{{"scheduler":"127.0.0.1:12345"}},"dev_accounts":[{{"index":0,"address":"0x{}","public_key":"0x{}","storage_tokens":1000000000}}]}}"#,
+                r#"{{"status":"ready","network_id":"groundhog-local","endpoints":{{"scheduler":"127.0.0.1:12345"}},"dev_accounts":[{{"index":0,"address":"0x{}","public_key":"0x{}","initial_storage_tokens":1000000000}}]}}"#,
                 "11".repeat(32),
                 "22".repeat(32),
             ),

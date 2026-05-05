@@ -1728,7 +1728,7 @@ fn dev_account_json(index: usize, address: &str) -> serde_json::Value {
         "address": address,
         "publicKey": format!("0x{}", hex::encode(signer.verifying_key_bytes())),
         "privateKey": format!("0x{}", hex::encode(&signer.to_keypair_bytes()[..32])),
-        "storageTokens": groundhog_signing::DEFAULT_DEV_ACCOUNT_STORAGE_TOKENS,
+        "initialStorageTokens": groundhog_signing::DEFAULT_DEV_ACCOUNT_STORAGE_TOKENS,
     })
 }
 
