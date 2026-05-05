@@ -1,9 +1,7 @@
 use groundhog_trace::{
     HostFunctionStatusXdr, InvocationFrameTrace, SyscallTrace, SyscallTraceBody,
 };
-use groundhog_xdr::storage_item::{
-    FlaggedStorageDelta, StorageDelta, StorageDeltaFlags, WireStorageItem,
-};
+use groundhog_xdr::storage_item::{FlaggedStorageDelta, StorageDelta, StorageDeltaFlags};
 use groundhog_xdr::transaction::{Invocation, InvocationFrameOutput};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -61,18 +59,6 @@ pub struct StorageDeltaInfo {
     pub flags: i32,
     /// XDR-encoded storage delta body.
     pub delta_xdr: HexBytes,
-}
-
-/// Readable latest-state storage item plus raw encoded value for inspection.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct StorageItemInfo {
-    /// Stable storage item kind identifier.
-    pub kind: String,
-    /// Human-readable summary used by future CLI/inspect output.
-    pub summary: String,
-    /// XDR-encoded wire storage item.
-    pub item_xdr: HexBytes,
 }
 
 /// Serializable frame trace for local-node debugging.
@@ -150,22 +136,6 @@ impl From<&FlaggedStorageDelta> for StorageDeltaInfo {
 impl From<FlaggedStorageDelta> for StorageDeltaInfo {
     fn from(delta: FlaggedStorageDelta) -> Self {
         Self::from(&delta)
-    }
-}
-
-impl From<&WireStorageItem> for StorageItemInfo {
-    fn from(item: &WireStorageItem) -> Self {
-        Self {
-            kind: storage_item_kind(item),
-            summary: storage_item_summary(item),
-            item_xdr: xdr_hex_bytes(item),
-        }
-    }
-}
-
-impl From<WireStorageItem> for StorageItemInfo {
-    fn from(item: WireStorageItem) -> Self {
-        Self::from(&item)
     }
 }
 
@@ -268,18 +238,6 @@ fn storage_delta_kind(delta: &StorageDelta) -> String {
     }
 }
 
-fn storage_item_kind(item: &WireStorageItem) -> String {
-    match item {
-        WireStorageItem::kItemTypeBytestring { .. } => "bytestring".into(),
-        WireStorageItem::kItemTypeNonnegativeInt { .. } => "nonnegativeInt".into(),
-        WireStorageItem::kItemTypeAuthData { .. } => "authData".into(),
-        WireStorageItem::kItemTypeRetrocausalQueue { .. } => "retrocausalQueue".into(),
-        WireStorageItem::kItemTypeReplayCacheData => "replayCacheData".into(),
-        WireStorageItem::kItemTypeDeployedContractHash { .. } => "deployedContractHash".into(),
-        other => format!("storageItem({})", other.type_().0),
-    }
-}
-
 fn storage_delta_summary(delta: &FlaggedStorageDelta) -> String {
     let body = match &delta.delta {
         StorageDelta::kDeltaTypeBytestringSet { bytestring } => {
@@ -324,41 +282,6 @@ fn storage_delta_summary(delta: &FlaggedStorageDelta) -> String {
         body
     } else {
         format!("{body} [{}]", storage_delta_flags_label(delta.flags))
-    }
-}
-
-fn storage_item_summary(item: &WireStorageItem) -> String {
-    match item {
-        WireStorageItem::kItemTypeBytestring { bytestring } => {
-            format!("Bytestring = 0x{}", hex::encode(&bytestring.0))
-        }
-        WireStorageItem::kItemTypeNonnegativeInt { nnint } => {
-            format!("NonnegativeInt = {}", format_i128_xdr(nnint))
-        }
-        WireStorageItem::kItemTypeAuthData { auth_data } => {
-            format!("AuthData = {}", xdr_hex_string(auth_data))
-        }
-        WireStorageItem::kItemTypeRetrocausalQueue { metadata } => format!(
-            "RetrocausalQueue live_entries={} max_live_block={} partial_consumed={} max_fully_consumed_block={}",
-            metadata.live_entries,
-            metadata.max_live_block_num,
-            metadata.consume_state.partial_consumed_number,
-            metadata.consume_state.max_fully_consumed_block_number,
-        ),
-        WireStorageItem::kItemTypeReplayCacheData => "ReplayCacheData".into(),
-        WireStorageItem::kItemTypeDeployedContractHash {
-            deployed_contract_hash,
-        } => format!(
-            "DeployedContractHash hash=0x{} size={} type={}",
-            hex::encode(deployed_contract_hash.hash.as_ref()),
-            deployed_contract_hash.contract_size,
-            deployed_contract_hash.contract_type.0,
-        ),
-        other => format!(
-            "StorageItem({}) = {}",
-            other.type_().0,
-            xdr_hex_string(other)
-        ),
     }
 }
 

@@ -5,8 +5,9 @@
 
 use groundhog_rpc_api_types::ContractAddress;
 use groundhog_rpc_api_types::block::ChainTip;
-use groundhog_rpc_api_types::dev::{DevAccount, StorageItemInfo, TransactionDetail};
+use groundhog_rpc_api_types::dev::{DevAccount, TransactionDetail};
 use groundhog_rpc_api_types::receipt::TransactionReceipt;
+use groundhog_rpc_api_types::state::StorageItemRead;
 use groundhog_rpc_api_types::transaction::{TransactionStatus, TxHash};
 use tokio::sync::{mpsc, oneshot};
 
@@ -30,7 +31,7 @@ pub enum DevCommand {
     GetStorageAt {
         address: ContractAddress,
         key: [u8; 32],
-        reply: oneshot::Sender<Option<StorageItemInfo>>,
+        reply: oneshot::Sender<StorageItemRead>,
     },
     GetTransactionStatus {
         tx_hash: TxHash,
@@ -104,12 +105,14 @@ impl WorkerHandle {
         rx.await.map_err(|_| DevNodeError::WorkerStopped)
     }
 
-    /// Latest-state point read for a contract storage key.
+    /// Latest-state point read for a contract storage key.  The
+    /// returned [`StorageItemRead`] always carries the snapshot
+    /// `block_height` (even on miss).
     pub async fn get_storage_at(
         &self,
         address: ContractAddress,
         key: [u8; 32],
-    ) -> Result<Option<StorageItemInfo>, DevNodeError> {
+    ) -> Result<StorageItemRead, DevNodeError> {
         let (reply, rx) = oneshot::channel();
         self.tx
             .send(DevCommand::GetStorageAt {

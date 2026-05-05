@@ -12,10 +12,11 @@ use jsonrpsee::proc_macros::rpc;
 use groundhog_rpc_api_types::{
     BlockHeight, ContractAddress,
     block::{BlockInfo, ChainTip},
-    dev::{DevAccount, StorageItemInfo, TransactionDetail},
+    dev::{DevAccount, TransactionDetail},
     events::{EventPage, EventQuery},
     hex::HexBytes,
     receipt::TransactionReceipt,
+    state::StorageItemRead,
     transaction::{TransactionStatus, TxHash},
 };
 
@@ -74,11 +75,15 @@ pub trait GroundhogDevApi {
     async fn get_transaction_detail(&self, tx_hash: TxHash)
     -> RpcResult<Option<TransactionDetail>>;
 
-    /// Read the latest storage item at an address/key pair.
+    /// Read the latest committed storage item at an address/key pair.
+    /// `block_height` in the returned `StorageItemRead` always
+    /// reflects the snapshot the read was performed against — even
+    /// when no item is present at the key — so wallets can compare
+    /// against `chainTip` to gauge freshness.
     #[method(name = "getStorageAt")]
     async fn get_storage_at(
         &self,
         address: ContractAddress,
         key: HexBytes,
-    ) -> RpcResult<Option<StorageItemInfo>>;
+    ) -> RpcResult<StorageItemRead>;
 }

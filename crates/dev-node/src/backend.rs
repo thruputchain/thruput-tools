@@ -9,9 +9,10 @@ use groundhog_native_exec::transaction_handler::{RootInvokeResult, TransactionHa
 use groundhog_rpc_api_types::BlockHeight;
 use groundhog_rpc_api_types::block::ChainTip;
 use groundhog_rpc_api_types::dev::{
-    DevAccount, StorageItemInfo, TransactionDetail, configured_gas_limit, format_gas_summary,
-    format_i128_xdr, int128_to_i128,
+    DevAccount, TransactionDetail, configured_gas_limit, format_gas_summary, format_i128_xdr,
+    int128_to_i128,
 };
+use groundhog_rpc_api_types::state::{StorageItemInfo, StorageItemRead};
 use groundhog_rpc_api_types::events::{EmittedEvent, IdentifiedEvent};
 use groundhog_rpc_api_types::hex::{Hex0x, HexBytes, Topic};
 use groundhog_rpc_api_types::receipt::{ExecStatus, TransactionReceipt};
@@ -317,16 +318,24 @@ impl DevBackend {
         transaction_detail_lookup(&self.transactions, tx_hash)
     }
 
-    /// Latest-state point read for a contract storage key.
+    /// Latest-state point read for a contract storage key.  The
+    /// returned [`StorageItemRead`] always carries the snapshot
+    /// `block_height` (current chain tip), even when no item is
+    /// present at the key.
     pub fn get_storage_at(
         &self,
         address: &ContractAddress,
         key: &[u8; 32],
-    ) -> Option<StorageItemInfo> {
+    ) -> StorageItemRead {
         let key = StorageKeyContractData::new(*key);
-        self.env
+        let item: Option<StorageItemInfo> = self
+            .env
             .get_snapshot_storage_item(address, &key)
-            .map(Into::into)
+            .map(Into::into);
+        StorageItemRead {
+            block_height: BlockHeight::from(self.tip_height),
+            item,
+        }
     }
 
     #[cfg(test)]

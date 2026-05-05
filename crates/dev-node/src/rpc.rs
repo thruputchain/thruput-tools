@@ -6,8 +6,9 @@
 
 use groundhog_rpc_api::GroundhogDevApiServer;
 use groundhog_rpc_api_types::ContractAddress;
-use groundhog_rpc_api_types::dev::{DevAccount, StorageItemInfo, TransactionDetail};
+use groundhog_rpc_api_types::dev::{DevAccount, TransactionDetail};
 use groundhog_rpc_api_types::hex::HexBytes;
+use groundhog_rpc_api_types::state::StorageItemRead;
 use groundhog_rpc_api_types::transaction::TxHash;
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::types::ErrorObjectOwned;
@@ -48,7 +49,7 @@ impl GroundhogDevApiServer for DevNodeRpc {
         &self,
         address: ContractAddress,
         key: HexBytes,
-    ) -> RpcResult<Option<StorageItemInfo>> {
+    ) -> RpcResult<StorageItemRead> {
         let key: [u8; 32] = key.0.as_slice().try_into().map_err(|_| {
             ErrorObjectOwned::owned(
                 groundhog_rpc_api_types::error::codes::INVALID_PARAMS,

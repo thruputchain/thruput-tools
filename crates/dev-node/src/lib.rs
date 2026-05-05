@@ -146,6 +146,7 @@ impl DevNodeHandle {
 mod tests {
     use super::{DevNodeConfig, start_server};
     use groundhog_rpc_api::{GroundhogApiClient, GroundhogDevApiClient};
+    use groundhog_rpc_api_types::state::StorageItemInfo;
     use groundhog_rpc_api_types::{ContractAddress, hex::HexBytes};
     use groundhog_signing::{
         BuildCallTransaction, BuildDeployTransaction, DEFAULT_PUBKEY_ACCOUNT_NONCE,
@@ -185,11 +186,17 @@ mod tests {
         let result = client
             .get_storage_at(address, HexBytes::from(key.to_vec()))
             .await
-            .expect("bug: getStorageAt should succeed")
-            .expect("bug: seeded storage item should be present");
+            .expect("bug: getStorageAt should succeed");
 
-        assert_eq!(result.kind, "bytestring");
-        assert_eq!(result.summary, "Bytestring = 0x68656c6c6f");
+        let item = result
+            .item
+            .expect("bug: seeded storage item should be present");
+        match item {
+            StorageItemInfo::Bytestring { bytes } => {
+                assert_eq!(bytes.0.as_slice(), b"hello");
+            }
+            other => panic!("unexpected storage item variant: {other:?}"),
+        }
 
         handle.stop().expect("bug: server should stop cleanly");
         handle.stopped().await;
@@ -220,11 +227,17 @@ mod tests {
         let result = client
             .get_storage_at(address, HexBytes::from(key.to_vec()))
             .await
-            .expect("bug: getStorageAt should succeed")
-            .expect("bug: seeded storage item should be present");
+            .expect("bug: getStorageAt should succeed");
 
-        assert_eq!(result.kind, "bytestring");
-        assert_eq!(result.summary, "Bytestring = 0x68656c6c6f");
+        let item = result
+            .item
+            .expect("bug: seeded storage item should be present");
+        match item {
+            StorageItemInfo::Bytestring { bytes } => {
+                assert_eq!(bytes.0.as_slice(), b"hello");
+            }
+            other => panic!("unexpected storage item variant: {other:?}"),
+        }
 
         handle.stop().expect("bug: server should stop cleanly");
         handle.stopped().await;
@@ -251,7 +264,7 @@ mod tests {
             .await
             .expect("bug: getStorageAt should succeed");
 
-        assert!(result.is_none());
+        assert!(result.item.is_none());
 
         handle.stop().expect("bug: server should stop cleanly");
         handle.stopped().await;
@@ -358,11 +371,17 @@ mod tests {
         let result = client
             .get_storage_at(deployed_address, HexBytes::from(vec![0x42; 32]))
             .await
-            .expect("bug: getStorageAt should succeed")
-            .expect("bug: committed storage should be present");
+            .expect("bug: getStorageAt should succeed");
 
-        assert_eq!(result.kind, "bytestring");
-        assert_eq!(result.summary, "Bytestring = 0x6361666562616265");
+        let item = result
+            .item
+            .expect("bug: committed storage should be present");
+        match item {
+            StorageItemInfo::Bytestring { bytes } => {
+                assert_eq!(bytes.0.as_slice(), b"cafebabe");
+            }
+            other => panic!("unexpected storage item variant: {other:?}"),
+        }
 
         handle.stop().expect("bug: server should stop cleanly");
         handle.stopped().await;
