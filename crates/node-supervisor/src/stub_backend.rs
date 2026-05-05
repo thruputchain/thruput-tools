@@ -16,10 +16,11 @@
 
 use async_trait::async_trait;
 use groundhog_rpc_api_types::{
-    BlockHeight,
+    BlockHeight, ContractAddress,
     block::{BlockInfo, ChainTip},
     events::{EventPage, EventQuery},
     receipt::TransactionReceipt,
+    state::StorageItemRead,
     transaction::{TransactionStatus, TxHash},
 };
 use groundhog_rpc_server::{
@@ -84,5 +85,13 @@ impl ReadPlane for StubBackend {
 
     async fn contract_events(&self, _query: EventQuery) -> Result<EventPage, RpcServerError> {
         Err(RpcServerError::NotImplemented("getEvents".into()))
+    }
+
+    async fn get_storage_at(
+        &self,
+        _address: ContractAddress,
+        _key: [u8; 32],
+    ) -> Result<StorageItemRead, RpcServerError> {
+        Err(RpcServerError::NotImplemented("getStorageAt".into()))
     }
 }

@@ -17,9 +17,11 @@ use groundhog_indexer::{
     TxInfoOutcome, TxInfoResult,
 };
 use groundhog_rpc_api_types::{
+    ContractAddress,
     events::{EventPage, EventQuery, IdentifiedEvent},
     hex::{Hex0x, HexBytes, Topic},
     receipt::{ExecStatus, TransactionReceipt},
+    state::StorageItemRead,
     transaction::{TransactionStatus, TxHash},
 };
 use groundhog_rpc_server::{ReadPlane, RpcServerError};
@@ -253,6 +255,20 @@ impl ReadPlane for HogdDevReadBackend {
             latest_block: page.latest_block,
             oldest_block: page.oldest_block,
         })
+    }
+
+    /// Latest-state storage read.
+    ///
+    /// Returns `NotImplemented` today: needs a `DbGateway1` x23
+    /// client connected to hogd-dev's `gateway` readiness endpoint.
+    #[tracing::instrument(skip_all, fields(?address))]
+    async fn get_storage_at(
+        &self,
+        address: ContractAddress,
+        key: [u8; 32],
+    ) -> Result<StorageItemRead, RpcServerError> {
+        let _ = (address, key);
+        Err(RpcServerError::NotImplemented("getStorageAt".into()))
     }
 }
 

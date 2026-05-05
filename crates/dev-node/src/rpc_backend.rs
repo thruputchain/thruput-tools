@@ -1,9 +1,10 @@
 use async_trait::async_trait;
 use groundhog_rpc_api_types::{
-    BlockHeight,
+    BlockHeight, ContractAddress,
     block::{BlockInfo, ChainTip},
     events::{EventPage, EventQuery},
     receipt::TransactionReceipt,
+    state::StorageItemRead,
     transaction::{TransactionStatus, TxHash},
 };
 use groundhog_rpc_server::{
@@ -99,6 +100,18 @@ impl ReadPlane for DevNodeBackend {
         // surface NotImplemented and route real `getEvents` testing
         // through the production gateway against a real hogd cluster.
         Err(RpcServerError::NotImplemented("getEvents".into()))
+    }
+
+    #[tracing::instrument(skip_all, fields(?address))]
+    async fn get_storage_at(
+        &self,
+        address: ContractAddress,
+        key: [u8; 32],
+    ) -> Result<StorageItemRead, RpcServerError> {
+        self.worker
+            .get_storage_at(address, key)
+            .await
+            .map_err(Into::into)
     }
 }
 

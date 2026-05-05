@@ -1,11 +1,15 @@
 use jsonrpsee::core::RpcResult;
+use jsonrpsee::types::ErrorObjectOwned;
 
 use groundhog_rpc_api::GroundhogApiServer;
 use groundhog_rpc_api_types::{
-    BlockHeight,
+    BlockHeight, ContractAddress,
     block::{BlockInfo, ChainTip},
+    error::codes,
     events::{EventPage, EventQuery},
+    hex::HexBytes,
     receipt::TransactionReceipt,
+    state::StorageItemRead,
     transaction::{TransactionStatus, TxHash},
 };
 
@@ -94,6 +98,22 @@ where
     async fn get_events(&self, query: EventQuery) -> RpcResult<EventPage> {
         validate_event_query(&query, &self.config)?;
         Ok(self.read.contract_events(query).await?)
+    }
+
+    #[tracing::instrument(skip_all, fields(?address, key_len = key.0.len()))]
+    async fn get_storage_at(
+        &self,
+        address: ContractAddress,
+        key: HexBytes,
+    ) -> RpcResult<StorageItemRead> {
+        let key: [u8; 32] = key.0.as_slice().try_into().map_err(|_| {
+            ErrorObjectOwned::owned(
+                codes::INVALID_PARAMS,
+                "storage key must be exactly 32 bytes",
+                None::<()>,
+            )
+        })?;
+        Ok(self.read.get_storage_at(address, key).await?)
     }
 }
 
@@ -257,6 +277,17 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             *self.event_calls.lock().await += 1;
             Ok(empty_page())
         }
+
+        async fn get_storage_at(
+            &self,
+            _address: ContractAddress,
+            _key: [u8; 32],
+        ) -> Result<StorageItemRead, RpcServerError> {
+            Ok(StorageItemRead {
+                block_height: BlockHeight::from(0),
+                item: None,
+            })
+        }
     }
 
     #[async_trait::async_trait]
@@ -278,6 +309,17 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         async fn contract_events(&self, _query: EventQuery) -> Result<EventPage, RpcServerError> {
             *self.event_calls.lock().await += 1;
             Ok(empty_page())
+        }
+
+        async fn get_storage_at(
+            &self,
+            _address: ContractAddress,
+            _key: [u8; 32],
+        ) -> Result<StorageItemRead, RpcServerError> {
+            Ok(StorageItemRead {
+                block_height: BlockHeight::from(0),
+                item: None,
+            })
         }
     }
 

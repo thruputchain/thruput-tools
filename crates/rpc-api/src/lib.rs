@@ -56,6 +56,18 @@ pub trait GroundhogApi {
     /// Soroban-shaped filter / cursor / topic surface.
     #[method(name = "getEvents")]
     async fn get_events(&self, query: EventQuery) -> RpcResult<EventPage>;
+
+    /// Read the latest committed storage item at an address/key pair.
+    /// `block_height` in the returned `StorageItemRead` always
+    /// reflects the snapshot the read was performed against — even
+    /// when no item is present at the key — so wallets can compare
+    /// against `chainTip` to gauge freshness.
+    #[method(name = "getStorageAt")]
+    async fn get_storage_at(
+        &self,
+        address: ContractAddress,
+        key: HexBytes,
+    ) -> RpcResult<StorageItemRead>;
 }
 
 /// Dev-only RPC methods. Only implemented by the local node.
@@ -74,16 +86,4 @@ pub trait GroundhogDevApi {
     #[method(name = "getTransactionDetail")]
     async fn get_transaction_detail(&self, tx_hash: TxHash)
     -> RpcResult<Option<TransactionDetail>>;
-
-    /// Read the latest committed storage item at an address/key pair.
-    /// `block_height` in the returned `StorageItemRead` always
-    /// reflects the snapshot the read was performed against — even
-    /// when no item is present at the key — so wallets can compare
-    /// against `chainTip` to gauge freshness.
-    #[method(name = "getStorageAt")]
-    async fn get_storage_at(
-        &self,
-        address: ContractAddress,
-        key: HexBytes,
-    ) -> RpcResult<StorageItemRead>;
 }

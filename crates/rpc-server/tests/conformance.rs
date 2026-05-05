@@ -15,12 +15,13 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use groundhog_rpc_api::GroundhogApiServer;
 use groundhog_rpc_api_types::{
-    BlockHeight,
+    BlockHeight, ContractAddress,
     block::{BlockInfo, ChainTip},
     error::codes,
     events::{BlockAnchor, EventFilter, EventPage, EventQuery, EventTopicFilter, IterationOrder},
     hex::Hex0x,
     receipt::TransactionReceipt,
+    state::StorageItemRead,
     transaction::{TransactionStatus, TxHash},
 };
 use groundhog_rpc_server::{
@@ -124,6 +125,14 @@ impl ReadPlane for ScriptedBackend {
             latest_block: BlockHeight::from(0),
             oldest_block: BlockHeight::from(0),
         })
+    }
+
+    async fn get_storage_at(
+        &self,
+        _address: ContractAddress,
+        _key: [u8; 32],
+    ) -> Result<StorageItemRead, RpcServerError> {
+        Err(RpcServerError::NotImplemented("getStorageAt".into()))
     }
 }
 

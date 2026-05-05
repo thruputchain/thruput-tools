@@ -433,7 +433,7 @@ Initial methods:
 - `groundhog_dev_reset`
 - `groundhog_dev_getAccounts`
 - `groundhog_dev_getTransactionDetail`
-- `groundhog_dev_getStorageAt`
+- `groundhog_getStorageAt`
 - `groundhog_dev_advanceBlock`
 - `groundhog_dev_snapshot`
 - `groundhog_dev_revert`

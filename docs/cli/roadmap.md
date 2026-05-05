@@ -71,7 +71,7 @@ Implementation status:
 - Phase 2 is complete for the current local-dev scope: `groundhog node`
   ships, shares execution semantics with the SDK/native executor, retains
   transaction detail, exposes events, and supports latest-state storage
-  reads through `groundhog_dev_getStorageAt`.
+  reads through `groundhog_getStorageAt`.
 - The current native-exec local-node backend is prototype infrastructure,
   not the durable backend contract. The durable direction is a Rust
   supervisor (`groundhog-node-supervisor`) around a hogd-owned `hogd-dev`

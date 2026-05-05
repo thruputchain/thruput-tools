@@ -62,10 +62,11 @@
 
 use async_trait::async_trait;
 use groundhog_rpc_api_types::{
-    BlockHeight,
+    BlockHeight, ContractAddress,
     block::{BlockInfo, ChainTip},
     events::{EventPage, EventQuery},
     receipt::TransactionReceipt,
+    state::StorageItemRead,
     transaction::{TransactionStatus, TxHash},
 };
 
@@ -131,4 +132,16 @@ pub trait ReadPlane: Send + Sync + 'static {
     /// Walk further pages by sending the same query back with `cursor`
     /// set to the value from the previous page.
     async fn contract_events(&self, query: EventQuery) -> Result<EventPage, RpcServerError>;
+
+    /// Return the latest committed storage item at one (address, key).
+    /// `key` is the 32-byte raw contract-data key that the wire form
+    /// has already validated as exactly 32 bytes.  The returned
+    /// `StorageItemRead` always carries `block_height` (even when no
+    /// item is present at the key) so callers can compare against
+    /// `chainTip` to gauge freshness.
+    async fn get_storage_at(
+        &self,
+        address: ContractAddress,
+        key: [u8; 32],
+    ) -> Result<StorageItemRead, RpcServerError>;
 }
