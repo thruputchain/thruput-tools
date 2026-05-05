@@ -32,14 +32,20 @@ impl SupervisorDevRpc {
 
 #[async_trait::async_trait]
 impl GroundhogDevApiServer for SupervisorDevRpc {
+    #[tracing::instrument(skip_all, fields(method = "groundhog_dev_reset"))]
     async fn reset(&self) -> RpcResult<()> {
         Err(method_not_found("groundhog_dev_reset"))
     }
 
+    #[tracing::instrument(
+        skip_all,
+        fields(method = "groundhog_dev_getAccounts", account_count = self.accounts.len())
+    )]
     async fn get_accounts(&self) -> RpcResult<Vec<DevAccount>> {
         Ok((*self.accounts).clone())
     }
 
+    #[tracing::instrument(skip_all, fields(method = "groundhog_dev_getTransactionDetail"))]
     async fn get_transaction_detail(
         &self,
         _tx_hash: TxHash,
@@ -47,6 +53,7 @@ impl GroundhogDevApiServer for SupervisorDevRpc {
         Err(method_not_found("groundhog_dev_getTransactionDetail"))
     }
 
+    #[tracing::instrument(skip_all, fields(method = "groundhog_dev_getStorageAt"))]
     async fn get_storage_at(
         &self,
         _address: ContractAddress,

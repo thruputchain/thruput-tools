@@ -50,7 +50,7 @@ pub struct HogdDevEndpoints {
 /// Public dev-account metadata advertised by hogd-dev readiness.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[non_exhaustive]
-pub struct HogdDevReadyAccount {
+pub(crate) struct HogdDevReadyAccount {
     /// Deterministic dev-account index.
     pub index: u32,
     /// Wallet contract address bootstrapped by hogd-dev.
@@ -73,7 +73,7 @@ pub struct HogdDevReadiness {
     pub endpoints: HogdDevEndpoints,
     /// Public dev-account metadata advertised by hogd-dev.
     #[serde(default)]
-    pub dev_accounts: Vec<HogdDevReadyAccount>,
+    pub(crate) dev_accounts: Vec<HogdDevReadyAccount>,
 }
 
 impl HogdDevReadiness {
@@ -89,7 +89,7 @@ impl HogdDevReadiness {
 }
 
 /// Build RPC-facing dev accounts from hogd-dev readiness plus local signer derivation.
-pub fn build_dev_accounts(
+pub(crate) fn build_dev_accounts(
     readiness: &HogdDevReadiness,
     config: &HogdDevConfig,
 ) -> Result<Vec<DevAccount>, NodeSupervisorError> {

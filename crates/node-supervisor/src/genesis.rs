@@ -1,4 +1,4 @@
-//! hogd-dev genesis bootstrap.
+//! hogd-dev genesis compatibility probe.
 
 use groundhog_scheduler::{
     DbSchedResult, GenesisConfiguration, SchedulerGetTipResult,
@@ -14,9 +14,10 @@ use crate::NodeSupervisorError;
 
 /// Ensure v1 hogd-dev has a genesis block.
 ///
-/// The first hogd-dev binary deliberately does not accept genesis on stdin.
-/// Rust owns the dev genesis choice for now and loads it over the v1 scheduler
-/// endpoint. The get-tip/load/re-tip flow follows
+/// Current hogd-dev bootstrap normally loads account genesis before readiness,
+/// so this is a no-op after `schedcoord_get_tip` succeeds. The empty-genesis
+/// fallback remains for older scheduler-only development binaries. The
+/// get-tip/load/re-tip flow follows
 /// `chuckd-rs/crates/coordinator/src/system.rs:524-557`.
 #[tracing::instrument(skip_all)]
 pub(crate) async fn ensure_dev_genesis(
@@ -82,7 +83,7 @@ fn unexpected_tip_result<T>(result: &SchedulerGetTipResult) -> Result<T, NodeSup
     })
 }
 
-/// Build the deterministic dev genesis loaded by `groundhog node`.
+/// Build the deterministic empty fallback genesis loaded by `groundhog node`.
 ///
 /// The empty initial-config shape follows
 /// `chuckd-rs/crates/scheduler/src/client.rs:324-346`. The storage cost

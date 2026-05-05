@@ -165,7 +165,8 @@ pub enum NodeSupervisorError {
 
     /// hogd-dev advertised a dev-account entry at the wrong index.
     #[error(
-        "hogd-dev readiness dev account at position {position} had index {actual}, expected {expected}"
+        "hogd-dev readiness dev account at position {position} had index \
+         {actual}, expected {expected}"
     )]
     DevAccountIndexMismatch {
         /// Position in the readiness account array.
@@ -177,7 +178,10 @@ pub enum NodeSupervisorError {
     },
 
     /// hogd-dev advertised a malformed dev-account public key.
-    #[error("hogd-dev readiness dev account {index} public key had {actual} bytes, expected 32")]
+    #[error(
+        "hogd-dev readiness dev account {index} public key had {actual} bytes, \
+         expected 32"
+    )]
     DevAccountPublicKeyLength {
         /// Dev-account index.
         index: usize,
@@ -188,7 +192,8 @@ pub enum NodeSupervisorError {
     /// hogd-dev advertised a dev-account public key that does not match the
     /// requested seed.
     #[error(
-        "hogd-dev readiness dev account {index} public key mismatch: expected {expected}, got {actual}"
+        "hogd-dev readiness dev account {index} public key mismatch: expected \
+         {expected}, got {actual}"
     )]
     DevAccountPublicKeyMismatch {
         /// Dev-account index.

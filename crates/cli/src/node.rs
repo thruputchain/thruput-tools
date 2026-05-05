@@ -165,7 +165,6 @@ fn hogd_dev_startup_payload(
             "endpoints": hogd_dev_endpoints_payload(readiness),
         },
         "rpc_url": format!("http://{addr}"),
-        "accounts": [],
     })
 }
 
@@ -222,7 +221,7 @@ mod tests {
             payload["backend"]["endpoints"]["control"],
             "127.0.0.1:12347"
         );
-        assert!(payload["accounts"].as_array().unwrap().is_empty());
+        assert!(payload.get("accounts").is_none());
     }
 
     #[test]
