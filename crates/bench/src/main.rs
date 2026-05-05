@@ -18,12 +18,11 @@ use std::time::{Duration, Instant};
 use clap::Parser;
 use groundhog_signing::{
     BuildCallTransaction, DEFAULT_PUBKEY_ACCOUNT_NONCE, LocalSigner, PubkeyAccount,
-    SignTransactionParams, Signer, build_call_transaction, encode_signed_transaction_xdr,
-    sign_transaction,
+    SignTransactionParams, Signer, build_call_transaction, derive_default_dev_account_signer,
+    encode_signed_transaction_xdr, sign_transaction,
 };
 use groundhog_xdr::contract::ContractEntrypointID;
 use hdrhistogram::Histogram;
-use sha2::{Digest, Sha256};
 
 /// Groundhog JSON-RPC benchmark harness.
 #[derive(Parser)]
@@ -71,11 +70,7 @@ struct Cli {
 /// The resulting transactions are only auth-valid against endpoints whose
 /// genesis bootstraps matching dev accounts.
 fn dev_signer(index: usize) -> LocalSigner {
-    let mut hasher = Sha256::new();
-    hasher.update(b"groundhog-dev-accounts:");
-    hasher.update(format!("account-{index}").as_bytes());
-    let secret: [u8; 32] = hasher.finalize().into();
-    LocalSigner::from_secret_key(secret)
+    derive_default_dev_account_signer(index)
 }
 
 /// Pre-generate a batch of hex-encoded signed transactions.

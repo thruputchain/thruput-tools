@@ -152,6 +152,58 @@ pub enum NodeSupervisorError {
         status: String,
     },
 
+    /// hogd-dev advertised a different dev-account count than requested.
+    #[error(
+        "hogd-dev readiness advertised {actual} dev accounts, but supervisor requested {expected}"
+    )]
+    DevAccountCountMismatch {
+        /// Requested dev-account count.
+        expected: usize,
+        /// Advertised dev-account count.
+        actual: usize,
+    },
+
+    /// hogd-dev advertised a dev-account entry at the wrong index.
+    #[error(
+        "hogd-dev readiness dev account at position {position} had index \
+         {actual}, expected {expected}"
+    )]
+    DevAccountIndexMismatch {
+        /// Position in the readiness account array.
+        position: usize,
+        /// Expected account index.
+        expected: usize,
+        /// Advertised account index.
+        actual: u32,
+    },
+
+    /// hogd-dev advertised a malformed dev-account public key.
+    #[error(
+        "hogd-dev readiness dev account {index} public key had {actual} bytes, \
+         expected 32"
+    )]
+    DevAccountPublicKeyLength {
+        /// Dev-account index.
+        index: usize,
+        /// Advertised public key length.
+        actual: usize,
+    },
+
+    /// hogd-dev advertised a dev-account public key that does not match the
+    /// requested seed.
+    #[error(
+        "hogd-dev readiness dev account {index} public key mismatch: expected \
+         {expected}, got {actual}"
+    )]
+    DevAccountPublicKeyMismatch {
+        /// Dev-account index.
+        index: usize,
+        /// Expected 0x-prefixed public key.
+        expected: String,
+        /// Advertised 0x-prefixed public key.
+        actual: String,
+    },
+
     /// The supervisor could not signal the child process group.
     #[cfg(unix)]
     #[error("failed to send {signal} to child process group `{program}`: {source}")]

@@ -236,16 +236,36 @@ fn ignore_sigterm() {
 
 /// Readiness JSON with only the scheduler endpoint (v1 reduced contract).
 fn readiness_scheduler_only(scheduler: SocketAddr) -> String {
+    let accounts = readiness_dev_accounts();
     format!(
-        r#"{{"status":"ready","network_id":"groundhog-local","endpoints":{{"scheduler":"{scheduler}"}}}}"#
+        r#"{{"status":"ready","network_id":"groundhog-local","endpoints":{{"scheduler":"{scheduler}"}},"dev_accounts":{accounts}}}"#
     )
 }
 
 /// Readiness JSON with both scheduler and read (indexer) endpoints.
 fn readiness_full(scheduler: SocketAddr, read: SocketAddr) -> String {
+    let accounts = readiness_dev_accounts();
     format!(
-        r#"{{"status":"ready","network_id":"groundhog-local","endpoints":{{"scheduler":"{scheduler}","read":"{read}"}}}}"#
+        r#"{{"status":"ready","network_id":"groundhog-local","endpoints":{{"scheduler":"{scheduler}","read":"{read}"}},"dev_accounts":{accounts}}}"#
     )
+}
+
+fn readiness_dev_accounts() -> String {
+    let accounts = (0..groundhog_signing::DEFAULT_DEV_ACCOUNT_COUNT)
+        .map(|index| {
+            let signer = groundhog_signing::derive_default_dev_account_signer(index);
+            let mut address = [0x70_u8; 32];
+            address[31] = u8::try_from(index).expect("bug: default account count fits in u8");
+            format!(
+                r#"{{"index":{index},"address":"0x{}","public_key":"0x{}","initial_storage_tokens":{}}}"#,
+                hex::encode(address),
+                hex::encode(signer.verifying_key_bytes()),
+                groundhog_signing::DEFAULT_DEV_ACCOUNT_STORAGE_TOKENS,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("[{accounts}]")
 }
 
 fn dead_loopback_addr() -> SocketAddr {

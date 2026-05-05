@@ -5,40 +5,29 @@
 //! lookup, no import step.
 
 use groundhog_signing::LocalSigner;
-use sha2::{Digest, Sha256};
 
 use crate::CliError;
 
-/// Well-known seed for deterministic `groundhog node` dev keys.
-///
-/// Keep in sync with the benchmark harness signer derivation in
-/// `crates/bench/src/main.rs`.
-const DEV_SEED: &str = "groundhog-dev-accounts";
-
 /// Check if a key name refers to a dev account.
 pub fn is_dev_key(name: &str) -> bool {
-    name.starts_with("dev-") && name[4..].parse::<usize>().is_ok()
+    dev_key_index(name).is_some()
+}
+
+/// Parse a `dev-N` key name into its dev-account index.
+pub fn dev_key_index(name: &str) -> Option<usize> {
+    name.strip_prefix("dev-").and_then(|s| s.parse().ok())
 }
 
 /// Derive a `LocalSigner` for a dev key name like "dev-0".
 ///
 /// Returns `Err` if the name doesn't match the `dev-N` pattern.
 pub fn load_dev_signer(name: &str) -> Result<LocalSigner, CliError> {
-    let index: usize = name
-        .strip_prefix("dev-")
-        .and_then(|s| s.parse().ok())
-        .ok_or_else(|| {
-            CliError::Other(format!(
-                "`{name}` is not a valid dev key name (expected dev-0, dev-1, ...)"
-            ))
-        })?;
-
-    let mut hasher = Sha256::new();
-    hasher.update(DEV_SEED.as_bytes());
-    hasher.update(b":");
-    hasher.update(format!("account-{index}").as_bytes());
-    let secret: [u8; 32] = hasher.finalize().into();
-    Ok(LocalSigner::from_secret_key(secret))
+    let index = dev_key_index(name).ok_or_else(|| {
+        CliError::Other(format!(
+            "`{name}` is not a valid dev key name (expected dev-0, dev-1, ...)"
+        ))
+    })?;
+    Ok(groundhog_signing::derive_default_dev_account_signer(index))
 }
 
 #[cfg(test)]

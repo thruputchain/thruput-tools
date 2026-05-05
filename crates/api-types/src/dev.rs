@@ -11,6 +11,11 @@ use crate::hex::{Hex0x, HexBytes};
 use crate::receipt::TransactionReceipt;
 
 /// A pre-funded dev account, returned by `groundhog_dev_getAccounts`.
+///
+/// Only emitted by local-node backends. The `private_key` and
+/// `initial_storage_tokens` fields are local-orchestration metadata with no
+/// testnet/mainnet meaning: production backends do not retain private keys
+/// and have no concept of a "bootstrap balance".
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DevAccount {
@@ -21,8 +26,10 @@ pub struct DevAccount {
     /// Ed25519 secret key bytes. Included because these are
     /// well-known dev-only keys.
     pub private_key: HexBytes,
-    /// Storage tokens advertised by the local dev backend after bootstrap.
-    pub storage_tokens: u64,
+    /// Storage-token balance at bootstrap. This is a snapshot taken when the
+    /// local node started; it is not refreshed as the wallet spends tokens.
+    /// Use a live balance read for current funding.
+    pub initial_storage_tokens: u64,
 }
 
 /// Dev-only execution detail for a committed transaction.

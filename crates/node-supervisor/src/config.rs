@@ -2,6 +2,10 @@
 
 use std::{path::PathBuf, time::Duration};
 
+use groundhog_signing::{
+    DEFAULT_DEV_ACCOUNT_COUNT, DEFAULT_DEV_ACCOUNT_SEED, DEFAULT_DEV_ACCOUNT_STORAGE_TOKENS,
+};
+
 /// Default JSON-RPC listen address for `groundhog node`.
 pub const DEFAULT_RPC_LISTEN_ADDRESS: &str = "127.0.0.1:9545";
 
@@ -13,6 +17,15 @@ pub const DEFAULT_HOGD_DEV_SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 
 /// Default startup timeout while waiting for hogd-dev readiness.
 pub const DEFAULT_HOGD_DEV_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Default number of dev accounts requested from hogd-dev.
+pub const DEFAULT_HOGD_DEV_ACCOUNT_COUNT: usize = DEFAULT_DEV_ACCOUNT_COUNT;
+
+/// Default dev account signer seed requested from hogd-dev.
+pub const DEFAULT_HOGD_DEV_ACCOUNT_SEED: &str = DEFAULT_DEV_ACCOUNT_SEED;
+
+/// Default storage-token funding target requested from hogd-dev per account.
+pub const DEFAULT_HOGD_DEV_ACCOUNT_TOKENS: u64 = DEFAULT_DEV_ACCOUNT_STORAGE_TOKENS;
 
 /// Supervisor configuration for a local Groundhog node.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,6 +87,12 @@ pub struct HogdDevConfig {
     pub shutdown_grace: Duration,
     /// Maximum time to wait for the readiness line after spawning hogd-dev.
     pub startup_timeout: Duration,
+    /// Number of deterministic dev accounts hogd-dev should bootstrap.
+    pub dev_account_count: usize,
+    /// Seed used by hogd-dev and the supervisor to derive dev-account signers.
+    pub dev_account_seed: String,
+    /// Storage-token funding target per dev account.
+    pub dev_account_tokens: u64,
 }
 
 impl Default for HogdDevConfig {
@@ -83,6 +102,9 @@ impl Default for HogdDevConfig {
             listen_host: DEFAULT_HOGD_DEV_LISTEN_HOST.to_string(),
             shutdown_grace: DEFAULT_HOGD_DEV_SHUTDOWN_GRACE,
             startup_timeout: DEFAULT_HOGD_DEV_STARTUP_TIMEOUT,
+            dev_account_count: DEFAULT_HOGD_DEV_ACCOUNT_COUNT,
+            dev_account_seed: DEFAULT_HOGD_DEV_ACCOUNT_SEED.to_string(),
+            dev_account_tokens: DEFAULT_HOGD_DEV_ACCOUNT_TOKENS,
         }
     }
 }
@@ -113,6 +135,27 @@ impl HogdDevConfig {
     #[must_use]
     pub fn with_startup_timeout(mut self, startup_timeout: Duration) -> Self {
         self.startup_timeout = startup_timeout;
+        self
+    }
+
+    /// Return a copy with a different dev-account count.
+    #[must_use]
+    pub fn with_dev_account_count(mut self, dev_account_count: usize) -> Self {
+        self.dev_account_count = dev_account_count;
+        self
+    }
+
+    /// Return a copy with a different dev-account derivation seed.
+    #[must_use]
+    pub fn with_dev_account_seed(mut self, dev_account_seed: impl Into<String>) -> Self {
+        self.dev_account_seed = dev_account_seed.into();
+        self
+    }
+
+    /// Return a copy with a different dev-account storage-token funding target.
+    #[must_use]
+    pub fn with_dev_account_tokens(mut self, dev_account_tokens: u64) -> Self {
+        self.dev_account_tokens = dev_account_tokens;
         self
     }
 }
