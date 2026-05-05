@@ -832,6 +832,97 @@ fn deploy_dry_run_json_outputs_prepared_transaction() {
 }
 
 #[test]
+fn deploy_dry_run_uses_advertised_dev_wallet_address() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let advertised_wallet = advertised_dev_wallet_address(0);
+    let (rpc_url, rpc_server) = spawn_dev_account_chain_tip_rpc(
+        42,
+        serde_json::json!([dev_account_json(0, &advertised_wallet)]),
+    );
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!("[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\n"),
+    )
+    .unwrap();
+
+    let wasm_path = tmp.path().join("test.wasm");
+    std::fs::write(&wasm_path, b"\0asm\x01\0\0\0").unwrap();
+
+    let output = groundhog()
+        .args([
+            "--json",
+            "deploy",
+            "--dry-run",
+            "--wasm",
+            wasm_path.to_str().unwrap(),
+        ])
+        .current_dir(&project)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let signed_tx = stdout["data"]["signed_tx"]
+        .as_str()
+        .expect("bug: dry-run output includes signed tx");
+
+    assert_eq!(signed_tx_invoked_address(signed_tx), advertised_wallet);
+}
+
+#[test]
+fn deploy_dev_key_fails_when_get_accounts_is_missing() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let (rpc_url, rpc_server) = spawn_dev_account_method_not_found_rpc();
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!("[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\n"),
+    )
+    .unwrap();
+
+    let wasm_path = tmp.path().join("test.wasm");
+    std::fs::write(&wasm_path, b"\0asm\x01\0\0\0").unwrap();
+
+    let output = groundhog()
+        .args([
+            "--json",
+            "deploy",
+            "--dry-run",
+            "--wasm",
+            wasm_path.to_str().unwrap(),
+        ])
+        .current_dir(&project)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(stderr["ok"], false);
+    assert_eq!(stderr["command"], "deploy");
+    assert_eq!(stderr["error"]["code"], "local_dev_account_unavailable");
+    assert!(
+        stderr["error"]["message"]
+            .as_str()
+            .expect("bug: error message should be string")
+            .contains("groundhog_dev_getAccounts"),
+    );
+}
+
+#[test]
 fn deploy_live_json_submits_and_returns_receipt() {
     let tmp = TempDir::new().unwrap();
     let config_home = tmp.path().join("config-home");
@@ -1033,6 +1124,52 @@ fn call_dry_run_json_outputs_prepared_transaction() {
             .unwrap()
             .starts_with("0x")
     );
+}
+
+#[test]
+fn call_dry_run_uses_advertised_dev_wallet_address() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let advertised_wallet = advertised_dev_wallet_address(0);
+    let (rpc_url, rpc_server) = spawn_dev_account_chain_tip_rpc(
+        42,
+        serde_json::json!([dev_account_json(0, &advertised_wallet)]),
+    );
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!("[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\n"),
+    )
+    .unwrap();
+
+    let contract = format!("0x{}", "11".repeat(32));
+    let output = groundhog()
+        .args([
+            "--json",
+            "call",
+            "--dry-run",
+            &contract,
+            "0x0123456789abcdef",
+            "0x0102",
+        ])
+        .current_dir(&project)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let signed_tx = stdout["data"]["signed_tx"]
+        .as_str()
+        .expect("bug: dry-run output includes signed tx");
+
+    assert_eq!(signed_tx_invoked_address(signed_tx), advertised_wallet);
 }
 
 #[test]
@@ -1500,6 +1637,109 @@ fn spawn_chain_tip_rpc(height: i64) -> (String, thread::JoinHandle<()>) {
     });
 
     (format!("http://{addr}"), handle)
+}
+
+fn spawn_dev_account_chain_tip_rpc(
+    height: i64,
+    accounts: serde_json::Value,
+) -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+
+    let handle = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+
+        let (stream, request) = read_jsonrpc_request(&listener, deadline, "getAccounts");
+        assert_eq!(request["method"], "groundhog_dev_getAccounts");
+        send_jsonrpc_response(stream, &request["id"], accounts);
+
+        let (stream, request) = read_jsonrpc_request(&listener, deadline, "chainTip");
+        assert_eq!(request["method"], "groundhog_chainTip");
+        send_jsonrpc_response(
+            stream,
+            &request["id"],
+            serde_json::json!({
+                "height": height,
+                "blockHash": format!("0x{}", "00".repeat(32)),
+            }),
+        );
+
+        let follow_up_deadline = Instant::now() + Duration::from_millis(200);
+        loop {
+            match listener.accept() {
+                Ok(_) => panic!("unexpected additional RPC request after dry-run preparation"),
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= follow_up_deadline {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(err) => panic!("failed to accept follow-up mock RPC connection: {err}"),
+            }
+        }
+    });
+
+    (format!("http://{addr}"), handle)
+}
+
+fn spawn_dev_account_method_not_found_rpc() -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+
+    let handle = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+
+        let (stream, request) = read_jsonrpc_request(&listener, deadline, "getAccounts");
+        assert_eq!(request["method"], "groundhog_dev_getAccounts");
+        send_jsonrpc_error_response(stream, &request["id"], -32601, "Method not found");
+
+        let follow_up_deadline = Instant::now() + Duration::from_millis(200);
+        loop {
+            match listener.accept() {
+                Ok(_) => panic!(
+                    "unexpected additional RPC request after groundhog_dev_getAccounts failed; \
+                     dev keys must not fall back to locally derived addresses"
+                ),
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= follow_up_deadline {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(err) => panic!("failed to accept follow-up mock RPC connection: {err}"),
+            }
+        }
+    });
+
+    (format!("http://{addr}"), handle)
+}
+
+fn advertised_dev_wallet_address(index: u8) -> String {
+    let mut address = [0x77_u8; 32];
+    address[31] = index;
+    format!("0x{}", hex::encode(address))
+}
+
+fn dev_account_json(index: usize, address: &str) -> serde_json::Value {
+    let signer = groundhog_signing::derive_default_dev_account_signer(index);
+    serde_json::json!({
+        "address": address,
+        "publicKey": format!("0x{}", hex::encode(signer.verifying_key_bytes())),
+        "privateKey": format!("0x{}", hex::encode(&signer.to_keypair_bytes()[..32])),
+        "storageTokens": groundhog_signing::DEFAULT_DEV_ACCOUNT_STORAGE_TOKENS,
+    })
+}
+
+fn signed_tx_invoked_address(tx_hex: &str) -> String {
+    let bytes = hex::decode(tx_hex.strip_prefix("0x").unwrap_or(tx_hex)).unwrap();
+    let signed_tx: groundhog_xdr::transaction::SignedTransaction =
+        xdrs::txs::decode(&bytes).unwrap();
+    format!(
+        "0x{}",
+        hex::encode(signed_tx.tx.invocation.invoked_address.as_ref())
+    )
 }
 
 enum DevDetailRpcResponse {

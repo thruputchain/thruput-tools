@@ -10,6 +10,8 @@ use std::{
     time::Duration,
 };
 
+use groundhog_rpc_api_types::{ContractAddress, dev::DevAccount, hex::HexBytes};
+use groundhog_signing::LocalSigner;
 use serde::Deserialize;
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, BufReader},
@@ -45,6 +47,20 @@ pub struct HogdDevEndpoints {
     pub control: Option<SocketAddr>,
 }
 
+/// Public dev-account metadata advertised by hogd-dev readiness.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[non_exhaustive]
+pub struct HogdDevReadyAccount {
+    /// Deterministic dev-account index.
+    pub index: u32,
+    /// Wallet contract address bootstrapped by hogd-dev.
+    pub address: ContractAddress,
+    /// Ed25519 public key authorized by the wallet contract.
+    pub public_key: HexBytes,
+    /// Actual post-bootstrap storage-token balance advertised by hogd-dev.
+    pub storage_tokens: u64,
+}
+
 /// hogd-dev readiness payload.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[non_exhaustive]
@@ -55,6 +71,9 @@ pub struct HogdDevReadiness {
     pub network_id: String,
     /// x23 endpoints available after startup.
     pub endpoints: HogdDevEndpoints,
+    /// Public dev-account metadata advertised by hogd-dev.
+    #[serde(default)]
+    pub dev_accounts: Vec<HogdDevReadyAccount>,
 }
 
 impl HogdDevReadiness {
@@ -67,6 +86,33 @@ impl HogdDevReadiness {
             status: self.status,
         })
     }
+}
+
+/// Build RPC-facing dev accounts from hogd-dev readiness plus local signer derivation.
+pub fn build_dev_accounts(
+    readiness: &HogdDevReadiness,
+    config: &HogdDevConfig,
+) -> Result<Vec<DevAccount>, NodeSupervisorError> {
+    validate_dev_account_count(config.dev_account_count, readiness.dev_accounts.len())?;
+
+    readiness
+        .dev_accounts
+        .iter()
+        .enumerate()
+        .map(|(position, account)| {
+            validate_dev_account_index(position, account.index)?;
+            let signer =
+                groundhog_signing::derive_dev_account_signer(&config.dev_account_seed, position);
+            validate_dev_account_public_key(position, account, &signer)?;
+
+            Ok(DevAccount {
+                address: account.address,
+                public_key: account.public_key.clone(),
+                private_key: HexBytes(signer.to_keypair_bytes()[..32].to_vec()),
+                storage_tokens: account.storage_tokens,
+            })
+        })
+        .collect()
 }
 
 /// Running hogd-dev child process plus its parsed readiness metadata.
@@ -221,6 +267,12 @@ pub fn build_hogd_dev_spec(binary: impl AsRef<Path>, config: &HogdDevConfig) -> 
             OsString::from("0"),
             OsString::from("--readiness"),
             OsString::from("stdout"),
+            OsString::from("--dev-accounts"),
+            OsString::from(config.dev_account_count.to_string()),
+            OsString::from("--dev-account-seed"),
+            OsString::from(config.dev_account_seed.as_str()),
+            OsString::from("--dev-account-tokens"),
+            OsString::from(config.dev_account_tokens.to_string()),
         ])
         .stdout_piped()
         .stderr_piped();
@@ -275,6 +327,53 @@ pub fn parse_readiness_line(
         }
     })?;
     readiness.ensure_ready(program)
+}
+
+fn validate_dev_account_count(expected: usize, actual: usize) -> Result<(), NodeSupervisorError> {
+    if actual == expected {
+        return Ok(());
+    }
+    Err(NodeSupervisorError::DevAccountCountMismatch { expected, actual })
+}
+
+fn validate_dev_account_index(position: usize, actual: u32) -> Result<(), NodeSupervisorError> {
+    let expected = position;
+    if usize::try_from(actual).ok() == Some(expected) {
+        return Ok(());
+    }
+    Err(NodeSupervisorError::DevAccountIndexMismatch {
+        position,
+        expected,
+        actual,
+    })
+}
+
+fn validate_dev_account_public_key(
+    index: usize,
+    account: &HogdDevReadyAccount,
+    signer: &LocalSigner,
+) -> Result<(), NodeSupervisorError> {
+    let expected = signer.verifying_key_bytes();
+    let actual = account.public_key.0.as_slice();
+    if actual.len() != expected.len() {
+        return Err(NodeSupervisorError::DevAccountPublicKeyLength {
+            index,
+            actual: actual.len(),
+        });
+    }
+    if actual == expected.as_slice() {
+        return Ok(());
+    }
+
+    Err(NodeSupervisorError::DevAccountPublicKeyMismatch {
+        index,
+        expected: format_hex(&expected),
+        actual: format_hex(actual),
+    })
+}
+
+fn format_hex(bytes: &[u8]) -> String {
+    format!("0x{}", hex::encode(bytes))
 }
 
 fn validate_configured_binary(path: &Path) -> Result<PathBuf, NodeSupervisorError> {
@@ -594,8 +693,8 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        DEFAULT_HOGD_DEV_BINARY, HOGD_DEV_BINARY_ENV, HogdDevProcess, build_hogd_dev_spec,
-        parse_readiness_line, resolve_hogd_dev_binary,
+        DEFAULT_HOGD_DEV_BINARY, HOGD_DEV_BINARY_ENV, HogdDevProcess, build_dev_accounts,
+        build_hogd_dev_spec, parse_readiness_line, resolve_hogd_dev_binary,
     };
     use crate::{
         HogdDevConfig, NodeSupervisorError,
@@ -621,6 +720,12 @@ mod tests {
                 OsString::from("0"),
                 OsString::from("--readiness"),
                 OsString::from("stdout"),
+                OsString::from("--dev-accounts"),
+                OsString::from("10"),
+                OsString::from("--dev-account-seed"),
+                OsString::from("groundhog-dev-accounts"),
+                OsString::from("--dev-account-tokens"),
+                OsString::from("1000000000"),
             ]
         );
     }
@@ -671,6 +776,77 @@ mod tests {
         );
         assert_eq!(readiness.endpoints.read, None);
         assert_eq!(readiness.endpoints.control, None);
+    }
+
+    #[test]
+    fn readiness_line_parses_dev_accounts() {
+        let signer = groundhog_signing::derive_default_dev_account_signer(0);
+        let readiness = parse_readiness_line(
+            "hogd-dev",
+            &format!(
+                r#"{{"status":"ready","network_id":"groundhog-local","endpoints":{{"scheduler":"127.0.0.1:12345"}},"dev_accounts":[{{"index":0,"address":"0x{}","public_key":"0x{}","storage_tokens":1000000000}}]}}"#,
+                "11".repeat(32),
+                hex::encode(signer.verifying_key_bytes()),
+            ),
+        )
+        .expect("bug: readiness payload should parse");
+
+        let config = HogdDevConfig::default().with_dev_account_count(1);
+        let accounts = build_dev_accounts(&readiness, &config)
+            .expect("bug: matching readiness dev account should validate");
+
+        assert_eq!(readiness.dev_accounts.len(), 1);
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(
+            serde_json::to_value(accounts[0].address).expect("bug: address serializes"),
+            format!("0x{}", "11".repeat(32)),
+        );
+        assert_eq!(
+            accounts[0].public_key.0,
+            signer.verifying_key_bytes().to_vec()
+        );
+        assert_eq!(
+            accounts[0].private_key.0,
+            signer.to_keypair_bytes()[..32].to_vec()
+        );
+        assert_eq!(accounts[0].storage_tokens, 1_000_000_000);
+    }
+
+    #[test]
+    fn dev_account_count_mismatch_is_rejected() {
+        let readiness =
+            parse_readiness_line("hogd-dev", V1_READY).expect("bug: readiness payload parses");
+        let err = build_dev_accounts(&readiness, &HogdDevConfig::default())
+            .expect_err("bug: missing default dev accounts should fail validation");
+
+        assert!(matches!(
+            err,
+            NodeSupervisorError::DevAccountCountMismatch {
+                expected: 10,
+                actual: 0
+            }
+        ));
+    }
+
+    #[test]
+    fn dev_account_public_key_mismatch_is_rejected() {
+        let readiness = parse_readiness_line(
+            "hogd-dev",
+            &format!(
+                r#"{{"status":"ready","network_id":"groundhog-local","endpoints":{{"scheduler":"127.0.0.1:12345"}},"dev_accounts":[{{"index":0,"address":"0x{}","public_key":"0x{}","storage_tokens":1000000000}}]}}"#,
+                "11".repeat(32),
+                "22".repeat(32),
+            ),
+        )
+        .expect("bug: readiness payload should parse");
+        let config = HogdDevConfig::default().with_dev_account_count(1);
+        let err = build_dev_accounts(&readiness, &config)
+            .expect_err("bug: wrong readiness public key should fail validation");
+
+        assert!(matches!(
+            err,
+            NodeSupervisorError::DevAccountPublicKeyMismatch { index: 0, .. }
+        ));
     }
 
     #[test]

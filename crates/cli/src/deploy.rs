@@ -4,9 +4,8 @@ use groundhog_rpc_api_types::hex::HexBytes;
 use groundhog_rpc_api_types::receipt::TransactionReceipt;
 use groundhog_rpc_api_types::transaction::TxHash;
 use groundhog_signing::{
-    BuildDeployTransaction, DEFAULT_TX_GAS_LIMIT, SignTransactionParams, Signer,
-    WALLET_DEPLOY_ENTRYPOINT, build_deploy_transaction, derive_deploy_address, sign_transaction,
-    source_address_auth_claim,
+    BuildDeployTransaction, DEFAULT_TX_GAS_LIMIT, SignTransactionParams, WALLET_DEPLOY_ENTRYPOINT,
+    build_deploy_transaction, derive_deploy_address, sign_transaction, source_address_auth_claim,
 };
 use groundhog_xdr::types::ContractAddress;
 use groundhog_xdr::types::SHA256Hash;
@@ -14,6 +13,7 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use xdr_common::VecM;
 
+use crate::account_resolution::resolve_wallet_address;
 use crate::artifacts::ArtifactOptions;
 use crate::config::{resolve_default_key, resolve_profile};
 use crate::dev_detail::{fetch_transaction_detail_blocking, print_transaction_detail};
@@ -212,14 +212,8 @@ pub(crate) fn prepare_deploy(
     let wasm_bytes_len = wasm_bytes.len();
 
     // Build the deploy transaction — invokes the sender's wallet contract.
-    let pubkey = signer.public_key();
-    let account = groundhog_signing::PubkeyAccount::new(
-        pubkey,
-        groundhog_signing::DEFAULT_PUBKEY_ACCOUNT_NONCE,
-    );
-    let wallet_address = account
-        .address()
-        .map_err(|e| CliError::Other(e.to_string()))?;
+    let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
+    let wallet_address = resolve_wallet_address(rpc_url, &key_name, &signer, &rt)?;
 
     let contract = groundhog_xdr::contract::Contract::kWasmi {
         wasmi_contract: groundhog_xdr::contract::ContractBlob {
@@ -251,7 +245,6 @@ pub(crate) fn prepare_deploy(
 
     let entrypoint = groundhog_xdr::contract::ContractEntrypointID::from(WALLET_DEPLOY_ENTRYPOINT);
 
-    let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
     let block_expiry_height = rt.block_on(async { resolve_block_expiry_height(rpc_url).await })?;
 
     let tx = build_deploy_transaction(BuildDeployTransaction {

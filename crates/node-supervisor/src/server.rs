@@ -7,15 +7,17 @@
 
 use std::{future::Future, net::SocketAddr, process::ExitStatus};
 
-use groundhog_rpc_api::GroundhogApiServer;
+use groundhog_rpc_api::{GroundhogApiServer, GroundhogDevApiServer};
+use groundhog_rpc_api_types::dev::DevAccount;
 use groundhog_rpc_server::{GroundhogRpcServer, RpcServerConfig};
 use jsonrpsee::server::{RpcModule, Server, ServerHandle};
 use serde::Serialize;
 
 use crate::{
     HogdDevProcess, HogdDevReadiness, NodeSupervisorConfig, NodeSupervisorError,
-    block_driver::BlockDriverTask, read_backend::HogdDevReadBackend,
-    rpc_backend::HogdDevSchedulerBackend, stub_backend::StubBackend,
+    block_driver::BlockDriverTask, dev_control::SupervisorDevRpc, hogd_dev::build_dev_accounts,
+    read_backend::HogdDevReadBackend, rpc_backend::HogdDevSchedulerBackend,
+    stub_backend::StubBackend,
 };
 
 /// Why a [`NodeSupervisorHandle::stopped`] call returned.
@@ -123,7 +125,20 @@ impl NodeSupervisorHandle {
     pub async fn start(config: NodeSupervisorConfig) -> Result<Self, NodeSupervisorError> {
         let mut hogd = HogdDevProcess::start(&config.hogd_dev).await?;
 
-        match start_rpc_server(&config.rpc_listen_address, hogd.readiness()).await {
+        let dev_accounts = match build_dev_accounts(hogd.readiness(), &config.hogd_dev) {
+            Ok(accounts) => accounts,
+            Err(error) => {
+                if let Err(stop_err) = hogd.stop().await {
+                    tracing::warn!(
+                        error = %stop_err,
+                        "failed to stop hogd-dev after readiness validation error",
+                    );
+                }
+                return Err(error);
+            }
+        };
+
+        match start_rpc_server(&config.rpc_listen_address, hogd.readiness(), dev_accounts).await {
             Ok(started) => {
                 tracing::info!(rpc_addr = %started.addr, "node supervisor JSON-RPC ready");
                 Ok(Self {
@@ -268,6 +283,7 @@ impl NodeSupervisorHandle {
 async fn start_rpc_server(
     listen_address: &str,
     readiness: &HogdDevReadiness,
+    dev_accounts: Vec<DevAccount>,
 ) -> Result<StartedRpcServer, NodeSupervisorError> {
     let scheduler_backend = HogdDevSchedulerBackend::connect(readiness.endpoints.scheduler).await?;
     scheduler_backend.ensure_dev_genesis().await?;
@@ -280,6 +296,7 @@ async fn start_rpc_server(
             listen_address,
             scheduler_backend,
             read,
+            dev_accounts,
             BackendPlanes::hogd_dev_full(),
         )
         .await
@@ -293,6 +310,7 @@ async fn start_rpc_server(
             listen_address,
             scheduler_backend,
             StubBackend::new(),
+            dev_accounts,
             BackendPlanes::hogd_dev_scheduler_only(),
         )
         .await
@@ -303,6 +321,7 @@ async fn start_rpc_server_with_read<R>(
     listen_address: &str,
     scheduler_backend: HogdDevSchedulerBackend,
     read: R,
+    dev_accounts: Vec<DevAccount>,
     backend_planes: BackendPlanes,
 ) -> Result<StartedRpcServer, NodeSupervisorError>
 where
@@ -334,6 +353,11 @@ where
     module
         .merge(GroundhogApiServer::into_rpc(core_rpc))
         .expect("bug: rpc-server methods register without conflicts");
+    module
+        .merge(GroundhogDevApiServer::into_rpc(SupervisorDevRpc::new(
+            dev_accounts,
+        )))
+        .expect("bug: dev RPC methods register without conflicts");
 
     let rpc_handle = server.start(module);
     Ok(StartedRpcServer {
@@ -356,7 +380,7 @@ struct StartedRpcServer {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use groundhog_rpc_api::GroundhogApiClient;
+    use groundhog_rpc_api::{GroundhogApiClient, GroundhogDevApiClient};
     use groundhog_rpc_api_types::error::codes;
     use jsonrpsee::core::{ClientError, client::ClientT};
     use jsonrpsee::http_client::HttpClientBuilder;
@@ -514,6 +538,23 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         assert_eq!(
             serde_json::to_value(tx_hash).expect("bug: tx hash should serialize"),
             CANONICAL_HASH_VECTOR_TX_HASH_JSON
+        );
+
+        let accounts = client
+            .get_accounts()
+            .await
+            .expect("bug: getAccounts should return fake readiness accounts");
+        assert_eq!(accounts.len(), groundhog_signing::DEFAULT_DEV_ACCOUNT_COUNT);
+        assert_eq!(
+            accounts[0].public_key.0,
+            groundhog_signing::derive_default_dev_account_signer(0)
+                .verifying_key_bytes()
+                .to_vec()
+        );
+        assert_eq!(
+            accounts[0].private_key.0,
+            groundhog_signing::derive_default_dev_account_signer(0).to_keypair_bytes()[..32]
+                .to_vec(),
         );
 
         let err = client

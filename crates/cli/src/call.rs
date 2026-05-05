@@ -5,12 +5,13 @@ use groundhog_rpc_api_types::receipt::ExecStatus;
 use groundhog_rpc_api_types::receipt::TransactionReceipt;
 use groundhog_rpc_api_types::transaction::TxHash;
 use groundhog_signing::{
-    BuildCallTransaction, DEFAULT_TX_GAS_LIMIT, SignTransactionParams, Signer,
-    build_call_transaction, sign_transaction, source_address_auth_claim,
+    BuildCallTransaction, DEFAULT_TX_GAS_LIMIT, SignTransactionParams, build_call_transaction,
+    sign_transaction, source_address_auth_claim,
 };
 use groundhog_xdr::contract::ContractEntrypointID;
 use serde_json::json;
 
+use crate::account_resolution::resolve_wallet_address;
 use crate::artifacts::ArtifactOptions;
 use crate::build::{cargo_metadata_with_artifacts, resolve_package};
 use crate::codec::{
@@ -274,14 +275,7 @@ fn prepare_call_with_runtime(
     let resolved = resolve_call(&cwd, method, artifacts)?;
     let calldata = encode_args(args, resolved.metadata.as_ref())?;
 
-    let pubkey = signer.public_key();
-    let account = groundhog_signing::PubkeyAccount::new(
-        pubkey,
-        groundhog_signing::DEFAULT_PUBKEY_ACCOUNT_NONCE,
-    );
-    let wallet_address = account
-        .address()
-        .map_err(|e| CliError::Other(e.to_string()))?;
+    let wallet_address = resolve_wallet_address(rpc_url, &key_name, &signer, rt)?;
 
     let inner_invocation = xdrs::txs::encode(&(
         contract_address,

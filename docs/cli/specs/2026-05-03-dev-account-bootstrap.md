@@ -24,6 +24,30 @@ ed25519 signer keys. The supervisor must expose those accounts through the
 dev JSON-RPC surface so CLI commands and tooling can discover the same
 addresses the backend bootstrapped.
 
+## Scope: Per-Environment vs Universal
+
+Three slices of work live in PR 4e. Keep them separated when reasoning
+about reuse:
+
+| Slice | Lifetime | Reuse |
+|---|---|---|
+| Local orchestration: `--dev-accounts`, `dev-N` resolver, `groundhog_dev_getAccounts`, supervisor discovery glue. | Local-only. | Does not escape `groundhog node`. Replaced on testnet/mainnet by faucet UX or imported keys. |
+| Wallet contract + auth wiring: deploy + do_action + return-data forwarding under protocol-rs 0.10 source-address auth. | Universal. | The same wallet shape is what testnet faucets and mainnet onboarding flows would deploy. |
+| Bootstrap-artifact shape: `GenesisConfiguration` + vetted init batches + dev-wallet bytes/hash + public account metadata. | Universal. | Reusable for testnet/mainnet genesis tooling and for a future gateway+real-hogd simulation rig with different inputs. |
+
+PR 4e is mostly local-orchestration sugar wrapped around two
+universally-needed primitives (the wallet contract and the bootstrap
+artifact shape) that we have to build somewhere first. Local is the
+convenient "somewhere" because we own the whole world and can iterate
+fast. The universal slices surviving into testnet/mainnet/rig contexts
+is a benefit, not the design goal.
+
+Implication for the Rust code: the address-aware signer abstraction
+(CLI holds a key, signs against an address discovered from the backend)
+is universal and belongs on the general code paths. The `dev-N` resolver
+is local-only and should stay isolated behind the dev backend's RPC
+surface so testnet/mainnet flows do not branch on it.
+
 ## Key Findings
 
 The original draft assumed protocol-rs 0.10 source-address auth could replace
