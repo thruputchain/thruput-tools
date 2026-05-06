@@ -51,6 +51,18 @@ pub struct AdaptiveBatchConfig {
     pub ingress_queue_depth: usize,
 }
 
+impl AdaptiveBatchConfig {
+    /// Maximum number of backend RPCs this batcher can have in flight
+    /// at once: `shards × max_inflight_batches`.  Use this to size
+    /// transport-layer connection pools so that the batcher's own
+    /// `Overloaded` is the saturation signal, not transport queuing.
+    pub fn max_concurrent_rpcs(&self) -> usize {
+        self.shards
+            .max(1)
+            .saturating_mul(self.max_inflight_batches.max(1) as usize)
+    }
+}
+
 impl Default for AdaptiveBatchConfig {
     fn default() -> Self {
         Self {

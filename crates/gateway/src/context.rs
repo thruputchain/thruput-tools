@@ -96,9 +96,16 @@ impl GatewayContext {
             .await?,
         ));
 
+        let db_gateway_pool = db_gateway_pool_size(&config);
         let db_gateway = Arc::new(RwLock::new(match &config.db_gateway_address {
             Some(addr) => {
-                try_connect("db_gateway", addr, 4, DbGateway_DbGateway1_Client::new).await?
+                try_connect(
+                    "db_gateway",
+                    addr,
+                    db_gateway_pool,
+                    DbGateway_DbGateway1_Client::new,
+                )
+                .await?
             }
             None => None,
         }));
@@ -128,11 +135,19 @@ impl GatewayContext {
 /// Slack covers ad-hoc calls (`lookup_transactions`, `pending_transaction_count`).
 fn scheduler_pool_size(config: &GatewayConfig) -> usize {
     const SLACK: usize = 4;
-    let batcher = config
-        .batch
-        .shards
-        .max(1)
-        .saturating_mul(config.batch.max_inflight_batches.max(1) as usize);
     let tip = config.tip.max_inflight_tips.max(1) as usize;
-    batcher.saturating_add(tip).saturating_add(SLACK)
+    config
+        .batch
+        .max_concurrent_rpcs()
+        .saturating_add(tip)
+        .saturating_add(SLACK)
+}
+
+/// Pick a `db_gateway` pool size that matches the storage batcher's own
+/// in-flight cap, so the batcher's `Overloaded` is the saturation
+/// signal rather than transport-layer queuing.  Slack covers transient
+/// reconnection overlap; no ad-hoc reads share this pool today.
+fn db_gateway_pool_size(config: &GatewayConfig) -> usize {
+    const SLACK: usize = 2;
+    config.storage.max_concurrent_rpcs().saturating_add(SLACK)
 }

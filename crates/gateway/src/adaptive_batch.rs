@@ -157,12 +157,20 @@ impl<I: Send + 'static> AdaptiveBatcher<I> {
         self.shards.len()
     }
 
-    /// Try to enqueue one item on `shard_idx`.  Returns `Overloaded`
-    /// when the shard's ingress channel is full;
-    /// `BackendUnavailable` if the channel has been closed (the shard
-    /// task exited).
+    /// Try to enqueue one item on `shard_idx`.  Returns
+    /// `BackendUnavailable` if `shard_idx >= n_shards()` (programming
+    /// error in the caller — surfaced rather than panicked) or if the
+    /// shard channel has been closed (shard task exited);
+    /// `Overloaded` when the shard's ingress channel is full.
     pub(crate) fn try_send(&self, item: I, shard_idx: usize) -> Result<(), GatewayError> {
-        self.shards[shard_idx].try_send(item).map_err(|e| match e {
+        let Some(sender) = self.shards.get(shard_idx) else {
+            return Err(GatewayError::BackendUnavailable(format!(
+                "{} shard index {shard_idx} out of range (n_shards={})",
+                self.name,
+                self.shards.len(),
+            )));
+        };
+        sender.try_send(item).map_err(|e| match e {
             mpsc::error::TrySendError::Full(_) => GatewayError::Overloaded(format!(
                 "gateway {} ingress queue full (shard {shard_idx})",
                 self.name
