@@ -1,7 +1,8 @@
 # Dev-Account Bootstrap Spec
 
 **Date:** 2026-05-03
-**Status:** Draft implementation contract for PR 4e.
+**Status:** PR 4e implementation contract. Code shipped. Published-SDK
+scaffold compatibility was verified on 2026-05-07 with `sdk = 0.14.0`.
 
 **Companion to:**
 
@@ -387,9 +388,9 @@ account-count overrides become useful during smoke testing.
 ## Acceptance
 
 The real-binary smoke on 2026-05-04 verified the Rust/supervisor path against a
-hogd-dev branch. A follow-up smoke on 2026-05-05 with a temporary counter
-project pointed at the current local `sdk_rs` checkout verified the
-protocol-current contract path:
+hogd-dev branch. The 2026-05-07 smoke verified the same default local loop
+against a published SDK crate from a fresh `groundhog new` scaffold using
+`sdk = 0.14.0`:
 
 1. `groundhog node --hogd-dev-binary <path>` starts and bootstraps 10 dev
    accounts.
@@ -402,13 +403,8 @@ protocol-current contract path:
 5. The read plane still returns receipts/events through hogd-dev's indexer.
 6. The block driver still coalesces ordinary submits and advances `chainTip`.
 
-Two smoke caveats remain outside the dev-account bootstrap shape:
+One smoke caveat remains outside the dev-account bootstrap shape:
 
-- The current `groundhog new` template still pins `sdk = 0.11.4`; that version
-  deploys but local-node calls fail against the protocol-current hogd-dev path.
-  Published `sdk = 0.13.0` is also not usable because its `raw_Return` ABI does
-  not match its published `groundhog-xdr` dependency. Bump the template after
-  the protocol-current SDK release is available in the registry.
 - Transaction receipts currently omit call return data, so `groundhog call get`
   can commit successfully while reporting `return_value: null`. Return-data
   surfacing should be tracked separately from account bootstrap.

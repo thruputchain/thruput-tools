@@ -1,9 +1,9 @@
 # Local Node Hogd-Dev Supervisor Implementation Plan
 
 **Date:** 2026-04-29
-**Status:** PRs 1–4d and the backend plane-status hoist shipped on the Rust
-supervisor side. The remaining default local-loop blocker is
-dev-wallet/genesis/auth bootstrap. PR 5 ahead.
+**Status:** PRs 1–4f and the backend plane-status hoist shipped across the
+Rust supervisor and hogd-dev path. Published-SDK scaffold compatibility was
+verified on 2026-05-07 against `sdk = 0.14.0`. PR 5 follows.
 
 **Companion to:**
 
@@ -484,8 +484,12 @@ dev-wallet/genesis/auth bootstrap, tracked as PR 4e below.
 
 ### PR 4e - Dev-Wallet/Genesis/Auth Bootstrap
 
-**Status:** Design phase. Blocks the default CLI local loop. Implementation
-contract: [`../specs/2026-05-03-dev-account-bootstrap.md`](../specs/2026-05-03-dev-account-bootstrap.md).
+**Status:** Shipped. Implementation contract:
+[`../specs/2026-05-03-dev-account-bootstrap.md`](../specs/2026-05-03-dev-account-bootstrap.md).
+The process path is live through hogd-dev startup, dev-account discovery,
+submit, block production, read/indexer receipt polling, and deploy. The
+remaining default-loop gap is the published SDK/template compatibility tracked
+in PR 4f below.
 
 The current supervisor genesis is empty. The legacy native-exec dev node used
 an in-process shortcut: install dev-wallet WASM at each `dev-N` pubkey-derived
@@ -515,7 +519,7 @@ Weight candidate shapes by:
 - whether the same data can feed hogd-dev and a future real-process rig;
 - minimal special cases in gateway and public JSON-RPC paths.
 
-Chosen direction for PR 4e, pending hogd/protocol owner sign-off:
+Shipped direction for PR 4e:
 
 - Define a hogd-owned bootstrap profile/artifact: `GenesisConfiguration`, vetted
   initialization transaction batches, dev-wallet contract bytes/hash, and public
@@ -566,9 +570,51 @@ unless we explicitly revive it behind a separate internal feature after the SDK
 
 #### Acceptance
 
-Do not treat the hogd-dev local-node path as complete until the real-binary
-smoke reaches:
+The PR4 hogd-dev local-node path is solid once the real-binary smoke reaches
+the normal user loop against a published SDK crate:
 `groundhog new` -> `build` -> `deploy` -> receipt -> `call`.
+
+Post-merge smoke on 2026-05-05 showed:
+
+- a fresh hogd-dev rebuild starts with matching protocol
+  `hogp/830b7810ee93`;
+- `groundhog node --hogd-dev-binary <path> --json` advertises submit and chain
+  as `scheduler` and read as `indexer`;
+- `groundhog_dev_getAccounts` returns deterministic wallet metadata;
+- `groundhog deploy` signed as `dev-0` commits and is visible through the read
+  plane;
+- the current `groundhog new` template still pins `sdk = 0.11.4`, which
+  deploys but produces deterministic call failures against current hogd-dev;
+- latest published `sdk = 0.13.0` is not a viable replacement because its
+  syscall ABI does not compile under normal dependency resolution when Cargo
+  selects published `groundhog-xdr 0.9.4`.
+
+A local `sdk_rs` checkout is useful to diagnose the contract path only after it
+has been bumped to the same protocol crates as hogd-dev. As of the 2026-05-06
+recheck, the local checkout resolves `groundhog-xdr 0.10.1`
+(`hogp/500463c1d97f`), so it is still behind the current hogd-dev protocol
+`hogp/830b7810ee93` unless locally patched.
+
+### PR 4f - Published SDK / Scaffold Compatibility
+
+**Status:** Shipped. Verified on 2026-05-07.
+
+Goal: make the default local loop work from a fresh scaffold without path or git
+dependency overrides.
+
+Shipped work:
+
+- published a protocol-current SDK crate family whose syscall ABI matches the
+  current hogd-dev protocol and built-contract path;
+- updated the `groundhog new` template from `sdk = 0.11.4` to that published
+  crate;
+- used exact pins in the SDK crate set so Cargo does not float
+  protocol/XDR crates across incompatible syscall ABI boundaries;
+- reran the real-binary smoke from a fresh scaffold:
+  `groundhog new` -> `build` -> `node` -> `deploy` -> receipt -> `call`
+  (`initialize`, `increment`, `decrement`, `get`);
+- kept call return-data surfacing as a separate follow-up because it does not
+  block committed calls.
 
 ### Typed Submit Follow-Up
 
@@ -610,7 +656,7 @@ Rollout order:
 
 ### PR 5 - Dev Control and Local Loop Completion
 
-Once hogd-dev can cover the current local development loop:
+After PR 4f proved the published-SDK scaffold loop against hogd-dev:
 
 - hoist the reusable dev-control server/backend wiring into
   `groundhog-rpc-server`, now that there is a second consumer;
@@ -652,36 +698,26 @@ end-to-end or be explicitly removed/deferred from the public local-node promise.
    The shared transport-wiring helper now lives in `crates/x23-transport`.
 2. Is `getStorageAt` required for hogd-dev local-loop completion, or should it be
    explicitly deferred from the first hogd-dev local-node milestone?
-3. Confirm whether local dev account addresses may be hogd-deployed wallet
+3. ~~Confirm whether local dev account addresses may be hogd-deployed wallet
    addresses rather than pubkey-derived addresses. If not, PR 4e must start
-   with the explicit arbitrary-address bootstrap surface.
-4. Choose the exact home for the current-protocol dev-wallet contract bytes
-   used by the bootstrap artifact.
+   with the explicit arbitrary-address bootstrap surface.~~
+   **Resolved 2026-05-05:** local dev accounts use hogd-deployed wallet
+   addresses advertised through readiness and `groundhog_dev_getAccounts`.
+4. ~~Choose the exact home for the current-protocol dev-wallet contract bytes
+   used by the bootstrap artifact.~~
+   **Resolved 2026-05-05:** the dev-wallet contract lives under hogd's
+   `built_contracts/integration_test_contracts/dev_wallet` pipeline and is
+   embedded as `built_contracts/dev_wallet.h`.
 
 ## Recommended Next Action
 
-PR 4d's Rust-side block driver is shipped. Settle dev-wallet
-genesis/bootstrap shape before promising the default CLI local loop against
-hogd-dev.
+PR 4f is green. The next step is PR 5 dev-control work.
 
 Concrete next steps:
 
-1. Use the real-binary smoke result as the handoff point for bootstrap work:
-   submits wake nominate/commit and `chainTip` advances, while `dev-0` deploys
-   still need dev-wallet auth/bootstrap support before receipts appear.
-2. Confirm the PR 4e spec's account model with hogd/protocol owners:
-   deterministic signer keys plus hogd-deployed wallet addresses, reported
-   through readiness and `groundhog_dev_getAccounts`.
-3. Add hogd-side bootstrap work: current-protocol dev wallet, bootstrap artifact
-   builder/profile, init-batch pumping, readiness account metadata, and smoke
-   coverage for bootstrap -> valid dev deploy submit -> commit -> indexer
-   receipt.
-4. Add the groundhog-rpc consumer PR: request the bootstrap profile, expose the
-   resulting accounts through `groundhog_dev_getAccounts`, update CLI
-   dev-key/address resolution with no pubkey-derived fallback, and keep the
-   block driver as the local single-node coordination policy.
-5. After dev-wallet bootstrap lands, rerun the normal local loop:
-   `groundhog new` -> `build` -> `deploy` -> receipt -> `call`.
-6. Typed submit stays deferred until this real local-node path is proven end to
+1. Start PR 5 dev-control work.
+2. Keep call return-data surfacing as a separate follow-up from account
+   bootstrap.
+3. Typed submit stays deferred until this real local-node path is proven end to
    end; otherwise we risk designing the typed-submit shape against incomplete
    topology assumptions.
