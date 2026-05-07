@@ -166,6 +166,63 @@ Maintenance rules:
   - [x] PR 4c — read RPC (receipts, events, composite status) on the
     Rust supervisor side (#44); end-to-end coverage gated on hogd-dev
     v1 advertising the indexer endpoint
+  - [x] PR 4d — supervisor block driver: local single-node nomination and
+    commit after accepted submits (#47)
+  - [x] PR 4e — dev-account bootstrap: hogd-dev wallet/bootstrap profile,
+    readiness account metadata, `groundhog_dev_getAccounts`, and CLI
+    `dev-N` wallet-address resolution
+  - [x] PR 4f — published SDK/scaffold compatibility: fresh `groundhog new`
+    builds and completes deploy/call against a registry SDK crate matching
+    the current hogd-dev protocol.
+
+    Verified on 2026-05-07 after publishing `sdk = "0.14.0"`. The fresh
+    scaffold resolves `groundhog-xdr = 0.12.0` and `hogexec-internal = 0.12.0`,
+    matching the current hogd-dev protocol. Each `groundhog-xdr` crate stamps a
+    `PROTOCOL_VERSION`:
+
+    | source                                      | xdr                  | protocol            |
+    | ------------------------------------------- | -------------------- | ------------------- |
+    | sdk 0.11.4 (template default)               | 0.7.11               | `hogp/cff5b0b2fc94` |
+    | sdk 0.13.0 (latest published, intended)     | 0.9.3                | `hogp/e4a1ca88f0ca` |
+    | sdk 0.13.0 (normal fresh resolution today)  | 0.9.4                | `hogp/850287355957` |
+    | sdk_rs HEAD path checkout (0.14.0)          | 0.10.1               | `hogp/500463c1d97f` |
+    | sdk 0.14.0 (published, template default)    | 0.12.0               | `hogp/830b7810ee93` |
+    | hogd-dev / groundhog-rpc current protocol   | 0.12.0               | `hogp/830b7810ee93` |
+
+    The protocol hash is the first 12 chars of the `protocol/`
+    submodule git commit baked into hogd at build time
+    (`hogd/version.h::protocol_commit`); `groundhog-xdr` crate releases
+    track the same submodule, so the `xdr` column is what an SDK
+    consumer pulls, but the binary's hash comes from the C++ side, not
+    from any Rust dep version.
+
+    Two historical failure modes were entangled and are now separated:
+
+    1. *Registry float break.* sdk 0.13.0 declares `groundhog-xdr ^0.9.3`,
+       but xdr 0.9.4 made `sys::raw_Return` a 3-arg call. A scaffold
+       bumped to `sdk = "0.13.0"` resolves to xdr 0.9.4 and fails to
+       compile with "this function takes 3 arguments but 2 arguments were
+       supplied." Future SDK publishes should pin xdr with `=` to prevent
+       this class of break.
+    2. *Protocol skew.* Even sdk 0.13.0's xdr 0.9.3 protocol
+       (`hogp/e4a1ca88f0ca`) doesn't match the running hogd-dev
+       (`hogp/830b7810ee93`). A WASM compiled against the wrong
+       protocol deploys cleanly but every call reverts with
+       `deterministicError {kind: "unknown"}` and no further detail
+       (`groundhog_dev_getTransactionDetail` is still a hogd-dev stub).
+       That protocol skew is resolved for default scaffolds by the `sdk 0.14.0`
+       publish and template bump.
+
+    Follow-ups:
+
+    1. The CLI should fail fast at deploy time when the SDK protocol stamped on
+       the artifact differs from the protocol the running node advertises in
+       readiness, instead of letting calls revert with a generic deterministic
+       error.
+    2. Optional but useful: a scaffold-time `--sdk-path` or a documented
+       `[patch]` recipe so internal contributors can iterate against a sibling
+       sdk_rs checkout without waiting on a republish.
+
   - [ ] PR 5 — dev control + native-exec retirement
 
 ### Phase 3
@@ -305,13 +362,13 @@ Goal: eliminate dependency on a remote network for the main inner loop.
 ### Deliverables
 
 1. **Dev backend in the RPC gateway**
-   - Shipped as a standalone `dev-node` crate implementing the same RPC
-     interface as the real service.
-   - Backed by the SDK/native executor.
+   - Retired as the long-term path. The native-exec `dev-node` prototype is
+     reference material; the durable backend is hogd-dev supervised by
+     `groundhog-node-supervisor`.
 
 2. **Local node command**
-   - Shipped as `groundhog node` behind the `dev-node` feature.
-   - Keep the UX aligned with the standalone dev node rather than reviving
+   - Shipped as `groundhog node` around a hogd-dev subprocess.
+   - Keep the UX aligned with the durable local-node path rather than reviving
      an older gateway `--dev` plan.
 
 3. **Core local-node features**
@@ -329,6 +386,8 @@ Goal: eliminate dependency on a remote network for the main inner loop.
 ### Exit Criteria
 
 - `deploy` and `call` work unchanged against local and remote RPC URLs.
+- The default local loop works from a fresh scaffold against a published SDK
+  crate, not only against a local SDK checkout.
 - A developer can build, test, deploy, and iterate offline.
 - The node and the test environment share the same execution semantics.
 
