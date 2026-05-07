@@ -328,7 +328,7 @@ pub struct ViewRequest {
 
 pub struct ViewResponse {
     pub output:     RootInvocationOutput,
-    pub events:     Vec<EmittedEvent>,       // events emitted under read-only semantics
+    pub events:     Vec<EmittedEvent>,       // ephemeral view events, if retained in v1
     pub height:     BlockHeight,             // height the read executed against
 }
 ```
@@ -382,10 +382,12 @@ Adding this method touches the shared Rust RPC surface:
   `ContractAddress`) surface as JSON-RPC `invalid params` (-32602)
   before any execution begins. Abort and abort-buffer bytes must reach
   the client; routing them through error envelopes loses the bytes.
-- Events emitted by the invocation are surfaced in `ViewResponse.events`
-  per hogexec's existing read-only behavior. This is wallet-preview
-  critical (showing "this swap will emit Transfer and Swap") and
-  consistent with NEAR/Sui returning logs/events from view-style calls.
+- If retained in v1, `ViewResponse.events` requires explicit hogd
+  view-mode event recording. Current `InvokeFlag::ReadOnly` behavior
+  appears to reject `log_event`, so this is not inherited for free from
+  the existing read-only primitive. The DX reason remains strong:
+  wallet previews need to show "this swap will emit Transfer and Swap,"
+  and NEAR/Sui return logs/events from view-style calls.
 
 ### Supervisor Behavior When View Endpoint Is Absent
 
@@ -432,14 +434,17 @@ hogexec already has read-only invocation semantics:
 - `InvokeFlag::ReadOnly` exists on subinvocations.
 - `SystemCallHandler::is_read_only()` reads the active frame's flag.
 - Nested invocations inherit read-only behavior.
-- `read_only_test.cc` covers rejected storage writes, event emission,
-  native token mutation, deployment behavior, and propagation.
+- `read_only_test.cc` covers read-only enforcement for storage writes,
+  event emission, native token mutation, deployment behavior, and
+  propagation.
 
 But top-level `ExecutionMode` is currently only `kProposing` or
 `kValidating`, and root transaction invocations have no `InvokeFlag`.
 The hogd lift for view is therefore to promote an existing per-frame
-primitive into a top-level service entry point. It is not a new
-read-only semantics design from scratch.
+primitive into a top-level service entry point. However, event emission
+appears to be rejected today under `InvokeFlag::ReadOnly`; if
+`ViewResponse.events` remains in v1, hogd must explicitly add ephemeral
+view-event recording while still rejecting state mutation.
 
 Recommendation: implement a dedicated service-level view endpoint. The
 hogexec test-FFI path can inform the implementation, but should not be
@@ -502,10 +507,11 @@ as a category.
 
 For most wallet-preview workflows, Milestone B is sufficient: the wallet
 simulates the inner contract call with `caller = <its own wallet
-address>`, and the target contract's behavior - including events and
-return value - is identical to what a real `do_action` subinvocation
-would observe. The only thing missing is the wallet's own outer-frame
-business logic.
+address>`, and the target contract's return/abort behavior is identical
+to what a real `do_action` subinvocation would observe. If v1 includes
+ephemeral view events, the target contract's emitted events should match
+as well. The only thing missing is the wallet's own outer-frame business
+logic.
 
 Supporting full `do_action` simulation requires a skip-auth or
 simulated-auth mode in the executor. That is security-relevant: if such
@@ -514,10 +520,21 @@ transactions be committed. If a future milestone delivers it, it should
 be a separate executor entry point with its own service endpoint, not
 smuggled into this view RPC.
 
+### Milestone B Hogd Questions
+
+Ryan/hogd needs to decide:
+
+- Should `groundhog_view` surface emitted events? Current read-only
+  frames appear to reject `log_event`; if events are required, does hogd
+  add distinct view-mode event recording, or defer `ViewResponse.events`
+  from v1?
+- If view events are retained, are events emitted before abort/fault/gas
+  exhaustion included in the successful `ViewResponse`?
+
 ### Milestone B Implementation Order
 
 1. hogd/protocol design sign-off for the view endpoint shape and caller
-   semantics.
+   semantics, including the v1 event-emission decision.
 2. hogd implementation: top-level read-only execution entry point using
    latest committed state, optional caller context, gas cap, and root
    output response.
@@ -559,9 +576,10 @@ smuggled into this view RPC.
 
 ### View RPC
 
-- Read-only method returns bytes, events, and height.
+- Read-only method returns bytes and height; if view events are retained
+  in v1, it also returns emitted events.
 - Abort response is returned as RPC success with raw abort output and
-  any events emitted before the abort.
+  any retained events emitted before the abort.
 - Fault response is returned as RPC success with the `Fault` variant.
 - Root-frame `get_msg_sender` view with `caller = None` fails normally.
 - The same method with `caller = Some(addr)` observes that address as
@@ -569,11 +587,11 @@ smuggled into this view RPC.
 - Direct state write in view is rejected with the same syscall error as
   a read-only frame in production.
 - Nested subcall write in view is rejected.
-- Event emission in view follows read-only semantics; emitted events
-  appear in `ViewResponse.events`.
+- If v1 retains view events, event emission uses explicit view-mode
+  event recording and appears in `ViewResponse.events`.
 - Gas cap is enforced and surfaces as
-  `ViewResponse.output = Fault` (RPC success), with any events emitted
-  before exhaustion present in `ViewResponse.events`.
+  `ViewResponse.output = Fault` (RPC success), with any retained events
+  emitted before exhaustion present in `ViewResponse.events`.
 - View execution sees a single snapshot: a contemporaneous commit on a
   parallel chain-driver path does not change the state observed by an
   in-flight view, and `ViewResponse.height` matches the snapshot the
