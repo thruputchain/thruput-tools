@@ -72,9 +72,10 @@ Implementation status:
   ships, shares execution semantics with the SDK/native executor, retains
   transaction detail, exposes events, and supports latest-state storage
   reads through `groundhog_getStorageAt`.
-- The current native-exec local-node backend is prototype infrastructure,
-  not the durable backend contract. The durable direction is a Rust
-  supervisor (`groundhog-node-supervisor`) around a hogd-owned `hogd-dev`
+- The legacy native-exec local-node backend (`crates/dev-node`) was
+  retired in PR 5 once hogd-dev proved out the published-SDK scaffold
+  loop. The durable backend is a Rust supervisor
+  (`groundhog-node-supervisor`) around a hogd-owned `hogd-dev`
   subprocess; see `docs/cli/2026-04-25-hogd-dev-node-hybrid.md` and
   `docs/cli/plans/2026-04-29-local-node-hogd-dev-supervisor.md`.
 - The no-key-required call dry-run / inspect split now has a draft design
@@ -375,9 +376,10 @@ Goal: eliminate dependency on a remote network for the main inner loop.
 ### Deliverables
 
 1. **Dev backend in the RPC gateway**
-   - Retired as the long-term path. The native-exec `dev-node` prototype is
-     reference material; the durable backend is hogd-dev supervised by
-     `groundhog-node-supervisor`.
+   - Retired as the long-term path. The native-exec `dev-node` prototype was
+     deleted in PR 5; the durable backend is hogd-dev supervised by
+     `groundhog-node-supervisor`. The git history retains the prototype
+     source for any future reference.
 
 2. **Local node command**
    - Shipped as `groundhog node` around a hogd-dev subprocess.

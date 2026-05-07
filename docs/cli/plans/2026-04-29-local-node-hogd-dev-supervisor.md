@@ -30,12 +30,13 @@ Create a fresh Rust crate, `crates/node-supervisor`
 for `groundhog node`.
 
 Use "local node" for the user-facing product shape, not for the crate name.
-The crate is the supervisor; naming it that avoids confusion with the legacy
-`crates/dev-node` prototype and with "the local node" as the running system.
+The crate is the supervisor; naming it that avoids confusion with "the local
+node" as the running system. The legacy `crates/dev-node` native-exec
+prototype was removed from the tree in PR 5.
 
-The durable backend target is a hogd-owned `hogd-dev` subprocess. The current
-`crates/dev-node` native-exec path should be treated as legacy prototype code
-and reference material, not as a supported long-term backend family.
+The durable backend target is a hogd-owned `hogd-dev` subprocess. The
+native-exec path was treated as legacy prototype code through PR 4 and
+deleted once hogd-dev proved out the published-SDK scaffold loop.
 
 The supervisor crate should own Rust-side lifecycle concerns:
 
@@ -153,9 +154,8 @@ crates/node-supervisor
   src/server.rs          # JSON-RPC facade startup and handle
 ```
 
-`crates/dev-node` remains in the tree as reference material for the retired
-native-exec prototype. It is not a workspace member and is not wired into the
-CLI path.
+The legacy `crates/dev-node` native-exec prototype was deleted in PR 5.
+The git history retains the prototype source for any future reference.
 
 ## Hogd-Dev Process Contract
 
@@ -566,11 +566,10 @@ actions should use `kSourceAddressAuthData { allowed_keys: 0x01,
 required_weight: 1 }` rather than the old invoked-address-signature claim.
 `groundhog-rpc` updates the hogd-dev supervisor, JSON-RPC validator, CLI
 signing, and gateway-facing protocol crates to 0.10. The legacy native-exec
-dev-node remains pinned to SDK/native-exec 0.13 and protocol-rs 0.9.x in the
-published registry, so it has been removed from the workspace and is no longer
-wired into `groundhog node`. Keep `crates/dev-node/` only as reference material
-unless we explicitly revive it behind a separate internal feature after the SDK
-0.14 crate family is published.
+dev-node was pinned to SDK/native-exec 0.13 and protocol-rs 0.9.x; it was
+removed from the workspace at PR 4f and the source tree was deleted in PR 5.
+The git history retains the prototype source if it is ever needed for
+reference.
 
 #### Acceptance
 
@@ -660,27 +659,48 @@ Rollout order:
 
 ### PR 5 - Dev Control and Local Loop Completion
 
-After PR 4f proved the published-SDK scaffold loop against hogd-dev:
+After PR 4f proved the published-SDK scaffold loop against hogd-dev,
+PR 5 finishes the local-loop story. Work splits into Rust-only slices
+that can land independently and hogd-dev-side slices owned by the same
+person; neither requires changes inside the broader hogd codebase
+(`hogexec`, `hogdb`, `indexer`), which is why this remains separable
+from the cross-team read-DX track.
 
-- hoist the reusable dev-control server/backend wiring into
-  `groundhog-rpc-server`, now that there is a second consumer;
-- keep the PR 4e supervisor-owned `groundhog_dev_getAccounts` path intact and
-  add the remaining `groundhog_dev_*` methods against hogd-dev control/read
-  APIs;
-- add reset and transaction detail support. `getTransactionDetail` should
-  cover dev-only debug data (per-frame info, traces, gas breakdown) and
-  should not duplicate fields that
-  [`../specs/2026-05-07-view-rpc-and-receipt-return-data.md`](../specs/2026-05-07-view-rpc-and-receipt-return-data.md)
-  Milestone A places on the public `TransactionReceipt` (`return_data`,
-  `abort_data`). Once Milestone A lands, the dev method's surface should
-  shrink, not grow;
-- snapshot/revert/time travel are not required for local-loop completion unless
-  product requirements change;
-- keep the native-exec prototype out of the `groundhog node` build.
+**Rust-only slices:**
 
-PR 5 is Rust-only and has no hogd protocol dependency. It runs in
-parallel with the cross-team read-DX track described in the spec linked
-above.
+- Delete `crates/dev-node` entirely. The dev-wallet source there is a
+  stale duplicate of the canonical wallet that now lives in hogd at
+  `built_contracts/integration_test_contracts/dev_wallet`; the Rust
+  workspace consumes the deployed wallet by address and the entrypoint
+  constants in `crates/signing/src/build.rs` and `crates/cli/src/call.rs`,
+  not the contract source. Native-exec retirement is finished once the
+  tree is gone.
+- Defer hoisting `dev_control` plumbing into `groundhog-rpc-server`
+  until a second consumer actually exists. Today only node-supervisor
+  mounts `SupervisorDevRpc`; the gateway should not expose
+  `groundhog_dev_*`. Hoisting prematurely creates churn without a
+  payoff. Reassess after the hogd-dev control endpoint lands.
+
+**Hogd-dev-only slices (same-owner, no broader hogd team gate):**
+
+- Add a control endpoint to hogd-dev's readiness so the supervisor can
+  consume reset and transaction-detail RPCs. `HogdDevEndpoints.control`
+  on the Rust side already exists as `Option<SocketAddr>` with
+  `serde(default)`; today it always deserializes to `None`.
+- Implement `groundhog_dev_reset` against the new control endpoint.
+  Reset wipes the in-memory chain state and re-applies the bootstrap
+  artifact; it is local-dev only.
+- Implement `groundhog_dev_getTransactionDetail`. Cover dev-only debug
+  data (per-frame info, traces, gas breakdown) and explicitly do not
+  duplicate fields that the read-DX spec's Milestone A places on the
+  public `TransactionReceipt` (`return_data`, `abort_data`). Once
+  Milestone A lands, this method's surface shrinks, not grows.
+
+**Out of scope for PR 5:**
+
+- Snapshot/revert/time travel.
+- Any change to `hogexec`, `hogdb`, `indexer`, or other broader hogd
+  components. Those go through the read-DX spec.
 
 Hogd-dev local-loop completion requires the normal local development loop used
 by the CLI docs: start node, list deterministic dev accounts, deploy,
@@ -727,9 +747,11 @@ end-to-end or be explicitly removed/deferred from the public local-node promise.
 
 PR 4f is green. Two parallel tracks are now open.
 
-**Rust track (this plan):**
+**This plan (PR 5):**
 
-1. Start PR 5 dev-control work. Rust-only, no hogd protocol dependency.
+1. Start PR 5 dev-control work. Splits into Rust-only slices (this
+   workspace) and hogd-dev-only slices (same owner, no broader hogd
+   team gate). Does not touch `hogexec`, `hogdb`, or `indexer`.
 
 **Cross-team read-DX track (separate spec):**
 
