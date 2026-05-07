@@ -31,7 +31,7 @@ The motivating CLI loop:
 groundhog new my-counter && cd my-counter
 groundhog build
 groundhog node          # in another terminal
-groundhog deploy        # writes alias counter -> address
+groundhog deploy        # writes alias my-counter -> address
 groundhog call my-counter increment
 groundhog view my-counter get   # -> 1
 ```
@@ -365,14 +365,23 @@ Adding this method touches the shared Rust RPC surface:
 - Execution uses hogexec's read-only semantics: state-modifying syscalls
   are rejected; writes are not silently executed and discarded.
 - Gas accounting runs as in production under a server-configured view gas
-  cap, but no gas is charged.
+  cap, but no gas is charged. Gas-cap exhaustion is a deterministic
+  execution outcome: it surfaces as `RootInvocationOutput::Fault` with
+  any pre-exhaustion events in `ViewResponse.events`, not as a JSON-RPC
+  error. This mirrors how `ExecResult::ExecResultTxDeterministicError`
+  flows through the receipt path on the commit side.
+- View execution is pinned to a single committed snapshot for its full
+  duration. `ViewResponse.height` is the height of that snapshot. A
+  view that races a new block sees only the snapshot it started on;
+  it does not observe newer state mid-execution.
 - Return shape mirrors root invocation output: `Return`, `Abort`, or
-  `Fault`.
-- `Abort` and `Fault` are returned as RPC success with the appropriate
-  output variant. Only transport-level failures, gas-cap exhaustion at
-  the service boundary, and invariant violations surface as JSON-RPC
-  errors. Abort buffers must reach the client; routing them through
-  error envelopes loses the bytes.
+  `Fault`. All three are RPC success responses carrying the response
+  body. Only transport-level failures and invariant violations surface
+  as JSON-RPC errors. Request validation failures (e.g. `entrypoint`
+  not exactly 8 bytes, malformed hex, contract address not a valid
+  `ContractAddress`) surface as JSON-RPC `invalid params` (-32602)
+  before any execution begins. Abort and abort-buffer bytes must reach
+  the client; routing them through error envelopes loses the bytes.
 - Events emitted by the invocation are surfaced in `ViewResponse.events`
   per hogexec's existing read-only behavior. This is wallet-preview
   critical (showing "this swap will emit Transfer and Swap") and
@@ -562,7 +571,16 @@ smuggled into this view RPC.
 - Nested subcall write in view is rejected.
 - Event emission in view follows read-only semantics; emitted events
   appear in `ViewResponse.events`.
-- Gas cap is enforced and reported as a deterministic view failure.
+- Gas cap is enforced and surfaces as
+  `ViewResponse.output = Fault` (RPC success), with any events emitted
+  before exhaustion present in `ViewResponse.events`.
+- View execution sees a single snapshot: a contemporaneous commit on a
+  parallel chain-driver path does not change the state observed by an
+  in-flight view, and `ViewResponse.height` matches the snapshot the
+  view actually executed against.
+- Request validation: `entrypoint` not exactly 8 bytes, malformed hex,
+  or invalid `ContractAddress` returns JSON-RPC `invalid params`
+  before execution.
 - `--from dev-N` resolves through `groundhog_dev_getAccounts` only on
   local dev endpoints; off-dev endpoints surface a clear error.
 - Supervisor conformance: when hogd-dev readiness omits the view

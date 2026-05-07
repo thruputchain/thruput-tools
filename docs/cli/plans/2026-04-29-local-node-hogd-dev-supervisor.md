@@ -744,6 +744,6 @@ PR 4f is green. Two parallel tracks are now open.
 
 **Continued deferrals:**
 
-3. Typed submit stays deferred until this real local-node path is proven end to
+1. Typed submit stays deferred until this real local-node path is proven end to
    end; otherwise we risk designing the typed-submit shape against incomplete
    topology assumptions.
