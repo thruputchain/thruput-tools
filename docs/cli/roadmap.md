@@ -77,8 +77,11 @@ Implementation status:
   supervisor (`groundhog-node-supervisor`) around a hogd-owned `hogd-dev`
   subprocess; see `docs/cli/2026-04-25-hogd-dev-node-hybrid.md` and
   `docs/cli/plans/2026-04-29-local-node-hogd-dev-supervisor.md`.
-- Still intentionally deferred: a no-key-required call dry-run / inspect
-  split, richer storage-cost reporting, and `groundhog inspect`.
+- The no-key-required call dry-run / inspect split now has a draft design
+  in [`specs/2026-05-07-view-rpc-and-receipt-return-data.md`](specs/2026-05-07-view-rpc-and-receipt-return-data.md);
+  it runs as a parallel cross-team track to PR 5 (see Phase 2 tracker).
+- Still intentionally deferred: richer storage-cost reporting and
+  `groundhog inspect`.
 
 ## Execution Tracker
 
@@ -224,6 +227,16 @@ Maintenance rules:
        sdk_rs checkout without waiting on a republish.
 
   - [ ] PR 5 — dev control + native-exec retirement
+  - [ ] Read DX follow-ups (parallel track to PR 5; cross-team).
+    See [`specs/2026-05-07-view-rpc-and-receipt-return-data.md`](specs/2026-05-07-view-rpc-and-receipt-return-data.md).
+    Closes the "no-key-required call dry-run / inspect split" deferred item
+    below and the "Keep call return-data surfacing as a separate follow-up"
+    note in the supervisor PR plan.
+    - [ ] Milestone A — receipt return data and abort data on
+      `TransactionReceipt`. Requires hogd `TxEventLog` extension and
+      indexer migration; Rust mapping waits on protocol-rs publish.
+    - [ ] Milestone B — `groundhog_view` RPC and `groundhog view` CLI
+      command. Requires hogd top-level read-only execution entry point.
 
 ### Phase 3
 
@@ -445,13 +458,34 @@ but the contract-spec work in Phase 1 should preserve a clean path to it.
 
 ## Immediate Next Steps
 
-The next concrete batch should continue Phase 3 testing DX:
+Two parallel tracks are open after PR 4f:
+
+**Rust track (no hogd dependency):**
+
+1. PR 5 — supervisor dev-control completion + native-exec retirement.
+   See `docs/cli/plans/2026-04-29-local-node-hogd-dev-supervisor.md` PR 5.
+
+**Cross-team track (driven by hogd / protocol-rs):**
+
+2. Read DX follow-ups per
+   [`specs/2026-05-07-view-rpc-and-receipt-return-data.md`](specs/2026-05-07-view-rpc-and-receipt-return-data.md).
+   - Milestone A: receipt return-data + abort-data. Hogd protocol design
+     and indexer migration come first; Rust mapping follows protocol-rs
+     publish.
+   - Milestone B: `groundhog_view` RPC. Hogd top-level read-only
+     execution entry point first; Rust + CLI follow.
+
+After either or both tracks close, the next batch should continue Phase 3
+testing DX:
 
 1. Add `groundhog test --integration` on top of the local dev node:
    - start a local node
    - deploy the target contract
    - run integration tests against its RPC URL
-   - clean up unless persistence is requested
+   - clean up unless persistence is requested.
+   This becomes materially better once Milestone B lands, since
+   integration assertions can use `groundhog view` instead of submitting
+   txs.
 2. Add better test output controls:
    - human verbosity levels
    - optional machine-readable output

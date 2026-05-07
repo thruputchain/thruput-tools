@@ -18,6 +18,10 @@ verified on 2026-05-07 against `sdk = 0.14.0`. PR 5 follows.
   - dev-account bootstrap implementation contract for PR 4e: hogd-owned
     bootstrap artifact/profile, deterministic signer metadata, wallet-address
     readiness, and the Rust supervisor/CLI consumer work.
+- [`../specs/2026-05-07-view-rpc-and-receipt-return-data.md`](../specs/2026-05-07-view-rpc-and-receipt-return-data.md)
+  - read DX follow-ups (receipt return-data + view RPC) running as a
+    parallel cross-team track to PR 5. Rust scaffolding waits on
+    hogd/protocol design sign-off and protocol-rs publication.
 
 ## Goal
 
@@ -663,10 +667,20 @@ After PR 4f proved the published-SDK scaffold loop against hogd-dev:
 - keep the PR 4e supervisor-owned `groundhog_dev_getAccounts` path intact and
   add the remaining `groundhog_dev_*` methods against hogd-dev control/read
   APIs;
-- add reset and transaction detail support;
+- add reset and transaction detail support. `getTransactionDetail` should
+  cover dev-only debug data (per-frame info, traces, gas breakdown) and
+  should not duplicate fields that
+  [`../specs/2026-05-07-view-rpc-and-receipt-return-data.md`](../specs/2026-05-07-view-rpc-and-receipt-return-data.md)
+  Milestone A places on the public `TransactionReceipt` (`return_data`,
+  `abort_data`). Once Milestone A lands, the dev method's surface should
+  shrink, not grow;
 - snapshot/revert/time travel are not required for local-loop completion unless
   product requirements change;
 - keep the native-exec prototype out of the `groundhog node` build.
+
+PR 5 is Rust-only and has no hogd protocol dependency. It runs in
+parallel with the cross-team read-DX track described in the spec linked
+above.
 
 Hogd-dev local-loop completion requires the normal local development loop used
 by the CLI docs: start node, list deterministic dev accounts, deploy,
@@ -711,13 +725,25 @@ end-to-end or be explicitly removed/deferred from the public local-node promise.
 
 ## Recommended Next Action
 
-PR 4f is green. The next step is PR 5 dev-control work.
+PR 4f is green. Two parallel tracks are now open.
 
-Concrete next steps:
+**Rust track (this plan):**
 
-1. Start PR 5 dev-control work.
-2. Keep call return-data surfacing as a separate follow-up from account
-   bootstrap.
+1. Start PR 5 dev-control work. Rust-only, no hogd protocol dependency.
+
+**Cross-team read-DX track (separate spec):**
+
+2. Send
+   [`../specs/2026-05-07-view-rpc-and-receipt-return-data.md`](../specs/2026-05-07-view-rpc-and-receipt-return-data.md)
+   to Geoff/Ryan for hogd-side design sign-off on Milestone A
+   (`TxEventLog` root output + indexer migration) and Milestone B
+   (top-level read-only execution endpoint). Rust-side scaffolding for
+   either milestone waits on hogd implementation and protocol-rs
+   publication; this avoids the protocol-skew rework cost the workspace
+   has paid before.
+
+**Continued deferrals:**
+
 3. Typed submit stays deferred until this real local-node path is proven end to
    end; otherwise we risk designing the typed-submit shape against incomplete
    topology assumptions.
