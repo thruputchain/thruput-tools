@@ -41,8 +41,8 @@ Workspace crates in `crates/`:
   reduced contract). End-to-end coverage of the read plane is gated on
   the hogd-dev v1 binary actually exposing the indexer endpoint with
   full event-feed wiring. This is the only CLI local-node backend; the
-  legacy native-exec prototype source is retained outside the workspace for
-  reference only.
+  legacy native-exec prototype (`crates/dev-node`) was deleted in PR 5,
+  with the git history retaining the source for any future reference.
 - **e2e-tests** — ignored process-level JSON-RPC lifecycle smoke tests.
 - **bench** — benchmark harnesses.
 

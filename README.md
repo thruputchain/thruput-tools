@@ -34,9 +34,9 @@ For the experimental local dev node:
 cargo run -p groundhog-cli --features dev-node -- node
 ```
 
-`groundhog node` now uses the hogd-dev supervisor path. The legacy
-`native_exec` prototype source remains in `crates/dev-node/` for reference but
-is no longer part of the workspace or CLI feature.
+`groundhog node` uses the hogd-dev supervisor path. The legacy
+`native_exec` prototype (`crates/dev-node`) was deleted in PR 5; the
+git history retains the source for any future reference.
 
 Or install the CLI with experimental local dev-node support:
 

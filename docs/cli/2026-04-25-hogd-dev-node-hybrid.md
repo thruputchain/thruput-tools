@@ -1,7 +1,12 @@
 # Hogd-Owned Hybrid Dev Node
 
 **Date:** 2026-04-25
-**Status:** Design proposal, not a decision.
+**Status:** Decision accepted. PRs 1-4f shipped the supervisor and
+hogd-dev path; PR 5 deleted the legacy `crates/dev-node` source tree.
+References below to "the dev-node" and `crates/dev-node` describe the
+historical native-exec prototype that motivated this design and have
+been retained for context. The current local-node implementation lives
+in `crates/node-supervisor` around a hogd-owned `hogd-dev` subprocess.
 
 **Companion to:**
 - [`plans/2026-04-29-local-node-hogd-dev-supervisor.md`](plans/2026-04-29-local-node-hogd-dev-supervisor.md)
