@@ -40,7 +40,7 @@ use xdr_common::VecM;
 
 use crate::{NodeSupervisorError, rpc_backend::HogdDevSchedulerBackend};
 
-const INDEXER_POOL_SIZE: usize = 2;
+const HOGD_DEV_POOL_SIZE: usize = 2;
 const TOPIC_SIZE: usize = 32;
 const MAX_TOPICS: u32 = 3;
 
@@ -76,7 +76,7 @@ impl HogdDevReadBackend {
         let indexer = connect(
             "hogd-dev indexer",
             &endpoint.to_string(),
-            INDEXER_POOL_SIZE,
+            HOGD_DEV_POOL_SIZE,
             IndexerBlockExplorer_IndexerBlockExplorer1_Client::new,
         )
         .await
@@ -102,43 +102,39 @@ impl HogdDevReadBackend {
             });
         }
 
-        let db_gateway = match gateway_endpoint {
-            Some(gateway_endpoint) => {
-                tracing::debug!(%gateway_endpoint, "connecting to hogd-dev DbGateway");
-                let client = connect(
-                    "hogd-dev DbGateway",
-                    &gateway_endpoint.to_string(),
-                    INDEXER_POOL_SIZE,
-                    DbGateway_DbGateway1_Client::new,
-                )
-                .await
-                .map_err(|source| NodeSupervisorError::DbGatewayConnect {
-                    endpoint: gateway_endpoint,
-                    source,
-                })?;
+        let db_gateway = if let Some(gateway_endpoint) = gateway_endpoint {
+            tracing::debug!(%gateway_endpoint, "connecting to hogd-dev DbGateway");
+            let client = connect(
+                "hogd-dev DbGateway",
+                &gateway_endpoint.to_string(),
+                HOGD_DEV_POOL_SIZE,
+                DbGateway_DbGateway1_Client::new,
+            )
+            .await
+            .map_err(|source| NodeSupervisorError::DbGatewayConnect {
+                endpoint: gateway_endpoint,
+                source,
+            })?;
 
-                let protocol: DbGatewayProtocol =
-                    xdr_common::StringM(PROTOCOL_VERSION.as_bytes().to_vec());
-                let intro_outcome = client.dbgateway_intro(&protocol).await.map_err(|e| {
-                    NodeSupervisorError::DbGatewayRpc {
-                        op: "dbgateway_intro",
-                        error: e.to_string(),
-                    }
-                })?;
-                if intro_outcome != DbGatewayIntroOutcome::DbGatewayIntroSuccess {
-                    return Err(NodeSupervisorError::DbGatewayIntroRejected {
-                        outcome: intro_outcome.0,
-                    });
+            let protocol: DbGatewayProtocol =
+                xdr_common::StringM(PROTOCOL_VERSION.as_bytes().to_vec());
+            let intro_outcome = client.dbgateway_intro(&protocol).await.map_err(|e| {
+                NodeSupervisorError::DbGatewayRpc {
+                    op: "dbgateway_intro",
+                    error: e.to_string(),
                 }
-                Some(client)
+            })?;
+            if intro_outcome != DbGatewayIntroOutcome::DbGatewayIntroSuccess {
+                return Err(NodeSupervisorError::DbGatewayIntroRejected {
+                    outcome: intro_outcome.0,
+                });
             }
-            None => {
-                tracing::warn!(
-                    "hogd-dev did not advertise a gateway endpoint; getStorageAt returns \
-                     NotImplemented"
-                );
-                None
-            }
+            Some(client)
+        } else {
+            tracing::warn!(
+                "hogd-dev did not advertise a gateway endpoint; getStorageAt is unavailable"
+            );
+            None
         };
 
         Ok(Self {
@@ -305,7 +301,10 @@ impl ReadPlane for HogdDevReadBackend {
     }
 
     /// Latest-state storage read.
-    #[tracing::instrument(skip_all, fields(?address))]
+    ///
+    /// Returns the hogd-dev `DbGateway1` snapshot block height whether the
+    /// item is present or absent, matching the public gateway contract.
+    #[tracing::instrument(skip_all, fields(?address, ?key))]
     async fn get_storage_at(
         &self,
         address: ContractAddress,
@@ -314,7 +313,7 @@ impl ReadPlane for HogdDevReadBackend {
         let db_gateway = self
             .db_gateway
             .as_ref()
-            .ok_or_else(|| RpcServerError::NotImplemented("getStorageAt".into()))?;
+            .ok_or_else(|| RpcServerError::BackendUnavailable("db_gateway not connected".into()))?;
         let batch: AddressAndKeyBatch = VecM(vec![AddressAndKey {
             address: address.0,
             key: StorageKey::ContractData {
@@ -347,6 +346,8 @@ impl ReadPlane for HogdDevReadBackend {
                 "hogd-dev DbGateway response had fewer items than the batch".into(),
             )
         })?;
+        // `payload.block_height` is the freshness boundary for the whole
+        // batch, including kRPCNotFound item misses.
         match item {
             DbGatewayItemResult::kRPCNone { item } => Ok(StorageItemRead {
                 block_height: payload.block_height,
@@ -456,6 +457,11 @@ mod tests {
     use std::{collections::HashMap, net::SocketAddr, time::Duration};
 
     use async_trait::async_trait;
+    use groundhog_db_gateway::{
+        AddressAndKeyBatch, DbGateway_DbGateway1, DbGateway_DbGateway1_Client,
+        DbGateway_DbGateway1_Dispatcher, DbGatewayIntroOutcome, DbGatewayItemResult,
+        DbGatewayPayload, DbGatewayResult, Protocol as DbGatewayProtocol, RPCError,
+    };
     use groundhog_indexer::{
         BlockHeight as IdxBlockHeight, EventPage as IdxEventPage,
         IdentifiedEvent as IdxIdentifiedEvent, IndexerBlockExplorer_IndexerBlockExplorer1,
@@ -465,9 +471,10 @@ mod tests {
     };
     use groundhog_rpc_api_types::{
         events::EventQuery,
+        hex::Hex0x,
         transaction::{TransactionStatus, TxHash},
     };
-    use groundhog_rpc_server::ReadPlane;
+    use groundhog_rpc_server::{ReadPlane, RpcServerError};
     use groundhog_scheduler::{
         BlockID, CoordinatorRegistrationOutcome, DbSchedResult, GenesisConfiguration, Invocation,
         Nomination, OptSignedTransactionBatch, ParallelSignedTransactionBatch,
@@ -482,6 +489,7 @@ mod tests {
     use groundhog_xdr::{
         event::TxEmittedEvent,
         exec_result::ExecResult,
+        storage_item::WireStorageItem,
         transaction::SignedTransactionHash,
         types::{ContractAddress, SHA256Hash},
     };
@@ -501,6 +509,9 @@ mod tests {
     const CANNED_HEIGHT_A: i64 = 5;
     const CANNED_HEIGHT_B: i64 = 10;
     const CANNED_EVENT_CURSOR: &[u8] = b"cursor-page-2";
+    const CANNED_STORAGE_KEY: [u8; 32] = [0x42u8; 32];
+    const CANNED_STORAGE_VALUE: &[u8] = b"local-node-storage";
+    const CANNED_STORAGE_HEIGHT: i64 = 12;
 
     // -----------------------------------------------------------------------
     // Fake scheduler
@@ -838,6 +849,99 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // Fake DbGateway
+    // -----------------------------------------------------------------------
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum FakeDbGatewayMode {
+        Found,
+        NotFound,
+        RpcFail,
+        OuterDefault,
+        EmptyPayload,
+        ItemDefaultError,
+    }
+
+    struct FakeDbGateway {
+        mode: FakeDbGatewayMode,
+    }
+
+    #[async_trait]
+    impl DbGateway_DbGateway1 for FakeDbGateway {
+        async fn dbgateway_intro(
+            &self,
+            _arg0: DbGatewayProtocol,
+        ) -> Result<DbGatewayIntroOutcome, ProgramError> {
+            Ok(DbGatewayIntroOutcome::DbGatewayIntroSuccess)
+        }
+
+        async fn dbgateway_get_items(
+            &self,
+            _arg0: AddressAndKeyBatch,
+        ) -> Result<DbGatewayResult, ProgramError> {
+            match self.mode {
+                FakeDbGatewayMode::Found => Ok(DbGatewayResult::kRPCNone {
+                    payload: DbGatewayPayload {
+                        block_height: IdxBlockHeight::from(CANNED_STORAGE_HEIGHT),
+                        items: VecM(vec![DbGatewayItemResult::kRPCNone {
+                            item: WireStorageItem::kItemTypeBytestring {
+                                bytestring: BytesM(CANNED_STORAGE_VALUE.to_vec()),
+                            },
+                        }]),
+                    },
+                }),
+                FakeDbGatewayMode::NotFound => Ok(DbGatewayResult::kRPCNone {
+                    payload: DbGatewayPayload {
+                        block_height: IdxBlockHeight::from(CANNED_STORAGE_HEIGHT),
+                        items: VecM(vec![DbGatewayItemResult::Default {
+                            error: RPCError::kRPCNotFound.0,
+                        }]),
+                    },
+                }),
+                FakeDbGatewayMode::RpcFail => Err(ProgramError::msg("fake DbGateway rpc-fail")),
+                FakeDbGatewayMode::OuterDefault => Ok(DbGatewayResult::Default {
+                    error: RPCError::kRPCUnrecoverable.0,
+                }),
+                FakeDbGatewayMode::EmptyPayload => Ok(DbGatewayResult::kRPCNone {
+                    payload: DbGatewayPayload {
+                        block_height: IdxBlockHeight::from(CANNED_STORAGE_HEIGHT),
+                        items: VecM(vec![]),
+                    },
+                }),
+                FakeDbGatewayMode::ItemDefaultError => Ok(DbGatewayResult::kRPCNone {
+                    payload: DbGatewayPayload {
+                        block_height: IdxBlockHeight::from(CANNED_STORAGE_HEIGHT),
+                        items: VecM(vec![DbGatewayItemResult::Default {
+                            error: RPCError::kRPCUnrecoverable.0,
+                        }]),
+                    },
+                }),
+            }
+        }
+    }
+
+    async fn start_fake_db_gateway(
+        mode: FakeDbGatewayMode,
+    ) -> (
+        SocketAddr,
+        tokio::task::JoinHandle<Result<(), std::io::Error>>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bug: test DbGateway should bind");
+        let addr = listener
+            .local_addr()
+            .expect("bug: test DbGateway should have local addr");
+        let mut services = ServiceMap::new();
+        services.add_service(Box::new(DbGateway_DbGateway1_Dispatcher::new(Box::new(
+            FakeDbGateway { mode },
+        ))));
+        let server = RpcServer::new(listener, services);
+        let handle = server.start().await;
+        (addr, handle)
+    }
+
+    // -----------------------------------------------------------------------
     // Test helpers
     // -----------------------------------------------------------------------
 
@@ -863,6 +967,16 @@ mod tests {
         IndexerBlockExplorer_IndexerBlockExplorer1_Client::new(pool)
     }
 
+    async fn make_db_gateway_client(addr: SocketAddr) -> DbGateway_DbGateway1_Client {
+        use std::sync::Arc;
+        let pool = Arc::new(
+            FixedSerialPool::connect(&addr, 1)
+                .await
+                .expect("bug: test DbGateway client should connect"),
+        );
+        DbGateway_DbGateway1_Client::new(pool)
+    }
+
     async fn make_read_backend(
         indexer_addr: SocketAddr,
         scheduler_addr: SocketAddr,
@@ -876,8 +990,27 @@ mod tests {
         }
     }
 
+    async fn make_read_backend_with_gateway(
+        indexer_addr: SocketAddr,
+        scheduler_addr: SocketAddr,
+        db_gateway_addr: SocketAddr,
+    ) -> HogdDevReadBackend {
+        let indexer = make_indexer_client(indexer_addr).await;
+        let scheduler = make_scheduler_client(scheduler_addr).await;
+        let db_gateway = make_db_gateway_client(db_gateway_addr).await;
+        HogdDevReadBackend {
+            indexer,
+            db_gateway: Some(db_gateway),
+            scheduler,
+        }
+    }
+
     fn canned_tx_hash(bytes: [u8; 32]) -> TxHash {
         TxHash(groundhog_rpc_api_types::hex::Hex0x(SHA256Hash::from(bytes)))
+    }
+
+    fn canned_storage_address() -> groundhog_rpc_api_types::ContractAddress {
+        Hex0x(ContractAddress::from([0u8; 32]))
     }
 
     fn empty_event_query() -> EventQuery {
@@ -967,6 +1100,157 @@ mod tests {
                 Err(groundhog_rpc_server::RpcServerError::BackendUnavailable(_))
             ),
             "indexer rpc-fail should surface BackendUnavailable, got {result:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // get_storage_at tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn get_storage_at_without_gateway_surfaces_backend_unavailable() {
+        // Arrange
+        let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
+        let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
+        let backend = make_read_backend(idx_addr, sched_addr).await;
+
+        // Act
+        let result = backend
+            .get_storage_at(canned_storage_address(), CANNED_STORAGE_KEY)
+            .await;
+
+        // Assert
+        assert!(
+            matches!(result, Err(RpcServerError::BackendUnavailable(_))),
+            "missing DbGateway should be BackendUnavailable, got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_storage_at_found_returns_item_with_snapshot_height() {
+        // Arrange
+        let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
+        let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
+        let (gateway_addr, _gateway) = start_fake_db_gateway(FakeDbGatewayMode::Found).await;
+        let backend = make_read_backend_with_gateway(idx_addr, sched_addr, gateway_addr).await;
+
+        // Act
+        let read = backend
+            .get_storage_at(canned_storage_address(), CANNED_STORAGE_KEY)
+            .await
+            .expect("bug: storage read should succeed");
+
+        // Assert
+        assert_eq!(*read.block_height, CANNED_STORAGE_HEIGHT);
+        let item = read.item.expect("bug: canned key should return an item");
+        let item_json = serde_json::to_value(item).expect("bug: storage item should serialize");
+        assert_eq!(item_json["kind"], "bytestring");
+        assert_eq!(
+            item_json["bytes"],
+            format!("0x{}", hex::encode(CANNED_STORAGE_VALUE))
+        );
+    }
+
+    #[tokio::test]
+    async fn get_storage_at_not_found_returns_none_with_snapshot_height() {
+        // Arrange
+        let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
+        let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
+        let (gateway_addr, _gateway) = start_fake_db_gateway(FakeDbGatewayMode::NotFound).await;
+        let backend = make_read_backend_with_gateway(idx_addr, sched_addr, gateway_addr).await;
+
+        // Act
+        let read = backend
+            .get_storage_at(canned_storage_address(), CANNED_STORAGE_KEY)
+            .await
+            .expect("bug: storage miss should still succeed");
+
+        // Assert
+        assert_eq!(*read.block_height, CANNED_STORAGE_HEIGHT);
+        assert!(
+            read.item.is_none(),
+            "kRPCNotFound should map to an absent storage item"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_storage_at_gateway_rpc_fail_surfaces_backend_unavailable() {
+        // Arrange
+        let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
+        let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
+        let (gateway_addr, _gateway) = start_fake_db_gateway(FakeDbGatewayMode::RpcFail).await;
+        let backend = make_read_backend_with_gateway(idx_addr, sched_addr, gateway_addr).await;
+
+        // Act
+        let result = backend
+            .get_storage_at(canned_storage_address(), CANNED_STORAGE_KEY)
+            .await;
+
+        // Assert
+        assert!(
+            matches!(result, Err(RpcServerError::BackendUnavailable(_))),
+            "DbGateway RPC failure should be BackendUnavailable, got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_storage_at_outer_default_surfaces_backend_unavailable() {
+        // Arrange
+        let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
+        let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
+        let (gateway_addr, _gateway) = start_fake_db_gateway(FakeDbGatewayMode::OuterDefault).await;
+        let backend = make_read_backend_with_gateway(idx_addr, sched_addr, gateway_addr).await;
+
+        // Act
+        let result = backend
+            .get_storage_at(canned_storage_address(), CANNED_STORAGE_KEY)
+            .await;
+
+        // Assert
+        assert!(
+            matches!(result, Err(RpcServerError::BackendUnavailable(_))),
+            "outer Default should be BackendUnavailable, got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_storage_at_empty_payload_surfaces_backend_unavailable() {
+        // Arrange
+        let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
+        let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
+        let (gateway_addr, _gateway) = start_fake_db_gateway(FakeDbGatewayMode::EmptyPayload).await;
+        let backend = make_read_backend_with_gateway(idx_addr, sched_addr, gateway_addr).await;
+
+        // Act
+        let result = backend
+            .get_storage_at(canned_storage_address(), CANNED_STORAGE_KEY)
+            .await;
+
+        // Assert
+        assert!(
+            matches!(result, Err(RpcServerError::BackendUnavailable(_))),
+            "empty payload should be BackendUnavailable, got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_storage_at_item_default_error_surfaces_backend_unavailable() {
+        // Arrange
+        let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
+        let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
+        let (gateway_addr, _gateway) =
+            start_fake_db_gateway(FakeDbGatewayMode::ItemDefaultError).await;
+        let backend = make_read_backend_with_gateway(idx_addr, sched_addr, gateway_addr).await;
+
+        // Act
+        let result = backend
+            .get_storage_at(canned_storage_address(), CANNED_STORAGE_KEY)
+            .await;
+
+        // Assert
+        assert!(
+            matches!(result, Err(RpcServerError::BackendUnavailable(_))),
+            "per-item non-not-found Default should be BackendUnavailable, got {result:?}"
         );
     }
 

@@ -974,6 +974,12 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     const CANNED_HASH_UNKNOWN_HEX: &str =
         "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
     const CANNED_HEIGHT_A: i64 = 5;
+    const CANNED_STORAGE_KEY_HEX: &str =
+        "0x4242424242424242424242424242424242424242424242424242424242424242";
+    const CANNED_STORAGE_MISSING_KEY_HEX: &str =
+        "0x4343434343434343434343434343434343434343434343434343434343434343";
+    const CANNED_STORAGE_VALUE_HEX: &str = "0x6c6f63616c2d6e6f64652d73746f72616765";
+    const CANNED_STORAGE_HEIGHT: i64 = 12;
 
     #[tokio::test]
     #[serial]
@@ -1187,7 +1193,8 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
     #[tokio::test]
     #[serial]
-    async fn get_storage_at_returns_item_from_hogd_dev_gateway() {
+    async fn get_storage_at_existing_key_returns_item_from_hogd_dev_gateway() {
+        // Arrange
         let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "ready-with-indexer");
         let hogd = HogdDevConfig::default()
             .with_binary_path(fake_hogd_dev_binary())
@@ -1205,21 +1212,100 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             .build(&url)
             .expect("bug: jsonrpsee http client builds");
         let address = format!("0x{}", "00".repeat(32));
-        let key = format!("0x{}", "42".repeat(32));
 
+        // Act
         let read: serde_json::Value = client
             .request(
                 "groundhog_getStorageAt",
-                jsonrpsee::rpc_params![address, key],
+                jsonrpsee::rpc_params![address, CANNED_STORAGE_KEY_HEX],
             )
             .await
             .expect("bug: getStorageAt should succeed");
 
-        assert_eq!(read["blockHeight"], 12);
+        // Assert
+        assert_eq!(read["blockHeight"], CANNED_STORAGE_HEIGHT);
         assert_eq!(read["item"]["kind"], "bytestring");
-        assert_eq!(
-            read["item"]["bytes"],
-            "0x6c6f63616c2d6e6f64652d73746f72616765"
+        assert_eq!(read["item"]["bytes"], CANNED_STORAGE_VALUE_HEX);
+
+        handle.stop().await.expect("bug: clean shutdown");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn get_storage_at_missing_key_returns_null_item_with_snapshot_height() {
+        // Arrange
+        let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "ready-with-indexer");
+        let hogd = HogdDevConfig::default()
+            .with_binary_path(fake_hogd_dev_binary())
+            .with_startup_timeout(Duration::from_secs(5))
+            .with_shutdown_grace(Duration::from_secs(2));
+        let config = NodeSupervisorConfig::default()
+            .with_rpc_listen_address("127.0.0.1:0")
+            .with_hogd_dev(hogd);
+        let handle = NodeSupervisorHandle::start(config)
+            .await
+            .expect("bug: supervisor should start");
+        let url = format!("http://{}", handle.rpc_addr());
+
+        let client = HttpClientBuilder::default()
+            .build(&url)
+            .expect("bug: jsonrpsee http client builds");
+        let address = format!("0x{}", "00".repeat(32));
+
+        // Act
+        let read: serde_json::Value = client
+            .request(
+                "groundhog_getStorageAt",
+                jsonrpsee::rpc_params![address, CANNED_STORAGE_MISSING_KEY_HEX],
+            )
+            .await
+            .expect("bug: getStorageAt miss should succeed");
+
+        // Assert
+        assert_eq!(read["blockHeight"], CANNED_STORAGE_HEIGHT);
+        assert!(
+            read["item"].is_null(),
+            "missing storage item should serialize as null"
+        );
+
+        handle.stop().await.expect("bug: clean shutdown");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn get_storage_at_without_gateway_endpoint_returns_backend_unavailable() {
+        // Arrange
+        let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "ready-with-indexer-no-gateway");
+        let hogd = HogdDevConfig::default()
+            .with_binary_path(fake_hogd_dev_binary())
+            .with_startup_timeout(Duration::from_secs(5))
+            .with_shutdown_grace(Duration::from_secs(2));
+        let config = NodeSupervisorConfig::default()
+            .with_rpc_listen_address("127.0.0.1:0")
+            .with_hogd_dev(hogd);
+        let handle = NodeSupervisorHandle::start(config)
+            .await
+            .expect("bug: supervisor should start");
+        let url = format!("http://{}", handle.rpc_addr());
+
+        let client = HttpClientBuilder::default()
+            .build(&url)
+            .expect("bug: jsonrpsee http client builds");
+        let address = format!("0x{}", "00".repeat(32));
+
+        // Act
+        let err = client
+            .request::<serde_json::Value, _>(
+                "groundhog_getStorageAt",
+                jsonrpsee::rpc_params![address, CANNED_STORAGE_KEY_HEX],
+            )
+            .await
+            .expect_err("bug: missing DbGateway should fail");
+
+        // Assert
+        assert!(
+            matches!(&err, ClientError::Call(object) if object.code() == codes::BACKEND_UNAVAILABLE),
+            "expected BACKEND_UNAVAILABLE JSON-RPC error, got {err:?}",
         );
 
         handle.stop().await.expect("bug: clean shutdown");
@@ -1253,6 +1339,45 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
                 }
             ),
             "expected IndexerRpc error for intro, got {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn start_rolls_back_hogd_dev_when_db_gateway_connect_fails() {
+        let err = start_fake_supervisor_expect_error("db-gateway-connect-fail").await;
+
+        assert!(
+            matches!(err, NodeSupervisorError::DbGatewayConnect { .. }),
+            "expected DbGatewayConnect error, got {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn start_rolls_back_hogd_dev_when_db_gateway_rpc_fail_at_startup() {
+        let err = start_fake_supervisor_expect_error("db-gateway-rpc-fail").await;
+
+        assert!(
+            matches!(
+                err,
+                NodeSupervisorError::DbGatewayRpc {
+                    op: "dbgateway_intro",
+                    ..
+                }
+            ),
+            "expected DbGatewayRpc error for intro, got {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn start_rolls_back_hogd_dev_when_db_gateway_intro_rejected() {
+        let err = start_fake_supervisor_expect_error("db-gateway-intro-rejected").await;
+
+        assert!(
+            matches!(err, NodeSupervisorError::DbGatewayIntroRejected { .. }),
+            "expected DbGatewayIntroRejected error, got {err:?}",
         );
     }
 

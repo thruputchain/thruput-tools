@@ -744,8 +744,11 @@ because hogd-dev already exposes the underlying `DbGateway1` surface.
    x23 client crates over `rpc_driver`, matching gateway. See
    [`../specs/2026-04-29-node-supervisor-x23-client-boundary.md`](../specs/2026-04-29-node-supervisor-x23-client-boundary.md).
    The shared transport-wiring helper now lives in `crates/x23-transport`.
-2. Is `getStorageAt` required for hogd-dev local-loop completion, or should it be
-   explicitly deferred from the first hogd-dev local-node milestone?
+2. ~~Is `getStorageAt` required for hogd-dev local-loop completion, or should it be
+   explicitly deferred from the first hogd-dev local-node milestone?~~
+   **Resolved 2026-05-07:** local-node `groundhog_getStorageAt` parity is the
+   first concrete post-bootstrap gap and is handled by wiring hogd-dev's
+   `gateway` / `DbGateway1` endpoint into the supervisor read backend.
 3. ~~Confirm whether local dev account addresses may be hogd-deployed wallet
    addresses rather than pubkey-derived addresses. If not, PR 4e must start
    with the explicit arbitrary-address bootstrap surface.~~

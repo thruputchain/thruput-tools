@@ -59,6 +59,12 @@ pub const CANNED_HEIGHT_A: i64 = 5;
 pub const CANNED_HEIGHT_B: i64 = 10;
 /// Cursor value the fake uses between page 1 and page 2 of `get_events`.
 pub const CANNED_EVENT_CURSOR: &[u8] = b"cursor-page-2";
+/// Storage key that returns `CANNED_STORAGE_VALUE` from the fake `DbGateway`.
+pub const CANNED_STORAGE_KEY: [u8; 32] = [0x42u8; 32];
+/// Storage value returned for `CANNED_STORAGE_KEY`.
+pub const CANNED_STORAGE_VALUE: &[u8] = b"local-node-storage";
+/// Snapshot height returned by the fake `DbGateway` for storage reads.
+pub const CANNED_STORAGE_HEIGHT: i64 = 12;
 
 extern "C" fn handle_sigterm(_: i32) {
     TERMINATED.store(true, Ordering::SeqCst);
@@ -104,9 +110,18 @@ fn main() {
             thread::sleep(Duration::from_secs(60));
         },
         Ok("ready-with-indexer") => run_with_indexer(FakeIndexerMode::Normal),
+        Ok("ready-with-indexer-no-gateway") => run_with_indexer_no_gateway(FakeIndexerMode::Normal),
         Ok("indexer-connect-fail") => run_indexer_connect_fail(),
         Ok("indexer-rpc-fail") => run_with_indexer(FakeIndexerMode::RpcFail),
         Ok("indexer-runtime-rpc-fail") => run_with_indexer(FakeIndexerMode::RuntimeRpcFail),
+        Ok("db-gateway-connect-fail") => run_db_gateway_connect_fail(),
+        Ok("db-gateway-rpc-fail") => {
+            run_with_indexer_and_db_gateway(FakeIndexerMode::Normal, FakeDbGatewayMode::RpcFail);
+        }
+        Ok("db-gateway-intro-rejected") => run_with_indexer_and_db_gateway(
+            FakeIndexerMode::Normal,
+            FakeDbGatewayMode::IntroRejected,
+        ),
         _ => {}
     }
 }
@@ -186,11 +201,33 @@ fn run_ignore_term_loop() {
 
 /// Start scheduler + indexer on Normal/RpcFail mode, announce both in readiness.
 fn run_with_indexer(indexer_mode: FakeIndexerMode) {
+    run_with_indexer_and_db_gateway(indexer_mode, FakeDbGatewayMode::Normal);
+}
+
+fn run_with_indexer_no_gateway(indexer_mode: FakeIndexerMode) {
     install_sigterm_handler();
     write_pid_file_if_requested();
     let scheduler = start_fake_scheduler(FakeSchedulerMode::Normal);
     let indexer = start_fake_indexer(indexer_mode);
-    let db_gateway = start_fake_db_gateway();
+    println!("{}", readiness_with_read(scheduler.addr, indexer.addr));
+    eprintln!(r#"{{"level":"info","target":"hogd_dev","message":"ready"}}"#);
+
+    while !TERMINATED.load(Ordering::SeqCst) {
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    eprintln!(r#"{{"level":"info","target":"hogd_dev","message":"stopping"}}"#);
+}
+
+fn run_with_indexer_and_db_gateway(
+    indexer_mode: FakeIndexerMode,
+    db_gateway_mode: FakeDbGatewayMode,
+) {
+    install_sigterm_handler();
+    write_pid_file_if_requested();
+    let scheduler = start_fake_scheduler(FakeSchedulerMode::Normal);
+    let indexer = start_fake_indexer(indexer_mode);
+    let db_gateway = start_fake_db_gateway(db_gateway_mode);
     println!(
         "{}",
         readiness_full(scheduler.addr, indexer.addr, db_gateway.addr)
@@ -211,12 +248,29 @@ fn run_indexer_connect_fail() {
     install_sigterm_handler();
     write_pid_file_if_requested();
     let scheduler = start_fake_scheduler(FakeSchedulerMode::Normal);
-    let db_gateway = start_fake_db_gateway();
+    let db_gateway = start_fake_db_gateway(FakeDbGatewayMode::Normal);
     // Grab an ephemeral addr and immediately close the listener.
     let dead_indexer_addr = dead_loopback_addr();
     println!(
         "{}",
         readiness_full(scheduler.addr, dead_indexer_addr, db_gateway.addr)
+    );
+    eprintln!(r#"{{"level":"info","target":"hogd_dev","message":"ready"}}"#);
+
+    while !TERMINATED.load(Ordering::SeqCst) {
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn run_db_gateway_connect_fail() {
+    install_sigterm_handler();
+    write_pid_file_if_requested();
+    let scheduler = start_fake_scheduler(FakeSchedulerMode::Normal);
+    let indexer = start_fake_indexer(FakeIndexerMode::Normal);
+    let dead_db_gateway_addr = dead_loopback_addr();
+    println!(
+        "{}",
+        readiness_full(scheduler.addr, indexer.addr, dead_db_gateway_addr)
     );
     eprintln!(r#"{{"level":"info","target":"hogd_dev","message":"ready"}}"#);
 
@@ -253,6 +307,14 @@ fn readiness_scheduler_only(scheduler: SocketAddr) -> String {
     let accounts = readiness_dev_accounts();
     format!(
         r#"{{"status":"ready","network_id":"groundhog-local","endpoints":{{"scheduler":"{scheduler}"}},"dev_accounts":{accounts}}}"#
+    )
+}
+
+/// Readiness JSON with scheduler and read endpoints, but no gateway endpoint.
+fn readiness_with_read(scheduler: SocketAddr, read: SocketAddr) -> String {
+    let accounts = readiness_dev_accounts();
+    format!(
+        r#"{{"status":"ready","network_id":"groundhog-local","endpoints":{{"scheduler":"{scheduler}","read":"{read}"}},"dev_accounts":{accounts}}}"#
     )
 }
 
@@ -565,7 +627,14 @@ struct FakeDbGatewayRuntime {
     addr: SocketAddr,
 }
 
-fn start_fake_db_gateway() -> FakeDbGatewayRuntime {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FakeDbGatewayMode {
+    Normal,
+    RpcFail,
+    IntroRejected,
+}
+
+fn start_fake_db_gateway(mode: FakeDbGatewayMode) -> FakeDbGatewayRuntime {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(1)
         .enable_all()
@@ -580,7 +649,7 @@ fn start_fake_db_gateway() -> FakeDbGatewayRuntime {
             .expect("bug: fake DbGateway should have local addr");
         let mut services = ServiceMap::new();
         services.add_service(Box::new(DbGateway_DbGateway1_Dispatcher::new(Box::new(
-            FakeDbGateway,
+            FakeDbGateway { mode },
         ))));
         let server = RpcServer::new(listener, services);
         let _server_handle = server.start().await;
@@ -592,7 +661,9 @@ fn start_fake_db_gateway() -> FakeDbGatewayRuntime {
     }
 }
 
-struct FakeDbGateway;
+struct FakeDbGateway {
+    mode: FakeDbGatewayMode,
+}
 
 #[async_trait]
 impl DbGateway_DbGateway1 for FakeDbGateway {
@@ -600,6 +671,13 @@ impl DbGateway_DbGateway1 for FakeDbGateway {
         &self,
         _arg0: DbGatewayProtocol,
     ) -> Result<DbGatewayIntroOutcome, ProgramError> {
+        match self.mode {
+            FakeDbGatewayMode::Normal => {}
+            FakeDbGatewayMode::RpcFail => return Err(ProgramError::msg("fake DbGateway rpc-fail")),
+            FakeDbGatewayMode::IntroRejected => {
+                return Ok(DbGatewayIntroOutcome::DbGatewayIntroMismatchedProtocol);
+            }
+        }
         Ok(DbGatewayIntroOutcome::DbGatewayIntroSuccess)
     }
 
@@ -612,11 +690,11 @@ impl DbGateway_DbGateway1 for FakeDbGateway {
             .into_iter()
             .map(|request| match request.key {
                 StorageKey::ContractData { contract_data_key }
-                    if contract_data_key.as_ref() == [0x42_u8; 32].as_slice() =>
+                    if contract_data_key.as_ref() == CANNED_STORAGE_KEY.as_slice() =>
                 {
                     DbGatewayItemResult::kRPCNone {
                         item: WireStorageItem::kItemTypeBytestring {
-                            bytestring: BytesM(b"local-node-storage".to_vec()),
+                            bytestring: BytesM(CANNED_STORAGE_VALUE.to_vec()),
                         },
                     }
                 }
@@ -627,7 +705,7 @@ impl DbGateway_DbGateway1 for FakeDbGateway {
             .collect();
         Ok(DbGatewayResult::kRPCNone {
             payload: DbGatewayPayload {
-                block_height: groundhog_xdr::types::BlockHeight::from(12_i64),
+                block_height: groundhog_xdr::types::BlockHeight::from(CANNED_STORAGE_HEIGHT),
                 items: VecM(items),
             },
         })

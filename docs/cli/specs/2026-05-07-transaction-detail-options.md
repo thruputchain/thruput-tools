@@ -139,7 +139,7 @@ Confirmed by reading the current code:
 | **A1-deltas** retention | per-tx delta retention added to the indexer | indexer schema + committed-delta capture from the hogdb/block commit path, or an equivalent event/indexer feed | Maps to a Groundhog-real concern (state transitions and current locks) | Bigger schema change of the A1 family; once retained it is a forever cost on production indexers |
 | **A2** replay | none | hogdb state-at-height read API + replay harness in hogd-dev | Zero production cost; one path covers gas + deltas + trace; matches Aptos/Sui exactly | Requires hogdb historical reads; unknown scope; depends on per-tx trace determinism (likely fine, not yet confirmed) |
 | **A3** rich submit | response shape on `sendRawTransaction` (or sibling `submitAndAwait`) | scheduler/coordinator return-path enrichment | Just-submitted dev loop is the common case; no retention burden; complements M-A naturally | Doesn't help historical inspection; only useful at submit time |
-| **A4** defer | none | none beyond the null capability-discovery control endpoint already in flight | M-A covers the everyday loop; nothing committed prematurely | Real product gap if/when post-hoc deep inspection becomes a workflow blocker |
+| **A4** defer | none | none; do not ship a null-only dev-control endpoint | M-A covers the everyday loop; nothing committed prematurely | Real product gap if/when post-hoc deep inspection becomes a workflow blocker |
 
 A `gas-only A1` retention path is explicitly excluded: gas has no
 fee story in Groundhog and the live retained data is low-value
