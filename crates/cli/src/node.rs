@@ -15,6 +15,7 @@ pub fn run(
     port: u16,
     _account_count: usize,
     hogd_dev_binary: Option<std::path::PathBuf>,
+    hogd_protocol: Option<String>,
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
@@ -26,13 +27,14 @@ pub fn run(
     init_tracing(default_filter);
 
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
-    rt.block_on(async { run_hogd_dev(port, hogd_dev_binary, cmd, print).await })
+    rt.block_on(async { run_hogd_dev(port, hogd_dev_binary, hogd_protocol, cmd, print).await })
 }
 
 #[cfg(feature = "dev-node")]
 async fn run_hogd_dev(
     port: u16,
     binary: Option<std::path::PathBuf>,
+    protocol_override: Option<String>,
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
@@ -47,6 +49,10 @@ async fn run_hogd_dev(
     let config = NodeSupervisorConfig::default()
         .with_rpc_listen_address(format!("127.0.0.1:{port}"))
         .with_hogd_dev(hogd);
+    let config = match protocol_override {
+        Some(protocol) => config.with_hogd_protocol_override(protocol),
+        None => config,
+    };
 
     let handle = NodeSupervisorHandle::start(config)
         .await
@@ -77,6 +83,9 @@ async fn run_hogd_dev(
         ));
         if let Some(read) = readiness.endpoints.read {
             print.status(format_args!("hogd-dev read: {read}"));
+        }
+        if let Some(gateway) = readiness.endpoints.gateway {
+            print.status(format_args!("hogd-dev gateway: {gateway}"));
         }
         if let Some(control) = readiness.endpoints.control {
             print.status(format_args!("hogd-dev control: {control}"));
@@ -123,6 +132,7 @@ pub fn run(
     _port: u16,
     _account_count: usize,
     _hogd_dev_binary: Option<std::path::PathBuf>,
+    _hogd_protocol: Option<String>,
     _cmd: &'static str,
     _print: &Print,
 ) -> Result<(), CliError> {
@@ -180,6 +190,12 @@ fn hogd_dev_endpoints_payload(
     if let Some(read) = readiness.endpoints.read {
         endpoints.insert("read".into(), serde_json::Value::String(read.to_string()));
     }
+    if let Some(gateway) = readiness.endpoints.gateway {
+        endpoints.insert(
+            "gateway".into(),
+            serde_json::Value::String(gateway.to_string()),
+        );
+    }
     if let Some(control) = readiness.endpoints.control {
         endpoints.insert(
             "control".into(),
@@ -199,7 +215,7 @@ mod tests {
         let addr = "127.0.0.1:9545".parse().expect("bug: valid socket addr");
         let readiness = parse_readiness_line(
             "hogd-dev",
-            r#"{"status":"ready","network_id":"groundhog-local","endpoints":{"scheduler":"127.0.0.1:12345","read":"127.0.0.1:12346","control":"127.0.0.1:12347"}}"#,
+            r#"{"status":"ready","network_id":"groundhog-local","endpoints":{"scheduler":"127.0.0.1:12345","read":"127.0.0.1:12346","gateway":"127.0.0.1:12347","control":"127.0.0.1:12348"}}"#,
         )
         .expect("bug: readiness should parse");
 
@@ -218,8 +234,12 @@ mod tests {
         );
         assert_eq!(payload["backend"]["endpoints"]["read"], "127.0.0.1:12346");
         assert_eq!(
-            payload["backend"]["endpoints"]["control"],
+            payload["backend"]["endpoints"]["gateway"],
             "127.0.0.1:12347"
+        );
+        assert_eq!(
+            payload["backend"]["endpoints"]["control"],
+            "127.0.0.1:12348"
         );
         assert!(payload.get("accounts").is_none());
     }
@@ -240,6 +260,7 @@ mod tests {
             "127.0.0.1:12345"
         );
         assert!(payload["backend"]["endpoints"].get("read").is_none());
+        assert!(payload["backend"]["endpoints"].get("gateway").is_none());
         assert!(payload["backend"]["endpoints"].get("control").is_none());
     }
 

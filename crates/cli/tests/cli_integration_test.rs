@@ -185,6 +185,7 @@ fn help_shows_subcommands() {
     assert!(stdout.contains("test"));
     assert!(stdout.contains("deploy"));
     assert!(stdout.contains("call"));
+    assert!(stdout.contains("storage"));
     assert!(stdout.contains("keys"));
     assert!(stdout.contains("login"));
     assert!(stdout.contains("logout"));
@@ -612,6 +613,16 @@ fn call_help_mentions_target_dir() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("--target-dir"));
     assert!(stdout.contains("--dry-run"));
+}
+
+#[test]
+fn storage_help_mentions_read_only_storage() {
+    let output = groundhog().args(["storage", "--help"]).output().unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("groundhog_getStorageAt"));
+    assert!(stdout.contains("--profile"));
 }
 
 #[test]
@@ -1054,6 +1065,143 @@ fn call_json_fails_without_config() {
     assert_eq!(stderr["ok"], false);
     assert_eq!(stderr["command"], "call");
     assert_eq!(stderr["error"]["code"], "missing_rpc_url");
+}
+
+#[test]
+fn storage_json_fails_without_config() {
+    let address = format!("0x{}", "11".repeat(32));
+    let key = format!("0x{}", "42".repeat(32));
+    let output = groundhog()
+        .args(["--json", "storage", &address, &key])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(stderr["ok"], false);
+    assert_eq!(stderr["command"], "storage");
+    assert_eq!(stderr["error"]["code"], "missing_rpc_url");
+}
+
+#[test]
+fn storage_json_reads_latest_item() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let address = format!("0x{}", "11".repeat(32));
+    let key = format!("0x{}", "42".repeat(32));
+    let (rpc_url, rpc_server) = spawn_storage_rpc(&address, &key);
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
+    )
+    .unwrap();
+
+    let output = groundhog()
+        .args(["--json", "storage", &address, &key])
+        .current_dir(&project)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["ok"], true);
+    assert_eq!(stdout["command"], "storage");
+    assert_eq!(stdout["warnings"], serde_json::json!([]));
+    assert_eq!(stdout["data"]["rpc_url"], rpc_url);
+    assert_eq!(stdout["data"]["address"], address);
+    assert_eq!(stdout["data"]["key"], key);
+    assert_eq!(stdout["data"]["block_height"], 12);
+    assert_eq!(stdout["data"]["item"]["kind"], "bytestring");
+    assert_eq!(
+        stdout["data"]["item"]["bytes"],
+        "0x6c6f63616c2d6e6f64652d73746f72616765"
+    );
+}
+
+#[test]
+fn storage_json_resolves_contract_alias() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let address = format!("0x{}", "11".repeat(32));
+    let key = format!("0x{}", "42".repeat(32));
+    let (rpc_url, rpc_server) = spawn_storage_rpc(&address, &key);
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.contracts]\ncounter = \"{address}\"\n"
+        ),
+    )
+    .unwrap();
+
+    let output = groundhog()
+        .args(["--json", "storage", "counter", &key])
+        .current_dir(&project)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["ok"], true);
+    assert_eq!(stdout["command"], "storage");
+    assert_eq!(stdout["data"]["address"], address);
+    assert_eq!(stdout["data"]["key"], key);
+}
+
+#[test]
+fn storage_json_rejects_short_key_before_rpc() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(
+        project.join("groundhog.toml"),
+        "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\n",
+    )
+    .unwrap();
+
+    let address = format!("0x{}", "11".repeat(32));
+    let output = groundhog()
+        .args(["--json", "storage", &address, "0x1234"])
+        .current_dir(&project)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(stderr["ok"], false);
+    assert_eq!(stderr["command"], "storage");
+    assert_eq!(stderr["error"]["code"], "invalid_storage_key");
+    assert!(
+        stderr["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("exactly 32 bytes")
+    );
+    assert!(
+        stderr["error"]["hint"]
+            .as_str()
+            .unwrap()
+            .contains("32-byte storage key")
+    );
 }
 
 #[test]
@@ -1634,6 +1782,37 @@ fn spawn_chain_tip_rpc(height: i64) -> (String, thread::JoinHandle<()>) {
                 Err(err) => panic!("failed to accept follow-up mock RPC connection: {err}"),
             }
         }
+    });
+
+    (format!("http://{addr}"), handle)
+}
+
+fn spawn_storage_rpc(address: &str, key: &str) -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+
+    let expected_address = address.to_owned();
+    let expected_key = key.to_owned();
+
+    let handle = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let (stream, request) = read_jsonrpc_request(&listener, deadline, "getStorageAt");
+        assert_eq!(request["method"], "groundhog_getStorageAt");
+        assert_eq!(request["params"][0], expected_address);
+        assert_eq!(request["params"][1], expected_key);
+
+        send_jsonrpc_response(
+            stream,
+            &request["id"],
+            serde_json::json!({
+                "blockHeight": 12,
+                "item": {
+                    "kind": "bytestring",
+                    "bytes": "0x6c6f63616c2d6e6f64652d73746f72616765",
+                },
+            }),
+        );
     });
 
     (format!("http://{addr}"), handle)

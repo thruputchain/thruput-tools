@@ -98,7 +98,10 @@ enums:
 
 **Dev types:** `DevAccount`, `TransactionDetail`, `StorageDeltaInfo`,
 `StorageItemInfo`, `TraceInfo`, `InvocationInfo`, `SyscallInfo`,
-`SyscallStatusInfo`, `FrameOutputInfo`.
+`SyscallStatusInfo`, `FrameOutputInfo`. (`TransactionDetail` and the
+trace/syscall/storage-delta types are reserved for a future spec — see
+[`2026-05-07-transaction-detail-options.md`](2026-05-07-transaction-detail-options.md)
+— and are not currently on any RPC trait.)
 
 **Hex wrappers:** `Hex0x<T>`, `HexBytes`, `Topic` — these need
 custom `JsonSchema` impls since their serde representation (0x hex

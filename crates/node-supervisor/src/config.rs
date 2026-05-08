@@ -35,6 +35,12 @@ pub struct NodeSupervisorConfig {
     pub rpc_listen_address: String,
     /// Configuration for the supervised hogd-dev child process.
     pub hogd_dev: HogdDevConfig,
+    /// Optional protocol string used for hogd-dev intro handshakes.
+    ///
+    /// Defaults to the protocol embedded in the linked `groundhog-xdr` crate.
+    /// This override is intended for local cross-repo smoke tests before a
+    /// matching Rust protocol crate has been published.
+    pub hogd_protocol_override: Option<String>,
 }
 
 impl Default for NodeSupervisorConfig {
@@ -42,6 +48,7 @@ impl Default for NodeSupervisorConfig {
         Self {
             rpc_listen_address: DEFAULT_RPC_LISTEN_ADDRESS.to_string(),
             hogd_dev: HogdDevConfig::default(),
+            hogd_protocol_override: None,
         }
     }
 }
@@ -65,6 +72,17 @@ impl NodeSupervisorConfig {
     #[must_use]
     pub fn with_hogd_dev(mut self, hogd_dev: HogdDevConfig) -> Self {
         self.hogd_dev = hogd_dev;
+        self
+    }
+
+    /// Return a copy with an explicit hogd protocol string for intro probes.
+    ///
+    /// This is a development escape hatch. It should only be used when the
+    /// caller has verified that the linked Rust protocol structs are compatible
+    /// with the hogd-dev binary being tested.
+    #[must_use]
+    pub fn with_hogd_protocol_override(mut self, protocol: impl Into<String>) -> Self {
+        self.hogd_protocol_override = Some(protocol.into());
         self
     }
 }

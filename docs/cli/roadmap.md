@@ -64,6 +64,11 @@ Implementation status:
 - `groundhog deploy --dry-run` resolves the WASM artifact, builds and
   signs the deploy transaction, computes the predicted contract address,
   and returns all of that without broadcasting.
+- `groundhog storage` now exposes the public `groundhog_getStorageAt`
+  latest-state read as a raw address/key inspection command. This keeps
+  the CLI split explicit: `call` signs and submits transactions, `storage`
+  reads committed storage, and future `view` executes read-only contract
+  methods.
 - Remaining Phase 1 follow-up: cache repeated embedded-spec parsing,
   tighten union/structured CLI ergonomics and diagnostics, and keep
   proving out the spec-driven path so the remaining local-source fallback
@@ -212,10 +217,9 @@ Maintenance rules:
        (`hogp/e4a1ca88f0ca`) doesn't match the running hogd-dev
        (`hogp/830b7810ee93`). A WASM compiled against the wrong
        protocol deploys cleanly but every call reverts with
-       `deterministicError {kind: "unknown"}` and no further detail
-       (`groundhog_dev_getTransactionDetail` is still a hogd-dev stub).
-       That protocol skew is resolved for default scaffolds by the `sdk 0.14.0`
-       publish and template bump.
+       `deterministicError {kind: "unknown"}`. That protocol skew is
+       resolved for default scaffolds by the `sdk 0.14.0` publish and
+       template bump.
 
     Follow-ups:
 
@@ -227,7 +231,11 @@ Maintenance rules:
        `[patch]` recipe so internal contributors can iterate against a sibling
        sdk_rs checkout without waiting on a republish.
 
-  - [ ] PR 5 — dev control + native-exec retirement
+  - [ ] PR 5 — local-node `getStorageAt` parity through hogd-dev's
+    existing `gateway` / `DbGateway1` endpoint, plus `groundhog storage`
+    as the CLI surface for raw committed storage reads. Transaction detail
+    and dev-control are deferred; see
+    [`specs/2026-05-07-transaction-detail-options.md`](specs/2026-05-07-transaction-detail-options.md).
   - [ ] Read DX follow-ups (parallel track to PR 5; cross-team).
     See [`specs/2026-05-07-view-rpc-and-receipt-return-data.md`](specs/2026-05-07-view-rpc-and-receipt-return-data.md).
     Closes the "no-key-required call dry-run / inspect split" deferred item
@@ -389,7 +397,7 @@ Goal: eliminate dependency on a remote network for the main inner loop.
 3. **Core local-node features**
    - deterministic funded accounts
    - instant commit
-   - resettable in-memory state
+   - startup clean slate via restart or `groundhog node --reset`
    - optional persisted state file
 
 4. **Groundhog-specific observability**
@@ -464,12 +472,21 @@ Two parallel tracks are open after PR 4f:
 
 **Rust track (no hogd dependency):**
 
-1. PR 5 — supervisor dev-control completion + native-exec retirement.
-   See `docs/cli/plans/2026-04-29-local-node-hogd-dev-supervisor.md` PR 5.
+1. Land local-node `groundhog_getStorageAt` parity and the `groundhog storage`
+   CLI wrapper for raw committed address/key reads. This is the concrete
+   wallet-readiness gap that does not require a new hogd protocol surface.
+2. Startup clean-slate UX (`groundhog node --reset`) as a process
+   lifecycle feature, not a runtime `groundhog_dev_reset` RPC.
+
+**Hogd-dev/control track:**
+
+3. Park the hogd-dev dev-control endpoint until a real hogd-owned dev
+   method needs it. Transaction detail is deferred; see
+   `docs/cli/specs/2026-05-07-transaction-detail-options.md`.
 
 **Cross-team track (driven by hogd / protocol-rs):**
 
-2. Read DX follow-ups per
+4. Read DX follow-ups per
    [`specs/2026-05-07-view-rpc-and-receipt-return-data.md`](specs/2026-05-07-view-rpc-and-receipt-return-data.md).
    - Milestone A: receipt return-data + abort-data. Hogd protocol design
      and indexer migration come first; Rust mapping follows protocol-rs
@@ -496,6 +513,12 @@ testing DX:
    - CLI output shape
    - JSON fields
    - relationship to existing transaction detail and storage deltas
+4. Design targeted state-surgery dev controls:
+   - storage-token/balance patching
+   - storage item patching
+   - code/contract replacement or per-contract import if a future
+     spooning workflow needs it
+   - explicit interaction with transaction detail and storage deltas
 
 ## Decision Rules
 

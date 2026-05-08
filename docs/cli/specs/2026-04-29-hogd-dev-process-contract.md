@@ -170,7 +170,15 @@ The ready endpoints must be sufficient for:
 - transaction status, including pending-vs-committed semantics;
 - block lookup once hogd-dev can answer it;
 - contract event queries;
-- dev-control methods needed for reset and transaction detail.
+- dev-control methods needed for transaction detail and future targeted
+  state surgery.
+
+Runtime whole-node reset is deliberately not a required ready-endpoint API.
+For a clean local chain, the supported shape is restart or a supervisor-owned
+startup flag such as `groundhog node --reset` that clears the dev state before
+hogd-dev launches. In-process reset spreads across RAMDB, mempool, auth,
+event, indexer, and bootstrap lifecycles and is lower leverage than targeted
+dev controls like balance/storage/code patching.
 
 For v1, the Rust adapter owns the composite transaction-status orchestration
 described in the shared RPC-server backend contract: scheduler pending state

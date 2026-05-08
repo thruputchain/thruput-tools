@@ -657,14 +657,22 @@ Rollout order:
 - protocol-rs regeneration.
 - groundhog-rpc PR updating supervisor submit mapping and gateway batch fanout.
 
-### PR 5 - Dev Control and Local Loop Completion
+### PR 5 - Local Storage Reads and Transaction Detail Deferral
 
 After PR 4f proved the published-SDK scaffold loop against hogd-dev,
-PR 5 finishes the local-loop story. Work splits into Rust-only slices
-that can land independently and hogd-dev-side slices owned by the same
-person; neither requires changes inside the broader hogd codebase
-(`hogexec`, `hogdb`, `indexer`), which is why this remains separable
-from the cross-team read-DX track.
+PR 5 closes the concrete local-node storage-read parity gap and defers
+the durable hogd-dev dev-control surface until a real hogd-owned method
+needs it. The product shape was refined after comparing Anvil/Hardhat,
+Aptos, NEAR sandbox, and Solana local-validator workflows: EVM-style
+full-chain forking makes runtime reset more useful, but Groundhog is
+closer to Move/WASM/account-based systems where the high-leverage
+controls are transaction detail and targeted state surgery.
+
+Clean slate is a process-lifecycle concern: restart hogd-dev or add a
+`groundhog node --reset` startup flag that clears local dev state before
+launch. Do not implement `groundhog_dev_reset` by reaching into
+hogd-dev internals across RAMDB, mempool, auth, event, and indexer
+state.
 
 **Rust-only slices:**
 
@@ -679,34 +687,40 @@ from the cross-team read-DX track.
   until a second consumer actually exists. Today only node-supervisor
   mounts `SupervisorDevRpc`; the gateway should not expose
   `groundhog_dev_*`. Hoisting prematurely creates churn without a
-  payoff. Reassess after the hogd-dev control endpoint lands.
+  payoff. Reassess when a real hogd-owned dev-control method is chosen.
 
-**Hogd-dev-only slices (same-owner, no broader hogd team gate):**
+**Local-node storage parity slice:**
 
-- Add a control endpoint to hogd-dev's readiness so the supervisor can
-  consume reset and transaction-detail RPCs. `HogdDevEndpoints.control`
-  on the Rust side already exists as `Option<SocketAddr>` with
-  `serde(default)`; today it always deserializes to `None`.
-- Implement `groundhog_dev_reset` against the new control endpoint.
-  Reset wipes the in-memory chain state and re-applies the bootstrap
-  artifact; it is local-dev only.
-- Implement `groundhog_dev_getTransactionDetail`. Cover dev-only debug
-  data (per-frame info, traces, gas breakdown) and explicitly do not
-  duplicate fields that the read-DX spec's Milestone A places on the
-  public `TransactionReceipt` (`return_data`, `abort_data`). Once
-  Milestone A lands, this method's surface shrinks, not grows.
+- Wire hogd-dev's existing readiness `gateway` endpoint into
+  node-supervisor and implement local-node `groundhog_getStorageAt`
+  through `DbGateway1`. This closes the concrete public-RPC parity gap
+  without adding a null dev-control protocol.
+- Keep `HogdDevEndpoints.control` on the Rust side as an optional,
+  future-compatible field, but do not add a hogd-dev control endpoint
+  until a real method needs it.
+- Defer transaction detail. See
+  `docs/cli/specs/2026-05-07-transaction-detail-options.md` for the
+  options paper and current A4 recommendation.
 
 **Out of scope for PR 5:**
 
+- Runtime `groundhog_dev_reset`. Clean-slate UX belongs to process
+  startup (`groundhog node --reset`) or node restart, not an in-process
+  dev-control RPC.
 - Snapshot/revert/time travel.
-- Any change to `hogexec`, `hogdb`, `indexer`, or other broader hogd
-  components. Those go through the read-DX spec.
+- State-surgery RPCs such as balance/storage/code/account patching.
+  These are higher-value dev controls than wipe-everything reset and
+  should be designed as a follow-up surface.
+- Any reset-driven change to `hogexec`, `hogdb`, `indexer`, auth,
+  event, or mempool internals. Broader read/trace retention work goes
+  through the read-DX spec.
 
 Hogd-dev local-loop completion requires the normal local development loop used
 by the CLI docs: start node, list deterministic dev accounts, deploy,
 call/query, submit transactions, poll status/receipt, read emitted events,
-reset state, and inspect transaction detail. `getStorageAt` should either work
-end-to-end or be explicitly removed/deferred from the public local-node promise.
+start from clean state when requested at launch, and inspect transaction
+detail. `getStorageAt` now belongs in the end-to-end local-node promise
+because hogd-dev already exposes the underlying `DbGateway1` surface.
 
 ## Testing Strategy
 
@@ -730,8 +744,11 @@ end-to-end or be explicitly removed/deferred from the public local-node promise.
    x23 client crates over `rpc_driver`, matching gateway. See
    [`../specs/2026-04-29-node-supervisor-x23-client-boundary.md`](../specs/2026-04-29-node-supervisor-x23-client-boundary.md).
    The shared transport-wiring helper now lives in `crates/x23-transport`.
-2. Is `getStorageAt` required for hogd-dev local-loop completion, or should it be
-   explicitly deferred from the first hogd-dev local-node milestone?
+2. ~~Is `getStorageAt` required for hogd-dev local-loop completion, or should it be
+   explicitly deferred from the first hogd-dev local-node milestone?~~
+   **Resolved 2026-05-07:** local-node `groundhog_getStorageAt` parity is the
+   first concrete post-bootstrap gap and is handled by wiring hogd-dev's
+   `gateway` / `DbGateway1` endpoint into the supervisor read backend.
 3. ~~Confirm whether local dev account addresses may be hogd-deployed wallet
    addresses rather than pubkey-derived addresses. If not, PR 4e must start
    with the explicit arbitrary-address bootstrap surface.~~
@@ -749,13 +766,19 @@ PR 4f is green. Two parallel tracks are now open.
 
 **This plan (PR 5):**
 
-1. Start PR 5 dev-control work. Splits into Rust-only slices (this
-   workspace) and hogd-dev-only slices (same owner, no broader hogd
-   team gate). Does not touch `hogexec`, `hogdb`, or `indexer`.
+1. Wire hogd-dev's existing `gateway` endpoint into the supervisor and
+   implement local-node `groundhog_getStorageAt`. Keep runtime reset out
+   of the stack; track `groundhog node --reset` as a startup-lifecycle
+   follow-up.
+2. Harden process ownership for `groundhog node`: it should behave like a
+   foreground dev server and reliably terminate supervised `hogd-dev` children
+   on Ctrl-C, SIGTERM, normal exit, and startup failure. The local-DX smoke
+   script kills descendants defensively, but that is test harness cleanup, not
+   the product lifecycle contract.
 
 **Cross-team read-DX track (separate spec):**
 
-2. Send
+3. Send
    [`../specs/2026-05-07-view-rpc-and-receipt-return-data.md`](../specs/2026-05-07-view-rpc-and-receipt-return-data.md)
    to Geoff/Ryan for hogd-side design sign-off on Milestone A
    (`TxEventLog` root output + indexer migration) and Milestone B

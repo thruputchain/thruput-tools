@@ -42,6 +42,9 @@ pub struct HogdDevEndpoints {
     /// Read endpoint. Absent in the v1 reduced contract.
     #[serde(default)]
     pub read: Option<SocketAddr>,
+    /// Latest-state storage read endpoint. Absent in the v1 reduced contract.
+    #[serde(default)]
+    pub gateway: Option<SocketAddr>,
     /// Dev-control endpoint. Absent in the v1 reduced contract.
     #[serde(default)]
     pub control: Option<SocketAddr>,
@@ -701,7 +704,7 @@ mod tests {
         test_support::{FAKE_HOGD_DEV_MODE_ENV, fake_hogd_dev_binary},
     };
 
-    const READY: &str = r#"{"status":"ready","network_id":"groundhog-local","endpoints":{"scheduler":"127.0.0.1:12345","read":"127.0.0.1:12346","control":"127.0.0.1:12347"}}"#;
+    const READY: &str = r#"{"status":"ready","network_id":"groundhog-local","endpoints":{"scheduler":"127.0.0.1:12345","read":"127.0.0.1:12346","gateway":"127.0.0.1:12347","control":"127.0.0.1:12348"}}"#;
     const V1_READY: &str = r#"{"status":"ready","network_id":"groundhog-local","endpoints":{"scheduler":"127.0.0.1:12345"}}"#;
 
     #[test]
@@ -754,6 +757,14 @@ mod tests {
         assert_eq!(
             readiness.endpoints.control,
             Some(
+                "127.0.0.1:12348"
+                    .parse()
+                    .expect("bug: address should parse")
+            )
+        );
+        assert_eq!(
+            readiness.endpoints.gateway,
+            Some(
                 "127.0.0.1:12347"
                     .parse()
                     .expect("bug: address should parse")
@@ -775,6 +786,7 @@ mod tests {
                 .expect("bug: address should parse")
         );
         assert_eq!(readiness.endpoints.read, None);
+        assert_eq!(readiness.endpoints.gateway, None);
         assert_eq!(readiness.endpoints.control, None);
     }
 

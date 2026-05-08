@@ -953,6 +953,7 @@ dependencies = [
  "groundhog-signing",
  "groundhog-x23-transport",
  "groundhog-xdr 0.12.0",
+ "groundhog_db_gateway",
  "groundhog_indexer",
  "groundhog_scheduler",
  "hex",
