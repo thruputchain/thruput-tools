@@ -45,14 +45,15 @@ groundhog test
 # Start the experimental hogd-dev-backed local node (optional, requires --features dev-node)
 groundhog node
 
-# Deploy and call against the active profile
+# Deploy, mutate, and inspect against the active profile
 groundhog deploy
-groundhog call my-counter get
+groundhog call my-counter increment 1
+groundhog storage my-counter 0x0000000000000000000000000000000000000000000000000000000000000000
 ```
 
 If you installed the CLI without `--features dev-node`, `groundhog node`
-is unavailable. `deploy` and `call` work either way against any RPC URL;
-the feature gate only affects the embedded local node.
+is unavailable. `deploy`, `call`, and `storage` work either way against any
+RPC URL; the feature gate only affects the embedded local node.
 
 ## Using cargo directly
 
@@ -185,18 +186,18 @@ groundhog deploy --json
 
 ### `groundhog call`
 
-Call a deployed contract method using either a literal address or a
-contract alias from the active profile. The CLI resolves entrypoints
-from embedded contract specs and local metadata when available, submits
-the invocation transaction, and prints returned values plus receipt
-status.
+Submit a transaction that calls a deployed contract method using either a
+literal address or a contract alias from the active profile. The CLI resolves
+entrypoints from embedded contract specs and local metadata when available,
+signs and submits the invocation transaction, and prints returned values plus
+receipt status.
 
 ```bash
-groundhog call my-counter get
 groundhog call my-counter increment 5
+groundhog call my-counter get
 groundhog call 0xabc123... get
-groundhog call my-counter get --dry-run
-groundhog call my-counter get --json
+groundhog call my-counter increment 5 --dry-run
+groundhog call my-counter increment 5 --json
 ```
 
 Embedded contract specs now drive selector resolution plus first-pass
@@ -216,6 +217,23 @@ Remaining follow-up after this first pass: cache repeated
 embedded-spec loads, tighten the union/structured CLI UX, and remove
 the remaining local-source fallback once the spec-driven path has
 soaked.
+
+### `groundhog storage`
+
+Read one latest committed raw storage item via `groundhog_getStorageAt`.
+This is the low-level address/key state inspection command; it does not
+execute contract code and does not require a signing key. Use `groundhog call`
+for signed state-changing invocation. A future `groundhog view` command will
+cover read-only contract method execution once the `groundhog_view` RPC lands.
+
+```bash
+groundhog storage my-counter 0x0000000000000000000000000000000000000000000000000000000000000000
+groundhog storage 0xabc123... 0x4242424242424242424242424242424242424242424242424242424242424242
+groundhog storage my-counter 0x4242424242424242424242424242424242424242424242424242424242424242 --json
+```
+
+The output includes the snapshot block height even when the item is absent,
+so scripts can compare it with `groundhog_chainTip` freshness.
 
 ### `groundhog node`
 
@@ -277,8 +295,8 @@ rpc_url = "https://testnet.groundhog.network"
 Select a profile via `--profile`, `GROUNDHOG_PROFILE`, or
 the `default` profile is used automatically.
 
-Contract aliases map names to addresses per profile. `deploy` and `call`
-resolve aliases from the active profile.
+Contract aliases map names to addresses per profile. `deploy`, `call`, and
+`storage` resolve aliases from the active profile.
 
 ## Global Flags
 
@@ -288,7 +306,7 @@ resolve aliases from the active profile.
 | `--json` | Emit structured JSON output |
 
 `--profile` is available on commands that interact with project
-config (`build`, `test`, `deploy`, `call`, `status`). Keys are
+config (`build`, `test`, `deploy`, `call`, `storage`, `status`). Keys are
 global — not per-profile.
 
 ## Templates

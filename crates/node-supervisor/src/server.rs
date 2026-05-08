@@ -10,6 +10,7 @@ use std::{future::Future, net::SocketAddr, process::ExitStatus};
 use groundhog_rpc_api::{GroundhogApiServer, GroundhogDevApiServer};
 use groundhog_rpc_api_types::dev::DevAccount;
 use groundhog_rpc_server::{GroundhogRpcServer, RpcServerConfig};
+use groundhog_xdr::PROTOCOL_VERSION;
 use jsonrpsee::server::{RpcModule, Server, ServerHandle};
 use serde::Serialize;
 
@@ -138,7 +139,17 @@ impl NodeSupervisorHandle {
             }
         };
 
-        match start_rpc_server(&config.rpc_listen_address, hogd.readiness(), dev_accounts).await {
+        match start_rpc_server(
+            &config.rpc_listen_address,
+            hogd.readiness(),
+            dev_accounts,
+            config
+                .hogd_protocol_override
+                .as_deref()
+                .unwrap_or(PROTOCOL_VERSION),
+        )
+        .await
+        {
             Ok(started) => {
                 tracing::info!(rpc_addr = %started.addr, "node supervisor JSON-RPC ready");
                 Ok(Self {
@@ -284,6 +295,7 @@ async fn start_rpc_server(
     listen_address: &str,
     readiness: &HogdDevReadiness,
     dev_accounts: Vec<DevAccount>,
+    protocol_version: &str,
 ) -> Result<StartedRpcServer, NodeSupervisorError> {
     let scheduler_backend = HogdDevSchedulerBackend::connect(readiness.endpoints.scheduler).await?;
     scheduler_backend.ensure_dev_genesis().await?;
@@ -291,9 +303,13 @@ async fn start_rpc_server(
     // Wire the read plane when hogd-dev advertises an indexer endpoint.
     if let Some(read_addr) = readiness.endpoints.read {
         tracing::debug!(%read_addr, "connecting to hogd-dev indexer");
-        let read =
-            HogdDevReadBackend::connect(read_addr, readiness.endpoints.gateway, &scheduler_backend)
-                .await?;
+        let read = HogdDevReadBackend::connect(
+            read_addr,
+            readiness.endpoints.gateway,
+            &scheduler_backend,
+            protocol_version,
+        )
+        .await?;
         start_rpc_server_with_read(
             listen_address,
             scheduler_backend,

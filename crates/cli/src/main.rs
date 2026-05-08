@@ -172,7 +172,7 @@ enum Command {
         #[command(flatten)]
         artifacts: ArtifactArgs,
     },
-    /// Call a deployed contract method
+    /// Submit a transaction that calls a deployed contract method
     Call {
         /// Contract address or alias
         contract: String,
@@ -193,6 +193,26 @@ enum Command {
         #[command(flatten)]
         artifacts: ArtifactArgs,
     },
+    /// Read latest committed raw contract storage
+    #[command(long_about = "Read one latest committed raw storage item via \
+                      groundhog_getStorageAt. This is a low-level state \
+                      inspection command for address/key reads; use \
+                      `groundhog call` for signed transaction invocation \
+                      and future `groundhog view` for read-only contract \
+                      method execution.")]
+    Storage {
+        /// Contract address or alias
+        address: String,
+        /// 32-byte storage key as 0x-prefixed hex
+        key: String,
+        /// Config profile to use
+        #[arg(
+            long = "profile",
+            alias = "network",
+            default_value = DEFAULT_PROFILE
+        )]
+        profile: String,
+    },
     /// Start an experimental local development node
     #[command(long_about = "Start an experimental local development node \
                       backed by a supervised hogd-dev process. The \
@@ -208,6 +228,9 @@ enum Command {
         /// Explicit hogd-dev binary path
         #[arg(long, hide = true)]
         hogd_dev_binary: Option<std::path::PathBuf>,
+        /// Override hogd protocol string for local cross-repo smoke tests
+        #[arg(long, hide = true)]
+        hogd_protocol: Option<String>,
     },
     /// Manage signing keys
     #[command(long_about = "Ed25519 signing keys stored in \
@@ -294,6 +317,7 @@ impl Command {
             Self::Test { .. } => "test",
             Self::Deploy { .. } => "deploy",
             Self::Call { .. } => "call",
+            Self::Storage { .. } => "storage",
             Self::Node { .. } => "node",
             Self::Keys { command } => command.command_name(),
             Self::Codegen { command } => command.command_name(),
@@ -430,11 +454,28 @@ fn main() {
                     &contract, &method, &args, dry_run, &artifacts, &profile, cmd_name, &print,
                 )
             }),
+        Command::Storage {
+            address,
+            key,
+            profile,
+        } => std::env::current_dir()
+            .map_err(groundhog_cli::CliError::Io)
+            .and_then(|cwd| {
+                groundhog_cli::storage::run(&address, &key, &cwd, &profile, cmd_name, &print)
+            }),
         Command::Node {
             port,
             accounts,
             hogd_dev_binary,
-        } => groundhog_cli::node::run(port, accounts, hogd_dev_binary, cmd_name, &print),
+            hogd_protocol,
+        } => groundhog_cli::node::run(
+            port,
+            accounts,
+            hogd_dev_binary,
+            hogd_protocol,
+            cmd_name,
+            &print,
+        ),
         Command::Keys { command } => match command {
             KeysCommand::Generate { name, fund } => {
                 groundhog_cli::keys::generate(&name, fund, cmd_name, &print)
