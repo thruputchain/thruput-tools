@@ -87,11 +87,12 @@ below.
 
 ### What v1 deliberately does NOT ship
 
-- **No read/control endpoints.** No new `.x` interface. The supervisor
-  process contract has a "v1 Reduced Contract" section that makes
-  `read` and `control` *optional* in the readiness JSON until those
-  interfaces are designed. PR 4a needs only `chainTip`, which is
-  already on the scheduler endpoint as `schedcoord_get_tip`.
+- **No required read/control endpoints.** The supervisor process contract
+  makes `read` and `control` optional in the readiness JSON until those
+  interfaces are designed. PR 4a needs only `chainTip`, which is already
+  on the scheduler endpoint as `schedcoord_get_tip`. Later PRs may add
+  a null-only control endpoint for capability discovery before any
+  dev-control methods are wired.
 - **No persistence.** Ephemeral only.
 - **No real coordinator.** Copy the trivial fake `CoordinatorSchedRpc`
   (~30 lines, 4 no-op methods) from `hogd/mempool/test/coordinator.h`

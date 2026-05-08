@@ -657,14 +657,22 @@ Rollout order:
 - protocol-rs regeneration.
 - groundhog-rpc PR updating supervisor submit mapping and gateway batch fanout.
 
-### PR 5 - Dev Control and Local Loop Completion
+### PR 5 - Dev Control Endpoint and Transaction Detail
 
 After PR 4f proved the published-SDK scaffold loop against hogd-dev,
-PR 5 finishes the local-loop story. Work splits into Rust-only slices
-that can land independently and hogd-dev-side slices owned by the same
-person; neither requires changes inside the broader hogd codebase
-(`hogexec`, `hogdb`, `indexer`), which is why this remains separable
-from the cross-team read-DX track.
+PR 5 starts the durable hogd-dev dev-control surface without treating
+runtime clean-slate reset as a required primitive. The product shape was
+refined after comparing Anvil/Hardhat, Aptos, NEAR sandbox, and Solana
+local-validator workflows: EVM-style full-chain forking makes runtime
+reset more useful, but Groundhog is closer to Move/WASM/account-based
+systems where the high-leverage controls are transaction detail and
+targeted state surgery.
+
+Clean slate is a process-lifecycle concern: restart hogd-dev or add a
+`groundhog node --reset` startup flag that clears local dev state before
+launch. Do not implement `groundhog_dev_reset` by reaching into
+hogd-dev internals across RAMDB, mempool, auth, event, and indexer
+state.
 
 **Rust-only slices:**
 
@@ -684,12 +692,10 @@ from the cross-team read-DX track.
 **Hogd-dev-only slices (same-owner, no broader hogd team gate):**
 
 - Add a control endpoint to hogd-dev's readiness so the supervisor can
-  consume reset and transaction-detail RPCs. `HogdDevEndpoints.control`
+  consume transaction-detail RPCs. `HogdDevEndpoints.control`
   on the Rust side already exists as `Option<SocketAddr>` with
-  `serde(default)`; today it always deserializes to `None`.
-- Implement `groundhog_dev_reset` against the new control endpoint.
-  Reset wipes the in-memory chain state and re-applies the bootstrap
-  artifact; it is local-dev only.
+  `serde(default)`; today it deserializes to `None` until hogd-dev
+  advertises the endpoint.
 - Implement `groundhog_dev_getTransactionDetail`. Cover dev-only debug
   data (per-frame info, traces, gas breakdown) and explicitly do not
   duplicate fields that the read-DX spec's Milestone A places on the
@@ -698,15 +704,23 @@ from the cross-team read-DX track.
 
 **Out of scope for PR 5:**
 
+- Runtime `groundhog_dev_reset`. Clean-slate UX belongs to process
+  startup (`groundhog node --reset`) or node restart, not an in-process
+  dev-control RPC.
 - Snapshot/revert/time travel.
-- Any change to `hogexec`, `hogdb`, `indexer`, or other broader hogd
-  components. Those go through the read-DX spec.
+- State-surgery RPCs such as balance/storage/code/account patching.
+  These are higher-value dev controls than wipe-everything reset and
+  should be designed as a follow-up surface.
+- Any reset-driven change to `hogexec`, `hogdb`, `indexer`, auth,
+  event, or mempool internals. Broader read/trace retention work goes
+  through the read-DX spec.
 
 Hogd-dev local-loop completion requires the normal local development loop used
 by the CLI docs: start node, list deterministic dev accounts, deploy,
 call/query, submit transactions, poll status/receipt, read emitted events,
-reset state, and inspect transaction detail. `getStorageAt` should either work
-end-to-end or be explicitly removed/deferred from the public local-node promise.
+start from clean state when requested at launch, and inspect transaction
+detail. `getStorageAt` should either work end-to-end or be explicitly
+removed/deferred from the public local-node promise.
 
 ## Testing Strategy
 
@@ -749,9 +763,10 @@ PR 4f is green. Two parallel tracks are now open.
 
 **This plan (PR 5):**
 
-1. Start PR 5 dev-control work. Splits into Rust-only slices (this
-   workspace) and hogd-dev-only slices (same owner, no broader hogd
-   team gate). Does not touch `hogexec`, `hogdb`, or `indexer`.
+1. Start PR 5 dev-control work with the narrowed scope: hogd-dev
+   advertises a control endpoint, then implements transaction-detail
+   data behind it. Keep runtime reset out of the stack; track
+   `groundhog node --reset` as a startup-lifecycle follow-up.
 
 **Cross-team read-DX track (separate spec):**
 

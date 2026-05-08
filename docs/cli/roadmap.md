@@ -227,7 +227,7 @@ Maintenance rules:
        `[patch]` recipe so internal contributors can iterate against a sibling
        sdk_rs checkout without waiting on a republish.
 
-  - [ ] PR 5 — dev control + native-exec retirement
+  - [ ] PR 5 — hogd-dev control endpoint + transaction detail
   - [ ] Read DX follow-ups (parallel track to PR 5; cross-team).
     See [`specs/2026-05-07-view-rpc-and-receipt-return-data.md`](specs/2026-05-07-view-rpc-and-receipt-return-data.md).
     Closes the "no-key-required call dry-run / inspect split" deferred item
@@ -389,7 +389,7 @@ Goal: eliminate dependency on a remote network for the main inner loop.
 3. **Core local-node features**
    - deterministic funded accounts
    - instant commit
-   - resettable in-memory state
+   - startup clean slate via restart or `groundhog node --reset`
    - optional persisted state file
 
 4. **Groundhog-specific observability**
@@ -464,12 +464,17 @@ Two parallel tracks are open after PR 4f:
 
 **Rust track (no hogd dependency):**
 
-1. PR 5 — supervisor dev-control completion + native-exec retirement.
+1. Startup clean-slate UX (`groundhog node --reset`) as a process
+   lifecycle feature, not a runtime `groundhog_dev_reset` RPC.
+
+**Hogd-dev/control track:**
+
+2. PR 5 — hogd-dev control endpoint + `groundhog_dev_getTransactionDetail`.
    See `docs/cli/plans/2026-04-29-local-node-hogd-dev-supervisor.md` PR 5.
 
 **Cross-team track (driven by hogd / protocol-rs):**
 
-2. Read DX follow-ups per
+3. Read DX follow-ups per
    [`specs/2026-05-07-view-rpc-and-receipt-return-data.md`](specs/2026-05-07-view-rpc-and-receipt-return-data.md).
    - Milestone A: receipt return-data + abort-data. Hogd protocol design
      and indexer migration come first; Rust mapping follows protocol-rs
@@ -496,6 +501,12 @@ testing DX:
    - CLI output shape
    - JSON fields
    - relationship to existing transaction detail and storage deltas
+4. Design targeted state-surgery dev controls:
+   - storage-token/balance patching
+   - storage item patching
+   - code/contract replacement or per-contract import if a future
+     spooning workflow needs it
+   - explicit interaction with transaction detail and storage deltas
 
 ## Decision Rules
 

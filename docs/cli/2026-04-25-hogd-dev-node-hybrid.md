@@ -86,7 +86,7 @@ lifecycle:
 - scheduler nomination/commit path
 - auth/replay behavior as seen by mempool
 - event/read/index retention as a node concern
-- clean long-lived reset/snapshot/revert semantics
+- clean startup/shutdown semantics
 
 `MempoolTestInfra` points at a better middle ground. It already stitches real
 hogd components into one process for tests:
@@ -263,7 +263,6 @@ trait ReadPlane {
 }
 
 trait DevControl {
-    async fn reset(&self) -> Result<(), Error>;
     async fn snapshot(&self) -> Result<SnapshotId, Error>;
     async fn revert(&self, id: SnapshotId) -> Result<bool, Error>;
     async fn advance_block(&self) -> Result<ChainTip, Error>;
@@ -289,7 +288,7 @@ reconstruct:
 - HogDB lifecycle, storage deltas, and DB commit semantics
 - HogDB-backed latest-state reads
 - event/indexer capture and committed-read retention
-- reset/snapshot/revert lifecycle
+- transaction detail and trace retention
 - dev-only mutation hooks
 
 Rust should own:
@@ -435,7 +434,6 @@ state.
 
 Initial methods:
 
-- `groundhog_dev_reset`
 - `groundhog_dev_getAccounts`
 - `groundhog_dev_getTransactionDetail`
 - `groundhog_getStorageAt`
@@ -453,7 +451,16 @@ map to Groundhog block advancement. The Groundhog-native terminology should be
 passed into hogd-dev at genesis. Rust should generate the deterministic keys
 and pass dev genesis/account configuration into hogd-dev; that keeps secret
 material in the consumer's control and matches hogd's existing config-driven
-shape. Everything that mutates or reads chain state should go through hogd-dev.
+model.
+
+Runtime whole-node reset is no longer an initial dev-control goal. For clean
+state, restart the supervised hogd-dev process or use a startup flag such as
+`groundhog node --reset` that clears local dev state before launch. The
+higher-value follow-up controls are targeted state surgery (`setStorageTokens`,
+storage item patching, contract/code patching) and per-contract import/spooning
+if a future fork-like workflow needs it.
+
+Everything that mutates or reads chain state should go through hogd-dev.
 Specifically, `getStorageAt` should be HogDB-backed, while transaction
 detail/receipt/event reads should come from the indexer-shaped read store.
 
@@ -505,7 +512,7 @@ proposal: at worst, the codebase ends up with a better-factored gateway.
 - Add clean startup and shutdown contracts.
 - Accept a dev genesis config with deterministic accounts, wallet contracts,
   storage tokens, and cost model.
-- Support empty/resettable ephemeral state first.
+- Support empty ephemeral state and a clean-slate startup path first.
 
 This is the gating stage. `MempoolTestInfra` is an existence proof, not a
 production lifecycle contract. Its shutdown path already documents fragile
@@ -525,7 +532,7 @@ hard dependency.
 ### Stage 4 — Fill Anvil-style dev lifecycle
 
 - Add auto/manual/interval block advancement policies.
-- Add snapshot/revert.
+- Add targeted state surgery before snapshot/revert.
 - Add set-time.
 - Add storage-token mutation.
 - Add transaction detail and trace retention.
