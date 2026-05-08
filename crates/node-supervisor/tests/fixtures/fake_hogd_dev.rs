@@ -13,6 +13,11 @@ use std::{
 };
 
 use async_trait::async_trait;
+use groundhog_db_gateway::{
+    AddressAndKeyBatch, DbGateway_DbGateway1, DbGateway_DbGateway1_Dispatcher,
+    DbGatewayIntroOutcome, DbGatewayItemResult, DbGatewayPayload, DbGatewayResult,
+    Protocol as DbGatewayProtocol, RPCError, StorageKey,
+};
 use groundhog_indexer::{
     BlockHeight, EventPage, EventQuery, IdentifiedEvent,
     IndexerBlockExplorer_IndexerBlockExplorer1,
@@ -28,6 +33,7 @@ use groundhog_scheduler::{
     SignedTransactionHashBatch, ValidatorID, ValidatorPublicInfo,
     sched_coord::{SchedulerCoord_SchedulerCoord1, SchedulerCoord_SchedulerCoord1_Dispatcher},
 };
+use groundhog_xdr::storage_item::WireStorageItem;
 use groundhog_xdr::types::{Ed25519PublicKey, SHA256Hash};
 use rpc_driver::{ProgramError, RpcServer, ServiceMap};
 use tokio::{net::TcpListener, runtime::Runtime};
@@ -184,7 +190,11 @@ fn run_with_indexer(indexer_mode: FakeIndexerMode) {
     write_pid_file_if_requested();
     let scheduler = start_fake_scheduler(FakeSchedulerMode::Normal);
     let indexer = start_fake_indexer(indexer_mode);
-    println!("{}", readiness_full(scheduler.addr, indexer.addr));
+    let db_gateway = start_fake_db_gateway();
+    println!(
+        "{}",
+        readiness_full(scheduler.addr, indexer.addr, db_gateway.addr)
+    );
     eprintln!(r#"{{"level":"info","target":"hogd_dev","message":"ready"}}"#);
 
     while !TERMINATED.load(Ordering::SeqCst) {
@@ -201,9 +211,13 @@ fn run_indexer_connect_fail() {
     install_sigterm_handler();
     write_pid_file_if_requested();
     let scheduler = start_fake_scheduler(FakeSchedulerMode::Normal);
+    let db_gateway = start_fake_db_gateway();
     // Grab an ephemeral addr and immediately close the listener.
     let dead_indexer_addr = dead_loopback_addr();
-    println!("{}", readiness_full(scheduler.addr, dead_indexer_addr));
+    println!(
+        "{}",
+        readiness_full(scheduler.addr, dead_indexer_addr, db_gateway.addr)
+    );
     eprintln!(r#"{{"level":"info","target":"hogd_dev","message":"ready"}}"#);
 
     while !TERMINATED.load(Ordering::SeqCst) {
@@ -242,11 +256,11 @@ fn readiness_scheduler_only(scheduler: SocketAddr) -> String {
     )
 }
 
-/// Readiness JSON with both scheduler and read (indexer) endpoints.
-fn readiness_full(scheduler: SocketAddr, read: SocketAddr) -> String {
+/// Readiness JSON with scheduler, read (indexer), and gateway endpoints.
+fn readiness_full(scheduler: SocketAddr, read: SocketAddr, gateway: SocketAddr) -> String {
     let accounts = readiness_dev_accounts();
     format!(
-        r#"{{"status":"ready","network_id":"groundhog-local","endpoints":{{"scheduler":"{scheduler}","read":"{read}"}},"dev_accounts":{accounts}}}"#
+        r#"{{"status":"ready","network_id":"groundhog-local","endpoints":{{"scheduler":"{scheduler}","read":"{read}","gateway":"{gateway}"}},"dev_accounts":{accounts}}}"#
     )
 }
 
@@ -539,6 +553,84 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
         _hashes: SignedTransactionHashBatch,
     ) -> Result<OptSignedTransactionBatch, ProgramError> {
         Ok(VecM(vec![]))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Fake DbGateway
+// ---------------------------------------------------------------------------
+
+struct FakeDbGatewayRuntime {
+    _runtime: Runtime,
+    addr: SocketAddr,
+}
+
+fn start_fake_db_gateway() -> FakeDbGatewayRuntime {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("bug: fake DbGateway runtime should build");
+    let addr = runtime.block_on(async {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bug: fake DbGateway should bind");
+        let addr = listener
+            .local_addr()
+            .expect("bug: fake DbGateway should have local addr");
+        let mut services = ServiceMap::new();
+        services.add_service(Box::new(DbGateway_DbGateway1_Dispatcher::new(Box::new(
+            FakeDbGateway,
+        ))));
+        let server = RpcServer::new(listener, services);
+        let _server_handle = server.start().await;
+        addr
+    });
+    FakeDbGatewayRuntime {
+        _runtime: runtime,
+        addr,
+    }
+}
+
+struct FakeDbGateway;
+
+#[async_trait]
+impl DbGateway_DbGateway1 for FakeDbGateway {
+    async fn dbgateway_intro(
+        &self,
+        _arg0: DbGatewayProtocol,
+    ) -> Result<DbGatewayIntroOutcome, ProgramError> {
+        Ok(DbGatewayIntroOutcome::DbGatewayIntroSuccess)
+    }
+
+    async fn dbgateway_get_items(
+        &self,
+        arg0: AddressAndKeyBatch,
+    ) -> Result<DbGatewayResult, ProgramError> {
+        let items = arg0
+            .0
+            .into_iter()
+            .map(|request| match request.key {
+                StorageKey::ContractData { contract_data_key }
+                    if contract_data_key.as_ref() == [0x42_u8; 32].as_slice() =>
+                {
+                    DbGatewayItemResult::kRPCNone {
+                        item: WireStorageItem::kItemTypeBytestring {
+                            bytestring: BytesM(b"local-node-storage".to_vec()),
+                        },
+                    }
+                }
+                _ => DbGatewayItemResult::Default {
+                    error: RPCError::kRPCNotFound.0,
+                },
+            })
+            .collect();
+        Ok(DbGatewayResult::kRPCNone {
+            payload: DbGatewayPayload {
+                block_height: groundhog_xdr::types::BlockHeight::from(12_i64),
+                items: VecM(items),
+            },
+        })
     }
 }
 

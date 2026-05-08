@@ -327,4 +327,30 @@ pub enum NodeSupervisorError {
         /// Raw outcome discriminant from the indexer.
         outcome: i32,
     },
+
+    /// The supervisor could not connect to hogd-dev's DbGateway x23 endpoint.
+    #[error("failed to connect hogd-dev DbGateway endpoint {endpoint}: {source}")]
+    DbGatewayConnect {
+        /// DbGateway endpoint advertised by hogd-dev readiness.
+        endpoint: std::net::SocketAddr,
+        /// x23 connection error.
+        #[source]
+        source: ConnectError,
+    },
+
+    /// A hogd-dev DbGateway RPC failed during startup probing.
+    #[error("hogd-dev DbGateway RPC `{op}` failed: {error}")]
+    DbGatewayRpc {
+        /// DbGateway RPC operation name.
+        op: &'static str,
+        /// x23 RPC error message.
+        error: String,
+    },
+
+    /// The DbGateway rejected the intro handshake with a non-success outcome.
+    #[error("hogd-dev DbGateway intro rejected with outcome {outcome}")]
+    DbGatewayIntroRejected {
+        /// Raw outcome discriminant from DbGateway.
+        outcome: i32,
+    },
 }

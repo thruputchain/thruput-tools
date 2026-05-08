@@ -78,6 +78,9 @@ async fn run_hogd_dev(
         if let Some(read) = readiness.endpoints.read {
             print.status(format_args!("hogd-dev read: {read}"));
         }
+        if let Some(gateway) = readiness.endpoints.gateway {
+            print.status(format_args!("hogd-dev gateway: {gateway}"));
+        }
         if let Some(control) = readiness.endpoints.control {
             print.status(format_args!("hogd-dev control: {control}"));
         }
@@ -180,6 +183,12 @@ fn hogd_dev_endpoints_payload(
     if let Some(read) = readiness.endpoints.read {
         endpoints.insert("read".into(), serde_json::Value::String(read.to_string()));
     }
+    if let Some(gateway) = readiness.endpoints.gateway {
+        endpoints.insert(
+            "gateway".into(),
+            serde_json::Value::String(gateway.to_string()),
+        );
+    }
     if let Some(control) = readiness.endpoints.control {
         endpoints.insert(
             "control".into(),
@@ -199,7 +208,7 @@ mod tests {
         let addr = "127.0.0.1:9545".parse().expect("bug: valid socket addr");
         let readiness = parse_readiness_line(
             "hogd-dev",
-            r#"{"status":"ready","network_id":"groundhog-local","endpoints":{"scheduler":"127.0.0.1:12345","read":"127.0.0.1:12346","control":"127.0.0.1:12347"}}"#,
+            r#"{"status":"ready","network_id":"groundhog-local","endpoints":{"scheduler":"127.0.0.1:12345","read":"127.0.0.1:12346","gateway":"127.0.0.1:12347","control":"127.0.0.1:12348"}}"#,
         )
         .expect("bug: readiness should parse");
 
@@ -218,8 +227,12 @@ mod tests {
         );
         assert_eq!(payload["backend"]["endpoints"]["read"], "127.0.0.1:12346");
         assert_eq!(
-            payload["backend"]["endpoints"]["control"],
+            payload["backend"]["endpoints"]["gateway"],
             "127.0.0.1:12347"
+        );
+        assert_eq!(
+            payload["backend"]["endpoints"]["control"],
+            "127.0.0.1:12348"
         );
         assert!(payload.get("accounts").is_none());
     }
@@ -240,6 +253,7 @@ mod tests {
             "127.0.0.1:12345"
         );
         assert!(payload["backend"]["endpoints"].get("read").is_none());
+        assert!(payload["backend"]["endpoints"].get("gateway").is_none());
         assert!(payload["backend"]["endpoints"].get("control").is_none());
     }
 

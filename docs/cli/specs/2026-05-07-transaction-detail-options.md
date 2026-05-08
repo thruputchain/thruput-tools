@@ -9,9 +9,9 @@ shape, and on what timeline.
 **Companion to:**
 
 - [`../plans/2026-04-29-local-node-hogd-dev-supervisor.md`](../plans/2026-04-29-local-node-hogd-dev-supervisor.md)
-  – PR 5 plan; this spec narrows PR 5 to the bare control-endpoint
-  scaffold and defers the detail RPC pending the decisions captured
-  here.
+  – local-node supervisor plan; this spec removes transaction detail
+  and null-only dev-control from the immediate PR stack pending the
+  decisions captured here.
 - [`2026-05-07-view-rpc-and-receipt-return-data.md`](2026-05-07-view-rpc-and-receipt-return-data.md)
   – the receipt return-data + view RPC spec. Milestone A there
   delivers `return_data` and `abort_data` on the public receipt, which
@@ -170,9 +170,10 @@ Reasoning:
   and it does so in service of debugging-curiosity rather than
   cost-accounting.
 
-If the team picks A4, PR 5 narrows to the control endpoint scaffold
-plus `hogddevcontrol_null` already in flight on the hogd side. The
-detail RPC waits for a real demand signal and a follow-up spec.
+If the team picks A4, PR 5 should not ship a null-only hogd-dev control
+endpoint. The detail RPC waits for a real demand signal and a follow-up
+spec; the first concrete local-node follow-up is `getStorageAt` parity
+through hogd-dev's existing `gateway` / `DbGateway1` endpoint.
 
 ## What this means for PR 5
 
@@ -190,7 +191,7 @@ If A4 is accepted:
   spec picks a final shape.
 - The hogd-side control-endpoint scaffold (`hogd_dev_control.x`,
   `hogd_dev_control.h`, readiness `control` field, `hogddevcontrol_null`)
-  lands as the only PR 5 deliverable on the hogd side.
+  is parked until a real hogd-owned dev-control method needs it.
 
 If a different path is later picked, this document's table is the
 input; the followup spec is a fresh design pass.

@@ -184,7 +184,8 @@ groundhog node process
 hogd-dev process
   ├─ public x23 scheduler endpoint
   ├─ public x23 dev-read endpoint
-  ├─ public x23 dev-control endpoint
+  ├─ public x23 gateway endpoint for latest-state storage reads
+  ├─ optional future x23 dev-control endpoint
   └─ internal hogd components with ephemeral/private ports
 ```
 
@@ -427,15 +428,23 @@ needs a supported dev-read surface rather than test-only access. The other
 major hogd-side dependency is snapshot/revert support over the relevant HogDB,
 indexer/read-store, and node lifecycle state.
 
-## Dev-control surface
+## Hogd-dev-backed local methods
 
-`groundhog_dev_*` methods should be backed by hogd-dev, not by ad hoc Rust
-state.
+Local-node methods that read or mutate hogd-owned chain state should be backed
+by hogd-dev, not by ad hoc Rust state. Do not add a null-only dev-control
+endpoint; introduce that endpoint when the first real hogd-owned method needs
+it.
 
-Initial methods:
+Initial public methods:
+
+- `groundhog_getStorageAt`
+
+Initial dev-only methods:
 
 - `groundhog_dev_getAccounts`
-- `groundhog_getStorageAt`
+
+Potential follow-up controls:
+
 - `groundhog_dev_advanceBlock`
 - `groundhog_dev_snapshot`
 - `groundhog_dev_revert`

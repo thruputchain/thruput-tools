@@ -12,6 +12,11 @@
 use std::{fmt, net::SocketAddr};
 
 use async_trait::async_trait;
+use groundhog_db_gateway::{
+    AddressAndKey, AddressAndKeyBatch, DbGateway_DbGateway1_Client, DbGatewayIntroOutcome,
+    DbGatewayItemResult, DbGatewayResult, Protocol as DbGatewayProtocol, RPCError, StorageKey,
+    StorageKeyContractData,
+};
 use groundhog_indexer::{
     IndexerBlockExplorer_IndexerBlockExplorer1_Client, IndexerBlockExplorerIntroOutcome, Protocol,
     TxInfoOutcome, TxInfoResult,
@@ -21,7 +26,7 @@ use groundhog_rpc_api_types::{
     events::{EventPage, EventQuery, IdentifiedEvent},
     hex::{Hex0x, HexBytes, Topic},
     receipt::{ExecStatus, TransactionReceipt},
-    state::StorageItemRead,
+    state::{StorageItemInfo, StorageItemRead},
     transaction::{TransactionStatus, TxHash},
 };
 use groundhog_rpc_server::{ReadPlane, RpcServerError};
@@ -47,6 +52,7 @@ const MAX_TOPICS: u32 = 3;
 #[derive(Clone)]
 pub(crate) struct HogdDevReadBackend {
     indexer: IndexerBlockExplorer_IndexerBlockExplorer1_Client,
+    db_gateway: Option<DbGateway_DbGateway1_Client>,
     scheduler: SchedulerCoord_SchedulerCoord1_Client,
 }
 
@@ -64,6 +70,7 @@ impl HogdDevReadBackend {
     /// should not start if its child's read endpoint is down.
     pub(crate) async fn connect(
         endpoint: SocketAddr,
+        gateway_endpoint: Option<SocketAddr>,
         scheduler_backend: &HogdDevSchedulerBackend,
     ) -> Result<Self, NodeSupervisorError> {
         let indexer = connect(
@@ -95,8 +102,48 @@ impl HogdDevReadBackend {
             });
         }
 
+        let db_gateway = match gateway_endpoint {
+            Some(gateway_endpoint) => {
+                tracing::debug!(%gateway_endpoint, "connecting to hogd-dev DbGateway");
+                let client = connect(
+                    "hogd-dev DbGateway",
+                    &gateway_endpoint.to_string(),
+                    INDEXER_POOL_SIZE,
+                    DbGateway_DbGateway1_Client::new,
+                )
+                .await
+                .map_err(|source| NodeSupervisorError::DbGatewayConnect {
+                    endpoint: gateway_endpoint,
+                    source,
+                })?;
+
+                let protocol: DbGatewayProtocol =
+                    xdr_common::StringM(PROTOCOL_VERSION.as_bytes().to_vec());
+                let intro_outcome = client.dbgateway_intro(&protocol).await.map_err(|e| {
+                    NodeSupervisorError::DbGatewayRpc {
+                        op: "dbgateway_intro",
+                        error: e.to_string(),
+                    }
+                })?;
+                if intro_outcome != DbGatewayIntroOutcome::DbGatewayIntroSuccess {
+                    return Err(NodeSupervisorError::DbGatewayIntroRejected {
+                        outcome: intro_outcome.0,
+                    });
+                }
+                Some(client)
+            }
+            None => {
+                tracing::warn!(
+                    "hogd-dev did not advertise a gateway endpoint; getStorageAt returns \
+                     NotImplemented"
+                );
+                None
+            }
+        };
+
         Ok(Self {
             indexer,
+            db_gateway,
             scheduler: scheduler_backend.scheduler_client().clone(),
         })
     }
@@ -258,17 +305,70 @@ impl ReadPlane for HogdDevReadBackend {
     }
 
     /// Latest-state storage read.
-    ///
-    /// Returns `NotImplemented` today: needs a `DbGateway1` x23
-    /// client connected to hogd-dev's `gateway` readiness endpoint.
     #[tracing::instrument(skip_all, fields(?address))]
     async fn get_storage_at(
         &self,
         address: ContractAddress,
         key: [u8; 32],
     ) -> Result<StorageItemRead, RpcServerError> {
-        let _ = (address, key);
-        Err(RpcServerError::NotImplemented("getStorageAt".into()))
+        let db_gateway = self
+            .db_gateway
+            .as_ref()
+            .ok_or_else(|| RpcServerError::NotImplemented("getStorageAt".into()))?;
+        let batch: AddressAndKeyBatch = VecM(vec![AddressAndKey {
+            address: address.0,
+            key: StorageKey::ContractData {
+                contract_data_key: StorageKeyContractData::from(key),
+            },
+        }]);
+        let outer = db_gateway
+            .dbgateway_get_items(&batch)
+            .await
+            .map_err(|source| {
+                RpcServerError::BackendUnavailable(format!("hogd-dev DbGateway: {source}"))
+            })?;
+        let payload = match outer {
+            DbGatewayResult::kRPCNone { payload } => payload,
+            DbGatewayResult::Default { error } => {
+                return Err(RpcServerError::BackendUnavailable(format!(
+                    "hogd-dev DbGateway: {}",
+                    RPCError(error)
+                )));
+            }
+            _ => {
+                return Err(RpcServerError::BackendUnavailable(
+                    "hogd-dev DbGateway returned an unrecognized result variant".into(),
+                ));
+            }
+        };
+
+        let item = payload.items.0.into_iter().next().ok_or_else(|| {
+            RpcServerError::BackendUnavailable(
+                "hogd-dev DbGateway response had fewer items than the batch".into(),
+            )
+        })?;
+        match item {
+            DbGatewayItemResult::kRPCNone { item } => Ok(StorageItemRead {
+                block_height: payload.block_height,
+                item: Some(StorageItemInfo::from(item)),
+            }),
+            DbGatewayItemResult::Default { error } => {
+                let err = RPCError(error);
+                if err == RPCError::kRPCNotFound {
+                    Ok(StorageItemRead {
+                        block_height: payload.block_height,
+                        item: None,
+                    })
+                } else {
+                    Err(RpcServerError::BackendUnavailable(format!(
+                        "hogd-dev DbGateway item: {err}"
+                    )))
+                }
+            }
+            _ => Err(RpcServerError::BackendUnavailable(
+                "hogd-dev DbGateway returned an unrecognized per-item variant".into(),
+            )),
+        }
     }
 }
 
@@ -769,7 +869,11 @@ mod tests {
     ) -> HogdDevReadBackend {
         let indexer = make_indexer_client(indexer_addr).await;
         let scheduler = make_scheduler_client(scheduler_addr).await;
-        HogdDevReadBackend { indexer, scheduler }
+        HogdDevReadBackend {
+            indexer,
+            db_gateway: None,
+            scheduler,
+        }
     }
 
     fn canned_tx_hash(bytes: [u8; 32]) -> TxHash {
@@ -1115,7 +1219,7 @@ mod tests {
         // Act
         let result = tokio::time::timeout(
             Duration::from_secs(5),
-            HogdDevReadBackend::connect(dead_addr, &sched_backend),
+            HogdDevReadBackend::connect(dead_addr, None, &sched_backend),
         )
         .await
         .expect("bug: connect to dead port should return promptly");

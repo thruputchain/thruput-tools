@@ -657,16 +657,16 @@ Rollout order:
 - protocol-rs regeneration.
 - groundhog-rpc PR updating supervisor submit mapping and gateway batch fanout.
 
-### PR 5 - Dev Control Endpoint and Transaction Detail
+### PR 5 - Local Storage Reads and Transaction Detail Deferral
 
 After PR 4f proved the published-SDK scaffold loop against hogd-dev,
-PR 5 starts the durable hogd-dev dev-control surface without treating
-runtime clean-slate reset as a required primitive. The product shape was
-refined after comparing Anvil/Hardhat, Aptos, NEAR sandbox, and Solana
-local-validator workflows: EVM-style full-chain forking makes runtime
-reset more useful, but Groundhog is closer to Move/WASM/account-based
-systems where the high-leverage controls are transaction detail and
-targeted state surgery.
+PR 5 closes the concrete local-node storage-read parity gap and defers
+the durable hogd-dev dev-control surface until a real hogd-owned method
+needs it. The product shape was refined after comparing Anvil/Hardhat,
+Aptos, NEAR sandbox, and Solana local-validator workflows: EVM-style
+full-chain forking makes runtime reset more useful, but Groundhog is
+closer to Move/WASM/account-based systems where the high-leverage
+controls are transaction detail and targeted state surgery.
 
 Clean slate is a process-lifecycle concern: restart hogd-dev or add a
 `groundhog node --reset` startup flag that clears local dev state before
@@ -687,15 +687,17 @@ state.
   until a second consumer actually exists. Today only node-supervisor
   mounts `SupervisorDevRpc`; the gateway should not expose
   `groundhog_dev_*`. Hoisting prematurely creates churn without a
-  payoff. Reassess after the hogd-dev control endpoint lands.
+  payoff. Reassess when a real hogd-owned dev-control method is chosen.
 
-**Hogd-dev-only slice (same-owner, no broader hogd team gate):**
+**Local-node storage parity slice:**
 
-- Add a control endpoint to hogd-dev's readiness so the supervisor can
-  expose future dev-control capabilities. `HogdDevEndpoints.control`
-  on the Rust side already exists as `Option<SocketAddr>` with
-  `serde(default)`; today it deserializes to `None` until hogd-dev
-  advertises the endpoint.
+- Wire hogd-dev's existing readiness `gateway` endpoint into
+  node-supervisor and implement local-node `groundhog_getStorageAt`
+  through `DbGateway1`. This closes the concrete public-RPC parity gap
+  without adding a null dev-control protocol.
+- Keep `HogdDevEndpoints.control` on the Rust side as an optional,
+  future-compatible field, but do not add a hogd-dev control endpoint
+  until a real method needs it.
 - Defer transaction detail. See
   `docs/cli/specs/2026-05-07-transaction-detail-options.md` for the
   options paper and current A4 recommendation.
@@ -717,8 +719,8 @@ Hogd-dev local-loop completion requires the normal local development loop used
 by the CLI docs: start node, list deterministic dev accounts, deploy,
 call/query, submit transactions, poll status/receipt, read emitted events,
 start from clean state when requested at launch, and inspect transaction
-detail. `getStorageAt` should either work end-to-end or be explicitly
-removed/deferred from the public local-node promise.
+detail. `getStorageAt` now belongs in the end-to-end local-node promise
+because hogd-dev already exposes the underlying `DbGateway1` surface.
 
 ## Testing Strategy
 
@@ -761,10 +763,10 @@ PR 4f is green. Two parallel tracks are now open.
 
 **This plan (PR 5):**
 
-1. Start PR 5 dev-control work with the narrowed scope: hogd-dev
-   advertises a control endpoint, then implements transaction-detail
-   data behind it. Keep runtime reset out of the stack; track
-   `groundhog node --reset` as a startup-lifecycle follow-up.
+1. Wire hogd-dev's existing `gateway` endpoint into the supervisor and
+   implement local-node `groundhog_getStorageAt`. Keep runtime reset out
+   of the stack; track `groundhog node --reset` as a startup-lifecycle
+   follow-up.
 
 **Cross-team read-DX track (separate spec):**
 

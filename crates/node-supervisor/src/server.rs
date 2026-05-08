@@ -291,7 +291,9 @@ async fn start_rpc_server(
     // Wire the read plane when hogd-dev advertises an indexer endpoint.
     if let Some(read_addr) = readiness.endpoints.read {
         tracing::debug!(%read_addr, "connecting to hogd-dev indexer");
-        let read = HogdDevReadBackend::connect(read_addr, &scheduler_backend).await?;
+        let read =
+            HogdDevReadBackend::connect(read_addr, readiness.endpoints.gateway, &scheduler_backend)
+                .await?;
         start_rpc_server_with_read(
             listen_address,
             scheduler_backend,
@@ -1178,6 +1180,46 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         assert!(
             cursor.len() > 2,
             "first page cursor should be non-empty (got {cursor:?})"
+        );
+
+        handle.stop().await.expect("bug: clean shutdown");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn get_storage_at_returns_item_from_hogd_dev_gateway() {
+        let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "ready-with-indexer");
+        let hogd = HogdDevConfig::default()
+            .with_binary_path(fake_hogd_dev_binary())
+            .with_startup_timeout(Duration::from_secs(5))
+            .with_shutdown_grace(Duration::from_secs(2));
+        let config = NodeSupervisorConfig::default()
+            .with_rpc_listen_address("127.0.0.1:0")
+            .with_hogd_dev(hogd);
+        let handle = NodeSupervisorHandle::start(config)
+            .await
+            .expect("bug: supervisor should start");
+        let url = format!("http://{}", handle.rpc_addr());
+
+        let client = HttpClientBuilder::default()
+            .build(&url)
+            .expect("bug: jsonrpsee http client builds");
+        let address = format!("0x{}", "00".repeat(32));
+        let key = format!("0x{}", "42".repeat(32));
+
+        let read: serde_json::Value = client
+            .request(
+                "groundhog_getStorageAt",
+                jsonrpsee::rpc_params![address, key],
+            )
+            .await
+            .expect("bug: getStorageAt should succeed");
+
+        assert_eq!(read["blockHeight"], 12);
+        assert_eq!(read["item"]["kind"], "bytestring");
+        assert_eq!(
+            read["item"]["bytes"],
+            "0x6c6f63616c2d6e6f64652d73746f72616765"
         );
 
         handle.stop().await.expect("bug: clean shutdown");

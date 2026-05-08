@@ -226,9 +226,10 @@ Maintenance rules:
        `[patch]` recipe so internal contributors can iterate against a sibling
        sdk_rs checkout without waiting on a republish.
 
-  - [ ] PR 5 — hogd-dev control endpoint scaffold (transaction detail
-    deferred; see
-    [`specs/2026-05-07-transaction-detail-options.md`](specs/2026-05-07-transaction-detail-options.md))
+  - [ ] PR 5 — local-node `getStorageAt` parity through hogd-dev's
+    existing `gateway` / `DbGateway1` endpoint. Transaction detail and
+    dev-control are deferred; see
+    [`specs/2026-05-07-transaction-detail-options.md`](specs/2026-05-07-transaction-detail-options.md).
   - [ ] Read DX follow-ups (parallel track to PR 5; cross-team).
     See [`specs/2026-05-07-view-rpc-and-receipt-return-data.md`](specs/2026-05-07-view-rpc-and-receipt-return-data.md).
     Closes the "no-key-required call dry-run / inspect split" deferred item
@@ -465,17 +466,22 @@ Two parallel tracks are open after PR 4f:
 
 **Rust track (no hogd dependency):**
 
-1. Startup clean-slate UX (`groundhog node --reset`) as a process
+1. Local-node `groundhog_getStorageAt` parity by wiring the supervisor to
+   hogd-dev's existing `gateway` / `DbGateway1` endpoint. This is the
+   next concrete wallet-readiness gap and does not require a new hogd
+   protocol surface.
+2. Startup clean-slate UX (`groundhog node --reset`) as a process
    lifecycle feature, not a runtime `groundhog_dev_reset` RPC.
 
 **Hogd-dev/control track:**
 
-2. PR 5 — hogd-dev control endpoint scaffold. Transaction detail is deferred;
-   see `docs/cli/specs/2026-05-07-transaction-detail-options.md`.
+3. Park the hogd-dev dev-control endpoint until a real hogd-owned dev
+   method needs it. Transaction detail is deferred; see
+   `docs/cli/specs/2026-05-07-transaction-detail-options.md`.
 
 **Cross-team track (driven by hogd / protocol-rs):**
 
-3. Read DX follow-ups per
+4. Read DX follow-ups per
    [`specs/2026-05-07-view-rpc-and-receipt-return-data.md`](specs/2026-05-07-view-rpc-and-receipt-return-data.md).
    - Milestone A: receipt return-data + abort-data. Hogd protocol design
      and indexer migration come first; Rust mapping follows protocol-rs
