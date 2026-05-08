@@ -99,10 +99,9 @@ fn parse_storage_key(raw: &str) -> Result<HexBytes, CliError> {
         .strip_prefix("0x")
         .or_else(|| raw.strip_prefix("0X"))
         .unwrap_or(raw);
-    let bytes = hex::decode(stripped)
-        .map_err(|e| CliError::Other(format!("invalid storage key hex: {e}")))?;
+    let bytes = hex::decode(stripped).map_err(|e| CliError::InvalidStorageKey(format!("{e}")))?;
     if bytes.len() != 32 {
-        return Err(CliError::Other(format!(
+        return Err(CliError::InvalidStorageKey(format!(
             "storage key must be exactly 32 bytes / 64 hex characters; got {} bytes",
             bytes.len()
         )));
@@ -138,5 +137,17 @@ mod tests {
     fn parse_storage_key_rejects_short_hex() {
         let err = parse_storage_key("0x1234").unwrap_err();
         assert!(err.to_string().contains("exactly 32 bytes"));
+    }
+
+    #[test]
+    fn parse_storage_key_rejects_long_hex() {
+        let err = parse_storage_key(&format!("0x{}", "42".repeat(33))).unwrap_err();
+        assert!(err.to_string().contains("exactly 32 bytes"));
+    }
+
+    #[test]
+    fn parse_storage_key_rejects_non_hex() {
+        let err = parse_storage_key("0xnot-hex").unwrap_err();
+        assert!(err.to_string().contains("invalid storage key"));
     }
 }

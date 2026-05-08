@@ -1129,6 +1129,45 @@ fn storage_json_reads_latest_item() {
 }
 
 #[test]
+fn storage_json_resolves_contract_alias() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let address = format!("0x{}", "11".repeat(32));
+    let key = format!("0x{}", "42".repeat(32));
+    let (rpc_url, rpc_server) = spawn_storage_rpc(&address, &key);
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.contracts]\ncounter = \"{address}\"\n"
+        ),
+    )
+    .unwrap();
+
+    let output = groundhog()
+        .args(["--json", "storage", "counter", &key])
+        .current_dir(&project)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["ok"], true);
+    assert_eq!(stdout["command"], "storage");
+    assert_eq!(stdout["data"]["address"], address);
+    assert_eq!(stdout["data"]["key"], key);
+}
+
+#[test]
 fn storage_json_rejects_short_key_before_rpc() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");
@@ -1150,12 +1189,18 @@ fn storage_json_rejects_short_key_before_rpc() {
     let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(stderr["ok"], false);
     assert_eq!(stderr["command"], "storage");
-    assert_eq!(stderr["error"]["code"], "other");
+    assert_eq!(stderr["error"]["code"], "invalid_storage_key");
     assert!(
         stderr["error"]["message"]
             .as_str()
             .unwrap()
             .contains("exactly 32 bytes")
+    );
+    assert!(
+        stderr["error"]["hint"]
+            .as_str()
+            .unwrap()
+            .contains("32-byte storage key")
     );
 }
 
