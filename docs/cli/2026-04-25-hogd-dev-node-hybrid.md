@@ -435,7 +435,6 @@ state.
 Initial methods:
 
 - `groundhog_dev_getAccounts`
-- `groundhog_dev_getTransactionDetail`
 - `groundhog_getStorageAt`
 - `groundhog_dev_advanceBlock`
 - `groundhog_dev_snapshot`

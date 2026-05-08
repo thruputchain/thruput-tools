@@ -53,12 +53,15 @@ an economic one. The remaining product questions about gas reduce to:
 That dissolves most of the live retained-data motivation that other
 chains have for keeping `gas_consumed` on every tx.
 
-Storage tokens are not a substitute story. They are **locked when a
-contract grows storage and refunded when storage is deleted** — a
-reservation, not expenditure. Net flow over the lifecycle is zero.
-The product question is "what storage do I currently hold locked?",
-which is queryable from current state via `getStorageAt`, not from
-historical per-tx deltas.
+Storage tokens are not a substitute story. They are **reserved while
+storage exists, not burned**. When a contract grows storage, hogdb
+locks enough storage tokens to cover the committed storage-cost
+increase. When storage shrinks or is deleted, committed storage-cost
+decreases can release reserved tokens, subject to the storage-cost
+model and item-specific semantics. The product question is therefore
+"what balance and storage do I currently have?", which is a current
+state question. Historical per-tx deltas are a separate debugging or
+accounting view, not the default cost loop.
 
 So neither gas nor storage tokens give us a "what did this transaction
 cost?" question to answer post-hoc. Per-tx execution detail is in the
@@ -105,11 +108,11 @@ Confirmed by reading the current code:
 - `TxEventLog` (the indexer's per-tx record, `protocol/event.x:47`)
   retains `proposed_tx_hash`, `exec_result`, and `events`. **No
   `gas_consumed`, no `storage_deltas`, no kConsoleLog output.**
-- `gas_consumed` is computed inside hogexec
-  (`hogd/hogexec/runtime/runtime.cc:101`) and emitted to a metrics
-  rate counter. It does **not** flow into wire `ExecResult` or any
-  retained data. The trace sink path is the only place it is captured
-  per-tx today.
+- `gas_consumed` is computed inside hogexec at the runtime/invocation
+  layer (`hogd/hogexec/runtime/runtime.cc:101`) and accumulated by
+  `SystemCallHandler` for the transaction. It does **not** flow into
+  wire `ExecResult` or any retained data. The trace sink path is the
+  only place it is captured per-tx today.
 - hogexec already has full trace machinery
   (`InvocationFrameTrace`, `SyscallTrace`) behind
   `enable_tracing()`. Used by tests; never on in production.
@@ -133,7 +136,7 @@ Confirmed by reading the current code:
 
 | Path | Production cost | Hogd-side work | Strength | Weakness |
 |---|---|---|---|---|
-| **A1-deltas** retention | per-tx delta retention added to the indexer | indexer schema + commit-path delta capture | Maps to a Groundhog-real concern (state transitions and current locks) | Bigger schema change of the A1 family; once retained it is a forever cost on production indexers |
+| **A1-deltas** retention | per-tx delta retention added to the indexer | indexer schema + committed-delta capture from the hogdb/block commit path, or an equivalent event/indexer feed | Maps to a Groundhog-real concern (state transitions and current locks) | Bigger schema change of the A1 family; once retained it is a forever cost on production indexers |
 | **A2** replay | none | hogdb state-at-height read API + replay harness in hogd-dev | Zero production cost; one path covers gas + deltas + trace; matches Aptos/Sui exactly | Requires hogdb historical reads; unknown scope; depends on per-tx trace determinism (likely fine, not yet confirmed) |
 | **A3** rich submit | response shape on `sendRawTransaction` (or sibling `submitAndAwait`) | scheduler/coordinator return-path enrichment | Just-submitted dev loop is the common case; no retention burden; complements M-A naturally | Doesn't help historical inspection; only useful at submit time |
 | **A4** defer | none | none beyond the null capability-discovery control endpoint already in flight | M-A covers the everyday loop; nothing committed prematurely | Real product gap if/when post-hoc deep inspection becomes a workflow blocker |

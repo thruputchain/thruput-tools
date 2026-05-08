@@ -212,10 +212,9 @@ Maintenance rules:
        (`hogp/e4a1ca88f0ca`) doesn't match the running hogd-dev
        (`hogp/830b7810ee93`). A WASM compiled against the wrong
        protocol deploys cleanly but every call reverts with
-       `deterministicError {kind: "unknown"}` and no further detail
-       (`groundhog_dev_getTransactionDetail` is still a hogd-dev stub).
-       That protocol skew is resolved for default scaffolds by the `sdk 0.14.0`
-       publish and template bump.
+       `deterministicError {kind: "unknown"}`. That protocol skew is
+       resolved for default scaffolds by the `sdk 0.14.0` publish and
+       template bump.
 
     Follow-ups:
 
@@ -227,7 +226,9 @@ Maintenance rules:
        `[patch]` recipe so internal contributors can iterate against a sibling
        sdk_rs checkout without waiting on a republish.
 
-  - [ ] PR 5 — hogd-dev control endpoint + transaction detail
+  - [ ] PR 5 — hogd-dev control endpoint scaffold (transaction detail
+    deferred; see
+    [`specs/2026-05-07-transaction-detail-options.md`](specs/2026-05-07-transaction-detail-options.md))
   - [ ] Read DX follow-ups (parallel track to PR 5; cross-team).
     See [`specs/2026-05-07-view-rpc-and-receipt-return-data.md`](specs/2026-05-07-view-rpc-and-receipt-return-data.md).
     Closes the "no-key-required call dry-run / inspect split" deferred item
@@ -469,8 +470,8 @@ Two parallel tracks are open after PR 4f:
 
 **Hogd-dev/control track:**
 
-2. PR 5 — hogd-dev control endpoint + `groundhog_dev_getTransactionDetail`.
-   See `docs/cli/plans/2026-04-29-local-node-hogd-dev-supervisor.md` PR 5.
+2. PR 5 — hogd-dev control endpoint scaffold. Transaction detail is deferred;
+   see `docs/cli/specs/2026-05-07-transaction-detail-options.md`.
 
 **Cross-team track (driven by hogd / protocol-rs):**
 

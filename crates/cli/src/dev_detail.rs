@@ -73,13 +73,20 @@ async fn fetch_transaction_detail(
     rpc_url: &str,
     tx_hash: TxHash,
 ) -> Result<Option<TransactionDetail>, CliError> {
-    use groundhog_rpc_client::{GroundhogDevApiClient, HttpClientBuilder};
+    use groundhog_rpc_client::HttpClientBuilder;
+    use jsonrpsee::core::client::ClientT;
 
     let client = HttpClientBuilder::default()
         .build(rpc_url)
         .map_err(|e| CliError::RpcConnect(format!("{rpc_url}: {e}")))?;
 
-    match client.get_transaction_detail(tx_hash).await {
+    match client
+        .request(
+            "groundhog_dev_getTransactionDetail",
+            jsonrpsee::rpc_params![tx_hash],
+        )
+        .await
+    {
         Ok(detail) => Ok(detail),
         Err(error) if is_method_not_found(&error) => Ok(None),
         Err(error) => Err(CliError::RpcMethodFailed {

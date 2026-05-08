@@ -689,18 +689,16 @@ state.
   `groundhog_dev_*`. Hoisting prematurely creates churn without a
   payoff. Reassess after the hogd-dev control endpoint lands.
 
-**Hogd-dev-only slices (same-owner, no broader hogd team gate):**
+**Hogd-dev-only slice (same-owner, no broader hogd team gate):**
 
 - Add a control endpoint to hogd-dev's readiness so the supervisor can
-  consume transaction-detail RPCs. `HogdDevEndpoints.control`
+  expose future dev-control capabilities. `HogdDevEndpoints.control`
   on the Rust side already exists as `Option<SocketAddr>` with
   `serde(default)`; today it deserializes to `None` until hogd-dev
   advertises the endpoint.
-- Implement `groundhog_dev_getTransactionDetail`. Cover dev-only debug
-  data (per-frame info, traces, gas breakdown) and explicitly do not
-  duplicate fields that the read-DX spec's Milestone A places on the
-  public `TransactionReceipt` (`return_data`, `abort_data`). Once
-  Milestone A lands, this method's surface shrinks, not grows.
+- Defer transaction detail. See
+  `docs/cli/specs/2026-05-07-transaction-detail-options.md` for the
+  options paper and current A4 recommendation.
 
 **Out of scope for PR 5:**
 

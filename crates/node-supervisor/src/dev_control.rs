@@ -1,16 +1,13 @@
 //! Dev-only JSON-RPC methods served by the node supervisor.
 //!
-//! `groundhog_dev_getAccounts` is live. Transaction detail is reserved until
-//! its backend data exists in hogd-dev.
+//! The trait surface is intentionally minimal pending the options paper at
+//! `docs/cli/specs/2026-05-07-transaction-detail-options.md`.
 
 use std::sync::Arc;
 
 use groundhog_rpc_api::GroundhogDevApiServer;
-use groundhog_rpc_api_types::{
-    dev::{DevAccount, TransactionDetail},
-    transaction::TxHash,
-};
-use jsonrpsee::{core::RpcResult, types::ErrorObjectOwned};
+use groundhog_rpc_api_types::dev::DevAccount;
+use jsonrpsee::core::RpcResult;
 
 /// Supervisor-owned dev RPC state.
 #[derive(Debug, Clone)]
@@ -36,20 +33,4 @@ impl GroundhogDevApiServer for SupervisorDevRpc {
     async fn get_accounts(&self) -> RpcResult<Vec<DevAccount>> {
         Ok((*self.accounts).clone())
     }
-
-    #[tracing::instrument(skip_all, fields(method = "groundhog_dev_getTransactionDetail"))]
-    async fn get_transaction_detail(
-        &self,
-        _tx_hash: TxHash,
-    ) -> RpcResult<Option<TransactionDetail>> {
-        Err(method_not_found("groundhog_dev_getTransactionDetail"))
-    }
-}
-
-fn method_not_found(method: &'static str) -> ErrorObjectOwned {
-    ErrorObjectOwned::owned(
-        jsonrpsee::types::error::METHOD_NOT_FOUND_CODE,
-        format!("{method} is not available from hogd-dev yet"),
-        None::<()>,
-    )
 }

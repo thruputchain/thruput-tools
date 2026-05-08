@@ -12,7 +12,7 @@ use jsonrpsee::proc_macros::rpc;
 use groundhog_rpc_api_types::{
     BlockHeight, ContractAddress,
     block::{BlockInfo, ChainTip},
-    dev::{DevAccount, TransactionDetail},
+    dev::DevAccount,
     events::{EventPage, EventQuery},
     hex::HexBytes,
     receipt::TransactionReceipt,
@@ -77,9 +77,4 @@ pub trait GroundhogDevApi {
     /// List pre-funded dev accounts with addresses and keys.
     #[method(name = "getAccounts")]
     async fn get_accounts(&self) -> RpcResult<Vec<DevAccount>>;
-
-    /// Full retained execution detail for a committed transaction.
-    #[method(name = "getTransactionDetail")]
-    async fn get_transaction_detail(&self, tx_hash: TxHash)
-    -> RpcResult<Option<TransactionDetail>>;
 }
