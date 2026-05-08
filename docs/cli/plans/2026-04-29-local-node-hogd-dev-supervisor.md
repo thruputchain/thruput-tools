@@ -770,10 +770,15 @@ PR 4f is green. Two parallel tracks are now open.
    implement local-node `groundhog_getStorageAt`. Keep runtime reset out
    of the stack; track `groundhog node --reset` as a startup-lifecycle
    follow-up.
+2. Harden process ownership for `groundhog node`: it should behave like a
+   foreground dev server and reliably terminate supervised `hogd-dev` children
+   on Ctrl-C, SIGTERM, normal exit, and startup failure. The local-DX smoke
+   script kills descendants defensively, but that is test harness cleanup, not
+   the product lifecycle contract.
 
 **Cross-team read-DX track (separate spec):**
 
-2. Send
+3. Send
    [`../specs/2026-05-07-view-rpc-and-receipt-return-data.md`](../specs/2026-05-07-view-rpc-and-receipt-return-data.md)
    to Geoff/Ryan for hogd-side design sign-off on Milestone A
    (`TxEventLog` root output + indexer migration) and Milestone B

@@ -21,6 +21,16 @@ For local development without installing:
 cargo run -p groundhog-cli --features dev-node -- node
 ```
 
+For a full local-DX smoke against a real `hogd-dev` binary:
+
+```bash
+scripts/smoke-local-dx.sh
+```
+
+The smoke scaffolds a counter project, builds the WASM, starts `groundhog node`,
+deploys, submits calls through `dev-0`, skips `groundhog view` until it exists,
+and performs a raw `groundhog storage` read for the counter's `value` slot.
+
 Requires the nightly Rust toolchain (pinned via `rust-toolchain.toml`
 in generated projects).
 
@@ -48,7 +58,7 @@ groundhog node
 # Deploy, mutate, and inspect against the active profile
 groundhog deploy
 groundhog call my-counter increment 1
-groundhog storage my-counter 0x0000000000000000000000000000000000000000000000000000000000000000
+groundhog storage my-counter <32-byte-storage-key>
 ```
 
 If you installed the CLI without `--features dev-node`, `groundhog node`

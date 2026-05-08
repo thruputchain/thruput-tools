@@ -410,9 +410,15 @@ async fn get_storage_at_from_db_gateway(
                 RPCError(error)
             )));
         }
-        _ => {
+        unexpected => {
+            tracing::warn!(
+                ?unexpected,
+                "hogd-dev DbGateway returned unsupported outer result variant"
+            );
             return Err(RpcServerError::BackendUnavailable(
-                "hogd-dev DbGateway returned an unrecognized result variant".into(),
+                "hogd-dev DbGateway returned an unsupported result variant; regenerate the \
+                 DbGateway client for this protocol"
+                    .into(),
             ));
         }
     };
@@ -442,9 +448,17 @@ async fn get_storage_at_from_db_gateway(
                 )))
             }
         }
-        _ => Err(RpcServerError::BackendUnavailable(
-            "hogd-dev DbGateway returned an unrecognized per-item variant".into(),
-        )),
+        unexpected => {
+            tracing::warn!(
+                ?unexpected,
+                "hogd-dev DbGateway returned unsupported per-item result variant"
+            );
+            Err(RpcServerError::BackendUnavailable(
+                "hogd-dev DbGateway returned an unsupported per-item result variant; \
+                 regenerate the DbGateway client for this protocol"
+                    .into(),
+            ))
+        }
     }
 }
 

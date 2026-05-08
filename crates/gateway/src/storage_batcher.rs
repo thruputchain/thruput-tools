@@ -67,9 +67,17 @@ impl StorageReadSink for DbGatewaySink {
                 "db_gateway: {}",
                 RPCError(error)
             ))),
-            _ => Err(GatewayError::BackendUnavailable(
-                "db_gateway returned an unrecognized result variant".into(),
-            )),
+            unexpected => {
+                tracing::warn!(
+                    ?unexpected,
+                    "db_gateway returned unsupported outer result variant"
+                );
+                Err(GatewayError::BackendUnavailable(
+                    "db_gateway returned an unsupported result variant; regenerate the \
+                     DbGateway client for this protocol"
+                        .into(),
+                ))
+            }
         }
     }
 }
@@ -121,9 +129,17 @@ impl BatchProcessor for StorageReadProcessor {
                                 )))
                             }
                         }
-                        Some(_) => Err(GatewayError::BackendUnavailable(
-                            "db_gateway returned an unrecognized per-item variant".into(),
-                        )),
+                        Some(unexpected) => {
+                            tracing::warn!(
+                                ?unexpected,
+                                "db_gateway returned unsupported per-item result variant"
+                            );
+                            Err(GatewayError::BackendUnavailable(
+                                "db_gateway returned an unsupported per-item result variant; \
+                                 regenerate the DbGateway client for this protocol"
+                                    .into(),
+                            ))
+                        }
                         None => Err(GatewayError::BackendUnavailable(
                             "db_gateway response had fewer items than the batch".into(),
                         )),
