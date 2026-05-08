@@ -7,6 +7,8 @@ use jsonrpsee::types::error::METHOD_NOT_FOUND_CODE;
 
 use crate::{CliError, Print};
 
+const GET_TRANSACTION_DETAIL_METHOD: &str = "groundhog_dev_getTransactionDetail";
+
 pub fn fetch_transaction_detail_blocking(
     rpc_url: &str,
     tx_hash: TxHash,
@@ -82,7 +84,7 @@ async fn fetch_transaction_detail(
 
     match client
         .request(
-            "groundhog_dev_getTransactionDetail",
+            GET_TRANSACTION_DETAIL_METHOD,
             jsonrpsee::rpc_params![tx_hash],
         )
         .await

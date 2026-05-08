@@ -111,6 +111,7 @@ fn main() {
         },
         Ok("ready-with-indexer") => run_with_indexer(FakeIndexerMode::Normal),
         Ok("ready-with-indexer-no-gateway") => run_with_indexer_no_gateway(FakeIndexerMode::Normal),
+        Ok("ready-with-gateway") => run_with_db_gateway_no_indexer(FakeDbGatewayMode::Normal),
         Ok("indexer-connect-fail") => run_indexer_connect_fail(),
         Ok("indexer-rpc-fail") => run_with_indexer(FakeIndexerMode::RpcFail),
         Ok("indexer-runtime-rpc-fail") => run_with_indexer(FakeIndexerMode::RuntimeRpcFail),
@@ -219,6 +220,24 @@ fn run_with_indexer_no_gateway(indexer_mode: FakeIndexerMode) {
     eprintln!(r#"{{"level":"info","target":"hogd_dev","message":"stopping"}}"#);
 }
 
+fn run_with_db_gateway_no_indexer(db_gateway_mode: FakeDbGatewayMode) {
+    install_sigterm_handler();
+    write_pid_file_if_requested();
+    let scheduler = start_fake_scheduler(FakeSchedulerMode::Normal);
+    let db_gateway = start_fake_db_gateway(db_gateway_mode);
+    println!(
+        "{}",
+        readiness_with_gateway(scheduler.addr, db_gateway.addr)
+    );
+    eprintln!(r#"{{"level":"info","target":"hogd_dev","message":"ready"}}"#);
+
+    while !TERMINATED.load(Ordering::SeqCst) {
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    eprintln!(r#"{{"level":"info","target":"hogd_dev","message":"stopping"}}"#);
+}
+
 fn run_with_indexer_and_db_gateway(
     indexer_mode: FakeIndexerMode,
     db_gateway_mode: FakeDbGatewayMode,
@@ -315,6 +334,14 @@ fn readiness_with_read(scheduler: SocketAddr, read: SocketAddr) -> String {
     let accounts = readiness_dev_accounts();
     format!(
         r#"{{"status":"ready","network_id":"groundhog-local","endpoints":{{"scheduler":"{scheduler}","read":"{read}"}},"dev_accounts":{accounts}}}"#
+    )
+}
+
+/// Readiness JSON with scheduler and gateway endpoints, but no read/indexer endpoint.
+fn readiness_with_gateway(scheduler: SocketAddr, gateway: SocketAddr) -> String {
+    let accounts = readiness_dev_accounts();
+    format!(
+        r#"{{"status":"ready","network_id":"groundhog-local","endpoints":{{"scheduler":"{scheduler}","gateway":"{gateway}"}},"dev_accounts":{accounts}}}"#
     )
 }
 

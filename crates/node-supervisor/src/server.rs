@@ -2,8 +2,9 @@
 //!
 //! Owns hogd-dev process supervision and the public JSON-RPC server. Backend
 //! adapters land by plane: chain and submit are backed by hogd-dev's scheduler
-//! endpoint; read is backed by hogd-dev's indexer endpoint when advertised in
-//! readiness.
+//! endpoint; receipt/event reads are backed by hogd-dev's indexer endpoint
+//! when advertised in readiness, and latest-state storage reads can be backed
+//! by hogd-dev's `DbGateway` endpoint independently.
 
 use std::{future::Future, net::SocketAddr, process::ExitStatus};
 
@@ -16,8 +17,11 @@ use serde::Serialize;
 
 use crate::{
     HogdDevProcess, HogdDevReadiness, NodeSupervisorConfig, NodeSupervisorError,
-    block_driver::BlockDriverTask, dev_control::SupervisorDevRpc, hogd_dev::build_dev_accounts,
-    read_backend::HogdDevReadBackend, rpc_backend::HogdDevSchedulerBackend,
+    block_driver::BlockDriverTask,
+    dev_control::SupervisorDevRpc,
+    hogd_dev::build_dev_accounts,
+    read_backend::{HogdDevReadBackend, HogdDevStorageReadBackend},
+    rpc_backend::HogdDevSchedulerBackend,
     stub_backend::StubBackend,
 };
 
@@ -53,6 +57,8 @@ pub enum PlaneStatus {
     Scheduler,
     /// The plane is backed by hogd-dev's indexer x23 endpoint.
     Indexer,
+    /// The plane is backed by hogd-dev's `DbGateway` x23 endpoint.
+    DbGateway,
     /// The plane is intentionally served by the supervisor stub.
     Stub,
 }
@@ -62,7 +68,7 @@ impl PlaneStatus {
     pub const fn is_indexer_backed(self) -> bool {
         match self {
             Self::Indexer => true,
-            Self::Scheduler | Self::Stub => false,
+            Self::Scheduler | Self::DbGateway | Self::Stub => false,
         }
     }
 }
@@ -94,6 +100,15 @@ impl BackendPlanes {
             submit: PlaneStatus::Scheduler,
             chain: PlaneStatus::Scheduler,
             read: PlaneStatus::Indexer,
+        }
+    }
+
+    /// Scheduler-backed submit/chain with DbGateway-backed latest storage reads.
+    pub const fn hogd_dev_storage_only() -> Self {
+        Self {
+            submit: PlaneStatus::Scheduler,
+            chain: PlaneStatus::Scheduler,
+            read: PlaneStatus::DbGateway,
         }
     }
 }
@@ -300,7 +315,8 @@ async fn start_rpc_server(
     let scheduler_backend = HogdDevSchedulerBackend::connect(readiness.endpoints.scheduler).await?;
     scheduler_backend.ensure_dev_genesis().await?;
 
-    // Wire the read plane when hogd-dev advertises an indexer endpoint.
+    // Prefer the full indexer-backed read plane when available. If hogd-dev
+    // only advertises DbGateway, still serve latest-state storage reads.
     if let Some(read_addr) = readiness.endpoints.read {
         tracing::debug!(%read_addr, "connecting to hogd-dev indexer");
         let read = HogdDevReadBackend::connect(
@@ -318,11 +334,22 @@ async fn start_rpc_server(
             BackendPlanes::hogd_dev_full(),
         )
         .await
+    } else if let Some(gateway_addr) = readiness.endpoints.gateway {
+        tracing::debug!(%gateway_addr, "connecting to hogd-dev DbGateway for storage reads");
+        let read = HogdDevStorageReadBackend::connect(gateway_addr, protocol_version).await?;
+        start_rpc_server_with_read(
+            listen_address,
+            scheduler_backend,
+            read,
+            dev_accounts,
+            BackendPlanes::hogd_dev_storage_only(),
+        )
+        .await
     } else {
         tracing::warn!(
-            "hogd-dev did not advertise a read endpoint; read plane is stubbed \
-             (getTransactionReceipt / getTransactionStatus / getContractEvents \
-              return NotImplemented)"
+            "hogd-dev did not advertise read or gateway endpoints; read plane is stubbed \
+             (getTransactionReceipt / getTransactionStatus / getContractEvents / \
+              getStorageAt return NotImplemented)"
         );
         start_rpc_server_with_read(
             listen_address,
@@ -946,6 +973,13 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     }
 
     #[test]
+    fn plane_status_db_gateway_serializes_to_db_gateway_string() {
+        let status = PlaneStatus::DbGateway;
+        let json = serde_json::to_value(status).expect("bug: PlaneStatus serializes");
+        assert_eq!(json, "db_gateway");
+    }
+
+    #[test]
     fn plane_status_stub_serializes_to_stub_string() {
         let status = PlaneStatus::Stub;
         let json = serde_json::to_value(status).expect("bug: PlaneStatus serializes");
@@ -956,6 +990,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     fn plane_status_read_predicates_match_known_planes() {
         assert!(!PlaneStatus::Scheduler.is_indexer_backed());
         assert!(PlaneStatus::Indexer.is_indexer_backed());
+        assert!(!PlaneStatus::DbGateway.is_indexer_backed());
         assert!(!PlaneStatus::Stub.is_indexer_backed());
     }
 
@@ -975,6 +1010,26 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             "submit": "scheduler",
             "chain": "scheduler",
             "read": "indexer"
+        });
+        assert_eq!(json, expected);
+    }
+
+    #[test]
+    fn backend_planes_hogd_dev_storage_only_constructor() {
+        let planes = BackendPlanes::hogd_dev_storage_only();
+        assert_eq!(planes.submit, PlaneStatus::Scheduler);
+        assert_eq!(planes.chain, PlaneStatus::Scheduler);
+        assert_eq!(planes.read, PlaneStatus::DbGateway);
+    }
+
+    #[test]
+    fn backend_planes_hogd_dev_storage_only_serializes_correctly() {
+        let planes = BackendPlanes::hogd_dev_storage_only();
+        let json = serde_json::to_value(planes).expect("bug: BackendPlanes serializes");
+        let expected = serde_json::json!({
+            "submit": "scheduler",
+            "chain": "scheduler",
+            "read": "db_gateway"
         });
         assert_eq!(json, expected);
     }
@@ -1016,6 +1071,30 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             handle.backend_planes(),
             BackendPlanes::hogd_dev_full(),
             "supervisor with indexer should report hogd_dev_full backend planes"
+        );
+
+        handle.stop().await.expect("bug: clean shutdown");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn start_with_gateway_without_indexer_reports_storage_only_backend_planes() {
+        let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "ready-with-gateway");
+        let hogd = HogdDevConfig::default()
+            .with_binary_path(fake_hogd_dev_binary())
+            .with_startup_timeout(Duration::from_secs(5))
+            .with_shutdown_grace(Duration::from_secs(2));
+        let config = NodeSupervisorConfig::default()
+            .with_rpc_listen_address("127.0.0.1:0")
+            .with_hogd_dev(hogd);
+        let handle = NodeSupervisorHandle::start(config)
+            .await
+            .expect("bug: supervisor should start against fake hogd-dev with gateway");
+
+        assert_eq!(
+            handle.backend_planes(),
+            BackendPlanes::hogd_dev_storage_only(),
+            "supervisor with only DbGateway should report storage-only backend planes"
         );
 
         handle.stop().await.expect("bug: clean shutdown");
@@ -1242,6 +1321,57 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         assert_eq!(read["blockHeight"], CANNED_STORAGE_HEIGHT);
         assert_eq!(read["item"]["kind"], "bytestring");
         assert_eq!(read["item"]["bytes"], CANNED_STORAGE_VALUE_HEX);
+
+        handle.stop().await.expect("bug: clean shutdown");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn get_storage_at_works_when_gateway_is_advertised_without_indexer() {
+        // Arrange
+        let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "ready-with-gateway");
+        let hogd = HogdDevConfig::default()
+            .with_binary_path(fake_hogd_dev_binary())
+            .with_startup_timeout(Duration::from_secs(5))
+            .with_shutdown_grace(Duration::from_secs(2));
+        let config = NodeSupervisorConfig::default()
+            .with_rpc_listen_address("127.0.0.1:0")
+            .with_hogd_dev(hogd);
+        let handle = NodeSupervisorHandle::start(config)
+            .await
+            .expect("bug: supervisor should start");
+        let url = format!("http://{}", handle.rpc_addr());
+
+        let client = HttpClientBuilder::default()
+            .build(&url)
+            .expect("bug: jsonrpsee http client builds");
+        let address = format!("0x{}", "00".repeat(32));
+
+        // Act
+        let read: serde_json::Value = client
+            .request(
+                "groundhog_getStorageAt",
+                jsonrpsee::rpc_params![address, CANNED_STORAGE_KEY_HEX],
+            )
+            .await
+            .expect("bug: getStorageAt should succeed with DbGateway only");
+
+        // Assert
+        assert_eq!(read["blockHeight"], CANNED_STORAGE_HEIGHT);
+        assert_eq!(read["item"]["kind"], "bytestring");
+        assert_eq!(read["item"]["bytes"], CANNED_STORAGE_VALUE_HEX);
+
+        let err = client
+            .request::<serde_json::Value, _>(
+                "groundhog_getTransactionReceipt",
+                jsonrpsee::rpc_params![CANNED_HASH_A_HEX],
+            )
+            .await
+            .expect_err("bug: receipt reads should remain unavailable without indexer");
+        assert!(
+            matches!(&err, ClientError::Call(object) if object.code() == codes::NOT_IMPLEMENTED),
+            "expected NOT_IMPLEMENTED JSON-RPC error, got {err:?}",
+        );
 
         handle.stop().await.expect("bug: clean shutdown");
     }

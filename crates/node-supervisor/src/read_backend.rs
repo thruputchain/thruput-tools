@@ -4,6 +4,8 @@
 //! x23 endpoint. `transaction_receipt` and `contract_events` are pure indexer
 //! calls; `transaction_status` does the composite scheduler-then-indexer probe
 //! that the gateway uses (scheduler for `Pending`, indexer for `Committed`).
+//! Latest-state storage reads use hogd-dev's `DbGateway` endpoint and can also be
+//! served by [`HogdDevStorageReadBackend`] when the indexer is absent.
 //!
 //! See `docs/cli/specs/2026-04-29-node-supervisor-x23-client-boundary.md` for
 //! the boundary discipline. The scheduler client is shared from
@@ -102,34 +104,8 @@ impl HogdDevReadBackend {
             });
         }
 
-        let db_gateway = if let Some(gateway_endpoint) = gateway_endpoint {
-            tracing::debug!(%gateway_endpoint, "connecting to hogd-dev DbGateway");
-            let client = connect(
-                "hogd-dev DbGateway",
-                &gateway_endpoint.to_string(),
-                HOGD_DEV_POOL_SIZE,
-                DbGateway_DbGateway1_Client::new,
-            )
-            .await
-            .map_err(|source| NodeSupervisorError::DbGatewayConnect {
-                endpoint: gateway_endpoint,
-                source,
-            })?;
-
-            let protocol: DbGatewayProtocol =
-                xdr_common::StringM(protocol_version.as_bytes().to_vec());
-            let intro_outcome = client.dbgateway_intro(&protocol).await.map_err(|e| {
-                NodeSupervisorError::DbGatewayRpc {
-                    op: "dbgateway_intro",
-                    error: e.to_string(),
-                }
-            })?;
-            if intro_outcome != DbGatewayIntroOutcome::DbGatewayIntroSuccess {
-                return Err(NodeSupervisorError::DbGatewayIntroRejected {
-                    outcome: intro_outcome.0,
-                });
-            }
-            Some(client)
+        let db_gateway = if let Some(endpoint) = gateway_endpoint {
+            Some(connect_db_gateway(endpoint, protocol_version).await?)
         } else {
             tracing::warn!(
                 "hogd-dev did not advertise a gateway endpoint; getStorageAt is unavailable"
@@ -142,6 +118,65 @@ impl HogdDevReadBackend {
             db_gateway,
             scheduler: scheduler_backend.scheduler_client().clone(),
         })
+    }
+}
+
+/// DbGateway-only read plane for hogd-dev readiness payloads that expose
+/// latest-state storage reads without the indexer.
+#[derive(Clone)]
+pub(crate) struct HogdDevStorageReadBackend {
+    db_gateway: DbGateway_DbGateway1_Client,
+}
+
+impl fmt::Debug for HogdDevStorageReadBackend {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HogdDevStorageReadBackend")
+            .finish_non_exhaustive()
+    }
+}
+
+impl HogdDevStorageReadBackend {
+    pub(crate) async fn connect(
+        endpoint: SocketAddr,
+        protocol_version: &str,
+    ) -> Result<Self, NodeSupervisorError> {
+        Ok(Self {
+            db_gateway: connect_db_gateway(endpoint, protocol_version).await?,
+        })
+    }
+}
+
+#[async_trait]
+impl ReadPlane for HogdDevStorageReadBackend {
+    async fn transaction_receipt(
+        &self,
+        _tx_hash: TxHash,
+    ) -> Result<Option<TransactionReceipt>, RpcServerError> {
+        Err(RpcServerError::NotImplemented("transactionReceipt".into()))
+    }
+
+    async fn transaction_status(
+        &self,
+        _tx_hash: TxHash,
+    ) -> Result<TransactionStatus, RpcServerError> {
+        Err(RpcServerError::NotImplemented("transactionStatus".into()))
+    }
+
+    async fn contract_events(&self, _query: EventQuery) -> Result<EventPage, RpcServerError> {
+        Err(RpcServerError::NotImplemented("getEvents".into()))
+    }
+
+    /// Latest-state storage read.
+    ///
+    /// Returns the hogd-dev `DbGateway1` snapshot block height whether the
+    /// item is present or absent, matching the public gateway contract.
+    #[tracing::instrument(skip_all, fields(?address, ?key))]
+    async fn get_storage_at(
+        &self,
+        address: ContractAddress,
+        key: [u8; 32],
+    ) -> Result<StorageItemRead, RpcServerError> {
+        get_storage_at_from_db_gateway(&self.db_gateway, address, key).await
     }
 }
 
@@ -314,62 +349,102 @@ impl ReadPlane for HogdDevReadBackend {
             .db_gateway
             .as_ref()
             .ok_or_else(|| RpcServerError::BackendUnavailable("db_gateway not connected".into()))?;
-        let batch: AddressAndKeyBatch = VecM(vec![AddressAndKey {
-            address: address.0,
-            key: StorageKey::ContractData {
-                contract_data_key: StorageKeyContractData::from(key),
-            },
-        }]);
-        let outer = db_gateway
-            .dbgateway_get_items(&batch)
-            .await
-            .map_err(|source| {
-                RpcServerError::BackendUnavailable(format!("hogd-dev DbGateway: {source}"))
-            })?;
-        let payload = match outer {
-            DbGatewayResult::kRPCNone { payload } => payload,
-            DbGatewayResult::Default { error } => {
-                return Err(RpcServerError::BackendUnavailable(format!(
-                    "hogd-dev DbGateway: {}",
-                    RPCError(error)
-                )));
-            }
-            _ => {
-                return Err(RpcServerError::BackendUnavailable(
-                    "hogd-dev DbGateway returned an unrecognized result variant".into(),
-                ));
-            }
-        };
+        get_storage_at_from_db_gateway(db_gateway, address, key).await
+    }
+}
 
-        let item = payload.items.0.into_iter().next().ok_or_else(|| {
-            RpcServerError::BackendUnavailable(
-                "hogd-dev DbGateway response had fewer items than the batch".into(),
-            )
+async fn connect_db_gateway(
+    endpoint: SocketAddr,
+    protocol_version: &str,
+) -> Result<DbGateway_DbGateway1_Client, NodeSupervisorError> {
+    tracing::debug!(%endpoint, "connecting to hogd-dev DbGateway");
+    let client = connect(
+        "hogd-dev DbGateway",
+        &endpoint.to_string(),
+        HOGD_DEV_POOL_SIZE,
+        DbGateway_DbGateway1_Client::new,
+    )
+    .await
+    .map_err(|source| NodeSupervisorError::DbGatewayConnect { endpoint, source })?;
+
+    let protocol: DbGatewayProtocol = xdr_common::StringM(protocol_version.as_bytes().to_vec());
+    let intro_outcome =
+        client
+            .dbgateway_intro(&protocol)
+            .await
+            .map_err(|e| NodeSupervisorError::DbGatewayRpc {
+                op: "dbgateway_intro",
+                error: e.to_string(),
+            })?;
+    if intro_outcome != DbGatewayIntroOutcome::DbGatewayIntroSuccess {
+        return Err(NodeSupervisorError::DbGatewayIntroRejected {
+            outcome: intro_outcome.0,
+        });
+    }
+
+    Ok(client)
+}
+
+async fn get_storage_at_from_db_gateway(
+    db_gateway: &DbGateway_DbGateway1_Client,
+    address: ContractAddress,
+    key: [u8; 32],
+) -> Result<StorageItemRead, RpcServerError> {
+    let batch: AddressAndKeyBatch = VecM(vec![AddressAndKey {
+        address: address.0,
+        key: StorageKey::ContractData {
+            contract_data_key: StorageKeyContractData::from(key),
+        },
+    }]);
+    let outer = db_gateway
+        .dbgateway_get_items(&batch)
+        .await
+        .map_err(|source| {
+            RpcServerError::BackendUnavailable(format!("hogd-dev DbGateway: {source}"))
         })?;
-        // `payload.block_height` is the freshness boundary for the whole
-        // batch, including kRPCNotFound item misses.
-        match item {
-            DbGatewayItemResult::kRPCNone { item } => Ok(StorageItemRead {
-                block_height: payload.block_height,
-                item: Some(StorageItemInfo::from(item)),
-            }),
-            DbGatewayItemResult::Default { error } => {
-                let err = RPCError(error);
-                if err == RPCError::kRPCNotFound {
-                    Ok(StorageItemRead {
-                        block_height: payload.block_height,
-                        item: None,
-                    })
-                } else {
-                    Err(RpcServerError::BackendUnavailable(format!(
-                        "hogd-dev DbGateway item: {err}"
-                    )))
-                }
-            }
-            _ => Err(RpcServerError::BackendUnavailable(
-                "hogd-dev DbGateway returned an unrecognized per-item variant".into(),
-            )),
+    let payload = match outer {
+        DbGatewayResult::kRPCNone { payload } => payload,
+        DbGatewayResult::Default { error } => {
+            return Err(RpcServerError::BackendUnavailable(format!(
+                "hogd-dev DbGateway: {}",
+                RPCError(error)
+            )));
         }
+        _ => {
+            return Err(RpcServerError::BackendUnavailable(
+                "hogd-dev DbGateway returned an unrecognized result variant".into(),
+            ));
+        }
+    };
+
+    let item = payload.items.0.into_iter().next().ok_or_else(|| {
+        RpcServerError::BackendUnavailable(
+            "hogd-dev DbGateway response had fewer items than the batch".into(),
+        )
+    })?;
+    // `payload.block_height` is the freshness boundary for the whole
+    // batch, including kRPCNotFound item misses.
+    match item {
+        DbGatewayItemResult::kRPCNone { item } => Ok(StorageItemRead {
+            block_height: payload.block_height,
+            item: Some(StorageItemInfo::from(item)),
+        }),
+        DbGatewayItemResult::Default { error } => {
+            let err = RPCError(error);
+            if err == RPCError::kRPCNotFound {
+                Ok(StorageItemRead {
+                    block_height: payload.block_height,
+                    item: None,
+                })
+            } else {
+                Err(RpcServerError::BackendUnavailable(format!(
+                    "hogd-dev DbGateway item: {err}"
+                )))
+            }
+        }
+        _ => Err(RpcServerError::BackendUnavailable(
+            "hogd-dev DbGateway returned an unrecognized per-item variant".into(),
+        )),
     }
 }
 
