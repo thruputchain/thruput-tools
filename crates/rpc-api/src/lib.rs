@@ -74,10 +74,6 @@ pub trait GroundhogApi {
 #[open_rpc(namespace = "groundhog_dev", tag = "Dev API")]
 #[rpc(client, server, namespace = "groundhog_dev")]
 pub trait GroundhogDevApi {
-    /// Reset the local node to its initial state.
-    #[method(name = "reset")]
-    async fn reset(&self) -> RpcResult<()>;
-
     /// List pre-funded dev accounts with addresses and keys.
     #[method(name = "getAccounts")]
     async fn get_accounts(&self) -> RpcResult<Vec<DevAccount>>;

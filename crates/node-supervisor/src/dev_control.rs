@@ -1,7 +1,7 @@
 //! Dev-only JSON-RPC methods served by the node supervisor.
 //!
-//! `groundhog_dev_getAccounts` is live; other `groundhog_dev_*` methods return
-//! method-not-found until their backend data exists in hogd-dev.
+//! `groundhog_dev_getAccounts` is live. Transaction detail is reserved until
+//! its backend data exists in hogd-dev.
 
 use std::sync::Arc;
 
@@ -29,11 +29,6 @@ impl SupervisorDevRpc {
 
 #[async_trait::async_trait]
 impl GroundhogDevApiServer for SupervisorDevRpc {
-    #[tracing::instrument(skip_all, fields(method = "groundhog_dev_reset"))]
-    async fn reset(&self) -> RpcResult<()> {
-        Err(method_not_found("groundhog_dev_reset"))
-    }
-
     #[tracing::instrument(
         skip_all,
         fields(method = "groundhog_dev_getAccounts", account_count = self.accounts.len())
