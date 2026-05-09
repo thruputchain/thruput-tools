@@ -191,33 +191,40 @@ async fn clean_stale_pid(
         return Ok(());
     };
 
-    if !matches_expected_program(&info.command, expected_program) || info.process_group != pid {
+    if !matches_expected_program(&info.program, expected_program) {
         tracing::warn!(
             pid,
-            command = %info.command,
+            program = %info.program,
             path = %path.display(),
-            "PID file points at a different process; ignoring stale PID"
+            "PID file points at a different program (likely PID reuse); ignoring"
         );
         return Ok(());
     }
 
-    if info.parent_pid == 1 {
-        tracing::info!(
-            pid,
-            ppid = info.parent_pid,
-            "stopping prior hogd-dev process group before startup"
-        );
-        kill_process_group(path, pid, grace).await?;
-    } else {
+    if info.process_group != pid {
+        // The supervisor always spawns hogd-dev as its own process-group
+        // leader (`process_group(0)`), so a recorded PID that is not its
+        // group's leader means signalling the group would hit the wrong
+        // processes. Refuse to clean up.
         tracing::warn!(
             pid,
-            ppid = info.parent_pid,
+            pgid = info.process_group,
             path = %path.display(),
-            "PID file points at a live hogd-dev process that is not orphaned; leaving it running"
+            "PID file's hogd-dev is not the leader of its process group; refusing to signal"
         );
+        return Ok(());
     }
 
-    Ok(())
+    // Lock ownership already proved no live supervisor holds this PID file,
+    // so the recorded child is orphaned no matter where it got reparented.
+    // Don't gate on `ppid == 1` — subreapers (systemd --user, Docker/tini,
+    // dev-container launchers) reparent orphans to themselves, not init.
+    tracing::info!(
+        pid,
+        ppid = info.parent_pid,
+        "stopping prior hogd-dev process group before startup"
+    );
+    kill_process_group(path, pid, grace).await
 }
 
 #[cfg(unix)]
@@ -225,11 +232,17 @@ async fn clean_stale_pid(
 struct ProcessInfo {
     parent_pid: u32,
     process_group: u32,
-    command: String,
+    /// Program basename as reported by `ps -o comm=` (kernel-set process
+    /// name, truncated to ~15 bytes on Linux).
+    program: String,
 }
 
 #[cfg(unix)]
 fn process_info(target_pid: u32) -> Option<ProcessInfo> {
+    // `comm=` returns the program basename as a single whitespace-free
+    // token on both Linux and BSD ps, which is stable across binary paths
+    // that contain spaces. `command=` would emit the full argv with the
+    // path embedded and break the parser below.
     let output = std::process::Command::new("ps")
         .args([
             "-p",
@@ -239,7 +252,7 @@ fn process_info(target_pid: u32) -> Option<ProcessInfo> {
             "-o",
             "pgid=",
             "-o",
-            "command=",
+            "comm=",
         ])
         .output()
         .ok()?;
@@ -252,31 +265,26 @@ fn process_info(target_pid: u32) -> Option<ProcessInfo> {
     let mut parts = line.split_whitespace();
     let parent_pid = parts.next()?.trim().parse::<u32>().ok()?;
     let process_group = parts.next()?.trim().parse::<u32>().ok()?;
-    let command = parts.next()?.trim().to_string();
-    if command.is_empty() {
+    let program = parts.next()?.trim().to_string();
+    if program.is_empty() {
         return None;
     }
 
     Some(ProcessInfo {
         parent_pid,
         process_group,
-        command,
+        program,
     })
 }
 
 #[cfg(unix)]
-fn matches_expected_program(command: &str, expected_program: &OsStr) -> bool {
+fn matches_expected_program(program: &str, expected_program: &OsStr) -> bool {
     let expected = Path::new(expected_program)
         .file_name()
         .and_then(OsStr::to_str)
         .unwrap_or_default();
-    let actual = command.split_whitespace().next().unwrap_or(command);
-    let actual = Path::new(actual)
-        .file_name()
-        .and_then(OsStr::to_str)
-        .unwrap_or(command);
 
-    !expected.is_empty() && actual == expected
+    !expected.is_empty() && program == expected
 }
 
 #[cfg(unix)]
@@ -285,16 +293,36 @@ async fn kill_process_group(
     process_group: u32,
     grace: Duration,
 ) -> Result<(), NodeSupervisorError> {
+    /// Hard cap on the post-SIGKILL drain. Bounds startup latency while
+    /// giving the kernel a window to release sockets the dying child held
+    /// (otherwise the new hogd-dev can race the old one for the listening
+    /// port and fail to bind).
+    const POST_KILL_DRAIN: Duration = Duration::from_millis(500);
+
     signal_process_group(path, process_group, libc::SIGTERM)?;
-    let deadline = time::Instant::now() + grace;
+    let term_deadline = time::Instant::now() + grace;
+    let mut kill_deadline: Option<time::Instant> = None;
 
     loop {
         if !process_group_exists(process_group) {
             return Ok(());
         }
 
-        if time::Instant::now() >= deadline {
+        let now = time::Instant::now();
+
+        if kill_deadline.is_none() && now >= term_deadline {
             signal_process_group(path, process_group, libc::SIGKILL)?;
+            kill_deadline = Some(now + POST_KILL_DRAIN);
+        }
+
+        if let Some(deadline) = kill_deadline
+            && now >= deadline
+        {
+            tracing::warn!(
+                process_group,
+                "hogd-dev process group still present after SIGKILL drain; \
+                 proceeding and letting the new child surface any port conflict"
+            );
             return Ok(());
         }
 
@@ -483,12 +511,10 @@ mod tests {
 
     #[test]
     fn matches_expected_program_compares_basenames() {
+        // `program` is the comm-style basename produced by `ps -o comm=`,
+        // so it never contains arguments or path components.
         assert!(matches_expected_program(
-            "/tmp/test-bin/hogd-dev",
-            std::ffi::OsStr::new("hogd-dev")
-        ));
-        assert!(matches_expected_program(
-            "/tmp/test-bin/hogd-dev --listen-host 127.0.0.1",
+            "hogd-dev",
             std::ffi::OsStr::new("hogd-dev")
         ));
         assert!(matches_expected_program(
@@ -496,9 +522,95 @@ mod tests {
             std::ffi::OsStr::new("/usr/local/bin/hogd-dev")
         ));
         assert!(!matches_expected_program(
-            "/usr/bin/sleep",
+            "sleep",
             std::ffi::OsStr::new("hogd-dev")
         ));
+        // Truncated comm column must not collide with a longer expected
+        // basename.
+        assert!(!matches_expected_program(
+            "hogd-de",
+            std::ffi::OsStr::new("hogd-dev")
+        ));
+    }
+
+    #[tokio::test]
+    async fn acquire_kills_recorded_running_process() {
+        use std::os::unix::process::CommandExt;
+
+        let temp = TempDir::new().expect("bug: temp dir should be created");
+        let path = temp.path().join("hogd-dev.pid");
+
+        // Spawn an orphan-shaped child: own process group, long-running, so
+        // `acquire` will find it live, see basename "sleep", and clean it
+        // up. We don't try to detach it from the test process — the test
+        // just needs `flock`-based cleanup to work even though `ppid` is
+        // the test runner (not 1). That's exactly the subreaper case.
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .process_group(0)
+            .spawn()
+            .expect("bug: sleep should spawn");
+        let pid = child.id();
+        fs::write(&path, format!("{pid}\n")).expect("bug: pid file write");
+
+        let guard = PidGuard::acquire(
+            path.clone(),
+            std::ffi::OsStr::new("sleep"),
+            Duration::from_secs(1),
+        )
+        .await
+        .expect("bug: acquire should clean up the recorded sleep");
+
+        let status = child
+            .wait()
+            .expect("bug: killed sleep should be reaped by the test");
+        assert!(
+            !status.success(),
+            "expected non-zero exit from killed sleep, got {status:?}"
+        );
+
+        drop(guard);
+    }
+
+    #[tokio::test]
+    async fn acquire_leaves_unrelated_program_alone() {
+        use std::os::unix::process::CommandExt;
+
+        let temp = TempDir::new().expect("bug: temp dir should be created");
+        let path = temp.path().join("hogd-dev.pid");
+
+        let mut child = std::process::Command::new("sleep")
+            .arg("2")
+            .process_group(0)
+            .spawn()
+            .expect("bug: sleep should spawn");
+        let pid = child.id();
+        fs::write(&path, format!("{pid}\n")).expect("bug: pid file write");
+
+        // Expected program is "hogd-dev" but the recorded PID is "sleep" —
+        // the basename mismatch should make acquire treat this as PID
+        // reuse and leave the process running.
+        let guard = PidGuard::acquire(
+            path.clone(),
+            std::ffi::OsStr::new("hogd-dev"),
+            Duration::from_millis(50),
+        )
+        .await
+        .expect("bug: acquire should succeed past mismatched basename");
+
+        // Confirm the sleep is still alive.
+        assert!(
+            child
+                .try_wait()
+                .expect("bug: try_wait should succeed")
+                .is_none(),
+            "sleep should still be running after acquire ignored it"
+        );
+
+        // Clean up so the test doesn't linger.
+        let _ = child.kill();
+        let _ = child.wait();
+        drop(guard);
     }
 
     #[test]
