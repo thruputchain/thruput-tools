@@ -12,6 +12,13 @@ use tokio::time;
 
 use crate::NodeSupervisorError;
 
+#[cfg(unix)]
+use nix::{
+    errno::Errno,
+    sys::signal::{Signal, kill},
+    unistd::Pid,
+};
+
 /// Guard that owns the hogd-dev PID file for the supervisor lifetime.
 #[derive(Debug)]
 pub(crate) struct PidGuard {
@@ -187,7 +194,16 @@ async fn clean_stale_pid(
     };
 
     let Some(info) = process_info(pid) else {
-        tracing::debug!(pid, path = %path.display(), "removing stale hogd-dev PID file");
+        if process_exists(pid) {
+            tracing::warn!(
+                pid,
+                path = %path.display(),
+                "PID file points at a live process, but this platform could not verify \
+                 its identity; refusing to signal it"
+            );
+        } else {
+            tracing::debug!(pid, path = %path.display(), "removing stale hogd-dev PID file");
+        }
         return Ok(());
     };
 
@@ -221,7 +237,7 @@ async fn clean_stale_pid(
     // dev-container launchers) reparent orphans to themselves, not init.
     tracing::info!(
         pid,
-        ppid = info.parent_pid,
+        ppid = ?info.parent_pid,
         "stopping prior hogd-dev process group before startup"
     );
     kill_process_group(path, pid, grace).await
@@ -230,51 +246,86 @@ async fn clean_stale_pid(
 #[cfg(unix)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ProcessInfo {
-    parent_pid: u32,
+    parent_pid: Option<u32>,
     process_group: u32,
-    /// Program basename as reported by `ps -o comm=` (kernel-set process
-    /// name, truncated to ~15 bytes on Linux).
+    /// Kernel-set process name, truncated on some platforms.
     program: String,
 }
 
 #[cfg(unix)]
 fn process_info(target_pid: u32) -> Option<ProcessInfo> {
-    // `comm=` returns the program basename as a single whitespace-free
-    // token on both Linux and BSD ps, which is stable across binary paths
-    // that contain spaces. `command=` would emit the full argv with the
-    // path embedded and break the parser below.
-    let output = std::process::Command::new("ps")
-        .args([
-            "-p",
-            &target_pid.to_string(),
-            "-o",
-            "ppid=",
-            "-o",
-            "pgid=",
-            "-o",
-            "comm=",
-        ])
-        .output()
-        .ok()?;
+    let pid = pid_from_u32(target_pid)?;
+    let process_group = u32::try_from(nix::unistd::getpgid(Some(pid)).ok()?.as_raw()).ok()?;
 
-    if !output.status.success() {
-        return None;
-    }
+    #[cfg(target_os = "linux")]
+    let (parent_pid, program) = linux_process_parent_and_comm(target_pid)?;
 
-    let line = String::from_utf8_lossy(&output.stdout);
-    let mut parts = line.split_whitespace();
-    let parent_pid = parts.next()?.trim().parse::<u32>().ok()?;
-    let process_group = parts.next()?.trim().parse::<u32>().ok()?;
-    let program = parts.next()?.trim().to_string();
-    if program.is_empty() {
+    #[cfg(target_os = "macos")]
+    let (parent_pid, program) = (None, macos_process_comm(target_pid)?);
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    let (parent_pid, program) = {
+        let _ = target_pid;
         return None;
-    }
+    };
 
     Some(ProcessInfo {
         parent_pid,
         process_group,
         program,
     })
+}
+
+#[cfg(all(unix, target_os = "linux"))]
+fn linux_process_parent_and_comm(target_pid: u32) -> Option<(Option<u32>, String)> {
+    let stat = fs::read_to_string(format!("/proc/{target_pid}/stat")).ok()?;
+    parse_linux_stat(&stat)
+}
+
+#[cfg(all(unix, target_os = "linux"))]
+fn parse_linux_stat(stat: &str) -> Option<(Option<u32>, String)> {
+    let open = stat.find('(')?;
+    let close = stat.rfind(')')?;
+    if close <= open {
+        return None;
+    }
+
+    let program = stat[open + 1..close].to_string();
+    if program.is_empty() {
+        return None;
+    }
+
+    let mut fields = stat[close + 1..].split_whitespace();
+    let _state = fields.next()?;
+    let parent_pid = fields.next()?.parse::<u32>().ok()?;
+
+    Some((Some(parent_pid), program))
+}
+
+#[cfg(all(unix, target_os = "macos"))]
+fn macos_process_comm(target_pid: u32) -> Option<String> {
+    let pid = i32::try_from(target_pid).ok()?;
+    let mut buffer = [0 as libc::c_char; 1024];
+    let len = unsafe {
+        libc::proc_name(
+            pid,
+            buffer.as_mut_ptr().cast::<libc::c_void>(),
+            u32::try_from(buffer.len()).ok()?,
+        )
+    };
+    if len <= 0 {
+        return None;
+    }
+
+    let program = unsafe { std::ffi::CStr::from_ptr(buffer.as_ptr()) }
+        .to_str()
+        .ok()?
+        .to_string();
+    if program.is_empty() {
+        return None;
+    }
+
+    Some(program)
 }
 
 #[cfg(unix)]
@@ -336,6 +387,45 @@ fn signal_process_group(
     process_group: u32,
     signal: i32,
 ) -> Result<(), NodeSupervisorError> {
+    let target = process_group_signal_target(path, process_group)?;
+    let signal = Signal::try_from(signal).map_err(|source| NodeSupervisorError::PidFile {
+        path: path.to_path_buf(),
+        source: nix_error_to_io(source),
+    })?;
+
+    match kill(target, signal) {
+        Ok(()) | Err(Errno::ESRCH) => Ok(()),
+        Err(source) => Err(NodeSupervisorError::PidFile {
+            path: path.to_path_buf(),
+            source: nix_error_to_io(source),
+        }),
+    }
+}
+
+#[cfg(unix)]
+fn process_group_exists(process_group: u32) -> bool {
+    let Ok(target) = process_group_signal_target(Path::new("<process-group>"), process_group)
+    else {
+        return false;
+    };
+
+    matches!(kill(target, None), Ok(()) | Err(Errno::EPERM))
+}
+
+#[cfg(unix)]
+fn process_exists(pid: u32) -> bool {
+    let Some(target) = pid_from_u32(pid) else {
+        return false;
+    };
+
+    matches!(kill(target, None), Ok(()) | Err(Errno::EPERM))
+}
+
+#[cfg(unix)]
+fn process_group_signal_target(
+    path: &Path,
+    process_group: u32,
+) -> Result<Pid, NodeSupervisorError> {
     let target = i32::try_from(process_group)
         .ok()
         .filter(|process_group| *process_group > 0)
@@ -348,34 +438,20 @@ fn signal_process_group(
             ),
         })?;
 
-    let result = unsafe { libc::kill(target, signal) };
-    if result == 0 {
-        return Ok(());
-    }
-
-    let source = io::Error::last_os_error();
-    if source.raw_os_error() == Some(libc::ESRCH) {
-        return Ok(());
-    }
-
-    Err(NodeSupervisorError::PidFile {
-        path: path.to_path_buf(),
-        source,
-    })
+    Ok(Pid::from_raw(target))
 }
 
 #[cfg(unix)]
-fn process_group_exists(process_group: u32) -> bool {
-    let Some(target) = i32::try_from(process_group)
+fn pid_from_u32(pid: u32) -> Option<Pid> {
+    i32::try_from(pid)
         .ok()
-        .filter(|process_group| *process_group > 0)
-        .and_then(i32::checked_neg)
-    else {
-        return false;
-    };
+        .filter(|pid| *pid > 0)
+        .map(Pid::from_raw)
+}
 
-    let result = unsafe { libc::kill(target, 0) };
-    result == 0 || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+#[cfg(unix)]
+fn nix_error_to_io(error: Errno) -> io::Error {
+    io::Error::from_raw_os_error(error as i32)
 }
 
 #[cfg(test)]
@@ -533,6 +609,22 @@ mod tests {
         ));
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn parse_linux_stat_handles_spaces_and_parens_in_comm() {
+        let stat = "123 (hogd dev) S 42 123 123 0 -1 4194560";
+        assert_eq!(
+            super::parse_linux_stat(stat),
+            Some((Some(42), "hogd dev".to_string()))
+        );
+
+        let stat = "123 (hogd)dev) S 42 123 123 0 -1 4194560";
+        assert_eq!(
+            super::parse_linux_stat(stat),
+            Some((Some(42), "hogd)dev".to_string()))
+        );
+    }
+
     #[tokio::test]
     async fn acquire_kills_recorded_running_process() {
         use std::os::unix::process::CommandExt;
@@ -545,7 +637,7 @@ mod tests {
         // up. We don't try to detach it from the test process — the test
         // just needs `flock`-based cleanup to work even though `ppid` is
         // the test runner (not 1). That's exactly the subreaper case.
-        let mut child = std::process::Command::new("sleep")
+        let mut child = std::process::Command::new(sleep_command())
             .arg("30")
             .process_group(0)
             .spawn()
@@ -579,7 +671,7 @@ mod tests {
         let temp = TempDir::new().expect("bug: temp dir should be created");
         let path = temp.path().join("hogd-dev.pid");
 
-        let mut child = std::process::Command::new("sleep")
+        let mut child = std::process::Command::new(sleep_command())
             .arg("2")
             .process_group(0)
             .spawn()
@@ -624,5 +716,14 @@ mod tests {
             "unexpected process group zero error: {err:?}"
         );
         assert!(!super::process_group_exists(0));
+    }
+
+    #[cfg(unix)]
+    fn sleep_command() -> &'static str {
+        if std::path::Path::new("/bin/sleep").exists() {
+            "/bin/sleep"
+        } else {
+            "sleep"
+        }
     }
 }
