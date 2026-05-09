@@ -28,6 +28,7 @@ groundhog_scheduler = { workspace = true }
 hex = { workspace = true }
 jsonrpsee = { workspace = true }
 libc = { workspace = true }
+nix = { workspace = true }
 rpc_driver = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -43,9 +43,12 @@ async fn run_hogd_dev(
         SupervisorStop,
     };
 
-    let hogd = binary.map_or_else(HogdDevConfig::default, |binary| {
-        HogdDevConfig::default().with_binary_path(binary)
-    });
+    let pid_file = crate::config::cache_dir()?.join("hogd-dev.pid");
+    let hogd = binary
+        .map_or_else(HogdDevConfig::default, |binary| {
+            HogdDevConfig::default().with_binary_path(binary)
+        })
+        .with_pid_file(pid_file);
     let config = NodeSupervisorConfig::default()
         .with_rpc_listen_address(format!("127.0.0.1:{port}"))
         .with_hogd_dev(hogd);
@@ -56,7 +59,7 @@ async fn run_hogd_dev(
 
     let handle = NodeSupervisorHandle::start(config)
         .await
-        .map_err(|err| CliError::NodeSupervisor(err.to_string()))?;
+        .map_err(map_node_supervisor_error)?;
     let rpc_addr = handle.rpc_addr();
     let readiness = handle.hogd_readiness().clone();
     let backend_planes = handle.backend_planes();
@@ -124,6 +127,17 @@ async fn run_hogd_dev(
         other => Err(CliError::NodeSupervisor(format!(
             "unexpected supervisor stop state: {other:?}"
         ))),
+    }
+}
+
+#[cfg(feature = "dev-node")]
+fn map_node_supervisor_error(err: groundhog_node_supervisor::NodeSupervisorError) -> CliError {
+    let message = err.to_string();
+    match err {
+        groundhog_node_supervisor::NodeSupervisorError::LocalNodeAlreadyRunning { .. } => {
+            CliError::LocalNodeAlreadyRunning(message)
+        }
+        _ => CliError::NodeSupervisor(message),
     }
 }
 

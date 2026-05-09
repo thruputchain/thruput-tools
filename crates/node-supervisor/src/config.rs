@@ -111,6 +111,8 @@ pub struct HogdDevConfig {
     pub dev_account_seed: String,
     /// Storage-token funding target per dev account.
     pub dev_account_tokens: u64,
+    /// PID file used to detect and clean up orphaned hogd-dev children.
+    pub pid_file: Option<PathBuf>,
 }
 
 impl Default for HogdDevConfig {
@@ -123,6 +125,7 @@ impl Default for HogdDevConfig {
             dev_account_count: DEFAULT_HOGD_DEV_ACCOUNT_COUNT,
             dev_account_seed: DEFAULT_HOGD_DEV_ACCOUNT_SEED.to_string(),
             dev_account_tokens: DEFAULT_HOGD_DEV_ACCOUNT_TOKENS,
+            pid_file: None,
         }
     }
 }
@@ -174,6 +177,13 @@ impl HogdDevConfig {
     #[must_use]
     pub fn with_dev_account_tokens(mut self, dev_account_tokens: u64) -> Self {
         self.dev_account_tokens = dev_account_tokens;
+        self
+    }
+
+    /// Return a copy with a PID file for orphan detection.
+    #[must_use]
+    pub fn with_pid_file(mut self, pid_file: impl Into<PathBuf>) -> Self {
+        self.pid_file = Some(pid_file.into());
         self
     }
 }

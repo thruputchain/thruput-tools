@@ -11,6 +11,7 @@ mod dev_control;
 pub mod error;
 mod genesis;
 pub mod hogd_dev;
+mod pid_file;
 pub mod process;
 mod read_backend;
 mod rpc_backend;
