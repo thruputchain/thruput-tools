@@ -22,6 +22,7 @@ use tokio::{
 
 use crate::{
     ChildProcessSpec, ChildSupervisor, HogdDevConfig, NodeSupervisorError, SupervisedChild,
+    pid_file::PidGuard,
 };
 
 /// Default hogd-dev binary name.
@@ -125,6 +126,7 @@ pub struct HogdDevProcess {
     child: SupervisedChild,
     stderr_task: Option<JoinHandle<()>>,
     shutdown_grace: Duration,
+    pid_guard: Option<PidGuard>,
 }
 
 impl HogdDevProcess {
@@ -149,8 +151,29 @@ impl HogdDevProcess {
         config: &HogdDevConfig,
         spec: ChildProcessSpec,
     ) -> Result<Self, NodeSupervisorError> {
+        let mut pid_guard = match &config.pid_file {
+            Some(pid_file) => Some(
+                PidGuard::acquire(pid_file.clone(), spec.program(), config.shutdown_grace).await?,
+            ),
+            None => None,
+        };
+
         let mut child = ChildSupervisor::new(spec).spawn()?;
         let program = child.program().to_string();
+        if let Some(guard) = &mut pid_guard {
+            let pid = child.id().ok_or_else(|| NodeSupervisorError::Status {
+                program: program.clone(),
+                source: io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "child process id is unavailable",
+                ),
+            })?;
+            if let Err(error) = guard.write(pid) {
+                kill_unready_child(&mut child).await;
+                return Err(error);
+            }
+        }
+
         let stdout = child
             .take_stdout()
             .ok_or_else(|| NodeSupervisorError::MissingStdout {
@@ -183,6 +206,7 @@ impl HogdDevProcess {
             child,
             stderr_task,
             shutdown_grace: config.shutdown_grace,
+            pid_guard,
         })
     }
 
@@ -201,6 +225,7 @@ impl HogdDevProcess {
     pub async fn stopped(&mut self) -> Result<ExitStatus, NodeSupervisorError> {
         let status = self.child.wait().await?;
         self.wait_for_stderr_task().await;
+        drop(self.pid_guard.take());
         Ok(status)
     }
 
@@ -223,6 +248,7 @@ impl HogdDevProcess {
         let status = self.child.kill_and_wait().await?;
 
         self.wait_for_stderr_task().await;
+        drop(self.pid_guard.take());
         Ok(status)
     }
 
@@ -929,6 +955,32 @@ mod tests {
 
         let status = process.stop().await.expect("bug: fake child should stop");
         assert!(status.success());
+    }
+
+    #[tokio::test]
+    async fn start_with_pid_file_writes_and_cleans_up() {
+        let temp = TempDir::new().expect("bug: temp dir should be created");
+        let pid_file = temp.path().join("nested").join("hogd-dev.pid");
+        let config = HogdDevConfig::default()
+            .with_startup_timeout(Duration::from_secs(2))
+            .with_shutdown_grace(Duration::from_millis(500))
+            .with_pid_file(pid_file.clone());
+
+        let mut process = start_fake_hogd_dev(&config, "ready")
+            .await
+            .expect("bug: fake hogd-dev should start");
+        let child_id = process
+            .child_id()
+            .expect("bug: fake hogd-dev pid should be available");
+
+        assert_eq!(
+            fs::read_to_string(&pid_file).expect("bug: PID file should be readable"),
+            format!("{child_id}\n")
+        );
+
+        let status = process.stop().await.expect("bug: fake child should stop");
+        assert!(status.success());
+        assert!(!pid_file.exists());
     }
 
     #[tokio::test]

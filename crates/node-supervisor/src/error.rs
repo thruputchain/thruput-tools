@@ -353,4 +353,26 @@ pub enum NodeSupervisorError {
         /// Raw outcome discriminant from `DbGateway`.
         outcome: i32,
     },
+
+    /// The supervisor could not operate on the hogd-dev PID file.
+    #[error("hogd-dev PID file operation failed at {}: {source}", path.display())]
+    PidFile {
+        /// PID file path or parent directory involved in the failed operation.
+        path: PathBuf,
+        /// Underlying I/O error.
+        #[source]
+        source: io::Error,
+    },
+
+    /// Another managed local node appears to be running.
+    #[error(
+        "groundhog local node already appears to be running (PID file {}, hogd-dev pid {pid:?}); stop it before starting another node",
+        path.display()
+    )]
+    LocalNodeAlreadyRunning {
+        /// PID file path that is locked by the running node.
+        path: PathBuf,
+        /// Existing hogd-dev PID if it could be read from the PID file.
+        pid: Option<u32>,
+    },
 }

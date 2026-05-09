@@ -77,6 +77,8 @@ pub enum CliError {
     StatusHasWarnings,
     #[error("node supervisor error: {0}")]
     NodeSupervisor(String),
+    #[error("local node already running: {0}")]
+    LocalNodeAlreadyRunning(String),
     #[error("could not connect to {0}")]
     RpcConnect(String),
     #[error("no rpc_url configured for the selected profile")]
@@ -154,6 +156,7 @@ impl CliError {
             Self::NotImplemented => "not_implemented",
             Self::StatusHasWarnings => "status_has_warnings",
             Self::NodeSupervisor(_) => "node_supervisor_error",
+            Self::LocalNodeAlreadyRunning(_) => "local_node_already_running",
             Self::RpcConnect(_) => "rpc_connect",
             Self::MissingRpcUrl => "missing_rpc_url",
             Self::MissingSigningKey => "missing_signing_key",
@@ -222,6 +225,9 @@ impl CliError {
             }
             Self::NodeSupervisor(_) => Some(Cow::Borrowed(
                 "check `--hogd-dev-binary`, the hogd-dev process output, and the local node logs",
+            )),
+            Self::LocalNodeAlreadyRunning(_) => Some(Cow::Borrowed(
+                "stop the running `groundhog node` process before starting another local node",
             )),
             Self::RpcConnect(url) => Some(Cow::Owned(format!(
                 "run `groundhog node` in another terminal, or check that \
