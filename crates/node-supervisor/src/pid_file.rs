@@ -13,11 +13,7 @@ use tokio::time;
 use crate::NodeSupervisorError;
 
 #[cfg(unix)]
-use nix::{
-    errno::Errno,
-    sys::signal::{Signal, kill},
-    unistd::Pid,
-};
+use nix::unistd::Pid;
 
 /// Guard that owns the hogd-dev PID file for the supervisor lifetime.
 #[derive(Debug)]
@@ -388,18 +384,21 @@ fn signal_process_group(
     signal: i32,
 ) -> Result<(), NodeSupervisorError> {
     let target = process_group_signal_target(path, process_group)?;
-    let signal = Signal::try_from(signal).map_err(|source| NodeSupervisorError::PidFile {
-        path: path.to_path_buf(),
-        source: nix_error_to_io(source),
-    })?;
 
-    match kill(target, signal) {
-        Ok(()) | Err(Errno::ESRCH) => Ok(()),
-        Err(source) => Err(NodeSupervisorError::PidFile {
-            path: path.to_path_buf(),
-            source: nix_error_to_io(source),
-        }),
+    let result = unsafe { libc::kill(target.as_raw(), signal) };
+    if result == 0 {
+        return Ok(());
     }
+
+    let source = io::Error::last_os_error();
+    if source.raw_os_error() == Some(libc::ESRCH) {
+        return Ok(());
+    }
+
+    Err(NodeSupervisorError::PidFile {
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
 #[cfg(unix)]
@@ -409,7 +408,8 @@ fn process_group_exists(process_group: u32) -> bool {
         return false;
     };
 
-    matches!(kill(target, None), Ok(()) | Err(Errno::EPERM))
+    let result = unsafe { libc::kill(target.as_raw(), 0) };
+    result == 0 || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
 #[cfg(unix)]
@@ -418,7 +418,8 @@ fn process_exists(pid: u32) -> bool {
         return false;
     };
 
-    matches!(kill(target, None), Ok(()) | Err(Errno::EPERM))
+    let result = unsafe { libc::kill(target.as_raw(), 0) };
+    result == 0 || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
 #[cfg(unix)]
@@ -449,11 +450,6 @@ fn pid_from_u32(pid: u32) -> Option<Pid> {
         .map(Pid::from_raw)
 }
 
-#[cfg(unix)]
-fn nix_error_to_io(error: Errno) -> io::Error {
-    io::Error::from_raw_os_error(error as i32)
-}
-
 #[cfg(test)]
 mod tests {
     use std::{fs, time::Duration};
@@ -461,7 +457,10 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{PidGuard, matches_expected_program};
-    use crate::NodeSupervisorError;
+    use crate::{
+        ChildProcessSpec, ChildSupervisor, NodeSupervisorError,
+        test_support::{FAKE_HOGD_DEV_MODE_ENV, fake_hogd_dev_binary},
+    };
 
     #[tokio::test]
     async fn acquire_no_file_is_clean() {
@@ -626,39 +625,42 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn acquire_kills_recorded_running_process() {
-        use std::os::unix::process::CommandExt;
-
+    async fn acquire_stops_recorded_running_process() {
         let temp = TempDir::new().expect("bug: temp dir should be created");
         let path = temp.path().join("hogd-dev.pid");
 
         // Spawn an orphan-shaped child: own process group, long-running, so
-        // `acquire` will find it live, see basename "sleep", and clean it
-        // up. We don't try to detach it from the test process — the test
-        // just needs `flock`-based cleanup to work even though `ppid` is
-        // the test runner (not 1). That's exactly the subreaper case.
-        let mut child = std::process::Command::new(sleep_command())
-            .arg("30")
-            .process_group(0)
+        // `acquire` will find it live, verify the expected basename, and
+        // clean it up. We don't try to detach it from the test process — the
+        // test just needs `flock`-based cleanup to work even though `ppid`
+        // is the test runner (not 1). That's exactly the subreaper case.
+        let binary = fake_hogd_dev_binary();
+        let spec = ChildProcessSpec::new(&binary)
+            .env(FAKE_HOGD_DEV_MODE_ENV, "hang")
+            .process_group(0);
+        let mut child = ChildSupervisor::new(spec)
             .spawn()
-            .expect("bug: sleep should spawn");
-        let pid = child.id();
+            .expect("bug: fake hogd-dev should spawn");
+        let pid = child.id().expect("bug: fake hogd-dev pid should be known");
         fs::write(&path, format!("{pid}\n")).expect("bug: pid file write");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let wait_task = tokio::spawn(async move {
+            child
+                .wait()
+                .await
+                .expect("bug: stopped fake hogd-dev should be reaped by the test")
+        });
 
-        let guard = PidGuard::acquire(
-            path.clone(),
-            std::ffi::OsStr::new("sleep"),
-            Duration::from_secs(1),
-        )
-        .await
-        .expect("bug: acquire should clean up the recorded sleep");
+        let guard = PidGuard::acquire(path.clone(), binary.as_os_str(), Duration::from_secs(1))
+            .await
+            .expect("bug: acquire should stop the recorded fake hogd-dev");
 
-        let status = child
-            .wait()
-            .expect("bug: killed sleep should be reaped by the test");
+        let status = wait_task
+            .await
+            .expect("bug: fake hogd-dev wait task should finish");
         assert!(
             !status.success(),
-            "expected non-zero exit from killed sleep, got {status:?}"
+            "expected signal exit from stopped fake hogd-dev, got {status:?}"
         );
 
         drop(guard);
