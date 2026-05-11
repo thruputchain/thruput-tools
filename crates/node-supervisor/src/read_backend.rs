@@ -564,7 +564,7 @@ mod tests {
         Protocol, TxInfo, TxInfoResult,
     };
     use groundhog_rpc_api_types::{
-        events::EventQuery,
+        events::{EventFilterList, EventQuery},
         hex::Hex0x,
         transaction::{TransactionStatus, TxHash},
     };
@@ -1113,7 +1113,7 @@ mod tests {
 
     fn empty_event_query() -> EventQuery {
         EventQuery {
-            filters: VecM(vec![]),
+            filters: EventFilterList(VecM(vec![])),
             order: groundhog_rpc_api_types::events::IterationOrder::Ascending,
             anchor: groundhog_rpc_api_types::events::BlockAnchor::AtBeginning,
             cursor: groundhog_rpc_api_types::events::PaginationCursor(vec![]),
@@ -1123,7 +1123,7 @@ mod tests {
 
     fn event_query_with_cursor(cursor: &[u8]) -> EventQuery {
         EventQuery {
-            filters: VecM(vec![]),
+            filters: EventFilterList(VecM(vec![])),
             order: groundhog_rpc_api_types::events::IterationOrder::Ascending,
             anchor: groundhog_rpc_api_types::events::BlockAnchor::AtBeginning,
             cursor: groundhog_rpc_api_types::events::PaginationCursor(cursor.to_vec()),

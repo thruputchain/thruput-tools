@@ -54,8 +54,8 @@ mod wire_format {
 
     use crate::block::{BlockInfo, ChainTip};
     use crate::events::{
-        BlockAnchor, EmittedEvent, EventFilter, EventQuery, EventTopicFilter, IdentifiedEvent,
-        IterationOrder, PaginationCursor,
+        BlockAnchor, ContractAddressList, EmittedEvent, EventFilter, EventFilterList, EventQuery,
+        EventTopicFilter, IdentifiedEvent, IterationOrder, PaginationCursor, TopicList,
     };
     use crate::hex::{Hex0x, HexBytes, Topic};
     use crate::receipt::{ExecStatus, TransactionReceipt};
@@ -191,14 +191,14 @@ mod wire_format {
     #[test]
     fn event_query_wire_format_uses_rpc_hex_projections() {
         let query = EventQuery {
-            filters: VecM(vec![EventFilter {
-                contract_addresses: VecM(vec![zero_address()]),
+            filters: EventFilterList(VecM(vec![EventFilter {
+                contract_addresses: ContractAddressList(VecM(vec![zero_address()])),
                 topics: EventTopicFilter {
-                    topic0: VecM(vec![Topic([0xab; 32])]),
-                    topic1: VecM(vec![]),
-                    topic2: VecM(vec![]),
+                    topic0: TopicList(VecM(vec![Topic([0xab; 32])])),
+                    topic1: TopicList(VecM(vec![])),
+                    topic2: TopicList(VecM(vec![])),
                 },
-            }]),
+            }])),
             order: IterationOrder::Ascending,
             anchor: BlockAnchor::AtBeginning,
             cursor: PaginationCursor(vec![]),
@@ -221,6 +221,9 @@ mod wire_format {
         assert_eq!(v["order"], "ascending");
         assert_eq!(v["anchor"]["kind"], "atBeginning");
         assert_eq!(v["cursor"], "0x");
+
+        let roundtrip: EventQuery = serde_json::from_value(v).unwrap();
+        assert_eq!(roundtrip, query);
     }
 
     #[test]

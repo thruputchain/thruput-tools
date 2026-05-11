@@ -2,6 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use groundhog_open_rpc_spec::build_spec;
+use groundhog_rpc_api::types::events::MAX_TOPIC_VALUES_PER_POSITION;
 use pretty_assertions::assert_eq;
 
 const SNAPSHOT_PATH: &str = "snapshots/groundhog-spec.json";
@@ -35,6 +36,20 @@ fn openrpc_spec_has_expected_shared_schema_invariants() {
         "real spec should define shared schemas"
     );
     assert!(schemas.contains_key("TxHash"), "TxHash should be shared");
+    assert!(
+        schemas.keys().all(|name| !name.starts_with("VecM<")),
+        "public schema names should not expose raw Rust VecM generic keys"
+    );
+    assert!(
+        schemas.contains_key("ContractAddressList")
+            && schemas.contains_key("EventFilterList")
+            && schemas.contains_key("TopicList"),
+        "event query list schemas should have stable public names"
+    );
+    assert_eq!(
+        schemas["TopicList"]["maxItems"], MAX_TOPIC_VALUES_PER_POSITION,
+        "TopicList should expose the explicit RPC topic-position bound"
+    );
 
     let methods = spec["methods"]
         .as_array()

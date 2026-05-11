@@ -22,9 +22,86 @@ use crate::{BlockHeight, ContractAddress};
 pub const MAX_CONTRACT_ADDRESSES_PER_EVENT_FILTER: u32 =
     wire_indexer::kMaxContractAddressesPerEventFilter;
 pub const MAX_EVENT_FILTERS_PER_QUERY: u32 = wire_indexer::kMaxEventFiltersPerQuery;
+/// RPC-layer cap for topic values per event-filter position.
+///
+/// Unlike the adjacent constants, this does not mirror a hogd-indexer
+/// protocol constant.
+pub const MAX_TOPIC_VALUES_PER_POSITION: u32 = 16;
 
-pub type ContractAddressList = VecM<ContractAddress, MAX_CONTRACT_ADDRESSES_PER_EVENT_FILTER>;
-pub type EventFilterList = VecM<EventFilter, MAX_EVENT_FILTERS_PER_QUERY>;
+/// Contract addresses accepted by a single event filter.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(transparent)]
+pub struct ContractAddressList(pub VecM<ContractAddress, MAX_CONTRACT_ADDRESSES_PER_EVENT_FILTER>);
+
+/// Topic values accepted for a single topic position.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(transparent)]
+pub struct TopicList(pub VecM<Topic, MAX_TOPIC_VALUES_PER_POSITION>);
+
+/// Event filters accepted by a single event query.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(transparent)]
+pub struct EventFilterList(pub VecM<EventFilter, MAX_EVENT_FILTERS_PER_QUERY>);
+
+impl JsonSchema for ContractAddressList {
+    fn schema_name() -> Cow<'static, str> {
+        "ContractAddressList".into()
+    }
+
+    fn schema_id() -> Cow<'static, str> {
+        concat!(module_path!(), "::ContractAddressList").into()
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        let items = generator.subschema_for::<ContractAddress>();
+        json_schema!({
+            "type": "array",
+            "items": items,
+            "maxItems": MAX_CONTRACT_ADDRESSES_PER_EVENT_FILTER,
+            "description": "Contract addresses accepted by a single event filter. Mirrors the hogd-indexer per-filter contract-address bound."
+        })
+    }
+}
+
+impl JsonSchema for TopicList {
+    fn schema_name() -> Cow<'static, str> {
+        "TopicList".into()
+    }
+
+    fn schema_id() -> Cow<'static, str> {
+        concat!(module_path!(), "::TopicList").into()
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        let items = generator.subschema_for::<Topic>();
+        json_schema!({
+            "type": "array",
+            "items": items,
+            "maxItems": MAX_TOPIC_VALUES_PER_POSITION,
+            "description": "Topic values accepted for a single topic position. This is an RPC-layer cap, not a hogd-indexer protocol constant."
+        })
+    }
+}
+
+impl JsonSchema for EventFilterList {
+    fn schema_name() -> Cow<'static, str> {
+        "EventFilterList".into()
+    }
+
+    fn schema_id() -> Cow<'static, str> {
+        concat!(module_path!(), "::EventFilterList").into()
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        let items = generator.subschema_for::<EventFilter>();
+        json_schema!({
+            "type": "array",
+            "items": items,
+            "maxItems": MAX_EVENT_FILTERS_PER_QUERY,
+            "description": "Event filters accepted by a single event query. Mirrors the hogd-indexer per-query filter bound."
+        })
+    }
+}
 
 /// Direction to walk a paginated event stream.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Hash)]
@@ -93,9 +170,9 @@ impl JsonSchema for PaginationCursor {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
 pub struct EventTopicFilter {
-    pub topic0: VecM<Topic>,
-    pub topic1: VecM<Topic>,
-    pub topic2: VecM<Topic>,
+    pub topic0: TopicList,
+    pub topic1: TopicList,
+    pub topic2: TopicList,
 }
 
 /// A single event-filter predicate: events must be emitted by one of
@@ -197,6 +274,135 @@ pub struct EventPage {
     pub oldest_block: BlockHeight,
 }
 
+impl From<VecM<ContractAddress, MAX_CONTRACT_ADDRESSES_PER_EVENT_FILTER>> for ContractAddressList {
+    fn from(value: VecM<ContractAddress, MAX_CONTRACT_ADDRESSES_PER_EVENT_FILTER>) -> Self {
+        Self(value)
+    }
+}
+
+impl From<ContractAddressList> for VecM<ContractAddress, MAX_CONTRACT_ADDRESSES_PER_EVENT_FILTER> {
+    fn from(value: ContractAddressList) -> Self {
+        value.0
+    }
+}
+
+impl ContractAddressList {
+    /// Iterate over the contained contract addresses.
+    pub fn iter(&self) -> std::slice::Iter<'_, ContractAddress> {
+        self.as_ref().iter()
+    }
+}
+
+impl AsRef<[ContractAddress]> for ContractAddressList {
+    fn as_ref(&self) -> &[ContractAddress] {
+        self.0.as_ref()
+    }
+}
+
+impl IntoIterator for ContractAddressList {
+    type Item = ContractAddress;
+    type IntoIter = std::vec::IntoIter<ContractAddress>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_vec().into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a ContractAddressList {
+    type Item = &'a ContractAddress;
+    type IntoIter = std::slice::Iter<'a, ContractAddress>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl From<VecM<Topic, MAX_TOPIC_VALUES_PER_POSITION>> for TopicList {
+    fn from(value: VecM<Topic, MAX_TOPIC_VALUES_PER_POSITION>) -> Self {
+        Self(value)
+    }
+}
+
+impl From<TopicList> for VecM<Topic, MAX_TOPIC_VALUES_PER_POSITION> {
+    fn from(value: TopicList) -> Self {
+        value.0
+    }
+}
+
+impl TopicList {
+    /// Iterate over the contained topic values.
+    pub fn iter(&self) -> std::slice::Iter<'_, Topic> {
+        self.as_ref().iter()
+    }
+}
+
+impl AsRef<[Topic]> for TopicList {
+    fn as_ref(&self) -> &[Topic] {
+        self.0.as_ref()
+    }
+}
+
+impl IntoIterator for TopicList {
+    type Item = Topic;
+    type IntoIter = std::vec::IntoIter<Topic>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_vec().into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a TopicList {
+    type Item = &'a Topic;
+    type IntoIter = std::slice::Iter<'a, Topic>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl From<VecM<EventFilter, MAX_EVENT_FILTERS_PER_QUERY>> for EventFilterList {
+    fn from(value: VecM<EventFilter, MAX_EVENT_FILTERS_PER_QUERY>) -> Self {
+        Self(value)
+    }
+}
+
+impl From<EventFilterList> for VecM<EventFilter, MAX_EVENT_FILTERS_PER_QUERY> {
+    fn from(value: EventFilterList) -> Self {
+        value.0
+    }
+}
+
+impl EventFilterList {
+    /// Iterate over the contained event filters.
+    pub fn iter(&self) -> std::slice::Iter<'_, EventFilter> {
+        self.as_ref().iter()
+    }
+}
+
+impl AsRef<[EventFilter]> for EventFilterList {
+    fn as_ref(&self) -> &[EventFilter] {
+        self.0.as_ref()
+    }
+}
+
+impl IntoIterator for EventFilterList {
+    type Item = EventFilter;
+    type IntoIter = std::vec::IntoIter<EventFilter>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_vec().into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a EventFilterList {
+    type Item = &'a EventFilter;
+    type IntoIter = std::slice::Iter<'a, EventFilter>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
 impl From<EventTopicFilter> for wire_indexer::EventTopicFilter {
     fn from(value: EventTopicFilter) -> Self {
         Self {
@@ -213,7 +419,6 @@ impl From<EventFilter> for wire_indexer::EventFilter {
             contract_addresses: VecM(
                 value
                     .contract_addresses
-                    .0
                     .into_iter()
                     .map(|addr| addr.0)
                     .collect(),
@@ -226,7 +431,7 @@ impl From<EventFilter> for wire_indexer::EventFilter {
 impl From<EventQuery> for wire_indexer::EventQuery {
     fn from(value: EventQuery) -> Self {
         Self {
-            filters: VecM(value.filters.0.into_iter().map(Into::into).collect()),
+            filters: VecM(value.filters.into_iter().map(Into::into).collect()),
             order: value.order.into(),
             anchor: value.anchor.into(),
             cursor: value.cursor.into(),
@@ -266,10 +471,9 @@ impl From<groundhog_indexer::pagination::PaginationCursor> for PaginationCursor 
     }
 }
 
-fn map_topic_list(topics: VecM<Topic>) -> VecM<groundhog_xdr::event::Topic> {
+fn map_topic_list(topics: TopicList) -> VecM<groundhog_xdr::event::Topic> {
     VecM(
         topics
-            .0
             .into_iter()
             .map(|topic| groundhog_xdr::event::Topic::from(topic.0))
             .collect(),

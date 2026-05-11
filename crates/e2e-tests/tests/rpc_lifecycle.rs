@@ -13,7 +13,8 @@
 
 use groundhog_rpc_api_types::ContractAddress;
 use groundhog_rpc_api_types::events::{
-    BlockAnchor, EventFilter, EventQuery, EventTopicFilter, IterationOrder, PaginationCursor,
+    BlockAnchor, ContractAddressList, EventFilter, EventFilterList, EventQuery, EventTopicFilter,
+    IterationOrder, PaginationCursor, TopicList,
 };
 use groundhog_rpc_api_types::hex::{Hex0x, HexBytes};
 use groundhog_rpc_api_types::state::StorageItemInfo;
@@ -152,16 +153,16 @@ fn events_for_address(
     limit: u32,
 ) -> EventQuery {
     EventQuery {
-        filters: VecM(vec![EventFilter {
-            contract_addresses: VecM(vec![Hex0x(groundhog_xdr::types::ContractAddress::from(
-                addr,
-            ))]),
+        filters: EventFilterList(VecM(vec![EventFilter {
+            contract_addresses: ContractAddressList(VecM(vec![Hex0x(
+                groundhog_xdr::types::ContractAddress::from(addr),
+            )])),
             topics: EventTopicFilter {
-                topic0: VecM(vec![]),
-                topic1: VecM(vec![]),
-                topic2: VecM(vec![]),
+                topic0: TopicList(VecM(vec![])),
+                topic1: TopicList(VecM(vec![])),
+                topic2: TopicList(VecM(vec![])),
             },
-        }]),
+        }])),
         order,
         anchor,
         cursor: PaginationCursor(vec![]),
