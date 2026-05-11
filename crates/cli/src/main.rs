@@ -511,7 +511,11 @@ fn main() {
         }
     };
     if let Err(e) = result {
-        if matches!(e, groundhog_cli::CliError::StatusHasWarnings) {
+        if matches!(
+            e,
+            groundhog_cli::CliError::StatusHasWarnings
+                | groundhog_cli::CliError::CommandReportedFailure
+        ) {
             std::process::exit(1);
         }
         if let Err(print_error) = print.command_error(cmd_name, &e) {

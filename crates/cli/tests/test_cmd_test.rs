@@ -273,11 +273,8 @@ fn test_failed_wasm_tests_update_rerun_cache() {
     .unwrap_err();
 
     assert!(
-        matches!(
-            err,
-            groundhog_cli::CliError::CargoFailedWithOutput { code: 101, .. }
-        ),
-        "expected CargoFailedWithOutput(101), got: {err:?}"
+        matches!(err, groundhog_cli::CliError::CommandReportedFailure),
+        "expected CommandReportedFailure, got: {err:?}"
     );
     let cache_path = tmp
         .path()

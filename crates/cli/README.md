@@ -160,7 +160,10 @@ failure as an explicit test filter; successful runs clear the cache.
 files and reruns after changes settle. It can be combined with `--rerun`
 for a focused red/green loop. With `--json --watch`, each run emits a
 single newline-delimited JSON record; successful runs are written to
-stdout and failures are written to stderr.
+stdout with `ok` set to `true` or `false` as appropriate. The
+machine-readable payload is versioned with `data.schemaVersion` and
+includes structured per-run and per-test results rather than only
+aggregated cargo output text.
 
 > **Note:** Plain `cargo test` also works for unit tests that
 > don't need the executor. `groundhog test` is required for
