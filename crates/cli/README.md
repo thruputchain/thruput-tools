@@ -266,9 +266,7 @@ backend planes, and endpoint metadata for scripting. Deterministic dev accounts
 return once hogd-dev has a dev-wallet bootstrap/control surface.
 
 See `../../docs/cli/2026-04-25-hogd-dev-node-hybrid.md` for the
-durable backend direction, and
-`../../docs/cli/plans/2026-04-29-local-node-hogd-dev-supervisor.md`
-for the implementation plan.
+durable backend direction.
 
 ### `groundhog login`
 

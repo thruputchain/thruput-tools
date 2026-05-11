@@ -81,8 +81,8 @@ Implementation status:
   retired in PR 5 once hogd-dev proved out the published-SDK scaffold
   loop. The durable backend is a Rust supervisor
   (`groundhog-node-supervisor`) around a hogd-owned `hogd-dev`
-  subprocess; see `docs/cli/2026-04-25-hogd-dev-node-hybrid.md` and
-  `docs/cli/plans/2026-04-29-local-node-hogd-dev-supervisor.md`.
+  subprocess; see `docs/cli/2026-04-25-hogd-dev-node-hybrid.md` for
+  the durable backend direction.
 - The no-key-required call dry-run / inspect split now has a draft design
   in [`specs/2026-05-07-view-rpc-and-receipt-return-data.md`](specs/2026-05-07-view-rpc-and-receipt-return-data.md);
   it runs as a parallel cross-team track to PR 5 (see Phase 2 tracker).
@@ -164,9 +164,7 @@ Maintenance rules:
   (`SubmitPlane`/`ChainPlane`/`ReadPlane` in `crates/rpc-server`,
   consumed by `crates/node-supervisor` over `crates/x23-transport`).
 - Durable local-node backend: `groundhog-node-supervisor` around a
-  hogd-owned `hogd-dev` subprocess. See
-  `docs/cli/plans/2026-04-29-local-node-hogd-dev-supervisor.md` for
-  the per-PR plan.
+  hogd-owned `hogd-dev` subprocess. PRs landed in order below.
   - [x] PR 1 — supervisor crate scaffold (#30)
   - [x] PR 2 — hogd-dev process adapter (#31)
   - [x] PR 3 — CLI integration behind experimental flag (#35)

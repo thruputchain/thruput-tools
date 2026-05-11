@@ -7,9 +7,8 @@
 //! Latest-state storage reads use hogd-dev's `DbGateway` endpoint and can also be
 //! served by [`HogdDevStorageReadBackend`] when the indexer is absent.
 //!
-//! See `docs/cli/specs/2026-04-29-node-supervisor-x23-client-boundary.md` for
-//! the boundary discipline. The scheduler client is shared from
-//! [`HogdDevSchedulerBackend`] — no second pool is created.
+//! The scheduler client is shared from [`HogdDevSchedulerBackend`] — no
+//! second pool is created.
 
 use std::{fmt, net::SocketAddr};
 

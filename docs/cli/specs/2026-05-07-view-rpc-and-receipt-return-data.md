@@ -10,9 +10,6 @@ milestones: receipt return-data first, view RPC second.
 - [`../roadmap.md`](../roadmap.md) - CLI roadmap; this spec defines the
   Phase-2 follow-up that unblocks `groundhog call <c> get` returning a
   decoded value.
-- [`2026-05-03-dev-account-bootstrap.md`](2026-05-03-dev-account-bootstrap.md)
-  - dev-account bootstrap; relevant because view calls are the first
-  read path that does not require a funded dev account.
 
 ## Goal
 

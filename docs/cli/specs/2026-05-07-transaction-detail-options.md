@@ -8,10 +8,6 @@ shape, and on what timeline.
 
 **Companion to:**
 
-- [`../plans/2026-04-29-local-node-hogd-dev-supervisor.md`](../plans/2026-04-29-local-node-hogd-dev-supervisor.md)
-  – local-node supervisor plan; this spec removes transaction detail
-  and null-only dev-control from the immediate PR stack pending the
-  decisions captured here.
 - [`2026-05-07-view-rpc-and-receipt-return-data.md`](2026-05-07-view-rpc-and-receipt-return-data.md)
   – the receipt return-data + view RPC spec. Milestone A there
   delivers `return_data` and `abort_data` on the public receipt, which

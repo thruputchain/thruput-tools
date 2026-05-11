@@ -144,8 +144,8 @@ impl ChildProcessSpec {
             // SIGKILLs the direct child so it does not become an orphan
             // parented to init/launchd. Note: this only reaps the direct
             // child; on macOS, descendants of hogd-dev can still leak.
-            // See `2026-04-29-local-node-hogd-dev-supervisor.md` for the
-            // PR_SET_PDEATHSIG / process-group orphan caveat.
+            // On Linux, PR_SET_PDEATHSIG + a dedicated process group
+            // could close that gap if it ever bites.
             .kill_on_drop(true);
 
         #[cfg(unix)]
