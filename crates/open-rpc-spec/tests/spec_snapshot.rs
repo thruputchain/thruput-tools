@@ -51,9 +51,10 @@ fn openrpc_spec_has_expected_shared_schema_invariants() {
         })
         .filter(|descriptor| descriptor["schema"]["$ref"] == "#/components/schemas/TxHash")
         .count();
-    assert_eq!(
-        tx_hash_refs, 3,
-        "TxHash should be reused across the real RPC surface"
+    assert!(
+        tx_hash_refs > 1,
+        "TxHash should be referenced via $ref from more than one method \
+         (found {tx_hash_refs}); the byte-exact snapshot covers the precise shape"
     );
 
     let send_raw_transaction = methods
