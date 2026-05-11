@@ -7,8 +7,6 @@ agreement before depending on a real binary.
 
 **Companion to:**
 
-- [`../plans/2026-04-29-local-node-hogd-dev-supervisor.md`](../plans/2026-04-29-local-node-hogd-dev-supervisor.md)
-  - Rust node-supervisor implementation plan.
 - [`../2026-04-25-hogd-dev-node-hybrid.md`](../2026-04-25-hogd-dev-node-hybrid.md)
   - big-picture hogd-owned hybrid dev-node design.
 
@@ -40,9 +38,7 @@ v1 reductions:
   capabilities exist.
 - **Genesis.** v1 hogd-dev does **not** load genesis itself. The
   supervisor loads genesis over `schedcoord_load_genesis_configuration`
-  after readiness, lifted from chuckd-rs. See
-  [`../plans/2026-04-30-hogd-dev-binary-bootstrap.md`](../plans/2026-04-30-hogd-dev-binary-bootstrap.md)
-  for the rationale and provenance.
+  after readiness, lifted from chuckd-rs.
 - **Logging.** v1 stderr is free-form text via existing
   `hogd::info/warn/error`. NDJSON formatter is a follow-up.
 - **Shutdown.** v1 SIGTERM handler sets a `sig_atomic_t` flag; the main

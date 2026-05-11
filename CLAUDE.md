@@ -312,10 +312,9 @@ downstream tooling (CI, watch consumers, automation):
 5. Add a binary-level integration test that shells the CLI against a
    fixture (e.g. fake-cargo on `PATH`) and asserts the JSON shape:
    `data.schemaVersion`, success / failure paths, structural fields
-   (not just compile-pass). See `groundhog test --json` and the
-   design note at
-   `docs/cli/specs/2026-05-11-test-json-schema-design.md` for the
-   reference shape.
+   (not just compile-pass). `groundhog test --json` and its
+   integration tests under `crates/cli/tests/` are the reference
+   shape.
 
 ### Credential security
 
@@ -400,42 +399,28 @@ includes test and bench code), so always use that flag locally too.
 
 ## Planning Docs
 
+Active design notes only. Shipped decisions live in the code; git
+history retains the design context for anything not currently active.
+
 - `docs/cli/roadmap.md` — CLI backlog, sequencing, and completion state.
-- `docs/cli/2026-04-25-hogd-dev-node-hybrid.md` — durable design for
-  the hogd-owned subprocess local-node backend (subprocess over FFI).
-- `docs/cli/plans/2026-04-29-local-node-hogd-dev-supervisor.md` —
-  node-supervisor implementation plan and PR boundaries.
-- `docs/cli/plans/2026-04-30-hogd-dev-binary-bootstrap.md` — hogd-side
-  bootstrap plan for the smallest credible `hogd-dev` v1 binary.
+- `docs/cli/2026-04-25-hogd-dev-node-hybrid.md` — durable architecture
+  for the hogd-owned subprocess local-node backend.
+- `docs/cli/specs/2026-04-29-hogd-dev-process-contract.md` — cross-team
+  hogd-dev subprocess contract.
 - `docs/cli/specs/2026-04-14-bundled-wasm-opt-design.md` — bundled
   wasm-opt rollout design.
 - `docs/cli/plans/2026-04-14-bundled-wasm-opt.md` — bundled wasm-opt
-  rollout plan; CLI still shells out as of 2026-04-30.
-- `docs/cli/specs/2026-04-29-hogd-dev-process-contract.md` — draft
-  hogd-dev subprocess contract.
-- `docs/cli/specs/2026-04-29-node-supervisor-x23-client-boundary.md` —
-  node-supervisor x23 client wiring decision.
-- `docs/cli/specs/2026-05-03-dev-account-bootstrap.md` — deterministic
-  dev-account signer derivation across CLI, bench, and supervisor.
-- `docs/cli/specs/2026-05-03-openrpc-spec-gen-design.md` — original
-  OpenRPC generator design (superseded in part by the shared-schemas
-  follow-up below).
-- `docs/cli/specs/2026-05-03-ts-codegen-design.md` — TypeScript
-  binding codegen design (`groundhog codegen ts`).
-- `docs/cli/specs/2026-05-07-transaction-detail-options.md` —
-  transaction detail / view-rpc / receipt return-data scoping.
+  rollout plan; CLI still shells out at time of writing.
+- `docs/cli/specs/2026-05-03-ts-codegen-design.md` — `groundhog codegen
+  ts` TypeScript binding codegen.
 - `docs/cli/specs/2026-05-07-view-rpc-and-receipt-return-data.md` —
-  view RPC and receipt return-data wire design.
-- `docs/cli/specs/2026-05-11-test-json-schema-design.md` —
-  `groundhog test --json` schema and ownership.
-- `docs/cli/specs/2026-05-11-openrpc-shared-schemas-design.md` —
-  OpenRPC `components.schemas` registry and `$ref` use sites.
-- `docs/cli/specs/2026-05-11-openrpc-error-docs-design.md` — canonical
-  JSON-RPC error catalog in `api-types` projected into the OpenRPC
-  artifact as `components.errors` plus per-method `errors[]` refs.
+  view RPC and structured receipt return-data wire design.
+- `docs/cli/specs/2026-05-07-transaction-detail-options.md` —
+  transaction detail / receipt response shape.
 - `docs/gateway/roadmap.md` — gateway backlog and sequencing.
-- `docs/gateway/system-design.md` — full gateway architecture and open
-  questions.
+- `docs/gateway/system-design.md` — gateway architecture.
+- `docs/gateway/open-questions.md` — cross-team open and resolved
+  questions for the gateway design.
 - `docs/cli/foundry.md` — Foundry DX analysis for CLI design reference.
 
 ## Context

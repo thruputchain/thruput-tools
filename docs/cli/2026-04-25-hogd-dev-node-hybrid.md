@@ -9,13 +9,8 @@ been retained for context. The current local-node implementation lives
 in `crates/node-supervisor` around a hogd-owned `hogd-dev` subprocess.
 
 **Companion to:**
-- [`plans/2026-04-29-local-node-hogd-dev-supervisor.md`](plans/2026-04-29-local-node-hogd-dev-supervisor.md)
-  — focused Rust local-node supervisor implementation plan
 - [`specs/2026-04-29-hogd-dev-process-contract.md`](specs/2026-04-29-hogd-dev-process-contract.md)
-  — draft hogd-dev subprocess contract proposal
-- [`specs/2026-04-29-node-supervisor-x23-client-boundary.md`](specs/2026-04-29-node-supervisor-x23-client-boundary.md)
-  — x23 client wiring decision (deliberately deferred adopting
-  `chuckd_scheduler::SchedulerClient` as a unifying aperture)
+  — hogd-dev subprocess contract.
 
 This doc supersedes earlier proposals that argued for an embedded
 `libhogdev` FFI backend (the durable target named here is a hogd-owned
