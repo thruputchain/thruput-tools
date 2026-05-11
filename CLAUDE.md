@@ -43,6 +43,25 @@ Workspace crates in `crates/`:
   full event-feed wiring. This is the only CLI local-node backend; the
   legacy native-exec prototype (`crates/dev-node`) was deleted in PR 5,
   with the git history retaining the source for any future reference.
+- **open-rpc** — OpenRPC document generator. `Project` owns a single
+  `schemars::SchemaGenerator` shared across modules so named Rust types
+  land once in `components.schemas` and use sites carry `$ref`.
+  `ModuleBuilder` is the threading point. Treated as an internal
+  implementation detail — the external consumer is the generated JSON,
+  not the Rust API.
+- **open-rpc-macros** — `#[open_rpc]` proc macro. Generates a companion
+  struct per jsonrpsee `#[rpc]` trait whose `module_doc(&mut
+  ModuleBuilder)` appends OpenRPC method descriptors. Resolves the
+  `groundhog-open-rpc` crate by package name via `proc_macro_crate` so
+  downstream re-exports work.
+- **open-rpc-spec** — library + binary that assembles the canonical
+  artifact. The binary emits JSON to stdout; the library is the
+  composition point for the workspace's RPC traits and owns the
+  hand-maintained per-method `errors[]` mapping. The published
+  `groundhog-open-rpc-spec` crate is consumed by `client-ts` via its
+  regen script. A byte-equal snapshot at
+  `crates/open-rpc-spec/snapshots/groundhog-spec.json` guards artifact
+  shape; `UPDATE_SNAPSHOTS=1` regenerates after intentional changes.
 - **e2e-tests** — ignored process-level JSON-RPC lifecycle smoke tests.
 - **bench** — benchmark harnesses.
 
@@ -91,6 +110,11 @@ runtime), `tower`/`tower-http` (middleware), `clap` (CLI), `prometheus`
 - OpenRPC / JSON Schema documents for the RPC surface are generated
   artifacts from Rust traits and Rust types. Do not hand-author or
   maintain parallel schema files for RPC methods or RPC payload types.
+- The canonical JSON-RPC error catalog lives in
+  `crates/api-types/src/error.rs`. See "Gateway Conventions" below for
+  the OpenRPC projection, the per-method mapping in
+  `crates/open-rpc-spec/src/lib.rs`, and the snapshot-enforced rule
+  that adding a method requires updating that mapping.
 - CLI-only machine-readable output types live in `crates/cli` by
   default. If a CLI schema embeds chain or runtime data, reuse
   `api-types` nested types instead of copying them.
@@ -125,6 +149,7 @@ cargo run -p groundhog-cli -- new my-counter
 cargo run -p groundhog-cli -- new my-stub --template stub
 cargo run -p groundhog-cli -- build        # from inside a project
 cargo run -p groundhog-cli -- test         # requires login first
+cargo run -p groundhog-cli -- test --json  # structured TestReport on stdout
 cargo run -p groundhog-cli -- deploy       # from inside a project
 cargo run -p groundhog-cli -- call my-counter get
 cargo run -p groundhog-cli -- keys generate alice
@@ -224,8 +249,16 @@ cargo run -p groundhog-cli --features dev-node -- node --hogd-dev-binary /path/t
 - `rpc-server` enforces shared request bounds — currently `getEvents`
   per-page limit and pagination cursor length.  Gateway supplies the
   production limits from `GatewayConfig`.
-- Error codes follow Substrate's per-module range pattern. Constants
-  live in `api-types/src/error.rs`.
+- Error codes follow Substrate's per-module range pattern. The
+  canonical catalog is `ERROR_INFOS` (stable name, code, short
+  message, consumer-facing description) plus `codes::ALL` in
+  `api-types/src/error.rs`. The OpenRPC artifact projects this into
+  `components.errors`; methods carry `errors[]` arrays of `$ref`s. The
+  per-method mapping lives in `crates/open-rpc-spec/src/lib.rs` and is
+  hand-maintained — adding a method requires updating that mapping or
+  the snapshot test fails. Error component `name` / `message` /
+  `description` are sibling fields on the error object; `data` stays
+  reserved for future typed runtime payloads.
 - Method prefix is `groundhog_` (may change — see open questions in
   docs/gateway/system-design.md).
 
@@ -255,6 +288,35 @@ cargo run -p groundhog-cli --features dev-node -- node --hogd-dev-binary /path/t
 4. Use the variant at call sites. Avoid `CliError::Other` for common
    user-facing failures.
 
+### Adding machine-readable output to a CLI command
+
+When a command's `--json` output is intended as a stable contract for
+downstream tooling (CI, watch consumers, automation):
+
+1. Define the typed report in `crates/cli/src/<cmd>_json.rs` with
+   `serde::{Serialize, Deserialize}` and `schemars::JsonSchema` derives.
+   Use `#[serde(rename_all = "camelCase")]` so the JSON boundary
+   matches Groundhog's wire convention.
+2. Include a `schema_version: u32` field inside `data` from v1
+   onward, plus a `pub const <CMD>_JSON_SCHEMA_VERSION: u32 = 1`
+   referenced once at construction. Do not version the shared
+   `CommandResult` envelope per command.
+3. Emit success and failure on the same stream (stdout) via
+   `print.json(&CommandResult::new(...))` and
+   `print.json(&CommandResult::failure(...))` so `--watch --json`
+   produces newline-delimited records that consumers can parse off a
+   single stream. Generic preflight errors that never produce the
+   typed payload may keep the existing stderr error envelope.
+4. Suppress non-JSON status output via `print.status` / `print.warn`
+   when `print.is_json()` so stdout stays clean.
+5. Add a binary-level integration test that shells the CLI against a
+   fixture (e.g. fake-cargo on `PATH`) and asserts the JSON shape:
+   `data.schemaVersion`, success / failure paths, structural fields
+   (not just compile-pass). See `groundhog test --json` and the
+   design note at
+   `docs/cli/specs/2026-05-11-test-json-schema-design.md` for the
+   reference shape.
+
 ### Credential security
 
 Never pass credentials as command-line arguments to subprocesses. They
@@ -283,6 +345,25 @@ loading the private key.
 - The `build` and `test` CLI commands cannot be fully
   integration-tested without the SDK crate registry. Unit tests cover
   helpers such as `find_project` and `wasm_output_path`.
+
+### Snapshot testing for generated artifacts
+
+For generated artifacts that consumers depend on (currently the
+OpenRPC spec; in future, any wire-format-stable codegen output):
+
+- Check the canonical artifact into the repo (e.g.
+  `crates/open-rpc-spec/snapshots/groundhog-spec.json`).
+- The test asserts byte-equal match against the committed file using
+  `pretty_assertions::assert_eq` so failure diffs are readable.
+- `UPDATE_SNAPSHOTS=1 cargo test ...` regenerates the snapshot on
+  intentional changes. The test returns early in that mode so it
+  never asserts against a freshly-written file.
+- Pair the snapshot with structural invariants in the same test file
+  that document intent and produce clearer failures than a multi-
+  thousand-line diff (e.g. "every method documents ≥1 error",
+  "every `$ref` resolves", "no schema key starts with `VecM<`").
+  The snapshot catches regressions; the invariants document the
+  contract.
 
 ## Before Committing
 
@@ -326,12 +407,32 @@ includes test and bench code), so always use that flag locally too.
   node-supervisor implementation plan and PR boundaries.
 - `docs/cli/plans/2026-04-30-hogd-dev-binary-bootstrap.md` — hogd-side
   bootstrap plan for the smallest credible `hogd-dev` v1 binary.
+- `docs/cli/specs/2026-04-14-bundled-wasm-opt-design.md` — bundled
+  wasm-opt rollout design.
+- `docs/cli/plans/2026-04-14-bundled-wasm-opt.md` — bundled wasm-opt
+  rollout plan; CLI still shells out as of 2026-04-30.
 - `docs/cli/specs/2026-04-29-hogd-dev-process-contract.md` — draft
   hogd-dev subprocess contract.
 - `docs/cli/specs/2026-04-29-node-supervisor-x23-client-boundary.md` —
   node-supervisor x23 client wiring decision.
-- `docs/cli/plans/2026-04-14-bundled-wasm-opt.md` — bundled wasm-opt
-  rollout; CLI still shells out as of 2026-04-30.
+- `docs/cli/specs/2026-05-03-dev-account-bootstrap.md` — deterministic
+  dev-account signer derivation across CLI, bench, and supervisor.
+- `docs/cli/specs/2026-05-03-openrpc-spec-gen-design.md` — original
+  OpenRPC generator design (superseded in part by the shared-schemas
+  follow-up below).
+- `docs/cli/specs/2026-05-03-ts-codegen-design.md` — TypeScript
+  binding codegen design (`groundhog codegen ts`).
+- `docs/cli/specs/2026-05-07-transaction-detail-options.md` —
+  transaction detail / view-rpc / receipt return-data scoping.
+- `docs/cli/specs/2026-05-07-view-rpc-and-receipt-return-data.md` —
+  view RPC and receipt return-data wire design.
+- `docs/cli/specs/2026-05-11-test-json-schema-design.md` —
+  `groundhog test --json` schema and ownership.
+- `docs/cli/specs/2026-05-11-openrpc-shared-schemas-design.md` —
+  OpenRPC `components.schemas` registry and `$ref` use sites.
+- `docs/cli/specs/2026-05-11-openrpc-error-docs-design.md` — canonical
+  JSON-RPC error catalog in `api-types` projected into the OpenRPC
+  artifact as `components.errors` plus per-method `errors[]` refs.
 - `docs/gateway/roadmap.md` — gateway backlog and sequencing.
 - `docs/gateway/system-design.md` — full gateway architecture and open
   questions.
