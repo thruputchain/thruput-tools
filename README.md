@@ -17,6 +17,9 @@ server layer, transaction signing library, and typed client.
 | [`rpc-server`](crates/rpc-server/) | Shared server-side JSON-RPC implementation and validation |
 | [`x23-transport`](crates/x23-transport/) | Shared x23 connection-pool helpers (used by gateway and node-supervisor) |
 | [`node-supervisor`](crates/node-supervisor/) | `groundhog node` facade: supervises hogd-dev and serves JSON-RPC via `rpc-server` (durable local-node path; chain/submit wired to hogd-dev scheduler, read wired to hogd-dev indexer when advertised; end-to-end read coverage gated on the hogd-dev v1 binary exposing the indexer endpoint) |
+| [`open-rpc`](crates/open-rpc/) | OpenRPC document generator: `Project` + `ModuleBuilder` thread a shared `schemars::SchemaGenerator` so named types land in `components.schemas` with `$ref` use sites |
+| [`open-rpc-macros`](crates/open-rpc-macros/) | `#[open_rpc]` proc macro that emits OpenRPC method descriptors from jsonrpsee `#[rpc]` traits |
+| [`open-rpc-spec`](crates/open-rpc-spec/) | Library + binary that assembles the canonical `groundhog-open-rpc-spec` artifact for downstream codegen (consumed by `client-ts`) |
 | [`e2e-tests`](crates/e2e-tests/) | Process-level JSON-RPC smoke tests |
 | [`bench`](crates/bench/) | Benchmark harnesses |
 
@@ -75,6 +78,12 @@ cargo fmt --check                       # format check
 - [Hogd-dev binary bootstrap plan](docs/cli/plans/2026-04-30-hogd-dev-binary-bootstrap.md)
 - [Hogd-dev process contract proposal](docs/cli/specs/2026-04-29-hogd-dev-process-contract.md)
 - [Node-supervisor x23 client boundary](docs/cli/specs/2026-04-29-node-supervisor-x23-client-boundary.md)
+- [OpenRPC shared-schemas design](docs/cli/specs/2026-05-11-openrpc-shared-schemas-design.md)
+- [OpenRPC error documentation design](docs/cli/specs/2026-05-11-openrpc-error-docs-design.md)
+- [TypeScript binding codegen design](docs/cli/specs/2026-05-03-ts-codegen-design.md)
+- [View RPC and receipt return data](docs/cli/specs/2026-05-07-view-rpc-and-receipt-return-data.md)
+- [Transaction detail options](docs/cli/specs/2026-05-07-transaction-detail-options.md)
+- [`groundhog test --json` schema](docs/cli/specs/2026-05-11-test-json-schema-design.md)
 - [Gateway system design](docs/gateway/system-design.md)
 - [Gateway API sketch](docs/gateway/api-sketch.md)
 - [Gateway roadmap](docs/gateway/roadmap.md)
