@@ -210,6 +210,10 @@ spec.module(|m| GroundhogApiOpenRpc::module_doc(m));
   `methods[].result.schema` carry `{"$ref": "..."}`.
 - Primitives stay inline at use sites; they do not get
   `components.schemas` entries.
+- Bounded collection types that are part of the JSON-RPC contract use
+  named wrapper types instead of exposing raw Rust generic keys such as
+  `VecM<T, N>`. The bound remains schema metadata (`maxItems`), not
+  part of the public type name.
 
 ## Name-Collision Policy
 

@@ -19,8 +19,8 @@ use groundhog_rpc_api_types::{
     block::{BlockInfo, ChainTip},
     error::codes,
     events::{
-        BlockAnchor, EventFilter, EventPage, EventQuery, EventTopicFilter, IterationOrder,
-        PaginationCursor,
+        BlockAnchor, ContractAddressList, EventFilter, EventFilterList, EventPage, EventQuery,
+        EventTopicFilter, IterationOrder, PaginationCursor, TopicList,
     },
     hex::{Hex0x, HexBytes},
     receipt::TransactionReceipt,
@@ -154,16 +154,16 @@ fn server(backend: ScriptedBackend) -> ScriptedServer {
 
 fn simple_query() -> EventQuery {
     EventQuery {
-        filters: VecM(vec![EventFilter {
-            contract_addresses: VecM(vec![Hex0x(groundhog_xdr::types::ContractAddress::from(
-                [0u8; 32],
-            ))]),
+        filters: EventFilterList(VecM(vec![EventFilter {
+            contract_addresses: ContractAddressList(VecM(vec![Hex0x(
+                groundhog_xdr::types::ContractAddress::from([0u8; 32]),
+            )])),
             topics: EventTopicFilter {
-                topic0: VecM(vec![]),
-                topic1: VecM(vec![]),
-                topic2: VecM(vec![]),
+                topic0: TopicList(VecM(vec![])),
+                topic1: TopicList(VecM(vec![])),
+                topic2: TopicList(VecM(vec![])),
             },
-        }]),
+        }])),
         order: IterationOrder::Ascending,
         anchor: BlockAnchor::AtBeginning,
         cursor: PaginationCursor(vec![]),
