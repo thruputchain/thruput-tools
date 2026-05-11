@@ -1,10 +1,136 @@
 # Groundhog Developer Tools
 
-Off-chain developer tooling for the Groundhog smart contract
-platform. Monorepo containing the CLI, RPC gateway, reusable RPC
-server layer, transaction signing library, and typed client.
+Off-chain developer tooling for the Groundhog smart-contract platform:
+the `groundhog` CLI, a JSON-RPC gateway, a reusable RPC-server layer,
+a transaction signing library, and a typed JSON-RPC client. The
+canonical OpenRPC artifact for downstream SDKs is produced from this
+monorepo.
 
-## Crates
+## Quick orientation
+
+Two audiences land here. Skip to whichever fits:
+
+- **Building on Groundhog?** (writing contracts, building SDKs,
+  integrating with the JSON-RPC API) → [Building on Groundhog](#building-on-groundhog).
+- **Contributing to this repo?** → [Contributing](#contributing).
+
+---
+
+## Building on Groundhog
+
+### Local dev path
+
+The `groundhog` CLI runs an isolated Groundhog chain in a `hogd-dev`
+subprocess and gives you a normal dev loop on top:
+
+```bash
+cargo install --path crates/cli --features dev-node
+groundhog init                   # one-time environment check
+groundhog login                  # one-time; early-access registry auth
+groundhog new my-counter && cd my-counter
+groundhog build
+# in another terminal
+groundhog node --hogd-dev-binary /path/to/hogd-dev
+groundhog deploy
+groundhog call my-counter get
+```
+
+`groundhog login` is currently required for the Groundhog contract SDK
+to resolve from the private crate registry that `groundhog new` writes
+into the project's `Cargo.toml`. This is an early-access constraint
+and will relax when the SDK ships publicly.
+
+`hogd-dev` is the single-process Groundhog node implementation used
+for development — scheduler, indexer, and storage in one binary. The
+`groundhog node` supervisor manages its lifecycle and serves the
+public JSON-RPC on top, so every CLI command (`deploy`, `call`,
+receipts, events, storage reads) talks to the same JSON-RPC surface
+an SDK would.
+
+### The API surface
+
+The JSON-RPC contract lives in the OpenRPC artifact at
+[`crates/open-rpc-spec/snapshots/groundhog-spec.json`](crates/open-rpc-spec/snapshots/groundhog-spec.json),
+also published as the `groundhog-open-rpc-spec` crate on the private
+registry. Two method namespaces:
+
+- `groundhog_*` — public surface intended for SDK consumption.
+- `groundhog_dev_*` — local-development helpers (account introspection,
+  test-mode utilities). SDKs should not surface these by default.
+
+Wire-format conventions:
+
+- `0x`-prefixed lowercase hex for all byte values (hashes, addresses,
+  topics, event data).
+- Decimal JSON numbers for heights, counts, and other quantities (no
+  Ethereum-style hex quantities).
+- `camelCase` JSON field names.
+- Tagged unions with `kind` or `status` discriminators.
+- Cursors are opaque server-authored `0x` strings — reflect verbatim.
+
+See the "Gateway Conventions" section of [`CLAUDE.md`](CLAUDE.md) for
+the full convention.
+
+### Errors
+
+Every method declares an `errors[]` array referencing
+`components.errors` in the artifact. Error codes follow Substrate's
+per-module range pattern; the canonical catalog (stable name, code,
+short message, consumer-facing description) lives in
+[`crates/api-types/src/error.rs`](crates/api-types/src/error.rs).
+
+Codes worth knowing for retry policy:
+
+- `Overloaded` (-32053) — request never reached the backend; retry safe.
+- `BackendTimeout` (-32051) — outcome ambiguous; idempotent retries only.
+- `TxRejected` (-32001) — permanent rejection; do not retry.
+
+### TypeScript
+
+XDR types, contract specs, and JSON-RPC primitives for TypeScript
+consumers live in the `protocol-ts` peer repository as
+`@groundhogchain/protocol`, `/contract-spec`, `/xdr`, and `/client`.
+The canonical TS SDK that codegens against the OpenRPC artifact and
+sits on top of those primitives is the right consumer-facing entry
+point — link will land here once it ships.
+
+### Near-term changes to the public surface
+
+Active design notes that will modify the JSON-RPC surface:
+
+- [View RPC and receipt return-data](docs/cli/specs/2026-05-07-view-rpc-and-receipt-return-data.md)
+  — read-only contract calls plus structured `return_data` /
+  `abort_data` on receipts.
+- [Transaction detail options](docs/cli/specs/2026-05-07-transaction-detail-options.md)
+  — receipt response shape.
+
+### Versioning caveat
+
+Wire-format-breaking changes to the OpenRPC artifact currently ride
+workspace-version bumps (e.g. `0.3.x → 0.4.0` may carry a wire change
+even when the diff looks like a routine release). Pin precisely and
+re-review the artifact on each bump. Decoupling wire-format versioning
+from workspace versioning is a tracked follow-up.
+
+### Mini-glossary
+
+Terms you'll encounter in the CLI output, the OpenRPC artifact, or
+this repo's docs:
+
+- `hogd-dev` — single-process Groundhog node implementation used for
+  local development.
+- `indexer` — receipt / event / transaction-status query plane.
+- `scheduler` — submit-tx + chain-tip plane.
+- `dev-N` — deterministic dev accounts (`dev-0` ... `dev-N`) the local
+  dev backend funds and signs as.
+- `x23` — wire protocol between the supervisor and the `hogd-dev`
+  subprocess. Internal; SDKs don't touch it.
+
+---
+
+## Contributing
+
+### Crates
 
 | Crate | Description |
 |-------|-------------|
@@ -12,81 +138,82 @@ server layer, transaction signing library, and typed client.
 | [`gateway`](crates/gateway/) | JSON-RPC 2.0 gateway server |
 | [`signing`](crates/signing/) | Off-chain transaction signing and construction |
 | [`client`](crates/client/) | Typed JSON-RPC client |
-| [`api-types`](crates/api-types/) | Shared RPC types |
+| [`api-types`](crates/api-types/) | Shared RPC types (including the error catalog) |
 | [`rpc-api`](crates/rpc-api/) | Shared jsonrpsee trait definitions |
 | [`rpc-server`](crates/rpc-server/) | Shared server-side JSON-RPC implementation and validation |
 | [`x23-transport`](crates/x23-transport/) | Shared x23 connection-pool helpers (used by gateway and node-supervisor) |
-| [`node-supervisor`](crates/node-supervisor/) | `groundhog node` facade: supervises hogd-dev and serves JSON-RPC via `rpc-server` (durable local-node path; chain/submit wired to hogd-dev scheduler, read wired to hogd-dev indexer when advertised; end-to-end read coverage gated on the hogd-dev v1 binary exposing the indexer endpoint) |
+| [`node-supervisor`](crates/node-supervisor/) | `groundhog node` facade: supervises `hogd-dev` and serves JSON-RPC via `rpc-server`. Chain/submit wired to the hogd-dev scheduler, read wired to the hogd-dev indexer when advertised. |
 | [`open-rpc`](crates/open-rpc/) | OpenRPC document generator: `Project` + `ModuleBuilder` thread a shared `schemars::SchemaGenerator` so named types land in `components.schemas` with `$ref` use sites |
-| [`open-rpc-macros`](crates/open-rpc-macros/) | `#[open_rpc]` proc macro that emits OpenRPC method descriptors from jsonrpsee `#[rpc]` traits |
-| [`open-rpc-spec`](crates/open-rpc-spec/) | Library + binary that assembles the canonical `groundhog-open-rpc-spec` artifact for downstream codegen (consumed by `client-ts`) |
+| [`open-rpc-macros`](crates/open-rpc-macros/) | `#[open_rpc]` proc macro emitting OpenRPC method descriptors from jsonrpsee `#[rpc]` traits |
+| [`open-rpc-spec`](crates/open-rpc-spec/) | Library + binary that assembles the canonical `groundhog-open-rpc-spec` artifact for downstream codegen |
 | [`e2e-tests`](crates/e2e-tests/) | Process-level JSON-RPC smoke tests |
 | [`bench`](crates/bench/) | Benchmark harnesses |
 
-## Quick Start
+### Local dev setup
 
 ```bash
-cargo build -p groundhog-cli
-cargo run -p groundhog-cli -- init
-cargo run -p groundhog-cli -- new my-counter
+cargo build --workspace
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --check
 ```
 
-For the experimental local dev node:
+The standard contributor smoke is `scripts/smoke-local-dx.sh` — runs
+the user-facing CLI loop (`new` → `build` → `node` → `deploy` →
+`call` → view → storage) against a real `hogd-dev` binary. Set
+`HOGD_DEV_BINARY=/path/to/hogd-dev` and invoke.
 
-```bash
-cargo run -p groundhog-cli --features dev-node -- node
-```
+The `test` subcommand requires `groundhog login` to authenticate
+against the private crate registry that ships the Groundhog contract
+SDK. See [`crates/cli/README.md`](crates/cli/README.md) for the full
+CLI reference.
 
-`groundhog node` uses the hogd-dev supervisor path. The legacy
-`native_exec` prototype (`crates/dev-node`) was deleted in PR 5; the
-git history retains the source for any future reference.
+### Conventions
 
-Or install the CLI with experimental local dev-node support:
+[`CLAUDE.md`](CLAUDE.md) is the convention reference for both human
+contributors and LLM assistants. Highlights:
 
-```bash
-cargo install --path crates/cli --features dev-node
-```
+- Edition 2024, stable Rust, 100-column max, `thiserror` only (no
+  `anyhow`), no `.unwrap()` outside tests.
+- Schema ownership: XDR in `protocol-rs/groundhog-xdr` (Rust) and
+  `protocol-ts` (TypeScript); JSON-RPC projections in `api-types`;
+  method surface in `rpc-api`; OpenRPC artifact generated, never
+  hand-authored.
+- Wire-format and error-catalog conventions are summarized in the
+  "Building on Groundhog" section above and detailed in CLAUDE.md
+  "Gateway Conventions".
+- CLI machine-readable output: typed report types in `crates/cli`,
+  `data.schemaVersion` from v1 onward, `CommandResult` envelope on a
+  single stdout stream.
 
-Typical local contract loop:
+### Design rationale
 
-```bash
-groundhog new my-counter && cd my-counter
-groundhog build
-groundhog node  # in another terminal
-groundhog deploy
-groundhog call my-counter get
-```
+Active design notes:
 
-See [`crates/cli/README.md`](crates/cli/README.md) for full CLI
-documentation.
+- [`docs/cli/specs/`](docs/cli/specs/) — CLI and developer-tooling specs.
+- [`docs/cli/roadmap.md`](docs/cli/roadmap.md) — CLI roadmap.
+- [`docs/gateway/`](docs/gateway/) — gateway architecture and roadmap.
 
-## Development
+Shipped decisions live in the code; git history retains the design
+context for anything not currently active.
 
-```bash
-cargo build                             # build all crates
-cargo test --workspace                  # run all tests
-cargo clippy --workspace --all-targets -- -D warnings # lint
-cargo fmt --check                       # format check
-```
+### Cross-team
 
-## Documentation
+This repo is the off-chain half of the Groundhog dev surface. Adjacent
+components:
 
-- [CLI documentation](crates/cli/README.md)
-- [CLI roadmap](docs/cli/roadmap.md)
-- [Hogd-dev hybrid dev-node design](docs/cli/2026-04-25-hogd-dev-node-hybrid.md)
-- [Local node hogd-dev supervisor plan](docs/cli/plans/2026-04-29-local-node-hogd-dev-supervisor.md)
-- [Hogd-dev binary bootstrap plan](docs/cli/plans/2026-04-30-hogd-dev-binary-bootstrap.md)
-- [Hogd-dev process contract proposal](docs/cli/specs/2026-04-29-hogd-dev-process-contract.md)
-- [Node-supervisor x23 client boundary](docs/cli/specs/2026-04-29-node-supervisor-x23-client-boundary.md)
-- [OpenRPC shared-schemas design](docs/cli/specs/2026-05-11-openrpc-shared-schemas-design.md)
-- [OpenRPC error documentation design](docs/cli/specs/2026-05-11-openrpc-error-docs-design.md)
-- [TypeScript binding codegen design](docs/cli/specs/2026-05-03-ts-codegen-design.md)
-- [View RPC and receipt return data](docs/cli/specs/2026-05-07-view-rpc-and-receipt-return-data.md)
-- [Transaction detail options](docs/cli/specs/2026-05-07-transaction-detail-options.md)
-- [`groundhog test --json` schema](docs/cli/specs/2026-05-11-test-json-schema-design.md)
-- [Gateway system design](docs/gateway/system-design.md)
-- [Gateway API sketch](docs/gateway/api-sketch.md)
-- [Gateway roadmap](docs/gateway/roadmap.md)
+- `protocol` — wire-protocol XDR definitions.
+- `protocol-rs` — Rust bindings for the XDR types (the `groundhog-xdr`
+  crate this repo depends on).
+- `protocol-ts` — TypeScript bindings for the same. The peer for
+  Rust↔TS parity.
+- `hogd` — the canonical Groundhog node. `hogd-dev` is the developer-
+  loop variant this repo's `groundhog node` supervises.
+
+See [`docs/gateway/system-design.md`](docs/gateway/system-design.md)
+for the full chain-level architecture and open questions.
+
+---
 
 ## License
 
