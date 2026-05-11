@@ -30,3 +30,4 @@ bytes = { workspace = true }
 hex = { workspace = true }
 thiserror = { workspace = true }
 xdrs = { workspace = true }
+xdr-common = { workspace = true }

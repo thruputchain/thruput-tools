@@ -304,9 +304,14 @@ impl ReadPlane for HogdDevReadBackend {
     /// pagination cursor is not affected.
     #[tracing::instrument(skip_all, fields(limit = query.limit))]
     async fn contract_events(&self, query: EventQuery) -> Result<EventPage, RpcServerError> {
-        let page = self.indexer.get_events(&query).await.map_err(|source| {
-            RpcServerError::BackendUnavailable(format!("hogd-dev indexer: {source}"))
-        })?;
+        let wire_query: groundhog_indexer::indexer::EventQuery = query.into();
+        let page = self
+            .indexer
+            .get_events(&wire_query)
+            .await
+            .map_err(|source| {
+                RpcServerError::BackendUnavailable(format!("hogd-dev indexer: {source}"))
+            })?;
 
         let mut events: Vec<IdentifiedEvent> = Vec::with_capacity(page.events.0.len());
         for identified in &page.events.0 {
@@ -329,7 +334,7 @@ impl ReadPlane for HogdDevReadBackend {
 
         Ok(EventPage {
             events,
-            cursor: page.cursor,
+            cursor: page.cursor.into(),
             latest_block: page.latest_block,
             oldest_block: page.oldest_block,
         })
@@ -901,7 +906,10 @@ mod tests {
             }
         }
 
-        async fn get_events(&self, arg0: EventQuery) -> Result<IdxEventPage, ProgramError> {
+        async fn get_events(
+            &self,
+            arg0: groundhog_indexer::EventQuery,
+        ) -> Result<IdxEventPage, ProgramError> {
             if self.mode == FakeIndexerMode::RpcFail {
                 return Err(ProgramError::msg("fake indexer rpc-fail"));
             }
@@ -1104,23 +1112,21 @@ mod tests {
     }
 
     fn empty_event_query() -> EventQuery {
-        use groundhog_indexer::pagination::{BlockAnchor, IterationOrder};
         EventQuery {
             filters: VecM(vec![]),
-            order: IterationOrder::IterationOrderAscending,
-            anchor: BlockAnchor::AnchorAtBeginning,
-            cursor: BytesM(vec![]),
+            order: groundhog_rpc_api_types::events::IterationOrder::Ascending,
+            anchor: groundhog_rpc_api_types::events::BlockAnchor::AtBeginning,
+            cursor: groundhog_rpc_api_types::events::PaginationCursor(vec![]),
             limit: 10,
         }
     }
 
     fn event_query_with_cursor(cursor: &[u8]) -> EventQuery {
-        use groundhog_indexer::pagination::{BlockAnchor, IterationOrder};
         EventQuery {
             filters: VecM(vec![]),
-            order: IterationOrder::IterationOrderAscending,
-            anchor: BlockAnchor::AnchorAtBeginning,
-            cursor: BytesM(cursor.to_vec()),
+            order: groundhog_rpc_api_types::events::IterationOrder::Ascending,
+            anchor: groundhog_rpc_api_types::events::BlockAnchor::AtBeginning,
+            cursor: groundhog_rpc_api_types::events::PaginationCursor(cursor.to_vec()),
             limit: 10,
         }
     }

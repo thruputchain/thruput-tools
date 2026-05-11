@@ -152,10 +152,10 @@ mod tests {
     use super::*;
     use crate::ValidatedTransaction;
     use groundhog_rpc_api_types::events::{
-        BlockAnchor, EventFilter, EventTopicFilter, IterationOrder,
+        BlockAnchor, EventFilter, EventTopicFilter, IterationOrder, PaginationCursor,
     };
     use groundhog_rpc_api_types::hex::Hex0x;
-    use xdr_common::{BytesM, VecM};
+    use xdr_common::VecM;
 
     // Canonical XDR/hash vector only. This transaction is structurally valid
     // and has a stable hash, but it is not auth-valid against empty hogd-dev
@@ -415,7 +415,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         );
 
         let mut q = simple_query();
-        q.cursor = BytesM(vec![0u8; cap + 1]);
+        q.cursor = PaginationCursor(vec![0u8; cap + 1]);
 
         let err = server
             .get_events(q)
@@ -463,18 +463,18 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     fn simple_query() -> EventQuery {
         EventQuery {
             filters: VecM(vec![EventFilter {
-                contract_addresses: VecM(vec![groundhog_xdr::types::ContractAddress::from(
+                contract_addresses: VecM(vec![Hex0x(groundhog_xdr::types::ContractAddress::from(
                     [0u8; 32],
-                )]),
+                ))]),
                 topics: EventTopicFilter {
                     topic0: VecM(vec![]),
                     topic1: VecM(vec![]),
                     topic2: VecM(vec![]),
                 },
             }]),
-            order: IterationOrder::IterationOrderAscending,
-            anchor: BlockAnchor::AnchorAtBeginning,
-            cursor: BytesM(vec![]),
+            order: IterationOrder::Ascending,
+            anchor: BlockAnchor::AtBeginning,
+            cursor: PaginationCursor(vec![]),
             limit: 0,
         }
     }
@@ -482,7 +482,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     fn empty_page() -> EventPage {
         EventPage {
             events: vec![],
-            cursor: BytesM(vec![]),
+            cursor: PaginationCursor(vec![]),
             latest_block: BlockHeight::from(0),
             oldest_block: BlockHeight::from(0),
         }

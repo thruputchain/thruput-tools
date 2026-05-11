@@ -28,8 +28,9 @@ pub async fn get_events(
         .clone()
         .ok_or_else(|| GatewayError::BackendUnavailable("indexer not connected".into()))?;
 
+    let wire_query: groundhog_indexer::indexer::EventQuery = query.into();
     let page = client
-        .get_events(&query)
+        .get_events(&wire_query)
         .await
         .map_err(|e| GatewayError::BackendUnavailable(format!("indexer: {e}")))?;
 
@@ -54,7 +55,7 @@ pub async fn get_events(
 
     Ok(EventPage {
         events,
-        cursor: page.cursor,
+        cursor: page.cursor.into(),
         latest_block: page.latest_block,
         oldest_block: page.oldest_block,
     })

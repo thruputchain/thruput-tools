@@ -13,13 +13,13 @@
 
 use groundhog_rpc_api_types::ContractAddress;
 use groundhog_rpc_api_types::events::{
-    BlockAnchor, EventFilter, EventQuery, EventTopicFilter, IterationOrder,
+    BlockAnchor, EventFilter, EventQuery, EventTopicFilter, IterationOrder, PaginationCursor,
 };
 use groundhog_rpc_api_types::hex::{Hex0x, HexBytes};
 use groundhog_rpc_api_types::state::StorageItemInfo;
 use groundhog_rpc_api_types::transaction::TransactionStatus;
 use groundhog_rpc_client::{GroundhogApiClient, HttpClientBuilder};
-use xdr_common::{BytesM, VecM};
+use xdr_common::VecM;
 
 fn rpc_url() -> String {
     std::env::var("RPC_URL").unwrap_or_else(|_| "http://127.0.0.1:9545".to_string())
@@ -153,7 +153,9 @@ fn events_for_address(
 ) -> EventQuery {
     EventQuery {
         filters: VecM(vec![EventFilter {
-            contract_addresses: VecM(vec![groundhog_xdr::types::ContractAddress::from(addr)]),
+            contract_addresses: VecM(vec![Hex0x(groundhog_xdr::types::ContractAddress::from(
+                addr,
+            ))]),
             topics: EventTopicFilter {
                 topic0: VecM(vec![]),
                 topic1: VecM(vec![]),
@@ -162,7 +164,7 @@ fn events_for_address(
         }]),
         order,
         anchor,
-        cursor: BytesM(vec![]),
+        cursor: PaginationCursor(vec![]),
         limit,
     }
 }
@@ -173,8 +175,8 @@ async fn get_events_returns_well_formed_page() {
     let c = client();
     let query = events_for_address(
         [0u8; 32],
-        BlockAnchor::AnchorAtEnd,
-        IterationOrder::IterationOrderDescending,
+        BlockAnchor::AtEnd,
+        IterationOrder::Descending,
         10,
     );
     let page = c.get_events(query).await.expect("getEvents should succeed");
@@ -214,12 +216,8 @@ async fn get_events_returns_well_formed_page() {
 #[ignore = "requires running RPC server with populated indexer"]
 async fn get_events_cursor_walks_or_terminates() {
     let c = client();
-    let mut query = events_for_address(
-        [0u8; 32],
-        BlockAnchor::AnchorAtEnd,
-        IterationOrder::IterationOrderDescending,
-        1,
-    );
+    let mut query =
+        events_for_address([0u8; 32], BlockAnchor::AtEnd, IterationOrder::Descending, 1);
 
     let first = c.get_events(query.clone()).await.expect("first page");
     assert!(
@@ -235,7 +233,7 @@ async fn get_events_cursor_walks_or_terminates() {
         return;
     }
 
-    query.cursor = BytesM(first.cursor.0.clone());
+    query.cursor = PaginationCursor(first.cursor.0.clone());
     let second = c.get_events(query).await.expect("second page");
 
     if let (Some(a), Some(b)) = (first.events.first(), second.events.first()) {

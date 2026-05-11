@@ -97,7 +97,7 @@ pub struct ModuleBuilder<'a> {
 
 impl ModuleBuilder<'_> {
     pub fn add_method(&mut self, doc: MethodDoc);
-    pub fn gen(&mut self) -> &mut SchemaGenerator;
+    pub fn generator(&mut self) -> &mut SchemaGenerator;
 }
 
 pub fn param_descriptor<T: JsonSchema>(
@@ -145,12 +145,15 @@ companion from "returns a `Module`" to "appends to a `ModuleBuilder`":
 ```rust
 impl FooOpenRpc {
     pub fn module_doc(builder: &mut groundhog_open_rpc::ModuleBuilder<'_>) {
+        let params = vec![
+            groundhog_open_rpc::param_descriptor::<String>(builder.generator(), "tx_hex"),
+        ];
+        let result =
+            groundhog_open_rpc::result_descriptor::<TxHash>(builder.generator(), "TxHash");
         builder.add_method(groundhog_open_rpc::MethodDoc {
             name: "groundhog_sendRawTransaction".to_owned(),
-            params: vec![
-                groundhog_open_rpc::param_descriptor::<String>(builder.gen(), "tx_hex"),
-            ],
-            result: groundhog_open_rpc::result_descriptor::<TxHash>(builder.gen(), "TxHash"),
+            params,
+            result,
             ..
         });
         // one block per method
@@ -224,20 +227,25 @@ considers and signs off on the global impact when choosing the
 renamed identifier. The OpenRPC artifact does not maintain an
 independent aliasing layer.
 
-**Why not OpenRPC-local aliasing?** schemars 1.x supports applying a
-`Transform` that could rewrite `components.schemas` keys and the
-corresponding `$ref` paths after generation, decoupling OpenRPC's
-naming from the global JsonSchema name. That mechanism is real code
-(state, traversal, error handling) maintained for a problem the
-current codebase does not have. Per `CLAUDE.md`'s "delete unused code
-rather than preserve it" guidance, we do not build it pre-emptively.
-If a collision arises where a global rename is unacceptable, add the
-`Transform` then — the hook point is well-defined.
+**Why not OpenRPC-local aliasing?** schemars 1.x `Transform`s can
+rewrite schema values, but they do not rename the
+`components.schemas` map keys created by `SchemaGenerator`, nor do
+they rewrite every matching `$ref` string in the final artifact. An
+OpenRPC-local aliasing layer therefore means a real post-processing
+pass (or custom registry logic) over the generated JSON. That code is
+not justified until the codebase has an actual collision. Per
+`CLAUDE.md`'s "delete unused code rather than preserve it" guidance,
+we do not build it pre-emptively.
 
-**What schemars does on collision.** schemars 1.x's collision behavior
-under a single `SchemaGenerator` is not relied on for correctness;
-the test plan covers the rename path explicitly. If schemars panics or
-silently overwrites, the snapshot test catches it.
+**What schemars does on collision.** Under one `SchemaGenerator`,
+schemars 1.x auto-suffixes duplicate schema names (`Foo`, `Foo2`,
+...) rather than panicking or overwriting. That behavior is accepted
+as an implementation detail, not as a desired public contract. The
+current RPC surface has no collisions, so v1 relies on snapshot review
+to surface an unexpected `Foo2`-style key. If a collision is
+introduced, resolve it deliberately before publish: prefer global
+`#[schemars(rename = "...")]`, or add explicit post-processing /
+validation if a global rename is unacceptable.
 
 ## Testing
 
