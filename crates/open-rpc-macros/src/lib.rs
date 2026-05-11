@@ -3,13 +3,14 @@
 //! Place `#[open_rpc(namespace = "groundhog", tag = "Core API")]` above
 //! the jsonrpsee `#[rpc(...)]` attribute on a trait.  The macro emits a
 //! companion struct `{TraitName}OpenRpc` with a
-//! `pub fn module_doc() -> groundhog_open_rpc::Module` method that
-//! builds the `OpenRPC` method descriptors at runtime.
+//! `pub fn module_doc(builder: &mut <resolved-open-rpc-crate>::ModuleBuilder<'_>)`
+//! method that appends the `OpenRPC` method descriptors at runtime.
 //!
 //! The original trait is passed through unchanged so that `#[rpc]` can
 //! process it normally.
 
 use proc_macro::TokenStream;
+use proc_macro_crate::{FoundCrate, crate_name};
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::{
@@ -37,7 +38,7 @@ use syn::{
 /// ```
 ///
 /// This generates `pub struct GroundhogApiOpenRpc;` with a
-/// `module_doc()` method.
+/// `module_doc(...)` method.
 #[proc_macro_attribute]
 pub fn open_rpc(attr: TokenStream, item: TokenStream) -> TokenStream {
     let item_trait = parse_macro_input!(item as ItemTrait);
@@ -45,8 +46,12 @@ pub fn open_rpc(attr: TokenStream, item: TokenStream) -> TokenStream {
         Ok(a) => a,
         Err(e) => return e.into_compile_error().into(),
     };
+    let open_rpc_path = match resolve_open_rpc_path() {
+        Ok(path) => path,
+        Err(e) => return e.into_compile_error().into(),
+    };
 
-    let companion = generate_companion(&item_trait, &args);
+    let companion = generate_companion(&item_trait, &args, &open_rpc_path);
 
     let mut output = quote! { #item_trait };
     output.extend(companion);
@@ -96,7 +101,11 @@ fn parse_open_rpc_args(tokens: TokenStream2) -> syn::Result<OpenRpcArgs> {
 // Code generation
 // ---------------------------------------------------------------------------
 
-fn generate_companion(item_trait: &ItemTrait, args: &OpenRpcArgs) -> TokenStream2 {
+fn generate_companion(
+    item_trait: &ItemTrait,
+    args: &OpenRpcArgs,
+    open_rpc_path: &TokenStream2,
+) -> TokenStream2 {
     let struct_name = format_ident!("{}OpenRpc", item_trait.ident);
     let namespace = &args.namespace;
 
@@ -114,16 +123,17 @@ fn generate_companion(item_trait: &ItemTrait, args: &OpenRpcArgs) -> TokenStream
             let rpc_name = extract_method_name(&method.attrs)?;
             let full_name = format!("{namespace}_{rpc_name}");
             let summary = extract_doc_summary(&method.attrs);
+            let open_rpc_path = open_rpc_path.clone();
             let tag_tokens = if let Some(t) = &args.tag {
                 quote! {
-                    vec![groundhog_open_rpc::Tag { name: #t.to_owned() }]
+                    vec![#open_rpc_path::Tag { name: #t.to_owned() }]
                 }
             } else {
                 quote! { vec![] }
             };
 
             // Build param descriptors (skip &self)
-            let param_tokens: Vec<TokenStream2> = method
+            let param_pushes: Vec<TokenStream2> = method
                 .sig
                 .inputs
                 .iter()
@@ -131,8 +141,12 @@ fn generate_companion(item_trait: &ItemTrait, args: &OpenRpcArgs) -> TokenStream
                     if let FnArg::Typed(pat_type) = arg {
                         let name = pat_to_name(&pat_type.pat);
                         let ty = &*pat_type.ty;
+                        let open_rpc_path = open_rpc_path.clone();
                         Some(quote! {
-                            groundhog_open_rpc::param_descriptor::<#ty>(#name)
+                            params.push({
+                            let generator = builder.generator();
+                            #open_rpc_path::param_descriptor::<#ty>(generator, #name)
+                            });
                         })
                     } else {
                         None // skip self
@@ -149,14 +163,21 @@ fn generate_companion(item_trait: &ItemTrait, args: &OpenRpcArgs) -> TokenStream
             } else {
                 quote! { None }
             };
+            let open_rpc_path = open_rpc_path.clone();
 
             Some(quote! {
-                module.add_method(groundhog_open_rpc::MethodDoc {
+                let mut params = Vec::new();
+                #(#param_pushes)*
+                let result = {
+                    let generator = builder.generator();
+                    #open_rpc_path::result_descriptor::<#result_type>(generator, #result_name)
+                };
+                builder.add_method(#open_rpc_path::MethodDoc {
                     name: #full_name.to_owned(),
                     summary: #summary_tokens,
                     tags: #tag_tokens,
-                    params: vec![#(#param_tokens),*],
-                    result: groundhog_open_rpc::result_descriptor::<#result_type>(#result_name),
+                    params,
+                    result,
                 });
             })
         })
@@ -168,14 +189,26 @@ fn generate_companion(item_trait: &ItemTrait, args: &OpenRpcArgs) -> TokenStream
         pub struct #struct_name;
 
         impl #struct_name {
-            /// Build the [`groundhog_open_rpc::Module`] describing every
-            /// RPC method in the companion trait.
-            pub fn module_doc() -> groundhog_open_rpc::Module {
-                let mut module = groundhog_open_rpc::Module::new();
+            /// Append every RPC method in the companion trait to the
+            /// provided module builder.
+            pub fn module_doc(builder: &mut #open_rpc_path::ModuleBuilder<'_>) {
                 #(#method_stmts)*
-                module
             }
         }
+    }
+}
+
+fn resolve_open_rpc_path() -> syn::Result<TokenStream2> {
+    match crate_name("groundhog-open-rpc") {
+        Ok(FoundCrate::Itself) => Ok(quote!(crate)),
+        Ok(FoundCrate::Name(name)) => {
+            let ident = format_ident!("{name}");
+            Ok(quote!(#ident))
+        }
+        Err(err) => Err(syn::Error::new(
+            proc_macro2::Span::call_site(),
+            format!("failed to resolve `groundhog-open-rpc` dependency: {err}"),
+        )),
     }
 }
 

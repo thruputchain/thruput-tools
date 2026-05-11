@@ -51,9 +51,10 @@ pub trait GroundhogApi {
     #[method(name = "pendingTransactionCount")]
     async fn pending_transaction_count(&self) -> RpcResult<u64>;
 
-    /// Paginated, filterable contract events.  See `EventQuery` /
-    /// `EventPage` (re-exported from `groundhog_indexer`) for the
-    /// Soroban-shaped filter / cursor / topic surface.
+    /// Paginated, filterable contract events. See `EventQuery` /
+    /// `EventPage` for the Soroban-shaped filter / cursor / topic
+    /// surface, with RPC-native `0x`-prefixed address and topic
+    /// projections at the JSON boundary.
     #[method(name = "getEvents")]
     async fn get_events(&self, query: EventQuery) -> RpcResult<EventPage>;
 

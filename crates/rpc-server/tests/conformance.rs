@@ -18,7 +18,10 @@ use groundhog_rpc_api_types::{
     BlockHeight, ContractAddress,
     block::{BlockInfo, ChainTip},
     error::codes,
-    events::{BlockAnchor, EventFilter, EventPage, EventQuery, EventTopicFilter, IterationOrder},
+    events::{
+        BlockAnchor, EventFilter, EventPage, EventQuery, EventTopicFilter, IterationOrder,
+        PaginationCursor,
+    },
     hex::{Hex0x, HexBytes},
     receipt::TransactionReceipt,
     state::StorageItemRead,
@@ -29,7 +32,7 @@ use groundhog_rpc_server::{
     ValidatedTransaction,
 };
 use tokio::sync::Mutex;
-use xdr_common::{BytesM, VecM};
+use xdr_common::VecM;
 
 // Canonical XDR/hash vector only. This transaction is structurally valid and
 // has a stable hash, but it is not auth-valid against empty hogd-dev genesis.
@@ -122,7 +125,7 @@ impl ReadPlane for ScriptedBackend {
         *self.contract_events_calls.lock().await += 1;
         Ok(EventPage {
             events: vec![],
-            cursor: BytesM(vec![]),
+            cursor: PaginationCursor(vec![]),
             latest_block: BlockHeight::from(0),
             oldest_block: BlockHeight::from(0),
         })
@@ -152,16 +155,18 @@ fn server(backend: ScriptedBackend) -> ScriptedServer {
 fn simple_query() -> EventQuery {
     EventQuery {
         filters: VecM(vec![EventFilter {
-            contract_addresses: VecM(vec![groundhog_xdr::types::ContractAddress::from([0u8; 32])]),
+            contract_addresses: VecM(vec![Hex0x(groundhog_xdr::types::ContractAddress::from(
+                [0u8; 32],
+            ))]),
             topics: EventTopicFilter {
                 topic0: VecM(vec![]),
                 topic1: VecM(vec![]),
                 topic2: VecM(vec![]),
             },
         }]),
-        order: IterationOrder::IterationOrderAscending,
-        anchor: BlockAnchor::AnchorAtBeginning,
-        cursor: BytesM(vec![]),
+        order: IterationOrder::Ascending,
+        anchor: BlockAnchor::AtBeginning,
+        cursor: PaginationCursor(vec![]),
         limit: 0,
     }
 }
@@ -258,7 +263,7 @@ async fn event_query_validation_runs_before_dispatch_for_all_shapes() {
         assert_eq!(limit_err.code(), codes::INVALID_PARAMS);
 
         let mut over_cursor = simple_query();
-        over_cursor.cursor = BytesM(vec![0u8; MAX_CURSOR_BYTES + 1]);
+        over_cursor.cursor = PaginationCursor(vec![0u8; MAX_CURSOR_BYTES + 1]);
         let cursor_err = svc
             .get_events(over_cursor)
             .await

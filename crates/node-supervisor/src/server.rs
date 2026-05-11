@@ -1255,14 +1255,14 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
         // Build a minimal EventQuery (first page, no filters).
         // Serialization shapes:
-        //   - `IterationOrder` is a transparent i32 (0 = ascending)
-        //   - `BlockAnchor` unit variants serialize as strings ("AnchorAtBeginning")
-        //   - `PaginationCursor` (BytesM) serializes as hex string; "" = empty
+        //   - `IterationOrder` serializes as "ascending" / "descending"
+        //   - `BlockAnchor` serializes as a tagged object
+        //   - `PaginationCursor` serializes as `0x`-prefixed hex; `0x` = empty
         let query = serde_json::json!({
             "filters": [],
-            "order": 0,
-            "anchor": "AnchorAtBeginning",
-            "cursor": "",
+            "order": "ascending",
+            "anchor": { "kind": "atBeginning" },
+            "cursor": "0x",
             "limit": 10
         });
 

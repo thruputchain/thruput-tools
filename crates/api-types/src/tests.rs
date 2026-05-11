@@ -7,7 +7,9 @@ mod schema_generation {
         DevAccount, FrameOutputInfo, InvocationInfo, StorageDeltaInfo, SyscallInfo,
         SyscallStatusInfo, TraceInfo, TransactionDetail,
     };
-    use crate::events::{EmittedEvent, EventPage, IdentifiedEvent};
+    use crate::events::{
+        EmittedEvent, EventFilter, EventPage, EventQuery, EventTopicFilter, IdentifiedEvent,
+    };
     use crate::receipt::{ExecStatus, TransactionReceipt};
     use crate::state::{StorageItemInfo, StorageItemRead};
     use crate::transaction::{TransactionStatus, TxHash};
@@ -26,6 +28,9 @@ mod schema_generation {
         let _ = schema_for!(EmittedEvent);
         let _ = schema_for!(IdentifiedEvent);
         let _ = schema_for!(EventPage);
+        let _ = schema_for!(EventTopicFilter);
+        let _ = schema_for!(EventFilter);
+        let _ = schema_for!(EventQuery);
 
         // State types
         let _ = schema_for!(StorageItemInfo);
@@ -48,11 +53,15 @@ mod wire_format {
     use serde_json::Value;
 
     use crate::block::{BlockInfo, ChainTip};
-    use crate::events::{EmittedEvent, IdentifiedEvent};
+    use crate::events::{
+        BlockAnchor, EmittedEvent, EventFilter, EventQuery, EventTopicFilter, IdentifiedEvent,
+        IterationOrder, PaginationCursor,
+    };
     use crate::hex::{Hex0x, HexBytes, Topic};
     use crate::receipt::{ExecStatus, TransactionReceipt};
     use crate::transaction::{TransactionStatus, TxHash};
     use crate::{BlockHeader, BlockHeight, SHA256Hash};
+    use xdr_common::VecM;
 
     fn zero_hash() -> SHA256Hash {
         Hex0x(groundhog_xdr::types::SHA256Hash::from([0u8; 32]))
@@ -176,6 +185,41 @@ mod wire_format {
         assert!(v.get("tx_hash").is_none());
         assert!(v.get("block_hash").is_none());
         assert!(v.get("sequence_number").is_none());
+    }
+
+    #[test]
+    fn event_query_wire_format_uses_rpc_hex_projections() {
+        let query = EventQuery {
+            filters: VecM(vec![EventFilter {
+                contract_addresses: VecM(vec![zero_address()]),
+                topics: EventTopicFilter {
+                    topic0: VecM(vec![Topic([0xab; 32])]),
+                    topic1: VecM(vec![]),
+                    topic2: VecM(vec![]),
+                },
+            }]),
+            order: IterationOrder::Ascending,
+            anchor: BlockAnchor::AtBeginning,
+            cursor: PaginationCursor(vec![]),
+            limit: 50,
+        };
+        let v: Value = serde_json::to_value(&query).unwrap();
+        assert!(
+            v["filters"][0]["contractAddresses"][0]
+                .as_str()
+                .unwrap()
+                .starts_with("0x")
+        );
+        assert!(v["filters"][0].get("contract_addresses").is_none());
+        assert!(
+            v["filters"][0]["topics"]["topic0"][0]
+                .as_str()
+                .unwrap()
+                .starts_with("0x")
+        );
+        assert_eq!(v["order"], "ascending");
+        assert_eq!(v["anchor"]["kind"], "atBeginning");
+        assert_eq!(v["cursor"], "0x");
     }
 
     #[test]

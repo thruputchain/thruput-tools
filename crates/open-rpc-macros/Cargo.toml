@@ -21,3 +21,8 @@ workspace = true
 syn = { version = "2", features = ["full", "parsing", "printing"] }
 quote = "1"
 proc-macro2 = "1"
+proc-macro-crate = "3"
+
+[dev-dependencies]
+gh_open_rpc = { package = "groundhog-open-rpc", path = "../open-rpc" }
+jsonrpsee = { workspace = true }
