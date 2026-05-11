@@ -2,7 +2,10 @@ use std::fs;
 use std::path::PathBuf;
 
 use groundhog_open_rpc_spec::build_spec;
-use groundhog_rpc_api::types::events::MAX_TOPIC_VALUES_PER_POSITION;
+use groundhog_rpc_api::types::{
+    error::{ERROR_INFOS, codes, error_info_by_code},
+    events::MAX_TOPIC_VALUES_PER_POSITION,
+};
 use pretty_assertions::assert_eq;
 
 const SNAPSHOT_PATH: &str = "snapshots/groundhog-spec.json";
@@ -80,6 +83,75 @@ fn openrpc_spec_has_expected_shared_schema_invariants() {
         send_raw_transaction["params"][0]["schema"]["type"], "string",
         "primitive parameter schemas should stay inline",
     );
+
+    assert_error_docs_are_wired(&spec, methods, send_raw_transaction);
+}
+
+fn assert_error_docs_are_wired(
+    spec: &serde_json::Value,
+    methods: &[serde_json::Value],
+    send_raw_transaction: &serde_json::Value,
+) {
+    let errors = spec["components"]["errors"]
+        .as_object()
+        .expect("components.errors should be an object");
+    assert_eq!(
+        errors.len(),
+        ERROR_INFOS.len(),
+        "every documented API error should be emitted once"
+    );
+    assert_eq!(
+        errors["BackendUnavailable"]["code"],
+        codes::BACKEND_UNAVAILABLE,
+        "BackendUnavailable should expose the public JSON-RPC code"
+    );
+    for info in ERROR_INFOS {
+        assert_eq!(
+            error_info_by_code(info.code),
+            Some(info),
+            "catalog lookup should resolve every documented error code"
+        );
+        assert!(
+            errors.contains_key(info.name),
+            "components.errors missing {}",
+            info.name
+        );
+    }
+
+    let send_errors = send_raw_transaction["errors"]
+        .as_array()
+        .expect("sendRawTransaction should document possible errors");
+    assert!(
+        send_errors
+            .iter()
+            .any(|error| error["$ref"] == "#/components/errors/TxRejected"),
+        "sendRawTransaction should document scheduler rejection"
+    );
+    assert!(
+        methods.iter().all(|method| method["errors"]
+            .as_array()
+            .is_some_and(|errors| !errors.is_empty())),
+        "every current method should document at least one JSON-RPC error"
+    );
+    for method in methods {
+        for error in method["errors"]
+            .as_array()
+            .expect("method errors should be an array")
+        {
+            let reference = error["$ref"]
+                .as_str()
+                .expect("method error should be a $ref string");
+            let key = reference
+                .strip_prefix("#/components/errors/")
+                .expect("method error $ref should target components.errors");
+            assert!(
+                errors.contains_key(key),
+                "method {} references missing error component {}",
+                method["name"],
+                key
+            );
+        }
+    }
 }
 
 fn snapshot_path() -> PathBuf {
