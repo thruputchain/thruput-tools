@@ -34,10 +34,14 @@ Each reusable error component is an OpenRPC error object:
 {
   "code": -32050,
   "message": "Backend unavailable",
-  "name": "BackendUnavailable",
-  "description": "The gateway could not reach a required backend..."
+  "x-name": "BackendUnavailable",
+  "x-description": "The gateway could not reach a required backend..."
 }
 ```
+
+`x-name` and `x-description` are OpenRPC specification extensions. They
+keep the artifact valid against the OpenRPC meta-schema while reserving
+the standard `data` field for future typed runtime payloads.
 
 Each method references shared errors:
 

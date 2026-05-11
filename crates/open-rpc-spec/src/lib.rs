@@ -61,12 +61,10 @@ fn add_error_docs(spec: &mut serde_json::Value) {
                     })
                 })
                 .collect();
-            if !refs.is_empty() {
-                method
-                    .as_object_mut()
-                    .expect("bug: methods should contain objects")
-                    .insert("errors".to_owned(), serde_json::Value::Array(refs));
-            }
+            method
+                .as_object_mut()
+                .expect("bug: methods should contain objects")
+                .insert("errors".to_owned(), serde_json::Value::Array(refs));
         }
     }
 }
@@ -75,8 +73,8 @@ fn error_object(info: &RpcErrorInfo) -> serde_json::Value {
     serde_json::json!({
         "code": info.code,
         "message": info.message,
-        "name": info.name,
-        "description": info.description,
+        "x-description": info.description,
+        "x-name": info.name,
     })
 }
 

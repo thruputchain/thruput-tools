@@ -116,6 +116,29 @@ fn assert_error_docs_are_wired(
             "components.errors missing {}",
             info.name
         );
+        assert_eq!(
+            errors[info.name]["x-name"], info.name,
+            "error component should expose the catalog name as an extension"
+        );
+        assert_eq!(
+            errors[info.name]["x-description"], info.description,
+            "error component should expose the catalog description as an extension"
+        );
+        assert_eq!(
+            errors[info.name]["name"],
+            serde_json::Value::Null,
+            "error component metadata should use x-name, not name"
+        );
+        assert_eq!(
+            errors[info.name]["description"],
+            serde_json::Value::Null,
+            "error component metadata should use x-description, not description"
+        );
+        assert_eq!(
+            errors[info.name]["data"],
+            serde_json::Value::Null,
+            "error.data is reserved for future typed runtime payloads"
+        );
     }
 
     let send_errors = send_raw_transaction["errors"]
