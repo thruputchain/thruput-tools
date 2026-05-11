@@ -25,6 +25,8 @@ subprocess and gives you a normal dev loop on top:
 
 ```bash
 cargo install --path crates/cli --features dev-node
+groundhog init                   # one-time environment check
+groundhog login                  # one-time; early-access registry auth
 groundhog new my-counter && cd my-counter
 groundhog build
 # in another terminal
@@ -32,6 +34,11 @@ groundhog node --hogd-dev-binary /path/to/hogd-dev
 groundhog deploy
 groundhog call my-counter get
 ```
+
+`groundhog login` is currently required for the Groundhog contract SDK
+to resolve from the private crate registry that `groundhog new` writes
+into the project's `Cargo.toml`. This is an early-access constraint
+and will relax when the SDK ships publicly.
 
 `hogd-dev` is the single-process Groundhog node implementation used
 for development — scheduler, indexer, and storage in one binary. The
