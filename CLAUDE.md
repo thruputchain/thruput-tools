@@ -111,13 +111,10 @@ runtime), `tower`/`tower-http` (middleware), `clap` (CLI), `prometheus`
   artifacts from Rust traits and Rust types. Do not hand-author or
   maintain parallel schema files for RPC methods or RPC payload types.
 - The canonical JSON-RPC error catalog lives in
-  `crates/api-types/src/error.rs` (`ERROR_INFOS` slice of
-  `RpcErrorInfo` plus `codes::ALL` for 1:1 coverage and
-  `error_info_by_code` for lookup). The OpenRPC artifact projects this
-  catalog into `components.errors`; methods carry per-method `errors[]`
-  arrays of `$ref`s. The mapping from method to errors is hand-
-  maintained in `crates/open-rpc-spec/src/lib.rs` and validated by the
-  spec snapshot test — adding a method requires updating that mapping.
+  `crates/api-types/src/error.rs`. See "Gateway Conventions" below for
+  the OpenRPC projection, the per-method mapping in
+  `crates/open-rpc-spec/src/lib.rs`, and the snapshot-enforced rule
+  that adding a method requires updating that mapping.
 - CLI-only machine-readable output types live in `crates/cli` by
   default. If a CLI schema embeds chain or runtime data, reuse
   `api-types` nested types instead of copying them.
@@ -152,7 +149,7 @@ cargo run -p groundhog-cli -- new my-counter
 cargo run -p groundhog-cli -- new my-stub --template stub
 cargo run -p groundhog-cli -- build        # from inside a project
 cargo run -p groundhog-cli -- test         # requires login first
-cargo run -p groundhog-cli -- --json test  # structured TestReport on stdout
+cargo run -p groundhog-cli -- test --json  # structured TestReport on stdout
 cargo run -p groundhog-cli -- deploy       # from inside a project
 cargo run -p groundhog-cli -- call my-counter get
 cargo run -p groundhog-cli -- keys generate alice
