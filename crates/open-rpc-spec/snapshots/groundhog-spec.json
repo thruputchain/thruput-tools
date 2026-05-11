@@ -1,5 +1,61 @@
 {
   "components": {
+    "errors": {
+      "BackendTimeout": {
+        "code": -32051,
+        "message": "Backend timeout",
+        "x-description": "The request timed out while waiting for a backend response; the backend outcome may be ambiguous.",
+        "x-name": "BackendTimeout"
+      },
+      "BackendUnavailable": {
+        "code": -32050,
+        "message": "Backend unavailable",
+        "x-description": "The gateway could not reach a required backend such as hogd, the scheduler, or the indexer.",
+        "x-name": "BackendUnavailable"
+      },
+      "BlockNotFound": {
+        "code": -32010,
+        "message": "Block not found",
+        "x-description": "The requested block height is out of range or beyond the current indexed chain tip.",
+        "x-name": "BlockNotFound"
+      },
+      "InvalidParams": {
+        "code": -32602,
+        "message": "Invalid params",
+        "x-description": "One or more JSON-RPC parameters are malformed, out of range, or otherwise invalid.",
+        "x-name": "InvalidParams"
+      },
+      "NotImplemented": {
+        "code": -32052,
+        "message": "Not implemented",
+        "x-description": "The JSON-RPC method exists but is not implemented by this gateway or backend capability shape.",
+        "x-name": "NotImplemented"
+      },
+      "Overloaded": {
+        "code": -32053,
+        "message": "Overloaded",
+        "x-description": "The gateway or backend is overloaded and rejected the request before it reached side-effecting backend execution.",
+        "x-name": "Overloaded"
+      },
+      "TxInvalid": {
+        "code": -32000,
+        "message": "Invalid transaction",
+        "x-description": "The submitted transaction is malformed, has invalid XDR, or fails local validation before backend submission.",
+        "x-name": "TxInvalid"
+      },
+      "TxNotFound": {
+        "code": -32002,
+        "message": "Transaction not found",
+        "x-description": "The requested transaction hash was not found in the mempool or committed index.",
+        "x-name": "TxNotFound"
+      },
+      "TxRejected": {
+        "code": -32001,
+        "message": "Transaction rejected",
+        "x-description": "The submitted transaction is well-formed but was rejected by the scheduler or execution backend.",
+        "x-name": "TxRejected"
+      }
+    },
     "schemas": {
       "BlockAnchor": {
         "description": "Where to begin iteration on the initial call.",
@@ -710,6 +766,29 @@
   },
   "methods": [
     {
+      "errors": [
+        {
+          "$ref": "#/components/errors/InvalidParams"
+        },
+        {
+          "$ref": "#/components/errors/TxInvalid"
+        },
+        {
+          "$ref": "#/components/errors/TxRejected"
+        },
+        {
+          "$ref": "#/components/errors/BackendUnavailable"
+        },
+        {
+          "$ref": "#/components/errors/BackendTimeout"
+        },
+        {
+          "$ref": "#/components/errors/Overloaded"
+        },
+        {
+          "$ref": "#/components/errors/NotImplemented"
+        }
+      ],
       "name": "groundhog_sendRawTransaction",
       "params": [
         {
@@ -734,6 +813,26 @@
       ]
     },
     {
+      "errors": [
+        {
+          "$ref": "#/components/errors/InvalidParams"
+        },
+        {
+          "$ref": "#/components/errors/TxNotFound"
+        },
+        {
+          "$ref": "#/components/errors/BackendUnavailable"
+        },
+        {
+          "$ref": "#/components/errors/BackendTimeout"
+        },
+        {
+          "$ref": "#/components/errors/Overloaded"
+        },
+        {
+          "$ref": "#/components/errors/NotImplemented"
+        }
+      ],
       "name": "groundhog_getTransactionReceipt",
       "params": [
         {
@@ -765,6 +864,26 @@
       ]
     },
     {
+      "errors": [
+        {
+          "$ref": "#/components/errors/InvalidParams"
+        },
+        {
+          "$ref": "#/components/errors/TxNotFound"
+        },
+        {
+          "$ref": "#/components/errors/BackendUnavailable"
+        },
+        {
+          "$ref": "#/components/errors/BackendTimeout"
+        },
+        {
+          "$ref": "#/components/errors/Overloaded"
+        },
+        {
+          "$ref": "#/components/errors/NotImplemented"
+        }
+      ],
       "name": "groundhog_getTransactionStatus",
       "params": [
         {
@@ -789,6 +908,20 @@
       ]
     },
     {
+      "errors": [
+        {
+          "$ref": "#/components/errors/BackendUnavailable"
+        },
+        {
+          "$ref": "#/components/errors/BackendTimeout"
+        },
+        {
+          "$ref": "#/components/errors/Overloaded"
+        },
+        {
+          "$ref": "#/components/errors/NotImplemented"
+        }
+      ],
       "name": "groundhog_chainTip",
       "params": [],
       "result": {
@@ -805,6 +938,26 @@
       ]
     },
     {
+      "errors": [
+        {
+          "$ref": "#/components/errors/InvalidParams"
+        },
+        {
+          "$ref": "#/components/errors/BlockNotFound"
+        },
+        {
+          "$ref": "#/components/errors/BackendUnavailable"
+        },
+        {
+          "$ref": "#/components/errors/BackendTimeout"
+        },
+        {
+          "$ref": "#/components/errors/Overloaded"
+        },
+        {
+          "$ref": "#/components/errors/NotImplemented"
+        }
+      ],
       "name": "groundhog_getBlockByNumber",
       "params": [
         {
@@ -836,6 +989,20 @@
       ]
     },
     {
+      "errors": [
+        {
+          "$ref": "#/components/errors/BackendUnavailable"
+        },
+        {
+          "$ref": "#/components/errors/BackendTimeout"
+        },
+        {
+          "$ref": "#/components/errors/Overloaded"
+        },
+        {
+          "$ref": "#/components/errors/NotImplemented"
+        }
+      ],
       "name": "groundhog_pendingTransactionCount",
       "params": [],
       "result": {
@@ -854,6 +1021,23 @@
       ]
     },
     {
+      "errors": [
+        {
+          "$ref": "#/components/errors/InvalidParams"
+        },
+        {
+          "$ref": "#/components/errors/BackendUnavailable"
+        },
+        {
+          "$ref": "#/components/errors/BackendTimeout"
+        },
+        {
+          "$ref": "#/components/errors/Overloaded"
+        },
+        {
+          "$ref": "#/components/errors/NotImplemented"
+        }
+      ],
       "name": "groundhog_getEvents",
       "params": [
         {
@@ -878,6 +1062,23 @@
       ]
     },
     {
+      "errors": [
+        {
+          "$ref": "#/components/errors/InvalidParams"
+        },
+        {
+          "$ref": "#/components/errors/BackendUnavailable"
+        },
+        {
+          "$ref": "#/components/errors/BackendTimeout"
+        },
+        {
+          "$ref": "#/components/errors/Overloaded"
+        },
+        {
+          "$ref": "#/components/errors/NotImplemented"
+        }
+      ],
       "name": "groundhog_getStorageAt",
       "params": [
         {
@@ -909,6 +1110,20 @@
       ]
     },
     {
+      "errors": [
+        {
+          "$ref": "#/components/errors/BackendUnavailable"
+        },
+        {
+          "$ref": "#/components/errors/BackendTimeout"
+        },
+        {
+          "$ref": "#/components/errors/Overloaded"
+        },
+        {
+          "$ref": "#/components/errors/NotImplemented"
+        }
+      ],
       "name": "groundhog_dev_getAccounts",
       "params": [],
       "result": {

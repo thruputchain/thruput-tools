@@ -1,5 +1,8 @@
 use groundhog_open_rpc::{Project, ProjectInfo};
-use groundhog_rpc_api::{GroundhogApiOpenRpc, GroundhogDevApiOpenRpc};
+use groundhog_rpc_api::{
+    GroundhogApiOpenRpc, GroundhogDevApiOpenRpc,
+    types::error::{ERROR_INFOS, RpcErrorInfo, codes, error_info_by_code},
+};
 
 /// Build the canonical `OpenRPC` artifact for the current RPC surface.
 ///
@@ -12,7 +15,113 @@ pub fn build_spec() -> serde_json::Value {
     });
     spec.module(GroundhogApiOpenRpc::module_doc);
     spec.module(GroundhogDevApiOpenRpc::module_doc);
-    canonicalize(spec.to_json())
+    let mut json = spec.to_json();
+    add_error_docs(&mut json);
+    canonicalize(json)
+}
+
+fn add_error_docs(spec: &mut serde_json::Value) {
+    let Some(root) = spec.as_object_mut() else {
+        return;
+    };
+    let components = root
+        .entry("components")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .expect("bug: components should be an object");
+
+    let errors = ERROR_INFOS
+        .iter()
+        .map(|info| (info.name.to_owned(), error_object(info)))
+        .collect();
+    components.insert("errors".to_owned(), serde_json::Value::Object(errors));
+
+    if let Some(methods) = root
+        .get_mut("methods")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for method in methods {
+            let Some(name) = method
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .map(ToOwned::to_owned)
+            else {
+                continue;
+            };
+
+            let refs: Vec<serde_json::Value> = method_error_codes(&name)
+                .iter()
+                .map(|code| {
+                    error_info_by_code(*code)
+                        .unwrap_or_else(|| panic!("bug: undocumented JSON-RPC error code {code}"))
+                })
+                .map(|info| {
+                    serde_json::json!({
+                        "$ref": format!("#/components/errors/{}", info.name)
+                    })
+                })
+                .collect();
+            method
+                .as_object_mut()
+                .expect("bug: methods should contain objects")
+                .insert("errors".to_owned(), serde_json::Value::Array(refs));
+        }
+    }
+}
+
+fn error_object(info: &RpcErrorInfo) -> serde_json::Value {
+    serde_json::json!({
+        "code": info.code,
+        "message": info.message,
+        "x-description": info.description,
+        "x-name": info.name,
+    })
+}
+
+fn method_error_codes(method: &str) -> &'static [i32] {
+    match method {
+        "groundhog_sendRawTransaction" => &[
+            codes::INVALID_PARAMS,
+            codes::TX_INVALID,
+            codes::TX_REJECTED,
+            codes::BACKEND_UNAVAILABLE,
+            codes::BACKEND_TIMEOUT,
+            codes::OVERLOADED,
+            codes::NOT_IMPLEMENTED,
+        ],
+        "groundhog_getTransactionReceipt" | "groundhog_getTransactionStatus" => &[
+            codes::INVALID_PARAMS,
+            codes::TX_NOT_FOUND,
+            codes::BACKEND_UNAVAILABLE,
+            codes::BACKEND_TIMEOUT,
+            codes::OVERLOADED,
+            codes::NOT_IMPLEMENTED,
+        ],
+        "groundhog_getBlockByNumber" => &[
+            codes::INVALID_PARAMS,
+            codes::BLOCK_NOT_FOUND,
+            codes::BACKEND_UNAVAILABLE,
+            codes::BACKEND_TIMEOUT,
+            codes::OVERLOADED,
+            codes::NOT_IMPLEMENTED,
+        ],
+        "groundhog_getEvents" | "groundhog_getStorageAt" => &[
+            codes::INVALID_PARAMS,
+            codes::BACKEND_UNAVAILABLE,
+            codes::BACKEND_TIMEOUT,
+            codes::OVERLOADED,
+            codes::NOT_IMPLEMENTED,
+        ],
+        "groundhog_chainTip"
+        | "groundhog_pendingTransactionCount"
+        | "groundhog_dev_getAccounts" => &[
+            codes::BACKEND_UNAVAILABLE,
+            codes::BACKEND_TIMEOUT,
+            codes::OVERLOADED,
+            codes::NOT_IMPLEMENTED,
+        ],
+        _ => panic!("bug: undocumented OpenRPC method `{method}`"),
+    }
 }
 
 fn canonicalize(value: serde_json::Value) -> serde_json::Value {
