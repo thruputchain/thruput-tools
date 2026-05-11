@@ -711,6 +711,9 @@ fn parse_summary_line(line: &str) -> Option<TestSummary> {
     }
 
     summary.total = summary.passed + summary.failed + summary.ignored + summary.measured;
+    if summary.total == 0 && summary.filtered_out == 0 && summary.duration_seconds.is_none() {
+        return None;
+    }
     Some(summary)
 }
 
@@ -779,7 +782,7 @@ fn aggregate_summary(runs: &[TestRun]) -> TestSummary {
         summary.source = match (summary.source, run.summary.source) {
             (TestSummarySource::Parsed, TestSummarySource::Parsed) => TestSummarySource::Parsed,
             (TestSummarySource::Empty, TestSummarySource::Empty) => TestSummarySource::Empty,
-            (TestSummarySource::Empty, other) => other,
+            (TestSummarySource::Empty, other) | (other, TestSummarySource::Empty) => other,
             _ => TestSummarySource::Derived,
         };
     }
@@ -1331,6 +1334,13 @@ failures:
     }
 
     #[test]
+    fn ignores_uninformative_libtest_summary_line() {
+        let summary = parse_summary_line("test result: ok. (no details)");
+
+        assert_eq!(summary, None);
+    }
+
+    #[test]
     fn derives_summary_when_libtest_summary_is_missing() {
         let cases = vec![
             TestCase {
@@ -1381,6 +1391,43 @@ failures:
         assert_eq!(summary.source, TestSummarySource::Parsed);
         assert_eq!(summary.total, 2);
         assert_eq!(summary.duration_seconds, Some(0.01));
+    }
+
+    #[test]
+    fn aggregate_summary_keeps_parsed_source_when_later_run_is_empty() {
+        let parsed = |line| parse_summary_line(line).expect("bug: summary line should parse");
+        let runs = vec![
+            crate::test_json::TestRun {
+                filter: Some("tests::a".into()),
+                exact_filter: true,
+                success: true,
+                exit_code: 0,
+                summary: parsed(
+                    "test result: ok. 1 passed; 0 failed; 0 ignored; \
+                     0 measured; 0 filtered out; finished in 0.01s",
+                ),
+                tests: vec![],
+                stdout: String::new(),
+                stderr: String::new(),
+            },
+            crate::test_json::TestRun {
+                filter: Some("tests::b".into()),
+                exact_filter: true,
+                success: false,
+                exit_code: 101,
+                summary: derive_summary_from_cases(&[]),
+                tests: vec![],
+                stdout: String::new(),
+                stderr: String::new(),
+            },
+        ];
+
+        let summary = aggregate_summary(&runs);
+
+        assert_eq!(summary.source, TestSummarySource::Parsed);
+        assert_eq!(summary.total, 1);
+        assert_eq!(summary.passed, 1);
+        assert_eq!(summary.failed, 0);
     }
 
     #[test]

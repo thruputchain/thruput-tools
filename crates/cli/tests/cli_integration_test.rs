@@ -785,6 +785,7 @@ fn test_json_failed_run_emits_report_on_stdout() {
     assert_eq!(stdout["command"], "test");
     assert!(stdout["warnings"].as_array().unwrap().is_empty());
     assert_eq!(stdout["data"]["schemaVersion"], 1);
+    assert!(stdout["data"]["projectRoot"].as_str().is_some());
     assert_eq!(stdout["data"]["success"], false);
     assert_eq!(stdout["data"]["summary"]["source"], "parsed");
     assert_eq!(stdout["data"]["summary"]["passed"], 1);
