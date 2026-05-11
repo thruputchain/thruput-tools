@@ -64,6 +64,7 @@ pub enum StorageItemInfo {
         /// Bytecode size in bytes.
         size: u32,
         /// Contract type tag (raw protocol value).
+        #[serde(rename = "contractType")]
         contract_type: i32,
     },
 
@@ -73,6 +74,7 @@ pub enum StorageItemInfo {
     /// "uninterpretable" and fall back to alternative reads.
     Unknown {
         /// Raw protocol type id of the unrecognized variant.
+        #[serde(rename = "typeId")]
         type_id: i32,
     },
 }

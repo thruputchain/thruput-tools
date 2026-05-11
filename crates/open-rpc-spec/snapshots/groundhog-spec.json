@@ -490,7 +490,7 @@
           {
             "description": "Deployed contract metadata.",
             "properties": {
-              "contract_type": {
+              "contractType": {
                 "description": "Contract type tag (raw protocol value).",
                 "format": "int32",
                 "type": "integer"
@@ -514,7 +514,7 @@
               "kind",
               "hash",
               "size",
-              "contract_type"
+              "contractType"
             ],
             "type": "object"
           },
@@ -525,7 +525,7 @@
                 "const": "unknown",
                 "type": "string"
               },
-              "type_id": {
+              "typeId": {
                 "description": "Raw protocol type id of the unrecognized variant.",
                 "format": "int32",
                 "type": "integer"
@@ -533,7 +533,7 @@
             },
             "required": [
               "kind",
-              "type_id"
+              "typeId"
             ],
             "type": "object"
           }
