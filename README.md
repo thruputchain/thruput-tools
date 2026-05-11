@@ -87,9 +87,9 @@ The canonical TS SDK that codegens against the OpenRPC artifact and
 sits on top of those primitives is the right consumer-facing entry
 point — link will land here once it ships.
 
-### Imminent surface changes
+### Near-term changes to the public surface
 
-Two design notes worth scanning before you finalize SDK shape:
+Active design notes that will modify the JSON-RPC surface:
 
 - [View RPC and receipt return-data](docs/cli/specs/2026-05-07-view-rpc-and-receipt-return-data.md)
   — read-only contract calls plus structured `return_data` /
