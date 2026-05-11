@@ -10,8 +10,9 @@ use crate::checks::{Finding, FindingLevel};
 
 /// Uniform JSON envelope for command output.
 ///
-/// `ok` is always `true` — this struct only represents
-/// success. Errors use `Print::error()`.
+/// Most commands emit success records with `ok = true`.
+/// Commands with stable machine-readable failure output may
+/// also emit `ok = false` records directly.
 #[derive(Debug, Serialize)]
 pub struct CommandResult<T: Serialize> {
     ok: bool,
@@ -38,6 +39,16 @@ impl<T: Serialize> CommandResult<T> {
             ok: true,
             command,
             warnings,
+            data,
+        }
+    }
+
+    /// Wrap a command's data in a structured failure envelope.
+    pub fn failure(command: &'static str, data: T) -> Self {
+        Self {
+            ok: false,
+            command,
+            warnings: Vec::new(),
             data,
         }
     }
@@ -76,6 +87,15 @@ mod tests {
         assert!(result.has_warnings());
         let json = serde_json::to_value(&result).unwrap();
         assert_eq!(json["warnings"][0]["code"], "test_warn");
+    }
+
+    #[test]
+    fn failure_result_serializes_false_ok() {
+        let result = CommandResult::failure("test", serde_json::json!({"status": "failed"}));
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(json["ok"], false);
+        assert_eq!(json["command"], "test");
+        assert_eq!(json["data"]["status"], "failed");
     }
 
     #[test]

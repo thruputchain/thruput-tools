@@ -696,6 +696,113 @@ fn test_json_failure_is_structured() {
     assert_eq!(stderr["error"]["code"], "cargo_metadata_failed");
 }
 
+#[cfg(unix)]
+#[test]
+fn test_json_failed_run_emits_report_on_stdout() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = TempDir::new().unwrap();
+    std::fs::write(
+        tmp.path().join("Cargo.toml"),
+        "[package]\nname = \"demo-contract\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(tmp.path().join(".cargo")).unwrap();
+    std::fs::write(tmp.path().join(".cargo/contract.toml"), "").unwrap();
+
+    let fake_bin = tmp.path().join("bin");
+    std::fs::create_dir_all(&fake_bin).unwrap();
+    let cargo = fake_bin.join("cargo");
+    let metadata_json = serde_json::json!({
+        "workspace_root": tmp.path(),
+        "target_directory": tmp.path().join("target"),
+        "packages": [{
+            "name": "demo-contract",
+            "manifest_path": tmp.path().join("Cargo.toml"),
+        }],
+    })
+    .to_string();
+    std::fs::write(
+        &cargo,
+        format!(
+            concat!(
+                "#!/bin/sh\n",
+                "if [ \"$1\" = \"metadata\" ]; then\n",
+                "  printf '%s' '{}'\n",
+                "  exit 0\n",
+                "fi\n",
+                "if [ \"$1\" = \"--config\" ]; then\n",
+                "  shift 2\n",
+                "fi\n",
+                "if [ \"$1\" = \"build\" ]; then\n",
+                "  /bin/mkdir -p '{}'\n",
+                "  printf '\\000asm\\001\\000\\000\\000' > '{}'\n",
+                "  exit 0\n",
+                "fi\n",
+                "if [ \"$1\" = \"test\" ]; then\n",
+                "  printf 'running 2 tests\\n'\n",
+                "  printf 'test tests::ok ... ok\\n'\n",
+                "  printf 'test tests::fails ... FAILED\\n'\n",
+                "  printf 'test result: FAILED. 1 passed; 1 failed; 0 ignored; ",
+                "0 measured; 2 filtered out; finished in 0.01s\\n'\n",
+                "  exit 101\n",
+                "fi\n",
+                "exit 0\n",
+            ),
+            metadata_json,
+            tmp.path()
+                .join("target/wasm32-unknown-unknown/release")
+                .display(),
+            tmp.path()
+                .join("target/wasm32-unknown-unknown/release/demo_contract.wasm")
+                .display()
+        ),
+    )
+    .unwrap();
+    let mut perms = std::fs::metadata(&cargo).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&cargo, perms).unwrap();
+
+    let output = groundhog()
+        .arg("--json")
+        .arg("test")
+        .arg("-p")
+        .arg("demo-contract")
+        .current_dir(tmp.path())
+        .env("PATH", &fake_bin)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(
+        output.stderr.is_empty(),
+        "expected empty stderr, got: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["ok"], false);
+    assert_eq!(stdout["command"], "test");
+    assert!(stdout["warnings"].as_array().unwrap().is_empty());
+    assert_eq!(stdout["data"]["schemaVersion"], 1);
+    assert!(stdout["data"]["projectRoot"].as_str().is_some());
+    assert_eq!(stdout["data"]["success"], false);
+    assert_eq!(stdout["data"]["summary"]["source"], "parsed");
+    assert_eq!(stdout["data"]["summary"]["passed"], 1);
+    assert_eq!(stdout["data"]["summary"]["failed"], 1);
+    assert_eq!(stdout["data"]["summary"]["filteredOut"], 2);
+    assert_eq!(stdout["data"]["runs"][0]["success"], false);
+    assert_eq!(stdout["data"]["runs"][0]["summary"]["source"], "parsed");
+    assert_eq!(stdout["data"]["runs"][0]["summary"]["filteredOut"], 2);
+    assert_eq!(stdout["data"]["runs"][0]["tests"][0]["name"], "tests::ok");
+    assert_eq!(stdout["data"]["runs"][0]["tests"][0]["status"], "passed");
+    assert_eq!(
+        stdout["data"]["runs"][0]["tests"][1]["name"],
+        "tests::fails"
+    );
+    assert_eq!(stdout["data"]["runs"][0]["tests"][1]["status"], "failed");
+}
+
 #[test]
 fn test_json_prefers_metadata_failure_outside_project() {
     let tmp = TempDir::new().unwrap();

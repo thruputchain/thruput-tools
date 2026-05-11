@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::global::load_default_key;
@@ -26,7 +27,7 @@ struct ProjectConfigFile {
 }
 
 /// Active project profile resolved from `groundhog.toml`.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct ResolvedProfile {
     pub name: String,
     pub rpc_url: Option<String>,

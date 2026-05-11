@@ -1,7 +1,11 @@
 use crate::artifacts::{self, ArtifactOptions};
+use crate::result::CommandResult;
+use crate::test_json::{
+    TEST_JSON_SCHEMA_VERSION, TestCase, TestCaseStatus, TestReport, TestRerunInfo, TestRun,
+    TestSummary, TestSummarySource, TestWatchInfo,
+};
 use crate::{CliError, Print};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use std::collections::BTreeMap;
 use std::env;
 use std::ffi::OsStr;
@@ -54,6 +58,7 @@ struct FailureCache {
 #[derive(Debug, Clone)]
 struct TestRunOutput {
     filter: Option<String>,
+    exact_filter: bool,
     success: bool,
     code: i32,
     stdout: String,
@@ -176,7 +181,8 @@ fn run_watch(
             explicit_profile,
             cmd,
             print,
-        ) {
+        ) && !matches!(error, CliError::CommandReportedFailure)
+        {
             print.command_error(cmd, &error)?;
         }
         let mut snapshot = watch_snapshot(&watch)?;
@@ -242,8 +248,6 @@ fn run_once_with_options(
             .flat_map(|output| extract_failed_tests(&output.stdout, &output.stderr)),
     );
     let executed_tests = executed_tests(&outputs);
-    let cargo_stdout = combined_output(&outputs, |output| &output.stdout);
-    let cargo_stderr = combined_output(&outputs, |output| &output.stderr);
     let cached_tests_after = update_failure_cache(
         &cache_path,
         &build.project_name,
@@ -254,38 +258,29 @@ fn run_once_with_options(
         &outputs,
     )?;
 
+    let report = build_test_report(
+        &build.project_root,
+        &profile,
+        &build.wasm,
+        &outputs,
+        options.rerun,
+        &cache_path,
+        &cached_tests,
+        &cached_tests_after,
+        &executed_tests,
+        &failed_tests,
+        options.watch,
+    );
+
     if let Some(failed) = outputs.iter().find(|output| !output.success) {
         if print.is_json() {
-            return Err(CliError::CargoFailedWithOutput {
-                code: failed.code,
-                stdout: cargo_stdout,
-                stderr: cargo_stderr,
-            });
+            print.json(&CommandResult::failure(cmd, &report))?;
+            return Err(CliError::CommandReportedFailure);
         }
         return Err(CliError::CargoFailed(failed.code));
     }
 
-    print.json(&crate::result::CommandResult::new(
-        cmd,
-        json!({
-            "project_root": root,
-            "profile": profile,
-            "wasm": build.wasm,
-            "cargo_stdout": cargo_stdout,
-            "cargo_stderr": cargo_stderr,
-            "rerun": {
-                "enabled": options.rerun,
-                "cache_path": cache_path,
-                "cached_tests": cached_tests,
-                "cached_tests_after": cached_tests_after,
-                "executed_tests": executed_tests,
-                "failed_tests": failed_tests,
-            },
-            "watch": {
-                "enabled": options.watch,
-            },
-        }),
-    ))?;
+    print.json(&CommandResult::new(cmd, &report))?;
     Ok(())
 }
 
@@ -480,27 +475,20 @@ fn finish_empty_rerun(
     } else {
         print.warn("no cached failed WASM tests match --match-test");
     }
-    print.json(&crate::result::CommandResult::new(
-        cmd,
-        json!({
-            "project_root": build.project_root,
-            "profile": profile,
-            "wasm": build.wasm,
-            "cargo_stdout": "",
-            "cargo_stderr": "",
-            "rerun": {
-                "enabled": true,
-                "cache_path": cache_path,
-                "cached_tests": cached_tests,
-                "cached_tests_after": cached_tests,
-                "executed_tests": [],
-                "failed_tests": [],
-            },
-            "watch": {
-                "enabled": watch_enabled,
-            },
-        }),
-    ))?;
+    let report = build_test_report(
+        &build.project_root,
+        profile,
+        &build.wasm,
+        &[],
+        true,
+        cache_path,
+        cached_tests,
+        cached_tests,
+        &[],
+        &[],
+        watch_enabled,
+    );
+    print.json(&CommandResult::new(cmd, &report))?;
     Ok(())
 }
 
@@ -563,11 +551,7 @@ fn run_test_commands(
             cargo_cmd.arg(arg);
         }
 
-        outputs.push(run_test_command(
-            &mut cargo_cmd,
-            context.print,
-            filter.name,
-        )?);
+        outputs.push(run_test_command(&mut cargo_cmd, context.print, *filter)?);
         if should_stop_rerun(options, &outputs) {
             break;
         }
@@ -579,6 +563,234 @@ fn should_stop_rerun(options: &TestOptions, outputs: &[TestRunOutput]) -> bool {
     options.rerun && options.harness.fail_fast && outputs.last().is_some_and(|o| !o.success)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn build_test_report(
+    project_root: &Path,
+    profile: &crate::config::ResolvedProfile,
+    wasm: &Path,
+    outputs: &[TestRunOutput],
+    rerun_enabled: bool,
+    cache_path: &Path,
+    cached_tests: &[String],
+    cached_tests_after: &[String],
+    executed_tests: &[String],
+    failed_tests: &[String],
+    watch_enabled: bool,
+) -> TestReport {
+    let runs = outputs.iter().map(parse_test_run).collect::<Vec<_>>();
+    let summary = aggregate_summary(&runs);
+    let success = outputs.iter().all(|output| output.success);
+
+    TestReport {
+        schema_version: TEST_JSON_SCHEMA_VERSION,
+        project_root: project_root.to_path_buf(),
+        profile: profile.clone(),
+        wasm: wasm.to_path_buf(),
+        success,
+        summary,
+        runs,
+        rerun: TestRerunInfo {
+            enabled: rerun_enabled,
+            cache_path: cache_path.to_path_buf(),
+            cached_tests: cached_tests.to_vec(),
+            cached_tests_after: cached_tests_after.to_vec(),
+            executed_tests: executed_tests.to_vec(),
+            failed_tests: failed_tests.to_vec(),
+        },
+        watch: TestWatchInfo {
+            enabled: watch_enabled,
+        },
+    }
+}
+
+fn parse_test_run(output: &TestRunOutput) -> TestRun {
+    let tests = parse_test_cases(&output.stdout, &output.stderr);
+    let summary = parse_test_summary(&output.stdout, &output.stderr, &tests);
+
+    TestRun {
+        filter: output.filter.clone(),
+        exact_filter: output.exact_filter,
+        success: output.success,
+        exit_code: output.code,
+        summary,
+        tests,
+        stdout: output.stdout.clone(),
+        stderr: output.stderr.clone(),
+    }
+}
+
+fn parse_test_cases(stdout: &str, stderr: &str) -> Vec<TestCase> {
+    let mut tests: Vec<TestCase> = Vec::new();
+    for line in stdout.lines().chain(stderr.lines()) {
+        let Some((name, status)) = parse_test_case_line(line) else {
+            continue;
+        };
+        if let Some(existing) = tests.iter_mut().find(|test| test.name == name) {
+            existing.status = status;
+        } else {
+            tests.push(TestCase { name, status });
+        }
+    }
+    tests
+}
+
+fn parse_test_case_line(line: &str) -> Option<(String, TestCaseStatus)> {
+    let line = line.trim();
+    let rest = line.strip_prefix("test ")?;
+    let (name, status_text) = rest.split_once(" ... ")?;
+    let status_token = status_text
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .find(|token| !token.is_empty())?;
+    let status = match status_token {
+        "ok" => TestCaseStatus::Passed,
+        "FAILED" => TestCaseStatus::Failed,
+        "ignored" => TestCaseStatus::Ignored,
+        "measured" => TestCaseStatus::Measured,
+        _ => return None,
+    };
+    Some((name.to_string(), status))
+}
+
+fn parse_test_summary(stdout: &str, stderr: &str, tests: &[TestCase]) -> TestSummary {
+    stdout
+        .lines()
+        .chain(stderr.lines())
+        .filter_map(parse_summary_line)
+        .next_back()
+        .unwrap_or_else(|| derive_summary_from_cases(tests))
+}
+
+fn parse_summary_line(line: &str) -> Option<TestSummary> {
+    let line = line.trim();
+    let rest = line.strip_prefix("test result: ")?;
+    let (_, metrics) = rest.split_once(". ")?;
+
+    let mut summary = TestSummary {
+        source: TestSummarySource::Parsed,
+        total: 0,
+        passed: 0,
+        failed: 0,
+        ignored: 0,
+        measured: 0,
+        filtered_out: 0,
+        duration_seconds: None,
+    };
+
+    for segment in metrics.split(';') {
+        let segment = segment.trim();
+        if segment.is_empty() {
+            continue;
+        }
+        if let Some(count) = parse_summary_count(segment, "passed") {
+            summary.passed = count;
+            continue;
+        }
+        if let Some(count) = parse_summary_count(segment, "failed") {
+            summary.failed = count;
+            continue;
+        }
+        if let Some(count) = parse_summary_count(segment, "ignored") {
+            summary.ignored = count;
+            continue;
+        }
+        if let Some(count) = parse_summary_count(segment, "measured") {
+            summary.measured = count;
+            continue;
+        }
+        if let Some(count) = parse_summary_count(segment, "filtered out") {
+            summary.filtered_out = count;
+            continue;
+        }
+        if let Some(duration) = segment
+            .strip_prefix("finished in ")
+            .and_then(|value| value.strip_suffix('s'))
+            .and_then(|value| value.parse::<f64>().ok())
+        {
+            summary.duration_seconds = Some(duration);
+        }
+    }
+
+    summary.total = summary.passed + summary.failed + summary.ignored + summary.measured;
+    if summary.total == 0 && summary.filtered_out == 0 && summary.duration_seconds.is_none() {
+        return None;
+    }
+    Some(summary)
+}
+
+fn parse_summary_count(segment: &str, suffix: &str) -> Option<u64> {
+    let number = segment.strip_suffix(suffix)?.trim_end();
+    number.parse().ok()
+}
+
+fn derive_summary_from_cases(tests: &[TestCase]) -> TestSummary {
+    if tests.is_empty() {
+        return TestSummary {
+            source: TestSummarySource::Empty,
+            total: 0,
+            passed: 0,
+            failed: 0,
+            ignored: 0,
+            measured: 0,
+            filtered_out: 0,
+            duration_seconds: None,
+        };
+    }
+
+    let mut summary = TestSummary {
+        source: TestSummarySource::Derived,
+        total: tests.len() as u64,
+        passed: 0,
+        failed: 0,
+        ignored: 0,
+        measured: 0,
+        filtered_out: 0,
+        duration_seconds: None,
+    };
+    for test in tests {
+        match test.status {
+            TestCaseStatus::Passed => summary.passed += 1,
+            TestCaseStatus::Failed => summary.failed += 1,
+            TestCaseStatus::Ignored => summary.ignored += 1,
+            TestCaseStatus::Measured => summary.measured += 1,
+        }
+    }
+    summary
+}
+
+fn aggregate_summary(runs: &[TestRun]) -> TestSummary {
+    if runs.is_empty() {
+        return derive_summary_from_cases(&[]);
+    }
+
+    let mut summary = runs[0].summary.clone();
+    if runs.len() > 1 {
+        summary.filtered_out = 0;
+    }
+
+    for run in &runs[1..] {
+        summary.total += run.summary.total;
+        summary.passed += run.summary.passed;
+        summary.failed += run.summary.failed;
+        summary.ignored += run.summary.ignored;
+        summary.measured += run.summary.measured;
+
+        match (summary.duration_seconds, run.summary.duration_seconds) {
+            (Some(total), Some(duration)) => summary.duration_seconds = Some(total + duration),
+            _ => summary.duration_seconds = None,
+        }
+
+        summary.source = match (summary.source, run.summary.source) {
+            (TestSummarySource::Parsed, TestSummarySource::Parsed) => TestSummarySource::Parsed,
+            (TestSummarySource::Empty, TestSummarySource::Empty) => TestSummarySource::Empty,
+            (TestSummarySource::Empty, other) | (other, TestSummarySource::Empty) => other,
+            _ => TestSummarySource::Derived,
+        };
+    }
+
+    summary
+}
+
+#[cfg(test)]
 fn combined_output(outputs: &[TestRunOutput], select: impl Fn(&TestRunOutput) -> &str) -> String {
     if outputs.len() <= 1 {
         return outputs.iter().map(select).collect();
@@ -662,7 +874,7 @@ fn apply_harness_options(
 fn run_test_command(
     cargo_cmd: &mut Command,
     print: &Print,
-    filter: Option<&str>,
+    filter: SelectedFilter<'_>,
 ) -> Result<TestRunOutput, CliError> {
     let mut child = cargo_cmd
         .stdout(Stdio::piped())
@@ -683,7 +895,8 @@ fn run_test_command(
     let stderr = join_capture(capture_stderr)?;
 
     Ok(TestRunOutput {
-        filter: filter.map(ToString::to_string),
+        filter: filter.name.map(ToString::to_string),
+        exact_filter: filter.exact,
         success: status.success(),
         code: status.code().unwrap_or(1),
         stdout: String::from_utf8_lossy(&stdout).into_owned(),
@@ -864,11 +1077,13 @@ fn dedup_tests(tests: impl IntoIterator<Item = String>) -> Vec<String> {
 mod tests {
     use super::{
         FAILURE_CACHE_VERSION, FailureCache, SelectedFilter, TestHarnessOptions, TestOptions,
-        TestRunOutput, WatchContext, apply_harness_options, combined_output, extract_failed_tests,
-        failure_cache_path, filter_cached_tests, next_cached_failures, read_failure_cache,
+        TestRunOutput, WatchContext, aggregate_summary, apply_harness_options, combined_output,
+        derive_summary_from_cases, extract_failed_tests, failure_cache_path, filter_cached_tests,
+        next_cached_failures, parse_summary_line, parse_test_case_line, read_failure_cache,
         should_stop_rerun, should_watch_file, update_failure_cache, watch_snapshot,
         write_failure_cache,
     };
+    use crate::test_json::{TestCase, TestCaseStatus, TestSummarySource};
     use std::fs;
     use std::path::PathBuf;
     use std::process::Command;
@@ -1081,6 +1296,181 @@ failures:
     }
 
     #[test]
+    fn parses_test_case_status_lines() {
+        assert_eq!(
+            parse_test_case_line("test tests::ok ... ok"),
+            Some(("tests::ok".into(), TestCaseStatus::Passed))
+        );
+        assert_eq!(
+            parse_test_case_line("test tests::fails ... FAILED"),
+            Some(("tests::fails".into(), TestCaseStatus::Failed))
+        );
+        assert_eq!(
+            parse_test_case_line("test tests::skip ... ignored, flaky on ci"),
+            Some(("tests::skip".into(), TestCaseStatus::Ignored))
+        );
+        assert_eq!(
+            parse_test_case_line("test tests::bench ... measured"),
+            Some(("tests::bench".into(), TestCaseStatus::Measured))
+        );
+    }
+
+    #[test]
+    fn parses_libtest_summary_line() {
+        let summary = parse_summary_line(
+            "test result: FAILED. 1 passed; 2 failed; 3 ignored; \
+             4 measured; 5 filtered out; finished in 0.42s",
+        )
+        .expect("bug: summary line should parse");
+
+        assert_eq!(summary.source, TestSummarySource::Parsed);
+        assert_eq!(summary.total, 10);
+        assert_eq!(summary.passed, 1);
+        assert_eq!(summary.failed, 2);
+        assert_eq!(summary.ignored, 3);
+        assert_eq!(summary.measured, 4);
+        assert_eq!(summary.filtered_out, 5);
+        assert_eq!(summary.duration_seconds, Some(0.42));
+    }
+
+    #[test]
+    fn ignores_uninformative_libtest_summary_line() {
+        let summary = parse_summary_line("test result: ok. (no details)");
+
+        assert_eq!(summary, None);
+    }
+
+    #[test]
+    fn derives_summary_when_libtest_summary_is_missing() {
+        let cases = vec![
+            TestCase {
+                name: "tests::ok".into(),
+                status: TestCaseStatus::Passed,
+            },
+            TestCase {
+                name: "tests::fail".into(),
+                status: TestCaseStatus::Failed,
+            },
+            TestCase {
+                name: "tests::skip".into(),
+                status: TestCaseStatus::Ignored,
+            },
+        ];
+
+        let summary = derive_summary_from_cases(&cases);
+
+        assert_eq!(summary.source, TestSummarySource::Derived);
+        assert_eq!(summary.total, 3);
+        assert_eq!(summary.passed, 1);
+        assert_eq!(summary.failed, 1);
+        assert_eq!(summary.ignored, 1);
+        assert_eq!(summary.measured, 0);
+        assert_eq!(summary.filtered_out, 0);
+        assert_eq!(summary.duration_seconds, None);
+    }
+
+    #[test]
+    fn aggregate_summary_preserves_parsed_source_for_single_run() {
+        let run = crate::test_json::TestRun {
+            filter: None,
+            exact_filter: false,
+            success: true,
+            exit_code: 0,
+            summary: parse_summary_line(
+                "test result: ok. 2 passed; 0 failed; 0 ignored; \
+                 0 measured; 0 filtered out; finished in 0.01s",
+            )
+            .expect("bug: summary line should parse"),
+            tests: vec![],
+            stdout: String::new(),
+            stderr: String::new(),
+        };
+
+        let summary = aggregate_summary(&[run]);
+
+        assert_eq!(summary.source, TestSummarySource::Parsed);
+        assert_eq!(summary.total, 2);
+        assert_eq!(summary.duration_seconds, Some(0.01));
+    }
+
+    #[test]
+    fn aggregate_summary_keeps_parsed_source_when_later_run_is_empty() {
+        let parsed = |line| parse_summary_line(line).expect("bug: summary line should parse");
+        let runs = vec![
+            crate::test_json::TestRun {
+                filter: Some("tests::a".into()),
+                exact_filter: true,
+                success: true,
+                exit_code: 0,
+                summary: parsed(
+                    "test result: ok. 1 passed; 0 failed; 0 ignored; \
+                     0 measured; 0 filtered out; finished in 0.01s",
+                ),
+                tests: vec![],
+                stdout: String::new(),
+                stderr: String::new(),
+            },
+            crate::test_json::TestRun {
+                filter: Some("tests::b".into()),
+                exact_filter: true,
+                success: false,
+                exit_code: 101,
+                summary: derive_summary_from_cases(&[]),
+                tests: vec![],
+                stdout: String::new(),
+                stderr: String::new(),
+            },
+        ];
+
+        let summary = aggregate_summary(&runs);
+
+        assert_eq!(summary.source, TestSummarySource::Parsed);
+        assert_eq!(summary.total, 1);
+        assert_eq!(summary.passed, 1);
+        assert_eq!(summary.failed, 0);
+    }
+
+    #[test]
+    fn aggregate_summary_zeroes_filtered_out_for_multiple_runs() {
+        let parsed = |line| parse_summary_line(line).expect("bug: summary line should parse");
+        let runs = vec![
+            crate::test_json::TestRun {
+                filter: Some("tests::a".into()),
+                exact_filter: true,
+                success: false,
+                exit_code: 101,
+                summary: parsed(
+                    "test result: FAILED. 0 passed; 1 failed; 0 ignored; \
+                     0 measured; 4 filtered out; finished in 0.01s",
+                ),
+                tests: vec![],
+                stdout: String::new(),
+                stderr: String::new(),
+            },
+            crate::test_json::TestRun {
+                filter: Some("tests::b".into()),
+                exact_filter: true,
+                success: false,
+                exit_code: 101,
+                summary: parsed(
+                    "test result: FAILED. 0 passed; 1 failed; 0 ignored; \
+                     0 measured; 4 filtered out; finished in 0.02s",
+                ),
+                tests: vec![],
+                stdout: String::new(),
+                stderr: String::new(),
+            },
+        ];
+
+        let summary = aggregate_summary(&runs);
+
+        assert_eq!(summary.total, 2);
+        assert_eq!(summary.failed, 2);
+        assert_eq!(summary.filtered_out, 0);
+        assert_eq!(summary.duration_seconds, Some(0.03));
+    }
+
+    #[test]
     fn deduplicates_failed_tests_from_stdout_and_stderr() {
         let stdout = "test tests::same ... FAILED\n";
         let stderr = "test tests::same ... FAILED\n";
@@ -1144,6 +1534,7 @@ failures:
         };
         let outputs = vec![TestRunOutput {
             filter: Some("tests::a".into()),
+            exact_filter: true,
             success: false,
             code: 101,
             stdout: "compile failed".into(),
@@ -1164,6 +1555,7 @@ failures:
         let outputs = vec![
             TestRunOutput {
                 filter: Some("tests::a".into()),
+                exact_filter: true,
                 success: false,
                 code: 101,
                 stdout: "a output\n".into(),
@@ -1171,6 +1563,7 @@ failures:
             },
             TestRunOutput {
                 filter: Some("tests::b".into()),
+                exact_filter: true,
                 success: false,
                 code: 101,
                 stdout: "b output\n".into(),
@@ -1196,6 +1589,7 @@ failures:
         };
         let outputs = vec![TestRunOutput {
             filter: Some("tests::a".into()),
+            exact_filter: true,
             success: false,
             code: 101,
             stdout: String::new(),

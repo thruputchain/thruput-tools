@@ -72,6 +72,32 @@ Key public deps: `jsonrpsee` (JSON-RPC), `axum` (HTTP), `tokio` (async
 runtime), `tower`/`tower-http` (middleware), `clap` (CLI), `prometheus`
 (metrics).
 
+## Schema Ownership
+
+- `protocol/*.x` owns the canonical binary protocol structure. The
+  Rust binding layer for those XDR types lives in
+  `protocol-rs/groundhog-xdr`; the TypeScript peer lives in
+  `protocol-ts` (`@groundhogchain/protocol`, `/contract-spec`,
+  `/xdr`, `/client`). Generated TS bindings emitted by
+  `groundhog codegen ts` import from these packages — the CLI never
+  re-derives protocol primitives.
+- `crates/api-types` owns shared JSON-RPC types and JSON projections
+  of XDR types. If the JSON wire format differs from raw XDR (for
+  example `0x`-prefixed hex wrappers), model that once here instead of
+  redefining it in gateway, client, or CLI code.
+- `crates/rpc-api` owns JSON-RPC method names, params, and results.
+  Trait signatures in `rpc-api/src/lib.rs` are the sole source of
+  truth for the public RPC surface.
+- OpenRPC / JSON Schema documents for the RPC surface are generated
+  artifacts from Rust traits and Rust types. Do not hand-author or
+  maintain parallel schema files for RPC methods or RPC payload types.
+- CLI-only machine-readable output types live in `crates/cli` by
+  default. If a CLI schema embeds chain or runtime data, reuse
+  `api-types` nested types instead of copying them.
+- Extract a shared CLI schema crate only after a CLI output type is
+  reused across commands or crates, or becomes a documented external
+  contract broader than a single command.
+
 ## Build and Test
 
 ### Workspace
@@ -161,6 +187,10 @@ cargo run -p groundhog-cli --features dev-node -- node --hogd-dev-binary /path/t
 
 - Use the `Print` struct (`print.status()`, `print.warn()`,
   `print.prompt()`), not raw `eprintln!`.
+- When a command's `data` payload is intended to be a stable
+  machine-readable contract, include a command-specific
+  `schemaVersion` field inside `data` from v1 onward. Do not version
+  the shared `CommandResult` envelope per command.
 
 ## Gateway Conventions
 

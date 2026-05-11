@@ -75,6 +75,8 @@ pub enum CliError {
     NotImplemented,
     #[error("status check found warnings")]
     StatusHasWarnings,
+    #[error("command emitted structured failure output")]
+    CommandReportedFailure,
     #[error("node supervisor error: {0}")]
     NodeSupervisor(String),
     #[error("local node already running: {0}")]
@@ -155,6 +157,7 @@ impl CliError {
             Self::JsonUnsupported(_) => "json_unsupported",
             Self::NotImplemented => "not_implemented",
             Self::StatusHasWarnings => "status_has_warnings",
+            Self::CommandReportedFailure => "command_reported_failure",
             Self::NodeSupervisor(_) => "node_supervisor_error",
             Self::LocalNodeAlreadyRunning(_) => "local_node_already_running",
             Self::RpcConnect(_) => "rpc_connect",
@@ -267,7 +270,8 @@ impl CliError {
             | Self::ReceiptPollingExhausted
             | Self::Io(_)
             | Self::Other(_)
-            | Self::StatusHasWarnings => None,
+            | Self::StatusHasWarnings
+            | Self::CommandReportedFailure => None,
             Self::ProfileNotFound(_) => Some(Cow::Borrowed(
                 "add the profile to `groundhog.toml`, or switch to \
                  an existing one with `--profile` or \

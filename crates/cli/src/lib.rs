@@ -25,6 +25,7 @@ pub mod scaffold;
 pub mod status;
 pub mod storage;
 pub mod test_cmd;
+pub mod test_json;
 pub mod tx_utils;
 pub mod wasm_instrument;
 pub use error::CliError;
