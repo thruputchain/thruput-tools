@@ -33,12 +33,24 @@ Out of scope for this work:
 
 `client-ts` is the only known consumer today; the spec is published on
 the private registry but no external SDKs depend on it. The artifact
-wire format changes once, with no dual-emit shim:
+wire format changes once, with no dual-emit shim.
 
-- `groundhog-open-rpc`, `groundhog-open-rpc-macros`, and
-  `groundhog-open-rpc-spec` bump together to `0.4.0`.
-- `client-ts` regen runs against `0.4.0` after publish.
-- CHANGELOG entry on `open-rpc-spec` records the wire-format change.
+The repo versions every workspace crate via `[workspace.package]
+version` in `Cargo.toml`, and every workspace dependency hard-pins
+`=<version>` with the explicit "must be kept in sync" comment. Per-
+crate versioning does not exist. The migration is therefore a
+**workspace-wide bump from `0.3.x` to `0.4.0`**, cascading to every
+member crate — the same shape as commit `6908876`, where the workspace
+moved to `0.3.1` for a change that only touched gateway + rpc-api +
+rpc-server.
+
+- Bump `[workspace.package] version` to `0.4.0` and update each
+  `groundhog-* = { ..., version = "=0.4.0", ... }` entry in
+  `[workspace.dependencies]` to match.
+- `client-ts` regen runs against the new published spec.
+- CHANGELOG entry records that this workspace bump carries an OpenRPC
+  artifact wire-format change, even though the crate-version delta
+  looks like a routine release.
 
 ## Implementation Approach
 
@@ -108,6 +120,22 @@ Breaking changes (intentional, the version bump catches them):
 - `ContentDescriptor.schema` may now be a `$ref` object instead of an
   inline schema. The Rust type is unchanged (`serde_json::Value`); the
   shape varies per type.
+
+These breakages are acceptable because **`groundhog-open-rpc` is an
+internal implementation detail**. The externally-visible consumer is
+`client-ts` reading the generated JSON, not any Rust caller of the
+crate. The only Rust callers are `groundhog-open-rpc-macros` (the
+companion-struct generator) and `groundhog-open-rpc-spec` (the binary
+that emits the artifact), both in this workspace. Both update
+atomically with the API change.
+
+Preserving the old `Module::new`/`add_method`/`add_module` surface
+would require either a parallel set of descriptor helpers (legacy
+inline vs new shared-registry — two ways to build descriptors with
+different observable JSON output) or a single helper with a hidden
+one-shot generator (produces inline schemas, contradicts the
+shared-registry goal). Neither is worth the API-stability theatre for
+a crate with no external Rust consumers.
 
 ## Macro Change
 
@@ -179,10 +207,37 @@ spec.module(|m| GroundhogApiOpenRpc::module_doc(m));
   `methods[].result.schema` carry `{"$ref": "..."}`.
 - Primitives stay inline at use sites; they do not get
   `components.schemas` entries.
-- Name collisions across different Rust types with the same identifier
-  are resolved by `#[schemars(rename = "...")]` on one side. The
-  generator does not silently overwrite; schemars surfaces the
-  collision at generation time.
+
+## Name-Collision Policy
+
+The current RPC surface has no name collisions — every Rust type
+referenced by the trait has a unique short identifier. The policy
+exists for future scenarios where two distinct Rust types resolve to
+the same `schemars::JsonSchema::schema_name()`.
+
+**Policy: accept the global effect of `#[schemars(rename = "...")]`.**
+Per `CLAUDE.md`'s schema-ownership rules, the JSON projection of XDR
+types lives in `api-types`; renaming a type there changes its
+JsonSchema name on every emit path (OpenRPC, `groundhog test --json`,
+future codegen). When a collision arises, the resolver explicitly
+considers and signs off on the global impact when choosing the
+renamed identifier. The OpenRPC artifact does not maintain an
+independent aliasing layer.
+
+**Why not OpenRPC-local aliasing?** schemars 1.x supports applying a
+`Transform` that could rewrite `components.schemas` keys and the
+corresponding `$ref` paths after generation, decoupling OpenRPC's
+naming from the global JsonSchema name. That mechanism is real code
+(state, traversal, error handling) maintained for a problem the
+current codebase does not have. Per `CLAUDE.md`'s "delete unused code
+rather than preserve it" guidance, we do not build it pre-emptively.
+If a collision arises where a global rename is unacceptable, add the
+`Transform` then — the hook point is well-defined.
+
+**What schemars does on collision.** schemars 1.x's collision behavior
+under a single `SchemaGenerator` is not relied on for correctness;
+the test plan covers the rename path explicitly. If schemars panics or
+silently overwrites, the snapshot test catches it.
 
 ## Testing
 
@@ -201,12 +256,31 @@ Three layers:
 
 **Integration test in `crates/open-rpc-spec/`**
 
-- Run `build_spec()` and structurally assert key invariants on the
-  real Groundhog RPC spec: a representative reused type (e.g.
-  `TransactionReceipt`) appears exactly once under
-  `components.schemas`; every method that references it uses `$ref`;
-  `components.schemas` is non-empty; the artifact parses as valid JSON.
-- Not byte-exact golden files. Structural assertions only.
+Two complementary checks:
+
+- **Canonical artifact snapshot.** Check the generated spec JSON into
+  the repo (e.g. `crates/open-rpc-spec/snapshots/groundhog-spec.json`).
+  The integration test runs `build_spec()` and asserts byte-equal
+  match against the committed file. An `UPDATE_SNAPSHOTS=1` env var
+  regenerates the snapshot when output changes intentionally. The
+  diff during a workspace bump or macro edit is the review surface
+  that catches unexpected schema hoisting, renamed component keys,
+  nested `$ref` churn, or any other artifact-shape regression — every
+  schemars or macro change is intentionally reviewed against the
+  full generated artifact, not a handful of structural assertions.
+- **Structural invariants.** Alongside the snapshot, assert
+  invariants that document intent and produce clearer failures than
+  a thousand-line diff: a representative reused type appears exactly
+  once under `components.schemas`; every method that references it
+  uses `$ref`; `components.schemas` is non-empty; the artifact parses
+  as valid JSON. The snapshot catches regressions; the invariants
+  document the contract.
+
+This combination is the right shape for a generated downstream
+contract: brittleness against schemars version bumps becomes a
+feature — schemars is workspace-pinned, so any change to its output
+already requires an explicit, reviewed Cargo.toml edit, and that PR
+should regenerate and re-review the snapshot in the same change.
 
 **Macro test in `crates/open-rpc-macros/tests/`**
 
@@ -219,8 +293,6 @@ Three layers:
 
 - OpenRPC 1.2.6 schema-validation of the artifact (no production-grade
   Rust validator; not worth a JS dependency in CI for one check).
-- Byte-exact JSON golden files (brittle against irrelevant schemars
-  version bumps).
 
 ## Risks
 
