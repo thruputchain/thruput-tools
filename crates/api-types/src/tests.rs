@@ -59,6 +59,7 @@ mod wire_format {
     };
     use crate::hex::{Hex0x, HexBytes, Topic};
     use crate::receipt::{ExecStatus, TransactionReceipt};
+    use crate::state::StorageItemInfo;
     use crate::transaction::{TransactionStatus, TxHash};
     use crate::{BlockHeader, BlockHeight, SHA256Hash};
     use xdr_common::VecM;
@@ -245,5 +246,24 @@ mod wire_format {
         assert!(v.get("network_id").is_none());
         assert!(v.get("block_height").is_none());
         assert!(v.get("txset_hash").is_none());
+    }
+
+    #[test]
+    fn storage_item_wire_format_uses_camel_case_variant_fields() {
+        let deployed = StorageItemInfo::DeployedContract {
+            hash: zero_hash(),
+            size: 7,
+            contract_type: 3,
+        };
+        let deployed_json: Value = serde_json::to_value(&deployed).unwrap();
+        assert_eq!(deployed_json["kind"], "deployedContract");
+        assert_eq!(deployed_json["contractType"], 3);
+        assert!(deployed_json.get("contract_type").is_none());
+
+        let unknown = StorageItemInfo::Unknown { type_id: 9 };
+        let unknown_json: Value = serde_json::to_value(&unknown).unwrap();
+        assert_eq!(unknown_json["kind"], "unknown");
+        assert_eq!(unknown_json["typeId"], 9);
+        assert!(unknown_json.get("type_id").is_none());
     }
 }
