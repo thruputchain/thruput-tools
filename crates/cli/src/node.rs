@@ -59,7 +59,7 @@ async fn run_hogd_dev(
 
     let handle = NodeSupervisorHandle::start(config)
         .await
-        .map_err(map_node_supervisor_error)?;
+        .map_err(|e| map_node_supervisor_error(&e))?;
     let rpc_addr = handle.rpc_addr();
     let readiness = handle.hogd_readiness().clone();
     let backend_planes = handle.backend_planes();
@@ -131,7 +131,7 @@ async fn run_hogd_dev(
 }
 
 #[cfg(feature = "dev-node")]
-fn map_node_supervisor_error(err: groundhog_node_supervisor::NodeSupervisorError) -> CliError {
+fn map_node_supervisor_error(err: &groundhog_node_supervisor::NodeSupervisorError) -> CliError {
     let message = err.to_string();
     match err {
         groundhog_node_supervisor::NodeSupervisorError::LocalNodeAlreadyRunning { .. } => {
