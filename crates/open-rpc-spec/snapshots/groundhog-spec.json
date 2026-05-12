@@ -650,6 +650,17 @@
       "TransactionReceipt": {
         "description": "Full transaction receipt. Returned by `getTransactionReceipt`.\n\nDesign notes:\n- `status` maps from `TxEventLog.exec_result` in the indexer.\n  Committed blocks include both successful and deterministically-failed\n  txs (reverts, OOG). If a receipt exists, the tx was committed.\n- No `blockHash`: SCP instant finality, height is sufficient.\n- No `gasUsed`/`gasPrice`, `transactionIndex`, `logsBloom`.\n\n`storage_delta` (net HOG locked/unlocked) is deferred — hogd's\n`TxInfo` doesn't include it. Will be added when indexer support lands.",
         "properties": {
+          "abortData": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HexBytes"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Bytes the contract passed to its `abort` / `revert` syscall\nwhen the transaction reverted deterministically.  Present\nwhen `status` is `reverted` and the chain version that\nexecuted the transaction recorded the revert payload; absent\notherwise.  Returned raw — decode against the contract's\nspec (typically the error variant) to recover a human-\nreadable reason."
+          },
           "events": {
             "description": "Events emitted during execution.",
             "items": {
@@ -670,7 +681,7 @@
                 "type": "null"
               }
             ],
-            "description": "Raw bytes returned from the root invocation, if any.\n\nCarries the root frame's return buffer when `status == Ok` and the\nroot frame's abort buffer when `status == Reverted` (i.e., revert\ndata).  `None` for fault/error outcomes and for pre-\n`TxEventLog.root_output` indexer rows.  Always interpret in the\ncontext of `status`; the gateway returns the bytes raw, leaving\nany contract-spec decoding to the caller."
+            "description": "Bytes returned by the contract's root call on a successful\ntransaction.  Present when `status` is `ok` and the chain\nversion that executed the transaction recorded a return\nvalue; absent otherwise.  Returned raw — decode against the\ncontract's spec to recover typed values."
           },
           "status": {
             "$ref": "#/components/schemas/ExecStatus",

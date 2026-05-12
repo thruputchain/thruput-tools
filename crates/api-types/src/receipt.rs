@@ -32,16 +32,23 @@ pub struct TransactionReceipt {
     /// Events emitted during execution.
     pub events: Vec<EmittedEvent>,
 
-    /// Raw bytes returned from the root invocation, if any.
-    ///
-    /// Carries the root frame's return buffer when `status == Ok` and the
-    /// root frame's abort buffer when `status == Reverted` (i.e., revert
-    /// data).  `None` for fault/error outcomes and for pre-
-    /// `TxEventLog.root_output` indexer rows.  Always interpret in the
-    /// context of `status`; the gateway returns the bytes raw, leaving
-    /// any contract-spec decoding to the caller.
+    /// Bytes returned by the contract's root call on a successful
+    /// transaction.  Present when `status` is `ok` and the chain
+    /// version that executed the transaction recorded a return
+    /// value; absent otherwise.  Returned raw — decode against the
+    /// contract's spec to recover typed values.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub return_data: Option<HexBytes>,
+
+    /// Bytes the contract passed to its `abort` / `revert` syscall
+    /// when the transaction reverted deterministically.  Present
+    /// when `status` is `reverted` and the chain version that
+    /// executed the transaction recorded the revert payload; absent
+    /// otherwise.  Returned raw — decode against the contract's
+    /// spec (typically the error variant) to recover a human-
+    /// readable reason.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub abort_data: Option<HexBytes>,
 }
 
 /// Execution result. Maps to hogd's `ExecResult` variants.

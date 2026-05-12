@@ -437,6 +437,7 @@ mod tests {
                     data: HexBytes(vec![0x44]),
                 }],
                 return_data: Some(HexBytes(vec![0x55])),
+                abort_data: None,
             },
             gas_consumed: 12,
             gas_limit: Some(99),

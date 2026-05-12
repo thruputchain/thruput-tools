@@ -121,6 +121,7 @@ mod wire_format {
             status: ExecStatus::Ok,
             events: vec![],
             return_data: None,
+            abort_data: None,
         };
         let v: Value = serde_json::to_value(&receipt).unwrap();
         assert!(v["txHash"].as_str().unwrap().starts_with("0x"));

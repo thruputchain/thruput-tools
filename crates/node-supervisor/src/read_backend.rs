@@ -208,14 +208,14 @@ impl ReadPlane for HogdDevReadBackend {
                     .filter_map(parse_emitted_event)
                     .collect();
 
-                let return_data = match &info.events.root_output {
+                let (return_data, abort_data) = match &info.events.root_output {
                     InvocationFrameOutput::Return { return_buffer } => {
-                        Some(HexBytes(return_buffer.0.clone()))
+                        (Some(HexBytes(return_buffer.0.clone())), None)
                     }
                     InvocationFrameOutput::Abort { abort_buffer } => {
-                        Some(HexBytes(abort_buffer.0.clone()))
+                        (None, Some(HexBytes(abort_buffer.0.clone())))
                     }
-                    _ => None,
+                    _ => (None, None),
                 };
 
                 Ok(Some(TransactionReceipt {
@@ -224,6 +224,7 @@ impl ReadPlane for HogdDevReadBackend {
                     status: map_exec_result(info.events.exec_result),
                     events,
                     return_data,
+                    abort_data,
                 }))
             }
             TxInfoResult::Default { outcome } if outcome == TxInfoOutcome::TxInfoNotFound.0 => {
