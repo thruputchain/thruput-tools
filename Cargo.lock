@@ -883,7 +883,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-cli"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "clap",
  "clap_complete",
@@ -957,7 +957,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-node-supervisor"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "async-trait",
  "groundhog-rpc-api",
@@ -986,7 +986,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-open-rpc"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "schemars 1.2.1",
  "serde",
@@ -995,7 +995,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-open-rpc-macros"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "groundhog-open-rpc",
  "jsonrpsee",
@@ -1007,7 +1007,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-open-rpc-spec"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "groundhog-open-rpc",
  "groundhog-rpc-api",
@@ -1018,7 +1018,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-rpc-api"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "async-trait",
  "groundhog-open-rpc",
@@ -1029,7 +1029,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-rpc-api-types"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "bytes",
  "groundhog-trace",
@@ -1047,7 +1047,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-rpc-client"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "async-trait",
  "groundhog-rpc-api",
@@ -1061,7 +1061,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-rpc-gateway"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "async-trait",
  "axum",
@@ -1092,7 +1092,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-rpc-server"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "async-trait",
  "groundhog-rpc-api",
@@ -1119,7 +1119,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-signing"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "ed25519-dalek",
  "groundhog-xdr 0.12.2",
@@ -1182,7 +1182,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-x23-transport"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "rpc_driver",
  "thiserror 2.0.18",
