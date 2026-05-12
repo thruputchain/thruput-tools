@@ -3,11 +3,12 @@
 
 use groundhog_indexer::indexer::TxInfoResult;
 use groundhog_rpc_api_types::{
+    hex::HexBytes,
     receipt::{ExecStatus, TransactionReceipt},
     transaction::{TransactionStatus, TxHash},
 };
 use groundhog_xdr::exec_result::ExecResult;
-use groundhog_xdr::transaction::SignedTransactionHash;
+use groundhog_xdr::transaction::{InvocationFrameOutput, SignedTransactionHash};
 use xdr_common::VecM;
 
 use crate::context::GatewayContext;
@@ -70,13 +71,22 @@ pub async fn get_transaction_receipt(
                 .iter()
                 .filter_map(parse_emitted_event)
                 .collect();
+            let return_data = match &info.events.root_output {
+                InvocationFrameOutput::Return { return_buffer } => {
+                    Some(HexBytes(return_buffer.0.clone()))
+                }
+                InvocationFrameOutput::Abort { abort_buffer } => {
+                    Some(HexBytes(abort_buffer.0.clone()))
+                }
+                _ => None,
+            };
 
             Ok(Some(TransactionReceipt {
                 tx_hash,
                 height: info.height,
                 status: map_exec_result(info.events.exec_result),
                 events,
-                return_data: None,
+                return_data,
             }))
         }
         _ => Ok(None),

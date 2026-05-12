@@ -32,11 +32,14 @@ pub struct TransactionReceipt {
     /// Events emitted during execution.
     pub events: Vec<EmittedEvent>,
 
-    /// Raw return data from contract execution.
+    /// Raw bytes returned from the root invocation, if any.
     ///
-    /// Populated by local-node backends from `InvocationFrameOutput::Return`.
-    /// May be `None` for production receipts if the indexer does not
-    /// store return data.
+    /// Carries the root frame's return buffer when `status == Ok` and the
+    /// root frame's abort buffer when `status == Reverted` (i.e., revert
+    /// data).  `None` for fault/error outcomes and for pre-
+    /// `TxEventLog.root_output` indexer rows.  Always interpret in the
+    /// context of `status`; the gateway returns the bytes raw, leaving
+    /// any contract-spec decoding to the caller.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub return_data: Option<HexBytes>,
 }

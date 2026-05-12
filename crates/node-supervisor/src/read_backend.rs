@@ -34,7 +34,9 @@ use groundhog_rpc_server::{ReadPlane, RpcServerError};
 use groundhog_scheduler::sched_coord::SchedulerCoord_SchedulerCoord1_Client;
 use groundhog_x23_transport::connect;
 use groundhog_xdr::{
-    event::TxEmittedEvent, exec_result::ExecResult, transaction::SignedTransactionHash,
+    event::TxEmittedEvent,
+    exec_result::ExecResult,
+    transaction::{InvocationFrameOutput, SignedTransactionHash},
 };
 use xdr_common::VecM;
 
@@ -206,12 +208,22 @@ impl ReadPlane for HogdDevReadBackend {
                     .filter_map(parse_emitted_event)
                     .collect();
 
+                let return_data = match &info.events.root_output {
+                    InvocationFrameOutput::Return { return_buffer } => {
+                        Some(HexBytes(return_buffer.0.clone()))
+                    }
+                    InvocationFrameOutput::Abort { abort_buffer } => {
+                        Some(HexBytes(abort_buffer.0.clone()))
+                    }
+                    _ => None,
+                };
+
                 Ok(Some(TransactionReceipt {
                     tx_hash,
                     height: info.height,
                     status: map_exec_result(info.events.exec_result),
                     events,
-                    return_data: None,
+                    return_data,
                 }))
             }
             TxInfoResult::Default { outcome } if outcome == TxInfoOutcome::TxInfoNotFound.0 => {
@@ -789,7 +801,7 @@ mod tests {
         }
 
         fn build_committed_set() -> CommittedSet {
-            use groundhog_xdr::event::TxEventLog;
+            use groundhog_xdr::{event::TxEventLog, transaction::InvocationFrameOutput};
 
             let mut map = HashMap::new();
 
@@ -798,6 +810,7 @@ mod tests {
                 events: TxEventLog {
                     proposed_tx_hash: SHA256Hash::from(CANNED_TX_HASH_A),
                     exec_result: ExecResult::ExecResultOK,
+                    root_output: InvocationFrameOutput::Fault,
                     events: VecM(vec![]),
                 },
             };
@@ -808,6 +821,7 @@ mod tests {
                 events: TxEventLog {
                     proposed_tx_hash: SHA256Hash::from(CANNED_TX_HASH_B),
                     exec_result: ExecResult::ExecResultOK,
+                    root_output: InvocationFrameOutput::Fault,
                     events: VecM(vec![]),
                 },
             };

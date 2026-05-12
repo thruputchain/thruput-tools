@@ -670,7 +670,7 @@
                 "type": "null"
               }
             ],
-            "description": "Raw return data from contract execution.\n\nPopulated by local-node backends from `InvocationFrameOutput::Return`.\nMay be `None` for production receipts if the indexer does not\nstore return data."
+            "description": "Raw bytes returned from the root invocation, if any.\n\nCarries the root frame's return buffer when `status == Ok` and the\nroot frame's abort buffer when `status == Reverted` (i.e., revert\ndata).  `None` for fault/error outcomes and for pre-\n`TxEventLog.root_output` indexer rows.  Always interpret in the\ncontext of `status`; the gateway returns the bytes raw, leaving\nany contract-spec decoding to the caller."
           },
           "status": {
             "$ref": "#/components/schemas/ExecStatus",

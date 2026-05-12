@@ -816,7 +816,9 @@ impl FakeIndexer {
     }
 
     fn build_committed_set() -> CommittedSet {
-        use groundhog_xdr::{event::TxEventLog, exec_result::ExecResult};
+        use groundhog_xdr::{
+            event::TxEventLog, exec_result::ExecResult, transaction::InvocationFrameOutput,
+        };
 
         let mut map = HashMap::new();
 
@@ -825,6 +827,7 @@ impl FakeIndexer {
             events: TxEventLog {
                 proposed_tx_hash: SHA256Hash::from(CANNED_TX_HASH_A),
                 exec_result: ExecResult::ExecResultOK,
+                root_output: InvocationFrameOutput::Fault,
                 events: VecM(vec![]),
             },
         };
@@ -835,6 +838,7 @@ impl FakeIndexer {
             events: TxEventLog {
                 proposed_tx_hash: SHA256Hash::from(CANNED_TX_HASH_B),
                 exec_result: ExecResult::ExecResultOK,
+                root_output: InvocationFrameOutput::Fault,
                 events: VecM(vec![]),
             },
         };
