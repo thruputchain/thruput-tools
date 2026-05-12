@@ -6,11 +6,13 @@ use serde::{Deserialize, Serialize};
 #[non_exhaustive]
 #[serde(rename_all = "camelCase")]
 pub struct VersionInfo {
-    /// Wire-format SemVer of the OpenRPC spec this node implements.
+    /// Wire-format `SemVer` of the `OpenRPC` spec this node implements.
     pub wire_format: String,
-    /// Implementation version of the binary serving this RPC endpoint.
+    /// Diagnostic-only implementation version of the binary serving this RPC endpoint.
+    /// Consumers must not branch on this field.
     pub implementation: String,
-    /// Git commit hash this server was built from, when available.
+    /// Diagnostic-only Git commit hash this server was built from, when available.
+    /// Consumers must not branch on this field.
     pub commit_hash: Option<String>,
 }
 

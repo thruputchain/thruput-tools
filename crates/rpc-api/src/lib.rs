@@ -21,9 +21,9 @@ use groundhog_rpc_api_types::{
     version::VersionInfo,
 };
 
-/// Wire-format SemVer for the JSON-RPC surface.
+/// Wire-format `SemVer` for the JSON-RPC surface.
 ///
-/// See the "OpenRPC Wire Version" section in `CLAUDE.md` for bump
+/// See the "`OpenRPC` Wire Version" section in `CLAUDE.md` for bump
 /// rules.
 pub const WIRE_FORMAT_VERSION: &str = "1.1.0";
 

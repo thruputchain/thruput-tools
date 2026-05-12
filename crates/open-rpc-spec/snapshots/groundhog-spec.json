@@ -762,18 +762,18 @@
         "description": "Runtime version information for a JSON-RPC server implementation.",
         "properties": {
           "commitHash": {
-            "description": "Git commit hash this server was built from, when available.",
+            "description": "Diagnostic-only Git commit hash this server was built from, when available.\nConsumers must not branch on this field.",
             "type": [
               "string",
               "null"
             ]
           },
           "implementation": {
-            "description": "Implementation version of the binary serving this RPC endpoint.",
+            "description": "Diagnostic-only implementation version of the binary serving this RPC endpoint.\nConsumers must not branch on this field.",
             "type": "string"
           },
           "wireFormat": {
-            "description": "Wire-format SemVer of the OpenRPC spec this node implements.",
+            "description": "Wire-format `SemVer` of the `OpenRPC` spec this node implements.",
             "type": "string"
           }
         },
