@@ -13,6 +13,12 @@ use pretty_assertions::assert_eq;
 
 const SNAPSHOT_PATH: &str = "snapshots/groundhog-spec.json";
 
+// Methods that are infallible by design and intentionally carry an empty
+// `errors: []` array. Add a method here only when it has no backend
+// dispatch and cannot fail (e.g. `groundhog_version`, sourced entirely
+// from compile-time constants and an injected `BuildInfo`).
+const INFALLIBLE_METHODS: &[&str] = &["groundhog_version"];
+
 #[test]
 fn openrpc_spec_matches_snapshot() {
     let spec = build_spec();
@@ -168,7 +174,8 @@ fn assert_error_docs_are_wired(
     );
     assert!(
         methods.iter().all(|method| {
-            method["name"] == "groundhog_version"
+            let name = method["name"].as_str().unwrap_or_default();
+            INFALLIBLE_METHODS.contains(&name)
                 || method["errors"]
                     .as_array()
                     .is_some_and(|errors| !errors.is_empty())
