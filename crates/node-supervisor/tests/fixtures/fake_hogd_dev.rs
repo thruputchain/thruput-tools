@@ -827,7 +827,9 @@ impl FakeIndexer {
             events: TxEventLog {
                 proposed_tx_hash: SHA256Hash::from(CANNED_TX_HASH_A),
                 exec_result: ExecResult::ExecResultOK,
-                root_output: InvocationFrameOutput::Fault,
+                root_output: InvocationFrameOutput::Return {
+                    return_buffer: BytesM(vec![]),
+                },
                 events: VecM(vec![]),
             },
         };
@@ -838,7 +840,9 @@ impl FakeIndexer {
             events: TxEventLog {
                 proposed_tx_hash: SHA256Hash::from(CANNED_TX_HASH_B),
                 exec_result: ExecResult::ExecResultOK,
-                root_output: InvocationFrameOutput::Fault,
+                root_output: InvocationFrameOutput::Return {
+                    return_buffer: BytesM(vec![]),
+                },
                 events: VecM(vec![]),
             },
         };
