@@ -1,3 +1,4 @@
+// Keep in sync with crates/node-supervisor/build.rs.
 use std::path::Path;
 use std::process::Command;
 
