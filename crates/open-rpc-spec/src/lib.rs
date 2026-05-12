@@ -1,6 +1,6 @@
 use groundhog_open_rpc::{Project, ProjectInfo};
 use groundhog_rpc_api::{
-    GroundhogApiOpenRpc, GroundhogDevApiOpenRpc,
+    GroundhogApiOpenRpc, GroundhogDevApiOpenRpc, WIRE_FORMAT_VERSION,
     types::error::{ERROR_INFOS, RpcErrorInfo, codes, error_info_by_code},
 };
 
@@ -11,7 +11,7 @@ use groundhog_rpc_api::{
 pub fn build_spec() -> serde_json::Value {
     let mut spec = Project::new(ProjectInfo {
         title: "Groundhog JSON-RPC".to_owned(),
-        version: env!("CARGO_PKG_VERSION").to_owned(),
+        version: WIRE_FORMAT_VERSION.to_owned(),
     });
     spec.module(GroundhogApiOpenRpc::module_doc);
     spec.module(GroundhogDevApiOpenRpc::module_doc);

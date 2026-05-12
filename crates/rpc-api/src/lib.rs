@@ -20,6 +20,12 @@ use groundhog_rpc_api_types::{
     transaction::{TransactionStatus, TxHash},
 };
 
+/// Wire-format SemVer for the JSON-RPC surface.
+///
+/// See the "OpenRPC Wire Version" section in `CLAUDE.md` for bump
+/// rules.
+pub const WIRE_FORMAT_VERSION: &str = "1.0.0";
+
 /// Phase 1: Core API — submit, query, poll.
 #[open_rpc(namespace = "groundhog", tag = "Core API")]
 #[rpc(client, server, namespace = "groundhog")]

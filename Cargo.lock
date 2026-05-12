@@ -1012,6 +1012,7 @@ dependencies = [
  "groundhog-open-rpc",
  "groundhog-rpc-api",
  "pretty_assertions",
+ "semver",
  "serde_json",
 ]
 

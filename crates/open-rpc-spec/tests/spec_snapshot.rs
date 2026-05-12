@@ -2,9 +2,12 @@ use std::fs;
 use std::path::PathBuf;
 
 use groundhog_open_rpc_spec::build_spec;
-use groundhog_rpc_api::types::{
-    error::{ERROR_INFOS, codes, error_info_by_code},
-    events::MAX_TOPIC_VALUES_PER_POSITION,
+use groundhog_rpc_api::{
+    WIRE_FORMAT_VERSION,
+    types::{
+        error::{ERROR_INFOS, codes, error_info_by_code},
+        events::MAX_TOPIC_VALUES_PER_POSITION,
+    },
 };
 use pretty_assertions::assert_eq;
 
@@ -26,6 +29,19 @@ fn openrpc_spec_matches_snapshot() {
 
     let expected = fs::read_to_string(&snapshot_path).expect("snapshot file should exist");
     assert_eq!(actual, expected.trim_end());
+}
+
+#[test]
+fn wire_format_version_is_valid_semver_and_matches_spec_info() {
+    semver::Version::parse(WIRE_FORMAT_VERSION)
+        .expect("bug: WIRE_FORMAT_VERSION should be valid SemVer");
+    assert_eq!(
+        build_spec()["info"]["version"]
+            .as_str()
+            .expect("bug: OpenRPC info.version should be a string"),
+        WIRE_FORMAT_VERSION,
+        "OpenRPC info.version should come from WIRE_FORMAT_VERSION"
+    );
 }
 
 #[test]

@@ -262,6 +262,17 @@ cargo run -p groundhog-cli --features dev-node -- node --hogd-dev-binary /path/t
 - Method prefix is `groundhog_` (may change — see open questions in
   docs/gateway/system-design.md).
 
+### OpenRPC Wire Version
+
+OpenRPC `info.version` is the JSON-RPC wire-format SemVer, not the
+Rust workspace version. The source of truth is `WIRE_FORMAT_VERSION`
+in `crates/rpc-api/src/lib.rs`.
+
+Bump major for breaking changes to method shape, params, results, or
+errors. Bump minor for additive changes such as new methods, optional
+fields, or errors. Bump patch for documentation, description, or
+example refinements only.
+
 ## CLI Patterns
 
 ### Adding a new subcommand
