@@ -407,10 +407,8 @@ history retains the design context for anything not currently active.
   for the hogd-owned subprocess local-node backend.
 - `docs/cli/specs/2026-04-29-hogd-dev-process-contract.md` — cross-team
   hogd-dev subprocess contract.
-- `docs/cli/specs/2026-04-14-bundled-wasm-opt-design.md` — bundled
-  wasm-opt rollout design.
-- `docs/cli/plans/2026-04-14-bundled-wasm-opt.md` — bundled wasm-opt
-  rollout plan; CLI still shells out at time of writing.
+- `docs/cli/specs/2026-04-14-bundled-wasm-opt-design.md` — deferred
+  note for possible future bundled wasm-opt work.
 - `docs/cli/specs/2026-05-03-ts-codegen-design.md` — `groundhog codegen
   ts` TypeScript binding codegen.
 - `docs/cli/specs/2026-05-07-view-rpc-and-receipt-return-data.md` —
