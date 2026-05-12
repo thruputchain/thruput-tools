@@ -13,7 +13,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use groundhog_rpc_api::GroundhogApiServer;
+use groundhog_rpc_api::{GroundhogApiServer, WIRE_FORMAT_VERSION};
 use groundhog_rpc_api_types::{
     BlockHeight, ContractAddress,
     block::{BlockInfo, ChainTip},
@@ -28,8 +28,8 @@ use groundhog_rpc_api_types::{
     transaction::{TransactionStatus, TxHash},
 };
 use groundhog_rpc_server::{
-    ChainPlane, GroundhogRpcServer, ReadPlane, RpcServerConfig, RpcServerError, SubmitPlane,
-    ValidatedTransaction,
+    BuildInfo, ChainPlane, GroundhogRpcServer, ReadPlane, RpcServerConfig, RpcServerError,
+    SubmitPlane, ValidatedTransaction,
 };
 use tokio::sync::Mutex;
 use xdr_common::VecM;
@@ -149,6 +149,7 @@ fn server(backend: ScriptedBackend) -> ScriptedServer {
         RpcServerConfig::default()
             .with_max_events_per_page(MAX_EVENTS_PER_PAGE)
             .with_max_cursor_bytes(MAX_CURSOR_BYTES),
+        BuildInfo::for_tests(),
     )
 }
 
@@ -245,6 +246,27 @@ async fn unknown_receipt_returns_none_for_all_shapes() {
             .expect("bug: receipt lookup must succeed");
 
         assert!(receipt.is_none());
+    }
+}
+
+#[tokio::test]
+async fn version_returns_shared_metadata_without_backend_dispatch_for_all_shapes() {
+    for backend in all_shapes() {
+        let submitted = backend.submitted.clone();
+        let event_calls = backend.contract_events_calls.clone();
+        let storage_calls = backend.get_storage_at_calls.clone();
+
+        let version = server(backend)
+            .version()
+            .await
+            .expect("bug: version metadata must be available for every backend shape");
+
+        assert_eq!(version.wire_format, WIRE_FORMAT_VERSION);
+        assert_eq!(version.implementation, "test");
+        assert_eq!(version.commit_hash.as_deref(), Some("test-commit"));
+        assert!(submitted.lock().await.is_empty());
+        assert_eq!(*event_calls.lock().await, 0);
+        assert_eq!(*storage_calls.lock().await, 0);
     }
 }
 

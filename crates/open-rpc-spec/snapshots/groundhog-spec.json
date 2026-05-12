@@ -757,12 +757,37 @@
       "TxHash": {
         "$ref": "#/components/schemas/Hex0x_SHA256Hash",
         "description": "Canonical transaction hash: `sha256(xdr_serialize(signed_tx.tx))`.\nCovers the inner Transaction body (not signatures), matching\nthe scheduler's lookup key and the indexer's primary key.\n\nSerializes as `\"0x...\"` hex string (64 hex chars)."
+      },
+      "VersionInfo": {
+        "description": "Runtime version information for a JSON-RPC server implementation.",
+        "properties": {
+          "commitHash": {
+            "description": "Diagnostic-only Git commit hash this server was built from, when available.\nConsumers must not branch on this field.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "implementation": {
+            "description": "Diagnostic-only implementation version of the binary serving this RPC endpoint.\nConsumers must not branch on this field.",
+            "type": "string"
+          },
+          "wireFormat": {
+            "description": "Wire-format `SemVer` of the `OpenRPC` spec this node implements.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "wireFormat",
+          "implementation"
+        ],
+        "type": "object"
       }
     }
   },
   "info": {
     "title": "Groundhog JSON-RPC",
-    "version": "0.3.1"
+    "version": "1.1.0"
   },
   "methods": [
     {
@@ -1103,6 +1128,23 @@
         }
       },
       "summary": "Read the latest committed storage item at an address/key pair. `block_height` in the returned `StorageItemRead` always reflects the snapshot the read was performed against — even when no item is present at the key — so wallets can compare against `chainTip` to gauge freshness.",
+      "tags": [
+        {
+          "name": "Core API"
+        }
+      ]
+    },
+    {
+      "errors": [],
+      "name": "groundhog_version",
+      "params": [],
+      "result": {
+        "name": "VersionInfo",
+        "schema": {
+          "$ref": "#/components/schemas/VersionInfo"
+        }
+      },
+      "summary": "Version dimensions for this JSON-RPC server.",
       "tags": [
         {
           "name": "Core API"

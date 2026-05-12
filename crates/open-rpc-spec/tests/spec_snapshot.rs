@@ -2,13 +2,22 @@ use std::fs;
 use std::path::PathBuf;
 
 use groundhog_open_rpc_spec::build_spec;
-use groundhog_rpc_api::types::{
-    error::{ERROR_INFOS, codes, error_info_by_code},
-    events::MAX_TOPIC_VALUES_PER_POSITION,
+use groundhog_rpc_api::{
+    WIRE_FORMAT_VERSION,
+    types::{
+        error::{ERROR_INFOS, codes, error_info_by_code},
+        events::MAX_TOPIC_VALUES_PER_POSITION,
+    },
 };
 use pretty_assertions::assert_eq;
 
 const SNAPSHOT_PATH: &str = "snapshots/groundhog-spec.json";
+
+// Methods that are infallible by design and intentionally carry an empty
+// `errors: []` array. Add a method here only when it has no backend
+// dispatch and cannot fail (e.g. `groundhog_version`, sourced entirely
+// from compile-time constants and an injected `BuildInfo`).
+const INFALLIBLE_METHODS: &[&str] = &["groundhog_version"];
 
 #[test]
 fn openrpc_spec_matches_snapshot() {
@@ -26,6 +35,19 @@ fn openrpc_spec_matches_snapshot() {
 
     let expected = fs::read_to_string(&snapshot_path).expect("snapshot file should exist");
     assert_eq!(actual, expected.trim_end());
+}
+
+#[test]
+fn wire_format_version_is_valid_semver_and_matches_spec_info() {
+    semver::Version::parse(WIRE_FORMAT_VERSION)
+        .expect("bug: WIRE_FORMAT_VERSION should be valid SemVer");
+    assert_eq!(
+        build_spec()["info"]["version"]
+            .as_str()
+            .expect("bug: OpenRPC info.version should be a string"),
+        WIRE_FORMAT_VERSION,
+        "OpenRPC info.version should come from WIRE_FORMAT_VERSION"
+    );
 }
 
 #[test]
@@ -151,10 +173,14 @@ fn assert_error_docs_are_wired(
         "sendRawTransaction should document scheduler rejection"
     );
     assert!(
-        methods.iter().all(|method| method["errors"]
-            .as_array()
-            .is_some_and(|errors| !errors.is_empty())),
-        "every current method should document at least one JSON-RPC error"
+        methods.iter().all(|method| {
+            let name = method["name"].as_str().unwrap_or_default();
+            INFALLIBLE_METHODS.contains(&name)
+                || method["errors"]
+                    .as_array()
+                    .is_some_and(|errors| !errors.is_empty())
+        }),
+        "every fallible current method should document at least one JSON-RPC error"
     );
     for method in methods {
         for error in method["errors"]

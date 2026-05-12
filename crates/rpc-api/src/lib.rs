@@ -18,7 +18,14 @@ use groundhog_rpc_api_types::{
     receipt::TransactionReceipt,
     state::StorageItemRead,
     transaction::{TransactionStatus, TxHash},
+    version::VersionInfo,
 };
+
+/// Wire-format `SemVer` for the JSON-RPC surface.
+///
+/// See the "`OpenRPC` Wire Version" section in `CLAUDE.md` for bump
+/// rules.
+pub const WIRE_FORMAT_VERSION: &str = "1.1.0";
 
 /// Phase 1: Core API — submit, query, poll.
 #[open_rpc(namespace = "groundhog", tag = "Core API")]
@@ -69,6 +76,10 @@ pub trait GroundhogApi {
         address: ContractAddress,
         key: HexBytes,
     ) -> RpcResult<StorageItemRead>;
+
+    /// Version dimensions for this JSON-RPC server.
+    #[method(name = "version")]
+    async fn version(&self) -> RpcResult<VersionInfo>;
 }
 
 /// Dev-only RPC methods. Only implemented by the local node.

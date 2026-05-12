@@ -1,7 +1,7 @@
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::types::ErrorObjectOwned;
 
-use groundhog_rpc_api::GroundhogApiServer;
+use groundhog_rpc_api::{GroundhogApiServer, WIRE_FORMAT_VERSION};
 use groundhog_rpc_api_types::{
     BlockHeight, ContractAddress,
     block::{BlockInfo, ChainTip},
@@ -11,6 +11,7 @@ use groundhog_rpc_api_types::{
     receipt::TransactionReceipt,
     state::StorageItemRead,
     transaction::{TransactionStatus, TxHash},
+    version::VersionInfo,
 };
 
 use crate::{
@@ -26,16 +27,49 @@ pub struct GroundhogRpcServer<S, C, R> {
     chain: C,
     read: R,
     config: RpcServerConfig,
+    build_info: BuildInfo,
+}
+
+/// Build-time implementation metadata exposed by `groundhog_version`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BuildInfo {
+    implementation_version: &'static str,
+    commit_hash: Option<&'static str>,
+}
+
+impl BuildInfo {
+    /// Create build metadata for the binary serving this RPC endpoint.
+    pub const fn new(
+        implementation_version: &'static str,
+        commit_hash: Option<&'static str>,
+    ) -> Self {
+        Self {
+            implementation_version,
+            commit_hash,
+        }
+    }
+
+    /// Build metadata suitable for unit tests and in-process fixtures.
+    pub const fn for_tests() -> Self {
+        Self::new("test", Some("test-commit"))
+    }
 }
 
 impl<S, C, R> GroundhogRpcServer<S, C, R> {
     /// Create a server wrapper around independent backend planes.
-    pub fn new(submit: S, chain: C, read: R, config: RpcServerConfig) -> Self {
+    pub fn new(
+        submit: S,
+        chain: C,
+        read: R,
+        config: RpcServerConfig,
+        build_info: BuildInfo,
+    ) -> Self {
         Self {
             submit,
             chain,
             read,
             config,
+            build_info,
         }
     }
 }
@@ -46,8 +80,14 @@ where
 {
     /// Convenience constructor for backends that implement all three planes
     /// on a single type.
-    pub fn unified(backend: B, config: RpcServerConfig) -> Self {
-        Self::new(backend.clone(), backend.clone(), backend, config)
+    pub fn unified(backend: B, config: RpcServerConfig, build_info: BuildInfo) -> Self {
+        Self::new(
+            backend.clone(),
+            backend.clone(),
+            backend,
+            config,
+            build_info,
+        )
     }
 }
 
@@ -114,6 +154,15 @@ where
             )
         })?;
         Ok(self.read.get_storage_at(address, key).await?)
+    }
+
+    #[tracing::instrument(skip_all)]
+    async fn version(&self) -> RpcResult<VersionInfo> {
+        Ok(VersionInfo::new(
+            WIRE_FORMAT_VERSION,
+            self.build_info.implementation_version,
+            self.build_info.commit_hash,
+        ))
     }
 }
 
@@ -192,7 +241,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     fn server(
         mock: Arc<MockBackend>,
     ) -> GroundhogRpcServer<Arc<MockBackend>, Arc<MockBackend>, Arc<MockBackend>> {
-        GroundhogRpcServer::unified(mock, RpcServerConfig::default())
+        GroundhogRpcServer::unified(mock, RpcServerConfig::default(), BuildInfo::for_tests())
     }
 
     #[async_trait::async_trait]
@@ -354,6 +403,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
                 event_calls: event_calls.clone(),
             },
             RpcServerConfig::default(),
+            BuildInfo::for_tests(),
         );
 
         let tx_hash = server
@@ -389,6 +439,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         let server = GroundhogRpcServer::unified(
             mock.clone(),
             RpcServerConfig::default().with_max_events_per_page(cap),
+            BuildInfo::for_tests(),
         );
 
         let mut q = simple_query();
@@ -413,6 +464,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         let server = GroundhogRpcServer::unified(
             mock.clone(),
             RpcServerConfig::default().with_max_cursor_bytes(cap),
+            BuildInfo::for_tests(),
         );
 
         let mut q = simple_query();
@@ -459,6 +511,27 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             err.code(),
             groundhog_rpc_api_types::error::codes::NOT_IMPLEMENTED
         );
+    }
+
+    #[tokio::test]
+    async fn version_uses_wire_format_and_build_info_without_backend_dispatch() {
+        let mock = Arc::new(MockBackend::default());
+        let server = GroundhogRpcServer::unified(
+            mock.clone(),
+            RpcServerConfig::default(),
+            BuildInfo::new("9.8.7", Some("abc123")),
+        );
+
+        let version = server
+            .version()
+            .await
+            .expect("bug: version metadata should be infallible");
+
+        assert_eq!(version.wire_format, WIRE_FORMAT_VERSION);
+        assert_eq!(version.implementation, "9.8.7");
+        assert_eq!(version.commit_hash.as_deref(), Some("abc123"));
+        assert!(mock.submitted.lock().await.is_empty());
+        assert_eq!(*mock.event_calls.lock().await, 0);
     }
 
     fn simple_query() -> EventQuery {
