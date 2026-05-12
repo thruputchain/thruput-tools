@@ -24,3 +24,9 @@ groundhog-rpc-api-types = { workspace = true }
 jsonrpsee = { workspace = true, features = ["client", "macros", "http-client"] }
 tokio = { workspace = true }
 serde = { workspace = true }
+
+[dev-dependencies]
+async-trait = { workspace = true }
+groundhog-rpc-server = { workspace = true }
+jsonrpsee = { workspace = true, features = ["server"] }
+serde_json = { workspace = true }

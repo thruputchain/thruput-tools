@@ -6,6 +6,7 @@ pub mod hex;
 pub mod receipt;
 pub mod state;
 pub mod transaction;
+pub mod version;
 
 use hex::Hex0x;
 

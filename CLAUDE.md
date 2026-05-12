@@ -273,6 +273,10 @@ errors. Bump minor for additive changes such as new methods, optional
 fields, or errors. Bump patch for documentation, description, or
 example refinements only.
 
+The `groundhog_version` RPC exposes `wireFormat`, `implementation`,
+and `commitHash`. SDKs and other consumers may branch on `wireFormat`
+only; `implementation` and `commitHash` are diagnostic fields.
+
 ## CLI Patterns
 
 ### Adding a new subcommand

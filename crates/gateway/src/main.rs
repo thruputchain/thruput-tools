@@ -18,7 +18,7 @@ use crate::backend::GatewayBackend;
 use crate::config::GatewayConfig;
 use crate::context::GatewayContext;
 use groundhog_rpc_api::GroundhogApiServer;
-use groundhog_rpc_server::{GroundhogRpcServer, RpcServerConfig};
+use groundhog_rpc_server::{BuildInfo, GroundhogRpcServer, RpcServerConfig};
 
 /// Groundhog JSON-RPC gateway.
 #[derive(Parser)]
@@ -95,7 +95,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rpc_config = RpcServerConfig::default()
         .with_max_events_per_page(ctx.config.max_events_per_page)
         .with_max_cursor_bytes(ctx.config.max_cursor_bytes);
-    let api_impl = GroundhogRpcServer::unified(GatewayBackend::new(ctx), rpc_config);
+    let api_impl = GroundhogRpcServer::unified(
+        GatewayBackend::new(ctx),
+        rpc_config,
+        BuildInfo::new(env!("CARGO_PKG_VERSION"), option_env!("GIT_COMMIT")),
+    );
     let handle = server.start(api_impl.into_rpc());
 
     tracing::info!("groundhog-rpc gateway listening");

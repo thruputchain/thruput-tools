@@ -10,7 +10,7 @@ use std::{future::Future, net::SocketAddr, process::ExitStatus};
 
 use groundhog_rpc_api::{GroundhogApiServer, GroundhogDevApiServer};
 use groundhog_rpc_api_types::dev::DevAccount;
-use groundhog_rpc_server::{GroundhogRpcServer, RpcServerConfig};
+use groundhog_rpc_server::{BuildInfo, GroundhogRpcServer, RpcServerConfig};
 use groundhog_xdr::PROTOCOL_VERSION;
 use jsonrpsee::server::{RpcModule, Server, ServerHandle};
 use serde::Serialize;
@@ -390,6 +390,7 @@ where
         scheduler_backend,
         read,
         RpcServerConfig::default(),
+        BuildInfo::new(env!("CARGO_PKG_VERSION"), option_env!("GIT_COMMIT")),
     );
     let mut module = RpcModule::new(());
     // `merge` only fails on duplicate method names, which is a compile-time

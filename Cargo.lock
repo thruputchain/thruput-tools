@@ -1049,10 +1049,13 @@ dependencies = [
 name = "groundhog-rpc-client"
 version = "0.3.1"
 dependencies = [
+ "async-trait",
  "groundhog-rpc-api",
  "groundhog-rpc-api-types",
+ "groundhog-rpc-server",
  "jsonrpsee",
  "serde",
+ "serde_json",
  "tokio",
 ]
 

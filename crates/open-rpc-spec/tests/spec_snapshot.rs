@@ -167,10 +167,13 @@ fn assert_error_docs_are_wired(
         "sendRawTransaction should document scheduler rejection"
     );
     assert!(
-        methods.iter().all(|method| method["errors"]
-            .as_array()
-            .is_some_and(|errors| !errors.is_empty())),
-        "every current method should document at least one JSON-RPC error"
+        methods.iter().all(|method| {
+            method["name"] == "groundhog_version"
+                || method["errors"]
+                    .as_array()
+                    .is_some_and(|errors| !errors.is_empty())
+        }),
+        "every fallible current method should document at least one JSON-RPC error"
     );
     for method in methods {
         for error in method["errors"]
