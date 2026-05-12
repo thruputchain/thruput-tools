@@ -56,18 +56,14 @@ pub fn print_transaction_detail(detail: &TransactionDetail, print: &Print) {
         }
     }
 
-    if let Some(return_data) = detail.receipt.return_data.as_ref()
-        && !return_data.0.is_empty()
-    {
+    if let Some(return_data) = detail.receipt.return_data.as_ref() {
         if !detail.storage_deltas.is_empty() || !detail.receipt.events.is_empty() {
             print.status("");
         }
         print.status(format!("  Return: {}", format_hex_bytes(return_data)));
     }
 
-    if let Some(abort_data) = detail.receipt.abort_data.as_ref()
-        && !abort_data.0.is_empty()
-    {
+    if let Some(abort_data) = detail.receipt.abort_data.as_ref() {
         if !detail.storage_deltas.is_empty()
             || !detail.receipt.events.is_empty()
             || detail.receipt.return_data.is_some()
