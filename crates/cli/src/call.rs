@@ -141,6 +141,7 @@ pub fn run(
             "status": receipt.status,
             "status_summary": status_summary,
             "return_data": receipt.return_data,
+            "abort_data": receipt.abort_data,
             "return_value": decoded_return,
             "transaction_detail": transaction_detail,
         }),

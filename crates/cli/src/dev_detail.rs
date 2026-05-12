@@ -65,6 +65,18 @@ pub fn print_transaction_detail(detail: &TransactionDetail, print: &Print) {
         print.status(format!("  Return: {}", format_hex_bytes(return_data)));
     }
 
+    if let Some(abort_data) = detail.receipt.abort_data.as_ref()
+        && !abort_data.0.is_empty()
+    {
+        if !detail.storage_deltas.is_empty()
+            || !detail.receipt.events.is_empty()
+            || detail.receipt.return_data.is_some()
+        {
+            print.status("");
+        }
+        print.status(format!("  Abort: {}", format_hex_bytes(abort_data)));
+    }
+
     print.status(format!(
         "  Gas: {}",
         format_gas_summary(detail.gas_consumed, detail.gas_limit)
