@@ -735,7 +735,7 @@ mod tests {
     fn maps_vector_type() {
         let ty = ContractType::Vector {
             vector: ContractVectorType {
-                element: Box::new(ContractType::Bool),
+                element: Some(Box::new(ContractType::Bool)),
                 max_len: 100,
             },
         };
@@ -759,7 +759,7 @@ mod tests {
     fn maps_vector_of_u8_to_uint8array() {
         let ty = ContractType::Vector {
             vector: ContractVectorType {
-                element: Box::new(ContractType::U8),
+                element: Some(Box::new(ContractType::U8)),
                 max_len: 1024,
             },
         };
@@ -770,7 +770,7 @@ mod tests {
     fn maps_array_of_u8_to_uint8array() {
         let ty = ContractType::Array {
             array: ContractArrayType {
-                element: Box::new(ContractType::U8),
+                element: Some(Box::new(ContractType::U8)),
                 len: 32,
             },
         };
@@ -781,7 +781,7 @@ mod tests {
     fn maps_array_of_non_u8_to_array() {
         let ty = ContractType::Array {
             array: ContractArrayType {
-                element: Box::new(ContractType::U32),
+                element: Some(Box::new(ContractType::U32)),
                 len: 4,
             },
         };
