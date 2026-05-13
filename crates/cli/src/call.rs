@@ -1146,7 +1146,7 @@ mod tests {
                     "digest",
                     ContractType::Array {
                         array: ContractArrayType {
-                            element: Box::new(ContractType::U8),
+                            element: Some(Box::new(ContractType::U8)),
                             len: 4,
                         },
                     },
@@ -1337,7 +1337,7 @@ mod tests {
     fn rejects_array_length_mismatches() {
         let metadata = sample_single_arg_spec_metadata(ContractType::Array {
             array: ContractArrayType {
-                element: Box::new(ContractType::Bool),
+                element: Some(Box::new(ContractType::Bool)),
                 len: 2,
             },
         });

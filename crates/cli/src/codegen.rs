@@ -746,9 +746,9 @@ mod tests {
     fn maps_vector_of_option_with_parens() {
         let ty = ContractType::Vector {
             vector: ContractVectorType {
-                element: Box::new(ContractType::Option {
+                element: Some(Box::new(ContractType::Option {
                     option_inner: Box::new(ContractType::U64),
-                }),
+                })),
                 max_len: 100,
             },
         };
