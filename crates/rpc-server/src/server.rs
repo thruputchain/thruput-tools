@@ -12,6 +12,7 @@ use groundhog_rpc_api_types::{
     state::StorageItemRead,
     transaction::{TransactionStatus, TxHash},
     version::VersionInfo,
+    view::{ViewRequest, ViewResponse},
 };
 
 use crate::{
@@ -154,6 +155,36 @@ where
             )
         })?;
         Ok(self.read.get_storage_at(address, key).await?)
+    }
+
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            ?request.contract,
+            entrypoint_len = request.entrypoint.0.len(),
+            calldata_len = request.calldata.0.len(),
+        )
+    )]
+    async fn view(&self, request: ViewRequest) -> RpcResult<ViewResponse> {
+        if request.entrypoint.0.len() != 8 {
+            return Err(ErrorObjectOwned::owned(
+                codes::INVALID_PARAMS,
+                "view entrypoint must be exactly 8 bytes",
+                None::<()>,
+            ));
+        }
+        if request.calldata.0.len() > self.config.max_view_calldata_bytes {
+            return Err(ErrorObjectOwned::owned(
+                codes::INVALID_PARAMS,
+                format!(
+                    "view calldata length {} exceeds maximum {}",
+                    request.calldata.0.len(),
+                    self.config.max_view_calldata_bytes
+                ),
+                None::<()>,
+            ));
+        }
+        Ok(self.read.view(request).await?)
     }
 
     #[tracing::instrument(skip_all)]

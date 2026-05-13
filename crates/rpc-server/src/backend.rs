@@ -28,6 +28,7 @@
 //! - `ReadPlane::contract_events`             → indexer
 //! - `ReadPlane::get_storage_at`              → `DbGateway1` (TBD; currently
 //!   `NotImplemented` on gateway and supervisor backends, real on dev-node)
+//! - `ReadPlane::view`                        → view executor service (TBD)
 //!
 //! `GroundhogRpcServer::new` accepts per-plane adapter types, so a future
 //! composition (e.g. the hogd-dev supervisor wiring distinct x23 clients)
@@ -70,6 +71,7 @@ use groundhog_rpc_api_types::{
     receipt::TransactionReceipt,
     state::StorageItemRead,
     transaction::{TransactionStatus, TxHash},
+    view::{ViewRequest, ViewResponse},
 };
 
 use crate::error::RpcServerError;
@@ -146,4 +148,18 @@ pub trait ReadPlane: Send + Sync + 'static {
         address: ContractAddress,
         key: [u8; 32],
     ) -> Result<StorageItemRead, RpcServerError>;
+
+    /// Execute a read-only contract invocation.
+    ///
+    /// `RootInvocationOutput::Abort` and `RootInvocationOutput::Fault`
+    /// are successful RPC responses, not `RpcServerError`s. Errors
+    /// here are reserved for transport, backend availability, and
+    /// request-level failures.
+    ///
+    /// Backends should override this once they have a stable hogd view
+    /// execution service. The default keeps the public method available
+    /// while capability rollout catches up.
+    async fn view(&self, _request: ViewRequest) -> Result<ViewResponse, RpcServerError> {
+        Err(RpcServerError::NotImplemented("view".into()))
+    }
 }
