@@ -312,7 +312,12 @@ fn encode_cli_spec_value(
             let mut encoded = encode_xdr_value(argument != "null")
                 .map_err(|e| encode_value_error(path, e.to_string()))?;
             if argument != "null" {
-                encoded.extend(encode_cli_spec_value(option_inner.as_ref(), argument, type_defs, path)?);
+                encoded.extend(encode_cli_spec_value(
+                    option_inner.as_ref(),
+                    argument,
+                    type_defs,
+                    path,
+                )?);
             }
             Ok(encoded)
         }
