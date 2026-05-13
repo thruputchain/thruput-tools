@@ -726,7 +726,7 @@ mod tests {
     #[test]
     fn maps_option_type() {
         let ty = ContractType::Option {
-            option_inner: Some(Box::new(ContractType::U64)),
+            option_inner: Box::new(ContractType::U64),
         };
         assert_eq!(ts_type_ref(&ty).unwrap(), "bigint | null");
     }
@@ -735,7 +735,7 @@ mod tests {
     fn maps_vector_type() {
         let ty = ContractType::Vector {
             vector: ContractVectorType {
-                element: Some(Box::new(ContractType::Bool)),
+                element: Box::new(ContractType::Bool),
                 max_len: 100,
             },
         };
@@ -746,9 +746,9 @@ mod tests {
     fn maps_vector_of_option_with_parens() {
         let ty = ContractType::Vector {
             vector: ContractVectorType {
-                element: Some(Box::new(ContractType::Option {
-                    option_inner: Some(Box::new(ContractType::U64)),
-                })),
+                element: Box::new(ContractType::Option {
+                    option_inner: Box::new(ContractType::U64),
+                }),
                 max_len: 100,
             },
         };
@@ -759,7 +759,7 @@ mod tests {
     fn maps_vector_of_u8_to_uint8array() {
         let ty = ContractType::Vector {
             vector: ContractVectorType {
-                element: Some(Box::new(ContractType::U8)),
+                element: Box::new(ContractType::U8),
                 max_len: 1024,
             },
         };
@@ -770,7 +770,7 @@ mod tests {
     fn maps_array_of_u8_to_uint8array() {
         let ty = ContractType::Array {
             array: ContractArrayType {
-                element: Some(Box::new(ContractType::U8)),
+                element: Box::new(ContractType::U8),
                 len: 32,
             },
         };
@@ -781,7 +781,7 @@ mod tests {
     fn maps_array_of_non_u8_to_array() {
         let ty = ContractType::Array {
             array: ContractArrayType {
-                element: Some(Box::new(ContractType::U32)),
+                element: Box::new(ContractType::U32),
                 len: 4,
             },
         };
@@ -1201,17 +1201,17 @@ export type Result =
                         ContractField {
                             name: spec_string("left"),
                             ty: ContractType::Option {
-                                option_inner: Some(Box::new(ContractType::Named {
+                                option_inner: Box::new(ContractType::Named {
                                     named: spec_string("Tree"),
-                                })),
+                                }),
                             },
                         },
                         ContractField {
                             name: spec_string("right"),
                             ty: ContractType::Option {
-                                option_inner: Some(Box::new(ContractType::Named {
+                                option_inner: Box::new(ContractType::Named {
                                     named: spec_string("Tree"),
-                                })),
+                                }),
                             },
                         },
                     ]
