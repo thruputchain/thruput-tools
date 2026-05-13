@@ -56,7 +56,7 @@ This spec defines the smallest cross-repo follow-up that lets
 
 ## Non-Goals
 
-- No public JSON-RPC request shape change.
+- No public JSON-RPC request shape change (no users/clients yet)
 - No historical view selector.
 - No wallet `do_action` simulation.
 - No simulated auth tokens or skip-auth execution mode.
@@ -86,24 +86,29 @@ result still lacks the snapshot height needed by public JSON-RPC.
 
 ### Service-Level Result
 
-The external service consumed by `groundhog-rpc` should return the
-height of the committed snapshot used for the view. `groundhog-rpc` must
-not infer this with a separate `get_tip` call, because the tip can
-advance between calls and report the wrong height.
+The external service consumed by `groundhog-rpc` must return the height
+of the committed snapshot used for the view. `groundhog-rpc` must not
+infer this with a separate `get_tip` call, because the tip can advance
+between calls and report the wrong height.
 
-Negotiation ladder:
+The missing height in hogd PR #1902 is an implementation omission, not a
+planned public protocol limitation. `ViewResponse.height` stays required
+for v1.
 
-1. **Preferred:** add a service-level wrapper that carries `height` with
-   the public view payload.
-2. **Acceptable:** add `BlockHeight height` directly to
-   `TransactionViewResult`, then have the service return that successful
-   payload while still documenting non-success status mapping.
-3. **Last resort before public wire stabilization:** change
-   `ViewResponse.height` to `Option<BlockHeight>` and return `None` when
-   the backend cannot supply the exact snapshot height. Clients that need
-   freshness can query `chainTip` separately, knowing it is a distinct
-   observation. Once hogd carries height, populate the field and make it
-   required in a later minor wire bump.
+The raw executor primitive is not the final public service boundary. The
+view service should add a thin retry layer above
+`ExecutorContext::view_transaction(...)`:
+
+1. Read the current committed `DbTip` and construct the view snapshot
+   from that tip.
+2. Run `view_transaction` against that snapshot.
+3. If the raw result is `Abandoned`, interpret that as hogdb having moved
+   ahead while the attempt was using its selected snapshot, refresh to a
+   later committed height, and retry up to a bounded `N` attempts.
+4. On success, return the height from the snapshot that actually
+   executed.
+5. Return `ViewGatewayAbandoned` only after the retry budget is
+   exhausted.
 
 Recommended wrapper:
 
@@ -125,11 +130,11 @@ struct ViewGatewayPayload {
 enum ViewGatewayOutcome {
   ViewGatewayOk = 0,
 
-  // The snapshot/block used for the view was abandoned before execution
-  // completed. This is a real hogexec outcome: the view primitive maps
-  // host SystemErrorCode::Abandon to TransactionViewStatus::Abandoned.
-  // The JSON-RPC gateway maps this to BACKEND_UNAVAILABLE with a
-  // retry-oriented message such as "view snapshot abandoned; retry later".
+  // Raw view attempts returned Abandoned until the bounded service retry
+  // budget was exhausted. This is a real hogexec outcome: the view
+  // primitive maps host SystemErrorCode::Abandon to
+  // TransactionViewStatus::Abandoned. The service retries it internally
+  // against a later committed snapshot before surfacing this outcome.
   ViewGatewayAbandoned = 1,
 
   // Server-side invariant failure or unavailable execution dependency.
@@ -149,7 +154,8 @@ This wrapper intentionally differs from raw `ExpectedViewResult`:
 - `ViewGatewayOk` is the only path that maps to a public
   `ViewResponse`.
 - `ViewGatewayAbandoned` maps to JSON-RPC `BACKEND_UNAVAILABLE` with a
-  retry-oriented message.
+  retry-oriented message after the hogd view service exhausts its own
+  retry budget.
 - `ViewGatewayInternalError` maps to JSON-RPC `BACKEND_UNAVAILABLE`.
 - Raw executor `InvalidInput(error_code)` should be mapped by the hogd
   service to `ViewGatewayOk` with `InvocationFrameOutput::Fault`, unless
@@ -160,15 +166,18 @@ This wrapper intentionally differs from raw `ExpectedViewResult`:
   backend failure for v1.
 
 The important invariant is honesty: a successful public view response
-either carries the exact height of the snapshot actually executed, or the
-public field is explicitly optional and absent. It must not carry a
-post-view `get_tip` result.
+carries the exact height of the snapshot actually executed. It must not
+carry a post-view `get_tip` result. If a backend cannot return the exact
+height, it is not ready to back public `groundhog_view` and should leave
+the JSON-RPC method as `NotImplemented`.
 
 Implementation note for hogd: the view service should prime the
 `StorageSnapshotCache` by reading its `DbTip` before invoking the
-contract, then reuse that cached `DbTip.height` in the response. Calling
-`get_tip` after `view_transaction` has the same race as doing it in
-`groundhog-rpc`.
+contract, then reuse that cached `DbTip.height` in the response for that
+attempt. Calling `get_tip` after `view_transaction` has the same race as
+doing it in `groundhog-rpc`. The retry budget should live in hogd service
+configuration or a reviewed constant; it is not a JSON-RPC request
+parameter.
 
 ### Service Program
 
@@ -225,6 +234,11 @@ The public `ViewRequest` maps into `TransactionViewQuery` as follows:
 | `caller = None` | `parent_address = nullptr` |
 | `caller = Some(addr)` | `parent_address = &addr` |
 
+The scaffold default for `RpcServerConfig::view_gas_limit` is
+`u64::MAX`, matching the existing "not configured" convention. Concrete
+gateway and node-supervisor view backends must override that default with
+a bounded production value before advertising public view support.
+
 The remaining `TransactionViewQuery` fields need explicit protocol
 documentation before protocol-rs publishes them:
 
@@ -257,8 +271,14 @@ simulation.
 
 ## Required Protocol-RS Changes
 
-`protocol-rs` should grow a first-class view binding instead of asking
-`groundhog-rpc` to use unrelated scheduler/indexer crates.
+`protocol-rs` should grow a first-class view binding modeled after the
+existing `groundhog_db_gateway` crate. `DbGateway` is the right precedent
+for naming, intro/version negotiation, generated-client shape, and
+hogd-dev readiness advertising, but it is not the right service to
+overload with contract execution: it is hogdb's latest-snapshot storage
+read interface, and adding view execution there would give hogdb an
+executor dependency. View execution should live behind a distinct
+executor-owned or dedicated view service.
 
 The standalone protocol-rs/xdrs migration landed on `groundhog-rpc`
 `origin/main` in v0.3.3 / PR #73. View adapter work should be rebased on
@@ -335,8 +355,10 @@ backend in a focused PR:
 
 1. Rebase onto `groundhog-rpc` v0.3.3 or later, then add
    `groundhog_view`.
-2. Add `RpcServerConfig::view_gas_limit` and pass it into
-   `TransactionViewQuery.invocation.gas_limit`.
+2. Configure a bounded `RpcServerConfig::view_gas_limit` for gateway and
+   node-supervisor view backends, then use that value as
+   `TransactionViewQuery.invocation.gas_limit`. The scaffold `u64::MAX`
+   default is only a placeholder while view returns `NotImplemented`.
 3. Parse optional `endpoints.view` in node-supervisor readiness.
 4. Add a node-supervisor adapter in `crates/node-supervisor/src/view_backend.rs`.
 5. Add a gateway adapter/handler alongside the existing gateway handler
@@ -349,7 +371,7 @@ backend in a focused PR:
    | `ViewGatewayOk(Return)` | `ViewResponse { output: Return, events, height }` |
    | `ViewGatewayOk(Abort)` | `ViewResponse { output: Abort, events, height }` |
    | `ViewGatewayOk(Fault)` | `ViewResponse { output: Fault, events, height }` |
-   | `ViewGatewayAbandoned` | `BACKEND_UNAVAILABLE`, message says the view snapshot was abandoned and retry is safe |
+   | `ViewGatewayAbandoned` | `BACKEND_UNAVAILABLE`, message says hogd exhausted its abandoned-snapshot retry budget and retry is safe |
    | `ViewGatewayInternalError` | `BACKEND_UNAVAILABLE` |
    | x23 timeout | `BACKEND_TIMEOUT` |
    | missing endpoint | `NotImplemented` JSON-RPC error |
@@ -380,6 +402,11 @@ hogd:
 - Service wrapper returns the snapshot height used for execution.
 - A concurrent commit cannot make the service report a different height
   than the one executed.
+- Raw `Abandoned` from `view_transaction` retries against a later
+  committed snapshot up to the service retry budget.
+- A successful retry returns the later snapshot height used for that
+  attempt.
+- Retry exhaustion returns `ViewGatewayAbandoned`.
 - `caller = None` preserves root-frame behavior.
 - `caller = Some(addr)` makes `get_msg_sender` observe `addr`.
 - State writes and nested state writes fail under read-only execution.
@@ -394,8 +421,8 @@ groundhog-rpc:
 - Present `endpoints.view` maps `Return`, `Abort`, and `Fault` as JSON-RPC
   successes.
 - `height` round-trips from the service payload.
-- `Abandoned`, internal errors, and timeouts use the existing view error
-  mapping.
+- `ViewGatewayAbandoned`, internal errors, and timeouts use the existing
+  view error mapping.
 - Malformed service payloads are rejected instead of producing partial
   JSON.
 - Gateway and node-supervisor produce byte-identical JSON for the same
@@ -407,6 +434,9 @@ groundhog-rpc:
   `groundhog_view`.
 - Final x23 program number. The implementation must reserve a unique
   value; `0x56475759` is a proposed mnemonic placeholder.
+- Final hogd service retry budget for raw `Abandoned` attempts.
+  Recommendation: keep `N` single-digit so sustained chain advancement
+  cannot turn one public view request into a long backend stall.
 - Whether hogd accepts the preferred optional `auth_claim` shape or needs
   a temporary ignored sentinel for compatibility.
 - Whether `InvalidInput(error_code)` detail should remain service-local

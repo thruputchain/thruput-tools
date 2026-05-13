@@ -30,7 +30,10 @@ pub struct ViewResponse {
     /// Root invocation output.
     pub output: RootInvocationOutput,
 
-    /// Events emitted during view execution, when retained by the backend.
+    /// Events emitted during view execution.
+    ///
+    /// Strict read-only v1 backends return an empty list unless hogd grows
+    /// explicit view-event recording.
     pub events: Vec<EmittedEvent>,
 
     /// Block height of the committed snapshot used for the view.

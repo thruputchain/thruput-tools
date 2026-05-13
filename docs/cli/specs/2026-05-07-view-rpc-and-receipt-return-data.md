@@ -637,8 +637,11 @@ mutation.
   users type `view` vs `call` themselves until the annotation catches
   up.
 - **View gas cap.** V1 should start with
-  `RpcServerConfig::view_gas_limit`. A request-level override can be
-  added later if needed.
+  `RpcServerConfig::view_gas_limit`. Concrete backends should set a
+  bounded production value before exposing public view support; an
+  unbounded scaffold default is only acceptable while the method returns
+  `NotImplemented`. A request-level override can be added later if
+  needed.
 - **Historical state selector.** The eventual shape should probably use
   a committed height selector, but that requires hogd-side support for
   retaining/selecting historical snapshots.

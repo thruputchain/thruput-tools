@@ -107,13 +107,13 @@ Active design notes that will modify the JSON-RPC surface:
 - [Transaction detail options](docs/cli/specs/2026-05-07-transaction-detail-options.md)
   — receipt response shape.
 
-### Versioning caveat
+### Wire-format versioning
 
-Wire-format-breaking changes to the OpenRPC artifact currently ride
-workspace-version bumps (e.g. `0.3.x → 0.4.0` may carry a wire change
-even when the diff looks like a routine release). Pin precisely and
-re-review the artifact on each bump. Decoupling wire-format versioning
-from workspace versioning is a tracked follow-up.
+The OpenRPC artifact uses its own SemVer in `info.version`, sourced from
+`groundhog_rpc_api::WIRE_FORMAT_VERSION`, rather than the Rust workspace
+version. SDKs should pin on `wireFormat` from `groundhog_version`;
+workspace releases such as `0.3.x` identify builds, not the JSON-RPC
+contract.
 
 ### Mini-glossary
 

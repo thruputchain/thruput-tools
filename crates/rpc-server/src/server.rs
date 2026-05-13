@@ -184,7 +184,7 @@ where
                 None::<()>,
             ));
         }
-        Ok(self.read.view(request).await?)
+        Ok(self.read.view(request, self.config.view_gas_limit).await?)
     }
 
     #[tracing::instrument(skip_all)]
@@ -267,6 +267,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     #[derive(Clone)]
     struct ReadOnly {
         event_calls: Arc<Mutex<u32>>,
+        view_gas_limits: Arc<Mutex<Vec<u64>>>,
     }
 
     fn server(
@@ -402,6 +403,21 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
                 item: None,
             })
         }
+
+        async fn view(
+            &self,
+            _request: ViewRequest,
+            gas_limit: u64,
+        ) -> Result<ViewResponse, RpcServerError> {
+            self.view_gas_limits.lock().await.push(gas_limit);
+            Ok(ViewResponse {
+                output: groundhog_rpc_api_types::view::RootInvocationOutput::Return {
+                    return_data: HexBytes(vec![]),
+                },
+                events: vec![],
+                height: BlockHeight::from(0),
+            })
+        }
     }
 
     #[tokio::test]
@@ -425,6 +441,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     async fn distinct_backend_plane_types_are_accepted() {
         let submitted = Arc::new(Mutex::new(Vec::new()));
         let event_calls = Arc::new(Mutex::new(0));
+        let view_gas_limits = Arc::new(Mutex::new(Vec::new()));
         let server = GroundhogRpcServer::new(
             SubmitOnly {
                 submitted: submitted.clone(),
@@ -432,6 +449,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             ChainOnly,
             ReadOnly {
                 event_calls: event_calls.clone(),
+                view_gas_limits,
             },
             RpcServerConfig::default(),
             BuildInfo::for_tests(),
@@ -461,6 +479,41 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             .expect("bug: read plane should answer events");
 
         assert_eq!(*event_calls.lock().await, 1);
+    }
+
+    #[tokio::test]
+    async fn view_passes_configured_gas_limit_to_read_plane() {
+        let submitted = Arc::new(Mutex::new(Vec::new()));
+        let event_calls = Arc::new(Mutex::new(0));
+        let view_gas_limits = Arc::new(Mutex::new(Vec::new()));
+        let gas_limit = 123_456;
+        let server = GroundhogRpcServer::new(
+            SubmitOnly {
+                submitted: submitted.clone(),
+            },
+            ChainOnly,
+            ReadOnly {
+                event_calls,
+                view_gas_limits: view_gas_limits.clone(),
+            },
+            RpcServerConfig::default().with_view_gas_limit(gas_limit),
+            BuildInfo::for_tests(),
+        );
+
+        let request = ViewRequest {
+            contract: Hex0x(groundhog_xdr::types::ContractAddress::from([0u8; 32])),
+            entrypoint: HexBytes(vec![0u8; 8]),
+            calldata: HexBytes(vec![]),
+            caller: None,
+        };
+
+        server
+            .view(request)
+            .await
+            .expect("bug: valid view request should dispatch to read plane");
+
+        assert_eq!(*view_gas_limits.lock().await, vec![gas_limit]);
+        assert!(submitted.lock().await.is_empty());
     }
 
     #[tokio::test]

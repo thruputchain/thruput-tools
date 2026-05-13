@@ -884,7 +884,7 @@
         "description": "Result of read-only contract execution.",
         "properties": {
           "events": {
-            "description": "Events emitted during view execution, when retained by the backend.",
+            "description": "Events emitted during view execution.\n\nStrict read-only v1 backends return an empty list unless hogd grows\nexplicit view-event recording.",
             "items": {
               "$ref": "#/components/schemas/EmittedEvent"
             },

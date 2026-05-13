@@ -156,10 +156,17 @@ pub trait ReadPlane: Send + Sync + 'static {
     /// here are reserved for transport, backend availability, and
     /// request-level failures.
     ///
+    /// `gas_limit` is the server-configured execution cap to put on the
+    /// root view invocation. It is not user supplied and no gas is charged.
+    ///
     /// Backends should override this once they have a stable hogd view
     /// execution service. The default keeps the public method available
     /// while capability rollout catches up.
-    async fn view(&self, _request: ViewRequest) -> Result<ViewResponse, RpcServerError> {
+    async fn view(
+        &self,
+        _request: ViewRequest,
+        _gas_limit: u64,
+    ) -> Result<ViewResponse, RpcServerError> {
         Err(RpcServerError::NotImplemented("view".into()))
     }
 }
