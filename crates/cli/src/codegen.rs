@@ -30,10 +30,7 @@ fn ts_type_ref(ty: &ContractType) -> Result<String, CliError> {
         ContractType::Bytes => Ok("Uint8Array".into()),
         ContractType::Address => Ok("ContractAddress".into()),
         ContractType::Option { option_inner } => {
-            let inner = option_inner.as_deref().ok_or_else(|| {
-                CliError::SpecFailed("contract spec is missing an option inner type".into())
-            })?;
-            Ok(format!("{} | null", ts_type_ref(inner)?))
+            Ok(format!("{} | null", ts_type_ref(option_inner.as_ref())?))
         }
         ContractType::Vector { vector } => {
             let element = vector.element.as_deref().ok_or_else(|| {
@@ -568,10 +565,7 @@ fn spec_type_to_ts_literal(ty: &ContractType) -> Result<String, CliError> {
         ContractType::Bytes => Ok("{ v: ContractTypeKind.Bytes }".into()),
         ContractType::Address => Ok("{ v: ContractTypeKind.Address }".into()),
         ContractType::Option { option_inner } => {
-            let inner = option_inner.as_deref().ok_or_else(|| {
-                CliError::SpecFailed("contract spec is missing an option inner type".into())
-            })?;
-            let inner_lit = spec_type_to_ts_literal(inner)?;
+            let inner_lit = spec_type_to_ts_literal(option_inner.as_ref())?;
             Ok(format!(
                 "{{ v: ContractTypeKind.Option, option_inner: \
                  {inner_lit} }}"

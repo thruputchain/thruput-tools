@@ -241,7 +241,7 @@ fn storage_delta_kind(delta: &StorageDelta) -> String {
         StorageDelta::kDeltaTypeAuthDataChange { .. } => "authDataChange".into(),
         StorageDelta::kDeltaTypeDeployContract { .. } => "deployContract".into(),
         StorageDelta::kDeltaTypeConsumeUniquifier { .. } => "consumeUniquifier".into(),
-        other => format!("storageDelta({})", other.type_().0),
+        other => format!("storageDelta({})", other.r#type().0),
     }
 }
 
@@ -280,7 +280,7 @@ fn storage_delta_summary(delta: &FlaggedStorageDelta) -> String {
         ),
         other => format!(
             "StorageDelta({}) -> {}",
-            other.type_().0,
+            other.r#type().0,
             xdr_hex_string(other)
         ),
     };

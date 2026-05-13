@@ -173,7 +173,7 @@ pub(crate) fn decode_spec_value_from_reader(
 
     match ty {
         ContractType::Option { option_inner } => {
-            decode_option_value_from_reader(option_inner.as_deref(), reader, type_defs, path)
+            decode_option_value_from_reader(option_inner.as_ref(), reader, type_defs, path)
         }
         ContractType::Vector { vector } => {
             decode_vector_value_from_reader(vector, reader, type_defs, path)
@@ -309,15 +309,10 @@ fn encode_cli_spec_value(
             "void is not a valid contract argument type",
         )),
         ContractType::Option { option_inner } => {
-            let inner = option_inner.as_deref().ok_or_else(|| {
-                CliError::SpecFailed(
-                    "embedded contract spec is missing an option inner type".into(),
-                )
-            })?;
             let mut encoded = encode_xdr_value(argument != "null")
                 .map_err(|e| encode_value_error(path, e.to_string()))?;
             if argument != "null" {
-                encoded.extend(encode_cli_spec_value(inner, argument, type_defs, path)?);
+                encoded.extend(encode_cli_spec_value(option_inner.as_ref(), argument, type_defs, path)?);
             }
             Ok(encoded)
         }
@@ -384,7 +379,7 @@ fn encode_json_spec_value(
 
     match ty {
         ContractType::Option { option_inner } => {
-            encode_option_json_value(option_inner.as_deref(), value, type_defs, path)
+            encode_option_json_value(option_inner.as_ref(), value, type_defs, path)
         }
         ContractType::Vector { vector } => encode_vector_json_value(vector, value, type_defs, path),
         ContractType::Tuple { tuple } => encode_tuple_json_items(tuple, value, type_defs, path),
@@ -450,14 +445,11 @@ fn encode_json_scalar_value(
 }
 
 fn encode_option_json_value(
-    inner: Option<&ContractType>,
+    inner: &ContractType,
     value: &Value,
     type_defs: &TypeDefIndex<'_>,
     path: &str,
 ) -> Result<Vec<u8>, CliError> {
-    let inner = inner.ok_or_else(|| {
-        CliError::SpecFailed("embedded contract spec is missing an option inner type".into())
-    })?;
     let mut encoded =
         encode_xdr_value(!value.is_null()).map_err(|e| encode_value_error(path, e.to_string()))?;
     if !value.is_null() {
@@ -1209,14 +1201,11 @@ fn decode_spec_scalar_value_from_reader(
 }
 
 fn decode_option_value_from_reader(
-    inner: Option<&ContractType>,
+    inner: &ContractType,
     reader: &mut xdrs::cxs::buf_reader::BufReader<'_>,
     type_defs: &TypeDefIndex<'_>,
     path: &str,
 ) -> Result<Value, CliError> {
-    let inner = inner.ok_or_else(|| {
-        CliError::SpecFailed("embedded contract spec is missing an option inner type".into())
-    })?;
     if read_xdr_value::<bool>(reader, path)? {
         decode_spec_value_from_reader(inner, reader, type_defs, path)
     } else {
