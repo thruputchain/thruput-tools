@@ -428,6 +428,8 @@ history retains the design context for anything not currently active.
   ts` TypeScript binding codegen.
 - `docs/cli/specs/2026-05-07-view-rpc-and-receipt-return-data.md` —
   view RPC and structured receipt return-data wire design.
+- `docs/cli/specs/2026-05-13-view-rpc-protocol-rs-follow-up.md` —
+  protocol/protocol-rs service contract needed to wire view execution.
 - `docs/cli/specs/2026-05-07-transaction-detail-options.md` —
   transaction detail / receipt response shape.
 - `docs/gateway/roadmap.md` — gateway backlog and sequencing.

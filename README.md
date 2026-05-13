@@ -101,6 +101,9 @@ Active design notes that will modify the JSON-RPC surface:
 - [View RPC and receipt return-data](docs/cli/specs/2026-05-07-view-rpc-and-receipt-return-data.md)
   — read-only contract calls plus structured `return_data` /
   `abort_data` on receipts.
+- [View RPC protocol-rs follow-up](docs/cli/specs/2026-05-13-view-rpc-protocol-rs-follow-up.md)
+  — protocol/protocol-rs service contract needed to wire
+  `groundhog_view` to hogd.
 - [Transaction detail options](docs/cli/specs/2026-05-07-transaction-detail-options.md)
   — receipt response shape.
 
