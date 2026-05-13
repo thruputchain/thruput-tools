@@ -1139,7 +1139,7 @@ mod tests {
                 contract_field(
                     "maybe_count",
                     ContractType::Option {
-                        option_inner: Some(Box::new(ContractType::U32)),
+                        option_inner: Box::new(ContractType::U32),
                     },
                 ),
                 contract_field(

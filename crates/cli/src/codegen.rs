@@ -30,10 +30,7 @@ fn ts_type_ref(ty: &ContractType) -> Result<String, CliError> {
         ContractType::Bytes => Ok("Uint8Array".into()),
         ContractType::Address => Ok("ContractAddress".into()),
         ContractType::Option { option_inner } => {
-            let inner = option_inner.as_deref().ok_or_else(|| {
-                CliError::SpecFailed("contract spec is missing an option inner type".into())
-            })?;
-            Ok(format!("{} | null", ts_type_ref(inner)?))
+            Ok(format!("{} | null", ts_type_ref(option_inner.as_ref())?))
         }
         ContractType::Vector { vector } => {
             let element = vector.element.as_deref().ok_or_else(|| {
@@ -568,10 +565,7 @@ fn spec_type_to_ts_literal(ty: &ContractType) -> Result<String, CliError> {
         ContractType::Bytes => Ok("{ v: ContractTypeKind.Bytes }".into()),
         ContractType::Address => Ok("{ v: ContractTypeKind.Address }".into()),
         ContractType::Option { option_inner } => {
-            let inner = option_inner.as_deref().ok_or_else(|| {
-                CliError::SpecFailed("contract spec is missing an option inner type".into())
-            })?;
-            let inner_lit = spec_type_to_ts_literal(inner)?;
+            let inner_lit = spec_type_to_ts_literal(option_inner.as_ref())?;
             Ok(format!(
                 "{{ v: ContractTypeKind.Option, option_inner: \
                  {inner_lit} }}"
@@ -732,7 +726,7 @@ mod tests {
     #[test]
     fn maps_option_type() {
         let ty = ContractType::Option {
-            option_inner: Some(Box::new(ContractType::U64)),
+            option_inner: Box::new(ContractType::U64),
         };
         assert_eq!(ts_type_ref(&ty).unwrap(), "bigint | null");
     }
@@ -753,7 +747,7 @@ mod tests {
         let ty = ContractType::Vector {
             vector: ContractVectorType {
                 element: Some(Box::new(ContractType::Option {
-                    option_inner: Some(Box::new(ContractType::U64)),
+                    option_inner: Box::new(ContractType::U64),
                 })),
                 max_len: 100,
             },
@@ -1207,17 +1201,17 @@ export type Result =
                         ContractField {
                             name: spec_string("left"),
                             ty: ContractType::Option {
-                                option_inner: Some(Box::new(ContractType::Named {
+                                option_inner: Box::new(ContractType::Named {
                                     named: spec_string("Tree"),
-                                })),
+                                }),
                             },
                         },
                         ContractField {
                             name: spec_string("right"),
                             ty: ContractType::Option {
-                                option_inner: Some(Box::new(ContractType::Named {
+                                option_inner: Box::new(ContractType::Named {
                                     named: spec_string("Tree"),
-                                })),
+                                }),
                             },
                         },
                     ]

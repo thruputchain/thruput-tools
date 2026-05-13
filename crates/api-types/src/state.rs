@@ -102,7 +102,7 @@ impl From<&WireStorageItem> for StorageItemInfo {
                 contract_type: deployed_contract_hash.contract_type.0,
             },
             other => Self::Unknown {
-                type_id: other.type_().0,
+                type_id: other.r#type().0,
             },
         }
     }
