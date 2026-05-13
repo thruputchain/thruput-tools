@@ -1155,7 +1155,7 @@ mod tests {
                     "flags",
                     ContractType::Vector {
                         vector: ContractVectorType {
-                            element: Box::new(ContractType::Bool),
+                            element: Some(Box::new(ContractType::Bool)),
                             max_len: 8,
                         },
                     },
@@ -1320,7 +1320,7 @@ mod tests {
     fn rejects_byte_vectors_exceeding_max_length() {
         let metadata = sample_single_arg_spec_metadata(ContractType::Vector {
             vector: ContractVectorType {
-                element: Box::new(ContractType::U8),
+                element: Some(Box::new(ContractType::U8)),
                 max_len: 2,
             },
         });
