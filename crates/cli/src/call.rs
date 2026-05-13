@@ -1139,14 +1139,14 @@ mod tests {
                 contract_field(
                     "maybe_count",
                     ContractType::Option {
-                        option_inner: Some(Box::new(ContractType::U32)),
+                        option_inner: Box::new(ContractType::U32),
                     },
                 ),
                 contract_field(
                     "digest",
                     ContractType::Array {
                         array: ContractArrayType {
-                            element: Some(Box::new(ContractType::U8)),
+                            element: Box::new(ContractType::U8),
                             len: 4,
                         },
                     },
@@ -1155,7 +1155,7 @@ mod tests {
                     "flags",
                     ContractType::Vector {
                         vector: ContractVectorType {
-                            element: Some(Box::new(ContractType::Bool)),
+                            element: Box::new(ContractType::Bool),
                             max_len: 8,
                         },
                     },
@@ -1320,7 +1320,7 @@ mod tests {
     fn rejects_byte_vectors_exceeding_max_length() {
         let metadata = sample_single_arg_spec_metadata(ContractType::Vector {
             vector: ContractVectorType {
-                element: Some(Box::new(ContractType::U8)),
+                element: Box::new(ContractType::U8),
                 max_len: 2,
             },
         });
@@ -1337,7 +1337,7 @@ mod tests {
     fn rejects_array_length_mismatches() {
         let metadata = sample_single_arg_spec_metadata(ContractType::Array {
             array: ContractArrayType {
-                element: Some(Box::new(ContractType::Bool)),
+                element: Box::new(ContractType::Bool),
                 len: 2,
             },
         });
