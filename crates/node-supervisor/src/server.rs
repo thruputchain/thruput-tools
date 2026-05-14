@@ -317,6 +317,13 @@ async fn start_rpc_server(
         HogdDevSchedulerBackend::connect(readiness.endpoints.scheduler_coord).await?;
     scheduler_backend.ensure_dev_genesis().await?;
 
+    if let Some(view_gateway_addr) = readiness.endpoints.view_gateway {
+        tracing::debug!(
+            %view_gateway_addr,
+            "hogd-dev ViewGateway is advertised but groundhog_view is not wired yet"
+        );
+    }
+
     // Prefer the full indexer-backed read plane when available. If hogd-dev
     // only advertises DbGateway, still serve latest-state storage reads.
     if let Some(indexer_addr) = readiness.endpoints.indexer_block_explorer {

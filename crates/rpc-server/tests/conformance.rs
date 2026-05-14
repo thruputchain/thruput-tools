@@ -339,20 +339,22 @@ async fn get_storage_at_key_length_validated_for_all_shapes() {
 #[tokio::test]
 async fn view_entrypoint_length_validated_for_all_shapes() {
     for backend in all_shapes() {
-        let svc = server(backend);
-        let request = ViewRequest {
-            contract: Hex0x(groundhog_xdr::types::ContractAddress::from([0u8; 32])),
-            entrypoint: HexBytes(vec![0u8; 7]),
-            calldata: HexBytes(vec![]),
-            caller: None,
-        };
+        for entrypoint_len in [7, 9] {
+            let svc = server(backend.clone());
+            let request = ViewRequest {
+                contract: Hex0x(groundhog_xdr::types::ContractAddress::from([0u8; 32])),
+                entrypoint: HexBytes(vec![0u8; entrypoint_len]),
+                calldata: HexBytes(vec![]),
+                caller: None,
+            };
 
-        let err = svc
-            .view(request)
-            .await
-            .expect_err("bug: short view entrypoint must be rejected");
+            let err = svc
+                .view(request)
+                .await
+                .expect_err("bug: invalid view entrypoint length must be rejected");
 
-        assert_eq!(err.code(), codes::INVALID_PARAMS);
+            assert_eq!(err.code(), codes::INVALID_PARAMS);
+        }
     }
 }
 
