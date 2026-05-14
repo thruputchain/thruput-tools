@@ -6,7 +6,6 @@ use groundhog_rpc_api_types::{
     view::{RootInvocationOutput, ViewRequest, ViewResponse},
 };
 use groundhog_rpc_client::{GroundhogApiClient, HttpClientBuilder};
-use serde_json::json;
 
 use crate::account_resolution::lookup_dev_account_address;
 use crate::artifacts::ArtifactOptions;
@@ -17,6 +16,7 @@ use crate::codec::{decode_return, encode_args, parse_contract_address};
 use crate::config::resolve_profile;
 use crate::dev_keys;
 use crate::result::CommandResult;
+use crate::view_json::{VIEW_JSON_SCHEMA_VERSION, ViewJsonPayload};
 use crate::{CliError, Print};
 
 /// Resolve inputs, call `groundhog_view`, and print the view output.
@@ -46,29 +46,35 @@ pub fn run(
         &rt,
     )?;
 
-    print.status(format_args!(
-        "Viewing {} on {} via {}...",
-        prepared.method, prepared.contract_address_hex, prepared.rpc_url
-    ));
+    if !print.is_json() {
+        print.status(format_args!(
+            "Viewing {} on {} via {}...",
+            prepared.method, prepared.contract_address_hex, prepared.rpc_url
+        ));
+    }
 
     let response = rt.block_on(fetch_view(&prepared.rpc_url, prepared.request.clone()))?;
+    let return_value = decoded_return_value(&prepared, &response);
 
-    print_view_response(&prepared, &response, print);
+    if !print.is_json() {
+        print_view_response(&prepared, &response, return_value.as_ref(), print);
+    }
     print.json(&CommandResult::new(
         cmd,
-        json!({
-            "rpc_url": prepared.rpc_url,
-            "contract": prepared.contract_address_hex,
-            "method": prepared.method,
-            "entrypoint_id": prepared.entrypoint_id,
-            "calldata": prepared.calldata_hex,
-            "caller": prepared.request.caller,
-            "selector": selector_json(&prepared.resolved),
-            "height": response.height,
-            "output": response.output,
-            "events": response.events,
-            "return_value": decoded_return_value(&prepared, &response),
-        }),
+        ViewJsonPayload {
+            schema_version: VIEW_JSON_SCHEMA_VERSION,
+            rpc_url: &prepared.rpc_url,
+            contract: &prepared.contract_address_hex,
+            method: &prepared.method,
+            entrypoint_id: &prepared.entrypoint_id,
+            calldata: &prepared.calldata_hex,
+            caller: &prepared.request.caller,
+            selector: selector_json(&prepared.resolved),
+            height: &response.height,
+            output: &response.output,
+            events: &response.events,
+            return_value: return_value.as_ref(),
+        },
     ))?;
 
     Ok(())
@@ -189,10 +195,15 @@ async fn fetch_view(rpc_url: &str, request: ViewRequest) -> Result<ViewResponse,
         })
 }
 
-fn print_view_response(prepared: &PreparedView, response: &ViewResponse, print: &Print) {
+fn print_view_response(
+    prepared: &PreparedView,
+    response: &ViewResponse,
+    decoded_return_value: Option<&serde_json::Value>,
+    print: &Print,
+) {
     match &response.output {
         RootInvocationOutput::Return { return_data } => {
-            if let Some(value) = decoded_return_value(prepared, response) {
+            if let Some(value) = decoded_return_value {
                 print.status(format_args!(
                     "View returned: {} -> {value}",
                     prepared.method
@@ -205,7 +216,7 @@ fn print_view_response(prepared: &PreparedView, response: &ViewResponse, print: 
                 prepared.contract_address_hex
             ));
             print.status(format_args!("  height: {}", *response.height));
-            if !return_data.0.is_empty() && decoded_return_value(prepared, response).is_none() {
+            if !return_data.0.is_empty() && decoded_return_value.is_none() {
                 print.status(format_args!(
                     "  return: {}",
                     format_hex_bytes(&return_data.0)

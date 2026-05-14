@@ -1249,9 +1249,10 @@ fn view_json_returns_raw_output() {
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "view");
     assert_eq!(stdout["warnings"], serde_json::json!([]));
-    assert_eq!(stdout["data"]["rpc_url"], rpc_url);
+    assert_eq!(stdout["data"]["schemaVersion"], 1);
+    assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
     assert_eq!(stdout["data"]["contract"], address);
-    assert_eq!(stdout["data"]["entrypoint_id"], entrypoint);
+    assert_eq!(stdout["data"]["entrypointId"], entrypoint);
     assert_eq!(stdout["data"]["calldata"], calldata);
     assert_eq!(stdout["data"]["caller"], serde_json::Value::Null);
     assert_eq!(stdout["data"]["height"], 12);
@@ -1389,11 +1390,12 @@ fn view_json_surfaces_abort_as_success_body() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    assert!(output.stderr.is_empty());
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["data"]["output"]["result"], "abort");
     assert_eq!(stdout["data"]["output"]["abortData"], "0x0a0b");
-    assert_eq!(stdout["data"]["return_value"], serde_json::Value::Null);
+    assert_eq!(stdout["data"]["returnValue"], serde_json::Value::Null);
 }
 
 #[test]
@@ -1431,10 +1433,11 @@ fn view_json_surfaces_fault_as_success_body() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    assert!(output.stderr.is_empty());
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["data"]["output"]["result"], "fault");
-    assert_eq!(stdout["data"]["return_value"], serde_json::Value::Null);
+    assert_eq!(stdout["data"]["returnValue"], serde_json::Value::Null);
 }
 
 #[test]

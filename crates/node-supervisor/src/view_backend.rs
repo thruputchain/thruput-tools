@@ -188,6 +188,9 @@ fn view_response_from_gateway_result(
                 "hogd-dev ViewGateway returned unexpected outcome: {outcome}"
             )))
         }
+        // `Default` handles unknown wire discriminants. This arm is still kept
+        // for source-level forward compatibility because the generated enum is
+        // non-exhaustive and a future protocol crate may add a named variant.
         other => {
             tracing::warn!(result = ?other, "unknown ViewGatewayResult variant");
             Err(RpcServerError::BackendUnavailable(
