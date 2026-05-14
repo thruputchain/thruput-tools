@@ -5,11 +5,10 @@ use groundhog_rpc_api_types::{
     hex::HexBytes,
     view::{RootInvocationOutput, ViewRequest, ViewResponse},
 };
-use groundhog_rpc_client::{GroundhogApiClient, GroundhogDevApiClient, HttpClientBuilder};
-use jsonrpsee::core::ClientError;
-use jsonrpsee::types::error::METHOD_NOT_FOUND_CODE;
+use groundhog_rpc_client::{GroundhogApiClient, HttpClientBuilder};
 use serde_json::json;
 
+use crate::account_resolution::lookup_dev_account_address;
 use crate::artifacts::ArtifactOptions;
 use crate::call::{
     ResolvedCall, format_entrypoint_id, format_hex_bytes, resolve_call, selector_json,
@@ -20,7 +19,7 @@ use crate::dev_keys;
 use crate::result::CommandResult;
 use crate::{CliError, Print};
 
-/// Execute a read-only contract invocation.
+/// Resolve inputs, call `groundhog_view`, and print the view output.
 #[allow(clippy::too_many_arguments)]
 pub fn run(
     contract: &str,
@@ -34,6 +33,7 @@ pub fn run(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
+    let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
     let prepared = prepare_view(
         contract,
         method,
@@ -43,6 +43,7 @@ pub fn run(
         artifacts,
         project_start,
         profile,
+        &rt,
     )?;
 
     print.status(format_args!(
@@ -50,7 +51,6 @@ pub fn run(
         prepared.method, prepared.contract_address_hex, prepared.rpc_url
     ));
 
-    let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
     let response = rt.block_on(fetch_view(&prepared.rpc_url, prepared.request.clone()))?;
 
     print_view_response(&prepared, &response, print);
@@ -95,6 +95,7 @@ fn prepare_view(
     artifacts: &ArtifactOptions,
     project_start: &Path,
     profile: &str,
+    rt: &tokio::runtime::Runtime,
 ) -> Result<PreparedView, CliError> {
     let resolved_profile = resolve_profile(project_start, Some(profile))?;
     let rpc_url = resolved_profile
@@ -106,7 +107,7 @@ fn prepare_view(
     let contract_address = ContractAddress::from(parse_contract_address(&contract_address_hex)?);
     let resolved = resolve_call(project_start, method, artifacts)?;
     let calldata_bytes = resolve_calldata(args, calldata, &resolved)?;
-    let caller = resolve_caller(rpc_url, from)?;
+    let caller = resolve_caller(rpc_url, from, rt)?;
     let entrypoint_bytes = resolved.entrypoint.into_inner().to_vec();
     let entrypoint_id = format_entrypoint_id(resolved.entrypoint);
     let calldata_hex = format_hex_bytes(&calldata_bytes);
@@ -134,12 +135,12 @@ fn resolve_calldata(
 ) -> Result<Vec<u8>, CliError> {
     if let Some(raw) = calldata {
         if resolved.metadata.is_some() {
-            return Err(CliError::Other(
+            return Err(CliError::InvalidViewArguments(
                 "`--calldata` can only be used with an explicit 0x-prefixed entrypoint ID".into(),
             ));
         }
         if !args.is_empty() {
-            return Err(CliError::Other(
+            return Err(CliError::InvalidViewArguments(
                 "`--calldata` cannot be combined with positional view arguments".into(),
             ));
         }
@@ -154,74 +155,25 @@ fn parse_calldata(raw: &str) -> Result<Vec<u8>, CliError> {
         .strip_prefix("0x")
         .or_else(|| raw.strip_prefix("0X"))
         .unwrap_or(raw);
-    hex::decode(stripped).map_err(|e| CliError::Other(format!("invalid view calldata hex: {e}")))
+    hex::decode(stripped).map_err(|e| CliError::InvalidViewCalldata(e.to_string()))
 }
 
-fn resolve_caller(rpc_url: &str, from: Option<&str>) -> Result<Option<ContractAddress>, CliError> {
+fn resolve_caller(
+    rpc_url: &str,
+    from: Option<&str>,
+    rt: &tokio::runtime::Runtime,
+) -> Result<Option<ContractAddress>, CliError> {
     let Some(from) = from else {
         return Ok(None);
     };
     if let Some(index) = dev_keys::dev_key_index(from) {
-        let rt =
-            tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
         return rt
-            .block_on(resolve_dev_caller(rpc_url, from, index))
+            .block_on(lookup_dev_account_address(rpc_url, from, index))
             .map(Some);
     }
     parse_contract_address(from)
         .map(ContractAddress::from)
         .map(Some)
-}
-
-async fn resolve_dev_caller(
-    rpc_url: &str,
-    from: &str,
-    index: usize,
-) -> Result<ContractAddress, CliError> {
-    let client = HttpClientBuilder::default()
-        .build(rpc_url)
-        .map_err(|error| {
-            dev_caller_error(from, format!("could not connect to {rpc_url}: {error}"))
-        })?;
-
-    let accounts = match client.get_accounts().await {
-        Ok(accounts) => accounts,
-        Err(error) if is_method_not_found(&error) => {
-            return Err(dev_caller_error(
-                from,
-                "RPC endpoint does not expose groundhog_dev_getAccounts",
-            ));
-        }
-        Err(error) => {
-            return Err(dev_caller_error(
-                from,
-                format!("groundhog_dev_getAccounts failed: {error}"),
-            ));
-        }
-    };
-
-    let Some(account) = accounts.get(index) else {
-        return Err(dev_caller_error(
-            from,
-            format!(
-                "groundhog_dev_getAccounts returned {} accounts, missing dev-{index}",
-                accounts.len()
-            ),
-        ));
-    };
-
-    Ok(account.address)
-}
-
-fn dev_caller_error(from: &str, message: impl Into<String>) -> CliError {
-    CliError::LocalDevAccountUnavailable {
-        key_name: from.to_owned(),
-        message: message.into(),
-    }
-}
-
-fn is_method_not_found(error: &ClientError) -> bool {
-    matches!(error, ClientError::Call(object) if object.code() == METHOD_NOT_FOUND_CODE)
 }
 
 async fn fetch_view(rpc_url: &str, request: ViewRequest) -> Result<ViewResponse, CliError> {
@@ -310,7 +262,10 @@ fn decoded_return_value(
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
+    use crate::codec::{CallMetadata, ContractMetadata, MethodMetadata};
 
     #[test]
     fn parse_calldata_accepts_prefixed_hex() {
@@ -320,6 +275,51 @@ mod tests {
     #[test]
     fn parse_calldata_rejects_non_hex() {
         let err = parse_calldata("0xnot-hex").unwrap_err();
-        assert!(err.to_string().contains("invalid view calldata hex"));
+        assert!(err.to_string().contains("invalid view calldata"));
+    }
+
+    #[test]
+    fn decoded_return_value_uses_resolved_metadata() {
+        let metadata = ContractMetadata {
+            interface_name: "Counter".into(),
+            version: "0.1.0".into(),
+            source: Path::new("/tmp/implementation.rs").to_path_buf(),
+            method: MethodMetadata {
+                arg_types: vec![],
+                return_type: Some("u64".into()),
+            },
+        };
+        let prepared = PreparedView {
+            rpc_url: "http://127.0.0.1:1".into(),
+            contract_address_hex: format!("0x{}", "11".repeat(32)),
+            method: "get".into(),
+            resolved: ResolvedCall {
+                entrypoint: groundhog_xdr::contract::ContractEntrypointID::from([0u8; 8]),
+                metadata: Some(CallMetadata::Local(metadata)),
+            },
+            entrypoint_id: "0x0000000000000000".into(),
+            calldata_hex: "0x".into(),
+            request: ViewRequest {
+                contract: ContractAddress::from(groundhog_xdr::types::ContractAddress::from(
+                    [0u8; 32],
+                )),
+                entrypoint: HexBytes(vec![0u8; 8]),
+                calldata: HexBytes(vec![]),
+                caller: None,
+            },
+        };
+        let return_data = xdrs::cxs::encode(&7_u64).expect("bug: u64 should encode");
+        let response = ViewResponse {
+            output: RootInvocationOutput::Return {
+                return_data: HexBytes(return_data),
+            },
+            events: vec![],
+            height: groundhog_rpc_api_types::BlockHeight::from(12),
+        };
+
+        assert_eq!(
+            decoded_return_value(&prepared, &response),
+            Some(serde_json::json!(7))
+        );
     }
 }

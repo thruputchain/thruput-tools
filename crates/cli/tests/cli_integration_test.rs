@@ -1310,6 +1310,133 @@ fn view_json_resolves_contract_alias_and_from_address() {
 }
 
 #[test]
+fn view_json_uses_dev_account_as_caller() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let address = format!("0x{}", "11".repeat(32));
+    let caller = advertised_dev_wallet_address(0);
+    let entrypoint = "0x0102030405060708";
+    let (rpc_url, rpc_server) = spawn_dev_account_view_rpc(
+        &address,
+        entrypoint,
+        "0x",
+        serde_json::json!([dev_account_json(0, &caller)]),
+        &caller,
+    );
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
+    )
+    .unwrap();
+
+    let output = groundhog()
+        .args(["--json", "view", &address, entrypoint, "--from", "dev-0"])
+        .current_dir(&project)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["ok"], true);
+    assert_eq!(stdout["command"], "view");
+    assert_eq!(stdout["data"]["caller"], caller);
+}
+
+#[test]
+fn view_json_surfaces_abort_as_success_body() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let address = format!("0x{}", "11".repeat(32));
+    let entrypoint = "0x0102030405060708";
+    let (rpc_url, rpc_server) = spawn_view_rpc_with_output(
+        &address,
+        entrypoint,
+        "0x",
+        serde_json::json!({
+            "result": "abort",
+            "abortData": "0x0a0b",
+        }),
+    );
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
+    )
+    .unwrap();
+
+    let output = groundhog()
+        .args(["--json", "view", &address, entrypoint])
+        .current_dir(&project)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["ok"], true);
+    assert_eq!(stdout["data"]["output"]["result"], "abort");
+    assert_eq!(stdout["data"]["output"]["abortData"], "0x0a0b");
+    assert_eq!(stdout["data"]["return_value"], serde_json::Value::Null);
+}
+
+#[test]
+fn view_json_surfaces_fault_as_success_body() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let address = format!("0x{}", "11".repeat(32));
+    let entrypoint = "0x0102030405060708";
+    let (rpc_url, rpc_server) = spawn_view_rpc_with_output(
+        &address,
+        entrypoint,
+        "0x",
+        serde_json::json!({
+            "result": "fault",
+        }),
+    );
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
+    )
+    .unwrap();
+
+    let output = groundhog()
+        .args(["--json", "view", &address, entrypoint])
+        .current_dir(&project)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["ok"], true);
+    assert_eq!(stdout["data"]["output"]["result"], "fault");
+    assert_eq!(stdout["data"]["return_value"], serde_json::Value::Null);
+}
+
+#[test]
 fn storage_json_reads_latest_item() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");
@@ -2049,7 +2176,16 @@ fn spawn_view_rpc(
     entrypoint: &str,
     calldata: &str,
 ) -> (String, thread::JoinHandle<()>) {
-    spawn_view_rpc_inner(address, entrypoint, calldata, None)
+    spawn_view_rpc_inner(
+        address,
+        entrypoint,
+        calldata,
+        None,
+        serde_json::json!({
+            "result": "return",
+            "returnData": "0x0102",
+        }),
+    )
 }
 
 fn spawn_view_rpc_with_caller(
@@ -2058,7 +2194,25 @@ fn spawn_view_rpc_with_caller(
     calldata: &str,
     caller: &str,
 ) -> (String, thread::JoinHandle<()>) {
-    spawn_view_rpc_inner(address, entrypoint, calldata, Some(caller))
+    spawn_view_rpc_inner(
+        address,
+        entrypoint,
+        calldata,
+        Some(caller),
+        serde_json::json!({
+            "result": "return",
+            "returnData": "0x0102",
+        }),
+    )
+}
+
+fn spawn_view_rpc_with_output(
+    address: &str,
+    entrypoint: &str,
+    calldata: &str,
+    output: serde_json::Value,
+) -> (String, thread::JoinHandle<()>) {
+    spawn_view_rpc_inner(address, entrypoint, calldata, None, output)
 }
 
 fn spawn_view_rpc_inner(
@@ -2066,6 +2220,7 @@ fn spawn_view_rpc_inner(
     entrypoint: &str,
     calldata: &str,
     caller: Option<&str>,
+    output: serde_json::Value,
 ) -> (String, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
@@ -2087,6 +2242,50 @@ fn spawn_view_rpc_inner(
             Some(caller) => assert_eq!(request["params"][0]["caller"], caller),
             None => assert!(request["params"][0].get("caller").is_none()),
         }
+
+        send_jsonrpc_response(
+            stream,
+            &request["id"],
+            serde_json::json!({
+                "output": output,
+                "events": [],
+                "height": 12,
+            }),
+        );
+    });
+
+    (format!("http://{addr}"), handle)
+}
+
+fn spawn_dev_account_view_rpc(
+    address: &str,
+    entrypoint: &str,
+    calldata: &str,
+    accounts: serde_json::Value,
+    caller: &str,
+) -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+
+    let expected_address = address.to_owned();
+    let expected_entrypoint = entrypoint.to_owned();
+    let expected_calldata = calldata.to_owned();
+    let expected_caller = caller.to_owned();
+
+    let handle = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+
+        let (stream, request) = read_jsonrpc_request(&listener, deadline, "getAccounts");
+        assert_eq!(request["method"], "groundhog_dev_getAccounts");
+        send_jsonrpc_response(stream, &request["id"], accounts);
+
+        let (stream, request) = read_jsonrpc_request(&listener, deadline, "view");
+        assert_eq!(request["method"], "groundhog_view");
+        assert_eq!(request["params"][0]["contract"], expected_address);
+        assert_eq!(request["params"][0]["entrypoint"], expected_entrypoint);
+        assert_eq!(request["params"][0]["calldata"], expected_calldata);
+        assert_eq!(request["params"][0]["caller"], expected_caller);
 
         send_jsonrpc_response(
             stream,
