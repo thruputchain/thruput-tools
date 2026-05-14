@@ -189,11 +189,11 @@ fn print_dry_run(
     Ok(())
 }
 
-fn format_entrypoint_id(entrypoint: ContractEntrypointID) -> String {
+pub(crate) fn format_entrypoint_id(entrypoint: ContractEntrypointID) -> String {
     format!("0x{}", hex::encode(entrypoint.into_inner()))
 }
 
-fn format_hex_bytes(bytes: &[u8]) -> String {
+pub(crate) fn format_hex_bytes(bytes: &[u8]) -> String {
     format!("0x{}", hex::encode(bytes))
 }
 
@@ -215,7 +215,7 @@ fn selector_summary(resolved: &ResolvedCall) -> String {
     }
 }
 
-fn selector_json(resolved: &ResolvedCall) -> serde_json::Value {
+pub(crate) fn selector_json(resolved: &ResolvedCall) -> serde_json::Value {
     match &resolved.metadata {
         Some(CallMetadata::Spec(metadata)) => json!({
             "source": "embedded_spec",
@@ -367,7 +367,7 @@ fn method_entrypoint_id(interface_name: &str, version: &str, method: &str) -> Co
     ContractEntrypointID::from(bytes)
 }
 
-fn resolve_call(
+pub(crate) fn resolve_call(
     cwd: &Path,
     method: &str,
     artifacts: &ArtifactOptions,
