@@ -354,6 +354,32 @@ pub enum NodeSupervisorError {
         outcome: i32,
     },
 
+    /// The supervisor could not connect to hogd-dev's `ViewGateway` x23 endpoint.
+    #[error("failed to connect hogd-dev ViewGateway endpoint {endpoint}: {source}")]
+    ViewGatewayConnect {
+        /// `ViewGateway` endpoint advertised by hogd-dev readiness.
+        endpoint: std::net::SocketAddr,
+        /// x23 connection error.
+        #[source]
+        source: ConnectError,
+    },
+
+    /// A hogd-dev `ViewGateway` RPC failed during startup probing.
+    #[error("hogd-dev ViewGateway RPC `{op}` failed: {error}")]
+    ViewGatewayRpc {
+        /// `ViewGateway` RPC operation name.
+        op: &'static str,
+        /// x23 RPC error message.
+        error: String,
+    },
+
+    /// The `ViewGateway` rejected the intro handshake with a non-success outcome.
+    #[error("hogd-dev ViewGateway intro rejected with outcome {outcome}")]
+    ViewGatewayIntroRejected {
+        /// Raw outcome discriminant from `ViewGateway`.
+        outcome: i32,
+    },
+
     /// The supervisor could not operate on the hogd-dev PID file.
     #[error("hogd-dev PID file operation failed at {}: {source}", path.display())]
     PidFile {

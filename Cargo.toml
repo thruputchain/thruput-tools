@@ -45,11 +45,12 @@ groundhog-open-rpc = { path = "crates/open-rpc", version = "=0.3.3", registry = 
 groundhog-open-rpc-macros = { path = "crates/open-rpc-macros", version = "=0.3.3", registry = "groundhog" }
 
 # --- Groundhog (private registry) ---
-groundhog-xdr = { version = "=0.13.1", registry = "groundhog", features = ["serde", "xdrs", "schema"] }
-groundhog_indexer = { version = "=0.13.1", registry = "groundhog", features = ["serde"] }
-groundhog_scheduler = { version = "=0.13.1", registry = "groundhog" }
-groundhog_db_gateway = { version = "=0.13.1", registry = "groundhog" }
-groundhog-trace = { version = "=0.13.1", registry = "groundhog" }
+groundhog-xdr = { path = "../protocol-rs/groundhog-xdr", version = "=0.13.3", registry = "groundhog", features = ["serde", "xdrs", "schema"] }
+groundhog_indexer = { path = "../protocol-rs/groundhog_indexer", version = "=0.13.3", registry = "groundhog", features = ["serde"] }
+groundhog_scheduler = { path = "../protocol-rs/groundhog_scheduler", version = "=0.13.3", registry = "groundhog" }
+groundhog_db_gateway = { path = "../protocol-rs/groundhog_db_gateway", version = "=0.13.3", registry = "groundhog" }
+groundhog_view = { path = "../protocol-rs/groundhog_view", version = "=0.13.3", registry = "groundhog" }
+groundhog-trace = { path = "../protocol-rs/groundhog-trace", version = "=0.13.3", registry = "groundhog" }
 xdrs = { version = "0.7.1", registry = "groundhog", features = ["alloc"] }
 xdr-common = { version = "0.7.1", registry = "groundhog" }
 rpc_driver = { version = "0.8", registry = "groundhog" }

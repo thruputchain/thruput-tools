@@ -1,3 +1,6 @@
+/// Default gas budget for backend `groundhog_view` execution.
+pub const DEFAULT_VIEW_GAS_LIMIT: u64 = 10_000_000;
+
 /// Server-wide bounds on JSON-RPC requests.  The shared dispatcher
 /// rejects requests that exceed these before they reach a backend.
 #[derive(Debug, Clone)]
@@ -19,9 +22,8 @@ pub struct RpcServerConfig {
     ///
     /// The shared server validates JSON request shape; concrete backends
     /// pass this cap into the hogd view invocation once view execution is
-    /// wired. The `u64::MAX` default is a scaffold placeholder for
-    /// backends that still return `NotImplemented`; concrete view-capable
-    /// backends must override it before exposing public view execution.
+    /// wired. Keep the default bounded so a view-capable backend cannot
+    /// accidentally expose an unbounded root invocation.
     pub view_gas_limit: u64,
 }
 
@@ -31,7 +33,7 @@ impl Default for RpcServerConfig {
             max_events_per_page: 200,
             max_cursor_bytes: 256,
             max_view_calldata_bytes: 64 * 1024,
-            view_gas_limit: u64::MAX,
+            view_gas_limit: DEFAULT_VIEW_GAS_LIMIT,
         }
     }
 }

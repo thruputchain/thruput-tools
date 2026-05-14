@@ -7,7 +7,7 @@
 //! latest-state storage reads can be backed by hogd-dev's `DbGateway`
 //! endpoint independently.
 
-use std::{future::Future, net::SocketAddr, process::ExitStatus};
+use std::{future::Future, net::SocketAddr, process::ExitStatus, time::Duration};
 
 use groundhog_rpc_api::{GroundhogApiServer, GroundhogDevApiServer};
 use groundhog_rpc_api_types::dev::DevAccount;
@@ -24,6 +24,7 @@ use crate::{
     read_backend::{HogdDevReadBackend, HogdDevStorageReadBackend},
     rpc_backend::HogdDevSchedulerBackend,
     stub_backend::StubBackend,
+    view_backend::HogdDevViewBackend,
 };
 
 /// Why a [`NodeSupervisorHandle::stopped`] call returned.
@@ -60,6 +61,8 @@ pub enum PlaneStatus {
     Indexer,
     /// The plane is backed by hogd-dev's `DbGateway` x23 endpoint.
     DbGateway,
+    /// The plane is backed by hogd-dev's `ViewGateway` x23 endpoint.
+    ViewGateway,
     /// The plane is intentionally served by the supervisor stub.
     Stub,
 }
@@ -69,7 +72,7 @@ impl PlaneStatus {
     pub const fn is_indexer_backed(self) -> bool {
         match self {
             Self::Indexer => true,
-            Self::Scheduler | Self::DbGateway | Self::Stub => false,
+            Self::Scheduler | Self::DbGateway | Self::ViewGateway | Self::Stub => false,
         }
     }
 }
@@ -83,6 +86,8 @@ pub struct BackendPlanes {
     pub chain: PlaneStatus,
     /// Committed-state read plane.
     pub read: PlaneStatus,
+    /// Read-only contract execution plane.
+    pub view: PlaneStatus,
 }
 
 impl BackendPlanes {
@@ -92,24 +97,27 @@ impl BackendPlanes {
             submit: PlaneStatus::Scheduler,
             chain: PlaneStatus::Scheduler,
             read: PlaneStatus::Stub,
+            view: PlaneStatus::Stub,
         }
     }
 
     /// All three planes backed by hogd-dev's scheduler and indexer x23 endpoints.
-    pub const fn hogd_dev_full() -> Self {
+    pub const fn hogd_dev_full(view: PlaneStatus) -> Self {
         Self {
             submit: PlaneStatus::Scheduler,
             chain: PlaneStatus::Scheduler,
             read: PlaneStatus::Indexer,
+            view,
         }
     }
 
     /// Scheduler-backed submit/chain with DbGateway-backed latest storage reads.
-    pub const fn hogd_dev_storage_only() -> Self {
+    pub const fn hogd_dev_storage_only(view: PlaneStatus) -> Self {
         Self {
             submit: PlaneStatus::Scheduler,
             chain: PlaneStatus::Scheduler,
             read: PlaneStatus::DbGateway,
+            view,
         }
     }
 }
@@ -163,6 +171,8 @@ impl NodeSupervisorHandle {
                 .hogd_protocol_override
                 .as_deref()
                 .unwrap_or(PROTOCOL_VERSION),
+            config.view_gas_limit,
+            config.view_timeout,
         )
         .await
         {
@@ -312,17 +322,20 @@ async fn start_rpc_server(
     readiness: &HogdDevReadiness,
     dev_accounts: Vec<DevAccount>,
     protocol_version: &str,
+    view_gas_limit: u64,
+    view_timeout: Duration,
 ) -> Result<StartedRpcServer, NodeSupervisorError> {
     let scheduler_backend =
         HogdDevSchedulerBackend::connect(readiness.endpoints.scheduler_coord).await?;
     scheduler_backend.ensure_dev_genesis().await?;
 
-    if let Some(view_gateway_addr) = readiness.endpoints.view_gateway {
-        tracing::debug!(
-            %view_gateway_addr,
-            "hogd-dev ViewGateway is advertised but groundhog_view is not wired yet"
-        );
-    }
+    let view = HogdDevViewBackend::connect_optional(
+        readiness.endpoints.view_gateway,
+        protocol_version,
+        view_timeout,
+    )
+    .await?;
+    let view_status = view.plane_status();
 
     // Prefer the full indexer-backed read plane when available. If hogd-dev
     // only advertises DbGateway, still serve latest-state storage reads.
@@ -339,8 +352,10 @@ async fn start_rpc_server(
             listen_address,
             scheduler_backend,
             read,
+            view,
             dev_accounts,
-            BackendPlanes::hogd_dev_full(),
+            BackendPlanes::hogd_dev_full(view_status),
+            view_gas_limit,
         )
         .await
     } else if let Some(db_gateway_addr) = readiness.endpoints.db_gateway {
@@ -350,8 +365,10 @@ async fn start_rpc_server(
             listen_address,
             scheduler_backend,
             read,
+            view,
             dev_accounts,
-            BackendPlanes::hogd_dev_storage_only(),
+            BackendPlanes::hogd_dev_storage_only(view_status),
+            view_gas_limit,
         )
         .await
     } else {
@@ -364,22 +381,30 @@ async fn start_rpc_server(
             listen_address,
             scheduler_backend,
             StubBackend::new(),
+            view,
             dev_accounts,
-            BackendPlanes::hogd_dev_scheduler_only(),
+            BackendPlanes {
+                view: view_status,
+                ..BackendPlanes::hogd_dev_scheduler_only()
+            },
+            view_gas_limit,
         )
         .await
     }
 }
 
-async fn start_rpc_server_with_read<R>(
+async fn start_rpc_server_with_read<R, V>(
     listen_address: &str,
     scheduler_backend: HogdDevSchedulerBackend,
     read: R,
+    view: V,
     dev_accounts: Vec<DevAccount>,
     backend_planes: BackendPlanes,
+    view_gas_limit: u64,
 ) -> Result<StartedRpcServer, NodeSupervisorError>
 where
     R: groundhog_rpc_server::ReadPlane,
+    V: groundhog_rpc_server::ViewPlane,
 {
     let server = Server::builder()
         .build(listen_address)
@@ -398,8 +423,8 @@ where
         scheduler_backend.clone(),
         scheduler_backend,
         read,
-        StubBackend::new(),
-        RpcServerConfig::default(),
+        view,
+        RpcServerConfig::default().with_view_gas_limit(view_gas_limit),
         BuildInfo::new(env!("CARGO_PKG_VERSION"), option_env!("GIT_COMMIT")),
     );
     let mut module = RpcModule::new(());
@@ -998,49 +1023,61 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     }
 
     #[test]
+    fn plane_status_view_gateway_serializes_to_view_gateway_string() {
+        let status = PlaneStatus::ViewGateway;
+        let json = serde_json::to_value(status).expect("bug: PlaneStatus serializes");
+        assert_eq!(json, "view_gateway");
+    }
+
+    #[test]
     fn plane_status_read_predicates_match_known_planes() {
         assert!(!PlaneStatus::Scheduler.is_indexer_backed());
         assert!(PlaneStatus::Indexer.is_indexer_backed());
         assert!(!PlaneStatus::DbGateway.is_indexer_backed());
+        assert!(!PlaneStatus::ViewGateway.is_indexer_backed());
         assert!(!PlaneStatus::Stub.is_indexer_backed());
     }
 
     #[test]
     fn backend_planes_hogd_dev_full_constructor() {
-        let planes = BackendPlanes::hogd_dev_full();
+        let planes = BackendPlanes::hogd_dev_full(PlaneStatus::ViewGateway);
         assert_eq!(planes.submit, PlaneStatus::Scheduler);
         assert_eq!(planes.chain, PlaneStatus::Scheduler);
         assert_eq!(planes.read, PlaneStatus::Indexer);
+        assert_eq!(planes.view, PlaneStatus::ViewGateway);
     }
 
     #[test]
     fn backend_planes_hogd_dev_full_serializes_correctly() {
-        let planes = BackendPlanes::hogd_dev_full();
+        let planes = BackendPlanes::hogd_dev_full(PlaneStatus::ViewGateway);
         let json = serde_json::to_value(planes).expect("bug: BackendPlanes serializes");
         let expected = serde_json::json!({
             "submit": "scheduler",
             "chain": "scheduler",
-            "read": "indexer"
+            "read": "indexer",
+            "view": "view_gateway"
         });
         assert_eq!(json, expected);
     }
 
     #[test]
     fn backend_planes_hogd_dev_storage_only_constructor() {
-        let planes = BackendPlanes::hogd_dev_storage_only();
+        let planes = BackendPlanes::hogd_dev_storage_only(PlaneStatus::Stub);
         assert_eq!(planes.submit, PlaneStatus::Scheduler);
         assert_eq!(planes.chain, PlaneStatus::Scheduler);
         assert_eq!(planes.read, PlaneStatus::DbGateway);
+        assert_eq!(planes.view, PlaneStatus::Stub);
     }
 
     #[test]
     fn backend_planes_hogd_dev_storage_only_serializes_correctly() {
-        let planes = BackendPlanes::hogd_dev_storage_only();
+        let planes = BackendPlanes::hogd_dev_storage_only(PlaneStatus::Stub);
         let json = serde_json::to_value(planes).expect("bug: BackendPlanes serializes");
         let expected = serde_json::json!({
             "submit": "scheduler",
             "chain": "scheduler",
-            "read": "db_gateway"
+            "read": "db_gateway",
+            "view": "stub"
         });
         assert_eq!(json, expected);
     }
@@ -1080,7 +1117,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
         assert_eq!(
             handle.backend_planes(),
-            BackendPlanes::hogd_dev_full(),
+            BackendPlanes::hogd_dev_full(PlaneStatus::Stub),
             "supervisor with indexer should report hogd_dev_full backend planes"
         );
 
@@ -1104,7 +1141,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
         assert_eq!(
             handle.backend_planes(),
-            BackendPlanes::hogd_dev_storage_only(),
+            BackendPlanes::hogd_dev_storage_only(PlaneStatus::Stub),
             "supervisor with only DbGateway should report storage-only backend planes"
         );
 

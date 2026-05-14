@@ -38,18 +38,23 @@ pub const MAX_READINESS_LINE_BYTES: usize = 64 * 1024;
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[non_exhaustive]
 pub struct HogdDevEndpoints {
-    /// `SchedulerCoord` endpoint.
+    /// `SchedulerCoord` endpoint. Also accepts hogd-dev's compact
+    /// readiness key `scheduler`.
     ///
     /// Required for submit, chain tip, and pending tx probes.
+    #[serde(alias = "scheduler")]
     pub scheduler_coord: SocketAddr,
-    /// `IndexerBlockExplorer` endpoint. Absent in the reduced contract.
-    #[serde(default)]
+    /// `IndexerBlockExplorer` endpoint. Also accepts hogd-dev's compact
+    /// readiness key `read`. Absent in the reduced contract.
+    #[serde(default, alias = "read")]
     pub indexer_block_explorer: Option<SocketAddr>,
-    /// `DbGateway` endpoint for latest-state storage reads.
-    #[serde(default)]
+    /// `DbGateway` endpoint for latest-state storage reads. Also accepts
+    /// hogd-dev's compact readiness key `gateway`.
+    #[serde(default, alias = "gateway")]
     pub db_gateway: Option<SocketAddr>,
-    /// `ViewGateway` endpoint for read-only contract execution.
-    #[serde(default)]
+    /// `ViewGateway` endpoint for read-only contract execution. Also accepts
+    /// hogd-dev's compact readiness key `view`.
+    #[serde(default, alias = "view")]
     pub view_gateway: Option<SocketAddr>,
     /// Dev-control endpoint. Absent in the reduced contract.
     #[serde(default)]
@@ -737,6 +742,7 @@ mod tests {
 
     const READY: &str = r#"{"status":"ready","network_id":"groundhog-local","endpoints":{"scheduler_coord":"127.0.0.1:12345","indexer_block_explorer":"127.0.0.1:12346","db_gateway":"127.0.0.1:12347","view_gateway":"127.0.0.1:12348","dev_control":"127.0.0.1:12349"}}"#;
     const V1_READY: &str = r#"{"status":"ready","network_id":"groundhog-local","endpoints":{"scheduler_coord":"127.0.0.1:12345"}}"#;
+    const COMPACT_READY: &str = r#"{"status":"ready","network_id":"groundhog-local","endpoints":{"scheduler":"127.0.0.1:12345","read":"127.0.0.1:12346","gateway":"127.0.0.1:12347","view":"127.0.0.1:12348"}}"#;
 
     #[test]
     fn command_shape_matches_contract() {
@@ -828,6 +834,43 @@ mod tests {
         assert_eq!(readiness.endpoints.db_gateway, None);
         assert_eq!(readiness.endpoints.view_gateway, None);
         assert_eq!(readiness.endpoints.dev_control, None);
+    }
+
+    #[test]
+    fn readiness_line_accepts_compact_endpoint_names() {
+        let readiness = parse_readiness_line("hogd-dev", COMPACT_READY)
+            .expect("bug: compact readiness payload should parse");
+
+        assert_eq!(
+            readiness.endpoints.scheduler_coord,
+            "127.0.0.1:12345"
+                .parse()
+                .expect("bug: address should parse")
+        );
+        assert_eq!(
+            readiness.endpoints.indexer_block_explorer,
+            Some(
+                "127.0.0.1:12346"
+                    .parse()
+                    .expect("bug: address should parse")
+            )
+        );
+        assert_eq!(
+            readiness.endpoints.db_gateway,
+            Some(
+                "127.0.0.1:12347"
+                    .parse()
+                    .expect("bug: address should parse")
+            )
+        );
+        assert_eq!(
+            readiness.endpoints.view_gateway,
+            Some(
+                "127.0.0.1:12348"
+                    .parse()
+                    .expect("bug: address should parse")
+            )
+        );
     }
 
     #[test]
