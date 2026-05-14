@@ -13,6 +13,7 @@ mod schema_generation {
     use crate::receipt::{ExecStatus, TransactionReceipt};
     use crate::state::{StorageItemInfo, StorageItemRead};
     use crate::transaction::{TransactionStatus, TxHash};
+    use crate::view::{RootInvocationOutput, ViewRequest, ViewResponse};
 
     #[test]
     fn schema_generation_succeeds() {
@@ -23,6 +24,9 @@ mod schema_generation {
         let _ = schema_for!(TransactionStatus);
         let _ = schema_for!(TransactionReceipt);
         let _ = schema_for!(ExecStatus);
+        let _ = schema_for!(ViewRequest);
+        let _ = schema_for!(ViewResponse);
+        let _ = schema_for!(RootInvocationOutput);
 
         // Event types
         let _ = schema_for!(EmittedEvent);
@@ -61,6 +65,7 @@ mod wire_format {
     use crate::receipt::{ExecStatus, TransactionReceipt};
     use crate::state::StorageItemInfo;
     use crate::transaction::{TransactionStatus, TxHash};
+    use crate::view::{RootInvocationOutput, ViewRequest, ViewResponse};
     use crate::{BlockHeader, BlockHeight, SHA256Hash};
     use xdr_common::VecM;
 
@@ -130,6 +135,55 @@ mod wire_format {
         assert!(v["events"].as_array().unwrap().is_empty());
         // camelCase
         assert!(v.get("tx_hash").is_none());
+    }
+
+    #[test]
+    fn view_request_wire_format() {
+        let request = ViewRequest {
+            contract: zero_address(),
+            entrypoint: HexBytes(vec![1, 2, 3, 4, 5, 6, 7, 8]),
+            calldata: HexBytes(vec![0xca, 0xfe]),
+            caller: None,
+        };
+        let v: Value = serde_json::to_value(&request).unwrap();
+        assert!(v["contract"].as_str().unwrap().starts_with("0x"));
+        assert_eq!(v["entrypoint"], "0x0102030405060708");
+        assert_eq!(v["calldata"], "0xcafe");
+        assert!(v.get("caller").is_none());
+    }
+
+    #[test]
+    fn view_response_wire_format() {
+        let response = ViewResponse {
+            output: RootInvocationOutput::Return {
+                return_data: HexBytes(vec![0x2a]),
+            },
+            events: vec![],
+            height: BlockHeight::from(7i64),
+        };
+        let v: Value = serde_json::to_value(&response).unwrap();
+        assert_eq!(v["output"]["result"], "return");
+        assert_eq!(v["output"]["returnData"], "0x2a");
+        assert_eq!(v["height"], 7);
+        assert!(v["events"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn view_abort_output_wire_format() {
+        let output = RootInvocationOutput::Abort {
+            abort_data: HexBytes(vec![0xde, 0xad]),
+        };
+        let v: Value = serde_json::to_value(&output).unwrap();
+        assert_eq!(v["result"], "abort");
+        assert_eq!(v["abortData"], "0xdead");
+        assert!(v.get("abort_data").is_none());
+    }
+
+    #[test]
+    fn view_fault_output_wire_format() {
+        let v: Value = serde_json::to_value(&RootInvocationOutput::Fault).unwrap();
+        assert_eq!(v["result"], "fault");
+        assert_eq!(v.as_object().unwrap().len(), 1);
     }
 
     #[test]

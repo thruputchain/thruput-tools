@@ -65,11 +65,11 @@ impl fmt::Debug for HogdDevReadBackend {
 }
 
 impl HogdDevReadBackend {
-    /// Connect to hogd-dev's indexer endpoint and wire the shared scheduler
-    /// client for pending-tx probes.
+    /// Connect to hogd-dev's `IndexerBlockExplorer` endpoint and wire the
+    /// shared `SchedulerCoord` client for pending-tx probes.
     ///
-    /// Fails hard if the indexer endpoint is unreachable — the supervisor
-    /// should not start if its child's read endpoint is down.
+    /// Fails hard if the `IndexerBlockExplorer` endpoint is unreachable: the supervisor
+    /// should not start if its child's `IndexerBlockExplorer` endpoint is down.
     pub(crate) async fn connect(
         endpoint: SocketAddr,
         gateway_endpoint: Option<SocketAddr>,
@@ -109,7 +109,7 @@ impl HogdDevReadBackend {
             Some(connect_db_gateway(endpoint, protocol_version).await?)
         } else {
             tracing::warn!(
-                "hogd-dev did not advertise a gateway endpoint; getStorageAt is unavailable"
+                "hogd-dev did not advertise a DbGateway endpoint; getStorageAt is unavailable"
             );
             None
         };

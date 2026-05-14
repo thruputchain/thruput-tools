@@ -1,10 +1,11 @@
 //! Top-level node supervisor orchestration.
 //!
 //! Owns hogd-dev process supervision and the public JSON-RPC server. Backend
-//! adapters land by plane: chain and submit are backed by hogd-dev's scheduler
-//! endpoint; receipt/event reads are backed by hogd-dev's indexer endpoint
-//! when advertised in readiness, and latest-state storage reads can be backed
-//! by hogd-dev's `DbGateway` endpoint independently.
+//! adapters land by plane: chain and submit are backed by hogd-dev's
+//! `SchedulerCoord` endpoint; receipt/event reads are backed by hogd-dev's
+//! `IndexerBlockExplorer` endpoint when advertised in readiness, and
+//! latest-state storage reads can be backed by hogd-dev's `DbGateway`
+//! endpoint independently.
 
 use std::{future::Future, net::SocketAddr, process::ExitStatus};
 
@@ -53,9 +54,9 @@ pub enum SupervisorStop {
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum PlaneStatus {
-    /// The plane is backed by hogd-dev's scheduler x23 endpoint.
+    /// The plane is backed by hogd-dev's `SchedulerCoord` x23 endpoint.
     Scheduler,
-    /// The plane is backed by hogd-dev's indexer x23 endpoint.
+    /// The plane is backed by hogd-dev's `IndexerBlockExplorer` x23 endpoint.
     Indexer,
     /// The plane is backed by hogd-dev's `DbGateway` x23 endpoint.
     DbGateway,
@@ -64,7 +65,7 @@ pub enum PlaneStatus {
 }
 
 impl PlaneStatus {
-    /// Returns true when this plane is backed by hogd-dev's indexer endpoint.
+    /// Returns true when this plane is backed by hogd-dev's `IndexerBlockExplorer` endpoint.
     pub const fn is_indexer_backed(self) -> bool {
         match self {
             Self::Indexer => true,
@@ -312,16 +313,24 @@ async fn start_rpc_server(
     dev_accounts: Vec<DevAccount>,
     protocol_version: &str,
 ) -> Result<StartedRpcServer, NodeSupervisorError> {
-    let scheduler_backend = HogdDevSchedulerBackend::connect(readiness.endpoints.scheduler).await?;
+    let scheduler_backend =
+        HogdDevSchedulerBackend::connect(readiness.endpoints.scheduler_coord).await?;
     scheduler_backend.ensure_dev_genesis().await?;
+
+    if let Some(view_gateway_addr) = readiness.endpoints.view_gateway {
+        tracing::debug!(
+            %view_gateway_addr,
+            "hogd-dev ViewGateway is advertised but groundhog_view is not wired yet"
+        );
+    }
 
     // Prefer the full indexer-backed read plane when available. If hogd-dev
     // only advertises DbGateway, still serve latest-state storage reads.
-    if let Some(read_addr) = readiness.endpoints.read {
-        tracing::debug!(%read_addr, "connecting to hogd-dev indexer");
+    if let Some(indexer_addr) = readiness.endpoints.indexer_block_explorer {
+        tracing::debug!(%indexer_addr, "connecting to hogd-dev IndexerBlockExplorer");
         let read = HogdDevReadBackend::connect(
-            read_addr,
-            readiness.endpoints.gateway,
+            indexer_addr,
+            readiness.endpoints.db_gateway,
             &scheduler_backend,
             protocol_version,
         )
@@ -334,9 +343,9 @@ async fn start_rpc_server(
             BackendPlanes::hogd_dev_full(),
         )
         .await
-    } else if let Some(gateway_addr) = readiness.endpoints.gateway {
-        tracing::debug!(%gateway_addr, "connecting to hogd-dev DbGateway for storage reads");
-        let read = HogdDevStorageReadBackend::connect(gateway_addr, protocol_version).await?;
+    } else if let Some(db_gateway_addr) = readiness.endpoints.db_gateway {
+        tracing::debug!(%db_gateway_addr, "connecting to hogd-dev DbGateway for storage reads");
+        let read = HogdDevStorageReadBackend::connect(db_gateway_addr, protocol_version).await?;
         start_rpc_server_with_read(
             listen_address,
             scheduler_backend,
@@ -347,7 +356,7 @@ async fn start_rpc_server(
         .await
     } else {
         tracing::warn!(
-            "hogd-dev did not advertise read or gateway endpoints; read plane is stubbed \
+            "hogd-dev did not advertise indexer_block_explorer or db_gateway endpoints; read plane is stubbed \
              (getTransactionReceipt / getTransactionStatus / getContractEvents / \
               getStorageAt return NotImplemented)"
         );

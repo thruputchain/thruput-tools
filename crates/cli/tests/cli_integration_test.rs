@@ -237,12 +237,12 @@ fn node_hogd_dev_binary_json_starts_supervisor() {
     assert_eq!(payload["data"]["backend"]["planes"]["submit"], "scheduler");
     assert_eq!(payload["data"]["backend"]["planes"]["chain"], "scheduler");
     assert_eq!(payload["data"]["backend"]["planes"]["read"], "indexer");
-    let scheduler = payload["data"]["backend"]["endpoints"]["scheduler"]
+    let scheduler = payload["data"]["backend"]["endpoints"]["scheduler_coord"]
         .as_str()
-        .expect("bug: scheduler endpoint should be a string");
+        .expect("bug: SchedulerCoord endpoint should be a string");
     assert!(
         scheduler.starts_with("127.0.0.1:"),
-        "scheduler endpoint should be loopback, got {scheduler}",
+        "SchedulerCoord endpoint should be loopback, got {scheduler}",
     );
     let rpc_url = payload["data"]["rpc_url"]
         .as_str()

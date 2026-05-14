@@ -172,7 +172,7 @@ Maintenance rules:
   - [x] PR 4b — submit RPC (`groundhog_sendRawTransaction`) (#40)
   - [x] PR 4c — read RPC (receipts, events, composite status) on the
     Rust supervisor side (#44); end-to-end coverage gated on hogd-dev
-    v1 advertising the indexer endpoint
+    v1 advertising the `indexer_block_explorer` endpoint
   - [x] PR 4d — supervisor block driver: local single-node nomination and
     commit after accepted submits (#47)
   - [x] PR 4e — dev-account bootstrap: hogd-dev wallet/bootstrap profile,

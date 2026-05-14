@@ -119,9 +119,9 @@ reserved for machine protocol; ordinary logs go to stderr.
   "status": "ready",
   "network_id": "groundhog-local",
   "endpoints": {
-    "scheduler": "127.0.0.1:12345",
-    "read": "127.0.0.1:12346",
-    "control": "127.0.0.1:12347"
+    "scheduler_coord": "127.0.0.1:12345",
+    "indexer_block_explorer": "127.0.0.1:12346",
+    "dev_control": "127.0.0.1:12347"
   }
 }
 ```

@@ -10,6 +10,19 @@ pub struct RpcServerConfig {
     /// Maximum length of the opaque `getEvents` pagination cursor;
     /// longer cursors are rejected as `InvalidParam`.
     pub max_cursor_bytes: usize,
+
+    /// Maximum `groundhog_view` calldata byte length; larger
+    /// requests are rejected as `InvalidParam` before backend dispatch.
+    pub max_view_calldata_bytes: usize,
+
+    /// Gas budget assigned to backend `groundhog_view` execution.
+    ///
+    /// The shared server validates JSON request shape; concrete backends
+    /// pass this cap into the hogd view invocation once view execution is
+    /// wired. The `u64::MAX` default is a scaffold placeholder for
+    /// backends that still return `NotImplemented`; concrete view-capable
+    /// backends must override it before exposing public view execution.
+    pub view_gas_limit: u64,
 }
 
 impl Default for RpcServerConfig {
@@ -17,6 +30,8 @@ impl Default for RpcServerConfig {
         Self {
             max_events_per_page: 200,
             max_cursor_bytes: 256,
+            max_view_calldata_bytes: 64 * 1024,
+            view_gas_limit: u64::MAX,
         }
     }
 }
@@ -33,6 +48,20 @@ impl RpcServerConfig {
     #[must_use]
     pub fn with_max_cursor_bytes(mut self, max: usize) -> Self {
         self.max_cursor_bytes = max;
+        self
+    }
+
+    /// Override the view calldata byte length cap.
+    #[must_use]
+    pub fn with_max_view_calldata_bytes(mut self, max: usize) -> Self {
+        self.max_view_calldata_bytes = max;
+        self
+    }
+
+    /// Override the view execution gas limit.
+    #[must_use]
+    pub fn with_view_gas_limit(mut self, gas_limit: u64) -> Self {
+        self.view_gas_limit = gas_limit;
         self
     }
 }

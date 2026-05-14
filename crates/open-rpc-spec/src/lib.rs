@@ -105,7 +105,7 @@ fn method_error_codes(method: &str) -> &'static [i32] {
             codes::OVERLOADED,
             codes::NOT_IMPLEMENTED,
         ],
-        "groundhog_getEvents" | "groundhog_getStorageAt" => &[
+        "groundhog_getEvents" | "groundhog_getStorageAt" | "groundhog_view" => &[
             codes::INVALID_PARAMS,
             codes::BACKEND_UNAVAILABLE,
             codes::BACKEND_TIMEOUT,

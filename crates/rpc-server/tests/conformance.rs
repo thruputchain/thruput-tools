@@ -26,6 +26,7 @@ use groundhog_rpc_api_types::{
     receipt::TransactionReceipt,
     state::StorageItemRead,
     transaction::{TransactionStatus, TxHash},
+    view::ViewRequest,
 };
 use groundhog_rpc_server::{
     BuildInfo, ChainPlane, GroundhogRpcServer, ReadPlane, RpcServerConfig, RpcServerError,
@@ -48,6 +49,7 @@ const CANONICAL_HASH_VECTOR_TX_HASH_HEX: &str =
 
 const MAX_EVENTS_PER_PAGE: u32 = 50;
 const MAX_CURSOR_BYTES: usize = 64;
+const MAX_VIEW_CALLDATA_BYTES: usize = 32;
 
 /// Mock backend that emulates a chosen production capability profile.
 ///
@@ -148,7 +150,8 @@ fn server(backend: ScriptedBackend) -> ScriptedServer {
         backend,
         RpcServerConfig::default()
             .with_max_events_per_page(MAX_EVENTS_PER_PAGE)
-            .with_max_cursor_bytes(MAX_CURSOR_BYTES),
+            .with_max_cursor_bytes(MAX_CURSOR_BYTES)
+            .with_max_view_calldata_bytes(MAX_VIEW_CALLDATA_BYTES),
         BuildInfo::for_tests(),
     )
 }
@@ -330,6 +333,68 @@ async fn get_storage_at_key_length_validated_for_all_shapes() {
             0,
             "key-length validation must short-circuit before backend dispatch"
         );
+    }
+}
+
+#[tokio::test]
+async fn view_entrypoint_length_validated_for_all_shapes() {
+    for backend in all_shapes() {
+        for entrypoint_len in [7, 9] {
+            let svc = server(backend.clone());
+            let request = ViewRequest {
+                contract: Hex0x(groundhog_xdr::types::ContractAddress::from([0u8; 32])),
+                entrypoint: HexBytes(vec![0u8; entrypoint_len]),
+                calldata: HexBytes(vec![]),
+                caller: None,
+            };
+
+            let err = svc
+                .view(request)
+                .await
+                .expect_err("bug: invalid view entrypoint length must be rejected");
+
+            assert_eq!(err.code(), codes::INVALID_PARAMS);
+        }
+    }
+}
+
+#[tokio::test]
+async fn view_calldata_length_validated_for_all_shapes() {
+    for backend in all_shapes() {
+        let svc = server(backend);
+        let request = ViewRequest {
+            contract: Hex0x(groundhog_xdr::types::ContractAddress::from([0u8; 32])),
+            entrypoint: HexBytes(vec![0u8; 8]),
+            calldata: HexBytes(vec![0u8; MAX_VIEW_CALLDATA_BYTES + 1]),
+            caller: None,
+        };
+
+        let err = svc
+            .view(request)
+            .await
+            .expect_err("bug: oversized view calldata must be rejected");
+
+        assert_eq!(err.code(), codes::INVALID_PARAMS);
+    }
+}
+
+#[tokio::test]
+async fn view_returns_not_implemented_until_backend_support_lands_for_all_shapes() {
+    for backend in all_shapes() {
+        let svc = server(backend);
+        let request = ViewRequest {
+            contract: Hex0x(groundhog_xdr::types::ContractAddress::from([0u8; 32])),
+            entrypoint: HexBytes(vec![0u8; 8]),
+            calldata: HexBytes(vec![]),
+            caller: None,
+        };
+
+        let err = svc
+            .view(request)
+            .await
+            .expect_err("bug: current backends should not implement view");
+
+        assert_eq!(err.code(), codes::NOT_IMPLEMENTED);
     }
 }
 

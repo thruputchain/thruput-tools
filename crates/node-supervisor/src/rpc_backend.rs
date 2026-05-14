@@ -1,8 +1,9 @@
 //! hogd-dev scheduler-backed adapters for the submit and chain planes.
 //!
-//! Both planes use hogd-dev's advertised scheduler endpoint. The read plane
-//! is implemented in [`crate::read_backend`] and backed by hogd-dev's indexer
-//! endpoint. Dev-control remains stubbed pending a hogd-dev stable x23 surface.
+//! Both planes use hogd-dev's advertised `SchedulerCoord` endpoint. The read
+//! plane is implemented in [`crate::read_backend`] and backed by hogd-dev's
+//! `IndexerBlockExplorer` / `DbGateway` endpoints. Dev-control remains stubbed
+//! pending a hogd-dev stable x23 surface.
 
 use async_trait::async_trait;
 use groundhog_rpc_api_types::{
@@ -21,7 +22,7 @@ use xdr_common::{BytesM, VecM};
 
 use crate::{NodeSupervisorError, block_driver::BlockDriverTrigger, genesis::ensure_dev_genesis};
 
-// chainTip and submit share the scheduler endpoint. Keep a small pool so a
+// chainTip and submit share the SchedulerCoord endpoint. Keep a small pool so a
 // long-running submit does not block tip checks during local-node startup and
 // smoke tests.
 const SCHEDULER_POOL_SIZE: usize = 2;

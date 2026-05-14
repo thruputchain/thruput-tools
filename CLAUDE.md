@@ -35,11 +35,12 @@ Workspace crates in `crates/`:
 - **node-supervisor** — `groundhog node` facade. Supervises a hogd-owned
   `hogd-dev` subprocess and embeds `rpc-server` to serve the public
   JSON-RPC. `chainTip` and `sendRawTransaction` are backed by hogd-dev's
-  scheduler endpoint; receipts, transaction status, and contract events
-  are backed by hogd-dev's indexer endpoint when advertised in readiness
-  (otherwise the read plane stays stubbed `NotImplemented` per the v1
-  reduced contract). End-to-end coverage of the read plane is gated on
-  the hogd-dev v1 binary actually exposing the indexer endpoint with
+  `SchedulerCoord` endpoint; receipts, transaction status, and contract
+  events are backed by hogd-dev's `IndexerBlockExplorer` endpoint when
+  advertised in readiness (otherwise the read plane stays stubbed
+  `NotImplemented` per the v1 reduced contract). End-to-end coverage of
+  the read plane is gated on the hogd-dev v1 binary actually exposing the
+  `IndexerBlockExplorer` endpoint with
   full event-feed wiring. This is the only CLI local-node backend; the
   legacy native-exec prototype (`crates/dev-node`) was deleted in PR 5,
   with the git history retaining the source for any future reference.
@@ -428,6 +429,8 @@ history retains the design context for anything not currently active.
   ts` TypeScript binding codegen.
 - `docs/cli/specs/2026-05-07-view-rpc-and-receipt-return-data.md` —
   view RPC and structured receipt return-data wire design.
+- `docs/cli/specs/2026-05-13-view-rpc-protocol-rs-follow-up.md` —
+  protocol/protocol-rs service contract needed to wire view execution.
 - `docs/cli/specs/2026-05-07-transaction-detail-options.md` —
   transaction detail / receipt response shape.
 - `docs/gateway/roadmap.md` — gateway backlog and sequencing.

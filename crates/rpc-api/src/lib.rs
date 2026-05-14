@@ -19,13 +19,14 @@ use groundhog_rpc_api_types::{
     state::StorageItemRead,
     transaction::{TransactionStatus, TxHash},
     version::VersionInfo,
+    view::{ViewRequest, ViewResponse},
 };
 
 /// Wire-format `SemVer` for the JSON-RPC surface.
 ///
 /// See the "`OpenRPC` Wire Version" section in `CLAUDE.md` for bump
 /// rules.
-pub const WIRE_FORMAT_VERSION: &str = "1.1.0";
+pub const WIRE_FORMAT_VERSION: &str = "1.2.0";
 
 /// Phase 1: Core API — submit, query, poll.
 #[open_rpc(namespace = "groundhog", tag = "Core API")]
@@ -76,6 +77,10 @@ pub trait GroundhogApi {
         address: ContractAddress,
         key: HexBytes,
     ) -> RpcResult<StorageItemRead>;
+
+    /// Execute a read-only contract invocation against committed state.
+    #[method(name = "view")]
+    async fn view(&self, request: ViewRequest) -> RpcResult<ViewResponse>;
 
     /// Version dimensions for this JSON-RPC server.
     #[method(name = "version")]

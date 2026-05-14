@@ -38,17 +38,22 @@ pub const MAX_READINESS_LINE_BYTES: usize = 64 * 1024;
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[non_exhaustive]
 pub struct HogdDevEndpoints {
-    /// Scheduler/submit endpoint.
-    pub scheduler: SocketAddr,
-    /// Read endpoint. Absent in the v1 reduced contract.
+    /// `SchedulerCoord` endpoint.
+    ///
+    /// Required for submit, chain tip, and pending tx probes.
+    pub scheduler_coord: SocketAddr,
+    /// `IndexerBlockExplorer` endpoint. Absent in the reduced contract.
     #[serde(default)]
-    pub read: Option<SocketAddr>,
-    /// Latest-state storage read endpoint. Absent in the v1 reduced contract.
+    pub indexer_block_explorer: Option<SocketAddr>,
+    /// `DbGateway` endpoint for latest-state storage reads.
     #[serde(default)]
-    pub gateway: Option<SocketAddr>,
-    /// Dev-control endpoint. Absent in the v1 reduced contract.
+    pub db_gateway: Option<SocketAddr>,
+    /// `ViewGateway` endpoint for read-only contract execution.
     #[serde(default)]
-    pub control: Option<SocketAddr>,
+    pub view_gateway: Option<SocketAddr>,
+    /// Dev-control endpoint. Absent in the reduced contract.
+    #[serde(default)]
+    pub dev_control: Option<SocketAddr>,
 }
 
 /// Public dev-account metadata advertised by hogd-dev readiness.
@@ -730,8 +735,8 @@ mod tests {
         test_support::{FAKE_HOGD_DEV_MODE_ENV, fake_hogd_dev_binary},
     };
 
-    const READY: &str = r#"{"status":"ready","network_id":"groundhog-local","endpoints":{"scheduler":"127.0.0.1:12345","read":"127.0.0.1:12346","gateway":"127.0.0.1:12347","control":"127.0.0.1:12348"}}"#;
-    const V1_READY: &str = r#"{"status":"ready","network_id":"groundhog-local","endpoints":{"scheduler":"127.0.0.1:12345"}}"#;
+    const READY: &str = r#"{"status":"ready","network_id":"groundhog-local","endpoints":{"scheduler_coord":"127.0.0.1:12345","indexer_block_explorer":"127.0.0.1:12346","db_gateway":"127.0.0.1:12347","view_gateway":"127.0.0.1:12348","dev_control":"127.0.0.1:12349"}}"#;
+    const V1_READY: &str = r#"{"status":"ready","network_id":"groundhog-local","endpoints":{"scheduler_coord":"127.0.0.1:12345"}}"#;
 
     #[test]
     fn command_shape_matches_contract() {
@@ -767,13 +772,13 @@ mod tests {
         assert_eq!(readiness.status, "ready");
         assert_eq!(readiness.network_id, "groundhog-local");
         assert_eq!(
-            readiness.endpoints.scheduler,
+            readiness.endpoints.scheduler_coord,
             "127.0.0.1:12345"
                 .parse()
                 .expect("bug: address should parse")
         );
         assert_eq!(
-            readiness.endpoints.read,
+            readiness.endpoints.indexer_block_explorer,
             Some(
                 "127.0.0.1:12346"
                     .parse()
@@ -781,17 +786,25 @@ mod tests {
             )
         );
         assert_eq!(
-            readiness.endpoints.control,
+            readiness.endpoints.dev_control,
             Some(
-                "127.0.0.1:12348"
+                "127.0.0.1:12349"
                     .parse()
                     .expect("bug: address should parse")
             )
         );
         assert_eq!(
-            readiness.endpoints.gateway,
+            readiness.endpoints.db_gateway,
             Some(
                 "127.0.0.1:12347"
+                    .parse()
+                    .expect("bug: address should parse")
+            )
+        );
+        assert_eq!(
+            readiness.endpoints.view_gateway,
+            Some(
+                "127.0.0.1:12348"
                     .parse()
                     .expect("bug: address should parse")
             )
@@ -806,14 +819,15 @@ mod tests {
         assert_eq!(readiness.status, "ready");
         assert_eq!(readiness.network_id, "groundhog-local");
         assert_eq!(
-            readiness.endpoints.scheduler,
+            readiness.endpoints.scheduler_coord,
             "127.0.0.1:12345"
                 .parse()
                 .expect("bug: address should parse")
         );
-        assert_eq!(readiness.endpoints.read, None);
-        assert_eq!(readiness.endpoints.gateway, None);
-        assert_eq!(readiness.endpoints.control, None);
+        assert_eq!(readiness.endpoints.indexer_block_explorer, None);
+        assert_eq!(readiness.endpoints.db_gateway, None);
+        assert_eq!(readiness.endpoints.view_gateway, None);
+        assert_eq!(readiness.endpoints.dev_control, None);
     }
 
     #[test]
@@ -822,7 +836,7 @@ mod tests {
         let readiness = parse_readiness_line(
             "hogd-dev",
             &format!(
-                r#"{{"status":"ready","network_id":"groundhog-local","endpoints":{{"scheduler":"127.0.0.1:12345"}},"dev_accounts":[{{"index":0,"address":"0x{}","public_key":"0x{}","initial_storage_tokens":1000000000}}]}}"#,
+                r#"{{"status":"ready","network_id":"groundhog-local","endpoints":{{"scheduler_coord":"127.0.0.1:12345"}},"dev_accounts":[{{"index":0,"address":"0x{}","public_key":"0x{}","initial_storage_tokens":1000000000}}]}}"#,
                 "11".repeat(32),
                 hex::encode(signer.verifying_key_bytes()),
             ),
@@ -871,7 +885,7 @@ mod tests {
         let readiness = parse_readiness_line(
             "hogd-dev",
             &format!(
-                r#"{{"status":"ready","network_id":"groundhog-local","endpoints":{{"scheduler":"127.0.0.1:12345"}},"dev_accounts":[{{"index":0,"address":"0x{}","public_key":"0x{}","initial_storage_tokens":1000000000}}]}}"#,
+                r#"{{"status":"ready","network_id":"groundhog-local","endpoints":{{"scheduler_coord":"127.0.0.1:12345"}},"dev_accounts":[{{"index":0,"address":"0x{}","public_key":"0x{}","initial_storage_tokens":1000000000}}]}}"#,
                 "11".repeat(32),
                 "22".repeat(32),
             ),
@@ -891,7 +905,7 @@ mod tests {
     fn non_ready_status_is_rejected() {
         let err = parse_readiness_line(
             "hogd-dev",
-            r#"{"status":"starting","network_id":"groundhog-local","endpoints":{"scheduler":"127.0.0.1:12345","read":"127.0.0.1:12346","control":"127.0.0.1:12347"}}"#,
+            r#"{"status":"starting","network_id":"groundhog-local","endpoints":{"scheduler_coord":"127.0.0.1:12345","indexer_block_explorer":"127.0.0.1:12346","dev_control":"127.0.0.1:12347"}}"#,
         )
         .expect_err("bug: non-ready status should fail");
 

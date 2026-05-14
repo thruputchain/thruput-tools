@@ -481,6 +481,58 @@
         "pattern": "^0x[0-9a-f]*$",
         "type": "string"
       },
+      "RootInvocationOutput": {
+        "description": "Root invocation output with raw buffers preserved as hex.",
+        "oneOf": [
+          {
+            "description": "Contract returned normally.",
+            "properties": {
+              "result": {
+                "const": "return",
+                "type": "string"
+              },
+              "returnData": {
+                "$ref": "#/components/schemas/HexBytes"
+              }
+            },
+            "required": [
+              "result",
+              "returnData"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Contract aborted/reverted deterministically.",
+            "properties": {
+              "abortData": {
+                "$ref": "#/components/schemas/HexBytes"
+              },
+              "result": {
+                "const": "abort",
+                "type": "string"
+              }
+            },
+            "required": [
+              "result",
+              "abortData"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Execution faulted before a return or abort payload was produced.",
+            "properties": {
+              "result": {
+                "const": "fault",
+                "type": "string"
+              }
+            },
+            "required": [
+              "result"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "StorageItemInfo": {
         "description": "Latest-committed value at a single storage location, presented as\na tagged union so machine consumers can switch on `kind` without\nrunning an XDR codec for the common cases.",
         "oneOf": [
@@ -793,12 +845,72 @@
           "implementation"
         ],
         "type": "object"
+      },
+      "ViewRequest": {
+        "description": "Request for read-only contract execution against the latest committed state.",
+        "properties": {
+          "calldata": {
+            "$ref": "#/components/schemas/HexBytes",
+            "description": "Opaque call input bytes."
+          },
+          "caller": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Hex0x_ContractAddress"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional simulated caller address observed by `get_msg_sender`."
+          },
+          "contract": {
+            "$ref": "#/components/schemas/Hex0x_ContractAddress",
+            "description": "Contract address to execute."
+          },
+          "entrypoint": {
+            "$ref": "#/components/schemas/HexBytes",
+            "description": "Contract entrypoint id. Must be exactly 8 bytes."
+          }
+        },
+        "required": [
+          "contract",
+          "entrypoint",
+          "calldata"
+        ],
+        "type": "object"
+      },
+      "ViewResponse": {
+        "description": "Result of read-only contract execution.",
+        "properties": {
+          "events": {
+            "description": "Events emitted during view execution.\n\nStrict read-only v1 backends return an empty list unless hogd grows\nexplicit view-event recording.",
+            "items": {
+              "$ref": "#/components/schemas/EmittedEvent"
+            },
+            "type": "array"
+          },
+          "height": {
+            "$ref": "#/components/schemas/BlockHeight",
+            "description": "Block height of the committed snapshot used for the view."
+          },
+          "output": {
+            "$ref": "#/components/schemas/RootInvocationOutput",
+            "description": "Root invocation output."
+          }
+        },
+        "required": [
+          "output",
+          "events",
+          "height"
+        ],
+        "type": "object"
       }
     }
   },
   "info": {
     "title": "Groundhog JSON-RPC",
-    "version": "1.1.0"
+    "version": "1.2.0"
   },
   "methods": [
     {
@@ -1139,6 +1251,47 @@
         }
       },
       "summary": "Read the latest committed storage item at an address/key pair. `block_height` in the returned `StorageItemRead` always reflects the snapshot the read was performed against — even when no item is present at the key — so wallets can compare against `chainTip` to gauge freshness.",
+      "tags": [
+        {
+          "name": "Core API"
+        }
+      ]
+    },
+    {
+      "errors": [
+        {
+          "$ref": "#/components/errors/InvalidParams"
+        },
+        {
+          "$ref": "#/components/errors/BackendUnavailable"
+        },
+        {
+          "$ref": "#/components/errors/BackendTimeout"
+        },
+        {
+          "$ref": "#/components/errors/Overloaded"
+        },
+        {
+          "$ref": "#/components/errors/NotImplemented"
+        }
+      ],
+      "name": "groundhog_view",
+      "params": [
+        {
+          "name": "request",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/ViewRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "ViewResponse",
+        "schema": {
+          "$ref": "#/components/schemas/ViewResponse"
+        }
+      },
+      "summary": "Execute a read-only contract invocation against committed state.",
       "tags": [
         {
           "name": "Core API"

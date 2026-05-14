@@ -101,16 +101,19 @@ Active design notes that will modify the JSON-RPC surface:
 - [View RPC and receipt return-data](docs/cli/specs/2026-05-07-view-rpc-and-receipt-return-data.md)
   — read-only contract calls plus structured `return_data` /
   `abort_data` on receipts.
+- [View RPC protocol-rs follow-up](docs/cli/specs/2026-05-13-view-rpc-protocol-rs-follow-up.md)
+  — protocol/protocol-rs service contract needed to wire
+  `groundhog_view` to hogd.
 - [Transaction detail options](docs/cli/specs/2026-05-07-transaction-detail-options.md)
   — receipt response shape.
 
-### Versioning caveat
+### Wire-format versioning
 
-Wire-format-breaking changes to the OpenRPC artifact currently ride
-workspace-version bumps (e.g. `0.3.x → 0.4.0` may carry a wire change
-even when the diff looks like a routine release). Pin precisely and
-re-review the artifact on each bump. Decoupling wire-format versioning
-from workspace versioning is a tracked follow-up.
+The OpenRPC artifact uses its own SemVer in `info.version`, sourced from
+`groundhog_rpc_api::WIRE_FORMAT_VERSION`, rather than the Rust workspace
+version. SDKs should pin on `wireFormat` from `groundhog_version`;
+workspace releases such as `0.3.x` identify builds, not the JSON-RPC
+contract.
 
 ### Mini-glossary
 
@@ -121,6 +124,9 @@ this repo's docs:
   local development.
 - `indexer` — receipt / event / transaction-status query plane.
 - `scheduler` — submit-tx + chain-tip plane.
+- `scheduler_coord`, `indexer_block_explorer`, `db_gateway`,
+  `view_gateway` — hogd-dev readiness endpoint keys. These name x23
+  services, not public JSON-RPC methods or `rpc-server` planes.
 - `dev-N` — deterministic dev accounts (`dev-0` ... `dev-N`) the local
   dev backend funds and signs as.
 - `x23` — wire protocol between the supervisor and the `hogd-dev`
