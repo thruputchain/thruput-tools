@@ -398,6 +398,7 @@ where
         scheduler_backend.clone(),
         scheduler_backend,
         read,
+        StubBackend::new(),
         RpcServerConfig::default(),
         BuildInfo::new(env!("CARGO_PKG_VERSION"), option_env!("GIT_COMMIT")),
     );

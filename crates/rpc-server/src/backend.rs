@@ -28,7 +28,7 @@
 //! - `ReadPlane::contract_events`             → indexer
 //! - `ReadPlane::get_storage_at`              → `DbGateway1` (TBD; currently
 //!   `NotImplemented` on gateway and supervisor backends, real on dev-node)
-//! - `ReadPlane::view`                        → view executor service (TBD)
+//! - `ViewPlane::view`                        → view executor service (TBD)
 //!
 //! `GroundhogRpcServer::new` accepts per-plane adapter types, so a future
 //! composition (e.g. the hogd-dev supervisor wiring distinct x23 clients)
@@ -112,7 +112,7 @@ pub trait ChainPlane: Send + Sync + 'static {
     async fn pending_transaction_count(&self) -> Result<u64, RpcServerError>;
 }
 
-/// Backend plane for transaction and event reads.
+/// Backend plane for transaction, event, and storage reads.
 #[async_trait]
 pub trait ReadPlane: Send + Sync + 'static {
     /// Return a committed transaction receipt, if available.
@@ -148,7 +148,11 @@ pub trait ReadPlane: Send + Sync + 'static {
         address: ContractAddress,
         key: [u8; 32],
     ) -> Result<StorageItemRead, RpcServerError>;
+}
 
+/// Backend plane for read-only contract execution.
+#[async_trait]
+pub trait ViewPlane: Send + Sync + 'static {
     /// Execute a read-only contract invocation.
     ///
     /// `RootInvocationOutput::Abort` and `RootInvocationOutput::Fault`

@@ -363,7 +363,7 @@ backend in a focused PR:
 4. Add a node-supervisor adapter in `crates/node-supervisor/src/view_backend.rs`.
 5. Add a gateway adapter/handler alongside the existing gateway handler
    modules, reusing `groundhog-x23-transport`.
-6. Override `ReadPlane::view` for node-supervisor and gateway backends.
+6. Implement `ViewPlane::view` for node-supervisor and gateway backends.
 7. Map service payloads to public API types:
 
    | View service result | JSON-RPC result |

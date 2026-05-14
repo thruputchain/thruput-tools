@@ -10,7 +10,7 @@ use groundhog_rpc_api_types::{
     transaction::{TransactionStatus, TxHash},
 };
 use groundhog_rpc_server::{
-    ChainPlane, ReadPlane, RpcServerError, SubmitPlane, ValidatedTransaction,
+    ChainPlane, ReadPlane, RpcServerError, SubmitPlane, ValidatedTransaction, ViewPlane,
 };
 
 use crate::{context::GatewayContext, error::GatewayError, handlers};
@@ -109,6 +109,9 @@ impl ReadPlane for GatewayBackend {
             .map_err(Into::into)
     }
 }
+
+#[async_trait]
+impl ViewPlane for GatewayBackend {}
 
 impl From<GatewayError> for RpcServerError {
     fn from(err: GatewayError) -> Self {
