@@ -321,35 +321,37 @@ fn ignore_sigterm() {
     }
 }
 
-/// Readiness JSON with only the scheduler endpoint (v1 reduced contract).
+/// Readiness JSON with only the `SchedulerCoord` endpoint (reduced contract).
 fn readiness_scheduler_only(scheduler: SocketAddr) -> String {
     let accounts = readiness_dev_accounts();
     format!(
-        r#"{{"status":"ready","network_id":"groundhog-local","endpoints":{{"scheduler":"{scheduler}"}},"dev_accounts":{accounts}}}"#
+        r#"{{"status":"ready","network_id":"groundhog-local","endpoints":{{"scheduler_coord":"{scheduler}"}},"dev_accounts":{accounts}}}"#
     )
 }
 
-/// Readiness JSON with scheduler and read endpoints, but no gateway endpoint.
+/// Readiness JSON with `SchedulerCoord` and `IndexerBlockExplorer`
+/// endpoints, but no `DbGateway` endpoint.
 fn readiness_with_read(scheduler: SocketAddr, read: SocketAddr) -> String {
     let accounts = readiness_dev_accounts();
     format!(
-        r#"{{"status":"ready","network_id":"groundhog-local","endpoints":{{"scheduler":"{scheduler}","read":"{read}"}},"dev_accounts":{accounts}}}"#
+        r#"{{"status":"ready","network_id":"groundhog-local","endpoints":{{"scheduler_coord":"{scheduler}","indexer_block_explorer":"{read}"}},"dev_accounts":{accounts}}}"#
     )
 }
 
-/// Readiness JSON with scheduler and gateway endpoints, but no read/indexer endpoint.
+/// Readiness JSON with `SchedulerCoord` and `DbGateway` endpoints, but no indexer endpoint.
 fn readiness_with_gateway(scheduler: SocketAddr, gateway: SocketAddr) -> String {
     let accounts = readiness_dev_accounts();
     format!(
-        r#"{{"status":"ready","network_id":"groundhog-local","endpoints":{{"scheduler":"{scheduler}","gateway":"{gateway}"}},"dev_accounts":{accounts}}}"#
+        r#"{{"status":"ready","network_id":"groundhog-local","endpoints":{{"scheduler_coord":"{scheduler}","db_gateway":"{gateway}"}},"dev_accounts":{accounts}}}"#
     )
 }
 
-/// Readiness JSON with scheduler, read (indexer), and gateway endpoints.
+/// Readiness JSON with `SchedulerCoord`, `IndexerBlockExplorer`, and
+/// `DbGateway` endpoints.
 fn readiness_full(scheduler: SocketAddr, read: SocketAddr, gateway: SocketAddr) -> String {
     let accounts = readiness_dev_accounts();
     format!(
-        r#"{{"status":"ready","network_id":"groundhog-local","endpoints":{{"scheduler":"{scheduler}","read":"{read}","gateway":"{gateway}"}},"dev_accounts":{accounts}}}"#
+        r#"{{"status":"ready","network_id":"groundhog-local","endpoints":{{"scheduler_coord":"{scheduler}","indexer_block_explorer":"{read}","db_gateway":"{gateway}"}},"dev_accounts":{accounts}}}"#
     )
 }
 

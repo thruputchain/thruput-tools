@@ -124,6 +124,9 @@ this repo's docs:
   local development.
 - `indexer` — receipt / event / transaction-status query plane.
 - `scheduler` — submit-tx + chain-tip plane.
+- `scheduler_coord`, `indexer_block_explorer`, `db_gateway`,
+  `view_gateway` — hogd-dev readiness endpoint keys. These name x23
+  services, not public JSON-RPC methods or `rpc-server` planes.
 - `dev-N` — deterministic dev accounts (`dev-0` ... `dev-N`) the local
   dev backend funds and signs as.
 - `x23` — wire protocol between the supervisor and the `hogd-dev`

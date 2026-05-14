@@ -81,17 +81,20 @@ async fn run_hogd_dev(
         }
         print.status(format_args!("Listening on http://{rpc_addr}"));
         print.status(format_args!(
-            "hogd-dev scheduler: {}",
-            readiness.endpoints.scheduler
+            "hogd-dev SchedulerCoord: {}",
+            readiness.endpoints.scheduler_coord
         ));
-        if let Some(read) = readiness.endpoints.read {
-            print.status(format_args!("hogd-dev read: {read}"));
+        if let Some(indexer) = readiness.endpoints.indexer_block_explorer {
+            print.status(format_args!("hogd-dev IndexerBlockExplorer: {indexer}"));
         }
-        if let Some(gateway) = readiness.endpoints.gateway {
-            print.status(format_args!("hogd-dev gateway: {gateway}"));
+        if let Some(db_gateway) = readiness.endpoints.db_gateway {
+            print.status(format_args!("hogd-dev DbGateway: {db_gateway}"));
         }
-        if let Some(control) = readiness.endpoints.control {
-            print.status(format_args!("hogd-dev control: {control}"));
+        if let Some(view_gateway) = readiness.endpoints.view_gateway {
+            print.status(format_args!("hogd-dev ViewGateway: {view_gateway}"));
+        }
+        if let Some(dev_control) = readiness.endpoints.dev_control {
+            print.status(format_args!("hogd-dev dev control: {dev_control}"));
         }
     }
 
@@ -198,22 +201,31 @@ fn hogd_dev_endpoints_payload(
 ) -> serde_json::Value {
     let mut endpoints = serde_json::Map::new();
     endpoints.insert(
-        "scheduler".into(),
-        serde_json::Value::String(readiness.endpoints.scheduler.to_string()),
+        "scheduler_coord".into(),
+        serde_json::Value::String(readiness.endpoints.scheduler_coord.to_string()),
     );
-    if let Some(read) = readiness.endpoints.read {
-        endpoints.insert("read".into(), serde_json::Value::String(read.to_string()));
-    }
-    if let Some(gateway) = readiness.endpoints.gateway {
+    if let Some(indexer) = readiness.endpoints.indexer_block_explorer {
         endpoints.insert(
-            "gateway".into(),
-            serde_json::Value::String(gateway.to_string()),
+            "indexer_block_explorer".into(),
+            serde_json::Value::String(indexer.to_string()),
         );
     }
-    if let Some(control) = readiness.endpoints.control {
+    if let Some(db_gateway) = readiness.endpoints.db_gateway {
         endpoints.insert(
-            "control".into(),
-            serde_json::Value::String(control.to_string()),
+            "db_gateway".into(),
+            serde_json::Value::String(db_gateway.to_string()),
+        );
+    }
+    if let Some(view_gateway) = readiness.endpoints.view_gateway {
+        endpoints.insert(
+            "view_gateway".into(),
+            serde_json::Value::String(view_gateway.to_string()),
+        );
+    }
+    if let Some(dev_control) = readiness.endpoints.dev_control {
+        endpoints.insert(
+            "dev_control".into(),
+            serde_json::Value::String(dev_control.to_string()),
         );
     }
     serde_json::Value::Object(endpoints)
@@ -229,7 +241,7 @@ mod tests {
         let addr = "127.0.0.1:9545".parse().expect("bug: valid socket addr");
         let readiness = parse_readiness_line(
             "hogd-dev",
-            r#"{"status":"ready","network_id":"groundhog-local","endpoints":{"scheduler":"127.0.0.1:12345","read":"127.0.0.1:12346","gateway":"127.0.0.1:12347","control":"127.0.0.1:12348"}}"#,
+            r#"{"status":"ready","network_id":"groundhog-local","endpoints":{"scheduler_coord":"127.0.0.1:12345","indexer_block_explorer":"127.0.0.1:12346","db_gateway":"127.0.0.1:12347","view_gateway":"127.0.0.1:12348","dev_control":"127.0.0.1:12349"}}"#,
         )
         .expect("bug: readiness should parse");
 
@@ -243,17 +255,24 @@ mod tests {
         assert_eq!(payload["backend"]["planes"], expected_planes);
         assert!(payload["backend"].get("limitations").is_none());
         assert_eq!(
-            payload["backend"]["endpoints"]["scheduler"],
+            payload["backend"]["endpoints"]["scheduler_coord"],
             "127.0.0.1:12345"
         );
-        assert_eq!(payload["backend"]["endpoints"]["read"], "127.0.0.1:12346");
         assert_eq!(
-            payload["backend"]["endpoints"]["gateway"],
+            payload["backend"]["endpoints"]["indexer_block_explorer"],
+            "127.0.0.1:12346"
+        );
+        assert_eq!(
+            payload["backend"]["endpoints"]["db_gateway"],
             "127.0.0.1:12347"
         );
         assert_eq!(
-            payload["backend"]["endpoints"]["control"],
+            payload["backend"]["endpoints"]["view_gateway"],
             "127.0.0.1:12348"
+        );
+        assert_eq!(
+            payload["backend"]["endpoints"]["dev_control"],
+            "127.0.0.1:12349"
         );
         assert!(payload.get("accounts").is_none());
     }
@@ -263,19 +282,28 @@ mod tests {
         let addr = "127.0.0.1:9545".parse().expect("bug: valid socket addr");
         let readiness = parse_readiness_line(
             "hogd-dev",
-            r#"{"status":"ready","network_id":"groundhog-local","endpoints":{"scheduler":"127.0.0.1:12345"}}"#,
+            r#"{"status":"ready","network_id":"groundhog-local","endpoints":{"scheduler_coord":"127.0.0.1:12345"}}"#,
         )
         .expect("bug: v1 readiness should parse");
 
         let payload =
             hogd_dev_startup_payload(addr, &readiness, BackendPlanes::hogd_dev_scheduler_only());
         assert_eq!(
-            payload["backend"]["endpoints"]["scheduler"],
+            payload["backend"]["endpoints"]["scheduler_coord"],
             "127.0.0.1:12345"
         );
-        assert!(payload["backend"]["endpoints"].get("read").is_none());
-        assert!(payload["backend"]["endpoints"].get("gateway").is_none());
-        assert!(payload["backend"]["endpoints"].get("control").is_none());
+        assert!(
+            payload["backend"]["endpoints"]
+                .get("indexer_block_explorer")
+                .is_none()
+        );
+        assert!(payload["backend"]["endpoints"].get("db_gateway").is_none());
+        assert!(
+            payload["backend"]["endpoints"]
+                .get("view_gateway")
+                .is_none()
+        );
+        assert!(payload["backend"]["endpoints"].get("dev_control").is_none());
     }
 
     #[test]
@@ -283,7 +311,7 @@ mod tests {
         let addr = "127.0.0.1:9545".parse().expect("bug: valid socket addr");
         let readiness = parse_readiness_line(
             "hogd-dev",
-            r#"{"status":"ready","network_id":"groundhog-local","endpoints":{"scheduler":"127.0.0.1:12345","read":"127.0.0.1:12346"}}"#,
+            r#"{"status":"ready","network_id":"groundhog-local","endpoints":{"scheduler_coord":"127.0.0.1:12345","indexer_block_explorer":"127.0.0.1:12346"}}"#,
         )
         .expect("bug: readiness should parse");
 

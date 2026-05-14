@@ -35,7 +35,7 @@ That is the right lower layer, but it is not yet a consumable
   `program`.
 - `protocol-rs/scripts/generate.sh` does not generate `view.x`.
 - `protocol-rs` does not publish a view RPC client crate/module.
-- `hogd-dev` readiness does not advertise a `view` endpoint.
+- `hogd-dev` readiness does not advertise a `view_gateway` endpoint.
 - The executor result does not carry the committed snapshot height that
   `ViewResponse.height` requires.
 
@@ -330,23 +330,23 @@ a stable published crate and method.
 ## Hogd-Dev Readiness
 
 When hogd-dev starts the view service, readiness should advertise it in
-the existing `endpoints` object:
+the existing `endpoints` object. Endpoint keys should match x23 service
+names rather than `rpc-server` plane names:
 
 ```json
 {
   "status": "ready",
   "endpoints": {
-    "scheduler": "127.0.0.1:9000",
-    "read": "127.0.0.1:9001",
-    "gateway": "127.0.0.1:9002",
-    "view": "127.0.0.1:9003"
+    "scheduler_coord": "127.0.0.1:9000",
+    "indexer_block_explorer": "127.0.0.1:9001",
+    "db_gateway": "127.0.0.1:9002",
+    "view_gateway": "127.0.0.1:9003"
   }
 }
 ```
 
-The `view` endpoint should be optional. Older hogd-dev binaries that omit
-it remain valid; node-supervisor keeps returning `NotImplemented` for
-`groundhog_view`.
+The `view_gateway` endpoint should be optional. If hogd-dev omits it,
+node-supervisor keeps returning `NotImplemented` for `groundhog_view`.
 
 ## Groundhog-RPC Consumption Plan
 
@@ -359,7 +359,7 @@ backend in a focused PR:
    node-supervisor view backends, then use that value as
    `TransactionViewQuery.invocation.gas_limit`. The scaffold `u64::MAX`
    default is only a placeholder while view returns `NotImplemented`.
-3. Parse optional `endpoints.view` in node-supervisor readiness.
+3. Parse optional `endpoints.view_gateway` in node-supervisor readiness.
 4. Add a node-supervisor adapter in `crates/node-supervisor/src/view_backend.rs`.
 5. Add a gateway adapter/handler alongside the existing gateway handler
    modules, reusing `groundhog-x23-transport`.
@@ -412,14 +412,14 @@ hogd:
 - State writes and nested state writes fail under read-only execution.
 - Executor `InvalidInput` is mapped according to this spec before
   crossing the service boundary.
-- hogd-dev readiness includes `endpoints.view` only when the service is
-  actually listening.
+- hogd-dev readiness includes `endpoints.view_gateway` only when the
+  service is actually listening.
 
 groundhog-rpc:
 
-- Missing `endpoints.view` remains `NotImplemented`.
-- Present `endpoints.view` maps `Return`, `Abort`, and `Fault` as JSON-RPC
-  successes.
+- Missing `endpoints.view_gateway` remains `NotImplemented`.
+- Present `endpoints.view_gateway` maps `Return`, `Abort`, and `Fault` as
+  JSON-RPC successes.
 - `height` round-trips from the service payload.
 - `ViewGatewayAbandoned`, internal errors, and timeouts use the existing
   view error mapping.

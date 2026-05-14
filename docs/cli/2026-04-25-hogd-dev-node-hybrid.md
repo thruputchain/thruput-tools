@@ -177,9 +177,10 @@ groundhog node process
   └─ child process: hogd-dev
 
 hogd-dev process
-  ├─ public x23 scheduler endpoint
-  ├─ public x23 dev-read endpoint
-  ├─ public x23 gateway endpoint for latest-state storage reads
+  ├─ public x23 SchedulerCoord endpoint
+  ├─ public x23 IndexerBlockExplorer endpoint
+  ├─ public x23 DbGateway endpoint for latest-state storage reads
+  ├─ optional future x23 ViewGateway endpoint
   ├─ optional future x23 dev-control endpoint
   └─ internal hogd components with ephemeral/private ports
 ```
@@ -509,9 +510,11 @@ proposal: at worst, the codebase ends up with a better-factored gateway.
 ### Stage 2 — Build hogd-dev prototype
 
 - Extract `MempoolTestInfra` wiring into supported non-test hogd code.
-- Hide internal ports; expose stable scheduler/read/control endpoints.
-- Make the read endpoint explicit about HogDB-backed latest-state reads versus
-  indexer-shaped committed receipt/event reads.
+- Hide internal ports; expose stable x23-service-named endpoints such as
+  `scheduler_coord`, `indexer_block_explorer`, `db_gateway`, and
+  `view_gateway` as those services become available.
+- Keep HogDB latest-state storage reads (`DbGateway`) distinct from
+  indexer-shaped committed receipt/event reads (`IndexerBlockExplorer`).
 - Add clean startup and shutdown contracts.
 - Accept a dev genesis config with deterministic accounts, wallet contracts,
   storage tokens, and cost model.
@@ -529,8 +532,9 @@ hard dependency.
 - Add `groundhog node --backend hogd-dev`.
 - Rust starts hogd-dev, waits for readiness, connects x23 clients, then starts
   JSON-RPC.
-- Use `chuckd_scheduler::TcpSchedulerClient` for scheduler operations.
-- Add read/control x23 clients as they become available.
+- Use the generated scheduler client for `SchedulerCoord` operations.
+- Add `IndexerBlockExplorer`, `DbGateway`, `ViewGateway`, and dev-control
+  x23 clients as they become available.
 
 ### Stage 4 — Fill Anvil-style dev lifecycle
 
@@ -584,9 +588,10 @@ boundary without requiring users to manually install hogd.
    hogd binary?
 
 3. **Read-plane implementation.**
-   Should hogd-dev expose one composite dev-read endpoint backed by HogDB for
-   latest state and an indexer-like store for committed receipts/events, or
-   should those stay as separate internal APIs?
+   Hogd-dev should keep backend services separate and advertise them by x23
+   service name: `IndexerBlockExplorer` for committed receipts/events,
+   `DbGateway` for latest-state storage reads, and `ViewGateway` for
+   read-only contract execution.
 
 4. **`sendRawTransaction` dev semantics.**
    Default should preserve production-style submit-and-poll semantics. Is an

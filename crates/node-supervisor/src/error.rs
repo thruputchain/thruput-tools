@@ -273,10 +273,10 @@ pub enum NodeSupervisorError {
         source: io::Error,
     },
 
-    /// The supervisor could not connect to hogd-dev's scheduler x23 endpoint.
-    #[error("failed to connect hogd-dev scheduler endpoint {endpoint}: {source}")]
+    /// The supervisor could not connect to hogd-dev's `SchedulerCoord` x23 endpoint.
+    #[error("failed to connect hogd-dev SchedulerCoord endpoint {endpoint}: {source}")]
     SchedulerConnect {
-        /// Scheduler endpoint advertised by hogd-dev readiness.
+        /// `SchedulerCoord` endpoint advertised by hogd-dev readiness.
         endpoint: std::net::SocketAddr,
         /// x23 connection error.
         #[source]
@@ -302,10 +302,10 @@ pub enum NodeSupervisorError {
         result: String,
     },
 
-    /// The supervisor could not connect to hogd-dev's indexer x23 endpoint.
-    #[error("failed to connect hogd-dev indexer endpoint {endpoint}: {source}")]
+    /// The supervisor could not connect to hogd-dev's `IndexerBlockExplorer` x23 endpoint.
+    #[error("failed to connect hogd-dev IndexerBlockExplorer endpoint {endpoint}: {source}")]
     IndexerConnect {
-        /// Indexer endpoint advertised by hogd-dev readiness.
+        /// `IndexerBlockExplorer` endpoint advertised by hogd-dev readiness.
         endpoint: std::net::SocketAddr,
         /// x23 connection error.
         #[source]

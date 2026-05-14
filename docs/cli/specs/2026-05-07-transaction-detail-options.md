@@ -186,8 +186,9 @@ If A4 is accepted:
   shape) but become unused; defer their removal until the followup
   spec picks a final shape.
 - The hogd-side control-endpoint scaffold (`hogd_dev_control.x`,
-  `hogd_dev_control.h`, readiness `control` field, `hogddevcontrol_null`)
-  is parked until a real hogd-owned dev-control method needs it.
+  `hogd_dev_control.h`, readiness `dev_control` field,
+  `hogddevcontrol_null`) is parked until a real hogd-owned dev-control
+  method needs it.
 
 If a different path is later picked, this document's table is the
 input; the followup spec is a fresh design pass.

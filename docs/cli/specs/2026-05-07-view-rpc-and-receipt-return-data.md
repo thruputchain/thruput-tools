@@ -300,7 +300,7 @@ Ryan/hogd needs to decide:
    - `gateway/handlers/receipt` maps `Return` -> `return_data`,
      `Abort` -> `abort_data`, `Fault` -> neither;
    - `node-supervisor::read_backend` does the same against hogd-dev's
-     indexer endpoint;
+     `IndexerBlockExplorer` endpoint;
    - shared conversion helpers live in `api-types` or `rpc-server` if
      both backends need the same XDR mapping;
    - update OpenRPC and TypeScript codegen artifacts to reflect the new
@@ -388,13 +388,13 @@ Adding this method touches the shared Rust RPC surface:
   mutation. `groundhog_view` should not get events by silently switching
   to drop-write simulation.
 
-### Supervisor Behavior When View Endpoint Is Absent
+### Supervisor Behavior When ViewGateway Endpoint Is Absent
 
-`hogd-dev` may be released before its view-execution endpoint is
-implemented, the same way it shipped without an indexer endpoint
-initially. node-supervisor should treat the view endpoint as optional in
-readiness, exactly as it currently treats `read`/`control`: an absent
-endpoint leaves the public `groundhog_view` method returning
+`hogd-dev` may be released before its `ViewGateway` endpoint is
+implemented, the same way it shipped without an `IndexerBlockExplorer` endpoint
+initially. node-supervisor should treat `endpoints.view_gateway` as
+optional in readiness, exactly as it treats other optional x23 services:
+an absent endpoint leaves the public `groundhog_view` method returning
 `NotImplemented`, not a startup failure. The gateway's production
 configuration follows the same rule against real hogd.
 
@@ -444,7 +444,8 @@ at the service boundary, and carry the snapshot height used for
 execution. Public v1 keeps `ViewResponse.events` but expects it to be
 empty under strict read-only execution.
 
-Recommendation: implement a dedicated service-level view endpoint. The
+Recommendation: implement a dedicated service-level `ViewGateway`
+endpoint. The
 hogexec test-FFI path can inform the implementation, but should not be
 the production/dev-node API surface.
 
@@ -530,7 +531,7 @@ mutation.
 
 ### Milestone B Implementation Order
 
-1. hogd/protocol design sign-off for the view endpoint shape, caller
+1. hogd/protocol design sign-off for the `ViewGateway` endpoint shape, caller
    semantics, height threading, and strict read-only event behavior.
 2. hogd implementation: top-level read-only execution entry point using
    latest committed state, optional caller context, gas cap, and root
