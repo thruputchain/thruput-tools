@@ -67,8 +67,8 @@ Implementation status:
 - `groundhog storage` now exposes the public `groundhog_getStorageAt`
   latest-state read as a raw address/key inspection command. This keeps
   the CLI split explicit: `call` signs and submits transactions, `storage`
-  reads committed storage, and future `view` executes read-only contract
-  methods.
+  reads committed storage, and `view` executes the contract under
+  sandboxed simulation.
 - Remaining Phase 1 follow-up: cache repeated embedded-spec parsing,
   tighten union/structured CLI ergonomics and diagnostics, and keep
   proving out the spec-driven path so the remaining local-source fallback
@@ -243,7 +243,8 @@ Maintenance rules:
       `TransactionReceipt`. Requires hogd `TxEventLog` extension and
       indexer migration; Rust mapping waits on protocol-rs publish.
     - [ ] Milestone B — `groundhog_view` RPC and `groundhog view` CLI
-      command. Requires hogd top-level read-only execution entry point.
+      command. Requires hogd top-level view execution entry point with
+      sandboxed-simulation semantics.
 
 ### Phase 3
 
@@ -489,8 +490,8 @@ Two parallel tracks are open after PR 4f:
    - Milestone A: receipt return-data + abort-data. Hogd protocol design
      and indexer migration come first; Rust mapping follows protocol-rs
      publish.
-   - Milestone B: `groundhog_view` RPC. Hogd top-level read-only
-     execution entry point first; Rust + CLI follow.
+   - Milestone B: `groundhog_view` RPC. Hogd top-level view execution
+     entry point (sandboxed simulation) first; Rust + CLI follow.
 
 After either or both tracks close, the next batch should continue Phase 3
 testing DX:

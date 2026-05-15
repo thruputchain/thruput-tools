@@ -1,7 +1,11 @@
 # View RPC Protocol-RS Follow-Up
 
-**Date:** 2026-05-13
-**Status:** Draft follow-up after hogd PR #1902 merged as `7b659115`.
+**Date:** 2026-05-13 (revised 2026-05-15)
+**Status:** Service contract and protocol-rs shape shipped. Revised
+2026-05-15 to flip the execution model from strict read-only to
+sandboxed simulation; see the parent doc for context. The wire shape
+(`ViewGatewayPayload`, `ViewGatewayResult`, `viewgateway_intro` /
+`viewgateway_view`) is unchanged.
 
 **Companion to:**
 
@@ -121,9 +125,9 @@ struct ViewGatewayPayload {
   // deterministic failures to Fault.
   InvocationFrameOutput output;
 
-  // Empty for public v1 if view remains strict read-only. Can carry
-  // ephemeral view events later if hogd adds view-event recording that
-  // does not permit storage mutation.
+  // Events emitted by the simulated frame, captured from
+  // `get_most_recent_frame_events()`. Wallet-preview callers see what
+  // events a real submit would produce.
   TxEmittedEvent events<>;
 };
 
@@ -205,7 +209,7 @@ program ViewGateway
   {
     ViewGatewayIntroOutcome viewgateway_intro(Protocol) = 0;
 
-    // Execute a read-only invocation against one committed snapshot.
+    // Execute a simulated invocation against one committed snapshot.
     ViewGatewayResult viewgateway_view(TransactionViewQuery) = 1;
   } = 1;
 }
@@ -242,8 +246,11 @@ a bounded production value before advertising public view support.
 The remaining `TransactionViewQuery` fields need explicit protocol
 documentation before protocol-rs publishes them:
 
-- `invoke_flags` should include `InvokeFlag::ReadOnly` and should not
-  include `TryInvoke` or `DelegateCall` for v1 public view.
+- `invoke_flags` should be `InvokeFlag::None` on the root invocation,
+  matching the protocol convention that "the root transaction invocation
+  always has no flags set" (`invoke_flag.x`). Sandboxing is a property
+  of the view execution mode (`ViewingModeData`), not of a per-frame
+  flag. `TryInvoke` and `DelegateCall` are not part of v1 public view.
 - `forwarded_tokens` should be empty.
 - `auth_claim` must not be validated for v1 public view. The preferred
   protocol shape is `AuthClaim *auth_claim`, with `nullptr` for public
@@ -252,22 +259,21 @@ documentation before protocol-rs publishes them:
   field for compatibility reasons.
 
 The hogd service should enforce this public subset at its boundary:
-either reject non-empty `forwarded_tokens` and non-`ReadOnly` /
-non-empty-disallowed flags, or normalize them before execution. It must
-not silently honor `TryInvoke`, `DelegateCall`, auth claims, or forwarded
-tokens from arbitrary callers of `viewgateway_view`.
+either reject non-empty `forwarded_tokens` and non-`None`-disallowed
+flags, or normalize them before execution. It must not silently honor
+`TryInvoke`, `DelegateCall`, auth claims, or forwarded tokens from
+arbitrary callers of `viewgateway_view`.
 
 The important invariant: public view is caller context, not authorization
 simulation. Passing `caller` must affect `get_msg_sender`; it must not
 prove ownership or grant capabilities.
 
-Because public v1 sends `InvokeFlag::ReadOnly`, emitted events are not
-part of v1 public view. The current hogexec read-only path rejects
-`log_event`, so `ViewGatewayPayload.events` should be empty. If wallet
-preview events become a v1 requirement, hogd must add a distinct
-view-event mode that records events while still rejecting storage writes;
-`groundhog-rpc` should not get events by switching to drop-write
-simulation.
+Emitted events are part of v1 public view. `ViewingModeData` permits
+`log_event`, and `view.cc` copies the simulated frame's events into
+`ViewGatewayPayload.events`. Storage writes from the simulated frame
+go to the per-transaction scratchpad that the view path never
+commits; defense in depth in hogdb keys on
+`kBlockExecutionModeViewing` so a scratchpad write cannot escape.
 
 ## Required Protocol-RS Changes
 
@@ -409,7 +415,12 @@ hogd:
 - Retry exhaustion returns `ViewGatewayAbandoned`.
 - `caller = None` preserves root-frame behavior.
 - `caller = Some(addr)` makes `get_msg_sender` observe `addr`.
-- State writes and nested state writes fail under read-only execution.
+- State writes and nested state writes execute against the view
+  scratchpad and do not commit. Subsequent reads in the same view
+  frame see the in-flight writes (faithful simulation), but the final
+  committed snapshot is unchanged.
+- Emitted events from the simulated frame surface in
+  `ViewGatewayPayload.events`.
 - Executor `InvalidInput` is mapped according to this spec before
   crossing the service boundary.
 - hogd-dev readiness includes `endpoints.view_gateway` only when the
@@ -441,6 +452,3 @@ groundhog-rpc:
   a temporary ignored sentinel for compatibility.
 - Whether `InvalidInput(error_code)` detail should remain service-local
   or force a public JSON-RPC `Fault` detail before wire stabilization.
-- Whether v1 changes scope to support ephemeral view events. The default
-  in this spec is strict read-only public view with an empty `events<>`
-  list.
