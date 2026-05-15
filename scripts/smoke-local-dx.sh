@@ -284,17 +284,10 @@ log "view error result: height=$(json_field data.height "$ERROR_VIEW_JSON") abor
 
 WRITE_VIEW_JSON="$(run_json "view decrement read-only" "$CLI" --json view --from dev-0 "$PROJECT_NAME" decrement 1)"
 WRITE_VIEW_OUTPUT="$(json_field data.output.result "$WRITE_VIEW_JSON")"
-case "$WRITE_VIEW_OUTPUT" in
-    fault)
-        log "view decrement read-only result: height=$(json_field data.height "$WRITE_VIEW_JSON") output=$WRITE_VIEW_OUTPUT"
-        ;;
-    return)
-        log "view decrement read-only result: height=$(json_field data.height "$WRITE_VIEW_JSON") output=$WRITE_VIEW_OUTPUT (current hogd behavior; storage check below verifies no commit)"
-        ;;
-    *)
-        die "view decrement output was $WRITE_VIEW_OUTPUT, expected fault or return"
-        ;;
-esac
+[[ "$WRITE_VIEW_OUTPUT" == "abort" ]] || die "view decrement output was $WRITE_VIEW_OUTPUT, expected abort"
+WRITE_ABORT_DATA="$(json_field data.output.abortData "$WRITE_VIEW_JSON")"
+[[ "$WRITE_ABORT_DATA" != "null" ]] || die "view decrement did not return abortData"
+log "view decrement read-only result: height=$(json_field data.height "$WRITE_VIEW_JSON") output=$WRITE_VIEW_OUTPUT abortData=$WRITE_ABORT_DATA"
 
 GET_JSON="$(run_json "call get" "$CLI" --json call "$PROJECT_NAME" get)"
 assert_call_succeeded "get" "$GET_JSON"
