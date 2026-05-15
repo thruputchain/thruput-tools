@@ -3,8 +3,11 @@ use std::sync::Arc;
 use groundhog_db_gateway::DbGateway_DbGateway1_Client;
 use groundhog_indexer::IndexerBlockExplorer_IndexerBlockExplorer1_Client;
 use groundhog_scheduler::sched_coord::SchedulerCoord_SchedulerCoord1_Client;
+use groundhog_view::{Protocol, ViewGateway_ViewGateway1_Client, ViewGatewayIntroOutcome};
 use groundhog_x23_transport::{ConnectError, try_connect};
+use groundhog_xdr::PROTOCOL_VERSION;
 use tokio::sync::RwLock;
+use xdr_common::StringM;
 
 use crate::config::GatewayConfig;
 use crate::storage_batcher::{DbGatewaySink, StorageReadBatcher, StorageReadSink};
@@ -43,6 +46,10 @@ pub struct GatewayContext {
     /// Request coalescer for `chainTip`. One in-flight `get_tip` RPC
     /// can satisfy many concurrent client requests.
     pub tip_coalescer: TipCoalescer,
+
+    /// x23 RPC client to hogd ViewGateway.
+    /// Used for: `groundhog_view`.
+    pub view_gateway: Arc<RwLock<Option<ViewGateway_ViewGateway1_Client>>>,
 
     /// x23 RPC client to coordinator storage (optional).
     /// Used for: block/CV queries and optional tx submission relay path.
@@ -110,6 +117,10 @@ impl GatewayContext {
             None => None,
         }));
 
+        let view_gateway = Arc::new(RwLock::new(
+            connect_optional_view_gateway(config.view_gateway_address.as_deref()).await?,
+        ));
+
         let submit_sink: Arc<dyn SubmitSink> = Arc::new(SchedulerSink::new(scheduler.clone()));
         let batch_submitter = BatchSubmitter::spawn(&config.batch, &submit_sink);
 
@@ -125,8 +136,49 @@ impl GatewayContext {
             batch_submitter,
             storage_batcher,
             tip_coalescer,
+            view_gateway,
             config,
         })
+    }
+}
+
+async fn connect_optional_view_gateway(
+    address: Option<&str>,
+) -> Result<Option<ViewGateway_ViewGateway1_Client>, ConnectError> {
+    let Some(address) = address else {
+        return Ok(None);
+    };
+
+    let Some(client) = try_connect(
+        "view_gateway",
+        address,
+        view_gateway_pool_size(),
+        ViewGateway_ViewGateway1_Client::new,
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
+
+    let protocol: Protocol = StringM(PROTOCOL_VERSION.as_bytes().to_vec());
+    match client.viewgateway_intro(&protocol).await {
+        Ok(ViewGatewayIntroOutcome::ViewGatewayIntroSuccess) => Ok(Some(client)),
+        Ok(outcome) => {
+            tracing::warn!(
+                outcome = outcome.0,
+                address,
+                "view_gateway intro rejected, starting view plane in degraded mode"
+            );
+            Ok(None)
+        }
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                address,
+                "view_gateway intro failed, starting view plane in degraded mode"
+            );
+            Ok(None)
+        }
     }
 }
 
@@ -150,4 +202,8 @@ fn scheduler_pool_size(config: &GatewayConfig) -> usize {
 fn db_gateway_pool_size(config: &GatewayConfig) -> usize {
     const SLACK: usize = 2;
     config.storage.max_concurrent_rpcs().saturating_add(SLACK)
+}
+
+fn view_gateway_pool_size() -> usize {
+    4
 }

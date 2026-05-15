@@ -258,9 +258,43 @@ EXPECTED_VALUE=$(( INITIAL_VALUE + INCREMENT_AMOUNT ))
 VIEW_JSON="$(run_json "view get" "$CLI" --json view --from dev-0 "$PROJECT_NAME" get)"
 VIEW_OUTPUT="$(json_field data.output.result "$VIEW_JSON")"
 [[ "$VIEW_OUTPUT" == "return" ]] || die "view get output was $VIEW_OUTPUT, expected return"
-VIEW_RETURN="$(json_field data.return_value "$VIEW_JSON")"
+VIEW_RETURN="$(json_field data.returnValue "$VIEW_JSON")"
 [[ "$VIEW_RETURN" == "$EXPECTED_VALUE" ]] || die "view get return was $VIEW_RETURN, expected $EXPECTED_VALUE"
 log "view get result: height=$(json_field data.height "$VIEW_JSON") caller=$(json_field data.caller "$VIEW_JSON") return=$VIEW_RETURN"
+
+VIEW_ENTRYPOINT="$(json_field data.entrypointId "$VIEW_JSON")"
+RAW_VIEW_JSON="$(run_json "raw view get" "$CLI" --json view "$CONTRACT_ADDRESS" "$VIEW_ENTRYPOINT" --calldata 0x)"
+RAW_VIEW_OUTPUT="$(json_field data.output.result "$RAW_VIEW_JSON")"
+[[ "$RAW_VIEW_OUTPUT" == "return" ]] || die "raw view get output was $RAW_VIEW_OUTPUT, expected return"
+RAW_VIEW_RETURN="$(json_field data.returnValue "$RAW_VIEW_JSON")"
+[[ "$RAW_VIEW_RETURN" == "null" ]] || die "raw view get decoded return was $RAW_VIEW_RETURN, expected null"
+RAW_VIEW_DATA="$(json_field data.output.returnData "$RAW_VIEW_JSON")"
+[[ "$RAW_VIEW_DATA" != "null" && "$RAW_VIEW_DATA" != "0x" ]] \
+    || die "raw view get did not return raw returnData"
+log "raw view get result: height=$(json_field data.height "$RAW_VIEW_JSON") entrypoint=$VIEW_ENTRYPOINT returnData=$RAW_VIEW_DATA"
+
+ERROR_VIEW_JSON="$(run_json "view error" "$CLI" --json view --from dev-0 "$PROJECT_NAME" error)"
+ERROR_VIEW_OUTPUT="$(json_field data.output.result "$ERROR_VIEW_JSON")"
+[[ "$ERROR_VIEW_OUTPUT" == "abort" ]] || die "view error output was $ERROR_VIEW_OUTPUT, expected abort"
+ERROR_ABORT_DATA="$(json_field data.output.abortData "$ERROR_VIEW_JSON")"
+[[ "$ERROR_ABORT_DATA" != "null" ]] || die "view error did not return abortData"
+ERROR_RETURN="$(json_field data.returnValue "$ERROR_VIEW_JSON")"
+[[ "$ERROR_RETURN" == "null" ]] || die "view error decoded return was $ERROR_RETURN, expected null"
+log "view error result: height=$(json_field data.height "$ERROR_VIEW_JSON") abortData=$ERROR_ABORT_DATA"
+
+WRITE_VIEW_JSON="$(run_json "view decrement read-only" "$CLI" --json view --from dev-0 "$PROJECT_NAME" decrement 1)"
+WRITE_VIEW_OUTPUT="$(json_field data.output.result "$WRITE_VIEW_JSON")"
+case "$WRITE_VIEW_OUTPUT" in
+    fault)
+        log "view decrement read-only result: height=$(json_field data.height "$WRITE_VIEW_JSON") output=$WRITE_VIEW_OUTPUT"
+        ;;
+    return)
+        log "view decrement read-only result: height=$(json_field data.height "$WRITE_VIEW_JSON") output=$WRITE_VIEW_OUTPUT (current hogd behavior; storage check below verifies no commit)"
+        ;;
+    *)
+        die "view decrement output was $WRITE_VIEW_OUTPUT, expected fault or return"
+        ;;
+esac
 
 GET_JSON="$(run_json "call get" "$CLI" --json call "$PROJECT_NAME" get)"
 assert_call_succeeded "get" "$GET_JSON"

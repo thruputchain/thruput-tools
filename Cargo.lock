@@ -1077,6 +1077,7 @@ dependencies = [
  "groundhog_db_gateway",
  "groundhog_indexer",
  "groundhog_scheduler",
+ "groundhog_view",
  "jsonrpsee",
  "prometheus",
  "rpc_driver",

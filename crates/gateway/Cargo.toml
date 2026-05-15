@@ -31,6 +31,7 @@ groundhog-xdr = { workspace = true }
 groundhog_indexer = { workspace = true }
 groundhog_scheduler = { workspace = true }
 groundhog_db_gateway = { workspace = true }
+groundhog_view = { workspace = true }
 rpc_driver = { workspace = true }
 xdr-common = { workspace = true }
 async-trait = { workspace = true }

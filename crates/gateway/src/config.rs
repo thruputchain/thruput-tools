@@ -134,6 +134,21 @@ pub struct GatewayConfig {
     /// `BackendUnavailable`.
     pub db_gateway_address: Option<String>,
 
+    /// x23 RPC address for hogd `ViewGateway1` (read-only contract execution).
+    ///
+    /// Serves `groundhog_view`. Optional: when absent the gateway returns
+    /// `NotImplemented` for view execution.
+    pub view_gateway_address: Option<String>,
+
+    /// Maximum time to wait for one `ViewGateway` execution RPC.
+    pub view_timeout_ms: u64,
+
+    /// Maximum `groundhog_view` calldata byte length.
+    pub max_view_calldata_bytes: usize,
+
+    /// Gas budget assigned to backend `groundhog_view` execution.
+    pub view_gas_limit: u64,
+
     /// x23 RPC address for coordinator (for block/CV queries).
     ///
     /// Also used for tx submission when `submission_backend=chuckd_coordinator`.
@@ -169,6 +184,10 @@ impl Default for GatewayConfig {
             scheduler_address: "127.0.0.1:9000".into(),
             indexer_address: "127.0.0.1:9001".into(),
             db_gateway_address: None,
+            view_gateway_address: None,
+            view_timeout_ms: 30_000,
+            max_view_calldata_bytes: 64 * 1024,
+            view_gas_limit: groundhog_rpc_server::DEFAULT_VIEW_GAS_LIMIT,
             coordinator_address: None,
             max_events_per_page: 200,
             max_cursor_bytes: 256,

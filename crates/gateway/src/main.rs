@@ -39,6 +39,10 @@ struct Cli {
     /// Indexer x23 RPC address (overrides config file)
     #[arg(long)]
     indexer: Option<String>,
+
+    /// ViewGateway x23 RPC address (overrides config file)
+    #[arg(long)]
+    view_gateway: Option<String>,
 }
 
 #[tokio::main]
@@ -68,12 +72,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(indexer) = cli.indexer {
         config.indexer_address = indexer;
     }
+    if let Some(view_gateway) = cli.view_gateway {
+        config.view_gateway_address = Some(view_gateway);
+    }
 
     tracing::info!(
         listen = %config.listen_address,
         submission_backend = ?config.submission_backend,
         scheduler = %config.scheduler_address,
         indexer = %config.indexer_address,
+        view_gateway = ?config.view_gateway_address,
         coordinator = ?config.coordinator_address,
         "loading configuration",
     );
@@ -94,7 +102,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let rpc_config = RpcServerConfig::default()
         .with_max_events_per_page(ctx.config.max_events_per_page)
-        .with_max_cursor_bytes(ctx.config.max_cursor_bytes);
+        .with_max_cursor_bytes(ctx.config.max_cursor_bytes)
+        .with_max_view_calldata_bytes(ctx.config.max_view_calldata_bytes)
+        .with_view_gas_limit(ctx.config.view_gas_limit);
     let api_impl = GroundhogRpcServer::unified(
         GatewayBackend::new(ctx),
         rpc_config,
