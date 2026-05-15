@@ -43,6 +43,10 @@ struct Cli {
     /// `ViewGateway` x23 RPC address (overrides config file)
     #[arg(long)]
     view_gateway: Option<String>,
+
+    /// Override hogd protocol string for local cross-repo smoke tests
+    #[arg(long, hide = true)]
+    hogd_protocol: Option<String>,
 }
 
 #[tokio::main]
@@ -75,6 +79,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(view_gateway) = cli.view_gateway {
         config.view_gateway_address = Some(view_gateway);
     }
+    if let Some(hogd_protocol) = cli.hogd_protocol {
+        config.hogd_protocol_override = Some(hogd_protocol);
+    }
 
     tracing::info!(
         listen = %config.listen_address,
@@ -82,6 +89,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         scheduler = %config.scheduler_address,
         indexer = %config.indexer_address,
         view_gateway = ?config.view_gateway_address,
+        hogd_protocol_override = ?config.hogd_protocol_override,
         coordinator = ?config.coordinator_address,
         "loading configuration",
     );

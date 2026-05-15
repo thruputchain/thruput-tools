@@ -143,6 +143,13 @@ pub struct GatewayConfig {
     /// Maximum time to wait for one `ViewGateway` execution RPC.
     pub view_timeout_ms: u64,
 
+    /// Optional protocol string used for hogd intro handshakes.
+    ///
+    /// Defaults to the protocol embedded in the linked `groundhog-xdr` crate.
+    /// This override is intended for local cross-repo smoke tests before a
+    /// matching Rust protocol crate has been published.
+    pub hogd_protocol_override: Option<String>,
+
     /// Maximum `groundhog_view` calldata byte length.
     pub max_view_calldata_bytes: usize,
 
@@ -186,6 +193,7 @@ impl Default for GatewayConfig {
             db_gateway_address: None,
             view_gateway_address: None,
             view_timeout_ms: 30_000,
+            hogd_protocol_override: None,
             max_view_calldata_bytes: 64 * 1024,
             view_gas_limit: groundhog_rpc_server::DEFAULT_VIEW_GAS_LIMIT,
             coordinator_address: None,

@@ -32,8 +32,8 @@ pub struct ViewResponse {
 
     /// Events emitted during view execution.
     ///
-    /// Strict read-only v1 backends return an empty list unless hogd grows
-    /// explicit view-event recording.
+    /// Hogd captures emitted events from the simulated frame; wallet-preview
+    /// callers see what events a real submit would produce.
     pub events: Vec<EmittedEvent>,
 
     /// Block height of the committed snapshot used for the view.

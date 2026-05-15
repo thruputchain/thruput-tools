@@ -76,7 +76,11 @@ fn view_query_from_request(
         parent_address: request.caller.map(|caller| caller.0),
         auth_claim: public_view_auth_claim(),
         forwarded_tokens: VecM(vec![]),
-        invoke_flags: InvokeFlag::ReadOnly.0,
+        // Root invocations carry no flags (`invoke_flag.x:9-10`). Hogd's
+        // `ViewingModeData` is what sandboxes the run — writes don't commit,
+        // and `log_event` is permitted so wallet-preview callers can see what
+        // events a real submit would produce.
+        invoke_flags: InvokeFlag::None.0,
     })
 }
 
@@ -243,7 +247,7 @@ mod tests {
         assert_eq!(query.invocation.calldata.0, vec![1, 2, 3]);
         assert_eq!(query.parent_address.as_ref(), Some(&caller.0));
         assert_eq!(query.forwarded_tokens.0.len(), 0);
-        assert_eq!(query.invoke_flags, InvokeFlag::ReadOnly.0);
+        assert_eq!(query.invoke_flags, InvokeFlag::None.0);
         assert_eq!(
             query.auth_claim,
             AuthClaim::kSourceAddressAuthData {

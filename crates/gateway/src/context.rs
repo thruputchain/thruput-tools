@@ -118,7 +118,11 @@ impl GatewayContext {
         }));
 
         let view_gateway = Arc::new(RwLock::new(
-            connect_optional_view_gateway(config.view_gateway_address.as_deref()).await?,
+            connect_optional_view_gateway(
+                config.view_gateway_address.as_deref(),
+                config.hogd_protocol_override.as_deref(),
+            )
+            .await?,
         ));
 
         let submit_sink: Arc<dyn SubmitSink> = Arc::new(SchedulerSink::new(scheduler.clone()));
@@ -144,6 +148,7 @@ impl GatewayContext {
 
 async fn connect_optional_view_gateway(
     address: Option<&str>,
+    protocol_override: Option<&str>,
 ) -> Result<Option<ViewGateway_ViewGateway1_Client>, ConnectError> {
     let Some(address) = address else {
         return Ok(None);
@@ -157,7 +162,8 @@ async fn connect_optional_view_gateway(
     )
     .await?;
 
-    let protocol: Protocol = StringM(PROTOCOL_VERSION.as_bytes().to_vec());
+    let protocol_version = protocol_override.unwrap_or(PROTOCOL_VERSION);
+    let protocol: Protocol = StringM(protocol_version.as_bytes().to_vec());
     match client.viewgateway_intro(&protocol).await {
         Ok(ViewGatewayIntroOutcome::ViewGatewayIntroSuccess) => Ok(Some(client)),
         Ok(outcome) => Err(ConnectError::StartupRejected {
@@ -216,6 +222,9 @@ mod tests {
     use super::*;
 
     struct IntroRejectedViewGateway;
+    struct ProtocolCheckingViewGateway {
+        expected: &'static str,
+    }
 
     #[async_trait]
     impl ViewGateway_ViewGateway1 for IntroRejectedViewGateway {
@@ -231,6 +240,27 @@ mod tests {
             _arg0: TransactionViewQuery,
         ) -> Result<ViewGatewayResult, ProgramError> {
             panic!("bug: intro rejection test should not issue view RPC")
+        }
+    }
+
+    #[async_trait]
+    impl ViewGateway_ViewGateway1 for ProtocolCheckingViewGateway {
+        async fn viewgateway_intro(
+            &self,
+            arg0: Protocol,
+        ) -> Result<ViewGatewayIntroOutcome, ProgramError> {
+            if arg0.0 == self.expected.as_bytes() {
+                Ok(ViewGatewayIntroOutcome::ViewGatewayIntroSuccess)
+            } else {
+                Ok(ViewGatewayIntroOutcome::ViewGatewayIntroMismatchedProtocol)
+            }
+        }
+
+        async fn viewgateway_view(
+            &self,
+            _arg0: TransactionViewQuery,
+        ) -> Result<ViewGatewayResult, ProgramError> {
+            panic!("bug: intro protocol test should not issue view RPC")
         }
     }
 
@@ -253,9 +283,30 @@ mod tests {
         (addr, handle)
     }
 
+    async fn start_protocol_checking_view_gateway(
+        expected: &'static str,
+    ) -> (
+        std::net::SocketAddr,
+        tokio::task::JoinHandle<Result<(), std::io::Error>>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bug: test ViewGateway should bind");
+        let addr = listener
+            .local_addr()
+            .expect("bug: test ViewGateway should have local addr");
+        let mut services = ServiceMap::new();
+        services.add_service(Box::new(ViewGateway_ViewGateway1_Dispatcher::new(
+            Box::new(ProtocolCheckingViewGateway { expected }),
+        )));
+        let server = RpcServer::new(listener, services);
+        let handle = server.start().await;
+        (addr, handle)
+    }
+
     #[tokio::test]
     async fn optional_view_gateway_without_address_is_absent() {
-        let client = connect_optional_view_gateway(None)
+        let client = connect_optional_view_gateway(None, None)
             .await
             .expect("missing optional ViewGateway should not fail startup");
 
@@ -266,7 +317,7 @@ mod tests {
     async fn configured_view_gateway_intro_rejection_fails_startup_probe() {
         let (addr, _server) = start_intro_rejected_view_gateway().await;
 
-        let Err(err) = connect_optional_view_gateway(Some(&addr.to_string())).await else {
+        let Err(err) = connect_optional_view_gateway(Some(&addr.to_string()), None).await else {
             panic!("configured ViewGateway intro rejection should fail startup");
         };
 
@@ -274,5 +325,18 @@ mod tests {
             matches!(err, ConnectError::StartupRejected { .. }),
             "expected StartupRejected, got {err:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn configured_view_gateway_uses_protocol_override_for_startup_probe() {
+        let (addr, _server) = start_protocol_checking_view_gateway("hogp/test-smoke").await;
+
+        let client =
+            connect_optional_view_gateway(Some(&addr.to_string()), Some("hogp/test-smoke"))
+                .await
+                .expect("matching protocol override should pass startup")
+                .expect("configured ViewGateway should be connected");
+
+        drop(client);
     }
 }
