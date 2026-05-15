@@ -109,6 +109,8 @@ Maintenance rules:
 - [x] `groundhog test`
 - [x] `groundhog deploy`
 - [x] `groundhog call`
+- [x] `groundhog view`
+- [x] `groundhog storage`
 - [x] `groundhog node` (feature-gated)
 - [x] `groundhog init`
 - [x] `groundhog status`
@@ -229,7 +231,7 @@ Maintenance rules:
        `[patch]` recipe so internal contributors can iterate against a sibling
        sdk_rs checkout without waiting on a republish.
 
-  - [ ] PR 5 — local-node `getStorageAt` parity through hogd-dev's
+  - [x] PR 5 — local-node `getStorageAt` parity through hogd-dev's
     existing `gateway` / `DbGateway1` endpoint, plus `groundhog storage`
     as the CLI surface for raw committed storage reads. Transaction detail
     and dev-control are deferred; see
@@ -242,9 +244,8 @@ Maintenance rules:
     - [ ] Milestone A — receipt return data and abort data on
       `TransactionReceipt`. Requires hogd `TxEventLog` extension and
       indexer migration; Rust mapping waits on protocol-rs publish.
-    - [ ] Milestone B — `groundhog_view` RPC and `groundhog view` CLI
-      command. Requires hogd top-level view execution entry point with
-      sandboxed-simulation semantics.
+    - [x] Milestone B — `groundhog_view` RPC and `groundhog view` CLI
+      command, landed with sandboxed-simulation semantics.
 
 ### Phase 3
 
@@ -471,9 +472,9 @@ Two parallel tracks are open after PR 4f:
 
 **Rust track (no hogd dependency):**
 
-1. Land local-node `groundhog_getStorageAt` parity and the `groundhog storage`
-   CLI wrapper for raw committed address/key reads. This is the concrete
-   wallet-readiness gap that does not require a new hogd protocol surface.
+1. Local-node `groundhog_getStorageAt` parity and the `groundhog storage`
+   CLI wrapper for raw committed address/key reads have landed. Transaction
+   detail remains deferred.
 2. Startup clean-slate UX (`groundhog node --reset`) as a process
    lifecycle feature, not a runtime `groundhog_dev_reset` RPC.
 
@@ -490,8 +491,9 @@ Two parallel tracks are open after PR 4f:
    - Milestone A: receipt return-data + abort-data. Hogd protocol design
      and indexer migration come first; Rust mapping follows protocol-rs
      publish.
-   - Milestone B: `groundhog_view` RPC. Hogd top-level view execution
-     entry point (sandboxed simulation) first; Rust + CLI follow.
+   - Milestone B: `groundhog_view` RPC. Hogd top-level view execution,
+     protocol-rs bindings, Rust gateway/local-node wiring, CLI, and smoke
+     coverage have landed with sandboxed simulation semantics.
 
 After either or both tracks close, the next batch should continue Phase 3
 testing DX:
@@ -501,7 +503,7 @@ testing DX:
    - deploy the target contract
    - run integration tests against its RPC URL
    - clean up unless persistence is requested.
-   This becomes materially better once Milestone B lands, since
+   This is materially better now that Milestone B has landed, since
    integration assertions can use `groundhog view` instead of submitting
    txs.
 2. Add better test output controls:

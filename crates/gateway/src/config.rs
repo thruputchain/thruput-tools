@@ -134,7 +134,7 @@ pub struct GatewayConfig {
     /// `BackendUnavailable`.
     pub db_gateway_address: Option<String>,
 
-    /// x23 RPC address for hogd `ViewGateway1` (read-only contract execution).
+    /// x23 RPC address for hogd `ViewGateway1` (sandboxed contract simulation).
     ///
     /// Serves `groundhog_view`. Optional: when absent the gateway returns
     /// `NotImplemented` for view execution.

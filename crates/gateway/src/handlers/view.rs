@@ -16,7 +16,7 @@ use crate::{context::GatewayContext, error::GatewayError};
 
 use super::parse_event::parse_emitted_event;
 
-/// Execute a read-only contract invocation through hogd `ViewGateway`.
+/// Execute a sandboxed contract simulation through hogd `ViewGateway`.
 #[tracing::instrument(
     skip_all,
     fields(

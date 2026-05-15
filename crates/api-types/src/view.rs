@@ -5,7 +5,7 @@ use crate::events::EmittedEvent;
 use crate::hex::HexBytes;
 use crate::{BlockHeight, ContractAddress};
 
-/// Request for read-only contract execution against the latest committed state.
+/// Request for sandboxed contract simulation against the latest committed state.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ViewRequest {
@@ -23,7 +23,7 @@ pub struct ViewRequest {
     pub caller: Option<ContractAddress>,
 }
 
-/// Result of read-only contract execution.
+/// Result of sandboxed contract simulation.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ViewResponse {

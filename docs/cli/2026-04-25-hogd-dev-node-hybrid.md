@@ -591,7 +591,7 @@ boundary without requiring users to manually install hogd.
    Hogd-dev should keep backend services separate and advertise them by x23
    service name: `IndexerBlockExplorer` for committed receipts/events,
    `DbGateway` for latest-state storage reads, and `ViewGateway` for
-   read-only contract execution.
+   sandboxed contract simulation.
 
 4. **`sendRawTransaction` dev semantics.**
    Default should preserve production-style submit-and-poll semantics. Is an

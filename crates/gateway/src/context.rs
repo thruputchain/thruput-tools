@@ -179,7 +179,7 @@ async fn connect_optional_view_gateway(
         Ok(outcome) => Err(ConnectError::StartupRejected {
             service: "view_gateway",
             addr: address.to_string(),
-            reason: format!("{outcome:?}"),
+            reason: outcome.to_string(),
         }),
         Err(source) => Err(ConnectError::ConnectFailed {
             service: "view_gateway_intro",

@@ -70,8 +70,8 @@ Concretely:
 
 ## Why Both Halves
 
-Comparable chains consistently expose a read-only contract path, but they
-vary on whether committed transaction metadata carries return data:
+Comparable chains consistently expose a non-mutating contract execution path,
+but they vary on whether committed transaction metadata carries return data:
 
 | Chain | Read RPC | Write result surface |
 |---|---|---|
@@ -509,7 +509,8 @@ groundhog view <contract> <method> [args...] --json
   `Abort`, a clear "view aborted" line with raw abort hex; on `Fault`,
   a clear fault line. The JSON envelope under `--json` mirrors the
   `ViewResponse` shape in all three cases. JSON-RPC error envelopes are
-  reserved for transport, gas-cap, and invariant failures.
+  reserved for transport/backend availability, request validation, and
+  gateway invariant failures.
 
 `groundhog call --dry-run` is not the same thing and stays as-is: it
 builds and signs a transaction without submitting it. It does not execute.

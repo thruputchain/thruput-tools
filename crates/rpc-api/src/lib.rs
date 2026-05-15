@@ -26,7 +26,7 @@ use groundhog_rpc_api_types::{
 ///
 /// See the "`OpenRPC` Wire Version" section in `CLAUDE.md` for bump
 /// rules.
-pub const WIRE_FORMAT_VERSION: &str = "1.2.0";
+pub const WIRE_FORMAT_VERSION: &str = "1.2.1";
 
 /// Phase 1: Core API — submit, query, poll.
 #[open_rpc(namespace = "groundhog", tag = "Core API")]
@@ -78,7 +78,7 @@ pub trait GroundhogApi {
         key: HexBytes,
     ) -> RpcResult<StorageItemRead>;
 
-    /// Execute a read-only contract invocation against committed state.
+    /// Execute a sandboxed contract simulation against committed state.
     #[method(name = "view")]
     async fn view(&self, request: ViewRequest) -> RpcResult<ViewResponse>;
 

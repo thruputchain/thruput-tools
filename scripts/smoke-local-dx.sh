@@ -256,19 +256,26 @@ fi
 
 WORK="$(mktemp -d)"
 NODE_PID=""
+NODE_DESCENDANTS=""
 GATEWAY_PID=""
 cleanup() {
     if [[ -n "$GATEWAY_PID" ]] && kill -0 "$GATEWAY_PID" >/dev/null 2>&1; then
         kill "$GATEWAY_PID" >/dev/null 2>&1 || true
         wait "$GATEWAY_PID" >/dev/null 2>&1 || true
     fi
+    local descendants="$NODE_DESCENDANTS"
     if [[ -n "$NODE_PID" ]] && kill -0 "$NODE_PID" >/dev/null 2>&1; then
-        local descendants
         descendants="$(collect_descendants "$NODE_PID" || true)"
+        NODE_DESCENDANTS="$descendants"
         # shellcheck disable=SC2086
         kill "$NODE_PID" $descendants >/dev/null 2>&1 || true
         wait "$NODE_PID" >/dev/null 2>&1 || true
         sleep 0.5
+    fi
+    if [[ -n "$descendants" ]]; then
+        # shellcheck disable=SC2086
+        kill $descendants >/dev/null 2>&1 || true
+        sleep 0.2
         # shellcheck disable=SC2086
         kill -9 $descendants >/dev/null 2>&1 || true
     fi
@@ -298,6 +305,7 @@ if ! wait_for_node_json "$WORK/node.json"; then
     die "local node did not emit startup JSON"
 fi
 NODE_JSON="$(head -n 1 "$WORK/node.json")"
+NODE_DESCENDANTS="$(collect_descendants "$NODE_PID" || true)"
 RPC_URL="$(json_field data.rpc_url "$NODE_JSON")"
 READ_PLANE="$(json_field data.backend.planes.read "$NODE_JSON")"
 VIEW_PLANE="$(json_field data.backend.planes.view "$NODE_JSON")"
