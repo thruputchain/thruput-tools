@@ -884,7 +884,7 @@
         "description": "Result of read-only contract execution.",
         "properties": {
           "events": {
-            "description": "Events emitted during view execution.\n\nStrict read-only v1 backends return an empty list unless hogd grows\nexplicit view-event recording.",
+            "description": "Events emitted during view execution.\n\nHogd captures emitted events from the simulated frame; wallet-preview\ncallers see what events a real submit would produce.",
             "items": {
               "$ref": "#/components/schemas/EmittedEvent"
             },

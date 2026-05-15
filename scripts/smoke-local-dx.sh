@@ -201,6 +201,16 @@ run_json() {
     printf '%s\n' "$output"
 }
 
+run_view_json() {
+    local label="$1"
+    shift
+    if [[ -n "${VIEW_FROM:-}" ]]; then
+        run_json "$label" "$CLI" --json view --from "$VIEW_FROM" "$@"
+    else
+        run_json "$label" "$CLI" --json view "$@"
+    fi
+}
+
 display_command() {
     local parts=("$@")
     if [[ "${parts[0]}" == "$CLI" ]]; then
@@ -343,17 +353,17 @@ INCREMENT_JSON="$(run_json "call increment" "$CLI" --json call "$PROJECT_NAME" i
 assert_call_succeeded "increment" "$INCREMENT_JSON"
 log "increment result: status=$(json_field data.status_summary "$INCREMENT_JSON") height=$(json_field data.height "$INCREMENT_JSON") tx=$(json_field data.tx_hash "$INCREMENT_JSON")"
 
-VIEW_FROM_ARGS=(--from dev-0)
+VIEW_FROM="dev-0"
 if [[ -n "$GATEWAY_RPC_URL" ]]; then
     log "Switching project RPC to standalone gateway for view/storage checks"
     update_rpc_url groundhog.toml "$GATEWAY_RPC_URL"
     # The production gateway intentionally does not expose dev-only account
     # lookup, so avoid `--from dev-0` in standalone gateway mode.
-    VIEW_FROM_ARGS=()
+    VIEW_FROM=""
 fi
 
 EXPECTED_VALUE=$(( INITIAL_VALUE + INCREMENT_AMOUNT ))
-VIEW_JSON="$(run_json "view get" "$CLI" --json view "${VIEW_FROM_ARGS[@]}" "$PROJECT_NAME" get)"
+VIEW_JSON="$(run_view_json "view get" "$PROJECT_NAME" get)"
 VIEW_OUTPUT="$(json_field data.output.result "$VIEW_JSON")"
 [[ "$VIEW_OUTPUT" == "return" ]] || die "view get output was $VIEW_OUTPUT, expected return"
 VIEW_RETURN="$(json_field data.returnValue "$VIEW_JSON")"
@@ -371,7 +381,7 @@ RAW_VIEW_DATA="$(json_field data.output.returnData "$RAW_VIEW_JSON")"
     || die "raw view get did not return raw returnData"
 log "raw view get result: height=$(json_field data.height "$RAW_VIEW_JSON") entrypoint=$VIEW_ENTRYPOINT returnData=$RAW_VIEW_DATA"
 
-ERROR_VIEW_JSON="$(run_json "view error" "$CLI" --json view "${VIEW_FROM_ARGS[@]}" "$PROJECT_NAME" error)"
+ERROR_VIEW_JSON="$(run_view_json "view error" "$PROJECT_NAME" error)"
 ERROR_VIEW_OUTPUT="$(json_field data.output.result "$ERROR_VIEW_JSON")"
 [[ "$ERROR_VIEW_OUTPUT" == "abort" ]] || die "view error output was $ERROR_VIEW_OUTPUT, expected abort"
 ERROR_ABORT_DATA="$(json_field data.output.abortData "$ERROR_VIEW_JSON")"
@@ -384,7 +394,7 @@ log "view error result: height=$(json_field data.height "$ERROR_VIEW_JSON") abor
 # a discarded scratchpad, so a mutating entrypoint like `decrement` returns
 # normally. The post-storage check below is the authoritative guarantee that
 # nothing actually committed.
-WRITE_VIEW_JSON="$(run_json "view decrement simulated" "$CLI" --json view "${VIEW_FROM_ARGS[@]}" "$PROJECT_NAME" decrement 1)"
+WRITE_VIEW_JSON="$(run_view_json "view decrement simulated" "$PROJECT_NAME" decrement 1)"
 WRITE_VIEW_OUTPUT="$(json_field data.output.result "$WRITE_VIEW_JSON")"
 [[ "$WRITE_VIEW_OUTPUT" == "return" ]] || die "view decrement output was $WRITE_VIEW_OUTPUT, expected return"
 log "view decrement simulated result: height=$(json_field data.height "$WRITE_VIEW_JSON") output=$WRITE_VIEW_OUTPUT"
@@ -392,7 +402,7 @@ log "view decrement simulated result: height=$(json_field data.height "$WRITE_VI
 # View an event-emitting entrypoint to confirm hogd captures events from the
 # simulated frame.
 PING_TAG=99
-PING_VIEW_JSON="$(run_json "view ping" "$CLI" --json view "${VIEW_FROM_ARGS[@]}" "$PROJECT_NAME" ping "$PING_TAG")"
+PING_VIEW_JSON="$(run_view_json "view ping" "$PROJECT_NAME" ping "$PING_TAG")"
 PING_VIEW_OUTPUT="$(json_field data.output.result "$PING_VIEW_JSON")"
 [[ "$PING_VIEW_OUTPUT" == "return" ]] || die "view ping output was $PING_VIEW_OUTPUT, expected return"
 PING_EVENTS="$(json_field data.events "$PING_VIEW_JSON")"
