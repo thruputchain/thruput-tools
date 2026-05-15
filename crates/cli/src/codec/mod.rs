@@ -321,7 +321,7 @@ fn encode_cli_spec_value(
             }
             Ok(encoded)
         }
-        ContractType::Vector { vector } if vector_contains_u8(vector.element.as_deref()) => {
+        ContractType::Vector { vector } if vector_contains_u8(&vector.element) => {
             let bytes = parse_bytes_argument(argument, path)?;
             if bytes.len() > vector.max_len as usize {
                 return Err(encode_value_error(
@@ -335,7 +335,7 @@ fn encode_cli_spec_value(
             }
             encode_variable_bytes(bytes, path)
         }
-        ContractType::Array { array } if vector_contains_u8(array.element.as_deref()) => {
+        ContractType::Array { array } if vector_contains_u8(&array.element) => {
             let bytes = parse_bytes_argument(argument, path)?;
             if bytes.len() != array.len as usize {
                 return Err(encode_value_error(
@@ -469,10 +469,8 @@ fn encode_vector_json_value(
     type_defs: &TypeDefIndex<'_>,
     path: &str,
 ) -> Result<Vec<u8>, CliError> {
-    let inner = vector.element.as_deref().ok_or_else(|| {
-        CliError::SpecFailed("embedded contract spec is missing a vector element type".into())
-    })?;
-    if vector_contains_u8(Some(inner)) {
+    let inner = vector.element.as_ref();
+    if vector_contains_u8(inner) {
         let bytes = parse_bytes_json_value(value, path)?;
         if bytes.len() > vector.max_len as usize {
             return Err(encode_value_error(
@@ -541,10 +539,8 @@ fn encode_array_json_value(
     type_defs: &TypeDefIndex<'_>,
     path: &str,
 ) -> Result<Vec<u8>, CliError> {
-    let inner = array.element.as_deref().ok_or_else(|| {
-        CliError::SpecFailed("embedded contract spec is missing an array element type".into())
-    })?;
-    if vector_contains_u8(Some(inner)) {
+    let inner = array.element.as_ref();
+    if vector_contains_u8(inner) {
         let bytes = parse_bytes_json_value(value, path)?;
         if bytes.len() != array.len as usize {
             return Err(encode_value_error(
@@ -1141,8 +1137,8 @@ fn parse_byte_string(value: &str, path: &str) -> Result<Vec<u8>, CliError> {
     Ok(value.as_bytes().to_vec())
 }
 
-fn vector_contains_u8(element: Option<&ContractType>) -> bool {
-    matches!(element, Some(ContractType::U8))
+fn vector_contains_u8(element: &ContractType) -> bool {
+    matches!(element, ContractType::U8)
 }
 
 fn encode_value_error(path: &str, message: impl Into<String>) -> CliError {
@@ -1224,10 +1220,8 @@ fn decode_vector_value_from_reader(
     type_defs: &TypeDefIndex<'_>,
     path: &str,
 ) -> Result<Value, CliError> {
-    let inner = vector.element.as_deref().ok_or_else(|| {
-        CliError::SpecFailed("embedded contract spec is missing a vector element type".into())
-    })?;
-    if vector_contains_u8(Some(inner)) {
+    let inner = vector.element.as_ref();
+    if vector_contains_u8(inner) {
         return reader
             .read_opaque_variable_owned(vector.max_len)
             .map(hex_json_value)
@@ -1279,10 +1273,8 @@ fn decode_array_value_from_reader(
     type_defs: &TypeDefIndex<'_>,
     path: &str,
 ) -> Result<Value, CliError> {
-    let inner = array.element.as_deref().ok_or_else(|| {
-        CliError::SpecFailed("embedded contract spec is missing an array element type".into())
-    })?;
-    if vector_contains_u8(Some(inner)) {
+    let inner = array.element.as_ref();
+    if vector_contains_u8(inner) {
         return reader
             .read_opaque_fixed_owned(array.len)
             .map(hex_json_value)

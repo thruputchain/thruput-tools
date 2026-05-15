@@ -10,7 +10,7 @@ use groundhog_rpc_api_types::{
 use groundhog_rpc_client::{GroundhogApiClient, HttpClientBuilder};
 use groundhog_rpc_server::{
     BuildInfo, ChainPlane, GroundhogRpcServer, ReadPlane, RpcServerConfig, RpcServerError,
-    SubmitPlane, ValidatedTransaction,
+    SubmitPlane, ValidatedTransaction, ViewPlane,
 };
 use jsonrpsee::server::Server;
 
@@ -79,6 +79,9 @@ impl ReadPlane for VersionOnlyBackend {
         Err(RpcServerError::NotImplemented("getStorageAt".into()))
     }
 }
+
+#[async_trait::async_trait]
+impl ViewPlane for VersionOnlyBackend {}
 
 #[tokio::test]
 async fn version_roundtrips_with_camel_case_json_shape() {

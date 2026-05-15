@@ -1,6 +1,6 @@
 //! Cross-backend conformance tests for the shared JSON-RPC server.
 //!
-//! Asserts that the public behavior of `GroundhogRpcServer<S, C, R>` is
+//! Asserts that the public behavior of `GroundhogRpcServer<S, C, R, V>` is
 //! consistent across the backend capability shapes used in production
 //! gateway and the local hogd-dev supervisor.
 //!
@@ -26,11 +26,11 @@ use groundhog_rpc_api_types::{
     receipt::TransactionReceipt,
     state::StorageItemRead,
     transaction::{TransactionStatus, TxHash},
-    view::ViewRequest,
+    view::{RootInvocationOutput, ViewRequest, ViewResponse},
 };
 use groundhog_rpc_server::{
     BuildInfo, ChainPlane, GroundhogRpcServer, ReadPlane, RpcServerConfig, RpcServerError,
-    SubmitPlane, ValidatedTransaction,
+    SubmitPlane, ValidatedTransaction, ViewPlane,
 };
 use tokio::sync::Mutex;
 use xdr_common::VecM;
@@ -54,13 +54,18 @@ const MAX_VIEW_CALLDATA_BYTES: usize = 32;
 /// Mock backend that emulates a chosen production capability profile.
 ///
 /// `Clone` is cheap: the only mutable state is held behind `Arc<Mutex<_>>`
-/// so the three plane copies handed to `GroundhogRpcServer::unified` share
+/// so the plane copies handed to `GroundhogRpcServer::unified` share
 /// one history.
 #[derive(Clone, Default)]
 struct ScriptedBackend {
     submitted: Arc<Mutex<Vec<ValidatedTransaction>>>,
     contract_events_calls: Arc<Mutex<u32>>,
     get_storage_at_calls: Arc<Mutex<u32>>,
+}
+
+#[derive(Clone)]
+struct ScriptedViewBackend {
+    output: RootInvocationOutput,
 }
 
 impl ScriptedBackend {
@@ -73,6 +78,12 @@ impl ScriptedBackend {
     /// Capability profile of the local hogd-dev supervisor.
     fn hogd_dev_shape() -> Self {
         Self::default()
+    }
+}
+
+impl ScriptedViewBackend {
+    fn new(output: RootInvocationOutput) -> Self {
+        Self { output }
     }
 }
 
@@ -143,11 +154,47 @@ impl ReadPlane for ScriptedBackend {
     }
 }
 
-type ScriptedServer = GroundhogRpcServer<ScriptedBackend, ScriptedBackend, ScriptedBackend>;
+#[async_trait]
+impl ViewPlane for ScriptedBackend {}
+
+#[async_trait]
+impl ViewPlane for ScriptedViewBackend {
+    async fn view(
+        &self,
+        _request: ViewRequest,
+        _gas_limit: u64,
+    ) -> Result<ViewResponse, RpcServerError> {
+        Ok(ViewResponse {
+            output: self.output.clone(),
+            events: vec![],
+            height: BlockHeight::from(42),
+        })
+    }
+}
+
+type ScriptedServer =
+    GroundhogRpcServer<ScriptedBackend, ScriptedBackend, ScriptedBackend, ScriptedBackend>;
 
 fn server(backend: ScriptedBackend) -> ScriptedServer {
     GroundhogRpcServer::unified(
         backend,
+        RpcServerConfig::default()
+            .with_max_events_per_page(MAX_EVENTS_PER_PAGE)
+            .with_max_cursor_bytes(MAX_CURSOR_BYTES)
+            .with_max_view_calldata_bytes(MAX_VIEW_CALLDATA_BYTES),
+        BuildInfo::for_tests(),
+    )
+}
+
+fn server_with_view(
+    backend: ScriptedBackend,
+    view: ScriptedViewBackend,
+) -> GroundhogRpcServer<ScriptedBackend, ScriptedBackend, ScriptedBackend, ScriptedViewBackend> {
+    GroundhogRpcServer::new(
+        backend.clone(),
+        backend.clone(),
+        backend,
+        view,
         RpcServerConfig::default()
             .with_max_events_per_page(MAX_EVENTS_PER_PAGE)
             .with_max_cursor_bytes(MAX_CURSOR_BYTES)
@@ -184,6 +231,27 @@ fn all_shapes() -> [ScriptedBackend; 2] {
         ScriptedBackend::gateway_shape(),
         ScriptedBackend::hogd_dev_shape(),
     ]
+}
+
+fn assert_view_output_eq(actual: &RootInvocationOutput, expected: &RootInvocationOutput) {
+    match (actual, expected) {
+        (
+            RootInvocationOutput::Return {
+                return_data: actual,
+            },
+            RootInvocationOutput::Return {
+                return_data: expected,
+            },
+        )
+        | (
+            RootInvocationOutput::Abort { abort_data: actual },
+            RootInvocationOutput::Abort {
+                abort_data: expected,
+            },
+        ) => assert_eq!(actual.0, expected.0),
+        (RootInvocationOutput::Fault, RootInvocationOutput::Fault) => {}
+        (actual, expected) => panic!("wrong view output: actual={actual:?}, expected={expected:?}"),
+    }
 }
 
 // === Conformance: behavior identical across backend shapes ===
@@ -395,6 +463,40 @@ async fn view_returns_not_implemented_until_backend_support_lands_for_all_shapes
             .expect_err("bug: current backends should not implement view");
 
         assert_eq!(err.code(), codes::NOT_IMPLEMENTED);
+    }
+}
+
+#[tokio::test]
+async fn view_success_outputs_round_trip_for_all_shapes() {
+    let cases = [
+        RootInvocationOutput::Return {
+            return_data: HexBytes(vec![0x01, 0x02]),
+        },
+        RootInvocationOutput::Abort {
+            abort_data: HexBytes(vec![0x0a, 0x0b]),
+        },
+        RootInvocationOutput::Fault,
+    ];
+
+    for backend in all_shapes() {
+        for output in cases.clone() {
+            let svc = server_with_view(backend.clone(), ScriptedViewBackend::new(output.clone()));
+            let request = ViewRequest {
+                contract: Hex0x(groundhog_xdr::types::ContractAddress::from([0u8; 32])),
+                entrypoint: HexBytes(vec![0u8; 8]),
+                calldata: HexBytes(vec![]),
+                caller: None,
+            };
+
+            let response = svc
+                .view(request)
+                .await
+                .expect("bug: scripted view backend should return a successful response");
+
+            assert_view_output_eq(&response.output, &output);
+            assert!(response.events.is_empty());
+            assert_eq!(*response.height, 42);
+        }
     }
 }
 

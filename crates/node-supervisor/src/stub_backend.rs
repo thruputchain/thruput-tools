@@ -24,7 +24,7 @@ use groundhog_rpc_api_types::{
     transaction::{TransactionStatus, TxHash},
 };
 use groundhog_rpc_server::{
-    ChainPlane, ReadPlane, RpcServerError, SubmitPlane, ValidatedTransaction,
+    ChainPlane, ReadPlane, RpcServerError, SubmitPlane, ValidatedTransaction, ViewPlane,
 };
 
 /// Backend that returns `NotImplemented` for unwired planes.
@@ -95,3 +95,6 @@ impl ReadPlane for StubBackend {
         Err(RpcServerError::NotImplemented("getStorageAt".into()))
     }
 }
+
+#[async_trait]
+impl ViewPlane for StubBackend {}

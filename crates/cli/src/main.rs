@@ -193,6 +193,35 @@ enum Command {
         #[command(flatten)]
         artifacts: ArtifactArgs,
     },
+    /// Execute a read-only contract method against committed state
+    #[command(long_about = "Execute a read-only contract invocation via \
+                      groundhog_view. Named methods use local or embedded \
+                      contract metadata when available. Without metadata, \
+                      pass an explicit 0x-prefixed 8-byte entrypoint ID \
+                      and raw calldata.")]
+    View {
+        /// Contract address or alias
+        contract: String,
+        /// Method name or 0x-prefixed 8-byte entrypoint ID
+        method: String,
+        /// Method arguments. With an explicit entrypoint, pass one raw hex calldata argument.
+        args: Vec<String>,
+        /// Raw calldata for explicit-entrypoint calls
+        #[arg(long)]
+        calldata: Option<String>,
+        /// Simulated caller address, or dev-N on local dev endpoints
+        #[arg(long = "from")]
+        from: Option<String>,
+        /// Config profile to use
+        #[arg(
+            long = "profile",
+            alias = "network",
+            default_value = DEFAULT_PROFILE
+        )]
+        profile: String,
+        #[command(flatten)]
+        artifacts: ArtifactArgs,
+    },
     /// Read latest committed raw contract storage
     #[command(long_about = "Read one latest committed raw storage item via \
                       groundhog_getStorageAt. This is a low-level state \
@@ -317,6 +346,7 @@ impl Command {
             Self::Test { .. } => "test",
             Self::Deploy { .. } => "deploy",
             Self::Call { .. } => "call",
+            Self::View { .. } => "view",
             Self::Storage { .. } => "storage",
             Self::Node { .. } => "node",
             Self::Keys { command } => command.command_name(),
@@ -452,6 +482,34 @@ fn main() {
                 );
                 groundhog_cli::call::run(
                     &contract, &method, &args, dry_run, &artifacts, &profile, cmd_name, &print,
+                )
+            }),
+        Command::View {
+            contract,
+            method,
+            args,
+            calldata,
+            from,
+            profile,
+            artifacts,
+        } => std::env::current_dir()
+            .map_err(groundhog_cli::CliError::Io)
+            .and_then(|cwd| {
+                let artifacts = groundhog_cli::artifacts::ArtifactOptions::from_invocation_cwd(
+                    artifacts.target_dir,
+                    &cwd,
+                );
+                groundhog_cli::view::run(
+                    &contract,
+                    &method,
+                    &args,
+                    calldata.as_deref(),
+                    from.as_deref(),
+                    &artifacts,
+                    &cwd,
+                    &profile,
+                    cmd_name,
+                    &print,
                 )
             }),
         Command::Storage {

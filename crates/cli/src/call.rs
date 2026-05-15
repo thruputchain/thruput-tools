@@ -189,11 +189,11 @@ fn print_dry_run(
     Ok(())
 }
 
-fn format_entrypoint_id(entrypoint: ContractEntrypointID) -> String {
+pub(crate) fn format_entrypoint_id(entrypoint: ContractEntrypointID) -> String {
     format!("0x{}", hex::encode(entrypoint.into_inner()))
 }
 
-fn format_hex_bytes(bytes: &[u8]) -> String {
+pub(crate) fn format_hex_bytes(bytes: &[u8]) -> String {
     format!("0x{}", hex::encode(bytes))
 }
 
@@ -215,7 +215,7 @@ fn selector_summary(resolved: &ResolvedCall) -> String {
     }
 }
 
-fn selector_json(resolved: &ResolvedCall) -> serde_json::Value {
+pub(crate) fn selector_json(resolved: &ResolvedCall) -> serde_json::Value {
     match &resolved.metadata {
         Some(CallMetadata::Spec(metadata)) => json!({
             "source": "embedded_spec",
@@ -367,7 +367,7 @@ fn method_entrypoint_id(interface_name: &str, version: &str, method: &str) -> Co
     ContractEntrypointID::from(bytes)
 }
 
-fn resolve_call(
+pub(crate) fn resolve_call(
     cwd: &Path,
     method: &str,
     artifacts: &ArtifactOptions,
@@ -1146,7 +1146,7 @@ mod tests {
                     "digest",
                     ContractType::Array {
                         array: ContractArrayType {
-                            element: Some(Box::new(ContractType::U8)),
+                            element: Box::new(ContractType::U8),
                             len: 4,
                         },
                     },
@@ -1155,7 +1155,7 @@ mod tests {
                     "flags",
                     ContractType::Vector {
                         vector: ContractVectorType {
-                            element: Some(Box::new(ContractType::Bool)),
+                            element: Box::new(ContractType::Bool),
                             max_len: 8,
                         },
                     },
@@ -1320,7 +1320,7 @@ mod tests {
     fn rejects_byte_vectors_exceeding_max_length() {
         let metadata = sample_single_arg_spec_metadata(ContractType::Vector {
             vector: ContractVectorType {
-                element: Some(Box::new(ContractType::U8)),
+                element: Box::new(ContractType::U8),
                 max_len: 2,
             },
         });
@@ -1337,7 +1337,7 @@ mod tests {
     fn rejects_array_length_mismatches() {
         let metadata = sample_single_arg_spec_metadata(ContractType::Array {
             array: ContractArrayType {
-                element: Some(Box::new(ContractType::Bool)),
+                element: Box::new(ContractType::Bool),
                 len: 2,
             },
         });
@@ -1432,7 +1432,7 @@ mod tests {
     fn rejects_decoded_vectors_exceeding_max_length() {
         let metadata = sample_single_arg_spec_metadata(ContractType::Vector {
             vector: ContractVectorType {
-                element: Some(Box::new(ContractType::Bool)),
+                element: Box::new(ContractType::Bool),
                 max_len: 1,
             },
         });
@@ -1673,7 +1673,7 @@ mod tests {
                                 "bytes",
                                 ContractType::Vector {
                                     vector: ContractVectorType {
-                                        element: Some(Box::new(ContractType::U8)),
+                                        element: Box::new(ContractType::U8),
                                         max_len: u32::MAX,
                                     },
                                 },

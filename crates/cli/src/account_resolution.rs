@@ -1,3 +1,5 @@
+use groundhog_rpc_api_types::{ContractAddress, dev::DevAccount};
+use groundhog_rpc_client::{GroundhogDevApiClient, HttpClientBuilder};
 use groundhog_signing::{DEFAULT_PUBKEY_ACCOUNT_NONCE, LocalSigner, PubkeyAccount, Signer};
 use jsonrpsee::core::ClientError;
 use jsonrpsee::types::error::METHOD_NOT_FOUND_CODE;
@@ -34,8 +36,37 @@ async fn resolve_dev_wallet_address(
     index: usize,
     signer: &LocalSigner,
 ) -> Result<groundhog_xdr::types::ContractAddress, CliError> {
-    use groundhog_rpc_client::{GroundhogDevApiClient, HttpClientBuilder};
+    let account = lookup_dev_account(rpc_url, key_name, index).await?;
 
+    let expected_public_key = signer.verifying_key_bytes();
+    if account.public_key.0.as_slice() != expected_public_key.as_slice() {
+        return Err(dev_account_error(
+            key_name,
+            format!(
+                "groundhog_dev_getAccounts returned public key {} for dev-{index}, expected 0x{}",
+                format_hex(&account.public_key.0),
+                hex::encode(expected_public_key),
+            ),
+        ));
+    }
+
+    Ok(account.address.0)
+}
+
+/// Look up a local dev account address through `groundhog_dev_getAccounts`.
+pub(crate) async fn lookup_dev_account_address(
+    rpc_url: &str,
+    key_name: &str,
+    index: usize,
+) -> Result<ContractAddress, CliError> {
+    Ok(lookup_dev_account(rpc_url, key_name, index).await?.address)
+}
+
+async fn lookup_dev_account(
+    rpc_url: &str,
+    key_name: &str,
+    index: usize,
+) -> Result<DevAccount, CliError> {
     let client = HttpClientBuilder::default()
         .build(rpc_url)
         .map_err(|error| {
@@ -58,29 +89,15 @@ async fn resolve_dev_wallet_address(
         }
     };
 
-    let Some(account) = accounts.get(index) else {
-        return Err(dev_account_error(
+    accounts.get(index).cloned().ok_or_else(|| {
+        dev_account_error(
             key_name,
             format!(
                 "groundhog_dev_getAccounts returned {} accounts, missing dev-{index}",
                 accounts.len()
             ),
-        ));
-    };
-
-    let expected_public_key = signer.verifying_key_bytes();
-    if account.public_key.0.as_slice() != expected_public_key.as_slice() {
-        return Err(dev_account_error(
-            key_name,
-            format!(
-                "groundhog_dev_getAccounts returned public key {} for dev-{index}, expected 0x{}",
-                format_hex(&account.public_key.0),
-                hex::encode(expected_public_key),
-            ),
-        ));
-    }
-
-    Ok(account.address.0)
+        )
+    })
 }
 
 fn dev_account_error(key_name: &str, message: impl Into<String>) -> CliError {

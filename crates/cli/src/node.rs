@@ -234,7 +234,7 @@ fn hogd_dev_endpoints_payload(
 #[cfg(all(test, feature = "dev-node"))]
 mod tests {
     use super::hogd_dev_startup_payload;
-    use groundhog_node_supervisor::{BackendPlanes, parse_readiness_line};
+    use groundhog_node_supervisor::{BackendPlanes, PlaneStatus, parse_readiness_line};
 
     #[test]
     fn hogd_dev_startup_payload_includes_readiness_endpoints() {
@@ -315,9 +315,13 @@ mod tests {
         )
         .expect("bug: readiness should parse");
 
-        let payload = hogd_dev_startup_payload(addr, &readiness, BackendPlanes::hogd_dev_full());
-        let expected_planes =
-            serde_json::to_value(BackendPlanes::hogd_dev_full()).expect("bug: planes serialize");
+        let payload = hogd_dev_startup_payload(
+            addr,
+            &readiness,
+            BackendPlanes::hogd_dev_full(PlaneStatus::Stub),
+        );
+        let expected_planes = serde_json::to_value(BackendPlanes::hogd_dev_full(PlaneStatus::Stub))
+            .expect("bug: planes serialize");
         assert_eq!(payload["backend"]["planes"], expected_planes);
         assert!(payload["backend"].get("limitations").is_none());
     }

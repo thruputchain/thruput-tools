@@ -9,6 +9,9 @@ use groundhog_signing::{
 /// Default JSON-RPC listen address for `groundhog node`.
 pub const DEFAULT_RPC_LISTEN_ADDRESS: &str = "127.0.0.1:9545";
 
+/// Default timeout for one hogd-dev `ViewGateway` execution RPC.
+pub const DEFAULT_HOGD_DEV_VIEW_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Default listen host passed to hogd-dev for internal services.
 pub const DEFAULT_HOGD_DEV_LISTEN_HOST: &str = "127.0.0.1";
 
@@ -41,6 +44,10 @@ pub struct NodeSupervisorConfig {
     /// This override is intended for local cross-repo smoke tests before a
     /// matching Rust protocol crate has been published.
     pub hogd_protocol_override: Option<String>,
+    /// Gas budget assigned to hogd-dev `ViewGateway` root invocations.
+    pub view_gas_limit: u64,
+    /// Maximum time to wait for one hogd-dev `ViewGateway` execution RPC.
+    pub view_timeout: Duration,
 }
 
 impl Default for NodeSupervisorConfig {
@@ -49,6 +56,8 @@ impl Default for NodeSupervisorConfig {
             rpc_listen_address: DEFAULT_RPC_LISTEN_ADDRESS.to_string(),
             hogd_dev: HogdDevConfig::default(),
             hogd_protocol_override: None,
+            view_gas_limit: groundhog_rpc_server::DEFAULT_VIEW_GAS_LIMIT,
+            view_timeout: DEFAULT_HOGD_DEV_VIEW_TIMEOUT,
         }
     }
 }
@@ -83,6 +92,20 @@ impl NodeSupervisorConfig {
     #[must_use]
     pub fn with_hogd_protocol_override(mut self, protocol: impl Into<String>) -> Self {
         self.hogd_protocol_override = Some(protocol.into());
+        self
+    }
+
+    /// Return a copy with a different hogd-dev `ViewGateway` gas budget.
+    #[must_use]
+    pub fn with_view_gas_limit(mut self, view_gas_limit: u64) -> Self {
+        self.view_gas_limit = view_gas_limit;
+        self
+    }
+
+    /// Return a copy with a different hogd-dev `ViewGateway` RPC timeout.
+    #[must_use]
+    pub fn with_view_timeout(mut self, view_timeout: Duration) -> Self {
+        self.view_timeout = view_timeout;
         self
     }
 }

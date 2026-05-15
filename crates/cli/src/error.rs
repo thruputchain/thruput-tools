@@ -118,6 +118,10 @@ pub enum CliError {
     CallDecode { path: String, message: String },
     #[error("invalid storage key: {0}")]
     InvalidStorageKey(String),
+    #[error("invalid view calldata: {0}")]
+    InvalidViewCalldata(String),
+    #[error("invalid view arguments: {0}")]
+    InvalidViewArguments(String),
     #[error("codegen failed: {0}")]
     CodegenFailed(String),
     #[error("{0}")]
@@ -172,6 +176,8 @@ impl CliError {
             Self::CallEncode { .. } => "call_encode",
             Self::CallDecode { .. } => "call_decode",
             Self::InvalidStorageKey(_) => "invalid_storage_key",
+            Self::InvalidViewCalldata(_) => "invalid_view_calldata",
+            Self::InvalidViewArguments(_) => "invalid_view_arguments",
             Self::CodegenFailed(_) => "codegen_failed",
             Self::Other(_) => "other",
         }
@@ -262,6 +268,12 @@ impl CliError {
             )),
             Self::InvalidStorageKey(_) => Some(Cow::Borrowed(
                 "pass a 32-byte storage key as 0x-prefixed hex",
+            )),
+            Self::InvalidViewCalldata(_) => Some(Cow::Borrowed(
+                "pass raw calldata as 0x-prefixed hex, or omit it for empty calldata",
+            )),
+            Self::InvalidViewArguments(_) => Some(Cow::Borrowed(
+                "use either positional method arguments or `--calldata`, not both",
             )),
             Self::CodegenFailed(_) => Some(Cow::Borrowed(
                 "check that the file contains a valid embedded contract spec",

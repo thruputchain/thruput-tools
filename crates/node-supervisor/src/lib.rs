@@ -17,6 +17,7 @@ mod read_backend;
 mod rpc_backend;
 pub mod server;
 mod stub_backend;
+mod view_backend;
 
 #[cfg(test)]
 mod test_support;

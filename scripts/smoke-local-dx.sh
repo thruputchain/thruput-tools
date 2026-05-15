@@ -2,7 +2,7 @@
 # Real local-DX smoke test.
 #
 # Exercises the user-facing CLI path against a real hogd-dev binary:
-#   groundhog new -> build -> node -> deploy -> call -> view placeholder -> storage
+#   groundhog new -> build -> node -> deploy -> call -> view -> storage
 #
 # Optional environment:
 #   HOGD_DEV_BINARY=/path/to/hogd-dev
@@ -234,7 +234,9 @@ fi
 NODE_JSON="$(head -n 1 "$WORK/node.json")"
 RPC_URL="$(json_field data.rpc_url "$NODE_JSON")"
 READ_PLANE="$(json_field data.backend.planes.read "$NODE_JSON")"
-log "Node RPC: $RPC_URL (read plane: $READ_PLANE)"
+VIEW_PLANE="$(json_field data.backend.planes.view "$NODE_JSON")"
+log "Node RPC: $RPC_URL (read plane: $READ_PLANE, view plane: $VIEW_PLANE)"
+[[ "$VIEW_PLANE" == "view_gateway" ]] || die "node view plane was $VIEW_PLANE, expected view_gateway"
 
 update_rpc_url groundhog.toml "$RPC_URL"
 
@@ -252,6 +254,14 @@ INCREMENT_JSON="$(run_json "call increment" "$CLI" --json call "$PROJECT_NAME" i
 assert_call_succeeded "increment" "$INCREMENT_JSON"
 log "increment result: status=$(json_field data.status_summary "$INCREMENT_JSON") height=$(json_field data.height "$INCREMENT_JSON") tx=$(json_field data.tx_hash "$INCREMENT_JSON")"
 
+EXPECTED_VALUE=$(( INITIAL_VALUE + INCREMENT_AMOUNT ))
+VIEW_JSON="$(run_json "view get" "$CLI" --json view --from dev-0 "$PROJECT_NAME" get)"
+VIEW_OUTPUT="$(json_field data.output.result "$VIEW_JSON")"
+[[ "$VIEW_OUTPUT" == "return" ]] || die "view get output was $VIEW_OUTPUT, expected return"
+VIEW_RETURN="$(json_field data.return_value "$VIEW_JSON")"
+[[ "$VIEW_RETURN" == "$EXPECTED_VALUE" ]] || die "view get return was $VIEW_RETURN, expected $EXPECTED_VALUE"
+log "view get result: height=$(json_field data.height "$VIEW_JSON") caller=$(json_field data.caller "$VIEW_JSON") return=$VIEW_RETURN"
+
 GET_JSON="$(run_json "call get" "$CLI" --json call "$PROJECT_NAME" get)"
 assert_call_succeeded "get" "$GET_JSON"
 GET_RETURN="$(json_field data.return_value "$GET_JSON")"
@@ -259,12 +269,6 @@ if [[ "$GET_RETURN" == "null" ]]; then
     GET_RETURN="<unavailable until receipt return_data lands>"
 fi
 log "get result: status=$(json_field data.status_summary "$GET_JSON") height=$(json_field data.height "$GET_JSON") tx=$(json_field data.tx_hash "$GET_JSON") return=$GET_RETURN"
-
-if "$CLI" view --help >/dev/null 2>&1; then
-    run_json view "$CLI" --json view "$PROJECT_NAME" get >/dev/null
-else
-    log "Skipping view: groundhog view is not implemented yet"
-fi
 
 COUNTER_VALUE_KEY="$(counter_value_key)"
 STORAGE_JSON="$(run_json storage "$CLI" --json storage "$CONTRACT_ADDRESS" "$COUNTER_VALUE_KEY")"

@@ -16,17 +16,18 @@ use groundhog_rpc_api_types::{
 };
 
 use crate::{
-    ChainPlane, ReadPlane, RpcServerConfig, RpcServerError, SubmitPlane,
+    ChainPlane, ReadPlane, RpcServerConfig, RpcServerError, SubmitPlane, ViewPlane,
     tx::validate_raw_transaction,
 };
 
 /// Generic implementation of the public Groundhog JSON-RPC API over
-/// independently-typed submit, chain, and read backend planes.
+/// independently-typed submit, chain, read, and view backend planes.
 #[derive(Debug, Clone)]
-pub struct GroundhogRpcServer<S, C, R> {
+pub struct GroundhogRpcServer<S, C, R, V> {
     submit: S,
     chain: C,
     read: R,
+    view: V,
     config: RpcServerConfig,
     build_info: BuildInfo,
 }
@@ -56,12 +57,13 @@ impl BuildInfo {
     }
 }
 
-impl<S, C, R> GroundhogRpcServer<S, C, R> {
+impl<S, C, R, V> GroundhogRpcServer<S, C, R, V> {
     /// Create a server wrapper around independent backend planes.
     pub fn new(
         submit: S,
         chain: C,
         read: R,
+        view: V,
         config: RpcServerConfig,
         build_info: BuildInfo,
     ) -> Self {
@@ -69,20 +71,22 @@ impl<S, C, R> GroundhogRpcServer<S, C, R> {
             submit,
             chain,
             read,
+            view,
             config,
             build_info,
         }
     }
 }
 
-impl<B> GroundhogRpcServer<B, B, B>
+impl<B> GroundhogRpcServer<B, B, B, B>
 where
     B: Clone,
 {
-    /// Convenience constructor for backends that implement all three planes
+    /// Convenience constructor for backends that implement all four planes
     /// on a single type.
     pub fn unified(backend: B, config: RpcServerConfig, build_info: BuildInfo) -> Self {
         Self::new(
+            backend.clone(),
             backend.clone(),
             backend.clone(),
             backend,
@@ -93,11 +97,12 @@ where
 }
 
 #[async_trait::async_trait]
-impl<S, C, R> GroundhogApiServer for GroundhogRpcServer<S, C, R>
+impl<S, C, R, V> GroundhogApiServer for GroundhogRpcServer<S, C, R, V>
 where
     S: SubmitPlane,
     C: ChainPlane,
     R: ReadPlane,
+    V: ViewPlane,
 {
     #[tracing::instrument(skip_all, fields(tx_hex_len = tx_hex.len()))]
     async fn send_raw_transaction(&self, tx_hex: String) -> RpcResult<TxHash> {
@@ -184,7 +189,7 @@ where
                 None::<()>,
             ));
         }
-        Ok(self.read.view(request, self.config.view_gas_limit).await?)
+        Ok(self.view.view(request, self.config.view_gas_limit).await?)
     }
 
     #[tracing::instrument(skip_all)]
@@ -230,7 +235,7 @@ mod tests {
     use tokio::sync::Mutex;
 
     use super::*;
-    use crate::ValidatedTransaction;
+    use crate::{ValidatedTransaction, ViewPlane};
     use groundhog_rpc_api_types::events::{
         BlockAnchor, ContractAddressList, EventFilter, EventFilterList, EventTopicFilter,
         IterationOrder, PaginationCursor, TopicList,
@@ -267,12 +272,17 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     #[derive(Clone)]
     struct ReadOnly {
         event_calls: Arc<Mutex<u32>>,
+    }
+
+    #[derive(Clone)]
+    struct ViewOnly {
         view_gas_limits: Arc<Mutex<Vec<u64>>>,
     }
 
     fn server(
         mock: Arc<MockBackend>,
-    ) -> GroundhogRpcServer<Arc<MockBackend>, Arc<MockBackend>, Arc<MockBackend>> {
+    ) -> GroundhogRpcServer<Arc<MockBackend>, Arc<MockBackend>, Arc<MockBackend>, Arc<MockBackend>>
+    {
         GroundhogRpcServer::unified(mock, RpcServerConfig::default(), BuildInfo::for_tests())
     }
 
@@ -373,6 +383,9 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     }
 
     #[async_trait::async_trait]
+    impl ViewPlane for Arc<MockBackend> {}
+
+    #[async_trait::async_trait]
     impl ReadPlane for ReadOnly {
         async fn transaction_receipt(
             &self,
@@ -403,7 +416,10 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
                 item: None,
             })
         }
+    }
 
+    #[async_trait::async_trait]
+    impl ViewPlane for ViewOnly {
         async fn view(
             &self,
             _request: ViewRequest,
@@ -449,7 +465,9 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             ChainOnly,
             ReadOnly {
                 event_calls: event_calls.clone(),
-                view_gas_limits,
+            },
+            ViewOnly {
+                view_gas_limits: view_gas_limits.clone(),
             },
             RpcServerConfig::default(),
             BuildInfo::for_tests(),
@@ -482,7 +500,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     }
 
     #[tokio::test]
-    async fn view_passes_configured_gas_limit_to_read_plane() {
+    async fn view_passes_configured_gas_limit_to_view_plane() {
         let submitted = Arc::new(Mutex::new(Vec::new()));
         let event_calls = Arc::new(Mutex::new(0));
         let view_gas_limits = Arc::new(Mutex::new(Vec::new()));
@@ -493,7 +511,9 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             },
             ChainOnly,
             ReadOnly {
-                event_calls,
+                event_calls: event_calls.clone(),
+            },
+            ViewOnly {
                 view_gas_limits: view_gas_limits.clone(),
             },
             RpcServerConfig::default().with_view_gas_limit(gas_limit),
@@ -510,10 +530,11 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         server
             .view(request)
             .await
-            .expect("bug: valid view request should dispatch to read plane");
+            .expect("bug: valid view request should dispatch to view plane");
 
         assert_eq!(*view_gas_limits.lock().await, vec![gas_limit]);
         assert!(submitted.lock().await.is_empty());
+        assert_eq!(*event_calls.lock().await, 0);
     }
 
     #[tokio::test]
