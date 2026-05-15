@@ -8,6 +8,7 @@ use groundhog_rpc_api_types::{
     receipt::TransactionReceipt,
     state::StorageItemRead,
     transaction::{TransactionStatus, TxHash},
+    view::{ViewRequest, ViewResponse},
 };
 use groundhog_rpc_server::{
     ChainPlane, ReadPlane, RpcServerError, SubmitPlane, ValidatedTransaction, ViewPlane,
@@ -111,7 +112,18 @@ impl ReadPlane for GatewayBackend {
 }
 
 #[async_trait]
-impl ViewPlane for GatewayBackend {}
+impl ViewPlane for GatewayBackend {
+    #[tracing::instrument(skip_all)]
+    async fn view(
+        &self,
+        request: ViewRequest,
+        gas_limit: u64,
+    ) -> Result<ViewResponse, RpcServerError> {
+        handlers::view::view(&self.ctx, request, gas_limit)
+            .await
+            .map_err(Into::into)
+    }
+}
 
 impl From<GatewayError> for RpcServerError {
     fn from(err: GatewayError) -> Self {

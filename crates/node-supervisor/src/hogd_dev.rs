@@ -52,7 +52,7 @@ pub struct HogdDevEndpoints {
     /// hogd-dev's compact readiness key `gateway`.
     #[serde(default, alias = "gateway")]
     pub db_gateway: Option<SocketAddr>,
-    /// `ViewGateway` endpoint for read-only contract execution. Also accepts
+    /// `ViewGateway` endpoint for sandboxed contract simulation. Also accepts
     /// hogd-dev's compact readiness key `view`.
     #[serde(default, alias = "view")]
     pub view_gateway: Option<SocketAddr>,

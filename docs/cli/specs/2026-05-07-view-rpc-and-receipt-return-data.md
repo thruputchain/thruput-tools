@@ -1,9 +1,17 @@
 # Receipt Return Data and View RPC
 
-**Date:** 2026-05-07
-**Status:** Draft for review. Reviewed against current groundhog-rpc,
-hogd, protocol, and protocol-rs code. The design is split into two
-milestones: receipt return-data first, view RPC second.
+**Date:** 2026-05-07 (revised 2026-05-15)
+**Status:** Milestone A (receipt return-data) shipped. Milestone B (view
+RPC) shipped on 2026-05-15 under sandboxed-simulation semantics: the
+gateway sends no `InvokeFlag` on root view invocations, hogd's
+`ViewingModeData` runs the contract against a discarded scratchpad, and
+emitted events are captured and surfaced. The original 2026-05-07 draft
+scoped view as strict read-only at the syscall layer; that semantic was
+reversed once we recognized the wallet-preview use case is simulation,
+not pure read. The strict-read-only enforcement work (PR #1959 on hogd)
+was closed; only the defense-in-depth `kBlockExecutionModeViewing` half
+was kept (hogd #1961). This document has been updated in-place; git
+history captures the pre-pivot language.
 
 **Companion to:**
 
@@ -62,8 +70,8 @@ Concretely:
 
 ## Why Both Halves
 
-Comparable chains consistently expose a read-only contract path, but they
-vary on whether committed transaction metadata carries return data:
+Comparable chains consistently expose a non-mutating contract execution path,
+but they vary on whether committed transaction metadata carries return data:
 
 | Chain | Read RPC | Write result surface |
 |---|---|---|
@@ -74,10 +82,10 @@ vary on whether committed transaction metadata carries return data:
 | CosmWasm | smart query | Execute responses can carry optional `data`, though events are the common app surface |
 | Solana | `simulateTransaction` | Confirmed transaction metadata can include `meta.returnData` |
 
-The DX argument for a dedicated read path is broad: reads should not
-require a key, should not commit, should not pollute history, and should
-eventually be runnable against historical heights. Receipt return-data
-alone does not satisfy any of those.
+The DX argument for a dedicated contract preview path is broad: previews
+should not require a key, should not commit, should not pollute history,
+and should eventually be runnable against historical heights. Receipt
+return-data alone does not satisfy any of those.
 
 The DX argument for committed return-data is narrower but immediate:
 when a state-changing call has a meaningful return value, forcing
@@ -88,8 +96,8 @@ The two halves share one concept - exporting the root
 
 - **Receipt return-data** threads root output into the event-server /
   indexer write path and bumps the committed tx metadata shape.
-- **View RPC** adds a top-level read-only execution entry point, service
-  endpoint, and gateway/node-supervisor routing.
+- **View RPC** adds a top-level simulation execution entry point,
+  service endpoint, and gateway/node-supervisor routing.
 
 They should be sequenced separately. Receipt return-data is the immediate
 PR 5 dependency because it unblocks `groundhog call ...` output with the
@@ -132,9 +140,7 @@ wallet-preview workflows. A wallet building a transaction can simulate
 the inner contract call as if its own wallet contract were the immediate
 caller, by passing `caller = <wallet-address>`. The wallet's own
 `do_action` business logic is not simulated, but the target contract's
-return/abort behavior and root return value are. Strict read-only v1
-does not preview emitted events; that requires explicit hogd view-event
-recording.
+return/abort behavior, root return value, and emitted events are.
 
 Cases where the wallet's own `do_action` materially changes the outer
 behavior (custom auth gates, multi-action wallets, replay protections
@@ -144,9 +150,9 @@ That is a narrow category, not "wallet preview" as a whole.
 
 This alignment has two concrete consequences for Milestone B's shape:
 
-- `ViewResponse` keeps an `events` field so the public shape can surface
-  ephemeral view events once hogd supports them without permitting
-  storage mutation. Strict read-only v1 may return an empty list.
+- `ViewResponse.events` carries the events the simulated frame emitted,
+  so wallet-preview callers see what events a real submit would
+  produce. Hogd captures these from `get_most_recent_frame_events()`.
 - The `caller` semantics must be stable enough for wallet code to rely
   on. A wallet sending `caller = <its own wallet address>` should see
   exactly what the inner contract sees during a real `do_action`
@@ -327,7 +333,7 @@ pub struct ViewRequest {
 
 pub struct ViewResponse {
     pub output:     RootInvocationOutput,
-    pub events:     Vec<EmittedEvent>,       // empty in strict read-only v1
+    pub events:     Vec<EmittedEvent>,       // captured from the simulated frame
     pub height:     BlockHeight,             // height the read executed against
 }
 ```
@@ -361,8 +367,18 @@ Adding this method touches the shared Rust RPC surface:
 - Storage reads are served from the latest committed snapshot. Historical
   view calls are out of scope for v1 because the current public
   `DbGateway` explicitly exposes latest-committed reads only.
-- Execution uses hogexec's read-only semantics: state-modifying syscalls
-  are rejected; writes are not silently executed and discarded.
+- Execution runs the contract under hogd's `ViewingModeData` sandbox:
+  state-modifying syscalls succeed against a scratchpad that the view
+  path never commits, and emitted events are captured and surfaced on
+  the response. A state-mutating entrypoint like `decrement` runs to
+  completion, returns its declared output, and leaves committed storage
+  unchanged. Wallet-preview callers see the events a real submit would
+  produce.
+- The gateway passes `invoke_flags = InvokeFlag::None` on the root
+  invocation, matching the protocol convention that "the root
+  transaction invocation always has no flags set" (`invoke_flag.x`).
+  Sandboxing is a property of the execution mode, not of a per-frame
+  read-only flag.
 - Gas accounting runs as in production under
   `RpcServerConfig::view_gas_limit`, but no gas is charged. Gas-cap
   exhaustion is a deterministic execution outcome: it surfaces as
@@ -381,12 +397,12 @@ Adding this method touches the shared Rust RPC surface:
   `ContractAddress`) surface as JSON-RPC `invalid params` (-32602)
   before any execution begins. Abort and abort-buffer bytes must reach
   the client; routing them through error envelopes loses the bytes.
-- Public v1 sends `InvokeFlag::ReadOnly`; current hogexec read-only
-  behavior rejects `log_event`, so `ViewResponse.events` is expected to
-  be empty. Surfacing wallet-preview events requires a distinct hogd
-  view-event mode that records events while still rejecting storage
-  mutation. `groundhog_view` should not get events by silently switching
-  to drop-write simulation.
+- Contracts can introspect that they are running under view via
+  `get_block_execution_mode() == kBlockExecutionModeViewing` (hogd
+  #1949 / #1961). A contract that branches on this can return one value
+  in view and a different value in commit; wallet-preview faithfulness
+  depends on contract authors not doing that. This is the same caveat
+  every chain with a `simulate`-style RPC carries.
 
 ### Supervisor Behavior When ViewGateway Endpoint Is Absent
 
@@ -413,41 +429,42 @@ Therefore view calls need two explicit modes:
   not read `msg.sender`, such as `get_balance_of(addr)`, work normally.
   Methods that read `msg.sender`, such as `get_balance()`, fail or abort
   according to normal contract behavior.
-- `caller = Some(addr)`: execute an unsigned read-only invocation where
+- `caller = Some(addr)`: execute an unsigned simulated invocation where
   the target observes `msg.sender = addr`.
 
 The second mode is a service-level execution mode, not a transaction
 shape. Passing `caller` to an ordinary root invocation is insufficient.
 hogd must either create a synthetic parent-frame context whose address is
-`caller`, then start the target as a read-only subinvocation, or provide
-an equivalent executor hook that makes `get_msg_sender` return `caller`
-for the view frame.
+`caller`, then start the target as a subinvocation under viewing mode,
+or provide an equivalent executor hook that makes `get_msg_sender`
+return `caller` for the view frame.
 
 This is caller context only. It is not proof of ownership, not a wallet
 action, not an `AuthClaim`, and not a capability grant.
 
 ### Existing Hogexec Primitive
 
-hogexec already has read-only invocation semantics:
+hogd has a top-level viewing mode (`ViewingModeData`) and an executor
+`view_transaction` primitive (hogd PR #1902). Under viewing mode:
 
-- `InvokeFlag::ReadOnly` exists on subinvocations.
-- `SystemCallHandler::is_read_only()` reads the active frame's flag.
-- Nested invocations inherit read-only behavior.
-- `read_only_test.cc` covers read-only enforcement for storage writes,
-  event emission, native token mutation, deployment behavior, and
-  propagation.
+- Writes go to a per-transaction scratchpad that the view path never
+  commits.
+- `log_event` is permitted and captured; `view.cc` copies emitted
+  events into the `ViewGatewayResult` payload via
+  `get_most_recent_frame_events()`.
+- `get_block_execution_mode()` returns `kBlockExecutionModeViewing`
+  (hogd #1949 / #1961), giving hogdb a defense-in-depth signal that
+  writes from this execution must not be committed.
 
-hogd PR #1902 added a top-level viewing mode and an executor
-`view_transaction` primitive. The remaining hogd lift is to expose that
-primitive through a service endpoint, enforce the public read-only subset
-at the service boundary, and carry the snapshot height used for
-execution. Public v1 keeps `ViewResponse.events` but expects it to be
-empty under strict read-only execution.
+`InvokeFlag::ReadOnly` (a separate, per-frame read-only flag with
+syscall-layer enforcement of writes) is still available for
+subinvocations that explicitly want strict read-only semantics inside
+a real transaction. View is not that use case; the gateway passes no
+flag on the root invocation and relies on viewing-mode sandboxing.
 
 Recommendation: implement a dedicated service-level `ViewGateway`
-endpoint. The
-hogexec test-FFI path can inform the implementation, but should not be
-the production/dev-node API surface.
+endpoint. The hogexec test-FFI path can inform the implementation, but
+should not be the production/dev-node API surface.
 
 ### Endpoint Placement
 
@@ -492,11 +509,12 @@ groundhog view <contract> <method> [args...] --json
   `Abort`, a clear "view aborted" line with raw abort hex; on `Fault`,
   a clear fault line. The JSON envelope under `--json` mirrors the
   `ViewResponse` shape in all three cases. JSON-RPC error envelopes are
-  reserved for transport, gas-cap, and invariant failures.
+  reserved for transport/backend availability, request validation, and
+  gateway invariant failures.
 
 `groundhog call --dry-run` is not the same thing and stays as-is: it
 builds and signs a transaction without submitting it. It does not execute.
-`view` actually executes in read-only mode.
+`view` actually executes the contract under sandboxed simulation.
 
 ### Auth Simulation
 
@@ -507,10 +525,9 @@ as a category.
 For most wallet-preview workflows that depend on target return/abort
 behavior, Milestone B is sufficient: the wallet simulates the inner
 contract call with `caller = <its own wallet address>`, and the target
-contract's return/abort behavior is identical to what a real
-`do_action` subinvocation would observe. Event previews remain deferred
-unless hogd adds explicit view-event recording. The other missing piece
-is the wallet's own outer-frame business logic.
+contract's return/abort behavior, return value, and emitted events are
+identical to what a real `do_action` subinvocation would observe. The
+missing piece is the wallet's own outer-frame business logic.
 
 Supporting full `do_action` simulation requires a skip-auth or
 simulated-auth mode in the executor. That is security-relevant: if such
@@ -521,21 +538,21 @@ smuggled into this view RPC.
 
 ### Milestone B Hogd Follow-Up
 
-hogd PR #1902 returns `get_most_recent_frame_events()` from the executor
-primitive, but public v1 still needs strict read-only execution. Because
-current `InvokeFlag::ReadOnly` behavior rejects `log_event`, the public
-gateway should send `ReadOnly` and return an empty `ViewResponse.events`
-list. If wallet-preview events become a v1 requirement, hogd needs a
-separate view-event mode that records events without allowing storage
-mutation.
+`ViewingModeData` already provides scratchpad-discarded writes and event
+capture, so public v1 ships as full sandboxed simulation. The only
+known hogd follow-up is rate-limiting and per-tenant fairness once
+view traffic is exposed to untrusted clients (see Risks). Defense-in-
+depth in hogdb keys on `kBlockExecutionModeViewing`; that signal is
+load-bearing for "writes from this execution must not commit," not
+optional decoration.
 
 ### Milestone B Implementation Order
 
 1. hogd/protocol design sign-off for the `ViewGateway` endpoint shape, caller
-   semantics, height threading, and strict read-only event behavior.
-2. hogd implementation: top-level read-only execution entry point using
-   latest committed state, optional caller context, gas cap, and root
-   output response.
+   semantics, height threading, and event-capture behavior.
+2. hogd implementation: top-level view execution entry point using
+   latest committed state, optional caller context, gas cap, sandboxed
+   writes, captured events, and root output response.
 3. protocol-rs bump and publish, including the follow-up in
    [`2026-05-13-view-rpc-protocol-rs-follow-up.md`](2026-05-13-view-rpc-protocol-rs-follow-up.md).
 4. Rust API:
@@ -575,19 +592,21 @@ mutation.
 
 ### View RPC
 
-- Read-only method returns bytes and height with an empty events list in
-  strict read-only v1.
-- Abort response is returned as RPC success with raw abort output and
-  an empty events list in strict read-only v1.
+- A pure-read method returns bytes and height; events list reflects any
+  events the contract emitted (typically empty for getter-style methods).
+- An event-emitting entrypoint surfaces emitted events on
+  `ViewResponse.events` with the contract's address and topics
+  populated. The `scripts/smoke-local-dx.sh` `view ping` step is the
+  reference assertion.
+- A state-mutating entrypoint (`decrement`) runs to completion under
+  view, returns `Return`, and leaves committed storage unchanged. The
+  post-view storage check is the authoritative "didn't commit"
+  guarantee.
+- Abort response is returned as RPC success with raw abort output.
 - Fault response is returned as RPC success with the `Fault` variant.
 - Root-frame `get_msg_sender` view with `caller = None` fails normally.
 - The same method with `caller = Some(addr)` observes that address as
   `msg.sender` and otherwise behaves as a real subinvocation.
-- Direct state write in view is rejected with the same syscall error as
-  a read-only frame in production.
-- Nested subcall write in view is rejected.
-- If a later v1 scope change retains view events, event emission uses
-  explicit view-mode event recording and appears in `ViewResponse.events`.
 - Gas cap is enforced and surfaces as
   `ViewResponse.output = Fault` (RPC success).
 - View execution sees a single snapshot: a contemporaneous commit on a
@@ -612,9 +631,6 @@ mutation.
 - Historical view calls. No `--at-height` / historical state selector in
   v1.
 - Forking / state overrides. No `eth_call`-style state diff parameter.
-- Drop-write simulation. View is read-only execution; a future simulation
-  RPC may execute mutating code and discard writes, but that is a
-  different tool.
 - Wallet `do_action` simulation.
 - Simulated auth tokens / capabilities.
 - Subinvocation traces in receipt or view responses.
@@ -630,13 +646,13 @@ mutation.
   `Reverted { message }` field at the gateway/supervisor boundary is a
   follow-up. Recommendation: keep the gateway raw and let CLI/SDK decode
   with contract-spec metadata when available.
-- **Method-level view annotation in the contract spec.** `ContractSpec`
-  has no view/mutable marker today. The *timing* of this annotation
-  affects Milestone B's UX directly: if `#[view]` lands first, `groundhog
-  call <c> <method>` can route to the view RPC automatically for view
-  methods, collapsing the read/write CLI distinction. If it lands later,
-  users type `view` vs `call` themselves until the annotation catches
-  up.
+- **Method-level mutability annotation in the contract spec.** `ContractSpec`
+  has no view/mutable marker today. Under sandboxed simulation, this
+  annotation is no longer required for Milestone B routing, but it still
+  matters for UX: the CLI/SDK can warn when a user simulates a method that
+  is known to be state-changing, or when a user submits a transaction for a
+  method that is known to be preview-only. Until the annotation exists,
+  users choose `view` vs `call` explicitly.
 - **View gas cap.** V1 should start with
   `RpcServerConfig::view_gas_limit`. Concrete backends should set a
   bounded production value before exposing public view support; an
@@ -656,9 +672,14 @@ mutation.
 - **Protocol-rs churn.** Lock the protocol shape before Rust scaffolding.
 - **Indexer migration.** `TxEventLog` is serialized into RocksDB today;
   the migration/default story must be explicit.
-- **Read-only execution divergence.** View must share hogexec semantics
-  with commit execution, with only read-only invocation, no commit, and
-  no auth-validation steps changed.
+- **Simulation divergence from commit.** View must share hogexec
+  semantics with commit execution, with only the write-scratchpad,
+  no-commit, and no-auth-validation differences. A bug that lets
+  view return a different value than the same call would on commit
+  (other than the writes themselves) is a wallet-preview correctness
+  hole. The `kBlockExecutionModeViewing` syscall return value is
+  observable to contracts, which can in principle branch on it; that's
+  a contract-author concern, not a host guarantee.
 - **Security boundary for auth simulation.** Any future skip-auth mode
   must be isolated from commit paths.
 - **Indexer storage growth from abort buffers.** Bounded by

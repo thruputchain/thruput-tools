@@ -193,8 +193,8 @@ enum Command {
         #[command(flatten)]
         artifacts: ArtifactArgs,
     },
-    /// Execute a read-only contract method against committed state
-    #[command(long_about = "Execute a read-only contract invocation via \
+    /// Execute a sandboxed contract simulation against committed state
+    #[command(long_about = "Execute a sandboxed contract simulation via \
                       groundhog_view. Named methods use local or embedded \
                       contract metadata when available. Without metadata, \
                       pass an explicit 0x-prefixed 8-byte entrypoint ID \
@@ -227,8 +227,8 @@ enum Command {
                       groundhog_getStorageAt. This is a low-level state \
                       inspection command for address/key reads; use \
                       `groundhog call` for signed transaction invocation \
-                      and future `groundhog view` for read-only contract \
-                      method execution.")]
+                      and `groundhog view` for sandboxed contract \
+                      simulation.")]
     Storage {
         /// Contract address or alias
         address: String,

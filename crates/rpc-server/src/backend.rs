@@ -150,10 +150,10 @@ pub trait ReadPlane: Send + Sync + 'static {
     ) -> Result<StorageItemRead, RpcServerError>;
 }
 
-/// Backend plane for read-only contract execution.
+/// Backend plane for sandboxed contract simulation.
 #[async_trait]
 pub trait ViewPlane: Send + Sync + 'static {
-    /// Execute a read-only contract invocation.
+    /// Execute a sandboxed contract simulation.
     ///
     /// `RootInvocationOutput::Abort` and `RootInvocationOutput::Fault`
     /// are successful RPC responses, not `RpcServerError`s. Errors

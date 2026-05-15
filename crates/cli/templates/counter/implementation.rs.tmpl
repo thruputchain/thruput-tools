@@ -6,6 +6,12 @@ pub enum CounterError {
     NotAuthorized = 1,
 }
 
+#[derive(Event, Clone, Debug)]
+pub struct PingEvent {
+    #[topic]
+    pub tag: u64,
+}
+
 /// A simple counter contract demonstrating commutative
 /// NNInt operations. Multiple increment/decrement calls can
 /// execute concurrently and merge correctly regardless of
@@ -32,6 +38,10 @@ impl Counter {
 
     pub fn get(&self) -> u64 {
         self.value.try_get().unwrap_or(0) as u64
+    }
+
+    pub fn ping(&self, tag: u64) {
+        log_event(&PingEvent { tag });
     }
 
     pub fn error(&self) -> u64 {

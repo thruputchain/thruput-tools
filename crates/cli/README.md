@@ -236,8 +236,8 @@ soaked.
 Read one latest committed raw storage item via `groundhog_getStorageAt`.
 This is the low-level address/key state inspection command; it does not
 execute contract code and does not require a signing key. Use `groundhog call`
-for signed state-changing invocation. A future `groundhog view` command will
-cover read-only contract method execution once the `groundhog_view` RPC lands.
+for signed state-changing invocation. Use `groundhog view` for sandboxed
+contract simulation through `groundhog_view`.
 
 ```bash
 groundhog storage my-counter 0x0000000000000000000000000000000000000000000000000000000000000000

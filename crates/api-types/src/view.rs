@@ -5,7 +5,7 @@ use crate::events::EmittedEvent;
 use crate::hex::HexBytes;
 use crate::{BlockHeight, ContractAddress};
 
-/// Request for read-only contract execution against the latest committed state.
+/// Request for sandboxed contract simulation against the latest committed state.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ViewRequest {
@@ -23,7 +23,7 @@ pub struct ViewRequest {
     pub caller: Option<ContractAddress>,
 }
 
-/// Result of read-only contract execution.
+/// Result of sandboxed contract simulation.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ViewResponse {
@@ -32,8 +32,8 @@ pub struct ViewResponse {
 
     /// Events emitted during view execution.
     ///
-    /// Strict read-only v1 backends return an empty list unless hogd grows
-    /// explicit view-event recording.
+    /// Hogd captures emitted events from the simulated frame; wallet-preview
+    /// callers see what events a real submit would produce.
     pub events: Vec<EmittedEvent>,
 
     /// Block height of the committed snapshot used for the view.
