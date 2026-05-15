@@ -9,7 +9,7 @@ use groundhog_signing::{
 /// Default JSON-RPC listen address for `groundhog node`.
 pub const DEFAULT_RPC_LISTEN_ADDRESS: &str = "127.0.0.1:9545";
 
-/// Default timeout for one hogd-dev ViewGateway execution RPC.
+/// Default timeout for one hogd-dev `ViewGateway` execution RPC.
 pub const DEFAULT_HOGD_DEV_VIEW_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Default listen host passed to hogd-dev for internal services.
@@ -44,9 +44,9 @@ pub struct NodeSupervisorConfig {
     /// This override is intended for local cross-repo smoke tests before a
     /// matching Rust protocol crate has been published.
     pub hogd_protocol_override: Option<String>,
-    /// Gas budget assigned to hogd-dev ViewGateway root invocations.
+    /// Gas budget assigned to hogd-dev `ViewGateway` root invocations.
     pub view_gas_limit: u64,
-    /// Maximum time to wait for one hogd-dev ViewGateway execution RPC.
+    /// Maximum time to wait for one hogd-dev `ViewGateway` execution RPC.
     pub view_timeout: Duration,
 }
 
@@ -95,14 +95,14 @@ impl NodeSupervisorConfig {
         self
     }
 
-    /// Return a copy with a different hogd-dev ViewGateway gas budget.
+    /// Return a copy with a different hogd-dev `ViewGateway` gas budget.
     #[must_use]
     pub fn with_view_gas_limit(mut self, view_gas_limit: u64) -> Self {
         self.view_gas_limit = view_gas_limit;
         self
     }
 
-    /// Return a copy with a different hogd-dev ViewGateway RPC timeout.
+    /// Return a copy with a different hogd-dev `ViewGateway` RPC timeout.
     #[must_use]
     pub fn with_view_timeout(mut self, view_timeout: Duration) -> Self {
         self.view_timeout = view_timeout;

@@ -33,9 +33,7 @@ fn ts_type_ref(ty: &ContractType) -> Result<String, CliError> {
             Ok(format!("{} | null", ts_type_ref(option_inner.as_ref())?))
         }
         ContractType::Vector { vector } => {
-            let element = vector.element.as_deref().ok_or_else(|| {
-                CliError::SpecFailed("contract spec is missing a vector element type".into())
-            })?;
+            let element = vector.element.as_ref();
             if matches!(element, ContractType::U8) {
                 return Ok("Uint8Array".into());
             }
@@ -47,9 +45,7 @@ fn ts_type_ref(ty: &ContractType) -> Result<String, CliError> {
             }
         }
         ContractType::Array { array } => {
-            let element = array.element.as_deref().ok_or_else(|| {
-                CliError::SpecFailed("contract spec is missing an array element type".into())
-            })?;
+            let element = array.element.as_ref();
             if matches!(element, ContractType::U8) {
                 return Ok("Uint8Array".into());
             }
@@ -572,9 +568,7 @@ fn spec_type_to_ts_literal(ty: &ContractType) -> Result<String, CliError> {
             ))
         }
         ContractType::Vector { vector } => {
-            let elem = vector.element.as_deref().ok_or_else(|| {
-                CliError::SpecFailed("contract spec is missing a vector element type".into())
-            })?;
+            let elem = vector.element.as_ref();
             let elem_lit = spec_type_to_ts_literal(elem)?;
             Ok(format!(
                 "{{ v: ContractTypeKind.Vector, vector: \
@@ -583,9 +577,7 @@ fn spec_type_to_ts_literal(ty: &ContractType) -> Result<String, CliError> {
             ))
         }
         ContractType::Array { array } => {
-            let elem = array.element.as_deref().ok_or_else(|| {
-                CliError::SpecFailed("contract spec is missing an array element type".into())
-            })?;
+            let elem = array.element.as_ref();
             let elem_lit = spec_type_to_ts_literal(elem)?;
             Ok(format!(
                 "{{ v: ContractTypeKind.Array, array: \
@@ -735,7 +727,7 @@ mod tests {
     fn maps_vector_type() {
         let ty = ContractType::Vector {
             vector: ContractVectorType {
-                element: Some(Box::new(ContractType::Bool)),
+                element: Box::new(ContractType::Bool),
                 max_len: 100,
             },
         };
@@ -746,9 +738,9 @@ mod tests {
     fn maps_vector_of_option_with_parens() {
         let ty = ContractType::Vector {
             vector: ContractVectorType {
-                element: Some(Box::new(ContractType::Option {
+                element: Box::new(ContractType::Option {
                     option_inner: Box::new(ContractType::U64),
-                })),
+                }),
                 max_len: 100,
             },
         };
@@ -759,7 +751,7 @@ mod tests {
     fn maps_vector_of_u8_to_uint8array() {
         let ty = ContractType::Vector {
             vector: ContractVectorType {
-                element: Some(Box::new(ContractType::U8)),
+                element: Box::new(ContractType::U8),
                 max_len: 1024,
             },
         };
@@ -770,7 +762,7 @@ mod tests {
     fn maps_array_of_u8_to_uint8array() {
         let ty = ContractType::Array {
             array: ContractArrayType {
-                element: Some(Box::new(ContractType::U8)),
+                element: Box::new(ContractType::U8),
                 len: 32,
             },
         };
@@ -781,7 +773,7 @@ mod tests {
     fn maps_array_of_non_u8_to_array() {
         let ty = ContractType::Array {
             array: ContractArrayType {
-                element: Some(Box::new(ContractType::U32)),
+                element: Box::new(ContractType::U32),
                 len: 4,
             },
         };
