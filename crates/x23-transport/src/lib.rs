@@ -22,7 +22,7 @@
 //!   this so that an indexer or scheduler outage at startup does not
 //!   take the gateway down).
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use rpc_driver::{FixedSerialPool, RpcSender};
 
@@ -54,6 +54,15 @@ pub enum ConnectError {
         service: &'static str,
         addr: String,
         reason: String,
+    },
+
+    /// The remote service accepted a connection but did not answer the startup
+    /// handshake/probe before the configured deadline.
+    #[error("{service} at {addr} timed out during startup probe after {timeout:?}")]
+    StartupProbeTimedOut {
+        service: &'static str,
+        addr: String,
+        timeout: Duration,
     },
 }
 
@@ -102,7 +111,11 @@ where
 {
     match connect(service, addr, pool_size, build).await {
         Ok(client) => Ok(Some(client)),
-        Err(e @ (ConnectError::BadAddress { .. } | ConnectError::StartupRejected { .. })) => Err(e),
+        Err(
+            e @ (ConnectError::BadAddress { .. }
+            | ConnectError::StartupRejected { .. }
+            | ConnectError::StartupProbeTimedOut { .. }),
+        ) => Err(e),
         Err(e) => {
             tracing::warn!(addr, service, error = %e, "unreachable, starting in degraded mode");
             Ok(None)
