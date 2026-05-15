@@ -82,10 +82,10 @@ but they vary on whether committed transaction metadata carries return data:
 | CosmWasm | smart query | Execute responses can carry optional `data`, though events are the common app surface |
 | Solana | `simulateTransaction` | Confirmed transaction metadata can include `meta.returnData` |
 
-The DX argument for a dedicated read path is broad: reads should not
-require a key, should not commit, should not pollute history, and should
-eventually be runnable against historical heights. Receipt return-data
-alone does not satisfy any of those.
+The DX argument for a dedicated contract preview path is broad: previews
+should not require a key, should not commit, should not pollute history,
+and should eventually be runnable against historical heights. Receipt
+return-data alone does not satisfy any of those.
 
 The DX argument for committed return-data is narrower but immediate:
 when a state-changing call has a meaningful return value, forcing
@@ -646,13 +646,13 @@ optional decoration.
   `Reverted { message }` field at the gateway/supervisor boundary is a
   follow-up. Recommendation: keep the gateway raw and let CLI/SDK decode
   with contract-spec metadata when available.
-- **Method-level view annotation in the contract spec.** `ContractSpec`
-  has no view/mutable marker today. The *timing* of this annotation
-  affects Milestone B's UX directly: if `#[view]` lands first, `groundhog
-  call <c> <method>` can route to the view RPC automatically for view
-  methods, collapsing the read/write CLI distinction. If it lands later,
-  users type `view` vs `call` themselves until the annotation catches
-  up.
+- **Method-level mutability annotation in the contract spec.** `ContractSpec`
+  has no view/mutable marker today. Under sandboxed simulation, this
+  annotation is no longer required for Milestone B routing, but it still
+  matters for UX: the CLI/SDK can warn when a user simulates a method that
+  is known to be state-changing, or when a user submits a transaction for a
+  method that is known to be preview-only. Until the annotation exists,
+  users choose `view` vs `call` explicitly.
 - **View gas cap.** V1 should start with
   `RpcServerConfig::view_gas_limit`. Concrete backends should set a
   bounded production value before exposing public view support; an

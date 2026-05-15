@@ -34,6 +34,8 @@ pub async fn view(
 ) -> Result<ViewResponse, GatewayError> {
     let client = ctx.view_gateway.read().await.clone().ok_or_else(|| {
         if ctx.config.view_gateway_address.is_some() {
+            // Startup currently rejects configured-but-unreachable ViewGateway
+            // endpoints; this covers future runtime disconnect/reconnect modes.
             GatewayError::BackendUnavailable("view_gateway not connected".into())
         } else {
             GatewayError::NotImplemented("view".into())
@@ -162,6 +164,7 @@ mod tests {
         Protocol, ViewGateway_ViewGateway1, ViewGateway_ViewGateway1_Client,
         ViewGateway_ViewGateway1_Dispatcher, ViewGatewayIntroOutcome, ViewGatewayPayload,
     };
+    use groundhog_xdr::event::TxEmittedEvent;
     use groundhog_xdr::types::ContractAddress as XdrContractAddress;
     use rpc_driver::{FixedSerialPool, ProgramError, RpcServer, ServiceMap};
     use tokio::net::TcpListener;
@@ -269,13 +272,24 @@ mod tests {
 
     #[test]
     fn gateway_return_maps_to_public_view_response() {
+        let topic0 = [10; 32];
+        let topic1 = [11; 32];
+        let data = vec![12, 13, 14];
+        let mut serialized_event = Vec::new();
+        serialized_event.extend_from_slice(&topic0);
+        serialized_event.extend_from_slice(&topic1);
+        serialized_event.extend_from_slice(&data);
         let result = ViewGatewayResult::ViewGatewayOk {
             payload: ViewGatewayPayload {
                 height: 42.into(),
                 output: InvocationFrameOutput::Return {
                     return_buffer: BytesM(vec![1, 2, 3]),
                 },
-                events: VecM(vec![]),
+                events: VecM(vec![TxEmittedEvent {
+                    contract_address: XdrContractAddress::from([15; 32]),
+                    num_topics: 2,
+                    serialized_event: BytesM(serialized_event),
+                }]),
             },
         };
 
@@ -288,7 +302,11 @@ mod tests {
             }
             other => panic!("unexpected output: {other:?}"),
         }
-        assert!(response.events.is_empty());
+        assert_eq!(response.events.len(), 1);
+        assert_eq!(response.events[0].contract_address.0.as_ref(), &[15; 32]);
+        assert_eq!(response.events[0].topics[0].0, topic0);
+        assert_eq!(response.events[0].topics[1].0, topic1);
+        assert_eq!(response.events[0].data.0, data);
     }
 
     #[test]

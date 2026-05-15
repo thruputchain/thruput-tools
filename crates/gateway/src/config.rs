@@ -137,7 +137,8 @@ pub struct GatewayConfig {
     /// x23 RPC address for hogd `ViewGateway1` (sandboxed contract simulation).
     ///
     /// Serves `groundhog_view`. Optional: when absent the gateway returns
-    /// `NotImplemented` for view execution.
+    /// `NotImplemented` for view execution. When configured, connection or
+    /// startup-probe failures are hard startup errors.
     pub view_gateway_address: Option<String>,
 
     /// Maximum time to wait for one `ViewGateway` execution RPC.
