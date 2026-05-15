@@ -46,6 +46,15 @@ pub enum ConnectError {
         addr: String,
         source: rpc_driver::RpcError,
     },
+
+    /// The remote service accepted a connection but rejected the startup
+    /// handshake/probe.
+    #[error("{service} at {addr} rejected startup probe: {reason}")]
+    StartupRejected {
+        service: &'static str,
+        addr: String,
+        reason: String,
+    },
 }
 
 /// Establish a connection pool and construct the typed client. Fails
@@ -93,7 +102,7 @@ where
 {
     match connect(service, addr, pool_size, build).await {
         Ok(client) => Ok(Some(client)),
-        Err(e @ ConnectError::BadAddress { .. }) => Err(e),
+        Err(e @ (ConnectError::BadAddress { .. } | ConnectError::StartupRejected { .. })) => Err(e),
         Err(e) => {
             tracing::warn!(addr, service, error = %e, "unreachable, starting in degraded mode");
             Ok(None)

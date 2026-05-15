@@ -40,7 +40,7 @@ struct Cli {
     #[arg(long)]
     indexer: Option<String>,
 
-    /// ViewGateway x23 RPC address (overrides config file)
+    /// `ViewGateway` x23 RPC address (overrides config file)
     #[arg(long)]
     view_gateway: Option<String>,
 }

@@ -4,7 +4,7 @@ use groundhog_db_gateway::DbGateway_DbGateway1_Client;
 use groundhog_indexer::IndexerBlockExplorer_IndexerBlockExplorer1_Client;
 use groundhog_scheduler::sched_coord::SchedulerCoord_SchedulerCoord1_Client;
 use groundhog_view::{Protocol, ViewGateway_ViewGateway1_Client, ViewGatewayIntroOutcome};
-use groundhog_x23_transport::{ConnectError, try_connect};
+use groundhog_x23_transport::{ConnectError, connect, try_connect};
 use groundhog_xdr::PROTOCOL_VERSION;
 use tokio::sync::RwLock;
 use xdr_common::StringM;
@@ -47,7 +47,7 @@ pub struct GatewayContext {
     /// can satisfy many concurrent client requests.
     pub tip_coalescer: TipCoalescer,
 
-    /// x23 RPC client to hogd ViewGateway.
+    /// x23 RPC client to hogd `ViewGateway`.
     /// Used for: `groundhog_view`.
     pub view_gateway: Arc<RwLock<Option<ViewGateway_ViewGateway1_Client>>>,
 
@@ -149,36 +149,27 @@ async fn connect_optional_view_gateway(
         return Ok(None);
     };
 
-    let Some(client) = try_connect(
+    let client = connect(
         "view_gateway",
         address,
         view_gateway_pool_size(),
         ViewGateway_ViewGateway1_Client::new,
     )
-    .await?
-    else {
-        return Ok(None);
-    };
+    .await?;
 
     let protocol: Protocol = StringM(PROTOCOL_VERSION.as_bytes().to_vec());
     match client.viewgateway_intro(&protocol).await {
         Ok(ViewGatewayIntroOutcome::ViewGatewayIntroSuccess) => Ok(Some(client)),
-        Ok(outcome) => {
-            tracing::warn!(
-                outcome = outcome.0,
-                address,
-                "view_gateway intro rejected, starting view plane in degraded mode"
-            );
-            Ok(None)
-        }
-        Err(error) => {
-            tracing::warn!(
-                %error,
-                address,
-                "view_gateway intro failed, starting view plane in degraded mode"
-            );
-            Ok(None)
-        }
+        Ok(outcome) => Err(ConnectError::StartupRejected {
+            service: "view_gateway",
+            addr: address.to_string(),
+            reason: format!("{outcome:?}"),
+        }),
+        Err(source) => Err(ConnectError::ConnectFailed {
+            service: "view_gateway_intro",
+            addr: address.to_string(),
+            source,
+        }),
     }
 }
 
@@ -204,6 +195,84 @@ fn db_gateway_pool_size(config: &GatewayConfig) -> usize {
     config.storage.max_concurrent_rpcs().saturating_add(SLACK)
 }
 
+/// Keep `ViewGateway` concurrency bounded independently from JSON-RPC
+/// `max_connections`. View calls are unbatched and may be expensive, so this
+/// intentionally starts conservative until the gateway has per-method
+/// concurrency limits or view-specific load data.
 fn view_gateway_pool_size() -> usize {
     4
+}
+
+#[cfg(test)]
+mod tests {
+    use async_trait::async_trait;
+    use groundhog_view::{
+        TransactionViewQuery, ViewGateway_ViewGateway1, ViewGateway_ViewGateway1_Dispatcher,
+        ViewGatewayResult,
+    };
+    use rpc_driver::{ProgramError, RpcServer, ServiceMap};
+    use tokio::net::TcpListener;
+
+    use super::*;
+
+    struct IntroRejectedViewGateway;
+
+    #[async_trait]
+    impl ViewGateway_ViewGateway1 for IntroRejectedViewGateway {
+        async fn viewgateway_intro(
+            &self,
+            _arg0: Protocol,
+        ) -> Result<ViewGatewayIntroOutcome, ProgramError> {
+            Ok(ViewGatewayIntroOutcome::ViewGatewayIntroMismatchedProtocol)
+        }
+
+        async fn viewgateway_view(
+            &self,
+            _arg0: TransactionViewQuery,
+        ) -> Result<ViewGatewayResult, ProgramError> {
+            panic!("bug: intro rejection test should not issue view RPC")
+        }
+    }
+
+    async fn start_intro_rejected_view_gateway() -> (
+        std::net::SocketAddr,
+        tokio::task::JoinHandle<Result<(), std::io::Error>>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bug: test ViewGateway should bind");
+        let addr = listener
+            .local_addr()
+            .expect("bug: test ViewGateway should have local addr");
+        let mut services = ServiceMap::new();
+        services.add_service(Box::new(ViewGateway_ViewGateway1_Dispatcher::new(
+            Box::new(IntroRejectedViewGateway),
+        )));
+        let server = RpcServer::new(listener, services);
+        let handle = server.start().await;
+        (addr, handle)
+    }
+
+    #[tokio::test]
+    async fn optional_view_gateway_without_address_is_absent() {
+        let client = connect_optional_view_gateway(None)
+            .await
+            .expect("missing optional ViewGateway should not fail startup");
+
+        assert!(client.is_none());
+    }
+
+    #[tokio::test]
+    async fn configured_view_gateway_intro_rejection_fails_startup_probe() {
+        let (addr, _server) = start_intro_rejected_view_gateway().await;
+
+        let Err(err) = connect_optional_view_gateway(Some(&addr.to_string())).await else {
+            panic!("configured ViewGateway intro rejection should fail startup");
+        };
+
+        assert!(
+            matches!(err, ConnectError::StartupRejected { .. }),
+            "expected StartupRejected, got {err:?}"
+        );
+    }
 }
