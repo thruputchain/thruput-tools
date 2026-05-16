@@ -37,6 +37,10 @@ pub struct TestOptions {
     pub harness: TestHarnessOptions,
 }
 
+/// Options for the future `groundhog test --integration` orchestration path.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct IntegrationTestOptions {}
+
 /// Boolean controls forwarded to the `test_wasm` libtest harness.
 #[derive(Debug, Clone, Default)]
 pub struct TestHarnessOptions {
@@ -154,6 +158,27 @@ pub fn run_with_options(
         cmd,
         print,
     )
+}
+
+/// Run integration tests with explicit orchestration controls.
+#[allow(clippy::too_many_arguments)]
+pub fn run_integration_with_options(
+    _package: Option<&str>,
+    options: &TestOptions,
+    _integration: &IntegrationTestOptions,
+    _cargo_args: &[String],
+    _artifacts: &ArtifactOptions,
+    _explicit_profile: Option<&str>,
+    _cmd: &'static str,
+    _print: &Print,
+) -> Result<(), CliError> {
+    if options.watch {
+        return Err(CliError::InvalidTestOptions(
+            "`--integration` cannot be combined with `--watch` yet".into(),
+        ));
+    }
+
+    Err(CliError::IntegrationTestsUnavailable)
 }
 
 fn run_watch(
@@ -1076,14 +1101,15 @@ fn dedup_tests(tests: impl IntoIterator<Item = String>) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        FAILURE_CACHE_VERSION, FailureCache, SelectedFilter, TestHarnessOptions, TestOptions,
-        TestRunOutput, WatchContext, aggregate_summary, apply_harness_options, combined_output,
-        derive_summary_from_cases, extract_failed_tests, failure_cache_path, filter_cached_tests,
-        next_cached_failures, parse_summary_line, parse_test_case_line, read_failure_cache,
-        should_stop_rerun, should_watch_file, update_failure_cache, watch_snapshot,
-        write_failure_cache,
+        FAILURE_CACHE_VERSION, FailureCache, IntegrationTestOptions, SelectedFilter,
+        TestHarnessOptions, TestOptions, TestRunOutput, WatchContext, aggregate_summary,
+        apply_harness_options, combined_output, derive_summary_from_cases, extract_failed_tests,
+        failure_cache_path, filter_cached_tests, next_cached_failures, parse_summary_line,
+        parse_test_case_line, read_failure_cache, should_stop_rerun, should_watch_file,
+        update_failure_cache, watch_snapshot, write_failure_cache,
     };
     use crate::test_json::{TestCase, TestCaseStatus, TestSummarySource};
+    use crate::{CliError, Print};
     use std::fs;
     use std::path::PathBuf;
     use std::process::Command;
@@ -1094,6 +1120,54 @@ mod tests {
             root: root.to_path_buf(),
             ignored_dirs: vec![root.join("target")],
         }
+    }
+
+    #[test]
+    fn integration_path_reports_unavailable_before_wasm_build() {
+        let options = TestOptions::default();
+
+        let err = super::run_integration_with_options(
+            None,
+            &options,
+            &IntegrationTestOptions::default(),
+            &[],
+            &crate::artifacts::ArtifactOptions::default(),
+            None,
+            "test",
+            &Print::quiet(),
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(err, CliError::IntegrationTestsUnavailable),
+            "expected IntegrationTestsUnavailable, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn integration_path_rejects_watch_mode() {
+        let options = TestOptions {
+            watch: true,
+            ..TestOptions::default()
+        };
+
+        let err = super::run_integration_with_options(
+            None,
+            &options,
+            &IntegrationTestOptions::default(),
+            &[],
+            &crate::artifacts::ArtifactOptions::default(),
+            None,
+            "test",
+            &Print::quiet(),
+        )
+        .unwrap_err();
+
+        let CliError::InvalidTestOptions(message) = err else {
+            panic!("expected InvalidTestOptions, got: {err:?}");
+        };
+        assert!(message.contains("--integration"));
+        assert!(message.contains("--watch"));
     }
 
     #[test]

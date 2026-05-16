@@ -141,6 +141,9 @@ enum Command {
         /// With --json, emits one newline-delimited JSON record per run.
         #[arg(long)]
         watch: bool,
+        /// Reserved for local hogd-dev integration tests (not wired yet)
+        #[arg(long)]
+        integration: bool,
         /// Config profile to use
         #[arg(
             long = "profile",
@@ -425,6 +428,7 @@ fn main() {
             skip,
             rerun,
             watch,
+            integration,
             profile,
             artifacts,
             cargo_args,
@@ -447,15 +451,28 @@ fn main() {
                         no_capture,
                     },
                 };
-                groundhog_cli::test_cmd::run_with_options(
-                    package.as_deref(),
-                    &options,
-                    &cargo_args,
-                    &artifacts,
-                    Some(&profile),
-                    cmd_name,
-                    &print,
-                )
+                if integration {
+                    groundhog_cli::test_cmd::run_integration_with_options(
+                        package.as_deref(),
+                        &options,
+                        &groundhog_cli::test_cmd::IntegrationTestOptions::default(),
+                        &cargo_args,
+                        &artifacts,
+                        Some(&profile),
+                        cmd_name,
+                        &print,
+                    )
+                } else {
+                    groundhog_cli::test_cmd::run_with_options(
+                        package.as_deref(),
+                        &options,
+                        &cargo_args,
+                        &artifacts,
+                        Some(&profile),
+                        cmd_name,
+                        &print,
+                    )
+                }
             }),
         Command::Deploy {
             wasm,

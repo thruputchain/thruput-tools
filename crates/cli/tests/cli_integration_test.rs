@@ -595,6 +595,9 @@ fn test_help_mentions_target_dir() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("--target-dir"));
     assert!(stdout.contains("--watch"));
+    assert!(stdout.contains("--integration"));
+    assert!(stdout.contains("hogd-dev"));
+    assert!(stdout.contains("not wired yet"));
 }
 
 #[test]
@@ -698,6 +701,63 @@ fn test_json_failure_is_structured() {
     assert_eq!(stderr["ok"], false);
     assert_eq!(stderr["command"], "test");
     assert_eq!(stderr["error"]["code"], "cargo_metadata_failed");
+}
+
+#[test]
+fn test_integration_json_reports_unavailable() {
+    let tmp = TempDir::new().unwrap();
+    let output = groundhog()
+        .arg("--json")
+        .arg("test")
+        .arg("--integration")
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(stderr["ok"], false);
+    assert_eq!(stderr["command"], "test");
+    assert_eq!(stderr["error"]["code"], "integration_tests_unavailable");
+    assert!(
+        stderr["error"]["hint"]
+            .as_str()
+            .expect("bug: hint should be present")
+            .contains("groundhog node")
+    );
+}
+
+#[test]
+fn test_integration_rejects_watch() {
+    let tmp = TempDir::new().unwrap();
+    let output = groundhog()
+        .arg("--json")
+        .arg("test")
+        .arg("--integration")
+        .arg("--watch")
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(stderr["ok"], false);
+    assert_eq!(stderr["command"], "test");
+    assert_eq!(stderr["error"]["code"], "invalid_test_options");
+    assert!(
+        stderr["error"]["message"]
+            .as_str()
+            .expect("bug: message should be present")
+            .contains("--watch")
+    );
+    assert!(
+        stderr["error"]["hint"]
+            .as_str()
+            .expect("bug: hint should be present")
+            .contains("conflicting")
+    );
 }
 
 #[cfg(unix)]
