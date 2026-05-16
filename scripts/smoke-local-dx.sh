@@ -57,8 +57,10 @@ path = sys.argv[1].split(".")
 payload = json.loads(sys.argv[2])
 value = payload
 for part in path:
+    if value is None:
+        break
     value = value.get(part) if isinstance(value, dict) else value[int(part)]
-print(len(value))
+print(len(value) if value is not None else 0)
 PY
 }
 
