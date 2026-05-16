@@ -48,6 +48,22 @@ else:
 PY
 }
 
+json_len() {
+    python3 - "$1" "$2" <<'PY'
+import json
+import sys
+
+path = sys.argv[1].split(".")
+payload = json.loads(sys.argv[2])
+value = payload
+for part in path:
+    if value is None:
+        break
+    value = value.get(part) if isinstance(value, dict) else value[int(part)]
+print(len(value) if value is not None else 0)
+PY
+}
+
 counter_value_key() {
     python3 - <<'PY'
 import hashlib
@@ -421,7 +437,11 @@ PING_EVENT_CONTRACT="$(json_field data.events.0.contractAddress "$PING_VIEW_JSON
     || die "view ping event contractAddress was $PING_EVENT_CONTRACT, expected $CONTRACT_ADDRESS"
 PING_EVENT_TOPICS="$(json_field data.events.0.topics "$PING_VIEW_JSON")"
 [[ "$PING_EVENT_TOPICS" != "[]" ]] || die "view ping event had no topics"
-log "view ping result: height=$(json_field data.height "$PING_VIEW_JSON") events=$PING_EVENTS"
+PING_EVENT_COUNT="$(json_len data.events "$PING_VIEW_JSON")"
+PING_EVENT_TOPIC0="$(json_field data.events.0.topics.0 "$PING_VIEW_JSON")"
+PING_EVENT_DATA="$(json_field data.events.0.data "$PING_VIEW_JSON")"
+log "view ping result: height=$(json_field data.height "$PING_VIEW_JSON") events=$PING_EVENT_COUNT \
+contract=$PING_EVENT_CONTRACT topic0=$PING_EVENT_TOPIC0 data=$PING_EVENT_DATA"
 
 if [[ -n "$GATEWAY_RPC_URL" ]]; then
     log "Skipping call get through standalone gateway because dev-key account lookup is local-node only"

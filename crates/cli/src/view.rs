@@ -14,6 +14,7 @@ use crate::call::{
 };
 use crate::codec::{decode_return, encode_args, parse_contract_address};
 use crate::config::resolve_profile;
+use crate::dev_detail::format_event;
 use crate::dev_keys;
 use crate::result::CommandResult;
 use crate::view_json::{VIEW_JSON_SCHEMA_VERSION, ViewJsonPayload};
@@ -255,6 +256,9 @@ fn print_view_response(
 
     if !response.events.is_empty() {
         print.status(format_args!("  events: {}", response.events.len()));
+        for (index, event) in response.events.iter().enumerate() {
+            print.status(format_args!("    [{index}] {}", format_event(event)));
+        }
     }
 }
 

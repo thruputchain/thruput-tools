@@ -119,7 +119,7 @@ fn format_storage_delta(delta: &StorageDeltaInfo) -> String {
     )
 }
 
-fn format_event(event: &EmittedEvent) -> String {
+pub(crate) fn format_event(event: &EmittedEvent) -> String {
     let mut parts = vec![format_contract_address(&event.contract_address.0)];
     parts.extend(
         event

@@ -615,6 +615,8 @@ fn call_help_mentions_target_dir() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("--target-dir"));
     assert!(stdout.contains("--dry-run"));
+    assert!(stdout.contains("0x-prefixed 8-byte entrypoint ID"));
+    assert!(stdout.contains("raw hex calldata"));
 }
 
 #[test]
@@ -1441,6 +1443,55 @@ fn view_json_surfaces_fault_as_success_body() {
 }
 
 #[test]
+fn view_human_prints_event_details() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let address = format!("0x{}", "11".repeat(32));
+    let entrypoint = "0x0102030405060708";
+    let topic = format!("0x{}", "22".repeat(32));
+    let event_data = "0x1234";
+    let (rpc_url, rpc_server) = spawn_view_rpc_with_events(
+        &address,
+        entrypoint,
+        "0x",
+        serde_json::json!([{
+            "contractAddress": address,
+            "topics": [topic],
+            "data": event_data,
+        }]),
+    );
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
+    )
+    .unwrap();
+
+    let output = groundhog()
+        .args(["view", &address, entrypoint, "--calldata", "0x"])
+        .current_dir(&project)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("View returned"));
+    assert!(stderr.contains("events: 1"));
+    assert!(stderr.contains(&format!(
+        "    [0] {address} topic0={topic} data={event_data}"
+    )));
+}
+
+#[test]
 fn storage_json_reads_latest_item() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");
@@ -2219,12 +2270,49 @@ fn spawn_view_rpc_with_output(
     spawn_view_rpc_inner(address, entrypoint, calldata, None, output)
 }
 
+fn spawn_view_rpc_with_events(
+    address: &str,
+    entrypoint: &str,
+    calldata: &str,
+    events: serde_json::Value,
+) -> (String, thread::JoinHandle<()>) {
+    spawn_view_rpc_inner_with_events(
+        address,
+        entrypoint,
+        calldata,
+        None,
+        serde_json::json!({
+            "result": "return",
+            "returnData": "0x",
+        }),
+        events,
+    )
+}
+
 fn spawn_view_rpc_inner(
     address: &str,
     entrypoint: &str,
     calldata: &str,
     caller: Option<&str>,
     output: serde_json::Value,
+) -> (String, thread::JoinHandle<()>) {
+    spawn_view_rpc_inner_with_events(
+        address,
+        entrypoint,
+        calldata,
+        caller,
+        output,
+        serde_json::json!([]),
+    )
+}
+
+fn spawn_view_rpc_inner_with_events(
+    address: &str,
+    entrypoint: &str,
+    calldata: &str,
+    caller: Option<&str>,
+    output: serde_json::Value,
+    events: serde_json::Value,
 ) -> (String, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
@@ -2252,7 +2340,7 @@ fn spawn_view_rpc_inner(
             &request["id"],
             serde_json::json!({
                 "output": output,
-                "events": [],
+                "events": events,
                 "height": 12,
             }),
         );

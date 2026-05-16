@@ -397,7 +397,8 @@ Goal: eliminate dependency on a remote network for the main inner loop.
 3. **Core local-node features**
    - deterministic funded accounts
    - instant commit
-   - startup clean slate via restart or `groundhog node --reset`
+   - startup clean slate via restart (hogd-dev is ephemeral; `--reset`
+     is only meaningful once an optional persisted state file ships)
    - optional persisted state file
 
 4. **Groundhog-specific observability**
@@ -468,44 +469,44 @@ but the contract-spec work in Phase 1 should preserve a clean path to it.
 
 ## Immediate Next Steps
 
-Two parallel tracks are open after PR 4f:
+Phase 2's durable-local-node work is complete through PR 5 and the
+view-RPC simulation pivot (PR #76, merged 2026-05-15).  The two
+historical Rust-track items are both resolved:
 
-**Rust track (no hogd dependency):**
+- `groundhog_getStorageAt` parity + `groundhog storage` CLI wrapper
+  shipped.
+- `groundhog node --reset` deferred — `HogdDevConfig` is documented as
+  ephemeral (`crates/node-supervisor/src/config.rs:124-128`), so each
+  start is already a clean slate.  `--reset` only becomes meaningful
+  once an optional persisted-state file ships, and would be one flag
+  on top of that work, not a standalone item.
 
-1. Local-node `groundhog_getStorageAt` parity and the `groundhog storage`
-   CLI wrapper for raw committed address/key reads have landed. Transaction
-   detail remains deferred.
-2. Startup clean-slate UX (`groundhog node --reset`) as a process
-   lifecycle feature, not a runtime `groundhog_dev_reset` RPC.
-
-**Hogd-dev/control track:**
-
-3. Park the hogd-dev dev-control endpoint until a real hogd-owned dev
-   method needs it. Transaction detail is deferred; see
-   `docs/cli/specs/2026-05-07-transaction-detail-options.md`.
+The hogd-dev/control track and the deferred transaction-detail work
+(`docs/cli/specs/2026-05-07-transaction-detail-options.md`) remain
+parked until a real hogd-owned dev method needs them.
 
 **Cross-team track (driven by hogd / protocol-rs):**
 
-4. Read DX follow-ups per
-   [`specs/2026-05-07-view-rpc-and-receipt-return-data.md`](specs/2026-05-07-view-rpc-and-receipt-return-data.md).
-   - Milestone A: receipt return-data + abort-data. Hogd protocol design
-     and indexer migration come first; Rust mapping follows protocol-rs
-     publish.
-   - Milestone B: `groundhog_view` RPC. Hogd top-level view execution,
-     protocol-rs bindings, Rust gateway/local-node wiring, CLI, and smoke
-     coverage have landed with sandboxed simulation semantics.
+- Milestone B (view RPC): **shipped**.  Hogd top-level view execution,
+  protocol-rs bindings, Rust gateway/local-node wiring, CLI, smoke
+  coverage, and spec rewrite all landed with sandboxed-simulation
+  semantics.  See
+  [`specs/2026-05-07-view-rpc-and-receipt-return-data.md`](specs/2026-05-07-view-rpc-and-receipt-return-data.md).
+- Milestone A (receipt return-data + abort-data on
+  `TransactionReceipt`): **still open**.  Requires hogd `TxEventLog`
+  extension and indexer migration; Rust mapping follows protocol-rs
+  publish.  The Rust scaffolding for `abort_data` already exists; both
+  backends hardcode `return_data: None` until hogd supplies the bytes.
 
-After either or both tracks close, the next batch should continue Phase 3
-testing DX:
+**Phase 3 testing DX, now unblocked by view:**
 
 1. Add `groundhog test --integration` on top of the local dev node:
    - start a local node
    - deploy the target contract
    - run integration tests against its RPC URL
    - clean up unless persistence is requested.
-   This is materially better now that Milestone B has landed, since
-   integration assertions can use `groundhog view` instead of submitting
-   txs.
+   Materially better now that Milestone B has landed, since integration
+   assertions can use `groundhog view` instead of submitting txs.
 2. Add better test output controls:
    - human verbosity levels
    - optional machine-readable output
