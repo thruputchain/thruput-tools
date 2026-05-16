@@ -173,12 +173,17 @@ enum Command {
         artifacts: ArtifactArgs,
     },
     /// Submit a transaction that calls a deployed contract method
+    #[command(long_about = "Submit a signed transaction that calls a deployed \
+                      contract method. Named methods use local or embedded \
+                      contract metadata when available. Without metadata, \
+                      pass an explicit 0x-prefixed 8-byte entrypoint ID \
+                      and one raw hex calldata argument.")]
     Call {
         /// Contract address or alias
         contract: String,
-        /// Method name to invoke
+        /// Method name or 0x-prefixed 8-byte entrypoint ID
         method: String,
-        /// Method arguments
+        /// Method arguments. With an explicit entrypoint, pass one raw hex calldata argument.
         args: Vec<String>,
         /// Resolve, encode, and sign the transaction without submitting it
         #[arg(long)]
