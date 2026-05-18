@@ -20,6 +20,7 @@ const FAILURE_CACHE_VERSION: u8 = 1;
 const WATCH_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const WATCH_DEBOUNCE: Duration = Duration::from_millis(350);
 const WASM_TEST_TARGET: &str = "test_wasm";
+#[cfg(any(feature = "dev-node", test))]
 const INTEGRATION_TEST_TARGET: &str = "integration";
 
 /// Explicit controls for the `test_wasm` harness invocation.
@@ -411,6 +412,7 @@ fn finish_integration_run(
     Ok(())
 }
 
+#[cfg(any(feature = "dev-node", test))]
 fn integration_test_environment(rpc_url: &str, contract_address: &str) -> Vec<(String, String)> {
     vec![
         ("GROUNDHOG_RPC_URL".into(), rpc_url.into()),
