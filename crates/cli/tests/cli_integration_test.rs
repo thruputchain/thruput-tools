@@ -597,7 +597,8 @@ fn test_help_mentions_target_dir() {
     assert!(stdout.contains("--watch"));
     assert!(stdout.contains("--integration"));
     assert!(stdout.contains("hogd-dev"));
-    assert!(stdout.contains("not wired yet"));
+    assert!(stdout.contains("tests/integration.rs"));
+    assert!(!stdout.contains("not wired yet"));
 }
 
 #[test]
@@ -703,6 +704,7 @@ fn test_json_failure_is_structured() {
     assert_eq!(stderr["error"]["code"], "cargo_metadata_failed");
 }
 
+#[cfg(not(feature = "dev-node"))]
 #[test]
 fn test_integration_json_reports_unavailable() {
     let tmp = TempDir::new().unwrap();
@@ -724,7 +726,33 @@ fn test_integration_json_reports_unavailable() {
         stderr["error"]["hint"]
             .as_str()
             .expect("bug: hint should be present")
-            .contains("groundhog node")
+            .contains("dev-node")
+    );
+}
+
+#[test]
+fn test_integration_rejects_rerun() {
+    let tmp = TempDir::new().unwrap();
+    let output = groundhog()
+        .arg("--json")
+        .arg("test")
+        .arg("--integration")
+        .arg("--rerun")
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(stderr["ok"], false);
+    assert_eq!(stderr["command"], "test");
+    assert_eq!(stderr["error"]["code"], "invalid_test_options");
+    assert!(
+        stderr["error"]["message"]
+            .as_str()
+            .expect("bug: message should be present")
+            .contains("--rerun")
     );
 }
 
@@ -758,6 +786,98 @@ fn test_integration_rejects_watch() {
             .expect("bug: hint should be present")
             .contains("conflicting")
     );
+}
+
+#[cfg(all(feature = "dev-node", unix))]
+#[test]
+fn test_integration_reports_local_node_startup_failure() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let hogd_dev = fake_hogd_dev_binary();
+    let tmp = TempDir::new().unwrap();
+    std::fs::write(
+        tmp.path().join("Cargo.toml"),
+        "[package]\nname = \"demo-contract\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(tmp.path().join(".cargo")).unwrap();
+    std::fs::write(tmp.path().join(".cargo/contract.toml"), "").unwrap();
+    std::fs::create_dir_all(tmp.path().join("tests")).unwrap();
+    std::fs::write(tmp.path().join("tests/integration.rs"), "").unwrap();
+
+    let fake_bin = tmp.path().join("bin");
+    std::fs::create_dir_all(&fake_bin).unwrap();
+    let cargo = fake_bin.join("cargo");
+    let metadata_json = serde_json::json!({
+        "workspace_root": tmp.path(),
+        "target_directory": tmp.path().join("target"),
+        "packages": [{
+            "name": "demo-contract",
+            "manifest_path": tmp.path().join("Cargo.toml"),
+        }],
+    })
+    .to_string();
+    std::fs::write(
+        &cargo,
+        format!(
+            concat!(
+                "#!/bin/sh\n",
+                "if [ \"$1\" = \"metadata\" ]; then\n",
+                "  printf '%s' '{}'\n",
+                "  exit 0\n",
+                "fi\n",
+                "if [ \"$1\" = \"--config\" ]; then\n",
+                "  shift 2\n",
+                "fi\n",
+                "if [ \"$1\" = \"build\" ]; then\n",
+                "  for arg in \"$@\"; do\n",
+                "    if [ \"$arg\" = \"--nocapture\" ]; then\n",
+                "      exit 88\n",
+                "    fi\n",
+                "  done\n",
+                "  /bin/mkdir -p '{}'\n",
+                "  printf '\\000asm\\001\\000\\000\\000' > '{}'\n",
+                "  exit 0\n",
+                "fi\n",
+                "exit 0\n",
+            ),
+            metadata_json,
+            tmp.path()
+                .join("target/wasm32-unknown-unknown/release")
+                .display(),
+            tmp.path()
+                .join("target/wasm32-unknown-unknown/release/demo_contract.wasm")
+                .display()
+        ),
+    )
+    .unwrap();
+    let mut perms = std::fs::metadata(&cargo).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&cargo, perms).unwrap();
+
+    let output = groundhog()
+        .args([
+            "--json",
+            "test",
+            "--integration",
+            "-p",
+            "demo-contract",
+            "--",
+            "--nocapture",
+        ])
+        .current_dir(tmp.path())
+        .env("PATH", &fake_bin)
+        .env("GROUNDHOG_HOGD_DEV_BINARY", &hogd_dev)
+        .env("GROUNDHOG_FAKE_HOGD_DEV_MODE", "exit-7")
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(stderr["ok"], false);
+    assert_eq!(stderr["command"], "test");
+    assert_eq!(stderr["error"]["code"], "node_supervisor_error");
 }
 
 #[cfg(unix)]

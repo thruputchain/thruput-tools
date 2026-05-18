@@ -53,6 +53,17 @@ impl<T: Serialize> CommandResult<T> {
         }
     }
 
+    /// Wrap a command's data in a structured failure envelope
+    /// with warnings.
+    pub fn failure_with_warnings(command: &'static str, warnings: Vec<Finding>, data: T) -> Self {
+        Self {
+            ok: false,
+            command,
+            warnings,
+            data,
+        }
+    }
+
     /// True when any warn-level finding exists.
     pub fn has_warnings(&self) -> bool {
         self.warnings.iter().any(|w| w.level == FindingLevel::Warn)
@@ -96,6 +107,24 @@ mod tests {
         assert_eq!(json["ok"], false);
         assert_eq!(json["command"], "test");
         assert_eq!(json["data"]["status"], "failed");
+    }
+
+    #[test]
+    fn failure_with_warnings_includes_findings() {
+        let warnings = vec![Finding {
+            level: FindingLevel::Warn,
+            code: "test_warn",
+            message: "a warning".into(),
+            hint: None,
+        }];
+        let result = CommandResult::failure_with_warnings(
+            "test",
+            warnings,
+            serde_json::json!({"status": "failed"}),
+        );
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(json["ok"], false);
+        assert_eq!(json["warnings"][0]["code"], "test_warn");
     }
 
     #[test]

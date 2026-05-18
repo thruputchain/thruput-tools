@@ -106,11 +106,13 @@ enum Command {
         #[arg(last = true)]
         cargo_args: Vec<String>,
     },
-    /// Build and test the contract under WASM execution
+    /// Build and test the contract under WASM or local-node execution
     #[command(long_about = "Builds the contract to WASM, then runs \
-                      the test_wasm target on the host. Faults \
-                      are real WASM aborts — the same behavior \
-                      as on-chain execution.")]
+                      the test_wasm target on the host. With \
+                      --integration, starts an ephemeral hogd-dev \
+                      local node, deploys the contract, and runs \
+                      the integration test target with RPC environment \
+                      variables.")]
     Test {
         /// Package to test (required in workspaces)
         #[arg(short, long)]
@@ -141,7 +143,7 @@ enum Command {
         /// With --json, emits one newline-delimited JSON record per run.
         #[arg(long)]
         watch: bool,
-        /// Reserved for local hogd-dev integration tests (not wired yet)
+        /// Run tests/integration.rs against an ephemeral hogd-dev local node
         #[arg(long)]
         integration: bool,
         /// Config profile to use

@@ -62,8 +62,9 @@ groundhog storage my-counter <32-byte-storage-key>
 ```
 
 If you installed the CLI without `--features dev-node`, `groundhog node`
-is unavailable. `deploy`, `call`, and `storage` work either way against any
-RPC URL; the feature gate only affects the embedded local node.
+and `groundhog test --integration` are unavailable. `deploy`, `call`,
+and `storage` work either way against any RPC URL; the feature gate only
+affects commands that supervise an embedded local node.
 
 ## Using cargo directly
 
@@ -75,7 +76,8 @@ plain `cargo` builds and tests work for the host target:
 | `cargo build` | Build for host (IDE, rust-analyzer) |
 | `cargo test` | Run unit tests on host |
 | `groundhog build` | Cross-compile to WASM (`--no-default-features --release`) |
-| `groundhog test` | Run integration tests against the WASM executor |
+| `groundhog test` | Run executor-backed WASM tests |
+| `groundhog test --integration` | Start hogd-dev, deploy, and run `tests/integration.rs` (`dev-node` feature required) |
 
 The `dev` feature enables `std` for native compilation.
 `groundhog build` passes `--no-default-features` to disable it
@@ -151,6 +153,7 @@ groundhog test --fail-fast                  # stop the WASM harness on first fai
 groundhog test --show-output                # show captured stdout for passing tests
 groundhog test --no-capture                 # stream test stdout/stderr
 groundhog test --test-threads 1             # set WASM harness thread count
+groundhog test --integration                # local node + deploy + tests/integration.rs
 ```
 
 `groundhog test` records failing libtest names under the package's Cargo
@@ -165,9 +168,24 @@ machine-readable payload is versioned with `data.schemaVersion` and
 includes structured per-run and per-test results rather than only
 aggregated cargo output text.
 
+`groundhog test --integration` requires the CLI's `dev-node` feature. It
+builds the WASM artifact, starts an ephemeral hogd-dev local node,
+deploys the contract with `dev-0`, then runs the `tests/integration.rs`
+target. The test process receives `GROUNDHOG_RPC_URL`,
+`GROUNDHOG_CONTRACT_ADDRESS`, `GROUNDHOG_PROFILE`, and
+`GROUNDHOG_DEFAULT_KEY`. `--watch` and `--rerun` are intentionally
+deferred for this integration path.
+
+If `hogd-dev` is not on `PATH`, point the runner at the binary:
+
+```bash
+GROUNDHOG_HOGD_DEV_BINARY=/path/to/hogd-dev groundhog test --integration
+```
+
 > **Note:** Plain `cargo test` also works for unit tests that
-> don't need the executor. `groundhog test` is required for
-> integration tests that use the FFI test harness.
+> don't need the executor or local JSON-RPC surface. Use
+> `groundhog test` for executor-backed WASM tests and
+> `groundhog test --integration` for RPC-backed local-node tests.
 
 ### `groundhog keys`
 

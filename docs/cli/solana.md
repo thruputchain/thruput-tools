@@ -151,11 +151,10 @@ per-profile contract addresses.
 One command. Zero manual setup. The test script imports the
 auto-generated client and interacts with the deployed program.
 
-**Groundhog lesson:** `groundhog test` currently runs cargo tests
-that use the SDK's mock environment. That's fine for unit tests.
-But the integration test story (deploy to local node, interact
-via RPC) needs the same one-command experience once the local
-node exists.
+**Groundhog status:** `groundhog test` runs executor-backed WASM tests,
+and `groundhog test --integration` now covers the one-command local-node
+path for the first single-contract slice: start hogd-dev, deploy, run
+`tests/integration.rs` with RPC environment variables, then shut down.
 
 ---
 
@@ -394,8 +393,10 @@ client SDK is a post-launch concern.
 ### 1. One-Command Test Loop (from Anchor)
 
 `anchor test` = build + start local node + deploy + run tests +
-shutdown. When the Groundhog local node exists, `groundhog test
---integration` should do the same.
+shutdown. Groundhog's v1 equivalent is `groundhog test --integration`
+for `tests/integration.rs`; the remaining parity work is richer output,
+watch/rerun support, persistence-aware runs, and multi-contract
+orchestration.
 
 ### 2. IDL / Contract Spec Generation (from Anchor)
 
