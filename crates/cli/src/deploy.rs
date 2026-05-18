@@ -26,7 +26,7 @@ use crate::tx_utils::{
 use crate::{CliError, Print};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DeployAddressSource {
+pub(crate) enum DeployAddressSource {
     Receipt,
     Derived,
 }
@@ -38,6 +38,15 @@ pub(crate) struct PreparedDeploy {
     pub(crate) wasm_bytes_len: usize,
     pub(crate) predicted_address: String,
     pub(crate) tx_hex: String,
+}
+
+/// Submitted deploy metadata shared by live CLI and integration-test orchestration.
+#[derive(Debug, Clone)]
+pub(crate) struct SubmittedDeploy {
+    pub(crate) tx_hash: TxHash,
+    pub(crate) receipt: TransactionReceipt,
+    pub(crate) contract_address: Option<String>,
+    pub(crate) address_source: Option<DeployAddressSource>,
 }
 
 /// Deploy a contract to the network.
@@ -59,21 +68,12 @@ pub fn run(
         prepared.wasm_bytes_len, prepared.rpc_url
     ));
 
-    let (tx_hash, receipt) = submit_prepared_deploy(&prepared)?;
+    let submitted = submit_prepared_deploy_and_resolve(&prepared)?;
+    let tx_hash = submitted.tx_hash;
+    let receipt = submitted.receipt;
     let transaction_detail = fetch_transaction_detail_blocking(&prepared.rpc_url, tx_hash, print);
-
-    let predicted_address = ContractAddress::from(hex_to_32_bytes(&prepared.predicted_address)?);
-
-    // Extract the deployed contract address from the receipt.
-    let (contract_addr_hex, address_source): (Option<String>, Option<DeployAddressSource>) =
-        match &receipt.status {
-            groundhog_rpc_api_types::receipt::ExecStatus::Ok => {
-                let (address, source) =
-                    resolve_deployed_address(receipt.return_data.as_ref(), &predicted_address)?;
-                (Some(address), Some(source))
-            }
-            _ => (None, None),
-        };
+    let contract_addr_hex = submitted.contract_address;
+    let address_source = submitted.address_source;
 
     // Print result
     let cwd = std::env::current_dir()?;
@@ -184,6 +184,29 @@ pub(crate) fn submit_prepared_deploy(
     rt.block_on(async { submit_and_poll(&prepared.rpc_url, &prepared.tx_hex).await })
 }
 
+/// Submit a deploy transaction and resolve the deployed contract address when successful.
+pub(crate) fn submit_prepared_deploy_and_resolve(
+    prepared: &PreparedDeploy,
+) -> Result<SubmittedDeploy, CliError> {
+    let (tx_hash, receipt) = submit_prepared_deploy(prepared)?;
+    let predicted_address = ContractAddress::from(hex_to_32_bytes(&prepared.predicted_address)?);
+    let (contract_address, address_source) = match &receipt.status {
+        groundhog_rpc_api_types::receipt::ExecStatus::Ok => {
+            let (address, source) =
+                resolve_deployed_address(receipt.return_data.as_ref(), &predicted_address)?;
+            (Some(address), Some(source))
+        }
+        _ => (None, None),
+    };
+
+    Ok(SubmittedDeploy {
+        tx_hash,
+        receipt,
+        contract_address,
+        address_source,
+    })
+}
+
 /// Resolve WASM, build and sign a deploy transaction without submitting it.
 #[allow(clippy::too_many_lines)]
 pub(crate) fn prepare_deploy(
@@ -199,9 +222,6 @@ pub(crate) fn prepare_deploy(
 
     // Resolve signing key
     let key_name = resolve_default_key(&cwd, Some(profile))?.ok_or(CliError::MissingSigningKey)?;
-    let signer = load_local_signer(&key_name)?;
-
-    // Find WASM binary
     let wasm_bytes = if let Some(path) = wasm_path {
         std::fs::read(path)?
     } else {
@@ -209,11 +229,34 @@ pub(crate) fn prepare_deploy(
         warn_if_stale(&resolved_wasm, &cwd, print);
         std::fs::read(&resolved_wasm)?
     };
+
+    prepare_deploy_transaction(wasm_bytes, rpc_url, &key_name)
+}
+
+/// Build and sign a deploy transaction for a known WASM artifact and RPC endpoint.
+#[cfg(feature = "dev-node")]
+pub(crate) fn prepare_deploy_for_rpc(
+    wasm_path: &Path,
+    rpc_url: &str,
+    key_name: &str,
+) -> Result<PreparedDeploy, CliError> {
+    let wasm_bytes = std::fs::read(wasm_path)?;
+    prepare_deploy_transaction(wasm_bytes, rpc_url, key_name)
+}
+
+#[allow(clippy::too_many_lines)]
+fn prepare_deploy_transaction(
+    wasm_bytes: Vec<u8>,
+    rpc_url: &str,
+    key_name: &str,
+) -> Result<PreparedDeploy, CliError> {
+    let signer = load_local_signer(key_name)?;
+
     let wasm_bytes_len = wasm_bytes.len();
 
     // Build the deploy transaction — invokes the sender's wallet contract.
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
-    let wallet_address = resolve_wallet_address(rpc_url, &key_name, &signer, &rt)?;
+    let wallet_address = resolve_wallet_address(rpc_url, key_name, &signer, &rt)?;
 
     let contract = groundhog_xdr::contract::Contract::kWasmi {
         wasmi_contract: groundhog_xdr::contract::ContractBlob {

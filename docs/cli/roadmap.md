@@ -249,7 +249,7 @@ Maintenance rules:
 
 ### Phase 3
 
-- [ ] `groundhog test --integration`
+- [x] `groundhog test --integration`
 - [x] `groundhog test --fail-fast`
 - [x] `groundhog test --match-test`
 - [x] `groundhog test --show-output`
@@ -424,11 +424,12 @@ Goal: make `groundhog test` fast, inspectable, and CI-friendly.
 1. **Cheap CLI wins**
    - Shipped: `--match-test`, `--fail-fast`, `--show-output`,
      `--no-capture`, `--test-threads`, `--skip`, `--rerun`,
-     `--watch`
-   - Remaining: `--integration`
-   - When the local node exists, `--integration` should orchestrate:
-     start local node, deploy contract(s), run integration tests, and
-     clean up local state unless persistence is requested
+     `--watch`, `--integration`
+   - `--integration` now orchestrates the v1 single-contract local-node
+     path: start ephemeral hogd-dev, deploy the target contract, run
+     `tests/integration.rs` with RPC environment variables, then clean up.
+   - Remaining follow-ups: `--watch` / `--rerun` support for the integration
+     path, persistence-aware integration runs, and multi-contract orchestration.
 
 2. **Output controls**
    - verbosity levels
@@ -498,19 +499,16 @@ parked until a real hogd-owned dev method needs them.
   publish.  The Rust scaffolding for `abort_data` already exists; both
   backends hardcode `return_data: None` until hogd supplies the bytes.
 
-**Phase 3 testing DX, now unblocked by view:**
+**Phase 3 testing DX, after `--integration` v1:**
 
-1. Add `groundhog test --integration` on top of the local dev node:
-   - start a local node
-   - deploy the target contract
-   - run integration tests against its RPC URL
-   - clean up unless persistence is requested.
-   Materially better now that Milestone B has landed, since integration
-   assertions can use `groundhog view` instead of submitting txs.
-2. Add better test output controls:
+1. Add better test output controls:
    - human verbosity levels
    - optional machine-readable output
    - event / delta snippets on failures
+2. Extend `groundhog test --integration`:
+   - `--watch` / `--rerun` support for RPC-backed tests
+   - optional persistence-aware runs once persisted local-node state exists
+   - multi-contract deployment when workspace support is real
 3. Define the first storage-cost reporting surface:
    - CLI output shape
    - JSON fields

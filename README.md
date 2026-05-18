@@ -29,10 +29,13 @@ groundhog init                   # one-time environment check
 groundhog login                  # one-time; early-access registry auth
 groundhog new my-counter && cd my-counter
 groundhog build
+groundhog test                   # executor-backed WASM tests
 # in another terminal
 groundhog node --hogd-dev-binary /path/to/hogd-dev
 groundhog deploy
 groundhog call my-counter get
+# one-command local-node integration path
+GROUNDHOG_HOGD_DEV_BINARY=/path/to/hogd-dev groundhog test --integration
 ```
 
 `groundhog login` is currently required for the Groundhog contract SDK
@@ -46,6 +49,14 @@ for development — scheduler, indexer, and storage in one binary. The
 public JSON-RPC on top, so every CLI command (`deploy`, `call`,
 receipts, events, storage reads) talks to the same JSON-RPC surface
 an SDK would.
+
+With the CLI's `dev-node` feature enabled, `groundhog test
+--integration` uses that same local-node path without a separate
+terminal: it builds the WASM artifact, starts an ephemeral hogd-dev
+node, deploys with `dev-0`, runs `tests/integration.rs`, then shuts the
+node down. The test process receives `GROUNDHOG_RPC_URL`,
+`GROUNDHOG_CONTRACT_ADDRESS`, `GROUNDHOG_PROFILE=integration`, and
+`GROUNDHOG_DEFAULT_KEY=dev-0`.
 
 ### The API surface
 

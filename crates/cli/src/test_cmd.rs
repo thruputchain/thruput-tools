@@ -37,11 +37,11 @@ pub struct TestOptions {
     pub harness: TestHarnessOptions,
 }
 
-/// Options for the future `groundhog test --integration` orchestration path.
+/// Options for the `groundhog test --integration` orchestration path.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct IntegrationTestOptions {}
 
-/// Boolean controls forwarded to the `test_wasm` libtest harness.
+/// Boolean controls forwarded to the selected libtest harness.
 #[derive(Debug, Clone, Default)]
 pub struct TestHarnessOptions {
     /// Stop the WASM test harness after the first test failure.
@@ -79,6 +79,8 @@ struct TestCommandContext<'a> {
     root: &'a Path,
     project_name: &'a str,
     host_target: &'a str,
+    test_target: &'a str,
+    env: &'a [(String, String)],
     artifacts: &'a ArtifactOptions,
     cargo_args: &'a [String],
     print: &'a Print,
@@ -99,6 +101,12 @@ struct WatchFileFingerprint {
 struct WatchContext {
     root: PathBuf,
     ignored_dirs: Vec<PathBuf>,
+}
+
+#[cfg(feature = "dev-node")]
+struct IntegrationRun {
+    report: TestReport,
+    failed_code: Option<i32>,
 }
 
 /// Build the contract to WASM, then run WASM tests
@@ -163,22 +171,218 @@ pub fn run_with_options(
 /// Run integration tests with explicit orchestration controls.
 #[allow(clippy::too_many_arguments)]
 pub fn run_integration_with_options(
-    _package: Option<&str>,
+    package: Option<&str>,
     options: &TestOptions,
     _integration: &IntegrationTestOptions,
-    _cargo_args: &[String],
-    _artifacts: &ArtifactOptions,
-    _explicit_profile: Option<&str>,
-    _cmd: &'static str,
-    _print: &Print,
+    cargo_args: &[String],
+    artifacts: &ArtifactOptions,
+    explicit_profile: Option<&str>,
+    cmd: &'static str,
+    print: &Print,
 ) -> Result<(), CliError> {
     if options.watch {
         return Err(CliError::InvalidTestOptions(
             "`--integration` cannot be combined with `--watch` yet".into(),
         ));
     }
+    if options.rerun {
+        return Err(CliError::InvalidTestOptions(
+            "`--integration` cannot be combined with `--rerun` yet".into(),
+        ));
+    }
 
-    Err(CliError::IntegrationTestsUnavailable)
+    #[cfg(feature = "dev-node")]
+    {
+        run_integration_with_dev_node(
+            package,
+            options,
+            cargo_args,
+            artifacts,
+            explicit_profile,
+            cmd,
+            print,
+        )
+    }
+
+    #[cfg(not(feature = "dev-node"))]
+    {
+        let _ = (package, cargo_args, artifacts, explicit_profile, cmd, print);
+        Err(CliError::IntegrationTestsUnavailable)
+    }
+}
+
+#[cfg(feature = "dev-node")]
+#[allow(clippy::too_many_arguments)]
+fn run_integration_with_dev_node(
+    package: Option<&str>,
+    options: &TestOptions,
+    cargo_args: &[String],
+    artifacts: &ArtifactOptions,
+    explicit_profile: Option<&str>,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
+    let build =
+        crate::build::build_project(package, false, &[], artifacts, explicit_profile, &[], print)?;
+    let host_target = host_target()?;
+    artifacts::ensure_no_target_dir_passthrough_conflicts(
+        artifacts,
+        &build.project_root,
+        cargo_args,
+    )?;
+
+    print.status("Starting ephemeral local node for integration tests...");
+    let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
+    let started = rt.block_on(crate::node::start_local_node(
+        crate::node::LocalNodeOptions {
+            port: 0,
+            pid_file: crate::node::LocalNodePidFile::Disabled,
+            ..crate::node::LocalNodeOptions::default()
+        },
+    ))?;
+
+    let rpc_url = started.rpc_url();
+    let result = run_integration_against_node(
+        &build,
+        &host_target,
+        &rpc_url,
+        options,
+        cargo_args,
+        artifacts,
+        print,
+    );
+
+    let stop_result = rt.block_on(started.stop());
+    match (result, stop_result) {
+        (Ok(run), Ok(_)) => finish_integration_run(&run, cmd, print),
+        (Ok(run), Err(error)) => {
+            if run.failed_code.is_some() {
+                print.warn(format_args!(
+                    "local node shutdown failed after integration test failure: {error}"
+                ));
+                finish_integration_run(&run, cmd, print)
+            } else {
+                Err(error)
+            }
+        }
+        (Err(error), Ok(_)) => Err(error),
+        (Err(error), Err(stop_error)) => {
+            print.warn(format_args!(
+                "local node shutdown failed after integration test error: {stop_error}"
+            ));
+            Err(error)
+        }
+    }
+}
+
+#[cfg(feature = "dev-node")]
+#[allow(clippy::too_many_arguments)]
+fn run_integration_against_node(
+    build: &crate::build::BuildResult,
+    host_target: &str,
+    rpc_url: &str,
+    options: &TestOptions,
+    cargo_args: &[String],
+    artifacts: &ArtifactOptions,
+    print: &Print,
+) -> Result<IntegrationRun, CliError> {
+    print.status(format_args!(
+        "Deploying {} to {rpc_url} for integration tests...",
+        build.project_name
+    ));
+    let prepared = crate::deploy::prepare_deploy_for_rpc(&build.wasm, rpc_url, "dev-0")?;
+    let submitted = crate::deploy::submit_prepared_deploy_and_resolve(&prepared)?;
+    let contract_address = submitted.contract_address.ok_or_else(|| {
+        CliError::Other(format!(
+            "integration deploy did not produce a contract address: {:?}",
+            submitted.receipt.status
+        ))
+    })?;
+    print.status(format_args!(
+        "Running RPC integration tests against {contract_address}..."
+    ));
+
+    let env = integration_test_environment(rpc_url, &contract_address);
+    let filter = SelectedFilter {
+        name: options.match_test.as_deref(),
+        exact: false,
+    };
+    let context = TestCommandContext {
+        root: &build.project_root,
+        project_name: &build.project_name,
+        host_target,
+        test_target: "integration",
+        env: &env,
+        artifacts,
+        cargo_args,
+        print,
+    };
+    let outputs = run_test_commands(&context, options, &[filter])?;
+
+    let mut profile = build.profile.clone();
+    profile.name = "integration".into();
+    profile.rpc_url = Some(rpc_url.to_owned());
+    profile.default_key = Some("dev-0".into());
+    profile.source = None;
+    profile
+        .contracts
+        .insert(build.project_name.clone(), contract_address);
+
+    let report = build_test_report(
+        &build.project_root,
+        &profile,
+        &build.wasm,
+        &outputs,
+        false,
+        &failure_cache_path(&build.target_directory, &build.project_name),
+        &[],
+        &[],
+        &executed_tests(&outputs),
+        &dedup_tests(
+            outputs
+                .iter()
+                .flat_map(|output| extract_failed_tests(&output.stdout, &output.stderr)),
+        ),
+        false,
+    );
+
+    let failed_code = outputs
+        .iter()
+        .find(|output| !output.success)
+        .map(|output| output.code);
+
+    Ok(IntegrationRun {
+        report,
+        failed_code,
+    })
+}
+
+#[cfg(feature = "dev-node")]
+fn finish_integration_run(
+    run: &IntegrationRun,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
+    if let Some(code) = run.failed_code {
+        if print.is_json() {
+            print.json(&CommandResult::failure(cmd, &run.report))?;
+            return Err(CliError::CommandReportedFailure);
+        }
+        return Err(CliError::CargoFailed(code));
+    }
+
+    print.json(&CommandResult::new(cmd, &run.report))?;
+    Ok(())
+}
+
+#[cfg(feature = "dev-node")]
+fn integration_test_environment(rpc_url: &str, contract_address: &str) -> Vec<(String, String)> {
+    vec![
+        ("GROUNDHOG_RPC_URL".into(), rpc_url.into()),
+        ("GROUNDHOG_CONTRACT_ADDRESS".into(), contract_address.into()),
+        ("GROUNDHOG_PROFILE".into(), "integration".into()),
+        ("GROUNDHOG_DEFAULT_KEY".into(), "dev-0".into()),
+    ]
 }
 
 fn run_watch(
@@ -261,6 +465,8 @@ fn run_once_with_options(
         root: &root,
         project_name: &build.project_name,
         host_target: &host_target,
+        test_target: "test_wasm",
+        env: &[],
         artifacts,
         cargo_args,
         print,
@@ -569,8 +775,14 @@ fn run_test_commands(
             context.print.status(format_args!("Rerunning {name}..."));
         }
 
-        let mut cargo_cmd = test_command(context.root, context.project_name, context.host_target);
+        let mut cargo_cmd = test_command(
+            context.root,
+            context.project_name,
+            context.host_target,
+            context.test_target,
+        );
         context.artifacts.apply_to_command(&mut cargo_cmd);
+        apply_test_environment(&mut cargo_cmd, context.env);
         apply_harness_options(&mut cargo_cmd, options, *filter);
         for arg in context.cargo_args {
             cargo_cmd.arg(arg);
@@ -848,7 +1060,7 @@ fn executed_tests(outputs: &[TestRunOutput]) -> Vec<String> {
         .collect()
 }
 
-fn test_command(root: &Path, project_name: &str, host_target: &str) -> Command {
+fn test_command(root: &Path, project_name: &str, host_target: &str, test_target: &str) -> Command {
     let mut cargo_cmd = Command::new("cargo");
     cargo_cmd
         .current_dir(root)
@@ -856,7 +1068,7 @@ fn test_command(root: &Path, project_name: &str, host_target: &str) -> Command {
         .arg("-p")
         .arg(project_name)
         .arg("--test")
-        .arg("test_wasm")
+        .arg(test_target)
         .arg("--target")
         .arg(host_target)
         .arg("--features")
@@ -866,13 +1078,19 @@ fn test_command(root: &Path, project_name: &str, host_target: &str) -> Command {
     cargo_cmd
 }
 
+fn apply_test_environment(cargo_cmd: &mut Command, env: &[(String, String)]) {
+    for (key, value) in env {
+        cargo_cmd.env(key, value);
+    }
+}
+
 fn apply_harness_options(
     cargo_cmd: &mut Command,
     options: &TestOptions,
     filter: SelectedFilter<'_>,
 ) {
     // Everything here is appended after cargo's `--` separator and is
-    // therefore scoped to the `test_wasm` libtest harness.
+    // therefore scoped to the selected libtest harness.
     if options.harness.fail_fast {
         cargo_cmd.arg("--fail-fast");
     }
@@ -1103,10 +1321,10 @@ mod tests {
     use super::{
         FAILURE_CACHE_VERSION, FailureCache, IntegrationTestOptions, SelectedFilter,
         TestHarnessOptions, TestOptions, TestRunOutput, WatchContext, aggregate_summary,
-        apply_harness_options, combined_output, derive_summary_from_cases, extract_failed_tests,
-        failure_cache_path, filter_cached_tests, next_cached_failures, parse_summary_line,
-        parse_test_case_line, read_failure_cache, should_stop_rerun, should_watch_file,
-        update_failure_cache, watch_snapshot, write_failure_cache,
+        apply_harness_options, apply_test_environment, combined_output, derive_summary_from_cases,
+        extract_failed_tests, failure_cache_path, filter_cached_tests, next_cached_failures,
+        parse_summary_line, parse_test_case_line, read_failure_cache, should_stop_rerun,
+        should_watch_file, test_command, update_failure_cache, watch_snapshot, write_failure_cache,
     };
     use crate::test_json::{TestCase, TestCaseStatus, TestSummarySource};
     use crate::{CliError, Print};
@@ -1122,6 +1340,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(feature = "dev-node"))]
     #[test]
     fn integration_path_reports_unavailable_before_wasm_build() {
         let options = TestOptions::default();
@@ -1168,6 +1387,90 @@ mod tests {
         };
         assert!(message.contains("--integration"));
         assert!(message.contains("--watch"));
+    }
+
+    #[test]
+    fn integration_path_rejects_rerun_mode() {
+        let options = TestOptions {
+            rerun: true,
+            ..TestOptions::default()
+        };
+
+        let err = super::run_integration_with_options(
+            None,
+            &options,
+            &IntegrationTestOptions::default(),
+            &[],
+            &crate::artifacts::ArtifactOptions::default(),
+            None,
+            "test",
+            &Print::quiet(),
+        )
+        .unwrap_err();
+
+        let CliError::InvalidTestOptions(message) = err else {
+            panic!("expected InvalidTestOptions, got: {err:?}");
+        };
+        assert!(message.contains("--integration"));
+        assert!(message.contains("--rerun"));
+    }
+
+    #[test]
+    fn integration_command_selects_integration_target() {
+        let command = test_command(
+            std::path::Path::new("/project"),
+            "demo",
+            "x86_64-unknown-linux-gnu",
+            "integration",
+        );
+
+        let args: Vec<_> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            args.windows(2)
+                .any(|window| window[0] == "--test" && window[1] == "integration")
+        );
+        assert!(
+            !args
+                .windows(2)
+                .any(|window| window[0] == "--test" && window[1] == "test_wasm")
+        );
+    }
+
+    #[test]
+    fn test_environment_injects_integration_values() {
+        let mut command = Command::new("cargo");
+        let env = vec![
+            ("GROUNDHOG_RPC_URL".into(), "http://127.0.0.1:1234".into()),
+            (
+                "GROUNDHOG_CONTRACT_ADDRESS".into(),
+                format!("0x{}", "11".repeat(32)),
+            ),
+            ("GROUNDHOG_PROFILE".into(), "integration".into()),
+            ("GROUNDHOG_DEFAULT_KEY".into(), "dev-0".into()),
+        ];
+
+        apply_test_environment(&mut command, &env);
+
+        let applied: Vec<_> = command
+            .get_envs()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value
+                        .map(|value| value.to_string_lossy().into_owned())
+                        .expect("bug: env var should be set"),
+                )
+            })
+            .collect();
+        assert!(applied.contains(&("GROUNDHOG_RPC_URL".into(), "http://127.0.0.1:1234".into())));
+        assert!(applied.iter().any(|(key, value)| {
+            key == "GROUNDHOG_CONTRACT_ADDRESS" && value == &format!("0x{}", "11".repeat(32))
+        }));
+        assert!(applied.contains(&("GROUNDHOG_PROFILE".into(), "integration".into())));
+        assert!(applied.contains(&("GROUNDHOG_DEFAULT_KEY".into(), "dev-0".into())));
     }
 
     #[test]

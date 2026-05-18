@@ -416,6 +416,7 @@ Use these commands by default:
 cargo test
 groundhog build
 groundhog test
+groundhog test --integration
 ```
 
 Meaning:
@@ -423,6 +424,11 @@ Meaning:
 - `groundhog build` performs the wasm build with the contract-specific
   cargo overlay.
 - `groundhog test` runs executor-backed testing for the wasm path.
+- `groundhog test --integration` requires the CLI's `dev-node` feature.
+  It starts an ephemeral hogd-dev local node, deploys the built contract
+  with `dev-0`, and runs `tests/integration.rs` with
+  `GROUNDHOG_RPC_URL`, `GROUNDHOG_CONTRACT_ADDRESS`,
+  `GROUNDHOG_PROFILE=integration`, and `GROUNDHOG_DEFAULT_KEY=dev-0`.
 
 ## Guidance for LLMs
 
