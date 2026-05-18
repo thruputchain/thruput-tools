@@ -73,6 +73,10 @@ pub enum CliError {
     JsonUnsupported(&'static str),
     #[error("not yet implemented")]
     NotImplemented,
+    #[error("`groundhog test --integration` is not wired yet")]
+    IntegrationTestsUnavailable,
+    #[error("invalid test options: {0}")]
+    InvalidTestOptions(String),
     #[error("status check found warnings")]
     StatusHasWarnings,
     #[error("command emitted structured failure output")]
@@ -160,6 +164,8 @@ impl CliError {
             Self::KeyNameInvalid => "key_name_invalid",
             Self::JsonUnsupported(_) => "json_unsupported",
             Self::NotImplemented => "not_implemented",
+            Self::IntegrationTestsUnavailable => "integration_tests_unavailable",
+            Self::InvalidTestOptions(_) => "invalid_test_options",
             Self::StatusHasWarnings => "status_has_warnings",
             Self::CommandReportedFailure => "command_reported_failure",
             Self::NodeSupervisor(_) => "node_supervisor_error",
@@ -336,6 +342,13 @@ impl CliError {
             ))),
             Self::NotImplemented => Some(Cow::Borrowed(
                 "this command is planned for a future release",
+            )),
+            Self::IntegrationTestsUnavailable => Some(Cow::Borrowed(
+                "for now, start `groundhog node` in another terminal, deploy with `groundhog deploy`, \
+                 then run RPC-backed tests with the selected profile",
+            )),
+            Self::InvalidTestOptions(_) => Some(Cow::Borrowed(
+                "remove the conflicting `groundhog test` option and rerun the command",
             )),
         }
     }

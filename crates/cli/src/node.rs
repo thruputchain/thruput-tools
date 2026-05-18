@@ -6,6 +6,12 @@ use crate::{CliError, Print};
 use crate::result::CommandResult;
 #[cfg(feature = "dev-node")]
 use serde_json::json;
+#[cfg(feature = "dev-node")]
+use std::net::SocketAddr;
+#[cfg(feature = "dev-node")]
+use std::path::PathBuf;
+#[cfg(feature = "dev-node")]
+use std::process::ExitStatus;
 
 /// Start the experimental hogd-dev local node server.
 ///
@@ -14,7 +20,7 @@ use serde_json::json;
 pub fn run(
     port: u16,
     _account_count: usize,
-    hogd_dev_binary: Option<std::path::PathBuf>,
+    hogd_dev_binary: Option<PathBuf>,
     hogd_protocol: Option<String>,
     cmd: &'static str,
     print: &Print,
@@ -27,36 +33,124 @@ pub fn run(
     init_tracing(default_filter);
 
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
-    rt.block_on(async { run_hogd_dev(port, hogd_dev_binary, hogd_protocol, cmd, print).await })
+    rt.block_on(async {
+        run_hogd_dev(
+            LocalNodeOptions {
+                port,
+                hogd_dev_binary,
+                hogd_protocol,
+                ..LocalNodeOptions::default()
+            },
+            cmd,
+            print,
+        )
+        .await
+    })
+}
+
+/// Startup options for a local hogd-dev-backed node.
+#[cfg(feature = "dev-node")]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct LocalNodeOptions {
+    /// Public JSON-RPC port. Use `0` to ask the OS for a free port.
+    pub port: u16,
+    /// Explicit hogd-dev binary path.
+    pub hogd_dev_binary: Option<PathBuf>,
+    /// Override hogd protocol string for local cross-repo smoke tests.
+    pub hogd_protocol: Option<String>,
+    /// PID-file behavior for orphan detection.
+    pub pid_file: LocalNodePidFile,
+    /// Override the deterministic dev-account count.
+    pub dev_account_count: Option<usize>,
+}
+
+/// PID-file behavior for local hogd-dev startup.
+#[cfg(feature = "dev-node")]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum LocalNodePidFile {
+    /// Use the standard cache-directory PID file.
+    #[default]
+    GlobalCache,
+    /// Use an explicit PID-file path.
+    Path(PathBuf),
+    /// Do not configure a PID file.
+    Disabled,
+}
+
+/// Running local node and the startup metadata callers need for orchestration.
+#[cfg(feature = "dev-node")]
+#[derive(Debug)]
+#[must_use = "local nodes keep hogd-dev running until stop, stopped, or run_until consumes them"]
+pub struct StartedLocalNode {
+    handle: groundhog_node_supervisor::NodeSupervisorHandle,
+    rpc_addr: SocketAddr,
+    readiness: groundhog_node_supervisor::HogdDevReadiness,
+    backend_planes: groundhog_node_supervisor::BackendPlanes,
 }
 
 #[cfg(feature = "dev-node")]
-async fn run_hogd_dev(
-    port: u16,
-    binary: Option<std::path::PathBuf>,
-    protocol_override: Option<String>,
-    cmd: &'static str,
-    print: &Print,
-) -> Result<(), CliError> {
-    use groundhog_node_supervisor::{
-        HogdDevConfig, NodeSupervisorConfig, NodeSupervisorError, NodeSupervisorHandle,
-        SupervisorStop,
-    };
+impl StartedLocalNode {
+    /// Bound JSON-RPC listen address.
+    pub fn rpc_addr(&self) -> SocketAddr {
+        self.rpc_addr
+    }
 
-    let pid_file = crate::config::cache_dir()?.join("hogd-dev.pid");
-    let hogd = binary
-        .map_or_else(HogdDevConfig::default, |binary| {
-            HogdDevConfig::default().with_binary_path(binary)
-        })
-        .with_pid_file(pid_file);
-    let config = NodeSupervisorConfig::default()
-        .with_rpc_listen_address(format!("127.0.0.1:{port}"))
-        .with_hogd_dev(hogd);
-    let config = match protocol_override {
-        Some(protocol) => config.with_hogd_protocol_override(protocol),
-        None => config,
-    };
+    /// HTTP JSON-RPC URL for the running local node.
+    pub fn rpc_url(&self) -> String {
+        format!("http://{}", self.rpc_addr)
+    }
 
+    /// Parsed hogd-dev readiness payload.
+    pub fn readiness(&self) -> &groundhog_node_supervisor::HogdDevReadiness {
+        &self.readiness
+    }
+
+    /// Backend plane status for startup reporting and feature gating.
+    pub fn backend_planes(&self) -> groundhog_node_supervisor::BackendPlanes {
+        self.backend_planes
+    }
+
+    /// Wait until hogd-dev or the JSON-RPC server stops, then tear down the
+    /// remaining side.
+    pub async fn stopped(self) -> Result<groundhog_node_supervisor::SupervisorStop, CliError> {
+        self.handle
+            .stopped()
+            .await
+            .map_err(|err| CliError::NodeSupervisor(err.to_string()))
+    }
+
+    /// Wait until hogd-dev exits, the JSON-RPC server stops, or a caller-owned
+    /// stop signal completes, then tear down the remaining side.
+    pub async fn run_until<F>(
+        self,
+        stop_signal: F,
+    ) -> Result<groundhog_node_supervisor::SupervisorStop, CliError>
+    where
+        F: std::future::Future<Output = Result<(), groundhog_node_supervisor::NodeSupervisorError>>,
+    {
+        self.handle
+            .run_until(stop_signal)
+            .await
+            .map_err(|err| CliError::NodeSupervisor(err.to_string()))
+    }
+
+    /// Stop the JSON-RPC server and shut hogd-dev down.
+    pub async fn stop(self) -> Result<ExitStatus, CliError> {
+        self.handle
+            .stop()
+            .await
+            .map_err(|err| CliError::NodeSupervisor(err.to_string()))
+    }
+}
+
+/// Start a reusable local node without taking over the terminal.
+#[cfg(feature = "dev-node")]
+pub async fn start_local_node(options: LocalNodeOptions) -> Result<StartedLocalNode, CliError> {
+    use groundhog_node_supervisor::NodeSupervisorHandle;
+
+    let config = local_node_config(options)?;
     let handle = NodeSupervisorHandle::start(config)
         .await
         .map_err(|e| map_node_supervisor_error(&e))?;
@@ -64,36 +158,58 @@ async fn run_hogd_dev(
     let readiness = handle.hogd_readiness().clone();
     let backend_planes = handle.backend_planes();
 
+    Ok(StartedLocalNode {
+        handle,
+        rpc_addr,
+        readiness,
+        backend_planes,
+    })
+}
+
+#[cfg(feature = "dev-node")]
+async fn run_hogd_dev(
+    options: LocalNodeOptions,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
+    use groundhog_node_supervisor::{NodeSupervisorError, SupervisorStop};
+
+    let started = start_local_node(options).await?;
+
     if print.is_json() {
         print.json(&CommandResult::new(
             cmd,
-            hogd_dev_startup_payload(rpc_addr, &readiness, backend_planes),
+            hogd_dev_startup_payload(
+                started.rpc_addr(),
+                started.readiness(),
+                started.backend_planes(),
+            ),
         ))?;
     } else {
         print.status("Groundhog Local Node (experimental)");
-        print.status(format_args!("Chain: {}", readiness.network_id));
-        if backend_planes.read.is_indexer_backed() {
+        print.status(format_args!("Chain: {}", started.readiness().network_id));
+        if started.backend_planes().read.is_indexer_backed() {
             print.warn("backend: hogd-dev (chainTip, submit, and reads live)");
         } else {
             print.warn(
                 "backend: hogd-dev (chainTip and submit live; read methods return NOT_IMPLEMENTED)",
             );
         }
-        print.status(format_args!("Listening on http://{rpc_addr}"));
+        print.status(format_args!("Listening on {}", started.rpc_url()));
         print.status(format_args!(
             "hogd-dev SchedulerCoord: {}",
-            readiness.endpoints.scheduler_coord
+            started.readiness().endpoints.scheduler_coord
         ));
-        if let Some(indexer) = readiness.endpoints.indexer_block_explorer {
+        if let Some(indexer) = started.readiness().endpoints.indexer_block_explorer {
             print.status(format_args!("hogd-dev IndexerBlockExplorer: {indexer}"));
         }
-        if let Some(db_gateway) = readiness.endpoints.db_gateway {
+        if let Some(db_gateway) = started.readiness().endpoints.db_gateway {
             print.status(format_args!("hogd-dev DbGateway: {db_gateway}"));
         }
-        if let Some(view_gateway) = readiness.endpoints.view_gateway {
+        if let Some(view_gateway) = started.readiness().endpoints.view_gateway {
             print.status(format_args!("hogd-dev ViewGateway: {view_gateway}"));
         }
-        if let Some(dev_control) = readiness.endpoints.dev_control {
+        if let Some(dev_control) = started.readiness().endpoints.dev_control {
             print.status(format_args!("hogd-dev dev control: {dev_control}"));
         }
     }
@@ -109,10 +225,7 @@ async fn run_hogd_dev(
         Ok(())
     };
 
-    let outcome = handle
-        .run_until(stop_signal)
-        .await
-        .map_err(|err| CliError::NodeSupervisor(err.to_string()))?;
+    let outcome = started.run_until(stop_signal).await?;
     match outcome {
         SupervisorStop::HogdExited(status) => {
             if !print.is_json() {
@@ -131,6 +244,37 @@ async fn run_hogd_dev(
             "unexpected supervisor stop state: {other:?}"
         ))),
     }
+}
+
+#[cfg(feature = "dev-node")]
+fn local_node_config(
+    options: LocalNodeOptions,
+) -> Result<groundhog_node_supervisor::NodeSupervisorConfig, CliError> {
+    use groundhog_node_supervisor::{HogdDevConfig, NodeSupervisorConfig};
+
+    let hogd = options
+        .hogd_dev_binary
+        .map_or_else(HogdDevConfig::default, |binary| {
+            HogdDevConfig::default().with_binary_path(binary)
+        });
+    let hogd = match options.pid_file {
+        LocalNodePidFile::GlobalCache => {
+            hogd.with_pid_file(crate::config::cache_dir()?.join("hogd-dev.pid"))
+        }
+        LocalNodePidFile::Path(path) => hogd.with_pid_file(path),
+        LocalNodePidFile::Disabled => hogd,
+    };
+    let hogd = match options.dev_account_count {
+        Some(count) => hogd.with_dev_account_count(count),
+        None => hogd,
+    };
+    let config = NodeSupervisorConfig::default()
+        .with_rpc_listen_address(format!("127.0.0.1:{}", options.port))
+        .with_hogd_dev(hogd);
+    Ok(match options.hogd_protocol {
+        Some(protocol) => config.with_hogd_protocol_override(protocol),
+        None => config,
+    })
 }
 
 #[cfg(feature = "dev-node")]
@@ -233,8 +377,45 @@ fn hogd_dev_endpoints_payload(
 
 #[cfg(all(test, feature = "dev-node"))]
 mod tests {
-    use super::hogd_dev_startup_payload;
+    use super::{LocalNodeOptions, LocalNodePidFile, hogd_dev_startup_payload, local_node_config};
     use groundhog_node_supervisor::{BackendPlanes, PlaneStatus, parse_readiness_line};
+    use std::path::PathBuf;
+
+    #[test]
+    fn local_node_config_sets_supervisor_startup_options() {
+        let binary = PathBuf::from("/tmp/hogd-dev-test");
+        let config = local_node_config(LocalNodeOptions {
+            port: 0,
+            hogd_dev_binary: Some(binary.clone()),
+            hogd_protocol: Some("test-protocol".into()),
+            pid_file: LocalNodePidFile::Path(PathBuf::from("/tmp/hogd-dev-test.pid")),
+            dev_account_count: Some(3),
+        })
+        .expect("bug: local node config should build");
+
+        assert_eq!(config.rpc_listen_address, "127.0.0.1:0");
+        assert_eq!(config.hogd_dev.binary_path, Some(binary));
+        assert_eq!(
+            config.hogd_protocol_override.as_deref(),
+            Some("test-protocol")
+        );
+        assert_eq!(
+            config.hogd_dev.pid_file.as_deref(),
+            Some(std::path::Path::new("/tmp/hogd-dev-test.pid"))
+        );
+        assert_eq!(config.hogd_dev.dev_account_count, 3);
+    }
+
+    #[test]
+    fn local_node_config_can_disable_pid_file() {
+        let config = local_node_config(LocalNodeOptions {
+            pid_file: LocalNodePidFile::Disabled,
+            ..LocalNodeOptions::default()
+        })
+        .expect("bug: local node config should build");
+
+        assert!(config.hogd_dev.pid_file.is_none());
+    }
 
     #[test]
     fn hogd_dev_startup_payload_includes_readiness_endpoints() {
