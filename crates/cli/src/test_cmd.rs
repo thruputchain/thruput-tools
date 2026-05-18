@@ -19,6 +19,8 @@ use std::time::{Duration, SystemTime};
 const FAILURE_CACHE_VERSION: u8 = 1;
 const WATCH_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const WATCH_DEBOUNCE: Duration = Duration::from_millis(350);
+const WASM_TEST_TARGET: &str = "test_wasm";
+const INTEGRATION_TEST_TARGET: &str = "integration";
 
 /// Explicit controls for the `test_wasm` harness invocation.
 #[derive(Debug, Clone, Default)]
@@ -230,6 +232,7 @@ fn run_integration_with_dev_node(
         &build.project_root,
         cargo_args,
     )?;
+    ensure_integration_test_target_exists(&build.project_root)?;
 
     print.status("Starting ephemeral local node for integration tests...");
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
@@ -253,25 +256,49 @@ fn run_integration_with_dev_node(
     );
 
     let stop_result = rt.block_on(started.stop());
+    handle_integration_outcome(result, stop_result.map(|_| ()), cmd, print)
+}
+
+#[cfg(feature = "dev-node")]
+fn handle_integration_outcome(
+    result: Result<IntegrationRun, CliError>,
+    stop_result: Result<(), CliError>,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
     match (result, stop_result) {
-        (Ok(run), Ok(_)) => finish_integration_run(&run, cmd, print),
+        (Ok(run), Ok(())) => finish_integration_run(&run, cmd, print, Vec::new()),
         (Ok(run), Err(error)) => {
-            if run.failed_code.is_some() {
-                print.warn(format_args!(
-                    "local node shutdown failed after integration test failure: {error}"
-                ));
-                finish_integration_run(&run, cmd, print)
-            } else {
-                Err(error)
-            }
+            let warning = local_node_shutdown_warning(
+                if run.failed_code.is_some() {
+                    "integration test failure"
+                } else {
+                    "successful integration test run"
+                },
+                &error,
+            );
+            print.warn(&warning.message);
+            finish_integration_run(&run, cmd, print, vec![warning])
         }
-        (Err(error), Ok(_)) => Err(error),
+        (Err(error), Ok(())) => Err(error),
         (Err(error), Err(stop_error)) => {
             print.warn(format_args!(
                 "local node shutdown failed after integration test error: {stop_error}"
             ));
             Err(error)
         }
+    }
+}
+
+#[cfg(feature = "dev-node")]
+fn local_node_shutdown_warning(context: &'static str, error: &CliError) -> crate::checks::Finding {
+    crate::checks::Finding {
+        level: crate::checks::FindingLevel::Warn,
+        code: "local_node_shutdown_failed",
+        message: format!("local node shutdown failed after {context}: {error}"),
+        hint: Some(std::borrow::Cow::Borrowed(
+            "check for a lingering hogd-dev process if the next local-node command fails",
+        )),
     }
 }
 
@@ -311,7 +338,7 @@ fn run_integration_against_node(
         root: &build.project_root,
         project_name: &build.project_name,
         host_target,
-        test_target: "integration",
+        test_target: INTEGRATION_TEST_TARGET,
         env: &env,
         artifacts,
         cargo_args,
@@ -362,20 +389,28 @@ fn finish_integration_run(
     run: &IntegrationRun,
     cmd: &'static str,
     print: &Print,
+    warnings: Vec<crate::checks::Finding>,
 ) -> Result<(), CliError> {
     if let Some(code) = run.failed_code {
         if print.is_json() {
-            print.json(&CommandResult::failure(cmd, &run.report))?;
+            print.json(&CommandResult::failure_with_warnings(
+                cmd,
+                warnings,
+                &run.report,
+            ))?;
             return Err(CliError::CommandReportedFailure);
         }
         return Err(CliError::CargoFailed(code));
     }
 
-    print.json(&CommandResult::new(cmd, &run.report))?;
+    if warnings.is_empty() {
+        print.json(&CommandResult::new(cmd, &run.report))?;
+    } else {
+        print.json(&CommandResult::with_warnings(cmd, warnings, &run.report))?;
+    }
     Ok(())
 }
 
-#[cfg(feature = "dev-node")]
 fn integration_test_environment(rpc_url: &str, contract_address: &str) -> Vec<(String, String)> {
     vec![
         ("GROUNDHOG_RPC_URL".into(), rpc_url.into()),
@@ -383,6 +418,17 @@ fn integration_test_environment(rpc_url: &str, contract_address: &str) -> Vec<(S
         ("GROUNDHOG_PROFILE".into(), "integration".into()),
         ("GROUNDHOG_DEFAULT_KEY".into(), "dev-0".into()),
     ]
+}
+
+#[cfg(feature = "dev-node")]
+fn ensure_integration_test_target_exists(project_root: &Path) -> Result<(), CliError> {
+    let path = project_root.join("tests").join("integration.rs");
+    if path.try_exists()? {
+        return Ok(());
+    }
+    Err(CliError::IntegrationTestNotFound(
+        path.display().to_string(),
+    ))
 }
 
 fn run_watch(
@@ -465,7 +511,7 @@ fn run_once_with_options(
         root: &root,
         project_name: &build.project_name,
         host_target: &host_target,
-        test_target: "test_wasm",
+        test_target: WASM_TEST_TARGET,
         env: &[],
         artifacts,
         cargo_args,
@@ -1073,8 +1119,10 @@ fn test_command(root: &Path, project_name: &str, host_target: &str, test_target:
         .arg(host_target)
         .arg("--features")
         .arg("dev")
-        .arg("--")
-        .arg("--include-ignored");
+        .arg("--");
+    if test_target == WASM_TEST_TARGET {
+        cargo_cmd.arg("--include-ignored");
+    }
     cargo_cmd
 }
 
@@ -1319,15 +1367,18 @@ fn dedup_tests(tests: impl IntoIterator<Item = String>) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        FAILURE_CACHE_VERSION, FailureCache, IntegrationTestOptions, SelectedFilter,
-        TestHarnessOptions, TestOptions, TestRunOutput, WatchContext, aggregate_summary,
-        apply_harness_options, apply_test_environment, combined_output, derive_summary_from_cases,
-        extract_failed_tests, failure_cache_path, filter_cached_tests, next_cached_failures,
-        parse_summary_line, parse_test_case_line, read_failure_cache, should_stop_rerun,
-        should_watch_file, test_command, update_failure_cache, watch_snapshot, write_failure_cache,
+        FAILURE_CACHE_VERSION, FailureCache, INTEGRATION_TEST_TARGET, IntegrationTestOptions,
+        SelectedFilter, TestHarnessOptions, TestOptions, TestRunOutput, WASM_TEST_TARGET,
+        WatchContext, aggregate_summary, apply_harness_options, apply_test_environment,
+        combined_output, derive_summary_from_cases, extract_failed_tests, failure_cache_path,
+        filter_cached_tests, next_cached_failures, parse_summary_line, parse_test_case_line,
+        read_failure_cache, should_stop_rerun, should_watch_file, test_command,
+        update_failure_cache, watch_snapshot, write_failure_cache,
     };
     use crate::test_json::{TestCase, TestCaseStatus, TestSummarySource};
     use crate::{CliError, Print};
+    #[cfg(feature = "dev-node")]
+    use std::collections::BTreeMap;
     use std::fs;
     use std::path::PathBuf;
     use std::process::Command;
@@ -1337,6 +1388,48 @@ mod tests {
         WatchContext {
             root: root.to_path_buf(),
             ignored_dirs: vec![root.join("target")],
+        }
+    }
+
+    #[cfg(feature = "dev-node")]
+    fn integration_run(success: bool) -> super::IntegrationRun {
+        let profile = crate::config::ResolvedProfile {
+            name: "integration".into(),
+            rpc_url: Some("http://127.0.0.1:1234".into()),
+            default_key: Some("dev-0".into()),
+            contracts: BTreeMap::new(),
+            source: None,
+        };
+        let outputs = vec![TestRunOutput {
+            filter: None,
+            exact_filter: false,
+            success,
+            code: if success { 0 } else { 101 },
+            stdout: if success {
+                "running 1 test\ntest tests::ok ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n"
+            } else {
+                "running 1 test\ntest tests::fails ... FAILED\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n"
+            }
+            .into(),
+            stderr: String::new(),
+        }];
+        let report = super::build_test_report(
+            std::path::Path::new("/project"),
+            &profile,
+            std::path::Path::new("/project/target/demo.wasm"),
+            &outputs,
+            false,
+            std::path::Path::new("/project/target/.groundhog/failures.json"),
+            &[],
+            &[],
+            &[],
+            &[],
+            false,
+        );
+
+        super::IntegrationRun {
+            report,
+            failed_code: if success { None } else { Some(101) },
         }
     }
 
@@ -1421,7 +1514,7 @@ mod tests {
             std::path::Path::new("/project"),
             "demo",
             "x86_64-unknown-linux-gnu",
-            "integration",
+            INTEGRATION_TEST_TARGET,
         );
 
         let args: Vec<_> = command
@@ -1435,22 +1528,49 @@ mod tests {
         assert!(
             !args
                 .windows(2)
-                .any(|window| window[0] == "--test" && window[1] == "test_wasm")
+                .any(|window| window[0] == "--test" && window[1] == WASM_TEST_TARGET)
         );
+        assert!(!args.iter().any(|arg| arg == "--include-ignored"));
     }
 
     #[test]
-    fn test_environment_injects_integration_values() {
+    fn wasm_command_includes_ignored_tests() {
+        let command = test_command(
+            std::path::Path::new("/project"),
+            "demo",
+            "x86_64-unknown-linux-gnu",
+            WASM_TEST_TARGET,
+        );
+
+        let args: Vec<_> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert!(args.iter().any(|arg| arg == "--include-ignored"));
+    }
+
+    #[test]
+    fn integration_test_environment_returns_expected_values() {
+        let env = super::integration_test_environment(
+            "http://127.0.0.1:1234",
+            &format!("0x{}", "11".repeat(32)),
+        );
+
+        assert!(env.contains(&("GROUNDHOG_RPC_URL".into(), "http://127.0.0.1:1234".into())));
+        assert!(env.iter().any(|(key, value)| {
+            key == "GROUNDHOG_CONTRACT_ADDRESS" && value == &format!("0x{}", "11".repeat(32))
+        }));
+        assert!(env.contains(&("GROUNDHOG_PROFILE".into(), "integration".into())));
+        assert!(env.contains(&("GROUNDHOG_DEFAULT_KEY".into(), "dev-0".into())));
+    }
+
+    #[test]
+    fn apply_environment_sets_integration_values() {
         let mut command = Command::new("cargo");
-        let env = vec![
-            ("GROUNDHOG_RPC_URL".into(), "http://127.0.0.1:1234".into()),
-            (
-                "GROUNDHOG_CONTRACT_ADDRESS".into(),
-                format!("0x{}", "11".repeat(32)),
-            ),
-            ("GROUNDHOG_PROFILE".into(), "integration".into()),
-            ("GROUNDHOG_DEFAULT_KEY".into(), "dev-0".into()),
-        ];
+        let env = super::integration_test_environment(
+            "http://127.0.0.1:1234",
+            &format!("0x{}", "11".repeat(32)),
+        );
 
         apply_test_environment(&mut command, &env);
 
@@ -1471,6 +1591,74 @@ mod tests {
         }));
         assert!(applied.contains(&("GROUNDHOG_PROFILE".into(), "integration".into())));
         assert!(applied.contains(&("GROUNDHOG_DEFAULT_KEY".into(), "dev-0".into())));
+    }
+
+    #[cfg(feature = "dev-node")]
+    #[test]
+    fn integration_preflight_requires_documented_test_target() {
+        let tmp = TempDir::new().expect("bug: temp dir should be created");
+        let err = super::ensure_integration_test_target_exists(tmp.path()).unwrap_err();
+        assert!(
+            matches!(err, CliError::IntegrationTestNotFound(_)),
+            "expected IntegrationTestNotFound, got {err:?}"
+        );
+
+        fs::create_dir_all(tmp.path().join("tests")).expect("bug: tests dir should be created");
+        fs::write(tmp.path().join("tests/integration.rs"), "")
+            .expect("bug: integration test should write");
+        super::ensure_integration_test_target_exists(tmp.path())
+            .expect("bug: integration test target should exist");
+    }
+
+    #[cfg(feature = "dev-node")]
+    #[test]
+    fn integration_outcome_emits_report_when_tests_pass_and_shutdown_fails() {
+        super::handle_integration_outcome(
+            Ok(integration_run(true)),
+            Err(CliError::NodeSupervisor("stop failed".into())),
+            "test",
+            &Print::quiet(),
+        )
+        .expect("bug: passing tests should not fail only because cleanup failed");
+    }
+
+    #[cfg(feature = "dev-node")]
+    #[test]
+    fn integration_outcome_preserves_failed_tests_when_shutdown_fails() {
+        let err = super::handle_integration_outcome(
+            Ok(integration_run(false)),
+            Err(CliError::NodeSupervisor("stop failed".into())),
+            "test",
+            &Print::quiet(),
+        )
+        .unwrap_err();
+        assert!(matches!(err, CliError::CargoFailed(101)));
+    }
+
+    #[cfg(feature = "dev-node")]
+    #[test]
+    fn integration_outcome_preserves_failed_tests_after_clean_shutdown() {
+        let err = super::handle_integration_outcome(
+            Ok(integration_run(false)),
+            Ok(()),
+            "test",
+            &Print::quiet(),
+        )
+        .unwrap_err();
+        assert!(matches!(err, CliError::CargoFailed(101)));
+    }
+
+    #[cfg(feature = "dev-node")]
+    #[test]
+    fn integration_outcome_preserves_run_error_after_clean_shutdown() {
+        let err = super::handle_integration_outcome(
+            Err(CliError::Other("deploy failed".into())),
+            Ok(()),
+            "test",
+            &Print::quiet(),
+        )
+        .unwrap_err();
+        assert!(matches!(err, CliError::Other(message) if message == "deploy failed"));
     }
 
     #[test]

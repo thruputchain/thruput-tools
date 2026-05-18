@@ -75,6 +75,8 @@ pub enum CliError {
     NotImplemented,
     #[error("`groundhog test --integration` requires the dev-node feature")]
     IntegrationTestsUnavailable,
+    #[error("integration test target not found at {0}")]
+    IntegrationTestNotFound(String),
     #[error("invalid test options: {0}")]
     InvalidTestOptions(String),
     #[error("status check found warnings")]
@@ -165,6 +167,7 @@ impl CliError {
             Self::JsonUnsupported(_) => "json_unsupported",
             Self::NotImplemented => "not_implemented",
             Self::IntegrationTestsUnavailable => "integration_tests_unavailable",
+            Self::IntegrationTestNotFound(_) => "integration_test_not_found",
             Self::InvalidTestOptions(_) => "invalid_test_options",
             Self::StatusHasWarnings => "status_has_warnings",
             Self::CommandReportedFailure => "command_reported_failure",
@@ -345,6 +348,9 @@ impl CliError {
             )),
             Self::IntegrationTestsUnavailable => Some(Cow::Borrowed(
                 "install with `groundhogup`, or build the CLI with `--features dev-node`",
+            )),
+            Self::IntegrationTestNotFound(_) => Some(Cow::Borrowed(
+                "create `tests/integration.rs` before running `groundhog test --integration`",
             )),
             Self::InvalidTestOptions(_) => Some(Cow::Borrowed(
                 "remove the conflicting `groundhog test` option and rerun the command",

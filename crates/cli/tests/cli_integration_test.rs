@@ -802,6 +802,8 @@ fn test_integration_reports_local_node_startup_failure() {
     .unwrap();
     std::fs::create_dir_all(tmp.path().join(".cargo")).unwrap();
     std::fs::write(tmp.path().join(".cargo/contract.toml"), "").unwrap();
+    std::fs::create_dir_all(tmp.path().join("tests")).unwrap();
+    std::fs::write(tmp.path().join("tests/integration.rs"), "").unwrap();
 
     let fake_bin = tmp.path().join("bin");
     std::fs::create_dir_all(&fake_bin).unwrap();

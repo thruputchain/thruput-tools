@@ -40,7 +40,7 @@ pub(crate) struct PreparedDeploy {
     pub(crate) tx_hex: String,
 }
 
-/// Submitted deploy metadata shared by live CLI and integration-test orchestration.
+/// Submitted deploy metadata after a live deploy transaction is accepted.
 #[derive(Debug, Clone)]
 pub(crate) struct SubmittedDeploy {
     pub(crate) tx_hash: TxHash,
