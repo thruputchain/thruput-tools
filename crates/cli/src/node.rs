@@ -435,6 +435,10 @@ mod tests {
             "groundhog_node_supervisor=info,hogd_dev=info"
         );
         assert_eq!(
+            default_tracing_filter(true, false),
+            "groundhog_node_supervisor=info,hogd_dev=info"
+        );
+        assert_eq!(
             default_tracing_filter(false, true),
             "groundhog_node_supervisor=warn"
         );

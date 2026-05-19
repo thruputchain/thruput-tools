@@ -547,6 +547,27 @@ async fn read_capped_line<R>(reader: &mut R, max_bytes: usize) -> Result<CappedL
 where
     R: AsyncBufRead + Unpin,
 {
+    read_capped_line_inner(reader, max_bytes, false).await
+}
+
+async fn read_capped_line_discarding_tail<R>(
+    reader: &mut R,
+    max_bytes: usize,
+) -> Result<CappedLine, io::Error>
+where
+    R: AsyncBufRead + Unpin,
+{
+    read_capped_line_inner(reader, max_bytes, true).await
+}
+
+async fn read_capped_line_inner<R>(
+    reader: &mut R,
+    max_bytes: usize,
+    discard_oversized_tail: bool,
+) -> Result<CappedLine, io::Error>
+where
+    R: AsyncBufRead + Unpin,
+{
     let mut line = Vec::new();
 
     loop {
@@ -568,6 +589,9 @@ where
 
         if line.len().saturating_add(line_end) > max_bytes {
             reader.consume(line_end);
+            if discard_oversized_tail && newline.is_none() {
+                discard_until_newline(reader).await?;
+            }
             return Ok(CappedLine::TooLarge);
         }
 
@@ -577,6 +601,28 @@ where
             return Ok(CappedLine::Line(
                 String::from_utf8_lossy(&line).into_owned(),
             ));
+        }
+    }
+}
+
+async fn discard_until_newline<R>(reader: &mut R) -> Result<(), io::Error>
+where
+    R: AsyncBufRead + Unpin,
+{
+    loop {
+        let buffer = reader.fill_buf().await?;
+        if buffer.is_empty() {
+            return Ok(());
+        }
+
+        let newline = buffer
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map(|position| position + 1);
+        let consume = newline.unwrap_or(buffer.len());
+        reader.consume(consume);
+        if newline.is_some() {
+            return Ok(());
         }
     }
 }
@@ -620,7 +666,7 @@ fn spawn_stderr_forwarder(stderr: ChildStderr) -> JoinHandle<()> {
         let mut stderr = BufReader::new(stderr);
 
         loop {
-            match read_capped_line(&mut stderr, MAX_LOG_LINE_BYTES).await {
+            match read_capped_line_discarding_tail(&mut stderr, MAX_LOG_LINE_BYTES).await {
                 Ok(CappedLine::Eof) => break,
                 Ok(CappedLine::Line(line)) => {
                     forward_log_line(line.trim_end_matches(['\r', '\n']));
@@ -948,6 +994,25 @@ mod tests {
                 line: None,
             }
         );
+    }
+
+    #[tokio::test]
+    async fn read_capped_line_discards_oversized_line_tail() {
+        let input = b"abcdef\n{\"level\":\"info\",\"message\":\"next\"}\n";
+        let mut reader = tokio::io::BufReader::with_capacity(4, &input[..]);
+
+        assert!(matches!(
+            super::read_capped_line_discarding_tail(&mut reader, 3).await,
+            Ok(super::CappedLine::TooLarge)
+        ));
+
+        let next = super::read_capped_line(&mut reader, 64)
+            .await
+            .expect("bug: next line should read");
+        let super::CappedLine::Line(line) = next else {
+            panic!("expected next physical line after oversized line");
+        };
+        assert_eq!(line, "{\"level\":\"info\",\"message\":\"next\"}\n");
     }
 
     #[test]
