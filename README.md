@@ -50,6 +50,17 @@ public JSON-RPC on top, so every CLI command (`deploy`, `call`,
 receipts, events, storage reads) talks to the same JSON-RPC surface
 an SDK would.
 
+`groundhog node` keeps stdout script-safe. In human mode stdout carries
+status lines; in `--json` mode stdout carries the startup JSON payload.
+Child-process logs are requested from `hogd-dev` as newline-delimited JSON on
+stderr, parsed by `node-supervisor`, and re-emitted through Rust `tracing` with
+`hogd_timestamp_ms`, `hogd_target`, `hogd_file`, `hogd_line`, and
+`hogd_fields` metadata.
+The default `groundhog node` output is the quiet golden path; use
+`groundhog node -v` / `--verbose` for the normal debugging view, including
+with `--json` because logs stay on stderr, and `RUST_LOG` for exact tracing
+filters.
+
 With the CLI's `dev-node` feature enabled, `groundhog test
 --integration` uses that same local-node path without a separate
 terminal: it builds the WASM artifact, starts an ephemeral hogd-dev
@@ -105,16 +116,16 @@ The canonical TS SDK that codegens against the OpenRPC artifact and
 sits on top of those primitives is the right consumer-facing entry
 point — link will land here once it ships.
 
-### Near-term changes to the public surface
+### Public surface design notes
 
-Active design notes that will modify the JSON-RPC surface:
+Recent and active design notes for the JSON-RPC surface:
 
 - [View RPC and receipt return-data](docs/cli/specs/2026-05-07-view-rpc-and-receipt-return-data.md)
   — read-only contract calls plus structured `return_data` /
   `abort_data` on receipts.
 - [View RPC protocol-rs follow-up](docs/cli/specs/2026-05-13-view-rpc-protocol-rs-follow-up.md)
-  — protocol/protocol-rs service contract needed to wire
-  `groundhog_view` to hogd.
+  — protocol/protocol-rs service contract used to wire `groundhog_view`
+  to hogd.
 - [Transaction detail options](docs/cli/specs/2026-05-07-transaction-detail-options.md)
   — receipt response shape.
 

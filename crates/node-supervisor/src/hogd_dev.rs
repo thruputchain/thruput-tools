@@ -14,7 +14,7 @@ use groundhog_rpc_api_types::{ContractAddress, dev::DevAccount, hex::HexBytes};
 use groundhog_signing::LocalSigner;
 use serde::Deserialize;
 use tokio::{
-    io::{AsyncBufReadExt, AsyncReadExt, BufReader},
+    io::{AsyncBufRead, AsyncBufReadExt, BufReader},
     process::{ChildStderr, ChildStdout},
     task::JoinHandle,
     time,
@@ -31,8 +31,14 @@ pub const DEFAULT_HOGD_DEV_BINARY: &str = "hogd-dev";
 /// Environment variable used to override the hogd-dev binary path.
 pub const HOGD_DEV_BINARY_ENV: &str = "GROUNDHOG_HOGD_DEV_BINARY";
 
+/// Environment variable used to request structured JSON logs from hogd-dev.
+pub const HOGD_LOG_FORMAT_ENV: &str = "HOGD_LOG_FORMAT";
+
 /// Maximum accepted hogd-dev readiness line length.
 pub const MAX_READINESS_LINE_BYTES: usize = 64 * 1024;
+
+/// Maximum accepted hogd-dev stderr log line length.
+pub const MAX_LOG_LINE_BYTES: usize = 64 * 1024;
 
 /// Ready endpoints exposed by hogd-dev.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -313,6 +319,7 @@ pub fn build_hogd_dev_spec(binary: impl AsRef<Path>, config: &HogdDevConfig) -> 
             OsString::from("--dev-account-tokens"),
             OsString::from(config.dev_account_tokens.to_string()),
         ])
+        .env(HOGD_LOG_FORMAT_ENV, "json")
         .stdout_piped()
         .stderr_piped();
 
@@ -453,8 +460,12 @@ async fn read_readiness_line(
     stderr_task: Option<&JoinHandle<()>>,
 ) -> Result<HogdDevReadiness, NodeSupervisorError> {
     let program = child.program().to_string();
-    let read_result =
-        time::timeout(timeout, read_capped_line(stdout, MAX_READINESS_LINE_BYTES)).await;
+    let mut stdout = BufReader::new(stdout);
+    let read_result = time::timeout(
+        timeout,
+        read_capped_line(&mut stdout, MAX_READINESS_LINE_BYTES),
+    )
+    .await;
     match read_result {
         Ok(Ok(CappedLine::Eof)) => {
             abort_stderr_task(stderr_task);
@@ -532,16 +543,15 @@ enum CappedLine {
     TooLarge,
 }
 
-async fn read_capped_line(
-    mut stdout: ChildStdout,
-    max_bytes: usize,
-) -> Result<CappedLine, io::Error> {
+async fn read_capped_line<R>(reader: &mut R, max_bytes: usize) -> Result<CappedLine, io::Error>
+where
+    R: AsyncBufRead + Unpin,
+{
     let mut line = Vec::new();
-    let mut chunk = [0_u8; 1024];
 
     loop {
-        let read = stdout.read(&mut chunk).await?;
-        if read == 0 {
+        let buffer = reader.fill_buf().await?;
+        if buffer.is_empty() {
             if line.is_empty() {
                 return Ok(CappedLine::Eof);
             }
@@ -550,18 +560,20 @@ async fn read_capped_line(
             ));
         }
 
-        let bytes = &chunk[..read];
-        let line_end = bytes
+        let newline = buffer
             .iter()
             .position(|byte| *byte == b'\n')
-            .map_or(read, |position| position + 1);
+            .map(|position| position + 1);
+        let line_end = newline.unwrap_or(buffer.len());
 
         if line.len().saturating_add(line_end) > max_bytes {
+            reader.consume(line_end);
             return Ok(CappedLine::TooLarge);
         }
 
-        line.extend_from_slice(&bytes[..line_end]);
-        if line_end < read || line.ends_with(b"\n") {
+        line.extend_from_slice(&buffer[..line_end]);
+        reader.consume(line_end);
+        if newline.is_some() {
             return Ok(CappedLine::Line(
                 String::from_utf8_lossy(&line).into_owned(),
             ));
@@ -606,13 +618,20 @@ async fn kill_unready_child(child: &mut SupervisedChild) {
 fn spawn_stderr_forwarder(stderr: ChildStderr) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut stderr = BufReader::new(stderr);
-        let mut line = String::new();
 
         loop {
-            line.clear();
-            match stderr.read_line(&mut line).await {
-                Ok(0) => break,
-                Ok(_) => forward_log_line(line.trim_end_matches(['\r', '\n'])),
+            match read_capped_line(&mut stderr, MAX_LOG_LINE_BYTES).await {
+                Ok(CappedLine::Eof) => break,
+                Ok(CappedLine::Line(line)) => {
+                    forward_log_line(line.trim_end_matches(['\r', '\n']));
+                }
+                Ok(CappedLine::TooLarge) => {
+                    tracing::warn!(
+                        target: "hogd_dev",
+                        max_bytes = MAX_LOG_LINE_BYTES,
+                        "discarding oversized hogd-dev stderr log line"
+                    );
+                }
                 Err(error) => {
                     tracing::warn!(target: "hogd_dev", %error, "failed to read hogd-dev stderr");
                     break;
@@ -625,6 +644,8 @@ fn spawn_stderr_forwarder(stderr: ChildStderr) -> JoinHandle<()> {
 #[derive(Debug, Deserialize)]
 struct HogdDevLogLine {
     #[serde(default)]
+    timestamp_ms: Option<i64>,
+    #[serde(default)]
     level: Option<String>,
     #[serde(default)]
     target: Option<String>,
@@ -634,64 +655,73 @@ struct HogdDevLogLine {
     fields: Option<serde_json::Value>,
 }
 
-fn forward_log_line(line: &str) {
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ForwardedLogLevel {
+    Error,
+    Warn,
+    Info,
+    Debug,
+    Trace,
+    Unknown(String),
+    Missing,
+}
+
+impl ForwardedLogLevel {
+    fn from_record(level: Option<&str>) -> Self {
+        let Some(level) = level else {
+            return Self::Missing;
+        };
+        if level.eq_ignore_ascii_case("error") {
+            Self::Error
+        } else if level.eq_ignore_ascii_case("warn") || level.eq_ignore_ascii_case("warning") {
+            Self::Warn
+        } else if level.eq_ignore_ascii_case("info") {
+            Self::Info
+        } else if level.eq_ignore_ascii_case("debug") {
+            Self::Debug
+        } else if level.eq_ignore_ascii_case("trace") {
+            Self::Trace
+        } else {
+            Self::Unknown(level.to_owned())
+        }
+    }
+
+    fn as_log_field(&self) -> Option<&str> {
+        match self {
+            Self::Unknown(level) => Some(level.as_str()),
+            Self::Missing => Some("<missing>"),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ForwardedLogRecord {
+    timestamp_ms: Option<i64>,
+    level: ForwardedLogLevel,
+    hogd_target: String,
+    message: String,
+    fields: ForwardedLogFields,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ForwardLogOutcome {
+    Forwarded(ForwardedLogRecord),
+    InvalidJson,
+}
+
+fn forward_log_line(line: &str) -> ForwardLogOutcome {
     match serde_json::from_str::<HogdDevLogLine>(line) {
         Ok(record) => {
-            let level = record.level.as_deref();
-            let hogd_target = record.target.as_deref().unwrap_or("hogd_dev");
-            let message = record.message.as_deref().unwrap_or("");
-            let fields = record
-                .fields
-                .as_ref()
-                .map_or_else(String::new, serde_json::Value::to_string);
-
-            if level.is_some_and(|level| level.eq_ignore_ascii_case("error")) {
-                tracing::error!(
-                    target: "hogd_dev",
-                    %hogd_target,
-                    %fields,
-                    "{message}"
-                );
-            } else if level.is_some_and(|level| {
-                level.eq_ignore_ascii_case("warn") || level.eq_ignore_ascii_case("warning")
-            }) {
-                tracing::warn!(
-                    target: "hogd_dev",
-                    %hogd_target,
-                    %fields,
-                    "{message}"
-                );
-            } else if level.is_some_and(|level| level.eq_ignore_ascii_case("debug")) {
-                tracing::debug!(
-                    target: "hogd_dev",
-                    %hogd_target,
-                    %fields,
-                    "{message}"
-                );
-            } else if level.is_some_and(|level| level.eq_ignore_ascii_case("trace")) {
-                tracing::trace!(
-                    target: "hogd_dev",
-                    %hogd_target,
-                    %fields,
-                    "{message}"
-                );
-            } else if level.is_some_and(|level| level.eq_ignore_ascii_case("info")) {
-                tracing::info!(
-                    target: "hogd_dev",
-                    %hogd_target,
-                    %fields,
-                    "{message}"
-                );
-            } else {
-                let level = level.unwrap_or("<missing>");
-                tracing::warn!(
-                    target: "hogd_dev",
-                    %hogd_target,
-                    %fields,
-                    %level,
-                    "{message}"
-                );
-            }
+            let forwarded = ForwardedLogRecord {
+                timestamp_ms: record.timestamp_ms,
+                level: ForwardedLogLevel::from_record(record.level.as_deref()),
+                hogd_target: record.target.unwrap_or_else(|| "hogd_dev".to_owned()),
+                message: record.message.unwrap_or_default(),
+                fields: parse_log_fields(record.fields.as_ref()),
+            };
+            emit_forwarded_log(&forwarded);
+            ForwardLogOutcome::Forwarded(forwarded)
         }
         Err(error) => {
             tracing::warn!(
@@ -700,7 +730,83 @@ fn forward_log_line(line: &str) {
                 line,
                 "invalid hogd-dev stderr log line"
             );
+            ForwardLogOutcome::InvalidJson
         }
+    }
+}
+
+macro_rules! emit_hogd_log {
+    ($level:ident, $record:expr, $hogd_file:expr, $hogd_line:expr, $hogd_fields:expr) => {
+        tracing::$level!(
+            target: "hogd_dev",
+            hogd_timestamp_ms = $record.timestamp_ms,
+            hogd_target = %$record.hogd_target,
+            hogd_file = %$hogd_file,
+            hogd_line = $hogd_line,
+            hogd_fields = %$hogd_fields,
+            "{}",
+            $record.message
+        );
+    };
+}
+
+fn emit_forwarded_log(record: &ForwardedLogRecord) {
+    let hogd_file = record.fields.file.as_deref().unwrap_or("");
+    let hogd_line = record.fields.line.unwrap_or(0);
+    let hogd_fields = record.fields.raw.as_str();
+
+    match &record.level {
+        ForwardedLogLevel::Error => {
+            emit_hogd_log!(error, record, hogd_file, hogd_line, hogd_fields);
+        }
+        ForwardedLogLevel::Warn => {
+            emit_hogd_log!(warn, record, hogd_file, hogd_line, hogd_fields);
+        }
+        ForwardedLogLevel::Info => {
+            emit_hogd_log!(info, record, hogd_file, hogd_line, hogd_fields);
+        }
+        ForwardedLogLevel::Debug => {
+            emit_hogd_log!(debug, record, hogd_file, hogd_line, hogd_fields);
+        }
+        ForwardedLogLevel::Trace => {
+            emit_hogd_log!(trace, record, hogd_file, hogd_line, hogd_fields);
+        }
+        ForwardedLogLevel::Unknown(_) | ForwardedLogLevel::Missing => {
+            let level = record.level.as_log_field().unwrap_or("<missing>");
+            tracing::warn!(
+                target: "hogd_dev",
+                hogd_timestamp_ms = record.timestamp_ms,
+                hogd_target = %record.hogd_target,
+                %hogd_file,
+                hogd_line,
+                %hogd_fields,
+                %level,
+                "{}",
+                record.message
+            );
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ForwardedLogFields {
+    raw: String,
+    file: Option<String>,
+    line: Option<u64>,
+}
+
+fn parse_log_fields(fields: Option<&serde_json::Value>) -> ForwardedLogFields {
+    let Some(fields) = fields else {
+        return ForwardedLogFields::default();
+    };
+
+    ForwardedLogFields {
+        raw: fields.to_string(),
+        file: fields
+            .get("file")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
+        line: fields.get("line").and_then(serde_json::Value::as_u64),
     }
 }
 
@@ -732,8 +838,8 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        DEFAULT_HOGD_DEV_BINARY, HOGD_DEV_BINARY_ENV, HogdDevProcess, build_dev_accounts,
-        build_hogd_dev_spec, parse_readiness_line, resolve_hogd_dev_binary,
+        DEFAULT_HOGD_DEV_BINARY, HOGD_DEV_BINARY_ENV, HOGD_LOG_FORMAT_ENV, HogdDevProcess,
+        build_dev_accounts, build_hogd_dev_spec, parse_readiness_line, resolve_hogd_dev_binary,
     };
     use crate::{
         HogdDevConfig, NodeSupervisorError,
@@ -767,6 +873,80 @@ mod tests {
                 OsString::from("--dev-account-tokens"),
                 OsString::from("1000000000"),
             ]
+        );
+        assert_eq!(
+            spec.program_envs(),
+            &[(OsString::from(HOGD_LOG_FORMAT_ENV), OsString::from("json"))]
+        );
+    }
+
+    #[test]
+    fn log_fields_extract_file_line_and_preserve_raw_fields() {
+        let raw = serde_json::json!({
+            "file": "rpc_from_coord.cc",
+            "line": 1833,
+            "stage": "commit",
+        });
+
+        let fields = super::parse_log_fields(Some(&raw));
+
+        assert_eq!(fields.file.as_deref(), Some("rpc_from_coord.cc"));
+        assert_eq!(fields.line, Some(1833));
+        let round_trip: serde_json::Value =
+            serde_json::from_str(&fields.raw).expect("bug: raw fields should stay JSON");
+        assert_eq!(round_trip, raw);
+    }
+
+    #[test]
+    fn log_fields_tolerate_absent_metadata() {
+        let fields = super::parse_log_fields(None);
+
+        assert_eq!(fields.file, None);
+        assert_eq!(fields.line, None);
+        assert!(fields.raw.is_empty());
+    }
+
+    #[test]
+    fn forward_log_line_reports_malformed_json() {
+        let outcome = super::forward_log_line("not json");
+
+        assert_eq!(outcome, super::ForwardLogOutcome::InvalidJson);
+    }
+
+    #[test]
+    fn forward_log_line_tolerates_missing_level_and_message() {
+        let outcome = super::forward_log_line(r#"{"target":"indexer"}"#);
+
+        let super::ForwardLogOutcome::Forwarded(record) = outcome else {
+            panic!("expected forwarded log record");
+        };
+        assert_eq!(record.level, super::ForwardedLogLevel::Missing);
+        assert_eq!(record.timestamp_ms, None);
+        assert_eq!(record.hogd_target, "indexer");
+        assert!(record.message.is_empty());
+        assert_eq!(record.fields, super::ForwardedLogFields::default());
+    }
+
+    #[test]
+    fn forward_log_line_tolerates_empty_fields() {
+        let outcome = super::forward_log_line(
+            r#"{"timestamp_ms":1770000000123,"level":"info","target":"hogdb","message":"ready","fields":{}}"#,
+        );
+
+        let super::ForwardLogOutcome::Forwarded(record) = outcome else {
+            panic!("expected forwarded log record");
+        };
+        assert_eq!(record.timestamp_ms, Some(1_770_000_000_123));
+        assert_eq!(record.level, super::ForwardedLogLevel::Info);
+        assert_eq!(record.hogd_target, "hogdb");
+        assert_eq!(record.message, "ready");
+        assert_eq!(
+            record.fields,
+            super::ForwardedLogFields {
+                raw: "{}".to_owned(),
+                file: None,
+                line: None,
+            }
         );
     }
 

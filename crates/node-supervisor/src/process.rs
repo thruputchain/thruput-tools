@@ -127,6 +127,12 @@ impl ChildProcessSpec {
         &self.args
     }
 
+    /// Environment variable overrides.
+    #[cfg(test)]
+    pub(crate) fn program_envs(&self) -> &[(OsString, OsString)] {
+        &self.envs
+    }
+
     fn program_label(&self) -> String {
         self.program.to_string_lossy().into_owned()
     }

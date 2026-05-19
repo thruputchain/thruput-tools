@@ -1,9 +1,8 @@
 # Hogd-Dev Process Contract
 
 **Date:** 2026-04-29
-**Status:** Draft contract proposal. PR 2 implements a fake-child adapter
-against these v1 choices; real hogd-dev integration still requires hogd-owner
-agreement before depending on a real binary.
+**Status:** Current implementation contract for the `groundhog node`
+supervisor path, with future extensions called out below.
 
 **Companion to:**
 
@@ -17,67 +16,32 @@ agreement before depending on a real binary.
 path, read APIs, and dev-control APIs. Rust owns only process lifecycle, dev
 account/genesis input, JSON-RPC facade wiring, log forwarding, and shutdown.
 
-## v1 Reduced Contract
+## Current Contract
 
-The full contract below describes the long-term shape. **The first hogd-dev
-binary (gating PR 4a) implements a deliberately reduced subset.** When this
-spec disagrees with the v1-reduced subset, the reduced subset wins for the
-v1 binary; the long-form contract describes the target the binary grows
-toward.
-
-v1 reductions:
-
-- **Endpoints.** Only `scheduler` (`SchedulerCoord1`) is bound and
-  advertised in the readiness JSON. `read` and `control` are absent in v1
-  and are *optional* in the readiness `endpoints` map. The supervisor
-  treats absent keys as "stub plane stays NotImplemented in JSON-RPC,"
-  not a startup failure.
-- **CLI flags.** v1 accepts `--listen-host`, `--scheduler-port`, and
-  `--readiness stdout`. **No `--read-port`, `--control-port`, or
-  `--genesis-stdin` flags in v1.** They are added when the corresponding
-  capabilities exist.
-- **Genesis.** v1 hogd-dev does **not** load genesis itself. The
-  supervisor loads genesis over `schedcoord_load_genesis_configuration`
-  after readiness, lifted from chuckd-rs.
-- **Logging.** v1 stderr is free-form text via existing
-  `hogd::info/warn/error`. NDJSON formatter is a follow-up.
-- **Shutdown.** v1 SIGTERM handler sets a `sig_atomic_t` flag; the main
-  thread observes it via `sigprocmask` + `sigsuspend` (race-free) and
-  returns normally from `main`, allowing RAII destructors to run —
-  `HogdDevNode` performs `MempoolTestInfra`-style component teardown
-  and `HogdDevTmpDir` removes the RAMDB temp directory. The destructor
-  body is wrapped in `try/catch + CHECK(false)` so any throw becomes a
-  loud abort. The supervisor contract treats clean teardown as
-  best-effort: the supervisor's 5s SIGKILL escalation remains the
-  safety net for destructor hangs (which the `try/catch` cannot
-  catch). Net: the happy path cleans up after itself; the unhappy
-  path is loudly killed within the grace window.
-
-When v1 is replaced by a richer hogd-dev, this section can be deleted and
-the long-form contract takes over verbatim.
-
-## Contract Checks Before PR 2
-
-This document intentionally leaves some implementation choices as proposed
-defaults. Before replacing the fake child with real hogd-dev, confirm these
-checks with hogd owners:
-
-- binary name and invocation shape: recommended v1 binary is `hogd-dev`;
-- readiness transport and JSON schema;
-- endpoint names, address format, and whether read state is one endpoint or
-  several named endpoints;
-- shutdown grace timeout: v1 default is 5s, then the supervisor escalates to
-  `SIGKILL`;
-- whether hogd-dev stderr is stable NDJSON. Timestamps may be emitted by
-  hogd-dev, but are not required by the v1 supervisor contract because tracing
-  output already carries receipt-time metadata;
-- supervisor log-forwarding model: v1 parses stderr NDJSON and re-emits through
-  tracing, while tolerating non-JSON lines during bring-up;
-- v1 platform target: Unix-only until SDK developer demand says otherwise;
-- exact meaning of "sibling path next to `groundhog`" for bundled releases:
-  v1 uses `std::env::current_exe().parent()`;
-- typed startup errors for not found, configured path missing, and configured
-  path not executable.
+- **Process name.** The child binary is `hogd-dev`.
+- **Readiness.** The supervisor starts `hogd-dev` with `--readiness stdout`
+  and reads exactly one capped JSON readiness line from stdout. Stdout is
+  otherwise reserved for machine protocol.
+- **Endpoints.** Current `hogd-dev` advertises compact `scheduler`, `read`,
+  and `gateway` endpoint keys, plus long-form `view_gateway`. The Rust
+  supervisor accepts the long-form Rust field names (`scheduler_coord`,
+  `indexer_block_explorer`, `db_gateway`, `view_gateway`) and the compact
+  aliases (`scheduler`, `read`, `gateway`, `view`). `dev_control` remains
+  optional.
+- **Dev accounts.** The supervisor passes deterministic dev-account count,
+  seed, and initial token flags. `hogd-dev` advertises the bootstrapped account
+  metadata in readiness, and the supervisor validates it before exposing
+  `groundhog_dev_getAccounts` and `dev-N` signing.
+- **Genesis.** Current `hogd-dev` normally loads dev-account genesis before
+  readiness. The supervisor keeps an empty-genesis compatibility probe after
+  readiness for older or reduced children that report no genesis block.
+- **Logging.** The supervisor sets `HOGD_LOG_FORMAT=json`, reads hogd-dev
+  stderr as newline-delimited JSON, and re-emits child logs through Rust
+  `tracing` with `hogd_timestamp_ms`, `hogd_target`, `hogd_file`, `hogd_line`,
+  and `hogd_fields` metadata. Non-JSON stderr is treated as a warning.
+- **Shutdown.** SIGTERM asks `hogd-dev` to stop accepting new requests and exit
+  normally. The supervisor sends SIGKILL to the process group only after the
+  configured grace timeout.
 
 ## Startup
 
@@ -90,39 +54,46 @@ The supervisor resolves the child binary, named `hogd-dev`, in this order:
 4. `PATH`;
 5. typed startup error.
 
-Target invocation shape (long-form contract; see "v1 Reduced Contract"
-above for what the first hogd-dev binary actually accepts):
+Current invocation shape:
 
 ```bash
 hogd-dev \
   --listen-host 127.0.0.1 \
   --scheduler-port 0 \
-  --read-port 0 \
-  --control-port 0 \
-  --genesis-stdin \
-  --readiness stdout
+  --readiness stdout \
+  --dev-accounts 10 \
+  --dev-account-seed groundhog-dev-accounts \
+  --dev-account-tokens 1000000000
 ```
 
-In the target shape Rust writes the dev genesis payload to stdin. v1 is
-ephemeral; no state directory is part of the contract until hogd-dev
-persistence is real. **The v1 binary does not accept `--read-port`,
-`--control-port`, or `--genesis-stdin`** — they are added when the
-matching capabilities exist (see the v1-reduced section).
+The supervisor also injects `HOGD_LOG_FORMAT=json`. `hogd-dev` remains
+ephemeral; no state directory is part of the contract until persistence is
+real. There are no `--read-port`, `--control-port`, or `--genesis-stdin`
+flags in the current binary.
 
 ## Readiness
 
-Preferred v1 readiness is exactly one stdout JSON line. Stdout is otherwise
-reserved for machine protocol; ordinary logs go to stderr.
+Readiness is exactly one stdout JSON line. Stdout is otherwise reserved for
+machine protocol; ordinary logs go to stderr.
 
 ```json
 {
   "status": "ready",
   "network_id": "groundhog-local",
   "endpoints": {
-    "scheduler_coord": "127.0.0.1:12345",
-    "indexer_block_explorer": "127.0.0.1:12346",
-    "dev_control": "127.0.0.1:12347"
-  }
+    "scheduler": "127.0.0.1:12345",
+    "read": "127.0.0.1:12346",
+    "gateway": "127.0.0.1:12347",
+    "view_gateway": "127.0.0.1:12348"
+  },
+  "dev_accounts": [
+    {
+      "index": 0,
+      "address": "0x...",
+      "public_key": "0x...",
+      "initial_storage_tokens": 1000000000
+    }
+  ]
 }
 ```
 
@@ -135,25 +106,70 @@ as a typed startup failure.
 Stderr should use newline-delimited JSON records:
 
 ```json
-{"level":"info","target":"hogd_dev","message":"scheduler listening","fields":{"addr":"127.0.0.1:12345"}}
+{"timestamp_ms":1770000000123,"level":"info","target":"hogd_dev","message":"scheduler listening","fields":{"addr":"127.0.0.1:12345"}}
 ```
 
-The supervisor forwards these into its tracing/log output. Human formatting
-belongs in the Rust CLI layer, not in the child process protocol. Timestamp
-fields are allowed but not required; tracing output provides receipt-time
-metadata.
+The supervisor forwards these into its tracing/log output. The tracing target
+is `hogd_dev`, and the child target is preserved as `hogd_target`. Common
+source metadata is promoted to `hogd_file` and `hogd_line`; child emission time
+is promoted to `hogd_timestamp_ms` when present; the original fields object is
+preserved as `hogd_fields`. Human formatting belongs in the Rust CLI layer, not
+in the child process protocol.
+
+`groundhog node` keeps forwarded hogd-dev info logs quiet by default so the
+golden path shows only supervisor lifecycle/status output. `groundhog node -v`
+/ `--verbose` enables the normal debugging view (`hogd_dev=info`), including
+when combined with `--json` because logs stay on stderr. `RUST_LOG`
+remains the expert override for exact filters and debug/trace output.
+
+### Structured Logging Follow-Up
+
+The current hogd JSON logger is an envelope bridge, not a full structured
+logging system. It preserves severity, target, message, source file, and source
+line, but the operational details from existing call sites remain inside the
+formatted `message` string:
+
+```json
+{
+  "level": "info",
+  "timestamp_ms": 1770000000123,
+  "target": "mempool",
+  "message": "commit summary: height=1, block_id=..., duration=0.022",
+  "fields": {
+    "file": "rpc_from_coord.cc",
+    "line": 1833
+  }
+}
+```
+
+That is enough for `groundhog node` to route, filter, and display child logs
+without changing every hogd subsystem. It is not enough for users or tools to
+query fields like `height`, `block_id`, `tx_hash`, `contract`, or `duration`
+without parsing free-form text.
+
+Follow-up when real user workflows justify it:
+
+- add a structured-field logging API in hogd without replacing the existing
+  formatted-message API;
+- migrate only high-value events first, such as commit summaries, transaction
+  submission/rejection, view execution, storage reads, and startup endpoint
+  reporting;
+- keep the JSON envelope schema compatible so `node-supervisor` can forward
+  both legacy formatted records and newer structured records;
+- measure overhead before enabling any richer structured logging on hot paths
+  outside the developer-node bridge.
 
 ## Shutdown
 
 `SIGTERM` asks hogd-dev to stop accepting new requests, drain or fail in-flight
 internal tasks deterministically, and exit within the configured grace timeout.
-The v1 default grace is 5s. Because v1 hogd-dev is ephemeral, shutdown grace
+The current default grace is 5s. Because hogd-dev is ephemeral, shutdown grace
 exists for log drain and clean SIGTERM handling, not state persistence. The
 supervisor sends `SIGKILL` to the process group only after that timeout.
 
 On Linux, the supervisor may set `PR_SET_PDEATHSIG` for best-effort cleanup if
-the parent dies. macOS has no direct equivalent; v1 documents that orphaned
-children are a best-effort cleanup risk rather than adding a persistent agent.
+the parent dies. macOS has no direct equivalent; orphaned children are a
+best-effort cleanup risk rather than adding a persistent agent.
 
 ## Required APIs
 
@@ -176,7 +192,7 @@ hogd-dev launches. In-process reset spreads across RAMDB, mempool, auth,
 event, indexer, and bootstrap lifecycles and is lower leverage than targeted
 dev controls like balance/storage/code patching.
 
-For v1, the Rust adapter owns the composite transaction-status orchestration
-described in the shared RPC-server backend contract: scheduler pending state
-first, then committed read state. If hogd-dev later exposes a unified status
-RPC, the adapter can collapse to that.
+The Rust adapter owns the composite transaction-status orchestration described
+in the shared RPC-server backend contract: scheduler pending state first, then
+committed read state. If hogd-dev later exposes a unified status RPC, the
+adapter can collapse to that.

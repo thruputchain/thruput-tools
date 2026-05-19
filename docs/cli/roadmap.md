@@ -184,9 +184,9 @@ Maintenance rules:
     builds and completes deploy/call against a registry SDK crate matching
     the current hogd-dev protocol.
 
-    Verified on 2026-05-07 after publishing `sdk = "0.14.0"`. The fresh
+    Verified on 2026-05-07 after publishing `sdk = "0.14.0"`. At that point the fresh
     scaffold resolves `groundhog-xdr = 0.12.0` and `hogexec-internal = 0.12.0`,
-    matching the current hogd-dev protocol. Each `groundhog-xdr` crate stamps a
+    matching the then-current hogd-dev protocol. Each `groundhog-xdr` crate stamps a
     `PROTOCOL_VERSION`:
 
     | source                                      | xdr                  | protocol            |
@@ -196,7 +196,7 @@ Maintenance rules:
     | sdk 0.13.0 (normal fresh resolution today)  | 0.9.4                | `hogp/850287355957` |
     | sdk_rs HEAD path checkout (0.14.0)          | 0.10.1               | `hogp/500463c1d97f` |
     | sdk 0.14.0 (published, template default)    | 0.12.0               | `hogp/830b7810ee93` |
-    | hogd-dev / groundhog-rpc current protocol   | 0.12.0               | `hogp/830b7810ee93` |
+    | hogd-dev / groundhog-rpc current protocol   | 0.13.6               | `hogp/020ed23d4e2f` |
 
     The protocol hash is the first 12 chars of the `protocol/`
     submodule git commit baked into hogd at build time
@@ -215,7 +215,8 @@ Maintenance rules:
        this class of break.
     2. *Protocol skew.* Even sdk 0.13.0's xdr 0.9.3 protocol
        (`hogp/e4a1ca88f0ca`) doesn't match the running hogd-dev
-       (`hogp/830b7810ee93`). A WASM compiled against the wrong
+       (`hogp/830b7810ee93` at the time; `hogp/020ed23d4e2f` currently).
+       A WASM compiled against the wrong
        protocol deploys cleanly but every call reverts with
        `deterministicError {kind: "unknown"}`. That protocol skew is
        resolved for default scaffolds by the `sdk 0.14.0` publish and
