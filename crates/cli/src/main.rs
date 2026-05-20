@@ -253,19 +253,25 @@ enum Command {
         profile: String,
     },
     /// Start an experimental local development node
-    #[command(long_about = "Start an experimental local development node \
+    #[command(
+        long_about = "Start an experimental local development node \
                       backed by a supervised hogd-dev process. The \
                       native_exec/test_ffi prototype backend is no longer \
-                      wired into this command.")]
+                      wired into this command.",
+        after_help = "Logging:\n  By default, groundhog node prints its own lifecycle/status output and keeps forwarded\n  hogd-dev info logs quiet. Use --verbose for the normal debugging view, or RUST_LOG\n  for exact tracing filters. --verbose is also honored with --json; logs stay on stderr.\n\nEnvironment:\n  GROUNDHOG_HOGD_DEV_BINARY  Default hogd-dev binary path when --hogd-dev-binary is omitted\n  RUST_LOG                    Overrides --verbose and controls supervisor/forwarded logs\n\nChild log bridge:\n  hogd-dev readiness is read from stdout. hogd-dev logs are requested as JSON on stderr,\n  parsed by node-supervisor, and re-emitted through tracing with hogd_timestamp_ms,\n  hogd_target, hogd_file, hogd_line, and hogd_fields metadata."
+    )]
     Node {
         /// Port to listen on
         #[arg(long, default_value = "9545")]
         port: u16,
+        /// Show forwarded hogd-dev info logs in addition to supervisor status
+        #[arg(long, short = 'v')]
+        verbose: bool,
         /// Deprecated: ignored by the hogd-dev backend
         #[arg(long, default_value = "10", hide = true)]
         accounts: usize,
         /// Explicit hogd-dev binary path
-        #[arg(long, hide = true)]
+        #[arg(long)]
         hogd_dev_binary: Option<std::path::PathBuf>,
         /// Override hogd protocol string for local cross-repo smoke tests
         #[arg(long, hide = true)]
@@ -547,11 +553,13 @@ fn main() {
             }),
         Command::Node {
             port,
+            verbose,
             accounts,
             hogd_dev_binary,
             hogd_protocol,
         } => groundhog_cli::node::run(
             port,
+            verbose,
             accounts,
             hogd_dev_binary,
             hogd_protocol,

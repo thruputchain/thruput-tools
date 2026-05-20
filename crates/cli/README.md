@@ -28,8 +28,8 @@ scripts/smoke-local-dx.sh
 ```
 
 The smoke scaffolds a counter project, builds the WASM, starts `groundhog node`,
-deploys, submits calls through `dev-0`, skips `groundhog view` until it exists,
-and performs a raw `groundhog storage` read for the counter's `value` slot.
+deploys, submits calls through `dev-0`, exercises `groundhog view`, and
+performs a raw `groundhog storage` read for the counter's `value` slot.
 
 Requires the nightly Rust toolchain (pinned via `rust-toolchain.toml`
 in generated projects).
@@ -176,7 +176,8 @@ target. The test process receives `GROUNDHOG_RPC_URL`,
 `GROUNDHOG_DEFAULT_KEY`. `--watch` and `--rerun` are intentionally
 deferred for this integration path.
 
-If `hogd-dev` is not on `PATH`, point the runner at the binary:
+If `hogd-dev` is not next to the `groundhog` binary or on `PATH`, point
+the runner at the binary:
 
 ```bash
 GROUNDHOG_HOGD_DEV_BINARY=/path/to/hogd-dev groundhog test --integration
@@ -277,11 +278,26 @@ building the CLI with the `dev-node` feature.
 groundhog node
 groundhog node --port 9546
 groundhog node --hogd-dev-binary /path/to/hogd-dev
+groundhog node -v
+RUST_LOG=groundhog_node_supervisor=debug,hogd_dev=debug groundhog node
 ```
 
 `groundhog node --json` emits the startup payload with `rpc_url`, hogd-dev
-backend planes, and endpoint metadata for scripting. Deterministic dev accounts
-return once hogd-dev has a dev-wallet bootstrap/control surface.
+backend planes, endpoint metadata, and the local dev-account surface for
+scripting. Stdout is reserved for this startup payload in JSON mode.
+Operational logs go to stderr, and `--verbose` is honored in JSON mode.
+
+The supervisor starts `hogd-dev` with `HOGD_LOG_FORMAT=json`, parses its
+newline-delimited stderr logs, and re-emits them through Rust `tracing`.
+Forwarded child logs carry `hogd_target`, `hogd_file`, `hogd_line`, and
+`hogd_fields` metadata, plus `hogd_timestamp_ms` when emitted by hogd-dev, so
+subsystem, source location, and child emission time survive the bridge.
+The default human-mode filter is intentionally quiet:
+`groundhog_node_supervisor=info`. Use `groundhog node --verbose` when you want
+the normal debugging view with forwarded hogd-dev info logs; `-v` is an alias.
+Use `RUST_LOG`
+only when you need exact filters or debug/trace-level output; if set,
+`RUST_LOG` overrides the `--verbose` preset.
 
 See `../../docs/cli/2026-04-25-hogd-dev-node-hybrid.md` for the
 durable backend direction.

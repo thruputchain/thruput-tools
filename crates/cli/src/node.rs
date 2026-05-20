@@ -19,18 +19,14 @@ use std::process::ExitStatus;
 #[cfg(feature = "dev-node")]
 pub fn run(
     port: u16,
+    verbose: bool,
     _account_count: usize,
     hogd_dev_binary: Option<PathBuf>,
     hogd_protocol: Option<String>,
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    let default_filter = if print.is_json() {
-        "groundhog_node_supervisor=warn"
-    } else {
-        "groundhog_node_supervisor=info"
-    };
-    init_tracing(default_filter);
+    init_tracing(default_tracing_filter(verbose, print.is_json()));
 
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
     rt.block_on(async {
@@ -291,6 +287,7 @@ fn map_node_supervisor_error(err: &groundhog_node_supervisor::NodeSupervisorErro
 #[cfg(not(feature = "dev-node"))]
 pub fn run(
     _port: u16,
+    _verbose: bool,
     _account_count: usize,
     _hogd_dev_binary: Option<std::path::PathBuf>,
     _hogd_protocol: Option<String>,
@@ -303,6 +300,17 @@ pub fn run(
          cargo install groundhog-cli --features dev-node"
             .into(),
     ))
+}
+
+#[cfg(feature = "dev-node")]
+fn default_tracing_filter(verbose: bool, json: bool) -> &'static str {
+    if verbose {
+        "groundhog_node_supervisor=info,hogd_dev=info"
+    } else if json {
+        "groundhog_node_supervisor=warn"
+    } else {
+        "groundhog_node_supervisor=info"
+    }
 }
 
 #[cfg(feature = "dev-node")]
@@ -377,7 +385,10 @@ fn hogd_dev_endpoints_payload(
 
 #[cfg(all(test, feature = "dev-node"))]
 mod tests {
-    use super::{LocalNodeOptions, LocalNodePidFile, hogd_dev_startup_payload, local_node_config};
+    use super::{
+        LocalNodeOptions, LocalNodePidFile, default_tracing_filter, hogd_dev_startup_payload,
+        local_node_config,
+    };
     use groundhog_node_supervisor::{BackendPlanes, PlaneStatus, parse_readiness_line};
     use std::path::PathBuf;
 
@@ -415,6 +426,26 @@ mod tests {
         .expect("bug: local node config should build");
 
         assert!(config.hogd_dev.pid_file.is_none());
+    }
+
+    #[test]
+    fn verbose_tracing_filter_is_honored_with_json_output() {
+        assert_eq!(
+            default_tracing_filter(true, true),
+            "groundhog_node_supervisor=info,hogd_dev=info"
+        );
+        assert_eq!(
+            default_tracing_filter(true, false),
+            "groundhog_node_supervisor=info,hogd_dev=info"
+        );
+        assert_eq!(
+            default_tracing_filter(false, true),
+            "groundhog_node_supervisor=warn"
+        );
+        assert_eq!(
+            default_tracing_filter(false, false),
+            "groundhog_node_supervisor=info"
+        );
     }
 
     #[test]

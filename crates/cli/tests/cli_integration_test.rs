@@ -602,6 +602,24 @@ fn test_help_mentions_target_dir() {
 }
 
 #[test]
+fn node_help_mentions_hogd_dev_binary_and_log_contract() {
+    let output = groundhog().args(["node", "--help"]).output().unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("-v, --verbose"));
+    assert!(stdout.contains("--verbose"));
+    assert!(stdout.contains("--verbose is also honored with --json"));
+    assert!(stdout.contains("--hogd-dev-binary"));
+    assert!(stdout.contains("GROUNDHOG_HOGD_DEV_BINARY"));
+    assert!(stdout.contains("RUST_LOG"));
+    assert!(stdout.contains("hogd_timestamp_ms"));
+    assert!(stdout.contains("hogd_target"));
+    assert!(stdout.contains("hogd_file"));
+    assert!(stdout.contains("hogd_line"));
+}
+
+#[test]
 fn deploy_help_mentions_target_dir_and_dry_run() {
     let output = groundhog().args(["deploy", "--help"]).output().unwrap();
 
