@@ -29,6 +29,7 @@ use groundhog_signing::{
 use groundhog_xdr::contract::ContractEntrypointID;
 use groundhog_xdr::types::ContractAddress;
 use hdrhistogram::Histogram;
+use tokio::io::AsyncReadExt;
 
 const SUPPORTED_DERIVATION_SCHEME: &str = "groundhog-bootstrap-account-v1";
 const MAX_RUNTIME_MANIFEST_BYTES: u64 = 1024 * 1024;
@@ -323,19 +324,16 @@ fn transaction_inputs_for_method(
 
 async fn load_runtime_manifest(path: &Path) -> Result<RuntimeManifest, BenchError> {
     let path_display = path.display().to_string();
-    let metadata = tokio::fs::metadata(path)
+    let file = tokio::fs::File::open(path)
         .await
         .map_err(|source| BenchError::ManifestRead {
             path: path_display.clone(),
             source,
         })?;
-    if metadata.len() > MAX_RUNTIME_MANIFEST_BYTES {
-        return Err(BenchError::ManifestTooLarge {
-            path: path_display,
-            max_bytes: MAX_RUNTIME_MANIFEST_BYTES,
-        });
-    }
-    let bytes = tokio::fs::read(path)
+    let mut bytes = Vec::new();
+    let mut reader = file.take(MAX_RUNTIME_MANIFEST_BYTES + 1);
+    reader
+        .read_to_end(&mut bytes)
         .await
         .map_err(|source| BenchError::ManifestRead {
             path: path_display.clone(),

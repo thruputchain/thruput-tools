@@ -12,7 +12,7 @@ pub const RUNTIME_MANIFEST_SCHEMA_VERSION: u32 = 1;
 
 /// Runtime manifest written by a backend after bootstrap is complete.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct RuntimeManifest {
     /// Version of this JSON contract.
@@ -39,7 +39,7 @@ pub struct RuntimeManifest {
 
 /// Runtime manifest producer metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct RuntimeManifestProducer {
     /// Executable name that wrote the manifest.
@@ -53,7 +53,7 @@ pub struct RuntimeManifestProducer {
 
 /// Advertised backend endpoints.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct RuntimeManifestEndpoints {
     /// Required mempool scheduler service.
@@ -83,7 +83,7 @@ pub struct RuntimeManifestEndpoints {
 
 /// Deterministic account derivation metadata shared by all bootstrap accounts.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct BootstrapAccountDerivation {
     /// Algorithm identifier for reproducing bootstrap account keys.
@@ -94,7 +94,7 @@ pub struct BootstrapAccountDerivation {
 
 /// Public bootstrap account metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct BootstrapAccount {
     /// Position passed to the derivation scheme.
@@ -111,7 +111,7 @@ pub struct BootstrapAccount {
 
 /// Runtime bootstrap metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct RuntimeManifestBootstrap {
     /// Wallet artifact installed during bootstrap.
@@ -122,7 +122,7 @@ pub struct RuntimeManifestBootstrap {
 
 /// Dev-wallet bootstrap artifact metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct RuntimeManifestDevWallet {
     /// Hash of the wallet artifact bytes.
@@ -139,7 +139,7 @@ pub struct RuntimeManifestDevWallet {
 
 /// Concrete storage cost model used at genesis.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct RuntimeManifestStorageCostModel {
     /// Hash over the deterministic version-tagged cost-model encoding.
@@ -325,18 +325,18 @@ mod tests {
     }
 
     #[test]
-    fn bootstrap_accounts_reject_private_keys() {
-        let err = serde_json::from_value::<BootstrapAccount>(json!({
+    fn runtime_manifest_ignores_unknown_additive_fields() {
+        let account = serde_json::from_value::<BootstrapAccount>(json!({
             "index": 0,
             "role": "local_user",
             "publicKey": prefixed_hex(0x61),
             "walletAddress": prefixed_hex(0x71),
             "initialStorageTokens": "1000000000",
-            "privateKey": prefixed_hex(0x81),
+            "producerAddedField": "ignored",
         }))
-        .expect_err("bug: private keys must not be accepted in runtime manifests");
+        .expect("bug: additive manifest fields should be ignored");
 
-        assert!(err.to_string().contains("unknown field"));
+        assert_eq!(account.index, 0);
     }
 
     fn addr(value: &str) -> SocketAddr {

@@ -459,14 +459,15 @@ fn parse_manifest_readiness_pointer(
 
     validate_manifest_hash_format(program, &pointer.manifest_hash)?;
     let manifest_path = pointer.manifest_path;
-    let manifest_hash = pointer.manifest_hash;
+    let advertised_manifest_hash = pointer.manifest_hash;
+    let manifest_hash = advertised_manifest_hash.to_ascii_lowercase();
     let manifest_bytes = read_runtime_manifest_bytes(program, &manifest_path)?;
     let actual_hash = sha256_hex(&manifest_bytes);
     if actual_hash != manifest_hash {
         return Err(NodeSupervisorError::RuntimeManifestHashMismatch {
             program: program.to_string(),
             path: manifest_path.display().to_string(),
-            expected: manifest_hash,
+            expected: advertised_manifest_hash,
             actual: actual_hash,
         });
     }
@@ -1530,6 +1531,25 @@ mod tests {
             err,
             NodeSupervisorError::RuntimeManifestHashMismatch { .. }
         ));
+    }
+
+    #[test]
+    fn readiness_manifest_hash_accepts_uppercase_hex_digits() {
+        let line = manifest_readiness_line(r#"{"scheduler":"127.0.0.1:12345"}"#, r"[]");
+        let mut pointer: serde_json::Value =
+            serde_json::from_str(&line).expect("bug: pointer line should parse");
+        let hash = pointer["manifestHash"]
+            .as_str()
+            .expect("bug: pointer has manifest hash")
+            .to_owned();
+        pointer["manifestHash"] =
+            serde_json::Value::String(format!("0x{}", hash[2..].to_uppercase()));
+        let line = serde_json::to_string(&pointer).expect("bug: pointer serializes");
+
+        let readiness = parse_readiness_line("hogd-dev", &line)
+            .expect("bug: uppercase manifest hash should parse");
+
+        assert_eq!(readiness.manifest_hash, Some(hash));
     }
 
     #[test]

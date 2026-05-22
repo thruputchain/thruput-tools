@@ -370,7 +370,7 @@ fn runtime_manifest_payload(
 ) -> serde_json::Value {
     match (&readiness.manifest_path, &readiness.manifest_hash) {
         (Some(path), Some(hash)) => json!({
-            "schemaVersion": 1,
+            "schemaVersion": groundhog_rpc_api_types::runtime_manifest::RUNTIME_MANIFEST_SCHEMA_VERSION,
             "path": path,
             "hash": hash,
         }),
