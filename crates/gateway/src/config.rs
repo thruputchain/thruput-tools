@@ -1,5 +1,7 @@
 use serde::Deserialize;
 
+use groundhog_rpc_api_types::runtime_manifest::RuntimeManifest;
+
 /// Backend used for transaction submission.
 ///
 /// This only affects `groundhog_sendRawTransaction`. Read paths still use
@@ -125,7 +127,10 @@ pub struct GatewayConfig {
     pub scheduler_address: String,
 
     /// x23 RPC address for hogd indexer.
-    pub indexer_address: String,
+    ///
+    /// Optional in runtime-manifest mode. When absent, read APIs backed by the
+    /// indexer return `BackendUnavailable`.
+    pub indexer_address: Option<String>,
 
     /// x23 RPC address for hogd `DbGateway1` (latest-snapshot reads).
     ///
@@ -190,7 +195,7 @@ impl Default for GatewayConfig {
             max_connections: 2000,
             submission_backend: SubmissionBackend::HogdScheduler,
             scheduler_address: "127.0.0.1:9000".into(),
-            indexer_address: "127.0.0.1:9001".into(),
+            indexer_address: Some("127.0.0.1:9001".into()),
             db_gateway_address: None,
             view_gateway_address: None,
             view_timeout_ms: 30_000,
@@ -204,5 +209,252 @@ impl Default for GatewayConfig {
             storage: AdaptiveBatchConfig::default(),
             tip: TipConfig::default(),
         }
+    }
+}
+
+impl GatewayConfig {
+    /// Overlay backend endpoint configuration from a runtime manifest.
+    pub fn apply_runtime_manifest(
+        &mut self,
+        manifest: &RuntimeManifest,
+    ) -> Result<(), RuntimeManifestConfigError> {
+        if manifest.schema_version
+            != groundhog_rpc_api_types::runtime_manifest::RUNTIME_MANIFEST_SCHEMA_VERSION
+        {
+            return Err(RuntimeManifestConfigError::UnsupportedSchemaVersion {
+                actual: manifest.schema_version,
+            });
+        }
+        let defaults = GatewayConfig::default();
+        let scheduler_address = manifest.endpoints.scheduler.to_string();
+        let indexer_address = manifest.endpoints.indexer.map(|addr| addr.to_string());
+        let db_gateway_address = manifest.endpoints.db_gateway.map(|addr| addr.to_string());
+        let view_gateway_address = manifest.endpoints.view_gateway.map(|addr| addr.to_string());
+        let hogd_protocol_override = Some(manifest.protocol.clone());
+
+        reject_manifest_conflict(
+            "scheduler_address",
+            &self.scheduler_address,
+            &defaults.scheduler_address,
+            &scheduler_address,
+        )?;
+        reject_manifest_conflict(
+            "indexer_address",
+            &self.indexer_address,
+            &defaults.indexer_address,
+            &indexer_address,
+        )?;
+        reject_manifest_conflict(
+            "db_gateway_address",
+            &self.db_gateway_address,
+            &defaults.db_gateway_address,
+            &db_gateway_address,
+        )?;
+        reject_manifest_conflict(
+            "view_gateway_address",
+            &self.view_gateway_address,
+            &defaults.view_gateway_address,
+            &view_gateway_address,
+        )?;
+        reject_manifest_conflict(
+            "hogd_protocol_override",
+            &self.hogd_protocol_override,
+            &defaults.hogd_protocol_override,
+            &hogd_protocol_override,
+        )?;
+
+        self.scheduler_address = scheduler_address;
+        self.indexer_address = indexer_address;
+        self.db_gateway_address = db_gateway_address;
+        self.view_gateway_address = view_gateway_address;
+        self.hogd_protocol_override = hogd_protocol_override;
+        Ok(())
+    }
+}
+
+fn reject_manifest_conflict<T>(
+    field: &'static str,
+    current: &T,
+    default: &T,
+    manifest: &T,
+) -> Result<(), RuntimeManifestConfigError>
+where
+    T: PartialEq,
+{
+    if current != default && current != manifest {
+        return Err(RuntimeManifestConfigError::TomlConflict { field });
+    }
+    Ok(())
+}
+
+/// Runtime manifest configuration error.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum RuntimeManifestConfigError {
+    /// The manifest uses a schema version this gateway does not understand.
+    #[error("unsupported runtime manifest schemaVersion {actual}")]
+    UnsupportedSchemaVersion {
+        /// Actual manifest schema version.
+        actual: u32,
+    },
+
+    /// The config file already set a backend field to a conflicting value.
+    #[error("runtime manifest conflicts with configured field `{field}`")]
+    TomlConflict {
+        /// Conflicting config field.
+        field: &'static str,
+    },
+}
+
+#[cfg(test)]
+mod tests {
+    use groundhog_rpc_api_types::{hex::Hex0x, runtime_manifest::RuntimeManifest};
+    use groundhog_xdr::types::SHA256Hash;
+    use serde_json::json;
+
+    use super::{GatewayConfig, RuntimeManifestConfigError};
+
+    #[test]
+    fn runtime_manifest_overlays_gateway_backend_endpoints() {
+        let mut config = GatewayConfig::default();
+        let manifest = manifest_with_endpoints(&json!({
+            "scheduler": "127.0.0.1:1000",
+            "indexer": "127.0.0.1:1001",
+            "dbGateway": "127.0.0.1:1002",
+            "viewGateway": "127.0.0.1:1003",
+        }));
+
+        config
+            .apply_runtime_manifest(&manifest)
+            .expect("bug: manifest should configure gateway");
+
+        assert_eq!(config.scheduler_address, "127.0.0.1:1000");
+        assert_eq!(config.indexer_address.as_deref(), Some("127.0.0.1:1001"));
+        assert_eq!(config.db_gateway_address.as_deref(), Some("127.0.0.1:1002"));
+        assert_eq!(
+            config.view_gateway_address.as_deref(),
+            Some("127.0.0.1:1003")
+        );
+        assert_eq!(config.hogd_protocol_override.as_deref(), Some("hogp/test"));
+    }
+
+    #[test]
+    fn runtime_manifest_can_omit_indexer_for_gateway() {
+        let mut config = GatewayConfig::default();
+        let manifest = manifest_with_endpoints(&json!({
+            "scheduler": "127.0.0.1:1000",
+        }));
+
+        config
+            .apply_runtime_manifest(&manifest)
+            .expect("bug: scheduler-only manifest should configure gateway");
+
+        assert_eq!(config.scheduler_address, "127.0.0.1:1000");
+        assert_eq!(config.indexer_address, None);
+        assert_eq!(config.db_gateway_address, None);
+        assert_eq!(config.view_gateway_address, None);
+        assert_eq!(config.hogd_protocol_override.as_deref(), Some("hogp/test"));
+    }
+
+    #[test]
+    fn runtime_manifest_rejects_unsupported_schema_version() {
+        let mut config = GatewayConfig::default();
+        let mut manifest = manifest_with_endpoints(&json!({
+            "scheduler": "127.0.0.1:1000",
+        }));
+        manifest.schema_version = 2;
+
+        let err = config
+            .apply_runtime_manifest(&manifest)
+            .expect_err("bug: unsupported schema should fail");
+
+        assert_eq!(
+            err,
+            RuntimeManifestConfigError::UnsupportedSchemaVersion { actual: 2 }
+        );
+    }
+
+    #[test]
+    fn runtime_manifest_conflicts_with_toml_endpoint_config() {
+        let mut config = GatewayConfig {
+            scheduler_address: "127.0.0.1:9999".into(),
+            ..GatewayConfig::default()
+        };
+        let manifest = manifest_with_endpoints(&json!({
+            "scheduler": "127.0.0.1:1000",
+        }));
+
+        let err = config
+            .apply_runtime_manifest(&manifest)
+            .expect_err("bug: conflicting scheduler should fail");
+
+        assert_eq!(
+            err,
+            RuntimeManifestConfigError::TomlConflict {
+                field: "scheduler_address",
+            }
+        );
+    }
+
+    #[test]
+    fn runtime_manifest_allows_matching_config_value() {
+        let mut config = GatewayConfig {
+            scheduler_address: "127.0.0.1:1000".into(),
+            ..GatewayConfig::default()
+        };
+        let manifest = manifest_with_endpoints(&json!({
+            "scheduler": "127.0.0.1:1000",
+        }));
+
+        config
+            .apply_runtime_manifest(&manifest)
+            .expect("bug: matching scheduler should not conflict");
+
+        assert_eq!(config.scheduler_address, "127.0.0.1:1000");
+    }
+
+    fn manifest_with_endpoints(endpoints: &serde_json::Value) -> RuntimeManifest {
+        serde_json::from_value(json!({
+            "schemaVersion": 1,
+            "kind": "hogd-dev-runtime",
+            "networkId": "groundhog-local",
+            "protocol": "hogp/test",
+            "genesisHash": hash(0x42),
+            "producer": {
+                "binary": "hogd-dev",
+                "version": "0.1.0",
+                "commitHash": "abcdef0",
+            },
+            "endpoints": endpoints,
+            "bootstrapAccountDerivation": {
+                "scheme": "groundhog-bootstrap-account-v1",
+                "seed": "groundhog-dev-accounts",
+            },
+            "bootstrapAccounts": [],
+            "bootstrap": {
+                "devWallet": {
+                    "contentHash": hash(0x51),
+                    "deployedCodeHash": hash(0x52),
+                    "artifactHint": "./dev-wallet.wasm",
+                    "deployEntrypoint": "0xadac498222148e4f",
+                    "doActionEntrypoint": "0x646f416374696f6e",
+                },
+                "storageCostModel": {
+                    "hash": hash(0x53),
+                    "baseDataItemCost": "12000",
+                    "bytestringCostPerByte": "10",
+                    "baseContractDeploymentCost": "12000",
+                    "contractDeploymentCostPerByte": "10",
+                    "authPerKeyCost": "1111",
+                    "rcqCostPerEntry": "8",
+                    "replayCacheCostPerEntry": "7",
+                    "balanceCost": "1234",
+                },
+            },
+        }))
+        .expect("bug: manifest JSON should parse")
+    }
+
+    fn hash(byte: u8) -> groundhog_rpc_api_types::SHA256Hash {
+        Hex0x(SHA256Hash::from([byte; 32]))
     }
 }

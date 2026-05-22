@@ -4,6 +4,7 @@ pub mod error;
 pub mod events;
 pub mod hex;
 pub mod receipt;
+pub mod runtime_manifest;
 pub mod state;
 pub mod transaction;
 pub mod version;

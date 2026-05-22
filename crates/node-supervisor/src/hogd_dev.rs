@@ -3,16 +3,23 @@
 use std::{
     env,
     ffi::OsString,
-    io,
+    fs::File,
+    io::{self, Read},
     net::SocketAddr,
     path::{Path, PathBuf},
     process::ExitStatus,
     time::Duration,
 };
 
-use groundhog_rpc_api_types::{ContractAddress, dev::DevAccount, hex::HexBytes};
+use groundhog_rpc_api_types::{
+    ContractAddress,
+    dev::DevAccount,
+    hex::HexBytes,
+    runtime_manifest::{RUNTIME_MANIFEST_SCHEMA_VERSION, RuntimeManifest},
+};
 use groundhog_signing::LocalSigner;
-use serde::Deserialize;
+use serde::{Deserialize, de::DeserializeOwned};
+use sha2::{Digest, Sha256};
 use tokio::{
     io::{AsyncBufRead, AsyncBufReadExt, BufReader},
     process::{ChildStderr, ChildStdout},
@@ -39,6 +46,9 @@ pub const MAX_READINESS_LINE_BYTES: usize = 64 * 1024;
 
 /// Maximum accepted hogd-dev stderr log line length.
 pub const MAX_LOG_LINE_BYTES: usize = 64 * 1024;
+
+/// Maximum accepted runtime manifest size.
+pub const MAX_RUNTIME_MANIFEST_BYTES: usize = 1024 * 1024;
 
 /// Ready endpoints exposed by hogd-dev.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -94,6 +104,15 @@ pub struct HogdDevReadiness {
     /// Public dev-account metadata advertised by hogd-dev.
     #[serde(default)]
     pub(crate) dev_accounts: Vec<HogdDevReadyAccount>,
+    /// Full runtime manifest loaded from the advertised readiness pointer.
+    #[serde(default)]
+    pub runtime_manifest: Option<RuntimeManifest>,
+    /// Runtime manifest file path advertised by hogd-dev readiness.
+    #[serde(default)]
+    pub manifest_path: Option<PathBuf>,
+    /// SHA-256 hash of the exact runtime manifest file bytes.
+    #[serde(default)]
+    pub manifest_hash: Option<String>,
 }
 
 impl HogdDevReadiness {
@@ -106,6 +125,15 @@ impl HogdDevReadiness {
             status: self.status,
         })
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct HogdDevReadinessPointer {
+    schema_version: u32,
+    status: String,
+    manifest_path: PathBuf,
+    manifest_hash: String,
 }
 
 /// Build RPC-facing dev accounts from hogd-dev readiness plus local signer derivation.
@@ -365,14 +393,356 @@ pub fn parse_readiness_line(
     program: &str,
     line: &str,
 ) -> Result<HogdDevReadiness, NodeSupervisorError> {
-    let readiness = serde_json::from_str::<HogdDevReadiness>(line).map_err(|source| {
-        NodeSupervisorError::InvalidReadinessJson {
+    let value: serde_json::Value = parse_readiness_str(program, line)?;
+
+    if has_manifest_pointer_fields(&value) {
+        let pointer: HogdDevReadinessPointer = parse_readiness_value(program, value, line)?;
+        return parse_manifest_readiness_pointer(program, pointer);
+    }
+
+    let readiness: HogdDevReadiness = parse_readiness_value(program, value, line)?;
+    readiness.ensure_ready(program)
+}
+
+fn parse_readiness_str<T>(program: &str, line: &str) -> Result<T, NodeSupervisorError>
+where
+    T: DeserializeOwned,
+{
+    serde_json::from_str(line).map_err(|source| NodeSupervisorError::InvalidReadinessJson {
+        program: program.to_string(),
+        line: line.to_string(),
+        source,
+    })
+}
+
+fn parse_readiness_value<T>(
+    program: &str,
+    value: serde_json::Value,
+    original_line: &str,
+) -> Result<T, NodeSupervisorError>
+where
+    T: DeserializeOwned,
+{
+    serde_json::from_value(value).map_err(|source| NodeSupervisorError::InvalidReadinessJson {
+        program: program.to_string(),
+        line: original_line.to_string(),
+        source,
+    })
+}
+
+fn has_manifest_pointer_fields(value: &serde_json::Value) -> bool {
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    object.contains_key("schemaVersion")
+        || object.contains_key("manifestPath")
+        || object.contains_key("manifestHash")
+}
+
+fn parse_manifest_readiness_pointer(
+    program: &str,
+    pointer: HogdDevReadinessPointer,
+) -> Result<HogdDevReadiness, NodeSupervisorError> {
+    if pointer.schema_version != RUNTIME_MANIFEST_SCHEMA_VERSION {
+        return Err(NodeSupervisorError::InvalidReadinessSchemaVersion {
             program: program.to_string(),
-            line: line.to_string(),
+            expected: RUNTIME_MANIFEST_SCHEMA_VERSION,
+            actual: pointer.schema_version,
+        });
+    }
+    if pointer.status != "ready" {
+        return Err(NodeSupervisorError::InvalidReadinessStatus {
+            program: program.to_string(),
+            status: pointer.status,
+        });
+    }
+
+    validate_manifest_hash_format(program, &pointer.manifest_hash)?;
+    let manifest_path = pointer.manifest_path;
+    let manifest_hash = pointer.manifest_hash;
+    let manifest_bytes = read_runtime_manifest_bytes(program, &manifest_path)?;
+    let actual_hash = sha256_hex(&manifest_bytes);
+    if actual_hash != manifest_hash {
+        return Err(NodeSupervisorError::RuntimeManifestHashMismatch {
+            program: program.to_string(),
+            path: manifest_path.display().to_string(),
+            expected: manifest_hash,
+            actual: actual_hash,
+        });
+    }
+
+    let manifest: RuntimeManifest = serde_json::from_slice(&manifest_bytes).map_err(|source| {
+        NodeSupervisorError::InvalidRuntimeManifest {
+            program: program.to_string(),
+            reason: source.to_string(),
+        }
+    })?;
+    readiness_from_runtime_manifest(program, manifest, manifest_path, actual_hash)
+}
+
+fn read_runtime_manifest_bytes(
+    program: &str,
+    manifest_path: &Path,
+) -> Result<Vec<u8>, NodeSupervisorError> {
+    if !manifest_path.is_absolute() {
+        return Err(NodeSupervisorError::RuntimeManifestUnsafePermissions {
+            program: program.to_string(),
+            path: manifest_path.display().to_string(),
+            reason: "manifestPath must be absolute".to_string(),
+        });
+    }
+
+    validate_manifest_parent_dir(program, manifest_path)?;
+    let file = open_runtime_manifest_file(program, manifest_path)?;
+    read_capped_runtime_manifest(program, manifest_path, file)
+}
+
+fn read_capped_runtime_manifest(
+    program: &str,
+    manifest_path: &Path,
+    file: File,
+) -> Result<Vec<u8>, NodeSupervisorError> {
+    let mut bytes = Vec::new();
+    let mut reader = file.take((MAX_RUNTIME_MANIFEST_BYTES + 1) as u64);
+    reader
+        .read_to_end(&mut bytes)
+        .map_err(|source| NodeSupervisorError::RuntimeManifestRead {
+            program: program.to_string(),
+            path: manifest_path.display().to_string(),
+            source,
+        })?;
+    if bytes.len() > MAX_RUNTIME_MANIFEST_BYTES {
+        return Err(NodeSupervisorError::InvalidRuntimeManifest {
+            program: program.to_string(),
+            reason: format!("runtime manifest exceeds {MAX_RUNTIME_MANIFEST_BYTES} bytes"),
+        });
+    }
+    Ok(bytes)
+}
+
+#[cfg(unix)]
+fn validate_manifest_parent_dir(
+    program: &str,
+    manifest_path: &Path,
+) -> Result<(), NodeSupervisorError> {
+    use std::os::unix::fs::MetadataExt;
+
+    let parent = manifest_path.parent().ok_or_else(|| {
+        NodeSupervisorError::RuntimeManifestUnsafePermissions {
+            program: program.to_string(),
+            path: manifest_path.display().to_string(),
+            reason: "manifestPath has no parent directory".to_string(),
+        }
+    })?;
+    let metadata = std::fs::symlink_metadata(parent).map_err(|source| {
+        NodeSupervisorError::RuntimeManifestRead {
+            program: program.to_string(),
+            path: parent.display().to_string(),
             source,
         }
     })?;
-    readiness.ensure_ready(program)
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
+        return Err(NodeSupervisorError::RuntimeManifestUnsafePermissions {
+            program: program.to_string(),
+            path: parent.display().to_string(),
+            reason: "manifest parent must be a directory, not a symlink".to_string(),
+        });
+    }
+    let expected_uid = unsafe { libc::geteuid() };
+    if metadata.uid() != expected_uid {
+        return Err(NodeSupervisorError::RuntimeManifestUnsafePermissions {
+            program: program.to_string(),
+            path: parent.display().to_string(),
+            reason: format!(
+                "manifest parent uid {} does not match current uid {expected_uid}",
+                metadata.uid()
+            ),
+        });
+    }
+    let mode = metadata.mode() & 0o777;
+    if mode & 0o077 != 0 {
+        return Err(NodeSupervisorError::RuntimeManifestUnsafePermissions {
+            program: program.to_string(),
+            path: parent.display().to_string(),
+            reason: format!("manifest parent mode {mode:03o} permits group or other access"),
+        });
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn validate_manifest_parent_dir(
+    _program: &str,
+    _manifest_path: &Path,
+) -> Result<(), NodeSupervisorError> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn open_runtime_manifest_file(
+    program: &str,
+    manifest_path: &Path,
+) -> Result<File, NodeSupervisorError> {
+    use std::{
+        fs::OpenOptions,
+        mem::MaybeUninit,
+        os::{fd::AsRawFd, unix::fs::OpenOptionsExt},
+    };
+
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(manifest_path)
+        .map_err(|source| {
+            if source.raw_os_error() == Some(libc::ELOOP) {
+                return NodeSupervisorError::RuntimeManifestUnsafePermissions {
+                    program: program.to_string(),
+                    path: manifest_path.display().to_string(),
+                    reason: "manifestPath must not be a symlink".to_string(),
+                };
+            }
+            NodeSupervisorError::RuntimeManifestRead {
+                program: program.to_string(),
+                path: manifest_path.display().to_string(),
+                source,
+            }
+        })?;
+
+    let mut stat = MaybeUninit::<libc::stat>::uninit();
+    let rc = unsafe { libc::fstat(file.as_raw_fd(), stat.as_mut_ptr()) };
+    if rc != 0 {
+        return Err(NodeSupervisorError::RuntimeManifestRead {
+            program: program.to_string(),
+            path: manifest_path.display().to_string(),
+            source: io::Error::last_os_error(),
+        });
+    }
+    let stat = unsafe { stat.assume_init() };
+    let mode = stat.st_mode & 0o777;
+    let expected_uid = unsafe { libc::geteuid() };
+    if stat.st_uid != expected_uid {
+        return Err(NodeSupervisorError::RuntimeManifestUnsafePermissions {
+            program: program.to_string(),
+            path: manifest_path.display().to_string(),
+            reason: format!(
+                "manifest uid {} does not match current uid {expected_uid}",
+                stat.st_uid
+            ),
+        });
+    }
+    if mode & 0o077 != 0 {
+        return Err(NodeSupervisorError::RuntimeManifestUnsafePermissions {
+            program: program.to_string(),
+            path: manifest_path.display().to_string(),
+            reason: format!("manifest mode {mode:03o} permits group or other access"),
+        });
+    }
+
+    let metadata = file
+        .metadata()
+        .map_err(|source| NodeSupervisorError::RuntimeManifestRead {
+            program: program.to_string(),
+            path: manifest_path.display().to_string(),
+            source,
+        })?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+        return Err(NodeSupervisorError::RuntimeManifestUnsafePermissions {
+            program: program.to_string(),
+            path: manifest_path.display().to_string(),
+            reason: "manifest must be a regular file, not a symlink".to_string(),
+        });
+    }
+
+    Ok(file)
+}
+
+#[cfg(not(unix))]
+fn open_runtime_manifest_file(
+    program: &str,
+    manifest_path: &Path,
+) -> Result<File, NodeSupervisorError> {
+    File::open(manifest_path).map_err(|source| NodeSupervisorError::RuntimeManifestRead {
+        program: program.to_string(),
+        path: manifest_path.display().to_string(),
+        source,
+    })
+}
+
+fn readiness_from_runtime_manifest(
+    program: &str,
+    manifest: RuntimeManifest,
+    manifest_path: PathBuf,
+    manifest_hash: String,
+) -> Result<HogdDevReadiness, NodeSupervisorError> {
+    if manifest.schema_version != RUNTIME_MANIFEST_SCHEMA_VERSION {
+        return Err(NodeSupervisorError::InvalidRuntimeManifest {
+            program: program.to_string(),
+            reason: format!(
+                "expected schemaVersion {}, got {}",
+                RUNTIME_MANIFEST_SCHEMA_VERSION, manifest.schema_version
+            ),
+        });
+    }
+
+    let dev_accounts = manifest
+        .bootstrap_accounts
+        .iter()
+        .map(|account| {
+            let initial_storage_tokens =
+                account
+                    .initial_storage_tokens
+                    .parse::<u64>()
+                    .map_err(|source| NodeSupervisorError::InvalidRuntimeManifest {
+                        program: program.to_string(),
+                        reason: format!(
+                            "bootstrap account {} initialStorageTokens is not a u64: {source}",
+                            account.index
+                        ),
+                    })?;
+            Ok(HogdDevReadyAccount {
+                index: account.index,
+                address: account.wallet_address,
+                public_key: HexBytes(account.public_key.as_ref().to_vec()),
+                initial_storage_tokens,
+            })
+        })
+        .collect::<Result<Vec<_>, NodeSupervisorError>>()?;
+
+    Ok(HogdDevReadiness {
+        status: "ready".to_string(),
+        network_id: manifest.network_id.clone(),
+        endpoints: HogdDevEndpoints {
+            scheduler_coord: manifest.endpoints.scheduler,
+            indexer_block_explorer: manifest.endpoints.indexer,
+            db_gateway: manifest.endpoints.db_gateway,
+            view_gateway: manifest.endpoints.view_gateway,
+            dev_control: None,
+        },
+        dev_accounts,
+        runtime_manifest: Some(manifest),
+        manifest_path: Some(manifest_path),
+        manifest_hash: Some(manifest_hash),
+    })
+}
+
+fn validate_manifest_hash_format(program: &str, hash: &str) -> Result<(), NodeSupervisorError> {
+    let Some(hex) = hash.strip_prefix("0x") else {
+        return Err(NodeSupervisorError::InvalidRuntimeManifestHash {
+            program: program.to_string(),
+            hash: hash.to_string(),
+        });
+    };
+    if hex.len() == 64 && hex.as_bytes().iter().all(u8::is_ascii_hexdigit) {
+        return Ok(());
+    }
+    Err(NodeSupervisorError::InvalidRuntimeManifestHash {
+        program: program.to_string(),
+        hash: hash.to_string(),
+    })
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    format!("0x{}", hex::encode(Sha256::digest(bytes)))
 }
 
 fn validate_dev_account_count(expected: usize, actual: usize) -> Result<(), NodeSupervisorError> {
@@ -892,7 +1262,6 @@ mod tests {
         test_support::{FAKE_HOGD_DEV_MODE_ENV, fake_hogd_dev_binary},
     };
 
-    const READY: &str = r#"{"status":"ready","network_id":"groundhog-local","endpoints":{"scheduler_coord":"127.0.0.1:12345","indexer_block_explorer":"127.0.0.1:12346","db_gateway":"127.0.0.1:12347","view_gateway":"127.0.0.1:12348","dev_control":"127.0.0.1:12349"}}"#;
     const V1_READY: &str = r#"{"status":"ready","network_id":"groundhog-local","endpoints":{"scheduler_coord":"127.0.0.1:12345"}}"#;
     const COMPACT_READY: &str = r#"{"status":"ready","network_id":"groundhog-local","endpoints":{"scheduler":"127.0.0.1:12345","read":"127.0.0.1:12346","gateway":"127.0.0.1:12347","view":"127.0.0.1:12348"}}"#;
 
@@ -1017,11 +1386,39 @@ mod tests {
 
     #[test]
     fn readiness_line_parses_endpoint_addresses() {
+        let line = manifest_readiness_line(
+            r#"{
+              "scheduler":"127.0.0.1:12345",
+              "indexer":"127.0.0.1:12346",
+              "dbGateway":"127.0.0.1:12347",
+              "viewGateway":"127.0.0.1:12348"
+            }"#,
+            r"[]",
+        );
+        let pointer: serde_json::Value =
+            serde_json::from_str(&line).expect("bug: pointer line should parse");
+        let pointer_keys = pointer
+            .as_object()
+            .expect("bug: pointer should be an object")
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            sorted(pointer_keys),
+            sorted(["manifestHash", "manifestPath", "schemaVersion", "status"])
+        );
+
         let readiness =
-            parse_readiness_line("hogd-dev", READY).expect("bug: readiness payload should parse");
+            parse_readiness_line("hogd-dev", &line).expect("bug: readiness payload should parse");
 
         assert_eq!(readiness.status, "ready");
         assert_eq!(readiness.network_id, "groundhog-local");
+        assert_eq!(
+            readiness.manifest_hash,
+            pointer["manifestHash"].as_str().map(str::to_owned)
+        );
+        assert!(readiness.manifest_path.is_some());
+        assert!(readiness.runtime_manifest.is_some());
         assert_eq!(
             readiness.endpoints.scheduler_coord,
             "127.0.0.1:12345"
@@ -1036,14 +1433,7 @@ mod tests {
                     .expect("bug: address should parse")
             )
         );
-        assert_eq!(
-            readiness.endpoints.dev_control,
-            Some(
-                "127.0.0.1:12349"
-                    .parse()
-                    .expect("bug: address should parse")
-            )
-        );
+        assert_eq!(readiness.endpoints.dev_control, None);
         assert_eq!(
             readiness.endpoints.db_gateway,
             Some(
@@ -1064,7 +1454,8 @@ mod tests {
 
     #[test]
     fn readiness_line_accepts_v1_scheduler_only_endpoint() {
-        let readiness = parse_readiness_line("hogd-dev", V1_READY)
+        let line = manifest_readiness_line(r#"{"scheduler":"127.0.0.1:12345"}"#, r"[]");
+        let readiness = parse_readiness_line("hogd-dev", &line)
             .expect("bug: v1 readiness payload should parse");
 
         assert_eq!(readiness.status, "ready");
@@ -1119,17 +1510,151 @@ mod tests {
     }
 
     #[test]
+    fn readiness_manifest_hash_mismatch_is_rejected() {
+        let line = manifest_readiness_line(r#"{"scheduler":"127.0.0.1:12345"}"#, r"[]");
+        let mut pointer: serde_json::Value =
+            serde_json::from_str(&line).expect("bug: pointer line should parse");
+        let path = PathBuf::from(
+            pointer["manifestPath"]
+                .as_str()
+                .expect("bug: pointer has manifest path"),
+        );
+        fs::write(&path, b"tampered").expect("bug: manifest should be writable");
+        pointer["manifestHash"] = serde_json::Value::String(super::sha256_hex(b"original"));
+        let line = serde_json::to_string(&pointer).expect("bug: pointer serializes");
+
+        let err = parse_readiness_line("hogd-dev", &line)
+            .expect_err("bug: manifest hash mismatch should fail");
+
+        assert!(matches!(
+            err,
+            NodeSupervisorError::RuntimeManifestHashMismatch { .. }
+        ));
+    }
+
+    #[test]
+    fn readiness_manifest_rejects_group_or_world_permissions() {
+        let line = manifest_readiness_line(r#"{"scheduler":"127.0.0.1:12345"}"#, r"[]");
+        let pointer: serde_json::Value =
+            serde_json::from_str(&line).expect("bug: pointer line should parse");
+        let path = PathBuf::from(
+            pointer["manifestPath"]
+                .as_str()
+                .expect("bug: pointer has manifest path"),
+        );
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644))
+            .expect("bug: permissions should be set");
+
+        let err = parse_readiness_line("hogd-dev", &line)
+            .expect_err("bug: unsafe manifest permissions should fail");
+
+        assert!(matches!(
+            err,
+            NodeSupervisorError::RuntimeManifestUnsafePermissions { .. }
+        ));
+    }
+
+    #[test]
+    fn readiness_manifest_rejects_symlink_path() {
+        let line = manifest_readiness_line(r#"{"scheduler":"127.0.0.1:12345"}"#, r"[]");
+        let mut pointer: serde_json::Value =
+            serde_json::from_str(&line).expect("bug: pointer line should parse");
+        let path = PathBuf::from(
+            pointer["manifestPath"]
+                .as_str()
+                .expect("bug: pointer has manifest path"),
+        );
+        let symlink_path = path.with_file_name("runtime-manifest-link.json");
+        std::os::unix::fs::symlink(&path, &symlink_path).expect("bug: symlink should be created");
+        pointer["manifestPath"] = serde_json::Value::String(symlink_path.display().to_string());
+        let line = serde_json::to_string(&pointer).expect("bug: pointer serializes");
+
+        let err = parse_readiness_line("hogd-dev", &line)
+            .expect_err("bug: symlink manifest path should fail");
+
+        assert!(matches!(
+            err,
+            NodeSupervisorError::RuntimeManifestUnsafePermissions { .. }
+        ));
+    }
+
+    #[test]
+    fn readiness_manifest_rejects_relative_path() {
+        let line = manifest_readiness_line(r#"{"scheduler":"127.0.0.1:12345"}"#, r"[]");
+        let mut pointer: serde_json::Value =
+            serde_json::from_str(&line).expect("bug: pointer line should parse");
+        pointer["manifestPath"] = serde_json::Value::String("runtime-manifest.json".into());
+        let line = serde_json::to_string(&pointer).expect("bug: pointer serializes");
+
+        let err = parse_readiness_line("hogd-dev", &line)
+            .expect_err("bug: relative manifest path should fail");
+
+        assert!(matches!(
+            err,
+            NodeSupervisorError::RuntimeManifestUnsafePermissions { .. }
+        ));
+    }
+
+    #[test]
+    fn manifest_pointer_fields_do_not_fall_back_to_legacy_readiness() {
+        let line = format!(
+            r#"{{"schemaVersion":1,"status":"ready","manifestPath":"/tmp/missing","manifestHash":"{}","network_id":"groundhog-local","endpoints":{{"scheduler_coord":"127.0.0.1:12345"}}}}"#,
+            super::sha256_hex(b"missing"),
+        );
+
+        let err = parse_readiness_line("hogd-dev", &line)
+            .expect_err("bug: mixed pointer and legacy readiness should fail");
+
+        assert!(matches!(
+            err,
+            NodeSupervisorError::InvalidReadinessJson { .. }
+        ));
+    }
+
+    #[test]
+    fn full_runtime_manifest_uses_canonical_endpoint_names() {
+        let line = manifest_readiness_line(
+            r#"{
+              "scheduler":"127.0.0.1:12345",
+              "indexer":"127.0.0.1:12346",
+              "dbGateway":"127.0.0.1:12347",
+              "viewGateway":"127.0.0.1:12348"
+            }"#,
+            r"[]",
+        );
+        let pointer: serde_json::Value =
+            serde_json::from_str(&line).expect("bug: pointer line should parse");
+        let manifest_path = pointer["manifestPath"]
+            .as_str()
+            .expect("bug: pointer has manifest path");
+        let manifest: serde_json::Value = serde_json::from_slice(
+            &fs::read(manifest_path).expect("bug: manifest should be readable"),
+        )
+        .expect("bug: manifest should parse");
+        let endpoint_keys = manifest["endpoints"]
+            .as_object()
+            .expect("bug: endpoints should be object")
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            sorted(endpoint_keys),
+            sorted(["dbGateway", "indexer", "scheduler", "viewGateway"])
+        );
+    }
+
+    #[test]
     fn readiness_line_parses_dev_accounts() {
         let signer = groundhog_signing::derive_default_dev_account_signer(0);
-        let readiness = parse_readiness_line(
-            "hogd-dev",
-            &format!(
-                r#"{{"status":"ready","network_id":"groundhog-local","endpoints":{{"scheduler_coord":"127.0.0.1:12345"}},"dev_accounts":[{{"index":0,"address":"0x{}","public_key":"0x{}","initial_storage_tokens":1000000000}}]}}"#,
-                "11".repeat(32),
-                hex::encode(signer.verifying_key_bytes()),
-            ),
-        )
-        .expect("bug: readiness payload should parse");
+        let accounts = format!(
+            r#"[{{"index":0,"role":"local_user","walletAddress":"0x{}","publicKey":"0x{}","initialStorageTokens":"1000000000"}}]"#,
+            "11".repeat(32),
+            hex::encode(signer.verifying_key_bytes()),
+        );
+        let line = manifest_readiness_line(r#"{"scheduler":"127.0.0.1:12345"}"#, &accounts);
+        let readiness =
+            parse_readiness_line("hogd-dev", &line).expect("bug: readiness payload should parse");
 
         let config = HogdDevConfig::default().with_dev_account_count(1);
         let accounts = build_dev_accounts(&readiness, &config)
@@ -1254,6 +1779,9 @@ mod tests {
             .expect("bug: fake hogd-dev should start");
 
         assert_eq!(process.readiness().network_id, "groundhog-local");
+        assert!(process.readiness().manifest_path.is_some());
+        assert!(process.readiness().manifest_hash.is_some());
+        assert!(process.readiness().runtime_manifest.is_some());
 
         let status = process.stop().await.expect("bug: fake child should stop");
         assert!(status.success());
@@ -1402,6 +1930,72 @@ mod tests {
             .expect("bug: system time should be after epoch")
             .as_nanos();
         env::temp_dir().join(format!("missing-hogd-dev-{unique}"))
+    }
+
+    fn manifest_readiness_line(endpoints: &str, accounts: &str) -> String {
+        let tmp = TempDir::new().expect("bug: temp dir should be created");
+        let manifest_dir = tmp.keep();
+        fs::set_permissions(&manifest_dir, fs::Permissions::from_mode(0o700))
+            .expect("bug: manifest dir permissions should be set");
+        let manifest_path = manifest_dir.join("runtime-manifest.json");
+        let manifest = format!(
+            r#"{{
+              "schemaVersion":1,
+              "kind":"hogd-dev-runtime",
+              "networkId":"groundhog-local",
+              "protocol":"hogp/test",
+              "genesisHash":"0x{}",
+              "producer":{{"binary":"hogd-dev","version":"0.1.0","commitHash":"abcdef0"}},
+              "endpoints":{endpoints},
+              "bootstrapAccountDerivation":{{
+                "scheme":"groundhog-bootstrap-account-v1",
+                "seed":"groundhog-dev-accounts"
+              }},
+              "bootstrapAccounts":{accounts},
+              "bootstrap":{{
+                "devWallet":{{
+                  "contentHash":"0x{}",
+                  "deployedCodeHash":"0x{}",
+                  "artifactHint":"./dev-wallet.wasm",
+                  "deployEntrypoint":"0xadac498222148e4f",
+                  "doActionEntrypoint":"0x646f416374696f6e"
+                }},
+                "storageCostModel":{{
+                  "hash":"0x{}",
+                  "baseDataItemCost":"12000",
+                  "bytestringCostPerByte":"10",
+                  "baseContractDeploymentCost":"12000",
+                  "contractDeploymentCostPerByte":"10",
+                  "authPerKeyCost":"1111",
+                  "rcqCostPerEntry":"8",
+                  "replayCacheCostPerEntry":"7",
+                  "balanceCost":"1234"
+                }}
+              }}
+            }}"#,
+            "42".repeat(32),
+            "51".repeat(32),
+            "52".repeat(32),
+            "53".repeat(32),
+        );
+        fs::write(&manifest_path, manifest.as_bytes()).expect("bug: manifest should be written");
+        fs::set_permissions(&manifest_path, fs::Permissions::from_mode(0o600))
+            .expect("bug: manifest permissions should be set");
+        format!(
+            r#"{{"schemaVersion":1,"status":"ready","manifestPath":"{}","manifestHash":"{}"}}"#,
+            manifest_path.display(),
+            super::sha256_hex(manifest.as_bytes()),
+        )
+    }
+
+    fn sorted<I, S>(values: I) -> Vec<String>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let mut values = values.into_iter().map(Into::into).collect::<Vec<_>>();
+        values.sort();
+        values
     }
 
     struct EnvGuard {

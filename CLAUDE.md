@@ -8,7 +8,8 @@ gateway, typed client, transaction building, key management, and CLI.
 Workspace crates in `crates/`:
 
 - **api-types** — shared RPC types (receipt, status, block info, events,
-  errors). Consumed by gateway, client, CLI, and external tools.
+  errors) plus the runtime manifest JSON contract used by local and
+  benchmark backends. Consumed by gateway, client, CLI, and external tools.
 - **rpc-api** — shared jsonrpsee trait definitions used by the gateway,
   local node, and client crate.
 - **rpc-server** — reusable server-side `GroundhogApiServer`
@@ -21,7 +22,9 @@ Workspace crates in `crates/`:
   the x23 wire protocol to keep it distinct from the JSON-RPC `rpc-*`
   family of crates.
 - **gateway** — jsonrpsee server binary. Its backend adapter implements
-  the rpc-server planes over hogd indexer and scheduler x23 RPCs.
+  the rpc-server planes over hogd indexer and scheduler x23 RPCs. For
+  dev/bench runs it can load backend endpoints and protocol metadata
+  from `--runtime-manifest <path>`.
 - **client** — typed JSON-RPC client generated from the same
   `#[rpc(client)]` trait as the server. Wraps api-types.
 - **signing** — off-chain transaction signing and construction. Signer
@@ -44,6 +47,9 @@ Workspace crates in `crates/`:
   full event-feed wiring. This is the only CLI local-node backend; the
   legacy native-exec prototype (`crates/dev-node`) was deleted in PR 5,
   with the git history retaining the source for any future reference.
+  Startup consumes hogd-dev's readiness pointer, verifies the runtime
+  manifest hash and owner-only file permissions, and exposes the manifest
+  path/hash in `groundhog node --json`.
 - **open-rpc** — OpenRPC document generator. `Project` owns a single
   `schemars::SchemaGenerator` shared across modules so named Rust types
   land once in `components.schemas` and use sites carry `$ref`.
@@ -64,10 +70,14 @@ Workspace crates in `crates/`:
   `crates/open-rpc-spec/snapshots/groundhog-spec.json` guards artifact
   shape; `UPDATE_SNAPSHOTS=1` regenerates after intentional changes.
 - **e2e-tests** — ignored process-level JSON-RPC lifecycle smoke tests.
-- **bench** — benchmark harnesses.
+- **bench** — benchmark harnesses. `groundhog-bench --runtime-manifest
+  <path>` derives bootstrapped account signers and submits dev-wallet
+  compatible `sendRawTransaction` traffic.
 
 See `docs/gateway/system-design.md` for full gateway design and
 `docs/gateway/api-sketch.md` for the jsonrpsee trait definition.
+See `docs/gateway/runtime-manifest.md` for the local
+CLI/gateway/bench startup handoff.
 
 ### Gateway Data Flows
 
@@ -105,6 +115,13 @@ runtime), `tower`/`tower-http` (middleware), `clap` (CLI), `prometheus`
   of XDR types. If the JSON wire format differs from raw XDR (for
   example `0x`-prefixed hex wrappers), model that once here instead of
   redefining it in gateway, client, or CLI code.
+- `crates/api-types/src/runtime_manifest.rs` owns the runtime manifest
+  schema shared by `hogd-dev` producers, `groundhog node`,
+  `groundhog-rpc --runtime-manifest`, and `groundhog-bench
+  --runtime-manifest`. Public manifest structs are `#[non_exhaustive]`;
+  additive fields are expected. Optional endpoints must be absent when
+  unavailable, not `null`. Large numeric quantities in the manifest are
+  decimal strings.
 - `crates/rpc-api` owns JSON-RPC method names, params, and results.
   Trait signatures in `rpc-api/src/lib.rs` are the sole source of
   truth for the public RPC surface.
@@ -141,6 +158,34 @@ cargo test -p groundhog-rpc-api-types    # test a specific crate
 cargo test -p groundhog-cli              # CLI tests
 ```
 
+### Runtime Manifest Smoke
+
+Use this for the local gateway/bench path once a real `hogd-dev` binary
+is available:
+
+```bash
+HOGD_DEV_BINARY=/path/to/hogd-dev scripts/smoke-runtime-manifest-bench.sh
+```
+
+The script starts `groundhog node`, reads `data.runtime_manifest.path`
+from the CLI startup JSON, runs `groundhog-bench` against the CLI node,
+starts `groundhog-rpc --runtime-manifest <path>`, and runs the same
+bench checks against the standalone gateway. `BENCH_RATE`,
+`BENCH_DURATION`, and `BENCH_ACCOUNTS` can tune the run.
+Use `BENCH_SCENARIO=gateway-baseline` or `BENCH_SCENARIO=submit-ramp`
+for the repeatable local benchmark scenarios documented in
+`docs/gateway/bench-scenarios.md`.
+
+The broader local-DX smoke remains:
+
+```bash
+HOGD_DEV_BINARY=/path/to/hogd-dev scripts/smoke-local-dx.sh
+```
+
+With `SMOKE_STANDALONE_GATEWAY=1`, that script also starts the standalone
+gateway from the runtime manifest; do not rehydrate gateway TOML by hand
+from individual endpoint fields unless you are testing config overrides.
+
 ### Running the CLI locally
 
 ```bash
@@ -157,12 +202,25 @@ cargo run -p groundhog-cli -- keys generate alice
 cargo run -p groundhog-cli -- keys ls
 # Experimental local node backed by hogd-dev (Cargo feature is still dev-node)
 cargo run -p groundhog-cli --features dev-node -- node --hogd-dev-binary /path/to/hogd-dev
+# Machine-readable startup metadata includes data.rpc_url and
+# data.runtime_manifest.path/hash.
+cargo run -p groundhog-cli --features dev-node -- --json node --hogd-dev-binary /path/to/hogd-dev
 # Typical local loop
 # 1. cargo run -p groundhog-cli -- new my-counter && cd my-counter
 # 2. cargo run -p groundhog-cli -- build
 # 3. cargo run -p groundhog-cli --features dev-node -- node --hogd-dev-binary /path/to/hogd-dev  # separate terminal
 # 4. cargo run -p groundhog-cli -- deploy
 # 5. cargo run -p groundhog-cli -- call my-counter get
+```
+
+For manual gateway/bench runs, start `groundhog node --json`, extract
+`data.runtime_manifest.path`, then pass it to both consumers:
+
+```bash
+groundhog-rpc --runtime-manifest "$RUNTIME_MANIFEST" --listen 127.0.0.1:9546
+groundhog-bench --url http://127.0.0.1:9546 \
+  --runtime-manifest "$RUNTIME_MANIFEST" \
+  --method sendRawTransaction
 ```
 
 ## Code Style
@@ -435,6 +493,11 @@ history retains the design context for anything not currently active.
   transaction detail / receipt response shape.
 - `docs/gateway/roadmap.md` — gateway backlog and sequencing.
 - `docs/gateway/system-design.md` — gateway architecture.
+- `docs/gateway/runtime-manifest.md` — runtime manifest quickstart for
+  CLI, gateway, and benchmark runs.
+- `docs/gateway/examples/runtime-manifest.hogd-dev.example.json` —
+  example v1 runtime manifest shape. It is not runnable because endpoint
+  ports, genesis hash, wallet addresses, and hashes are runtime state.
 - `docs/gateway/open-questions.md` — cross-team open and resolved
   questions for the gateway design.
 - `docs/cli/foundry.md` — Foundry DX analysis for CLI design reference.

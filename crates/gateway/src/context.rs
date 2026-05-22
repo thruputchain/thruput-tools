@@ -93,15 +93,18 @@ impl GatewayContext {
             .await?,
         ));
 
-        let indexer = Arc::new(RwLock::new(
-            try_connect(
-                "indexer",
-                &config.indexer_address,
-                4,
-                IndexerBlockExplorer_IndexerBlockExplorer1_Client::new,
-            )
-            .await?,
-        ));
+        let indexer = Arc::new(RwLock::new(match &config.indexer_address {
+            Some(addr) => {
+                try_connect(
+                    "indexer",
+                    addr,
+                    4,
+                    IndexerBlockExplorer_IndexerBlockExplorer1_Client::new,
+                )
+                .await?
+            }
+            None => None,
+        }));
 
         let db_gateway_pool = db_gateway_pool_size(&config);
         let db_gateway = Arc::new(RwLock::new(match &config.db_gateway_address {

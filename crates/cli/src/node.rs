@@ -12,17 +12,21 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 #[cfg(feature = "dev-node")]
 use std::process::ExitStatus;
+#[cfg(feature = "dev-node")]
+use std::time::Duration;
 
 /// Start the experimental hogd-dev local node server.
 ///
 /// Requires the `dev-node` feature.
 #[cfg(feature = "dev-node")]
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     port: u16,
     verbose: bool,
     _account_count: usize,
     hogd_dev_binary: Option<PathBuf>,
     hogd_protocol: Option<String>,
+    startup_timeout_secs: Option<u64>,
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
@@ -35,6 +39,7 @@ pub fn run(
                 port,
                 hogd_dev_binary,
                 hogd_protocol,
+                startup_timeout: startup_timeout_secs.map(Duration::from_secs),
                 ..LocalNodeOptions::default()
             },
             cmd,
@@ -55,6 +60,8 @@ pub struct LocalNodeOptions {
     pub hogd_dev_binary: Option<PathBuf>,
     /// Override hogd protocol string for local cross-repo smoke tests.
     pub hogd_protocol: Option<String>,
+    /// Override readiness timeout while waiting for hogd-dev.
+    pub startup_timeout: Option<Duration>,
     /// PID-file behavior for orphan detection.
     pub pid_file: LocalNodePidFile,
     /// Override the deterministic dev-account count.
@@ -208,6 +215,9 @@ async fn run_hogd_dev(
         if let Some(dev_control) = started.readiness().endpoints.dev_control {
             print.status(format_args!("hogd-dev dev control: {dev_control}"));
         }
+        if let Some(path) = &started.readiness().manifest_path {
+            print.status(format_args!("runtime manifest: {}", path.display()));
+        }
     }
 
     let stop_signal = async {
@@ -264,6 +274,10 @@ fn local_node_config(
         Some(count) => hogd.with_dev_account_count(count),
         None => hogd,
     };
+    let hogd = match options.startup_timeout {
+        Some(timeout) => hogd.with_startup_timeout(timeout),
+        None => hogd,
+    };
     let config = NodeSupervisorConfig::default()
         .with_rpc_listen_address(format!("127.0.0.1:{}", options.port))
         .with_hogd_dev(hogd);
@@ -285,12 +299,14 @@ fn map_node_supervisor_error(err: &groundhog_node_supervisor::NodeSupervisorErro
 }
 
 #[cfg(not(feature = "dev-node"))]
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     _port: u16,
     _verbose: bool,
     _account_count: usize,
     _hogd_dev_binary: Option<std::path::PathBuf>,
     _hogd_protocol: Option<String>,
+    _startup_timeout_secs: Option<u64>,
     _cmd: &'static str,
     _print: &Print,
 ) -> Result<(), CliError> {
@@ -343,8 +359,23 @@ fn hogd_dev_startup_payload(
             "planes": backend_planes,
             "endpoints": hogd_dev_endpoints_payload(readiness),
         },
+        "runtime_manifest": runtime_manifest_payload(readiness),
         "rpc_url": format!("http://{addr}"),
     })
+}
+
+#[cfg(feature = "dev-node")]
+fn runtime_manifest_payload(
+    readiness: &groundhog_node_supervisor::HogdDevReadiness,
+) -> serde_json::Value {
+    match (&readiness.manifest_path, &readiness.manifest_hash) {
+        (Some(path), Some(hash)) => json!({
+            "schemaVersion": 1,
+            "path": path,
+            "hash": hash,
+        }),
+        _ => serde_json::Value::Null,
+    }
 }
 
 #[cfg(feature = "dev-node")]
@@ -390,7 +421,9 @@ mod tests {
         local_node_config,
     };
     use groundhog_node_supervisor::{BackendPlanes, PlaneStatus, parse_readiness_line};
-    use std::path::PathBuf;
+    use sha2::{Digest, Sha256};
+    use std::{fs, path::PathBuf, time::Duration};
+    use tempfile::TempDir;
 
     #[test]
     fn local_node_config_sets_supervisor_startup_options() {
@@ -399,6 +432,7 @@ mod tests {
             port: 0,
             hogd_dev_binary: Some(binary.clone()),
             hogd_protocol: Some("test-protocol".into()),
+            startup_timeout: Some(Duration::from_secs(30)),
             pid_file: LocalNodePidFile::Path(PathBuf::from("/tmp/hogd-dev-test.pid")),
             dev_account_count: Some(3),
         })
@@ -415,6 +449,7 @@ mod tests {
             Some(std::path::Path::new("/tmp/hogd-dev-test.pid"))
         );
         assert_eq!(config.hogd_dev.dev_account_count, 3);
+        assert_eq!(config.hogd_dev.startup_timeout, Duration::from_secs(30));
     }
 
     #[test]
@@ -486,7 +521,82 @@ mod tests {
             payload["backend"]["endpoints"]["dev_control"],
             "127.0.0.1:12349"
         );
+        assert!(payload["runtime_manifest"].is_null());
         assert!(payload.get("accounts").is_none());
+    }
+
+    #[test]
+    fn hogd_dev_startup_payload_includes_runtime_manifest_pointer() {
+        let temp = TempDir::new().expect("bug: temp dir should be created");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700))
+                .expect("bug: temp dir permissions should be set");
+        }
+        let manifest_path = temp.path().join("runtime-manifest.json");
+        let manifest = br#"{
+          "schemaVersion": 1,
+          "kind": "hogd-dev-runtime",
+          "networkId": "groundhog-local",
+          "protocol": "hogp/test",
+          "genesisHash": "0x4242424242424242424242424242424242424242424242424242424242424242",
+          "producer": {"binary": "hogd-dev", "version": "0.1.0", "commitHash": "abcdef0"},
+          "endpoints": {"scheduler": "127.0.0.1:12345"},
+          "bootstrapAccountDerivation": {
+            "scheme": "groundhog-bootstrap-account-v1",
+            "seed": "groundhog-dev-accounts"
+          },
+          "bootstrapAccounts": [],
+          "bootstrap": {
+            "devWallet": {
+              "contentHash": "0x5151515151515151515151515151515151515151515151515151515151515151",
+              "deployedCodeHash": "0x5252525252525252525252525252525252525252525252525252525252525252",
+              "artifactHint": "./dev-wallet.wasm",
+              "deployEntrypoint": "0xadac498222148e4f",
+              "doActionEntrypoint": "0x646f416374696f6e"
+            },
+            "storageCostModel": {
+              "hash": "0x5353535353535353535353535353535353535353535353535353535353535353",
+              "baseDataItemCost": "12000",
+              "bytestringCostPerByte": "10",
+              "baseContractDeploymentCost": "12000",
+              "contractDeploymentCostPerByte": "10",
+              "authPerKeyCost": "1111",
+              "rcqCostPerEntry": "8",
+              "replayCacheCostPerEntry": "7",
+              "balanceCost": "1234"
+            }
+          }
+        }"#;
+        fs::write(&manifest_path, manifest).expect("bug: manifest should be written");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&manifest_path, fs::Permissions::from_mode(0o600))
+                .expect("bug: manifest permissions should be set");
+        }
+        let hash = format!("0x{}", hex::encode(Sha256::digest(manifest)));
+        let pointer = serde_json::json!({
+            "schemaVersion": 1,
+            "status": "ready",
+            "manifestPath": manifest_path,
+            "manifestHash": hash,
+        });
+        let readiness = parse_readiness_line("hogd-dev", &pointer.to_string())
+            .expect("bug: readiness pointer should parse");
+        let payload = hogd_dev_startup_payload(
+            "127.0.0.1:9545".parse().expect("bug: valid socket addr"),
+            &readiness,
+            BackendPlanes::hogd_dev_scheduler_only(),
+        );
+
+        assert_eq!(payload["runtime_manifest"]["schemaVersion"], 1);
+        assert_eq!(
+            payload["runtime_manifest"]["path"],
+            manifest_path.display().to_string()
+        );
+        assert_eq!(payload["runtime_manifest"]["hash"], hash);
     }
 
     #[test]

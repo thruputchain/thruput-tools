@@ -69,6 +69,31 @@ node down. The test process receives `GROUNDHOG_RPC_URL`,
 `GROUNDHOG_CONTRACT_ADDRESS`, `GROUNDHOG_PROFILE=integration`, and
 `GROUNDHOG_DEFAULT_KEY=dev-0`.
 
+For gateway and benchmark runs, `hogd-dev` also writes a runtime manifest
+describing the live x23 endpoints, bootstrapped dev wallets, and funding
+state. `groundhog node --json` reports the manifest under
+`data.runtime_manifest.path`; the standalone gateway and benchmark harness can
+consume the same file:
+
+```bash
+# in one terminal
+groundhog --json node --hogd-dev-binary /path/to/hogd-dev > /tmp/node.json
+
+# in other terminals
+RUNTIME_MANIFEST=$(jq -r '.data.runtime_manifest.path' /tmp/node.json)
+groundhog-rpc --runtime-manifest "$RUNTIME_MANIFEST" --listen 127.0.0.1:9546
+groundhog-bench --url http://127.0.0.1:9546 \
+  --runtime-manifest "$RUNTIME_MANIFEST" \
+  --method sendRawTransaction
+```
+
+See [Runtime Manifest Quickstart](docs/gateway/runtime-manifest.md) for the
+full CLI/gateway/bench loop,
+[Benchmark Scenario Library](docs/gateway/bench-scenarios.md) for repeatable
+local load shapes, and
+[`docs/gateway/examples/runtime-manifest.hogd-dev.example.json`](docs/gateway/examples/runtime-manifest.hogd-dev.example.json)
+for the v1 JSON shape.
+
 ### The API surface
 
 The JSON-RPC contract lives in the OpenRPC artifact at
@@ -190,6 +215,13 @@ The standard contributor smoke is `scripts/smoke-local-dx.sh` — runs
 the user-facing CLI loop (`new` → `build` → `node` → `deploy` →
 `call` → view → storage) against a real `hogd-dev` binary. Set
 `HOGD_DEV_BINARY=/path/to/hogd-dev` and invoke.
+
+For the runtime-manifest gateway/bench path, run
+`scripts/smoke-runtime-manifest-bench.sh`. It starts `groundhog node`,
+extracts the generated runtime manifest, runs `groundhog-bench` against the
+CLI node, starts `groundhog-rpc --runtime-manifest`, and repeats the bench
+checks against the standalone gateway. Set `BENCH_SCENARIO=gateway-baseline`
+or `BENCH_SCENARIO=submit-ramp` for the heavier local scenario library.
 
 The `test` subcommand requires `groundhog login` to authenticate
 against the private crate registry that ships the Groundhog contract
