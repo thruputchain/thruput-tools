@@ -13,6 +13,7 @@ use std::{path::Path, sync::Arc};
 
 use clap::Parser;
 use groundhog_rpc_api_types::runtime_manifest::RuntimeManifest;
+use tokio::io::AsyncReadExt;
 use tracing_subscriber::EnvFilter;
 
 use crate::backend::GatewayBackend;
@@ -150,16 +151,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn read_runtime_manifest(path: &Path) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    let metadata = tokio::fs::metadata(path).await?;
-    if metadata.len() > MAX_RUNTIME_MANIFEST_BYTES {
-        return Err(format!(
-            "runtime manifest {} exceeds {} bytes",
-            path.display(),
-            MAX_RUNTIME_MANIFEST_BYTES,
-        )
-        .into());
-    }
-    let contents = tokio::fs::read(path).await?;
+    let file = tokio::fs::File::open(path).await?;
+    let mut contents = Vec::new();
+    let mut reader = file.take(MAX_RUNTIME_MANIFEST_BYTES + 1);
+    reader.read_to_end(&mut contents).await?;
     if contents.len() as u64 > MAX_RUNTIME_MANIFEST_BYTES {
         return Err(format!(
             "runtime manifest {} exceeds {} bytes",
