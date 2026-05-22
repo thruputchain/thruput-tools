@@ -68,6 +68,8 @@ for part in path:
     value = value.get(part) if isinstance(value, dict) else value[int(part)]
 if value is None:
     print("null")
+elif isinstance(value, bool):
+    print("true" if value else "false")
 elif isinstance(value, (dict, list)):
     print(json.dumps(value, sort_keys=True, separators=(",", ":")))
 else:
