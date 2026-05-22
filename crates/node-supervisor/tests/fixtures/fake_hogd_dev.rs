@@ -3,6 +3,7 @@ use std::{
     env, fs,
     io::{self, Write},
     net::{SocketAddr, TcpListener as StdTcpListener},
+    path::PathBuf,
     process::{self, Command},
     sync::{
         Arc, Mutex,
@@ -24,6 +25,7 @@ use groundhog_indexer::{
     IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher, IndexerBlockExplorerIntroOutcome,
     Protocol, SignedTransactionHash, TxInfo, TxInfoResult,
 };
+use groundhog_rpc_api_types::hex::Hex0x;
 use groundhog_scheduler::{
     BlockHash, CoordinatorRegistrationOutcome, DbSchedResult, DbTip, GenesisConfiguration,
     Nomination, OptSignedTransactionBatch, ParallelBatch,
@@ -36,6 +38,8 @@ use groundhog_scheduler::{
 use groundhog_xdr::storage_item::WireStorageItem;
 use groundhog_xdr::types::{Ed25519PublicKey, SHA256Hash};
 use rpc_driver::{ProgramError, RpcServer, ServiceMap};
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use tokio::{net::TcpListener, runtime::Runtime};
 use xdr_common::{BytesM, StringM, VecM};
 
@@ -43,7 +47,48 @@ const MODE_ENV: &str = "GROUNDHOG_FAKE_HOGD_DEV_MODE";
 /// Optional path the fake writes its PID to before printing readiness.
 /// Tests use this to verify cleanup (poll `kill(pid, 0)` until ESRCH).
 const PID_FILE_ENV: &str = "GROUNDHOG_FAKE_HOGD_DEV_PID_FILE";
+const DERIVATION_SCHEME: &str = "groundhog-bootstrap-account-v1";
 static TERMINATED: AtomicBool = AtomicBool::new(false);
+
+#[derive(Debug, Clone)]
+struct FakeStartupConfig {
+    count: usize,
+    seed: String,
+    tokens: u64,
+}
+
+impl Default for FakeStartupConfig {
+    fn default() -> Self {
+        Self {
+            count: groundhog_signing::DEFAULT_DEV_ACCOUNT_COUNT,
+            seed: groundhog_signing::DEFAULT_DEV_ACCOUNT_SEED.to_string(),
+            tokens: groundhog_signing::DEFAULT_DEV_ACCOUNT_STORAGE_TOKENS,
+        }
+    }
+}
+
+impl FakeStartupConfig {
+    fn from_args() -> Self {
+        let mut config = Self::default();
+        let mut args = env::args().skip(1);
+        while let Some(arg) = args.next() {
+            let Some(value) = args.next() else {
+                continue;
+            };
+            match arg.as_str() {
+                "--dev-accounts" => {
+                    config.count = value.parse().expect("bug: fake dev account count parses");
+                }
+                "--dev-account-seed" => config.seed = value,
+                "--dev-account-tokens" => {
+                    config.tokens = value.parse().expect("bug: fake dev account tokens parse");
+                }
+                _ => {}
+            }
+        }
+        config
+    }
+}
 
 // --- Well-known canned tx hashes used across fake-indexer tests ---
 
@@ -323,54 +368,188 @@ fn ignore_sigterm() {
 
 /// Readiness JSON with only the `SchedulerCoord` endpoint (reduced contract).
 fn readiness_scheduler_only(scheduler: SocketAddr) -> String {
-    let accounts = readiness_dev_accounts();
-    format!(
-        r#"{{"status":"ready","network_id":"groundhog-local","endpoints":{{"scheduler_coord":"{scheduler}"}},"dev_accounts":{accounts}}}"#
-    )
+    readiness_pointer(&endpoints_json(scheduler, None, None, None))
 }
 
 /// Readiness JSON with `SchedulerCoord` and `IndexerBlockExplorer`
 /// endpoints, but no `DbGateway` endpoint.
 fn readiness_with_read(scheduler: SocketAddr, read: SocketAddr) -> String {
-    let accounts = readiness_dev_accounts();
-    format!(
-        r#"{{"status":"ready","network_id":"groundhog-local","endpoints":{{"scheduler_coord":"{scheduler}","indexer_block_explorer":"{read}"}},"dev_accounts":{accounts}}}"#
-    )
+    readiness_pointer(&endpoints_json(scheduler, Some(read), None, None))
 }
 
 /// Readiness JSON with `SchedulerCoord` and `DbGateway` endpoints, but no indexer endpoint.
 fn readiness_with_gateway(scheduler: SocketAddr, gateway: SocketAddr) -> String {
-    let accounts = readiness_dev_accounts();
-    format!(
-        r#"{{"status":"ready","network_id":"groundhog-local","endpoints":{{"scheduler_coord":"{scheduler}","db_gateway":"{gateway}"}},"dev_accounts":{accounts}}}"#
-    )
+    readiness_pointer(&endpoints_json(scheduler, None, Some(gateway), None))
 }
 
 /// Readiness JSON with `SchedulerCoord`, `IndexerBlockExplorer`, and
 /// `DbGateway` endpoints.
 fn readiness_full(scheduler: SocketAddr, read: SocketAddr, gateway: SocketAddr) -> String {
-    let accounts = readiness_dev_accounts();
+    readiness_pointer(&endpoints_json(scheduler, Some(read), Some(gateway), None))
+}
+
+fn endpoints_json(
+    scheduler: SocketAddr,
+    indexer: Option<SocketAddr>,
+    db_gateway: Option<SocketAddr>,
+    view_gateway: Option<SocketAddr>,
+) -> Value {
+    let mut endpoints = serde_json::Map::new();
+    endpoints.insert("scheduler".to_string(), json!(scheduler));
+    if let Some(indexer) = indexer {
+        endpoints.insert("indexer".to_string(), json!(indexer));
+    }
+    if let Some(db_gateway) = db_gateway {
+        endpoints.insert("dbGateway".to_string(), json!(db_gateway));
+    }
+    if let Some(view_gateway) = view_gateway {
+        endpoints.insert("viewGateway".to_string(), json!(view_gateway));
+    }
+    Value::Object(endpoints)
+}
+
+fn readiness_pointer(endpoints: &Value) -> String {
+    let config = FakeStartupConfig::from_args();
+    let manifest = runtime_manifest(endpoints, &config);
+    let manifest_bytes =
+        serde_json::to_vec_pretty(&manifest).expect("bug: runtime manifest should serialize");
+    let manifest_hash = sha256_hex(&manifest_bytes);
+    let manifest_path = write_runtime_manifest(&manifest_bytes);
     format!(
-        r#"{{"status":"ready","network_id":"groundhog-local","endpoints":{{"scheduler_coord":"{scheduler}","indexer_block_explorer":"{read}","db_gateway":"{gateway}"}},"dev_accounts":{accounts}}}"#
+        r#"{{"schemaVersion":1,"status":"ready","manifestPath":"{}","manifestHash":"{}"}}"#,
+        manifest_path.display(),
+        manifest_hash,
     )
 }
 
-fn readiness_dev_accounts() -> String {
-    let accounts = (0..groundhog_signing::DEFAULT_DEV_ACCOUNT_COUNT)
+fn runtime_manifest(endpoints: &Value, config: &FakeStartupConfig) -> Value {
+    let mut producer = serde_json::Map::new();
+    producer.insert("binary".to_string(), json!("hogd-dev"));
+    producer.insert("version".to_string(), json!(env!("CARGO_PKG_VERSION")));
+    if let Some(commit_hash) = option_env!("GROUNDHOG_GIT_COMMIT") {
+        producer.insert("commitHash".to_string(), json!(commit_hash));
+    }
+
+    json!({
+        "schemaVersion": 1,
+        "kind": "hogd-dev-runtime",
+        "networkId": "groundhog-local",
+        "protocol": "fake-hogd-dev/x23",
+        "genesisHash": Hex0x(SHA256Hash::from([0x42; 32])),
+        "producer": Value::Object(producer),
+        "endpoints": endpoints,
+        "bootstrapAccountDerivation": {
+            "scheme": DERIVATION_SCHEME,
+            "seed": config.seed,
+        },
+        "bootstrapAccounts": bootstrap_accounts(config),
+        "bootstrap": {
+            "devWallet": {
+                "contentHash": Hex0x(SHA256Hash::from([0x51; 32])),
+                "deployedCodeHash": Hex0x(SHA256Hash::from([0x52; 32])),
+                "artifactHint": "fake-dev-wallet.wasm",
+                "deployEntrypoint": "0xadac498222148e4f",
+                "doActionEntrypoint": "0x646f416374696f6e",
+            },
+            "storageCostModel": storage_cost_model(),
+        },
+    })
+}
+
+fn bootstrap_accounts(config: &FakeStartupConfig) -> Vec<Value> {
+    (0..config.count)
         .map(|index| {
-            let signer = groundhog_signing::derive_default_dev_account_signer(index);
+            let signer = groundhog_signing::derive_dev_account_signer(&config.seed, index);
             let mut address = [0x70_u8; 32];
             address[31] = u8::try_from(index).expect("bug: default account count fits in u8");
-            format!(
-                r#"{{"index":{index},"address":"0x{}","public_key":"0x{}","initial_storage_tokens":{}}}"#,
-                hex::encode(address),
-                hex::encode(signer.verifying_key_bytes()),
-                groundhog_signing::DEFAULT_DEV_ACCOUNT_STORAGE_TOKENS,
-            )
+            json!({
+                "index": u32::try_from(index).expect("bug: fake account index fits in u32"),
+                "role": "local_user",
+                "publicKey": Hex0x(Ed25519PublicKey::from(signer.verifying_key_bytes())),
+                "walletAddress": Hex0x(groundhog_xdr::types::ContractAddress::from(address)),
+                "initialStorageTokens": config.tokens.to_string(),
+            })
         })
-        .collect::<Vec<_>>()
-        .join(",");
-    format!("[{accounts}]")
+        .collect()
+}
+
+fn storage_cost_model() -> Value {
+    let fields = StorageCostModelFields {
+        base_data_item_cost: "12000",
+        bytestring_cost_per_byte: "10",
+        base_contract_deployment_cost: "12000",
+        contract_deployment_cost_per_byte: "10",
+        auth_per_key_cost: "1111",
+        rcq_cost_per_entry: "8",
+        replay_cache_cost_per_entry: "7",
+        balance_cost: "1234",
+    };
+    json!({
+        "hash": Hex0x(SHA256Hash::from(storage_cost_model_hash(&fields))),
+        "baseDataItemCost": fields.base_data_item_cost,
+        "bytestringCostPerByte": fields.bytestring_cost_per_byte,
+        "baseContractDeploymentCost": fields.base_contract_deployment_cost,
+        "contractDeploymentCostPerByte": fields.contract_deployment_cost_per_byte,
+        "authPerKeyCost": fields.auth_per_key_cost,
+        "rcqCostPerEntry": fields.rcq_cost_per_entry,
+        "replayCacheCostPerEntry": fields.replay_cache_cost_per_entry,
+        "balanceCost": fields.balance_cost,
+    })
+}
+
+struct StorageCostModelFields<'a> {
+    base_data_item_cost: &'a str,
+    bytestring_cost_per_byte: &'a str,
+    base_contract_deployment_cost: &'a str,
+    contract_deployment_cost_per_byte: &'a str,
+    auth_per_key_cost: &'a str,
+    rcq_cost_per_entry: &'a str,
+    replay_cache_cost_per_entry: &'a str,
+    balance_cost: &'a str,
+}
+
+fn storage_cost_model_hash(fields: &StorageCostModelFields<'_>) -> [u8; 32] {
+    let mut encoding = Vec::new();
+    for item in [
+        "groundhog-storage-cost-model-v1",
+        fields.base_data_item_cost,
+        fields.bytestring_cost_per_byte,
+        fields.base_contract_deployment_cost,
+        fields.contract_deployment_cost_per_byte,
+        fields.auth_per_key_cost,
+        fields.rcq_cost_per_entry,
+        fields.replay_cache_cost_per_entry,
+        fields.balance_cost,
+    ] {
+        encoding.extend_from_slice(item.as_bytes());
+        encoding.push(0);
+    }
+    Sha256::digest(&encoding).into()
+}
+
+fn write_runtime_manifest(bytes: &[u8]) -> PathBuf {
+    let dir = env::temp_dir().join(format!("hogd-dev-runtime-{}", process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir(&dir).expect("bug: fake runtime manifest dir should be created");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))
+            .expect("bug: fake runtime manifest dir permissions should be set");
+    }
+    let path = dir.join("runtime-manifest.json");
+    fs::write(&path, bytes).expect("bug: fake runtime manifest should be written");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+            .expect("bug: fake runtime manifest permissions should be set");
+    }
+    path
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    format!("0x{}", hex::encode(Sha256::digest(bytes)))
 }
 
 fn dead_loopback_addr() -> SocketAddr {

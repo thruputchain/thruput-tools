@@ -143,6 +143,19 @@ pub enum NodeSupervisorError {
         source: serde_json::Error,
     },
 
+    /// The child process wrote a readiness line with an unsupported schema.
+    #[error(
+        "invalid readiness schema version from child process `{program}`: expected {expected}, got {actual}"
+    )]
+    InvalidReadinessSchemaVersion {
+        /// Program path or name.
+        program: String,
+        /// Expected schema version.
+        expected: u32,
+        /// Actual schema version.
+        actual: u32,
+    },
+
     /// The child process wrote a readiness line with an unexpected status.
     #[error("invalid readiness status from child process `{program}`: {status}")]
     InvalidReadinessStatus {
@@ -150,6 +163,64 @@ pub enum NodeSupervisorError {
         program: String,
         /// Status value from the readiness line.
         status: String,
+    },
+
+    /// The supervisor could not read the readiness runtime manifest.
+    #[error(
+        "failed to read runtime manifest `{path}` advertised by child process `{program}`: {source}"
+    )]
+    RuntimeManifestRead {
+        /// Program path or name.
+        program: String,
+        /// Manifest path advertised in readiness.
+        path: String,
+        /// Underlying I/O error.
+        #[source]
+        source: io::Error,
+    },
+
+    /// The advertised runtime manifest path or permissions are unsafe.
+    #[error("unsafe runtime manifest `{path}` advertised by child process `{program}`: {reason}")]
+    RuntimeManifestUnsafePermissions {
+        /// Program path or name.
+        program: String,
+        /// Manifest path advertised in readiness.
+        path: String,
+        /// Validation failure.
+        reason: String,
+    },
+
+    /// The child process advertised a malformed runtime manifest hash.
+    #[error("invalid runtime manifest hash from child process `{program}`: {hash}")]
+    InvalidRuntimeManifestHash {
+        /// Program path or name.
+        program: String,
+        /// Advertised hash.
+        hash: String,
+    },
+
+    /// The runtime manifest bytes did not match the advertised hash.
+    #[error(
+        "runtime manifest hash mismatch from child process `{program}` for `{path}`: expected {expected}, got {actual}"
+    )]
+    RuntimeManifestHashMismatch {
+        /// Program path or name.
+        program: String,
+        /// Manifest path advertised in readiness.
+        path: String,
+        /// Hash advertised in readiness.
+        expected: String,
+        /// Hash computed from manifest bytes.
+        actual: String,
+    },
+
+    /// The runtime manifest could not be parsed or projected.
+    #[error("invalid runtime manifest from child process `{program}`: {reason}")]
+    InvalidRuntimeManifest {
+        /// Program path or name.
+        program: String,
+        /// Validation failure.
+        reason: String,
     },
 
     /// hogd-dev advertised a different dev-account count than requested.

@@ -9,9 +9,11 @@ mod storage_batcher;
 mod submitter;
 mod tip_coalescer;
 
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
 
 use clap::Parser;
+use groundhog_rpc_api_types::runtime_manifest::RuntimeManifest;
+use tokio::io::AsyncReadExt;
 use tracing_subscriber::EnvFilter;
 
 use crate::backend::GatewayBackend;
@@ -20,6 +22,8 @@ use crate::context::GatewayContext;
 use groundhog_rpc_api::GroundhogApiServer;
 use groundhog_rpc_server::{BuildInfo, GroundhogRpcServer, RpcServerConfig};
 
+const MAX_RUNTIME_MANIFEST_BYTES: u64 = 1024 * 1024;
+
 /// Groundhog JSON-RPC gateway.
 #[derive(Parser)]
 #[command(name = "groundhog-rpc", about = "Groundhog JSON-RPC gateway")]
@@ -27,6 +31,10 @@ struct Cli {
     /// Path to TOML config file
     #[arg(long)]
     config: Option<std::path::PathBuf>,
+
+    /// Path to backend runtime manifest JSON
+    #[arg(long)]
+    runtime_manifest: Option<std::path::PathBuf>,
 
     /// Listen address (overrides config file)
     #[arg(long)]
@@ -39,6 +47,10 @@ struct Cli {
     /// Indexer x23 RPC address (overrides config file)
     #[arg(long)]
     indexer: Option<String>,
+
+    /// `DbGateway` x23 RPC address (overrides config file)
+    #[arg(long)]
+    db_gateway: Option<String>,
 
     /// `ViewGateway` x23 RPC address (overrides config file)
     #[arg(long)]
@@ -70,11 +82,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(listen) = cli.listen {
         config.listen_address = listen;
     }
+    if let Some(path) = cli.runtime_manifest {
+        let contents = read_runtime_manifest(&path).await?;
+        let manifest = serde_json::from_slice::<RuntimeManifest>(&contents)?;
+        config.apply_runtime_manifest(&manifest)?;
+    }
     if let Some(scheduler) = cli.scheduler {
         config.scheduler_address = scheduler;
     }
     if let Some(indexer) = cli.indexer {
-        config.indexer_address = indexer;
+        config.indexer_address = Some(indexer);
+    }
+    if let Some(db_gateway) = cli.db_gateway {
+        config.db_gateway_address = Some(db_gateway);
     }
     if let Some(view_gateway) = cli.view_gateway {
         config.view_gateway_address = Some(view_gateway);
@@ -87,7 +107,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         listen = %config.listen_address,
         submission_backend = ?config.submission_backend,
         scheduler = %config.scheduler_address,
-        indexer = %config.indexer_address,
+        indexer = ?config.indexer_address,
         view_gateway = ?config.view_gateway_address,
         hogd_protocol_override = ?config.hogd_protocol_override,
         coordinator = ?config.coordinator_address,
@@ -128,4 +148,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     handle.stopped().await;
 
     Ok(())
+}
+
+async fn read_runtime_manifest(path: &Path) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let file = tokio::fs::File::open(path).await?;
+    let mut contents = Vec::new();
+    let mut reader = file.take(MAX_RUNTIME_MANIFEST_BYTES + 1);
+    reader.read_to_end(&mut contents).await?;
+    if contents.len() as u64 > MAX_RUNTIME_MANIFEST_BYTES {
+        return Err(format!(
+            "runtime manifest {} exceeds {} bytes",
+            path.display(),
+            MAX_RUNTIME_MANIFEST_BYTES,
+        )
+        .into());
+    }
+    Ok(contents)
 }

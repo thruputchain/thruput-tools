@@ -330,30 +330,17 @@ log "Node RPC: $RPC_URL (read plane: $READ_PLANE, view plane: $VIEW_PLANE)"
 
 GATEWAY_RPC_URL=""
 if [[ "${SMOKE_STANDALONE_GATEWAY:-0}" == "1" ]]; then
-    SCHEDULER_ENDPOINT="$(json_field data.backend.endpoints.scheduler_coord "$NODE_JSON")"
-    INDEXER_ENDPOINT="$(json_field data.backend.endpoints.indexer_block_explorer "$NODE_JSON")"
-    DB_GATEWAY_ENDPOINT="$(json_field data.backend.endpoints.db_gateway "$NODE_JSON")"
-    VIEW_GATEWAY_ENDPOINT="$(json_field data.backend.endpoints.view_gateway "$NODE_JSON")"
-    [[ "$SCHEDULER_ENDPOINT" != "null" ]] || die "hogd-dev did not advertise scheduler_coord"
-    [[ "$INDEXER_ENDPOINT" != "null" ]] || die "hogd-dev did not advertise indexer_block_explorer"
-    [[ "$DB_GATEWAY_ENDPOINT" != "null" ]] || die "hogd-dev did not advertise db_gateway"
-    [[ "$VIEW_GATEWAY_ENDPOINT" != "null" ]] || die "hogd-dev did not advertise view_gateway"
+    RUNTIME_MANIFEST="$(json_field data.runtime_manifest.path "$NODE_JSON")"
+    [[ "$RUNTIME_MANIFEST" != "null" && -n "$RUNTIME_MANIFEST" ]] \
+        || die "groundhog node did not report a runtime manifest path"
+    [[ -r "$RUNTIME_MANIFEST" ]] || die "runtime manifest is not readable: $RUNTIME_MANIFEST"
 
     GATEWAY_PORT="$(free_tcp_port)"
     GATEWAY_RPC_URL="http://127.0.0.1:$GATEWAY_PORT"
-    cat > "$WORK/gateway.toml" <<EOF
-listen_address = "127.0.0.1:$GATEWAY_PORT"
-scheduler_address = "$SCHEDULER_ENDPOINT"
-indexer_address = "$INDEXER_ENDPOINT"
-db_gateway_address = "$DB_GATEWAY_ENDPOINT"
-view_gateway_address = "$VIEW_GATEWAY_ENDPOINT"
-EOF
-    if [[ -n "$HOGD_PROTOCOL" ]]; then
-        printf 'hogd_protocol_override = "%s"\n' "$HOGD_PROTOCOL" >> "$WORK/gateway.toml"
-    fi
 
-    log "Starting standalone gateway: $GATEWAY_RPC_URL"
-    "$GATEWAY" --config "$WORK/gateway.toml" > "$WORK/gateway.out" 2> "$WORK/gateway.err" &
+    log "Starting standalone gateway from runtime manifest: $GATEWAY_RPC_URL"
+    "$GATEWAY" --runtime-manifest "$RUNTIME_MANIFEST" --listen "127.0.0.1:$GATEWAY_PORT" \
+        > "$WORK/gateway.out" 2> "$WORK/gateway.err" &
     GATEWAY_PID=$!
     if ! wait_for_gateway_rpc "$GATEWAY_RPC_URL"; then
         cat "$WORK/gateway.err" >&2 || true

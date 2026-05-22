@@ -276,6 +276,9 @@ enum Command {
         /// Override hogd protocol string for local cross-repo smoke tests
         #[arg(long, hide = true)]
         hogd_protocol: Option<String>,
+        /// Override hogd-dev readiness timeout for smoke tests
+        #[arg(long, hide = true)]
+        startup_timeout_secs: Option<u64>,
     },
     /// Manage signing keys
     #[command(long_about = "Ed25519 signing keys stored in \
@@ -557,12 +560,14 @@ fn main() {
             accounts,
             hogd_dev_binary,
             hogd_protocol,
+            startup_timeout_secs,
         } => groundhog_cli::node::run(
             port,
             verbose,
             accounts,
             hogd_dev_binary,
             hogd_protocol,
+            startup_timeout_secs,
             cmd_name,
             &print,
         ),
