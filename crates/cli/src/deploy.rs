@@ -271,7 +271,7 @@ fn prepare_deploy_transaction(
 
     // Build the deploy transaction — invokes the sender's wallet contract.
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
-    let wallet_address = resolve_wallet_address(profile, key_name, &signer, &rt)?;
+    let wallet_address = resolve_wallet_address(profile, key_name, &signer)?;
 
     let contract = groundhog_xdr::contract::Contract::kWasmi {
         wasmi_contract: groundhog_xdr::contract::ContractBlob {

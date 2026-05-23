@@ -169,18 +169,11 @@ fn read_local_node_state(profile: &ResolvedProfile) -> Result<Option<LocalNodeSt
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
     };
-    let state: LocalNodeState = serde_json::from_str(&contents).map_err(|error| {
-        CliError::Other(format!(
-            "failed to parse local node state {}: {error}",
-            path.display()
-        ))
-    })?;
+    let Ok(state) = serde_json::from_str::<LocalNodeState>(&contents) else {
+        return Ok(None);
+    };
     if state.schema_version != LOCAL_NODE_STATE_SCHEMA_VERSION {
-        return Err(CliError::Other(format!(
-            "unsupported local node state schemaVersion {} in {}",
-            state.schema_version,
-            path.display()
-        )));
+        return Ok(None);
     }
     Ok(Some(state))
 }
@@ -234,17 +227,7 @@ fn resolve_from_cwd(path: PathBuf) -> Result<PathBuf, CliError> {
 }
 
 fn load_runtime_manifest(path: &Path, key_name: &str) -> Result<RuntimeManifest, CliError> {
-    let metadata = std::fs::symlink_metadata(path)
-        .map_err(|source| manifest_error(path, key_name, &source))?;
-    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
-        return Err(manifest_message(
-            path,
-            key_name,
-            "runtime manifest must be a regular file, not a symlink",
-        ));
-    }
-    let file =
-        std::fs::File::open(path).map_err(|source| manifest_error(path, key_name, &source))?;
+    let file = open_runtime_manifest_file(path, key_name)?;
     let mut reader = file.take(MAX_RUNTIME_MANIFEST_BYTES + 1);
     let mut bytes = Vec::new();
     reader
@@ -276,6 +259,47 @@ fn load_runtime_manifest(path: &Path, key_name: &str) -> Result<RuntimeManifest,
         ));
     }
     Ok(manifest)
+}
+
+fn open_runtime_manifest_file(path: &Path, key_name: &str) -> Result<std::fs::File, CliError> {
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|source| manifest_error(path, key_name, &source))?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+        return Err(manifest_message(
+            path,
+            key_name,
+            "runtime manifest must be a regular file, not a symlink",
+        ));
+    }
+
+    let file = open_regular_file_no_symlink(path, key_name)?;
+    let metadata = file
+        .metadata()
+        .map_err(|source| manifest_error(path, key_name, &source))?;
+    if !metadata.file_type().is_file() {
+        return Err(manifest_message(
+            path,
+            key_name,
+            "runtime manifest must be a regular file, not a symlink",
+        ));
+    }
+    Ok(file)
+}
+
+#[cfg(unix)]
+fn open_regular_file_no_symlink(path: &Path, key_name: &str) -> Result<std::fs::File, CliError> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+        .map_err(|source| manifest_error(path, key_name, &source))
+}
+
+#[cfg(not(unix))]
+fn open_regular_file_no_symlink(path: &Path, key_name: &str) -> Result<std::fs::File, CliError> {
+    std::fs::File::open(path).map_err(|source| manifest_error(path, key_name, &source))
 }
 
 #[cfg(any(feature = "dev-node", test))]
@@ -400,6 +424,44 @@ mod tests {
         assert_eq!(
             configured_runtime_manifest_path(&profile).expect("bug: config lookup should succeed"),
             Some(manifest)
+        );
+    }
+
+    #[test]
+    fn invalid_local_node_state_is_treated_as_absent() {
+        let tmp = tempfile::tempdir().expect("bug: tempdir should be created");
+        let config_path = tmp.path().join("groundhog.toml");
+        std::fs::write(&config_path, "").expect("bug: project config should be written");
+        let state_dir = tmp.path().join(LOCAL_NODE_STATE_DIR);
+        std::fs::create_dir(&state_dir).expect("bug: state dir should be created");
+        let state_path = state_dir.join(LOCAL_NODE_STATE_FILE);
+        std::fs::write(
+            &state_path,
+            r#"{"schemaVersion":999,"rpcUrl":"http://127.0.0.1:9545","runtimeManifest":"/tmp/runtime-manifest.json"}"#,
+        )
+        .expect("bug: local state should be written");
+        let profile = ResolvedProfile {
+            name: "default".to_string(),
+            rpc_url: None,
+            default_key: Some("dev-0".to_string()),
+            runtime_manifest: None,
+            contracts: BTreeMap::default(),
+            source: Some(config_path),
+        };
+
+        assert!(
+            configured_runtime_manifest_path(&profile)
+                .expect("bug: config lookup should succeed")
+                .is_none(),
+            "bug: unsupported local state schemas should not block CLI commands"
+        );
+
+        std::fs::write(&state_path, "{").expect("bug: malformed local state should be written");
+        assert!(
+            configured_runtime_manifest_path(&profile)
+                .expect("bug: config lookup should succeed")
+                .is_none(),
+            "bug: malformed local state should not block CLI commands"
         );
     }
 }

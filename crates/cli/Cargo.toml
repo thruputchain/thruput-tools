@@ -49,12 +49,12 @@ tokio = { workspace = true }
 tracing-subscriber = { workspace = true }
 groundhog-node-supervisor = { workspace = true, optional = true }
 jsonrpsee = { workspace = true, features = ["client", "http-client"] }
+libc = { workspace = true }
 
 [features]
 dev-node = ["dep:groundhog-node-supervisor"]
 
 [dev-dependencies]
-libc = { workspace = true }
 tempfile = "3"
 serial_test = "3"
 

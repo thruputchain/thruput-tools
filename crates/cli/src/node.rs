@@ -211,7 +211,7 @@ async fn run_hogd_dev(
         Ok(())
     };
 
-    let outcome = started.run_until(stop_signal).await?;
+    let outcome = started.run_until(stop_signal).await;
     if let (Some(local_state_path), Some(started_manifest_path)) = (
         local_state_path.as_deref(),
         started_manifest_path.as_deref(),
@@ -223,6 +223,7 @@ async fn run_hogd_dev(
     {
         print.warn(format!("local node state was not removed: {error}"));
     }
+    let outcome = outcome?;
     match outcome {
         SupervisorStop::HogdExited(status) => {
             if !print.is_json() {

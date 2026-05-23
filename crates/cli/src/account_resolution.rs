@@ -17,7 +17,6 @@ pub(crate) fn resolve_wallet_address(
     profile: &ResolvedProfile,
     key_name: &str,
     signer: &LocalSigner,
-    _rt: &tokio::runtime::Runtime,
 ) -> Result<groundhog_xdr::types::ContractAddress, CliError> {
     if let Some(index) = dev_keys::dev_key_index(key_name) {
         resolve_dev_wallet_address(profile, key_name, index, signer)
@@ -165,7 +164,6 @@ mod tests {
     #[test]
     fn non_dev_key_uses_pubkey_derived_wallet_address() {
         let signer = groundhog_signing::derive_default_dev_account_signer(0);
-        let rt = tokio::runtime::Runtime::new().expect("bug: runtime should start");
         let profile = ResolvedProfile {
             name: "default".into(),
             rpc_url: Some("http://127.0.0.1:1".into()),
@@ -174,7 +172,7 @@ mod tests {
             contracts: BTreeMap::default(),
             source: None,
         };
-        let resolved = resolve_wallet_address(&profile, "alice", &signer, &rt)
+        let resolved = resolve_wallet_address(&profile, "alice", &signer)
             .expect("bug: non-dev key should not call RPC");
         let expected = PubkeyAccount::new(signer.public_key(), DEFAULT_PUBKEY_ACCOUNT_NONCE)
             .address()
@@ -239,7 +237,6 @@ mod tests {
             serde_json::to_vec_pretty(&manifest).unwrap(),
         )
         .expect("bug: manifest should write");
-        let rt = tokio::runtime::Runtime::new().expect("bug: runtime should start");
         let profile = ResolvedProfile {
             name: "default".into(),
             rpc_url: None,
@@ -249,7 +246,7 @@ mod tests {
             source: None,
         };
 
-        let resolved = resolve_wallet_address(&profile, "dev-0", &signer, &rt)
+        let resolved = resolve_wallet_address(&profile, "dev-0", &signer)
             .expect("bug: manifest-backed dev key should not require rpc_url");
 
         assert_eq!(resolved, wallet_address);
@@ -273,7 +270,6 @@ mod tests {
             &manifest_path,
         )
         .expect("bug: local-node state should write");
-        let rt = tokio::runtime::Runtime::new().expect("bug: runtime should start");
         let profile = ResolvedProfile {
             name: "default".into(),
             rpc_url: None,
@@ -283,7 +279,7 @@ mod tests {
             source: Some(config_path),
         };
 
-        let resolved = resolve_wallet_address(&profile, "dev-0", &signer, &rt)
+        let resolved = resolve_wallet_address(&profile, "dev-0", &signer)
             .expect("bug: local-node state manifest should resolve dev key");
 
         assert_eq!(resolved, wallet_address);
