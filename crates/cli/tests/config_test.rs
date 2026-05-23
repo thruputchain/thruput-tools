@@ -104,6 +104,7 @@ fn resolve_profile_loads_default_project_profile() {
 [profile.default]
 rpc_url = "http://localhost:9545"
 default_key = "alice"
+runtime_manifest = "runtime-manifest.json"
 
 [profile.default.contracts]
 counter = "0x1234"
@@ -115,6 +116,10 @@ counter = "0x1234"
     assert_eq!(profile.name, "default");
     assert_eq!(profile.rpc_url.as_deref(), Some("http://localhost:9545"));
     assert_eq!(profile.default_key.as_deref(), Some("alice"));
+    assert_eq!(
+        profile.runtime_manifest.as_deref(),
+        Some(std::path::Path::new("runtime-manifest.json"))
+    );
     assert_eq!(
         profile.contracts.get("counter").map(String::as_str),
         Some("0x1234")

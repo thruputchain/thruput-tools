@@ -325,16 +325,24 @@ NODE_DESCENDANTS="$(collect_descendants "$NODE_PID" || true)"
 RPC_URL="$(json_field data.rpc_url "$NODE_JSON")"
 READ_PLANE="$(json_field data.backend.planes.read "$NODE_JSON")"
 VIEW_PLANE="$(json_field data.backend.planes.view "$NODE_JSON")"
+RUNTIME_MANIFEST="$(json_field data.runtime_manifest.path "$NODE_JSON")"
 log "Node RPC: $RPC_URL (read plane: $READ_PLANE, view plane: $VIEW_PLANE)"
 [[ "$VIEW_PLANE" == "view_gateway" ]] || die "node view plane was $VIEW_PLANE, expected view_gateway"
+[[ "$RUNTIME_MANIFEST" != "null" && -n "$RUNTIME_MANIFEST" ]] \
+    || die "groundhog node did not report a runtime manifest path"
+[[ -r "$RUNTIME_MANIFEST" ]] || die "runtime manifest is not readable: $RUNTIME_MANIFEST"
+LOCAL_NODE_STATE=".groundhog/local-node.json"
+[[ -r "$LOCAL_NODE_STATE" ]] || die "local node state was not written: $LOCAL_NODE_STATE"
+STATE_RPC_URL="$(json_field rpcUrl "$(cat "$LOCAL_NODE_STATE")")"
+STATE_RUNTIME_MANIFEST="$(json_field runtimeManifest "$(cat "$LOCAL_NODE_STATE")")"
+[[ "$STATE_RPC_URL" == "$RPC_URL" ]] \
+    || die "local node state rpcUrl was $STATE_RPC_URL, expected $RPC_URL"
+[[ "$STATE_RUNTIME_MANIFEST" == "$RUNTIME_MANIFEST" ]] \
+    || die "local node state runtimeManifest was $STATE_RUNTIME_MANIFEST, expected $RUNTIME_MANIFEST"
+unset GROUNDHOG_RUNTIME_MANIFEST
 
 GATEWAY_RPC_URL=""
 if [[ "${SMOKE_STANDALONE_GATEWAY:-0}" == "1" ]]; then
-    RUNTIME_MANIFEST="$(json_field data.runtime_manifest.path "$NODE_JSON")"
-    [[ "$RUNTIME_MANIFEST" != "null" && -n "$RUNTIME_MANIFEST" ]] \
-        || die "groundhog node did not report a runtime manifest path"
-    [[ -r "$RUNTIME_MANIFEST" ]] || die "runtime manifest is not readable: $RUNTIME_MANIFEST"
-
     GATEWAY_PORT="$(free_tcp_port)"
     GATEWAY_RPC_URL="http://127.0.0.1:$GATEWAY_PORT"
 
@@ -347,8 +355,6 @@ if [[ "${SMOKE_STANDALONE_GATEWAY:-0}" == "1" ]]; then
         die "standalone gateway did not answer groundhog_version"
     fi
 fi
-
-update_rpc_url groundhog.toml "$RPC_URL"
 
 DEPLOY_JSON="$(run_json deploy "$CLI" --json deploy)"
 CONTRACT_ADDRESS="$(json_field data.address "$DEPLOY_JSON")"
@@ -367,10 +373,8 @@ log "increment result: status=$(json_field data.status_summary "$INCREMENT_JSON"
 VIEW_FROM="dev-0"
 if [[ -n "$GATEWAY_RPC_URL" ]]; then
     log "Switching project RPC to standalone gateway for view/storage checks"
+    export GROUNDHOG_RUNTIME_MANIFEST="$RUNTIME_MANIFEST"
     update_rpc_url groundhog.toml "$GATEWAY_RPC_URL"
-    # The production gateway intentionally does not expose dev-only account
-    # lookup, so avoid `--from dev-0` in standalone gateway mode.
-    VIEW_FROM=""
 fi
 
 EXPECTED_VALUE=$(( INITIAL_VALUE + INCREMENT_AMOUNT ))
@@ -431,7 +435,7 @@ log "view ping result: height=$(json_field data.height "$PING_VIEW_JSON") events
 contract=$PING_EVENT_CONTRACT topic0=$PING_EVENT_TOPIC0 data=$PING_EVENT_DATA"
 
 if [[ -n "$GATEWAY_RPC_URL" ]]; then
-    log "Skipping call get through standalone gateway because dev-key account lookup is local-node only"
+    log "Skipping call get through standalone gateway because local block driving is owned by groundhog node"
 else
     GET_JSON="$(run_json "call get" "$CLI" --json call "$PROJECT_NAME" get)"
     assert_call_succeeded "get" "$GET_JSON"

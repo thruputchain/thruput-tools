@@ -7,7 +7,14 @@ dev-wallet installation, account funding, and endpoint binding are complete.
 Use it for local benchmark runs:
 
 - `groundhog node` consumes the manifest internally and reports its path in
-  `--json` startup output.
+  `--json` startup output. When launched from a project, it also writes
+  `.groundhog/local-node.json` with the matching RPC URL and manifest path for
+  other terminals, then removes that state on shutdown.
+- CLI commands that use `dev-N` keys resolve manifest paths in this order:
+  `GROUNDHOG_RUNTIME_MANIFEST`, `profile.<name>.runtime_manifest`, then
+  `.groundhog/local-node.json`. The local-node fallback applies only when the
+  profile RPC URL is unset or already loopback, and in that case the state file
+  also supplies the matching RPC URL.
 - `groundhog-rpc --runtime-manifest <path>` starts the standalone gateway from
   the same backend endpoints.
 - `groundhog-bench --runtime-manifest <path>` derives the bootstrapped account
@@ -71,6 +78,22 @@ Extract the RPC URL and manifest path:
 ```bash
 RPC_URL=$(jq -r '.data.rpc_url' /tmp/groundhog-node.json)
 RUNTIME_MANIFEST=$(jq -r '.data.runtime_manifest.path' /tmp/groundhog-node.json)
+```
+
+When `groundhog node` is started from a project directory, normal CLI commands
+in another terminal can use the project-local state file directly while the
+node is running:
+
+```bash
+groundhog deploy
+groundhog call my-contract get
+```
+
+For shell scripts or commands outside the project tree, export the manifest
+path explicitly:
+
+```bash
+export GROUNDHOG_RUNTIME_MANIFEST="$RUNTIME_MANIFEST"
 ```
 
 Push read traffic:
@@ -152,10 +175,26 @@ Readiness stdout is a single bounded JSON pointer line:
 }
 ```
 
-Consumers verify `manifestHash` before parsing the file. On Unix, the Rust
-supervisor also requires an absolute manifest path, rejects symlinks, requires
-the manifest file to be owner-only, and requires the parent directory to be
-owner-only.
+Consumers reading a manifest through the readiness pointer verify
+`manifestHash` before parsing the file. On Unix, the Rust supervisor also
+requires an absolute manifest path, rejects symlinks, requires the manifest
+file to be owner-only, and requires the parent directory to be owner-only.
+
+Consumers configured with a direct `--runtime-manifest`,
+`GROUNDHOG_RUNTIME_MANIFEST`, or `profile.<name>.runtime_manifest` path do not
+have a readiness pointer hash to verify. The CLI direct loader rejects
+symlink/non-file manifest paths before reading a bounded JSON file and
+validating the schema. Gateway and bench direct paths perform bounded JSON
+schema validation and treat the configured path as trusted local developer
+configuration.
+
+The project-local `.groundhog/local-node.json` file is also trusted local
+developer state. It is not hash-verified readiness data; it points the CLI at
+the RPC URL and regular runtime-manifest file produced by the current local
+node workflow. `groundhog node` writes it atomically and removes it on clean
+shutdown if the file still describes the same node. It never overrides
+`GROUNDHOG_RUNTIME_MANIFEST`, `profile.<name>.runtime_manifest`, or an explicit
+non-local profile RPC URL.
 
 Optional endpoints are absent when unavailable. They are never emitted as
 `null`.

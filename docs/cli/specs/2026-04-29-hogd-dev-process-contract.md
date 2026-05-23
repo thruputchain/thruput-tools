@@ -30,8 +30,8 @@ account/genesis input, JSON-RPC facade wiring, log forwarding, and shutdown.
   optional.
 - **Dev accounts.** The supervisor passes deterministic dev-account count,
   seed, and initial token flags. `hogd-dev` advertises the bootstrapped account
-  metadata in readiness, and the supervisor validates it before exposing
-  `groundhog_dev_getAccounts` and `dev-N` signing.
+  metadata in readiness, and the supervisor validates it for manifest-backed
+  `dev-N` signing.
 - **Genesis.** Current `hogd-dev` normally loads dev-account genesis before
   readiness. The supervisor keeps an empty-genesis compatibility probe after
   readiness for older or reduced children that report no genesis block.

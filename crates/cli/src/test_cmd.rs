@@ -246,10 +246,12 @@ fn run_integration_with_dev_node(
     ))?;
 
     let rpc_url = started.rpc_url();
+    let runtime_manifest = started.readiness().manifest_path.clone();
     let result = run_integration_against_node(
         &build,
         &host_target,
         &rpc_url,
+        runtime_manifest,
         options,
         cargo_args,
         artifacts,
@@ -309,6 +311,7 @@ fn run_integration_against_node(
     build: &crate::build::BuildResult,
     host_target: &str,
     rpc_url: &str,
+    runtime_manifest: Option<std::path::PathBuf>,
     options: &TestOptions,
     cargo_args: &[String],
     artifacts: &ArtifactOptions,
@@ -318,7 +321,12 @@ fn run_integration_against_node(
         "Deploying {} to {rpc_url} for integration tests...",
         build.project_name
     ));
-    let prepared = crate::deploy::prepare_deploy_for_rpc(&build.wasm, rpc_url, "dev-0")?;
+    let prepared = crate::deploy::prepare_deploy_for_rpc_with_manifest(
+        &build.wasm,
+        rpc_url,
+        "dev-0",
+        runtime_manifest.clone(),
+    )?;
     let submitted = crate::deploy::submit_prepared_deploy_and_resolve(&prepared)?;
     let contract_address = submitted.contract_address.ok_or_else(|| {
         CliError::Other(format!(
@@ -330,7 +338,7 @@ fn run_integration_against_node(
         "Running RPC integration tests against {contract_address}..."
     ));
 
-    let env = integration_test_environment(rpc_url, &contract_address);
+    let env = integration_test_environment(rpc_url, &contract_address, runtime_manifest.as_deref());
     let filter = SelectedFilter {
         name: options.match_test.as_deref(),
         exact: false,
@@ -351,6 +359,7 @@ fn run_integration_against_node(
     profile.name = "integration".into();
     profile.rpc_url = Some(rpc_url.to_owned());
     profile.default_key = Some("dev-0".into());
+    profile.runtime_manifest = runtime_manifest;
     profile.source = None;
     profile
         .contracts
@@ -413,13 +422,24 @@ fn finish_integration_run(
 }
 
 #[cfg(any(feature = "dev-node", test))]
-fn integration_test_environment(rpc_url: &str, contract_address: &str) -> Vec<(String, String)> {
-    vec![
+fn integration_test_environment(
+    rpc_url: &str,
+    contract_address: &str,
+    runtime_manifest: Option<&std::path::Path>,
+) -> Vec<(String, String)> {
+    let mut env = vec![
         ("GROUNDHOG_RPC_URL".into(), rpc_url.into()),
         ("GROUNDHOG_CONTRACT_ADDRESS".into(), contract_address.into()),
         ("GROUNDHOG_PROFILE".into(), "integration".into()),
         ("GROUNDHOG_DEFAULT_KEY".into(), "dev-0".into()),
-    ]
+    ];
+    if let Some(path) = runtime_manifest {
+        env.push((
+            "GROUNDHOG_RUNTIME_MANIFEST".into(),
+            path.display().to_string(),
+        ));
+    }
+    env
 }
 
 #[cfg(feature = "dev-node")]
@@ -1399,6 +1419,7 @@ mod tests {
             name: "integration".into(),
             rpc_url: Some("http://127.0.0.1:1234".into()),
             default_key: Some("dev-0".into()),
+            runtime_manifest: None,
             contracts: BTreeMap::new(),
             source: None,
         };
@@ -1556,6 +1577,7 @@ mod tests {
         let env = super::integration_test_environment(
             "http://127.0.0.1:1234",
             &format!("0x{}", "11".repeat(32)),
+            Some(std::path::Path::new("/tmp/runtime-manifest.json")),
         );
 
         assert!(env.contains(&("GROUNDHOG_RPC_URL".into(), "http://127.0.0.1:1234".into())));
@@ -1564,6 +1586,10 @@ mod tests {
         }));
         assert!(env.contains(&("GROUNDHOG_PROFILE".into(), "integration".into())));
         assert!(env.contains(&("GROUNDHOG_DEFAULT_KEY".into(), "dev-0".into())));
+        assert!(env.contains(&(
+            "GROUNDHOG_RUNTIME_MANIFEST".into(),
+            "/tmp/runtime-manifest.json".into()
+        )));
     }
 
     #[test]
@@ -1572,6 +1598,7 @@ mod tests {
         let env = super::integration_test_environment(
             "http://127.0.0.1:1234",
             &format!("0x{}", "11".repeat(32)),
+            Some(std::path::Path::new("/tmp/runtime-manifest.json")),
         );
 
         apply_test_environment(&mut command, &env);
@@ -1593,6 +1620,10 @@ mod tests {
         }));
         assert!(applied.contains(&("GROUNDHOG_PROFILE".into(), "integration".into())));
         assert!(applied.contains(&("GROUNDHOG_DEFAULT_KEY".into(), "dev-0".into())));
+        assert!(applied.contains(&(
+            "GROUNDHOG_RUNTIME_MANIFEST".into(),
+            "/tmp/runtime-manifest.json".into()
+        )));
     }
 
     #[cfg(feature = "dev-node")]

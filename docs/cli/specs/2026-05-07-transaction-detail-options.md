@@ -171,14 +171,17 @@ endpoint. The detail RPC waits for a real demand signal and a follow-up
 spec; the first concrete local-node follow-up is `getStorageAt` parity
 through hogd-dev's existing `gateway` / `DbGateway1` endpoint.
 
-## What this means for PR 5
+## What this meant for PR 5
+
+Historical note: `groundhog_dev_getAccounts` was later removed after
+runtime-manifest account discovery landed. The bullets below describe the
+decision at the time of this spec.
 
 If A4 is accepted:
 
 - `groundhog_dev_getTransactionDetail` is removed from PR 5 scope.
-- `crates/rpc-api`'s `GroundhogDevApi` keeps `get_accounts` only;
-  `get_transaction_detail` comes out of the trait alongside `reset`
-  (already removed).
+- At the time, `crates/rpc-api`'s `GroundhogDevApi` kept `get_accounts` only;
+  that trait has since been removed with the dev-account RPC.
 - The supervisor stub `crates/node-supervisor/src/dev_control.rs`
   drops the `get_transaction_detail` METHOD_NOT_FOUND stub.
 - `TransactionDetail` and friends in `crates/api-types/src/dev.rs`

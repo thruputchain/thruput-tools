@@ -1,7 +1,10 @@
 # Gateway Benchmark Bootstrap Plan
 
 **Date:** 2026-05-21
-**Status:** Draft plan for review.
+**Status:** Partially implemented. Runtime-manifest readiness, gateway
+consumption, benchmark consumption, CLI manifest-first dev-account discovery,
+and dev-account RPC removal have landed; bootstrap-manifest input and the
+full-stack benchnet harness remain open.
 
 ## Goal
 
@@ -37,18 +40,21 @@ Most of the pieces already exist:
 
 - `hogd-dev` can bootstrap deterministic dev accounts and advertise them in
   readiness.
-- `groundhog node` already validates advertised dev-account metadata before
-  exposing `groundhog_dev_getAccounts`.
+- `groundhog node` validates advertised dev-account metadata against local
+  deterministic dev-key settings.
 - `groundhog-rpc` already runs the production gateway path and connects to
   scheduler, indexer, DbGateway, and ViewGateway endpoints.
 - `groundhog-bench` already provides an open-loop HTTP JSON-RPC load generator.
 - The CLI dev-key flow already treats `dev-N` wallet addresses as backend
-  metadata, not locally-derived addresses; today it obtains that metadata from
-  `groundhog_dev_getAccounts`.
+  metadata, not locally-derived addresses. It reads configured runtime
+  manifests for wallet-address discovery.
 
-The missing connective tissue is a portable bootstrap/runtime contract that can
-be consumed by `hogd-dev`, a full-stack benchmark harness, gateway config
-generation, and benchmark workload generation.
+The first runtime-manifest handoff now exists and is consumed by `groundhog
+node`, `groundhog-rpc --runtime-manifest`, and `groundhog-bench
+--runtime-manifest`. The temporary dev-account RPC has been removed; remaining
+connective tissue is the expansion around that contract: bootstrap input should
+become portable, and a full-stack benchmark harness should consume the same
+shapes.
 
 Today's public JSON-RPC surface already covers most normal transaction and
 state reads:
@@ -207,10 +213,10 @@ This is observed state. It answers: "What is actually running, where are the
 services, which accounts are funded, and which wallet addresses should clients
 invoke?"
 
-The runtime manifest can replace today's readiness JSON because there are no
-external customers yet, but the one-line stdout contract should stay tiny:
-read exactly one bounded JSON line from stdout; require `status = "ready"`;
-load the manifest from `manifestPath`.
+The runtime manifest replaces the previous ad hoc readiness JSON without
+changing the tiny one-line stdout contract: read exactly one bounded JSON line
+from stdout, require `status = "ready"`, and load the manifest from
+`manifestPath`.
 
 The manifest file should be written in an owner-only directory with restrictive
 permissions, and the readiness pointer includes `manifestHash` so consumers can
@@ -262,10 +268,9 @@ the bootstrap manifest. `deployedCodeHash` is the hash of the code actually
 installed in genesis and may differ if the backend transforms the artifact
 before deployment.
 
-Terminology note: the current code calls these `DevAccount`s because the first
-consumer was `groundhog node`. The manifest should use `bootstrapAccounts`
-instead. These are accounts/wallets materialized at bootstrap so local CLI,
-bench, and test harnesses can submit valid transactions.
+Terminology note: the runtime manifest uses `bootstrapAccounts` for
+accounts/wallets materialized at bootstrap so local CLI, bench, and test
+harnesses can submit valid transactions.
 
 For v1, all `bootstrapAccounts` share the top-level
 `bootstrapAccountDerivation` scheme and seed; `index` is the only key
@@ -327,9 +332,9 @@ pretty-printed JSON. The full cost model remains authoritative.
   `genesisHash` is the strongest candidate for promotion because it is a chain
   fingerprint; if promoted, prefer adding it to `groundhog_version` rather than
   minting a manifest-shaped RPC method.
-- Should accept `--runtime-manifest <path>` for dev/bench runs and derive its
-  backend endpoint config directly from the manifest. TOML remains the normal
-  production config format when no manifest exists.
+- Accepts `--runtime-manifest <path>` for dev/bench runs and derives its backend
+  endpoint config directly from the manifest. TOML remains the normal production
+  config format when no manifest exists.
 
 ### groundhog-bench
 
@@ -349,58 +354,77 @@ Schema artifact for TypeScript, Python, shell tooling, and C++ producer tests.
 Hogd may produce the JSON from C++ without importing Rust code, but it should
 test against the generated schema.
 
-The current `api-types::dev::DevAccount` is a local-node RPC type and includes
-private-key material. The manifest type should be a new shape rather than a
-rename-only reuse of `DevAccount`.
+The removed `api-types::dev::DevAccount` local-node RPC type included
+private-key material. The runtime manifest deliberately uses a different shape
+with public bootstrap metadata only.
 
-The current `groundhog_dev_getAccounts` method is a local-node compatibility
-surface, not the long-term discovery contract. It is load-bearing today for CLI
-`dev-N` wallet-address resolution, so it should be removed only after the CLI
-and bench can resolve bootstrap accounts from the runtime manifest.
+The removed `groundhog_dev_getAccounts` method was a local-node compatibility
+surface, not the long-term discovery contract. CLI `dev-N` wallet-address
+resolution and `groundhog-bench` now derive account metadata from the runtime
+manifest.
+
+## Implementation Status
+
+As of 2026-05-22:
+
+- [x] `hogd-dev` readiness pointer to a versioned runtime manifest.
+- [x] `groundhog node` reports `data.runtime_manifest.path` and hash in
+  startup JSON.
+- [x] Supervisor parses the runtime manifest and validates advertised
+  dev-account metadata against configured deterministic dev keys.
+- [x] `groundhog-bench --runtime-manifest` generates valid dev-wallet
+  `sendRawTransaction` workloads from `bootstrapAccounts`.
+- [x] `groundhog-rpc --runtime-manifest` overlays gateway backend endpoints
+  from the manifest.
+- [x] Smoke and repeatable local benchmark scenarios cover the manifest-backed
+  CLI-node path, standalone-gateway read/view/storage checks, and
+  standalone-gateway benchmark submit traffic.
+- [x] CLI `dev-N` wallet-address resolution reads a configured runtime
+  manifest.
+- [x] Remove the dev-account RPC compatibility path.
+- [ ] Define and consume a portable bootstrap manifest input for `hogd-dev`.
+- [ ] Build the full-stack benchnet harness for hogd/chuckd topologies.
 
 ## Phased Plan
 
 ### Phase 1: Runtime Manifest Readiness
 
-- Replace `hogd-dev` readiness with a small versioned readiness pointer.
-- Write the versioned runtime manifest to disk.
-- Update `node-supervisor` parsing to accept the new manifest shape.
-- Preserve the one-line stdout contract and bounded read for the pointer.
-- Keep stderr for logs.
-- If a local admin HTTP server exists, optionally expose `GET /manifest` as a
+- [x] Replace `hogd-dev` readiness with a small versioned readiness pointer.
+- [x] Write the versioned runtime manifest to disk.
+- [x] Update `node-supervisor` parsing to accept the new manifest shape.
+- [x] Preserve the one-line stdout contract and bounded read for the pointer.
+- [x] Keep stderr for logs.
+- [ ] If a local admin HTTP server exists, optionally expose `GET /manifest` as a
   protected post-startup retrieval path for the same manifest.
-- Keep endpoint aliases only if needed during the transition; prefer canonical
+- [x] Keep endpoint aliases only if needed during the transition; prefer canonical
   manifest keys going forward.
-- Keep the current `groundhog_dev_getAccounts` RPC working during the
-  transition by deriving its response from the runtime manifest.
-- `groundhog_dev_getAccounts` may remain richer than the manifest by
-  re-deriving local-only private keys in-process from the manifest's derivation
-  scheme and seed. Do not write those private keys into the manifest.
+- [x] Do not write private keys into the runtime manifest; local dev signers
+  remain deterministic and are derived in process when needed.
 
 Deliverable: `groundhog node` still works, but its startup data is the runtime
 manifest rather than ad hoc readiness JSON.
 
 ### Phase 2: Benchmark Consumption
 
-- Teach `groundhog-bench` to read a runtime manifest.
-- Generate valid dev-wallet transaction workloads from `bootstrapAccounts`.
-- Keep the current URL-only mode for simple RPC smoke tests.
-- Add machine-readable benchmark output if missing for comparison across runs.
-- Teach CLI `dev-N` wallet-address resolution to prefer a configured runtime
-  manifest over `groundhog_dev_getAccounts`, keeping the RPC lookup only as a
-  temporary compatibility fallback.
+- [x] Teach `groundhog-bench` to read a runtime manifest.
+- [x] Generate valid dev-wallet transaction workloads from `bootstrapAccounts`.
+- [x] Keep the current URL-only mode for simple RPC smoke tests.
+- [ ] Add machine-readable benchmark output if missing for comparison across runs.
+- [x] Teach CLI `dev-N` wallet-address resolution to use a configured runtime
+  manifest.
 
 Deliverable: benchmark submit workloads are valid against a bootstrapped
-backend instead of relying on local assumptions.
+backend instead of relying on local assumptions. The benchmark and CLI
+dev-account discovery portions are done.
 
 ### Phase 2.5: Remove Dev RPC Compatibility
 
-- Once CLI and bench no longer require `groundhog_dev_getAccounts`, remove the
-  dev-account RPC compatibility path rather than letting it linger.
-- Delete `GroundhogDevApi` / `groundhog_dev_getAccounts` from the generated API
+- [x] Once the manifest-first migration has proven out, remove the dev-account
+  RPC compatibility path rather than letting it linger.
+- [x] Delete `GroundhogDevApi` / `groundhog_dev_getAccounts` from the generated API
   surface and OpenRPC spec unless another concrete local-only use remains.
-- Remove supervisor `dev_accounts` plumbing that exists only to serve that RPC.
-- Keep deterministic dev-key signing support; only the account-discovery
+- [x] Remove supervisor `dev_accounts` plumbing that exists only to serve that RPC.
+- [x] Keep deterministic dev-key signing support; only the account-discovery
   surface moves to the runtime manifest.
 
 Deliverable: bootstrap account discovery has one maintained path: the runtime
@@ -408,14 +432,15 @@ manifest.
 
 ### Phase 3: Gateway Config Generation
 
-- Add `groundhog-rpc --runtime-manifest <path>` so dev/bench runs can consume
+- [x] Add `groundhog-rpc --runtime-manifest <path>` so dev/bench runs can consume
   advertised backend endpoints directly.
-- Keep TOML config for production deployments and for hand-authored configs
+- [x] Keep TOML config for production deployments and for hand-authored configs
   where no runtime manifest exists.
-- Keep benchmark runs on the production gateway binary.
+- [x] Keep benchmark runs on the production gateway binary.
 
 Deliverable: the gateway can start against a bootstrapped backend without
-hand-copying ports or generating an intermediate config file.
+hand-copying ports or generating an intermediate config file. This phase is
+implemented for the hogd-dev runtime-manifest path.
 
 ### Phase 4: Bootstrap Manifest Input
 
@@ -481,7 +506,7 @@ The scope appears manageable because the codebase already has:
 - hogd-dev process supervision and readiness parsing;
 - deterministic dev-key derivation;
 - backend-advertised wallet address resolution;
-- `groundhog_dev_getAccounts` as today's local-node compatibility lookup;
+- runtime-manifest account discovery for CLI and benchmark workloads;
 - an initial open-loop benchmark harness.
 
 The main design work is to promote the existing readiness and bootstrap-account

@@ -66,8 +66,8 @@ With the CLI's `dev-node` feature enabled, `groundhog test
 terminal: it builds the WASM artifact, starts an ephemeral hogd-dev
 node, deploys with `dev-0`, runs `tests/integration.rs`, then shuts the
 node down. The test process receives `GROUNDHOG_RPC_URL`,
-`GROUNDHOG_CONTRACT_ADDRESS`, `GROUNDHOG_PROFILE=integration`, and
-`GROUNDHOG_DEFAULT_KEY=dev-0`.
+`GROUNDHOG_CONTRACT_ADDRESS`, `GROUNDHOG_PROFILE=integration`,
+`GROUNDHOG_DEFAULT_KEY=dev-0`, and `GROUNDHOG_RUNTIME_MANIFEST`.
 
 For gateway and benchmark runs, `hogd-dev` also writes a runtime manifest
 describing the live x23 endpoints, bootstrapped dev wallets, and funding
@@ -87,6 +87,15 @@ groundhog-bench --url http://127.0.0.1:9546 \
   --method sendRawTransaction
 ```
 
+CLI commands using local dev keys (`dev-0`, `dev-1`, ...) read the runtime
+manifest for wallet-address discovery. `groundhog node` writes
+`.groundhog/local-node.json` when launched from a project, so commands in
+another terminal can discover the live RPC URL and manifest automatically, and
+removes that state on shutdown. This project-local state only fills missing
+dev-key config or replaces loopback RPC URLs; scripts and non-local profiles
+can also set `GROUNDHOG_RUNTIME_MANIFEST` or
+`profile.<name>.runtime_manifest` explicitly.
+
 See [Runtime Manifest Quickstart](docs/gateway/runtime-manifest.md) for the
 full CLI/gateway/bench loop,
 [Benchmark Scenario Library](docs/gateway/bench-scenarios.md) for repeatable
@@ -99,11 +108,12 @@ for the v1 JSON shape.
 The JSON-RPC contract lives in the OpenRPC artifact at
 [`crates/open-rpc-spec/snapshots/groundhog-spec.json`](crates/open-rpc-spec/snapshots/groundhog-spec.json),
 also published as the `groundhog-open-rpc-spec` crate on the private
-registry. Two method namespaces:
+registry. The current public JSON-RPC surface uses one method namespace:
 
 - `groundhog_*` — public surface intended for SDK consumption.
-- `groundhog_dev_*` — local-development helpers (account introspection,
-  test-mode utilities). SDKs should not surface these by default.
+
+Local dev-key metadata for `dev-N` workflows is intentionally outside JSON-RPC;
+the CLI, gateway, and bench harness discover it from the runtime manifest.
 
 Wire-format conventions:
 

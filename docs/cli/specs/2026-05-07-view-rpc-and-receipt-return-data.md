@@ -500,10 +500,9 @@ groundhog view <contract> <method> [args...] --json
   specs from deployed bytecode/address is a future feature and requires a
   hogd/gateway read surface for deployed code or spec metadata.
 - `--from <hex-address>` works anywhere.
-- `--from dev-N` is local-dev sugar resolved through
-  `groundhog_dev_getAccounts`. On endpoints that do not expose
-  `groundhog_dev_getAccounts`, the CLI should return a clear error and
-  ask for an explicit address.
+- `--from dev-N` is local-dev sugar. This originally resolved through
+  `groundhog_dev_getAccounts`; the current implementation resolves it through
+  the runtime manifest.
 - Output: human-readable line on `Return` (decoded if metadata is
   present, raw hex otherwise) plus any non-empty events list; on
   `Abort`, a clear "view aborted" line with raw abort hex; on `Fault`,
@@ -616,8 +615,8 @@ optional decoration.
 - Request validation: `entrypoint` not exactly 8 bytes, malformed hex,
   or invalid `ContractAddress` returns JSON-RPC `invalid params`
   before execution.
-- `--from dev-N` resolves through `groundhog_dev_getAccounts` only on
-  local dev endpoints; off-dev endpoints surface a clear error.
+- `--from dev-N` resolves through a configured runtime manifest; missing
+  manifest configuration surfaces a clear local-dev account error.
 - Supervisor conformance: when hogd-dev readiness omits the view
   endpoint, `groundhog_view` returns `NotImplemented` instead of failing
   startup.

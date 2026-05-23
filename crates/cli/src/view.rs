@@ -13,10 +13,11 @@ use crate::call::{
     ResolvedCall, format_entrypoint_id, format_hex_bytes, resolve_call, selector_json,
 };
 use crate::codec::{decode_return, encode_args, parse_contract_address};
-use crate::config::resolve_profile;
+use crate::config::{resolve_default_key, resolve_profile};
 use crate::dev_detail::format_event;
 use crate::dev_keys;
 use crate::result::CommandResult;
+use crate::runtime_manifest::apply_local_node_state_for_dev_key;
 use crate::view_json::{VIEW_JSON_SCHEMA_VERSION, ViewJsonPayload};
 use crate::{CliError, Print};
 
@@ -104,7 +105,11 @@ fn prepare_view(
     profile: &str,
     rt: &tokio::runtime::Runtime,
 ) -> Result<PreparedView, CliError> {
-    let resolved_profile = resolve_profile(project_start, Some(profile))?;
+    let mut resolved_profile = resolve_profile(project_start, Some(profile))?;
+    let default_key = resolve_default_key(project_start, Some(profile))?;
+    if let Some(key_name) = local_dev_key_for_view(from, default_key.as_deref()) {
+        apply_local_node_state_for_dev_key(&mut resolved_profile, &key_name)?;
+    }
     let rpc_url = resolved_profile
         .rpc_url
         .as_deref()
@@ -114,7 +119,7 @@ fn prepare_view(
     let contract_address = ContractAddress::from(parse_contract_address(&contract_address_hex)?);
     let resolved = resolve_call(project_start, method, artifacts)?;
     let calldata_bytes = resolve_calldata(args, calldata, &resolved)?;
-    let caller = resolve_caller(rpc_url, from, rt)?;
+    let caller = resolve_caller(&resolved_profile, from, rt)?;
     let entrypoint_bytes = resolved.entrypoint.into_inner().to_vec();
     let entrypoint_id = format_entrypoint_id(resolved.entrypoint);
     let calldata_hex = format_hex_bytes(&calldata_bytes);
@@ -133,6 +138,16 @@ fn prepare_view(
             caller,
         },
     })
+}
+
+fn local_dev_key_for_view(from: Option<&str>, default_key: Option<&str>) -> Option<String> {
+    match from {
+        Some(from) if dev_keys::dev_key_index(from).is_some() => Some(from.to_owned()),
+        Some(_) => None,
+        None => default_key
+            .filter(|key| dev_keys::dev_key_index(key).is_some())
+            .map(str::to_owned),
+    }
 }
 
 fn resolve_calldata(
@@ -166,17 +181,15 @@ fn parse_calldata(raw: &str) -> Result<Vec<u8>, CliError> {
 }
 
 fn resolve_caller(
-    rpc_url: &str,
+    profile: &crate::config::ResolvedProfile,
     from: Option<&str>,
-    rt: &tokio::runtime::Runtime,
+    _rt: &tokio::runtime::Runtime,
 ) -> Result<Option<ContractAddress>, CliError> {
     let Some(from) = from else {
         return Ok(None);
     };
     if let Some(index) = dev_keys::dev_key_index(from) {
-        return rt
-            .block_on(lookup_dev_account_address(rpc_url, from, index))
-            .map(Some);
+        return lookup_dev_account_address(profile, from, index).map(Some);
     }
     parse_contract_address(from)
         .map(ContractAddress::from)

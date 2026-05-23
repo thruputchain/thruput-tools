@@ -4,8 +4,8 @@ mod schema_generation {
 
     use crate::block::{BlockInfo, ChainTip};
     use crate::dev::{
-        DevAccount, FrameOutputInfo, InvocationInfo, StorageDeltaInfo, SyscallInfo,
-        SyscallStatusInfo, TraceInfo, TransactionDetail,
+        FrameOutputInfo, InvocationInfo, StorageDeltaInfo, SyscallInfo, SyscallStatusInfo,
+        TraceInfo, TransactionDetail,
     };
     use crate::events::{
         EmittedEvent, EventFilter, EventPage, EventQuery, EventTopicFilter, IdentifiedEvent,
@@ -41,7 +41,6 @@ mod schema_generation {
         let _ = schema_for!(StorageItemRead);
 
         // Dev types
-        let _ = schema_for!(DevAccount);
         let _ = schema_for!(TransactionDetail);
         let _ = schema_for!(StorageDeltaInfo);
         let _ = schema_for!(TraceInfo);
