@@ -17,6 +17,8 @@ pub struct ProjectProfile {
     #[serde(default)]
     pub default_key: Option<String>,
     #[serde(default)]
+    pub runtime_manifest: Option<PathBuf>,
+    #[serde(default)]
     pub contracts: BTreeMap<String, String>,
 }
 
@@ -32,6 +34,7 @@ pub struct ResolvedProfile {
     pub name: String,
     pub rpc_url: Option<String>,
     pub default_key: Option<String>,
+    pub runtime_manifest: Option<PathBuf>,
     pub contracts: BTreeMap<String, String>,
     pub source: Option<PathBuf>,
 }
@@ -199,6 +202,7 @@ pub fn resolve_profile(start: &Path, explicit: Option<&str>) -> Result<ResolvedP
         name,
         rpc_url: profile.rpc_url,
         default_key: profile.default_key,
+        runtime_manifest: profile.runtime_manifest,
         contracts: profile.contracts,
         source,
     })

@@ -276,7 +276,7 @@ fn prepare_call_with_runtime(
     let resolved = resolve_call(&cwd, method, artifacts)?;
     let calldata = encode_args(args, resolved.metadata.as_ref())?;
 
-    let wallet_address = resolve_wallet_address(rpc_url, &key_name, &signer, rt)?;
+    let wallet_address = resolve_wallet_address(&resolved_profile, &key_name, &signer, rt)?;
 
     let inner_invocation = xdrs::txs::encode(&(
         contract_address,

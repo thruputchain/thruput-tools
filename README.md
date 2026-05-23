@@ -66,8 +66,8 @@ With the CLI's `dev-node` feature enabled, `groundhog test
 terminal: it builds the WASM artifact, starts an ephemeral hogd-dev
 node, deploys with `dev-0`, runs `tests/integration.rs`, then shuts the
 node down. The test process receives `GROUNDHOG_RPC_URL`,
-`GROUNDHOG_CONTRACT_ADDRESS`, `GROUNDHOG_PROFILE=integration`, and
-`GROUNDHOG_DEFAULT_KEY=dev-0`.
+`GROUNDHOG_CONTRACT_ADDRESS`, `GROUNDHOG_PROFILE=integration`,
+`GROUNDHOG_DEFAULT_KEY=dev-0`, and `GROUNDHOG_RUNTIME_MANIFEST`.
 
 For gateway and benchmark runs, `hogd-dev` also writes a runtime manifest
 describing the live x23 endpoints, bootstrapped dev wallets, and funding
@@ -87,6 +87,11 @@ groundhog-bench --url http://127.0.0.1:9546 \
   --method sendRawTransaction
 ```
 
+CLI commands using local dev keys (`dev-0`, `dev-1`, ...) also prefer the
+runtime manifest for wallet-address discovery when
+`GROUNDHOG_RUNTIME_MANIFEST` or `profile.<name>.runtime_manifest` is set.
+`groundhog_dev_getAccounts` remains a temporary compatibility fallback.
+
 See [Runtime Manifest Quickstart](docs/gateway/runtime-manifest.md) for the
 full CLI/gateway/bench loop,
 [Benchmark Scenario Library](docs/gateway/bench-scenarios.md) for repeatable
@@ -102,8 +107,10 @@ also published as the `groundhog-open-rpc-spec` crate on the private
 registry. Two method namespaces:
 
 - `groundhog_*` — public surface intended for SDK consumption.
-- `groundhog_dev_*` — local-development helpers (account introspection,
-  test-mode utilities). SDKs should not surface these by default.
+- `groundhog_dev_*` — temporary local-development compatibility helpers.
+  Today this includes dev-account introspection for `dev-N` workflows; the
+  long-term discovery path is the runtime manifest, and SDKs should not surface
+  these methods by default.
 
 Wire-format conventions:
 

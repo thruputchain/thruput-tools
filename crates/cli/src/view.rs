@@ -114,7 +114,7 @@ fn prepare_view(
     let contract_address = ContractAddress::from(parse_contract_address(&contract_address_hex)?);
     let resolved = resolve_call(project_start, method, artifacts)?;
     let calldata_bytes = resolve_calldata(args, calldata, &resolved)?;
-    let caller = resolve_caller(rpc_url, from, rt)?;
+    let caller = resolve_caller(&resolved_profile, from, rt)?;
     let entrypoint_bytes = resolved.entrypoint.into_inner().to_vec();
     let entrypoint_id = format_entrypoint_id(resolved.entrypoint);
     let calldata_hex = format_hex_bytes(&calldata_bytes);
@@ -166,7 +166,7 @@ fn parse_calldata(raw: &str) -> Result<Vec<u8>, CliError> {
 }
 
 fn resolve_caller(
-    rpc_url: &str,
+    profile: &crate::config::ResolvedProfile,
     from: Option<&str>,
     rt: &tokio::runtime::Runtime,
 ) -> Result<Option<ContractAddress>, CliError> {
@@ -175,7 +175,7 @@ fn resolve_caller(
     };
     if let Some(index) = dev_keys::dev_key_index(from) {
         return rt
-            .block_on(lookup_dev_account_address(rpc_url, from, index))
+            .block_on(lookup_dev_account_address(profile, from, index))
             .map(Some);
     }
     parse_contract_address(from)

@@ -21,6 +21,7 @@ pub mod new;
 pub mod node;
 pub mod print;
 pub mod result;
+pub(crate) mod runtime_manifest;
 pub mod scaffold;
 pub mod status;
 pub mod storage;

@@ -13,7 +13,9 @@ use groundhog_rpc_client::{GroundhogApiClient, HttpClientBuilder};
 use tempfile::TempDir;
 
 fn groundhog() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_groundhog"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_groundhog"));
+    command.env_remove("GROUNDHOG_RUNTIME_MANIFEST");
+    command
 }
 
 #[cfg(feature = "dev-node")]
@@ -1199,6 +1201,292 @@ fn deploy_dry_run_uses_advertised_dev_wallet_address() {
 }
 
 #[test]
+fn deploy_dry_run_uses_manifest_dev_wallet_address_without_dev_rpc() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let advertised_wallet = advertised_dev_wallet_address(0);
+    let manifest_path = write_runtime_manifest(&project, 0, &advertised_wallet, None);
+    let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            manifest_path.file_name().unwrap().to_string_lossy()
+        ),
+    )
+    .unwrap();
+
+    let wasm_path = tmp.path().join("test.wasm");
+    std::fs::write(&wasm_path, b"\0asm\x01\0\0\0").unwrap();
+
+    let output = groundhog()
+        .args([
+            "--json",
+            "deploy",
+            "--dry-run",
+            "--wasm",
+            wasm_path.to_str().unwrap(),
+        ])
+        .current_dir(&project)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let signed_tx = stdout["data"]["signed_tx"]
+        .as_str()
+        .expect("bug: dry-run output includes signed tx");
+
+    assert_eq!(signed_tx_invoked_address(signed_tx), advertised_wallet);
+}
+
+#[test]
+fn deploy_dry_run_runtime_manifest_env_overrides_profile() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let profile_wallet = advertised_dev_wallet_address(0);
+    let env_wallet = advertised_dev_wallet_address(1);
+    let profile_manifest = write_runtime_manifest(&project, 0, &profile_wallet, None);
+    let env_manifest = write_runtime_manifest(tmp.path(), 0, &env_wallet, None);
+    let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            profile_manifest.file_name().unwrap().to_string_lossy()
+        ),
+    )
+    .unwrap();
+
+    let wasm_path = tmp.path().join("test.wasm");
+    std::fs::write(&wasm_path, b"\0asm\x01\0\0\0").unwrap();
+
+    let output = groundhog()
+        .args([
+            "--json",
+            "deploy",
+            "--dry-run",
+            "--wasm",
+            wasm_path.to_str().unwrap(),
+        ])
+        .current_dir(&project)
+        .env("GROUNDHOG_RUNTIME_MANIFEST", &env_manifest)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let signed_tx = stdout["data"]["signed_tx"]
+        .as_str()
+        .expect("bug: dry-run output includes signed tx");
+
+    assert_eq!(signed_tx_invoked_address(signed_tx), env_wallet);
+}
+
+#[test]
+fn deploy_dry_run_blank_runtime_manifest_env_falls_back_to_profile() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let profile_wallet = advertised_dev_wallet_address(0);
+    let profile_manifest = write_runtime_manifest(&project, 0, &profile_wallet, None);
+    let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            profile_manifest.file_name().unwrap().to_string_lossy()
+        ),
+    )
+    .unwrap();
+
+    let wasm_path = tmp.path().join("test.wasm");
+    std::fs::write(&wasm_path, b"\0asm\x01\0\0\0").unwrap();
+
+    let output = groundhog()
+        .args([
+            "--json",
+            "deploy",
+            "--dry-run",
+            "--wasm",
+            wasm_path.to_str().unwrap(),
+        ])
+        .current_dir(&project)
+        .env("GROUNDHOG_RUNTIME_MANIFEST", "   ")
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let signed_tx = stdout["data"]["signed_tx"]
+        .as_str()
+        .expect("bug: dry-run output includes signed tx");
+
+    assert_eq!(signed_tx_invoked_address(signed_tx), profile_wallet);
+}
+
+#[cfg(unix)]
+#[test]
+fn deploy_dry_run_rejects_runtime_manifest_symlink() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let advertised_wallet = advertised_dev_wallet_address(0);
+    let manifest_path = write_runtime_manifest(tmp.path(), 0, &advertised_wallet, None);
+    let symlink_path = tmp.path().join("runtime-manifest-link.json");
+    std::os::unix::fs::symlink(&manifest_path, &symlink_path).unwrap();
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!(
+            "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            symlink_path.display()
+        ),
+    )
+    .unwrap();
+
+    let wasm_path = tmp.path().join("test.wasm");
+    std::fs::write(&wasm_path, b"\0asm\x01\0\0\0").unwrap();
+
+    let output = groundhog()
+        .args([
+            "--json",
+            "deploy",
+            "--dry-run",
+            "--wasm",
+            wasm_path.to_str().unwrap(),
+        ])
+        .current_dir(&project)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(stderr["error"]["code"], "local_dev_account_unavailable");
+    assert!(
+        stderr["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("not a symlink")
+    );
+}
+
+#[test]
+fn deploy_dry_run_rejects_manifest_public_key_mismatch_before_rpc() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let advertised_wallet = advertised_dev_wallet_address(0);
+    let manifest_path = write_runtime_manifest(tmp.path(), 0, &advertised_wallet, Some([0x99; 32]));
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!(
+            "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            manifest_path.display()
+        ),
+    )
+    .unwrap();
+
+    let wasm_path = tmp.path().join("test.wasm");
+    std::fs::write(&wasm_path, b"\0asm\x01\0\0\0").unwrap();
+
+    let output = groundhog()
+        .args([
+            "--json",
+            "deploy",
+            "--dry-run",
+            "--wasm",
+            wasm_path.to_str().unwrap(),
+        ])
+        .current_dir(&project)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(stderr["error"]["code"], "local_dev_account_unavailable");
+    assert!(
+        stderr["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("does not match derivation seed")
+    );
+}
+
+#[test]
+fn deploy_dry_run_rejects_manifest_seed_that_does_not_match_signer() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let advertised_wallet = advertised_dev_wallet_address(0);
+    let manifest_path = write_runtime_manifest_with_seed(
+        tmp.path(),
+        0,
+        &advertised_wallet,
+        "alternate-dev-seed",
+        None,
+    );
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!(
+            "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            manifest_path.display()
+        ),
+    )
+    .unwrap();
+
+    let wasm_path = tmp.path().join("test.wasm");
+    std::fs::write(&wasm_path, b"\0asm\x01\0\0\0").unwrap();
+
+    let output = groundhog()
+        .args([
+            "--json",
+            "deploy",
+            "--dry-run",
+            "--wasm",
+            wasm_path.to_str().unwrap(),
+        ])
+        .current_dir(&project)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(stderr["error"]["code"], "local_dev_account_unavailable");
+    assert!(
+        stderr["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("expected 0x")
+    );
+}
+
+#[test]
 fn deploy_dev_key_fails_when_get_accounts_is_missing() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");
@@ -1530,6 +1818,47 @@ fn view_json_uses_dev_account_as_caller() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
+    )
+    .unwrap();
+
+    let output = groundhog()
+        .args(["--json", "view", &address, entrypoint, "--from", "dev-0"])
+        .current_dir(&project)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["ok"], true);
+    assert_eq!(stdout["command"], "view");
+    assert_eq!(stdout["data"]["caller"], caller);
+}
+
+#[test]
+fn view_json_uses_manifest_dev_account_as_caller_without_dev_rpc() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let address = format!("0x{}", "11".repeat(32));
+    let caller = advertised_dev_wallet_address(0);
+    let entrypoint = "0x0102030405060708";
+    let manifest_path = write_runtime_manifest(tmp.path(), 0, &caller, None);
+    let (rpc_url, rpc_server) = spawn_view_rpc_with_caller(&address, entrypoint, "0x", &caller);
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\nruntime_manifest = \"{}\"\n",
+            manifest_path.display()
+        ),
     )
     .unwrap();
 
@@ -1894,6 +2223,53 @@ fn call_dry_run_uses_advertised_dev_wallet_address() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!("[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\n"),
+    )
+    .unwrap();
+
+    let contract = format!("0x{}", "11".repeat(32));
+    let output = groundhog()
+        .args([
+            "--json",
+            "call",
+            "--dry-run",
+            &contract,
+            "0x0123456789abcdef",
+            "0x0102",
+        ])
+        .current_dir(&project)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let signed_tx = stdout["data"]["signed_tx"]
+        .as_str()
+        .expect("bug: dry-run output includes signed tx");
+
+    assert_eq!(signed_tx_invoked_address(signed_tx), advertised_wallet);
+}
+
+#[test]
+fn call_dry_run_uses_manifest_dev_wallet_address_without_dev_rpc() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let advertised_wallet = advertised_dev_wallet_address(0);
+    let manifest_path = write_runtime_manifest(tmp.path(), 0, &advertised_wallet, None);
+    let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            manifest_path.display()
+        ),
     )
     .unwrap();
 
@@ -2685,6 +3061,80 @@ fn dev_account_json(index: usize, address: &str) -> serde_json::Value {
         "privateKey": format!("0x{}", hex::encode(&signer.to_keypair_bytes()[..32])),
         "initialStorageTokens": groundhog_signing::DEFAULT_DEV_ACCOUNT_STORAGE_TOKENS,
     })
+}
+
+fn write_runtime_manifest(
+    dir: &std::path::Path,
+    index: usize,
+    address: &str,
+    public_key_override: Option<[u8; 32]>,
+) -> std::path::PathBuf {
+    write_runtime_manifest_with_seed(
+        dir,
+        index,
+        address,
+        groundhog_signing::DEFAULT_DEV_ACCOUNT_SEED,
+        public_key_override,
+    )
+}
+
+fn write_runtime_manifest_with_seed(
+    dir: &std::path::Path,
+    index: usize,
+    address: &str,
+    seed: &str,
+    public_key_override: Option<[u8; 32]>,
+) -> std::path::PathBuf {
+    let signer = groundhog_signing::dev_account::derive_dev_account_signer(seed, index);
+    let public_key = public_key_override.unwrap_or_else(|| signer.verifying_key_bytes());
+    let path = dir.join(format!("runtime-manifest-{index}.json"));
+    let manifest = serde_json::json!({
+        "schemaVersion": 1,
+        "kind": "hogd-dev-runtime",
+        "networkId": "groundhog-local",
+        "protocol": "hogp/test",
+        "genesisHash": format!("0x{}", "42".repeat(32)),
+        "producer": {
+            "binary": "hogd-dev",
+            "version": "0.1.0"
+        },
+        "endpoints": {
+            "scheduler": "127.0.0.1:1000"
+        },
+        "bootstrapAccountDerivation": {
+            "scheme": "groundhog-bootstrap-account-v1",
+            "seed": seed
+        },
+        "bootstrapAccounts": [{
+            "index": index,
+            "role": "local_user",
+            "publicKey": format!("0x{}", hex::encode(public_key)),
+            "walletAddress": address,
+            "initialStorageTokens": groundhog_signing::DEFAULT_DEV_ACCOUNT_STORAGE_TOKENS.to_string()
+        }],
+        "bootstrap": {
+            "devWallet": {
+                "contentHash": format!("0x{}", "51".repeat(32)),
+                "deployedCodeHash": format!("0x{}", "52".repeat(32)),
+                "artifactHint": "./dev-wallet.wasm",
+                "deployEntrypoint": "0xadac498222148e4f",
+                "doActionEntrypoint": "0x646f416374696f6e"
+            },
+            "storageCostModel": {
+                "hash": format!("0x{}", "53".repeat(32)),
+                "baseDataItemCost": "12000",
+                "bytestringCostPerByte": "10",
+                "baseContractDeploymentCost": "12000",
+                "contractDeploymentCostPerByte": "10",
+                "authPerKeyCost": "1111",
+                "rcqCostPerEntry": "8",
+                "replayCacheCostPerEntry": "7",
+                "balanceCost": "1234"
+            }
+        }
+    });
+    std::fs::write(&path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
+    path
 }
 
 fn signed_tx_invoked_address(tx_hex: &str) -> String {

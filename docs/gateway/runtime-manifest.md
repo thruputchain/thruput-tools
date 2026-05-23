@@ -8,6 +8,9 @@ Use it for local benchmark runs:
 
 - `groundhog node` consumes the manifest internally and reports its path in
   `--json` startup output.
+- CLI commands that use `dev-N` keys can read the manifest through
+  `GROUNDHOG_RUNTIME_MANIFEST` or `profile.<name>.runtime_manifest`, falling
+  back to `groundhog_dev_getAccounts` only when no manifest is configured.
 - `groundhog-rpc --runtime-manifest <path>` starts the standalone gateway from
   the same backend endpoints.
 - `groundhog-bench --runtime-manifest <path>` derives the bootstrapped account
@@ -152,10 +155,17 @@ Readiness stdout is a single bounded JSON pointer line:
 }
 ```
 
-Consumers verify `manifestHash` before parsing the file. On Unix, the Rust
-supervisor also requires an absolute manifest path, rejects symlinks, requires
-the manifest file to be owner-only, and requires the parent directory to be
-owner-only.
+Consumers reading a manifest through the readiness pointer verify
+`manifestHash` before parsing the file. On Unix, the Rust supervisor also
+requires an absolute manifest path, rejects symlinks, requires the manifest
+file to be owner-only, and requires the parent directory to be owner-only.
+
+Consumers configured with a direct `--runtime-manifest`,
+`GROUNDHOG_RUNTIME_MANIFEST`, or `profile.<name>.runtime_manifest` path do not
+have a readiness pointer hash to verify; they reject symlink/non-file manifest
+paths, then read a bounded JSON file and validate the manifest schema. They do
+not require owner-only permissions, because these paths are local developer
+configuration and commonly live inside project worktrees.
 
 Optional endpoints are absent when unavailable. They are never emitted as
 `null`.

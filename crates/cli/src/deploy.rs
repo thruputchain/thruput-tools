@@ -15,7 +15,7 @@ use xdr_common::VecM;
 
 use crate::account_resolution::resolve_wallet_address;
 use crate::artifacts::ArtifactOptions;
-use crate::config::{resolve_default_key, resolve_profile};
+use crate::config::{ResolvedProfile, resolve_default_key, resolve_profile};
 use crate::dev_detail::{fetch_transaction_detail_blocking, print_transaction_detail};
 use crate::keys::load_local_signer;
 use crate::result::CommandResult;
@@ -217,8 +217,7 @@ pub(crate) fn prepare_deploy(
 ) -> Result<PreparedDeploy, CliError> {
     let cwd = std::env::current_dir()?;
     let resolved = resolve_profile(&cwd, Some(profile))?;
-
-    let rpc_url = resolved.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
+    resolved.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
 
     // Resolve signing key
     let key_name = resolve_default_key(&cwd, Some(profile))?.ok_or(CliError::MissingSigningKey)?;
@@ -230,33 +229,43 @@ pub(crate) fn prepare_deploy(
         std::fs::read(&resolved_wasm)?
     };
 
-    prepare_deploy_transaction(wasm_bytes, rpc_url, &key_name)
+    prepare_deploy_transaction(wasm_bytes, &resolved, &key_name)
 }
 
 /// Build and sign a deploy transaction for a known WASM artifact and RPC endpoint.
 #[cfg(feature = "dev-node")]
-pub(crate) fn prepare_deploy_for_rpc(
+pub(crate) fn prepare_deploy_for_rpc_with_manifest(
     wasm_path: &Path,
     rpc_url: &str,
     key_name: &str,
+    runtime_manifest: Option<PathBuf>,
 ) -> Result<PreparedDeploy, CliError> {
     let wasm_bytes = std::fs::read(wasm_path)?;
-    prepare_deploy_transaction(wasm_bytes, rpc_url, key_name)
+    let profile = ResolvedProfile {
+        name: "integration".into(),
+        rpc_url: Some(rpc_url.into()),
+        default_key: Some(key_name.into()),
+        runtime_manifest,
+        contracts: Default::default(),
+        source: None,
+    };
+    prepare_deploy_transaction(wasm_bytes, &profile, key_name)
 }
 
 #[allow(clippy::too_many_lines)]
 fn prepare_deploy_transaction(
     wasm_bytes: Vec<u8>,
-    rpc_url: &str,
+    profile: &ResolvedProfile,
     key_name: &str,
 ) -> Result<PreparedDeploy, CliError> {
+    let rpc_url = profile.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
     let signer = load_local_signer(key_name)?;
 
     let wasm_bytes_len = wasm_bytes.len();
 
     // Build the deploy transaction — invokes the sender's wallet contract.
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
-    let wallet_address = resolve_wallet_address(rpc_url, key_name, &signer, &rt)?;
+    let wallet_address = resolve_wallet_address(profile, key_name, &signer, &rt)?;
 
     let contract = groundhog_xdr::contract::Contract::kWasmi {
         wasmi_contract: groundhog_xdr::contract::ContractBlob {

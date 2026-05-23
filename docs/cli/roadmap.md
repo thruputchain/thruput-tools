@@ -77,6 +77,13 @@ Implementation status:
   ships, shares execution semantics with the SDK/native executor, retains
   transaction detail, exposes events, and supports latest-state storage
   reads through `groundhog_getStorageAt`.
+- Runtime-manifest producer/consumer work has landed for `groundhog node`,
+  `groundhog-rpc --runtime-manifest`, and `groundhog-bench
+  --runtime-manifest`. CLI `dev-N` wallet-address resolution now prefers a
+  configured runtime manifest (`GROUNDHOG_RUNTIME_MANIFEST` or
+  `profile.<name>.runtime_manifest`) and falls back to
+  `groundhog_dev_getAccounts` only for compatibility. The local-only dev RPC
+  remains in the OpenRPC surface until that fallback path is removed.
 - The legacy native-exec local-node backend (`crates/dev-node`) was
   retired in PR 5 once hogd-dev proved out the published-SDK scaffold
   loop. The durable backend is a Rust supervisor
@@ -486,6 +493,21 @@ historical Rust-track items are both resolved:
 The hogd-dev/control track and the deferred transaction-detail work
 (`docs/cli/specs/2026-05-07-transaction-detail-options.md`) remain
 parked until a real hogd-owned dev method needs them.
+
+**Runtime manifest / dev-account cleanup:**
+
+- Runtime-manifest readiness and consumer paths are shipped for the local node,
+  gateway, and benchmark harness.
+- `groundhog-bench --runtime-manifest` now derives valid dev-wallet submit
+  workloads from `bootstrapAccounts`.
+- `groundhog-rpc --runtime-manifest` now starts the standalone gateway from
+  advertised backend endpoints.
+- CLI `dev-N` wallet-address resolution now prefers a configured runtime
+  manifest over `groundhog_dev_getAccounts`.
+- Still open: remove the dev-account RPC compatibility path
+  (`GroundhogDevApi`, `groundhog_dev_getAccounts`, generated OpenRPC entries,
+  client re-export, and supervisor `dev_accounts` plumbing) unless another
+  concrete local-only use remains.
 
 **Cross-team track (driven by hogd / protocol-rs):**
 
