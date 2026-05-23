@@ -168,15 +168,13 @@ fn parse_calldata(raw: &str) -> Result<Vec<u8>, CliError> {
 fn resolve_caller(
     profile: &crate::config::ResolvedProfile,
     from: Option<&str>,
-    rt: &tokio::runtime::Runtime,
+    _rt: &tokio::runtime::Runtime,
 ) -> Result<Option<ContractAddress>, CliError> {
     let Some(from) = from else {
         return Ok(None);
     };
     if let Some(index) = dev_keys::dev_key_index(from) {
-        return rt
-            .block_on(lookup_dev_account_address(profile, from, index))
-            .map(Some);
+        return lookup_dev_account_address(profile, from, index).map(Some);
     }
     parse_contract_address(from)
         .map(ContractAddress::from)

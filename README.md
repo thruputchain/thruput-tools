@@ -87,10 +87,9 @@ groundhog-bench --url http://127.0.0.1:9546 \
   --method sendRawTransaction
 ```
 
-CLI commands using local dev keys (`dev-0`, `dev-1`, ...) also prefer the
-runtime manifest for wallet-address discovery when
-`GROUNDHOG_RUNTIME_MANIFEST` or `profile.<name>.runtime_manifest` is set.
-`groundhog_dev_getAccounts` remains a temporary compatibility fallback.
+CLI commands using local dev keys (`dev-0`, `dev-1`, ...) read the runtime
+manifest for wallet-address discovery through `GROUNDHOG_RUNTIME_MANIFEST` or
+`profile.<name>.runtime_manifest`.
 
 See [Runtime Manifest Quickstart](docs/gateway/runtime-manifest.md) for the
 full CLI/gateway/bench loop,

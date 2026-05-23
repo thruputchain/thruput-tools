@@ -437,7 +437,8 @@ Initial public methods:
 
 Initial dev-only methods:
 
-- `groundhog_dev_getAccounts`
+- `groundhog_dev_getAccounts` (later removed after runtime-manifest account
+  discovery landed)
 
 Potential follow-up controls:
 

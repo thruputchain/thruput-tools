@@ -7,7 +7,6 @@
 
 mod block_driver;
 pub mod config;
-mod dev_control;
 pub mod error;
 mod genesis;
 pub mod hogd_dev;

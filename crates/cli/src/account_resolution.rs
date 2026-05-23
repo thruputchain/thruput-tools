@@ -1,8 +1,5 @@
 use groundhog_rpc_api_types::{ContractAddress, runtime_manifest::RuntimeManifest};
-use groundhog_rpc_client::{GroundhogDevApiClient, HttpClientBuilder};
 use groundhog_signing::{DEFAULT_PUBKEY_ACCOUNT_NONCE, LocalSigner, PubkeyAccount, Signer};
-use jsonrpsee::core::ClientError;
-use jsonrpsee::types::error::METHOD_NOT_FOUND_CODE;
 
 use crate::{
     CliError,
@@ -20,10 +17,10 @@ pub(crate) fn resolve_wallet_address(
     profile: &ResolvedProfile,
     key_name: &str,
     signer: &LocalSigner,
-    rt: &tokio::runtime::Runtime,
+    _rt: &tokio::runtime::Runtime,
 ) -> Result<groundhog_xdr::types::ContractAddress, CliError> {
     if let Some(index) = dev_keys::dev_key_index(key_name) {
-        rt.block_on(async { resolve_dev_wallet_address(profile, key_name, index, signer).await })
+        resolve_dev_wallet_address(profile, key_name, index, signer)
     } else {
         let account = PubkeyAccount::new(signer.public_key(), DEFAULT_PUBKEY_ACCOUNT_NONCE);
         account
@@ -35,13 +32,13 @@ pub(crate) fn resolve_wallet_address(
     }
 }
 
-async fn resolve_dev_wallet_address(
+fn resolve_dev_wallet_address(
     profile: &ResolvedProfile,
     key_name: &str,
     index: usize,
     signer: &LocalSigner,
 ) -> Result<groundhog_xdr::types::ContractAddress, CliError> {
-    let account = resolve_dev_account(profile, key_name, index).await?;
+    let account = resolve_dev_account(profile, key_name, index)?;
 
     let expected_public_key = signer.verifying_key_bytes();
     if account.public_key.as_slice() != expected_public_key.as_slice() {
@@ -58,20 +55,18 @@ async fn resolve_dev_wallet_address(
     Ok(account.address)
 }
 
-/// Look up a local dev account address through the configured runtime manifest
-/// or the `groundhog_dev_getAccounts` compatibility fallback.
-pub(crate) async fn lookup_dev_account_address(
+/// Look up a local dev account address through the configured runtime manifest.
+pub(crate) fn lookup_dev_account_address(
     profile: &ResolvedProfile,
     key_name: &str,
     index: usize,
 ) -> Result<ContractAddress, CliError> {
-    Ok(resolve_dev_account(profile, key_name, index)
-        .await?
+    Ok(resolve_dev_account(profile, key_name, index)?
         .address
         .into())
 }
 
-async fn resolve_dev_account(
+fn resolve_dev_account(
     profile: &ResolvedProfile,
     key_name: &str,
     index: usize,
@@ -79,8 +74,10 @@ async fn resolve_dev_account(
     if let Some(manifest) = load_configured_runtime_manifest(profile, key_name)? {
         return dev_account_from_manifest(&manifest, key_name, index);
     }
-    let rpc_url = profile.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
-    lookup_dev_account(rpc_url, key_name, index).await
+    Err(dev_account_error(
+        key_name,
+        "dev-N keys require GROUNDHOG_RUNTIME_MANIFEST or profile.<name>.runtime_manifest",
+    ))
 }
 
 struct ResolvedDevAccount {
@@ -147,57 +144,11 @@ fn dev_account_from_manifest(
     })
 }
 
-async fn lookup_dev_account(
-    rpc_url: &str,
-    key_name: &str,
-    index: usize,
-) -> Result<ResolvedDevAccount, CliError> {
-    let client = HttpClientBuilder::default()
-        .build(rpc_url)
-        .map_err(|error| {
-            dev_account_error(key_name, format!("could not connect to {rpc_url}: {error}"))
-        })?;
-
-    let accounts = match client.get_accounts().await {
-        Ok(accounts) => accounts,
-        Err(error) if is_method_not_found(&error) => {
-            return Err(dev_account_error(
-                key_name,
-                "RPC endpoint does not expose groundhog_dev_getAccounts",
-            ));
-        }
-        Err(error) => {
-            return Err(dev_account_error(
-                key_name,
-                format!("groundhog_dev_getAccounts failed: {error}"),
-            ));
-        }
-    };
-
-    let account = accounts.get(index).cloned().ok_or_else(|| {
-        dev_account_error(
-            key_name,
-            format!(
-                "groundhog_dev_getAccounts returned {} accounts, missing dev-{index}",
-                accounts.len()
-            ),
-        )
-    })?;
-    Ok(ResolvedDevAccount {
-        address: account.address.0,
-        public_key: account.public_key.0,
-    })
-}
-
 fn dev_account_error(key_name: &str, message: impl Into<String>) -> CliError {
     CliError::LocalDevAccountUnavailable {
         key_name: key_name.to_string(),
         message: message.into(),
     }
-}
-
-fn is_method_not_found(error: &ClientError) -> bool {
-    matches!(error, ClientError::Call(object) if object.code() == METHOD_NOT_FOUND_CODE)
 }
 
 fn format_hex(bytes: &[u8]) -> String {

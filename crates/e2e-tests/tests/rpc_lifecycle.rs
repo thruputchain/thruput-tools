@@ -248,7 +248,6 @@ async fn get_events_cursor_walks_or_terminates() {
     }
 }
 
-// TODO: add submit_and_query_receipt test once we can construct valid
-// transactions against the running node's genesis state. Requires
-// the local node to expose pre-funded account keys via
-// groundhog_dev_getAccounts.
+// TODO: add submit_and_query_receipt test once this suite can read the
+// runtime manifest emitted by the running node and construct valid dev-wallet
+// transactions against the bootstrapped genesis state.

@@ -12,7 +12,6 @@ use jsonrpsee::proc_macros::rpc;
 use groundhog_rpc_api_types::{
     BlockHeight, ContractAddress,
     block::{BlockInfo, ChainTip},
-    dev::DevAccount,
     events::{EventPage, EventQuery},
     hex::HexBytes,
     receipt::TransactionReceipt,
@@ -26,7 +25,7 @@ use groundhog_rpc_api_types::{
 ///
 /// See the "`OpenRPC` Wire Version" section in `CLAUDE.md` for bump
 /// rules.
-pub const WIRE_FORMAT_VERSION: &str = "1.2.1";
+pub const WIRE_FORMAT_VERSION: &str = "2.0.0";
 
 /// Phase 1: Core API — submit, query, poll.
 #[open_rpc(namespace = "groundhog", tag = "Core API")]
@@ -85,13 +84,4 @@ pub trait GroundhogApi {
     /// Version dimensions for this JSON-RPC server.
     #[method(name = "version")]
     async fn version(&self) -> RpcResult<VersionInfo>;
-}
-
-/// Dev-only RPC methods. Only implemented by the local node.
-#[open_rpc(namespace = "groundhog_dev", tag = "Dev API")]
-#[rpc(client, server, namespace = "groundhog_dev")]
-pub trait GroundhogDevApi {
-    /// List pre-funded dev accounts with addresses and keys.
-    #[method(name = "getAccounts")]
-    async fn get_accounts(&self) -> RpcResult<Vec<DevAccount>>;
 }

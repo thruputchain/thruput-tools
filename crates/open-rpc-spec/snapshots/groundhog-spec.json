@@ -165,36 +165,6 @@
         "maxItems": 5,
         "type": "array"
       },
-      "DevAccount": {
-        "description": "A pre-funded dev account, returned by `groundhog_dev_getAccounts`.\n\nOnly emitted by local-node backends. The `private_key` and\n`initial_storage_tokens` fields are local-orchestration metadata with no\ntestnet/mainnet meaning: production backends do not retain private keys\nand have no concept of a \"bootstrap balance\".",
-        "properties": {
-          "address": {
-            "$ref": "#/components/schemas/Hex0x_ContractAddress",
-            "description": "Local dev account/wallet contract address advertised by the backend."
-          },
-          "initialStorageTokens": {
-            "description": "Storage-token balance at bootstrap. This is a snapshot taken when the\nlocal node started; it is not refreshed as the wallet spends tokens.\nUse a live balance read for current funding.",
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "privateKey": {
-            "$ref": "#/components/schemas/HexBytes",
-            "description": "Ed25519 secret key bytes. Included because these are\nwell-known dev-only keys."
-          },
-          "publicKey": {
-            "$ref": "#/components/schemas/HexBytes",
-            "description": "Ed25519 public key bytes."
-          }
-        },
-        "required": [
-          "address",
-          "publicKey",
-          "privateKey",
-          "initialStorageTokens"
-        ],
-        "type": "object"
-      },
       "EmittedEvent": {
         "description": "A single emitted event, as stored by the hogd indexer.\n\nThe gateway parses hogd's `TxEmittedEvent.serialized_event` into\nseparate topics and data. The serialized format is:\n`topic0 (32B) || topic1 (32B) || ... || data (remaining bytes)`.\n`num_topics` (0–3) determines the split point. Max total 1024 bytes.\n\nSee `docs/gateway/system-design.md` \"Event Parsing\" for details.",
         "properties": {
@@ -910,7 +880,7 @@
   },
   "info": {
     "title": "Groundhog JSON-RPC",
-    "version": "1.2.1"
+    "version": "2.0.0"
   },
   "methods": [
     {
@@ -1312,39 +1282,6 @@
       "tags": [
         {
           "name": "Core API"
-        }
-      ]
-    },
-    {
-      "errors": [
-        {
-          "$ref": "#/components/errors/BackendUnavailable"
-        },
-        {
-          "$ref": "#/components/errors/BackendTimeout"
-        },
-        {
-          "$ref": "#/components/errors/Overloaded"
-        },
-        {
-          "$ref": "#/components/errors/NotImplemented"
-        }
-      ],
-      "name": "groundhog_dev_getAccounts",
-      "params": [],
-      "result": {
-        "name": "Vec",
-        "schema": {
-          "items": {
-            "$ref": "#/components/schemas/DevAccount"
-          },
-          "type": "array"
-        }
-      },
-      "summary": "List pre-funded dev accounts with addresses and keys.",
-      "tags": [
-        {
-          "name": "Dev API"
         }
       ]
     }

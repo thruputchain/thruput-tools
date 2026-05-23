@@ -79,11 +79,10 @@ Implementation status:
   reads through `groundhog_getStorageAt`.
 - Runtime-manifest producer/consumer work has landed for `groundhog node`,
   `groundhog-rpc --runtime-manifest`, and `groundhog-bench
-  --runtime-manifest`. CLI `dev-N` wallet-address resolution now prefers a
+  --runtime-manifest`. CLI `dev-N` wallet-address resolution now uses a
   configured runtime manifest (`GROUNDHOG_RUNTIME_MANIFEST` or
-  `profile.<name>.runtime_manifest`) and falls back to
-  `groundhog_dev_getAccounts` only for compatibility. The local-only dev RPC
-  remains in the OpenRPC surface until that fallback path is removed.
+  `profile.<name>.runtime_manifest`). The former local-only dev-account RPC
+  has been removed from the OpenRPC surface.
 - The legacy native-exec local-node backend (`crates/dev-node`) was
   retired in PR 5 once hogd-dev proved out the published-SDK scaffold
   loop. The durable backend is a Rust supervisor
@@ -185,8 +184,8 @@ Maintenance rules:
   - [x] PR 4d — supervisor block driver: local single-node nomination and
     commit after accepted submits (#47)
   - [x] PR 4e — dev-account bootstrap: hogd-dev wallet/bootstrap profile,
-    readiness account metadata, `groundhog_dev_getAccounts`, and CLI
-    `dev-N` wallet-address resolution
+    readiness account metadata, and CLI `dev-N` wallet-address resolution
+    (now manifest-backed; the old dev-account RPC has been removed)
   - [x] PR 4f — published SDK/scaffold compatibility: fresh `groundhog new`
     builds and completes deploy/call against a registry SDK crate matching
     the current hogd-dev protocol.
@@ -502,12 +501,10 @@ parked until a real hogd-owned dev method needs them.
   workloads from `bootstrapAccounts`.
 - `groundhog-rpc --runtime-manifest` now starts the standalone gateway from
   advertised backend endpoints.
-- CLI `dev-N` wallet-address resolution now prefers a configured runtime
-  manifest over `groundhog_dev_getAccounts`.
-- Still open: remove the dev-account RPC compatibility path
+- CLI `dev-N` wallet-address resolution now uses a configured runtime
+  manifest, and the dev-account RPC compatibility path has been removed
   (`GroundhogDevApi`, `groundhog_dev_getAccounts`, generated OpenRPC entries,
-  client re-export, and supervisor `dev_accounts` plumbing) unless another
-  concrete local-only use remains.
+  client re-export, and supervisor RPC plumbing).
 
 **Cross-team track (driven by hogd / protocol-rs):**
 

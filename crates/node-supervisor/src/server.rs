@@ -9,8 +9,7 @@
 
 use std::{future::Future, net::SocketAddr, process::ExitStatus, time::Duration};
 
-use groundhog_rpc_api::{GroundhogApiServer, GroundhogDevApiServer};
-use groundhog_rpc_api_types::dev::DevAccount;
+use groundhog_rpc_api::GroundhogApiServer;
 use groundhog_rpc_server::{BuildInfo, GroundhogRpcServer, RpcServerConfig};
 use groundhog_xdr::PROTOCOL_VERSION;
 use jsonrpsee::server::{RpcModule, Server, ServerHandle};
@@ -19,8 +18,7 @@ use serde::Serialize;
 use crate::{
     HogdDevProcess, HogdDevReadiness, NodeSupervisorConfig, NodeSupervisorError,
     block_driver::BlockDriverTask,
-    dev_control::SupervisorDevRpc,
-    hogd_dev::build_dev_accounts,
+    hogd_dev::validate_dev_accounts,
     read_backend::{HogdDevReadBackend, HogdDevStorageReadBackend},
     rpc_backend::HogdDevSchedulerBackend,
     stub_backend::StubBackend,
@@ -150,8 +148,8 @@ impl NodeSupervisorHandle {
     pub async fn start(config: NodeSupervisorConfig) -> Result<Self, NodeSupervisorError> {
         let mut hogd = HogdDevProcess::start(&config.hogd_dev).await?;
 
-        let dev_accounts = match build_dev_accounts(hogd.readiness(), &config.hogd_dev) {
-            Ok(accounts) => accounts,
+        match validate_dev_accounts(hogd.readiness(), &config.hogd_dev) {
+            Ok(()) => {}
             Err(error) => {
                 if let Err(stop_err) = hogd.stop().await {
                     tracing::warn!(
@@ -161,12 +159,11 @@ impl NodeSupervisorHandle {
                 }
                 return Err(error);
             }
-        };
+        }
 
         match start_rpc_server(
             &config.rpc_listen_address,
             hogd.readiness(),
-            dev_accounts,
             config
                 .hogd_protocol_override
                 .as_deref()
@@ -320,7 +317,6 @@ impl NodeSupervisorHandle {
 async fn start_rpc_server(
     listen_address: &str,
     readiness: &HogdDevReadiness,
-    dev_accounts: Vec<DevAccount>,
     protocol_version: &str,
     view_gas_limit: u64,
     view_timeout: Duration,
@@ -353,7 +349,6 @@ async fn start_rpc_server(
             scheduler_backend,
             read,
             view,
-            dev_accounts,
             BackendPlanes::hogd_dev_full(view_status),
             view_gas_limit,
         )
@@ -366,7 +361,6 @@ async fn start_rpc_server(
             scheduler_backend,
             read,
             view,
-            dev_accounts,
             BackendPlanes::hogd_dev_storage_only(view_status),
             view_gas_limit,
         )
@@ -382,7 +376,6 @@ async fn start_rpc_server(
             scheduler_backend,
             StubBackend::new(),
             view,
-            dev_accounts,
             BackendPlanes {
                 view: view_status,
                 ..BackendPlanes::hogd_dev_scheduler_only()
@@ -398,7 +391,6 @@ async fn start_rpc_server_with_read<R, V>(
     scheduler_backend: HogdDevSchedulerBackend,
     read: R,
     view: V,
-    dev_accounts: Vec<DevAccount>,
     backend_planes: BackendPlanes,
     view_gas_limit: u64,
 ) -> Result<StartedRpcServer, NodeSupervisorError>
@@ -434,11 +426,6 @@ where
     module
         .merge(GroundhogApiServer::into_rpc(core_rpc))
         .expect("bug: rpc-server methods register without conflicts");
-    module
-        .merge(GroundhogDevApiServer::into_rpc(SupervisorDevRpc::new(
-            dev_accounts,
-        )))
-        .expect("bug: dev RPC methods register without conflicts");
 
     let rpc_handle = server.start(module);
     Ok(StartedRpcServer {
@@ -461,7 +448,7 @@ struct StartedRpcServer {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use groundhog_rpc_api::{GroundhogApiClient, GroundhogDevApiClient};
+    use groundhog_rpc_api::GroundhogApiClient;
     use groundhog_rpc_api_types::error::codes;
     use jsonrpsee::core::{ClientError, client::ClientT};
     use jsonrpsee::http_client::HttpClientBuilder;
@@ -619,23 +606,6 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         assert_eq!(
             serde_json::to_value(tx_hash).expect("bug: tx hash should serialize"),
             CANONICAL_HASH_VECTOR_TX_HASH_JSON
-        );
-
-        let accounts = client
-            .get_accounts()
-            .await
-            .expect("bug: getAccounts should return fake readiness accounts");
-        assert_eq!(accounts.len(), groundhog_signing::DEFAULT_DEV_ACCOUNT_COUNT);
-        assert_eq!(
-            accounts[0].public_key.0,
-            groundhog_signing::derive_default_dev_account_signer(0)
-                .verifying_key_bytes()
-                .to_vec()
-        );
-        assert_eq!(
-            accounts[0].private_key.0,
-            groundhog_signing::derive_default_dev_account_signer(0).to_keypair_bytes()[..32]
-                .to_vec(),
         );
 
         let err = client

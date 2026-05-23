@@ -98,8 +98,7 @@ groundhog-bench --url http://127.0.0.1:9546 \
 
 For CLI commands that sign or simulate as `dev-N`, set
 `GROUNDHOG_RUNTIME_MANIFEST` or `profile.<name>.runtime_manifest` to use that
-same manifest for wallet-address discovery. The dev-account RPC remains a
-compatibility fallback when no manifest is configured.
+same manifest for wallet-address discovery.
 
 ## Using cargo directly
 

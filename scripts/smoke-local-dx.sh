@@ -325,16 +325,16 @@ NODE_DESCENDANTS="$(collect_descendants "$NODE_PID" || true)"
 RPC_URL="$(json_field data.rpc_url "$NODE_JSON")"
 READ_PLANE="$(json_field data.backend.planes.read "$NODE_JSON")"
 VIEW_PLANE="$(json_field data.backend.planes.view "$NODE_JSON")"
+RUNTIME_MANIFEST="$(json_field data.runtime_manifest.path "$NODE_JSON")"
 log "Node RPC: $RPC_URL (read plane: $READ_PLANE, view plane: $VIEW_PLANE)"
 [[ "$VIEW_PLANE" == "view_gateway" ]] || die "node view plane was $VIEW_PLANE, expected view_gateway"
+[[ "$RUNTIME_MANIFEST" != "null" && -n "$RUNTIME_MANIFEST" ]] \
+    || die "groundhog node did not report a runtime manifest path"
+[[ -r "$RUNTIME_MANIFEST" ]] || die "runtime manifest is not readable: $RUNTIME_MANIFEST"
+export GROUNDHOG_RUNTIME_MANIFEST="$RUNTIME_MANIFEST"
 
 GATEWAY_RPC_URL=""
 if [[ "${SMOKE_STANDALONE_GATEWAY:-0}" == "1" ]]; then
-    RUNTIME_MANIFEST="$(json_field data.runtime_manifest.path "$NODE_JSON")"
-    [[ "$RUNTIME_MANIFEST" != "null" && -n "$RUNTIME_MANIFEST" ]] \
-        || die "groundhog node did not report a runtime manifest path"
-    [[ -r "$RUNTIME_MANIFEST" ]] || die "runtime manifest is not readable: $RUNTIME_MANIFEST"
-
     GATEWAY_PORT="$(free_tcp_port)"
     GATEWAY_RPC_URL="http://127.0.0.1:$GATEWAY_PORT"
 
@@ -368,9 +368,6 @@ VIEW_FROM="dev-0"
 if [[ -n "$GATEWAY_RPC_URL" ]]; then
     log "Switching project RPC to standalone gateway for view/storage checks"
     update_rpc_url groundhog.toml "$GATEWAY_RPC_URL"
-    # The production gateway intentionally does not expose dev-only account
-    # lookup, so avoid `--from dev-0` in standalone gateway mode.
-    VIEW_FROM=""
 fi
 
 EXPECTED_VALUE=$(( INITIAL_VALUE + INCREMENT_AMOUNT ))

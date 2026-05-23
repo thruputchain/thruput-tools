@@ -13,7 +13,6 @@ use std::{
 
 use groundhog_rpc_api_types::{
     ContractAddress,
-    dev::DevAccount,
     hex::HexBytes,
     runtime_manifest::{RUNTIME_MANIFEST_SCHEMA_VERSION, RuntimeManifest},
 };
@@ -136,31 +135,21 @@ struct HogdDevReadinessPointer {
     manifest_hash: String,
 }
 
-/// Build RPC-facing dev accounts from hogd-dev readiness plus local signer derivation.
-pub(crate) fn build_dev_accounts(
+/// Validate hogd-dev readiness account metadata against local dev-account config.
+pub(crate) fn validate_dev_accounts(
     readiness: &HogdDevReadiness,
     config: &HogdDevConfig,
-) -> Result<Vec<DevAccount>, NodeSupervisorError> {
+) -> Result<(), NodeSupervisorError> {
     validate_dev_account_count(config.dev_account_count, readiness.dev_accounts.len())?;
 
-    readiness
-        .dev_accounts
-        .iter()
-        .enumerate()
-        .map(|(position, account)| {
-            validate_dev_account_index(position, account.index)?;
-            let signer =
-                groundhog_signing::derive_dev_account_signer(&config.dev_account_seed, position);
-            validate_dev_account_public_key(position, account, &signer)?;
+    for (position, account) in readiness.dev_accounts.iter().enumerate() {
+        validate_dev_account_index(position, account.index)?;
+        let signer =
+            groundhog_signing::derive_dev_account_signer(&config.dev_account_seed, position);
+        validate_dev_account_public_key(position, account, &signer)?;
+    }
 
-            Ok(DevAccount {
-                address: account.address,
-                public_key: account.public_key.clone(),
-                private_key: HexBytes(signer.to_keypair_bytes()[..32].to_vec()),
-                initial_storage_tokens: account.initial_storage_tokens,
-            })
-        })
-        .collect()
+    Ok(())
 }
 
 /// Running hogd-dev child process plus its parsed readiness metadata.
@@ -1256,7 +1245,7 @@ mod tests {
 
     use super::{
         DEFAULT_HOGD_DEV_BINARY, HOGD_DEV_BINARY_ENV, HOGD_LOG_FORMAT_ENV, HogdDevProcess,
-        build_dev_accounts, build_hogd_dev_spec, parse_readiness_line, resolve_hogd_dev_binary,
+        build_hogd_dev_spec, parse_readiness_line, resolve_hogd_dev_binary, validate_dev_accounts,
     };
     use crate::{
         HogdDevConfig, NodeSupervisorError,
@@ -1677,31 +1666,30 @@ mod tests {
             parse_readiness_line("hogd-dev", &line).expect("bug: readiness payload should parse");
 
         let config = HogdDevConfig::default().with_dev_account_count(1);
-        let accounts = build_dev_accounts(&readiness, &config)
+        validate_dev_accounts(&readiness, &config)
             .expect("bug: matching readiness dev account should validate");
 
         assert_eq!(readiness.dev_accounts.len(), 1);
-        assert_eq!(accounts.len(), 1);
         assert_eq!(
-            serde_json::to_value(accounts[0].address).expect("bug: address serializes"),
+            serde_json::to_value(readiness.dev_accounts[0].address)
+                .expect("bug: address serializes"),
             format!("0x{}", "11".repeat(32)),
         );
         assert_eq!(
-            accounts[0].public_key.0,
+            readiness.dev_accounts[0].public_key.0,
             signer.verifying_key_bytes().to_vec()
         );
         assert_eq!(
-            accounts[0].private_key.0,
-            signer.to_keypair_bytes()[..32].to_vec()
+            readiness.dev_accounts[0].initial_storage_tokens,
+            1_000_000_000
         );
-        assert_eq!(accounts[0].initial_storage_tokens, 1_000_000_000);
     }
 
     #[test]
     fn dev_account_count_mismatch_is_rejected() {
         let readiness =
             parse_readiness_line("hogd-dev", V1_READY).expect("bug: readiness payload parses");
-        let err = build_dev_accounts(&readiness, &HogdDevConfig::default())
+        let err = validate_dev_accounts(&readiness, &HogdDevConfig::default())
             .expect_err("bug: missing default dev accounts should fail validation");
 
         assert!(matches!(
@@ -1725,7 +1713,7 @@ mod tests {
         )
         .expect("bug: readiness payload should parse");
         let config = HogdDevConfig::default().with_dev_account_count(1);
-        let err = build_dev_accounts(&readiness, &config)
+        let err = validate_dev_accounts(&readiness, &config)
             .expect_err("bug: wrong readiness public key should fail validation");
 
         assert!(matches!(

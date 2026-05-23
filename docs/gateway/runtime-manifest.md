@@ -9,8 +9,7 @@ Use it for local benchmark runs:
 - `groundhog node` consumes the manifest internally and reports its path in
   `--json` startup output.
 - CLI commands that use `dev-N` keys can read the manifest through
-  `GROUNDHOG_RUNTIME_MANIFEST` or `profile.<name>.runtime_manifest`, falling
-  back to `groundhog_dev_getAccounts` only when no manifest is configured.
+  `GROUNDHOG_RUNTIME_MANIFEST` or `profile.<name>.runtime_manifest`.
 - `groundhog-rpc --runtime-manifest <path>` starts the standalone gateway from
   the same backend endpoints.
 - `groundhog-bench --runtime-manifest <path>` derives the bootstrapped account
