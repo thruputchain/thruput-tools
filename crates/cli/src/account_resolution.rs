@@ -76,7 +76,8 @@ fn resolve_dev_account(
     }
     Err(dev_account_error(
         key_name,
-        "dev-N keys require GROUNDHOG_RUNTIME_MANIFEST or profile.<name>.runtime_manifest",
+        "dev-N keys require GROUNDHOG_RUNTIME_MANIFEST, profile.<name>.runtime_manifest, \
+         or project-local .groundhog/local-node.json from `groundhog node`",
     ))
 }
 
@@ -252,5 +253,96 @@ mod tests {
             .expect("bug: manifest-backed dev key should not require rpc_url");
 
         assert_eq!(resolved, wallet_address);
+    }
+
+    #[test]
+    fn dev_key_manifest_resolution_uses_project_local_node_state() {
+        let temp = tempfile::TempDir::new().expect("bug: tempdir should be created");
+        let project = temp.path().join("counter");
+        std::fs::create_dir(&project).expect("bug: project dir should be created");
+        let config_path = project.join("groundhog.toml");
+        std::fs::write(&config_path, "[profile.default]\ndefault_key = \"dev-0\"\n")
+            .expect("bug: project config should write");
+        let manifest_path = temp.path().join("runtime-manifest.json");
+        let signer = groundhog_signing::derive_default_dev_account_signer(0);
+        let wallet_address = groundhog_xdr::types::ContractAddress::from([0x72; 32]);
+        write_test_runtime_manifest(&manifest_path, &signer, wallet_address);
+        crate::runtime_manifest::write_local_node_state(
+            &project,
+            "http://127.0.0.1:9545",
+            &manifest_path,
+        )
+        .expect("bug: local-node state should write");
+        let rt = tokio::runtime::Runtime::new().expect("bug: runtime should start");
+        let profile = ResolvedProfile {
+            name: "default".into(),
+            rpc_url: None,
+            default_key: Some("dev-0".into()),
+            runtime_manifest: None,
+            contracts: BTreeMap::default(),
+            source: Some(config_path),
+        };
+
+        let resolved = resolve_wallet_address(&profile, "dev-0", &signer, &rt)
+            .expect("bug: local-node state manifest should resolve dev key");
+
+        assert_eq!(resolved, wallet_address);
+    }
+
+    fn write_test_runtime_manifest(
+        manifest_path: &std::path::Path,
+        signer: &LocalSigner,
+        wallet_address: groundhog_xdr::types::ContractAddress,
+    ) {
+        let manifest = serde_json::json!({
+            "schemaVersion": 1,
+            "kind": "hogd-dev-runtime",
+            "networkId": "groundhog-local",
+            "protocol": "hogp/test",
+            "genesisHash": format!("0x{}", "42".repeat(32)),
+            "producer": {
+                "binary": "hogd-dev",
+                "version": "0.1.0"
+            },
+            "endpoints": {
+                "scheduler": "127.0.0.1:1000"
+            },
+            "bootstrapAccountDerivation": {
+                "scheme": SUPPORTED_DERIVATION_SCHEME,
+                "seed": groundhog_signing::DEFAULT_DEV_ACCOUNT_SEED
+            },
+            "bootstrapAccounts": [{
+                "index": 0,
+                "role": "local_user",
+                "publicKey": format!("0x{}", hex::encode(signer.verifying_key_bytes())),
+                "walletAddress": format!("0x{}", hex::encode(wallet_address.as_ref())),
+                "initialStorageTokens": "1000000000"
+            }],
+            "bootstrap": {
+                "devWallet": {
+                    "contentHash": format!("0x{}", "51".repeat(32)),
+                    "deployedCodeHash": format!("0x{}", "52".repeat(32)),
+                    "artifactHint": "./dev-wallet.wasm",
+                    "deployEntrypoint": "0xadac498222148e4f",
+                    "doActionEntrypoint": "0x646f416374696f6e"
+                },
+                "storageCostModel": {
+                    "hash": format!("0x{}", "53".repeat(32)),
+                    "baseDataItemCost": "12000",
+                    "bytestringCostPerByte": "10",
+                    "baseContractDeploymentCost": "12000",
+                    "contractDeploymentCostPerByte": "10",
+                    "authPerKeyCost": "1111",
+                    "rcqCostPerEntry": "8",
+                    "replayCacheCostPerEntry": "7",
+                    "balanceCost": "1234"
+                }
+            }
+        });
+        std::fs::write(
+            manifest_path,
+            serde_json::to_vec_pretty(&manifest).expect("bug: manifest serializes"),
+        )
+        .expect("bug: manifest should write");
     }
 }

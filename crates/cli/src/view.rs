@@ -13,10 +13,11 @@ use crate::call::{
     ResolvedCall, format_entrypoint_id, format_hex_bytes, resolve_call, selector_json,
 };
 use crate::codec::{decode_return, encode_args, parse_contract_address};
-use crate::config::resolve_profile;
+use crate::config::{resolve_default_key, resolve_profile};
 use crate::dev_detail::format_event;
 use crate::dev_keys;
 use crate::result::CommandResult;
+use crate::runtime_manifest::apply_local_node_state_for_dev_key;
 use crate::view_json::{VIEW_JSON_SCHEMA_VERSION, ViewJsonPayload};
 use crate::{CliError, Print};
 
@@ -104,7 +105,11 @@ fn prepare_view(
     profile: &str,
     rt: &tokio::runtime::Runtime,
 ) -> Result<PreparedView, CliError> {
-    let resolved_profile = resolve_profile(project_start, Some(profile))?;
+    let mut resolved_profile = resolve_profile(project_start, Some(profile))?;
+    let default_key = resolve_default_key(project_start, Some(profile))?;
+    if let Some(key_name) = local_dev_key_for_view(from, default_key.as_deref()) {
+        apply_local_node_state_for_dev_key(&mut resolved_profile, &key_name)?;
+    }
     let rpc_url = resolved_profile
         .rpc_url
         .as_deref()
@@ -133,6 +138,16 @@ fn prepare_view(
             caller,
         },
     })
+}
+
+fn local_dev_key_for_view(from: Option<&str>, default_key: Option<&str>) -> Option<String> {
+    match from {
+        Some(from) if dev_keys::dev_key_index(from).is_some() => Some(from.to_owned()),
+        Some(_) => None,
+        None => default_key
+            .filter(|key| dev_keys::dev_key_index(key).is_some())
+            .map(str::to_owned),
+    }
 }
 
 fn resolve_calldata(

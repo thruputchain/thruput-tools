@@ -7,8 +7,9 @@ use groundhog_rpc_client::{GroundhogApiClient, HttpClientBuilder};
 use serde_json::json;
 
 use crate::codec::parse_contract_address;
-use crate::config::resolve_profile;
+use crate::config::{resolve_default_key, resolve_profile};
 use crate::result::CommandResult;
+use crate::runtime_manifest::apply_local_node_state_for_dev_key;
 use crate::{CliError, Print};
 
 /// Read the latest committed storage item at a contract address/key pair.
@@ -20,7 +21,10 @@ pub fn run(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    let resolved_profile = resolve_profile(project_start, Some(profile))?;
+    let mut resolved_profile = resolve_profile(project_start, Some(profile))?;
+    if let Some(key_name) = resolve_default_key(project_start, Some(profile))? {
+        apply_local_node_state_for_dev_key(&mut resolved_profile, &key_name)?;
+    }
     let rpc_url = resolved_profile
         .rpc_url
         .as_deref()

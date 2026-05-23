@@ -2,8 +2,8 @@
 
 **Date:** 2026-05-21
 **Status:** Partially implemented. Runtime-manifest readiness, gateway
-consumption, benchmark consumption, and CLI manifest-first dev-account
-discovery have landed; dev RPC removal, bootstrap-manifest input, and the
+consumption, benchmark consumption, CLI manifest-first dev-account discovery,
+and dev-account RPC removal have landed; bootstrap-manifest input and the
 full-stack benchnet harness remain open.
 
 ## Goal
@@ -51,10 +51,10 @@ Most of the pieces already exist:
 
 The first runtime-manifest handoff now exists and is consumed by `groundhog
 node`, `groundhog-rpc --runtime-manifest`, and `groundhog-bench
---runtime-manifest`. Remaining connective tissue is the cleanup and expansion
-around that contract: the temporary dev-account RPC should be removed after the
-manifest-first CLI migration proves out, bootstrap input should become
-portable, and a full-stack benchmark harness should consume the same shapes.
+--runtime-manifest`. The temporary dev-account RPC has been removed; remaining
+connective tissue is the expansion around that contract: bootstrap input should
+become portable, and a full-stack benchmark harness should consume the same
+shapes.
 
 Today's public JSON-RPC surface already covers most normal transaction and
 state reads:
@@ -377,7 +377,8 @@ As of 2026-05-22:
 - [x] `groundhog-rpc --runtime-manifest` overlays gateway backend endpoints
   from the manifest.
 - [x] Smoke and repeatable local benchmark scenarios cover the manifest-backed
-  CLI-node and standalone-gateway paths.
+  CLI-node path, standalone-gateway read/view/storage checks, and
+  standalone-gateway benchmark submit traffic.
 - [x] CLI `dev-N` wallet-address resolution reads a configured runtime
   manifest.
 - [x] Remove the dev-account RPC compatibility path.

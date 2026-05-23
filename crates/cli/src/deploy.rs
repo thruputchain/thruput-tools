@@ -19,6 +19,7 @@ use crate::config::{ResolvedProfile, resolve_default_key, resolve_profile};
 use crate::dev_detail::{fetch_transaction_detail_blocking, print_transaction_detail};
 use crate::keys::load_local_signer;
 use crate::result::CommandResult;
+use crate::runtime_manifest::apply_local_node_state_for_dev_key;
 use crate::tx_utils::{
     format_tx_hash, nonce_from_timestamp, resolve_block_expiry_height, submit_and_poll,
     summarize_exec_status,
@@ -216,11 +217,16 @@ pub(crate) fn prepare_deploy(
     print: &Print,
 ) -> Result<PreparedDeploy, CliError> {
     let cwd = std::env::current_dir()?;
-    let resolved = resolve_profile(&cwd, Some(profile))?;
-    resolved.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
+    let mut resolved = resolve_profile(&cwd, Some(profile))?;
 
     // Resolve signing key
-    let key_name = resolve_default_key(&cwd, Some(profile))?.ok_or(CliError::MissingSigningKey)?;
+    let key_name = resolve_default_key(&cwd, Some(profile))?;
+    if resolved.rpc_url.is_none() && key_name.is_none() {
+        return Err(CliError::MissingRpcUrl);
+    }
+    let key_name = key_name.ok_or(CliError::MissingSigningKey)?;
+    apply_local_node_state_for_dev_key(&mut resolved, &key_name)?;
+    resolved.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
     let wasm_bytes = if let Some(path) = wasm_path {
         std::fs::read(path)?
     } else {
@@ -246,7 +252,7 @@ pub(crate) fn prepare_deploy_for_rpc_with_manifest(
         rpc_url: Some(rpc_url.into()),
         default_key: Some(key_name.into()),
         runtime_manifest,
-        contracts: Default::default(),
+        contracts: std::collections::BTreeMap::default(),
         source: None,
     };
     prepare_deploy_transaction(wasm_bytes, &profile, key_name)

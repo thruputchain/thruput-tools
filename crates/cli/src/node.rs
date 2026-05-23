@@ -178,6 +178,14 @@ async fn run_hogd_dev(
     use groundhog_node_supervisor::{NodeSupervisorError, SupervisorStop};
 
     let started = start_local_node(options).await?;
+    let local_state_result = write_started_local_node_state(&started);
+    let started_rpc_url = started.rpc_url();
+    let started_manifest_path = started.readiness().manifest_path.clone();
+    let local_state_path = local_state_result
+        .as_ref()
+        .ok()
+        .and_then(|path| path.as_ref())
+        .cloned();
 
     if print.is_json() {
         print.json(&CommandResult::new(
@@ -189,35 +197,7 @@ async fn run_hogd_dev(
             ),
         ))?;
     } else {
-        print.status("Groundhog Local Node (experimental)");
-        print.status(format_args!("Chain: {}", started.readiness().network_id));
-        if started.backend_planes().read.is_indexer_backed() {
-            print.warn("backend: hogd-dev (chainTip, submit, and reads live)");
-        } else {
-            print.warn(
-                "backend: hogd-dev (chainTip and submit live; read methods return NOT_IMPLEMENTED)",
-            );
-        }
-        print.status(format_args!("Listening on {}", started.rpc_url()));
-        print.status(format_args!(
-            "hogd-dev SchedulerCoord: {}",
-            started.readiness().endpoints.scheduler_coord
-        ));
-        if let Some(indexer) = started.readiness().endpoints.indexer_block_explorer {
-            print.status(format_args!("hogd-dev IndexerBlockExplorer: {indexer}"));
-        }
-        if let Some(db_gateway) = started.readiness().endpoints.db_gateway {
-            print.status(format_args!("hogd-dev DbGateway: {db_gateway}"));
-        }
-        if let Some(view_gateway) = started.readiness().endpoints.view_gateway {
-            print.status(format_args!("hogd-dev ViewGateway: {view_gateway}"));
-        }
-        if let Some(dev_control) = started.readiness().endpoints.dev_control {
-            print.status(format_args!("hogd-dev dev control: {dev_control}"));
-        }
-        if let Some(path) = &started.readiness().manifest_path {
-            print.status(format_args!("runtime manifest: {}", path.display()));
-        }
+        print_started_local_node(&started, &local_state_result, print);
     }
 
     let stop_signal = async {
@@ -232,6 +212,17 @@ async fn run_hogd_dev(
     };
 
     let outcome = started.run_until(stop_signal).await?;
+    if let (Some(local_state_path), Some(started_manifest_path)) = (
+        local_state_path.as_deref(),
+        started_manifest_path.as_deref(),
+    ) && let Err(error) = crate::runtime_manifest::remove_local_node_state_if_matches(
+        local_state_path,
+        &started_rpc_url,
+        started_manifest_path,
+    ) && !print.is_json()
+    {
+        print.warn(format!("local node state was not removed: {error}"));
+    }
     match outcome {
         SupervisorStop::HogdExited(status) => {
             if !print.is_json() {
@@ -250,6 +241,72 @@ async fn run_hogd_dev(
             "unexpected supervisor stop state: {other:?}"
         ))),
     }
+}
+
+#[cfg(feature = "dev-node")]
+fn print_started_local_node(
+    started: &StartedLocalNode,
+    local_state_result: &Result<Option<PathBuf>, CliError>,
+    print: &Print,
+) {
+    print.status("Groundhog Local Node (experimental)");
+    print.status(format_args!("Chain: {}", started.readiness().network_id));
+    if started.backend_planes().read.is_indexer_backed() {
+        print.warn("backend: hogd-dev (chainTip, submit, and reads live)");
+    } else {
+        print.warn(
+            "backend: hogd-dev (chainTip and submit live; read methods return NOT_IMPLEMENTED)",
+        );
+    }
+    print.status(format_args!("Listening on {}", started.rpc_url()));
+    print.status(format_args!(
+        "hogd-dev SchedulerCoord: {}",
+        started.readiness().endpoints.scheduler_coord
+    ));
+    if let Some(indexer) = started.readiness().endpoints.indexer_block_explorer {
+        print.status(format_args!("hogd-dev IndexerBlockExplorer: {indexer}"));
+    }
+    if let Some(db_gateway) = started.readiness().endpoints.db_gateway {
+        print.status(format_args!("hogd-dev DbGateway: {db_gateway}"));
+    }
+    if let Some(view_gateway) = started.readiness().endpoints.view_gateway {
+        print.status(format_args!("hogd-dev ViewGateway: {view_gateway}"));
+    }
+    if let Some(dev_control) = started.readiness().endpoints.dev_control {
+        print.status(format_args!("hogd-dev dev control: {dev_control}"));
+    }
+    if let Some(path) = &started.readiness().manifest_path {
+        print.status(format_args!("runtime manifest: {}", path.display()));
+        match local_state_result {
+            Ok(Some(local_state_path)) => print.status(format_args!(
+                "local node state: {}",
+                local_state_path.display()
+            )),
+            Ok(None) => {}
+            Err(error) => {
+                print.warn(format!("local node state was not written: {error}"));
+            }
+        }
+        print.status(format_args!(
+            "dev-key manifest: export GROUNDHOG_RUNTIME_MANIFEST={}",
+            path.display()
+        ));
+    }
+}
+
+#[cfg(feature = "dev-node")]
+fn write_started_local_node_state(started: &StartedLocalNode) -> Result<Option<PathBuf>, CliError> {
+    let manifest_path = started
+        .readiness()
+        .manifest_path
+        .as_deref()
+        .ok_or_else(|| {
+            CliError::NodeSupervisor(
+                "hogd-dev readiness did not include runtime manifest path".into(),
+            )
+        })?;
+    let cwd = std::env::current_dir()?;
+    crate::runtime_manifest::write_local_node_state(&cwd, &started.rpc_url(), manifest_path)
 }
 
 #[cfg(feature = "dev-node")]

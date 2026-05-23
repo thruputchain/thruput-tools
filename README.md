@@ -88,8 +88,13 @@ groundhog-bench --url http://127.0.0.1:9546 \
 ```
 
 CLI commands using local dev keys (`dev-0`, `dev-1`, ...) read the runtime
-manifest for wallet-address discovery through `GROUNDHOG_RUNTIME_MANIFEST` or
-`profile.<name>.runtime_manifest`.
+manifest for wallet-address discovery. `groundhog node` writes
+`.groundhog/local-node.json` when launched from a project, so commands in
+another terminal can discover the live RPC URL and manifest automatically, and
+removes that state on shutdown. This project-local state only fills missing
+dev-key config or replaces loopback RPC URLs; scripts and non-local profiles
+can also set `GROUNDHOG_RUNTIME_MANIFEST` or
+`profile.<name>.runtime_manifest` explicitly.
 
 See [Runtime Manifest Quickstart](docs/gateway/runtime-manifest.md) for the
 full CLI/gateway/bench loop,
@@ -103,13 +108,12 @@ for the v1 JSON shape.
 The JSON-RPC contract lives in the OpenRPC artifact at
 [`crates/open-rpc-spec/snapshots/groundhog-spec.json`](crates/open-rpc-spec/snapshots/groundhog-spec.json),
 also published as the `groundhog-open-rpc-spec` crate on the private
-registry. Two method namespaces:
+registry. The current public JSON-RPC surface uses one method namespace:
 
 - `groundhog_*` — public surface intended for SDK consumption.
-- `groundhog_dev_*` — temporary local-development compatibility helpers.
-  Today this includes dev-account introspection for `dev-N` workflows; the
-  long-term discovery path is the runtime manifest, and SDKs should not surface
-  these methods by default.
+
+Local dev-key metadata for `dev-N` workflows is intentionally outside JSON-RPC;
+the CLI, gateway, and bench harness discover it from the runtime manifest.
 
 Wire-format conventions:
 

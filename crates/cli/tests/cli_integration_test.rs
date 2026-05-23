@@ -1202,6 +1202,53 @@ fn deploy_dry_run_uses_manifest_dev_wallet_address_without_dev_rpc() {
 }
 
 #[test]
+fn deploy_dry_run_uses_project_local_node_state_rpc_and_manifest() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let advertised_wallet = advertised_dev_wallet_address(0);
+    let manifest_path = write_runtime_manifest(tmp.path(), 0, &advertised_wallet, None);
+    let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
+    std::fs::write(
+        project.join("groundhog.toml"),
+        "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"dev-0\"\n",
+    )
+    .unwrap();
+    write_local_node_state(&project, &rpc_url, &manifest_path);
+
+    let wasm_path = tmp.path().join("test.wasm");
+    std::fs::write(&wasm_path, b"\0asm\x01\0\0\0").unwrap();
+
+    let output = groundhog()
+        .args([
+            "--json",
+            "deploy",
+            "--dry-run",
+            "--wasm",
+            wasm_path.to_str().unwrap(),
+        ])
+        .current_dir(&project)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let signed_tx = stdout["data"]["signed_tx"]
+        .as_str()
+        .expect("bug: dry-run output includes signed tx");
+
+    assert_eq!(stdout["data"]["rpc_url"], rpc_url);
+    assert_eq!(signed_tx_invoked_address(signed_tx), advertised_wallet);
+}
+
+#[test]
 fn deploy_dry_run_runtime_manifest_env_overrides_profile() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");
@@ -1968,6 +2015,46 @@ fn storage_json_reads_latest_item() {
         stdout["data"]["item"]["bytes"],
         "0x6c6f63616c2d6e6f64652d73746f72616765"
     );
+}
+
+#[test]
+fn storage_json_uses_project_local_node_state_with_global_dev_key() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(config_home.join("groundhog")).unwrap();
+    std::fs::write(
+        config_home.join("groundhog").join("config.toml"),
+        "default_key = \"dev-0\"\n",
+    )
+    .unwrap();
+
+    let address = format!("0x{}", "11".repeat(32));
+    let key = format!("0x{}", "42".repeat(32));
+    let manifest_path =
+        write_runtime_manifest(tmp.path(), 0, &advertised_dev_wallet_address(0), None);
+    let (rpc_url, rpc_server) = spawn_storage_rpc(&address, &key);
+    std::fs::write(project.join("groundhog.toml"), "[profile.default]\n").unwrap();
+    write_local_node_state(&project, &rpc_url, &manifest_path);
+
+    let output = groundhog()
+        .args(["--json", "storage", &address, &key])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["data"]["rpc_url"], rpc_url);
+    assert_eq!(stdout["data"]["block_height"], 12);
 }
 
 #[test]
@@ -2862,6 +2949,25 @@ fn write_runtime_manifest_with_seed(
     });
     std::fs::write(&path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
     path
+}
+
+fn write_local_node_state(
+    project: &std::path::Path,
+    rpc_url: &str,
+    manifest_path: &std::path::Path,
+) {
+    let state_dir = project.join(".groundhog");
+    std::fs::create_dir_all(&state_dir).unwrap();
+    std::fs::write(
+        state_dir.join("local-node.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "schemaVersion": 1,
+            "rpcUrl": rpc_url,
+            "runtimeManifest": manifest_path,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
 }
 
 fn signed_tx_invoked_address(tx_hex: &str) -> String {
