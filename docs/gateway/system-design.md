@@ -1,7 +1,9 @@
 # RPC Gateway: System Design
 
-**Status:** Draft v2 — updated 2026-03-11 with findings from hogd/chuckd-rs code review
-**Context:** Follows from [opportunity-developer-facing-api.md](opportunity-developer-facing-api.md) — this is the "how" for Option B (separate Rust gateway service).
+**Status:** Architecture background updated for the current gateway shape. The
+OpenRPC snapshot and `GroundhogApi` trait are the API source of truth.
+**Context:** This records why the repo uses a separate Rust gateway service and
+which backend responsibilities the gateway assumes.
 
 Cross-team open questions and resolved decisions live in
 [`open-questions.md`](open-questions.md) to keep this doc focused on
@@ -75,7 +77,9 @@ embedding it in chuckd or chuckd-rs. Reasons:
 | Transaction submission | configurable: hogd scheduler or chuckd coordinator | `submit_unvetted(batch)` | Gateway config selects the private-network ingress path |
 | Transaction lookup (pending) | hogd scheduler | `lookup_transactions(hashes)` | Returns `Option<SignedTransaction>` per hash |
 | Pending tx count | hogd scheduler | `size()` | Atomic counter, includes runqueue + stranded |
-| Block/CV data by height or hash | chuckd coordinator | **TBD** — see question #1 | `DiskStorage` exists but not exposed for queries |
+| Latest committed storage | hogd DbGateway | `get_storage_at(address, key)` | Optional endpoint; required for `groundhog_getStorageAt` |
+| Sandboxed view execution | hogd ViewGateway | `view(TransactionViewQuery)` | Optional endpoint; required for `groundhog_view` |
+| Block/CV data by height or hash | chuckd coordinator | **TBD** — see open questions | `DiskStorage` exists but not exposed for queries |
 
 ### What Needs x23 Exposure
 
@@ -85,12 +89,11 @@ Most query paths already exist. Gaps:
   and `lookup_catchup_block()` exist in chuckd-rs but are only
   accessible through the catchup/repair peer protocols, which use
   signed requests. A lightweight query endpoint is needed, OR hogd
-  needs to index block headers. **[Question #1 above]**
+  needs to index block headers. See `open-questions.md`.
 
 - **Block commit notifications**: `Notify` interface exists (chuckd)
   but is stubbed (`IgnoreNotify`). Phase 2 needs this wired to a
-  broadcast channel that the gateway can subscribe to.
-  **[Question #4 above]**
+  broadcast channel that the gateway can subscribe to. See `open-questions.md`.
 
 - **A concrete Rust surface for a chuckd submit backend**: `protocol-rs`
   now provides generated Rust/XDR support for the direct scheduler path
@@ -221,11 +224,10 @@ Ethereum's hex-encoded *quantities* (`"0x1a4"` for block 420) are widely
 considered a UX mistake — Solana, Sui, Aptos, and Stellar all use plain
 integers. We take the best of both: hex bytes, decimal numbers.
 
-**Note on `groundhog-xdr`:** The XDR crate serializes hash/address types
-as bare hex (no `0x` prefix) via `serde_arrays::hex`. The `api-types`
-crate's wrapper types (`HexBytes`, `Topic`) add the prefix. Whether to
-also wrap XDR re-exports for prefix consistency is an open question
-(see question #3).
+**Note on `groundhog-xdr`:** The XDR crate serializes hash/address types as
+bare hex (no `0x` prefix) via `serde_arrays::hex`. The public RPC boundary wraps
+byte-like values in `api-types` so JSON-RPC clients see the `0x`-prefixed
+format consistently.
 
 ---
 
@@ -432,9 +434,9 @@ prometheus = "0.13"
 
 ### Phase 1: Submit + Query (Target: private testnet)
 
-Seven RPC methods (or six if `getBlockByNumber` is deferred — see
-question #1). All reads via x23 to hogd indexer/scheduler. HTTP
-transport only (no WebSocket).
+The current public surface is generated from `crates/rpc-api`. Reads go through
+x23-backed gateway adapters where the corresponding hogd endpoint exists. HTTP
+transport is the current focus; WebSocket subscriptions remain a later phase.
 
 | Method | Data Source | Notes |
 |--------|-----------|-------|
@@ -442,9 +444,12 @@ transport only (no WebSocket).
 | `groundhog_getTransactionReceipt(hash) → Receipt` | indexer `get_transaction_info` | No `storage_delta` in Phase 1 |
 | `groundhog_getTransactionStatus(hash) → Status` | scheduler `find_tx` + indexer | See lookup order above |
 | `groundhog_chainTip() → TipInfo` | scheduler `get_tip` | |
-| `groundhog_getBlockByNumber(height) → BlockInfo` | **TBD** (question #1) | May defer |
+| `groundhog_getBlockByNumber(height) → BlockInfo` | **TBD** | In OpenRPC; handler is not implemented until a block query backend exists |
 | `groundhog_getEvents(EventQuery) → EventPage` | indexer `get_events` | Gateway enforces per-page limit and cursor length |
-| `groundhog_pendingTransactionCount() → u64` | scheduler `size()` | Includes runqueue + stranded |
+| `groundhog_pendingTransactionCount() → u64` | scheduler `size()` | In OpenRPC; gateway handler is not wired yet |
+| `groundhog_getStorageAt(address, key) → StorageItemRead` | DbGateway | Requires `db_gateway` endpoint |
+| `groundhog_view(request) → ViewResponse` | ViewGateway | Requires `view_gateway` endpoint |
+| `groundhog_version() → VersionInfo` | gateway build metadata | Reports wire-format and implementation versions |
 
 Plus `rpc.discover` for free from jsonrpsee's OpenRPC generation.
 

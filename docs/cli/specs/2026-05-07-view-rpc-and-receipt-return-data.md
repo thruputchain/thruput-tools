@@ -652,12 +652,10 @@ optional decoration.
   is known to be state-changing, or when a user submits a transaction for a
   method that is known to be preview-only. Until the annotation exists,
   users choose `view` vs `call` explicitly.
-- **View gas cap.** V1 should start with
-  `RpcServerConfig::view_gas_limit`. Concrete backends should set a
-  bounded production value before exposing public view support; an
-  unbounded scaffold default is only acceptable while the method returns
-  `NotImplemented`. A request-level override can be added later if
-  needed.
+- **View gas cap.** V1 starts with `RpcServerConfig::view_gas_limit`. The
+  shared default is bounded, and concrete backends pass it through to
+  `TransactionViewQuery.invocation.gas_limit`. A request-level override can be
+  added later if needed.
 - **Historical state selector.** The eventual shape should probably use
   a committed height selector, but that requires hogd-side support for
   retaining/selecting historical snapshots.

@@ -1,5 +1,9 @@
 # TypeScript Binding Codegen
 
+**Status:** Shipped. The current implementation lives in
+`crates/cli/src/codegen.rs` and is exposed through `groundhog codegen ts` plus
+`groundhog build --bindings ts`.
+
 Generate typed TypeScript bindings from Groundhog contract specs.
 Like wagmi codegen for Ethereum ABIs, but for Groundhog contracts.
 

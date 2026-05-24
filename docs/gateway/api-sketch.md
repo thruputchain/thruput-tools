@@ -1,6 +1,8 @@
 # RPC Gateway: API Sketch
 
-**Status:** Draft v2 — updated 2026-03-11
+**Status:** Historical sketch. The current source of truth is the
+`GroundhogApi` trait in `crates/rpc-api` plus the generated OpenRPC snapshot in
+`crates/open-rpc-spec/snapshots/groundhog-spec.json`.
 **Context:** Code sketches for [system-design.md](system-design.md).
 Not compilable as-is; intended to communicate shape and decisions.
 

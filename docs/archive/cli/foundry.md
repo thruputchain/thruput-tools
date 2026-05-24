@@ -1,5 +1,9 @@
 # Groundhog CLI: DX Roadmap
 
+**Archive note:** Historical competitive analysis from 2026-04-07. This is not
+the current CLI roadmap; use [`../../cli/roadmap.md`](../../cli/roadmap.md) for
+active planning.
+
 Strategic analysis of Foundry's developer experience patterns applied to
 the Groundhog CLI, SDK, and RPC Gateway. Based on source-level review of
 Foundry (forge/anvil/cast/chisel), the Groundhog SDK (`sdk_rs`), the

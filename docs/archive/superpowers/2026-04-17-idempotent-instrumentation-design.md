@@ -1,5 +1,9 @@
 # Idempotent Instrumentation and Groundhog-Owned Artifacts
 
+**Archive note:** Shipped implementation plan. The current behavior lives in
+`crates/cli/src/build.rs`, `crates/cli/src/artifacts.rs`, and
+`crates/cli/src/contract_spec.rs`.
+
 ## Problem
 
 `groundhog build` currently treats Cargo's raw WASM output as the working file for all

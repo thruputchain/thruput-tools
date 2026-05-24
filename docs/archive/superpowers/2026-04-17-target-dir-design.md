@@ -1,5 +1,8 @@
 # `--target-dir` Support For Artifact-Aware Groundhog CLI Commands
 
+**Archive note:** Shipped implementation plan. The current behavior lives in
+the CLI help and `crates/cli/src/artifacts.rs`.
+
 Date: 2026-04-17
 
 ## Summary

@@ -260,6 +260,8 @@ contributors and LLM assistants. Highlights:
 
 Active design notes:
 
+- [`docs/README.md`](docs/README.md) — map of living docs vs archived
+  historical notes.
 - [`docs/cli/specs/`](docs/cli/specs/) — CLI and developer-tooling specs.
 - [`docs/cli/roadmap.md`](docs/cli/roadmap.md) — CLI roadmap.
 - [`docs/gateway/`](docs/gateway/) — gateway architecture and roadmap.

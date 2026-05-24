@@ -6,7 +6,7 @@ supervisor path, with future extensions called out below.
 
 **Companion to:**
 
-- [`../2026-04-25-hogd-dev-node-hybrid.md`](../2026-04-25-hogd-dev-node-hybrid.md)
+- [`../../archive/cli/2026-04-25-hogd-dev-node-hybrid.md`](../../archive/cli/2026-04-25-hogd-dev-node-hybrid.md)
   - big-picture hogd-owned hybrid dev-node design.
 
 ## Scope
@@ -20,18 +20,18 @@ account/genesis input, JSON-RPC facade wiring, log forwarding, and shutdown.
 
 - **Process name.** The child binary is `hogd-dev`.
 - **Readiness.** The supervisor starts `hogd-dev` with `--readiness stdout`
-  and reads exactly one capped JSON readiness line from stdout. Stdout is
-  otherwise reserved for machine protocol.
-- **Endpoints.** Current `hogd-dev` advertises compact `scheduler`, `read`,
-  and `gateway` endpoint keys, plus long-form `view_gateway`. The Rust
-  supervisor accepts the long-form Rust field names (`scheduler_coord`,
-  `indexer_block_explorer`, `db_gateway`, `view_gateway`) and the compact
-  aliases (`scheduler`, `read`, `gateway`, `view`). `dev_control` remains
-  optional.
+  and reads exactly one capped JSON readiness line from stdout. Current
+  readiness is a pointer to a versioned runtime manifest. Stdout is otherwise
+  reserved for machine protocol.
+- **Endpoints.** Current `hogd-dev` writes canonical endpoint keys into the
+  runtime manifest: `scheduler`, `indexer`, `dbGateway`, and `viewGateway`.
+  The Rust supervisor still accepts older compact/long-form inline readiness
+  aliases while parsing, but validation for the local-node path requires the
+  runtime manifest pointer.
 - **Dev accounts.** The supervisor passes deterministic dev-account count,
   seed, and initial token flags. `hogd-dev` advertises the bootstrapped account
-  metadata in readiness, and the supervisor validates it for manifest-backed
-  `dev-N` signing.
+  metadata in the runtime manifest, and the supervisor validates it for
+  manifest-backed `dev-N` signing.
 - **Genesis.** Current `hogd-dev` normally loads dev-account genesis before
   readiness. The supervisor keeps an empty-genesis compatibility probe after
   readiness for older or reduced children that report no genesis block.
@@ -74,28 +74,22 @@ flags in the current binary.
 ## Readiness
 
 Readiness is exactly one stdout JSON line. Stdout is otherwise reserved for
-machine protocol; ordinary logs go to stderr.
+machine protocol; ordinary logs go to stderr. Current readiness is a bounded
+pointer to the runtime manifest:
 
 ```json
 {
+  "schemaVersion": 1,
   "status": "ready",
-  "network_id": "groundhog-local",
-  "endpoints": {
-    "scheduler": "127.0.0.1:12345",
-    "read": "127.0.0.1:12346",
-    "gateway": "127.0.0.1:12347",
-    "view_gateway": "127.0.0.1:12348"
-  },
-  "dev_accounts": [
-    {
-      "index": 0,
-      "address": "0x...",
-      "public_key": "0x...",
-      "initial_storage_tokens": 1000000000
-    }
-  ]
+  "manifestPath": "/tmp/hogd-dev/runtime-manifest.json",
+  "manifestHash": "0x..."
 }
 ```
+
+The supervisor opens the manifest path, verifies `manifestHash`, parses the
+versioned runtime manifest, and derives its internal readiness view from that
+manifest. The manifest contains `networkId`, backend endpoints,
+`bootstrapAccountDerivation`, and `bootstrapAccounts`.
 
 If startup fails before readiness, hogd-dev should exit non-zero and write a
 clear error record to stderr. The supervisor treats child exit before readiness
