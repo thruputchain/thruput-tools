@@ -25,10 +25,10 @@ Options:
 **This is the biggest open question** — option A requires chuckd-rs
 changes, option B requires hogd changes.
 
-### 2. Method prefix
+### 2. Concrete block query backend for `getBlockByNumber`
 
-`groundhog_`, `gh_`, or something else? Low stakes but should be
-decided before clients exist. Current scaffold uses `groundhog_`.
+The public method is in the OpenRPC surface, but the gateway handler still
+returns `not_implemented` until hogd/chuckd exposes a supported query backend.
 
 ### ~~3. Byte format for JSON wire protocol~~ — RESOLVED
 
@@ -47,8 +47,12 @@ stream? [Petar, Geoff]
   from Phase 1 — removed from `TransactionReceipt`. Add back when
   indexer support lands.
 - **`pendingTransactionCount` backend:** Maps to `scheduler.size()`,
-  which returns total tx count including runqueue + stranded.
-  (`hogd/mempool/scheduler.h:136`)
+  which returns total tx count including runqueue + stranded. The public method
+  is in the OpenRPC surface; the gateway handler remains unwired until the
+  scheduler client path is plumbed through. (`hogd/mempool/scheduler.h:136`)
+- **Method prefix:** The public namespace is `groundhog_*`. Local dev-account
+  discovery is intentionally not an RPC namespace; current dev-key metadata
+  discovery goes through runtime manifests.
 - **Event structure in hogd:** `TxEmittedEvent.serialized_event`
   concatenates topics + data: `topic0 (32B) || ... || data (rest)`.
   `num_topics` (0–3) determines the split point. Max total 1024 bytes.

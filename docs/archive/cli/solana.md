@@ -1,5 +1,9 @@
 # Solana Ecosystem: DX Analysis for Groundhog
 
+**Archive note:** Historical competitive analysis from 2026-04-08. This is not
+the current CLI roadmap; use [`../../cli/roadmap.md`](../../cli/roadmap.md) for
+active planning.
+
 Analysis of the Solana developer experience — Anchor framework, Solana
 CLI, solana-sdk (Rust), and @solana/kit (TypeScript) — with lessons
 for the Groundhog CLI and SDK. Based on source-level review of

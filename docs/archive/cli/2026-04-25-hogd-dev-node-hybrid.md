@@ -1,5 +1,9 @@
 # Hogd-Owned Hybrid Dev Node
 
+**Archive note:** Historical design note. The hogd-dev supervisor path shipped;
+the current child-process contract is
+[`../../cli/specs/2026-04-29-hogd-dev-process-contract.md`](../../cli/specs/2026-04-29-hogd-dev-process-contract.md).
+
 **Date:** 2026-04-25
 **Status:** Decision accepted. PRs 1-4f shipped the supervisor and
 hogd-dev path; PR 5 deleted the legacy `crates/dev-node` source tree.
@@ -9,7 +13,7 @@ been retained for context. The current local-node implementation lives
 in `crates/node-supervisor` around a hogd-owned `hogd-dev` subprocess.
 
 **Companion to:**
-- [`specs/2026-04-29-hogd-dev-process-contract.md`](specs/2026-04-29-hogd-dev-process-contract.md)
+- [`../../cli/specs/2026-04-29-hogd-dev-process-contract.md`](../../cli/specs/2026-04-29-hogd-dev-process-contract.md)
   — hogd-dev subprocess contract.
 
 This doc supersedes earlier proposals that argued for an embedded

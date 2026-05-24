@@ -1,8 +1,9 @@
 # OpenRPC Wire-Format Version Decoupling
 
 **Date:** 2026-05-11
-**Status:** Draft — closes the third architecture follow-up flagged in PR
-#61 ("Decouple wire-format version from workspace version").
+**Status:** Shipped. The current code declares
+`groundhog_rpc_api::WIRE_FORMAT_VERSION`; as of 2026-05-23 it is `2.0.0`.
+This document preserves the design rationale and original rollout plan.
 
 ## Context
 
@@ -68,7 +69,7 @@ decoupled from `CARGO_PKG_VERSION`:
 /// - major: breaking change to method shape, params, results, or errors
 /// - minor: additive change (new method, new optional field, new error)
 /// - patch: documentation / description / example refinement only
-pub const WIRE_FORMAT_VERSION: &str = "1.0.0";
+pub const WIRE_FORMAT_VERSION: &str = "2.0.0";
 ```
 
 `open-rpc-spec::build_spec()` reads
@@ -77,9 +78,8 @@ is also the home consumed by `rpc-server` for the `groundhog_version`
 RPC in Part C — single source of truth, both consumers already depend
 on `rpc-api`.
 
-**Initial value:** `1.0.0`. The current artifact has been through
-review and is the stable starting point. Future bumps are intentional
-PR-author decisions, not automatic.
+**Current value:** `2.0.0`. Future bumps are intentional PR-author decisions,
+not automatic.
 
 **Enforcement:** the existing snapshot test
 (`crates/open-rpc-spec/tests/spec_snapshot.rs`) already pins the
@@ -209,9 +209,9 @@ versions.
   a check that "snapshot changed ⇒ `WIRE_FORMAT_VERSION` changed,"
   but reviewer enforcement is the lower-cost first step.
 
-## Sequencing
+## Original Sequencing
 
-Two PRs, A first:
+This was the rollout plan when the design was written:
 
 - **PR A: independent spec SemVer.** Add `WIRE_FORMAT_VERSION` to
   `rpc-api`, wire `open-rpc-spec::build_spec()` through it, update

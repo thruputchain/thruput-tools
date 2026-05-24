@@ -14,15 +14,14 @@ sandboxed simulation; see the parent doc for context. The wire shape
 
 ## Context
 
-`groundhog-rpc` now has the public `groundhog_view` scaffold:
+`groundhog-rpc` now has the public `groundhog_view` method:
 
 - `ViewRequest { contract, entrypoint, calldata, caller }`
 - `ViewResponse { output, events, height }`
 - `RootInvocationOutput::{Return, Abort, Fault}`
 - shared request validation, including 8-byte entrypoints and a calldata
   cap
-- a backend default of `NotImplemented` until hogd exposes a real view
-  service
+- a bounded backend gas limit passed into the view request
 
 hogd PR #1902 landed the executor primitive that makes this possible:
 
@@ -32,16 +31,11 @@ hogd PR #1902 landed the executor primitive that makes this possible:
 - hogexec has `ExecutorContext::view_transaction(...)`.
 - hogexec tests exercise the view execution path.
 
-That is the right lower layer, but it is not yet a consumable
-`groundhog-rpc` backend contract. As of the merge:
-
-- `protocol/view.x` defines data types only; it does not define an x23
-  `program`.
-- `protocol-rs/scripts/generate.sh` does not generate `view.x`.
-- `protocol-rs` does not publish a view RPC client crate/module.
-- `hogd-dev` readiness does not advertise a `view_gateway` endpoint.
-- The executor result does not carry the committed snapshot height that
-  `ViewResponse.height` requires.
+The follow-up work in this document has landed: protocol-rs publishes the view
+RPC surface, `hogd-dev` can advertise a `viewGateway` endpoint through the
+runtime manifest, and both the standalone gateway and node-supervisor wire the
+backend when that endpoint is present. If the endpoint is absent, the public
+method remains available but returns `NotImplemented`.
 
 This spec defines the smallest cross-repo follow-up that lets
 `groundhog-rpc` replace `NotImplemented` with a real adapter.
@@ -238,10 +232,9 @@ The public `ViewRequest` maps into `TransactionViewQuery` as follows:
 | `caller = None` | `parent_address = nullptr` |
 | `caller = Some(addr)` | `parent_address = &addr` |
 
-The scaffold default for `RpcServerConfig::view_gas_limit` is
-`u64::MAX`, matching the existing "not configured" convention. Concrete
-gateway and node-supervisor view backends must override that default with
-a bounded production value before advertising public view support.
+The shared default for `RpcServerConfig::view_gas_limit` is bounded. Gateway
+and node-supervisor view backends pass that value through to
+`invocation.gas_limit`.
 
 The remaining `TransactionViewQuery` fields need explicit protocol
 documentation before protocol-rs publishes them:
@@ -351,25 +344,23 @@ names rather than `rpc-server` plane names:
 }
 ```
 
-The `view_gateway` endpoint should be optional. If hogd-dev omits it,
+The `view_gateway` endpoint is optional. If hogd-dev omits it,
 node-supervisor keeps returning `NotImplemented` for `groundhog_view`.
 
 ## Groundhog-RPC Consumption Plan
 
-Once the protocol-rs release exists, `groundhog-rpc` can wire the real
-backend in a focused PR:
+This plan has shipped. The implemented shape is:
 
-1. Rebase onto `groundhog-rpc` v0.3.3 or later, then add
-   `groundhog_view`.
-2. Configure a bounded `RpcServerConfig::view_gas_limit` for gateway and
-   node-supervisor view backends, then use that value as
-   `TransactionViewQuery.invocation.gas_limit`. The scaffold `u64::MAX`
-   default is only a placeholder while view returns `NotImplemented`.
-3. Parse optional `endpoints.view_gateway` in node-supervisor readiness.
-4. Add a node-supervisor adapter in `crates/node-supervisor/src/view_backend.rs`.
-5. Add a gateway adapter/handler alongside the existing gateway handler
-   modules, reusing `groundhog-x23-transport`.
-6. Implement `ViewPlane::view` for node-supervisor and gateway backends.
+1. `RpcServerConfig::view_gas_limit` has a bounded default and is used as
+   `TransactionViewQuery.invocation.gas_limit`.
+2. Runtime manifests carry optional `endpoints.viewGateway`, which
+   node-supervisor reads as `readiness.endpoints.view_gateway`.
+3. Node-supervisor adapts the endpoint in
+   `crates/node-supervisor/src/view_backend.rs`.
+4. The standalone gateway adapts the endpoint in
+   `crates/gateway/src/handlers/view.rs`.
+5. `ViewPlane::view` is implemented for the node-supervisor and gateway
+   backends when a view endpoint is configured.
 7. Map service payloads to public API types:
 
    | View service result | JSON-RPC result |

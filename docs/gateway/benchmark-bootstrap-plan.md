@@ -38,8 +38,8 @@ and a real chuckd coordinator behind the real `groundhog-rpc` gateway.
 
 Most of the pieces already exist:
 
-- `hogd-dev` can bootstrap deterministic dev accounts and advertise them in
-  readiness.
+- `hogd-dev` can bootstrap deterministic dev accounts and advertise them in a
+  runtime manifest pointed to by readiness.
 - `groundhog node` validates advertised dev-account metadata against local
   deterministic dev-key settings.
 - `groundhog-rpc` already runs the production gateway path and connects to
@@ -479,8 +479,8 @@ the full-stack benchnet needs a portable bootstrap input.
 - Do not inline large genesis artifacts in one-line readiness output.
 - Do not expose dev-account private keys or dev metadata from production
   gateway mode.
-- Do not keep `groundhog_dev_*` as the long-term bootstrap account discovery
-  surface once manifest consumers are in place.
+- Do not reintroduce `groundhog_dev_*` as a bootstrap account discovery
+  surface; manifest consumers are now the maintained path.
 - Do not make the manifest contract depend on whether hogd components run as
   separate processes or as one stitched binary with role flags.
 - Do not treat the runtime manifest as the canonical genesis source of truth;
@@ -509,6 +509,7 @@ The scope appears manageable because the codebase already has:
 - runtime-manifest account discovery for CLI and benchmark workloads;
 - an initial open-loop benchmark harness.
 
-The main design work is to promote the existing readiness and bootstrap-account
-metadata into a versioned runtime manifest, then use that artifact to drive
-gateway benchmarking without changing the meaning of `groundhog node`.
+The runtime-manifest handoff is now in place. The remaining design work is to
+define the portable bootstrap-manifest input and then use that input/runtime
+pair to drive full-stack gateway benchmarking without changing the meaning of
+`groundhog node`.

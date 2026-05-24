@@ -1,9 +1,9 @@
 # Groundhog CLI Roadmap
 
-Execution roadmap for the Groundhog CLI as of 2026-04-24.
+Execution roadmap for the Groundhog CLI as of 2026-05-23.
 
-`docs/foundry.md` is the benchmark/reference document. This file is the
-working plan we should actually execute against.
+Historical competitive-analysis notes live under `docs/archive/cli/`.
+This file is the working plan we should actually execute against.
 `TODO.md` is a lightweight session tracker only. If `TODO.md` and this
 file ever disagree, this file wins.
 
@@ -87,8 +87,8 @@ Implementation status:
   retired in PR 5 once hogd-dev proved out the published-SDK scaffold
   loop. The durable backend is a Rust supervisor
   (`groundhog-node-supervisor`) around a hogd-owned `hogd-dev`
-  subprocess; see `docs/cli/2026-04-25-hogd-dev-node-hybrid.md` for
-  the durable backend direction.
+  subprocess. Historical design context lives in
+  [`../archive/cli/2026-04-25-hogd-dev-node-hybrid.md`](../archive/cli/2026-04-25-hogd-dev-node-hybrid.md).
 - The no-key-required call dry-run / inspect split now has a draft design
   in [`specs/2026-05-07-view-rpc-and-receipt-return-data.md`](specs/2026-05-07-view-rpc-and-receipt-return-data.md);
   it runs as a parallel cross-team track to PR 5 (see Phase 2 tracker).
@@ -305,7 +305,7 @@ Goal: make the current CLI trustworthy and easier to adopt.
      smoke path.
 
 3. **Planning/docs cleanup**
-   - Keep `docs/foundry.md` as benchmark/reference.
+   - Keep historical benchmark/reference notes under `docs/archive/`.
    - Keep this file short and current.
    - Keep `TODO.md` as a lightweight working tracker that points back to
      this file instead of duplicating it.
