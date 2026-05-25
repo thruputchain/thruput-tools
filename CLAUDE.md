@@ -115,12 +115,14 @@ runtime), `tower`/`tower-http` (middleware), `clap` (CLI), `prometheus`
   of XDR types. If the JSON wire format differs from raw XDR (for
   example `0x`-prefixed hex wrappers), model that once here instead of
   redefining it in gateway, client, or CLI code.
-- `crates/api-types/src/runtime_manifest.rs` owns the runtime manifest
-  schema shared by `hogd-dev` producers, `groundhog node`,
+- `crates/api-types/src/bootstrap_manifest.rs` owns the bootstrap
+  manifest input schema for local and benchmark backend launchers.
+  `crates/api-types/src/runtime_manifest.rs` owns the runtime manifest
+  output schema shared by `hogd-dev` producers, `groundhog node`,
   `groundhog-rpc --runtime-manifest`, and `groundhog-bench
   --runtime-manifest`. Public manifest structs are `#[non_exhaustive]`;
   additive fields are expected. Optional endpoints must be absent when
-  unavailable, not `null`. Large numeric quantities in the manifest are
+  unavailable, not `null`. Large numeric quantities in manifests are
   decimal strings.
 - `crates/rpc-api` owns JSON-RPC method names, params, and results.
   Trait signatures in `rpc-api/src/lib.rs` are the sole source of

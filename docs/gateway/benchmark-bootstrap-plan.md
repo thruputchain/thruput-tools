@@ -1,10 +1,10 @@
 # Gateway Benchmark Bootstrap Plan
 
-**Date:** 2026-05-21
+**Date:** 2026-05-24
 **Status:** Partially implemented. Runtime-manifest readiness, gateway
 consumption, benchmark consumption, CLI manifest-first dev-account discovery,
-and dev-account RPC removal have landed; bootstrap-manifest input and the
-full-stack benchnet harness remain open.
+dev-account RPC removal, and bootstrap-manifest input have landed. The
+full-stack benchnet harness remains open.
 
 ## Goal
 
@@ -92,8 +92,8 @@ Input to a backend launcher. Describes desired genesis/bootstrap state.
   "kind": "groundhog-bootstrap",
   "networkId": "groundhog-bench-local",
   "profile": "local-dev",
-  "protocol": "hogp/...",
   "devWallet": {
+    "profile": "hogd-dev-default",
     "artifactHint": "./dev-wallet.wasm",
     "contentHash": "0x...",
     "deployEntrypoint": "0xadac498222148e4f",
@@ -112,17 +112,37 @@ Input to a backend launcher. Describes desired genesis/bootstrap state.
 
 This is intent. It should be small and deterministic. It may refer to artifacts
 by a resolution hint plus a content hash; it should not be required to inline
-large WASM blobs. The hint helps humans and launchers find the artifact, while
-the hash verifies that the backend bootstrapped the intended bytes.
+large WASM blobs. When provided, the hint helps humans and launchers find the
+artifact, while the hash verifies that the backend bootstrapped the intended
+bytes.
+
+Producers should treat the bootstrap manifest as a small, trusted operator
+input. Concrete bounds the `hogd-dev` consumer enforces today:
+
+- The manifest file must be a regular file. Symlinks, FIFOs, devices, and
+  directories are rejected.
+- File size is capped at 64 KiB.
+- `bootstrapAccounts.count` is capped at 1000.
+
+Other producers should adopt comparable bounds. The exact thresholds are
+implementation choices; the principle is that bootstrap input is small,
+deterministic, and not user-supplied.
 
 The bootstrap manifest is canonical input. Convenience CLI flags may lower into
 this shape, but a flag that conflicts with an explicit manifest field should be
 an error rather than a silent override.
 
-For benchmark profiles, `protocol` should be pinned. The backend should reject
-startup if the running binary cannot materialize that protocol version. Local
-developer shorthand profiles may omit it and accept the binary's embedded
-protocol, but reproducible benchmark inputs should not.
+Example:
+[`docs/gateway/examples/bootstrap-manifest.local-dev.example.json`](examples/bootstrap-manifest.local-dev.example.json).
+
+The local-dev example uses the minimal dev-wallet profile shape emitted by
+`groundhog node`. The artifact/hash/entrypoint fields above are optional
+assertions for benchmark profiles or hand-authored manifests.
+
+Bootstrap input does not carry protocol identity. The backend reports the
+materialized protocol in the runtime manifest, and benchmark runners should
+validate that runtime output against the expected binary/protocol pairing before
+recording results.
 
 Where the bootstrap manifest names a profile, the runtime manifest expands it
 into the concrete parameters actually applied. For example,
@@ -365,7 +385,7 @@ manifest.
 
 ## Implementation Status
 
-As of 2026-05-22:
+As of 2026-05-24:
 
 - [x] `hogd-dev` readiness pointer to a versioned runtime manifest.
 - [x] `groundhog node` reports `data.runtime_manifest.path` and hash in
@@ -382,7 +402,7 @@ As of 2026-05-22:
 - [x] CLI `dev-N` wallet-address resolution reads a configured runtime
   manifest.
 - [x] Remove the dev-account RPC compatibility path.
-- [ ] Define and consume a portable bootstrap manifest input for `hogd-dev`.
+- [x] Define and consume a portable bootstrap manifest input for `hogd-dev`.
 - [ ] Build the full-stack benchnet harness for hogd/chuckd topologies.
 
 ## Phased Plan
@@ -444,11 +464,17 @@ implemented for the hogd-dev runtime-manifest path.
 
 ### Phase 4: Bootstrap Manifest Input
 
-- Define the bootstrap manifest accepted by `hogd-dev`.
-- Move dev account count, seed, token amount, dev-wallet profile, and cost-model
+- [x] Define the shared Rust bootstrap manifest type in `crates/api-types`.
+- [x] Add a local-dev example bootstrap manifest.
+- [x] Add supervisor lowering from current hogd-dev shorthand settings into
+  bootstrap intent.
+- [x] Add `hogd-dev --bootstrap-manifest <path>` parsing and validation.
+- [x] Pass serialized bootstrap manifests from the Rust supervisor once the
+  hogd-dev consumer is available.
+- [x] Move dev account count, seed, token amount, dev-wallet profile, and cost-model
   profile into that manifest.
-- Keep simple CLI flags as convenience shorthands that lower into the manifest.
-- Leave arbitrary `initialContracts` out of this phase. Add it in a later phase
+- [x] Keep simple CLI flags as convenience shorthands that lower into the manifest.
+- [x] Leave arbitrary `initialContracts` out of this phase. Add it in a later phase
   only when there is a concrete entry shape and producer implementation.
 
 Deliverable: local dev and benchmark backends can request the same genesis
@@ -509,7 +535,7 @@ The scope appears manageable because the codebase already has:
 - runtime-manifest account discovery for CLI and benchmark workloads;
 - an initial open-loop benchmark harness.
 
-The runtime-manifest handoff is now in place. The remaining design work is to
-define the portable bootstrap-manifest input and then use that input/runtime
-pair to drive full-stack gateway benchmarking without changing the meaning of
-`groundhog node`.
+The runtime-manifest handoff and portable bootstrap-manifest input are now in
+place for `hogd-dev`. The remaining design work is to use that input/runtime
+pair in the full-stack benchnet harness for hogd/chuckd topologies without
+changing the meaning of `groundhog node`.

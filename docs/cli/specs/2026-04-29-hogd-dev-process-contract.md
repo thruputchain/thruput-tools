@@ -28,10 +28,11 @@ account/genesis input, JSON-RPC facade wiring, log forwarding, and shutdown.
   The Rust supervisor still accepts older compact/long-form inline readiness
   aliases while parsing, but validation for the local-node path requires the
   runtime manifest pointer.
-- **Dev accounts.** The supervisor passes deterministic dev-account count,
-  seed, and initial token flags. `hogd-dev` advertises the bootstrapped account
-  metadata in the runtime manifest, and the supervisor validates it for
-  manifest-backed `dev-N` signing.
+- **Dev accounts.** The supervisor lowers deterministic dev-account count,
+  seed, and initial token settings into a temporary bootstrap manifest and
+  starts `hogd-dev` with `--bootstrap-manifest <path>`. `hogd-dev` advertises
+  the bootstrapped account metadata in the runtime manifest, and the supervisor
+  validates it for manifest-backed `dev-N` signing.
 - **Genesis.** Current `hogd-dev` normally loads dev-account genesis before
   readiness. The supervisor keeps an empty-genesis compatibility probe after
   readiness for older or reduced children that report no genesis block.
@@ -61,11 +62,14 @@ hogd-dev \
   --listen-host 127.0.0.1 \
   --scheduler-port 0 \
   --readiness stdout \
-  --dev-accounts 10 \
-  --dev-account-seed groundhog-dev-accounts \
-  --dev-account-tokens 1000000000
+  --bootstrap-manifest /tmp/groundhog-hogd-bootstrap-.../bootstrap-manifest.json
 ```
 
+The bootstrap manifest contains the local-dev network id, dev-wallet profile,
+deterministic dev-account count/seed/token funding, and storage-cost profile.
+Current `hogd-dev` treats this as small trusted operator input: the path must
+open to a regular file, the file is capped at 64 KiB, and
+`bootstrapAccounts.count` is capped at 1000.
 The supervisor also injects `HOGD_LOG_FORMAT=json`. `hogd-dev` remains
 ephemeral; no state directory is part of the contract until persistence is
 real. There are no `--read-port`, `--control-port`, or `--genesis-stdin`

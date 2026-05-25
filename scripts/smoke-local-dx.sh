@@ -164,7 +164,22 @@ detect_hogd_protocol() {
         return
     fi
 
-    # hogd-dev prints protocol metadata during startup, even for --help.
+    local version_file
+    version_file="$(dirname "$binary")/../version.c"
+    if [[ -f "$version_file" ]]; then
+        python3 - "$version_file" <<'PY'
+import re
+import sys
+
+text = open(sys.argv[1], encoding="utf-8").read()
+match = re.search(r'protocol_commit\[\]\s*=\s*"([0-9a-fA-F]+)"', text)
+if match:
+    print(f"hogp/{match.group(1)[:12]}")
+PY
+        return
+    fi
+
+    # Older hogd-dev builds printed protocol metadata for --help.
     # Strip ANSI color escapes before extracting the protocol marker.
     local output
     output="$("$binary" --help 2>&1 || true)"

@@ -3,6 +3,7 @@ mod schema_generation {
     use schemars::schema_for;
 
     use crate::block::{BlockInfo, ChainTip};
+    use crate::bootstrap_manifest::BootstrapManifest;
     use crate::dev::{
         FrameOutputInfo, InvocationInfo, StorageDeltaInfo, SyscallInfo, SyscallStatusInfo,
         TraceInfo, TransactionDetail,
@@ -48,6 +49,9 @@ mod schema_generation {
         let _ = schema_for!(SyscallInfo);
         let _ = schema_for!(SyscallStatusInfo);
         let _ = schema_for!(FrameOutputInfo);
+
+        // Manifest types
+        let _ = schema_for!(BootstrapManifest);
     }
 }
 

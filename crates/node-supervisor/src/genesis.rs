@@ -5,9 +5,7 @@ use groundhog_scheduler::{
     sched_coord::SchedulerCoord_SchedulerCoord1_Client,
 };
 use groundhog_xdr::{
-    genesis::InitialConfigurationList,
-    storage_cost::StorageCostModelXdr,
-    types::{ExtensionPoint, int128_xdr},
+    genesis::InitialConfigurationList, storage_cost::StorageCostModelXdr, types::ExtensionPoint,
 };
 
 use crate::NodeSupervisorError;
@@ -95,22 +93,15 @@ fn dev_genesis_config() -> GenesisConfiguration {
         initial_config: InitialConfigurationList::default(),
         storage_cost_model: StorageCostModelXdr {
             ext: ExtensionPoint::_0,
-            base_data_item_cost: int128(12_000),
+            base_data_item_cost: 12_000,
             bytestring_cost_per_byte: 10,
-            base_contract_deployment_cost: int128(12_000),
-            contract_deployment_cost_per_byte: int128(10),
-            auth_per_key_cost: int128(1_111),
-            rcq_cost_per_entry: int128(8),
-            replay_cache_cost_per_entry: int128(7),
-            balance_cost: int128(1_234),
+            base_contract_deployment_cost: 12_000,
+            contract_deployment_cost_per_byte: 10,
+            auth_per_key_cost: 1_111,
+            rcq_cost_per_entry: 8,
+            replay_cache_cost_per_entry: 7,
+            balance_cost: 1_234,
         },
-    }
-}
-
-fn int128(lowbits: u64) -> int128_xdr {
-    int128_xdr {
-        highbits: 0,
-        lowbits,
     }
 }
 
@@ -124,13 +115,13 @@ mod tests {
         assert!(genesis.initial_config.is_empty());
 
         let costs = genesis.storage_cost_model;
-        assert_eq!(costs.base_data_item_cost.lowbits, 12_000);
+        assert_eq!(costs.base_data_item_cost, 12_000);
         assert_eq!(costs.bytestring_cost_per_byte, 10);
-        assert_eq!(costs.base_contract_deployment_cost.lowbits, 12_000);
-        assert_eq!(costs.contract_deployment_cost_per_byte.lowbits, 10);
-        assert_eq!(costs.auth_per_key_cost.lowbits, 1_111);
-        assert_eq!(costs.rcq_cost_per_entry.lowbits, 8);
-        assert_eq!(costs.replay_cache_cost_per_entry.lowbits, 7);
-        assert_eq!(costs.balance_cost.lowbits, 1_234);
+        assert_eq!(costs.base_contract_deployment_cost, 12_000);
+        assert_eq!(costs.contract_deployment_cost_per_byte, 10);
+        assert_eq!(costs.auth_per_key_cost, 1_111);
+        assert_eq!(costs.rcq_cost_per_entry, 8);
+        assert_eq!(costs.replay_cache_cost_per_entry, 7);
+        assert_eq!(costs.balance_cost, 1_234);
     }
 }

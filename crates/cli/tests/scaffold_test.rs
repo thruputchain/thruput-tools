@@ -21,7 +21,8 @@ fn scaffold_counter_creates_expected_files() {
     let cargo = fs::read_to_string(dir.join("Cargo.toml")).unwrap();
     assert!(cargo.contains(r#"name = "my-counter""#));
     assert!(cargo.contains("registry = \"groundhog\""));
-    assert!(cargo.contains(r#"sdk = { version = "0.14.0""#));
+    assert!(!cargo.contains("sdk/spec"));
+    assert!(cargo.contains(r#"sdk = { version = "0.14.7""#));
 
     let lib = fs::read_to_string(dir.join("src/lib.rs")).unwrap();
     assert!(lib.contains("mod implementation"));

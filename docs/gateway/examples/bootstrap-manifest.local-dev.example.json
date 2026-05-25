@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "kind": "groundhog-bootstrap",
+  "networkId": "groundhog-bench-local",
+  "profile": "local-dev",
+  "devWallet": {
+    "profile": "hogd-dev-default"
+  },
+  "bootstrapAccounts": {
+    "count": 100,
+    "seed": "groundhog-bench-accounts",
+    "initialStorageTokens": "1000000000"
+  },
+  "storageCostModel": {
+    "profile": "hogd-default"
+  }
+}

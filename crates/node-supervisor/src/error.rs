@@ -80,6 +80,39 @@ pub enum NodeSupervisorError {
         source: io::Error,
     },
 
+    /// The configured hogd-dev bootstrap manifest request could not be represented.
+    #[error("invalid hogd-dev bootstrap manifest request: {reason}")]
+    InvalidBootstrapManifestConfig {
+        /// Human-readable reason.
+        reason: String,
+    },
+
+    /// The supervisor could not create a private bootstrap-manifest directory.
+    #[error("failed to create hogd-dev bootstrap manifest temp dir: {source}")]
+    BootstrapManifestTempDir {
+        /// Underlying I/O error.
+        #[source]
+        source: io::Error,
+    },
+
+    /// The supervisor could not serialize the bootstrap manifest.
+    #[error("failed to serialize hogd-dev bootstrap manifest: {source}")]
+    BootstrapManifestSerialize {
+        /// Underlying JSON error.
+        #[source]
+        source: serde_json::Error,
+    },
+
+    /// The supervisor could not write the bootstrap manifest file.
+    #[error("failed to write hogd-dev bootstrap manifest {}: {source}", path.display())]
+    BootstrapManifestWrite {
+        /// Manifest path.
+        path: PathBuf,
+        /// Underlying I/O error.
+        #[source]
+        source: io::Error,
+    },
+
     /// The child process was spawned without a stdout pipe.
     #[error("child process `{program}` did not expose stdout")]
     MissingStdout {
