@@ -1,14 +1,22 @@
+pub mod assertions;
+pub mod compare;
+pub mod error;
 pub mod event;
+pub mod executor;
 pub mod manifest;
 pub mod metrics;
 pub mod nonce;
 pub mod result;
+pub mod run;
 pub mod runtime;
 pub mod scheduler;
 pub mod target;
+pub mod util;
 pub mod validation;
 
+pub use error::SimError;
 pub use manifest::{SimulationManifest, WorkloadKind};
 pub use nonce::NonceNamespace;
 pub use result::{ChaosEventState, MetricAvailability, SimResult, SimRunOutcome};
+pub use run::{ExistingRunOptions, RunSummary};
 pub use target::{TargetProviderKind, TargetProviderSpec};

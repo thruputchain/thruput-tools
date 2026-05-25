@@ -246,10 +246,11 @@ mod tests {
     #[test]
     fn chain_progress_sample_cap_drops_new_samples_without_rewriting_history() {
         let mut metrics = RunMetricsBuilder::default();
-        for height in 0..(MAX_CHAIN_PROGRESS_OBSERVATIONS + 1) {
+        for height in 0..=MAX_CHAIN_PROGRESS_OBSERVATIONS {
+            let height = i64::try_from(height).expect("test height should fit i64");
             metrics.record_chain_tip(ChainTipObservation {
-                simulation_time_ms: height as u64,
-                height: height as i64,
+                simulation_time_ms: u64::try_from(height).expect("test height should fit u64"),
+                height,
                 block_hash: format!("0x{height:04x}"),
             });
         }

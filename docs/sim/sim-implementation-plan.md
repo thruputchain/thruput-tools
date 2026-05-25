@@ -98,9 +98,9 @@ chaos, deploy new contracts, or create remote infrastructure.
 
 ## Open Hardening Follow-Ups
 
-- [ ] Move executor, result building, and compare logic out of `main.rs` into
+- [x] Move executor, result building, and compare logic out of `main.rs` into
   library modules while the surface area is still small.
-- [ ] Add a mock-client orchestration test that drives schedule dispatch,
+- [x] Add a mock-client orchestration test that drives schedule dispatch,
   workload execution, event writing, and result aggregation end to end.
 - [ ] Decide whether Phase 1 compare should remain identity/availability-only
   or implement numeric deltas before external consumers rely on it.
