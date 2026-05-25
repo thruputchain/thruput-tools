@@ -28,6 +28,12 @@ Run the end-to-end local benchmark smoke:
 HOGD_DEV_BINARY=/path/to/hogd-dev scripts/smoke-runtime-manifest-bench.sh
 ```
 
+If the local `hogd-dev` binary advertises a newer `hogp/<hash>` than the Rust
+protocol crates linked into `groundhog node`, set
+`HOGD_PROTOCOL_OVERRIDE=hogp/<hash>`. The script passes it through as
+`--hogd-protocol`; incompatible XDR shape changes still fail through the
+generated clients.
+
 The script:
 
 1. Builds `groundhog`, `groundhog-rpc`, and `groundhog-bench`.
@@ -72,6 +78,11 @@ cargo run -p groundhog-cli --features dev-node -- \
   --hogd-dev-binary /path/to/hogd-dev \
   > /tmp/groundhog-node.json
 ```
+
+Add `--hogd-protocol hogp/<hash>` when the local `hogd-dev` binary advertises a
+newer protocol token than the currently published Rust protocol crates. The
+override is only used for x23 intro handshakes. Real XDR shape mismatches still
+surface as generated-client decode or RPC failures.
 
 Extract the RPC URL and manifest path:
 

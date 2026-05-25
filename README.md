@@ -87,6 +87,12 @@ groundhog-bench --url http://127.0.0.1:9546 \
   --method sendRawTransaction
 ```
 
+When testing a local `hogd-dev` build whose `hogp/<hash>` is newer than the
+published Rust protocol crates, pass the token explicitly with
+`groundhog node --hogd-protocol hogp/<hash>`. This only overrides the intro
+handshake string; if the XDR wire shape has actually changed, the generated
+client still fails on the affected RPC.
+
 CLI commands using local dev keys (`dev-0`, `dev-1`, ...) read the runtime
 manifest for wallet-address discovery. `groundhog node` writes
 `.groundhog/local-node.json` when launched from a project, so commands in

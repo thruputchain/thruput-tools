@@ -6,7 +6,7 @@
 #
 # Optional environment:
 #   HOGD_DEV_BINARY=/path/to/hogd-dev
-#   HOGD_PROTOCOL_OVERRIDE=hogp/<hash>
+#   HOGD_PROTOCOL_OVERRIDE=hogp/<hash>  # intro token only; XDR still validates shape
 #   SMOKE_STANDALONE_GATEWAY=1  # route view/storage checks through groundhog-rpc
 #   KEEP_WORKDIR=1
 set -euo pipefail

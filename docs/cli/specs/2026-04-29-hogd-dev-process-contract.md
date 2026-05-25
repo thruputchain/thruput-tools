@@ -55,6 +55,13 @@ The supervisor resolves the child binary, named `hogd-dev`, in this order:
 4. `PATH`;
 5. typed startup error.
 
+`groundhog node --hogd-protocol hogp/<hash>` may override the protocol token
+used for hogd-dev x23 intro handshakes. This is a local-development
+compatibility escape hatch for testing a `hogd-dev` build ahead of the
+published Rust protocol crates. It does not change the generated XDR types; if
+the wire shape has actually drifted, the generated client fails during the
+affected RPC.
+
 Current invocation shape:
 
 ```bash

@@ -312,6 +312,7 @@ building the CLI with the `dev-node` feature.
 groundhog node
 groundhog node --port 9546
 groundhog node --hogd-dev-binary /path/to/hogd-dev
+groundhog node --hogd-dev-binary /path/to/hogd-dev --hogd-protocol hogp/<hash>
 groundhog node -v
 RUST_LOG=groundhog_node_supervisor=debug,hogd_dev=debug groundhog node
 ```
@@ -320,6 +321,12 @@ RUST_LOG=groundhog_node_supervisor=debug,hogd_dev=debug groundhog node
 backend planes, endpoint metadata, and the local dev-account surface for
 scripting. Stdout is reserved for this startup payload in JSON mode.
 Operational logs go to stderr, and `--verbose` is honored in JSON mode.
+
+`--hogd-protocol` overrides the protocol token used for hogd-dev x23 intro
+handshakes. It is useful when a local `hogd-dev` build is slightly ahead of
+the published Rust protocol crates but the XDR shapes are still compatible.
+If the actual protocol shape is out of alignment, the generated x23/XDR client
+will fail during the affected RPC call rather than silently accepting bad data.
 
 The supervisor starts `hogd-dev` with `HOGD_LOG_FORMAT=json`, parses its
 newline-delimited stderr logs, and re-emits them through Rust `tracing`.
