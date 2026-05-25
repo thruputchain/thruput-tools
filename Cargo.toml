@@ -15,6 +15,7 @@ members = [
     "crates/open-rpc-spec",
     "crates/e2e-tests",
     "crates/bench",
+    "crates/sim",
 ]
 
 [workspace.package]

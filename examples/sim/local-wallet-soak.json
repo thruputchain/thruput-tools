@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "kind": "groundhog-simulation",
+  "name": "local-wallet-soak",
+  "seed": "local-wallet-soak-v1",
+  "target": {
+    "provider": "existing",
+    "rpcUrl": "http://127.0.0.1:9545",
+    "runtimeManifest": "/tmp/hogd-dev/runtime-manifest.json"
+  },
+  "loadShape": [
+    {
+      "duration": "30s",
+      "users": 5,
+      "ratePerUserHz": 0.5
+    }
+  ],
+  "workloads": [
+    {
+      "name": "chain-tip",
+      "weight": 10
+    },
+    {
+      "name": "wallet-submit-smoke",
+      "weight": 20
+    },
+    {
+      "name": "receipt-poll",
+      "weight": 20
+    }
+  ],
+  "assertions": {
+    "maxErrorRate": 0.001,
+    "maxReceiptTimeoutRate": 0.001,
+    "maxChainStall": "10s",
+    "p99SubmitLatencyMs": 250
+  }
+}

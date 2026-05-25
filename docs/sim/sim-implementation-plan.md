@@ -1,0 +1,350 @@
+# Groundhog Simulation Implementation Plan
+
+**Date:** 2026-05-25
+**Status:** Draft execution checklist. Phase 1 chain-tip execution, reviewer
+hardening, and live hogd-dev smoke slices complete; submit/receipt actor state
+is next.
+
+This plan pairs with [Simulation design](sim-design.md). The design doc owns
+the architectural boundary and long-term shape. This file is the implementation
+tracker, with detail focused on Phase 1.
+
+## Scope
+
+The first useful simulator should run against an already-started target:
+
+```bash
+hoglab run examples/sim/chain-tip-smoke.json \
+  --rpc-url http://127.0.0.1:9545 \
+  --runtime-manifest /tmp/hogd-dev/runtime-manifest.json
+```
+
+Phase 1 should prove:
+
+- public JSON-RPC traffic generation;
+- runtime-manifest account discovery;
+- deterministic dev signer derivation;
+- run-unique transaction nonce namespacing for existing targets;
+- basic actor scheduling;
+- append-only event output;
+- aggregated result output;
+- pairwise result comparison.
+
+Phase 1 explicitly does not launch `hogd-dev`, manage a local process, execute
+chaos, deploy new contracts, or create remote infrastructure.
+
+## Completed Slice: Chain-Tip Execution
+
+- [x] Add a scheduler module that expands load phases into deterministic actor
+  ticks.
+- [x] Add an event writer abstraction so `result.jsonl` append/flush behavior
+  is owned in one place.
+- [x] Implement the `chain-tip` workload through the typed RPC client.
+- [x] Aggregate `chain-tip` counts, errors, latency samples, and chain progress
+  into `result.json`.
+- [x] Add unit tests for deterministic scheduling and result aggregation.
+- [x] Add an ignored process-level smoke test gated by
+  `GROUNDHOG_SIM_RPC_URL` and `GROUNDHOG_SIM_RUNTIME_MANIFEST`.
+- [x] Run `examples/sim/chain-tip-smoke.json` against a live `groundhog node`
+  / `hogd-dev` target and verify a passing result bundle.
+- [x] Verify the same smoke with `groundhog node --hogd-protocol
+  hogp/77397967490b`, using registry-linked Rust protocol crates and only
+  overriding the intro protocol token for a newer local `hogd-dev` build.
+- [x] Make `groundhog node --hogd-protocol` a documented, visible CLI flag
+  for local protocol-token skew; real XDR shape mismatch still fails through
+  the generated clients.
+- [x] Fix executor in-flight accounting so completions drained during the
+  schedule loop are not waited on a second time at shutdown.
+
+## Completed Slice: Reviewer Hardening
+
+- [x] Normalize `simulation.json` after CLI overrides and hash the emitted
+  artifact.
+- [x] Record the resolved nonce namespace in `simulation.json` and
+  `result.json`.
+- [x] Add runtime identity and target identity to `result.json`.
+- [x] Change the scheduler to emit deterministic actor ticks; workload choice
+  now happens at dispatch time so actor state can participate later.
+- [x] Dispatch workload execution asynchronously with global and per-actor
+  in-flight bounds.
+- [x] Use bounded latency histograms instead of retaining every latency sample.
+- [x] Cap chain-progress samples in `result.json` while preserving total
+  observation count and first/last/max heights.
+- [x] Evaluate `maxErrorRate` and `maxChainStall`; mark submit/receipt
+  assertions unsupported until those workloads land.
+
+## Current Next Slice
+
+- [ ] Implement `wallet-submit-smoke` transaction construction and submit
+  execution.
+- [ ] Add actor state tracking for signer, wallet address, next namespaced
+  nonce, and last submitted transaction hash.
+- [ ] Add receipt-poll workload tied to actor state and record submit-to-receipt
+  latency when receipts appear.
+- [ ] Wire submit/receipt assertion evaluation for p99 submit latency and
+  receipt timeout rate.
+
+## Phase 0: Skeleton
+
+- [x] Add a `crates/sim` workspace member named `groundhog-sim`.
+- [x] Add a `hoglab` binary with `run`, `compare`, and `validate`
+  subcommands.
+- [x] Keep the manifest kind as `groundhog-simulation` while using `hoglab`
+  as the user-facing CLI name.
+- [x] Add typed simulation manifest structs.
+  - Include `baseline` as an optional typed path; Phase 2 adds automatic
+    runtime baseline diffing.
+- [x] Add typed result structs.
+- [x] Add typed `MetricAvailability`:
+  - `observed`
+  - `unsupported`
+  - `unavailable`
+- [x] Add typed `ChaosEvent` and `ChaosEventState` enums even though Phase 1
+  providers execute no chaos.
+  - `ChaosEventState` variants: `scheduled`, `started`, `completed`, `failed`,
+    `recovered`.
+- [ ] Add target provider traits:
+  - target acquisition
+  - capability declaration
+  - `ChaosController`
+  - ownership metadata
+  - cleanup hook
+- [x] Add typed target provider specs, capabilities, and ownership metadata.
+- [x] Add JSON parsing and validation for simulation manifests.
+- [x] Add example manifest under `examples/sim/`.
+- [x] Add unit tests for manifest parsing and validation.
+
+## Phase 1: Existing Target Simulator
+
+### Inputs
+
+- [x] `hoglab run <scenario-path>`
+- [x] `--rpc-url <url>` override.
+- [x] `--runtime-manifest <path>` override.
+- [x] `--out-dir <path>` override.
+- [x] `--seed <seed>` override.
+- [x] `--nonce-namespace <u64>` override for repeatable runs on fresh targets.
+- [x] Reject scenarios whose selected provider does not match the supplied
+  target flags.
+- [x] Validate runtime manifest schema version using `api-types`.
+- [x] Reject runtime manifests that do not advertise bootstrap accounts.
+- [x] Reject unsupported bootstrap account derivation schemes.
+- [x] Validate bootstrap account public keys against derived signers, matching
+  the `groundhog-bench` behavior.
+- [x] Validate that requested actor count does not exceed available bootstrap
+  accounts unless account reuse is explicitly added to the scenario schema.
+- [x] Validate that workloads requiring receipts or status have read-plane
+  support in the runtime manifest, or reject the scenario before sending
+  traffic.
+- [x] Reject any chaos event for the `existing` provider.
+
+### Runtime Model
+
+- [ ] Build a deterministic RNG from the scenario seed.
+- [x] Generate a run-unique nonce namespace when one is not supplied, and record
+  it in normalized `simulation.json` plus `result.json`.
+- [x] Represent nonce namespaces as the high 32 bits of the transaction nonce;
+  validate that `--nonce-namespace` fits in `u32`, and combine it with the
+  per-actor low-32-bit sequence as `(namespace << 32) | actor_sequence`.
+- [ ] Document that fixed nonce namespaces require a fresh target or an empty
+  replay cache.
+- [ ] Assign one bootstrap account per actor.
+- [ ] Track per-actor state:
+  - account index
+  - signer
+  - wallet address
+  - next nonce within the run nonce namespace
+  - last submitted transaction hash
+  - last observed receipt
+- [x] Implement load phases with:
+  - duration
+  - actor count
+  - rate per actor
+- [x] Implement weighted workload selection.
+- [x] Keep workload execution asynchronous.
+- [x] Bound in-flight work globally.
+- [x] Bound in-flight work per actor.
+- [x] Emit explicit overload/backpressure events when the simulator cannot
+  maintain its own schedule.
+
+### Workloads
+
+- [x] `chain-tip`
+  - call `groundhog_chainTip`
+  - record latency, success, and error classification
+- [ ] `wallet-submit-smoke`
+  - build dev-wallet-compatible signed transactions from runtime-manifest
+    bootstrap accounts
+  - submit through `groundhog_sendRawTransaction`
+  - record tx hash on actor state
+  - record submit latency
+  - record that HTTP/RPC submit success is separate from receipt execution
+    success
+- [ ] `receipt-poll`
+  - poll `groundhog_getTransactionReceipt` for actor's last submitted tx
+  - record null receipt as a non-error poll result
+  - record committed receipt status when present
+  - do not require `ExecStatus::Ok` for the Phase 1 smoke transaction
+  - record submit-to-receipt latency when possible
+- [ ] Defer `events-query`, `storage-read`, `status-poll`, and `view-call`
+  until the first three workloads are stable unless Phase 1 remains small.
+
+### Event Stream
+
+- [x] Create result directory before traffic starts.
+- [x] Write normalized `simulation.json`.
+- [x] Copy normalized `runtime-manifest.json`.
+- [x] Do not write `bootstrap-manifest.json` for the `existing` provider;
+  instead record bootstrap manifest availability as unavailable/unknown.
+- [x] Write `target-ownership.json` with `startedBySim = false`.
+- [x] Stream `result.jsonl` records as newline-delimited JSON.
+- [x] Include record kinds:
+  - run started
+  - target resolved
+  - phase started
+  - workload completed
+  - workload failed
+  - workload skipped
+  - assertion checked
+  - run completed
+- [ ] Include metric availability records.
+- [x] Flush `result.jsonl` frequently enough for live tailing.
+- [x] Preserve enough context in every workload record to debug:
+  - actor id
+  - workload name
+  - scheduled time
+  - started time
+  - completed time
+  - latency
+  - RPC method
+  - tx hash when applicable
+  - error class when applicable
+
+### Result Aggregation
+
+- [x] Write final `result.json`.
+- [x] Include manifest hashes:
+  - simulation manifest hash
+  - runtime manifest hash
+  - bootstrap manifest hash when present, otherwise null/absent with
+    availability reason
+- [x] Include protocol, genesis hash, producer binary/version/commit from the
+  runtime manifest.
+- [x] Do not claim a producer executable hash for `existing` targets unless an
+  external provider supplied one.
+- [x] Include target provider and target identity.
+- [x] Include per-workload counts.
+- [x] Include per-workload error counts and error classes.
+- [x] Include per-workload latency percentiles:
+  - p50
+  - p95
+  - p99
+  - p99.9
+  - max
+- [ ] Include submit-to-receipt latency percentiles.
+- [x] Include chain progress timeline from observed `chain-tip` calls.
+- [x] Mark storage-token metrics `unsupported`.
+- [x] Mark NNInt compute metrics `unsupported`.
+- [x] Include assertion results.
+- [x] Include run outcome:
+  - passed
+  - failed
+  - aborted
+- [x] Write `result.json` atomically at run end.
+
+### Assertions
+
+- [x] Implement `maxErrorRate`.
+- [ ] Implement `maxReceiptTimeoutRate`.
+- [x] Implement `maxChainStall`.
+- [ ] Implement `p99SubmitLatencyMs`.
+- [x] Record every assertion check in `result.jsonl`.
+- [x] Include assertion pass/fail details in `result.json`.
+- [x] Return a nonzero process exit code when assertions fail.
+
+### Comparison
+
+- [x] Add `hoglab compare <run-a> <run-b>`.
+- [x] Accept either run directories or direct `result.json` paths.
+- [ ] Compare per-workload counts and errors.
+- [ ] Compare latency percentiles.
+- [ ] Compare assertion result transitions.
+- [ ] Compare chain progress and stall metrics.
+- [x] Compare manifest hashes and mark cross-config diffs.
+- [x] Compare producer identity tuple (`binary`, `version`, optional
+  `commitHash`) and only compare executable hashes when both results include
+  one.
+- [x] Compare metric availability transitions.
+- [x] Skip numeric deltas when either side is `unsupported` or `unavailable`.
+- [x] Emit structured JSON behind `--json`.
+- [x] Emit a readable text summary for humans.
+
+### Tests
+
+- [x] Unit-test simulation manifest parsing.
+- [x] Unit-test unsupported chaos rejection for `existing`.
+- [x] Unit-test runtime manifest account validation.
+- [x] Unit-test runtime manifest read-plane validation.
+- [x] Unit-test weighted workload selection determinism.
+- [x] Unit-test deterministic scheduling with same seed, load shape, and chaos
+  schedule, comparing event ordering while ignoring wall-clock timestamps.
+- [x] Unit-test histogram aggregation.
+- [x] Unit-test assertion evaluation.
+- [ ] Unit-test compare output for:
+  - same-config numeric deltas
+  - cross-config manifest hash mismatch
+  - metric availability transitions
+  - unsupported/unavailable numeric-skip behavior
+- [x] Add one ignored process-level smoke test that runs against a supplied
+  `GROUNDHOG_SIM_RPC_URL` and `GROUNDHOG_SIM_RUNTIME_MANIFEST`.
+
+### Documentation
+
+- [x] Add `examples/sim/local-wallet-soak.json`.
+- [ ] Document the `existing` provider.
+- [ ] Document result directory contents.
+- [ ] Document comparison semantics.
+- [x] Add quickstart commands to `docs/sim/README.md`.
+
+## Phase 2: Local Managed Target
+
+- [ ] Add `local` target provider.
+- [ ] Generate a bootstrap manifest from the simulation manifest.
+- [ ] Start `groundhog node` / `hogd-dev`.
+- [ ] Capture startup JSON, runtime manifest, and logs.
+- [ ] Write target ownership metadata with `startedBySim = true`.
+- [ ] Stop the target on completion.
+- [ ] Add sweeper command for sim-owned local targets.
+- [ ] Implement `restart-target` chaos for the local provider as whole-target
+  stop+restart, matching current `groundhog node` supervisor behavior.
+- [ ] Record chaos state transitions in `result.jsonl` and `result.json`.
+- [ ] Support scenario `baseline` and emit baseline diff inside `result.json`.
+
+## Phase 3: Stateful Contract Workloads
+
+- [ ] Add deploy-at-start contract corpus support.
+- [ ] Add storage-read workloads tied to deployed contracts.
+- [ ] Add events-query workloads tied to deployed contracts.
+- [ ] Add view-call workloads when the runtime manifest advertises view support.
+- [ ] Add richer actor state machines.
+- [ ] Add read-after-write scenario presets.
+- [ ] Add storage-heavy, event-heavy, calldata-heavy, and compute-heavy
+  workloads.
+- [ ] Add NNInt-specific scenario presets.
+
+## Phase 4: Single Remote Host
+
+- [ ] Add `remote-ssh` target provider.
+- [ ] Support manually provisioned EC2 or bare-metal hosts.
+- [ ] Start or discover `hogd-dev` on one host.
+- [ ] Fetch runtime manifest and logs.
+- [ ] Preserve target ownership metadata.
+- [ ] Implement restart-target chaos over SSH.
+
+## Phase 5: Infra Provider Hooks
+
+- [ ] Stabilize provider interfaces for future infra-backed targets.
+- [ ] Add deployment identity fields where useful.
+- [ ] Keep simulator core independent of OpenTofu state.
+- [ ] Evaluate whether `ops` / `hogctl` should provide a target provider
+  adapter or remain a separate orchestration layer.
