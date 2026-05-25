@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "kind": "groundhog-bootstrap",
-  "networkId": "groundhog-bench-local",
+  "networkId": "groundhog-local",
   "profile": "local-dev",
   "devWallet": {
     "profile": "hogd-dev-default"

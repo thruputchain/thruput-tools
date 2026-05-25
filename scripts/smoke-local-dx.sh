@@ -167,7 +167,8 @@ detect_hogd_protocol() {
     local version_file
     version_file="$(dirname "$binary")/../version.c"
     if [[ -f "$version_file" ]]; then
-        python3 - "$version_file" <<'PY'
+        local protocol
+        protocol="$(python3 - "$version_file" <<'PY'
 import re
 import sys
 
@@ -176,7 +177,11 @@ match = re.search(r'protocol_commit\[\]\s*=\s*"([0-9a-fA-F]+)"', text)
 if match:
     print(f"hogp/{match.group(1)[:12]}")
 PY
-        return
+)"
+        if [[ -n "$protocol" ]]; then
+            printf '%s\n' "$protocol"
+            return
+        fi
     fi
 
     # Older hogd-dev builds printed protocol metadata for --help.
