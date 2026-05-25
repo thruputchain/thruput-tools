@@ -7,6 +7,7 @@
 #
 # Optional environment:
 #   HOGD_DEV_BINARY=/path/to/hogd-dev
+#   HOGD_PROTOCOL_OVERRIDE=hogp/<hash>
 #   NODE_STARTUP_TIMEOUT_SECS=60
 #   NODE_VERBOSE=1
 #   BENCH_SCENARIO=smoke|gateway-baseline|submit-ramp
@@ -158,6 +159,46 @@ find_hogd_dev_binary() {
     die "set HOGD_DEV_BINARY=/path/to/hogd-dev"
 }
 
+detect_hogd_protocol() {
+    local binary="$1"
+    if [[ -n "${HOGD_PROTOCOL_OVERRIDE:-}" ]]; then
+        printf '%s\n' "$HOGD_PROTOCOL_OVERRIDE"
+        return
+    fi
+
+    local version_file
+    version_file="$(dirname "$binary")/../version.c"
+    if [[ -f "$version_file" ]]; then
+        local protocol
+        protocol="$(python3 - "$version_file" <<'PY'
+import re
+import sys
+
+text = open(sys.argv[1], encoding="utf-8").read()
+match = re.search(r'protocol_commit\[\]\s*=\s*"([0-9a-fA-F]+)"', text)
+if match:
+    print(f"hogp/{match.group(1)[:12]}")
+PY
+)"
+        if [[ -n "$protocol" ]]; then
+            printf '%s\n' "$protocol"
+            return
+        fi
+    fi
+
+    # Older hogd-dev builds printed protocol metadata for --help.
+    # Strip ANSI color escapes before extracting the protocol marker.
+    local output
+    output="$("$binary" --help 2>&1 || true)"
+    python3 -c 'import re, sys
+text = sys.stdin.read()
+text = re.sub(r"\x1b\[[0-9;]*m", "", text)
+matches = re.findall(r"hogd protocol: (hogp/[A-Za-z0-9]+)", text)
+if matches:
+    print(matches[-1])
+' <<< "$output"
+}
+
 collect_descendants() {
     local pid="$1"
     local child
@@ -260,6 +301,7 @@ cargo build -p groundhog-cli -p groundhog-rpc-gateway -p groundhog-bench \
 
 HOGD_DEV_BINARY="$(find_hogd_dev_binary)"
 [[ -x "$HOGD_DEV_BINARY" ]] || die "hogd-dev binary is not executable: $HOGD_DEV_BINARY"
+HOGD_PROTOCOL="$(detect_hogd_protocol "$HOGD_DEV_BINARY")"
 
 WORK="$(mktemp -d)"
 NODE_PID=""
@@ -308,6 +350,10 @@ NODE_ARGS=(
     --hogd-dev-binary
     "$HOGD_DEV_BINARY"
 )
+if [[ -n "$HOGD_PROTOCOL" ]]; then
+    NODE_ARGS+=(--hogd-protocol "$HOGD_PROTOCOL")
+    log "Using hogd protocol override: $HOGD_PROTOCOL"
+fi
 if [[ "${NODE_VERBOSE:-0}" == "1" ]]; then
     NODE_ARGS+=(--verbose)
 fi

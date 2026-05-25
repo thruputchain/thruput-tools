@@ -76,6 +76,7 @@ impl FakeStartupConfig {
                 continue;
             };
             match arg.as_str() {
+                "--bootstrap-manifest" => config = Self::from_bootstrap_manifest(&value),
                 "--dev-accounts" => {
                     config.count = value.parse().expect("bug: fake dev account count parses");
                 }
@@ -87,6 +88,38 @@ impl FakeStartupConfig {
             }
         }
         config
+    }
+
+    fn from_bootstrap_manifest(path: &str) -> Self {
+        let manifest: Value = serde_json::from_slice(
+            &fs::read(path).expect("bug: fake bootstrap manifest should be readable"),
+        )
+        .expect("bug: fake bootstrap manifest should parse");
+        let accounts = manifest
+            .get("bootstrapAccounts")
+            .and_then(Value::as_object)
+            .expect("bug: fake bootstrap manifest has bootstrapAccounts");
+        let count = accounts
+            .get("count")
+            .and_then(Value::as_u64)
+            .and_then(|count| usize::try_from(count).ok())
+            .expect("bug: fake bootstrap manifest count fits usize");
+        let seed = accounts
+            .get("seed")
+            .and_then(Value::as_str)
+            .expect("bug: fake bootstrap manifest seed is a string")
+            .to_string();
+        let tokens = accounts
+            .get("initialStorageTokens")
+            .and_then(Value::as_str)
+            .expect("bug: fake bootstrap manifest token amount is a string")
+            .parse()
+            .expect("bug: fake bootstrap manifest tokens parse");
+        Self {
+            count,
+            seed,
+            tokens,
+        }
     }
 }
 

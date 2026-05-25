@@ -45,20 +45,20 @@ groundhog-open-rpc = { path = "crates/open-rpc", version = "=0.3.4", registry = 
 groundhog-open-rpc-macros = { path = "crates/open-rpc-macros", version = "=0.3.4", registry = "groundhog" }
 
 # --- Groundhog (private registry) ---
-groundhog-xdr = { version = "=0.13.6", registry = "groundhog", features = ["serde", "xdrs", "schema"] }
-groundhog_indexer = { version = "=0.13.6", registry = "groundhog", features = ["serde"] }
-groundhog_scheduler = { version = "=0.13.6", registry = "groundhog" }
-groundhog_db_gateway = { version = "=0.13.6", registry = "groundhog" }
-groundhog_view = { version = "=0.13.6", registry = "groundhog" }
-groundhog-trace = { version = "=0.13.6", registry = "groundhog" }
+groundhog-xdr = { version = "=0.13.7", registry = "groundhog", features = ["serde", "xdrs", "schema"] }
+groundhog_indexer = { version = "=0.13.7", registry = "groundhog", features = ["serde"] }
+groundhog_scheduler = { version = "=0.13.7", registry = "groundhog" }
+groundhog_db_gateway = { version = "=0.13.7", registry = "groundhog" }
+groundhog_view = { version = "=0.13.7", registry = "groundhog" }
+groundhog-trace = { version = "=0.13.7", registry = "groundhog" }
 xdrs = { version = "0.7.1", registry = "groundhog", features = ["alloc"] }
 xdr-common = { version = "0.7.1", registry = "groundhog" }
 rpc_driver = { version = "0.8", registry = "groundhog" }
 groundhog-wasm-meter = { version = "0.4.0", registry = "groundhog" }
 # from the sdk crate
-groundhog-spec-tool = { version = "0.14.5", registry = "groundhog" }
-groundhog-contract-util = { version = "0.14.5", registry = "groundhog" }
-groundhog-contract-spec = { version = "0.14.5", registry = "groundhog" }
+groundhog-spec-tool = { version = "0.14.7", registry = "groundhog" }
+groundhog-contract-util = { version = "0.14.7", registry = "groundhog" }
+groundhog-contract-spec = { version = "0.14.7", registry = "groundhog" }
 
 # --- Async ---
 async-trait = "0.1"

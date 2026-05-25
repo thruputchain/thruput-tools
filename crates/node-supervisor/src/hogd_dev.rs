@@ -3,7 +3,7 @@
 use std::{
     env,
     ffi::OsString,
-    fs::File,
+    fs::{self, File},
     io::{self, Read},
     net::SocketAddr,
     path::{Path, PathBuf},
@@ -19,6 +19,7 @@ use groundhog_rpc_api_types::{
 use groundhog_signing::LocalSigner;
 use serde::{Deserialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
+use tempfile::TempDir;
 use tokio::{
     io::{AsyncBufRead, AsyncBufReadExt, BufReader},
     process::{ChildStderr, ChildStdout},
@@ -51,6 +52,9 @@ pub const MAX_RUNTIME_MANIFEST_BYTES: usize = 1024 * 1024;
 
 /// Bootstrap-account derivation contract supported by the Rust dev tooling.
 pub const SUPPORTED_BOOTSTRAP_ACCOUNT_DERIVATION_SCHEME: &str = "groundhog-bootstrap-account-v1";
+
+const HOGD_DEV_BOOTSTRAP_NETWORK_ID: &str = "groundhog-local";
+const BOOTSTRAP_MANIFEST_FILE_NAME: &str = "bootstrap-manifest.json";
 
 /// Ready endpoints exposed by hogd-dev.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -174,6 +178,7 @@ pub struct HogdDevProcess {
     stderr_task: Option<JoinHandle<()>>,
     shutdown_grace: Duration,
     pid_guard: Option<PidGuard>,
+    _bootstrap_manifest: Option<BootstrapManifestFile>,
 }
 
 impl HogdDevProcess {
@@ -190,13 +195,19 @@ impl HogdDevProcess {
         config: &HogdDevConfig,
         binary: impl AsRef<Path>,
     ) -> Result<Self, NodeSupervisorError> {
-        let spec = build_hogd_dev_spec(binary.as_ref(), config);
-        Self::start_with_spec(config, spec).await
+        let bootstrap_manifest = write_bootstrap_manifest(config)?;
+        let spec = build_hogd_dev_spec_with_bootstrap_manifest(
+            binary.as_ref(),
+            config,
+            bootstrap_manifest.path(),
+        );
+        Self::start_with_spec(config, spec, Some(bootstrap_manifest)).await
     }
 
     async fn start_with_spec(
         config: &HogdDevConfig,
         spec: ChildProcessSpec,
+        bootstrap_manifest: Option<BootstrapManifestFile>,
     ) -> Result<Self, NodeSupervisorError> {
         let mut pid_guard = match &config.pid_file {
             Some(pid_file) => Some(
@@ -254,6 +265,7 @@ impl HogdDevProcess {
             stderr_task,
             shutdown_grace: config.shutdown_grace,
             pid_guard,
+            _bootstrap_manifest: bootstrap_manifest,
         })
     }
 
@@ -333,9 +345,49 @@ impl HogdDevProcess {
     }
 }
 
+#[derive(Debug)]
+struct BootstrapManifestFile {
+    _dir: TempDir,
+    path: PathBuf,
+}
+
+impl BootstrapManifestFile {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+fn write_bootstrap_manifest(
+    config: &HogdDevConfig,
+) -> Result<BootstrapManifestFile, NodeSupervisorError> {
+    let manifest = config
+        .to_bootstrap_manifest(HOGD_DEV_BOOTSTRAP_NETWORK_ID)
+        .map_err(
+            |source| NodeSupervisorError::InvalidBootstrapManifestConfig {
+                reason: format!("dev_account_count does not fit u32: {source}"),
+            },
+        )?;
+    let bytes = serde_json::to_vec_pretty(&manifest)
+        .map_err(|source| NodeSupervisorError::BootstrapManifestSerialize { source })?;
+    let dir = tempfile::Builder::new()
+        .prefix("groundhog-hogd-bootstrap-")
+        .tempdir()
+        .map_err(|source| NodeSupervisorError::BootstrapManifestTempDir { source })?;
+    let path = dir.path().join(BOOTSTRAP_MANIFEST_FILE_NAME);
+    fs::write(&path, bytes).map_err(|source| NodeSupervisorError::BootstrapManifestWrite {
+        path: path.clone(),
+        source,
+    })?;
+    Ok(BootstrapManifestFile { _dir: dir, path })
+}
+
 /// Build the hogd-dev child process command specification.
+///
+/// This compatibility helper preserves the original shorthand-flag command
+/// shape for external callers. The supervisor startup path uses
+/// `--bootstrap-manifest` via `build_hogd_dev_spec_with_bootstrap_manifest`.
 pub fn build_hogd_dev_spec(binary: impl AsRef<Path>, config: &HogdDevConfig) -> ChildProcessSpec {
-    let spec = ChildProcessSpec::new(binary.as_ref().as_os_str().to_owned())
+    ChildProcessSpec::new(binary.as_ref().as_os_str().to_owned())
         .args([
             OsString::from("--listen-host"),
             OsString::from(config.listen_host.as_str()),
@@ -349,6 +401,28 @@ pub fn build_hogd_dev_spec(binary: impl AsRef<Path>, config: &HogdDevConfig) -> 
             OsString::from(config.dev_account_seed.as_str()),
             OsString::from("--dev-account-tokens"),
             OsString::from(config.dev_account_tokens.to_string()),
+        ])
+        .env(HOGD_LOG_FORMAT_ENV, "json")
+        .stdout_piped()
+        .stderr_piped()
+}
+
+/// Build the hogd-dev command specification used by the supervisor path.
+pub(crate) fn build_hogd_dev_spec_with_bootstrap_manifest(
+    binary: impl AsRef<Path>,
+    config: &HogdDevConfig,
+    bootstrap_manifest_path: impl AsRef<Path>,
+) -> ChildProcessSpec {
+    let spec = ChildProcessSpec::new(binary.as_ref().as_os_str().to_owned())
+        .args([
+            OsString::from("--listen-host"),
+            OsString::from(config.listen_host.as_str()),
+            OsString::from("--scheduler-port"),
+            OsString::from("0"),
+            OsString::from("--readiness"),
+            OsString::from("stdout"),
+            OsString::from("--bootstrap-manifest"),
+            bootstrap_manifest_path.as_ref().as_os_str().to_owned(),
         ])
         .env(HOGD_LOG_FORMAT_ENV, "json")
         .stdout_piped()
@@ -1300,7 +1374,8 @@ mod tests {
 
     use super::{
         DEFAULT_HOGD_DEV_BINARY, HOGD_DEV_BINARY_ENV, HOGD_LOG_FORMAT_ENV, HogdDevProcess,
-        build_hogd_dev_spec, parse_readiness_line, resolve_hogd_dev_binary, validate_dev_accounts,
+        build_hogd_dev_spec, build_hogd_dev_spec_with_bootstrap_manifest, parse_readiness_line,
+        resolve_hogd_dev_binary, validate_dev_accounts, write_bootstrap_manifest,
     };
     use crate::{
         HogdDevConfig, NodeSupervisorError,
@@ -1313,12 +1388,40 @@ mod tests {
     #[test]
     fn command_shape_matches_contract() {
         let config = HogdDevConfig::default().with_listen_host("127.0.0.2");
-        let spec = build_hogd_dev_spec("/tmp/hogd-dev", &config);
+        let spec = build_hogd_dev_spec_with_bootstrap_manifest(
+            "/tmp/hogd-dev",
+            &config,
+            "/tmp/bootstrap-manifest.json",
+        );
 
         assert_eq!(spec.program(), std::ffi::OsStr::new("/tmp/hogd-dev"));
         let args = spec.program_args();
         assert_eq!(
             args,
+            &[
+                OsString::from("--listen-host"),
+                OsString::from("127.0.0.2"),
+                OsString::from("--scheduler-port"),
+                OsString::from("0"),
+                OsString::from("--readiness"),
+                OsString::from("stdout"),
+                OsString::from("--bootstrap-manifest"),
+                OsString::from("/tmp/bootstrap-manifest.json"),
+            ]
+        );
+        assert_eq!(
+            spec.program_envs(),
+            &[(OsString::from(HOGD_LOG_FORMAT_ENV), OsString::from("json"))]
+        );
+    }
+
+    #[test]
+    fn public_command_builder_keeps_shorthand_compatibility() {
+        let config = HogdDevConfig::default().with_listen_host("127.0.0.2");
+        let spec = build_hogd_dev_spec("/tmp/hogd-dev", &config);
+
+        assert_eq!(
+            spec.program_args(),
             &[
                 OsString::from("--listen-host"),
                 OsString::from("127.0.0.2"),
@@ -1334,10 +1437,30 @@ mod tests {
                 OsString::from("1000000000"),
             ]
         );
-        assert_eq!(
-            spec.program_envs(),
-            &[(OsString::from(HOGD_LOG_FORMAT_ENV), OsString::from("json"))]
-        );
+    }
+
+    #[test]
+    fn bootstrap_manifest_file_serializes_config() {
+        let config = HogdDevConfig::default()
+            .with_dev_account_count(2)
+            .with_dev_account_seed("manifest-seed")
+            .with_dev_account_tokens(1234);
+
+        let manifest = write_bootstrap_manifest(&config)
+            .expect("bug: bootstrap manifest file should be written");
+        let value: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(manifest.path()).expect("bug: bootstrap manifest should be readable"),
+        )
+        .expect("bug: bootstrap manifest should parse");
+
+        assert_eq!(value["kind"], "groundhog-bootstrap");
+        assert_eq!(value["networkId"], "groundhog-local");
+        assert_eq!(value["profile"], "local-dev");
+        assert_eq!(value["devWallet"]["profile"], "hogd-dev-default");
+        assert_eq!(value["bootstrapAccounts"]["count"], 2);
+        assert_eq!(value["bootstrapAccounts"]["seed"], "manifest-seed");
+        assert_eq!(value["bootstrapAccounts"]["initialStorageTokens"], "1234");
+        assert_eq!(value["storageCostModel"]["profile"], "hogd-default");
     }
 
     #[test]
@@ -2062,9 +2185,15 @@ mod tests {
         config: &HogdDevConfig,
         mode: &str,
     ) -> Result<HogdDevProcess, NodeSupervisorError> {
-        let spec =
-            build_hogd_dev_spec(fake_hogd_dev_binary(), config).env(FAKE_HOGD_DEV_MODE_ENV, mode);
-        HogdDevProcess::start_with_spec(config, spec).await
+        let bootstrap_manifest = write_bootstrap_manifest(config)
+            .expect("bug: bootstrap manifest file should be written");
+        let spec = build_hogd_dev_spec_with_bootstrap_manifest(
+            fake_hogd_dev_binary(),
+            config,
+            bootstrap_manifest.path(),
+        )
+        .env(FAKE_HOGD_DEV_MODE_ENV, mode);
+        HogdDevProcess::start_with_spec(config, spec, Some(bootstrap_manifest)).await
     }
 
     async fn assert_process_group_exits(process_group: i32) {

@@ -1,7 +1,11 @@
 //! Configuration for the node supervisor.
 
-use std::{path::PathBuf, time::Duration};
+use std::{num::TryFromIntError, path::PathBuf, time::Duration};
 
+use groundhog_rpc_api_types::bootstrap_manifest::{
+    BootstrapManifest, BootstrapManifestAccounts, BootstrapManifestDevWallet,
+    BootstrapManifestStorageCostModel,
+};
 use groundhog_signing::{
     DEFAULT_DEV_ACCOUNT_COUNT, DEFAULT_DEV_ACCOUNT_SEED, DEFAULT_DEV_ACCOUNT_STORAGE_TOKENS,
 };
@@ -29,6 +33,18 @@ pub const DEFAULT_HOGD_DEV_ACCOUNT_SEED: &str = DEFAULT_DEV_ACCOUNT_SEED;
 
 /// Default storage-token funding target requested from hogd-dev per account.
 pub const DEFAULT_HOGD_DEV_ACCOUNT_TOKENS: u64 = DEFAULT_DEV_ACCOUNT_STORAGE_TOKENS;
+
+/// Bootstrap manifest kind emitted for hogd-dev shorthand lowering.
+pub const HOGD_DEV_BOOTSTRAP_MANIFEST_KIND: &str = "groundhog-bootstrap";
+
+/// Default bootstrap profile requested from hogd-dev.
+pub const DEFAULT_HOGD_DEV_BOOTSTRAP_PROFILE: &str = "local-dev";
+
+/// Default dev-wallet profile requested from hogd-dev.
+pub const DEFAULT_HOGD_DEV_WALLET_PROFILE: &str = "hogd-dev-default";
+
+/// Default storage-cost model profile requested from hogd-dev.
+pub const DEFAULT_HOGD_DEV_STORAGE_COST_MODEL_PROFILE: &str = "hogd-default";
 
 /// Supervisor configuration for a local Groundhog node.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -208,5 +224,69 @@ impl HogdDevConfig {
     pub fn with_pid_file(mut self, pid_file: impl Into<PathBuf>) -> Self {
         self.pid_file = Some(pid_file.into());
         self
+    }
+
+    /// Lower the current hogd-dev shorthand settings into bootstrap intent.
+    ///
+    /// Supervisor launch code serializes this manifest and passes it to
+    /// `hogd-dev --bootstrap-manifest`.
+    pub fn to_bootstrap_manifest(
+        &self,
+        network_id: impl Into<String>,
+    ) -> Result<BootstrapManifest, TryFromIntError> {
+        Ok(BootstrapManifest::new(
+            HOGD_DEV_BOOTSTRAP_MANIFEST_KIND,
+            network_id,
+            DEFAULT_HOGD_DEV_BOOTSTRAP_PROFILE,
+            BootstrapManifestDevWallet::profile(DEFAULT_HOGD_DEV_WALLET_PROFILE),
+            BootstrapManifestAccounts::new(
+                u32::try_from(self.dev_account_count)?,
+                self.dev_account_seed.clone(),
+                self.dev_account_tokens.to_string(),
+            ),
+            BootstrapManifestStorageCostModel::profile(DEFAULT_HOGD_DEV_STORAGE_COST_MODEL_PROFILE),
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::HogdDevConfig;
+
+    #[test]
+    fn hogd_dev_config_lowers_to_bootstrap_manifest() {
+        let config = HogdDevConfig::default()
+            .with_dev_account_count(3)
+            .with_dev_account_seed("bench-seed")
+            .with_dev_account_tokens(42);
+
+        let manifest = config
+            .to_bootstrap_manifest("groundhog-bench-local")
+            .expect("bug: account count fits u32");
+
+        let value = serde_json::to_value(manifest).expect("bug: manifest serializes");
+
+        assert_eq!(
+            value,
+            json!({
+                "schemaVersion": 1,
+                "kind": "groundhog-bootstrap",
+                "networkId": "groundhog-bench-local",
+                "profile": "local-dev",
+                "devWallet": {
+                    "profile": "hogd-dev-default",
+                },
+                "bootstrapAccounts": {
+                    "count": 3,
+                    "seed": "bench-seed",
+                    "initialStorageTokens": "42",
+                },
+                "storageCostModel": {
+                    "profile": "hogd-default",
+                },
+            })
+        );
     }
 }

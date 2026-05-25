@@ -1,4 +1,5 @@
 pub mod block;
+pub mod bootstrap_manifest;
 pub mod dev;
 pub mod error;
 pub mod events;

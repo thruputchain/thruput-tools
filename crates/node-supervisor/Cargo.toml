@@ -34,6 +34,7 @@ rpc_driver = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
+tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
@@ -42,7 +43,6 @@ xdr-common = { workspace = true }
 [dev-dependencies]
 jsonrpsee = { workspace = true, features = ["http-client"] }
 serial_test = { workspace = true }
-tempfile = { workspace = true }
 
 [[example]]
 name = "fake_hogd_dev"
