@@ -163,8 +163,6 @@ impl ChainProgressBuilder {
 
         if self.sampled.len() < MAX_CHAIN_PROGRESS_OBSERVATIONS {
             self.sampled.push(observation);
-        } else if let Some(last) = self.sampled.last_mut() {
-            *last = observation;
         }
     }
 
@@ -214,7 +212,7 @@ mod tests {
                 p50_ms: 20,
                 p95_ms: 100,
                 p99_ms: 100,
-                p99_9_ms: 100,
+                p999_ms: 100,
                 max_ms: 100,
             })
         );
@@ -243,5 +241,33 @@ mod tests {
         assert_eq!(progress.max_height, 9);
         assert_eq!(progress.total_observations, 2);
         assert_eq!(progress.observations.len(), 2);
+    }
+
+    #[test]
+    fn chain_progress_sample_cap_drops_new_samples_without_rewriting_history() {
+        let mut metrics = RunMetricsBuilder::default();
+        for height in 0..(MAX_CHAIN_PROGRESS_OBSERVATIONS + 1) {
+            metrics.record_chain_tip(ChainTipObservation {
+                simulation_time_ms: height as u64,
+                height: height as i64,
+                block_hash: format!("0x{height:04x}"),
+            });
+        }
+
+        let progress = metrics
+            .finish()
+            .chain_progress
+            .expect("progress should exist");
+        assert_eq!(progress.total_observations, 1_025);
+        assert_eq!(progress.last_height, 1_024);
+        assert_eq!(progress.observations.len(), MAX_CHAIN_PROGRESS_OBSERVATIONS);
+        assert_eq!(
+            progress
+                .observations
+                .last()
+                .expect("sample should contain entries")
+                .height,
+            1_023
+        );
     }
 }

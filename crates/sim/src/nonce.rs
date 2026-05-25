@@ -32,33 +32,10 @@ impl NonceNamespace {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NonceSequence {
-    namespace: NonceNamespace,
-    next: u32,
-}
-
-impl NonceSequence {
-    pub fn new(namespace: NonceNamespace) -> Self {
-        Self { namespace, next: 0 }
-    }
-
-    pub fn next_nonce(&mut self) -> Result<u64, NonceError> {
-        let sequence = self.next;
-        self.next = self
-            .next
-            .checked_add(1)
-            .ok_or(NonceError::SequenceExhausted)?;
-        Ok(self.namespace.make_nonce(sequence))
-    }
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum NonceError {
     #[error("nonce namespace {value} exceeds the high-32-bit namespace limit")]
     NamespaceTooLarge { value: u64 },
-    #[error("nonce sequence exhausted the low 32 bits")]
-    SequenceExhausted,
 }
 
 #[cfg(test)]

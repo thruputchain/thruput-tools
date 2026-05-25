@@ -32,7 +32,7 @@ pub fn validate_manifest(manifest: &SimulationManifest) -> Result<(), Validation
     for (index, phase) in manifest.load_shape.iter().enumerate() {
         phase
             .duration
-            .parse_seconds()
+            .parse_millis()
             .map_err(|source| ValidationError::InvalidDuration { index, source })?;
         if phase.users == 0 {
             return Err(ValidationError::InvalidUsers { index });
@@ -60,7 +60,7 @@ pub fn validate_manifest(manifest: &SimulationManifest) -> Result<(), Validation
         }
         event
             .at
-            .parse_seconds()
+            .parse_millis()
             .map_err(|source| ValidationError::InvalidChaosTime { source })?;
     }
 

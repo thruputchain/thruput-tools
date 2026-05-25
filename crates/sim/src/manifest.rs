@@ -54,8 +54,8 @@ pub struct LoadPhase {
 pub struct DurationSpec(pub String);
 
 impl DurationSpec {
-    pub fn parse_seconds(&self) -> Result<u64, DurationParseError> {
-        parse_duration_seconds(&self.0)
+    pub fn parse_millis(&self) -> Result<u64, DurationParseError> {
+        parse_duration_millis(&self.0)
     }
 }
 
@@ -67,25 +67,25 @@ pub enum DurationParseError {
     UnsupportedSuffix(String),
     #[error("duration `{0}` is not a positive number")]
     InvalidNumber(String),
-    #[error("duration `{0}` is shorter than one second")]
+    #[error("duration `{0}` is shorter than one millisecond")]
     TooShort(String),
 }
 
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-fn parse_duration_seconds(value: &str) -> Result<u64, DurationParseError> {
+fn parse_duration_millis(value: &str) -> Result<u64, DurationParseError> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return Err(DurationParseError::Empty);
     }
 
     let (number, multiplier) = if let Some(number) = trimmed.strip_suffix("ms") {
-        (number, 0.001)
-    } else if let Some(number) = trimmed.strip_suffix('s') {
         (number, 1.0)
+    } else if let Some(number) = trimmed.strip_suffix('s') {
+        (number, 1_000.0)
     } else if let Some(number) = trimmed.strip_suffix('m') {
-        (number, 60.0)
+        (number, 60_000.0)
     } else if let Some(number) = trimmed.strip_suffix('h') {
-        (number, 3600.0)
+        (number, 3_600_000.0)
     } else {
         return Err(DurationParseError::UnsupportedSuffix(trimmed.to_string()));
     };
@@ -98,11 +98,15 @@ fn parse_duration_seconds(value: &str) -> Result<u64, DurationParseError> {
         return Err(DurationParseError::InvalidNumber(trimmed.to_string()));
     }
 
-    let seconds = parsed * multiplier;
-    if seconds < 1.0 {
+    let millis = parsed * multiplier;
+    if millis < 1.0 {
         return Err(DurationParseError::TooShort(trimmed.to_string()));
     }
-    Ok(seconds.ceil() as u64)
+    let rounded = millis.round();
+    if !rounded.is_finite() || (millis - rounded).abs() > f64::EPSILON * rounded.max(1.0) {
+        return Err(DurationParseError::InvalidNumber(trimmed.to_string()));
+    }
+    Ok(rounded as u64)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -201,7 +205,10 @@ mod tests {
 
         assert_eq!(manifest.target.provider, TargetProviderKind::Existing);
         assert_eq!(manifest.workloads[1].name, WorkloadKind::WalletSubmitSmoke);
-        assert_eq!(manifest.load_shape[0].duration.parse_seconds().unwrap(), 10);
+        assert_eq!(
+            manifest.load_shape[0].duration.parse_millis().unwrap(),
+            10_000
+        );
         assert_eq!(
             manifest.baseline.unwrap(),
             PathBuf::from("baselines/local-wallet-soak.json")
@@ -225,10 +232,11 @@ mod tests {
     }
 
     #[test]
-    fn parses_duration_suffixes_to_seconds() {
-        assert_eq!(DurationSpec("1500ms".into()).parse_seconds().unwrap(), 2);
-        assert_eq!(DurationSpec("2s".into()).parse_seconds().unwrap(), 2);
-        assert_eq!(DurationSpec("3m".into()).parse_seconds().unwrap(), 180);
-        assert_eq!(DurationSpec("1h".into()).parse_seconds().unwrap(), 3600);
+    fn parses_duration_suffixes_to_milliseconds() {
+        assert_eq!(DurationSpec("1500ms".into()).parse_millis().unwrap(), 1_500);
+        assert_eq!(DurationSpec("1.5s".into()).parse_millis().unwrap(), 1_500);
+        assert_eq!(DurationSpec("2s".into()).parse_millis().unwrap(), 2_000);
+        assert_eq!(DurationSpec("3m".into()).parse_millis().unwrap(), 180_000);
+        assert_eq!(DurationSpec("1h".into()).parse_millis().unwrap(), 3_600_000);
     }
 }

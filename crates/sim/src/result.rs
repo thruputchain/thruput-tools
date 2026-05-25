@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 use crate::manifest::WorkloadKind;
 use crate::target::{TargetOwnership, TargetProviderKind};
 
+pub const SIM_RESULT_SCHEMA_VERSION: u32 = 1;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SimResult {
@@ -148,8 +150,7 @@ pub struct LatencySummary {
     pub p50_ms: u64,
     pub p95_ms: u64,
     pub p99_ms: u64,
-    #[serde(rename = "p99_9Ms")]
-    pub p99_9_ms: u64,
+    pub p999_ms: u64,
     pub max_ms: u64,
 }
 
@@ -164,36 +165,10 @@ impl LatencySummary {
             p50_ms: histogram.value_at_quantile(0.50),
             p95_ms: histogram.value_at_quantile(0.95),
             p99_ms: histogram.value_at_quantile(0.99),
-            p99_9_ms: histogram.value_at_quantile(0.999),
+            p999_ms: histogram.value_at_quantile(0.999),
             max_ms: histogram.max(),
         })
     }
-
-    pub fn from_sorted_samples(samples: &[u64]) -> Option<Self> {
-        if samples.is_empty() {
-            return None;
-        }
-
-        Some(Self {
-            sample_count: samples.len() as u64,
-            p50_ms: percentile_per_mille(samples, 500),
-            p95_ms: percentile_per_mille(samples, 950),
-            p99_ms: percentile_per_mille(samples, 990),
-            p99_9_ms: percentile_per_mille(samples, 999),
-            max_ms: *samples
-                .last()
-                .expect("bug: samples was checked non-empty above"),
-        })
-    }
-}
-
-fn percentile_per_mille(sorted_samples: &[u64], per_mille: usize) -> u64 {
-    let rank = sorted_samples
-        .len()
-        .saturating_mul(per_mille)
-        .div_ceil(1_000);
-    let index = rank.saturating_sub(1).min(sorted_samples.len() - 1);
-    sorted_samples[index]
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -305,22 +280,6 @@ mod tests {
                 json!("failed"),
                 json!("recovered"),
             ]
-        );
-    }
-
-    #[test]
-    fn latency_summary_uses_nearest_rank_percentiles() {
-        let samples = [10, 20, 30, 40, 50];
-        assert_eq!(
-            LatencySummary::from_sorted_samples(&samples),
-            Some(LatencySummary {
-                sample_count: 5,
-                p50_ms: 30,
-                p95_ms: 50,
-                p99_ms: 50,
-                p99_9_ms: 50,
-                max_ms: 50,
-            })
         );
     }
 }

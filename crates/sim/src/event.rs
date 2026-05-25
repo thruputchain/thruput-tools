@@ -7,6 +7,7 @@ use crate::manifest::WorkloadKind;
 use crate::result::{AssertionResult, SimRunOutcome};
 use crate::target::TargetProviderKind;
 
+#[derive(Debug)]
 pub struct EventWriter {
     file: tokio::fs::File,
 }
@@ -15,8 +16,7 @@ impl EventWriter {
     pub async fn create(path: impl AsRef<Path>) -> Result<Self, std::io::Error> {
         let file = tokio::fs::OpenOptions::new()
             .create(true)
-            .truncate(true)
-            .write(true)
+            .append(true)
             .open(path)
             .await?;
         Ok(Self { file })
@@ -72,8 +72,8 @@ pub struct WorkloadEvent {
     pub actor_id: u32,
     pub workload: WorkloadKind,
     pub scheduled_time_ms: u64,
-    pub started_at_unix_ms: u128,
-    pub completed_at_unix_ms: u128,
+    pub started_at_unix_ms: String,
+    pub completed_at_unix_ms: String,
     pub latency_ms: u64,
     pub rpc_method: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -97,6 +97,7 @@ pub enum EventWriteError {
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+    use tempfile::NamedTempFile;
 
     use super::*;
 
@@ -106,8 +107,8 @@ mod tests {
             actor_id: 7,
             workload: WorkloadKind::ChainTip,
             scheduled_time_ms: 1_000,
-            started_at_unix_ms: 10,
-            completed_at_unix_ms: 12,
+            started_at_unix_ms: "10".into(),
+            completed_at_unix_ms: "12".into(),
             latency_ms: 2,
             rpc_method: "groundhog_chainTip",
             chain_height: Some(42),
@@ -124,13 +125,34 @@ mod tests {
                 "actorId": 7,
                 "workload": "chain-tip",
                 "scheduledTimeMs": 1000,
-                "startedAtUnixMs": 10,
-                "completedAtUnixMs": 12,
+                "startedAtUnixMs": "10",
+                "completedAtUnixMs": "12",
                 "latencyMs": 2,
                 "rpcMethod": "groundhog_chainTip",
                 "chainHeight": 42,
                 "chainBlockHash": "0xabc"
             })
         );
+    }
+
+    #[tokio::test]
+    async fn event_writer_appends_to_existing_stream() {
+        let file = NamedTempFile::new().expect("temp file should be created");
+        tokio::fs::write(file.path(), b"{\"kind\":\"existing\"}\n")
+            .await
+            .expect("seed event should write");
+
+        let mut writer = EventWriter::create(file.path())
+            .await
+            .expect("event writer should open");
+        writer
+            .write(&json!({"kind": "new"}))
+            .await
+            .expect("new event should append");
+
+        let contents = tokio::fs::read_to_string(file.path())
+            .await
+            .expect("event stream should read");
+        assert_eq!(contents, "{\"kind\":\"existing\"}\n{\"kind\":\"new\"}\n");
     }
 }

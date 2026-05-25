@@ -58,7 +58,7 @@ pub fn phase_starts(manifest: &SimulationManifest) -> Result<Vec<PhaseStart>, Sc
     let mut starts = Vec::with_capacity(manifest.load_shape.len());
 
     for (phase_index, phase) in manifest.load_shape.iter().enumerate() {
-        let duration_ms = phase.duration.parse_seconds()? * 1_000;
+        let duration_ms = phase.duration.parse_millis()?;
         starts.push(PhaseStart {
             phase_index,
             simulation_time_ms,
@@ -108,7 +108,7 @@ pub fn generate_schedule(
     for (chaos_index, chaos) in manifest.chaos.iter().enumerate() {
         events.push(ScheduledSimulationEvent::Chaos(ScheduledChaos {
             chaos_index,
-            simulation_time_ms: chaos.at.parse_seconds()? * 1_000,
+            simulation_time_ms: chaos.at.parse_millis()?,
             kind: chaos.kind,
         }));
     }
@@ -201,6 +201,7 @@ fn select_workload(
     hasher.update(b"hoglab workload selection v1");
     hasher.update(seed.as_bytes());
     hasher.update(scenario_name.as_bytes());
+    let phase_index = u64::try_from(phase_index).expect("phase index should fit u64");
     hasher.update(phase_index.to_le_bytes());
     hasher.update(actor_id.to_le_bytes());
     hasher.update(actor_sequence.to_le_bytes());

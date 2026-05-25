@@ -14,8 +14,8 @@ use groundhog_sim::metrics::{RunMetrics, RunMetricsBuilder};
 use groundhog_sim::nonce::NonceNamespace;
 use groundhog_sim::result::{
     AssertionResult, AssertionStatus, ChainProgressSummary, ChainTipObservation, ManifestHashes,
-    MetricAvailability, ProducerIdentity, RuntimeIdentity, SimMetricAvailability, SimResult,
-    SimRunOutcome, TargetIdentity, WorkloadCounts,
+    MetricAvailability, ProducerIdentity, RuntimeIdentity, SIM_RESULT_SCHEMA_VERSION,
+    SimMetricAvailability, SimResult, SimRunOutcome, TargetIdentity, WorkloadCounts,
 };
 use groundhog_sim::runtime::{derive_accounts, load_runtime_manifest};
 use groundhog_sim::scheduler::{
@@ -200,15 +200,7 @@ async fn run_existing(args: RunArgs) -> Result<(), CliError> {
             .write(&ResultEvent::AssertionChecked(assertion.clone()))
             .await?;
     }
-    let assertions_failed = assertion_results
-        .iter()
-        .any(|assertion| assertion.status == AssertionStatus::Failed);
-    let uncapped_workload_failures = assertion_results.is_empty() && failed_workloads > 0;
-    let outcome = if assertions_failed || uncapped_workload_failures {
-        SimRunOutcome::Failed
-    } else {
-        SimRunOutcome::Passed
-    };
+    let outcome = determine_outcome(&assertion_results, failed_workloads);
     event_writer
         .write(&ResultEvent::RunCompleted {
             outcome,
@@ -301,7 +293,7 @@ struct BuildResultInput<'a> {
 
 fn build_result(input: BuildResultInput<'_>) -> SimResult {
     SimResult {
-        schema_version: 1,
+        schema_version: SIM_RESULT_SCHEMA_VERSION,
         name: input.loaded_sim.manifest.name.clone(),
         outcome: input.outcome,
         target_provider: TargetProviderKind::Existing,
@@ -323,8 +315,8 @@ fn build_result(input: BuildResultInput<'_>) -> SimResult {
         manifest_hashes: ManifestHashes {
             simulation_manifest_sha256: input.loaded_sim.sha256.clone(),
             runtime_manifest_sha256: input.runtime_manifest_sha256.into(),
-            bootstrap_manifest: MetricAvailability::Unavailable {
-                reason: "existing target did not supply bootstrap manifest launcher input".into(),
+            bootstrap_manifest: MetricAvailability::Unsupported {
+                reason: "existing target cannot expose simulator launcher input".into(),
             },
         },
         metric_availability: SimMetricAvailability::phase_one_defaults(),
@@ -503,13 +495,15 @@ fn backpressure_completion(
     scope: &str,
     error: &str,
 ) -> WorkloadCompletion {
-    let now = unix_ms().unwrap_or_default();
+    let now = unix_ms()
+        .map(|millis| millis.to_string())
+        .unwrap_or_else(|_| "0".into());
     WorkloadCompletion {
         event: ResultEvent::WorkloadSkipped(WorkloadEvent {
             actor_id: tick.actor_id,
             workload,
             scheduled_time_ms: tick.simulation_time_ms,
-            started_at_unix_ms: now,
+            started_at_unix_ms: now.clone(),
             completed_at_unix_ms: now,
             latency_ms: 0,
             rpc_method: rpc_method(workload),
@@ -549,11 +543,11 @@ async fn execute_chain_tip<C>(
 where
     C: GroundhogApiClient + Clone + Send + Sync + 'static,
 {
-    let started_at_unix_ms = unix_ms()?;
+    let started_at_unix_ms = unix_ms()?.to_string();
     let started = Instant::now();
     let response = client.chain_tip().await;
     let latency_ms = duration_ms(started.elapsed());
-    let completed_at_unix_ms = unix_ms()?;
+    let completed_at_unix_ms = unix_ms()?.to_string();
 
     match response {
         Ok(tip) => {
@@ -658,7 +652,14 @@ async fn load_result(path: &Path) -> Result<SimResult, CliError> {
         path.to_path_buf()
     };
     let bytes = tokio::fs::read(&path).await?;
-    Ok(serde_json::from_slice(&bytes)?)
+    let result: SimResult = serde_json::from_slice(&bytes)?;
+    if result.schema_version != SIM_RESULT_SCHEMA_VERSION {
+        return Err(CliError::UnsupportedResultSchema {
+            actual: result.schema_version,
+            path: path.display().to_string(),
+        });
+    }
+    Ok(result)
 }
 
 #[derive(Debug, Serialize)]
@@ -713,6 +714,21 @@ fn availability_status<T>(availability: &MetricAvailability<T>) -> String {
     .into()
 }
 
+fn determine_outcome(
+    assertion_results: &[AssertionResult],
+    failed_workloads: u64,
+) -> SimRunOutcome {
+    if failed_workloads > 0
+        || assertion_results
+            .iter()
+            .any(|assertion| assertion.status == AssertionStatus::Failed)
+    {
+        SimRunOutcome::Failed
+    } else {
+        SimRunOutcome::Passed
+    }
+}
+
 #[allow(clippy::cast_precision_loss)]
 fn evaluate_assertions(
     manifest: &SimulationManifest,
@@ -745,11 +761,10 @@ fn evaluate_assertions(
 
     if let Some(max_chain_stall) = &manifest.assertions.max_chain_stall {
         match (
-            max_chain_stall.parse_seconds(),
+            max_chain_stall.parse_millis(),
             max_chain_stall_ms(chain_progress),
         ) {
-            (Ok(threshold_seconds), Some(observed_ms)) => {
-                let threshold_ms = threshold_seconds * 1_000;
+            (Ok(threshold_ms), Some(observed_ms)) => {
                 results.push(AssertionResult {
                     name: "maxChainStall".into(),
                     status: if observed_ms <= threshold_ms {
@@ -762,12 +777,12 @@ fn evaluate_assertions(
                     reason: None,
                 });
             }
-            (Ok(threshold_seconds), None) => {
+            (Ok(threshold_ms), None) => {
                 results.push(AssertionResult {
                     name: "maxChainStall".into(),
                     status: AssertionStatus::Unsupported,
                     observed: None,
-                    threshold: Some(format!("{}ms", threshold_seconds * 1_000)),
+                    threshold: Some(format!("{threshold_ms}ms")),
                     reason: Some("no chain-tip observations were recorded".into()),
                 });
             }
@@ -814,8 +829,14 @@ fn max_chain_stall_ms(chain_progress: Option<&ChainProgressSummary>) -> Option<u
     if observations.is_empty() {
         return None;
     }
-    let mut last_progress_time = observations[0].simulation_time_ms;
-    let mut last_height = observations[0].height;
+    let mut observations: Vec<_> = observations.iter().collect();
+    observations.sort_by_key(|observation| observation.simulation_time_ms);
+
+    let first = observations
+        .first()
+        .expect("bug: observations was checked non-empty");
+    let mut last_progress_time = first.simulation_time_ms;
+    let mut last_height = first.height;
     let mut max_stall = 0_u64;
 
     for observation in observations.iter().skip(1) {
@@ -970,11 +991,14 @@ enum CliError {
     MissingRuntimeManifest,
     #[error("system clock is before Unix epoch")]
     ClockBeforeEpoch,
+    #[error("unsupported result schemaVersion {actual} in {path}")]
+    UnsupportedResultSchema { actual: u32, path: String },
 }
 
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+    use tempfile::NamedTempFile;
 
     use super::*;
 
@@ -986,6 +1010,22 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].name, "maxErrorRate");
         assert_eq!(results[0].status, AssertionStatus::Passed);
+    }
+
+    #[test]
+    fn workload_failures_fail_run_even_when_assertions_pass() {
+        let assertion_results = vec![AssertionResult {
+            name: "maxChainStall".into(),
+            status: AssertionStatus::Passed,
+            observed: Some("0ms".into()),
+            threshold: Some("1000ms".into()),
+            reason: None,
+        }];
+
+        assert_eq!(
+            determine_outcome(&assertion_results, 1),
+            SimRunOutcome::Failed
+        );
     }
 
     #[test]
@@ -1016,6 +1056,55 @@ mod tests {
         assert_eq!(results[0].status, AssertionStatus::Failed);
     }
 
+    #[test]
+    fn max_chain_stall_handles_out_of_order_observations() {
+        let chain_progress = ChainProgressSummary {
+            first_height: 1,
+            last_height: 1,
+            max_height: 2,
+            total_observations: 3,
+            observations: vec![
+                ChainTipObservation {
+                    simulation_time_ms: 2_000,
+                    height: 2,
+                    block_hash: "0x02".into(),
+                },
+                ChainTipObservation {
+                    simulation_time_ms: 0,
+                    height: 1,
+                    block_hash: "0x01".into(),
+                },
+                ChainTipObservation {
+                    simulation_time_ms: 1_000,
+                    height: 1,
+                    block_hash: "0x01".into(),
+                },
+            ],
+        };
+
+        assert_eq!(max_chain_stall_ms(Some(&chain_progress)), Some(2_000));
+    }
+
+    #[tokio::test]
+    async fn load_result_rejects_future_schema_version() {
+        let file = NamedTempFile::new().expect("temp file should be created");
+        tokio::fs::write(
+            file.path(),
+            serde_json::to_vec(&minimal_result_json(99)).unwrap(),
+        )
+        .await
+        .expect("result should write");
+
+        let err = load_result(file.path())
+            .await
+            .expect_err("future schema should reject");
+
+        assert!(matches!(
+            err,
+            CliError::UnsupportedResultSchema { actual: 99, .. }
+        ));
+    }
+
     fn manifest_with_assertions(assertions: &serde_json::Value) -> SimulationManifest {
         serde_json::from_value(json!({
             "schemaVersion": 1,
@@ -1028,5 +1117,38 @@ mod tests {
             "assertions": assertions
         }))
         .expect("manifest fixture should parse")
+    }
+
+    fn minimal_result_json(schema_version: u32) -> serde_json::Value {
+        json!({
+            "schemaVersion": schema_version,
+            "name": "result-test",
+            "outcome": "passed",
+            "targetProvider": "existing",
+            "targetOwnership": {
+                "provider": "existing",
+                "startedBySim": false,
+                "cleanupAllowed": false
+            },
+            "nonceNamespace": 1,
+            "manifestHashes": {
+                "simulationManifestSha256": "sim",
+                "runtimeManifestSha256": "runtime",
+                "bootstrapManifest": {
+                    "status": "unsupported",
+                    "reason": "existing target"
+                }
+            },
+            "metricAvailability": {
+                "storageTokensConsumed": {
+                    "status": "unsupported",
+                    "reason": "not surfaced"
+                },
+                "nnintComputeUsed": {
+                    "status": "unsupported",
+                    "reason": "not surfaced"
+                }
+            }
+        })
     }
 }

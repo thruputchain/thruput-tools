@@ -69,9 +69,21 @@ chaos, deploy new contracts, or create remote infrastructure.
   in-flight bounds.
 - [x] Use bounded latency histograms instead of retaining every latency sample.
 - [x] Cap chain-progress samples in `result.json` while preserving total
-  observation count and first/last/max heights.
+  observation count and first/last/max heights, without rewriting earlier
+  samples after the cap is reached.
 - [x] Evaluate `maxErrorRate` and `maxChainStall`; mark submit/receipt
   assertions unsupported until those workloads land.
+- [x] Keep workload failures fatal even when all configured assertions pass.
+- [x] Evaluate chain-stall assertions in simulation-time order so concurrent
+  completion order cannot panic or distort the stall window.
+- [x] Open `result.jsonl` in append mode and cover append-only behavior with a
+  unit test.
+- [x] Make workload selection hashing architecture-independent.
+- [x] Parse manifest durations as integer milliseconds in scheduler,
+  validation, and assertion paths.
+- [x] Reject unsupported `result.json` schema versions during compare/load.
+- [x] Rename latency p99.9 output to strict camelCase `p999Ms`.
+- [x] Serialize wall-clock event timestamps as decimal strings.
 
 ## Current Next Slice
 
@@ -83,6 +95,21 @@ chaos, deploy new contracts, or create remote infrastructure.
   latency when receipts appear.
 - [ ] Wire submit/receipt assertion evaluation for p99 submit latency and
   receipt timeout rate.
+
+## Open Hardening Follow-Ups
+
+- [ ] Move executor, result building, and compare logic out of `main.rs` into
+  library modules while the surface area is still small.
+- [ ] Add a mock-client orchestration test that drives schedule dispatch,
+  workload execution, event writing, and result aggregation end to end.
+- [ ] Decide whether Phase 1 compare should remain identity/availability-only
+  or implement numeric deltas before external consumers rely on it.
+- [ ] Add compare unit tests for config mismatch, metric availability
+  transitions, numeric deltas, and numeric-skip behavior.
+- [ ] Add provider trait and `ChaosController` types matching the design names,
+  even if only the `existing` provider is executable in Phase 1.
+- [ ] Add doc comments and `#[non_exhaustive]` to public library API before
+  treating `groundhog-sim` as a stable downstream dependency.
 
 ## Phase 0: Skeleton
 
@@ -275,7 +302,8 @@ chaos, deploy new contracts, or create remote infrastructure.
   `commitHash`) and only compare executable hashes when both results include
   one.
 - [x] Compare metric availability transitions.
-- [x] Skip numeric deltas when either side is `unsupported` or `unavailable`.
+- [ ] Skip numeric deltas when either side is `unsupported` or `unavailable`
+  once numeric deltas are implemented.
 - [x] Emit structured JSON behind `--json`.
 - [x] Emit a readable text summary for humans.
 
@@ -290,6 +318,10 @@ chaos, deploy new contracts, or create remote infrastructure.
   schedule, comparing event ordering while ignoring wall-clock timestamps.
 - [x] Unit-test histogram aggregation.
 - [x] Unit-test assertion evaluation.
+- [x] Unit-test workload failures with passing assertions still fail the run.
+- [x] Unit-test max-chain-stall against out-of-order observations.
+- [x] Unit-test append-only JSONL event writing.
+- [x] Unit-test result schema-version rejection.
 - [ ] Unit-test compare output for:
   - same-config numeric deltas
   - cross-config manifest hash mismatch
