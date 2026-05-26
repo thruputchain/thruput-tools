@@ -7,8 +7,14 @@ use crate::error::SimError;
 use crate::manifest::WorkloadKind;
 use crate::result::{
     AssertionResult, AssertionStatus, ChainProgressSummary, LatencySummary, MetricAvailability,
-    SIM_RESULT_SCHEMA_VERSION, SimResult, WorkloadCounts, WorkloadMetrics,
+    SIM_RESULT_SCHEMA_VERSION, SimResult, SimRunOutcome, WorkloadCounts, WorkloadMetrics,
 };
+
+/// Schema version for the JSON shape emitted by `hoglab compare --json`.
+///
+/// Bump when an existing field changes meaning, is removed, or is renamed.
+/// Purely additive fields (new optional keys) do not require a bump.
+pub const COMPARE_DIFF_SCHEMA_VERSION: u32 = 1;
 
 /// Load a `result.json` from either a run directory or direct file path.
 pub async fn load_result(path: &Path) -> Result<SimResult, SimError> {
@@ -33,11 +39,14 @@ pub async fn load_result(path: &Path) -> Result<SimResult, SimError> {
 #[allow(clippy::struct_excessive_bools)]
 #[serde(rename_all = "camelCase")]
 pub struct ResultDiff {
+    pub schema_version: u32,
     pub same_config: bool,
     pub simulation_manifest_match: bool,
     pub runtime_manifest_match: bool,
     pub runtime_identity_match: bool,
     pub producer_identity_match: bool,
+    pub outcome_a: SimRunOutcome,
+    pub outcome_b: SimRunOutcome,
     pub storage_tokens_a: String,
     pub storage_tokens_b: String,
     pub nnint_compute_a: String,
@@ -66,6 +75,7 @@ impl ResultDiff {
 
         let metric_diffs = metric_diffs(a, b);
         Self {
+            schema_version: COMPARE_DIFF_SCHEMA_VERSION,
             same_config: simulation_manifest_match
                 && runtime_manifest_match
                 && runtime_identity_match
@@ -74,6 +84,8 @@ impl ResultDiff {
             runtime_manifest_match,
             runtime_identity_match,
             producer_identity_match,
+            outcome_a: a.outcome,
+            outcome_b: b.outcome,
             storage_tokens_a: availability_status(&a.metric_availability.storage_tokens_consumed),
             storage_tokens_b: availability_status(&b.metric_availability.storage_tokens_consumed),
             nnint_compute_a: availability_status(&a.metric_availability.nnint_compute_used),
@@ -95,19 +107,27 @@ impl ResultDiff {
     pub fn render_text(&self) -> String {
         format!(
             concat!(
-                "config match: {}\n",
-                "runtime identity match: {}\n",
-                "producer identity match: {}\n",
+                "same config: {}\n",
+                "  simulation manifest match: {}\n",
+                "  runtime manifest match: {}\n",
+                "  runtime identity match: {}\n",
+                "  producer identity match: {}\n",
+                "outcome: {} -> {}\n",
                 "storage-token availability: {} -> {}\n",
                 "NNInt compute availability: {} -> {}\n",
                 "workload count deltas: {}\n",
                 "latency delta workloads: {}\n",
                 "assertion transitions: {}\n",
+                "metric numeric deltas: {}\n",
                 "numeric skips: {}"
             ),
             self.same_config,
+            self.simulation_manifest_match,
+            self.runtime_manifest_match,
             self.runtime_identity_match,
             self.producer_identity_match,
+            outcome_label(self.outcome_a),
+            outcome_label(self.outcome_b),
             self.storage_tokens_a,
             self.storage_tokens_b,
             self.nnint_compute_a,
@@ -115,8 +135,17 @@ impl ResultDiff {
             self.workload_count_deltas.len(),
             self.latency_deltas_ms.len(),
             self.assertion_transitions.len(),
+            self.metric_numeric_deltas.len(),
             self.numeric_skips.len()
         )
+    }
+}
+
+fn outcome_label(outcome: SimRunOutcome) -> &'static str {
+    match outcome {
+        SimRunOutcome::Passed => "passed",
+        SimRunOutcome::Failed => "failed",
+        SimRunOutcome::Aborted => "aborted",
     }
 }
 
@@ -328,9 +357,9 @@ fn chain_progress_delta(
     match (a, b) {
         (Some(a), Some(b)) => {
             let delta = ChainProgressDelta {
-                first_height: b.first_height - a.first_height,
-                last_height: b.last_height - a.last_height,
-                max_height: b.max_height - a.max_height,
+                first_height: delta_i64(a.first_height, b.first_height),
+                last_height: delta_i64(a.last_height, b.last_height),
+                max_height: delta_i64(a.max_height, b.max_height),
                 total_observations: delta_u64(a.total_observations, b.total_observations),
             };
             (!delta.is_zero()).then_some(delta)
@@ -478,7 +507,14 @@ fn availability_status<T>(availability: &MetricAvailability<T>) -> String {
 }
 
 fn delta_u64(a: u64, b: u64) -> i64 {
-    let delta = i128::from(b) - i128::from(a);
+    saturating_delta(i128::from(b) - i128::from(a))
+}
+
+fn delta_i64(a: i64, b: i64) -> i64 {
+    saturating_delta(i128::from(b) - i128::from(a))
+}
+
+fn saturating_delta(delta: i128) -> i64 {
     i64::try_from(delta).unwrap_or_else(|_| {
         if delta.is_negative() {
             i64::MIN
@@ -682,6 +718,72 @@ mod tests {
                 .iter()
                 .any(|delta| { delta.metric == "storageTokensConsumed" && delta.value == 4 })
         );
+    }
+
+    #[test]
+    fn compare_diff_carries_schema_version_in_json() {
+        let result = result_from_json(minimal_result_json(SIM_RESULT_SCHEMA_VERSION));
+
+        let diff = ResultDiff::from_results(&result, &result);
+        let json = serde_json::to_value(&diff).expect("diff should serialize");
+
+        assert_eq!(json["schemaVersion"], json!(COMPARE_DIFF_SCHEMA_VERSION));
+    }
+
+    #[test]
+    fn compare_surfaces_outcome_transition() {
+        let a = result_from_json(minimal_result_json(SIM_RESULT_SCHEMA_VERSION));
+        let mut b_json = minimal_result_json(SIM_RESULT_SCHEMA_VERSION);
+        b_json["outcome"] = json!("aborted");
+        let b = result_from_json(b_json);
+
+        let diff = ResultDiff::from_results(&a, &b);
+
+        assert_eq!(diff.outcome_a, SimRunOutcome::Passed);
+        assert_eq!(diff.outcome_b, SimRunOutcome::Aborted);
+        assert!(diff.render_text().contains("outcome: passed -> aborted"));
+    }
+
+    #[test]
+    fn compare_text_lists_all_match_flags() {
+        let result = result_from_json(minimal_result_json(SIM_RESULT_SCHEMA_VERSION));
+
+        let text = ResultDiff::from_results(&result, &result).render_text();
+
+        assert!(text.contains("simulation manifest match:"));
+        assert!(text.contains("runtime manifest match:"));
+        assert!(text.contains("runtime identity match:"));
+        assert!(text.contains("producer identity match:"));
+    }
+
+    #[test]
+    fn chain_progress_delta_saturates_on_overflow() {
+        let mut a_json = minimal_result_json(SIM_RESULT_SCHEMA_VERSION);
+        a_json["chainProgress"] = json!({
+            "firstHeight": i64::MAX,
+            "lastHeight": i64::MAX,
+            "maxHeight": i64::MAX,
+            "totalObservations": 1,
+            "observations": []
+        });
+        let mut b_json = minimal_result_json(SIM_RESULT_SCHEMA_VERSION);
+        b_json["chainProgress"] = json!({
+            "firstHeight": i64::MIN,
+            "lastHeight": i64::MIN,
+            "maxHeight": i64::MIN,
+            "totalObservations": 1,
+            "observations": []
+        });
+
+        let diff = ResultDiff::from_results(&result_from_json(a_json), &result_from_json(b_json));
+
+        let delta = diff
+            .chain_progress_delta
+            .as_ref()
+            .expect("chain delta should exist");
+        assert_eq!(delta.first_height, i64::MIN);
+        assert_eq!(delta.last_height, i64::MIN);
+        assert_eq!(delta.max_height, i64::MIN);
     }
 
     #[test]

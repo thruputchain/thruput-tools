@@ -32,22 +32,39 @@ newer `hogp/<hash>` than the Rust protocol crates linked into `groundhog node`.
 It only overrides the intro token; incompatible XDR shapes still fail through
 the generated client.
 
-The first implementation slice validates the scenario and runtime manifest,
-derives bootstrap account signers, writes the result directory skeleton, and
-executes deterministic open-loop `chain-tip` traffic through the typed RPC
-client. `wallet-submit-smoke` now submits dev-wallet-compatible transactions;
-`receipt-poll` tracks actor-submitted transactions until their receipts appear
-and records receipt presence, status, optional reverted/error detail, and
-submit-to-receipt wall-clock latency. `result.json` aggregates both workload
-latency and submit-to-receipt latency percentiles, and Phase 1 assertion
-evaluation covers max error rate, max chain stall, p99 submit latency, and
-receipt timeout rate. Timeout rate is computed from submitted transactions
-that still have no observed receipt when the run ends; transient `null`
-receipt polls are retained as `receiptPoll.absent` diagnostics but do not count
-as timeouts once the receipt appears. Receipt-poll ticks before an actor has
-submitted a transaction are emitted as skipped with `errorClass:
-"no-submitted-transaction"`; error-rate consumers should treat that as
-scheduler warm-up rather than RPC failure.
+Phase 1 validates the scenario and runtime manifest, derives bootstrap account
+signers from the runtime manifest, writes the result directory skeleton, and
+executes deterministic open-loop traffic through the typed RPC client.
+Supported workloads are `chain-tip`, `wallet-submit-smoke` (dev-wallet
+compatible transactions), and `receipt-poll`. `receipt-poll` tracks
+actor-submitted transactions in a per-actor FIFO queue until their receipts
+appear and records receipt presence, status, optional reverted/error detail,
+and submit-to-receipt wall-clock latency.
+
+After the scheduled load ends, the simulator runs a bounded receipt drain on
+remaining pending transactions (10 second budget, 250 ms retry interval). Drain
+polls reuse the same `receipt-poll` event shape and are counted in the compact
+`run-completed.scheduledWorkloads` summary. Consumers that need to distinguish
+scheduled load from shutdown reconciliation should inspect `result.jsonl`
+timing/workload details until a dedicated drain counter is added.
+
+`result.json` aggregates per-workload latency, success-only submit latency,
+submit-to-receipt latency percentiles, and `receiptPoll.{present, absent,
+pendingAtShutdown}` counts. Phase 1 assertions cover:
+
+- `maxErrorRate` over `completed + failed` workloads (skipped excluded).
+- `maxChainStall` over chain-tip observations in simulation-time order.
+- `p99SubmitLatencyMs` over successful `wallet-submit-smoke` submissions only;
+  failed submits contribute to the broader `latencyMs` histogram but never to
+  this assertion's percentile input.
+- `maxReceiptTimeoutRate` computed as
+  `pendingAtShutdown / (present + pendingAtShutdown)`. Transient `null` receipt
+  polls remain diagnostic `receiptPoll.absent` samples and do not count as
+  timeouts once a later drain or scheduled poll observes the receipt.
+
+Receipt-poll ticks before an actor has submitted a transaction are emitted as
+skipped with `errorClass: "no-submitted-transaction"`; error-rate consumers
+should treat that as scheduler warm-up rather than RPC failure.
 
 ## Existing Provider
 
@@ -96,3 +113,9 @@ assertion status/measurement transitions, and numeric metrics that are observed
 on both sides. Storage-token and NNInt compute deltas are skipped when either
 run marks the metric `unsupported` or `unavailable`; the availability transition
 is still reported so instrumentation changes remain visible.
+
+The JSON output carries a `schemaVersion` at the root. Bumps follow the same
+rules as `result.json`: only on field rename/removal/meaning change. New
+optional fields are additive and do not bump the version. The diff also
+surfaces `outcomeA`/`outcomeB` so a `Passed → Aborted` transition is visible
+without inferring it from derived assertion deltas.

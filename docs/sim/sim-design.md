@@ -190,18 +190,30 @@ should depend on a provider trait, not on OpenTofu state.
 
 ## Target Model
 
-A target provider returns a running target:
+A target provider exposes lifecycle and capabilities on the provider itself,
+not on a target handle. The runner calls `TargetProvider::acquire` to materialize
+or locate a target, runs the simulation against the returned `ResolvedTarget`,
+and calls `TargetProvider::cleanup` at the end. Phase 1 ships:
 
 ```text
-Target {
-  id
+TargetProvider {
+  kind() -> TargetProviderKind
+  capabilities() -> TargetCapabilities
+  acquire(manifest, overrides) -> ResolvedTarget
+  chaos_controller() -> Option<&dyn ChaosController>
+  cleanup(target) -> Result<()>
+}
+
+ResolvedTarget {
+  provider
+  capabilities
+  ownership
   rpc_url
   runtime_manifest
-  started_by_sim
-  ownership
-  metrics_endpoints
-  log_handles
-  stop()
+  // Phase 2+ fields (process handle, log handles, metrics endpoints) live
+  // either on this struct or in provider-owned state returned alongside it.
+  // The shape is intentionally minimal in Phase 1 because the existing
+  // provider does not own any of those resources.
 }
 ```
 
@@ -218,7 +230,10 @@ Provider responsibilities:
 `ownership` is explicit target metadata, not just a simulator PID. For a
 sim-created local target it may include child PID, process-group ID, and
 PID-file path. For an `existing` target it records that the simulator owns no
-target lifecycle and must not attempt cleanup.
+target lifecycle and must not attempt cleanup. The cleanup hook on the provider
+is the only lifecycle path; there is no target-owned `stop()` method, because
+Phase 1's `existing` target has nothing to stop and a Phase 2 `local` provider
+will own its child process inside the provider rather than on the target.
 
 Initial providers:
 
@@ -335,7 +350,10 @@ distinguish scheduled load from shutdown reconciliation should use
 pending after this drain: `pendingAtShutdown / (present + pendingAtShutdown)`.
 Transient `null` receipt polls remain diagnostic `receiptPoll.absent` samples
 and do not count as timeouts once a later drain or scheduled poll observes the
-receipt.
+receipt. `p99SubmitLatencyMs` is computed from successful `wallet-submit-smoke`
+submissions only; failed submits feed the broader workload `latencyMs`
+histogram but never the assertion's input, so transient submit errors cannot
+mask a real success-path latency regression.
 
 Open questions before freezing the schema:
 
@@ -428,9 +446,14 @@ Three architectural hooks land early:
 
 - a `ChaosEvent` enum in the simulation manifest, with a single `kind`
   variant in v1 (`restart-target`) and additive room for future variants;
-- a `ChaosController` capability on each target provider that declares the
-  set of events it can execute. `existing` declares none, `local` declares
-  `restart-target`, `remote-ssh` will declare `restart-target` later;
+- a `TargetCapabilities::chaos` set on each target provider that declares the
+  events it supports, and a separate `ChaosController` trait that *executes*
+  a `ChaosEvent` returning a `ChaosEventOutcome`. `existing` declares no
+  chaos and returns `None` from `chaos_controller()`; `local` declares
+  `restart-target` and returns a controller in Phase 2; `remote-ssh` will
+  declare `restart-target` later. Splitting declaration (capabilities) from
+  execution (controller) keeps validation independent of whether any
+  provider actually wires up a controller yet;
 - chaos state transitions recorded in `result.json` and `result.jsonl` with
   observed timestamps, so assertions can reason about them (for example,
   "p99 submit latency excluding 5s after each restart").
@@ -505,10 +528,17 @@ logging land; target logs are only expected when a provider supplies them.
 - NNInt compute used per workload where the receipt surfaces it;
 - chaos event state transitions and their observed timestamps, including at
   least scheduled, started, completed, failed, and recovered where applicable;
-- metric availability for storage-token and NNInt compute fields;
-- assertion results;
-- baseline-anchored diff when `baseline:` is set on the scenario;
-- pointers to logs and metrics snapshots.
+- metric availability for storage-token and NNInt compute fields, using the
+  `observed` / `unsupported` / `unavailable` ladder defined below;
+- assertion results. Each assertion carries its own status enum — `passed`,
+  `failed`, or `unsupported` — where `unsupported` means the run produced no
+  measurement to evaluate the threshold against (for example, a
+  `p99SubmitLatencyMs` assertion with no successful submits). This is a
+  separate ladder from the metric availability ladder above;
+- baseline-anchored diff when `baseline:` is set on the scenario (Phase 2+);
+- pointers to logs and metrics snapshots (Phase 2+ once histogram export and
+  provider-supplied log capture land; the `histograms/` and `logs/`
+  directories exist as placeholders today).
 
 `result.jsonl` is the append-only event stream — one versioned record per
 workload completion, chaos event, metric availability snapshot, and assertion
@@ -540,17 +570,25 @@ it should never be the only source of truth.
 - chain progress and stall deltas;
 - storage-token and NNInt compute deltas;
 - metric availability transitions, reported separately from numeric deltas;
-- manifest/runtime/producer identity match flags. Runtime manifest bytes can be
+- manifest/runtime/producer identity match flags. Runtime manifest bytes are
   hash-compared. Producer comparison uses the runtime manifest's producer
-  identity tuple (`binary`, `version`, and optional `commitHash`) unless a
-  managed provider records an executable hash separately. When any of these
-  differ, the comparison is flagged as cross-config; the diff is still emitted
-  but should be read with that context.
+  identity tuple (`binary`, `version`, and optional `commitHash`). A separate
+  managed-provider `executableHash` field is reserved for a future Phase 2+
+  managed provider that can record one; Phase 1's `existing` provider never
+  supplies a hash, and `ProducerIdentity` currently exposes no such field.
+  When any of these identifiers differ, the comparison is flagged as
+  cross-config; the diff is still emitted but should be read with that
+  context.
 
 Comparisons skip numeric deltas for any metric where either side is
 `unsupported` or `unavailable`. The availability transition itself remains in
 the structured diff because it usually indicates a topology or instrumentation
 change, not a performance regression.
+
+The structured diff carries its own `schemaVersion` field at the root, independent of `result.json`'s schema version. Bumps follow the same rule:
+on field rename/removal/meaning change, not on additive optional fields.
+`outcomeA` / `outcomeB` are surfaced explicitly so a `Passed → Aborted`
+transition is visible without inferring it from derived assertion deltas.
 
 A scenario may set `baseline: <path>` pointing at a committed `result.json`
 snapshot. When set, `hoglab run` automatically emits a
