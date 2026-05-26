@@ -144,6 +144,10 @@ chaos, deploy new contracts, or create remote infrastructure.
   target acquisition.
 - [ ] Replace ad-hoc CLI output and silent internal drops with the eventual
   logging/printing discipline.
+- [ ] Add `--json` to `hoglab validate` and `hoglab run` so all hoglab
+  subcommands match the CLAUDE.md machine-readable-output convention. Each
+  needs a typed payload: validate emits a manifest-validation report;
+  run emits a run summary (outcome, counts, out-dir, run id).
 - [ ] Add a stream header event or sibling metadata file when the first UI/live
   progress consumer needs stream-level run metadata without scanning JSONL.
 - [ ] Add a redacted actor view type when actor state becomes user-visible.
