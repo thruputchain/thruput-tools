@@ -39,7 +39,7 @@ HOGD_DEV_BINARY=/path/to/hogd-dev scripts/smoke-runtime-manifest-bench.sh
 
 That smoke starts `groundhog node`, extracts `data.runtime_manifest.path`,
 drives `groundhog-bench` against the CLI node, starts
-`groundhog-rpc --runtime-manifest`, and drives the same benchmark traffic
+`hogway --runtime-manifest`, and drives the same benchmark traffic
 against the standalone gateway. Set `BENCH_SCENARIO=gateway-baseline` or
 `BENCH_SCENARIO=submit-ramp` for repeatable heavier local runs.
 
@@ -90,7 +90,7 @@ Use that manifest to start a standalone gateway or generate valid benchmark
 submit traffic:
 
 ```bash
-groundhog-rpc --runtime-manifest "$RUNTIME_MANIFEST" --listen 127.0.0.1:9546
+hogway --runtime-manifest "$RUNTIME_MANIFEST" --listen 127.0.0.1:9546
 groundhog-bench --url http://127.0.0.1:9546 \
   --runtime-manifest "$RUNTIME_MANIFEST" \
   --method sendRawTransaction
@@ -312,6 +312,7 @@ building the CLI with the `dev-node` feature.
 groundhog node
 groundhog node --port 9546
 groundhog node --hogd-dev-binary /path/to/hogd-dev
+groundhog node --hogd-dev-binary /path/to/hogd-dev --hogd-protocol hogp/<hash>
 groundhog node -v
 RUST_LOG=groundhog_node_supervisor=debug,hogd_dev=debug groundhog node
 ```
@@ -320,6 +321,12 @@ RUST_LOG=groundhog_node_supervisor=debug,hogd_dev=debug groundhog node
 backend planes, endpoint metadata, and the local dev-account surface for
 scripting. Stdout is reserved for this startup payload in JSON mode.
 Operational logs go to stderr, and `--verbose` is honored in JSON mode.
+
+`--hogd-protocol` overrides the protocol token used for hogd-dev x23 intro
+handshakes. It is useful when a local `hogd-dev` build is slightly ahead of
+the published Rust protocol crates but the XDR shapes are still compatible.
+If the actual protocol shape is out of alignment, the generated x23/XDR client
+will fail during the affected RPC call rather than silently accepting bad data.
 
 The supervisor starts `hogd-dev` with `HOGD_LOG_FORMAT=json`, parses its
 newline-delimited stderr logs, and re-emits them through Rust `tracing`.

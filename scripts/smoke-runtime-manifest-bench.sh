@@ -7,7 +7,7 @@
 #
 # Optional environment:
 #   HOGD_DEV_BINARY=/path/to/hogd-dev
-#   HOGD_PROTOCOL_OVERRIDE=hogp/<hash>
+#   HOGD_PROTOCOL_OVERRIDE=hogp/<hash>  # intro token only; XDR still validates shape
 #   NODE_STARTUP_TIMEOUT_SECS=60
 #   NODE_VERBOSE=1
 #   BENCH_SCENARIO=smoke|gateway-baseline|submit-ramp
@@ -22,7 +22,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CLI="$REPO_ROOT/target/debug/groundhog"
-GATEWAY="$REPO_ROOT/target/debug/groundhog-rpc"
+GATEWAY="$REPO_ROOT/target/debug/hogway"
 BENCH="$REPO_ROOT/target/debug/groundhog-bench"
 
 BENCH_SCENARIO="${BENCH_SCENARIO:-smoke}"

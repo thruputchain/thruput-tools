@@ -19,12 +19,12 @@ use std::{path::Path, process, sync::Arc};
 use clap::Parser;
 use groundhog_rpc_api_types::runtime_manifest::{
     BootstrapAccount, RUNTIME_MANIFEST_SCHEMA_VERSION, RuntimeManifest,
+    RuntimeManifestEntrypointError,
 };
 use groundhog_signing::{
-    BuildCallTransaction, DEFAULT_PUBKEY_ACCOUNT_NONCE, LocalSigner, PubkeyAccount,
-    SignTransactionParams, Signer, build_call_transaction, derive_default_dev_account_signer,
-    derive_dev_account_signer, encode_signed_transaction_xdr, sign_transaction,
-    source_address_auth_claim,
+    BuildDevWalletDoActionTransaction, DEFAULT_PUBKEY_ACCOUNT_NONCE, LocalSigner, PubkeyAccount,
+    SignTransactionParams, Signer, SigningError, build_dev_wallet_do_action_transaction,
+    derive_default_dev_account_signer, derive_dev_account_signer, sign_and_encode_transaction_hex,
 };
 use groundhog_xdr::contract::ContractEntrypointID;
 use groundhog_xdr::types::ContractAddress;
@@ -68,21 +68,23 @@ enum BenchError {
     BootstrapPublicKeyMismatch { index: u32 },
     #[error("runtime manifest bootstrap account index {index} does not fit this platform")]
     BootstrapAccountIndexTooLarge { index: u32 },
-    #[error("runtime manifest devWallet.doActionEntrypoint is not valid hex: {source}")]
-    EntrypointHex {
+    #[error("failed to parse runtime manifest devWallet.doActionEntrypoint: {source}")]
+    Entrypoint {
         #[source]
-        source: hex::FromHexError,
+        source: RuntimeManifestEntrypointError,
     },
-    #[error("runtime manifest devWallet.doActionEntrypoint must be 8 bytes, got {len}")]
-    EntrypointLength { len: usize },
     #[error("failed to derive default dev account {index} address: {reason}")]
     DefaultAccountAddress { index: usize, reason: String },
-    #[error("failed to encode wallet action calldata: {reason}")]
-    WalletCalldata { reason: String },
-    #[error("failed to sign benchmark transaction: {reason}")]
-    SignTransaction { reason: String },
-    #[error("failed to encode signed transaction: {reason}")]
-    EncodeTransaction { reason: String },
+    #[error("failed to encode wallet action calldata: {source}")]
+    WalletCalldata {
+        #[source]
+        source: SigningError,
+    },
+    #[error("failed to sign and encode benchmark transaction: {source}")]
+    SignAndEncodeTransaction {
+        #[source]
+        source: SigningError,
+    },
     #[error("failed to build HTTP client: {source}")]
     HttpClient {
         #[source]
@@ -181,66 +183,23 @@ fn generate_tx_batch(
         .map(|i| {
             let idx = i % accounts.len();
             let account = &accounts[idx];
-            let calldata =
-                dev_wallet_do_action_calldata(account.wallet_address, wallet_entrypoint, vec![])?;
-            let tx = build_call_transaction(BuildCallTransaction {
-                invoked_address: account.wallet_address,
-                entrypoint: wallet_entrypoint,
-                calldata,
+            let tx = build_dev_wallet_do_action_transaction(BuildDevWalletDoActionTransaction {
+                wallet_address: account.wallet_address,
+                wallet_entrypoint,
+                target_address: account.wallet_address,
+                target_entrypoint: wallet_entrypoint,
+                target_calldata: &[],
                 gas_limit: 10_000_000,
+                target_gas_limit: 10_000_000,
                 block_expiry_height: 10_000_000,
                 nonce: i as u64,
-                auth_claim: source_address_auth_claim(),
-            });
+            })
+            .map_err(|source| BenchError::WalletCalldata { source })?;
 
-            let signed = sign_transaction(tx, &account.signer, SignTransactionParams::default())
-                .map_err(|source| BenchError::SignTransaction {
-                    reason: source.to_string(),
-                })?;
-            let xdr = encode_signed_transaction_xdr(&signed).map_err(|source| {
-                BenchError::EncodeTransaction {
-                    reason: source.to_string(),
-                }
-            })?;
-            Ok(format!("0x{}", hex::encode(&xdr)))
+            sign_and_encode_transaction_hex(tx, &account.signer, SignTransactionParams::default())
+                .map_err(|source| BenchError::SignAndEncodeTransaction { source })
         })
         .collect()
-}
-
-fn dev_wallet_do_action_calldata(
-    target_address: ContractAddress,
-    target_entrypoint: ContractEntrypointID,
-    target_calldata: Vec<u8>,
-) -> Result<Vec<u8>, BenchError> {
-    let inner_invocation = xdrs::txs::encode(&(
-        target_address,
-        target_entrypoint,
-        10_000_000u64,
-        target_calldata.as_slice(),
-    ))
-    .map_err(|source| BenchError::WalletCalldata {
-        reason: source.to_string(),
-    })?;
-    xdrs::cxs::encode(&inner_invocation.as_slice()).map_err(|source| BenchError::WalletCalldata {
-        reason: source.to_string(),
-    })
-}
-
-fn manifest_action_entrypoint(
-    manifest: &RuntimeManifest,
-) -> Result<ContractEntrypointID, BenchError> {
-    let value = manifest
-        .bootstrap
-        .dev_wallet
-        .do_action_entrypoint
-        .strip_prefix("0x")
-        .unwrap_or(&manifest.bootstrap.dev_wallet.do_action_entrypoint);
-    let bytes = hex::decode(value).map_err(|source| BenchError::EntrypointHex { source })?;
-    let len = bytes.len();
-    let bytes: [u8; 8] = bytes
-        .try_into()
-        .map_err(|_| BenchError::EntrypointLength { len })?;
-    Ok(ContractEntrypointID::from(bytes))
 }
 
 fn default_bench_accounts(num_accounts: usize) -> Result<Vec<BenchAccount>, BenchError> {
@@ -313,7 +272,11 @@ fn transaction_inputs_for_method(
         None => default_bench_accounts(num_accounts)?,
     };
     let entrypoint = match manifest {
-        Some(manifest) => manifest_action_entrypoint(manifest)?,
+        Some(manifest) => manifest
+            .bootstrap
+            .dev_wallet
+            .do_action_entrypoint_id()
+            .map_err(|source| BenchError::Entrypoint { source })?,
         None => ContractEntrypointID::from([0u8; 8]),
     };
     if accounts.is_empty() {

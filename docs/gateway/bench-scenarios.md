@@ -6,7 +6,7 @@ we can compare results over time instead of rebuilding one-off shell commands.
 
 All scenarios start a real `hogd-dev` through `groundhog node`, read
 `data.runtime_manifest.path` from startup JSON, start a standalone
-`groundhog-rpc --runtime-manifest`, and run `groundhog-bench` against the
+`hogway --runtime-manifest`, and run `groundhog-bench` against the
 selected target.
 
 ```bash
@@ -18,6 +18,9 @@ HOGD_DEV_BINARY=/path/to/hogd-dev \
 Set `NODE_STARTUP_TIMEOUT_SECS` higher for slow debug `hogd-dev` builds. Set
 `NODE_VERBOSE=1` when a scenario stalls before readiness; the script will print
 forwarded hogd-dev logs on startup failure.
+Set `HOGD_PROTOCOL_OVERRIDE=hogp/<hash>` when the local `hogd-dev` build is
+ahead of the published Rust protocol crates. This only overrides x23 intro
+tokens; generated XDR clients still fail if the wire shape has changed.
 
 ## Scenarios
 

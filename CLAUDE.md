@@ -73,11 +73,16 @@ Workspace crates in `crates/`:
 - **bench** — benchmark harnesses. `groundhog-bench --runtime-manifest
   <path>` derives bootstrapped account signers and submits dev-wallet
   compatible `sendRawTransaction` traffic.
+- **sim** — `hoglab` stateful simulation and soak-test harness. Runs
+  deterministic actor schedules against an existing target, writes
+  `result.jsonl` / `result.json`, and currently covers chain-tip,
+  dev-wallet submit smoke, receipt polling, and Phase 1 assertions.
 
 See `docs/gateway/system-design.md` for full gateway design and
 `docs/gateway/api-sketch.md` for the jsonrpsee trait definition.
 See `docs/gateway/runtime-manifest.md` for the local
-CLI/gateway/bench startup handoff.
+CLI/gateway/bench startup handoff. See `docs/sim/README.md` for the
+simulator quickstart and result-artifact contract.
 
 ### Gateway Data Flows
 
@@ -119,7 +124,7 @@ runtime), `tower`/`tower-http` (middleware), `clap` (CLI), `prometheus`
   manifest input schema for local and benchmark backend launchers.
   `crates/api-types/src/runtime_manifest.rs` owns the runtime manifest
   output schema shared by `hogd-dev` producers, `groundhog node`,
-  `groundhog-rpc --runtime-manifest`, and `groundhog-bench
+  `hogway --runtime-manifest`, and `groundhog-bench
   --runtime-manifest`. Public manifest structs are `#[non_exhaustive]`;
   additive fields are expected. Optional endpoints must be absent when
   unavailable, not `null`. Large numeric quantities in manifests are
@@ -171,7 +176,7 @@ HOGD_DEV_BINARY=/path/to/hogd-dev scripts/smoke-runtime-manifest-bench.sh
 
 The script starts `groundhog node`, reads `data.runtime_manifest.path`
 from the CLI startup JSON, runs `groundhog-bench` against the CLI node,
-starts `groundhog-rpc --runtime-manifest <path>`, and runs the same
+starts `hogway --runtime-manifest <path>`, and runs the same
 bench checks against the standalone gateway. `BENCH_RATE`,
 `BENCH_DURATION`, and `BENCH_ACCOUNTS` can tune the run.
 Use `BENCH_SCENARIO=gateway-baseline` or `BENCH_SCENARIO=submit-ramp`
@@ -187,6 +192,18 @@ HOGD_DEV_BINARY=/path/to/hogd-dev scripts/smoke-local-dx.sh
 With `SMOKE_STANDALONE_GATEWAY=1`, that script also starts the standalone
 gateway from the runtime manifest; do not rehydrate gateway TOML by hand
 from individual endpoint fields unless you are testing config overrides.
+
+For simulator work, use `hoglab` against an already-started target:
+
+```bash
+cargo run -p groundhog-sim --bin hoglab -- validate examples/sim/local-wallet-soak.json
+cargo run -p groundhog-sim --bin hoglab -- run examples/sim/local-wallet-soak.json \
+  --rpc-url http://127.0.0.1:9545 \
+  --runtime-manifest "$RUNTIME_MANIFEST"
+```
+
+The current simulator contract and open implementation checklist live under
+`docs/sim/`.
 
 ### Running the CLI locally
 
@@ -219,7 +236,7 @@ For manual gateway/bench runs, start `groundhog node --json`, extract
 `data.runtime_manifest.path`, then pass it to both consumers:
 
 ```bash
-groundhog-rpc --runtime-manifest "$RUNTIME_MANIFEST" --listen 127.0.0.1:9546
+hogway --runtime-manifest "$RUNTIME_MANIFEST" --listen 127.0.0.1:9546
 groundhog-bench --url http://127.0.0.1:9546 \
   --runtime-manifest "$RUNTIME_MANIFEST" \
   --method sendRawTransaction
@@ -478,9 +495,9 @@ includes test and bench code), so always use that flag locally too.
 Active design notes only. Shipped decisions live in the code; git
 history retains the design context for anything not currently active.
 
+- `docs/README.md` — index distinguishing living docs from archived
+  historical notes.
 - `docs/cli/roadmap.md` — CLI backlog, sequencing, and completion state.
-- `docs/cli/2026-04-25-hogd-dev-node-hybrid.md` — durable architecture
-  for the hogd-owned subprocess local-node backend.
 - `docs/cli/specs/2026-04-29-hogd-dev-process-contract.md` — cross-team
   hogd-dev subprocess contract.
 - `docs/cli/specs/2026-04-14-bundled-wasm-opt-design.md` — deferred
@@ -489,10 +506,12 @@ history retains the design context for anything not currently active.
   ts` TypeScript binding codegen.
 - `docs/cli/specs/2026-05-07-view-rpc-and-receipt-return-data.md` —
   view RPC and structured receipt return-data wire design.
-- `docs/cli/specs/2026-05-13-view-rpc-protocol-rs-follow-up.md` —
-  protocol/protocol-rs service contract needed to wire view execution.
 - `docs/cli/specs/2026-05-07-transaction-detail-options.md` —
   transaction detail / receipt response shape.
+- `docs/cli/specs/2026-05-11-openrpc-wire-version-design.md` — OpenRPC
+  wire-version policy and `groundhog_version` exposure.
+- `docs/cli/specs/2026-05-13-view-rpc-protocol-rs-follow-up.md` —
+  protocol/protocol-rs service contract needed to wire view execution.
 - `docs/gateway/roadmap.md` — gateway backlog and sequencing.
 - `docs/gateway/system-design.md` — gateway architecture.
 - `docs/gateway/runtime-manifest.md` — runtime manifest quickstart for
@@ -502,7 +521,17 @@ history retains the design context for anything not currently active.
   ports, genesis hash, wallet addresses, and hashes are runtime state.
 - `docs/gateway/open-questions.md` — cross-team open and resolved
   questions for the gateway design.
-- `docs/cli/foundry.md` — Foundry DX analysis for CLI design reference.
+- `docs/sim/README.md` — `hoglab` quickstart, existing-provider contract,
+  result-directory layout, and compare semantics.
+- `docs/sim/sim-design.md` — simulator design: provider boundary,
+  workload model, chaos taxonomy, result/comparison artifacts.
+- `docs/sim/sim-implementation-plan.md` — Phase 1 execution checklist
+  and Open Hardening Follow-Ups for the simulator crate.
+- `docs/archive/cli/2026-04-25-hogd-dev-node-hybrid.md` — historical
+  durable-local-node design context, retained after the hogd-dev
+  supervisor path shipped.
+- `docs/archive/cli/foundry.md` — Foundry DX analysis kept as design
+  reference; not a current task list.
 
 ## Context
 

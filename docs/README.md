@@ -15,6 +15,8 @@ This directory has two kinds of documents:
   local-node, gateway, and benchmark handoff contract.
 - [Gateway benchmark bootstrap plan](gateway/benchmark-bootstrap-plan.md) -
   active benchmark/bootstrap roadmap, including bootstrap-manifest input.
+- [Groundhog simulation](sim/) - draft design for stateful end-to-end chain
+  traffic, soak tests, and simulation target boundaries.
 - [Benchmark scenario library](gateway/bench-scenarios.md) - repeatable local
   benchmark scenarios.
 - [Gateway roadmap](gateway/roadmap.md) - high-level gateway product roadmap.

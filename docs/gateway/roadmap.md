@@ -18,7 +18,7 @@ the ingress policy is intentionally minimal.
 
 Scope:
 
-- dedicated `groundhog-rpc` service as the only public ingress
+- dedicated `hogway` service as the only public ingress
 - private-network connectivity from gateway to validator components
 - `submission_backend` remains configurable so we do not hard-bake the internal
   submit hop too early

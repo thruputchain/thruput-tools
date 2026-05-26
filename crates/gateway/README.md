@@ -1,4 +1,4 @@
-# groundhog-rpc
+# hogway
 
 Standalone JSON-RPC 2.0 gateway for the [Groundhog](https://groundhog.dev) blockchain. Communicates with the validator stack (hogd indexer, hogd scheduler, chuckd coordinator) exclusively over x23 RPC.
 
@@ -57,7 +57,7 @@ RUNTIME_MANIFEST=$(jq -r '.data.runtime_manifest.path' /tmp/node.json)
 Start the standalone gateway from that manifest:
 
 ```bash
-groundhog-rpc --runtime-manifest "$RUNTIME_MANIFEST" --listen 127.0.0.1:9546
+hogway --runtime-manifest "$RUNTIME_MANIFEST" --listen 127.0.0.1:9546
 ```
 
 Then drive benchmark traffic through the gateway:

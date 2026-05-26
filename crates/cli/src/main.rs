@@ -258,7 +258,7 @@ enum Command {
                       backed by a supervised hogd-dev process. The \
                       native_exec/test_ffi prototype backend is no longer \
                       wired into this command.",
-        after_help = "Logging:\n  By default, groundhog node prints its own lifecycle/status output and keeps forwarded\n  hogd-dev info logs quiet. Use --verbose for the normal debugging view, or RUST_LOG\n  for exact tracing filters. --verbose is also honored with --json; logs stay on stderr.\n\nEnvironment:\n  GROUNDHOG_HOGD_DEV_BINARY  Default hogd-dev binary path when --hogd-dev-binary is omitted\n  RUST_LOG                    Overrides --verbose and controls supervisor/forwarded logs\n\nChild log bridge:\n  hogd-dev readiness is read from stdout. hogd-dev logs are requested as JSON on stderr,\n  parsed by node-supervisor, and re-emitted through tracing with hogd_timestamp_ms,\n  hogd_target, hogd_file, hogd_line, and hogd_fields metadata."
+        after_help = "Protocol override:\n  --hogd-protocol hogp/<hash> overrides the x23 intro token used for local\n  hogd-dev handshakes. This is useful when a local hogd-dev build is ahead of\n  the published Rust protocol crates; generated XDR clients still fail if the\n  wire shape is actually incompatible.\n\nLogging:\n  By default, groundhog node prints its own lifecycle/status output and keeps forwarded\n  hogd-dev info logs quiet. Use --verbose for the normal debugging view, or RUST_LOG\n  for exact tracing filters. --verbose is also honored with --json; logs stay on stderr.\n\nEnvironment:\n  GROUNDHOG_HOGD_DEV_BINARY  Default hogd-dev binary path when --hogd-dev-binary is omitted\n  RUST_LOG                    Overrides --verbose and controls supervisor/forwarded logs\n\nChild log bridge:\n  hogd-dev readiness is read from stdout. hogd-dev logs are requested as JSON on stderr,\n  parsed by node-supervisor, and re-emitted through tracing with hogd_timestamp_ms,\n  hogd_target, hogd_file, hogd_line, and hogd_fields metadata."
     )]
     Node {
         /// Port to listen on
@@ -273,8 +273,8 @@ enum Command {
         /// Explicit hogd-dev binary path
         #[arg(long)]
         hogd_dev_binary: Option<std::path::PathBuf>,
-        /// Override hogd protocol string for local cross-repo smoke tests
-        #[arg(long, hide = true)]
+        /// Override hogd-dev x23 intro protocol token
+        #[arg(long)]
         hogd_protocol: Option<String>,
         /// Override hogd-dev readiness timeout for smoke tests
         #[arg(long, hide = true)]
