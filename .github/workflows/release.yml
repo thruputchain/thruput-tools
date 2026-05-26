@@ -32,19 +32,28 @@ jobs:
       - name: Build hogway
         run: cargo build --locked --release -p groundhog-rpc-gateway --bin hogway
 
+      - name: Build groundhog CLI
+        run: cargo build --locked --release -p groundhog-cli --bin groundhog --features dev-node
+
       - name: Verify hogway
         run: target/release/hogway --help
+
+      - name: Verify groundhog CLI
+        run: target/release/groundhog --help
 
       - name: Prepare artifacts
         run: |
           mkdir -p artifacts
           cp target/release/hogway artifacts/
-          chmod +x artifacts/hogway
+          cp target/release/groundhog artifacts/
+          chmod +x artifacts/hogway artifacts/groundhog
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/hogway
+          files: |
+            artifacts/hogway
+            artifacts/groundhog
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}

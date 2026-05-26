@@ -171,13 +171,14 @@ cargo test -p groundhog-cli              # CLI tests
 asset publishing. Run **Release package** manually to publish crates. It reads
 the Cargo workspace version, creates the matching `vX.Y.Z` tag, publishes the
 crate set, pushes the tag only after crate publish succeeds, then explicitly
-dispatches `release.yml` on that tag. `release.yml` builds
-`cargo build --locked --release -p groundhog-rpc-gateway --bin hogway` and
-attaches the asset named `hogway` to the GitHub Release.
+dispatches `release.yml` on that tag. `release.yml` builds `hogway` and the
+`groundhog` CLI; the CLI release build uses `--features dev-node` so the
+published binary includes the local `groundhog node` path. The GitHub Release
+assets are named exactly `hogway` and `groundhog`.
 
 Keep the Cargo workspace version, internal `=X.Y.Z` workspace dependency pins,
-git tag, and GitHub Release tag aligned. The release repo downloads the
-`hogway` asset from the pinned `groundhog-rpc` tag.
+git tag, and GitHub Release tag aligned. The release repo downloads component
+assets from the pinned `groundhog-rpc` tag.
 
 ### Runtime Manifest Smoke
 
