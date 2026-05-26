@@ -81,7 +81,7 @@ groundhog --json node --hogd-dev-binary /path/to/hogd-dev > /tmp/node.json
 
 # in other terminals
 RUNTIME_MANIFEST=$(jq -r '.data.runtime_manifest.path' /tmp/node.json)
-groundhog-rpc --runtime-manifest "$RUNTIME_MANIFEST" --listen 127.0.0.1:9546
+hogway --runtime-manifest "$RUNTIME_MANIFEST" --listen 127.0.0.1:9546
 groundhog-bench --url http://127.0.0.1:9546 \
   --runtime-manifest "$RUNTIME_MANIFEST" \
   --method sendRawTransaction
@@ -236,7 +236,7 @@ the user-facing CLI loop (`new` → `build` → `node` → `deploy` →
 For the runtime-manifest gateway/bench path, run
 `scripts/smoke-runtime-manifest-bench.sh`. It starts `groundhog node`,
 extracts the generated runtime manifest, runs `groundhog-bench` against the
-CLI node, starts `groundhog-rpc --runtime-manifest`, and repeats the bench
+CLI node, starts `hogway --runtime-manifest`, and repeats the bench
 checks against the standalone gateway. Set `BENCH_SCENARIO=gateway-baseline`
 or `BENCH_SCENARIO=submit-ramp` for the heavier local scenario library.
 

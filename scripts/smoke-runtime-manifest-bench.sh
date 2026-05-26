@@ -22,7 +22,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CLI="$REPO_ROOT/target/debug/groundhog"
-GATEWAY="$REPO_ROOT/target/debug/groundhog-rpc"
+GATEWAY="$REPO_ROOT/target/debug/hogway"
 BENCH="$REPO_ROOT/target/debug/groundhog-bench"
 
 BENCH_SCENARIO="${BENCH_SCENARIO:-smoke}"

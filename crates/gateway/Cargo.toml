@@ -16,7 +16,7 @@ exclude = [
 ]
 
 [[bin]]
-name = "groundhog-rpc"
+name = "hogway"
 path = "src/main.rs"
 
 [lints]

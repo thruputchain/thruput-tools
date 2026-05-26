@@ -39,7 +39,7 @@ HOGD_DEV_BINARY=/path/to/hogd-dev scripts/smoke-runtime-manifest-bench.sh
 
 That smoke starts `groundhog node`, extracts `data.runtime_manifest.path`,
 drives `groundhog-bench` against the CLI node, starts
-`groundhog-rpc --runtime-manifest`, and drives the same benchmark traffic
+`hogway --runtime-manifest`, and drives the same benchmark traffic
 against the standalone gateway. Set `BENCH_SCENARIO=gateway-baseline` or
 `BENCH_SCENARIO=submit-ramp` for repeatable heavier local runs.
 
@@ -90,7 +90,7 @@ Use that manifest to start a standalone gateway or generate valid benchmark
 submit traffic:
 
 ```bash
-groundhog-rpc --runtime-manifest "$RUNTIME_MANIFEST" --listen 127.0.0.1:9546
+hogway --runtime-manifest "$RUNTIME_MANIFEST" --listen 127.0.0.1:9546
 groundhog-bench --url http://127.0.0.1:9546 \
   --runtime-manifest "$RUNTIME_MANIFEST" \
   --method sendRawTransaction

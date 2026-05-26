@@ -18,7 +18,7 @@ The benchmark path should be:
 groundhog-bench / loadgen
         |
         v
-groundhog-rpc gateway
+hogway gateway
         |
         v
 hogd-dev or full hogd/chuckd backend stack
@@ -32,7 +32,7 @@ The first implementation target is `hogd-dev`: it is the fastest place to
 prototype the manifest producer and validate the CLI/bench/gateway consumers.
 The contract should not be hogd-dev-specific. The same bootstrap/runtime shapes
 must also work for a production-style backend made of discrete hogd processes
-and a real chuckd coordinator behind the real `groundhog-rpc` gateway.
+and a real chuckd coordinator behind the real `hogway` gateway.
 
 ## Current Pieces
 
@@ -42,7 +42,7 @@ Most of the pieces already exist:
   runtime manifest pointed to by readiness.
 - `groundhog node` validates advertised dev-account metadata against local
   deterministic dev-key settings.
-- `groundhog-rpc` already runs the production gateway path and connects to
+- `hogway` already runs the production gateway path and connects to
   scheduler, indexer, DbGateway, and ViewGateway endpoints.
 - `groundhog-bench` already provides an open-loop HTTP JSON-RPC load generator.
 - The CLI dev-key flow already treats `dev-N` wallet addresses as backend
@@ -50,7 +50,7 @@ Most of the pieces already exist:
   manifests for wallet-address discovery.
 
 The first runtime-manifest handoff now exists and is consumed by `groundhog
-node`, `groundhog-rpc --runtime-manifest`, and `groundhog-bench
+node`, `hogway --runtime-manifest`, and `groundhog-bench
 --runtime-manifest`. The temporary dev-account RPC has been removed; remaining
 connective tissue is the expansion around that contract: bootstrap input should
 become portable, and a full-stack benchmark harness should consume the same
@@ -332,13 +332,13 @@ pretty-printed JSON. The full cost model remains authoritative.
   manifest concept.
 - Emits the same runtime manifest shape, extended with coordinator endpoints
   when present.
-- May write derived `groundhog-rpc` config as a convenience for hand inspection,
+- May write derived `hogway` config as a convenience for hand inspection,
   but the runtime manifest is the source of truth for dev/bench orchestration.
 - May launch either separate binaries/processes for each hogd component or a
   stitched binary with role-selecting flags. That process topology is an
   implementation choice; the manifest contract should not depend on it.
 
-### groundhog-rpc Gateway
+### hogway Gateway
 
 - Remains the production JSON-RPC process under benchmark.
 - Consumes endpoint config, not genesis intent.
@@ -394,7 +394,7 @@ As of 2026-05-24:
   dev-account metadata against configured deterministic dev keys.
 - [x] `groundhog-bench --runtime-manifest` generates valid dev-wallet
   `sendRawTransaction` workloads from `bootstrapAccounts`.
-- [x] `groundhog-rpc --runtime-manifest` overlays gateway backend endpoints
+- [x] `hogway --runtime-manifest` overlays gateway backend endpoints
   from the manifest.
 - [x] Smoke and repeatable local benchmark scenarios cover the manifest-backed
   CLI-node path, standalone-gateway read/view/storage checks, and
@@ -452,7 +452,7 @@ manifest.
 
 ### Phase 3: Gateway Config Generation
 
-- [x] Add `groundhog-rpc --runtime-manifest <path>` so dev/bench runs can consume
+- [x] Add `hogway --runtime-manifest <path>` so dev/bench runs can consume
   advertised backend endpoints directly.
 - [x] Keep TOML config for production deployments and for hand-authored configs
   where no runtime manifest exists.

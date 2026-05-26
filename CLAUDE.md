@@ -124,7 +124,7 @@ runtime), `tower`/`tower-http` (middleware), `clap` (CLI), `prometheus`
   manifest input schema for local and benchmark backend launchers.
   `crates/api-types/src/runtime_manifest.rs` owns the runtime manifest
   output schema shared by `hogd-dev` producers, `groundhog node`,
-  `groundhog-rpc --runtime-manifest`, and `groundhog-bench
+  `hogway --runtime-manifest`, and `groundhog-bench
   --runtime-manifest`. Public manifest structs are `#[non_exhaustive]`;
   additive fields are expected. Optional endpoints must be absent when
   unavailable, not `null`. Large numeric quantities in manifests are
@@ -176,7 +176,7 @@ HOGD_DEV_BINARY=/path/to/hogd-dev scripts/smoke-runtime-manifest-bench.sh
 
 The script starts `groundhog node`, reads `data.runtime_manifest.path`
 from the CLI startup JSON, runs `groundhog-bench` against the CLI node,
-starts `groundhog-rpc --runtime-manifest <path>`, and runs the same
+starts `hogway --runtime-manifest <path>`, and runs the same
 bench checks against the standalone gateway. `BENCH_RATE`,
 `BENCH_DURATION`, and `BENCH_ACCOUNTS` can tune the run.
 Use `BENCH_SCENARIO=gateway-baseline` or `BENCH_SCENARIO=submit-ramp`
@@ -236,7 +236,7 @@ For manual gateway/bench runs, start `groundhog node --json`, extract
 `data.runtime_manifest.path`, then pass it to both consumers:
 
 ```bash
-groundhog-rpc --runtime-manifest "$RUNTIME_MANIFEST" --listen 127.0.0.1:9546
+hogway --runtime-manifest "$RUNTIME_MANIFEST" --listen 127.0.0.1:9546
 groundhog-bench --url http://127.0.0.1:9546 \
   --runtime-manifest "$RUNTIME_MANIFEST" \
   --method sendRawTransaction

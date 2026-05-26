@@ -225,7 +225,7 @@ surface.
 There is not yet a corresponding generated x23 "submit unvetted to chuckd"
 surface in `protocol-rs`.
 
-So a configurable `submission_backend` in `groundhog-rpc` is still useful, but
+So a configurable `submission_backend` in `hogway` is still useful, but
 the two backends are not equally mature:
 
 - `hogd_scheduler`: real typed x23 path exists now
