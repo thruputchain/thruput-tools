@@ -1,0 +1,49 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  CARGO_REGISTRIES_GROUNDHOG_TOKEN: ${{ secrets.GROUNDHOG_REGISTRY_TOKEN }}
+  CARGO_REGISTRY_GLOBAL_CREDENTIAL_PROVIDERS: cargo:token
+  CARGO_REGISTRIES_GROUNDHOG_INDEX: sparse+https://groundhog.dev/crates/api/v1/crates/
+  CARGO_REGISTRIES_GROUNDHOG_SOURCE: sparse+https://groundhog.dev/crates/api/v1/crates/
+  HOGD_FFI_PASSWORD: ${{ secrets.HOGD_FFI_PASSWORD }}
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: namespace-profile-chuckd-rs-linux
+    steps:
+      - uses: namespacelabs/nscloud-checkout-action@v8
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: namespacelabs/nscloud-cache-action@v1
+        with:
+          cache: rust
+
+      - name: Build hogway
+        run: cargo build --locked --release -p groundhog-rpc-gateway --bin hogway
+
+      - name: Verify hogway
+        run: target/release/hogway --help
+
+      - name: Prepare artifacts
+        run: |
+          mkdir -p artifacts
+          cp target/release/hogway artifacts/
+          chmod +x artifacts/hogway
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/hogway
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
