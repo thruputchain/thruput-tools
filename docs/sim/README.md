@@ -35,5 +35,5 @@ the generated client.
 The first implementation slice validates the scenario and runtime manifest,
 derives bootstrap account signers, writes the result directory skeleton, and
 executes deterministic open-loop `chain-tip` traffic through the typed RPC
-client.
-`wallet-submit-smoke` and receipt polling remain in the Phase 1 backlog.
+client. `wallet-submit-smoke` now submits dev-wallet-compatible transactions;
+receipt polling remains in the Phase 1 backlog.

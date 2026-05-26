@@ -2,6 +2,7 @@
 
 /// Errors returned by `groundhog-signing`.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum SigningError {
     /// The provided secret key bytes were invalid.
     #[error("invalid secret key bytes")]

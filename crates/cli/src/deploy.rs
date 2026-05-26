@@ -5,7 +5,8 @@ use groundhog_rpc_api_types::receipt::TransactionReceipt;
 use groundhog_rpc_api_types::transaction::TxHash;
 use groundhog_signing::{
     BuildDeployTransaction, DEFAULT_TX_GAS_LIMIT, SignTransactionParams, WALLET_DEPLOY_ENTRYPOINT,
-    build_deploy_transaction, derive_deploy_address, sign_transaction, source_address_auth_claim,
+    build_deploy_transaction, derive_deploy_address, sign_and_encode_transaction_hex,
+    source_address_auth_claim,
 };
 use groundhog_xdr::types::ContractAddress;
 use groundhog_xdr::types::SHA256Hash;
@@ -316,16 +317,14 @@ fn prepare_deploy_transaction(
         auth_claim,
     });
 
-    let signed_tx = sign_transaction(tx, &signer, SignTransactionParams::default())
-        .map_err(|e| CliError::Other(e.to_string()))?;
-    let tx_xdr = groundhog_signing::encode_signed_transaction_xdr(&signed_tx)
+    let tx_hex = sign_and_encode_transaction_hex(tx, &signer, SignTransactionParams::default())
         .map_err(|e| CliError::Other(e.to_string()))?;
 
     Ok(PreparedDeploy {
         rpc_url: rpc_url.to_owned(),
         wasm_bytes_len,
         predicted_address: format!("0x{}", hex::encode(predicted_address.as_ref())),
-        tx_hex: format!("0x{}", hex::encode(&tx_xdr)),
+        tx_hex,
     })
 }
 

@@ -36,22 +36,31 @@ impl ActorState {
         }
     }
 
-    /// Allocate the next namespaced transaction nonce for this actor.
-    pub fn next_nonce(&mut self) -> Result<u64, ActorError> {
-        let sequence = self.next_nonce_sequence;
+    /// Return the next namespaced transaction nonce without consuming it.
+    pub fn current_nonce(&self) -> Result<u64, ActorError> {
+        if self.next_nonce_sequence == u32::MAX {
+            return Err(ActorError::NonceSequenceExhausted {
+                actor_id: self.actor_id,
+            });
+        }
+        Ok(self.nonce_namespace.make_nonce(self.next_nonce_sequence))
+    }
+
+    /// Record that this actor submitted a transaction.
+    pub fn record_submitted_tx(
+        &mut self,
+        tx_hash: TxHash,
+        scheduled_time_ms: u64,
+    ) -> Result<(), ActorError> {
         self.next_nonce_sequence =
             self.next_nonce_sequence
                 .checked_add(1)
                 .ok_or(ActorError::NonceSequenceExhausted {
                     actor_id: self.actor_id,
                 })?;
-        Ok(self.nonce_namespace.make_nonce(sequence))
-    }
-
-    /// Record that this actor submitted a transaction.
-    pub fn record_submitted_tx(&mut self, tx_hash: TxHash, scheduled_time_ms: u64) {
         self.last_submitted_tx_hash = Some(tx_hash);
         self.last_submitted_scheduled_time_ms = Some(scheduled_time_ms);
+        Ok(())
     }
 
     /// Record a committed receipt observed for this actor.
@@ -124,9 +133,49 @@ mod tests {
             NonceNamespace::new(0x1234_5678).expect("namespace should fit"),
         );
 
-        assert_eq!(actor.next_nonce().unwrap(), 0x1234_5678_0000_0000);
-        assert_eq!(actor.next_nonce().unwrap(), 0x1234_5678_0000_0001);
+        assert_eq!(actor.current_nonce().unwrap(), 0x1234_5678_0000_0000);
+        actor
+            .record_submitted_tx(tx_hash(1), 10)
+            .expect("submitted tx should record");
+        assert_eq!(actor.current_nonce().unwrap(), 0x1234_5678_0000_0001);
+        actor
+            .record_submitted_tx(tx_hash(2), 20)
+            .expect("submitted tx should record");
         assert_eq!(actor.next_nonce_sequence, 2);
+    }
+
+    #[test]
+    fn actor_does_not_advance_nonce_until_submit_is_recorded() {
+        let mut actor = ActorState::new(
+            2,
+            sim_account(9),
+            NonceNamespace::new(0x1234_5678).expect("namespace should fit"),
+        );
+
+        assert_eq!(actor.current_nonce().unwrap(), 0x1234_5678_0000_0000);
+        assert_eq!(actor.current_nonce().unwrap(), 0x1234_5678_0000_0000);
+        assert_eq!(actor.next_nonce_sequence, 0);
+
+        actor
+            .record_submitted_tx(tx_hash(3), 30)
+            .expect("submitted tx should record");
+
+        assert_eq!(actor.current_nonce().unwrap(), 0x1234_5678_0000_0001);
+    }
+
+    #[test]
+    fn actor_reports_nonce_sequence_exhaustion_at_boundary() {
+        let mut actor = ActorState::new(
+            2,
+            sim_account(9),
+            NonceNamespace::new(0x1234_5678).expect("namespace should fit"),
+        );
+        actor.next_nonce_sequence = u32::MAX;
+
+        assert!(matches!(
+            actor.current_nonce(),
+            Err(ActorError::NonceSequenceExhausted { actor_id: 2 })
+        ));
     }
 
     #[test]
@@ -163,5 +212,9 @@ mod tests {
             signer: derive_dev_account_signer("actor-test-seed", index as usize),
             wallet_address: Hex0x(ContractAddress::from([address_byte; 32])).0,
         }
+    }
+
+    fn tx_hash(byte: u8) -> TxHash {
+        TxHash(Hex0x(groundhog_xdr::types::SHA256Hash::from([byte; 32])))
     }
 }

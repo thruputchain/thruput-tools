@@ -6,6 +6,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::{ContractAddress, Ed25519PublicKey, SHA256Hash};
+use groundhog_xdr::contract::ContractEntrypointID;
 
 /// Current runtime manifest schema version.
 pub const RUNTIME_MANIFEST_SCHEMA_VERSION: u32 = 1;
@@ -135,6 +136,54 @@ pub struct RuntimeManifestDevWallet {
     pub deploy_entrypoint: String,
     /// Entrypoint used to submit wallet actions.
     pub do_action_entrypoint: String,
+}
+
+impl RuntimeManifestDevWallet {
+    /// Parse the advertised dev-wallet `doAction` entrypoint into its XDR ID.
+    pub fn do_action_entrypoint_id(
+        &self,
+    ) -> Result<ContractEntrypointID, RuntimeManifestEntrypointError> {
+        parse_entrypoint_id(
+            "bootstrap.devWallet.doActionEntrypoint",
+            &self.do_action_entrypoint,
+        )
+    }
+}
+
+fn parse_entrypoint_id(
+    field: &'static str,
+    value: &str,
+) -> Result<ContractEntrypointID, RuntimeManifestEntrypointError> {
+    let value = value.strip_prefix("0x").unwrap_or(value);
+    let bytes = hex::decode(value)
+        .map_err(|source| RuntimeManifestEntrypointError::InvalidHex { field, source })?;
+    let len = bytes.len();
+    let bytes: [u8; 8] = bytes
+        .try_into()
+        .map_err(|_| RuntimeManifestEntrypointError::InvalidLength { field, len })?;
+    Ok(ContractEntrypointID::from(bytes))
+}
+
+/// Errors returned while parsing entrypoint IDs advertised by a runtime manifest.
+#[derive(Debug, thiserror::Error)]
+pub enum RuntimeManifestEntrypointError {
+    /// The manifest field was not valid hex.
+    #[error("{field} is not valid hex: {source}")]
+    InvalidHex {
+        /// JSON field path being parsed.
+        field: &'static str,
+        /// Hex decoder failure.
+        #[source]
+        source: hex::FromHexError,
+    },
+    /// The manifest field decoded to the wrong byte length.
+    #[error("{field} must be 8 bytes, got {len}")]
+    InvalidLength {
+        /// JSON field path being parsed.
+        field: &'static str,
+        /// Decoded byte length.
+        len: usize,
+    },
 }
 
 /// Concrete storage cost model used at genesis.
@@ -337,6 +386,18 @@ mod tests {
         .expect("bug: additive manifest fields should be ignored");
 
         assert_eq!(account.index, 0);
+    }
+
+    #[test]
+    fn dev_wallet_do_action_entrypoint_parses_from_manifest() {
+        let manifest = full_manifest();
+        let entrypoint = manifest
+            .bootstrap
+            .dev_wallet
+            .do_action_entrypoint_id()
+            .expect("entrypoint should parse");
+
+        assert_eq!(entrypoint.as_ref(), b"doAction");
     }
 
     fn addr(value: &str) -> SocketAddr {

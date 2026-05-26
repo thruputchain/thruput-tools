@@ -109,6 +109,13 @@ chaos, deploy new contracts, or create remote infrastructure.
   execution.
 - [x] Add actor state tracking for signer, wallet address, next namespaced
   nonce, and last submitted transaction hash.
+- [x] Advance actor nonce only after a submit returns a transaction hash, so
+  transient RPC submit failures retry the same namespaced nonce.
+- [x] Share runtime-manifest dev-wallet entrypoint parsing through
+  `groundhog-rpc-api-types`.
+- [x] Share sign-and-0x-encode transaction helper through `groundhog-signing`.
+- [x] Add a byte-equal determinism test for wallet-submit-smoke transaction
+  construction.
 - [ ] Add receipt-poll workload tied to actor state and record submit-to-receipt
   latency when receipts appear.
 - [ ] Wire submit/receipt assertion evaluation for p99 submit latency and
@@ -135,6 +142,14 @@ chaos, deploy new contracts, or create remote infrastructure.
 - [ ] Add a redacted actor view type when actor state becomes user-visible.
 - [ ] Revisit `build_actor_states` if v1's static one-account-per-actor pool
   evolves into hot account rotation or dynamic actor spawning.
+- [ ] Decide whether submit events should inline `walletAddress` and
+  `accountIndex`, or keep those fields derivable from run metadata until the
+  UI/event consumer exists.
+- [ ] Canonicalize or document the CLI wallet entrypoint constant versus the
+  runtime-manifest-derived dev-wallet `doAction` entrypoint used by bench and
+  sim.
+- [ ] Add `wallet-submit-smoke` coverage to the ignored existing-target smoke
+  test once the local smoke fixture can reliably provide a runtime manifest.
 
 ## Phase 0: Skeleton
 

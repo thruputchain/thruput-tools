@@ -57,8 +57,10 @@ pub struct BuildDevWalletDoActionTransaction<'a> {
     pub target_entrypoint: ContractEntrypointID,
     /// Inner target calldata bytes.
     pub target_calldata: &'a [u8],
-    /// Gas limit used for both the outer wallet call and inner invocation.
+    /// Gas limit used for the outer wallet call.
     pub gas_limit: u64,
+    /// Gas limit encoded into the inner invocation.
+    pub target_gas_limit: u64,
     /// Transaction expiry height.
     pub block_expiry_height: i64,
     /// Transaction nonce.
@@ -145,7 +147,7 @@ pub fn build_dev_wallet_do_action_transaction(
     let calldata = dev_wallet_do_action_calldata(
         args.target_address,
         args.target_entrypoint,
-        args.gas_limit,
+        args.target_gas_limit,
         args.target_calldata,
     )?;
     Ok(build_call_transaction(BuildCallTransaction {
@@ -215,4 +217,15 @@ pub fn sign_transaction(
         tx,
         signatures: VecM(vec![decorated_signature]),
     })
+}
+
+/// Sign a transaction and return its 0x-prefixed signed-transaction XDR bytes.
+pub fn sign_and_encode_transaction_hex(
+    tx: Transaction,
+    signer: &impl Signer,
+    params: SignTransactionParams,
+) -> Result<String, SigningError> {
+    let signed_tx = sign_transaction(tx, signer, params)?;
+    let tx_xdr = crate::encode_signed_transaction_xdr(&signed_tx)?;
+    Ok(format!("0x{}", hex::encode(tx_xdr)))
 }

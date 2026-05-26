@@ -26,6 +26,8 @@ use crate::transaction::{
 use crate::util::{duration_ms, json_string, unix_ms, workload_name};
 
 const DEFAULT_GLOBAL_IN_FLIGHT_LIMIT: usize = 1_024;
+// Actor state is mutated only when a workload completion is recorded. Keep the
+// per-actor limit at one unless nonce/state ownership is redesigned.
 const DEFAULT_PER_ACTOR_IN_FLIGHT_LIMIT: usize = 1;
 
 /// Minimal RPC surface used by the Phase 1 simulator executor.
@@ -362,7 +364,7 @@ async fn record_completion(
         let actor = actor_states
             .get_mut(submitted.actor_id as usize)
             .ok_or(SimError::Executor("actor state missing".into()))?;
-        actor.record_submitted_tx(submitted.tx_hash, submitted.scheduled_time_ms);
+        actor.record_submitted_tx(submitted.tx_hash, submitted.scheduled_time_ms)?;
     }
     if let Some(error_class) = completion.error_class {
         if completion.skipped {
@@ -694,6 +696,11 @@ mod tests {
         submitted: Arc<Mutex<Vec<String>>>,
     }
 
+    #[derive(Clone)]
+    struct FailingSubmitClient {
+        submitted: Arc<Mutex<Vec<String>>>,
+    }
+
     impl SimRpcClient for PanickingClient {
         #[allow(clippy::manual_async_fn)]
         fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, String>> + Send {
@@ -748,6 +755,28 @@ mod tests {
                     .expect("submitted transaction list should lock")
                     .push(tx_hex);
                 Ok(TxHash(Hex0x(SHA256Hash::from([0x5a; 32]))))
+            }
+        }
+    }
+
+    impl SimRpcClient for FailingSubmitClient {
+        #[allow(clippy::manual_async_fn)]
+        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, String>> + Send {
+            async { Err("chain tip should not be called".into()) }
+        }
+
+        #[allow(clippy::manual_async_fn)]
+        fn send_raw_transaction(
+            &self,
+            tx_hex: String,
+        ) -> impl Future<Output = Result<TxHash, String>> + Send {
+            let submitted = self.submitted.clone();
+            async move {
+                submitted
+                    .lock()
+                    .expect("submitted transaction list should lock")
+                    .push(tx_hex);
+                Err("submit failed".into())
             }
         }
     }
@@ -913,6 +942,51 @@ mod tests {
             "\"txHash\":\"0x5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\""
         ));
         assert!(events.contains("\"txNonce\":\"4294967296\""));
+    }
+
+    #[tokio::test]
+    async fn failed_wallet_submit_does_not_advance_actor_nonce() {
+        let manifest = wallet_manifest();
+        let schedule = generate_schedule(&manifest).expect("schedule should generate");
+        let starts = phase_starts(&manifest).expect("phase starts should generate");
+        let file = NamedTempFile::new().expect("temp file should be created");
+        let mut event_writer = EventWriter::create(file.path())
+            .await
+            .expect("event writer should open");
+        let mut metrics = RunMetricsBuilder::default();
+        let mut actors = actor_states();
+        let submitted = Arc::new(Mutex::new(Vec::new()));
+
+        run_schedule(
+            FailingSubmitClient {
+                submitted: submitted.clone(),
+            },
+            ScheduleExecution {
+                manifest: &manifest,
+                runtime_manifest: &runtime_manifest(),
+                schedule: &schedule,
+                phase_starts: &starts,
+                actor_states: &mut actors,
+                event_writer: &mut event_writer,
+                metrics: &mut metrics,
+            },
+        )
+        .await
+        .expect("failed submit should be recorded as workload failure");
+
+        assert_eq!(actors[0].next_nonce_sequence, 0);
+        assert_eq!(actors[0].last_submitted_tx_hash, None);
+        assert_eq!(
+            submitted
+                .lock()
+                .expect("submitted transaction list should lock")
+                .len(),
+            1
+        );
+        assert_eq!(
+            metrics.workload_counts()[&WorkloadKind::WalletSubmitSmoke].failed,
+            1
+        );
     }
 
     fn manifest() -> SimulationManifest {
