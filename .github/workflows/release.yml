@@ -2,9 +2,6 @@ name: Release
 
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - 'v*'
 
 env:
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
@@ -14,6 +11,9 @@ env:
   CARGO_REGISTRIES_GROUNDHOG_SOURCE: sparse+https://groundhog.dev/crates/api/v1/crates/
   HOGD_FFI_PASSWORD: ${{ secrets.HOGD_FFI_PASSWORD }}
   RELEASE_TARGET: x86_64-unknown-linux-gnu
+  RELEASE_CRATES: >-
+    groundhog-cli
+    groundhog-rpc-gateway
 
 permissions:
   contents: write
@@ -29,6 +29,28 @@ jobs:
       - uses: namespacelabs/nscloud-cache-action@v1
         with:
           cache: rust
+
+      - name: Verify publish-driven release
+        run: |
+          set -euo pipefail
+
+          if [ "${GITHUB_ACTOR}" != "github-actions[bot]" ]; then
+            echo "release.yml is internal; run the Release package workflow instead."
+            echo "Unexpected actor: ${GITHUB_ACTOR}"
+            exit 1
+          fi
+
+          TAG="${GITHUB_REF_NAME}"
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "release.yml must be dispatched on a release tag ref, got: $TAG"
+            exit 1
+          fi
+
+          VERSION="${TAG#v}"
+          for crate in $RELEASE_CRATES; do
+            cargo info "${crate}@${VERSION}" --registry groundhog >/dev/null
+            echo "OK: ${crate}@${VERSION} exists in the groundhog registry"
+          done
 
       - name: Build hogway
         run: cargo build --locked --release -p groundhog-rpc-gateway --bin hogway
@@ -59,7 +81,7 @@ jobs:
           done
 
           cd artifacts
-          sha256sum *.tar.gz > SHA256SUMS
+          sha256sum -- *.tar.gz > SHA256SUMS
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

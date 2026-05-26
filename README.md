@@ -111,13 +111,14 @@ for the v1 JSON shape.
 
 ### Releases
 
-There are two release workflows:
+There are two release workflows, but only one human entrypoint:
 
 - `.github/workflows/publish.yml` publishes the Rust crates to the private
-  `groundhog` Cargo registry.
-- `.github/workflows/release.yml` builds Linux `hogway` and `groundhog`
-  binaries, packages each app as a per-target `.tar.gz`, and attaches the
-  archives plus `SHA256SUMS` to a GitHub Release.
+  `groundhog` Cargo registry and owns release orchestration.
+- `.github/workflows/release.yml` is dispatch-only and internal to
+  `publish.yml`. It builds Linux `hogway` and `groundhog` binaries, packages
+  each app as a per-target `.tar.gz`, and attaches the archives plus
+  `SHA256SUMS` to a GitHub Release.
 
 For a normal release, bump the workspace version in `Cargo.toml` and keep the
 internal workspace dependency pins in sync. Then run the **Release package**
@@ -125,6 +126,12 @@ workflow manually from GitHub Actions. That workflow dry-runs publishing,
 creates the matching local tag from the Cargo version (for example `v0.3.6`),
 publishes the crates, pushes the tag after publishing succeeds, and explicitly
 dispatches the binary release workflow on that same tag.
+
+Do not run `.github/workflows/release.yml` directly for normal releases and do
+not manually push `v*` tags. Direct human dispatch of the release workflow
+fails; it must be dispatched by the publish workflow. The release workflow also
+verifies that the matching `groundhog-cli` and `groundhog-rpc-gateway` crate
+versions already exist in the private registry before it uploads binary assets.
 
 The result is one matching version across the Cargo crates, git tag, and
 GitHub Release. Release assets follow this naming pattern:

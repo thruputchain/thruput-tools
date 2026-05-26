@@ -168,10 +168,17 @@ cargo test -p groundhog-cli              # CLI tests
 ## Release Process
 
 `publish.yml` and `release.yml` intentionally split crate publishing from binary
-asset publishing. Run **Release package** manually to publish crates. It reads
-the Cargo workspace version, creates the matching `vX.Y.Z` tag, publishes the
-crate set, pushes the tag only after crate publish succeeds, then explicitly
-dispatches `release.yml` on that tag. `release.yml` builds `hogway` and the
+asset publishing, but **Release package** is the only normal human entrypoint.
+Run **Release package** manually to publish crates. It reads the Cargo workspace
+version, creates the matching `vX.Y.Z` tag, publishes the crate set, pushes the
+tag only after crate publish succeeds, then explicitly dispatches `release.yml`
+on that tag. Do not manually push `v*` tags and do not run `release.yml`
+directly for normal releases.
+
+`release.yml` is dispatch-only and direct human dispatch fails; it must be
+dispatched by the publish workflow. It verifies that the matching
+`groundhog-cli` and `groundhog-rpc-gateway` crate versions already exist in the
+private registry before uploading binary assets. It builds `hogway` and the
 `groundhog` CLI; the CLI release build uses `--features dev-node` so the
 published binary includes the local `groundhog node` path. The GitHub Release
 assets are per-app, per-target archives:
