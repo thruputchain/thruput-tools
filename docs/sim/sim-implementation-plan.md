@@ -93,6 +93,8 @@ chaos, deploy new contracts, or create remote infrastructure.
 - [x] Validate existing-target flags before applying CLI overrides.
 - [x] Remove async-trait allocation from the Phase 1 mock-client seam.
 - [x] Delete dead chain-progress construction helper.
+- [x] Drain completed workload tasks while waiting for the next simulation tick
+  or phase so `result.jsonl` does not trail long scheduler sleeps.
 
 ## Current Next Slice
 
@@ -340,6 +342,7 @@ chaos, deploy new contracts, or create remote infrastructure.
   failures.
 - [x] Unit-test nonce namespace uniqueness across run IDs.
 - [x] Unit-test existing-provider target ownership artifact writing.
+- [x] Unit-test draining completions while waiting for the next phase.
 - [ ] Unit-test compare output for:
   - same-config numeric deltas
   - cross-config manifest hash mismatch

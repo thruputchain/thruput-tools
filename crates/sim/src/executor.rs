@@ -67,12 +67,30 @@ where
         while let Some(phase) =
             next_phase.next_if(|phase| phase.simulation_time_ms <= event.simulation_time_ms())
         {
-            sleep_until_sim_time(run_start, phase.simulation_time_ms).await;
+            sleep_until_sim_time_draining(
+                run_start,
+                phase.simulation_time_ms,
+                &mut tasks,
+                &mut task_contexts,
+                event_writer,
+                metrics,
+                &mut in_flight,
+            )
+            .await?;
             write_phase_started(event_writer, phase).await?;
         }
         match event {
             ScheduledSimulationEvent::ActorTick(tick) => {
-                sleep_until_sim_time(run_start, tick.simulation_time_ms).await;
+                sleep_until_sim_time_draining(
+                    run_start,
+                    tick.simulation_time_ms,
+                    &mut tasks,
+                    &mut task_contexts,
+                    event_writer,
+                    metrics,
+                    &mut in_flight,
+                )
+                .await?;
                 let workload = select_workload_for_tick(manifest, tick)?;
                 if let Some(skipped) = dispatch_workload(
                     client.clone(),
@@ -95,7 +113,16 @@ where
         }
     }
     for phase in next_phase {
-        sleep_until_sim_time(run_start, phase.simulation_time_ms).await;
+        sleep_until_sim_time_draining(
+            run_start,
+            phase.simulation_time_ms,
+            &mut tasks,
+            &mut task_contexts,
+            event_writer,
+            metrics,
+            &mut in_flight,
+        )
+        .await?;
         write_phase_started(event_writer, phase).await?;
     }
     while in_flight > 0 {
@@ -380,11 +407,38 @@ struct WorkloadTaskContext {
     workload: WorkloadKind,
 }
 
-async fn sleep_until_sim_time(run_start: Instant, simulation_time_ms: u64) {
-    let target = Duration::from_millis(simulation_time_ms);
-    let elapsed = run_start.elapsed();
-    if let Some(remaining) = target.checked_sub(elapsed) {
-        tokio::time::sleep(remaining).await;
+async fn sleep_until_sim_time_draining(
+    run_start: Instant,
+    simulation_time_ms: u64,
+    tasks: &mut JoinSet<Result<WorkloadCompletion, SimError>>,
+    task_contexts: &mut HashMap<TaskId, WorkloadTaskContext>,
+    event_writer: &mut EventWriter,
+    metrics: &mut RunMetricsBuilder,
+    in_flight: &mut u64,
+) -> Result<(), SimError> {
+    loop {
+        let target = Duration::from_millis(simulation_time_ms);
+        let elapsed = run_start.elapsed();
+        let Some(remaining) = target.checked_sub(elapsed) else {
+            return Ok(());
+        };
+
+        if tasks.is_empty() {
+            tokio::time::sleep(remaining).await;
+            return Ok(());
+        }
+
+        tokio::select! {
+            () = tokio::time::sleep(remaining) => return Ok(()),
+            joined = tasks.join_next_with_id() => {
+                let joined = joined.ok_or(SimError::Executor("workload task set closed early".into()))?;
+                let completion = join_workload(joined, task_contexts)??;
+                record_completion(completion, event_writer, metrics).await?;
+                *in_flight = in_flight
+                    .checked_sub(1)
+                    .ok_or(SimError::Executor("in-flight workload count underflowed".into()))?;
+            }
+        }
     }
 }
 
@@ -402,6 +456,8 @@ fn rpc_method(workload: WorkloadKind) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use groundhog_rpc_api_types::{BlockHeight, block::ChainTip, hex::Hex0x};
+    use groundhog_xdr::types::SHA256Hash;
     use serde_json::json;
     use tempfile::NamedTempFile;
 
@@ -414,10 +470,26 @@ mod tests {
     #[derive(Clone)]
     struct PanickingClient;
 
+    #[derive(Clone)]
+    struct DelayedClient;
+
     impl SimRpcClient for PanickingClient {
         #[allow(clippy::manual_async_fn)]
         fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, String>> + Send {
             async { panic!("simulated chain-tip panic") }
+        }
+    }
+
+    impl SimRpcClient for DelayedClient {
+        #[allow(clippy::manual_async_fn)]
+        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, String>> + Send {
+            async {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+                Ok(ChainTip {
+                    height: BlockHeight::from(7),
+                    block_hash: Hex0x(SHA256Hash::from([0x07; 32])),
+                })
+            }
         }
     }
 
@@ -451,6 +523,69 @@ mod tests {
                 ref payload,
             } if payload == "simulated chain-tip panic"
         ));
+    }
+
+    #[tokio::test]
+    async fn run_schedule_drains_completions_while_waiting_for_next_phase() {
+        let manifest = manifest();
+        let schedule = vec![ScheduledSimulationEvent::ActorTick(ScheduledActorTick {
+            phase_index: 0,
+            actor_id: 0,
+            actor_sequence: 0,
+            simulation_time_ms: 0,
+        })];
+        let phase_starts = vec![
+            PhaseStart {
+                phase_index: 0,
+                simulation_time_ms: 0,
+                duration_ms: 20,
+                users: 1,
+                rate_per_user_millihz: 50_000,
+            },
+            PhaseStart {
+                phase_index: 1,
+                simulation_time_ms: 20,
+                duration_ms: 1,
+                users: 1,
+                rate_per_user_millihz: 1_000,
+            },
+        ];
+        let file = NamedTempFile::new().expect("temp file should be created");
+        let mut event_writer = EventWriter::create(file.path())
+            .await
+            .expect("event writer should open");
+        let mut metrics = RunMetricsBuilder::default();
+
+        run_schedule(
+            DelayedClient,
+            &manifest,
+            &schedule,
+            &phase_starts,
+            &mut event_writer,
+            &mut metrics,
+        )
+        .await
+        .expect("schedule should run");
+
+        let events = tokio::fs::read_to_string(file.path())
+            .await
+            .expect("events should read");
+        let kinds: Vec<_> = events
+            .lines()
+            .map(|line| {
+                serde_json::from_str::<serde_json::Value>(line)
+                    .expect("event should parse")
+                    .get("kind")
+                    .and_then(serde_json::Value::as_str)
+                    .expect("event kind should be present")
+                    .to_owned()
+            })
+            .collect();
+
+        assert_eq!(
+            kinds,
+            vec!["phase-started", "workload-completed", "phase-started"]
+        );
     }
 
     fn manifest() -> SimulationManifest {
