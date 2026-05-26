@@ -27,6 +27,7 @@ env:
 jobs:
   publish:
     permissions:
+      actions: write
       contents: write
     runs-on: hog1
 
@@ -72,6 +73,14 @@ jobs:
         with:
           packages: ${{ env.PUBLISH_PACKAGES }}
 
+      - name: publish
+        uses: ./actions/cargo-publish
+        with:
+          packages: ${{ env.PUBLISH_PACKAGES }}
+          git-tag: ${{ steps.publish-tag.outputs.tag }}
+          registry-name: groundhog
+          registry-token: ${{ secrets.GROUNDHOG_REGISTRY_TOKEN }}
+
       - name: push tag
         run: |
           git remote set-url origin https://${{ github.actor }}:${{ github.token }}@github.com/${{ github.repository }}.git
@@ -95,10 +104,7 @@ jobs:
           fi
           git remote set-url origin git@github.com:${{ github.repository }}.git
 
-      - name: publish
-        uses: ./actions/cargo-publish
-        with:
-          packages: ${{ env.PUBLISH_PACKAGES }}
-          git-tag: ${{ steps.publish-tag.outputs.tag }}
-          registry-name: groundhog
-          registry-token: ${{ secrets.GROUNDHOG_REGISTRY_TOKEN }}
+      - name: trigger binary release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run release.yml --ref "${{ steps.publish-tag.outputs.tag }}"
