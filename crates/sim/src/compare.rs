@@ -1,9 +1,14 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use serde::Serialize;
 
 use crate::error::SimError;
-use crate::result::{MetricAvailability, SIM_RESULT_SCHEMA_VERSION, SimResult};
+use crate::manifest::WorkloadKind;
+use crate::result::{
+    AssertionResult, AssertionStatus, ChainProgressSummary, LatencySummary, MetricAvailability,
+    SIM_RESULT_SCHEMA_VERSION, SimResult, WorkloadCounts, WorkloadMetrics,
+};
 
 /// Load a `result.json` from either a run directory or direct file path.
 pub async fn load_result(path: &Path) -> Result<SimResult, SimError> {
@@ -37,6 +42,14 @@ pub struct ResultDiff {
     pub storage_tokens_b: String,
     pub nnint_compute_a: String,
     pub nnint_compute_b: String,
+    pub workload_count_deltas: BTreeMap<WorkloadKind, WorkloadCountDelta>,
+    pub workload_error_deltas: BTreeMap<WorkloadKind, BTreeMap<String, i64>>,
+    pub latency_deltas_ms: BTreeMap<WorkloadKind, WorkloadLatencyDelta>,
+    pub assertion_transitions: Vec<AssertionTransition>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chain_progress_delta: Option<ChainProgressDelta>,
+    pub metric_numeric_deltas: Vec<MetricNumericDelta>,
+    pub numeric_skips: Vec<NumericSkip>,
 }
 
 impl ResultDiff {
@@ -51,6 +64,7 @@ impl ResultDiff {
             && a.runtime_identity.genesis_hash == b.runtime_identity.genesis_hash;
         let producer_identity_match = a.runtime_identity.producer == b.runtime_identity.producer;
 
+        let metric_diffs = metric_diffs(a, b);
         Self {
             same_config: simulation_manifest_match
                 && runtime_manifest_match
@@ -64,6 +78,16 @@ impl ResultDiff {
             storage_tokens_b: availability_status(&b.metric_availability.storage_tokens_consumed),
             nnint_compute_a: availability_status(&a.metric_availability.nnint_compute_used),
             nnint_compute_b: availability_status(&b.metric_availability.nnint_compute_used),
+            workload_count_deltas: workload_count_deltas(a, b),
+            workload_error_deltas: workload_error_deltas(a, b),
+            latency_deltas_ms: latency_deltas(a, b),
+            assertion_transitions: assertion_transitions(a, b),
+            chain_progress_delta: chain_progress_delta(
+                a.chain_progress.as_ref(),
+                b.chain_progress.as_ref(),
+            ),
+            metric_numeric_deltas: metric_diffs.deltas,
+            numeric_skips: metric_diffs.skips,
         }
     }
 
@@ -75,7 +99,11 @@ impl ResultDiff {
                 "runtime identity match: {}\n",
                 "producer identity match: {}\n",
                 "storage-token availability: {} -> {}\n",
-                "NNInt compute availability: {} -> {}"
+                "NNInt compute availability: {} -> {}\n",
+                "workload count deltas: {}\n",
+                "latency delta workloads: {}\n",
+                "assertion transitions: {}\n",
+                "numeric skips: {}"
             ),
             self.same_config,
             self.runtime_identity_match,
@@ -83,8 +111,360 @@ impl ResultDiff {
             self.storage_tokens_a,
             self.storage_tokens_b,
             self.nnint_compute_a,
-            self.nnint_compute_b
+            self.nnint_compute_b,
+            self.workload_count_deltas.len(),
+            self.latency_deltas_ms.len(),
+            self.assertion_transitions.len(),
+            self.numeric_skips.len()
         )
+    }
+}
+
+/// Per-workload completed/failed/skipped deltas, computed as `b - a`.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkloadCountDelta {
+    pub completed: i64,
+    pub failed: i64,
+    pub skipped: i64,
+}
+
+/// Per-workload latency percentile deltas, computed as `b - a`.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkloadLatencyDelta {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latency_ms: Option<LatencySummaryDelta>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub success_latency_ms: Option<LatencySummaryDelta>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub submit_to_receipt_latency_ms: Option<LatencySummaryDelta>,
+}
+
+/// Latency-summary deltas, computed as `b - a`.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LatencySummaryDelta {
+    pub sample_count: i64,
+    pub p50_ms: i64,
+    pub p95_ms: i64,
+    pub p99_ms: i64,
+    pub p999_ms: i64,
+    pub max_ms: i64,
+}
+
+/// Assertion status or measurement transition between two runs.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssertionTransition {
+    pub name: String,
+    pub status_a: Option<AssertionStatus>,
+    pub status_b: Option<AssertionStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub observed_a: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub observed_b: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub threshold_a: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub threshold_b: Option<String>,
+}
+
+/// Chain-progress deltas, computed as `b - a`.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChainProgressDelta {
+    pub first_height: i64,
+    pub last_height: i64,
+    pub max_height: i64,
+    pub total_observations: i64,
+}
+
+/// Numeric metric delta for metrics observed on both sides.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetricNumericDelta {
+    pub metric: &'static str,
+    pub value: i64,
+}
+
+/// Numeric metric comparison skipped because at least one side has no value.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NumericSkip {
+    pub metric: &'static str,
+    pub status_a: String,
+    pub status_b: String,
+}
+
+struct MetricDiffs {
+    deltas: Vec<MetricNumericDelta>,
+    skips: Vec<NumericSkip>,
+}
+
+fn workload_count_deltas(
+    a: &SimResult,
+    b: &SimResult,
+) -> BTreeMap<WorkloadKind, WorkloadCountDelta> {
+    workload_keys(&a.workload_counts, &b.workload_counts)
+        .into_iter()
+        .filter_map(|workload| {
+            let a_counts = a
+                .workload_counts
+                .get(&workload)
+                .cloned()
+                .unwrap_or_default();
+            let b_counts = b
+                .workload_counts
+                .get(&workload)
+                .cloned()
+                .unwrap_or_default();
+            let delta = count_delta(&a_counts, &b_counts);
+            if delta.completed == 0 && delta.failed == 0 && delta.skipped == 0 {
+                None
+            } else {
+                Some((workload, delta))
+            }
+        })
+        .collect()
+}
+
+fn workload_error_deltas(
+    a: &SimResult,
+    b: &SimResult,
+) -> BTreeMap<WorkloadKind, BTreeMap<String, i64>> {
+    workload_metric_keys(a, b)
+        .into_iter()
+        .filter_map(|workload| {
+            let a_errors = a
+                .workload_metrics
+                .get(&workload)
+                .map(|metrics| &metrics.error_counts);
+            let b_errors = b
+                .workload_metrics
+                .get(&workload)
+                .map(|metrics| &metrics.error_counts);
+            let deltas = error_deltas(a_errors, b_errors);
+            if deltas.is_empty() {
+                None
+            } else {
+                Some((workload, deltas))
+            }
+        })
+        .collect()
+}
+
+fn latency_deltas(a: &SimResult, b: &SimResult) -> BTreeMap<WorkloadKind, WorkloadLatencyDelta> {
+    workload_metric_keys(a, b)
+        .into_iter()
+        .filter_map(|workload| {
+            let a_metrics = a.workload_metrics.get(&workload);
+            let b_metrics = b.workload_metrics.get(&workload);
+            let delta = workload_latency_delta(a_metrics, b_metrics);
+            if delta.latency_ms.is_none()
+                && delta.success_latency_ms.is_none()
+                && delta.submit_to_receipt_latency_ms.is_none()
+            {
+                None
+            } else {
+                Some((workload, delta))
+            }
+        })
+        .collect()
+}
+
+fn assertion_transitions(a: &SimResult, b: &SimResult) -> Vec<AssertionTransition> {
+    let a_assertions: BTreeMap<_, _> = a
+        .assertion_results
+        .iter()
+        .map(|assertion| (assertion.name.as_str(), assertion))
+        .collect();
+    let b_assertions: BTreeMap<_, _> = b
+        .assertion_results
+        .iter()
+        .map(|assertion| (assertion.name.as_str(), assertion))
+        .collect();
+    a_assertions
+        .keys()
+        .chain(b_assertions.keys())
+        .copied()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .filter_map(|name| {
+            assertion_transition(name, a_assertions.get(name), b_assertions.get(name))
+        })
+        .collect()
+}
+
+fn assertion_transition(
+    name: &str,
+    a: Option<&&AssertionResult>,
+    b: Option<&&AssertionResult>,
+) -> Option<AssertionTransition> {
+    if a.map(|assertion| assertion.status) == b.map(|assertion| assertion.status)
+        && a.and_then(|assertion| assertion.observed.as_ref())
+            == b.and_then(|assertion| assertion.observed.as_ref())
+        && a.and_then(|assertion| assertion.threshold.as_ref())
+            == b.and_then(|assertion| assertion.threshold.as_ref())
+    {
+        return None;
+    }
+
+    Some(AssertionTransition {
+        name: name.into(),
+        status_a: a.map(|assertion| assertion.status),
+        status_b: b.map(|assertion| assertion.status),
+        observed_a: a.and_then(|assertion| assertion.observed.clone()),
+        observed_b: b.and_then(|assertion| assertion.observed.clone()),
+        threshold_a: a.and_then(|assertion| assertion.threshold.clone()),
+        threshold_b: b.and_then(|assertion| assertion.threshold.clone()),
+    })
+}
+
+fn chain_progress_delta(
+    a: Option<&ChainProgressSummary>,
+    b: Option<&ChainProgressSummary>,
+) -> Option<ChainProgressDelta> {
+    match (a, b) {
+        (Some(a), Some(b)) => {
+            let delta = ChainProgressDelta {
+                first_height: b.first_height - a.first_height,
+                last_height: b.last_height - a.last_height,
+                max_height: b.max_height - a.max_height,
+                total_observations: delta_u64(a.total_observations, b.total_observations),
+            };
+            (!delta.is_zero()).then_some(delta)
+        }
+        _ => None,
+    }
+}
+
+fn metric_diffs(a: &SimResult, b: &SimResult) -> MetricDiffs {
+    let mut deltas = Vec::new();
+    let mut skips = Vec::new();
+    collect_metric_diff(
+        "storageTokensConsumed",
+        &a.metric_availability.storage_tokens_consumed,
+        &b.metric_availability.storage_tokens_consumed,
+        &mut deltas,
+        &mut skips,
+    );
+    collect_metric_diff(
+        "nnintComputeUsed",
+        &a.metric_availability.nnint_compute_used,
+        &b.metric_availability.nnint_compute_used,
+        &mut deltas,
+        &mut skips,
+    );
+    MetricDiffs { deltas, skips }
+}
+
+fn collect_metric_diff(
+    metric: &'static str,
+    a: &MetricAvailability<u64>,
+    b: &MetricAvailability<u64>,
+    deltas: &mut Vec<MetricNumericDelta>,
+    skips: &mut Vec<NumericSkip>,
+) {
+    match (a, b) {
+        (MetricAvailability::Observed { value: a }, MetricAvailability::Observed { value: b }) => {
+            deltas.push(MetricNumericDelta {
+                metric,
+                value: delta_u64(*a, *b),
+            });
+        }
+        _ => skips.push(NumericSkip {
+            metric,
+            status_a: availability_status(a),
+            status_b: availability_status(b),
+        }),
+    }
+}
+
+fn workload_keys(
+    a: &BTreeMap<WorkloadKind, WorkloadCounts>,
+    b: &BTreeMap<WorkloadKind, WorkloadCounts>,
+) -> BTreeSet<WorkloadKind> {
+    a.keys().chain(b.keys()).copied().collect()
+}
+
+fn workload_metric_keys(a: &SimResult, b: &SimResult) -> BTreeSet<WorkloadKind> {
+    a.workload_metrics
+        .keys()
+        .chain(b.workload_metrics.keys())
+        .copied()
+        .collect()
+}
+
+fn count_delta(a: &WorkloadCounts, b: &WorkloadCounts) -> WorkloadCountDelta {
+    WorkloadCountDelta {
+        completed: delta_u64(a.completed, b.completed),
+        failed: delta_u64(a.failed, b.failed),
+        skipped: delta_u64(a.skipped, b.skipped),
+    }
+}
+
+fn error_deltas(
+    a: Option<&BTreeMap<String, u64>>,
+    b: Option<&BTreeMap<String, u64>>,
+) -> BTreeMap<String, i64> {
+    let keys: BTreeSet<_> = a
+        .into_iter()
+        .flat_map(BTreeMap::keys)
+        .chain(b.into_iter().flat_map(BTreeMap::keys))
+        .collect();
+    keys.into_iter()
+        .filter_map(|key| {
+            let delta = delta_u64(
+                a.and_then(|errors| errors.get(key))
+                    .copied()
+                    .unwrap_or_default(),
+                b.and_then(|errors| errors.get(key))
+                    .copied()
+                    .unwrap_or_default(),
+            );
+            (delta != 0).then(|| (key.clone(), delta))
+        })
+        .collect()
+}
+
+fn workload_latency_delta(
+    a: Option<&WorkloadMetrics>,
+    b: Option<&WorkloadMetrics>,
+) -> WorkloadLatencyDelta {
+    WorkloadLatencyDelta {
+        latency_ms: latency_summary_delta(
+            a.and_then(|metrics| metrics.latency_ms.as_ref()),
+            b.and_then(|metrics| metrics.latency_ms.as_ref()),
+        ),
+        success_latency_ms: latency_summary_delta(
+            a.and_then(|metrics| metrics.success_latency_ms.as_ref()),
+            b.and_then(|metrics| metrics.success_latency_ms.as_ref()),
+        ),
+        submit_to_receipt_latency_ms: latency_summary_delta(
+            a.and_then(|metrics| metrics.submit_to_receipt_latency_ms.as_ref()),
+            b.and_then(|metrics| metrics.submit_to_receipt_latency_ms.as_ref()),
+        ),
+    }
+}
+
+fn latency_summary_delta(
+    a: Option<&LatencySummary>,
+    b: Option<&LatencySummary>,
+) -> Option<LatencySummaryDelta> {
+    match (a, b) {
+        (Some(a), Some(b)) => {
+            let delta = LatencySummaryDelta {
+                sample_count: delta_u64(a.sample_count, b.sample_count),
+                p50_ms: delta_u64(a.p50_ms, b.p50_ms),
+                p95_ms: delta_u64(a.p95_ms, b.p95_ms),
+                p99_ms: delta_u64(a.p99_ms, b.p99_ms),
+                p999_ms: delta_u64(a.p999_ms, b.p999_ms),
+                max_ms: delta_u64(a.max_ms, b.max_ms),
+            };
+            (!delta.is_zero()).then_some(delta)
+        }
+        _ => None,
     }
 }
 
@@ -95,6 +475,37 @@ fn availability_status<T>(availability: &MetricAvailability<T>) -> String {
         MetricAvailability::Unavailable { .. } => "unavailable",
     }
     .into()
+}
+
+fn delta_u64(a: u64, b: u64) -> i64 {
+    let delta = i128::from(b) - i128::from(a);
+    i64::try_from(delta).unwrap_or_else(|_| {
+        if delta.is_negative() {
+            i64::MIN
+        } else {
+            i64::MAX
+        }
+    })
+}
+
+impl LatencySummaryDelta {
+    fn is_zero(&self) -> bool {
+        self.sample_count == 0
+            && self.p50_ms == 0
+            && self.p95_ms == 0
+            && self.p99_ms == 0
+            && self.p999_ms == 0
+            && self.max_ms == 0
+    }
+}
+
+impl ChainProgressDelta {
+    fn is_zero(&self) -> bool {
+        self.first_height == 0
+            && self.last_height == 0
+            && self.max_height == 0
+            && self.total_observations == 0
+    }
 }
 
 #[cfg(test)]
@@ -122,6 +533,194 @@ mod tests {
             err,
             SimError::UnsupportedResultSchema { actual: 99, .. }
         ));
+    }
+
+    #[test]
+    fn compare_reports_workload_latency_assertion_and_chain_deltas() {
+        let mut a = minimal_result_json(SIM_RESULT_SCHEMA_VERSION);
+        a["workloadCounts"] = json!({
+            "chain-tip": {"completed": 2, "failed": 1, "skipped": 0}
+        });
+        a["workloadMetrics"] = json!({
+            "chain-tip": {
+                "counts": {"completed": 2, "failed": 1, "skipped": 0},
+                "errorCounts": {"rpc": 1},
+                "latencyMs": latency_json(2, 10)
+            }
+        });
+        a["chainProgress"] = json!({
+            "firstHeight": 10,
+            "lastHeight": 12,
+            "maxHeight": 12,
+            "totalObservations": 2,
+            "observations": []
+        });
+        a["assertionResults"] = json!([{
+            "name": "maxChainStall",
+            "status": "passed",
+            "observed": "0ms",
+            "threshold": "1000ms"
+        }]);
+
+        let mut b = minimal_result_json(SIM_RESULT_SCHEMA_VERSION);
+        b["workloadCounts"] = json!({
+            "chain-tip": {"completed": 5, "failed": 1, "skipped": 1}
+        });
+        b["workloadMetrics"] = json!({
+            "chain-tip": {
+                "counts": {"completed": 5, "failed": 1, "skipped": 1},
+                "errorCounts": {"rpc": 3},
+                "latencyMs": latency_json(5, 18)
+            }
+        });
+        b["chainProgress"] = json!({
+            "firstHeight": 11,
+            "lastHeight": 20,
+            "maxHeight": 21,
+            "totalObservations": 5,
+            "observations": []
+        });
+        b["assertionResults"] = json!([{
+            "name": "maxChainStall",
+            "status": "failed",
+            "observed": "2000ms",
+            "threshold": "1000ms"
+        }]);
+
+        let diff = ResultDiff::from_results(&result_from_json(a), &result_from_json(b));
+
+        let count_delta = diff
+            .workload_count_deltas
+            .get(&WorkloadKind::ChainTip)
+            .expect("chain-tip count delta should exist");
+        assert_eq!(count_delta.completed, 3);
+        assert_eq!(count_delta.skipped, 1);
+        assert_eq!(
+            diff.workload_error_deltas[&WorkloadKind::ChainTip]["rpc"],
+            2
+        );
+        assert_eq!(
+            diff.latency_deltas_ms[&WorkloadKind::ChainTip]
+                .latency_ms
+                .as_ref()
+                .expect("latency delta should exist")
+                .p99_ms,
+            8
+        );
+        assert_eq!(diff.assertion_transitions.len(), 1);
+        assert_eq!(
+            diff.assertion_transitions[0].status_b,
+            Some(AssertionStatus::Failed)
+        );
+        assert_eq!(
+            diff.chain_progress_delta
+                .as_ref()
+                .expect("chain delta should exist")
+                .last_height,
+            8
+        );
+    }
+
+    #[test]
+    fn compare_reports_cross_config_mismatch() {
+        let a = result_from_json(minimal_result_json(SIM_RESULT_SCHEMA_VERSION));
+        let mut b_json = minimal_result_json(SIM_RESULT_SCHEMA_VERSION);
+        b_json["manifestHashes"]["simulationManifestSha256"] = json!("different-sim");
+        let b = result_from_json(b_json);
+
+        let diff = ResultDiff::from_results(&a, &b);
+
+        assert!(!diff.same_config);
+        assert!(!diff.simulation_manifest_match);
+        assert!(diff.runtime_manifest_match);
+    }
+
+    #[test]
+    fn compare_reports_metric_availability_transitions_and_numeric_skips() {
+        let a = result_from_json(minimal_result_json(SIM_RESULT_SCHEMA_VERSION));
+        let mut b_json = minimal_result_json(SIM_RESULT_SCHEMA_VERSION);
+        b_json["metricAvailability"]["storageTokensConsumed"] = json!({
+            "status": "unavailable",
+            "reason": "collector failed"
+        });
+        b_json["metricAvailability"]["nnintComputeUsed"] = json!({
+            "status": "observed",
+            "value": 9
+        });
+        let b = result_from_json(b_json);
+
+        let diff = ResultDiff::from_results(&a, &b);
+
+        assert_eq!(diff.storage_tokens_a, "unsupported");
+        assert_eq!(diff.storage_tokens_b, "unavailable");
+        assert!(diff.metric_numeric_deltas.is_empty());
+        assert_eq!(diff.numeric_skips.len(), 2);
+        assert!(diff.numeric_skips.iter().any(|skip| {
+            skip.metric == "nnintComputeUsed"
+                && skip.status_a == "unsupported"
+                && skip.status_b == "observed"
+        }));
+    }
+
+    #[test]
+    fn compare_reports_observed_metric_delta() {
+        let mut a_json = minimal_result_json(SIM_RESULT_SCHEMA_VERSION);
+        a_json["metricAvailability"]["storageTokensConsumed"] = json!({
+            "status": "observed",
+            "value": 10
+        });
+        let mut b_json = minimal_result_json(SIM_RESULT_SCHEMA_VERSION);
+        b_json["metricAvailability"]["storageTokensConsumed"] = json!({
+            "status": "observed",
+            "value": 14
+        });
+
+        let diff = ResultDiff::from_results(&result_from_json(a_json), &result_from_json(b_json));
+
+        assert!(
+            diff.metric_numeric_deltas
+                .iter()
+                .any(|delta| { delta.metric == "storageTokensConsumed" && delta.value == 4 })
+        );
+    }
+
+    #[test]
+    fn compare_omits_zero_latency_and_chain_deltas() {
+        let mut value = minimal_result_json(SIM_RESULT_SCHEMA_VERSION);
+        value["workloadMetrics"] = json!({
+            "chain-tip": {
+                "counts": {"completed": 2, "failed": 0, "skipped": 0},
+                "latencyMs": latency_json(2, 10)
+            }
+        });
+        value["chainProgress"] = json!({
+            "firstHeight": 10,
+            "lastHeight": 12,
+            "maxHeight": 12,
+            "totalObservations": 2,
+            "observations": []
+        });
+        let result = result_from_json(value);
+
+        let diff = ResultDiff::from_results(&result, &result);
+
+        assert!(diff.latency_deltas_ms.is_empty());
+        assert!(diff.chain_progress_delta.is_none());
+    }
+
+    fn result_from_json(value: serde_json::Value) -> SimResult {
+        serde_json::from_value(value).expect("result fixture should parse")
+    }
+
+    fn latency_json(sample_count: u64, base: u64) -> serde_json::Value {
+        json!({
+            "sampleCount": sample_count,
+            "p50Ms": base,
+            "p95Ms": base,
+            "p99Ms": base,
+            "p999Ms": base,
+            "maxMs": base
+        })
     }
 
     fn minimal_result_json(schema_version: u32) -> serde_json::Value {

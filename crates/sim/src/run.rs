@@ -242,6 +242,7 @@ where
         .sum();
     metrics.record_pending_receipts_at_shutdown(pending_receipts);
     let finished_metrics = metrics.finish();
+    let metric_availability = SimMetricAvailability::phase_one_defaults();
     let assertion_results = evaluate_assertions(
         &input.loaded_sim.manifest,
         completed_workloads,
@@ -257,6 +258,12 @@ where
             })
             .await?;
     }
+    input
+        .event_writer
+        .write(&ResultEvent::MetricAvailabilityRecorded {
+            metric_availability: metric_availability.clone(),
+        })
+        .await?;
     let outcome = determine_outcome(&assertion_results, failed_workloads);
     input
         .event_writer
@@ -279,6 +286,7 @@ where
         nonce_namespace: input.nonce_namespace,
         workload_counts,
         finished_metrics,
+        metric_availability,
         assertion_results,
     })
 }
@@ -338,6 +346,7 @@ struct BuildResultInput<'a> {
     nonce_namespace: NonceNamespace,
     workload_counts: BTreeMap<WorkloadKind, WorkloadCounts>,
     finished_metrics: RunMetrics,
+    metric_availability: SimMetricAvailability,
     assertion_results: Vec<AssertionResult>,
 }
 
@@ -370,7 +379,7 @@ fn build_result(input: BuildResultInput<'_>) -> Result<SimResult, SimError> {
                 reason: "existing target cannot expose simulator launcher input".into(),
             },
         },
-        metric_availability: SimMetricAvailability::phase_one_defaults(),
+        metric_availability: input.metric_availability,
         workload_counts: input.workload_counts,
         workload_metrics: input.finished_metrics.workload_metrics,
         chain_progress: input.finished_metrics.chain_progress,
@@ -505,6 +514,7 @@ mod tests {
             .await
             .expect("events should read");
         assert!(events.contains("\"kind\":\"workload-completed\""));
+        assert!(events.contains("\"kind\":\"metric-availability-recorded\""));
         assert!(events.contains("\"kind\":\"run-completed\""));
     }
 

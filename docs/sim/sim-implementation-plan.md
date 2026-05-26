@@ -1,10 +1,10 @@
 # Groundhog Simulation Implementation Plan
 
 **Date:** 2026-05-25
-**Status:** Draft execution checklist. Phase 1 chain-tip execution, reviewer
-hardening, live hogd-dev smoke, submit/receipt actor state,
-submit/receipt assertion wiring, and the target-provider boundary are
-complete; local-provider execution is next.
+**Status:** Draft execution checklist. Phase 1 existing-target execution,
+reviewer hardening, live hogd-dev smoke, submit/receipt actor state,
+submit/receipt assertion wiring, numeric compare, and the target-provider
+boundary are complete; local-provider execution is next.
 
 This plan pairs with [Simulation design](sim-design.md). The design doc owns
 the architectural boundary and long-term shape. This file is the implementation
@@ -124,15 +124,14 @@ chaos, deploy new contracts, or create remote infrastructure.
 - [x] Wire submit/receipt assertion evaluation for p99 submit latency and
   receipt timeout rate.
 
-## Open Hardening Follow-Ups
+## Open Non-Blocking Hardening Follow-Ups
 
 - [x] Move executor, result building, and compare logic out of `main.rs` into
   library modules while the surface area is still small.
 - [x] Add a mock-client orchestration test that drives schedule dispatch,
   workload execution, event writing, and result aggregation end to end.
-- [x] Keep Phase 1 compare identity/availability-only until numeric deltas are
-  intentionally added with compare-specific tests.
-- [ ] Add compare unit tests for config mismatch, metric availability
+- [x] Add Phase 1 compare numeric deltas with compare-specific tests.
+- [x] Add compare unit tests for config mismatch, metric availability
   transitions, numeric deltas, and numeric-skip behavior.
 - [x] Add provider trait and `ChaosController` types matching the design names,
   even if only the `existing` provider is executable in Phase 1.
@@ -223,7 +222,8 @@ chaos, deploy new contracts, or create remote infrastructure.
 
 ### Runtime Model
 
-- [ ] Build a deterministic RNG from the scenario seed.
+- [x] Use scenario-seed-derived deterministic scheduling and workload
+  selection. Phase 1 uses stable hash inputs rather than a stateful RNG.
 - [x] Generate a run-unique nonce namespace when one is not supplied, and record
   it in normalized `simulation.json` plus `result.json`.
 - [x] Represent nonce namespaces as the high 32 bits of the transaction nonce;
@@ -269,7 +269,7 @@ chaos, deploy new contracts, or create remote infrastructure.
   - record committed receipt status when present
   - do not require `ExecStatus::Ok` for the Phase 1 smoke transaction
   - record submit-to-receipt latency when possible
-- [ ] Defer `events-query`, `storage-read`, `status-poll`, and `view-call`
+- [x] Defer `events-query`, `storage-read`, `status-poll`, and `view-call`
   until the first three workloads are stable unless Phase 1 remains small.
 
 ### Event Stream
@@ -291,7 +291,7 @@ chaos, deploy new contracts, or create remote infrastructure.
   - workload skipped
   - assertion checked
   - run completed
-- [ ] Include metric availability records.
+- [x] Include metric availability records.
 - [x] Flush `result.jsonl` frequently enough for live tailing.
 - [x] Preserve enough context in every workload record to debug:
   - actor id
@@ -351,16 +351,16 @@ chaos, deploy new contracts, or create remote infrastructure.
 
 - [x] Add `hoglab compare <run-a> <run-b>`.
 - [x] Accept either run directories or direct `result.json` paths.
-- [ ] Compare per-workload counts and errors.
-- [ ] Compare latency percentiles.
-- [ ] Compare assertion result transitions.
-- [ ] Compare chain progress and stall metrics.
+- [x] Compare per-workload counts and errors.
+- [x] Compare latency percentiles.
+- [x] Compare assertion result transitions.
+- [x] Compare chain progress and stall metrics.
 - [x] Compare manifest hashes and mark cross-config diffs.
 - [x] Compare producer identity tuple (`binary`, `version`, optional
   `commitHash`) and only compare executable hashes when both results include
   one.
 - [x] Compare metric availability transitions.
-- [ ] Skip numeric deltas when either side is `unsupported` or `unavailable`
+- [x] Skip numeric deltas when either side is `unsupported` or `unavailable`
   once numeric deltas are implemented.
 - [x] Emit structured JSON behind `--json`.
 - [x] Emit a readable text summary for humans.
@@ -388,7 +388,7 @@ chaos, deploy new contracts, or create remote infrastructure.
 - [x] Unit-test nonce namespace uniqueness across run IDs.
 - [x] Unit-test existing-provider target ownership artifact writing.
 - [x] Unit-test draining completions while waiting for the next phase.
-- [ ] Unit-test compare output for:
+- [x] Unit-test compare output for:
   - same-config numeric deltas
   - cross-config manifest hash mismatch
   - metric availability transitions
@@ -401,7 +401,7 @@ chaos, deploy new contracts, or create remote infrastructure.
 - [x] Add `examples/sim/local-wallet-soak.json`.
 - [x] Document the `existing` provider.
 - [x] Document result directory contents.
-- [ ] Document comparison semantics.
+- [x] Document comparison semantics.
 - [x] Add quickstart commands to `docs/sim/README.md`.
 
 ## Phase 2: Local Managed Target

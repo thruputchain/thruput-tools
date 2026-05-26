@@ -4,7 +4,7 @@ use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 
 use crate::manifest::WorkloadKind;
-use crate::result::{AssertionResult, SimRunOutcome};
+use crate::result::{AssertionResult, SimMetricAvailability, SimRunOutcome};
 use crate::target::TargetProviderKind;
 
 pub const RESULT_EVENT_SCHEMA_VERSION: u32 = 1;
@@ -74,6 +74,10 @@ pub enum ResultEvent {
     AssertionChecked {
         #[serde(flatten)]
         assertion: AssertionResult,
+    },
+    MetricAvailabilityRecorded {
+        #[serde(flatten)]
+        metric_availability: SimMetricAvailability,
     },
     RunCompleted {
         outcome: SimRunOutcome,
@@ -217,6 +221,32 @@ mod tests {
                 "rpcUrl": "http://127.0.0.1:9545",
                 "actorAccounts": 2,
                 "nonceNamespace": 9
+            })
+        );
+    }
+
+    #[test]
+    fn metric_availability_event_shape_matches_stream_contract() {
+        let event = ResultEvent::MetricAvailabilityRecorded {
+            metric_availability: SimMetricAvailability::phase_one_defaults(),
+        };
+
+        let value =
+            serde_json::to_value(VersionedEvent::new(&event)).expect("event should serialize");
+
+        assert_eq!(
+            value,
+            json!({
+                "kind": "metric-availability-recorded",
+                "schemaVersion": 1,
+                "storageTokensConsumed": {
+                    "status": "unsupported",
+                    "reason": "public receipt path does not surface storage-token deltas"
+                },
+                "nnintComputeUsed": {
+                    "status": "unsupported",
+                    "reason": "public receipt path does not surface NNInt compute usage"
+                }
             })
         );
     }

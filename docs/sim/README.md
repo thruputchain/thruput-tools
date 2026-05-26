@@ -74,7 +74,25 @@ Each run writes a self-contained result directory:
   and account derivation.
 - `target-ownership.json` - provider ownership and cleanup metadata.
 - `result.jsonl` - append-only event stream for run, target, phase, workload,
-  assertion, and completion events.
+  metric availability, assertion, and completion events.
 - `result.json` - final aggregate written atomically at run end.
 - `histograms/` and `logs/` - reserved directories for future exports and
   provider-supplied logs.
+
+## Compare Semantics
+
+`hoglab compare <run-a> <run-b>` accepts either run directories or direct
+`result.json` paths. It is a pure artifact comparison; it does not read the
+original target, runtime manifest path, or event stream.
+
+The diff reports whether the simulation manifest, runtime manifest, runtime
+identity, and producer identity match. When any of those differ,
+`sameConfig` is false and numeric deltas should be read as cross-config
+diagnostics rather than a strict regression signal.
+
+For matching or cross-config runs, compare emits `b - a` deltas for workload
+counts, workload error classes, latency percentiles, observed chain progress,
+assertion status/measurement transitions, and numeric metrics that are observed
+on both sides. Storage-token and NNInt compute deltas are skipped when either
+run marks the metric `unsupported` or `unavailable`; the availability transition
+is still reported so instrumentation changes remain visible.
