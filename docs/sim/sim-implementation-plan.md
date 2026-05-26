@@ -95,12 +95,14 @@ chaos, deploy new contracts, or create remote infrastructure.
 - [x] Delete dead chain-progress construction helper.
 - [x] Drain completed workload tasks while waiting for the next simulation tick
   or phase so `result.jsonl` does not trail long scheduler sleeps.
+- [x] Add `runId` to `result.json` and `schemaVersion` to each `result.jsonl`
+  event for future UI/API consumers.
 
 ## Current Next Slice
 
 - [ ] Implement `wallet-submit-smoke` transaction construction and submit
   execution.
-- [ ] Add actor state tracking for signer, wallet address, next namespaced
+- [x] Add actor state tracking for signer, wallet address, next namespaced
   nonce, and last submitted transaction hash.
 - [ ] Add receipt-poll workload tied to actor state and record submit-to-receipt
   latency when receipts appear.
@@ -186,10 +188,10 @@ chaos, deploy new contracts, or create remote infrastructure.
 - [x] Represent nonce namespaces as the high 32 bits of the transaction nonce;
   validate that `--nonce-namespace` fits in `u32`, and combine it with the
   per-actor low-32-bit sequence as `(namespace << 32) | actor_sequence`.
-- [ ] Document that fixed nonce namespaces require a fresh target or an empty
+- [x] Document that fixed nonce namespaces require a fresh target or an empty
   replay cache.
-- [ ] Assign one bootstrap account per actor.
-- [ ] Track per-actor state:
+- [x] Assign one bootstrap account per actor.
+- [x] Track per-actor state:
   - account index
   - signer
   - wallet address
@@ -238,6 +240,7 @@ chaos, deploy new contracts, or create remote infrastructure.
   instead record bootstrap manifest availability as unavailable/unknown.
 - [x] Write `target-ownership.json` with `startedBySim = false`.
 - [x] Stream `result.jsonl` records as newline-delimited JSON.
+- [x] Include `schemaVersion` on each JSONL event.
 - [x] Include record kinds:
   - run started
   - target resolved
@@ -263,6 +266,7 @@ chaos, deploy new contracts, or create remote infrastructure.
 ### Result Aggregation
 
 - [x] Write final `result.json`.
+- [x] Include run id.
 - [x] Include manifest hashes:
   - simulation manifest hash
   - runtime manifest hash

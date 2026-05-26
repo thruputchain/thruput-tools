@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use groundhog_rpc_api_types::runtime_manifest::RuntimeManifest;
 use groundhog_rpc_client::HttpClientBuilder;
 
+use crate::actor::{ActorState, build_actor_states};
 use crate::assertions::{determine_outcome, evaluate_assertions};
 use crate::error::SimError;
 use crate::event::{EventWriter, ResultEvent};
@@ -86,6 +87,7 @@ pub async fn run_existing_target(args: ExistingRunOptions) -> Result<RunSummary,
             &run_id,
         ),
     };
+    let mut actor_states = build_actor_states(&loaded_sim.manifest, accounts, nonce_namespace)?;
     loaded_sim.manifest.resolved = Some(ResolvedRunSpec {
         rpc_url: rpc_url.clone(),
         runtime_manifest: runtime_manifest_path,
@@ -105,7 +107,7 @@ pub async fn run_existing_target(args: ExistingRunOptions) -> Result<RunSummary,
         &mut event_writer,
         &run_id,
         &rpc_url,
-        accounts.len(),
+        actor_states.len(),
         nonce_namespace,
         &loaded_runtime.sha256,
     )
@@ -121,11 +123,13 @@ pub async fn run_existing_target(args: ExistingRunOptions) -> Result<RunSummary,
     let result = execute_loaded_simulation(
         client,
         LoadedExecution {
+            run_id: &run_id,
             loaded_sim: &loaded_sim,
             runtime_manifest: &loaded_runtime.manifest,
             runtime_manifest_sha256: &loaded_runtime.sha256,
             rpc_url: &rpc_url,
             nonce_namespace,
+            actor_states: &mut actor_states,
             scheduled_workloads,
             schedule: &schedule,
             phase_starts: &phase_starts,
@@ -146,11 +150,13 @@ pub async fn run_existing_target(args: ExistingRunOptions) -> Result<RunSummary,
 /// Inputs for executing an already-loaded simulation.
 #[derive(Debug)]
 pub struct LoadedExecution<'a> {
+    pub run_id: &'a str,
     pub loaded_sim: &'a LoadedSimulationManifest,
     pub runtime_manifest: &'a RuntimeManifest,
     pub runtime_manifest_sha256: &'a str,
     pub rpc_url: &'a str,
     pub nonce_namespace: NonceNamespace,
+    pub actor_states: &'a mut [ActorState],
     pub scheduled_workloads: u64,
     pub schedule: &'a [ScheduledSimulationEvent],
     pub phase_starts: &'a [PhaseStart],
@@ -171,6 +177,7 @@ where
         &input.loaded_sim.manifest,
         input.schedule,
         input.phase_starts,
+        input.actor_states,
         &mut *input.event_writer,
         &mut metrics,
     )
@@ -207,6 +214,7 @@ where
 
     build_result(BuildResultInput {
         loaded_sim: input.loaded_sim,
+        run_id: input.run_id,
         runtime_manifest: input.runtime_manifest,
         runtime_manifest_sha256: input.runtime_manifest_sha256,
         rpc_url: input.rpc_url,
@@ -268,6 +276,7 @@ async fn write_initial_events(
 
 struct BuildResultInput<'a> {
     loaded_sim: &'a LoadedSimulationManifest,
+    run_id: &'a str,
     runtime_manifest: &'a RuntimeManifest,
     runtime_manifest_sha256: &'a str,
     rpc_url: &'a str,
@@ -281,6 +290,7 @@ struct BuildResultInput<'a> {
 fn build_result(input: BuildResultInput<'_>) -> Result<SimResult, SimError> {
     Ok(SimResult {
         schema_version: SIM_RESULT_SCHEMA_VERSION,
+        run_id: input.run_id.into(),
         name: input.loaded_sim.manifest.name.clone(),
         outcome: input.outcome,
         target_provider: TargetProviderKind::Existing,
@@ -334,13 +344,15 @@ fn validate_executable_workloads(manifest: &SimulationManifest) -> Result<(), Si
 #[cfg(test)]
 mod tests {
     use groundhog_rpc_api_types::{BlockHeight, block::ChainTip, hex::Hex0x};
-    use groundhog_xdr::types::SHA256Hash;
+    use groundhog_signing::derive_dev_account_signer;
+    use groundhog_xdr::types::{ContractAddress, SHA256Hash};
     use serde_json::json;
     use tempfile::{NamedTempFile, tempdir};
 
     use super::*;
     use crate::event::EventWriter;
     use crate::executor::SimRpcClient;
+    use crate::runtime::SimAccount;
     use crate::scheduler::{generate_schedule, phase_starts};
     use crate::util::sha256_hex;
 
@@ -373,6 +385,7 @@ mod tests {
         let mut event_writer = EventWriter::create(file.path())
             .await
             .expect("event writer should open");
+        let mut actors = actor_states();
 
         let result = execute_loaded_simulation(
             MockClient {
@@ -382,11 +395,13 @@ mod tests {
                 },
             },
             LoadedExecution {
+                run_id: "test-run",
                 loaded_sim: &loaded_sim,
                 runtime_manifest: &runtime_manifest,
                 runtime_manifest_sha256: "runtime-sha",
                 rpc_url: "http://127.0.0.1:9545",
                 nonce_namespace: NonceNamespace::new(7).expect("nonce namespace should fit"),
+                actor_states: &mut actors,
                 scheduled_workloads: 1,
                 schedule: &schedule,
                 phase_starts: &starts,
@@ -397,6 +412,7 @@ mod tests {
         .expect("simulation should execute");
 
         assert_eq!(result.outcome, SimRunOutcome::Passed);
+        assert_eq!(result.run_id, "test-run");
         let metrics = result
             .workload_metrics
             .get(&WorkloadKind::ChainTip)
@@ -509,5 +525,17 @@ mod tests {
 
     fn prefixed_hex(byte: u8) -> String {
         format!("0x{}", hex::encode([byte; 32]))
+    }
+
+    fn actor_states() -> Vec<ActorState> {
+        vec![ActorState::new(
+            0,
+            SimAccount {
+                index: 0,
+                signer: derive_dev_account_signer("run-test-seed", 0),
+                wallet_address: Hex0x(ContractAddress::from([0x66; 32])).0,
+            },
+            NonceNamespace::new(7).expect("namespace should fit"),
+        )]
     }
 }

@@ -8,6 +8,7 @@ use groundhog_rpc_client::GroundhogApiClient;
 use tokio::sync::Semaphore;
 use tokio::task::{Id as TaskId, JoinError, JoinSet};
 
+use crate::actor::ActorState;
 use crate::error::SimError;
 use crate::event::{EventWriter, ResultEvent, WorkloadEvent};
 use crate::manifest::{SimulationManifest, WorkloadKind};
@@ -46,6 +47,7 @@ pub async fn run_schedule<C>(
     manifest: &SimulationManifest,
     schedule: &[ScheduledSimulationEvent],
     phase_starts: &[PhaseStart],
+    actor_states: &mut [ActorState],
     event_writer: &mut EventWriter,
     metrics: &mut RunMetricsBuilder,
 ) -> Result<(), SimError>
@@ -91,6 +93,9 @@ where
                     &mut in_flight,
                 )
                 .await?;
+                let _actor = actor_states
+                    .get_mut(tick.actor_id as usize)
+                    .ok_or(SimError::Executor("actor state missing".into()))?;
                 let workload = select_workload_for_tick(manifest, tick)?;
                 if let Some(skipped) = dispatch_workload(
                     client.clone(),
@@ -457,7 +462,8 @@ fn rpc_method(workload: WorkloadKind) -> &'static str {
 #[cfg(test)]
 mod tests {
     use groundhog_rpc_api_types::{BlockHeight, block::ChainTip, hex::Hex0x};
-    use groundhog_xdr::types::SHA256Hash;
+    use groundhog_signing::derive_dev_account_signer;
+    use groundhog_xdr::types::{ContractAddress, SHA256Hash};
     use serde_json::json;
     use tempfile::NamedTempFile;
 
@@ -465,6 +471,8 @@ mod tests {
     use crate::event::EventWriter;
     use crate::manifest::SimulationManifest;
     use crate::metrics::RunMetricsBuilder;
+    use crate::nonce::NonceNamespace;
+    use crate::runtime::SimAccount;
     use crate::scheduler::{generate_schedule, phase_starts};
 
     #[derive(Clone)]
@@ -503,12 +511,14 @@ mod tests {
             .await
             .expect("event writer should open");
         let mut metrics = RunMetricsBuilder::default();
+        let mut actors = actor_states();
 
         let err = run_schedule(
             PanickingClient,
             &manifest,
             &schedule,
             &starts,
+            &mut actors,
             &mut event_writer,
             &mut metrics,
         )
@@ -555,12 +565,14 @@ mod tests {
             .await
             .expect("event writer should open");
         let mut metrics = RunMetricsBuilder::default();
+        let mut actors = actor_states();
 
         run_schedule(
             DelayedClient,
             &manifest,
             &schedule,
             &phase_starts,
+            &mut actors,
             &mut event_writer,
             &mut metrics,
         )
@@ -599,5 +611,17 @@ mod tests {
             "workloads": [{"name": "chain-tip", "weight": 1}]
         }))
         .expect("manifest fixture should parse")
+    }
+
+    fn actor_states() -> Vec<ActorState> {
+        vec![ActorState::new(
+            0,
+            SimAccount {
+                index: 0,
+                signer: derive_dev_account_signer("executor-test-seed", 0),
+                wallet_address: Hex0x(ContractAddress::from([0x99; 32])).0,
+            },
+            NonceNamespace::new(1).expect("namespace should fit"),
+        )]
     }
 }

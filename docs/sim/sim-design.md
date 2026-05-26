@@ -475,6 +475,7 @@ logging land; target logs are only expected when a provider supplies them.
 
 `result.json` should include:
 
+- run id;
 - simulation manifest hash;
 - bootstrap manifest hash and availability, if a bootstrap manifest is known;
 - runtime manifest hash;
@@ -492,9 +493,9 @@ logging land; target logs are only expected when a provider supplies them.
 - baseline-anchored diff when `baseline:` is set on the scenario;
 - pointers to logs and metrics snapshots.
 
-`result.jsonl` is the append-only event stream — one record per workload
-completion, chaos event, and assertion check. Live progress readers tail
-it; `result.json` is the aggregated snapshot written at run end. The
+`result.jsonl` is the append-only event stream — one versioned record per
+workload completion, chaos event, and assertion check. Live progress readers
+tail it; `result.json` is the aggregated snapshot written at run end. The
 `target-ownership.json` file records which target resources, if any, the
 simulator created. A sweeper may only clean up resources marked
 `startedBySim`; it must never infer ownership from a stale PID alone.

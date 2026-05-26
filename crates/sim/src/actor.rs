@@ -1,0 +1,167 @@
+use groundhog_rpc_api_types::{receipt::TransactionReceipt, transaction::TxHash};
+use groundhog_signing::LocalSigner;
+use groundhog_xdr::types::ContractAddress;
+
+use crate::manifest::SimulationManifest;
+use crate::nonce::NonceNamespace;
+use crate::runtime::SimAccount;
+
+/// Mutable per-actor state owned by the simulator runtime.
+#[derive(Debug)]
+pub struct ActorState {
+    pub actor_id: u32,
+    pub account_index: u32,
+    pub signer: LocalSigner,
+    pub wallet_address: ContractAddress,
+    pub nonce_namespace: NonceNamespace,
+    pub next_nonce_sequence: u32,
+    pub last_submitted_tx_hash: Option<TxHash>,
+    pub last_submitted_scheduled_time_ms: Option<u64>,
+    pub last_observed_receipt: Option<TransactionReceipt>,
+}
+
+impl ActorState {
+    /// Build actor state from a derived bootstrap account.
+    pub fn new(actor_id: u32, account: SimAccount, nonce_namespace: NonceNamespace) -> Self {
+        Self {
+            actor_id,
+            account_index: account.index,
+            signer: account.signer,
+            wallet_address: account.wallet_address,
+            nonce_namespace,
+            next_nonce_sequence: 0,
+            last_submitted_tx_hash: None,
+            last_submitted_scheduled_time_ms: None,
+            last_observed_receipt: None,
+        }
+    }
+
+    /// Allocate the next namespaced transaction nonce for this actor.
+    pub fn next_nonce(&mut self) -> Result<u64, ActorError> {
+        let sequence = self.next_nonce_sequence;
+        self.next_nonce_sequence =
+            self.next_nonce_sequence
+                .checked_add(1)
+                .ok_or(ActorError::NonceSequenceExhausted {
+                    actor_id: self.actor_id,
+                })?;
+        Ok(self.nonce_namespace.make_nonce(sequence))
+    }
+
+    /// Record that this actor submitted a transaction.
+    pub fn record_submitted_tx(&mut self, tx_hash: TxHash, scheduled_time_ms: u64) {
+        self.last_submitted_tx_hash = Some(tx_hash);
+        self.last_submitted_scheduled_time_ms = Some(scheduled_time_ms);
+    }
+
+    /// Record a committed receipt observed for this actor.
+    pub fn record_receipt(&mut self, receipt: TransactionReceipt) {
+        self.last_observed_receipt = Some(receipt);
+    }
+}
+
+/// Construct actor state for the maximum actor count requested by a scenario.
+pub fn build_actor_states(
+    manifest: &SimulationManifest,
+    accounts: Vec<SimAccount>,
+    nonce_namespace: NonceNamespace,
+) -> Result<Vec<ActorState>, ActorError> {
+    let actor_count = max_actor_count(manifest);
+    let available = accounts.len();
+    if actor_count > available {
+        return Err(ActorError::TooManyActors {
+            requested: actor_count,
+            available,
+        });
+    }
+
+    accounts
+        .into_iter()
+        .take(actor_count)
+        .enumerate()
+        .map(|(actor_id, account)| {
+            let actor_id =
+                u32::try_from(actor_id).map_err(|_| ActorError::ActorIdTooLarge { actor_id })?;
+            Ok(ActorState::new(actor_id, account, nonce_namespace))
+        })
+        .collect()
+}
+
+fn max_actor_count(manifest: &SimulationManifest) -> usize {
+    manifest
+        .load_shape
+        .iter()
+        .map(|phase| phase.users as usize)
+        .max()
+        .unwrap_or_default()
+}
+
+/// Errors from actor-state construction and mutation.
+#[derive(Debug, thiserror::Error)]
+pub enum ActorError {
+    #[error("scenario requests {requested} actors but only {available} accounts are available")]
+    TooManyActors { requested: usize, available: usize },
+    #[error("actor id {actor_id} does not fit in u32")]
+    ActorIdTooLarge { actor_id: usize },
+    #[error("actor {actor_id} exhausted the low 32 nonce sequence bits")]
+    NonceSequenceExhausted { actor_id: u32 },
+}
+
+#[cfg(test)]
+mod tests {
+    use groundhog_rpc_api_types::hex::Hex0x;
+    use groundhog_signing::derive_dev_account_signer;
+    use groundhog_xdr::types::ContractAddress;
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn actor_allocates_namespaced_nonces() {
+        let mut actor = ActorState::new(
+            2,
+            sim_account(9),
+            NonceNamespace::new(0x1234_5678).expect("namespace should fit"),
+        );
+
+        assert_eq!(actor.next_nonce().unwrap(), 0x1234_5678_0000_0000);
+        assert_eq!(actor.next_nonce().unwrap(), 0x1234_5678_0000_0001);
+        assert_eq!(actor.next_nonce_sequence, 2);
+    }
+
+    #[test]
+    fn actor_state_uses_one_bootstrap_account_per_actor() {
+        let manifest: SimulationManifest = serde_json::from_value(json!({
+            "schemaVersion": 1,
+            "kind": "groundhog-simulation",
+            "name": "actor-test",
+            "seed": "seed",
+            "target": {"provider": "existing"},
+            "loadShape": [{"duration": "1s", "users": 2, "ratePerUserHz": 1.0}],
+            "workloads": [{"name": "chain-tip", "weight": 1}]
+        }))
+        .expect("manifest should parse");
+
+        let actors = build_actor_states(
+            &manifest,
+            vec![sim_account(4), sim_account(5)],
+            NonceNamespace::new(99).expect("namespace should fit"),
+        )
+        .expect("actors should build");
+
+        assert_eq!(actors.len(), 2);
+        assert_eq!(actors[0].actor_id, 0);
+        assert_eq!(actors[0].account_index, 4);
+        assert_eq!(actors[1].actor_id, 1);
+        assert_eq!(actors[1].account_index, 5);
+    }
+
+    fn sim_account(index: u32) -> SimAccount {
+        let address_byte = u8::try_from(index).expect("test account index should fit u8");
+        SimAccount {
+            index,
+            signer: derive_dev_account_signer("actor-test-seed", index as usize),
+            wallet_address: Hex0x(ContractAddress::from([address_byte; 32])).0,
+        }
+    }
+}

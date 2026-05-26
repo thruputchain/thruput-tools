@@ -127,6 +127,7 @@ mod tests {
     fn minimal_result_json(schema_version: u32) -> serde_json::Value {
         json!({
             "schemaVersion": schema_version,
+            "runId": "result-test-run",
             "name": "result-test",
             "outcome": "passed",
             "targetProvider": "existing",

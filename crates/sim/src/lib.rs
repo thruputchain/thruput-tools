@@ -1,3 +1,4 @@
+pub mod actor;
 pub mod assertions;
 pub mod compare;
 pub mod error;

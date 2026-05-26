@@ -6,6 +6,8 @@ pub enum SimError {
     #[error("{0}")]
     RuntimeManifest(#[from] crate::runtime::RuntimeManifestError),
     #[error("{0}")]
+    Actor(#[from] crate::actor::ActorError),
+    #[error("{0}")]
     Nonce(#[from] crate::nonce::NonceError),
     #[error("{0}")]
     Schedule(#[from] crate::scheduler::ScheduleError),

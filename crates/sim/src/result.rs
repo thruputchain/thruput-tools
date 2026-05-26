@@ -12,6 +12,7 @@ pub const SIM_RESULT_SCHEMA_VERSION: u32 = 1;
 #[serde(rename_all = "camelCase")]
 pub struct SimResult {
     pub schema_version: u32,
+    pub run_id: String,
     pub name: String,
     pub outcome: SimRunOutcome,
     pub target_provider: TargetProviderKind,

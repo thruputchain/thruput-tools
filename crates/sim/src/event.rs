@@ -1,11 +1,14 @@
 use std::path::Path;
 
-use serde::Serialize;
+use serde::{Serialize, Serializer, ser::Error as SerdeError};
+use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
 
 use crate::manifest::WorkloadKind;
 use crate::result::{AssertionResult, SimRunOutcome};
 use crate::target::TargetProviderKind;
+
+pub const RESULT_EVENT_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug)]
 pub struct EventWriter {
@@ -31,8 +34,7 @@ impl EventWriter {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "kebab-case")]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ResultEvent {
     RunStarted {
         run_id: String,
@@ -64,6 +66,91 @@ pub enum ResultEvent {
         failed_workloads: u64,
         skipped_workloads: u64,
     },
+}
+
+impl Serialize for ResultEvent {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut value = match self {
+            Self::RunStarted {
+                run_id,
+                target_provider,
+                rpc_url,
+                actor_accounts,
+                nonce_namespace,
+            } => json!({
+                "kind": "run-started",
+                "runId": run_id,
+                "targetProvider": target_provider,
+                "rpcUrl": rpc_url,
+                "actorAccounts": actor_accounts,
+                "nonceNamespace": nonce_namespace,
+            }),
+            Self::TargetResolved {
+                target_provider,
+                rpc_url,
+                runtime_manifest_sha256,
+            } => json!({
+                "kind": "target-resolved",
+                "targetProvider": target_provider,
+                "rpcUrl": rpc_url,
+                "runtimeManifestSha256": runtime_manifest_sha256,
+            }),
+            Self::PhaseStarted {
+                phase_index,
+                simulation_time_ms,
+                duration_ms,
+                users,
+                rate_per_user_millihz,
+            } => json!({
+                "kind": "phase-started",
+                "phaseIndex": phase_index,
+                "simulationTimeMs": simulation_time_ms,
+                "durationMs": duration_ms,
+                "users": users,
+                "ratePerUserMillihz": rate_per_user_millihz,
+            }),
+            Self::WorkloadCompleted(event) => {
+                tagged_event("workload-completed", event).map_err(S::Error::custom)?
+            }
+            Self::WorkloadFailed(event) => {
+                tagged_event("workload-failed", event).map_err(S::Error::custom)?
+            }
+            Self::WorkloadSkipped(event) => {
+                tagged_event("workload-skipped", event).map_err(S::Error::custom)?
+            }
+            Self::AssertionChecked(assertion) => {
+                tagged_event("assertion-checked", assertion).map_err(S::Error::custom)?
+            }
+            Self::RunCompleted {
+                outcome,
+                scheduled_workloads,
+                completed_workloads,
+                failed_workloads,
+                skipped_workloads,
+            } => json!({
+                "kind": "run-completed",
+                "outcome": outcome,
+                "scheduledWorkloads": scheduled_workloads,
+                "completedWorkloads": completed_workloads,
+                "failedWorkloads": failed_workloads,
+                "skippedWorkloads": skipped_workloads,
+            }),
+        };
+
+        let object = value
+            .as_object_mut()
+            .ok_or_else(|| S::Error::custom("result event did not serialize as a JSON object"))?;
+        object.insert("schemaVersion".into(), json!(RESULT_EVENT_SCHEMA_VERSION));
+        value.serialize(serializer)
+    }
+}
+
+fn tagged_event<T: Serialize>(kind: &'static str, event: &T) -> Result<Value, serde_json::Error> {
+    let mut value = serde_json::to_value(event)?;
+    if let Some(object) = value.as_object_mut() {
+        object.insert("kind".into(), json!(kind));
+    }
+    Ok(value)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -122,6 +209,7 @@ mod tests {
             value,
             json!({
                 "kind": "workload-completed",
+                "schemaVersion": 1,
                 "actorId": 7,
                 "workload": "chain-tip",
                 "scheduledTimeMs": 1000,
