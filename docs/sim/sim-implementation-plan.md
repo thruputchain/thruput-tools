@@ -2,8 +2,9 @@
 
 **Date:** 2026-05-25
 **Status:** Draft execution checklist. Phase 1 chain-tip execution, reviewer
-hardening, live hogd-dev smoke, submit/receipt actor state, and
-submit/receipt assertion wiring are complete; local-provider work is next.
+hardening, live hogd-dev smoke, submit/receipt actor state,
+submit/receipt assertion wiring, and the target-provider boundary are
+complete; local-provider execution is next.
 
 This plan pairs with [Simulation design](sim-design.md). The design doc owns
 the architectural boundary and long-term shape. This file is the implementation
@@ -102,6 +103,8 @@ chaos, deploy new contracts, or create remote infrastructure.
 - [x] Replace manual result-event serialization with derived event serialization
   plus an `EventWriter` version wrapper so new event variants inherit
   `schemaVersion`.
+- [x] Add target-provider traits and an `existing` provider adapter without
+  changing Phase 1 run behavior.
 
 ## Current Next Slice
 
@@ -131,7 +134,7 @@ chaos, deploy new contracts, or create remote infrastructure.
   intentionally added with compare-specific tests.
 - [ ] Add compare unit tests for config mismatch, metric availability
   transitions, numeric deltas, and numeric-skip behavior.
-- [ ] Add provider trait and `ChaosController` types matching the design names,
+- [x] Add provider trait and `ChaosController` types matching the design names,
   even if only the `existing` provider is executable in Phase 1.
 - [ ] Add doc comments and `#[non_exhaustive]` to public library API before
   treating `groundhog-sim` as a stable downstream dependency.
@@ -178,7 +181,7 @@ chaos, deploy new contracts, or create remote infrastructure.
   providers execute no chaos.
   - `ChaosEventState` variants: `scheduled`, `started`, `completed`, `failed`,
     `recovered`.
-- [ ] Add target provider traits:
+- [x] Add target provider traits:
   - target acquisition
   - capability declaration
   - `ChaosController`
@@ -391,8 +394,8 @@ chaos, deploy new contracts, or create remote infrastructure.
 ### Documentation
 
 - [x] Add `examples/sim/local-wallet-soak.json`.
-- [ ] Document the `existing` provider.
-- [ ] Document result directory contents.
+- [x] Document the `existing` provider.
+- [x] Document result directory contents.
 - [ ] Document comparison semantics.
 - [x] Add quickstart commands to `docs/sim/README.md`.
 

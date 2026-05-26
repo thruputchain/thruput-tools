@@ -22,14 +22,14 @@ use crate::result::{
 };
 use crate::runtime::{derive_accounts, load_runtime_manifest};
 use crate::scheduler::{PhaseStart, ScheduledSimulationEvent, generate_schedule, phase_starts};
-use crate::target::{TargetOwnership, TargetProviderKind};
+use crate::target::{
+    ExistingTargetProvider, ResolvedTarget, TargetOverrides, TargetOwnership, TargetProvider,
+};
 use crate::util::{
     LoadedSimulationManifest, default_run_dir, json_string, load_simulation_manifest, run_id,
     workload_name, write_json_pretty, write_json_pretty_atomic,
 };
-use crate::validation::{
-    validate_against_runtime, validate_existing_target_flags, validate_manifest,
-};
+use crate::validation::{validate_against_runtime, validate_manifest};
 
 /// Options for running a simulation against an already-started target.
 #[derive(Debug, Clone)]
@@ -50,39 +50,53 @@ pub struct RunSummary {
 }
 
 /// Run a simulation against an already-started target.
-#[allow(clippy::too_many_lines)]
 pub async fn run_existing_target(args: ExistingRunOptions) -> Result<RunSummary, SimError> {
-    let mut loaded_sim = load_simulation_manifest(&args.scenario).await?;
-    if let Some(seed) = args.seed {
+    let ExistingRunOptions {
+        scenario,
+        rpc_url,
+        runtime_manifest,
+        out_dir,
+        seed,
+        nonce_namespace,
+    } = args;
+    let mut loaded_sim = load_simulation_manifest(&scenario).await?;
+    if let Some(seed) = seed {
         loaded_sim.manifest.seed = seed;
     }
     validate_manifest(&loaded_sim.manifest)?;
-    validate_existing_target_flags(
-        &loaded_sim.manifest,
-        args.rpc_url.as_deref(),
-        args.runtime_manifest.is_some(),
-    )?;
+    let provider = ExistingTargetProvider;
+    let target = provider
+        .acquire(
+            &loaded_sim.manifest,
+            TargetOverrides {
+                rpc_url,
+                runtime_manifest,
+            },
+        )
+        .await?;
+    let run_result =
+        run_resolved_existing_target(loaded_sim, &target, out_dir, nonce_namespace).await;
+    provider.cleanup(&target).await?;
+    run_result
+}
 
-    let runtime_manifest_path = args
-        .runtime_manifest
-        .clone()
-        .or_else(|| loaded_sim.manifest.target.runtime_manifest.clone())
-        .ok_or(SimError::MissingRuntimeManifest)?;
-    let rpc_url = args
-        .rpc_url
-        .clone()
-        .or_else(|| loaded_sim.manifest.target.rpc_url.clone())
-        .ok_or(SimError::MissingRpcUrl)?;
-    loaded_sim.manifest.target.rpc_url = Some(rpc_url.clone());
-    loaded_sim.manifest.target.runtime_manifest = Some(runtime_manifest_path.clone());
+#[allow(clippy::too_many_lines)]
+async fn run_resolved_existing_target(
+    mut loaded_sim: LoadedSimulationManifest,
+    target: &ResolvedTarget,
+    out_dir: Option<PathBuf>,
+    nonce_namespace: Option<u64>,
+) -> Result<RunSummary, SimError> {
+    loaded_sim.manifest.target.rpc_url = Some(target.rpc_url.clone());
+    loaded_sim.manifest.target.runtime_manifest = Some(target.runtime_manifest.clone());
 
-    let loaded_runtime = load_runtime_manifest(&runtime_manifest_path).await?;
+    let loaded_runtime = load_runtime_manifest(&target.runtime_manifest).await?;
     let accounts = derive_accounts(&loaded_runtime.manifest)?;
     validate_executable_workloads(&loaded_sim.manifest)?;
     validate_against_runtime(&loaded_sim.manifest, &loaded_runtime.manifest)?;
 
     let run_id = run_id()?;
-    let nonce_namespace = match args.nonce_namespace {
+    let nonce_namespace = match nonce_namespace {
         Some(value) => NonceNamespace::new(value)?,
         None => NonceNamespace::generate(
             &loaded_sim.manifest.seed,
@@ -92,24 +106,26 @@ pub async fn run_existing_target(args: ExistingRunOptions) -> Result<RunSummary,
     };
     let mut actor_states = build_actor_states(&loaded_sim.manifest, accounts, nonce_namespace)?;
     loaded_sim.manifest.resolved = Some(ResolvedRunSpec {
-        rpc_url: rpc_url.clone(),
-        runtime_manifest: runtime_manifest_path,
+        rpc_url: target.rpc_url.clone(),
+        runtime_manifest: target.runtime_manifest.clone(),
         nonce_namespace: nonce_namespace.get(),
     });
     loaded_sim.refresh_sha256()?;
     let schedule = generate_schedule(&loaded_sim.manifest)?;
     let phase_starts = phase_starts(&loaded_sim.manifest)?;
-    let out_dir = args
-        .out_dir
-        .unwrap_or_else(|| default_run_dir(&run_id, &loaded_sim.manifest.name));
+    let out_dir = out_dir.unwrap_or_else(|| default_run_dir(&run_id, &loaded_sim.manifest.name));
 
-    let mut event_writer =
-        prepare_result_directory(&out_dir, loaded_sim.bytes.as_slice(), &loaded_runtime.bytes)
-            .await?;
+    let mut event_writer = prepare_result_directory(
+        &out_dir,
+        loaded_sim.bytes.as_slice(),
+        &loaded_runtime.bytes,
+        &target.ownership,
+    )
+    .await?;
     write_initial_events(
         &mut event_writer,
         &run_id,
-        &rpc_url,
+        target,
         actor_states.len(),
         nonce_namespace,
         &loaded_runtime.sha256,
@@ -117,7 +133,7 @@ pub async fn run_existing_target(args: ExistingRunOptions) -> Result<RunSummary,
     .await?;
 
     let client = HttpClientBuilder::default()
-        .build(rpc_url.clone())
+        .build(target.rpc_url.clone())
         .map_err(|error| SimError::RpcClient(error.to_string()))?;
     let scheduled_workloads = schedule
         .iter()
@@ -130,7 +146,7 @@ pub async fn run_existing_target(args: ExistingRunOptions) -> Result<RunSummary,
             loaded_sim: &loaded_sim,
             runtime_manifest: &loaded_runtime.manifest,
             runtime_manifest_sha256: &loaded_runtime.sha256,
-            rpc_url: &rpc_url,
+            target,
             nonce_namespace,
             actor_states: &mut actor_states,
             scheduled_workloads,
@@ -157,7 +173,7 @@ pub struct LoadedExecution<'a> {
     pub loaded_sim: &'a LoadedSimulationManifest,
     pub runtime_manifest: &'a RuntimeManifest,
     pub runtime_manifest_sha256: &'a str,
-    pub rpc_url: &'a str,
+    pub target: &'a ResolvedTarget,
     pub nonce_namespace: NonceNamespace,
     pub actor_states: &'a mut [ActorState],
     pub scheduled_workloads: u64,
@@ -247,7 +263,7 @@ where
         run_id: input.run_id,
         runtime_manifest: input.runtime_manifest,
         runtime_manifest_sha256: input.runtime_manifest_sha256,
-        rpc_url: input.rpc_url,
+        target: input.target,
         outcome,
         nonce_namespace: input.nonce_namespace,
         workload_counts,
@@ -260,6 +276,7 @@ async fn prepare_result_directory(
     out_dir: &Path,
     simulation_manifest_bytes: &[u8],
     runtime_manifest_bytes: &[u8],
+    target_ownership: &TargetOwnership,
 ) -> Result<EventWriter, SimError> {
     tokio::fs::create_dir_all(out_dir.join("histograms")).await?;
     tokio::fs::create_dir_all(out_dir.join("logs")).await?;
@@ -269,18 +286,14 @@ async fn prepare_result_directory(
         runtime_manifest_bytes,
     )
     .await?;
-    write_json_pretty(
-        out_dir.join("target-ownership.json"),
-        &TargetOwnership::existing(),
-    )
-    .await?;
+    write_json_pretty(out_dir.join("target-ownership.json"), target_ownership).await?;
     Ok(EventWriter::create(out_dir.join("result.jsonl")).await?)
 }
 
 async fn write_initial_events(
     event_writer: &mut EventWriter,
     run_id: &str,
-    rpc_url: &str,
+    target: &ResolvedTarget,
     actor_accounts: usize,
     nonce_namespace: NonceNamespace,
     runtime_manifest_sha256: &str,
@@ -288,16 +301,16 @@ async fn write_initial_events(
     event_writer
         .write(&ResultEvent::RunStarted {
             run_id: run_id.into(),
-            target_provider: TargetProviderKind::Existing,
-            rpc_url: rpc_url.into(),
+            target_provider: target.provider,
+            rpc_url: target.rpc_url.clone(),
             actor_accounts,
             nonce_namespace: nonce_namespace.get(),
         })
         .await?;
     event_writer
         .write(&ResultEvent::TargetResolved {
-            target_provider: TargetProviderKind::Existing,
-            rpc_url: rpc_url.into(),
+            target_provider: target.provider,
+            rpc_url: target.rpc_url.clone(),
             runtime_manifest_sha256: runtime_manifest_sha256.into(),
         })
         .await?;
@@ -309,7 +322,7 @@ struct BuildResultInput<'a> {
     run_id: &'a str,
     runtime_manifest: &'a RuntimeManifest,
     runtime_manifest_sha256: &'a str,
-    rpc_url: &'a str,
+    target: &'a ResolvedTarget,
     outcome: SimRunOutcome,
     nonce_namespace: NonceNamespace,
     workload_counts: BTreeMap<WorkloadKind, WorkloadCounts>,
@@ -323,10 +336,10 @@ fn build_result(input: BuildResultInput<'_>) -> Result<SimResult, SimError> {
         run_id: input.run_id.into(),
         name: input.loaded_sim.manifest.name.clone(),
         outcome: input.outcome,
-        target_provider: TargetProviderKind::Existing,
-        target_ownership: TargetOwnership::existing(),
+        target_provider: input.target.provider,
+        target_ownership: input.target.ownership.clone(),
         target_identity: TargetIdentity {
-            rpc_url: Some(input.rpc_url.into()),
+            rpc_url: Some(input.target.rpc_url.clone()),
         },
         runtime_identity: RuntimeIdentity {
             network_id: input.runtime_manifest.network_id.clone(),
@@ -431,6 +444,7 @@ mod tests {
             .await
             .expect("event writer should open");
         let mut actors = actor_states();
+        let target = resolved_target();
 
         let result = execute_loaded_simulation(
             MockClient {
@@ -444,7 +458,7 @@ mod tests {
                 loaded_sim: &loaded_sim,
                 runtime_manifest: &runtime_manifest,
                 runtime_manifest_sha256: "runtime-sha",
-                rpc_url: "http://127.0.0.1:9545",
+                target: &target,
                 nonce_namespace: NonceNamespace::new(7).expect("nonce namespace should fit"),
                 actor_states: &mut actors,
                 scheduled_workloads: 1,
@@ -483,10 +497,14 @@ mod tests {
     async fn prepare_result_directory_writes_existing_target_ownership() {
         let dir = tempdir().expect("temp dir should be created");
         let out_dir = dir.path().join("run");
-        let mut writer =
-            prepare_result_directory(&out_dir, b"{\"simulation\":true}", b"{\"runtime\":true}")
-                .await
-                .expect("result directory should prepare");
+        let mut writer = prepare_result_directory(
+            &out_dir,
+            b"{\"simulation\":true}",
+            b"{\"runtime\":true}",
+            &TargetOwnership::existing(),
+        )
+        .await
+        .expect("result directory should prepare");
         writer
             .write(&ResultEvent::RunCompleted {
                 outcome: SimRunOutcome::Passed,
@@ -523,6 +541,18 @@ mod tests {
             "workloads": [{"name": "chain-tip", "weight": 1}]
         }))
         .expect("manifest fixture should parse")
+    }
+
+    fn resolved_target() -> ResolvedTarget {
+        ResolvedTarget {
+            provider: crate::target::TargetProviderKind::Existing,
+            capabilities: crate::target::TargetCapabilities::for_provider(
+                crate::target::TargetProviderKind::Existing,
+            ),
+            ownership: TargetOwnership::existing(),
+            rpc_url: "http://127.0.0.1:9545".into(),
+            runtime_manifest: PathBuf::from("/tmp/runtime-manifest.json"),
+        }
     }
 
     fn runtime_manifest() -> RuntimeManifest {

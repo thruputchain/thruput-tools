@@ -48,3 +48,33 @@ as timeouts once the receipt appears. Receipt-poll ticks before an actor has
 submitted a transaction are emitted as skipped with `errorClass:
 "no-submitted-transaction"`; error-rate consumers should treat that as
 scheduler warm-up rather than RPC failure.
+
+## Existing Provider
+
+The `existing` target provider runs against an already-started JSON-RPC target.
+It does not launch, restart, or clean up the target process. The provider
+requires:
+
+- an RPC URL, supplied by `target.rpcUrl` or `--rpc-url`;
+- a runtime manifest path, supplied by `target.runtimeManifest` or
+  `--runtime-manifest`.
+
+CLI overrides win over manifest fields. After resolution, `hoglab` writes the
+effective RPC URL, runtime manifest path, and nonce namespace into
+`simulation.json` under `resolved`. `target-ownership.json` records
+`startedBySim: false` and `cleanupAllowed: false`.
+
+## Result Directory
+
+Each run writes a self-contained result directory:
+
+- `simulation.json` - normalized scenario after CLI overrides and resolved run
+  metadata.
+- `runtime-manifest.json` - copy of the runtime manifest used for validation
+  and account derivation.
+- `target-ownership.json` - provider ownership and cleanup metadata.
+- `result.jsonl` - append-only event stream for run, target, phase, workload,
+  assertion, and completion events.
+- `result.json` - final aggregate written atomically at run end.
+- `histograms/` and `logs/` - reserved directories for future exports and
+  provider-supplied logs.
