@@ -13,9 +13,10 @@ pub mod signer;
 
 pub use account::{DEFAULT_PUBKEY_ACCOUNT_NONCE, PUBKEY_ACCOUNT_TAG_STR, PubkeyAccount};
 pub use build::{
-    BuildCallTransaction, BuildDeployTransaction, DEFAULT_TX_GAS_LIMIT, SignTransactionParams,
-    WALLET_DEPLOY_ENTRYPOINT, build_call_transaction, build_deploy_transaction,
-    derive_deploy_address, sign_transaction, source_address_auth_claim,
+    BuildCallTransaction, BuildDeployTransaction, BuildDevWalletDoActionTransaction,
+    DEFAULT_TX_GAS_LIMIT, SignTransactionParams, WALLET_DEPLOY_ENTRYPOINT, build_call_transaction,
+    build_deploy_transaction, build_dev_wallet_do_action_transaction, derive_deploy_address,
+    dev_wallet_do_action_calldata, sign_transaction, source_address_auth_claim,
 };
 pub use dev_account::{
     DEFAULT_DEV_ACCOUNT_COUNT, DEFAULT_DEV_ACCOUNT_SEED, DEFAULT_DEV_ACCOUNT_STORAGE_TOKENS,
@@ -33,6 +34,7 @@ mod tests {
     use super::*;
     use groundhog_xdr::contract::ContractEntrypointID;
     use groundhog_xdr::transaction::SignedTransaction;
+    use groundhog_xdr::types::ContractAddress;
     use sha2::{Digest, Sha256};
 
     // These pinned vectors currently come from the pre-refactor tx-builder
@@ -94,5 +96,32 @@ mod tests {
             hex::encode(signed_tx_xdr),
             "bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7000000000000000000000000000f42400000000000000000000f4240000000000000000100000000000000010000000050ec72dbafd4898c5df0e15ea6ba3e46240945b7210fe2d63dde1e896f42107a000000000000000000000001000000000000000041d0144af2776cae9804ed899018a6bc17a5705d74c84e02556b9695031c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d"
         );
+    }
+
+    #[test]
+    fn builds_dev_wallet_do_action_transaction() {
+        let wallet_address = ContractAddress::from([0x11; 32]);
+        let target_address = ContractAddress::from([0x22; 32]);
+        let wallet_entrypoint = ContractEntrypointID::from(*b"doAction");
+        let target_entrypoint = ContractEntrypointID::from(*b"transfer");
+
+        let tx = build_dev_wallet_do_action_transaction(BuildDevWalletDoActionTransaction {
+            wallet_address,
+            wallet_entrypoint,
+            target_address,
+            target_entrypoint,
+            target_calldata: b"payload",
+            gas_limit: 123,
+            block_expiry_height: 456,
+            nonce: 789,
+        })
+        .expect("dev wallet transaction should build");
+
+        assert_eq!(tx.invocation.invoked_address, wallet_address);
+        assert_eq!(tx.invocation.entrypoint, wallet_entrypoint);
+        assert_eq!(tx.invocation.gas_limit, 123);
+        assert_eq!(*tx.uniquifier.block_expiry_height, 456);
+        assert_eq!(tx.uniquifier.nonce, 789);
+        assert!(!tx.invocation.calldata.0.is_empty());
     }
 }

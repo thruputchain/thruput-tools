@@ -168,6 +168,10 @@ pub struct WorkloadEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chain_block_hash: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub tx_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tx_nonce: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub error_class: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -200,6 +204,8 @@ mod tests {
             rpc_method: "groundhog_chainTip",
             chain_height: Some(42),
             chain_block_hash: Some("0xabc".into()),
+            tx_hash: None,
+            tx_nonce: None,
             error_class: None,
             error: None,
         });

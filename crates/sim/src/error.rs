@@ -10,6 +10,8 @@ pub enum SimError {
     #[error("{0}")]
     Nonce(#[from] crate::nonce::NonceError),
     #[error("{0}")]
+    TransactionBuild(#[from] crate::transaction::TransactionBuildError),
+    #[error("{0}")]
     Schedule(#[from] crate::scheduler::ScheduleError),
     #[error("{0}")]
     EventWrite(#[from] crate::event::EventWriteError),

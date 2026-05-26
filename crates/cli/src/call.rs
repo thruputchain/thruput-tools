@@ -5,8 +5,8 @@ use groundhog_rpc_api_types::receipt::ExecStatus;
 use groundhog_rpc_api_types::receipt::TransactionReceipt;
 use groundhog_rpc_api_types::transaction::TxHash;
 use groundhog_signing::{
-    BuildCallTransaction, DEFAULT_TX_GAS_LIMIT, SignTransactionParams, build_call_transaction,
-    sign_transaction, source_address_auth_claim,
+    BuildDevWalletDoActionTransaction, DEFAULT_TX_GAS_LIMIT, SignTransactionParams,
+    build_dev_wallet_do_action_transaction, sign_transaction,
 };
 use groundhog_xdr::contract::ContractEntrypointID;
 use serde_json::json;
@@ -284,31 +284,20 @@ fn prepare_call_with_runtime(
 
     let wallet_address = resolve_wallet_address(&resolved_profile, &key_name, &signer)?;
 
-    let inner_invocation = xdrs::txs::encode(&(
-        contract_address,
-        resolved.entrypoint,
-        DEFAULT_TX_GAS_LIMIT,
-        calldata.as_slice(),
-    ))
-    .map_err(|e| CliError::Other(format!("failed to encode inner invocation: {e}")))?;
-
-    let do_action_calldata = xdrs::cxs::encode(&inner_invocation.as_slice())
-        .map_err(|e| CliError::Other(format!("failed to CXS-encode do_action calldata: {e}")))?;
-
-    let auth_claim = source_address_auth_claim();
-
     let wallet_entrypoint = ContractEntrypointID::from(WALLET_DO_ACTION_ENTRYPOINT);
     let block_expiry_height = rt.block_on(async { resolve_block_expiry_height(rpc_url).await })?;
 
-    let tx = build_call_transaction(BuildCallTransaction {
-        invoked_address: wallet_address,
-        entrypoint: wallet_entrypoint,
-        calldata: do_action_calldata,
+    let tx = build_dev_wallet_do_action_transaction(BuildDevWalletDoActionTransaction {
+        wallet_address,
+        wallet_entrypoint,
+        target_address: contract_address,
+        target_entrypoint: resolved.entrypoint,
+        target_calldata: calldata.as_slice(),
         gas_limit: DEFAULT_TX_GAS_LIMIT,
         block_expiry_height,
         nonce: nonce_from_timestamp(),
-        auth_claim,
-    });
+    })
+    .map_err(|e| CliError::Other(e.to_string()))?;
 
     let signed_tx = sign_transaction(tx, &signer, SignTransactionParams::default())
         .map_err(|e| CliError::Other(e.to_string()))?;

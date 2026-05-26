@@ -8,7 +8,7 @@ use crate::actor::{ActorState, build_actor_states};
 use crate::assertions::{determine_outcome, evaluate_assertions};
 use crate::error::SimError;
 use crate::event::{EventWriter, ResultEvent};
-use crate::executor::{SimRpcClient, run_schedule};
+use crate::executor::{ScheduleExecution, SimRpcClient, run_schedule};
 use crate::manifest::{ResolvedRunSpec, SimulationManifest, WorkloadKind};
 use crate::metrics::{RunMetrics, RunMetricsBuilder};
 use crate::nonce::NonceNamespace;
@@ -174,12 +174,15 @@ where
     let mut metrics = RunMetricsBuilder::default();
     run_schedule(
         client,
-        &input.loaded_sim.manifest,
-        input.schedule,
-        input.phase_starts,
-        input.actor_states,
-        &mut *input.event_writer,
-        &mut metrics,
+        ScheduleExecution {
+            manifest: &input.loaded_sim.manifest,
+            runtime_manifest: input.runtime_manifest,
+            schedule: input.schedule,
+            phase_starts: input.phase_starts,
+            actor_states: input.actor_states,
+            event_writer: &mut *input.event_writer,
+            metrics: &mut metrics,
+        },
     )
     .await?;
     let completed_workloads = metrics.completed_count();
@@ -329,7 +332,12 @@ fn validate_executable_workloads(manifest: &SimulationManifest) -> Result<(), Si
     let unsupported: Vec<_> = manifest
         .workloads
         .iter()
-        .filter(|workload| workload.name != WorkloadKind::ChainTip)
+        .filter(|workload| {
+            !matches!(
+                workload.name,
+                WorkloadKind::ChainTip | WorkloadKind::WalletSubmitSmoke
+            )
+        })
         .map(|workload| workload_name(workload.name))
         .collect();
     if unsupported.is_empty() {
@@ -343,7 +351,7 @@ fn validate_executable_workloads(manifest: &SimulationManifest) -> Result<(), Si
 
 #[cfg(test)]
 mod tests {
-    use groundhog_rpc_api_types::{BlockHeight, block::ChainTip, hex::Hex0x};
+    use groundhog_rpc_api_types::{BlockHeight, block::ChainTip, hex::Hex0x, transaction::TxHash};
     use groundhog_signing::derive_dev_account_signer;
     use groundhog_xdr::types::{ContractAddress, SHA256Hash};
     use serde_json::json;
@@ -366,6 +374,14 @@ mod tests {
         fn chain_tip(&self) -> impl std::future::Future<Output = Result<ChainTip, String>> + Send {
             let tip = self.tip.clone();
             async move { Ok(tip) }
+        }
+
+        #[allow(clippy::manual_async_fn)]
+        fn send_raw_transaction(
+            &self,
+            _tx_hex: String,
+        ) -> impl std::future::Future<Output = Result<TxHash, String>> + Send {
+            async { Ok(TxHash(Hex0x(SHA256Hash::from([0x55; 32])))) }
         }
     }
 

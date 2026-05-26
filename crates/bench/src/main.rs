@@ -21,10 +21,10 @@ use groundhog_rpc_api_types::runtime_manifest::{
     BootstrapAccount, RUNTIME_MANIFEST_SCHEMA_VERSION, RuntimeManifest,
 };
 use groundhog_signing::{
-    BuildCallTransaction, DEFAULT_PUBKEY_ACCOUNT_NONCE, LocalSigner, PubkeyAccount,
-    SignTransactionParams, Signer, build_call_transaction, derive_default_dev_account_signer,
-    derive_dev_account_signer, encode_signed_transaction_xdr, sign_transaction,
-    source_address_auth_claim,
+    BuildDevWalletDoActionTransaction, DEFAULT_PUBKEY_ACCOUNT_NONCE, LocalSigner, PubkeyAccount,
+    SignTransactionParams, Signer, build_dev_wallet_do_action_transaction,
+    derive_default_dev_account_signer, derive_dev_account_signer, encode_signed_transaction_xdr,
+    sign_transaction,
 };
 use groundhog_xdr::contract::ContractEntrypointID;
 use groundhog_xdr::types::ContractAddress;
@@ -181,17 +181,19 @@ fn generate_tx_batch(
         .map(|i| {
             let idx = i % accounts.len();
             let account = &accounts[idx];
-            let calldata =
-                dev_wallet_do_action_calldata(account.wallet_address, wallet_entrypoint, vec![])?;
-            let tx = build_call_transaction(BuildCallTransaction {
-                invoked_address: account.wallet_address,
-                entrypoint: wallet_entrypoint,
-                calldata,
+            let tx = build_dev_wallet_do_action_transaction(BuildDevWalletDoActionTransaction {
+                wallet_address: account.wallet_address,
+                wallet_entrypoint,
+                target_address: account.wallet_address,
+                target_entrypoint: wallet_entrypoint,
+                target_calldata: &[],
                 gas_limit: 10_000_000,
                 block_expiry_height: 10_000_000,
                 nonce: i as u64,
-                auth_claim: source_address_auth_claim(),
-            });
+            })
+            .map_err(|source| BenchError::WalletCalldata {
+                reason: source.to_string(),
+            })?;
 
             let signed = sign_transaction(tx, &account.signer, SignTransactionParams::default())
                 .map_err(|source| BenchError::SignTransaction {
@@ -205,25 +207,6 @@ fn generate_tx_batch(
             Ok(format!("0x{}", hex::encode(&xdr)))
         })
         .collect()
-}
-
-fn dev_wallet_do_action_calldata(
-    target_address: ContractAddress,
-    target_entrypoint: ContractEntrypointID,
-    target_calldata: Vec<u8>,
-) -> Result<Vec<u8>, BenchError> {
-    let inner_invocation = xdrs::txs::encode(&(
-        target_address,
-        target_entrypoint,
-        10_000_000u64,
-        target_calldata.as_slice(),
-    ))
-    .map_err(|source| BenchError::WalletCalldata {
-        reason: source.to_string(),
-    })?;
-    xdrs::cxs::encode(&inner_invocation.as_slice()).map_err(|source| BenchError::WalletCalldata {
-        reason: source.to_string(),
-    })
 }
 
 fn manifest_action_entrypoint(

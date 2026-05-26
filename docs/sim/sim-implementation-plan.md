@@ -97,10 +97,12 @@ chaos, deploy new contracts, or create remote infrastructure.
   or phase so `result.jsonl` does not trail long scheduler sleeps.
 - [x] Add `runId` to `result.json` and `schemaVersion` to each `result.jsonl`
   event for future UI/API consumers.
+- [x] Reuse the shared `groundhog-signing` dev-wallet `doAction` transaction
+  helper across CLI calls, bench submit load, and sim submit smoke.
 
 ## Current Next Slice
 
-- [ ] Implement `wallet-submit-smoke` transaction construction and submit
+- [x] Implement `wallet-submit-smoke` transaction construction and submit
   execution.
 - [x] Add actor state tracking for signer, wallet address, next namespaced
   nonce, and last submitted transaction hash.
@@ -214,7 +216,7 @@ chaos, deploy new contracts, or create remote infrastructure.
 - [x] `chain-tip`
   - call `groundhog_chainTip`
   - record latency, success, and error classification
-- [ ] `wallet-submit-smoke`
+- [x] `wallet-submit-smoke`
   - build dev-wallet-compatible signed transactions from runtime-manifest
     bootstrap accounts
   - submit through `groundhog_sendRawTransaction`

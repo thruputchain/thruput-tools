@@ -494,9 +494,11 @@ logging land; target logs are only expected when a provider supplies them.
 - pointers to logs and metrics snapshots.
 
 `result.jsonl` is the append-only event stream — one versioned record per
-workload completion, chaos event, and assertion check. Live progress readers
-tail it; `result.json` is the aggregated snapshot written at run end. The
-`target-ownership.json` file records which target resources, if any, the
+workload completion, chaos event, and assertion check. Workload records include
+workload-specific correlation fields when available, such as submit transaction
+hash and nonce. Live progress readers tail it; `result.json` is the aggregated
+snapshot written at run end. The `target-ownership.json` file records which
+target resources, if any, the
 simulator created. A sweeper may only clean up resources marked
 `startedBySim`; it must never infer ownership from a stale PID alone.
 

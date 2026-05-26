@@ -43,6 +43,28 @@ pub struct BuildCallTransaction {
     pub auth_claim: AuthClaim,
 }
 
+/// Inputs for constructing a transaction through a dev-wallet `doAction`
+/// wrapper.
+#[derive(Clone, Copy, Debug)]
+pub struct BuildDevWalletDoActionTransaction<'a> {
+    /// Wallet contract address to invoke.
+    pub wallet_address: ContractAddress,
+    /// Wallet `doAction` entrypoint.
+    pub wallet_entrypoint: ContractEntrypointID,
+    /// Inner target contract address.
+    pub target_address: ContractAddress,
+    /// Inner target entrypoint.
+    pub target_entrypoint: ContractEntrypointID,
+    /// Inner target calldata bytes.
+    pub target_calldata: &'a [u8],
+    /// Gas limit used for both the outer wallet call and inner invocation.
+    pub gas_limit: u64,
+    /// Transaction expiry height.
+    pub block_expiry_height: i64,
+    /// Transaction nonce.
+    pub nonce: u64,
+}
+
 /// Inputs for constructing a deployment transaction.
 #[derive(Clone, Debug)]
 pub struct BuildDeployTransaction {
@@ -95,6 +117,46 @@ pub fn build_call_transaction(args: BuildCallTransaction) -> Transaction {
         contracts_to_deploy: VecM(vec![]),
         auth_claim: args.auth_claim,
     }
+}
+
+/// Encodes the calldata accepted by the dev-wallet `doAction` entrypoint.
+pub fn dev_wallet_do_action_calldata(
+    target_address: ContractAddress,
+    target_entrypoint: ContractEntrypointID,
+    target_gas_limit: u64,
+    target_calldata: &[u8],
+) -> Result<Vec<u8>, SigningError> {
+    let inner_invocation = xdrs::txs::encode(&(
+        target_address,
+        target_entrypoint,
+        target_gas_limit,
+        target_calldata,
+    ))
+    .map_err(|error| SigningError::XdrEncode(error.to_string()))?;
+    xdrs::cxs::encode(&inner_invocation.as_slice())
+        .map_err(|error| SigningError::XdrEncode(error.to_string()))
+}
+
+/// Builds a source-address-authenticated call through the dev-wallet
+/// `doAction` entrypoint.
+pub fn build_dev_wallet_do_action_transaction(
+    args: BuildDevWalletDoActionTransaction<'_>,
+) -> Result<Transaction, SigningError> {
+    let calldata = dev_wallet_do_action_calldata(
+        args.target_address,
+        args.target_entrypoint,
+        args.gas_limit,
+        args.target_calldata,
+    )?;
+    Ok(build_call_transaction(BuildCallTransaction {
+        invoked_address: args.wallet_address,
+        entrypoint: args.wallet_entrypoint,
+        calldata,
+        gas_limit: args.gas_limit,
+        block_expiry_height: args.block_expiry_height,
+        nonce: args.nonce,
+        auth_claim: source_address_auth_claim(),
+    }))
 }
 
 /// Builds a deployment transaction.
