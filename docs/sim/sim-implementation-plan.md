@@ -157,6 +157,9 @@ chaos, deploy new contracts, or create remote infrastructure.
   sim.
 - [ ] Add `wallet-submit-smoke` coverage to the ignored existing-target smoke
   test once the local smoke fixture can reliably provide a runtime manifest.
+- [ ] Replace `ChainProgressBuilder`'s retained uncapped observations with
+  streaming max-stall computation before long Phase 2 soaks make chain-tip
+  observation memory material.
 - [x] Replace receipt-poll's v1 latest-transaction slot with per-transaction
   receipt tracking before wiring `maxReceiptTimeoutRate`; otherwise a newer
   submit can hide timeout state for an older unreceipted transaction.
