@@ -217,7 +217,7 @@ this repo's docs:
 | [`open-rpc-spec`](crates/open-rpc-spec/) | Library + binary that assembles the canonical `groundhog-open-rpc-spec` artifact for downstream codegen |
 | [`e2e-tests`](crates/e2e-tests/) | Process-level JSON-RPC smoke tests |
 | [`bench`](crates/bench/) | Benchmark harnesses |
-| [`sim`](crates/sim/) | `hoglab` stateful simulation and soak-test harness. Runs deterministic actor schedules against an existing target, emits `result.jsonl` / `result.json`, and currently covers chain-tip, dev-wallet submit smoke, and receipt polling. |
+| [`sim`](crates/sim/) | `hoglab` stateful simulation and soak-test harness. Runs deterministic actor schedules against an existing target, emits `result.jsonl` / `result.json`, and currently covers chain-tip, dev-wallet submit smoke, receipt polling, and Phase 1 assertions. |
 
 ### Local dev setup
 

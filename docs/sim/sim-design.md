@@ -322,6 +322,21 @@ fault is usually lying. A later schema may add an explicit `ifSupported` or
 to the manifest) pointing at a committed `result.json` snapshot — see
 Comparison below.
 
+After the scheduled load ends, the simulator runs a bounded receipt drain for
+submitted transactions that still have no observed receipt. The Phase 1 drain
+polls the same per-actor FIFO receipt queues used by `receipt-poll`, retries for
+up to 10 seconds with a 250 ms interval, and emits normal `receipt-poll`
+completion events at the final simulated timestamp. These polls are
+post-schedule reconciliation traffic: they are counted in the compact
+`run-completed.scheduledWorkloads` summary for now, but consumers that need to
+distinguish scheduled load from shutdown reconciliation should use
+`result.jsonl` timing/workload details until a dedicated drain counter is added.
+`maxReceiptTimeoutRate` is computed only from submitted transactions still
+pending after this drain: `pendingAtShutdown / (present + pendingAtShutdown)`.
+Transient `null` receipt polls remain diagnostic `receiptPoll.absent` samples
+and do not count as timeouts once a later drain or scheduled poll observes the
+receipt.
+
 Open questions before freezing the schema:
 
 - Use JSON for consistency with manifests, or TOML for operator ergonomics?
@@ -482,7 +497,9 @@ logging land; target logs are only expected when a provider supplies them.
 - protocol, genesis hash, producer binary/version/commit;
 - target provider and target identity;
 - per-workload counts, errors, and latency histograms;
-- submit-to-receipt latency;
+- receipt-poll metrics, including receipt presence, transient absence,
+  pending-at-shutdown count, and submit-to-receipt latency percentiles under
+  the `receipt-poll` workload entry;
 - chain-progress timeline;
 - storage tokens consumed per workload and in total;
 - NNInt compute used per workload where the receipt surfaces it;

@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::time::Instant;
 
 use groundhog_rpc_api_types::{receipt::TransactionReceipt, transaction::TxHash};
@@ -21,6 +22,7 @@ pub struct ActorState {
     pub last_submitted_scheduled_time_ms: Option<u64>,
     pub last_submitted_completed_at: Option<Instant>,
     pub last_observed_receipt: Option<TransactionReceipt>,
+    pending_receipts: VecDeque<PendingReceipt>,
 }
 
 impl ActorState {
@@ -37,6 +39,7 @@ impl ActorState {
             last_submitted_scheduled_time_ms: None,
             last_submitted_completed_at: None,
             last_observed_receipt: None,
+            pending_receipts: VecDeque::new(),
         }
     }
 
@@ -66,13 +69,46 @@ impl ActorState {
         self.last_submitted_tx_hash = Some(tx_hash);
         self.last_submitted_scheduled_time_ms = Some(scheduled_time_ms);
         self.last_submitted_completed_at = Some(completed_at);
+        self.pending_receipts.push_back(PendingReceipt {
+            tx_hash,
+            submit_completed_at: completed_at,
+        });
         Ok(())
+    }
+
+    /// Return the next submitted transaction that still needs a receipt.
+    pub fn receipt_poll_target(&self) -> Option<ReceiptPollTarget> {
+        self.pending_receipts
+            .front()
+            .map(|pending| ReceiptPollTarget {
+                tx_hash: pending.tx_hash,
+                submit_completed_at: pending.submit_completed_at,
+            })
+    }
+
+    /// Return the number of submitted transactions still waiting for receipts.
+    pub fn pending_receipt_count(&self) -> u64 {
+        self.pending_receipts.len() as u64
     }
 
     /// Record a committed receipt observed for this actor.
     pub fn record_receipt(&mut self, receipt: TransactionReceipt) {
+        self.pending_receipts
+            .retain(|pending| pending.tx_hash != receipt.tx_hash);
         self.last_observed_receipt = Some(receipt);
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ReceiptPollTarget {
+    pub tx_hash: TxHash,
+    pub submit_completed_at: Instant,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PendingReceipt {
+    tx_hash: TxHash,
+    submit_completed_at: Instant,
 }
 
 /// Construct actor state for the maximum actor count requested by a scenario.
@@ -148,6 +184,7 @@ mod tests {
             .record_submitted_tx(tx_hash(2), 20, Instant::now())
             .expect("submitted tx should record");
         assert_eq!(actor.next_nonce_sequence, 2);
+        assert_eq!(actor.receipt_poll_target().unwrap().tx_hash, tx_hash(1));
     }
 
     #[test]
@@ -167,6 +204,33 @@ mod tests {
             .expect("submitted tx should record");
 
         assert_eq!(actor.current_nonce().unwrap(), 0x1234_5678_0000_0001);
+    }
+
+    #[test]
+    fn actor_polls_oldest_pending_receipt_and_removes_observed_receipt() {
+        let mut actor = ActorState::new(
+            2,
+            sim_account(9),
+            NonceNamespace::new(0x1234_5678).expect("namespace should fit"),
+        );
+        actor
+            .record_submitted_tx(tx_hash(1), 10, Instant::now())
+            .expect("first tx should record");
+        actor
+            .record_submitted_tx(tx_hash(2), 20, Instant::now())
+            .expect("second tx should record");
+
+        assert_eq!(actor.receipt_poll_target().unwrap().tx_hash, tx_hash(1));
+        actor.record_receipt(TransactionReceipt {
+            tx_hash: tx_hash(1),
+            height: groundhog_rpc_api_types::BlockHeight::from(1),
+            status: groundhog_rpc_api_types::receipt::ExecStatus::Ok,
+            events: Vec::new(),
+            return_data: None,
+            abort_data: None,
+        });
+
+        assert_eq!(actor.receipt_poll_target().unwrap().tx_hash, tx_hash(2));
     }
 
     #[test]

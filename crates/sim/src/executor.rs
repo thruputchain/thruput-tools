@@ -13,7 +13,7 @@ use groundhog_rpc_client::GroundhogApiClient;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::{Id as TaskId, JoinError, JoinSet};
 
-use crate::actor::ActorState;
+use crate::actor::{ActorState, ReceiptPollTarget};
 use crate::error::SimError;
 use crate::event::{EventWriter, ResultEvent, WorkloadEvent};
 use crate::manifest::{SimulationManifest, WorkloadKind};
@@ -32,6 +32,8 @@ const DEFAULT_GLOBAL_IN_FLIGHT_LIMIT: usize = 1_024;
 // Actor state is mutated only when a workload completion is recorded. Keep the
 // per-actor limit at one unless nonce/state ownership is redesigned.
 const DEFAULT_PER_ACTOR_IN_FLIGHT_LIMIT: usize = 1;
+pub const DEFAULT_RECEIPT_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
+pub const DEFAULT_RECEIPT_DRAIN_RETRY_INTERVAL: Duration = Duration::from_millis(250);
 
 /// Minimal RPC surface used by the Phase 1 simulator executor.
 pub trait SimRpcClient {
@@ -227,6 +229,70 @@ where
     Ok(())
 }
 
+/// Poll pending receipt queues once the scheduled load has stopped.
+///
+/// This prevents tail-end submissions from being classified as timed out just
+/// because no scheduled receipt-poll tick remained after the submit.
+pub async fn drain_pending_receipt_polls<C>(
+    client: C,
+    actor_states: &mut [ActorState],
+    event_writer: &mut EventWriter,
+    metrics: &mut RunMetricsBuilder,
+    simulation_time_ms: u64,
+    max_wait: Duration,
+    retry_interval: Duration,
+) -> Result<u64, SimError>
+where
+    C: SimRpcClient + Clone + Send + Sync + 'static,
+{
+    let mut drained = 0_u64;
+    let deadline = Instant::now()
+        .checked_add(max_wait)
+        .unwrap_or_else(Instant::now);
+
+    loop {
+        for actor_index in 0..actor_states.len() {
+            while let Some(target) = actor_states[actor_index].receipt_poll_target() {
+                let tick = ScheduledActorTick {
+                    phase_index: 0,
+                    actor_id: actor_states[actor_index].actor_id,
+                    actor_sequence: u64::from(actor_states[actor_index].next_nonce_sequence),
+                    simulation_time_ms,
+                };
+                let completion = execute_receipt_poll(
+                    client.clone(),
+                    &tick,
+                    PreparedReceiptPoll {
+                        target: Some(target),
+                    },
+                )
+                .await?;
+                let found_receipt = matches!(
+                    completion.receipt_poll,
+                    Some(ReceiptPollCompletion { present: true })
+                );
+                record_completion(completion, actor_states, event_writer, metrics).await?;
+                drained += 1;
+                if !found_receipt {
+                    break;
+                }
+            }
+        }
+        if actor_states
+            .iter()
+            .all(|actor| actor.receipt_poll_target().is_none())
+        {
+            return Ok(drained);
+        }
+
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(drained);
+        }
+        tokio::time::sleep(retry_interval.min(remaining)).await;
+    }
+}
+
 fn actor_semaphores(phase_starts: &[PhaseStart]) -> Vec<Arc<Semaphore>> {
     let max_users = phase_starts
         .iter()
@@ -283,8 +349,7 @@ fn prepare_workload(
             build_wallet_submit_smoke_transaction(actor, wallet_entrypoint)?,
         )),
         WorkloadKind::ReceiptPoll => Ok(PreparedWorkload::ReceiptPoll(PreparedReceiptPoll {
-            tx_hash: actor.last_submitted_tx_hash,
-            submit_completed_at: actor.last_submitted_completed_at,
+            target: actor.receipt_poll_target(),
         })),
         _ => Err(SimError::UnsupportedRuntimeWorkloads(workload_name(
             workload,
@@ -403,6 +468,12 @@ async fn record_completion(
             .ok_or(SimError::Executor("actor state missing".into()))?;
         actor.record_receipt(observed.receipt);
     }
+    if let Some(receipt_poll) = completion.receipt_poll {
+        metrics.record_receipt_poll(receipt_poll.present);
+    }
+    if let Some(latency_ms) = completion.submit_to_receipt_latency_ms {
+        metrics.record_submit_to_receipt_latency(completion.workload, latency_ms);
+    }
     if let Some(error_class) = completion.error_class {
         if completion.skipped {
             metrics.record_skipped(completion.workload, error_class);
@@ -455,6 +526,8 @@ fn backpressure_completion(
         chain_tip: None,
         submitted_transaction: None,
         observed_receipt: None,
+        receipt_poll: None,
+        submit_to_receipt_latency_ms: None,
     })
 }
 
@@ -525,6 +598,8 @@ where
                 skipped: false,
                 submitted_transaction: None,
                 observed_receipt: None,
+                receipt_poll: None,
+                submit_to_receipt_latency_ms: None,
             })
         }
         Err(error) => Ok(WorkloadCompletion {
@@ -556,6 +631,8 @@ where
             skipped: false,
             submitted_transaction: None,
             observed_receipt: None,
+            receipt_poll: None,
+            submit_to_receipt_latency_ms: None,
         }),
     }
 }
@@ -613,6 +690,8 @@ where
                 },
                 skipped: false,
                 observed_receipt: None,
+                receipt_poll: None,
+                submit_to_receipt_latency_ms: None,
             })
         }
         Err(error) => Ok(WorkloadCompletion {
@@ -644,6 +723,8 @@ where
             },
             skipped: false,
             observed_receipt: None,
+            receipt_poll: None,
+            submit_to_receipt_latency_ms: None,
         }),
     }
 }
@@ -658,9 +739,10 @@ where
 {
     let started_at_unix_ms = unix_ms()?.to_string();
     let started = Instant::now();
-    let Some(tx_hash) = poll.tx_hash else {
+    let Some(target) = poll.target else {
         return receipt_poll_no_submitted_tx(tick, started_at_unix_ms);
     };
+    let tx_hash = target.tx_hash;
 
     let response = client.transaction_receipt(tx_hash).await;
     let completed = Instant::now();
@@ -668,9 +750,9 @@ where
         started_unix: started_at_unix_ms,
         completed_unix: unix_ms()?.to_string(),
         rpc_latency: duration_ms(completed.duration_since(started)),
-        submit_to_receipt_latency: poll
-            .submit_completed_at
-            .map(|submitted| duration_ms(completed.saturating_duration_since(submitted))),
+        submit_to_receipt_latency: Some(duration_ms(
+            completed.saturating_duration_since(target.submit_completed_at),
+        )),
     };
     let tx_hash_json = json_string(&tx_hash, "txHash")?;
 
@@ -709,6 +791,8 @@ fn receipt_poll_no_submitted_tx(
             ),
         },
         skipped: true,
+        receipt_poll: None,
+        submit_to_receipt_latency_ms: None,
     })
 }
 
@@ -739,6 +823,8 @@ fn receipt_poll_present(
             ),
         },
         skipped: false,
+        receipt_poll: Some(ReceiptPollCompletion { present: true }),
+        submit_to_receipt_latency_ms: times.submit_to_receipt_latency,
     }
 }
 
@@ -763,6 +849,8 @@ fn receipt_poll_absent(
             ),
         },
         skipped: false,
+        receipt_poll: Some(ReceiptPollCompletion { present: false }),
+        submit_to_receipt_latency_ms: None,
     }
 }
 
@@ -784,6 +872,8 @@ fn receipt_poll_failed(
                 .with_error("rpc-error", error),
         },
         skipped: false,
+        receipt_poll: None,
+        submit_to_receipt_latency_ms: None,
     }
 }
 
@@ -896,6 +986,8 @@ struct WorkloadCompletion {
     chain_tip: Option<ChainTipObservation>,
     submitted_transaction: Option<SubmittedTransaction>,
     observed_receipt: Option<ObservedReceipt>,
+    receipt_poll: Option<ReceiptPollCompletion>,
+    submit_to_receipt_latency_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -911,6 +1003,11 @@ struct ObservedReceipt {
     receipt: TransactionReceipt,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ReceiptPollCompletion {
+    present: bool,
+}
+
 struct WorkloadPermits {
     _global: OwnedSemaphorePermit,
     _actor: OwnedSemaphorePermit,
@@ -924,8 +1021,7 @@ enum PreparedWorkload {
 
 #[derive(Debug, Clone, Copy)]
 struct PreparedReceiptPoll {
-    tx_hash: Option<TxHash>,
-    submit_completed_at: Option<Instant>,
+    target: Option<ReceiptPollTarget>,
 }
 
 struct ReceiptPollTimes {
@@ -1033,6 +1129,17 @@ mod tests {
     struct ReceiptClient {
         receipt: Option<TransactionReceipt>,
         requested: Arc<Mutex<Vec<TxHash>>>,
+    }
+
+    #[derive(Clone)]
+    struct EchoReceiptClient {
+        requested: Arc<Mutex<Vec<TxHash>>>,
+    }
+
+    #[derive(Clone)]
+    struct EventuallyReceiptClient {
+        requested: Arc<Mutex<Vec<TxHash>>>,
+        absent_before_present: Arc<Mutex<u32>>,
     }
 
     #[derive(Clone)]
@@ -1147,6 +1254,75 @@ mod tests {
                     .expect("requested receipt list should lock")
                     .push(tx_hash);
                 Ok(receipt)
+            }
+        }
+    }
+
+    impl SimRpcClient for EchoReceiptClient {
+        #[allow(clippy::manual_async_fn)]
+        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, String>> + Send {
+            async { Err("chain tip should not be called".into()) }
+        }
+
+        #[allow(clippy::manual_async_fn)]
+        fn send_raw_transaction(
+            &self,
+            _tx_hex: String,
+        ) -> impl Future<Output = Result<TxHash, String>> + Send {
+            async { Err("submit should not be called".into()) }
+        }
+
+        #[allow(clippy::manual_async_fn)]
+        fn transaction_receipt(
+            &self,
+            tx_hash: TxHash,
+        ) -> impl Future<Output = Result<Option<TransactionReceipt>, String>> + Send {
+            let requested = self.requested.clone();
+            async move {
+                requested
+                    .lock()
+                    .expect("requested receipt list should lock")
+                    .push(tx_hash);
+                Ok(Some(receipt(tx_hash)))
+            }
+        }
+    }
+
+    impl SimRpcClient for EventuallyReceiptClient {
+        #[allow(clippy::manual_async_fn)]
+        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, String>> + Send {
+            async { Err("chain tip should not be called".into()) }
+        }
+
+        #[allow(clippy::manual_async_fn)]
+        fn send_raw_transaction(
+            &self,
+            _tx_hex: String,
+        ) -> impl Future<Output = Result<TxHash, String>> + Send {
+            async { Err("submit should not be called".into()) }
+        }
+
+        #[allow(clippy::manual_async_fn)]
+        fn transaction_receipt(
+            &self,
+            tx_hash: TxHash,
+        ) -> impl Future<Output = Result<Option<TransactionReceipt>, String>> + Send {
+            let requested = self.requested.clone();
+            let absent_before_present = self.absent_before_present.clone();
+            async move {
+                requested
+                    .lock()
+                    .expect("requested receipt list should lock")
+                    .push(tx_hash);
+                let mut remaining = absent_before_present
+                    .lock()
+                    .expect("absent count should lock");
+                if *remaining == 0 {
+                    Ok(Some(receipt(tx_hash)))
+                } else {
+                    *remaining -= 1;
+                    Ok(None)
+                }
             }
         }
     }
@@ -1500,6 +1676,16 @@ mod tests {
             metrics.workload_counts()[&WorkloadKind::ReceiptPoll].completed,
             1
         );
+        let finished = metrics.finish();
+        assert_eq!(
+            finished
+                .workload_metrics
+                .get(&WorkloadKind::ReceiptPoll)
+                .and_then(|metrics| metrics.receipt_poll.as_ref())
+                .expect("receipt-poll summary should be recorded")
+                .absent,
+            1
+        );
 
         let events = tokio::fs::read_to_string(file.path())
             .await
@@ -1697,6 +1883,104 @@ mod tests {
         assert_eq!(event["errorClass"], "rpc-error");
         assert_eq!(event["error"], "receipt rpc failed");
         assert_eq!(event["receiptPresent"], serde_json::Value::Null);
+    }
+
+    #[tokio::test]
+    async fn shutdown_receipt_drain_records_tail_receipts() {
+        let file = NamedTempFile::new().expect("temp file should be created");
+        let mut event_writer = EventWriter::create(file.path())
+            .await
+            .expect("event writer should open");
+        let mut metrics = RunMetricsBuilder::default();
+        let mut actors = actor_states();
+        actors[0]
+            .record_submitted_tx(tx_hash(0x5a), 1, Instant::now())
+            .expect("first submitted tx should record");
+        actors[0]
+            .record_submitted_tx(tx_hash(0x5b), 2, Instant::now())
+            .expect("second submitted tx should record");
+        let requested = Arc::new(Mutex::new(Vec::new()));
+
+        let drained = drain_pending_receipt_polls(
+            EchoReceiptClient {
+                requested: requested.clone(),
+            },
+            &mut actors,
+            &mut event_writer,
+            &mut metrics,
+            30,
+            Duration::ZERO,
+            Duration::ZERO,
+        )
+        .await
+        .expect("pending receipt drain should run");
+
+        assert_eq!(drained, 2);
+        assert_eq!(
+            requested
+                .lock()
+                .expect("requested list should lock")
+                .as_slice(),
+            &[tx_hash(0x5a), tx_hash(0x5b)]
+        );
+        assert_eq!(actors[0].pending_receipt_count(), 0);
+        let finished = metrics.finish();
+        assert_eq!(
+            finished
+                .workload_metrics
+                .get(&WorkloadKind::ReceiptPoll)
+                .and_then(|metrics| metrics.receipt_poll.as_ref())
+                .expect("receipt-poll summary should be recorded")
+                .present,
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn shutdown_receipt_drain_retries_tail_receipts_until_present() {
+        let file = NamedTempFile::new().expect("temp file should be created");
+        let mut event_writer = EventWriter::create(file.path())
+            .await
+            .expect("event writer should open");
+        let mut metrics = RunMetricsBuilder::default();
+        let mut actors = actor_states();
+        actors[0]
+            .record_submitted_tx(tx_hash(0x5a), 1, Instant::now())
+            .expect("submitted tx should record");
+        let requested = Arc::new(Mutex::new(Vec::new()));
+
+        let drained = drain_pending_receipt_polls(
+            EventuallyReceiptClient {
+                requested: requested.clone(),
+                absent_before_present: Arc::new(Mutex::new(1)),
+            },
+            &mut actors,
+            &mut event_writer,
+            &mut metrics,
+            30,
+            Duration::from_secs(1),
+            Duration::ZERO,
+        )
+        .await
+        .expect("pending receipt drain should run");
+
+        assert_eq!(drained, 2);
+        assert_eq!(
+            requested
+                .lock()
+                .expect("requested list should lock")
+                .as_slice(),
+            &[tx_hash(0x5a), tx_hash(0x5a)]
+        );
+        assert_eq!(actors[0].pending_receipt_count(), 0);
+        let finished = metrics.finish();
+        let receipt_poll = finished
+            .workload_metrics
+            .get(&WorkloadKind::ReceiptPoll)
+            .and_then(|metrics| metrics.receipt_poll.as_ref())
+            .expect("receipt-poll summary should be recorded");
+        assert_eq!(receipt_poll.absent, 1);
+        assert_eq!(receipt_poll.present, 1);
     }
 
     fn manifest() -> SimulationManifest {

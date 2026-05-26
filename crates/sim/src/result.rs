@@ -142,6 +142,27 @@ pub struct WorkloadMetrics {
     pub error_counts: BTreeMap<String, u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub latency_ms: Option<LatencySummary>,
+    /// Latency summary for successful workload completions only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub success_latency_ms: Option<LatencySummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub submit_to_receipt_latency_ms: Option<LatencySummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receipt_poll: Option<ReceiptPollSummary>,
+}
+
+/// Receipt-poll outcome summary for submitted transactions.
+///
+/// `present` counts transactions whose receipt was observed. `absent` counts
+/// poll attempts that returned `null` while the transaction stayed pending.
+/// `pending_at_shutdown` counts submitted transactions that still had no
+/// observed receipt when the run ended.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReceiptPollSummary {
+    pub present: u64,
+    pub absent: u64,
+    pub pending_at_shutdown: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

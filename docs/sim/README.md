@@ -36,9 +36,15 @@ The first implementation slice validates the scenario and runtime manifest,
 derives bootstrap account signers, writes the result directory skeleton, and
 executes deterministic open-loop `chain-tip` traffic through the typed RPC
 client. `wallet-submit-smoke` now submits dev-wallet-compatible transactions;
-`receipt-poll` now tracks the latest actor-submitted transaction and records
-receipt presence, status, optional reverted/error detail, and
-submit-to-receipt wall-clock latency when the receipt appears. Receipt-poll
-ticks before an actor has submitted a transaction are emitted as skipped with
-`errorClass: "no-submitted-transaction"`; error-rate consumers should treat
-that as scheduler warm-up rather than RPC failure.
+`receipt-poll` tracks actor-submitted transactions until their receipts appear
+and records receipt presence, status, optional reverted/error detail, and
+submit-to-receipt wall-clock latency. `result.json` aggregates both workload
+latency and submit-to-receipt latency percentiles, and Phase 1 assertion
+evaluation covers max error rate, max chain stall, p99 submit latency, and
+receipt timeout rate. Timeout rate is computed from submitted transactions
+that still have no observed receipt when the run ends; transient `null`
+receipt polls are retained as `receiptPoll.absent` diagnostics but do not count
+as timeouts once the receipt appears. Receipt-poll ticks before an actor has
+submitted a transaction are emitted as skipped with `errorClass:
+"no-submitted-transaction"`; error-rate consumers should treat that as
+scheduler warm-up rather than RPC failure.

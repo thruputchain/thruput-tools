@@ -2,8 +2,8 @@
 
 **Date:** 2026-05-25
 **Status:** Draft execution checklist. Phase 1 chain-tip execution, reviewer
-hardening, live hogd-dev smoke, and submit/receipt actor-state slices are
-complete; submit/receipt assertion wiring is next.
+hardening, live hogd-dev smoke, submit/receipt actor state, and
+submit/receipt assertion wiring are complete; local-provider work is next.
 
 This plan pairs with [Simulation design](sim-design.md). The design doc owns
 the architectural boundary and long-term shape. This file is the implementation
@@ -118,7 +118,7 @@ chaos, deploy new contracts, or create remote infrastructure.
   construction.
 - [x] Add receipt-poll workload tied to actor state and record submit-to-receipt
   latency when receipts appear.
-- [ ] Wire submit/receipt assertion evaluation for p99 submit latency and
+- [x] Wire submit/receipt assertion evaluation for p99 submit latency and
   receipt timeout rate.
 
 ## Open Hardening Follow-Ups
@@ -150,9 +150,11 @@ chaos, deploy new contracts, or create remote infrastructure.
   sim.
 - [ ] Add `wallet-submit-smoke` coverage to the ignored existing-target smoke
   test once the local smoke fixture can reliably provide a runtime manifest.
-- [ ] Replace receipt-poll's v1 latest-transaction slot with per-transaction
+- [x] Replace receipt-poll's v1 latest-transaction slot with per-transaction
   receipt tracking before wiring `maxReceiptTimeoutRate`; otherwise a newer
   submit can hide timeout state for an older unreceipted transaction.
+- [ ] Cap per-actor pending receipt queues and emit simulator overload events
+  when submit rate exceeds receipt tracking capacity.
 - [ ] Decide whether pre-submit receipt-poll ticks should remain
   `WorkloadSkipped` with `errorClass: "no-submitted-transaction"` or move to a
   separate warm-up classification before error-rate consumers depend on it.
@@ -316,7 +318,7 @@ chaos, deploy new contracts, or create remote infrastructure.
   - p99
   - p99.9
   - max
-- [ ] Include submit-to-receipt latency percentiles.
+- [x] Include submit-to-receipt latency percentiles.
 - [x] Include chain progress timeline from observed `chain-tip` calls.
 - [x] Mark storage-token metrics `unsupported`.
 - [x] Mark NNInt compute metrics `unsupported`.
@@ -330,9 +332,9 @@ chaos, deploy new contracts, or create remote infrastructure.
 ### Assertions
 
 - [x] Implement `maxErrorRate`.
-- [ ] Implement `maxReceiptTimeoutRate`.
+- [x] Implement `maxReceiptTimeoutRate`.
 - [x] Implement `maxChainStall`.
-- [ ] Implement `p99SubmitLatencyMs`.
+- [x] Implement `p99SubmitLatencyMs`.
 - [x] Record every assertion check in `result.jsonl`.
 - [x] Include assertion pass/fail details in `result.json`.
 - [x] Return a nonzero process exit code when assertions fail.

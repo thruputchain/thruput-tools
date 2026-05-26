@@ -4,7 +4,8 @@ use hdrhistogram::Histogram;
 
 use crate::manifest::WorkloadKind;
 use crate::result::{
-    ChainProgressSummary, ChainTipObservation, LatencySummary, WorkloadCounts, WorkloadMetrics,
+    ChainProgressSummary, ChainTipObservation, LatencySummary, ReceiptPollSummary, WorkloadCounts,
+    WorkloadMetrics,
 };
 
 const MAX_CHAIN_PROGRESS_OBSERVATIONS: usize = 1_024;
@@ -37,6 +38,21 @@ impl RunMetricsBuilder {
 
     pub fn record_chain_tip(&mut self, observation: ChainTipObservation) {
         self.chain_progress.record(observation);
+    }
+
+    pub fn record_submit_to_receipt_latency(&mut self, workload: WorkloadKind, latency_ms: u64) {
+        self.workload_mut(workload)
+            .record_submit_to_receipt_latency(latency_ms);
+    }
+
+    pub fn record_receipt_poll(&mut self, present: bool) {
+        self.workload_mut(WorkloadKind::ReceiptPoll)
+            .record_receipt_poll(present);
+    }
+
+    pub fn record_pending_receipts_at_shutdown(&mut self, count: u64) {
+        self.workload_mut(WorkloadKind::ReceiptPoll)
+            .record_pending_receipts_at_shutdown(count);
     }
 
     pub fn workload_counts(&self) -> BTreeMap<WorkloadKind, WorkloadCounts> {
@@ -97,6 +113,9 @@ struct WorkloadMetricsBuilder {
     counts: WorkloadCounts,
     error_counts: BTreeMap<String, u64>,
     latency_histogram_ms: Histogram<u64>,
+    success_latency_histogram_ms: Histogram<u64>,
+    submit_to_receipt_latency_histogram_ms: Histogram<u64>,
+    receipt_poll: ReceiptPollSummary,
 }
 
 impl WorkloadMetricsBuilder {
@@ -105,6 +124,9 @@ impl WorkloadMetricsBuilder {
         self.latency_histogram_ms
             .record(latency_ms.max(1))
             .expect("bug: latency histogram should accept u64 millisecond samples");
+        self.success_latency_histogram_ms
+            .record(latency_ms.max(1))
+            .expect("bug: success latency histogram should accept u64 millisecond samples");
     }
 
     fn record_failure(&mut self, error_class: String, latency_ms: u64) {
@@ -120,11 +142,42 @@ impl WorkloadMetricsBuilder {
         *self.error_counts.entry(error_class).or_default() += 1;
     }
 
+    fn record_submit_to_receipt_latency(&mut self, latency_ms: u64) {
+        self.submit_to_receipt_latency_histogram_ms
+            .record(latency_ms.max(1))
+            .expect("bug: receipt latency histogram should accept u64 millisecond samples");
+    }
+
+    fn record_receipt_poll(&mut self, present: bool) {
+        if present {
+            self.receipt_poll.present += 1;
+        } else {
+            self.receipt_poll.absent += 1;
+        }
+    }
+
+    fn record_pending_receipts_at_shutdown(&mut self, count: u64) {
+        self.receipt_poll.pending_at_shutdown += count;
+    }
+
     fn finish(self) -> WorkloadMetrics {
+        let receipt_poll = if self.receipt_poll.present == 0
+            && self.receipt_poll.absent == 0
+            && self.receipt_poll.pending_at_shutdown == 0
+        {
+            None
+        } else {
+            Some(self.receipt_poll)
+        };
         WorkloadMetrics {
             counts: self.counts,
             error_counts: self.error_counts,
             latency_ms: LatencySummary::from_histogram(&self.latency_histogram_ms),
+            success_latency_ms: LatencySummary::from_histogram(&self.success_latency_histogram_ms),
+            submit_to_receipt_latency_ms: LatencySummary::from_histogram(
+                &self.submit_to_receipt_latency_histogram_ms,
+            ),
+            receipt_poll,
         }
     }
 }
@@ -136,6 +189,11 @@ impl Default for WorkloadMetricsBuilder {
             error_counts: BTreeMap::new(),
             latency_histogram_ms: Histogram::new(3)
                 .expect("bug: latency histogram precision should be valid"),
+            success_latency_histogram_ms: Histogram::new(3)
+                .expect("bug: success latency histogram precision should be valid"),
+            submit_to_receipt_latency_histogram_ms: Histogram::new(3)
+                .expect("bug: receipt latency histogram precision should be valid"),
+            receipt_poll: ReceiptPollSummary::default(),
         }
     }
 }
@@ -214,6 +272,57 @@ mod tests {
                 p99_ms: 100,
                 p999_ms: 100,
                 max_ms: 100,
+            })
+        );
+        assert_eq!(
+            chain_tip.success_latency_ms,
+            Some(LatencySummary {
+                sample_count: 2,
+                p50_ms: 10,
+                p95_ms: 20,
+                p99_ms: 20,
+                p999_ms: 20,
+                max_ms: 20,
+            })
+        );
+    }
+
+    #[test]
+    fn aggregates_receipt_poll_presence_and_submit_to_receipt_latency() {
+        let mut metrics = RunMetricsBuilder::default();
+        metrics.record_success(WorkloadKind::ReceiptPoll, 2);
+        metrics.record_receipt_poll(true);
+        metrics.record_submit_to_receipt_latency(WorkloadKind::ReceiptPoll, 12);
+        metrics.record_success(WorkloadKind::ReceiptPoll, 3);
+        metrics.record_receipt_poll(false);
+        metrics.record_pending_receipts_at_shutdown(1);
+
+        let finished = metrics.finish();
+        let receipt_poll = finished
+            .workload_metrics
+            .get(&WorkloadKind::ReceiptPoll)
+            .expect("receipt-poll metrics should exist");
+
+        assert_eq!(
+            receipt_poll
+                .receipt_poll
+                .as_ref()
+                .expect("receipt-poll summary should exist"),
+            &ReceiptPollSummary {
+                present: 1,
+                absent: 1,
+                pending_at_shutdown: 1,
+            }
+        );
+        assert_eq!(
+            receipt_poll.submit_to_receipt_latency_ms,
+            Some(LatencySummary {
+                sample_count: 1,
+                p50_ms: 12,
+                p95_ms: 12,
+                p99_ms: 12,
+                p999_ms: 12,
+                max_ms: 12,
             })
         );
     }

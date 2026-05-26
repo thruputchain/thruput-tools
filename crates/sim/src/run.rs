@@ -8,7 +8,10 @@ use crate::actor::{ActorState, build_actor_states};
 use crate::assertions::{determine_outcome, evaluate_assertions};
 use crate::error::SimError;
 use crate::event::{EventWriter, ResultEvent};
-use crate::executor::{ScheduleExecution, SimRpcClient, run_schedule};
+use crate::executor::{
+    DEFAULT_RECEIPT_DRAIN_RETRY_INTERVAL, DEFAULT_RECEIPT_DRAIN_TIMEOUT, ScheduleExecution,
+    SimRpcClient, drain_pending_receipt_polls, run_schedule,
+};
 use crate::manifest::{ResolvedRunSpec, SimulationManifest, WorkloadKind};
 use crate::metrics::{RunMetrics, RunMetricsBuilder};
 use crate::nonce::NonceNamespace;
@@ -173,7 +176,7 @@ where
 {
     let mut metrics = RunMetricsBuilder::default();
     run_schedule(
-        client,
+        client.clone(),
         ScheduleExecution {
             manifest: &input.loaded_sim.manifest,
             runtime_manifest: input.runtime_manifest,
@@ -185,10 +188,32 @@ where
         },
     )
     .await?;
+    let shutdown_simulation_time_ms = input
+        .schedule
+        .iter()
+        .map(ScheduledSimulationEvent::simulation_time_ms)
+        .max()
+        .unwrap_or_default();
+    let reconciled_receipt_polls = drain_pending_receipt_polls(
+        client,
+        input.actor_states,
+        &mut *input.event_writer,
+        &mut metrics,
+        shutdown_simulation_time_ms,
+        DEFAULT_RECEIPT_DRAIN_TIMEOUT,
+        DEFAULT_RECEIPT_DRAIN_RETRY_INTERVAL,
+    )
+    .await?;
     let completed_workloads = metrics.completed_count();
     let failed_workloads = metrics.failed_count();
     let skipped_workloads = metrics.skipped_count();
     let workload_counts = metrics.workload_counts();
+    let pending_receipts = input
+        .actor_states
+        .iter()
+        .map(ActorState::pending_receipt_count)
+        .sum();
+    metrics.record_pending_receipts_at_shutdown(pending_receipts);
     let finished_metrics = metrics.finish();
     let assertion_results = evaluate_assertions(
         &input.loaded_sim.manifest,
@@ -210,7 +235,7 @@ where
         .event_writer
         .write(&ResultEvent::RunCompleted {
             outcome,
-            scheduled_workloads: input.scheduled_workloads,
+            scheduled_workloads: input.scheduled_workloads + reconciled_receipt_polls,
             completed_workloads,
             failed_workloads,
             skipped_workloads,

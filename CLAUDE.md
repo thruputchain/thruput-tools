@@ -76,7 +76,7 @@ Workspace crates in `crates/`:
 - **sim** — `hoglab` stateful simulation and soak-test harness. Runs
   deterministic actor schedules against an existing target, writes
   `result.jsonl` / `result.json`, and currently covers chain-tip,
-  dev-wallet submit smoke, and receipt polling.
+  dev-wallet submit smoke, receipt polling, and Phase 1 assertions.
 
 See `docs/gateway/system-design.md` for full gateway design and
 `docs/gateway/api-sketch.md` for the jsonrpsee trait definition.
