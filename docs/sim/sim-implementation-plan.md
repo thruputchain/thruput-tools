@@ -160,6 +160,14 @@ chaos, deploy new contracts, or create remote infrastructure.
 - [ ] Replace `ChainProgressBuilder`'s retained uncapped observations with
   streaming max-stall computation before long Phase 2 soaks make chain-tip
   observation memory material.
+- [ ] Decide how `simulator-backpressure` skipped completions interact with run
+  outcome and `maxErrorRate`. Today they are emitted as `WorkloadSkipped` with
+  `errorClass: "simulator-backpressure"` and excluded from both the error-rate
+  denominator and the failed-workload count, so a saturated simulator can shed
+  scheduled load and still report `passed`. Options include adding a dedicated
+  `maxBackpressureRate` assertion, surfacing `backpressureRate` in
+  `result.json` for downstream gating, or reclassifying backpressure skips as
+  failures.
 - [x] Replace receipt-poll's v1 latest-transaction slot with per-transaction
   receipt tracking before wiring `maxReceiptTimeoutRate`; otherwise a newer
   submit can hide timeout state for an older unreceipted transaction.

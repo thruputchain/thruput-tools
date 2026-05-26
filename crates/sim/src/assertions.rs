@@ -156,8 +156,15 @@ fn evaluate_receipt_timeout_rate(
         .get(&WorkloadKind::ReceiptPoll)
         .and_then(|metrics| metrics.receipt_poll.as_ref())
     {
-        Some(receipts) if receipts.present + receipts.pending_at_shutdown > 0 => {
-            let total = receipts.present + receipts.pending_at_shutdown;
+        Some(receipts)
+            if receipts
+                .present
+                .saturating_add(receipts.pending_at_shutdown)
+                > 0 =>
+        {
+            let total = receipts
+                .present
+                .saturating_add(receipts.pending_at_shutdown);
             let observed = receipts.pending_at_shutdown as f64 / total as f64;
             AssertionResult {
                 name: "maxReceiptTimeoutRate".into(),

@@ -125,7 +125,7 @@ where
     let mut in_flight = 0_u64;
 
     for event in schedule {
-        in_flight -= drain_completed_workloads(
+        let drained = drain_completed_workloads(
             &mut tasks,
             &mut task_contexts,
             actor_states,
@@ -133,6 +133,9 @@ where
             metrics,
         )
         .await?;
+        in_flight = in_flight.checked_sub(drained).ok_or(SimError::Executor(
+            "in-flight workload count underflowed".into(),
+        ))?;
         while let Some(phase) =
             next_phase.next_if(|phase| phase.simulation_time_ms <= event.simulation_time_ms())
         {
@@ -224,7 +227,9 @@ where
             .ok_or(SimError::Executor("workload task set closed early".into()))?;
         let completion = join_workload(joined, &mut task_contexts)??;
         record_completion(completion, actor_states, event_writer, metrics).await?;
-        in_flight -= 1;
+        in_flight = in_flight.checked_sub(1).ok_or(SimError::Executor(
+            "in-flight workload count underflowed".into(),
+        ))?;
     }
     Ok(())
 }

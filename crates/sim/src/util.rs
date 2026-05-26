@@ -49,13 +49,19 @@ pub async fn write_json_pretty(path: PathBuf, value: &impl Serialize) -> Result<
 }
 
 /// Atomically replace a JSON file with pretty-encoded contents.
+///
+/// On rename failure the temporary file is removed before the error is
+/// returned so callers never see an orphaned `.json.tmp` sibling.
 pub async fn write_json_pretty_atomic(
     path: PathBuf,
     value: &impl Serialize,
 ) -> Result<(), SimError> {
     let tmp = path.with_extension("json.tmp");
     write_json_pretty(tmp.clone(), value).await?;
-    tokio::fs::rename(tmp, path).await?;
+    if let Err(error) = tokio::fs::rename(&tmp, &path).await {
+        let _ = tokio::fs::remove_file(&tmp).await;
+        return Err(error.into());
+    }
     Ok(())
 }
 
@@ -127,6 +133,27 @@ mod tests {
                 field: "notAString"
             }
         ));
+    }
+
+    #[tokio::test]
+    async fn write_json_pretty_atomic_cleans_up_tmp_when_rename_fails() {
+        let dir = tempdir().expect("temp dir should be created");
+        // Parent directory does not exist, so the final rename target is
+        // unreachable. The intermediate tmp write also targets the missing
+        // parent, so this exercises the error path even when the failure
+        // happens before rename.
+        let path = dir.path().join("missing").join("value.json");
+
+        let err = write_json_pretty_atomic(path.clone(), &json!({"new": true}))
+            .await
+            .expect_err("write should fail");
+        assert!(matches!(err, SimError::Io(_)));
+        assert!(
+            !path
+                .with_extension("json.tmp")
+                .try_exists()
+                .expect("tmp existence should be knowable")
+        );
     }
 
     #[tokio::test]
