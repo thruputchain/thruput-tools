@@ -138,6 +138,11 @@ chaos, deploy new contracts, or create remote infrastructure.
   even if only the `existing` provider is executable in Phase 1.
 - [ ] Add doc comments and `#[non_exhaustive]` to public library API before
   treating `groundhog-sim` as a stable downstream dependency.
+- [ ] Add a panic-safe cleanup guard for managed providers before
+  `LocalTargetProvider` can own child processes.
+- [ ] Decide whether local-provider process handles, log handles, and metrics
+  endpoints live on `ResolvedTarget` or in provider-owned state returned by
+  target acquisition.
 - [ ] Replace ad-hoc CLI output and silent internal drops with the eventual
   logging/printing discipline.
 - [ ] Add a stream header event or sibling metadata file when the first UI/live

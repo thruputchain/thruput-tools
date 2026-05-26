@@ -22,6 +22,7 @@ pub use nonce::NonceNamespace;
 pub use result::{ChaosEventState, MetricAvailability, SimResult, SimRunOutcome};
 pub use run::{ExistingRunOptions, RunSummary};
 pub use target::{
-    ChaosController, ExistingTargetProvider, ResolvedTarget, TargetOverrides, TargetProvider,
-    TargetProviderKind, TargetProviderSpec,
+    ChaosController, ChaosEventOutcome, ExistingTargetProvider, ResolvedTarget, TargetCapabilities,
+    TargetOverrides, TargetOwnership, TargetProvider, TargetProviderFuture, TargetProviderKind,
+    TargetProviderSpec,
 };

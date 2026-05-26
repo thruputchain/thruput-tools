@@ -109,7 +109,7 @@ pub fn validate_against_runtime(
     Ok(())
 }
 
-pub fn validate_existing_target_flags(
+pub(crate) fn validate_existing_target_flags(
     manifest: &SimulationManifest,
     rpc_url: Option<&str>,
     runtime_manifest_supplied: bool,

@@ -76,8 +76,19 @@ pub async fn run_existing_target(args: ExistingRunOptions) -> Result<RunSummary,
         .await?;
     let run_result =
         run_resolved_existing_target(loaded_sim, &target, out_dir, nonce_namespace).await;
-    provider.cleanup(&target).await?;
-    run_result
+    let cleanup_result = provider.cleanup(&target).await;
+    finish_target_run(run_result, cleanup_result)
+}
+
+fn finish_target_run<T>(
+    run_result: Result<T, SimError>,
+    cleanup_result: Result<(), SimError>,
+) -> Result<T, SimError> {
+    match (run_result, cleanup_result) {
+        (Err(run_error), _) => Err(run_error),
+        (Ok(_), Err(cleanup_error)) => Err(cleanup_error),
+        (Ok(output), Ok(())) => Ok(output),
+    }
 }
 
 #[allow(clippy::too_many_lines)]
@@ -472,6 +483,10 @@ mod tests {
 
         assert_eq!(result.outcome, SimRunOutcome::Passed);
         assert_eq!(result.run_id, "test-run");
+        assert_eq!(
+            result.target_identity.rpc_url.as_deref(),
+            Some("http://127.0.0.1:9545")
+        );
         let metrics = result
             .workload_metrics
             .get(&WorkloadKind::ChainTip)
@@ -528,6 +543,29 @@ mod tests {
                 .await
                 .expect("result stream existence should be knowable")
         );
+    }
+
+    #[test]
+    fn target_run_error_wins_over_cleanup_error() {
+        let result = finish_target_run::<()>(
+            Err(SimError::Executor("run failed".into())),
+            Err(SimError::Executor("cleanup failed".into())),
+        );
+
+        assert!(matches!(
+            result,
+            Err(SimError::Executor(message)) if message == "run failed"
+        ));
+    }
+
+    #[test]
+    fn target_cleanup_error_is_reported_after_successful_run() {
+        let result = finish_target_run(Ok(()), Err(SimError::Executor("cleanup failed".into())));
+
+        assert!(matches!(
+            result,
+            Err(SimError::Executor(message)) if message == "cleanup failed"
+        ));
     }
 
     fn manifest() -> SimulationManifest {
