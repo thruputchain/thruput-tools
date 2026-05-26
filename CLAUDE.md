@@ -495,9 +495,9 @@ includes test and bench code), so always use that flag locally too.
 Active design notes only. Shipped decisions live in the code; git
 history retains the design context for anything not currently active.
 
+- `docs/README.md` — index distinguishing living docs from archived
+  historical notes.
 - `docs/cli/roadmap.md` — CLI backlog, sequencing, and completion state.
-- `docs/cli/2026-04-25-hogd-dev-node-hybrid.md` — durable architecture
-  for the hogd-owned subprocess local-node backend.
 - `docs/cli/specs/2026-04-29-hogd-dev-process-contract.md` — cross-team
   hogd-dev subprocess contract.
 - `docs/cli/specs/2026-04-14-bundled-wasm-opt-design.md` — deferred
@@ -506,10 +506,12 @@ history retains the design context for anything not currently active.
   ts` TypeScript binding codegen.
 - `docs/cli/specs/2026-05-07-view-rpc-and-receipt-return-data.md` —
   view RPC and structured receipt return-data wire design.
-- `docs/cli/specs/2026-05-13-view-rpc-protocol-rs-follow-up.md` —
-  protocol/protocol-rs service contract needed to wire view execution.
 - `docs/cli/specs/2026-05-07-transaction-detail-options.md` —
   transaction detail / receipt response shape.
+- `docs/cli/specs/2026-05-11-openrpc-wire-version-design.md` — OpenRPC
+  wire-version policy and `groundhog_version` exposure.
+- `docs/cli/specs/2026-05-13-view-rpc-protocol-rs-follow-up.md` —
+  protocol/protocol-rs service contract needed to wire view execution.
 - `docs/gateway/roadmap.md` — gateway backlog and sequencing.
 - `docs/gateway/system-design.md` — gateway architecture.
 - `docs/gateway/runtime-manifest.md` — runtime manifest quickstart for
@@ -519,7 +521,17 @@ history retains the design context for anything not currently active.
   ports, genesis hash, wallet addresses, and hashes are runtime state.
 - `docs/gateway/open-questions.md` — cross-team open and resolved
   questions for the gateway design.
-- `docs/cli/foundry.md` — Foundry DX analysis for CLI design reference.
+- `docs/sim/README.md` — `hoglab` quickstart, existing-provider contract,
+  result-directory layout, and compare semantics.
+- `docs/sim/sim-design.md` — simulator design: provider boundary,
+  workload model, chaos taxonomy, result/comparison artifacts.
+- `docs/sim/sim-implementation-plan.md` — Phase 1 execution checklist
+  and Open Hardening Follow-Ups for the simulator crate.
+- `docs/archive/cli/2026-04-25-hogd-dev-node-hybrid.md` — historical
+  durable-local-node design context, retained after the hogd-dev
+  supervisor path shipped.
+- `docs/archive/cli/foundry.md` — Foundry DX analysis kept as design
+  reference; not a current task list.
 
 ## Context
 
