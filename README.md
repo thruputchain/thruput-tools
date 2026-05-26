@@ -109,6 +109,26 @@ local load shapes, and
 [`docs/gateway/examples/runtime-manifest.hogd-dev.example.json`](docs/gateway/examples/runtime-manifest.hogd-dev.example.json)
 for the v1 JSON shape.
 
+### Releases
+
+There are two release workflows:
+
+- `.github/workflows/publish.yml` publishes the Rust crates to the private
+  `groundhog` Cargo registry.
+- `.github/workflows/release.yml` builds the Linux `hogway` binary and attaches
+  it to a GitHub Release.
+
+For a normal release, bump the workspace version in `Cargo.toml` and keep the
+internal workspace dependency pins in sync. Then run the **Release package**
+workflow manually from GitHub Actions. That workflow dry-runs publishing,
+creates the matching local tag from the Cargo version (for example `v0.3.6`),
+publishes the crates, pushes the tag after publishing succeeds, and explicitly
+dispatches the binary release workflow on that same tag.
+
+The result is one matching version across the Cargo crates, git tag, and
+GitHub Release. The release repo consumes the GitHub Release asset named
+`hogway` by pinning `groundhog-rpc` in `release-manifest.toml`.
+
 ### The API surface
 
 The JSON-RPC contract lives in the OpenRPC artifact at
