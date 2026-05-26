@@ -337,7 +337,9 @@ fn validate_executable_workloads(manifest: &SimulationManifest) -> Result<(), Si
         .filter(|workload| {
             !matches!(
                 workload.name,
-                WorkloadKind::ChainTip | WorkloadKind::WalletSubmitSmoke
+                WorkloadKind::ChainTip
+                    | WorkloadKind::WalletSubmitSmoke
+                    | WorkloadKind::ReceiptPoll
             )
         })
         .map(|workload| workload_name(workload.name))

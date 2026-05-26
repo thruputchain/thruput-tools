@@ -2,8 +2,8 @@
 
 **Date:** 2026-05-25
 **Status:** Draft execution checklist. Phase 1 chain-tip execution, reviewer
-hardening, and live hogd-dev smoke slices complete; submit/receipt actor state
-is next.
+hardening, live hogd-dev smoke, and submit/receipt actor-state slices are
+complete; submit/receipt assertion wiring is next.
 
 This plan pairs with [Simulation design](sim-design.md). The design doc owns
 the architectural boundary and long-term shape. This file is the implementation
@@ -116,7 +116,7 @@ chaos, deploy new contracts, or create remote infrastructure.
 - [x] Share sign-and-0x-encode transaction helper through `groundhog-signing`.
 - [x] Add a byte-equal determinism test for wallet-submit-smoke transaction
   construction.
-- [ ] Add receipt-poll workload tied to actor state and record submit-to-receipt
+- [x] Add receipt-poll workload tied to actor state and record submit-to-receipt
   latency when receipts appear.
 - [ ] Wire submit/receipt assertion evaluation for p99 submit latency and
   receipt timeout rate.
@@ -150,6 +150,12 @@ chaos, deploy new contracts, or create remote infrastructure.
   sim.
 - [ ] Add `wallet-submit-smoke` coverage to the ignored existing-target smoke
   test once the local smoke fixture can reliably provide a runtime manifest.
+- [ ] Replace receipt-poll's v1 latest-transaction slot with per-transaction
+  receipt tracking before wiring `maxReceiptTimeoutRate`; otherwise a newer
+  submit can hide timeout state for an older unreceipted transaction.
+- [ ] Decide whether pre-submit receipt-poll ticks should remain
+  `WorkloadSkipped` with `errorClass: "no-submitted-transaction"` or move to a
+  separate warm-up classification before error-rate consumers depend on it.
 
 ## Phase 0: Skeleton
 
@@ -247,7 +253,7 @@ chaos, deploy new contracts, or create remote infrastructure.
   - record submit latency
   - record that HTTP/RPC submit success is separate from receipt execution
     success
-- [ ] `receipt-poll`
+- [x] `receipt-poll`
   - poll `groundhog_getTransactionReceipt` for actor's last submitted tx
   - record null receipt as a non-error poll result
   - record committed receipt status when present

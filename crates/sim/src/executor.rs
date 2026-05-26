@@ -4,7 +4,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use groundhog_rpc_api_types::{
-    block::ChainTip, runtime_manifest::RuntimeManifest, transaction::TxHash,
+    block::ChainTip,
+    receipt::{ExecStatus, TransactionReceipt},
+    runtime_manifest::RuntimeManifest,
+    transaction::TxHash,
 };
 use groundhog_rpc_client::GroundhogApiClient;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
@@ -37,6 +40,13 @@ pub trait SimRpcClient {
         &self,
         tx_hex: String,
     ) -> impl Future<Output = Result<TxHash, String>> + Send;
+    /// Return the committed receipt for a transaction hash, or `None` when it is not indexed yet.
+    fn transaction_receipt(
+        &self,
+        _tx_hash: TxHash,
+    ) -> impl Future<Output = Result<Option<TransactionReceipt>, String>> + Send {
+        async { Err("transaction receipt RPC is not implemented by this client".into()) }
+    }
 }
 
 impl<T> SimRpcClient for T
@@ -59,6 +69,18 @@ where
     ) -> impl Future<Output = Result<TxHash, String>> + Send {
         async {
             GroundhogApiClient::send_raw_transaction(self, tx_hex)
+                .await
+                .map_err(|error| error.to_string())
+        }
+    }
+
+    #[allow(clippy::manual_async_fn)]
+    fn transaction_receipt(
+        &self,
+        tx_hash: TxHash,
+    ) -> impl Future<Output = Result<Option<TransactionReceipt>, String>> + Send {
+        async move {
+            GroundhogApiClient::get_transaction_receipt(self, tx_hash)
                 .await
                 .map_err(|error| error.to_string())
         }
@@ -260,6 +282,10 @@ fn prepare_workload(
         WorkloadKind::WalletSubmitSmoke => Ok(PreparedWorkload::WalletSubmitSmoke(
             build_wallet_submit_smoke_transaction(actor, wallet_entrypoint)?,
         )),
+        WorkloadKind::ReceiptPoll => Ok(PreparedWorkload::ReceiptPoll(PreparedReceiptPoll {
+            tx_hash: actor.last_submitted_tx_hash,
+            submit_completed_at: actor.last_submitted_completed_at,
+        })),
         _ => Err(SimError::UnsupportedRuntimeWorkloads(workload_name(
             workload,
         ))),
@@ -289,6 +315,7 @@ fn dispatch_workload<C>(
             PreparedWorkload::WalletSubmitSmoke(tx) => {
                 execute_wallet_submit_smoke(client, &tick, tx).await
             }
+            PreparedWorkload::ReceiptPoll(poll) => execute_receipt_poll(client, &tick, poll).await,
         }
     });
     task_contexts.insert(abort.id(), context);
@@ -364,7 +391,17 @@ async fn record_completion(
         let actor = actor_states
             .get_mut(submitted.actor_id as usize)
             .ok_or(SimError::Executor("actor state missing".into()))?;
-        actor.record_submitted_tx(submitted.tx_hash, submitted.scheduled_time_ms)?;
+        actor.record_submitted_tx(
+            submitted.tx_hash,
+            submitted.scheduled_time_ms,
+            submitted.completed_at,
+        )?;
+    }
+    if let Some(observed) = completion.observed_receipt {
+        let actor = actor_states
+            .get_mut(observed.actor_id as usize)
+            .ok_or(SimError::Executor("actor state missing".into()))?;
+        actor.record_receipt(observed.receipt);
     }
     if let Some(error_class) = completion.error_class {
         if completion.skipped {
@@ -403,6 +440,10 @@ fn backpressure_completion(
                 chain_block_hash: None,
                 tx_hash: None,
                 tx_nonce: None,
+                receipt_present: None,
+                receipt_status: None,
+                receipt_status_detail: None,
+                submit_to_receipt_latency_ms: None,
                 error_class: Some("simulator-backpressure".into()),
                 error: Some(format!("{scope} in-flight limit reached: {error}")),
             },
@@ -413,6 +454,7 @@ fn backpressure_completion(
         skipped: true,
         chain_tip: None,
         submitted_transaction: None,
+        observed_receipt: None,
     })
 }
 
@@ -472,12 +514,17 @@ where
                         chain_block_hash: Some(block_hash),
                         tx_hash: None,
                         tx_nonce: None,
+                        receipt_present: None,
+                        receipt_status: None,
+                        receipt_status_detail: None,
+                        submit_to_receipt_latency_ms: None,
                         error_class: None,
                         error: None,
                     },
                 },
                 skipped: false,
                 submitted_transaction: None,
+                observed_receipt: None,
             })
         }
         Err(error) => Ok(WorkloadCompletion {
@@ -498,12 +545,17 @@ where
                     chain_block_hash: None,
                     tx_hash: None,
                     tx_nonce: None,
+                    receipt_present: None,
+                    receipt_status: None,
+                    receipt_status_detail: None,
+                    submit_to_receipt_latency_ms: None,
                     error_class: Some("rpc-error".into()),
                     error: Some(error),
                 },
             },
             skipped: false,
             submitted_transaction: None,
+            observed_receipt: None,
         }),
     }
 }
@@ -519,7 +571,8 @@ where
     let started_at_unix_ms = unix_ms()?.to_string();
     let started = Instant::now();
     let response = client.send_raw_transaction(tx.tx_hex).await;
-    let latency_ms = duration_ms(started.elapsed());
+    let completed_at = Instant::now();
+    let latency_ms = duration_ms(completed_at.duration_since(started));
     let completed_at_unix_ms = unix_ms()?.to_string();
     let tx_nonce = Some(tx.nonce.to_string());
 
@@ -535,6 +588,7 @@ where
                     actor_id: tick.actor_id,
                     tx_hash,
                     scheduled_time_ms: tick.simulation_time_ms,
+                    completed_at,
                 }),
                 event: ResultEvent::WorkloadCompleted {
                     event: WorkloadEvent {
@@ -549,11 +603,16 @@ where
                         chain_block_hash: None,
                         tx_hash: Some(tx_hash_json),
                         tx_nonce,
+                        receipt_present: None,
+                        receipt_status: None,
+                        receipt_status_detail: None,
+                        submit_to_receipt_latency_ms: None,
                         error_class: None,
                         error: None,
                     },
                 },
                 skipped: false,
+                observed_receipt: None,
             })
         }
         Err(error) => Ok(WorkloadCompletion {
@@ -575,12 +634,256 @@ where
                     chain_block_hash: None,
                     tx_hash: None,
                     tx_nonce,
+                    receipt_present: None,
+                    receipt_status: None,
+                    receipt_status_detail: None,
+                    submit_to_receipt_latency_ms: None,
                     error_class: Some("rpc-error".into()),
                     error: Some(error),
                 },
             },
             skipped: false,
+            observed_receipt: None,
         }),
+    }
+}
+
+async fn execute_receipt_poll<C>(
+    client: C,
+    tick: &ScheduledActorTick,
+    poll: PreparedReceiptPoll,
+) -> Result<WorkloadCompletion, SimError>
+where
+    C: SimRpcClient + Clone + Send + Sync + 'static,
+{
+    let started_at_unix_ms = unix_ms()?.to_string();
+    let started = Instant::now();
+    let Some(tx_hash) = poll.tx_hash else {
+        return receipt_poll_no_submitted_tx(tick, started_at_unix_ms);
+    };
+
+    let response = client.transaction_receipt(tx_hash).await;
+    let completed = Instant::now();
+    let times = ReceiptPollTimes {
+        started_unix: started_at_unix_ms,
+        completed_unix: unix_ms()?.to_string(),
+        rpc_latency: duration_ms(completed.duration_since(started)),
+        submit_to_receipt_latency: poll
+            .submit_completed_at
+            .map(|submitted| duration_ms(completed.saturating_duration_since(submitted))),
+    };
+    let tx_hash_json = json_string(&tx_hash, "txHash")?;
+
+    match response {
+        Ok(Some(receipt)) => Ok(receipt_poll_present(tick, tx_hash_json, &times, receipt)),
+        Ok(None) => Ok(receipt_poll_absent(tick, tx_hash_json, &times)),
+        Err(error) => Ok(receipt_poll_failed(tick, tx_hash_json, &times, error)),
+    }
+}
+
+fn receipt_poll_no_submitted_tx(
+    tick: &ScheduledActorTick,
+    started_at_unix_ms: String,
+) -> Result<WorkloadCompletion, SimError> {
+    Ok(WorkloadCompletion {
+        workload: WorkloadKind::ReceiptPoll,
+        latency_ms: 0,
+        error_class: Some("no-submitted-transaction".into()),
+        chain_tip: None,
+        submitted_transaction: None,
+        observed_receipt: None,
+        event: ResultEvent::WorkloadSkipped {
+            event: receipt_poll_event(
+                tick,
+                &ReceiptPollTimes {
+                    rpc_latency: 0,
+                    submit_to_receipt_latency: None,
+                    started_unix: started_at_unix_ms,
+                    completed_unix: unix_ms()?.to_string(),
+                },
+                None,
+            )
+            .with_error(
+                "no-submitted-transaction",
+                "actor has not submitted a transaction yet",
+            ),
+        },
+        skipped: true,
+    })
+}
+
+fn receipt_poll_present(
+    tick: &ScheduledActorTick,
+    tx_hash_json: String,
+    times: &ReceiptPollTimes,
+    receipt: TransactionReceipt,
+) -> WorkloadCompletion {
+    let chain_height = *receipt.height;
+    let receipt_status = SimReceiptStatus::from_exec_status(&receipt.status);
+    WorkloadCompletion {
+        workload: WorkloadKind::ReceiptPoll,
+        latency_ms: times.rpc_latency,
+        error_class: None,
+        chain_tip: None,
+        submitted_transaction: None,
+        observed_receipt: Some(ObservedReceipt {
+            actor_id: tick.actor_id,
+            receipt,
+        }),
+        event: ResultEvent::WorkloadCompleted {
+            event: receipt_poll_event(tick, times, Some(tx_hash_json)).with_receipt(
+                Some(chain_height),
+                true,
+                receipt_status,
+                times.submit_to_receipt_latency,
+            ),
+        },
+        skipped: false,
+    }
+}
+
+fn receipt_poll_absent(
+    tick: &ScheduledActorTick,
+    tx_hash_json: String,
+    times: &ReceiptPollTimes,
+) -> WorkloadCompletion {
+    WorkloadCompletion {
+        workload: WorkloadKind::ReceiptPoll,
+        latency_ms: times.rpc_latency,
+        error_class: None,
+        chain_tip: None,
+        submitted_transaction: None,
+        observed_receipt: None,
+        event: ResultEvent::WorkloadCompleted {
+            event: receipt_poll_event(tick, times, Some(tx_hash_json)).with_receipt(
+                None,
+                false,
+                SimReceiptStatus::absent(),
+                None,
+            ),
+        },
+        skipped: false,
+    }
+}
+
+fn receipt_poll_failed(
+    tick: &ScheduledActorTick,
+    tx_hash_json: String,
+    times: &ReceiptPollTimes,
+    error: String,
+) -> WorkloadCompletion {
+    WorkloadCompletion {
+        workload: WorkloadKind::ReceiptPoll,
+        latency_ms: times.rpc_latency,
+        error_class: Some("rpc-error".into()),
+        chain_tip: None,
+        submitted_transaction: None,
+        observed_receipt: None,
+        event: ResultEvent::WorkloadFailed {
+            event: receipt_poll_event(tick, times, Some(tx_hash_json))
+                .with_error("rpc-error", error),
+        },
+        skipped: false,
+    }
+}
+
+fn receipt_poll_event(
+    tick: &ScheduledActorTick,
+    times: &ReceiptPollTimes,
+    tx_hash: Option<String>,
+) -> WorkloadEvent {
+    WorkloadEvent {
+        actor_id: tick.actor_id,
+        workload: WorkloadKind::ReceiptPoll,
+        scheduled_time_ms: tick.simulation_time_ms,
+        started_at_unix_ms: times.started_unix.clone(),
+        completed_at_unix_ms: times.completed_unix.clone(),
+        latency_ms: times.rpc_latency,
+        rpc_method: "groundhog_getTransactionReceipt",
+        chain_height: None,
+        chain_block_hash: None,
+        tx_hash,
+        tx_nonce: None,
+        receipt_present: None,
+        receipt_status: None,
+        receipt_status_detail: None,
+        submit_to_receipt_latency_ms: None,
+        error_class: None,
+        error: None,
+    }
+}
+
+trait ReceiptPollEventExt {
+    fn with_receipt(
+        self,
+        chain_height: Option<i64>,
+        present: bool,
+        status: SimReceiptStatus,
+        submit_to_receipt_latency_ms: Option<u64>,
+    ) -> Self;
+    fn with_error(self, class: impl Into<String>, error: impl Into<String>) -> Self;
+}
+
+impl ReceiptPollEventExt for WorkloadEvent {
+    fn with_receipt(
+        mut self,
+        chain_height: Option<i64>,
+        present: bool,
+        status: SimReceiptStatus,
+        submit_to_receipt_latency_ms: Option<u64>,
+    ) -> Self {
+        self.chain_height = chain_height;
+        self.receipt_present = Some(present);
+        self.receipt_status = status.name;
+        self.receipt_status_detail = status.detail;
+        if present {
+            self.submit_to_receipt_latency_ms = submit_to_receipt_latency_ms;
+        }
+        self
+    }
+
+    fn with_error(mut self, class: impl Into<String>, error: impl Into<String>) -> Self {
+        self.error_class = Some(class.into());
+        self.error = Some(error.into());
+        self
+    }
+}
+
+struct SimReceiptStatus {
+    name: Option<String>,
+    detail: Option<String>,
+}
+
+impl SimReceiptStatus {
+    fn absent() -> Self {
+        Self {
+            name: None,
+            detail: None,
+        }
+    }
+
+    fn from_exec_status(status: &ExecStatus) -> Self {
+        match status {
+            ExecStatus::Ok => Self::named("ok"),
+            ExecStatus::Reverted { message } => Self {
+                name: Some("reverted".into()),
+                detail: message.clone(),
+            },
+            ExecStatus::DeterministicError { kind } => Self {
+                name: Some("deterministicError".into()),
+                detail: Some(kind.clone()),
+            },
+            ExecStatus::NonDeterministicError => Self::named("nonDeterministicError"),
+            ExecStatus::FailedGasSponsorship => Self::named("failedGasSponsorship"),
+            _ => Self::named("other"),
+        }
+    }
+
+    fn named(name: impl Into<String>) -> Self {
+        Self {
+            name: Some(name.into()),
+            detail: None,
+        }
     }
 }
 
@@ -592,6 +895,7 @@ struct WorkloadCompletion {
     skipped: bool,
     chain_tip: Option<ChainTipObservation>,
     submitted_transaction: Option<SubmittedTransaction>,
+    observed_receipt: Option<ObservedReceipt>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -599,6 +903,12 @@ struct SubmittedTransaction {
     actor_id: u32,
     tx_hash: TxHash,
     scheduled_time_ms: u64,
+    completed_at: Instant,
+}
+
+struct ObservedReceipt {
+    actor_id: u32,
+    receipt: TransactionReceipt,
 }
 
 struct WorkloadPermits {
@@ -609,6 +919,20 @@ struct WorkloadPermits {
 enum PreparedWorkload {
     ChainTip,
     WalletSubmitSmoke(BuiltSubmitTransaction),
+    ReceiptPoll(PreparedReceiptPoll),
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PreparedReceiptPoll {
+    tx_hash: Option<TxHash>,
+    submit_completed_at: Option<Instant>,
+}
+
+struct ReceiptPollTimes {
+    started_unix: String,
+    completed_unix: String,
+    rpc_latency: u64,
+    submit_to_receipt_latency: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -669,7 +993,11 @@ fn rpc_method(workload: WorkloadKind) -> &'static str {
 #[cfg(test)]
 mod tests {
     use groundhog_rpc_api_types::{
-        BlockHeight, block::ChainTip, hex::Hex0x, runtime_manifest::RuntimeManifest,
+        BlockHeight,
+        block::ChainTip,
+        hex::Hex0x,
+        receipt::{ExecStatus, TransactionReceipt},
+        runtime_manifest::RuntimeManifest,
     };
     use groundhog_signing::derive_dev_account_signer;
     use groundhog_xdr::types::{ContractAddress, SHA256Hash};
@@ -699,6 +1027,17 @@ mod tests {
     #[derive(Clone)]
     struct FailingSubmitClient {
         submitted: Arc<Mutex<Vec<String>>>,
+    }
+
+    #[derive(Clone)]
+    struct ReceiptClient {
+        receipt: Option<TransactionReceipt>,
+        requested: Arc<Mutex<Vec<TxHash>>>,
+    }
+
+    #[derive(Clone)]
+    struct FailingReceiptClient {
+        requested: Arc<Mutex<Vec<TxHash>>>,
     }
 
     impl SimRpcClient for PanickingClient {
@@ -777,6 +1116,67 @@ mod tests {
                     .expect("submitted transaction list should lock")
                     .push(tx_hex);
                 Err("submit failed".into())
+            }
+        }
+    }
+
+    impl SimRpcClient for ReceiptClient {
+        #[allow(clippy::manual_async_fn)]
+        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, String>> + Send {
+            async { Err("chain tip should not be called".into()) }
+        }
+
+        #[allow(clippy::manual_async_fn)]
+        fn send_raw_transaction(
+            &self,
+            _tx_hex: String,
+        ) -> impl Future<Output = Result<TxHash, String>> + Send {
+            async { Err("submit should not be called".into()) }
+        }
+
+        #[allow(clippy::manual_async_fn)]
+        fn transaction_receipt(
+            &self,
+            tx_hash: TxHash,
+        ) -> impl Future<Output = Result<Option<TransactionReceipt>, String>> + Send {
+            let requested = self.requested.clone();
+            let receipt = self.receipt.clone();
+            async move {
+                requested
+                    .lock()
+                    .expect("requested receipt list should lock")
+                    .push(tx_hash);
+                Ok(receipt)
+            }
+        }
+    }
+
+    impl SimRpcClient for FailingReceiptClient {
+        #[allow(clippy::manual_async_fn)]
+        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, String>> + Send {
+            async { Err("chain tip should not be called".into()) }
+        }
+
+        #[allow(clippy::manual_async_fn)]
+        fn send_raw_transaction(
+            &self,
+            _tx_hex: String,
+        ) -> impl Future<Output = Result<TxHash, String>> + Send {
+            async { Err("submit should not be called".into()) }
+        }
+
+        #[allow(clippy::manual_async_fn)]
+        fn transaction_receipt(
+            &self,
+            tx_hash: TxHash,
+        ) -> impl Future<Output = Result<Option<TransactionReceipt>, String>> + Send {
+            let requested = self.requested.clone();
+            async move {
+                requested
+                    .lock()
+                    .expect("requested receipt list should lock")
+                    .push(tx_hash);
+                Err("receipt rpc failed".into())
             }
         }
     }
@@ -989,6 +1389,316 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn receipt_poll_without_submitted_tx_is_skipped() {
+        let manifest = receipt_manifest();
+        let schedule = vec![ScheduledSimulationEvent::ActorTick(ScheduledActorTick {
+            phase_index: 0,
+            actor_id: 0,
+            actor_sequence: 0,
+            simulation_time_ms: 0,
+        })];
+        let starts = phase_starts(&manifest).expect("phase starts should generate");
+        let file = NamedTempFile::new().expect("temp file should be created");
+        let mut event_writer = EventWriter::create(file.path())
+            .await
+            .expect("event writer should open");
+        let mut metrics = RunMetricsBuilder::default();
+        let mut actors = actor_states();
+        let requested = Arc::new(Mutex::new(Vec::new()));
+
+        run_schedule(
+            ReceiptClient {
+                receipt: None,
+                requested: requested.clone(),
+            },
+            ScheduleExecution {
+                manifest: &manifest,
+                runtime_manifest: &runtime_manifest(),
+                schedule: &schedule,
+                phase_starts: &starts,
+                actor_states: &mut actors,
+                event_writer: &mut event_writer,
+                metrics: &mut metrics,
+            },
+        )
+        .await
+        .expect("receipt poll should run");
+
+        assert!(
+            requested
+                .lock()
+                .expect("requested list should lock")
+                .is_empty()
+        );
+        assert_eq!(
+            metrics.workload_counts()[&WorkloadKind::ReceiptPoll].skipped,
+            1
+        );
+
+        let events = tokio::fs::read_to_string(file.path())
+            .await
+            .expect("events should read");
+        assert!(events.contains("\"kind\":\"workload-skipped\""));
+        assert!(events.contains("\"errorClass\":\"no-submitted-transaction\""));
+    }
+
+    #[tokio::test]
+    async fn receipt_poll_records_null_receipt_as_completed() {
+        let manifest = receipt_manifest();
+        let schedule = vec![ScheduledSimulationEvent::ActorTick(ScheduledActorTick {
+            phase_index: 0,
+            actor_id: 0,
+            actor_sequence: 0,
+            simulation_time_ms: 10,
+        })];
+        let starts = phase_starts(&manifest).expect("phase starts should generate");
+        let file = NamedTempFile::new().expect("temp file should be created");
+        let mut event_writer = EventWriter::create(file.path())
+            .await
+            .expect("event writer should open");
+        let mut metrics = RunMetricsBuilder::default();
+        let mut actors = actor_states();
+        actors[0]
+            .record_submitted_tx(
+                tx_hash(0x5a),
+                3,
+                Instant::now()
+                    .checked_sub(Duration::from_millis(7))
+                    .expect("test instant should support subtraction"),
+            )
+            .expect("submitted tx should record");
+        let requested = Arc::new(Mutex::new(Vec::new()));
+
+        run_schedule(
+            ReceiptClient {
+                receipt: None,
+                requested: requested.clone(),
+            },
+            ScheduleExecution {
+                manifest: &manifest,
+                runtime_manifest: &runtime_manifest(),
+                schedule: &schedule,
+                phase_starts: &starts,
+                actor_states: &mut actors,
+                event_writer: &mut event_writer,
+                metrics: &mut metrics,
+            },
+        )
+        .await
+        .expect("receipt poll should run");
+
+        assert_eq!(
+            requested
+                .lock()
+                .expect("requested list should lock")
+                .as_slice(),
+            &[tx_hash(0x5a)]
+        );
+        assert!(actors[0].last_observed_receipt.is_none());
+        assert_eq!(
+            metrics.workload_counts()[&WorkloadKind::ReceiptPoll].completed,
+            1
+        );
+
+        let events = tokio::fs::read_to_string(file.path())
+            .await
+            .expect("events should read");
+        assert!(events.contains("\"workload\":\"receipt-poll\""));
+        assert!(events.contains("\"receiptPresent\":false"));
+        assert!(!events.contains("\"errorClass\""));
+    }
+
+    #[tokio::test]
+    async fn receipt_poll_records_receipt_status_and_submit_latency() {
+        let manifest = receipt_manifest();
+        let schedule = vec![ScheduledSimulationEvent::ActorTick(ScheduledActorTick {
+            phase_index: 0,
+            actor_id: 0,
+            actor_sequence: 0,
+            simulation_time_ms: 10,
+        })];
+        let starts = phase_starts(&manifest).expect("phase starts should generate");
+        let file = NamedTempFile::new().expect("temp file should be created");
+        let mut event_writer = EventWriter::create(file.path())
+            .await
+            .expect("event writer should open");
+        let mut metrics = RunMetricsBuilder::default();
+        let mut actors = actor_states();
+        actors[0]
+            .record_submitted_tx(
+                tx_hash(0x5a),
+                3,
+                Instant::now()
+                    .checked_sub(Duration::from_millis(7))
+                    .expect("test instant should support subtraction"),
+            )
+            .expect("submitted tx should record");
+        let requested = Arc::new(Mutex::new(Vec::new()));
+
+        run_schedule(
+            ReceiptClient {
+                receipt: Some(receipt(tx_hash(0x5a))),
+                requested: requested.clone(),
+            },
+            ScheduleExecution {
+                manifest: &manifest,
+                runtime_manifest: &runtime_manifest(),
+                schedule: &schedule,
+                phase_starts: &starts,
+                actor_states: &mut actors,
+                event_writer: &mut event_writer,
+                metrics: &mut metrics,
+            },
+        )
+        .await
+        .expect("receipt poll should run");
+
+        assert_eq!(
+            requested
+                .lock()
+                .expect("requested list should lock")
+                .as_slice(),
+            &[tx_hash(0x5a)]
+        );
+        let observed = actors[0]
+            .last_observed_receipt
+            .as_ref()
+            .expect("receipt should be recorded on actor state");
+        assert_eq!(observed.tx_hash, tx_hash(0x5a));
+        assert_eq!(
+            metrics.workload_counts()[&WorkloadKind::ReceiptPoll].completed,
+            1
+        );
+
+        let events = tokio::fs::read_to_string(file.path())
+            .await
+            .expect("events should read");
+        let event = find_event(&events, "workload-completed");
+        assert_eq!(event["kind"], "workload-completed");
+        assert_eq!(event["receiptPresent"], true);
+        assert_eq!(event["receiptStatus"], "ok");
+        assert!(
+            event["submitToReceiptLatencyMs"]
+                .as_u64()
+                .expect("submit-to-receipt latency should be numeric")
+                >= 7
+        );
+        assert_eq!(event["chainHeight"], 77);
+    }
+
+    #[tokio::test]
+    async fn receipt_poll_records_receipt_status_detail() {
+        let manifest = receipt_manifest();
+        let schedule = vec![ScheduledSimulationEvent::ActorTick(ScheduledActorTick {
+            phase_index: 0,
+            actor_id: 0,
+            actor_sequence: 0,
+            simulation_time_ms: 10,
+        })];
+        let starts = phase_starts(&manifest).expect("phase starts should generate");
+        let file = NamedTempFile::new().expect("temp file should be created");
+        let mut event_writer = EventWriter::create(file.path())
+            .await
+            .expect("event writer should open");
+        let mut metrics = RunMetricsBuilder::default();
+        let mut actors = actor_states();
+        actors[0]
+            .record_submitted_tx(tx_hash(0x5a), 3, Instant::now())
+            .expect("submitted tx should record");
+        let requested = Arc::new(Mutex::new(Vec::new()));
+
+        run_schedule(
+            ReceiptClient {
+                receipt: Some(receipt_with_status(
+                    tx_hash(0x5a),
+                    ExecStatus::DeterministicError {
+                        kind: "outOfGas".into(),
+                    },
+                )),
+                requested,
+            },
+            ScheduleExecution {
+                manifest: &manifest,
+                runtime_manifest: &runtime_manifest(),
+                schedule: &schedule,
+                phase_starts: &starts,
+                actor_states: &mut actors,
+                event_writer: &mut event_writer,
+                metrics: &mut metrics,
+            },
+        )
+        .await
+        .expect("receipt poll should run");
+
+        let events = tokio::fs::read_to_string(file.path())
+            .await
+            .expect("events should read");
+        assert!(events.contains("\"receiptStatus\":\"deterministicError\""));
+        assert!(events.contains("\"receiptStatusDetail\":\"outOfGas\""));
+    }
+
+    #[tokio::test]
+    async fn receipt_poll_records_rpc_failure() {
+        let manifest = receipt_manifest();
+        let schedule = vec![ScheduledSimulationEvent::ActorTick(ScheduledActorTick {
+            phase_index: 0,
+            actor_id: 0,
+            actor_sequence: 0,
+            simulation_time_ms: 10,
+        })];
+        let starts = phase_starts(&manifest).expect("phase starts should generate");
+        let file = NamedTempFile::new().expect("temp file should be created");
+        let mut event_writer = EventWriter::create(file.path())
+            .await
+            .expect("event writer should open");
+        let mut metrics = RunMetricsBuilder::default();
+        let mut actors = actor_states();
+        actors[0]
+            .record_submitted_tx(tx_hash(0x5a), 3, Instant::now())
+            .expect("submitted tx should record");
+        let requested = Arc::new(Mutex::new(Vec::new()));
+
+        run_schedule(
+            FailingReceiptClient {
+                requested: requested.clone(),
+            },
+            ScheduleExecution {
+                manifest: &manifest,
+                runtime_manifest: &runtime_manifest(),
+                schedule: &schedule,
+                phase_starts: &starts,
+                actor_states: &mut actors,
+                event_writer: &mut event_writer,
+                metrics: &mut metrics,
+            },
+        )
+        .await
+        .expect("receipt poll failure should be recorded as workload failure");
+
+        assert_eq!(
+            requested
+                .lock()
+                .expect("requested list should lock")
+                .as_slice(),
+            &[tx_hash(0x5a)]
+        );
+        assert!(actors[0].last_observed_receipt.is_none());
+        assert_eq!(
+            metrics.workload_counts()[&WorkloadKind::ReceiptPoll].failed,
+            1
+        );
+
+        let events = tokio::fs::read_to_string(file.path())
+            .await
+            .expect("events should read");
+        let event = find_event(&events, "workload-failed");
+        assert_eq!(event["kind"], "workload-failed");
+        assert_eq!(event["errorClass"], "rpc-error");
+        assert_eq!(event["error"], "receipt rpc failed");
+        assert_eq!(event["receiptPresent"], serde_json::Value::Null);
+    }
+
     fn manifest() -> SimulationManifest {
         serde_json::from_value(json!({
             "schemaVersion": 1,
@@ -1013,6 +1723,29 @@ mod tests {
             "workloads": [{"name": "wallet-submit-smoke", "weight": 1}]
         }))
         .expect("manifest fixture should parse")
+    }
+
+    fn receipt_manifest() -> SimulationManifest {
+        serde_json::from_value(json!({
+            "schemaVersion": 1,
+            "kind": "groundhog-simulation",
+            "name": "executor-receipt-test",
+            "seed": "seed",
+            "target": {"provider": "existing"},
+            "loadShape": [{"duration": "20ms", "users": 1, "ratePerUserHz": 100.0}],
+            "workloads": [{"name": "receipt-poll", "weight": 1}]
+        }))
+        .expect("manifest fixture should parse")
+    }
+
+    fn find_event(events: &str, kind: &str) -> serde_json::Value {
+        events
+            .lines()
+            .map(|line| {
+                serde_json::from_str::<serde_json::Value>(line).expect("event should parse")
+            })
+            .find(|event| event["kind"] == kind)
+            .unwrap_or_else(|| panic!("expected {kind} event"))
     }
 
     fn actor_states() -> Vec<ActorState> {
@@ -1073,5 +1806,24 @@ mod tests {
 
     fn prefixed_hex(byte: u8) -> String {
         format!("0x{}", hex::encode([byte; 32]))
+    }
+
+    fn tx_hash(byte: u8) -> TxHash {
+        TxHash(Hex0x(SHA256Hash::from([byte; 32])))
+    }
+
+    fn receipt(tx_hash: TxHash) -> TransactionReceipt {
+        receipt_with_status(tx_hash, ExecStatus::Ok)
+    }
+
+    fn receipt_with_status(tx_hash: TxHash, status: ExecStatus) -> TransactionReceipt {
+        TransactionReceipt {
+            tx_hash,
+            height: BlockHeight::from(77),
+            status,
+            events: Vec::new(),
+            return_data: None,
+            abort_data: None,
+        }
     }
 }

@@ -22,7 +22,7 @@ RUNTIME_MANIFEST=$(jq -r '.data.runtime_manifest.path' /tmp/groundhog-node.json)
 
 cargo run -p groundhog-sim --bin hoglab -- validate examples/sim/local-wallet-soak.json
 
-cargo run -p groundhog-sim --bin hoglab -- run examples/sim/chain-tip-smoke.json \
+cargo run -p groundhog-sim --bin hoglab -- run examples/sim/local-wallet-soak.json \
   --rpc-url http://127.0.0.1:9545 \
   --runtime-manifest "$RUNTIME_MANIFEST"
 ```
@@ -36,4 +36,9 @@ The first implementation slice validates the scenario and runtime manifest,
 derives bootstrap account signers, writes the result directory skeleton, and
 executes deterministic open-loop `chain-tip` traffic through the typed RPC
 client. `wallet-submit-smoke` now submits dev-wallet-compatible transactions;
-receipt polling remains in the Phase 1 backlog.
+`receipt-poll` now tracks the latest actor-submitted transaction and records
+receipt presence, status, optional reverted/error detail, and
+submit-to-receipt wall-clock latency when the receipt appears. Receipt-poll
+ticks before an actor has submitted a transaction are emitted as skipped with
+`errorClass: "no-submitted-transaction"`; error-rate consumers should treat
+that as scheduler warm-up rather than RPC failure.

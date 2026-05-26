@@ -217,6 +217,7 @@ this repo's docs:
 | [`open-rpc-spec`](crates/open-rpc-spec/) | Library + binary that assembles the canonical `groundhog-open-rpc-spec` artifact for downstream codegen |
 | [`e2e-tests`](crates/e2e-tests/) | Process-level JSON-RPC smoke tests |
 | [`bench`](crates/bench/) | Benchmark harnesses |
+| [`sim`](crates/sim/) | `hoglab` stateful simulation and soak-test harness. Runs deterministic actor schedules against an existing target, emits `result.jsonl` / `result.json`, and currently covers chain-tip, dev-wallet submit smoke, and receipt polling. |
 
 ### Local dev setup
 
@@ -238,6 +239,19 @@ extracts the generated runtime manifest, runs `groundhog-bench` against the
 CLI node, starts `groundhog-rpc --runtime-manifest`, and repeats the bench
 checks against the standalone gateway. Set `BENCH_SCENARIO=gateway-baseline`
 or `BENCH_SCENARIO=submit-ramp` for the heavier local scenario library.
+
+For deterministic stateful simulator runs, use `hoglab` from `crates/sim`
+against an already-started `groundhog node` target:
+
+```bash
+cargo run -p groundhog-sim --bin hoglab -- validate examples/sim/local-wallet-soak.json
+cargo run -p groundhog-sim --bin hoglab -- run examples/sim/local-wallet-soak.json \
+  --rpc-url http://127.0.0.1:9545 \
+  --runtime-manifest "$RUNTIME_MANIFEST"
+```
+
+See [`docs/sim/README.md`](docs/sim/README.md) for the current simulation
+scope and result-artifact contract.
 
 The `test` subcommand requires `groundhog login` to authenticate
 against the private crate registry that ships the Groundhog contract
@@ -271,6 +285,8 @@ Active design notes:
 - [`docs/cli/specs/`](docs/cli/specs/) — CLI and developer-tooling specs.
 - [`docs/cli/roadmap.md`](docs/cli/roadmap.md) — CLI roadmap.
 - [`docs/gateway/`](docs/gateway/) — gateway architecture and roadmap.
+- [`docs/sim/`](docs/sim/) — `hoglab` simulator design, implementation plan,
+  and quickstart.
 
 Shipped decisions live in the code; git history retains the design
 context for anything not currently active.

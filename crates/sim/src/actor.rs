@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use groundhog_rpc_api_types::{receipt::TransactionReceipt, transaction::TxHash};
 use groundhog_signing::LocalSigner;
 use groundhog_xdr::types::ContractAddress;
@@ -17,6 +19,7 @@ pub struct ActorState {
     pub next_nonce_sequence: u32,
     pub last_submitted_tx_hash: Option<TxHash>,
     pub last_submitted_scheduled_time_ms: Option<u64>,
+    pub last_submitted_completed_at: Option<Instant>,
     pub last_observed_receipt: Option<TransactionReceipt>,
 }
 
@@ -32,6 +35,7 @@ impl ActorState {
             next_nonce_sequence: 0,
             last_submitted_tx_hash: None,
             last_submitted_scheduled_time_ms: None,
+            last_submitted_completed_at: None,
             last_observed_receipt: None,
         }
     }
@@ -51,6 +55,7 @@ impl ActorState {
         &mut self,
         tx_hash: TxHash,
         scheduled_time_ms: u64,
+        completed_at: Instant,
     ) -> Result<(), ActorError> {
         self.next_nonce_sequence =
             self.next_nonce_sequence
@@ -60,6 +65,7 @@ impl ActorState {
                 })?;
         self.last_submitted_tx_hash = Some(tx_hash);
         self.last_submitted_scheduled_time_ms = Some(scheduled_time_ms);
+        self.last_submitted_completed_at = Some(completed_at);
         Ok(())
     }
 
@@ -135,11 +141,11 @@ mod tests {
 
         assert_eq!(actor.current_nonce().unwrap(), 0x1234_5678_0000_0000);
         actor
-            .record_submitted_tx(tx_hash(1), 10)
+            .record_submitted_tx(tx_hash(1), 10, Instant::now())
             .expect("submitted tx should record");
         assert_eq!(actor.current_nonce().unwrap(), 0x1234_5678_0000_0001);
         actor
-            .record_submitted_tx(tx_hash(2), 20)
+            .record_submitted_tx(tx_hash(2), 20, Instant::now())
             .expect("submitted tx should record");
         assert_eq!(actor.next_nonce_sequence, 2);
     }
@@ -157,7 +163,7 @@ mod tests {
         assert_eq!(actor.next_nonce_sequence, 0);
 
         actor
-            .record_submitted_tx(tx_hash(3), 30)
+            .record_submitted_tx(tx_hash(3), 30, Instant::now())
             .expect("submitted tx should record");
 
         assert_eq!(actor.current_nonce().unwrap(), 0x1234_5678_0000_0001);

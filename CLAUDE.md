@@ -73,11 +73,16 @@ Workspace crates in `crates/`:
 - **bench** — benchmark harnesses. `groundhog-bench --runtime-manifest
   <path>` derives bootstrapped account signers and submits dev-wallet
   compatible `sendRawTransaction` traffic.
+- **sim** — `hoglab` stateful simulation and soak-test harness. Runs
+  deterministic actor schedules against an existing target, writes
+  `result.jsonl` / `result.json`, and currently covers chain-tip,
+  dev-wallet submit smoke, and receipt polling.
 
 See `docs/gateway/system-design.md` for full gateway design and
 `docs/gateway/api-sketch.md` for the jsonrpsee trait definition.
 See `docs/gateway/runtime-manifest.md` for the local
-CLI/gateway/bench startup handoff.
+CLI/gateway/bench startup handoff. See `docs/sim/README.md` for the
+simulator quickstart and result-artifact contract.
 
 ### Gateway Data Flows
 
@@ -187,6 +192,18 @@ HOGD_DEV_BINARY=/path/to/hogd-dev scripts/smoke-local-dx.sh
 With `SMOKE_STANDALONE_GATEWAY=1`, that script also starts the standalone
 gateway from the runtime manifest; do not rehydrate gateway TOML by hand
 from individual endpoint fields unless you are testing config overrides.
+
+For simulator work, use `hoglab` against an already-started target:
+
+```bash
+cargo run -p groundhog-sim --bin hoglab -- validate examples/sim/local-wallet-soak.json
+cargo run -p groundhog-sim --bin hoglab -- run examples/sim/local-wallet-soak.json \
+  --rpc-url http://127.0.0.1:9545 \
+  --runtime-manifest "$RUNTIME_MANIFEST"
+```
+
+The current simulator contract and open implementation checklist live under
+`docs/sim/`.
 
 ### Running the CLI locally
 

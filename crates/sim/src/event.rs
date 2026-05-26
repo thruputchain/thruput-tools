@@ -111,6 +111,8 @@ pub struct WorkloadEvent {
     pub completed_at_unix_ms: String,
     pub latency_ms: u64,
     pub rpc_method: &'static str,
+    /// Chain height observed by the workload: tip height for `chain-tip`, or
+    /// receipt commit height for `receipt-poll`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chain_height: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -119,6 +121,14 @@ pub struct WorkloadEvent {
     pub tx_hash: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tx_nonce: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub receipt_present: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub receipt_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub receipt_status_detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub submit_to_receipt_latency_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_class: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -155,6 +165,10 @@ mod tests {
                 chain_block_hash: Some("0xabc".into()),
                 tx_hash: None,
                 tx_nonce: None,
+                receipt_present: None,
+                receipt_status: None,
+                receipt_status_detail: None,
+                submit_to_receipt_latency_ms: None,
                 error_class: None,
                 error: None,
             },

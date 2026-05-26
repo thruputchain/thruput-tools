@@ -100,7 +100,7 @@ pub fn evaluate_assertions(
                 .and_then(|metrics| metrics.latency_ms.as_ref())
                 .map(|latency| format!("{}ms", latency.p99_ms)),
             threshold: Some(format!("{threshold}ms")),
-            reason: Some("wallet-submit-smoke execution is not implemented yet".into()),
+            reason: Some("p99 submit latency assertion is not wired yet".into()),
         });
     }
 
@@ -110,7 +110,7 @@ pub fn evaluate_assertions(
             status: AssertionStatus::Unsupported,
             observed: None,
             threshold: Some(format!("{max_timeout_rate:.6}")),
-            reason: Some("receipt-poll execution is not implemented yet".into()),
+            reason: Some("receipt timeout-rate assertion is not wired yet".into()),
         });
     }
 
