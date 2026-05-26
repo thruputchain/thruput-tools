@@ -182,7 +182,11 @@ fn evaluate_receipt_timeout_rate(
 }
 
 fn max_chain_stall_ms(chain_progress: Option<&ChainProgressSummary>) -> Option<u64> {
-    let observations = &chain_progress?.observations;
+    let chain_progress = chain_progress?;
+    if let Some(max_stall_ms) = chain_progress.max_stall_ms {
+        return Some(max_stall_ms);
+    }
+    let observations = &chain_progress.observations;
     if observations.is_empty() {
         return None;
     }
@@ -252,6 +256,7 @@ mod tests {
             last_height: 1,
             max_height: 1,
             total_observations: 2,
+            max_stall_ms: Some(2_000),
             observations: vec![
                 ChainTipObservation {
                     simulation_time_ms: 0,
@@ -279,6 +284,7 @@ mod tests {
             last_height: 1,
             max_height: 2,
             total_observations: 3,
+            max_stall_ms: None,
             observations: vec![
                 ChainTipObservation {
                     simulation_time_ms: 2_000,
@@ -299,6 +305,35 @@ mod tests {
         };
 
         assert_eq!(max_chain_stall_ms(Some(&chain_progress)), Some(2_000));
+    }
+
+    #[test]
+    fn max_chain_stall_uses_uncapped_summary_when_available() {
+        let manifest = manifest_with_assertions(&json!({"maxChainStall": "1s"}));
+        let chain_progress = ChainProgressSummary {
+            first_height: 1,
+            last_height: 2,
+            max_height: 2,
+            total_observations: 1_025,
+            max_stall_ms: Some(5_000),
+            observations: vec![
+                ChainTipObservation {
+                    simulation_time_ms: 0,
+                    height: 1,
+                    block_hash: "0x01".into(),
+                },
+                ChainTipObservation {
+                    simulation_time_ms: 1,
+                    height: 2,
+                    block_hash: "0x02".into(),
+                },
+            ],
+        };
+
+        let results = evaluate_assertions(&manifest, 2, 0, Some(&chain_progress), &BTreeMap::new());
+
+        assert_eq!(results[0].status, AssertionStatus::Failed);
+        assert_eq!(results[0].observed.as_deref(), Some("5000ms"));
     }
 
     #[test]

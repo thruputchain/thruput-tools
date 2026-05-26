@@ -207,6 +207,8 @@ pub struct ChainProgressDelta {
     pub last_height: i64,
     pub max_height: i64,
     pub total_observations: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_stall_ms: Option<i64>,
 }
 
 /// Numeric metric delta for metrics observed on both sides.
@@ -361,6 +363,10 @@ fn chain_progress_delta(
                 last_height: delta_i64(a.last_height, b.last_height),
                 max_height: delta_i64(a.max_height, b.max_height),
                 total_observations: delta_u64(a.total_observations, b.total_observations),
+                max_stall_ms: match (a.max_stall_ms, b.max_stall_ms) {
+                    (Some(a), Some(b)) => Some(delta_u64(a, b)),
+                    _ => None,
+                },
             };
             (!delta.is_zero()).then_some(delta)
         }
@@ -541,6 +547,7 @@ impl ChainProgressDelta {
             && self.last_height == 0
             && self.max_height == 0
             && self.total_observations == 0
+            && self.max_stall_ms.unwrap_or_default() == 0
     }
 }
 
@@ -589,6 +596,7 @@ mod tests {
             "lastHeight": 12,
             "maxHeight": 12,
             "totalObservations": 2,
+            "maxStallMs": 1_000,
             "observations": []
         });
         a["assertionResults"] = json!([{
@@ -614,6 +622,7 @@ mod tests {
             "lastHeight": 20,
             "maxHeight": 21,
             "totalObservations": 5,
+            "maxStallMs": 4_000,
             "observations": []
         });
         b["assertionResults"] = json!([{
@@ -654,6 +663,13 @@ mod tests {
                 .expect("chain delta should exist")
                 .last_height,
             8
+        );
+        assert_eq!(
+            diff.chain_progress_delta
+                .as_ref()
+                .expect("chain delta should exist")
+                .max_stall_ms,
+            Some(3_000)
         );
     }
 

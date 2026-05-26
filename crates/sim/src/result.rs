@@ -200,6 +200,10 @@ pub struct ChainProgressSummary {
     pub last_height: i64,
     pub max_height: i64,
     pub total_observations: u64,
+    /// Maximum observed chain stall in simulation time, computed from all
+    /// chain-tip observations before the public observation list is capped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_stall_ms: Option<u64>,
     pub observations: Vec<ChainTipObservation>,
 }
 

@@ -204,6 +204,7 @@ struct ChainProgressBuilder {
     last: Option<ChainTipObservation>,
     max_height: Option<i64>,
     sampled: Vec<ChainTipObservation>,
+    all_observations: Vec<ChainTipObservation>,
     total_observations: u64,
 }
 
@@ -220,8 +221,9 @@ impl ChainProgressBuilder {
         self.last = Some(observation.clone());
 
         if self.sampled.len() < MAX_CHAIN_PROGRESS_OBSERVATIONS {
-            self.sampled.push(observation);
+            self.sampled.push(observation.clone());
         }
+        self.all_observations.push(observation);
     }
 
     fn finish(self) -> Option<ChainProgressSummary> {
@@ -238,9 +240,37 @@ impl ChainProgressBuilder {
             last_height: last.height,
             max_height,
             total_observations: self.total_observations,
+            max_stall_ms: max_chain_stall_ms(self.all_observations),
             observations: self.sampled,
         })
     }
+}
+
+fn max_chain_stall_ms(mut observations: Vec<ChainTipObservation>) -> Option<u64> {
+    if observations.is_empty() {
+        return None;
+    }
+    observations.sort_by_key(|observation| observation.simulation_time_ms);
+
+    let first = observations
+        .first()
+        .expect("bug: observations was checked non-empty");
+    let mut last_progress_time = first.simulation_time_ms;
+    let mut last_height = first.height;
+    let mut max_stall = 0_u64;
+
+    for observation in observations.iter().skip(1) {
+        if observation.height > last_height {
+            max_stall = max_stall.max(observation.simulation_time_ms - last_progress_time);
+            last_progress_time = observation.simulation_time_ms;
+            last_height = observation.height;
+        }
+    }
+    let last_time = observations
+        .last()
+        .expect("bug: observations was checked non-empty")
+        .simulation_time_ms;
+    Some(max_stall.max(last_time - last_progress_time))
 }
 
 #[cfg(test)]
@@ -349,6 +379,7 @@ mod tests {
         assert_eq!(progress.last_height, 9);
         assert_eq!(progress.max_height, 9);
         assert_eq!(progress.total_observations, 2);
+        assert_eq!(progress.max_stall_ms, Some(1_000));
         assert_eq!(progress.observations.len(), 2);
     }
 
@@ -370,6 +401,7 @@ mod tests {
             .expect("progress should exist");
         assert_eq!(progress.total_observations, 1_025);
         assert_eq!(progress.last_height, 1_024);
+        assert_eq!(progress.max_stall_ms, Some(1));
         assert_eq!(progress.observations.len(), MAX_CHAIN_PROGRESS_OBSERVATIONS);
         assert_eq!(
             progress
@@ -379,5 +411,33 @@ mod tests {
                 .height,
             1_023
         );
+    }
+
+    #[test]
+    fn chain_progress_max_stall_includes_observations_after_sample_cap() {
+        let mut metrics = RunMetricsBuilder::default();
+        for index in 0..MAX_CHAIN_PROGRESS_OBSERVATIONS {
+            let height = i64::try_from(index).expect("test height should fit i64");
+            metrics.record_chain_tip(ChainTipObservation {
+                simulation_time_ms: u64::try_from(index).expect("test time should fit u64"),
+                height,
+                block_hash: format!("0x{height:04x}"),
+            });
+        }
+        let capped_height =
+            i64::try_from(MAX_CHAIN_PROGRESS_OBSERVATIONS - 1).expect("test height should fit i64");
+        metrics.record_chain_tip(ChainTipObservation {
+            simulation_time_ms: u64::try_from(MAX_CHAIN_PROGRESS_OBSERVATIONS + 10)
+                .expect("test time should fit u64"),
+            height: capped_height,
+            block_hash: format!("0x{capped_height:04x}"),
+        });
+
+        let progress = metrics
+            .finish()
+            .chain_progress
+            .expect("progress should exist");
+        assert_eq!(progress.observations.len(), MAX_CHAIN_PROGRESS_OBSERVATIONS);
+        assert_eq!(progress.max_stall_ms, Some(11));
     }
 }

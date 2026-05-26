@@ -193,7 +193,9 @@ should depend on a provider trait, not on OpenTofu state.
 A target provider exposes lifecycle and capabilities on the provider itself,
 not on a target handle. The runner calls `TargetProvider::acquire` to materialize
 or locate a target, runs the simulation against the returned `ResolvedTarget`,
-and calls `TargetProvider::cleanup` at the end. Phase 1 ships:
+and calls `TargetProvider::cleanup` on normal completion and error returns. A
+panic-safe cleanup guard for managed providers remains a Phase 2 hardening item.
+Phase 1 ships:
 
 ```text
 TargetProvider {
@@ -523,7 +525,8 @@ logging land; target logs are only expected when a provider supplies them.
 - receipt-poll metrics, including receipt presence, transient absence,
   pending-at-shutdown count, and submit-to-receipt latency percentiles under
   the `receipt-poll` workload entry;
-- chain-progress timeline;
+- chain-progress timeline, plus a `maxStallMs` summary computed from all
+  observations before the public timeline is capped;
 - storage tokens consumed per workload and in total;
 - NNInt compute used per workload where the receipt surfaces it;
 - chaos event state transitions and their observed timestamps, including at
@@ -585,10 +588,13 @@ Comparisons skip numeric deltas for any metric where either side is
 the structured diff because it usually indicates a topology or instrumentation
 change, not a performance regression.
 
-The structured diff carries its own `schemaVersion` field at the root, independent of `result.json`'s schema version. Bumps follow the same rule:
-on field rename/removal/meaning change, not on additive optional fields.
+The structured diff carries its own `schemaVersion` field at the root,
+independent of `result.json`'s schema version. Bumps follow the same rule: on
+field rename/removal/meaning change, not on additive optional fields.
 `outcomeA` / `outcomeB` are surfaced explicitly so a `Passed → Aborted`
-transition is visible without inferring it from derived assertion deltas.
+transition is visible without inferring it from derived assertion deltas. Phase
+1 runs emit `passed` or `failed`; `aborted` is reserved for a future path that
+writes a final result after mid-run aborts.
 
 A scenario may set `baseline: <path>` pointing at a committed `result.json`
 snapshot. When set, `hoglab run` automatically emits a

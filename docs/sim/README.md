@@ -53,7 +53,9 @@ submit-to-receipt latency percentiles, and `receiptPoll.{present, absent,
 pendingAtShutdown}` counts. Phase 1 assertions cover:
 
 - `maxErrorRate` over `completed + failed` workloads (skipped excluded).
-- `maxChainStall` over chain-tip observations in simulation-time order.
+- `maxChainStall` over all chain-tip observations in simulation-time order; the
+  public observation timeline is capped, but `maxStallMs` is computed before
+  that cap is applied.
 - `p99SubmitLatencyMs` over successful `wallet-submit-smoke` submissions only;
   failed submits contribute to the broader `latencyMs` histogram but never to
   this assertion's percentile input.
@@ -91,7 +93,8 @@ Each run writes a self-contained result directory:
   and account derivation.
 - `target-ownership.json` - provider ownership and cleanup metadata.
 - `result.jsonl` - append-only event stream for run, target, phase, workload,
-  metric availability, assertion, and completion events.
+  assertion, and completion events, plus one `metric-availability-recorded`
+  event per run with the run-level availability snapshot.
 - `result.json` - final aggregate written atomically at run end.
 - `histograms/` and `logs/` - reserved directories for future exports and
   provider-supplied logs.
@@ -109,13 +112,18 @@ diagnostics rather than a strict regression signal.
 
 For matching or cross-config runs, compare emits `b - a` deltas for workload
 counts, workload error classes, latency percentiles, observed chain progress,
-assertion status/measurement transitions, and numeric metrics that are observed
-on both sides. Storage-token and NNInt compute deltas are skipped when either
-run marks the metric `unsupported` or `unavailable`; the availability transition
-is still reported so instrumentation changes remain visible.
+chain-stall summaries, assertion status/measurement transitions, and numeric
+metrics that are observed on both sides. Storage-token and NNInt compute deltas
+are skipped when either run marks the metric `unsupported` or `unavailable`; the
+availability transition is still reported so instrumentation changes remain
+visible.
 
 The JSON output carries a `schemaVersion` at the root. Bumps follow the same
 rules as `result.json`: only on field rename/removal/meaning change. New
 optional fields are additive and do not bump the version. The diff also
 surfaces `outcomeA`/`outcomeB` so a `Passed → Aborted` transition is visible
 without inferring it from derived assertion deltas.
+
+Phase 1 runs emit `passed` or `failed` final results. The `aborted` outcome is
+reserved in the schema for a future path that writes a final result after
+mid-run aborts.

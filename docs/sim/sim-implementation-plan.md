@@ -334,7 +334,7 @@ chaos, deploy new contracts, or create remote infrastructure.
 - [x] Include run outcome:
   - passed
   - failed
-  - aborted
+  - aborted (reserved in Phase 1; no current run path emits it)
 - [x] Write `result.json` atomically at run end.
 
 ### Assertions

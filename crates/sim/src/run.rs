@@ -306,6 +306,7 @@ async fn prepare_result_directory(
     )
     .await?;
     write_json_pretty(out_dir.join("target-ownership.json"), target_ownership).await?;
+    tokio::fs::write(out_dir.join("result.jsonl"), b"").await?;
     Ok(EventWriter::create(out_dir.join("result.jsonl")).await?)
 }
 
@@ -553,6 +554,43 @@ mod tests {
                 .await
                 .expect("result stream existence should be knowable")
         );
+    }
+
+    #[tokio::test]
+    async fn prepare_result_directory_truncates_stale_result_stream() {
+        let dir = tempdir().expect("temp dir should be created");
+        let out_dir = dir.path().join("run");
+        tokio::fs::create_dir_all(&out_dir)
+            .await
+            .expect("result dir should be created");
+        tokio::fs::write(out_dir.join("result.jsonl"), b"{\"kind\":\"stale\"}\n")
+            .await
+            .expect("stale event should write");
+
+        let mut writer = prepare_result_directory(
+            &out_dir,
+            b"{\"simulation\":true}",
+            b"{\"runtime\":true}",
+            &TargetOwnership::existing(),
+        )
+        .await
+        .expect("result directory should prepare");
+        writer
+            .write(&ResultEvent::RunCompleted {
+                outcome: SimRunOutcome::Passed,
+                scheduled_workloads: 0,
+                completed_workloads: 0,
+                failed_workloads: 0,
+                skipped_workloads: 0,
+            })
+            .await
+            .expect("event should write");
+
+        let contents = tokio::fs::read_to_string(out_dir.join("result.jsonl"))
+            .await
+            .expect("result stream should read");
+        assert!(!contents.contains("stale"));
+        assert!(contents.contains("\"kind\":\"run-completed\""));
     }
 
     #[test]
