@@ -200,7 +200,9 @@ where
     for assertion in &assertion_results {
         input
             .event_writer
-            .write(&ResultEvent::AssertionChecked(assertion.clone()))
+            .write(&ResultEvent::AssertionChecked {
+                assertion: assertion.clone(),
+            })
             .await?;
     }
     let outcome = determine_outcome(&assertion_results, failed_workloads);

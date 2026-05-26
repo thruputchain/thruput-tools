@@ -1,7 +1,6 @@
 use std::path::Path;
 
-use serde::{Serialize, Serializer, ser::Error as SerdeError};
-use serde_json::{Value, json};
+use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 
 use crate::manifest::WorkloadKind;
@@ -25,8 +24,8 @@ impl EventWriter {
         Ok(Self { file })
     }
 
-    pub async fn write<T: Serialize + ?Sized>(&mut self, event: &T) -> Result<(), EventWriteError> {
-        let bytes = serde_json::to_vec(event)?;
+    pub async fn write(&mut self, event: &ResultEvent) -> Result<(), EventWriteError> {
+        let bytes = serde_json::to_vec(&VersionedEvent::new(event))?;
         self.file.write_all(&bytes).await?;
         self.file.write_all(b"\n").await?;
         self.file.flush().await?;
@@ -34,7 +33,12 @@ impl EventWriter {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
 pub enum ResultEvent {
     RunStarted {
         run_id: String,
@@ -55,10 +59,22 @@ pub enum ResultEvent {
         users: u32,
         rate_per_user_millihz: u64,
     },
-    WorkloadCompleted(WorkloadEvent),
-    WorkloadFailed(WorkloadEvent),
-    WorkloadSkipped(WorkloadEvent),
-    AssertionChecked(AssertionResult),
+    WorkloadCompleted {
+        #[serde(flatten)]
+        event: WorkloadEvent,
+    },
+    WorkloadFailed {
+        #[serde(flatten)]
+        event: WorkloadEvent,
+    },
+    WorkloadSkipped {
+        #[serde(flatten)]
+        event: WorkloadEvent,
+    },
+    AssertionChecked {
+        #[serde(flatten)]
+        assertion: AssertionResult,
+    },
     RunCompleted {
         outcome: SimRunOutcome,
         scheduled_workloads: u64,
@@ -68,89 +84,21 @@ pub enum ResultEvent {
     },
 }
 
-impl Serialize for ResultEvent {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut value = match self {
-            Self::RunStarted {
-                run_id,
-                target_provider,
-                rpc_url,
-                actor_accounts,
-                nonce_namespace,
-            } => json!({
-                "kind": "run-started",
-                "runId": run_id,
-                "targetProvider": target_provider,
-                "rpcUrl": rpc_url,
-                "actorAccounts": actor_accounts,
-                "nonceNamespace": nonce_namespace,
-            }),
-            Self::TargetResolved {
-                target_provider,
-                rpc_url,
-                runtime_manifest_sha256,
-            } => json!({
-                "kind": "target-resolved",
-                "targetProvider": target_provider,
-                "rpcUrl": rpc_url,
-                "runtimeManifestSha256": runtime_manifest_sha256,
-            }),
-            Self::PhaseStarted {
-                phase_index,
-                simulation_time_ms,
-                duration_ms,
-                users,
-                rate_per_user_millihz,
-            } => json!({
-                "kind": "phase-started",
-                "phaseIndex": phase_index,
-                "simulationTimeMs": simulation_time_ms,
-                "durationMs": duration_ms,
-                "users": users,
-                "ratePerUserMillihz": rate_per_user_millihz,
-            }),
-            Self::WorkloadCompleted(event) => {
-                tagged_event("workload-completed", event).map_err(S::Error::custom)?
-            }
-            Self::WorkloadFailed(event) => {
-                tagged_event("workload-failed", event).map_err(S::Error::custom)?
-            }
-            Self::WorkloadSkipped(event) => {
-                tagged_event("workload-skipped", event).map_err(S::Error::custom)?
-            }
-            Self::AssertionChecked(assertion) => {
-                tagged_event("assertion-checked", assertion).map_err(S::Error::custom)?
-            }
-            Self::RunCompleted {
-                outcome,
-                scheduled_workloads,
-                completed_workloads,
-                failed_workloads,
-                skipped_workloads,
-            } => json!({
-                "kind": "run-completed",
-                "outcome": outcome,
-                "scheduledWorkloads": scheduled_workloads,
-                "completedWorkloads": completed_workloads,
-                "failedWorkloads": failed_workloads,
-                "skippedWorkloads": skipped_workloads,
-            }),
-        };
-
-        let object = value
-            .as_object_mut()
-            .ok_or_else(|| S::Error::custom("result event did not serialize as a JSON object"))?;
-        object.insert("schemaVersion".into(), json!(RESULT_EVENT_SCHEMA_VERSION));
-        value.serialize(serializer)
-    }
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VersionedEvent<'a> {
+    schema_version: u32,
+    #[serde(flatten)]
+    event: &'a ResultEvent,
 }
 
-fn tagged_event<T: Serialize>(kind: &'static str, event: &T) -> Result<Value, serde_json::Error> {
-    let mut value = serde_json::to_value(event)?;
-    if let Some(object) = value.as_object_mut() {
-        object.insert("kind".into(), json!(kind));
+impl<'a> VersionedEvent<'a> {
+    fn new(event: &'a ResultEvent) -> Self {
+        Self {
+            schema_version: RESULT_EVENT_SCHEMA_VERSION,
+            event,
+        }
     }
-    Ok(value)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -193,24 +141,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn workload_event_has_tagged_shape() {
-        let event = ResultEvent::WorkloadCompleted(WorkloadEvent {
-            actor_id: 7,
-            workload: WorkloadKind::ChainTip,
-            scheduled_time_ms: 1_000,
-            started_at_unix_ms: "10".into(),
-            completed_at_unix_ms: "12".into(),
-            latency_ms: 2,
-            rpc_method: "groundhog_chainTip",
-            chain_height: Some(42),
-            chain_block_hash: Some("0xabc".into()),
-            tx_hash: None,
-            tx_nonce: None,
-            error_class: None,
-            error: None,
-        });
+    fn versioned_workload_event_has_tagged_shape() {
+        let event = ResultEvent::WorkloadCompleted {
+            event: WorkloadEvent {
+                actor_id: 7,
+                workload: WorkloadKind::ChainTip,
+                scheduled_time_ms: 1_000,
+                started_at_unix_ms: "10".into(),
+                completed_at_unix_ms: "12".into(),
+                latency_ms: 2,
+                rpc_method: "groundhog_chainTip",
+                chain_height: Some(42),
+                chain_block_hash: Some("0xabc".into()),
+                tx_hash: None,
+                tx_nonce: None,
+                error_class: None,
+                error: None,
+            },
+        };
 
-        let value = serde_json::to_value(event).expect("event should serialize");
+        let value =
+            serde_json::to_value(VersionedEvent::new(&event)).expect("event should serialize");
         assert_eq!(
             value,
             json!({
@@ -229,6 +180,33 @@ mod tests {
         );
     }
 
+    #[test]
+    fn derived_run_event_shape_matches_stream_contract() {
+        let event = ResultEvent::RunStarted {
+            run_id: "run-1".into(),
+            target_provider: crate::target::TargetProviderKind::Existing,
+            rpc_url: "http://127.0.0.1:9545".into(),
+            actor_accounts: 2,
+            nonce_namespace: 9,
+        };
+
+        let value =
+            serde_json::to_value(VersionedEvent::new(&event)).expect("event should serialize");
+
+        assert_eq!(
+            value,
+            json!({
+                "kind": "run-started",
+                "schemaVersion": 1,
+                "runId": "run-1",
+                "targetProvider": "existing",
+                "rpcUrl": "http://127.0.0.1:9545",
+                "actorAccounts": 2,
+                "nonceNamespace": 9
+            })
+        );
+    }
+
     #[tokio::test]
     async fn event_writer_appends_to_existing_stream() {
         let file = NamedTempFile::new().expect("temp file should be created");
@@ -240,13 +218,27 @@ mod tests {
             .await
             .expect("event writer should open");
         writer
-            .write(&json!({"kind": "new"}))
+            .write(&ResultEvent::RunCompleted {
+                outcome: SimRunOutcome::Passed,
+                scheduled_workloads: 0,
+                completed_workloads: 0,
+                failed_workloads: 0,
+                skipped_workloads: 0,
+            })
             .await
             .expect("new event should append");
 
         let contents = tokio::fs::read_to_string(file.path())
             .await
             .expect("event stream should read");
-        assert_eq!(contents, "{\"kind\":\"existing\"}\n{\"kind\":\"new\"}\n");
+        assert_eq!(
+            contents,
+            concat!(
+                "{\"kind\":\"existing\"}\n",
+                "{\"schemaVersion\":1,\"kind\":\"run-completed\",\"outcome\":\"passed\",",
+                "\"scheduledWorkloads\":0,\"completedWorkloads\":0,",
+                "\"failedWorkloads\":0,\"skippedWorkloads\":0}\n"
+            )
+        );
     }
 }

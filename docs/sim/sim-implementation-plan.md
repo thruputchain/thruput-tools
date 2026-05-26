@@ -99,6 +99,9 @@ chaos, deploy new contracts, or create remote infrastructure.
   event for future UI/API consumers.
 - [x] Reuse the shared `groundhog-signing` dev-wallet `doAction` transaction
   helper across CLI calls, bench submit load, and sim submit smoke.
+- [x] Replace manual result-event serialization with derived event serialization
+  plus an `EventWriter` version wrapper so new event variants inherit
+  `schemaVersion`.
 
 ## Current Next Slice
 
@@ -127,6 +130,11 @@ chaos, deploy new contracts, or create remote infrastructure.
   treating `groundhog-sim` as a stable downstream dependency.
 - [ ] Replace ad-hoc CLI output and silent internal drops with the eventual
   logging/printing discipline.
+- [ ] Add a stream header event or sibling metadata file when the first UI/live
+  progress consumer needs stream-level run metadata without scanning JSONL.
+- [ ] Add a redacted actor view type when actor state becomes user-visible.
+- [ ] Revisit `build_actor_states` if v1's static one-account-per-actor pool
+  evolves into hot account rotation or dynamic actor spawning.
 
 ## Phase 0: Skeleton
 
