@@ -9,7 +9,6 @@ name = "hoglab"
 path = "src/main.rs"
 
 [dependencies]
-async-trait = { workspace = true }
 clap = { workspace = true }
 groundhog-rpc-api-types = { workspace = true }
 groundhog-rpc-client = { workspace = true }

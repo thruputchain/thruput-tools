@@ -66,6 +66,26 @@ impl ResultDiff {
             nnint_compute_b: availability_status(&b.metric_availability.nnint_compute_used),
         }
     }
+
+    /// Render a human-readable summary for terminal output.
+    pub fn render_text(&self) -> String {
+        format!(
+            concat!(
+                "config match: {}\n",
+                "runtime identity match: {}\n",
+                "producer identity match: {}\n",
+                "storage-token availability: {} -> {}\n",
+                "NNInt compute availability: {} -> {}"
+            ),
+            self.same_config,
+            self.runtime_identity_match,
+            self.producer_identity_match,
+            self.storage_tokens_a,
+            self.storage_tokens_b,
+            self.nnint_compute_a,
+            self.nnint_compute_b
+        )
+    }
 }
 
 fn availability_status<T>(availability: &MetricAvailability<T>) -> String {

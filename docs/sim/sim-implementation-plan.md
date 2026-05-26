@@ -84,6 +84,15 @@ chaos, deploy new contracts, or create remote infrastructure.
 - [x] Reject unsupported `result.json` schema versions during compare/load.
 - [x] Rename latency p99.9 output to strict camelCase `p999Ms`.
 - [x] Serialize wall-clock event timestamps as decimal strings.
+- [x] Surface workload task panics with actor/workload context instead of
+  collapsing them into completion-channel shutdown.
+- [x] Move compare text rendering next to the structured diff.
+- [x] Remove duplicated workload-name formatting helper.
+- [x] Fail instead of falling back to non-hex debug strings for JSON string
+  fields such as block and genesis hashes.
+- [x] Validate existing-target flags before applying CLI overrides.
+- [x] Remove async-trait allocation from the Phase 1 mock-client seam.
+- [x] Delete dead chain-progress construction helper.
 
 ## Current Next Slice
 
@@ -102,14 +111,16 @@ chaos, deploy new contracts, or create remote infrastructure.
   library modules while the surface area is still small.
 - [x] Add a mock-client orchestration test that drives schedule dispatch,
   workload execution, event writing, and result aggregation end to end.
-- [ ] Decide whether Phase 1 compare should remain identity/availability-only
-  or implement numeric deltas before external consumers rely on it.
+- [x] Keep Phase 1 compare identity/availability-only until numeric deltas are
+  intentionally added with compare-specific tests.
 - [ ] Add compare unit tests for config mismatch, metric availability
   transitions, numeric deltas, and numeric-skip behavior.
 - [ ] Add provider trait and `ChaosController` types matching the design names,
   even if only the `existing` provider is executable in Phase 1.
 - [ ] Add doc comments and `#[non_exhaustive]` to public library API before
   treating `groundhog-sim` as a stable downstream dependency.
+- [ ] Replace ad-hoc CLI output and silent internal drops with the eventual
+  logging/printing discipline.
 
 ## Phase 0: Skeleton
 
@@ -322,6 +333,13 @@ chaos, deploy new contracts, or create remote infrastructure.
 - [x] Unit-test max-chain-stall against out-of-order observations.
 - [x] Unit-test append-only JSONL event writing.
 - [x] Unit-test result schema-version rejection.
+- [x] Unit-test mock-client orchestration from schedule dispatch through
+  workload execution, event writing, and result aggregation.
+- [x] Unit-test workload panic reporting with actor/workload context.
+- [x] Unit-test utility hashing, atomic JSON writes, and JSON string field
+  failures.
+- [x] Unit-test nonce namespace uniqueness across run IDs.
+- [x] Unit-test existing-provider target ownership artifact writing.
 - [ ] Unit-test compare output for:
   - same-config numeric deltas
   - cross-config manifest hash mismatch

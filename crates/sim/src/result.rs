@@ -181,29 +181,6 @@ pub struct ChainProgressSummary {
     pub observations: Vec<ChainTipObservation>,
 }
 
-impl ChainProgressSummary {
-    pub fn from_observations(observations: Vec<ChainTipObservation>) -> Option<Self> {
-        let first = observations.first()?;
-        let last = observations
-            .last()
-            .expect("bug: first observation existed, so last must exist");
-        let max_height = observations
-            .iter()
-            .map(|observation| observation.height)
-            .max()
-            .expect("bug: first observation existed, so max must exist");
-
-        Some(Self {
-            first_height: first.height,
-            last_height: last.height,
-            max_height,
-            total_observations: u64::try_from(observations.len())
-                .expect("bug: observation length should fit u64"),
-            observations,
-        })
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChainTipObservation {

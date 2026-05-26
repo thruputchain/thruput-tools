@@ -201,7 +201,7 @@ fn select_workload(
     hasher.update(b"hoglab workload selection v1");
     hasher.update(seed.as_bytes());
     hasher.update(scenario_name.as_bytes());
-    let phase_index = u64::try_from(phase_index).expect("phase index should fit u64");
+    let phase_index = u64::try_from(phase_index).expect("bug: phase index should fit u64");
     hasher.update(phase_index.to_le_bytes());
     hasher.update(actor_id.to_le_bytes());
     hasher.update(actor_sequence.to_le_bytes());

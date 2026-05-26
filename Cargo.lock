@@ -1221,7 +1221,6 @@ dependencies = [
 name = "groundhog-sim"
 version = "0.0.0"
 dependencies = [
- "async-trait",
  "clap",
  "groundhog-rpc-api-types",
  "groundhog-rpc-client",

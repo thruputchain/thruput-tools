@@ -5,7 +5,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::error::SimError;
-use crate::manifest::SimulationManifest;
+use crate::manifest::{SimulationManifest, WorkloadKind};
 
 /// A simulation manifest loaded from disk with its encoded bytes and hash.
 #[derive(Debug, Clone)]
@@ -85,10 +85,71 @@ pub fn duration_ms(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
-/// Convert a serializable API value into its JSON string representation.
-pub fn json_string<T: Serialize + std::fmt::Debug>(value: &T) -> String {
+/// Convert a serializable API value into a JSON string field.
+pub fn json_string<T: Serialize>(value: &T, field: &'static str) -> Result<String, SimError> {
     serde_json::to_value(value)
+        .map_err(SimError::Json)?
+        .as_str()
+        .map(str::to_owned)
+        .ok_or(SimError::JsonStringField { field })
+}
+
+/// Return the JSON name for a workload kind.
+pub fn workload_name(workload: WorkloadKind) -> String {
+    serde_json::to_value(workload)
         .ok()
         .and_then(|value| value.as_str().map(str::to_owned))
-        .unwrap_or_else(|| format!("{value:?}"))
+        .unwrap_or_else(|| format!("{workload:?}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+    use tempfile::tempdir;
+
+    use super::*;
+
+    #[test]
+    fn sha256_hex_returns_prefixed_digest() {
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "0xba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
+    fn json_string_rejects_non_string_values() {
+        let err = json_string(&123_u64, "notAString").expect_err("number should reject");
+
+        assert!(matches!(
+            err,
+            SimError::JsonStringField {
+                field: "notAString"
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn write_json_pretty_atomic_replaces_target() {
+        let dir = tempdir().expect("temp dir should be created");
+        let path = dir.path().join("value.json");
+        tokio::fs::write(&path, b"{\"old\":true}")
+            .await
+            .expect("seed file should write");
+
+        write_json_pretty_atomic(path.clone(), &json!({"new": true}))
+            .await
+            .expect("atomic write should succeed");
+
+        let value: serde_json::Value =
+            serde_json::from_slice(&tokio::fs::read(&path).await.expect("json should read"))
+                .expect("json should parse");
+        assert_eq!(value, json!({"new": true}));
+        assert!(
+            !path
+                .with_extension("json.tmp")
+                .try_exists()
+                .expect("tmp existence should be knowable")
+        );
+    }
 }

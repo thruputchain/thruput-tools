@@ -106,17 +106,7 @@ async fn compare_runs(run_a: PathBuf, run_b: PathBuf, json: bool) -> Result<(), 
     if json {
         println!("{}", serde_json::to_string_pretty(&diff)?);
     } else {
-        println!("config match: {}", diff.same_config);
-        println!("runtime identity match: {}", diff.runtime_identity_match);
-        println!("producer identity match: {}", diff.producer_identity_match);
-        println!(
-            "storage-token availability: {} -> {}",
-            diff.storage_tokens_a, diff.storage_tokens_b
-        );
-        println!(
-            "NNInt compute availability: {} -> {}",
-            diff.nnint_compute_a, diff.nnint_compute_b
-        );
+        println!("{}", diff.render_text());
     }
     Ok(())
 }

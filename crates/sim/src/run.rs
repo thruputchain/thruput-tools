@@ -21,7 +21,7 @@ use crate::scheduler::{PhaseStart, ScheduledSimulationEvent, generate_schedule, 
 use crate::target::{TargetOwnership, TargetProviderKind};
 use crate::util::{
     LoadedSimulationManifest, default_run_dir, json_string, load_simulation_manifest, run_id,
-    write_json_pretty, write_json_pretty_atomic,
+    workload_name, write_json_pretty, write_json_pretty_atomic,
 };
 use crate::validation::{
     validate_against_runtime, validate_existing_target_flags, validate_manifest,
@@ -53,6 +53,11 @@ pub async fn run_existing_target(args: ExistingRunOptions) -> Result<RunSummary,
         loaded_sim.manifest.seed = seed;
     }
     validate_manifest(&loaded_sim.manifest)?;
+    validate_existing_target_flags(
+        &loaded_sim.manifest,
+        args.rpc_url.as_deref(),
+        args.runtime_manifest.is_some(),
+    )?;
 
     let runtime_manifest_path = args
         .runtime_manifest
@@ -66,12 +71,11 @@ pub async fn run_existing_target(args: ExistingRunOptions) -> Result<RunSummary,
         .ok_or(SimError::MissingRpcUrl)?;
     loaded_sim.manifest.target.rpc_url = Some(rpc_url.clone());
     loaded_sim.manifest.target.runtime_manifest = Some(runtime_manifest_path.clone());
-    validate_existing_target_flags(&loaded_sim.manifest, Some(&rpc_url), true)?;
 
     let loaded_runtime = load_runtime_manifest(&runtime_manifest_path).await?;
     let accounts = derive_accounts(&loaded_runtime.manifest)?;
-    validate_against_runtime(&loaded_sim.manifest, &loaded_runtime.manifest)?;
     validate_executable_workloads(&loaded_sim.manifest)?;
+    validate_against_runtime(&loaded_sim.manifest, &loaded_runtime.manifest)?;
 
     let run_id = run_id()?;
     let nonce_namespace = match args.nonce_namespace {
@@ -140,6 +144,7 @@ pub async fn run_existing_target(args: ExistingRunOptions) -> Result<RunSummary,
 }
 
 /// Inputs for executing an already-loaded simulation.
+#[derive(Debug)]
 pub struct LoadedExecution<'a> {
     pub loaded_sim: &'a LoadedSimulationManifest,
     pub runtime_manifest: &'a RuntimeManifest,
@@ -200,7 +205,7 @@ where
         })
         .await?;
 
-    Ok(build_result(BuildResultInput {
+    build_result(BuildResultInput {
         loaded_sim: input.loaded_sim,
         runtime_manifest: input.runtime_manifest,
         runtime_manifest_sha256: input.runtime_manifest_sha256,
@@ -210,7 +215,7 @@ where
         workload_counts,
         finished_metrics,
         assertion_results,
-    }))
+    })
 }
 
 async fn prepare_result_directory(
@@ -273,8 +278,8 @@ struct BuildResultInput<'a> {
     assertion_results: Vec<AssertionResult>,
 }
 
-fn build_result(input: BuildResultInput<'_>) -> SimResult {
-    SimResult {
+fn build_result(input: BuildResultInput<'_>) -> Result<SimResult, SimError> {
+    Ok(SimResult {
         schema_version: SIM_RESULT_SCHEMA_VERSION,
         name: input.loaded_sim.manifest.name.clone(),
         outcome: input.outcome,
@@ -286,7 +291,7 @@ fn build_result(input: BuildResultInput<'_>) -> SimResult {
         runtime_identity: RuntimeIdentity {
             network_id: input.runtime_manifest.network_id.clone(),
             protocol: input.runtime_manifest.protocol.clone(),
-            genesis_hash: json_string(&input.runtime_manifest.genesis_hash),
+            genesis_hash: json_string(&input.runtime_manifest.genesis_hash, "genesisHash")?,
             producer: ProducerIdentity {
                 binary: input.runtime_manifest.producer.binary.clone(),
                 version: input.runtime_manifest.producer.version.clone(),
@@ -307,7 +312,7 @@ fn build_result(input: BuildResultInput<'_>) -> SimResult {
         chain_progress: input.finished_metrics.chain_progress,
         assertion_results: input.assertion_results,
         chaos_events: Vec::new(),
-    }
+    })
 }
 
 fn validate_executable_workloads(manifest: &SimulationManifest) -> Result<(), SimError> {
@@ -326,19 +331,12 @@ fn validate_executable_workloads(manifest: &SimulationManifest) -> Result<(), Si
     }
 }
 
-fn workload_name(workload: WorkloadKind) -> String {
-    serde_json::to_value(workload)
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .unwrap_or_else(|| format!("{workload:?}"))
-}
-
 #[cfg(test)]
 mod tests {
     use groundhog_rpc_api_types::{BlockHeight, block::ChainTip, hex::Hex0x};
     use groundhog_xdr::types::SHA256Hash;
     use serde_json::json;
-    use tempfile::NamedTempFile;
+    use tempfile::{NamedTempFile, tempdir};
 
     use super::*;
     use crate::event::EventWriter;
@@ -351,10 +349,11 @@ mod tests {
         tip: ChainTip,
     }
 
-    #[async_trait::async_trait]
     impl SimRpcClient for MockClient {
-        async fn chain_tip(&self) -> Result<ChainTip, String> {
-            Ok(self.tip.clone())
+        #[allow(clippy::manual_async_fn)]
+        fn chain_tip(&self) -> impl std::future::Future<Output = Result<ChainTip, String>> + Send {
+            let tip = self.tip.clone();
+            async move { Ok(tip) }
         }
     }
 
@@ -417,6 +416,39 @@ mod tests {
             .expect("events should read");
         assert!(events.contains("\"kind\":\"workload-completed\""));
         assert!(events.contains("\"kind\":\"run-completed\""));
+    }
+
+    #[tokio::test]
+    async fn prepare_result_directory_writes_existing_target_ownership() {
+        let dir = tempdir().expect("temp dir should be created");
+        let out_dir = dir.path().join("run");
+        let mut writer =
+            prepare_result_directory(&out_dir, b"{\"simulation\":true}", b"{\"runtime\":true}")
+                .await
+                .expect("result directory should prepare");
+        writer
+            .write(&ResultEvent::RunCompleted {
+                outcome: SimRunOutcome::Passed,
+                scheduled_workloads: 0,
+                completed_workloads: 0,
+                failed_workloads: 0,
+                skipped_workloads: 0,
+            })
+            .await
+            .expect("event should write");
+
+        let ownership: TargetOwnership = serde_json::from_slice(
+            &tokio::fs::read(out_dir.join("target-ownership.json"))
+                .await
+                .expect("ownership should read"),
+        )
+        .expect("ownership should parse");
+        assert_eq!(ownership, TargetOwnership::existing());
+        assert!(
+            tokio::fs::try_exists(out_dir.join("result.jsonl"))
+                .await
+                .expect("result stream existence should be knowable")
+        );
     }
 
     fn manifest() -> SimulationManifest {

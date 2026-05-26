@@ -67,4 +67,14 @@ mod tests {
         assert_eq!(a, b);
         assert_ne!(a, c);
     }
+
+    #[test]
+    fn generated_namespace_changes_across_run_ids() {
+        let namespaces: std::collections::BTreeSet<_> = ["run-1", "run-2", "run-3"]
+            .into_iter()
+            .map(|run_id| NonceNamespace::generate("seed", "scenario", run_id).get())
+            .collect();
+
+        assert_eq!(namespaces.len(), 3);
+    }
 }

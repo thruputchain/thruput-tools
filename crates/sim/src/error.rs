@@ -23,6 +23,12 @@ pub enum SimError {
     RpcClient(String),
     #[error("executor error: {0}")]
     Executor(String),
+    #[error("workload task panicked for actor {actor_id} {workload:?}: {payload}")]
+    WorkloadPanic {
+        actor_id: u32,
+        workload: crate::manifest::WorkloadKind,
+        payload: String,
+    },
     #[error("run completed with failed workloads; result directory: {0}")]
     RunFailed(String),
     #[error("existing target requires an RPC URL")]
@@ -33,4 +39,6 @@ pub enum SimError {
     ClockBeforeEpoch,
     #[error("unsupported result schemaVersion {actual} in {path}")]
     UnsupportedResultSchema { actual: u32, path: String },
+    #[error("serialized field `{field}` was not a JSON string")]
+    JsonStringField { field: &'static str },
 }
