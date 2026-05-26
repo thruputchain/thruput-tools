@@ -115,8 +115,9 @@ There are two release workflows:
 
 - `.github/workflows/publish.yml` publishes the Rust crates to the private
   `groundhog` Cargo registry.
-- `.github/workflows/release.yml` builds the Linux `hogway` and `groundhog`
-  binaries and attaches them to a GitHub Release.
+- `.github/workflows/release.yml` builds Linux `hogway` and `groundhog`
+  binaries, packages each app as a per-target `.tar.gz`, and attaches the
+  archives plus `SHA256SUMS` to a GitHub Release.
 
 For a normal release, bump the workspace version in `Cargo.toml` and keep the
 internal workspace dependency pins in sync. Then run the **Release package**
@@ -126,9 +127,17 @@ publishes the crates, pushes the tag after publishing succeeds, and explicitly
 dispatches the binary release workflow on that same tag.
 
 The result is one matching version across the Cargo crates, git tag, and
-GitHub Release. The release assets are named `hogway` and `groundhog`. The
-release repo consumes the `hogway` asset today by pinning `groundhog-rpc` in
-`release-manifest.toml`; CLI packaging can consume the `groundhog` asset the
+GitHub Release. Release assets follow this naming pattern:
+
+```text
+hogway-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz
+groundhog-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz
+SHA256SUMS
+```
+
+Each archive contains one app binary plus `README.md` and `LICENSE`. The
+release repo can consume the `hogway` archive by pinning `groundhog-rpc` in
+`release-manifest.toml`; CLI packaging can consume the `groundhog` archive the
 same way.
 
 ### The API surface

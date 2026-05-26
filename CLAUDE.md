@@ -174,7 +174,9 @@ crate set, pushes the tag only after crate publish succeeds, then explicitly
 dispatches `release.yml` on that tag. `release.yml` builds `hogway` and the
 `groundhog` CLI; the CLI release build uses `--features dev-node` so the
 published binary includes the local `groundhog node` path. The GitHub Release
-assets are named exactly `hogway` and `groundhog`.
+assets are per-app, per-target archives:
+`hogway-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz` and
+`groundhog-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz`, plus `SHA256SUMS`.
 
 Keep the Cargo workspace version, internal `=X.Y.Z` workspace dependency pins,
 git tag, and GitHub Release tag aligned. The release repo downloads component

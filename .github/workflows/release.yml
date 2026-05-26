@@ -13,6 +13,7 @@ env:
   CARGO_REGISTRIES_GROUNDHOG_INDEX: sparse+https://groundhog.dev/crates/api/v1/crates/
   CARGO_REGISTRIES_GROUNDHOG_SOURCE: sparse+https://groundhog.dev/crates/api/v1/crates/
   HOGD_FFI_PASSWORD: ${{ secrets.HOGD_FFI_PASSWORD }}
+  RELEASE_TARGET: x86_64-unknown-linux-gnu
 
 permissions:
   contents: write
@@ -43,17 +44,29 @@ jobs:
 
       - name: Prepare artifacts
         run: |
-          mkdir -p artifacts
-          cp target/release/hogway artifacts/
-          cp target/release/groundhog artifacts/
-          chmod +x artifacts/hogway artifacts/groundhog
+          set -euo pipefail
+
+          mkdir -p artifacts package
+
+          for app in hogway groundhog; do
+            archive_base="${app}-${GITHUB_REF_NAME}-${RELEASE_TARGET}"
+            package_dir="package/${archive_base}"
+            mkdir -p "$package_dir"
+            cp "target/release/${app}" "$package_dir/"
+            cp README.md LICENSE "$package_dir/"
+            chmod +x "$package_dir/$app"
+            tar -czf "artifacts/${archive_base}.tar.gz" -C package "$archive_base"
+          done
+
+          cd artifacts
+          sha256sum *.tar.gz > SHA256SUMS
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            artifacts/hogway
-            artifacts/groundhog
+            artifacts/*.tar.gz
+            artifacts/SHA256SUMS
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
