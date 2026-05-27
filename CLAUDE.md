@@ -217,7 +217,22 @@ With `SMOKE_STANDALONE_GATEWAY=1`, that script also starts the standalone
 gateway from the runtime manifest; do not rehydrate gateway TOML by hand
 from individual endpoint fields unless you are testing config overrides.
 
-For simulator work, use `hoglab` against an already-started target:
+For simulator local-target work, use the script so the local-provider and
+existing-provider process smokes stay in sync:
+
+```bash
+GROUNDHOG_HOGD_DEV_BINARY=/path/to/hogd-dev scripts/smoke-sim-local.sh
+```
+
+These smokes start `groundhog node`, run `hogd-dev`, connect to localhost, and
+write the node PID file under `~/.cache/groundhog`; Codex should run them
+outside the sandbox. If they fail with permission, localhost-connect, network,
+or cache-write errors, rerun the same command with escalation rather than
+rewriting the workflow. Use absolute paths for `hogd-dev` because quoted `~`
+does not expand.
+
+For simulator existing-target work, `hoglab` can still run against an
+already-started target:
 
 ```bash
 cargo run -p groundhog-sim --bin hoglab -- validate examples/sim/local-wallet-soak.json

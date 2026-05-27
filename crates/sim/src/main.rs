@@ -4,7 +4,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use groundhog_sim::compare::{ResultDiff, load_result};
 use groundhog_sim::error::SimError;
-use groundhog_sim::run::{ExistingRunOptions, run_existing_target};
+use groundhog_sim::run::{RunOptions, run_target};
 use groundhog_sim::util::load_simulation_manifest;
 use groundhog_sim::validation::validate_manifest;
 
@@ -23,7 +23,7 @@ enum Command {
         /// Simulation manifest path.
         scenario: PathBuf,
     },
-    /// Run a simulation against an existing target.
+    /// Run a simulation against the configured target provider.
     Run(RunArgs),
     /// Compare two completed run directories or result.json files.
     Compare {
@@ -44,6 +44,18 @@ struct RunArgs {
     /// Override the runtime manifest path.
     #[arg(long)]
     runtime_manifest: Option<PathBuf>,
+    /// Override the groundhog binary path for local target runs.
+    #[arg(long)]
+    groundhog_binary: Option<PathBuf>,
+    /// Override the hogd-dev binary path for local target runs.
+    #[arg(long)]
+    hogd_dev_binary: Option<PathBuf>,
+    /// Override the local target JSON-RPC port.
+    #[arg(long)]
+    port: Option<u16>,
+    /// Override the local target startup timeout in seconds.
+    #[arg(long)]
+    startup_timeout_secs: Option<u64>,
     /// Override the output directory.
     #[arg(long)]
     out_dir: Option<PathBuf>,
@@ -55,12 +67,16 @@ struct RunArgs {
     nonce_namespace: Option<u64>,
 }
 
-impl From<RunArgs> for ExistingRunOptions {
+impl From<RunArgs> for RunOptions {
     fn from(args: RunArgs) -> Self {
         Self {
             scenario: args.scenario,
             rpc_url: args.rpc_url,
             runtime_manifest: args.runtime_manifest,
+            groundhog_binary: args.groundhog_binary,
+            hogd_dev_binary: args.hogd_dev_binary,
+            port: args.port,
+            startup_timeout_secs: args.startup_timeout_secs,
             out_dir: args.out_dir,
             seed: args.seed,
             nonce_namespace: args.nonce_namespace,
@@ -89,8 +105,8 @@ async fn run_cli() -> Result<(), SimError> {
             Ok(())
         }
         Command::Run(args) => {
-            let summary = run_existing_target(args.into()).await?;
-            println!("completed existing target run");
+            let summary = run_target(args.into()).await?;
+            println!("completed run");
             println!("run directory: {}", summary.out_dir.display());
             Ok(())
         }
@@ -109,4 +125,36 @@ async fn compare_runs(run_a: PathBuf, run_b: PathBuf, json: bool) -> Result<(), 
         println!("{}", diff.render_text());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn run_local_launch_flags_parse() {
+        let cli = Cli::parse_from([
+            "hoglab",
+            "run",
+            "scenario.json",
+            "--groundhog-binary",
+            "/tmp/groundhog",
+            "--hogd-dev-binary",
+            "/tmp/hogd-dev",
+            "--port",
+            "0",
+            "--startup-timeout-secs",
+            "5",
+        ]);
+
+        match cli.command {
+            Command::Run(args) => {
+                assert_eq!(args.groundhog_binary, Some(PathBuf::from("/tmp/groundhog")));
+                assert_eq!(args.hogd_dev_binary, Some(PathBuf::from("/tmp/hogd-dev")));
+                assert_eq!(args.port, Some(0));
+                assert_eq!(args.startup_timeout_secs, Some(5));
+            }
+            _ => panic!("expected run command"),
+        }
+    }
 }

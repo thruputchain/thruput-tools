@@ -3,8 +3,8 @@ use std::path::Path;
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 
-use crate::manifest::WorkloadKind;
-use crate::result::{AssertionResult, SimMetricAvailability, SimRunOutcome};
+use crate::manifest::{ChaosEventKind, WorkloadKind};
+use crate::result::{AssertionResult, ChaosEventState, SimMetricAvailability, SimRunOutcome};
 use crate::target::TargetProviderKind;
 
 pub const RESULT_EVENT_SCHEMA_VERSION: u32 = 1;
@@ -70,6 +70,10 @@ pub enum ResultEvent {
     WorkloadSkipped {
         #[serde(flatten)]
         event: WorkloadEvent,
+    },
+    ChaosTransition {
+        #[serde(flatten)]
+        event: ChaosTransitionEvent,
     },
     AssertionChecked {
         #[serde(flatten)]
@@ -137,6 +141,22 @@ pub struct WorkloadEvent {
     pub error_class: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChaosTransitionEvent {
+    pub chaos_index: usize,
+    pub chaos_kind: ChaosEventKind,
+    pub state: ChaosEventState,
+    pub simulation_time_ms: u64,
+    pub started_at_unix_ms: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completed_at_unix_ms: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latency_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -249,6 +269,65 @@ mod tests {
                 }
             })
         );
+    }
+
+    #[test]
+    fn chaos_transition_event_shape_matches_stream_contract() {
+        let event = ResultEvent::ChaosTransition {
+            event: ChaosTransitionEvent {
+                chaos_index: 0,
+                chaos_kind: crate::manifest::ChaosEventKind::RestartTarget,
+                state: ChaosEventState::Recovered,
+                simulation_time_ms: 1_000,
+                started_at_unix_ms: "10".into(),
+                completed_at_unix_ms: Some("15".into()),
+                latency_ms: Some(5),
+                detail: Some("restarted".into()),
+            },
+        };
+
+        let value =
+            serde_json::to_value(VersionedEvent::new(&event)).expect("event should serialize");
+
+        assert_eq!(
+            value,
+            json!({
+                "kind": "chaos-transition",
+                "schemaVersion": 1,
+                "chaosIndex": 0,
+                "chaosKind": "restart-target",
+                "state": "recovered",
+                "simulationTimeMs": 1000,
+                "startedAtUnixMs": "10",
+                "completedAtUnixMs": "15",
+                "latencyMs": 5,
+                "detail": "restarted"
+            })
+        );
+    }
+
+    #[test]
+    fn scheduled_chaos_transition_omits_completion_fields() {
+        let event = ResultEvent::ChaosTransition {
+            event: ChaosTransitionEvent {
+                chaos_index: 0,
+                chaos_kind: crate::manifest::ChaosEventKind::RestartTarget,
+                state: ChaosEventState::Scheduled,
+                simulation_time_ms: 1_000,
+                started_at_unix_ms: "10".into(),
+                completed_at_unix_ms: None,
+                latency_ms: None,
+                detail: None,
+            },
+        };
+
+        let value =
+            serde_json::to_value(VersionedEvent::new(&event)).expect("event should serialize");
+
+        assert_eq!(value["state"], "scheduled");
+        assert!(value.get("completedAtUnixMs").is_none());
+        assert!(value.get("latencyMs").is_none());
+        assert!(value.get("detail").is_none());
     }
 
     #[tokio::test]

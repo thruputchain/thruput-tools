@@ -267,9 +267,9 @@ enum Command {
         /// Show forwarded hogd-dev info logs in addition to supervisor status
         #[arg(long, short = 'v')]
         verbose: bool,
-        /// Deprecated: ignored by the hogd-dev backend
-        #[arg(long, default_value = "10", hide = true)]
-        accounts: usize,
+        /// Number of deterministic dev accounts to bootstrap
+        #[arg(long)]
+        dev_account_count: Option<usize>,
         /// Explicit hogd-dev binary path
         #[arg(long)]
         hogd_dev_binary: Option<std::path::PathBuf>,
@@ -557,14 +557,14 @@ fn main() {
         Command::Node {
             port,
             verbose,
-            accounts,
+            dev_account_count,
             hogd_dev_binary,
             hogd_protocol,
             startup_timeout_secs,
         } => groundhog_cli::node::run(
             port,
             verbose,
-            accounts,
+            dev_account_count,
             hogd_dev_binary,
             hogd_protocol,
             startup_timeout_secs,
@@ -617,5 +617,22 @@ fn main() {
             eprintln!("error: {print_error}");
         }
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn node_dev_account_count_flag_parses() {
+        let cli = Cli::parse_from(["groundhog", "node", "--dev-account-count", "3"]);
+
+        match cli.command {
+            Command::Node {
+                dev_account_count, ..
+            } => assert_eq!(dev_account_count, Some(3)),
+            _ => panic!("expected node command"),
+        }
     }
 }

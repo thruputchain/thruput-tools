@@ -451,11 +451,11 @@ Three architectural hooks land early:
 - a `TargetCapabilities::chaos` set on each target provider that declares the
   events it supports, and a separate `ChaosController` trait that *executes*
   a `ChaosEvent` returning a `ChaosEventOutcome`. `existing` declares no
-  chaos and returns `None` from `chaos_controller()`; `local` declares
-  `restart-target` and returns a controller in Phase 2; `remote-ssh` will
-  declare `restart-target` later. Splitting declaration (capabilities) from
-  execution (controller) keeps validation independent of whether any
-  provider actually wires up a controller yet;
+  chaos and returns `None` from `chaos_controller()`; `local` declares no
+  chaos until the Phase 2 restart controller lands, then will declare
+  `restart-target`; `remote-ssh` will declare `restart-target` later.
+  Capabilities are the validation gate and should not advertise an event until
+  the provider has a controller that can execute it;
 - chaos state transitions recorded in `result.json` and `result.jsonl` with
   observed timestamps, so assertions can reason about them (for example,
   "p99 submit latency excluding 5s after each restart").

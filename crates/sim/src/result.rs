@@ -221,6 +221,12 @@ pub struct ChaosEventRecord {
     pub kind: String,
     pub state: ChaosEventState,
     pub simulation_time_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chaos_index: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latency_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -283,6 +289,32 @@ mod tests {
                 json!("failed"),
                 json!("recovered"),
             ]
+        );
+    }
+
+    #[test]
+    fn chaos_event_record_serializes_aggregate_shape() {
+        let record = ChaosEventRecord {
+            kind: "restart-target".into(),
+            state: ChaosEventState::Recovered,
+            simulation_time_ms: 1_000,
+            chaos_index: Some(0),
+            latency_ms: Some(12),
+            detail: Some("restarted local target oldPid=1 newPid=2".into()),
+        };
+
+        let value = serde_json::to_value(record).expect("record serializes");
+
+        assert_eq!(
+            value,
+            json!({
+                "kind": "restart-target",
+                "state": "recovered",
+                "simulationTimeMs": 1000,
+                "chaosIndex": 0,
+                "latencyMs": 12,
+                "detail": "restarted local target oldPid=1 newPid=2"
+            })
         );
     }
 }

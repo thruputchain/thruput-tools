@@ -3,8 +3,9 @@
 **Date:** 2026-05-25
 **Status:** Draft execution checklist. Phase 1 existing-target execution,
 reviewer hardening, live hogd-dev smoke, submit/receipt actor state,
-submit/receipt assertion wiring, numeric compare, and the target-provider
-boundary are complete; local-provider execution is next.
+submit/receipt assertion wiring, numeric compare, the target-provider boundary,
+and Phase 2 Slice A/B local-provider execution and restart-target chaos are
+complete.
 
 This plan pairs with [Simulation design](sim-design.md). The design doc owns
 the architectural boundary and long-term shape. This file is the implementation
@@ -137,11 +138,19 @@ chaos, deploy new contracts, or create remote infrastructure.
   even if only the `existing` provider is executable in Phase 1.
 - [ ] Add doc comments and `#[non_exhaustive]` to public library API before
   treating `groundhog-sim` as a stable downstream dependency.
-- [ ] Add a panic-safe cleanup guard for managed providers before
-  `LocalTargetProvider` can own child processes.
-- [ ] Decide whether local-provider process handles, log handles, and metrics
+- [ ] Give `groundhog node` cooperative shutdown for programmatic parents
+  (parent-death detection or an explicit shutdown channel) so a hoglab panic
+  or SIGKILL cannot orphan the node + hogd-dev tree. This is the durable home
+  for managed-target robustness; the local provider deliberately does not add
+  a sim-side panic guard or signal handler. Normal-path teardown is a graceful
+  SIGTERM (catchable, so the node reaps hogd-dev), and terminal Ctrl-C is
+  already handled by process-group signal delivery to the node itself. Lower
+  priority while a deployed devnet/EC2 target may make the local provider the
+  non-strategic, least-hardened provider.
+- [x] Decide whether local-provider process handles, log handles, and metrics
   endpoints live on `ResolvedTarget` or in provider-owned state returned by
-  target acquisition.
+  target acquisition. Slice A/B keep live process state and restart launch
+  config in provider-owned state; `ResolvedTarget` remains pure result data.
 - [ ] Replace ad-hoc CLI output and silent internal drops with the eventual
   logging/printing discipline.
 - [ ] Add `--json` to `hoglab validate` and `hoglab run` so all hoglab
@@ -210,6 +219,32 @@ chaos, deploy new contracts, or create remote infrastructure.
 - [x] Add JSON parsing and validation for simulation manifests.
 - [x] Add example manifest under `examples/sim/`.
 - [x] Add unit tests for manifest parsing and validation.
+
+## Phase 2: Local Managed Target
+
+### Slice A: Local Provider
+
+- [x] Launch and clean up a simulator-owned `groundhog node`.
+- [x] Request the dev account count required by the scenario.
+- [x] Parse startup JSON for the effective RPC URL and runtime manifest.
+- [x] Record local target ownership artifacts.
+- [x] Add local-provider process-level smoke coverage.
+
+### Slice B: Local Restart-Target Chaos
+
+- [x] Add handoff design:
+  `docs/sim/specs/2026-05-27-local-restart-target-chaos-design.md`.
+- [x] Advertise and validate `restart-target` for the `local` provider.
+- [x] Add local provider restart support with stable resolved-port relaunch.
+- [x] Wire executor chaos handling and pause later ticks until restart
+  recovery.
+- [x] Mark pending receipt queues lost at restart with
+  `errorClass: "target-restarted"`.
+- [x] Record chaos transitions in `result.jsonl` and `result.json`.
+- [x] Make failed chaos actions produce a failed run outcome.
+- [x] Add `examples/sim/local-restart-chain-tip-smoke.json`.
+- [x] Extend local smoke coverage to verify restart artifacts and final port
+  cleanup.
 
 ## Phase 1: Existing Target Simulator
 
@@ -421,16 +456,18 @@ chaos, deploy new contracts, or create remote infrastructure.
 
 ## Phase 2: Local Managed Target
 
-- [ ] Add `local` target provider.
-- [ ] Generate a bootstrap manifest from the simulation manifest.
-- [ ] Start `groundhog node` / `hogd-dev`.
-- [ ] Capture startup JSON, runtime manifest, and logs.
-- [ ] Write target ownership metadata with `startedBySim = true`.
-- [ ] Stop the target on completion.
+- [x] Add `local` target provider.
+- [x] Request the required dev-account count from `groundhog node` based on
+  the simulation manifest's max phase users.
+- [x] Start `groundhog node` / `hogd-dev`.
+- [x] Capture startup JSON and runtime manifest path.
+- [ ] Capture provider logs.
+- [x] Write target ownership metadata with `startedBySim = true`.
+- [x] Stop the target on completion.
 - [ ] Add sweeper command for sim-owned local targets.
-- [ ] Implement `restart-target` chaos for the local provider as whole-target
+- [x] Implement `restart-target` chaos for the local provider as whole-target
   stop+restart, matching current `groundhog node` supervisor behavior.
-- [ ] Record chaos state transitions in `result.jsonl` and `result.json`.
+- [x] Record chaos state transitions in `result.jsonl` and `result.json`.
 - [ ] Support scenario `baseline` and emit baseline diff inside `result.json`.
 
 ## Phase 3: Stateful Contract Workloads

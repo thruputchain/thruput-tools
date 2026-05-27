@@ -10,7 +10,33 @@ Start here:
 - [Implementation plan](sim-implementation-plan.md) - execution checklist with
   Phase 1 details.
 
-Current quickstart:
+Current local-provider quickstart:
+
+```bash
+cargo run -p groundhog-cli --features dev-node -- --version
+
+cargo run -p groundhog-sim --bin hoglab -- run examples/sim/local-chain-tip-smoke.json \
+  --groundhog-binary target/debug/groundhog \
+  --hogd-dev-binary /path/to/hogd-dev \
+  --port 0
+```
+
+The `local` provider launches `groundhog node --json`, requests the dev account
+count required by the scenario, reads the node's startup JSON for the effective
+RPC URL and runtime manifest path, runs workloads over public JSON-RPC, and
+stops the node at the end of the run. `target-ownership.json` records
+`startedBySim: true` and `cleanupAllowed: true`.
+
+Local restart chaos can be exercised with:
+
+```bash
+cargo run -p groundhog-sim --bin hoglab -- run examples/sim/local-restart-chain-tip-smoke.json \
+  --groundhog-binary target/debug/groundhog \
+  --hogd-dev-binary /path/to/hogd-dev \
+  --port 0
+```
+
+Existing-target quickstart:
 
 ```bash
 cargo run -p groundhog-cli --features dev-node -- --json node \
@@ -31,6 +57,9 @@ cargo run -p groundhog-sim --bin hoglab -- run examples/sim/local-wallet-soak.js
 newer `hogp/<hash>` than the Rust protocol crates linked into `groundhog node`.
 It only overrides the intro token; incompatible XDR shapes still fail through
 the generated client.
+
+The `local` provider's dev-account path is interim; faucet-based actor funding
+is expected to replace it for longer-lived devnet targets.
 
 Phase 1 validates the scenario and runtime manifest, derives bootstrap account
 signers from the runtime manifest, writes the result directory skeleton, and
@@ -83,6 +112,24 @@ effective RPC URL, runtime manifest path, and nonce namespace into
 `simulation.json` under `resolved`. `target-ownership.json` records
 `startedBySim: false` and `cleanupAllowed: false`.
 
+## Local Provider
+
+The `local` target provider launches and owns a local `groundhog node` process.
+It rejects `target.rpcUrl`, `target.runtimeManifest`, `--rpc-url`, and
+`--runtime-manifest` because those values are outputs from the launched node.
+Use `--groundhog-binary` to select the supervisor binary, `--hogd-dev-binary`
+to forward a specific backend binary, `--port` to request a port, and
+`--startup-timeout-secs` to bound startup.
+
+The provider sends SIGTERM to the node for graceful shutdown, waits a bounded
+grace period, and escalates to SIGKILL only if the node does not exit.
+`restart-target` chaos is supported for `local`: the simulator stops and
+relaunches the whole `groundhog node` process on the same resolved RPC port,
+pauses later scheduled ticks until startup JSON is parsed, records
+`chaos-transition` events, and classifies pending receipt queues lost at restart
+with `errorClass: "target-restarted"`. Provider log capture, sweeper ownership
+fields, and baseline diffing remain later Phase 2 work.
+
 ## Result Directory
 
 Each run writes a self-contained result directory:
@@ -93,8 +140,9 @@ Each run writes a self-contained result directory:
   and account derivation.
 - `target-ownership.json` - provider ownership and cleanup metadata.
 - `result.jsonl` - append-only event stream for run, target, phase, workload,
-  assertion, and completion events, plus one `metric-availability-recorded`
-  event per run with the run-level availability snapshot.
+  chaos transition, assertion, and completion events, plus one
+  `metric-availability-recorded` event per run with the run-level availability
+  snapshot.
 - `result.json` - final aggregate written atomically at run end.
 - `histograms/` and `logs/` - reserved directories for future exports and
   provider-supplied logs.

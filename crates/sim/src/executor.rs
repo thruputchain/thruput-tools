@@ -13,15 +13,16 @@ use groundhog_rpc_client::GroundhogApiClient;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::{Id as TaskId, JoinError, JoinSet};
 
-use crate::actor::{ActorState, ReceiptPollTarget};
+use crate::actor::{ActorState, DrainedPendingReceipt, ReceiptPollTarget};
 use crate::error::SimError;
-use crate::event::{EventWriter, ResultEvent, WorkloadEvent};
-use crate::manifest::{SimulationManifest, WorkloadKind};
+use crate::event::{ChaosTransitionEvent, EventWriter, ResultEvent, WorkloadEvent};
+use crate::manifest::{ChaosEventKind, ChaosEventSpec, SimulationManifest, WorkloadKind};
 use crate::metrics::RunMetricsBuilder;
-use crate::result::ChainTipObservation;
+use crate::result::{ChainTipObservation, ChaosEventRecord, ChaosEventState};
 use crate::scheduler::{
     PhaseStart, ScheduledActorTick, ScheduledSimulationEvent, select_workload_for_tick,
 };
+use crate::target::ChaosController;
 use crate::transaction::{
     BuiltSubmitTransaction, build_wallet_submit_smoke_transaction,
     runtime_dev_wallet_action_entrypoint,
@@ -100,9 +101,30 @@ pub struct ScheduleExecution<'a> {
     pub metrics: &'a mut RunMetricsBuilder,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ScheduleRunReport {
+    pub chaos_failed: bool,
+}
+
 /// Execute a deterministic simulation schedule against a typed RPC client.
-#[allow(clippy::too_many_lines)]
 pub async fn run_schedule<C>(client: C, input: ScheduleExecution<'_>) -> Result<(), SimError>
+where
+    C: SimRpcClient + Clone + Send + Sync + 'static,
+{
+    let mut chaos_events = Vec::new();
+    run_schedule_with_chaos(client, input, None, &mut chaos_events)
+        .await
+        .map(|_| ())
+}
+
+/// Execute a deterministic simulation schedule with an optional target chaos controller.
+#[allow(clippy::too_many_lines)]
+pub async fn run_schedule_with_chaos<C>(
+    client: C,
+    input: ScheduleExecution<'_>,
+    chaos_controller: Option<&dyn ChaosController>,
+    chaos_events: &mut Vec<ChaosEventRecord>,
+) -> Result<ScheduleRunReport, SimError>
 where
     C: SimRpcClient + Clone + Send + Sync + 'static,
 {
@@ -123,6 +145,7 @@ where
     let global_in_flight = Arc::new(Semaphore::new(DEFAULT_GLOBAL_IN_FLIGHT_LIMIT));
     let actor_in_flight = actor_semaphores(phase_starts);
     let mut in_flight = 0_u64;
+    let mut chaos_failed = false;
 
     for event in schedule {
         let drained = drain_completed_workloads(
@@ -203,22 +226,60 @@ where
                 );
                 in_flight += 1;
             }
-            ScheduledSimulationEvent::Chaos(_) => {}
+            ScheduledSimulationEvent::Chaos(chaos) => {
+                sleep_until_sim_time_draining(
+                    run_start,
+                    chaos.simulation_time_ms,
+                    &mut tasks,
+                    &mut task_contexts,
+                    event_writer,
+                    metrics,
+                    actor_states,
+                    &mut in_flight,
+                )
+                .await?;
+                let event_spec =
+                    manifest
+                        .chaos
+                        .get(chaos.chaos_index)
+                        .ok_or(SimError::Executor(
+                            "scheduled chaos index missing from manifest".into(),
+                        ))?;
+                chaos_failed = execute_scheduled_chaos(
+                    event_spec,
+                    chaos.chaos_index,
+                    chaos.simulation_time_ms,
+                    chaos_controller,
+                    &mut tasks,
+                    &mut task_contexts,
+                    actor_states,
+                    event_writer,
+                    metrics,
+                    chaos_events,
+                    &mut in_flight,
+                )
+                .await?;
+                if chaos_failed {
+                    break;
+                }
+            }
         }
     }
-    for phase in next_phase {
-        sleep_until_sim_time_draining(
-            run_start,
-            phase.simulation_time_ms,
-            &mut tasks,
-            &mut task_contexts,
-            event_writer,
-            metrics,
-            actor_states,
-            &mut in_flight,
-        )
-        .await?;
-        write_phase_started(event_writer, phase).await?;
+    if !chaos_failed {
+        for phase in next_phase {
+            sleep_until_sim_time_draining(
+                run_start,
+                phase.simulation_time_ms,
+                &mut tasks,
+                &mut task_contexts,
+                event_writer,
+                metrics,
+                actor_states,
+                &mut in_flight,
+            )
+            .await?;
+            write_phase_started(event_writer, phase).await?;
+        }
     }
     while in_flight > 0 {
         let joined = tasks
@@ -231,7 +292,7 @@ where
             "in-flight workload count underflowed".into(),
         ))?;
     }
-    Ok(())
+    Ok(ScheduleRunReport { chaos_failed })
 }
 
 /// Poll pending receipt queues once the scheduled load has stopped.
@@ -376,6 +437,7 @@ fn dispatch_workload<C>(
     let context = WorkloadTaskContext {
         actor_id: tick.actor_id,
         workload,
+        scheduled_time_ms: tick.simulation_time_ms,
     };
 
     let abort = tasks.spawn(async move {
@@ -550,6 +612,433 @@ async fn write_phase_started(
         })
         .await?;
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+async fn execute_scheduled_chaos(
+    event_spec: &ChaosEventSpec,
+    chaos_index: usize,
+    simulation_time_ms: u64,
+    chaos_controller: Option<&dyn ChaosController>,
+    tasks: &mut JoinSet<Result<WorkloadCompletion, SimError>>,
+    task_contexts: &mut HashMap<TaskId, WorkloadTaskContext>,
+    actor_states: &mut [ActorState],
+    event_writer: &mut EventWriter,
+    metrics: &mut RunMetricsBuilder,
+    chaos_events: &mut Vec<ChaosEventRecord>,
+    in_flight: &mut u64,
+) -> Result<bool, SimError> {
+    let (scheduled_started, scheduled_started_unix) = transition_start()?;
+    write_chaos_transition(
+        event_writer,
+        chaos_events,
+        ChaosTransitionInput {
+            chaos_index,
+            chaos_kind: event_spec.kind,
+            state: ChaosEventState::Scheduled,
+            simulation_time_ms,
+            started: scheduled_started,
+            started_at_unix_ms: scheduled_started_unix,
+            completed: None,
+            detail: None,
+        },
+    )
+    .await?;
+
+    let Some(controller) = chaos_controller else {
+        let (failed_started, failed_started_unix) = transition_start()?;
+        write_chaos_transition(
+            event_writer,
+            chaos_events,
+            ChaosTransitionInput {
+                chaos_index,
+                chaos_kind: event_spec.kind,
+                state: ChaosEventState::Failed,
+                simulation_time_ms,
+                started: failed_started,
+                started_at_unix_ms: failed_started_unix,
+                completed: Some(Instant::now()),
+                detail: Some("target provider does not expose a chaos controller".into()),
+            },
+        )
+        .await?;
+        return Ok(true);
+    };
+
+    tokio::task::yield_now().await;
+    let drained =
+        drain_completed_workloads(tasks, task_contexts, actor_states, event_writer, metrics)
+            .await?;
+    *in_flight = in_flight.checked_sub(drained).ok_or(SimError::Executor(
+        "in-flight workload count underflowed".into(),
+    ))?;
+    let aborted_contexts = abort_in_flight_for_restart(tasks, task_contexts, in_flight).await?;
+
+    let (started, started_unix) = transition_start()?;
+    write_chaos_transition(
+        event_writer,
+        chaos_events,
+        ChaosTransitionInput {
+            chaos_index,
+            chaos_kind: event_spec.kind,
+            state: ChaosEventState::Started,
+            simulation_time_ms,
+            started,
+            started_at_unix_ms: started_unix.clone(),
+            completed: None,
+            detail: None,
+        },
+    )
+    .await?;
+
+    match controller.execute(event_spec).await {
+        Ok(outcome) => {
+            // We abort before restart to stop dispatch against a dying target, but
+            // record restart-loss diagnostics only after recovery is confirmed.
+            record_aborted_for_restart(
+                aborted_contexts,
+                actor_states,
+                event_writer,
+                metrics,
+                simulation_time_ms,
+            )
+            .await?;
+            record_restart_lost_receipts(actor_states, event_writer, metrics, simulation_time_ms)
+                .await?;
+            let completed = Instant::now();
+            write_chaos_transition(
+                event_writer,
+                chaos_events,
+                ChaosTransitionInput {
+                    chaos_index,
+                    chaos_kind: event_spec.kind,
+                    state: ChaosEventState::Completed,
+                    simulation_time_ms,
+                    started,
+                    started_at_unix_ms: started_unix.clone(),
+                    completed: Some(completed),
+                    detail: outcome.detail.clone(),
+                },
+            )
+            .await?;
+            if outcome.state == ChaosEventState::Recovered {
+                write_chaos_transition(
+                    event_writer,
+                    chaos_events,
+                    ChaosTransitionInput {
+                        chaos_index,
+                        chaos_kind: event_spec.kind,
+                        state: ChaosEventState::Recovered,
+                        simulation_time_ms,
+                        started,
+                        started_at_unix_ms: started_unix,
+                        completed: Some(Instant::now()),
+                        detail: outcome.detail,
+                    },
+                )
+                .await?;
+            }
+            Ok(false)
+        }
+        Err(error) => {
+            record_aborted_for_failed_chaos(
+                aborted_contexts,
+                actor_states,
+                event_writer,
+                metrics,
+                simulation_time_ms,
+            )
+            .await?;
+            write_chaos_transition(
+                event_writer,
+                chaos_events,
+                ChaosTransitionInput {
+                    chaos_index,
+                    chaos_kind: event_spec.kind,
+                    state: ChaosEventState::Failed,
+                    simulation_time_ms,
+                    started,
+                    started_at_unix_ms: started_unix,
+                    completed: Some(Instant::now()),
+                    detail: Some(error.to_string()),
+                },
+            )
+            .await?;
+            Ok(true)
+        }
+    }
+}
+
+async fn abort_in_flight_for_restart(
+    tasks: &mut JoinSet<Result<WorkloadCompletion, SimError>>,
+    task_contexts: &mut HashMap<TaskId, WorkloadTaskContext>,
+    in_flight: &mut u64,
+) -> Result<Vec<WorkloadTaskContext>, SimError> {
+    let contexts: Vec<_> = task_contexts.drain().map(|(_, context)| context).collect();
+    if contexts.is_empty() {
+        *in_flight = 0;
+        return Ok(contexts);
+    }
+
+    tasks.abort_all();
+    while tasks.join_next_with_id().await.is_some() {}
+    *in_flight = 0;
+    Ok(contexts)
+}
+
+async fn record_aborted_for_restart(
+    contexts: Vec<WorkloadTaskContext>,
+    actor_states: &mut [ActorState],
+    event_writer: &mut EventWriter,
+    metrics: &mut RunMetricsBuilder,
+    simulation_time_ms: u64,
+) -> Result<(), SimError> {
+    for context in contexts {
+        if context.workload == WorkloadKind::ReceiptPoll {
+            continue;
+        }
+        if context.workload == WorkloadKind::WalletSubmitSmoke {
+            let actor = actor_states
+                .get_mut(context.actor_id as usize)
+                .ok_or(SimError::Executor("actor state missing".into()))?;
+            actor.record_uncertain_submit_nonce()?;
+        }
+        record_completion(
+            target_restarted_workload_completion(context, simulation_time_ms)?,
+            actor_states,
+            event_writer,
+            metrics,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+async fn record_aborted_for_failed_chaos(
+    contexts: Vec<WorkloadTaskContext>,
+    actor_states: &mut [ActorState],
+    event_writer: &mut EventWriter,
+    metrics: &mut RunMetricsBuilder,
+    simulation_time_ms: u64,
+) -> Result<(), SimError> {
+    for context in contexts {
+        record_completion(
+            chaos_failed_workload_completion(context, simulation_time_ms)?,
+            actor_states,
+            event_writer,
+            metrics,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+async fn record_restart_lost_receipts(
+    actor_states: &mut [ActorState],
+    event_writer: &mut EventWriter,
+    metrics: &mut RunMetricsBuilder,
+    simulation_time_ms: u64,
+) -> Result<(), SimError> {
+    let drained: Vec<_> = actor_states
+        .iter_mut()
+        .flat_map(ActorState::drain_pending_receipts)
+        .collect();
+    for receipt in drained {
+        record_completion(
+            target_restarted_receipt_completion(receipt, simulation_time_ms)?,
+            actor_states,
+            event_writer,
+            metrics,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+fn target_restarted_workload_completion(
+    context: WorkloadTaskContext,
+    simulation_time_ms: u64,
+) -> Result<WorkloadCompletion, SimError> {
+    let now = unix_ms()?.to_string();
+    Ok(WorkloadCompletion {
+        event: ResultEvent::WorkloadFailed {
+            event: WorkloadEvent {
+                actor_id: context.actor_id,
+                workload: context.workload,
+                scheduled_time_ms: context.scheduled_time_ms,
+                started_at_unix_ms: now.clone(),
+                completed_at_unix_ms: now,
+                latency_ms: 0,
+                rpc_method: rpc_method(context.workload),
+                chain_height: None,
+                chain_block_hash: None,
+                tx_hash: None,
+                tx_nonce: None,
+                receipt_present: None,
+                receipt_status: None,
+                receipt_status_detail: None,
+                submit_to_receipt_latency_ms: None,
+                error_class: Some("target-restarted".into()),
+                error: Some(format!(
+                    "workload aborted at simulation time {simulation_time_ms} because target restarted"
+                )),
+            },
+        },
+        workload: context.workload,
+        latency_ms: 0,
+        error_class: Some("target-restarted".into()),
+        skipped: false,
+        chain_tip: None,
+        submitted_transaction: None,
+        observed_receipt: None,
+        receipt_poll: None,
+        submit_to_receipt_latency_ms: None,
+    })
+}
+
+fn chaos_failed_workload_completion(
+    context: WorkloadTaskContext,
+    simulation_time_ms: u64,
+) -> Result<WorkloadCompletion, SimError> {
+    let now = unix_ms()?.to_string();
+    Ok(WorkloadCompletion {
+        event: ResultEvent::WorkloadFailed {
+            event: WorkloadEvent {
+                actor_id: context.actor_id,
+                workload: context.workload,
+                scheduled_time_ms: context.scheduled_time_ms,
+                started_at_unix_ms: now.clone(),
+                completed_at_unix_ms: now,
+                latency_ms: 0,
+                rpc_method: rpc_method(context.workload),
+                chain_height: None,
+                chain_block_hash: None,
+                tx_hash: None,
+                tx_nonce: None,
+                receipt_present: None,
+                receipt_status: None,
+                receipt_status_detail: None,
+                submit_to_receipt_latency_ms: None,
+                error_class: Some("chaos-failed".into()),
+                error: Some(format!(
+                    "workload aborted at simulation time {simulation_time_ms} because chaos failed"
+                )),
+            },
+        },
+        workload: context.workload,
+        latency_ms: 0,
+        error_class: Some("chaos-failed".into()),
+        skipped: false,
+        chain_tip: None,
+        submitted_transaction: None,
+        observed_receipt: None,
+        receipt_poll: None,
+        submit_to_receipt_latency_ms: None,
+    })
+}
+
+fn target_restarted_receipt_completion(
+    receipt: DrainedPendingReceipt,
+    simulation_time_ms: u64,
+) -> Result<WorkloadCompletion, SimError> {
+    let now = unix_ms()?.to_string();
+    let tx_hash = json_string(&receipt.tx_hash, "txHash")?;
+    Ok(WorkloadCompletion {
+        event: ResultEvent::WorkloadFailed {
+            event: WorkloadEvent {
+                actor_id: receipt.actor_id,
+                workload: WorkloadKind::ReceiptPoll,
+                scheduled_time_ms: simulation_time_ms,
+                started_at_unix_ms: now.clone(),
+                completed_at_unix_ms: now,
+                latency_ms: 0,
+                rpc_method: "groundhog_getTransactionReceipt",
+                chain_height: None,
+                chain_block_hash: None,
+                tx_hash: Some(tx_hash),
+                tx_nonce: None,
+                receipt_present: Some(false),
+                receipt_status: None,
+                receipt_status_detail: None,
+                submit_to_receipt_latency_ms: Some(duration_ms(
+                    Instant::now().saturating_duration_since(receipt.submit_completed_at),
+                )),
+                error_class: Some("target-restarted".into()),
+                error: Some("pending receipt lost because target restarted".into()),
+            },
+        },
+        workload: WorkloadKind::ReceiptPoll,
+        latency_ms: 0,
+        error_class: Some("target-restarted".into()),
+        skipped: false,
+        chain_tip: None,
+        submitted_transaction: None,
+        observed_receipt: None,
+        receipt_poll: None,
+        submit_to_receipt_latency_ms: None,
+    })
+}
+
+struct ChaosTransitionInput {
+    chaos_index: usize,
+    chaos_kind: ChaosEventKind,
+    state: ChaosEventState,
+    simulation_time_ms: u64,
+    started: Instant,
+    started_at_unix_ms: String,
+    completed: Option<Instant>,
+    detail: Option<String>,
+}
+
+fn transition_start() -> Result<(Instant, String), SimError> {
+    Ok((Instant::now(), unix_ms()?.to_string()))
+}
+
+async fn write_chaos_transition(
+    event_writer: &mut EventWriter,
+    chaos_events: &mut Vec<ChaosEventRecord>,
+    input: ChaosTransitionInput,
+) -> Result<(), SimError> {
+    let completed_at_unix_ms = input
+        .completed
+        .map(|_| unix_ms())
+        .transpose()?
+        .map(|ms| ms.to_string());
+    let latency_ms = input
+        .completed
+        .map(|completed| duration_ms(completed.saturating_duration_since(input.started)));
+    let kind = chaos_kind_name(input.chaos_kind).to_string();
+    // Keep the streaming JSONL event and aggregate result record coupled so
+    // artifact consumers see the same transition sequence in both places.
+    event_writer
+        .write(&ResultEvent::ChaosTransition {
+            event: ChaosTransitionEvent {
+                chaos_index: input.chaos_index,
+                chaos_kind: input.chaos_kind,
+                state: input.state,
+                simulation_time_ms: input.simulation_time_ms,
+                started_at_unix_ms: input.started_at_unix_ms.clone(),
+                completed_at_unix_ms,
+                latency_ms,
+                detail: input.detail.clone(),
+            },
+        })
+        .await?;
+    chaos_events.push(ChaosEventRecord {
+        kind,
+        state: input.state,
+        simulation_time_ms: input.simulation_time_ms,
+        chaos_index: Some(input.chaos_index),
+        latency_ms,
+        detail: input.detail,
+    });
+    Ok(())
+}
+
+fn chaos_kind_name(kind: ChaosEventKind) -> &'static str {
+    match kind {
+        ChaosEventKind::RestartTarget => "restart-target",
+    }
 }
 
 async fn execute_chain_tip<C>(
@@ -1040,6 +1529,7 @@ struct ReceiptPollTimes {
 struct WorkloadTaskContext {
     actor_id: u32,
     workload: WorkloadKind,
+    scheduled_time_ms: u64,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1113,6 +1603,7 @@ mod tests {
     use crate::nonce::NonceNamespace;
     use crate::runtime::SimAccount;
     use crate::scheduler::{generate_schedule, phase_starts};
+    use crate::target::{ChaosController, ChaosEventOutcome, TargetProviderFuture};
 
     #[derive(Clone)]
     struct PanickingClient;
@@ -1150,6 +1641,38 @@ mod tests {
     #[derive(Clone)]
     struct FailingReceiptClient {
         requested: Arc<Mutex<Vec<TxHash>>>,
+    }
+
+    #[derive(Clone)]
+    struct SlowReceiptClient {
+        requested: Arc<Mutex<Vec<TxHash>>>,
+    }
+
+    struct SuccessfulChaosController;
+
+    struct FailingChaosController;
+
+    impl ChaosController for SuccessfulChaosController {
+        fn execute<'a>(
+            &'a self,
+            _event: &'a ChaosEventSpec,
+        ) -> TargetProviderFuture<'a, Result<ChaosEventOutcome, SimError>> {
+            Box::pin(async {
+                Ok(ChaosEventOutcome {
+                    state: ChaosEventState::Recovered,
+                    detail: None,
+                })
+            })
+        }
+    }
+
+    impl ChaosController for FailingChaosController {
+        fn execute<'a>(
+            &'a self,
+            _event: &'a ChaosEventSpec,
+        ) -> TargetProviderFuture<'a, Result<ChaosEventOutcome, SimError>> {
+            Box::pin(async { Err(SimError::Executor("restart failed".into())) })
+        }
     }
 
     impl SimRpcClient for PanickingClient {
@@ -1358,6 +1881,37 @@ mod tests {
                     .expect("requested receipt list should lock")
                     .push(tx_hash);
                 Err("receipt rpc failed".into())
+            }
+        }
+    }
+
+    impl SimRpcClient for SlowReceiptClient {
+        #[allow(clippy::manual_async_fn)]
+        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, String>> + Send {
+            async { Err("chain tip should not be called".into()) }
+        }
+
+        #[allow(clippy::manual_async_fn)]
+        fn send_raw_transaction(
+            &self,
+            _tx_hex: String,
+        ) -> impl Future<Output = Result<TxHash, String>> + Send {
+            async { Err("submit should not be called".into()) }
+        }
+
+        #[allow(clippy::manual_async_fn)]
+        fn transaction_receipt(
+            &self,
+            tx_hash: TxHash,
+        ) -> impl Future<Output = Result<Option<TransactionReceipt>, String>> + Send {
+            let requested = self.requested.clone();
+            async move {
+                requested
+                    .lock()
+                    .expect("requested receipt list should lock")
+                    .push(tx_hash);
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                Ok(None)
             }
         }
     }
@@ -1988,6 +2542,274 @@ mod tests {
         assert_eq!(receipt_poll.present, 1);
     }
 
+    #[tokio::test]
+    async fn run_schedule_records_successful_chaos_transitions() {
+        let manifest = chaos_manifest();
+        let schedule = generate_schedule(&manifest).expect("schedule should generate");
+        let starts = phase_starts(&manifest).expect("phase starts should generate");
+        let file = NamedTempFile::new().expect("temp file should be created");
+        let mut event_writer = EventWriter::create(file.path())
+            .await
+            .expect("event writer should open");
+        let mut metrics = RunMetricsBuilder::default();
+        let mut actors = actor_states();
+        let mut chaos_events = Vec::new();
+
+        let report = run_schedule_with_chaos(
+            DelayedClient,
+            ScheduleExecution {
+                manifest: &manifest,
+                runtime_manifest: &runtime_manifest(),
+                schedule: &schedule,
+                phase_starts: &starts,
+                actor_states: &mut actors,
+                event_writer: &mut event_writer,
+                metrics: &mut metrics,
+            },
+            Some(&SuccessfulChaosController),
+            &mut chaos_events,
+        )
+        .await
+        .expect("schedule should run");
+
+        assert!(!report.chaos_failed);
+        let states: Vec<_> = chaos_events.iter().map(|event| event.state).collect();
+        assert_eq!(
+            states,
+            vec![
+                ChaosEventState::Scheduled,
+                ChaosEventState::Started,
+                ChaosEventState::Completed,
+                ChaosEventState::Recovered,
+            ]
+        );
+
+        let events = tokio::fs::read_to_string(file.path())
+            .await
+            .expect("events should read");
+        let chaos_event = find_event(&events, "chaos-transition");
+        assert_eq!(chaos_event["chaosKind"], "restart-target");
+        assert_eq!(chaos_event["state"], "scheduled");
+        let stream_states: Vec<_> = find_events(&events, "chaos-transition")
+            .iter()
+            .map(|event| {
+                event["state"]
+                    .as_str()
+                    .expect("chaos state should be a string")
+                    .to_owned()
+            })
+            .collect();
+        assert_eq!(
+            stream_states,
+            vec!["scheduled", "started", "completed", "recovered"]
+        );
+    }
+
+    #[tokio::test]
+    async fn restart_chaos_drains_pending_receipts_as_target_restarted() {
+        let manifest = chaos_manifest();
+        let schedule = vec![ScheduledSimulationEvent::Chaos(
+            crate::scheduler::ScheduledChaos {
+                chaos_index: 0,
+                simulation_time_ms: 10,
+                kind: ChaosEventKind::RestartTarget,
+            },
+        )];
+        let starts = phase_starts(&manifest).expect("phase starts should generate");
+        let file = NamedTempFile::new().expect("temp file should be created");
+        let mut event_writer = EventWriter::create(file.path())
+            .await
+            .expect("event writer should open");
+        let mut metrics = RunMetricsBuilder::default();
+        let mut actors = actor_states();
+        actors[0]
+            .record_submitted_tx(tx_hash(0x5a), 3, Instant::now())
+            .expect("submitted tx should record");
+        let mut chaos_events = Vec::new();
+
+        run_schedule_with_chaos(
+            DelayedClient,
+            ScheduleExecution {
+                manifest: &manifest,
+                runtime_manifest: &runtime_manifest(),
+                schedule: &schedule,
+                phase_starts: &starts,
+                actor_states: &mut actors,
+                event_writer: &mut event_writer,
+                metrics: &mut metrics,
+            },
+            Some(&SuccessfulChaosController),
+            &mut chaos_events,
+        )
+        .await
+        .expect("restart chaos should run");
+
+        assert_eq!(actors[0].pending_receipt_count(), 0);
+        let finished = metrics.finish();
+        let receipt_metrics = finished
+            .workload_metrics
+            .get(&WorkloadKind::ReceiptPoll)
+            .expect("receipt metrics should exist");
+        assert_eq!(receipt_metrics.counts.failed, 1);
+        assert_eq!(receipt_metrics.error_counts["target-restarted"], 1);
+
+        let events = tokio::fs::read_to_string(file.path())
+            .await
+            .expect("events should read");
+        let failed = find_event(&events, "workload-failed");
+        assert_eq!(failed["errorClass"], "target-restarted");
+        assert_eq!(failed["receiptPresent"], false);
+    }
+
+    #[tokio::test]
+    async fn restart_chaos_does_not_double_count_in_flight_receipt_poll() {
+        let manifest = receipt_chaos_manifest();
+        let schedule = generate_schedule(&manifest).expect("schedule should generate");
+        let starts = phase_starts(&manifest).expect("phase starts should generate");
+        let file = NamedTempFile::new().expect("temp file should be created");
+        let mut event_writer = EventWriter::create(file.path())
+            .await
+            .expect("event writer should open");
+        let mut metrics = RunMetricsBuilder::default();
+        let mut actors = actor_states();
+        actors[0]
+            .record_submitted_tx(tx_hash(0x5a), 0, Instant::now())
+            .expect("submitted tx should record");
+        let requested = Arc::new(Mutex::new(Vec::new()));
+        let mut chaos_events = Vec::new();
+
+        run_schedule_with_chaos(
+            SlowReceiptClient {
+                requested: requested.clone(),
+            },
+            ScheduleExecution {
+                manifest: &manifest,
+                runtime_manifest: &runtime_manifest(),
+                schedule: &schedule,
+                phase_starts: &starts,
+                actor_states: &mut actors,
+                event_writer: &mut event_writer,
+                metrics: &mut metrics,
+            },
+            Some(&SuccessfulChaosController),
+            &mut chaos_events,
+        )
+        .await
+        .expect("restart chaos should run");
+
+        assert_eq!(
+            requested
+                .lock()
+                .expect("requested receipt list should lock")
+                .as_slice(),
+            &[tx_hash(0x5a)]
+        );
+        assert_eq!(actors[0].pending_receipt_count(), 0);
+        let counts = metrics.workload_counts();
+        assert_eq!(counts[&WorkloadKind::ReceiptPoll].failed, 1);
+
+        let events = tokio::fs::read_to_string(file.path())
+            .await
+            .expect("events should read");
+        let failed_events = find_events(&events, "workload-failed");
+        assert_eq!(failed_events.len(), 1);
+        assert_eq!(failed_events[0]["errorClass"], "target-restarted");
+        assert_eq!(
+            failed_events[0]["txHash"],
+            "0x5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a"
+        );
+    }
+
+    #[tokio::test]
+    async fn restart_chaos_drains_completed_submit_before_marking_receipt_lost() {
+        let manifest = wallet_chaos_manifest();
+        let schedule = generate_schedule(&manifest).expect("schedule should generate");
+        let starts = phase_starts(&manifest).expect("phase starts should generate");
+        let file = NamedTempFile::new().expect("temp file should be created");
+        let mut event_writer = EventWriter::create(file.path())
+            .await
+            .expect("event writer should open");
+        let mut metrics = RunMetricsBuilder::default();
+        let mut actors = actor_states();
+        let mut chaos_events = Vec::new();
+        let submitted = Arc::new(Mutex::new(Vec::new()));
+
+        run_schedule_with_chaos(
+            SubmitClient {
+                submitted: submitted.clone(),
+            },
+            ScheduleExecution {
+                manifest: &manifest,
+                runtime_manifest: &runtime_manifest(),
+                schedule: &schedule,
+                phase_starts: &starts,
+                actor_states: &mut actors,
+                event_writer: &mut event_writer,
+                metrics: &mut metrics,
+            },
+            Some(&SuccessfulChaosController),
+            &mut chaos_events,
+        )
+        .await
+        .expect("restart chaos should run");
+
+        assert_eq!(
+            submitted
+                .lock()
+                .expect("submitted transaction list should lock")
+                .len(),
+            1
+        );
+        assert_eq!(actors[0].pending_receipt_count(), 0);
+        let counts = metrics.workload_counts();
+        assert_eq!(counts[&WorkloadKind::WalletSubmitSmoke].completed, 1);
+        assert_eq!(counts[&WorkloadKind::ReceiptPoll].failed, 1);
+
+        let events = tokio::fs::read_to_string(file.path())
+            .await
+            .expect("events should read");
+        assert!(events.contains("\"workload\":\"wallet-submit-smoke\""));
+        assert!(events.contains("\"errorClass\":\"target-restarted\""));
+    }
+
+    #[tokio::test]
+    async fn failed_chaos_stops_schedule_and_reports_failure() {
+        let manifest = chaos_manifest();
+        let schedule = generate_schedule(&manifest).expect("schedule should generate");
+        let starts = phase_starts(&manifest).expect("phase starts should generate");
+        let file = NamedTempFile::new().expect("temp file should be created");
+        let mut event_writer = EventWriter::create(file.path())
+            .await
+            .expect("event writer should open");
+        let mut metrics = RunMetricsBuilder::default();
+        let mut actors = actor_states();
+        let mut chaos_events = Vec::new();
+
+        let report = run_schedule_with_chaos(
+            DelayedClient,
+            ScheduleExecution {
+                manifest: &manifest,
+                runtime_manifest: &runtime_manifest(),
+                schedule: &schedule,
+                phase_starts: &starts,
+                actor_states: &mut actors,
+                event_writer: &mut event_writer,
+                metrics: &mut metrics,
+            },
+            Some(&FailingChaosController),
+            &mut chaos_events,
+        )
+        .await
+        .expect("failed chaos should be recorded");
+
+        assert!(report.chaos_failed);
+        assert!(
+            chaos_events
+                .iter()
+                .any(|event| event.state == ChaosEventState::Failed)
+        );
+    }
+
     fn manifest() -> SimulationManifest {
         serde_json::from_value(json!({
             "schemaVersion": 1,
@@ -2027,6 +2849,48 @@ mod tests {
         .expect("manifest fixture should parse")
     }
 
+    fn chaos_manifest() -> SimulationManifest {
+        serde_json::from_value(json!({
+            "schemaVersion": 1,
+            "kind": "groundhog-simulation",
+            "name": "executor-chaos-test",
+            "seed": "seed",
+            "target": {"provider": "local"},
+            "loadShape": [{"duration": "2ms", "users": 1, "ratePerUserHz": 1000.0}],
+            "workloads": [{"name": "chain-tip", "weight": 1}],
+            "chaos": [{"at": "10ms", "kind": "restart-target"}]
+        }))
+        .expect("manifest fixture should parse")
+    }
+
+    fn receipt_chaos_manifest() -> SimulationManifest {
+        serde_json::from_value(json!({
+            "schemaVersion": 1,
+            "kind": "groundhog-simulation",
+            "name": "executor-receipt-chaos-test",
+            "seed": "seed",
+            "target": {"provider": "local"},
+            "loadShape": [{"duration": "1ms", "users": 1, "ratePerUserHz": 1000.0}],
+            "workloads": [{"name": "receipt-poll", "weight": 1}],
+            "chaos": [{"at": "1ms", "kind": "restart-target"}]
+        }))
+        .expect("manifest fixture should parse")
+    }
+
+    fn wallet_chaos_manifest() -> SimulationManifest {
+        serde_json::from_value(json!({
+            "schemaVersion": 1,
+            "kind": "groundhog-simulation",
+            "name": "executor-wallet-chaos-test",
+            "seed": "seed",
+            "target": {"provider": "local"},
+            "loadShape": [{"duration": "1ms", "users": 1, "ratePerUserHz": 1000.0}],
+            "workloads": [{"name": "wallet-submit-smoke", "weight": 1}],
+            "chaos": [{"at": "1ms", "kind": "restart-target"}]
+        }))
+        .expect("manifest fixture should parse")
+    }
+
     fn find_event(events: &str, kind: &str) -> serde_json::Value {
         events
             .lines()
@@ -2035,6 +2899,16 @@ mod tests {
             })
             .find(|event| event["kind"] == kind)
             .unwrap_or_else(|| panic!("expected {kind} event"))
+    }
+
+    fn find_events(events: &str, kind: &str) -> Vec<serde_json::Value> {
+        events
+            .lines()
+            .map(|line| {
+                serde_json::from_str::<serde_json::Value>(line).expect("event should parse")
+            })
+            .filter(|event| event["kind"] == kind)
+            .collect()
     }
 
     fn actor_states() -> Vec<ActorState> {
