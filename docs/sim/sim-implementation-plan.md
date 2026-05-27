@@ -469,6 +469,15 @@ chaos, deploy new contracts, or create remote infrastructure.
   stop+restart, matching current `groundhog node` supervisor behavior.
 - [x] Record chaos state transitions in `result.jsonl` and `result.json`.
 - [ ] Support scenario `baseline` and emit baseline diff inside `result.json`.
+  - [x] Slice D1: write handoff design:
+    `docs/sim/specs/2026-05-27-scenario-baseline-result-diff-design.md`.
+  - [x] Review gate D1: spec review for artifact shape, path resolution, and
+    deferred CI policy.
+  - [x] Slice D2: wire baseline loading and embedded diff into the runner.
+  - [x] Review gate D2: semantics review for outcome behavior, load errors,
+    and compare reuse.
+  - [x] Slice D3: add tests, docs/examples, and verification.
+  - [x] Final review gate: full Slice D code review plus test/artifact review.
 
 ## Phase 3: Stateful Contract Workloads
 

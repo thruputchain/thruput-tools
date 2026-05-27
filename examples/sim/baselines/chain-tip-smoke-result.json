@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "runId": "baseline-chain-tip-smoke",
+  "name": "chain-tip-smoke-baseline",
+  "outcome": "passed",
+  "targetProvider": "existing",
+  "targetOwnership": {
+    "provider": "existing",
+    "startedBySim": false,
+    "cleanupAllowed": false
+  },
+  "targetIdentity": {
+    "rpcUrl": "http://127.0.0.1:9545"
+  },
+  "runtimeIdentity": {
+    "networkId": "groundhog-local",
+    "protocol": "hogp/test",
+    "genesisHash": "0x4242424242424242424242424242424242424242424242424242424242424242",
+    "producer": {
+      "binary": "hogd-dev",
+      "version": "0.1.0"
+    }
+  },
+  "nonceNamespace": 1,
+  "manifestHashes": {
+    "simulationManifestSha256": "baseline-snapshot",
+    "runtimeManifestSha256": "baseline-runtime",
+    "bootstrapManifest": {
+      "status": "unsupported",
+      "reason": "baseline fixture"
+    }
+  },
+  "metricAvailability": {
+    "storageTokensConsumed": {
+      "status": "unsupported",
+      "reason": "public receipt path does not surface storage-token deltas"
+    },
+    "nnintComputeUsed": {
+      "status": "unsupported",
+      "reason": "public receipt path does not surface NNInt compute usage"
+    }
+  },
+  "workloadCounts": {
+    "chain-tip": {
+      "completed": 0,
+      "failed": 0,
+      "skipped": 0
+    }
+  },
+  "workloadMetrics": {
+    "chain-tip": {
+      "counts": {
+        "completed": 0,
+        "failed": 0,
+        "skipped": 0
+      },
+      "errorCounts": {}
+    }
+  },
+  "assertionResults": [],
+  "chaosEvents": []
+}

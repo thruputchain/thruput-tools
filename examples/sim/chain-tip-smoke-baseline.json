@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "kind": "groundhog-simulation",
+  "name": "chain-tip-smoke-baseline",
+  "seed": "chain-tip-smoke-v1",
+  "target": {
+    "provider": "existing",
+    "rpcUrl": "http://127.0.0.1:9545",
+    "runtimeManifest": "/tmp/hogd-dev/runtime-manifest.json"
+  },
+  "baseline": "baselines/chain-tip-smoke-result.json",
+  "loadShape": [
+    {
+      "duration": "3s",
+      "users": 1,
+      "ratePerUserHz": 1.0
+    }
+  ],
+  "workloads": [
+    {
+      "name": "chain-tip",
+      "weight": 1
+    }
+  ],
+  "assertions": {
+    "maxErrorRate": 0.001,
+    "maxChainStall": "10s"
+  }
+}
