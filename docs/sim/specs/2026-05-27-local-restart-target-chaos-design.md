@@ -44,9 +44,14 @@ B makes the existing chaos model executable for that provider.
 - Failed chaos marks the run outcome `failed`, even if workload assertions pass.
 - Add one local restart smoke example and process-level ignored smoke coverage.
 
+### Added after Slice B
+
+- Provider log capture in result artifacts landed as a follow-up local-provider
+  hardening slice. Restart relaunch retries use per-attempt log suffixes so a
+  failed restart attempt's output is not overwritten by a later retry.
+
 ### Out of scope
 
-- Provider log capture in result artifacts.
 - Sweeper ownership fields.
 - `remote-ssh` restart chaos.
 - Asynchronous outage modeling where workloads continue dispatching into

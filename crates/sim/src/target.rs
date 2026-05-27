@@ -1,4 +1,5 @@
 use std::future::Future;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::process::Stdio;
@@ -6,9 +7,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, oneshot};
+use tokio::task::JoinHandle;
 use tokio::time::{Instant, sleep, timeout};
 
 use crate::error::SimError;
@@ -23,6 +25,7 @@ const DEFAULT_LOCAL_STARTUP_TIMEOUT_SECS: u64 = 30;
 const LOCAL_CLEANUP_GRACE: Duration = Duration::from_secs(10);
 const LOCAL_RESTART_RELAUNCH_ATTEMPTS: usize = 3;
 const LOCAL_RESTART_RELAUNCH_RETRY_DELAY: Duration = Duration::from_millis(250);
+const LOCAL_STARTUP_STDERR_CAPTURE_LIMIT_BYTES: usize = 64 * 1024;
 
 /// Boxed future returned by target-provider lifecycle hooks.
 pub type TargetProviderFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -131,6 +134,14 @@ pub struct TargetOverrides {
     pub startup_timeout_secs: Option<u64>,
 }
 
+/// Per-run context supplied to target providers during acquisition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct TargetProviderContext {
+    /// Directory where providers may write target-owned logs for this run.
+    pub logs_dir: PathBuf,
+}
+
 impl TargetOverrides {
     fn first_local_launch_override(&self) -> Option<&'static str> {
         if self.groundhog_binary.is_some() {
@@ -188,6 +199,7 @@ pub trait TargetProvider {
         &'a self,
         manifest: &'a SimulationManifest,
         overrides: TargetOverrides,
+        context: TargetProviderContext,
     ) -> TargetProviderFuture<'a, Result<ResolvedTarget, SimError>>;
 
     /// Return the chaos controller for providers that can execute chaos events.
@@ -229,6 +241,7 @@ impl TargetProvider for ExistingTargetProvider {
         &'a self,
         manifest: &'a SimulationManifest,
         overrides: TargetOverrides,
+        _context: TargetProviderContext,
     ) -> TargetProviderFuture<'a, Result<ResolvedTarget, SimError>> {
         Box::pin(async move {
             if let Some(flag) = overrides.first_local_launch_override() {
@@ -276,8 +289,10 @@ enum LocalTargetState {
 struct LocalAcquiredTarget {
     child: Child,
     launch_config: LocalLaunchConfig,
+    log_tasks: LocalLogTasks,
     rpc_url: String,
     rpc_port: u16,
+    next_launch_index: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -286,12 +301,39 @@ struct LocalLaunchConfig {
     hogd_dev_binary: Option<PathBuf>,
     required_accounts: u32,
     startup_timeout_secs: u64,
+    logs_dir: PathBuf,
 }
 
 #[derive(Debug)]
 struct LocalLaunchedTarget {
     child: Child,
     startup: LocalNodeStartup,
+    log_tasks: LocalLogTasks,
+}
+
+#[derive(Debug)]
+struct LocalLogTasks {
+    stdout: JoinHandle<io::Result<()>>,
+    stderr: JoinHandle<io::Result<()>>,
+}
+
+#[derive(Debug)]
+struct StdoutCapture {
+    startup_line: oneshot::Receiver<StartupLine>,
+    task: JoinHandle<io::Result<()>>,
+}
+
+#[derive(Debug)]
+struct StderrCapture {
+    collected: Arc<Mutex<String>>,
+    task: JoinHandle<io::Result<()>>,
+}
+
+#[derive(Debug)]
+enum StartupLine {
+    Line(String),
+    Eof,
+    Io(String),
 }
 
 impl LocalTargetProvider {
@@ -309,6 +351,7 @@ impl TargetProvider for LocalTargetProvider {
         &'a self,
         manifest: &'a SimulationManifest,
         overrides: TargetOverrides,
+        context: TargetProviderContext,
     ) -> TargetProviderFuture<'a, Result<ResolvedTarget, SimError>> {
         Box::pin(async move {
             validate_local_target_flags(
@@ -323,7 +366,7 @@ impl TargetProvider for LocalTargetProvider {
                 }
                 *state = LocalTargetState::Acquiring;
             }
-            let acquire_result = self.acquire_inner(manifest, overrides).await;
+            let acquire_result = self.acquire_inner(manifest, overrides, context).await;
             if acquire_result.is_err() {
                 *self.state.lock().await = LocalTargetState::Idle;
             }
@@ -340,8 +383,13 @@ impl TargetProvider for LocalTargetProvider {
                 LocalTargetState::Acquired(acquired) => acquired,
                 LocalTargetState::Idle | LocalTargetState::Acquiring => return Ok(()),
             };
-            let mut child = acquired.child;
-            terminate_child(&mut child, LOCAL_CLEANUP_GRACE).await
+            let LocalAcquiredTarget {
+                mut child,
+                log_tasks,
+                ..
+            } = *acquired;
+            terminate_child(&mut child, LOCAL_CLEANUP_GRACE).await?;
+            log_tasks.finish().await
         })
     }
 
@@ -355,6 +403,7 @@ impl LocalTargetProvider {
         &self,
         manifest: &SimulationManifest,
         overrides: TargetOverrides,
+        context: TargetProviderContext,
     ) -> Result<ResolvedTarget, SimError> {
         let groundhog = resolve_groundhog_binary(overrides.groundhog_binary.as_deref())?;
         let required_accounts = required_bootstrap_accounts(manifest);
@@ -369,14 +418,16 @@ impl LocalTargetProvider {
             hogd_dev_binary,
             required_accounts,
             startup_timeout_secs,
+            logs_dir: context.logs_dir,
         };
-        let launched = launch_local_node(&launch_config, overrides.port).await?;
+        let launched = launch_local_node(&launch_config, overrides.port, 0, None).await?;
         let rpc_url = launched.startup.rpc_url.clone();
         let rpc_port = match resolved_rpc_port(&rpc_url) {
             Ok(port) => port,
             Err(error) => {
                 let mut child = launched.child;
                 let _ = terminate_child(&mut child, LOCAL_CLEANUP_GRACE).await;
+                let _ = launched.log_tasks.finish().await;
                 return Err(error);
             }
         };
@@ -384,8 +435,10 @@ impl LocalTargetProvider {
         *self.state.lock().await = LocalTargetState::Acquired(Box::new(LocalAcquiredTarget {
             child: launched.child,
             launch_config,
+            log_tasks: launched.log_tasks,
             rpc_url: rpc_url.clone(),
             rpc_port,
+            next_launch_index: 1,
         }));
         Ok(ResolvedTarget {
             provider: TargetProviderKind::Local,
@@ -428,14 +481,18 @@ impl LocalTargetProvider {
         let expected_rpc_url = acquired.rpc_url.clone();
         let launch_config = acquired.launch_config.clone();
         let rpc_port = acquired.rpc_port;
-        let launched = match relaunch_local_node_for_restart(&launch_config, rpc_port).await {
-            Ok(launched) => launched,
-            Err(error) => return Err(error),
-        };
+        let launch_index = acquired.next_launch_index;
+        acquired.log_tasks.finish().await?;
+        let launched =
+            match relaunch_local_node_for_restart(&launch_config, rpc_port, launch_index).await {
+                Ok(launched) => launched,
+                Err(error) => return Err(error),
+            };
         let actual_rpc_url = launched.startup.rpc_url.clone();
         if actual_rpc_url != expected_rpc_url {
             let mut child = launched.child;
             let _ = terminate_child(&mut child, LOCAL_CLEANUP_GRACE).await;
+            let _ = launched.log_tasks.finish().await;
             return Err(SimError::LocalNodeRestartRpcUrlChanged {
                 expected: expected_rpc_url,
                 actual: actual_rpc_url,
@@ -445,8 +502,10 @@ impl LocalTargetProvider {
         *self.state.lock().await = LocalTargetState::Acquired(Box::new(LocalAcquiredTarget {
             child: launched.child,
             launch_config,
+            log_tasks: launched.log_tasks,
             rpc_url: expected_rpc_url,
             rpc_port,
+            next_launch_index: launch_index + 1,
         }));
 
         Ok(ChaosEventOutcome {
@@ -490,6 +549,8 @@ fn local_node_args(
 async fn launch_local_node(
     config: &LocalLaunchConfig,
     port: Option<u16>,
+    launch_index: u32,
+    launch_attempt: Option<usize>,
 ) -> Result<LocalLaunchedTarget, SimError> {
     let args = local_node_args(
         config.required_accounts,
@@ -510,27 +571,48 @@ async fn launch_local_node(
         source,
     })?;
 
-    let stderr = collect_child_stderr(&mut child);
-    let startup =
-        match wait_for_local_startup(&mut child, config.startup_timeout_secs, stderr.clone()).await
+    let logs =
+        match start_child_log_capture(&mut child, &config.logs_dir, launch_index, launch_attempt)
+            .await
         {
-            Ok(startup) => startup,
+            Ok(logs) => logs,
             Err(error) => {
                 let _ = terminate_child(&mut child, LOCAL_CLEANUP_GRACE).await;
                 return Err(error);
             }
         };
+    let stderr = Arc::clone(&logs.stderr);
+    let startup = match wait_for_local_startup(
+        &mut child,
+        config.startup_timeout_secs,
+        logs.startup_line,
+        Arc::clone(&stderr),
+    )
+    .await
+    {
+        Ok(startup) => startup,
+        Err(error) => {
+            let _ = terminate_child(&mut child, LOCAL_CLEANUP_GRACE).await;
+            let _ = logs.tasks.finish().await;
+            return Err(error);
+        }
+    };
 
-    Ok(LocalLaunchedTarget { child, startup })
+    Ok(LocalLaunchedTarget {
+        child,
+        startup,
+        log_tasks: logs.tasks,
+    })
 }
 
 async fn relaunch_local_node_for_restart(
     config: &LocalLaunchConfig,
     port: u16,
+    launch_index: u32,
 ) -> Result<LocalLaunchedTarget, SimError> {
     let mut last_error = None;
     for attempt in 0..LOCAL_RESTART_RELAUNCH_ATTEMPTS {
-        match launch_local_node(config, Some(port)).await {
+        match launch_local_node(config, Some(port), launch_index, Some(attempt)).await {
             Ok(launched) => return Ok(launched),
             Err(error) => {
                 last_error = Some(error);
@@ -601,41 +683,190 @@ fn resolve_groundhog_binary(override_path: Option<&Path>) -> Result<PathBuf, Sim
     })
 }
 
-fn collect_child_stderr(child: &mut Child) -> Arc<Mutex<String>> {
+struct StartedChildLogCapture {
+    startup_line: oneshot::Receiver<StartupLine>,
+    stderr: Arc<Mutex<String>>,
+    tasks: LocalLogTasks,
+}
+
+async fn start_child_log_capture(
+    child: &mut Child,
+    logs_dir: &Path,
+    launch_index: u32,
+    launch_attempt: Option<usize>,
+) -> Result<StartedChildLogCapture, SimError> {
+    tokio::fs::create_dir_all(logs_dir).await?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| SimError::Executor("local node stdout was not piped".into()))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| SimError::Executor("local node stderr was not piped".into()))?;
+    let stdout_log = tokio::fs::File::create(local_log_path(
+        logs_dir,
+        launch_index,
+        launch_attempt,
+        "stdout",
+    ))
+    .await?;
+    let stderr_log = tokio::fs::File::create(local_log_path(
+        logs_dir,
+        launch_index,
+        launch_attempt,
+        "stderr",
+    ))
+    .await?;
+    let stdout_capture = spawn_stdout_capture(stdout, stdout_log);
+    let stderr_capture = spawn_stderr_capture(stderr, stderr_log);
+    Ok(StartedChildLogCapture {
+        startup_line: stdout_capture.startup_line,
+        stderr: Arc::clone(&stderr_capture.collected),
+        tasks: LocalLogTasks {
+            stdout: stdout_capture.task,
+            stderr: stderr_capture.task,
+        },
+    })
+}
+
+fn local_log_path(
+    logs_dir: &Path,
+    launch_index: u32,
+    launch_attempt: Option<usize>,
+    stream: &str,
+) -> PathBuf {
+    let attempt = launch_attempt.map_or_else(String::new, |attempt| format!(".attempt-{attempt}"));
+    logs_dir.join(format!("local-node-{launch_index}{attempt}.{stream}.log"))
+}
+
+#[cfg(test)]
+async fn start_stdout_capture<R>(stdout: R, log_path: PathBuf) -> Result<StdoutCapture, SimError>
+where
+    R: AsyncRead + Unpin + Send + 'static,
+{
+    let log = tokio::fs::File::create(log_path).await?;
+    Ok(spawn_stdout_capture(stdout, log))
+}
+
+fn spawn_stdout_capture<R>(stdout: R, mut log: tokio::fs::File) -> StdoutCapture
+where
+    R: AsyncRead + Unpin + Send + 'static,
+{
+    let (startup_sender, startup_line) = oneshot::channel();
+    let task = tokio::spawn(async move {
+        let mut reader = BufReader::new(stdout);
+        let mut line = String::new();
+        let mut startup_sender = Some(startup_sender);
+        loop {
+            line.clear();
+            let read = match reader.read_line(&mut line).await {
+                Ok(read) => read,
+                Err(error) => {
+                    send_startup_line(&mut startup_sender, StartupLine::Io(error.to_string()));
+                    return Err(error);
+                }
+            };
+            if read == 0 {
+                send_startup_line(&mut startup_sender, StartupLine::Eof);
+                return log.flush().await;
+            }
+            if let Err(error) = log.write_all(line.as_bytes()).await {
+                send_startup_line(&mut startup_sender, StartupLine::Io(error.to_string()));
+                return Err(error);
+            }
+            if !line.trim().is_empty() {
+                send_startup_line(&mut startup_sender, StartupLine::Line(line.clone()));
+            }
+        }
+    });
+    StdoutCapture { startup_line, task }
+}
+
+#[cfg(test)]
+async fn start_stderr_capture<R>(stderr: R, log_path: PathBuf) -> Result<StderrCapture, SimError>
+where
+    R: AsyncRead + Unpin + Send + 'static,
+{
+    let log = tokio::fs::File::create(log_path).await?;
+    Ok(spawn_stderr_capture(stderr, log))
+}
+
+fn spawn_stderr_capture<R>(stderr: R, mut log: tokio::fs::File) -> StderrCapture
+where
+    R: AsyncRead + Unpin + Send + 'static,
+{
     let collected = Arc::new(Mutex::new(String::new()));
-    let Some(stderr) = child.stderr.take() else {
-        return collected;
-    };
-    let output = Arc::clone(&collected);
-    tokio::spawn(async move {
+    let task_collected = Arc::clone(&collected);
+    let task = tokio::spawn(async move {
         let mut reader = BufReader::new(stderr);
         let mut buffer = [0_u8; 1024];
         loop {
-            let Ok(read) = tokio::io::AsyncReadExt::read(&mut reader, &mut buffer).await else {
-                return;
-            };
+            let read = tokio::io::AsyncReadExt::read(&mut reader, &mut buffer).await?;
             if read == 0 {
-                return;
+                return log.flush().await;
             }
-            let mut output = output.lock().await;
-            output.push_str(&String::from_utf8_lossy(&buffer[..read]));
+            log.write_all(&buffer[..read]).await?;
+            let mut output = task_collected.lock().await;
+            // This in-memory snippet is only startup-error context. The durable
+            // stderr artifact above preserves the raw bytes without lossy
+            // UTF-8 chunk conversion.
+            append_bounded_stderr(&mut output, &buffer[..read]);
         }
     });
-    collected
+    StderrCapture { collected, task }
+}
+
+fn send_startup_line(sender: &mut Option<oneshot::Sender<StartupLine>>, message: StartupLine) {
+    if let Some(sender) = sender.take() {
+        let _ = sender.send(message);
+    }
+}
+
+fn append_bounded_stderr(output: &mut String, bytes: &[u8]) {
+    if output.len() >= LOCAL_STARTUP_STDERR_CAPTURE_LIMIT_BYTES {
+        return;
+    }
+    let text = String::from_utf8_lossy(bytes);
+    let remaining = LOCAL_STARTUP_STDERR_CAPTURE_LIMIT_BYTES - output.len();
+    if text.len() <= remaining {
+        output.push_str(&text);
+        return;
+    }
+    let mut used = 0;
+    for ch in text.chars() {
+        let len = ch.len_utf8();
+        if used + len > remaining {
+            break;
+        }
+        output.push(ch);
+        used += len;
+    }
+}
+
+impl LocalLogTasks {
+    async fn finish(self) -> Result<(), SimError> {
+        finish_log_task(self.stdout).await?;
+        finish_log_task(self.stderr).await
+    }
+}
+
+async fn finish_log_task(task: JoinHandle<io::Result<()>>) -> Result<(), SimError> {
+    task.await.map_err(|error| {
+        SimError::Executor(format!("local log capture task panicked: {error}"))
+    })??;
+    Ok(())
 }
 
 async fn wait_for_local_startup(
     child: &mut Child,
     timeout_secs: u64,
+    startup_line: oneshot::Receiver<StartupLine>,
     stderr: Arc<Mutex<String>>,
 ) -> Result<LocalNodeStartup, SimError> {
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| SimError::Executor("local node stdout was not piped".into()))?;
     match timeout(
         Duration::from_secs(timeout_secs),
-        read_local_startup(child, stdout, Arc::clone(&stderr)),
+        read_local_startup(child, startup_line, Arc::clone(&stderr)),
     )
     .await
     {
@@ -647,37 +878,36 @@ async fn wait_for_local_startup(
     }
 }
 
-async fn read_local_startup<R>(
+async fn read_local_startup(
     child: &mut Child,
-    stdout: R,
+    startup_line: oneshot::Receiver<StartupLine>,
     stderr: Arc<Mutex<String>>,
-) -> Result<LocalNodeStartup, SimError>
-where
-    R: AsyncRead + Unpin,
-{
-    let mut lines = BufReader::new(stdout).lines();
-    loop {
-        tokio::select! {
-            biased;
-            line = lines.next_line() => {
-                match line? {
-                    Some(line) if line.trim().is_empty() => {}
-                    Some(line) => return parse_local_startup_json(&line),
-                    None => {
-                        let status = child.wait().await?;
-                        return Err(SimError::LocalNodeStartupExit {
-                            status: status.to_string(),
-                            stderr: stderr.lock().await.clone(),
-                        });
-                    }
+) -> Result<LocalNodeStartup, SimError> {
+    let mut startup_line = startup_line;
+    tokio::select! {
+        biased;
+        line = &mut startup_line => {
+            match line {
+                Ok(StartupLine::Line(line)) => parse_local_startup_json(&line),
+                Ok(StartupLine::Eof) | Err(_) => {
+                    let status = child.wait().await?;
+                    Err(SimError::LocalNodeStartupExit {
+                        status: status.to_string(),
+                        stderr: stderr.lock().await.clone(),
+                    })
                 }
+                Ok(StartupLine::Io(error)) => Err(io::Error::other(error).into()),
             }
-            status = child.wait() => {
-                return Err(SimError::LocalNodeStartupExit {
-                    status: status?.to_string(),
-                    stderr: stderr.lock().await.clone(),
-                });
+        }
+        status = child.wait() => {
+            let status = status?;
+            if let Ok(StartupLine::Line(line)) = startup_line.await {
+                return parse_local_startup_json(&line);
             }
+            Err(SimError::LocalNodeStartupExit {
+                status: status.to_string(),
+                stderr: stderr.lock().await.clone(),
+            })
         }
     }
 }
@@ -758,6 +988,7 @@ async fn terminate_child(child: &mut Child, _grace: Duration) -> Result<(), SimE
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+    use tokio::io::AsyncWriteExt;
 
     use super::*;
 
@@ -770,7 +1001,7 @@ mod tests {
         }));
 
         let target = ExistingTargetProvider
-            .acquire(&manifest, TargetOverrides::default())
+            .acquire(&manifest, TargetOverrides::default(), context())
             .await
             .expect("existing target should resolve");
 
@@ -794,7 +1025,7 @@ mod tests {
         let provider: &dyn TargetProvider = &ExistingTargetProvider;
 
         let target = provider
-            .acquire(&manifest, TargetOverrides::default())
+            .acquire(&manifest, TargetOverrides::default(), context())
             .await
             .expect("existing target should resolve through a trait object");
 
@@ -837,6 +1068,7 @@ mod tests {
                     runtime_manifest: Some(PathBuf::from("/tmp/manifest-b.json")),
                     ..TargetOverrides::default()
                 },
+                context(),
             )
             .await
             .expect("existing target should resolve");
@@ -863,6 +1095,7 @@ mod tests {
                     port: Some(0),
                     ..TargetOverrides::default()
                 },
+                context(),
             )
             .await
             .expect_err("existing target should reject local launch flags");
@@ -883,7 +1116,7 @@ mod tests {
         }));
 
         let error = ExistingTargetProvider
-            .acquire(&manifest, TargetOverrides::default())
+            .acquire(&manifest, TargetOverrides::default(), context())
             .await
             .expect_err("existing provider should reject local manifests");
 
@@ -903,7 +1136,7 @@ mod tests {
         }));
 
         let error = ExistingTargetProvider
-            .acquire(&manifest, TargetOverrides::default())
+            .acquire(&manifest, TargetOverrides::default(), context())
             .await
             .expect_err("existing provider should require a runtime manifest");
 
@@ -926,6 +1159,7 @@ mod tests {
                     rpc_url: Some("http://127.0.0.1:9545".into()),
                     ..TargetOverrides::default()
                 },
+                context(),
             )
             .await
             .expect_err("local target should reject rpc override");
@@ -950,6 +1184,7 @@ mod tests {
                     groundhog_binary: Some(missing.clone()),
                     ..TargetOverrides::default()
                 },
+                context(),
             )
             .await
             .expect_err("local target should require a real groundhog binary");
@@ -1006,6 +1241,117 @@ mod tests {
                 "49152"
             ]
         );
+    }
+
+    #[test]
+    fn local_log_paths_are_deterministic_by_launch_index_and_attempt() {
+        let logs_dir = PathBuf::from("/tmp/sim-run/logs");
+
+        assert_eq!(
+            local_log_path(&logs_dir, 0, None, "stdout"),
+            PathBuf::from("/tmp/sim-run/logs/local-node-0.stdout.log")
+        );
+        assert_eq!(
+            local_log_path(&logs_dir, 1, Some(0), "stderr"),
+            PathBuf::from("/tmp/sim-run/logs/local-node-1.attempt-0.stderr.log")
+        );
+        assert_eq!(
+            local_log_path(&logs_dir, 1, None, "stderr"),
+            PathBuf::from("/tmp/sim-run/logs/local-node-1.stderr.log")
+        );
+    }
+
+    #[tokio::test]
+    async fn stdout_capture_preserves_startup_json_while_parsing_it() {
+        let dir = tempfile::tempdir().expect("temp dir should be created");
+        let log_path = dir.path().join("local-node-0.stdout.log");
+        let (mut writer, reader) = tokio::io::duplex(1024);
+        let capture = start_stdout_capture(reader, log_path.clone())
+            .await
+            .expect("stdout capture should start");
+        let startup = r#"{"ok":true,"data":{"rpc_url":"http://127.0.0.1:9545","runtime_manifest":{"path":"/tmp/runtime-manifest.json"}}}"#;
+
+        writer
+            .write_all(b"\n")
+            .await
+            .expect("blank line should write");
+        writer
+            .write_all(startup.as_bytes())
+            .await
+            .expect("startup line should write");
+        writer
+            .write_all(b"\nafter-startup\n")
+            .await
+            .expect("post-startup line should write");
+        drop(writer);
+
+        match capture
+            .startup_line
+            .await
+            .expect("startup line should send")
+        {
+            StartupLine::Line(line) => assert_eq!(line.trim_end(), startup),
+            other => panic!("expected startup line, got {other:?}"),
+        }
+        capture
+            .task
+            .await
+            .expect("stdout task should join")
+            .expect("stdout task should succeed");
+        let log = tokio::fs::read_to_string(log_path)
+            .await
+            .expect("stdout log should read");
+        assert!(log.contains(startup));
+        assert!(log.contains("after-startup"));
+    }
+
+    #[tokio::test]
+    async fn stderr_capture_writes_log_and_keeps_startup_error_context() {
+        let dir = tempfile::tempdir().expect("temp dir should be created");
+        let log_path = dir.path().join("local-node-0.stderr.log");
+        let (mut writer, reader) = tokio::io::duplex(1024);
+        let capture = start_stderr_capture(reader, log_path.clone())
+            .await
+            .expect("stderr capture should start");
+
+        writer
+            .write_all(b"startup failed\n")
+            .await
+            .expect("stderr should write");
+        drop(writer);
+        capture
+            .task
+            .await
+            .expect("stderr task should join")
+            .expect("stderr task should succeed");
+
+        assert_eq!(&*capture.collected.lock().await, "startup failed\n");
+        let log = tokio::fs::read_to_string(log_path)
+            .await
+            .expect("stderr log should read");
+        assert_eq!(log, "startup failed\n");
+    }
+
+    #[test]
+    fn bounded_stderr_capture_respects_exact_byte_boundary() {
+        let mut output = "x".repeat(LOCAL_STARTUP_STDERR_CAPTURE_LIMIT_BYTES - 1);
+
+        append_bounded_stderr(&mut output, b"y");
+        append_bounded_stderr(&mut output, b"z");
+
+        assert_eq!(output.len(), LOCAL_STARTUP_STDERR_CAPTURE_LIMIT_BYTES);
+        assert!(output.ends_with('y'));
+        assert!(!output.ends_with('z'));
+    }
+
+    #[test]
+    fn bounded_stderr_capture_does_not_split_multibyte_utf8() {
+        let mut output = "x".repeat(LOCAL_STARTUP_STDERR_CAPTURE_LIMIT_BYTES - 1);
+
+        append_bounded_stderr(&mut output, "é".as_bytes());
+
+        assert_eq!(output.len(), LOCAL_STARTUP_STDERR_CAPTURE_LIMIT_BYTES - 1);
+        assert!(!output.contains('é'));
     }
 
     #[test]
@@ -1183,6 +1529,9 @@ while :; do sleep 1; done
                     startup_timeout_secs: Some(5),
                     ..TargetOverrides::default()
                 },
+                TargetProviderContext {
+                    logs_dir: dir.path().join("logs"),
+                },
             )
             .await
             .expect("fake local target should acquire");
@@ -1210,6 +1559,18 @@ while :; do sleep 1; done
         assert_eq!(lines.len(), 2);
         assert!(lines[0].contains("--port 0"));
         assert!(lines[1].contains("--port 49152"));
+        assert!(dir.path().join("logs/local-node-0.stdout.log").exists());
+        assert!(dir.path().join("logs/local-node-0.stderr.log").exists());
+        assert!(
+            dir.path()
+                .join("logs/local-node-1.attempt-0.stdout.log")
+                .exists()
+        );
+        assert!(
+            dir.path()
+                .join("logs/local-node-1.attempt-0.stderr.log")
+                .exists()
+        );
     }
 
     #[tokio::test]
@@ -1221,7 +1582,7 @@ while :; do sleep 1; done
         }));
 
         let error = provider
-            .acquire(&manifest, TargetOverrides::default())
+            .acquire(&manifest, TargetOverrides::default(), context())
             .await
             .expect_err("provider should reject concurrent acquire");
 
@@ -1239,6 +1600,12 @@ while :; do sleep 1; done
             "workloads": [{"name": "chain-tip", "weight": 1}]
         }))
         .expect("manifest should parse")
+    }
+
+    fn context() -> TargetProviderContext {
+        TargetProviderContext {
+            logs_dir: PathBuf::from("/tmp/groundhog-sim-target-test-logs"),
+        }
     }
 
     #[cfg(unix)]

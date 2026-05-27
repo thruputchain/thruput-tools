@@ -35,6 +35,8 @@ fn local_target_chain_tip_smoke() {
     assert!(temp.path().join("result.json").exists());
     assert!(temp.path().join("result.jsonl").exists());
     assert!(temp.path().join("target-ownership.json").exists());
+    assert!(temp.path().join("logs/local-node-0.stdout.log").exists());
+    assert!(temp.path().join("logs/local-node-0.stderr.log").exists());
 
     let simulation = std::fs::read_to_string(temp.path().join("simulation.json"))
         .expect("simulation artifact should read");
@@ -73,6 +75,18 @@ fn local_restart_target_chain_tip_smoke() {
         .expect("hoglab should launch");
 
     assert!(status.success(), "hoglab run failed with status {status}");
+    assert!(temp.path().join("logs/local-node-0.stdout.log").exists());
+    assert!(temp.path().join("logs/local-node-0.stderr.log").exists());
+    assert!(
+        temp.path()
+            .join("logs/local-node-1.attempt-0.stdout.log")
+            .exists()
+    );
+    assert!(
+        temp.path()
+            .join("logs/local-node-1.attempt-0.stderr.log")
+            .exists()
+    );
 
     let result: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(temp.path().join("result.json"))

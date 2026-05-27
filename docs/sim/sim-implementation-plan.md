@@ -4,8 +4,8 @@
 **Status:** Draft execution checklist. Phase 1 existing-target execution,
 reviewer hardening, live hogd-dev smoke, submit/receipt actor state,
 submit/receipt assertion wiring, numeric compare, the target-provider boundary,
-and Phase 2 Slice A/B local-provider execution and restart-target chaos are
-complete.
+Phase 2 Slice A/B local-provider execution and restart-target chaos, and local
+provider log capture are complete.
 
 This plan pairs with [Simulation design](sim-design.md). The design doc owns
 the architectural boundary and long-term shape. This file is the implementation
@@ -461,7 +461,7 @@ chaos, deploy new contracts, or create remote infrastructure.
   the simulation manifest's max phase users.
 - [x] Start `groundhog node` / `hogd-dev`.
 - [x] Capture startup JSON and runtime manifest path.
-- [ ] Capture provider logs.
+- [x] Capture provider logs for simulator-owned local targets.
 - [x] Write target ownership metadata with `startedBySim = true`.
 - [x] Stop the target on completion.
 - [ ] Add sweeper command for sim-owned local targets.
