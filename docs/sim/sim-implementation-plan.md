@@ -428,12 +428,14 @@ chaos, deploy new contracts, or create remote infrastructure.
 
 ## Phase 2: Local Managed Target
 
-- [ ] Add `local` target provider.
-- [ ] Generate a bootstrap manifest from the simulation manifest.
-- [ ] Start `groundhog node` / `hogd-dev`.
-- [ ] Capture startup JSON, runtime manifest, and logs.
-- [ ] Write target ownership metadata with `startedBySim = true`.
-- [ ] Stop the target on completion.
+- [x] Add `local` target provider.
+- [x] Request the required dev-account count from `groundhog node` based on
+  the simulation manifest's max phase users.
+- [x] Start `groundhog node` / `hogd-dev`.
+- [x] Capture startup JSON and runtime manifest path.
+- [ ] Capture provider logs.
+- [x] Write target ownership metadata with `startedBySim = true`.
+- [x] Stop the target on completion.
 - [ ] Add sweeper command for sim-owned local targets.
 - [ ] Implement `restart-target` chaos for the local provider as whole-target
   stop+restart, matching current `groundhog node` supervisor behavior.

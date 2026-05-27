@@ -25,6 +25,37 @@ pub enum SimError {
     UnsupportedRuntimeWorkloads(String),
     #[error("failed to build JSON-RPC client: {0}")]
     RpcClient(String),
+    #[error(
+        "groundhog binary `{binary}` was not found; pass --groundhog-binary to hoglab run for local targets"
+    )]
+    GroundhogBinaryNotFound { binary: String },
+    #[error("failed to spawn local groundhog node `{binary}`: {source}")]
+    LocalNodeSpawn {
+        binary: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error(
+        "local groundhog node did not emit startup JSON within {timeout_secs}s; stderr: {stderr}"
+    )]
+    LocalNodeStartupTimeout { timeout_secs: u64, stderr: String },
+    #[error("local groundhog node exited before startup JSON; status: {status}; stderr: {stderr}")]
+    LocalNodeStartupExit { status: String, stderr: String },
+    #[error("local groundhog node startup JSON is missing field `{field}`")]
+    LocalNodeStartupJsonMissing { field: &'static str },
+    #[error("local groundhog node startup JSON is invalid: {source}")]
+    LocalNodeStartupJson {
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("failed to signal local groundhog node pid {pid}: {source}")]
+    LocalNodeSignal {
+        pid: u32,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("local target provider already has an acquired node; cleanup before acquiring again")]
+    LocalNodeAlreadyAcquired,
     #[error("executor error: {0}")]
     Executor(String),
     #[error("workload task panicked for actor {actor_id} {workload:?}: {payload}")]

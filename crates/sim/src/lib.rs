@@ -20,9 +20,9 @@ pub use error::SimError;
 pub use manifest::{SimulationManifest, WorkloadKind};
 pub use nonce::NonceNamespace;
 pub use result::{ChaosEventState, MetricAvailability, SimResult, SimRunOutcome};
-pub use run::{ExistingRunOptions, RunSummary};
+pub use run::{ExistingRunOptions, RunOptions, RunSummary, run_target};
 pub use target::{
-    ChaosController, ChaosEventOutcome, ExistingTargetProvider, ResolvedTarget, TargetCapabilities,
-    TargetOverrides, TargetOwnership, TargetProvider, TargetProviderFuture, TargetProviderKind,
-    TargetProviderSpec,
+    ChaosController, ChaosEventOutcome, ExistingTargetProvider, LocalTargetProvider,
+    ResolvedTarget, TargetCapabilities, TargetOverrides, TargetOwnership, TargetProvider,
+    TargetProviderFuture, TargetProviderKind, TargetProviderSpec,
 };

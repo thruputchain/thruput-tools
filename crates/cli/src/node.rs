@@ -23,7 +23,7 @@ use std::time::Duration;
 pub fn run(
     port: u16,
     verbose: bool,
-    _account_count: usize,
+    dev_account_count: Option<usize>,
     hogd_dev_binary: Option<PathBuf>,
     hogd_protocol: Option<String>,
     startup_timeout_secs: Option<u64>,
@@ -40,6 +40,7 @@ pub fn run(
                 hogd_dev_binary,
                 hogd_protocol,
                 startup_timeout: startup_timeout_secs.map(Duration::from_secs),
+                dev_account_count,
                 ..LocalNodeOptions::default()
             },
             cmd,
@@ -201,7 +202,7 @@ async fn run_hogd_dev(
     }
 
     let stop_signal = async {
-        tokio::signal::ctrl_c()
+        wait_for_stop_signal()
             .await
             .map_err(|source| NodeSupervisorError::StopSignal { source })?;
         if !print.is_json() {
@@ -241,6 +242,23 @@ async fn run_hogd_dev(
         other => Err(CliError::NodeSupervisor(format!(
             "unexpected supervisor stop state: {other:?}"
         ))),
+    }
+}
+
+#[cfg(feature = "dev-node")]
+async fn wait_for_stop_signal() -> Result<(), std::io::Error> {
+    #[cfg(unix)]
+    {
+        let mut sigterm =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => result,
+            _ = sigterm.recv() => Ok(()),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c().await
     }
 }
 
@@ -361,7 +379,7 @@ fn map_node_supervisor_error(err: &groundhog_node_supervisor::NodeSupervisorErro
 pub fn run(
     _port: u16,
     _verbose: bool,
-    _account_count: usize,
+    _dev_account_count: Option<usize>,
     _hogd_dev_binary: Option<std::path::PathBuf>,
     _hogd_protocol: Option<String>,
     _startup_timeout_secs: Option<u64>,

@@ -23,13 +23,29 @@ use crate::result::{
 use crate::runtime::{derive_accounts, load_runtime_manifest};
 use crate::scheduler::{PhaseStart, ScheduledSimulationEvent, generate_schedule, phase_starts};
 use crate::target::{
-    ExistingTargetProvider, ResolvedTarget, TargetOverrides, TargetOwnership, TargetProvider,
+    ExistingTargetProvider, LocalTargetProvider, ResolvedTarget, TargetOverrides, TargetOwnership,
+    TargetProvider, TargetProviderKind,
 };
 use crate::util::{
     LoadedSimulationManifest, default_run_dir, json_string, load_simulation_manifest, run_id,
     workload_name, write_json_pretty, write_json_pretty_atomic,
 };
 use crate::validation::{validate_against_runtime, validate_manifest};
+
+/// Options for running a simulation.
+#[derive(Debug, Clone)]
+pub struct RunOptions {
+    pub scenario: PathBuf,
+    pub rpc_url: Option<String>,
+    pub runtime_manifest: Option<PathBuf>,
+    pub groundhog_binary: Option<PathBuf>,
+    pub hogd_dev_binary: Option<PathBuf>,
+    pub port: Option<u16>,
+    pub startup_timeout_secs: Option<u64>,
+    pub out_dir: Option<PathBuf>,
+    pub seed: Option<String>,
+    pub nonce_namespace: Option<u64>,
+}
 
 /// Options for running a simulation against an already-started target.
 #[derive(Debug, Clone)]
@@ -40,6 +56,68 @@ pub struct ExistingRunOptions {
     pub out_dir: Option<PathBuf>,
     pub seed: Option<String>,
     pub nonce_namespace: Option<u64>,
+}
+
+impl From<ExistingRunOptions> for RunOptions {
+    fn from(args: ExistingRunOptions) -> Self {
+        Self {
+            scenario: args.scenario,
+            rpc_url: args.rpc_url,
+            runtime_manifest: args.runtime_manifest,
+            groundhog_binary: None,
+            hogd_dev_binary: None,
+            port: None,
+            startup_timeout_secs: None,
+            out_dir: args.out_dir,
+            seed: args.seed,
+            nonce_namespace: args.nonce_namespace,
+        }
+    }
+}
+
+/// Run a simulation against the provider selected by the manifest.
+pub async fn run_target(args: RunOptions) -> Result<RunSummary, SimError> {
+    let RunOptions {
+        scenario,
+        rpc_url,
+        runtime_manifest,
+        groundhog_binary,
+        hogd_dev_binary,
+        port,
+        startup_timeout_secs,
+        out_dir,
+        seed,
+        nonce_namespace,
+    } = args;
+    let mut loaded_sim = load_simulation_manifest(&scenario).await?;
+    if let Some(seed) = seed {
+        loaded_sim.manifest.seed = seed;
+    }
+    validate_manifest(&loaded_sim.manifest)?;
+    let overrides = TargetOverrides {
+        rpc_url,
+        runtime_manifest,
+        groundhog_binary,
+        hogd_dev_binary,
+        port,
+        startup_timeout_secs,
+    };
+    match loaded_sim.manifest.target.provider {
+        TargetProviderKind::Existing => {
+            let provider = ExistingTargetProvider;
+            run_with_provider(loaded_sim, &provider, overrides, out_dir, nonce_namespace).await
+        }
+        TargetProviderKind::Local => {
+            let provider = LocalTargetProvider::new();
+            run_with_provider(loaded_sim, &provider, overrides, out_dir, nonce_namespace).await
+        }
+        TargetProviderKind::RemoteSsh => {
+            Err(crate::validation::ValidationError::ProviderNotImplemented {
+                provider: TargetProviderKind::RemoteSsh,
+            }
+            .into())
+        }
+    }
 }
 
 /// Summary of a completed simulation run.
@@ -65,17 +143,29 @@ pub async fn run_existing_target(args: ExistingRunOptions) -> Result<RunSummary,
     }
     validate_manifest(&loaded_sim.manifest)?;
     let provider = ExistingTargetProvider;
-    let target = provider
-        .acquire(
-            &loaded_sim.manifest,
-            TargetOverrides {
-                rpc_url,
-                runtime_manifest,
-            },
-        )
-        .await?;
-    let run_result =
-        run_resolved_existing_target(loaded_sim, &target, out_dir, nonce_namespace).await;
+    run_with_provider(
+        loaded_sim,
+        &provider,
+        TargetOverrides {
+            rpc_url,
+            runtime_manifest,
+            ..TargetOverrides::default()
+        },
+        out_dir,
+        nonce_namespace,
+    )
+    .await
+}
+
+async fn run_with_provider(
+    loaded_sim: LoadedSimulationManifest,
+    provider: &dyn TargetProvider,
+    overrides: TargetOverrides,
+    out_dir: Option<PathBuf>,
+    nonce_namespace: Option<u64>,
+) -> Result<RunSummary, SimError> {
+    let target = provider.acquire(&loaded_sim.manifest, overrides).await?;
+    let run_result = run_resolved_target(loaded_sim, &target, out_dir, nonce_namespace).await;
     let cleanup_result = provider.cleanup(&target).await;
     finish_target_run(run_result, cleanup_result)
 }
@@ -92,7 +182,7 @@ fn finish_target_run<T>(
 }
 
 #[allow(clippy::too_many_lines)]
-async fn run_resolved_existing_target(
+async fn run_resolved_target(
     mut loaded_sim: LoadedSimulationManifest,
     target: &ResolvedTarget,
     out_dir: Option<PathBuf>,
@@ -616,6 +706,65 @@ mod tests {
         ));
     }
 
+    #[tokio::test]
+    async fn run_target_dispatches_local_validation() {
+        let dir = tempdir().expect("temp dir should be created");
+        let scenario = dir.path().join("local.json");
+        tokio::fs::write(&scenario, local_manifest_bytes())
+            .await
+            .expect("scenario should write");
+
+        let error = run_target(RunOptions {
+            scenario,
+            rpc_url: Some("http://127.0.0.1:9545".into()),
+            runtime_manifest: None,
+            groundhog_binary: None,
+            hogd_dev_binary: None,
+            port: None,
+            startup_timeout_secs: None,
+            out_dir: None,
+            seed: None,
+            nonce_namespace: None,
+        })
+        .await
+        .expect_err("local run should reject rpc url before launch");
+
+        assert!(matches!(
+            error,
+            SimError::Validation(crate::validation::ValidationError::LocalRejectsRpcUrl)
+        ));
+    }
+
+    #[tokio::test]
+    async fn run_target_dispatches_local_provider() {
+        let dir = tempdir().expect("temp dir should be created");
+        let scenario = dir.path().join("local.json");
+        tokio::fs::write(&scenario, local_manifest_bytes())
+            .await
+            .expect("scenario should write");
+        let missing = dir.path().join("missing-groundhog");
+
+        let error = run_target(RunOptions {
+            scenario,
+            rpc_url: None,
+            runtime_manifest: None,
+            groundhog_binary: Some(missing.clone()),
+            hogd_dev_binary: None,
+            port: None,
+            startup_timeout_secs: None,
+            out_dir: None,
+            seed: None,
+            nonce_namespace: None,
+        })
+        .await
+        .expect_err("local run should use the local provider");
+
+        assert!(matches!(
+            error,
+            SimError::GroundhogBinaryNotFound { binary } if binary == missing.display().to_string()
+        ));
+    }
+
     fn manifest() -> SimulationManifest {
         serde_json::from_value(json!({
             "schemaVersion": 1,
@@ -627,6 +776,19 @@ mod tests {
             "workloads": [{"name": "chain-tip", "weight": 1}]
         }))
         .expect("manifest fixture should parse")
+    }
+
+    fn local_manifest_bytes() -> Vec<u8> {
+        serde_json::to_vec_pretty(&json!({
+            "schemaVersion": 1,
+            "kind": "groundhog-simulation",
+            "name": "local-test",
+            "seed": "seed",
+            "target": {"provider": "local"},
+            "loadShape": [{"duration": "1ms", "users": 1, "ratePerUserHz": 1000.0}],
+            "workloads": [{"name": "chain-tip", "weight": 1}]
+        }))
+        .expect("manifest should encode")
     }
 
     fn resolved_target() -> ResolvedTarget {

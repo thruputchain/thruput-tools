@@ -10,7 +10,24 @@ Start here:
 - [Implementation plan](sim-implementation-plan.md) - execution checklist with
   Phase 1 details.
 
-Current quickstart:
+Current local-provider quickstart:
+
+```bash
+cargo run -p groundhog-cli --features dev-node -- --version
+
+cargo run -p groundhog-sim --bin hoglab -- run examples/sim/local-chain-tip-smoke.json \
+  --groundhog-binary target/debug/groundhog \
+  --hogd-dev-binary /path/to/hogd-dev \
+  --port 0
+```
+
+The `local` provider launches `groundhog node --json`, requests the dev account
+count required by the scenario, reads the node's startup JSON for the effective
+RPC URL and runtime manifest path, runs workloads over public JSON-RPC, and
+stops the node at the end of the run. `target-ownership.json` records
+`startedBySim: true` and `cleanupAllowed: true`.
+
+Existing-target quickstart:
 
 ```bash
 cargo run -p groundhog-cli --features dev-node -- --json node \
@@ -31,6 +48,9 @@ cargo run -p groundhog-sim --bin hoglab -- run examples/sim/local-wallet-soak.js
 newer `hogp/<hash>` than the Rust protocol crates linked into `groundhog node`.
 It only overrides the intro token; incompatible XDR shapes still fail through
 the generated client.
+
+The `local` provider's dev-account path is interim; faucet-based actor funding
+is expected to replace it for longer-lived devnet targets.
 
 Phase 1 validates the scenario and runtime manifest, derives bootstrap account
 signers from the runtime manifest, writes the result directory skeleton, and
@@ -82,6 +102,20 @@ CLI overrides win over manifest fields. After resolution, `hoglab` writes the
 effective RPC URL, runtime manifest path, and nonce namespace into
 `simulation.json` under `resolved`. `target-ownership.json` records
 `startedBySim: false` and `cleanupAllowed: false`.
+
+## Local Provider
+
+The `local` target provider launches and owns a local `groundhog node` process.
+It rejects `target.rpcUrl`, `target.runtimeManifest`, `--rpc-url`, and
+`--runtime-manifest` because those values are outputs from the launched node.
+Use `--groundhog-binary` to select the supervisor binary, `--hogd-dev-binary`
+to forward a specific backend binary, `--port` to request a port, and
+`--startup-timeout-secs` to bound startup.
+
+The provider sends SIGTERM to the node for graceful shutdown, waits a bounded
+grace period, and escalates to SIGKILL only if the node does not exit.
+`restart-target` chaos, provider log capture, sweeper ownership fields, and
+baseline diffing remain later Phase 2 work.
 
 ## Result Directory
 

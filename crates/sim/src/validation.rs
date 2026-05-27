@@ -52,6 +52,11 @@ pub fn validate_manifest(manifest: &SimulationManifest) -> Result<(), Validation
 
     let capabilities = TargetCapabilities::for_provider(manifest.target.provider);
     for event in &manifest.chaos {
+        if manifest.target.provider == TargetProviderKind::Local {
+            return Err(ValidationError::LocalChaosUnsupported {
+                kind: format!("{:?}", event.kind),
+            });
+        }
         if !capabilities.supports_chaos(event.kind) {
             return Err(ValidationError::UnsupportedChaos {
                 provider: manifest.target.provider,
@@ -131,6 +136,38 @@ pub(crate) fn validate_existing_target_flags(
     Ok(())
 }
 
+pub(crate) fn validate_local_target_flags(
+    manifest: &SimulationManifest,
+    rpc_url: Option<&str>,
+    runtime_manifest_supplied: bool,
+) -> Result<(), ValidationError> {
+    if manifest.target.provider != TargetProviderKind::Local {
+        return Err(ValidationError::ProviderMismatch {
+            expected: TargetProviderKind::Local,
+            actual: manifest.target.provider,
+        });
+    }
+    if rpc_url
+        .or(manifest.target.rpc_url.as_deref())
+        .is_some_and(|value| !value.is_empty())
+    {
+        return Err(ValidationError::LocalRejectsRpcUrl);
+    }
+    if runtime_manifest_supplied || manifest.target.runtime_manifest.is_some() {
+        return Err(ValidationError::LocalRejectsRuntimeManifest);
+    }
+    Ok(())
+}
+
+pub(crate) fn required_bootstrap_accounts(manifest: &SimulationManifest) -> u32 {
+    manifest
+        .load_shape
+        .iter()
+        .map(|phase| phase.users)
+        .max()
+        .unwrap_or(0)
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ValidationError {
     #[error("unsupported simulation schemaVersion {actual}")]
@@ -162,6 +199,8 @@ pub enum ValidationError {
         provider: TargetProviderKind,
         kind: String,
     },
+    #[error("local target restart chaos is not implemented until Phase 2 Slice B: {kind}")]
+    LocalChaosUnsupported { kind: String },
     #[error("chaos event has invalid schedule: {source}")]
     InvalidChaosTime {
         #[source]
@@ -169,10 +208,25 @@ pub enum ValidationError {
     },
     #[error("only the existing target provider is implemented in Phase 1, got {provider:?}")]
     OnlyExistingProviderImplemented { provider: TargetProviderKind },
+    #[error("target provider {provider:?} is not implemented")]
+    ProviderNotImplemented { provider: TargetProviderKind },
+    #[error("target provider mismatch: expected {expected:?}, got {actual:?}")]
+    ProviderMismatch {
+        expected: TargetProviderKind,
+        actual: TargetProviderKind,
+    },
     #[error("existing target requires an RPC URL")]
     MissingRpcUrl,
     #[error("existing target requires a runtime manifest path")]
     MissingRuntimeManifest,
+    #[error("existing target does not accept local launch option {flag}")]
+    ExistingRejectsLocalLaunchOverride { flag: &'static str },
+    #[error("local target produces its RPC URL; do not supply target.rpcUrl or --rpc-url")]
+    LocalRejectsRpcUrl,
+    #[error(
+        "local target produces its runtime manifest; do not supply target.runtimeManifest or --runtime-manifest"
+    )]
+    LocalRejectsRuntimeManifest,
     #[error(
         "scenario requests {requested} actors but runtime manifest advertises {available} bootstrap accounts"
     )]
@@ -207,6 +261,22 @@ mod tests {
         let err = validate_manifest(&manifest).expect_err("existing should not support chaos");
 
         assert!(matches!(err, ValidationError::UnsupportedChaos { .. }));
+    }
+
+    #[test]
+    fn rejects_local_chaos_until_controller_exists() {
+        let mut manifest = basic_manifest();
+        manifest.target.provider = TargetProviderKind::Local;
+        manifest.target.rpc_url = None;
+        manifest.target.runtime_manifest = None;
+        manifest.chaos = vec![crate::manifest::ChaosEventSpec {
+            at: DurationSpec("1s".into()),
+            kind: crate::manifest::ChaosEventKind::RestartTarget,
+        }];
+
+        let err = validate_manifest(&manifest).expect_err("local chaos is Slice B");
+
+        assert!(matches!(err, ValidationError::LocalChaosUnsupported { .. }));
     }
 
     #[test]
@@ -247,6 +317,46 @@ mod tests {
                 available: 1
             }
         ));
+    }
+
+    #[test]
+    fn validates_local_target_flags_reject_output_overrides() {
+        let mut manifest = basic_manifest();
+        manifest.target.provider = TargetProviderKind::Local;
+        manifest.target.runtime_manifest = None;
+
+        let err = validate_local_target_flags(&manifest, Some("http://127.0.0.1:9545"), false)
+            .expect_err("local should reject rpc url overrides");
+        assert!(matches!(err, ValidationError::LocalRejectsRpcUrl));
+
+        manifest.target.rpc_url = None;
+        let err = validate_local_target_flags(&manifest, None, true)
+            .expect_err("local should reject runtime manifest overrides");
+        assert!(matches!(err, ValidationError::LocalRejectsRuntimeManifest));
+    }
+
+    #[test]
+    fn required_bootstrap_accounts_uses_max_phase_users() {
+        let mut manifest = basic_manifest();
+        manifest.load_shape = vec![
+            LoadPhase {
+                duration: DurationSpec("1s".into()),
+                users: 2,
+                rate_per_user_hz: 1.0,
+            },
+            LoadPhase {
+                duration: DurationSpec("1s".into()),
+                users: 5,
+                rate_per_user_hz: 1.0,
+            },
+            LoadPhase {
+                duration: DurationSpec("1s".into()),
+                users: 3,
+                rate_per_user_hz: 1.0,
+            },
+        ];
+
+        assert_eq!(required_bootstrap_accounts(&manifest), 5);
     }
 
     fn basic_manifest() -> SimulationManifest {

@@ -72,8 +72,9 @@ loosely-coupled subsystems; this slice is deliberately just the foundation.
 - **`TargetProvider` trait** (`crates/sim/src/target.rs`) — dyn-compatible via
   boxed futures, with `acquire`, `cleanup` (idempotent), `capabilities`, and
   `chaos_controller`. `ExistingTargetProvider` is the only current impl.
-  `TargetCapabilities::for_provider(Local)` already declares
-  `ChaosEventKind::RestartTarget` (executed in Slice B, not here).
+  `TargetCapabilities::for_provider(Local)` deliberately declares no chaos
+  until Slice B wires a real `restart-target` controller, so validation cannot
+  accept an unexecutable chaos event.
 - **`ResolvedTarget`** — a pure-data value type (`Clone + PartialEq + Eq`),
   threaded into events and `result.json`. It holds `provider`, `capabilities`,
   `ownership`, `rpc_url`, `runtime_manifest`. It intentionally does **not** hold
