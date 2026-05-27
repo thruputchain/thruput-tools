@@ -54,6 +54,12 @@ pub enum SimError {
         #[source]
         source: std::io::Error,
     },
+    #[error("local restart requires an acquired node")]
+    LocalNodeRestartWithoutAcquiredTarget,
+    #[error("local node startup rpc_url `{rpc_url}` is not a supported host:port URL")]
+    LocalNodeInvalidRpcUrl { rpc_url: String },
+    #[error("local restart resolved rpc_url `{actual}` but expected stable rpc_url `{expected}`")]
+    LocalNodeRestartRpcUrlChanged { expected: String, actual: String },
     #[error("local target provider already has an acquired node; cleanup before acquiring again")]
     LocalNodeAlreadyAcquired,
     #[error("executor error: {0}")]

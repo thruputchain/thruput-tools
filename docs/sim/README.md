@@ -27,6 +27,15 @@ RPC URL and runtime manifest path, runs workloads over public JSON-RPC, and
 stops the node at the end of the run. `target-ownership.json` records
 `startedBySim: true` and `cleanupAllowed: true`.
 
+Local restart chaos can be exercised with:
+
+```bash
+cargo run -p groundhog-sim --bin hoglab -- run examples/sim/local-restart-chain-tip-smoke.json \
+  --groundhog-binary target/debug/groundhog \
+  --hogd-dev-binary /path/to/hogd-dev \
+  --port 0
+```
+
 Existing-target quickstart:
 
 ```bash
@@ -114,8 +123,12 @@ to forward a specific backend binary, `--port` to request a port, and
 
 The provider sends SIGTERM to the node for graceful shutdown, waits a bounded
 grace period, and escalates to SIGKILL only if the node does not exit.
-`restart-target` chaos, provider log capture, sweeper ownership fields, and
-baseline diffing remain later Phase 2 work.
+`restart-target` chaos is supported for `local`: the simulator stops and
+relaunches the whole `groundhog node` process on the same resolved RPC port,
+pauses later scheduled ticks until startup JSON is parsed, records
+`chaos-transition` events, and classifies pending receipt queues lost at restart
+with `errorClass: "target-restarted"`. Provider log capture, sweeper ownership
+fields, and baseline diffing remain later Phase 2 work.
 
 ## Result Directory
 
@@ -127,8 +140,9 @@ Each run writes a self-contained result directory:
   and account derivation.
 - `target-ownership.json` - provider ownership and cleanup metadata.
 - `result.jsonl` - append-only event stream for run, target, phase, workload,
-  assertion, and completion events, plus one `metric-availability-recorded`
-  event per run with the run-level availability snapshot.
+  chaos transition, assertion, and completion events, plus one
+  `metric-availability-recorded` event per run with the run-level availability
+  snapshot.
 - `result.json` - final aggregate written atomically at run end.
 - `histograms/` and `logs/` - reserved directories for future exports and
   provider-supplied logs.

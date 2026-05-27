@@ -3,7 +3,8 @@
 #
 # Runs the ignored hoglab process-level smokes against a real hogd-dev binary:
 #   1. local provider launches groundhog node itself
-#   2. existing provider connects to a temporary groundhog node started here
+#   2. local provider restarts its managed node through restart-target chaos
+#   3. existing provider connects to a temporary groundhog node started here
 #
 # Optional environment:
 #   HOGD_DEV_BINARY=/path/to/hogd-dev
@@ -107,7 +108,12 @@ cargo build -p groundhog-cli --features dev-node
 log "running local-provider smoke"
 GROUNDHOG_SIM_HOGD_DEV_BINARY="$HOGD_DEV_BINARY" \
 GROUNDHOG_SIM_GROUNDHOG_BINARY="$GROUNDHOG_BINARY" \
-    cargo test -p groundhog-sim --test local_target_smoke -- --ignored --nocapture
+    cargo test -p groundhog-sim --test local_target_smoke local_target_chain_tip_smoke -- --ignored --nocapture
+
+log "running local-provider restart smoke"
+GROUNDHOG_SIM_HOGD_DEV_BINARY="$HOGD_DEV_BINARY" \
+GROUNDHOG_SIM_GROUNDHOG_BINARY="$GROUNDHOG_BINARY" \
+    cargo test -p groundhog-sim --test local_target_smoke local_restart_target_chain_tip_smoke -- --ignored --nocapture
 
 NODE_STDOUT="$WORKDIR/groundhog-node.json"
 NODE_STDERR="$WORKDIR/groundhog-node.stderr"

@@ -21,6 +21,8 @@ use crate::validation::{
 
 const DEFAULT_LOCAL_STARTUP_TIMEOUT_SECS: u64 = 30;
 const LOCAL_CLEANUP_GRACE: Duration = Duration::from_secs(10);
+const LOCAL_RESTART_RELAUNCH_ATTEMPTS: usize = 3;
+const LOCAL_RESTART_RELAUNCH_RETRY_DELAY: Duration = Duration::from_millis(250);
 
 /// Boxed future returned by target-provider lifecycle hooks.
 pub type TargetProviderFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -66,9 +68,8 @@ impl TargetCapabilities {
     /// Return the static capabilities currently known for a provider kind.
     pub fn for_provider(provider: TargetProviderKind) -> Self {
         let chaos = match provider {
-            TargetProviderKind::Existing
-            | TargetProviderKind::Local
-            | TargetProviderKind::RemoteSsh => Vec::new(),
+            TargetProviderKind::Local => vec![ChaosEventKind::RestartTarget],
+            TargetProviderKind::Existing | TargetProviderKind::RemoteSsh => Vec::new(),
         };
         Self { chaos }
     }
@@ -268,7 +269,30 @@ enum LocalTargetState {
     #[default]
     Idle,
     Acquiring,
-    Acquired(Child),
+    Acquired(Box<LocalAcquiredTarget>),
+}
+
+#[derive(Debug)]
+struct LocalAcquiredTarget {
+    child: Child,
+    launch_config: LocalLaunchConfig,
+    rpc_url: String,
+    rpc_port: u16,
+    _runtime_manifest: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+struct LocalLaunchConfig {
+    groundhog_binary: PathBuf,
+    hogd_dev_binary: Option<PathBuf>,
+    required_accounts: u32,
+    startup_timeout_secs: u64,
+}
+
+#[derive(Debug)]
+struct LocalLaunchedTarget {
+    child: Child,
+    startup: LocalNodeStartup,
 }
 
 impl LocalTargetProvider {
@@ -313,13 +337,17 @@ impl TargetProvider for LocalTargetProvider {
         _target: &'a ResolvedTarget,
     ) -> TargetProviderFuture<'a, Result<(), SimError>> {
         Box::pin(async move {
-            let child = match std::mem::take(&mut *self.state.lock().await) {
-                LocalTargetState::Acquired(child) => child,
+            let acquired = match std::mem::take(&mut *self.state.lock().await) {
+                LocalTargetState::Acquired(acquired) => acquired,
                 LocalTargetState::Idle | LocalTargetState::Acquiring => return Ok(()),
             };
-            let mut child = child;
+            let mut child = acquired.child;
             terminate_child(&mut child, LOCAL_CLEANUP_GRACE).await
         })
+    }
+
+    fn chaos_controller(&self) -> Option<&dyn ChaosController> {
+        Some(self)
     }
 }
 
@@ -331,42 +359,103 @@ impl LocalTargetProvider {
     ) -> Result<ResolvedTarget, SimError> {
         let groundhog = resolve_groundhog_binary(overrides.groundhog_binary.as_deref())?;
         let required_accounts = required_bootstrap_accounts(manifest);
-        let args = local_node_args(
-            required_accounts,
-            overrides
-                .hogd_dev_binary
-                .as_deref()
-                .or(manifest.target.hogd_dev_binary.as_deref()),
-            overrides.port,
-        );
-        let mut child = Command::new(&groundhog)
-            .args(&args)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|source| SimError::LocalNodeSpawn {
-                binary: groundhog.display().to_string(),
-                source,
-            })?;
-
-        let stderr = collect_child_stderr(&mut child);
-        let timeout_secs = overrides
+        let hogd_dev_binary = overrides
+            .hogd_dev_binary
+            .or_else(|| manifest.target.hogd_dev_binary.clone());
+        let startup_timeout_secs = overrides
             .startup_timeout_secs
             .unwrap_or(DEFAULT_LOCAL_STARTUP_TIMEOUT_SECS);
-        let startup = match wait_for_local_startup(&mut child, timeout_secs, stderr.clone()).await {
-            Ok(startup) => startup,
+        let launch_config = LocalLaunchConfig {
+            groundhog_binary: groundhog,
+            hogd_dev_binary,
+            required_accounts,
+            startup_timeout_secs,
+        };
+        let launched = launch_local_node(&launch_config, overrides.port).await?;
+        let rpc_url = launched.startup.rpc_url.clone();
+        let rpc_port = match resolved_rpc_port(&rpc_url) {
+            Ok(port) => port,
             Err(error) => {
+                let mut child = launched.child;
                 let _ = terminate_child(&mut child, LOCAL_CLEANUP_GRACE).await;
                 return Err(error);
             }
         };
-        *self.state.lock().await = LocalTargetState::Acquired(child);
+        let runtime_manifest = launched.startup.runtime_manifest.clone();
+        *self.state.lock().await = LocalTargetState::Acquired(Box::new(LocalAcquiredTarget {
+            child: launched.child,
+            launch_config,
+            rpc_url: rpc_url.clone(),
+            rpc_port,
+            _runtime_manifest: runtime_manifest.clone(),
+        }));
         Ok(ResolvedTarget {
             provider: TargetProviderKind::Local,
             capabilities: self.capabilities(),
             ownership: TargetOwnership::local(),
-            rpc_url: startup.rpc_url,
-            runtime_manifest: startup.runtime_manifest,
+            rpc_url,
+            runtime_manifest,
+        })
+    }
+}
+
+impl ChaosController for LocalTargetProvider {
+    fn execute<'a>(
+        &'a self,
+        event: &'a ChaosEventSpec,
+    ) -> TargetProviderFuture<'a, Result<ChaosEventOutcome, SimError>> {
+        Box::pin(async move {
+            match event.kind {
+                ChaosEventKind::RestartTarget => self.restart_target().await,
+            }
+        })
+    }
+}
+
+impl LocalTargetProvider {
+    async fn restart_target(&self) -> Result<ChaosEventOutcome, SimError> {
+        let mut acquired = match std::mem::take(&mut *self.state.lock().await) {
+            LocalTargetState::Acquired(acquired) => acquired,
+            LocalTargetState::Idle | LocalTargetState::Acquiring => {
+                return Err(SimError::LocalNodeRestartWithoutAcquiredTarget);
+            }
+        };
+
+        let old_pid = acquired.child.id();
+        if let Err(error) = terminate_child(&mut acquired.child, LOCAL_CLEANUP_GRACE).await {
+            *self.state.lock().await = LocalTargetState::Acquired(acquired);
+            return Err(error);
+        }
+
+        let expected_rpc_url = acquired.rpc_url.clone();
+        let launch_config = acquired.launch_config.clone();
+        let rpc_port = acquired.rpc_port;
+        let launched = match relaunch_local_node_for_restart(&launch_config, rpc_port).await {
+            Ok(launched) => launched,
+            Err(error) => return Err(error),
+        };
+        let actual_rpc_url = launched.startup.rpc_url.clone();
+        if actual_rpc_url != expected_rpc_url {
+            let mut child = launched.child;
+            let _ = terminate_child(&mut child, LOCAL_CLEANUP_GRACE).await;
+            return Err(SimError::LocalNodeRestartRpcUrlChanged {
+                expected: expected_rpc_url,
+                actual: actual_rpc_url,
+            });
+        }
+        let runtime_manifest = launched.startup.runtime_manifest.clone();
+        let new_pid = launched.child.id();
+        *self.state.lock().await = LocalTargetState::Acquired(Box::new(LocalAcquiredTarget {
+            child: launched.child,
+            launch_config,
+            rpc_url: expected_rpc_url,
+            rpc_port,
+            _runtime_manifest: runtime_manifest,
+        }));
+
+        Ok(ChaosEventOutcome {
+            state: ChaosEventState::Recovered,
+            detail: Some(format_restart_detail(old_pid, new_pid)),
         })
     }
 }
@@ -397,6 +486,92 @@ fn local_node_args(
         args.push(port.to_string());
     }
     args
+}
+
+async fn launch_local_node(
+    config: &LocalLaunchConfig,
+    port: Option<u16>,
+) -> Result<LocalLaunchedTarget, SimError> {
+    let args = local_node_args(
+        config.required_accounts,
+        config.hogd_dev_binary.as_deref(),
+        port,
+    );
+    let mut command = Command::new(&config.groundhog_binary);
+    command
+        .args(&args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    #[cfg(unix)]
+    command.process_group(0);
+    let mut child = command.spawn().map_err(|source| SimError::LocalNodeSpawn {
+        binary: config.groundhog_binary.display().to_string(),
+        source,
+    })?;
+
+    let stderr = collect_child_stderr(&mut child);
+    let startup =
+        match wait_for_local_startup(&mut child, config.startup_timeout_secs, stderr.clone()).await
+        {
+            Ok(startup) => startup,
+            Err(error) => {
+                let _ = terminate_child(&mut child, LOCAL_CLEANUP_GRACE).await;
+                return Err(error);
+            }
+        };
+
+    Ok(LocalLaunchedTarget { child, startup })
+}
+
+async fn relaunch_local_node_for_restart(
+    config: &LocalLaunchConfig,
+    port: u16,
+) -> Result<LocalLaunchedTarget, SimError> {
+    let mut last_error = None;
+    for attempt in 0..LOCAL_RESTART_RELAUNCH_ATTEMPTS {
+        match launch_local_node(config, Some(port)).await {
+            Ok(launched) => return Ok(launched),
+            Err(error) => {
+                last_error = Some(error);
+                if attempt + 1 < LOCAL_RESTART_RELAUNCH_ATTEMPTS {
+                    sleep(LOCAL_RESTART_RELAUNCH_RETRY_DELAY).await;
+                }
+            }
+        }
+    }
+    Err(last_error.expect("bug: restart relaunch attempts must be nonzero"))
+}
+
+fn resolved_rpc_port(rpc_url: &str) -> Result<u16, SimError> {
+    let without_scheme = rpc_url
+        .strip_prefix("http://")
+        .or_else(|| rpc_url.strip_prefix("https://"))
+        .ok_or_else(|| SimError::LocalNodeInvalidRpcUrl {
+            rpc_url: rpc_url.into(),
+        })?;
+    let authority =
+        without_scheme
+            .split('/')
+            .next()
+            .ok_or_else(|| SimError::LocalNodeInvalidRpcUrl {
+                rpc_url: rpc_url.into(),
+            })?;
+    let port = authority
+        .rsplit_once(':')
+        .and_then(|(_, port)| port.parse::<u16>().ok())
+        .ok_or_else(|| SimError::LocalNodeInvalidRpcUrl {
+            rpc_url: rpc_url.into(),
+        })?;
+    Ok(port)
+}
+
+fn format_restart_detail(old_pid: Option<u32>, new_pid: Option<u32>) -> String {
+    format!(
+        "restarted local target oldPid={} newPid={}",
+        old_pid.map_or_else(|| "unknown".into(), |pid| pid.to_string()),
+        new_pid.map_or_else(|| "unknown".into(), |pid| pid.to_string())
+    )
 }
 
 fn resolve_groundhog_binary(override_path: Option<&Path>) -> Result<PathBuf, SimError> {
@@ -533,7 +708,7 @@ async fn terminate_child(child: &mut Child, grace: Duration) -> Result<(), SimEr
         return Ok(());
     }
     if let Some(pid) = child.id() {
-        signal_process(pid, libc::SIGTERM)?;
+        signal_process_group(pid, libc::SIGTERM)?;
     }
     let deadline = Instant::now() + grace;
     loop {
@@ -546,19 +721,25 @@ async fn terminate_child(child: &mut Child, grace: Duration) -> Result<(), SimEr
         sleep(Duration::from_millis(50)).await;
     }
     child.start_kill()?;
+    if let Some(pid) = child.id() {
+        let _ = signal_process_group(pid, libc::SIGKILL);
+    }
     child.wait().await?;
     Ok(())
 }
 
-fn signal_process(pid: u32, signal: libc::c_int) -> Result<(), SimError> {
-    let rc = unsafe { libc::kill(pid.cast_signed(), signal) };
+fn signal_process_group(pid: u32, signal: libc::c_int) -> Result<(), SimError> {
+    let target = -pid.cast_signed();
+    let rc = unsafe { libc::kill(target, signal) };
     if rc == 0 {
         Ok(())
     } else {
-        Err(SimError::LocalNodeSignal {
-            pid,
-            source: std::io::Error::last_os_error(),
-        })
+        let source = std::io::Error::last_os_error();
+        if source.raw_os_error() == Some(libc::ESRCH) {
+            Ok(())
+        } else {
+            Err(SimError::LocalNodeSignal { pid, source })
+        }
     }
 }
 
@@ -607,6 +788,25 @@ mod tests {
 
         assert_eq!(target.provider, TargetProviderKind::Existing);
         assert!(provider.chaos_controller().is_none());
+    }
+
+    #[test]
+    fn local_provider_advertises_restart_target() {
+        let provider = LocalTargetProvider::new();
+        let capabilities = TargetCapabilities::for_provider(TargetProviderKind::Local);
+
+        assert!(capabilities.supports_chaos(ChaosEventKind::RestartTarget));
+        assert!(provider.chaos_controller().is_some());
+        assert!(
+            TargetCapabilities::for_provider(TargetProviderKind::Existing)
+                .chaos
+                .is_empty()
+        );
+        assert!(
+            TargetCapabilities::for_provider(TargetProviderKind::RemoteSsh)
+                .chaos
+                .is_empty()
+        );
     }
 
     #[tokio::test]
@@ -768,6 +968,31 @@ mod tests {
     }
 
     #[test]
+    fn resolved_rpc_port_extracts_startup_port() {
+        assert_eq!(
+            resolved_rpc_port("http://127.0.0.1:49152").expect("port should parse"),
+            49152
+        );
+    }
+
+    #[test]
+    fn restart_args_use_resolved_port() {
+        let args = local_node_args(5, None, Some(49152));
+
+        assert_eq!(
+            args,
+            vec![
+                "node",
+                "--dev-account-count",
+                "5",
+                "--json",
+                "--port",
+                "49152"
+            ]
+        );
+    }
+
+    #[test]
     fn parse_local_startup_json_extracts_rpc_and_runtime_manifest() {
         let startup = parse_local_startup_json(
             r#"{"ok":true,"command":"node","warnings":[],"data":{"rpc_url":"http://127.0.0.1:9545","runtime_manifest":{"path":"/tmp/runtime-manifest.json"}}}"#,
@@ -855,6 +1080,123 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn local_restart_rejects_missing_acquired_child() {
+        let provider = LocalTargetProvider::new();
+        let event = ChaosEventSpec {
+            at: crate::manifest::DurationSpec("1s".into()),
+            kind: ChaosEventKind::RestartTarget,
+        };
+
+        let error = provider
+            .execute(&event)
+            .await
+            .expect_err("restart should require acquired child");
+
+        assert!(matches!(
+            error,
+            SimError::LocalNodeRestartWithoutAcquiredTarget
+        ));
+    }
+
+    #[tokio::test]
+    async fn local_restart_rejects_acquiring_state() {
+        let provider = LocalTargetProvider::new();
+        *provider.state.lock().await = LocalTargetState::Acquiring;
+        let event = ChaosEventSpec {
+            at: crate::manifest::DurationSpec("1s".into()),
+            kind: ChaosEventKind::RestartTarget,
+        };
+
+        let error = provider
+            .execute(&event)
+            .await
+            .expect_err("restart should require acquired child");
+
+        assert!(matches!(
+            error,
+            SimError::LocalNodeRestartWithoutAcquiredTarget
+        ));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn local_restart_relaunches_on_resolved_port() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("temp dir should be created");
+        let args_log = dir.path().join("args.log");
+        let runtime_manifest = dir.path().join("runtime-manifest.json");
+        let script = dir.path().join("groundhog");
+        let script_body = format!(
+            r#"#!/bin/sh
+printf '%s\n' "$*" >> "{}"
+port=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "--port" ]; then
+    port="$arg"
+  fi
+  prev="$arg"
+done
+if [ -z "$port" ] || [ "$port" = "0" ]; then
+  port="49152"
+fi
+printf '{{"ok":true,"data":{{"rpc_url":"http://127.0.0.1:%s","runtime_manifest":{{"path":"{}"}}}}}}\n' "$port"
+trap 'exit 0' TERM INT
+while :; do sleep 1; done
+"#,
+            args_log.display(),
+            runtime_manifest.display(),
+        );
+        std::fs::write(&script, script_body).expect("fake groundhog should write");
+        let mut permissions = std::fs::metadata(&script)
+            .expect("fake groundhog metadata should read")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&script, permissions)
+            .expect("fake groundhog should be executable");
+
+        let provider = LocalTargetProvider::new();
+        let manifest = manifest(&json!({"provider": "local"}));
+        let target = provider
+            .acquire(
+                &manifest,
+                TargetOverrides {
+                    groundhog_binary: Some(script),
+                    port: Some(0),
+                    startup_timeout_secs: Some(5),
+                    ..TargetOverrides::default()
+                },
+            )
+            .await
+            .expect("fake local target should acquire");
+        assert_eq!(target.rpc_url, "http://127.0.0.1:49152");
+
+        let event = ChaosEventSpec {
+            at: crate::manifest::DurationSpec("1s".into()),
+            kind: ChaosEventKind::RestartTarget,
+        };
+        let outcome = provider
+            .execute(&event)
+            .await
+            .expect("fake restart should succeed");
+        assert_eq!(outcome.state, ChaosEventState::Recovered);
+        let detail = outcome.detail.expect("restart detail should report pids");
+        assert_restart_detail_has_distinct_pids(&detail);
+
+        provider
+            .cleanup(&target)
+            .await
+            .expect("fake target should clean up");
+
+        let calls = std::fs::read_to_string(args_log).expect("args log should read");
+        let lines: Vec<_> = calls.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].contains("--port 0"));
+        assert!(lines[1].contains("--port 49152"));
+    }
+
+    #[tokio::test]
     async fn local_provider_rejects_acquire_while_acquiring() {
         let provider = LocalTargetProvider::new();
         *provider.state.lock().await = LocalTargetState::Acquiring;
@@ -881,5 +1223,21 @@ mod tests {
             "workloads": [{"name": "chain-tip", "weight": 1}]
         }))
         .expect("manifest should parse")
+    }
+
+    #[cfg(unix)]
+    fn assert_restart_detail_has_distinct_pids(detail: &str) {
+        let old_pid = detail
+            .split_whitespace()
+            .find_map(|part| part.strip_prefix("oldPid="))
+            .expect("old pid should be present");
+        let new_pid = detail
+            .split_whitespace()
+            .find_map(|part| part.strip_prefix("newPid="))
+            .expect("new pid should be present");
+
+        assert_ne!(old_pid, "unknown");
+        assert_ne!(new_pid, "unknown");
+        assert_ne!(old_pid, new_pid);
     }
 }

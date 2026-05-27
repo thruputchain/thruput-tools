@@ -52,11 +52,6 @@ pub fn validate_manifest(manifest: &SimulationManifest) -> Result<(), Validation
 
     let capabilities = TargetCapabilities::for_provider(manifest.target.provider);
     for event in &manifest.chaos {
-        if manifest.target.provider == TargetProviderKind::Local {
-            return Err(ValidationError::LocalChaosUnsupported {
-                kind: format!("{:?}", event.kind),
-            });
-        }
         if !capabilities.supports_chaos(event.kind) {
             return Err(ValidationError::UnsupportedChaos {
                 provider: manifest.target.provider,
@@ -199,8 +194,6 @@ pub enum ValidationError {
         provider: TargetProviderKind,
         kind: String,
     },
-    #[error("local target restart chaos is not implemented until Phase 2 Slice B: {kind}")]
-    LocalChaosUnsupported { kind: String },
     #[error("chaos event has invalid schedule: {source}")]
     InvalidChaosTime {
         #[source]
@@ -264,7 +257,27 @@ mod tests {
     }
 
     #[test]
-    fn rejects_local_chaos_until_controller_exists() {
+    fn rejects_chaos_for_remote_ssh_provider() {
+        let mut manifest = basic_manifest();
+        manifest.target.provider = TargetProviderKind::RemoteSsh;
+        manifest.chaos = vec![crate::manifest::ChaosEventSpec {
+            at: DurationSpec("1s".into()),
+            kind: crate::manifest::ChaosEventKind::RestartTarget,
+        }];
+
+        let err = validate_manifest(&manifest).expect_err("remote-ssh should not support chaos");
+
+        assert!(matches!(
+            err,
+            ValidationError::UnsupportedChaos {
+                provider: TargetProviderKind::RemoteSsh,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn validates_local_restart_chaos() {
         let mut manifest = basic_manifest();
         manifest.target.provider = TargetProviderKind::Local;
         manifest.target.rpc_url = None;
@@ -274,9 +287,7 @@ mod tests {
             kind: crate::manifest::ChaosEventKind::RestartTarget,
         }];
 
-        let err = validate_manifest(&manifest).expect_err("local chaos is Slice B");
-
-        assert!(matches!(err, ValidationError::LocalChaosUnsupported { .. }));
+        validate_manifest(&manifest).expect("local restart chaos should validate");
     }
 
     #[test]

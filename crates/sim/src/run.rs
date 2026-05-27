@@ -10,7 +10,7 @@ use crate::error::SimError;
 use crate::event::{EventWriter, ResultEvent};
 use crate::executor::{
     DEFAULT_RECEIPT_DRAIN_RETRY_INTERVAL, DEFAULT_RECEIPT_DRAIN_TIMEOUT, ScheduleExecution,
-    SimRpcClient, drain_pending_receipt_polls, run_schedule,
+    SimRpcClient, drain_pending_receipt_polls, run_schedule_with_chaos,
 };
 use crate::manifest::{ResolvedRunSpec, SimulationManifest, WorkloadKind};
 use crate::metrics::{RunMetrics, RunMetricsBuilder};
@@ -165,7 +165,14 @@ async fn run_with_provider(
     nonce_namespace: Option<u64>,
 ) -> Result<RunSummary, SimError> {
     let target = provider.acquire(&loaded_sim.manifest, overrides).await?;
-    let run_result = run_resolved_target(loaded_sim, &target, out_dir, nonce_namespace).await;
+    let run_result = run_resolved_target(
+        loaded_sim,
+        &target,
+        provider.chaos_controller(),
+        out_dir,
+        nonce_namespace,
+    )
+    .await;
     let cleanup_result = provider.cleanup(&target).await;
     finish_target_run(run_result, cleanup_result)
 }
@@ -185,6 +192,7 @@ fn finish_target_run<T>(
 async fn run_resolved_target(
     mut loaded_sim: LoadedSimulationManifest,
     target: &ResolvedTarget,
+    chaos_controller: Option<&dyn crate::target::ChaosController>,
     out_dir: Option<PathBuf>,
     nonce_namespace: Option<u64>,
 ) -> Result<RunSummary, SimError> {
@@ -248,6 +256,7 @@ async fn run_resolved_target(
             runtime_manifest: &loaded_runtime.manifest,
             runtime_manifest_sha256: &loaded_runtime.sha256,
             target,
+            chaos_controller,
             nonce_namespace,
             actor_states: &mut actor_states,
             scheduled_workloads,
@@ -268,13 +277,13 @@ async fn run_resolved_target(
 }
 
 /// Inputs for executing an already-loaded simulation.
-#[derive(Debug)]
 pub struct LoadedExecution<'a> {
     pub run_id: &'a str,
     pub loaded_sim: &'a LoadedSimulationManifest,
     pub runtime_manifest: &'a RuntimeManifest,
     pub runtime_manifest_sha256: &'a str,
     pub target: &'a ResolvedTarget,
+    pub chaos_controller: Option<&'a dyn crate::target::ChaosController>,
     pub nonce_namespace: NonceNamespace,
     pub actor_states: &'a mut [ActorState],
     pub scheduled_workloads: u64,
@@ -292,7 +301,8 @@ where
     C: SimRpcClient + Clone + Send + Sync + 'static,
 {
     let mut metrics = RunMetricsBuilder::default();
-    run_schedule(
+    let mut chaos_events = Vec::new();
+    let schedule_report = run_schedule_with_chaos(
         client.clone(),
         ScheduleExecution {
             manifest: &input.loaded_sim.manifest,
@@ -303,6 +313,8 @@ where
             event_writer: &mut *input.event_writer,
             metrics: &mut metrics,
         },
+        input.chaos_controller,
+        &mut chaos_events,
     )
     .await?;
     let shutdown_simulation_time_ms = input
@@ -311,16 +323,20 @@ where
         .map(ScheduledSimulationEvent::simulation_time_ms)
         .max()
         .unwrap_or_default();
-    let reconciled_receipt_polls = drain_pending_receipt_polls(
-        client,
-        input.actor_states,
-        &mut *input.event_writer,
-        &mut metrics,
-        shutdown_simulation_time_ms,
-        DEFAULT_RECEIPT_DRAIN_TIMEOUT,
-        DEFAULT_RECEIPT_DRAIN_RETRY_INTERVAL,
-    )
-    .await?;
+    let reconciled_receipt_polls = if schedule_report.chaos_failed {
+        0
+    } else {
+        drain_pending_receipt_polls(
+            client,
+            input.actor_states,
+            &mut *input.event_writer,
+            &mut metrics,
+            shutdown_simulation_time_ms,
+            DEFAULT_RECEIPT_DRAIN_TIMEOUT,
+            DEFAULT_RECEIPT_DRAIN_RETRY_INTERVAL,
+        )
+        .await?
+    };
     let completed_workloads = metrics.completed_count();
     let failed_workloads = metrics.failed_count();
     let skipped_workloads = metrics.skipped_count();
@@ -354,7 +370,10 @@ where
             metric_availability: metric_availability.clone(),
         })
         .await?;
-    let outcome = determine_outcome(&assertion_results, failed_workloads);
+    let mut outcome = determine_outcome(&assertion_results, failed_workloads);
+    if schedule_report.chaos_failed {
+        outcome = SimRunOutcome::Failed;
+    }
     input
         .event_writer
         .write(&ResultEvent::RunCompleted {
@@ -378,6 +397,7 @@ where
         finished_metrics,
         metric_availability,
         assertion_results,
+        chaos_events,
     })
 }
 
@@ -439,6 +459,7 @@ struct BuildResultInput<'a> {
     finished_metrics: RunMetrics,
     metric_availability: SimMetricAvailability,
     assertion_results: Vec<AssertionResult>,
+    chaos_events: Vec<crate::result::ChaosEventRecord>,
 }
 
 fn build_result(input: BuildResultInput<'_>) -> Result<SimResult, SimError> {
@@ -475,7 +496,7 @@ fn build_result(input: BuildResultInput<'_>) -> Result<SimResult, SimError> {
         workload_metrics: input.finished_metrics.workload_metrics,
         chain_progress: input.finished_metrics.chain_progress,
         assertion_results: input.assertion_results,
-        chaos_events: Vec::new(),
+        chaos_events: input.chaos_events,
     })
 }
 
@@ -513,8 +534,10 @@ mod tests {
     use super::*;
     use crate::event::EventWriter;
     use crate::executor::SimRpcClient;
+    use crate::manifest::ChaosEventSpec;
     use crate::runtime::SimAccount;
     use crate::scheduler::{generate_schedule, phase_starts};
+    use crate::target::{ChaosController, ChaosEventOutcome, TargetProviderFuture};
     use crate::util::sha256_hex;
 
     #[derive(Clone)]
@@ -535,6 +558,17 @@ mod tests {
             _tx_hex: String,
         ) -> impl std::future::Future<Output = Result<TxHash, String>> + Send {
             async { Ok(TxHash(Hex0x(SHA256Hash::from([0x55; 32])))) }
+        }
+    }
+
+    struct FailingChaosController;
+
+    impl ChaosController for FailingChaosController {
+        fn execute<'a>(
+            &'a self,
+            _event: &'a ChaosEventSpec,
+        ) -> TargetProviderFuture<'a, Result<ChaosEventOutcome, SimError>> {
+            Box::pin(async { Err(SimError::Executor("restart failed".into())) })
         }
     }
 
@@ -570,6 +604,7 @@ mod tests {
                 runtime_manifest: &runtime_manifest,
                 runtime_manifest_sha256: "runtime-sha",
                 target: &target,
+                chaos_controller: None,
                 nonce_namespace: NonceNamespace::new(7).expect("nonce namespace should fit"),
                 actor_states: &mut actors,
                 scheduled_workloads: 1,
@@ -607,6 +642,65 @@ mod tests {
         assert!(events.contains("\"kind\":\"workload-completed\""));
         assert!(events.contains("\"kind\":\"metric-availability-recorded\""));
         assert!(events.contains("\"kind\":\"run-completed\""));
+    }
+
+    #[tokio::test]
+    async fn failed_chaos_marks_result_failed_and_records_chaos_events() {
+        let manifest = chaos_manifest();
+        let bytes = serde_json::to_vec_pretty(&manifest).expect("manifest should encode");
+        let loaded_sim = LoadedSimulationManifest {
+            manifest,
+            sha256: sha256_hex(&bytes),
+            bytes,
+        };
+        let runtime_manifest = runtime_manifest();
+        let schedule = generate_schedule(&loaded_sim.manifest).expect("schedule should generate");
+        let starts = phase_starts(&loaded_sim.manifest).expect("phase starts should generate");
+        let file = NamedTempFile::new().expect("temp file should be created");
+        let mut event_writer = EventWriter::create(file.path())
+            .await
+            .expect("event writer should open");
+        let mut actors = actor_states();
+        let target = resolved_target();
+
+        let result = execute_loaded_simulation(
+            MockClient {
+                tip: ChainTip {
+                    height: BlockHeight::from(42),
+                    block_hash: Hex0x(SHA256Hash::from([0x42; 32])),
+                },
+            },
+            LoadedExecution {
+                run_id: "test-run",
+                loaded_sim: &loaded_sim,
+                runtime_manifest: &runtime_manifest,
+                runtime_manifest_sha256: "runtime-sha",
+                target: &target,
+                chaos_controller: Some(&FailingChaosController),
+                nonce_namespace: NonceNamespace::new(7).expect("nonce namespace should fit"),
+                actor_states: &mut actors,
+                scheduled_workloads: 2,
+                schedule: &schedule,
+                phase_starts: &starts,
+                event_writer: &mut event_writer,
+            },
+        )
+        .await
+        .expect("failed chaos should still build a result");
+
+        assert_eq!(result.outcome, SimRunOutcome::Failed);
+        assert!(
+            result
+                .chaos_events
+                .iter()
+                .any(|event| event.state == crate::result::ChaosEventState::Failed)
+        );
+
+        let events = tokio::fs::read_to_string(file.path())
+            .await
+            .expect("events should read");
+        assert!(events.contains("\"kind\":\"chaos-transition\""));
+        assert!(events.contains("\"outcome\":\"failed\""));
     }
 
     #[tokio::test]
@@ -774,6 +868,20 @@ mod tests {
             "target": {"provider": "existing"},
             "loadShape": [{"duration": "1ms", "users": 1, "ratePerUserHz": 1000.0}],
             "workloads": [{"name": "chain-tip", "weight": 1}]
+        }))
+        .expect("manifest fixture should parse")
+    }
+
+    fn chaos_manifest() -> SimulationManifest {
+        serde_json::from_value(json!({
+            "schemaVersion": 1,
+            "kind": "groundhog-simulation",
+            "name": "orchestration-chaos-test",
+            "seed": "seed",
+            "target": {"provider": "local"},
+            "loadShape": [{"duration": "2ms", "users": 1, "ratePerUserHz": 1000.0}],
+            "workloads": [{"name": "chain-tip", "weight": 1}],
+            "chaos": [{"at": "1ms", "kind": "restart-target"}]
         }))
         .expect("manifest fixture should parse")
     }

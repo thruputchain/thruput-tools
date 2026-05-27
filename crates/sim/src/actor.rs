@@ -91,6 +91,29 @@ impl ActorState {
         self.pending_receipts.len() as u64
     }
 
+    /// Drain submitted transactions that were still waiting for receipts.
+    pub fn drain_pending_receipts(&mut self) -> Vec<DrainedPendingReceipt> {
+        self.pending_receipts
+            .drain(..)
+            .map(|pending| DrainedPendingReceipt {
+                actor_id: self.actor_id,
+                tx_hash: pending.tx_hash,
+                submit_completed_at: pending.submit_completed_at,
+            })
+            .collect()
+    }
+
+    /// Advance the actor nonce after a submit was interrupted at an unknown point.
+    pub fn record_uncertain_submit_nonce(&mut self) -> Result<(), ActorError> {
+        self.next_nonce_sequence =
+            self.next_nonce_sequence
+                .checked_add(1)
+                .ok_or(ActorError::NonceSequenceExhausted {
+                    actor_id: self.actor_id,
+                })?;
+        Ok(())
+    }
+
     /// Record a committed receipt observed for this actor.
     pub fn record_receipt(&mut self, receipt: TransactionReceipt) {
         self.pending_receipts
@@ -101,6 +124,13 @@ impl ActorState {
 
 #[derive(Debug, Clone, Copy)]
 pub struct ReceiptPollTarget {
+    pub tx_hash: TxHash,
+    pub submit_completed_at: Instant,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct DrainedPendingReceipt {
+    pub actor_id: u32,
     pub tx_hash: TxHash,
     pub submit_completed_at: Instant,
 }
