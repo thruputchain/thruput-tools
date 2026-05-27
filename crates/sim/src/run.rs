@@ -1033,6 +1033,54 @@ mod tests {
         ));
     }
 
+    #[tokio::test]
+    async fn attach_baseline_diff_resolves_absolute_path_without_scenario_dir() {
+        let dir = tempdir().expect("temp dir should be created");
+        let scenario = dir.path().join("scenarios").join("scenario.json");
+        let baseline_path = dir.path().join("absolute-baseline.json");
+        write_json_pretty(baseline_path.clone(), &result_fixture(1))
+            .await
+            .expect("baseline should write");
+        let mut current = result_fixture(4);
+
+        attach_baseline_diff(&mut current, &scenario, Some(&baseline_path))
+            .await
+            .expect("absolute baseline should load regardless of scenario dir");
+
+        let baseline_diff = current
+            .baseline_diff
+            .as_ref()
+            .expect("baseline diff should exist");
+        assert_eq!(baseline_diff.path, baseline_path.display().to_string());
+        assert_eq!(
+            baseline_diff
+                .diff
+                .workload_count_deltas
+                .get(&WorkloadKind::ChainTip)
+                .expect("chain-tip delta should exist")
+                .completed,
+            3
+        );
+    }
+
+    #[tokio::test]
+    async fn attach_baseline_diff_errors_when_baseline_file_missing() {
+        let dir = tempdir().expect("temp dir should be created");
+        let scenario = dir.path().join("scenario.json");
+        let mut current = result_fixture(1);
+
+        let error = attach_baseline_diff(
+            &mut current,
+            &scenario,
+            Some(Path::new("does-not-exist.json")),
+        )
+        .await
+        .expect_err("missing baseline file should fail the run");
+
+        assert!(matches!(error, SimError::Io(_)));
+        assert!(current.baseline_diff.is_none());
+    }
+
     fn manifest() -> SimulationManifest {
         serde_json::from_value(json!({
             "schemaVersion": 1,

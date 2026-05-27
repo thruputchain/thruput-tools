@@ -598,16 +598,23 @@ mod tests {
         let loaded = load_result(dir.path())
             .await
             .expect("augmented result should load");
+        let loaded_baseline_diff = loaded
+            .baseline_diff
+            .as_ref()
+            .expect("baseline diff should deserialize");
+        assert_eq!(loaded_baseline_diff.path, "baselines/result.json");
         assert_eq!(
-            loaded
-                .baseline_diff
-                .as_ref()
-                .expect("baseline diff should deserialize")
-                .path,
-            "baselines/result.json"
+            loaded_baseline_diff.diff,
+            ResultDiff::from_results(&baseline, &current)
         );
-        let diff = ResultDiff::from_results(&baseline, &loaded);
-        assert_eq!(diff.outcome_b, SimRunOutcome::Passed);
+
+        // A loaded augmented result must itself re-serialize without losing the
+        // embedded baselineDiff, so it can serve as a baseline for a later run.
+        let reserialized: SimResult = serde_json::from_value(
+            serde_json::to_value(&loaded).expect("loaded result should re-serialize"),
+        )
+        .expect("re-serialized result should deserialize");
+        assert_eq!(reserialized, loaded);
     }
 
     #[test]

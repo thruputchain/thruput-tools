@@ -39,10 +39,14 @@ pub struct SimResult {
     pub baseline_diff: Option<BaselineDiff>,
 }
 
+/// Diff of the current run against a baseline result declared by the scenario.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BaselineDiff {
+    /// Baseline reference exactly as authored in the scenario manifest, not the
+    /// path resolved relative to the scenario file.
     pub path: String,
+    /// Per-metric deltas computed as current run minus baseline.
     pub diff: ResultDiff,
 }
 
