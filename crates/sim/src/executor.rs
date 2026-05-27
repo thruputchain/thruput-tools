@@ -794,6 +794,9 @@ async fn record_aborted_for_restart(
     simulation_time_ms: u64,
 ) -> Result<(), SimError> {
     for context in contexts {
+        if context.workload == WorkloadKind::ReceiptPoll {
+            continue;
+        }
         if context.workload == WorkloadKind::WalletSubmitSmoke {
             let actor = actor_states
                 .get_mut(context.actor_id as usize)
@@ -1640,6 +1643,11 @@ mod tests {
         requested: Arc<Mutex<Vec<TxHash>>>,
     }
 
+    #[derive(Clone)]
+    struct SlowReceiptClient {
+        requested: Arc<Mutex<Vec<TxHash>>>,
+    }
+
     struct SuccessfulChaosController;
 
     struct FailingChaosController;
@@ -1873,6 +1881,37 @@ mod tests {
                     .expect("requested receipt list should lock")
                     .push(tx_hash);
                 Err("receipt rpc failed".into())
+            }
+        }
+    }
+
+    impl SimRpcClient for SlowReceiptClient {
+        #[allow(clippy::manual_async_fn)]
+        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, String>> + Send {
+            async { Err("chain tip should not be called".into()) }
+        }
+
+        #[allow(clippy::manual_async_fn)]
+        fn send_raw_transaction(
+            &self,
+            _tx_hex: String,
+        ) -> impl Future<Output = Result<TxHash, String>> + Send {
+            async { Err("submit should not be called".into()) }
+        }
+
+        #[allow(clippy::manual_async_fn)]
+        fn transaction_receipt(
+            &self,
+            tx_hash: TxHash,
+        ) -> impl Future<Output = Result<Option<TransactionReceipt>, String>> + Send {
+            let requested = self.requested.clone();
+            async move {
+                requested
+                    .lock()
+                    .expect("requested receipt list should lock")
+                    .push(tx_hash);
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                Ok(None)
             }
         }
     }
@@ -2623,6 +2662,65 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn restart_chaos_does_not_double_count_in_flight_receipt_poll() {
+        let manifest = receipt_chaos_manifest();
+        let schedule = generate_schedule(&manifest).expect("schedule should generate");
+        let starts = phase_starts(&manifest).expect("phase starts should generate");
+        let file = NamedTempFile::new().expect("temp file should be created");
+        let mut event_writer = EventWriter::create(file.path())
+            .await
+            .expect("event writer should open");
+        let mut metrics = RunMetricsBuilder::default();
+        let mut actors = actor_states();
+        actors[0]
+            .record_submitted_tx(tx_hash(0x5a), 0, Instant::now())
+            .expect("submitted tx should record");
+        let requested = Arc::new(Mutex::new(Vec::new()));
+        let mut chaos_events = Vec::new();
+
+        run_schedule_with_chaos(
+            SlowReceiptClient {
+                requested: requested.clone(),
+            },
+            ScheduleExecution {
+                manifest: &manifest,
+                runtime_manifest: &runtime_manifest(),
+                schedule: &schedule,
+                phase_starts: &starts,
+                actor_states: &mut actors,
+                event_writer: &mut event_writer,
+                metrics: &mut metrics,
+            },
+            Some(&SuccessfulChaosController),
+            &mut chaos_events,
+        )
+        .await
+        .expect("restart chaos should run");
+
+        assert_eq!(
+            requested
+                .lock()
+                .expect("requested receipt list should lock")
+                .as_slice(),
+            &[tx_hash(0x5a)]
+        );
+        assert_eq!(actors[0].pending_receipt_count(), 0);
+        let counts = metrics.workload_counts();
+        assert_eq!(counts[&WorkloadKind::ReceiptPoll].failed, 1);
+
+        let events = tokio::fs::read_to_string(file.path())
+            .await
+            .expect("events should read");
+        let failed_events = find_events(&events, "workload-failed");
+        assert_eq!(failed_events.len(), 1);
+        assert_eq!(failed_events[0]["errorClass"], "target-restarted");
+        assert_eq!(
+            failed_events[0]["txHash"],
+            "0x5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a"
+        );
+    }
+
+    #[tokio::test]
     async fn restart_chaos_drains_completed_submit_before_marking_receipt_lost() {
         let manifest = wallet_chaos_manifest();
         let schedule = generate_schedule(&manifest).expect("schedule should generate");
@@ -2761,6 +2859,20 @@ mod tests {
             "loadShape": [{"duration": "2ms", "users": 1, "ratePerUserHz": 1000.0}],
             "workloads": [{"name": "chain-tip", "weight": 1}],
             "chaos": [{"at": "10ms", "kind": "restart-target"}]
+        }))
+        .expect("manifest fixture should parse")
+    }
+
+    fn receipt_chaos_manifest() -> SimulationManifest {
+        serde_json::from_value(json!({
+            "schemaVersion": 1,
+            "kind": "groundhog-simulation",
+            "name": "executor-receipt-chaos-test",
+            "seed": "seed",
+            "target": {"provider": "local"},
+            "loadShape": [{"duration": "1ms", "users": 1, "ratePerUserHz": 1000.0}],
+            "workloads": [{"name": "receipt-poll", "weight": 1}],
+            "chaos": [{"at": "1ms", "kind": "restart-target"}]
         }))
         .expect("manifest fixture should parse")
     }

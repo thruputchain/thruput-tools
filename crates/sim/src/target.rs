@@ -278,7 +278,6 @@ struct LocalAcquiredTarget {
     launch_config: LocalLaunchConfig,
     rpc_url: String,
     rpc_port: u16,
-    _runtime_manifest: PathBuf,
 }
 
 #[derive(Debug, Clone)]
@@ -387,7 +386,6 @@ impl LocalTargetProvider {
             launch_config,
             rpc_url: rpc_url.clone(),
             rpc_port,
-            _runtime_manifest: runtime_manifest.clone(),
         }));
         Ok(ResolvedTarget {
             provider: TargetProviderKind::Local,
@@ -443,14 +441,12 @@ impl LocalTargetProvider {
                 actual: actual_rpc_url,
             });
         }
-        let runtime_manifest = launched.startup.runtime_manifest.clone();
         let new_pid = launched.child.id();
         *self.state.lock().await = LocalTargetState::Acquired(Box::new(LocalAcquiredTarget {
             child: launched.child,
             launch_config,
             rpc_url: expected_rpc_url,
             rpc_port,
-            _runtime_manifest: runtime_manifest,
         }));
 
         Ok(ChaosEventOutcome {
@@ -470,12 +466,15 @@ fn local_node_args(
     required_accounts: u32,
     hogd_dev_binary: Option<&Path>,
     port: Option<u16>,
+    startup_timeout_secs: u64,
 ) -> Vec<String> {
     let mut args = vec![
         "node".to_string(),
         "--dev-account-count".to_string(),
         required_accounts.to_string(),
         "--json".to_string(),
+        "--startup-timeout-secs".to_string(),
+        startup_timeout_secs.to_string(),
     ];
     if let Some(binary) = hogd_dev_binary {
         args.push("--hogd-dev-binary".to_string());
@@ -496,6 +495,7 @@ async fn launch_local_node(
         config.required_accounts,
         config.hogd_dev_binary.as_deref(),
         port,
+        config.startup_timeout_secs,
     );
     let mut command = Command::new(&config.groundhog_binary);
     command
@@ -658,6 +658,7 @@ where
     let mut lines = BufReader::new(stdout).lines();
     loop {
         tokio::select! {
+            biased;
             line = lines.next_line() => {
                 match line? {
                     Some(line) if line.trim().is_empty() => {}
@@ -703,6 +704,7 @@ fn parse_local_startup_json(line: &str) -> Result<LocalNodeStartup, SimError> {
     })
 }
 
+#[cfg(unix)]
 async fn terminate_child(child: &mut Child, grace: Duration) -> Result<(), SimError> {
     if child.try_wait()?.is_some() {
         return Ok(());
@@ -741,6 +743,16 @@ fn signal_process_group(pid: u32, signal: libc::c_int) -> Result<(), SimError> {
             Err(SimError::LocalNodeSignal { pid, source })
         }
     }
+}
+
+#[cfg(not(unix))]
+async fn terminate_child(child: &mut Child, _grace: Duration) -> Result<(), SimError> {
+    if child.try_wait()?.is_some() {
+        return Ok(());
+    }
+    child.start_kill()?;
+    child.wait().await?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -950,7 +962,7 @@ mod tests {
 
     #[test]
     fn local_node_args_include_required_account_count() {
-        let args = local_node_args(5, Some(std::path::Path::new("/tmp/hogd-dev")), Some(0));
+        let args = local_node_args(5, Some(std::path::Path::new("/tmp/hogd-dev")), Some(0), 45);
 
         assert_eq!(
             args,
@@ -959,6 +971,8 @@ mod tests {
                 "--dev-account-count",
                 "5",
                 "--json",
+                "--startup-timeout-secs",
+                "45",
                 "--hogd-dev-binary",
                 "/tmp/hogd-dev",
                 "--port",
@@ -977,7 +991,7 @@ mod tests {
 
     #[test]
     fn restart_args_use_resolved_port() {
-        let args = local_node_args(5, None, Some(49152));
+        let args = local_node_args(5, None, Some(49152), 30);
 
         assert_eq!(
             args,
@@ -986,6 +1000,8 @@ mod tests {
                 "--dev-account-count",
                 "5",
                 "--json",
+                "--startup-timeout-secs",
+                "30",
                 "--port",
                 "49152"
             ]

@@ -23,7 +23,7 @@ enum Command {
         /// Simulation manifest path.
         scenario: PathBuf,
     },
-    /// Run a simulation against an existing target.
+    /// Run a simulation against the configured target provider.
     Run(RunArgs),
     /// Compare two completed run directories or result.json files.
     Compare {
