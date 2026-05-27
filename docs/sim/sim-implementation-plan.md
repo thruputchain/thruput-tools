@@ -137,8 +137,15 @@ chaos, deploy new contracts, or create remote infrastructure.
   even if only the `existing` provider is executable in Phase 1.
 - [ ] Add doc comments and `#[non_exhaustive]` to public library API before
   treating `groundhog-sim` as a stable downstream dependency.
-- [ ] Add a panic-safe cleanup guard for managed providers before
-  `LocalTargetProvider` can own child processes.
+- [ ] Give `groundhog node` cooperative shutdown for programmatic parents
+  (parent-death detection or an explicit shutdown channel) so a hoglab panic
+  or SIGKILL cannot orphan the node + hogd-dev tree. This is the durable home
+  for managed-target robustness; the local provider deliberately does not add
+  a sim-side panic guard or signal handler. Normal-path teardown is a graceful
+  SIGTERM (catchable, so the node reaps hogd-dev), and terminal Ctrl-C is
+  already handled by process-group signal delivery to the node itself. Lower
+  priority while a deployed devnet/EC2 target may make the local provider the
+  non-strategic, least-hardened provider.
 - [ ] Decide whether local-provider process handles, log handles, and metrics
   endpoints live on `ResolvedTarget` or in provider-owned state returned by
   target acquisition.
