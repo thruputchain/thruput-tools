@@ -25,6 +25,7 @@ const DEFAULT_LOCAL_STARTUP_TIMEOUT_SECS: u64 = 30;
 const LOCAL_CLEANUP_GRACE: Duration = Duration::from_secs(10);
 const LOCAL_RESTART_RELAUNCH_ATTEMPTS: usize = 3;
 const LOCAL_RESTART_RELAUNCH_RETRY_DELAY: Duration = Duration::from_millis(250);
+const LOCAL_STARTUP_EXIT_STDOUT_GRACE: Duration = Duration::from_millis(100);
 const LOCAL_STARTUP_STDERR_CAPTURE_LIMIT_BYTES: usize = 64 * 1024;
 
 /// Boxed future returned by target-provider lifecycle hooks.
@@ -846,8 +847,9 @@ fn append_bounded_stderr(output: &mut String, bytes: &[u8]) {
 
 impl LocalLogTasks {
     async fn finish(self) -> Result<(), SimError> {
-        finish_log_task(self.stdout).await?;
-        finish_log_task(self.stderr).await
+        let stdout_result = finish_log_task(self.stdout).await;
+        let stderr_result = finish_log_task(self.stderr).await;
+        stdout_result.and(stderr_result)
     }
 }
 
@@ -901,7 +903,9 @@ async fn read_local_startup(
         }
         status = child.wait() => {
             let status = status?;
-            if let Ok(StartupLine::Line(line)) = startup_line.await {
+            if let Ok(Ok(StartupLine::Line(line))) =
+                timeout(LOCAL_STARTUP_EXIT_STDOUT_GRACE, startup_line).await
+            {
                 return parse_local_startup_json(&line);
             }
             Err(SimError::LocalNodeStartupExit {
