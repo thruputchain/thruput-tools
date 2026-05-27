@@ -123,12 +123,18 @@ to forward a specific backend binary, `--port` to request a port, and
 
 The provider sends SIGTERM to the node for graceful shutdown, waits a bounded
 grace period, and escalates to SIGKILL only if the node does not exit.
+Simulator-owned local target stdout/stderr is captured under `logs/` as
+`local-node-<launch-index>.stdout.log` and
+`local-node-<launch-index>.stderr.log` for the initial launch. Restart
+relaunch attempts use `local-node-<launch-index>.attempt-<attempt>.stdout.log`
+and `.stderr.log`, preserving failed retry-attempt logs instead of truncating
+them.
 `restart-target` chaos is supported for `local`: the simulator stops and
 relaunches the whole `groundhog node` process on the same resolved RPC port,
 pauses later scheduled ticks until startup JSON is parsed, records
 `chaos-transition` events, and classifies pending receipt queues lost at restart
-with `errorClass: "target-restarted"`. Provider log capture, sweeper ownership
-fields, and baseline diffing remain later Phase 2 work.
+with `errorClass: "target-restarted"`. Sweeper ownership fields and baseline
+diffing remain later Phase 2 work.
 
 ## Result Directory
 
@@ -145,7 +151,7 @@ Each run writes a self-contained result directory:
   snapshot.
 - `result.json` - final aggregate written atomically at run end.
 - `histograms/` and `logs/` - reserved directories for future exports and
-  provider-supplied logs.
+  provider-supplied logs; local-provider runs write node stdout/stderr logs.
 
 ## Compare Semantics
 

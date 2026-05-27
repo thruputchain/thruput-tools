@@ -24,7 +24,7 @@ use crate::runtime::{derive_accounts, load_runtime_manifest};
 use crate::scheduler::{PhaseStart, ScheduledSimulationEvent, generate_schedule, phase_starts};
 use crate::target::{
     ExistingTargetProvider, LocalTargetProvider, ResolvedTarget, TargetOverrides, TargetOwnership,
-    TargetProvider, TargetProviderKind,
+    TargetProvider, TargetProviderContext, TargetProviderKind,
 };
 use crate::util::{
     LoadedSimulationManifest, default_run_dir, json_string, load_simulation_manifest, run_id,
@@ -164,12 +164,20 @@ async fn run_with_provider(
     out_dir: Option<PathBuf>,
     nonce_namespace: Option<u64>,
 ) -> Result<RunSummary, SimError> {
-    let target = provider.acquire(&loaded_sim.manifest, overrides).await?;
+    let run_id = run_id()?;
+    let out_dir = out_dir.unwrap_or_else(|| default_run_dir(&run_id, &loaded_sim.manifest.name));
+    let context = TargetProviderContext {
+        logs_dir: out_dir.join("logs"),
+    };
+    let target = provider
+        .acquire(&loaded_sim.manifest, overrides, context)
+        .await?;
     let run_result = run_resolved_target(
         loaded_sim,
         &target,
         provider.chaos_controller(),
         out_dir,
+        run_id,
         nonce_namespace,
     )
     .await;
@@ -193,7 +201,8 @@ async fn run_resolved_target(
     mut loaded_sim: LoadedSimulationManifest,
     target: &ResolvedTarget,
     chaos_controller: Option<&dyn crate::target::ChaosController>,
-    out_dir: Option<PathBuf>,
+    out_dir: PathBuf,
+    run_id: String,
     nonce_namespace: Option<u64>,
 ) -> Result<RunSummary, SimError> {
     loaded_sim.manifest.target.rpc_url = Some(target.rpc_url.clone());
@@ -204,7 +213,6 @@ async fn run_resolved_target(
     validate_executable_workloads(&loaded_sim.manifest)?;
     validate_against_runtime(&loaded_sim.manifest, &loaded_runtime.manifest)?;
 
-    let run_id = run_id()?;
     let nonce_namespace = match nonce_namespace {
         Some(value) => NonceNamespace::new(value)?,
         None => NonceNamespace::generate(
@@ -222,7 +230,6 @@ async fn run_resolved_target(
     loaded_sim.refresh_sha256()?;
     let schedule = generate_schedule(&loaded_sim.manifest)?;
     let phase_starts = phase_starts(&loaded_sim.manifest)?;
-    let out_dir = out_dir.unwrap_or_else(|| default_run_dir(&run_id, &loaded_sim.manifest.name));
 
     let mut event_writer = prepare_result_directory(
         &out_dir,

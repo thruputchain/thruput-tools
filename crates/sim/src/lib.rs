@@ -24,5 +24,5 @@ pub use run::{ExistingRunOptions, RunOptions, RunSummary, run_target};
 pub use target::{
     ChaosController, ChaosEventOutcome, ExistingTargetProvider, LocalTargetProvider,
     ResolvedTarget, TargetCapabilities, TargetOverrides, TargetOwnership, TargetProvider,
-    TargetProviderFuture, TargetProviderKind, TargetProviderSpec,
+    TargetProviderContext, TargetProviderFuture, TargetProviderKind, TargetProviderSpec,
 };
