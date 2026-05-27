@@ -6,6 +6,7 @@ use groundhog_rpc_client::HttpClientBuilder;
 
 use crate::actor::{ActorState, build_actor_states};
 use crate::assertions::{determine_outcome, evaluate_assertions};
+use crate::compare::{ResultDiff, load_result};
 use crate::error::SimError;
 use crate::event::{EventWriter, ResultEvent};
 use crate::executor::{
@@ -16,9 +17,9 @@ use crate::manifest::{ResolvedRunSpec, SimulationManifest, WorkloadKind};
 use crate::metrics::{RunMetrics, RunMetricsBuilder};
 use crate::nonce::NonceNamespace;
 use crate::result::{
-    AssertionResult, ManifestHashes, MetricAvailability, ProducerIdentity, RuntimeIdentity,
-    SIM_RESULT_SCHEMA_VERSION, SimMetricAvailability, SimResult, SimRunOutcome, TargetIdentity,
-    WorkloadCounts,
+    AssertionResult, BaselineDiff, ManifestHashes, MetricAvailability, ProducerIdentity,
+    RuntimeIdentity, SIM_RESULT_SCHEMA_VERSION, SimMetricAvailability, SimResult, SimRunOutcome,
+    TargetIdentity, WorkloadCounts,
 };
 use crate::runtime::{derive_accounts, load_runtime_manifest};
 use crate::scheduler::{PhaseStart, ScheduledSimulationEvent, generate_schedule, phase_starts};
@@ -89,6 +90,7 @@ pub async fn run_target(args: RunOptions) -> Result<RunSummary, SimError> {
         seed,
         nonce_namespace,
     } = args;
+    let scenario_path = scenario.clone();
     let mut loaded_sim = load_simulation_manifest(&scenario).await?;
     if let Some(seed) = seed {
         loaded_sim.manifest.seed = seed;
@@ -105,11 +107,27 @@ pub async fn run_target(args: RunOptions) -> Result<RunSummary, SimError> {
     match loaded_sim.manifest.target.provider {
         TargetProviderKind::Existing => {
             let provider = ExistingTargetProvider;
-            run_with_provider(loaded_sim, &provider, overrides, out_dir, nonce_namespace).await
+            run_with_provider(
+                loaded_sim,
+                &scenario_path,
+                &provider,
+                overrides,
+                out_dir,
+                nonce_namespace,
+            )
+            .await
         }
         TargetProviderKind::Local => {
             let provider = LocalTargetProvider::new();
-            run_with_provider(loaded_sim, &provider, overrides, out_dir, nonce_namespace).await
+            run_with_provider(
+                loaded_sim,
+                &scenario_path,
+                &provider,
+                overrides,
+                out_dir,
+                nonce_namespace,
+            )
+            .await
         }
         TargetProviderKind::RemoteSsh => {
             Err(crate::validation::ValidationError::ProviderNotImplemented {
@@ -137,6 +155,7 @@ pub async fn run_existing_target(args: ExistingRunOptions) -> Result<RunSummary,
         seed,
         nonce_namespace,
     } = args;
+    let scenario_path = scenario.clone();
     let mut loaded_sim = load_simulation_manifest(&scenario).await?;
     if let Some(seed) = seed {
         loaded_sim.manifest.seed = seed;
@@ -145,6 +164,7 @@ pub async fn run_existing_target(args: ExistingRunOptions) -> Result<RunSummary,
     let provider = ExistingTargetProvider;
     run_with_provider(
         loaded_sim,
+        &scenario_path,
         &provider,
         TargetOverrides {
             rpc_url,
@@ -159,6 +179,7 @@ pub async fn run_existing_target(args: ExistingRunOptions) -> Result<RunSummary,
 
 async fn run_with_provider(
     loaded_sim: LoadedSimulationManifest,
+    scenario_path: &Path,
     provider: &dyn TargetProvider,
     overrides: TargetOverrides,
     out_dir: Option<PathBuf>,
@@ -174,6 +195,7 @@ async fn run_with_provider(
         .await?;
     let run_result = run_resolved_target(
         loaded_sim,
+        scenario_path,
         &target,
         provider.chaos_controller(),
         out_dir,
@@ -199,6 +221,7 @@ fn finish_target_run<T>(
 #[allow(clippy::too_many_lines)]
 async fn run_resolved_target(
     mut loaded_sim: LoadedSimulationManifest,
+    scenario_path: &Path,
     target: &ResolvedTarget,
     chaos_controller: Option<&dyn crate::target::ChaosController>,
     out_dir: PathBuf,
@@ -255,7 +278,7 @@ async fn run_resolved_target(
         .iter()
         .filter(|event| matches!(event, ScheduledSimulationEvent::ActorTick(_)))
         .count() as u64;
-    let result = execute_loaded_simulation(
+    let mut result = execute_loaded_simulation(
         client,
         LoadedExecution {
             run_id: &run_id,
@@ -271,6 +294,12 @@ async fn run_resolved_target(
             phase_starts: &phase_starts,
             event_writer: &mut event_writer,
         },
+    )
+    .await?;
+    attach_baseline_diff(
+        &mut result,
+        scenario_path,
+        loaded_sim.manifest.baseline.as_deref(),
     )
     .await?;
     let outcome = result.outcome;
@@ -408,6 +437,35 @@ where
     })
 }
 
+async fn attach_baseline_diff(
+    result: &mut SimResult,
+    scenario_path: &Path,
+    baseline: Option<&Path>,
+) -> Result<(), SimError> {
+    let Some(baseline) = baseline else {
+        return Ok(());
+    };
+
+    let baseline_load_path = resolve_baseline_path(scenario_path, baseline);
+    let baseline_result = load_result(&baseline_load_path).await?;
+    result.baseline_diff = Some(BaselineDiff {
+        path: baseline.display().to_string(),
+        diff: ResultDiff::from_results(&baseline_result, result),
+    });
+    Ok(())
+}
+
+fn resolve_baseline_path(scenario_path: &Path, baseline: &Path) -> PathBuf {
+    if baseline.is_absolute() {
+        return baseline.to_path_buf();
+    }
+
+    scenario_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(baseline)
+}
+
 async fn prepare_result_directory(
     out_dir: &Path,
     simulation_manifest_bytes: &[u8],
@@ -504,6 +562,7 @@ fn build_result(input: BuildResultInput<'_>) -> Result<SimResult, SimError> {
         chain_progress: input.finished_metrics.chain_progress,
         assertion_results: input.assertion_results,
         chaos_events: input.chaos_events,
+        baseline_diff: None,
     })
 }
 
@@ -866,6 +925,114 @@ mod tests {
         ));
     }
 
+    #[tokio::test]
+    async fn attach_baseline_diff_none_leaves_result_unchanged() {
+        let mut result = result_fixture(1);
+
+        attach_baseline_diff(&mut result, Path::new("scenario.json"), None)
+            .await
+            .expect("missing baseline should be a no-op");
+
+        assert!(result.baseline_diff.is_none());
+    }
+
+    #[tokio::test]
+    async fn attach_baseline_diff_resolves_relative_path_and_preserves_manifest_path() {
+        let dir = tempdir().expect("temp dir should be created");
+        let scenario = dir.path().join("scenarios").join("scenario.json");
+        let baseline_path = dir
+            .path()
+            .join("scenarios")
+            .join("baselines")
+            .join("baseline-result.json");
+        tokio::fs::create_dir_all(baseline_path.parent().expect("baseline should have parent"))
+            .await
+            .expect("baseline dir should create");
+        write_json_pretty(baseline_path, &result_fixture(1))
+            .await
+            .expect("baseline should write");
+        let mut current = result_fixture(3);
+
+        attach_baseline_diff(
+            &mut current,
+            &scenario,
+            Some(Path::new("baselines/baseline-result.json")),
+        )
+        .await
+        .expect("baseline diff should attach");
+
+        let baseline_diff = current
+            .baseline_diff
+            .as_ref()
+            .expect("baseline diff should exist");
+        assert_eq!(baseline_diff.path, "baselines/baseline-result.json");
+        assert_eq!(
+            baseline_diff
+                .diff
+                .workload_count_deltas
+                .get(&WorkloadKind::ChainTip)
+                .expect("chain-tip delta should exist")
+                .completed,
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn attach_baseline_diff_accepts_run_directory_baseline() {
+        let dir = tempdir().expect("temp dir should be created");
+        let scenario = dir.path().join("scenario.json");
+        let run_dir = dir.path().join("baseline-run");
+        tokio::fs::create_dir_all(&run_dir)
+            .await
+            .expect("baseline run dir should create");
+        write_json_pretty(run_dir.join("result.json"), &result_fixture(2))
+            .await
+            .expect("baseline should write");
+        let mut current = result_fixture(5);
+
+        attach_baseline_diff(&mut current, &scenario, Some(Path::new("baseline-run")))
+            .await
+            .expect("run directory baseline should load");
+
+        assert_eq!(
+            current
+                .baseline_diff
+                .as_ref()
+                .expect("baseline diff should exist")
+                .diff
+                .workload_count_deltas
+                .get(&WorkloadKind::ChainTip)
+                .expect("chain-tip delta should exist")
+                .completed,
+            3
+        );
+    }
+
+    #[tokio::test]
+    async fn attach_baseline_diff_rejects_unsupported_result_schema() {
+        let dir = tempdir().expect("temp dir should be created");
+        let scenario = dir.path().join("scenario.json");
+        let baseline_path = dir.path().join("baseline.json");
+        let mut baseline = serde_json::to_value(result_fixture(1)).expect("result serializes");
+        baseline["schemaVersion"] = json!(SIM_RESULT_SCHEMA_VERSION + 1);
+        write_json_pretty(baseline_path, &baseline)
+            .await
+            .expect("baseline should write");
+        let mut current = result_fixture(1);
+
+        let error = attach_baseline_diff(&mut current, &scenario, Some(Path::new("baseline.json")))
+            .await
+            .expect_err("unsupported baseline schema should fail");
+
+        assert!(matches!(
+            error,
+            SimError::UnsupportedResultSchema {
+                actual,
+                ..
+            } if actual == SIM_RESULT_SCHEMA_VERSION + 1
+        ));
+    }
+
     fn manifest() -> SimulationManifest {
         serde_json::from_value(json!({
             "schemaVersion": 1,
@@ -975,5 +1142,51 @@ mod tests {
             },
             NonceNamespace::new(7).expect("namespace should fit"),
         )]
+    }
+
+    fn result_fixture(completed: u64) -> SimResult {
+        SimResult {
+            schema_version: SIM_RESULT_SCHEMA_VERSION,
+            run_id: "result-fixture-run".into(),
+            name: "result-fixture".into(),
+            outcome: SimRunOutcome::Passed,
+            target_provider: TargetProviderKind::Existing,
+            target_ownership: TargetOwnership::existing(),
+            target_identity: TargetIdentity {
+                rpc_url: Some("http://127.0.0.1:9545".into()),
+            },
+            runtime_identity: RuntimeIdentity {
+                network_id: "groundhog-local".into(),
+                protocol: "hogp/test".into(),
+                genesis_hash: prefixed_hex(0x42),
+                producer: ProducerIdentity {
+                    binary: "hogd-dev".into(),
+                    version: "0.1.0".into(),
+                    commit_hash: None,
+                },
+            },
+            nonce_namespace: 1,
+            manifest_hashes: ManifestHashes {
+                simulation_manifest_sha256: "sim".into(),
+                runtime_manifest_sha256: "runtime".into(),
+                bootstrap_manifest: MetricAvailability::Unsupported {
+                    reason: "existing target".into(),
+                },
+            },
+            metric_availability: SimMetricAvailability::phase_one_defaults(),
+            workload_counts: BTreeMap::from([(
+                WorkloadKind::ChainTip,
+                WorkloadCounts {
+                    completed,
+                    failed: 0,
+                    skipped: 0,
+                },
+            )]),
+            workload_metrics: BTreeMap::new(),
+            chain_progress: None,
+            assertion_results: Vec::new(),
+            chaos_events: Vec::new(),
+            baseline_diff: None,
+        }
     }
 }

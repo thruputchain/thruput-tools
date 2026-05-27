@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::error::SimError;
 use crate::manifest::WorkloadKind;
@@ -35,7 +35,7 @@ pub async fn load_result(path: &Path) -> Result<SimResult, SimError> {
 }
 
 /// Identity and availability diff for two run results.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[allow(clippy::struct_excessive_bools)]
 #[serde(rename_all = "camelCase")]
 pub struct ResultDiff {
@@ -150,7 +150,7 @@ fn outcome_label(outcome: SimRunOutcome) -> &'static str {
 }
 
 /// Per-workload completed/failed/skipped deltas, computed as `b - a`.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkloadCountDelta {
     pub completed: i64,
@@ -159,7 +159,7 @@ pub struct WorkloadCountDelta {
 }
 
 /// Per-workload latency percentile deltas, computed as `b - a`.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkloadLatencyDelta {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -171,7 +171,7 @@ pub struct WorkloadLatencyDelta {
 }
 
 /// Latency-summary deltas, computed as `b - a`.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LatencySummaryDelta {
     pub sample_count: i64,
@@ -183,7 +183,7 @@ pub struct LatencySummaryDelta {
 }
 
 /// Assertion status or measurement transition between two runs.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AssertionTransition {
     pub name: String,
@@ -200,7 +200,7 @@ pub struct AssertionTransition {
 }
 
 /// Chain-progress deltas, computed as `b - a`.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChainProgressDelta {
     pub first_height: i64,
@@ -212,18 +212,18 @@ pub struct ChainProgressDelta {
 }
 
 /// Numeric metric delta for metrics observed on both sides.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MetricNumericDelta {
-    pub metric: &'static str,
+    pub metric: String,
     pub value: i64,
 }
 
 /// Numeric metric comparison skipped because at least one side has no value.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NumericSkip {
-    pub metric: &'static str,
+    pub metric: String,
     pub status_a: String,
     pub status_b: String,
 }
@@ -404,12 +404,12 @@ fn collect_metric_diff(
     match (a, b) {
         (MetricAvailability::Observed { value: a }, MetricAvailability::Observed { value: b }) => {
             deltas.push(MetricNumericDelta {
-                metric,
+                metric: metric.into(),
                 value: delta_u64(*a, *b),
             });
         }
         _ => skips.push(NumericSkip {
-            metric,
+            metric: metric.into(),
             status_a: availability_status(a),
             status_b: availability_status(b),
         }),
@@ -554,7 +554,7 @@ impl ChainProgressDelta {
 #[cfg(test)]
 mod tests {
     use serde_json::json;
-    use tempfile::NamedTempFile;
+    use tempfile::{NamedTempFile, tempdir};
 
     use super::*;
 
@@ -576,6 +576,38 @@ mod tests {
             err,
             SimError::UnsupportedResultSchema { actual: 99, .. }
         ));
+    }
+
+    #[tokio::test]
+    async fn load_result_accepts_augmented_baseline_diff_results() {
+        let dir = tempdir().expect("temp dir should be created");
+        let baseline = result_from_json(minimal_result_json(SIM_RESULT_SCHEMA_VERSION));
+        let current = result_from_json(minimal_result_json(SIM_RESULT_SCHEMA_VERSION));
+        let mut current_json = serde_json::to_value(&current).expect("result should serialize");
+        current_json["baselineDiff"] = json!({
+            "path": "baselines/result.json",
+            "diff": ResultDiff::from_results(&baseline, &current)
+        });
+        tokio::fs::write(
+            dir.path().join("result.json"),
+            serde_json::to_vec(&current_json).expect("result should encode"),
+        )
+        .await
+        .expect("result should write");
+
+        let loaded = load_result(dir.path())
+            .await
+            .expect("augmented result should load");
+        assert_eq!(
+            loaded
+                .baseline_diff
+                .as_ref()
+                .expect("baseline diff should deserialize")
+                .path,
+            "baselines/result.json"
+        );
+        let diff = ResultDiff::from_results(&baseline, &loaded);
+        assert_eq!(diff.outcome_b, SimRunOutcome::Passed);
     }
 
     #[test]

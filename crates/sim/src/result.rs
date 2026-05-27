@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use hdrhistogram::Histogram;
 use serde::{Deserialize, Serialize};
 
+use crate::compare::ResultDiff;
 use crate::manifest::WorkloadKind;
 use crate::target::{TargetOwnership, TargetProviderKind};
 
@@ -34,6 +35,15 @@ pub struct SimResult {
     pub assertion_results: Vec<AssertionResult>,
     #[serde(default)]
     pub chaos_events: Vec<ChaosEventRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline_diff: Option<BaselineDiff>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BaselineDiff {
+    pub path: String,
+    pub diff: ResultDiff,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

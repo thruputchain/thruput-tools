@@ -19,7 +19,7 @@ pub mod validation;
 pub use error::SimError;
 pub use manifest::{SimulationManifest, WorkloadKind};
 pub use nonce::NonceNamespace;
-pub use result::{ChaosEventState, MetricAvailability, SimResult, SimRunOutcome};
+pub use result::{BaselineDiff, ChaosEventState, MetricAvailability, SimResult, SimRunOutcome};
 pub use run::{ExistingRunOptions, RunOptions, RunSummary, run_target};
 pub use target::{
     ChaosController, ChaosEventOutcome, ExistingTargetProvider, LocalTargetProvider,

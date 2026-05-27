@@ -178,6 +178,19 @@ optional fields are additive and do not bump the version. The diff also
 surfaces `outcomeA`/`outcomeB` so a `Passed → Aborted` transition is visible
 without inferring it from derived assertion deltas.
 
+## Baselines
+
+A scenario can set `baseline` to a committed `result.json` snapshot or a run
+directory containing one. Relative baseline paths resolve from the scenario
+file's directory. When present, `hoglab run` embeds `baselineDiff` in the final
+`result.json`; the diff uses the same shape as `hoglab compare --json` and is
+computed as current run minus baseline.
+
+Baseline comparison is diagnostic only. It does not change the run outcome or
+apply regression thresholds. If a configured baseline is missing, invalid, or
+uses an unsupported result schema, the run returns an error before writing the
+final `result.json`; target cleanup still runs.
+
 Phase 1 runs emit `passed` or `failed` final results. The `aborted` outcome is
 reserved in the schema for a future path that writes a final result after
 mid-run aborts.
