@@ -4,10 +4,12 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use groundhog_rpc_api_types::{
+    ContractAddress,
     block::ChainTip,
     hex::{Hex0x, HexBytes},
     receipt::{ExecStatus, TransactionReceipt},
     runtime_manifest::RuntimeManifest,
+    state::{StorageItemInfo, StorageItemRead},
     transaction::TxHash,
     view::{RootInvocationOutput, ViewRequest, ViewResponse},
 };
@@ -16,7 +18,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::{Id as TaskId, JoinError, JoinSet};
 
 use crate::actor::{ActorState, DrainedPendingReceipt, ReceiptPollTarget};
-use crate::contract::PreparedViewCall;
+use crate::contract::{PreparedStorageRead, PreparedViewCall};
 use crate::error::SimError;
 use crate::event::{ChaosTransitionEvent, EventWriter, ResultEvent, WorkloadEvent};
 use crate::manifest::{ChaosEventKind, ChaosEventSpec, SimulationManifest, WorkloadKind};
@@ -58,6 +60,13 @@ pub trait SimRpcClient {
         _request: ViewRequest,
     ) -> impl Future<Output = Result<ViewResponse, String>> + Send {
         async { Err("view RPC is not implemented by this client".into()) }
+    }
+    fn storage_read(
+        &self,
+        _address: ContractAddress,
+        _key: HexBytes,
+    ) -> impl Future<Output = Result<StorageItemRead, String>> + Send {
+        async { Err("storage read RPC is not implemented by this client".into()) }
     }
 }
 
@@ -109,6 +118,19 @@ where
                 .map_err(|error| error.to_string())
         }
     }
+
+    #[allow(clippy::manual_async_fn)]
+    fn storage_read(
+        &self,
+        address: ContractAddress,
+        key: HexBytes,
+    ) -> impl Future<Output = Result<StorageItemRead, String>> + Send {
+        async move {
+            GroundhogApiClient::get_storage_at(self, address, key)
+                .await
+                .map_err(|error| error.to_string())
+        }
+    }
 }
 
 /// Inputs for executing a generated schedule.
@@ -121,6 +143,7 @@ pub struct ScheduleExecution<'a> {
     pub event_writer: &'a mut EventWriter,
     pub metrics: &'a mut RunMetricsBuilder,
     pub view_calls: &'a [PreparedViewCall],
+    pub storage_reads: &'a [PreparedStorageRead],
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -134,11 +157,6 @@ where
     C: SimRpcClient + Clone + Send + Sync + 'static,
 {
     let mut chaos_events = Vec::new();
-    let view_calls = Vec::new();
-    let input = ScheduleExecution {
-        view_calls: &view_calls,
-        ..input
-    };
     run_schedule_with_chaos(client, input, None, &mut chaos_events)
         .await
         .map(|_| ())
@@ -164,6 +182,7 @@ where
         event_writer,
         metrics,
         view_calls,
+        storage_reads,
     } = input;
     let wallet_entrypoint = runtime_dev_wallet_action_entrypoint(runtime_manifest)?;
     let run_start = Instant::now();
@@ -243,6 +262,7 @@ where
                     workload,
                     wallet_entrypoint,
                     view_calls,
+                    storage_reads,
                 )?;
                 dispatch_workload(
                     client.clone(),
@@ -438,6 +458,7 @@ fn prepare_workload(
     workload: WorkloadKind,
     wallet_entrypoint: groundhog_xdr::contract::ContractEntrypointID,
     view_calls: &[PreparedViewCall],
+    storage_reads: &[PreparedStorageRead],
 ) -> Result<PreparedWorkload, SimError> {
     match workload {
         WorkloadKind::ChainTip => Ok(PreparedWorkload::ChainTip),
@@ -454,6 +475,16 @@ fn prepare_workload(
             Ok(PreparedWorkload::ViewCall(PreparedViewWorkload {
                 view: view.clone(),
                 caller: actor.wallet_address,
+            }))
+        }
+        WorkloadKind::StorageRead => {
+            let read = storage_reads.first().ok_or_else(|| {
+                SimError::Executor(
+                    "storage-read workload requires at least one prepared storage read".into(),
+                )
+            })?;
+            Ok(PreparedWorkload::StorageRead(PreparedStorageReadWorkload {
+                read: read.clone(),
             }))
         }
         _ => Err(SimError::UnsupportedRuntimeWorkloads(workload_name(
@@ -488,6 +519,7 @@ fn dispatch_workload<C>(
             }
             PreparedWorkload::ReceiptPoll(poll) => execute_receipt_poll(client, &tick, poll).await,
             PreparedWorkload::ViewCall(view) => execute_view_call(client, &tick, view).await,
+            PreparedWorkload::StorageRead(read) => execute_storage_read(client, &tick, read).await,
         }
     });
     task_contexts.insert(abort.id(), context);
@@ -626,6 +658,11 @@ fn backpressure_completion(
                 view_return_data: None,
                 view_abort_data: None,
                 view_event_count: None,
+                storage_read_name: None,
+                storage_contract: None,
+                storage_key: None,
+                storage_item_present: None,
+                storage_item_kind: None,
                 error_class: Some("simulator-backpressure".into()),
                 error: Some(format!("{scope} in-flight limit reached: {error}")),
             },
@@ -926,6 +963,11 @@ fn target_restarted_workload_completion(
                 view_return_data: None,
                 view_abort_data: None,
                 view_event_count: None,
+                storage_read_name: None,
+                storage_contract: None,
+                storage_key: None,
+                storage_item_present: None,
+                storage_item_kind: None,
                 error_class: Some("target-restarted".into()),
                 error: Some(format!(
                     "workload aborted at simulation time {simulation_time_ms} because target restarted"
@@ -971,6 +1013,11 @@ fn chaos_failed_workload_completion(
                 view_return_data: None,
                 view_abort_data: None,
                 view_event_count: None,
+                storage_read_name: None,
+                storage_contract: None,
+                storage_key: None,
+                storage_item_present: None,
+                storage_item_kind: None,
                 error_class: Some("chaos-failed".into()),
                 error: Some(format!(
                     "workload aborted at simulation time {simulation_time_ms} because chaos failed"
@@ -1019,6 +1066,11 @@ fn target_restarted_receipt_completion(
                 view_return_data: None,
                 view_abort_data: None,
                 view_event_count: None,
+                storage_read_name: None,
+                storage_contract: None,
+                storage_key: None,
+                storage_item_present: None,
+                storage_item_kind: None,
                 error_class: Some("target-restarted".into()),
                 error: Some("pending receipt lost because target restarted".into()),
             },
@@ -1145,6 +1197,11 @@ where
                         view_return_data: None,
                         view_abort_data: None,
                         view_event_count: None,
+                        storage_read_name: None,
+                        storage_contract: None,
+                        storage_key: None,
+                        storage_item_present: None,
+                        storage_item_kind: None,
                         error_class: None,
                         error: None,
                     },
@@ -1182,6 +1239,11 @@ where
                     view_return_data: None,
                     view_abort_data: None,
                     view_event_count: None,
+                    storage_read_name: None,
+                    storage_contract: None,
+                    storage_key: None,
+                    storage_item_present: None,
+                    storage_item_kind: None,
                     error_class: Some("rpc-error".into()),
                     error: Some(error),
                 },
@@ -1195,6 +1257,7 @@ where
     }
 }
 
+#[allow(clippy::too_many_lines)]
 async fn execute_wallet_submit_smoke<C>(
     client: C,
     tick: &ScheduledActorTick,
@@ -1246,6 +1309,11 @@ where
                         view_return_data: None,
                         view_abort_data: None,
                         view_event_count: None,
+                        storage_read_name: None,
+                        storage_contract: None,
+                        storage_key: None,
+                        storage_item_present: None,
+                        storage_item_kind: None,
                         error_class: None,
                         error: None,
                     },
@@ -1283,6 +1351,11 @@ where
                     view_return_data: None,
                     view_abort_data: None,
                     view_event_count: None,
+                    storage_read_name: None,
+                    storage_contract: None,
+                    storage_key: None,
+                    storage_item_present: None,
+                    storage_item_kind: None,
                     error_class: Some("rpc-error".into()),
                     error: Some(error),
                 },
@@ -1622,8 +1695,184 @@ fn view_workload_event(
         view_return_data: None,
         view_abort_data: None,
         view_event_count: None,
+        storage_read_name: None,
+        storage_contract: None,
+        storage_key: None,
+        storage_item_present: None,
+        storage_item_kind: None,
         error_class: None,
         error: None,
+    }
+}
+
+async fn execute_storage_read<C>(
+    client: C,
+    tick: &ScheduledActorTick,
+    prepared: PreparedStorageReadWorkload,
+) -> Result<WorkloadCompletion, SimError>
+where
+    C: SimRpcClient + Clone + Send + Sync + 'static,
+{
+    let started_at_unix_ms = unix_ms()?.to_string();
+    let started = Instant::now();
+    let response = client
+        .storage_read(
+            Hex0x(prepared.read.contract),
+            HexBytes(prepared.read.key.clone()),
+        )
+        .await;
+    let latency_ms = duration_ms(started.elapsed());
+    let completed_at_unix_ms = unix_ms()?.to_string();
+
+    match response {
+        Ok(response) => Ok(storage_read_response_completion(
+            tick,
+            &prepared.read,
+            &response,
+            started_at_unix_ms,
+            completed_at_unix_ms,
+            latency_ms,
+        )),
+        Err(error) => Ok(storage_read_failure_completion(
+            storage_read_workload_event(
+                tick,
+                &prepared.read,
+                started_at_unix_ms,
+                completed_at_unix_ms,
+                latency_ms,
+            ),
+            latency_ms,
+            "storage-read-rpc-error",
+            error,
+        )),
+    }
+}
+
+fn storage_read_response_completion(
+    tick: &ScheduledActorTick,
+    read: &PreparedStorageRead,
+    response: &StorageItemRead,
+    started_at_unix_ms: String,
+    completed_at_unix_ms: String,
+    latency_ms: u64,
+) -> WorkloadCompletion {
+    let mut event = storage_read_workload_event(
+        tick,
+        read,
+        started_at_unix_ms,
+        completed_at_unix_ms,
+        latency_ms,
+    );
+    let present = response.item.is_some();
+    event.chain_height = Some(*response.block_height);
+    event.storage_item_present = Some(present);
+    event.storage_item_kind = response
+        .item
+        .as_ref()
+        .map(storage_item_kind)
+        .map(str::to_owned);
+
+    if let Some(expected) = read.expect_present
+        && expected != present
+    {
+        let error = format!(
+            "storage read `{}` on `{}` present={present}, expected {expected}",
+            read.name, read.contract_name
+        );
+        return storage_read_failure_completion(
+            event,
+            latency_ms,
+            "storage-presence-mismatch",
+            error,
+        );
+    }
+    storage_read_success_completion(event, latency_ms)
+}
+
+fn storage_read_success_completion(event: WorkloadEvent, latency_ms: u64) -> WorkloadCompletion {
+    WorkloadCompletion {
+        workload: WorkloadKind::StorageRead,
+        latency_ms,
+        error_class: None,
+        chain_tip: None,
+        event: ResultEvent::WorkloadCompleted { event },
+        skipped: false,
+        submitted_transaction: None,
+        observed_receipt: None,
+        receipt_poll: None,
+        submit_to_receipt_latency_ms: None,
+    }
+}
+
+fn storage_read_failure_completion(
+    event: WorkloadEvent,
+    latency_ms: u64,
+    class: impl Into<String>,
+    error: impl Into<String>,
+) -> WorkloadCompletion {
+    let class = class.into();
+    WorkloadCompletion {
+        workload: WorkloadKind::StorageRead,
+        latency_ms,
+        error_class: Some(class.clone()),
+        chain_tip: None,
+        event: ResultEvent::WorkloadFailed {
+            event: event.with_error(class, error),
+        },
+        skipped: false,
+        submitted_transaction: None,
+        observed_receipt: None,
+        receipt_poll: None,
+        submit_to_receipt_latency_ms: None,
+    }
+}
+
+fn storage_read_workload_event(
+    tick: &ScheduledActorTick,
+    read: &PreparedStorageRead,
+    started_at_unix_ms: String,
+    completed_at_unix_ms: String,
+    latency_ms: u64,
+) -> WorkloadEvent {
+    WorkloadEvent {
+        actor_id: tick.actor_id,
+        workload: WorkloadKind::StorageRead,
+        scheduled_time_ms: tick.simulation_time_ms,
+        started_at_unix_ms,
+        completed_at_unix_ms,
+        latency_ms,
+        rpc_method: "groundhog_getStorageAt",
+        chain_height: None,
+        chain_block_hash: None,
+        tx_hash: None,
+        tx_nonce: None,
+        receipt_present: None,
+        receipt_status: None,
+        receipt_status_detail: None,
+        submit_to_receipt_latency_ms: None,
+        view_result: None,
+        view_return_data: None,
+        view_abort_data: None,
+        view_event_count: None,
+        storage_read_name: Some(read.name.clone()),
+        storage_contract: Some(format!("0x{}", hex::encode(read.contract.as_ref()))),
+        storage_key: Some(format!("0x{}", hex::encode(&read.key))),
+        storage_item_present: None,
+        storage_item_kind: None,
+        error_class: None,
+        error: None,
+    }
+}
+
+fn storage_item_kind(item: &StorageItemInfo) -> &'static str {
+    match item {
+        StorageItemInfo::NonnegativeInt { .. } => "nonnegative-int",
+        StorageItemInfo::Bytestring { .. } => "bytestring",
+        StorageItemInfo::AuthData => "auth-data",
+        StorageItemInfo::RetrocausalQueue => "retrocausal-queue",
+        StorageItemInfo::ReplayCacheEntry => "replay-cache-entry",
+        StorageItemInfo::DeployedContract { .. } => "deployed-contract",
+        StorageItemInfo::Unknown { .. } => "unknown",
     }
 }
 
@@ -1652,6 +1901,11 @@ fn receipt_poll_event(
         view_return_data: None,
         view_abort_data: None,
         view_event_count: None,
+        storage_read_name: None,
+        storage_contract: None,
+        storage_key: None,
+        storage_item_present: None,
+        storage_item_kind: None,
         error_class: None,
         error: None,
     }
@@ -1772,6 +2026,7 @@ enum PreparedWorkload {
     WalletSubmitSmoke(BuiltSubmitTransaction),
     ReceiptPoll(PreparedReceiptPoll),
     ViewCall(PreparedViewWorkload),
+    StorageRead(PreparedStorageReadWorkload),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1783,6 +2038,11 @@ struct PreparedReceiptPoll {
 struct PreparedViewWorkload {
     view: PreparedViewCall,
     caller: groundhog_xdr::types::ContractAddress,
+}
+
+#[derive(Debug, Clone)]
+struct PreparedStorageReadWorkload {
+    read: PreparedStorageRead,
 }
 
 struct ReceiptPollTimes {
@@ -1856,6 +2116,7 @@ mod tests {
         hex::Hex0x,
         receipt::{ExecStatus, TransactionReceipt},
         runtime_manifest::RuntimeManifest,
+        state::StorageItemRead,
         view::{RootInvocationOutput, ViewResponse},
     };
     use groundhog_signing::derive_dev_account_signer;
@@ -1872,6 +2133,8 @@ mod tests {
     use crate::runtime::SimAccount;
     use crate::scheduler::{generate_schedule, phase_starts};
     use crate::target::{ChaosController, ChaosEventOutcome, TargetProviderFuture};
+
+    type StorageRequests = Arc<Mutex<Vec<(ContractAddress, Vec<u8>)>>>;
 
     #[derive(Clone)]
     struct PanickingClient;
@@ -1919,6 +2182,12 @@ mod tests {
     #[derive(Clone)]
     struct ViewClient {
         response: ViewResponse,
+    }
+
+    #[derive(Clone)]
+    struct StorageReadClient {
+        response: StorageItemRead,
+        requested: StorageRequests,
     }
 
     struct SuccessfulChaosController;
@@ -2005,6 +2274,38 @@ mod tests {
         ) -> impl Future<Output = Result<ViewResponse, String>> + Send {
             let response = self.response.clone();
             async move { Ok(response) }
+        }
+    }
+
+    impl SimRpcClient for StorageReadClient {
+        #[allow(clippy::manual_async_fn)]
+        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, String>> + Send {
+            async { panic!("chain_tip should not be called") }
+        }
+
+        #[allow(clippy::manual_async_fn)]
+        fn send_raw_transaction(
+            &self,
+            _tx_hex: String,
+        ) -> impl Future<Output = Result<TxHash, String>> + Send {
+            async { panic!("send_raw_transaction should not be called") }
+        }
+
+        #[allow(clippy::manual_async_fn)]
+        fn storage_read(
+            &self,
+            address: Hex0x<ContractAddress>,
+            key: HexBytes,
+        ) -> impl Future<Output = Result<StorageItemRead, String>> + Send {
+            let response = self.response.clone();
+            let requested = self.requested.clone();
+            async move {
+                requested
+                    .lock()
+                    .expect("storage request list should lock")
+                    .push((address.0, key.0));
+                Ok(response)
+            }
         }
     }
 
@@ -2236,6 +2537,7 @@ mod tests {
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
                 view_calls: &[],
+                storage_reads: &[],
             },
         )
         .await
@@ -2294,6 +2596,7 @@ mod tests {
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
                 view_calls: &[],
+                storage_reads: &[],
             },
         )
         .await
@@ -2346,6 +2649,7 @@ mod tests {
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
                 view_calls: &[],
+                storage_reads: &[],
             },
         )
         .await
@@ -2405,6 +2709,7 @@ mod tests {
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
                 view_calls: &[],
+                storage_reads: &[],
             },
         )
         .await
@@ -2502,6 +2807,153 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn storage_read_records_absent_item_fields() {
+        let tick = ScheduledActorTick {
+            phase_index: 0,
+            actor_id: 0,
+            actor_sequence: 0,
+            simulation_time_ms: 25,
+        };
+        let requested = Arc::new(Mutex::new(Vec::new()));
+        let completion = execute_storage_read(
+            StorageReadClient {
+                response: StorageItemRead {
+                    block_height: BlockHeight::from(45),
+                    item: None,
+                },
+                requested: requested.clone(),
+            },
+            &tick,
+            prepared_storage_read(Some(false)),
+        )
+        .await
+        .expect("storage read should complete");
+
+        assert_eq!(completion.error_class, None);
+        assert_eq!(
+            requested
+                .lock()
+                .expect("storage request list should lock")
+                .as_slice(),
+            &[(ContractAddress::from([0x88; 32]), vec![0; 32])]
+        );
+        match completion.event {
+            ResultEvent::WorkloadCompleted { event } => {
+                assert_eq!(event.workload, WorkloadKind::StorageRead);
+                assert_eq!(event.rpc_method, "groundhog_getStorageAt");
+                assert_eq!(event.chain_height, Some(45));
+                assert_eq!(event.storage_read_name.as_deref(), Some("fib-zero-key"));
+                assert_eq!(
+                    event.storage_contract.as_deref(),
+                    Some(prefixed_hex(0x88).as_str())
+                );
+                assert_eq!(
+                    event.storage_key.as_deref(),
+                    Some(prefixed_hex(0x00).as_str())
+                );
+                assert_eq!(event.storage_item_present, Some(false));
+                assert_eq!(event.storage_item_kind, None);
+            }
+            other => panic!("expected completed event, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn storage_read_presence_mismatch_is_failed_workload() {
+        let tick = ScheduledActorTick {
+            phase_index: 0,
+            actor_id: 0,
+            actor_sequence: 0,
+            simulation_time_ms: 25,
+        };
+        let completion = execute_storage_read(
+            StorageReadClient {
+                response: StorageItemRead {
+                    block_height: BlockHeight::from(45),
+                    item: None,
+                },
+                requested: Arc::new(Mutex::new(Vec::new())),
+            },
+            &tick,
+            prepared_storage_read(Some(true)),
+        )
+        .await
+        .expect("storage read should complete");
+
+        assert_eq!(
+            completion.error_class.as_deref(),
+            Some("storage-presence-mismatch")
+        );
+        match completion.event {
+            ResultEvent::WorkloadFailed { event } => {
+                assert_eq!(event.storage_item_present, Some(false));
+                assert_eq!(
+                    event.error_class.as_deref(),
+                    Some("storage-presence-mismatch")
+                );
+            }
+            other => panic!("expected failed event, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn run_schedule_executes_storage_read_and_records_metrics() {
+        let manifest = storage_manifest();
+        let schedule = generate_schedule(&manifest).expect("schedule should generate");
+        let starts = phase_starts(&manifest).expect("phase starts should generate");
+        let file = NamedTempFile::new().expect("temp file should be created");
+        let mut event_writer = EventWriter::create(file.path())
+            .await
+            .expect("event writer should open");
+        let mut metrics = RunMetricsBuilder::default();
+        let mut actors = actor_states();
+        let requested = Arc::new(Mutex::new(Vec::new()));
+        let storage_read = prepared_storage_read(Some(false)).read;
+
+        run_schedule(
+            StorageReadClient {
+                response: StorageItemRead {
+                    block_height: BlockHeight::from(45),
+                    item: None,
+                },
+                requested: requested.clone(),
+            },
+            ScheduleExecution {
+                manifest: &manifest,
+                runtime_manifest: &runtime_manifest(),
+                schedule: &schedule,
+                phase_starts: &starts,
+                actor_states: &mut actors,
+                event_writer: &mut event_writer,
+                metrics: &mut metrics,
+                view_calls: &[],
+                storage_reads: &[storage_read],
+            },
+        )
+        .await
+        .expect("storage-read schedule should run");
+
+        assert_eq!(
+            requested
+                .lock()
+                .expect("storage request list should lock")
+                .len(),
+            1
+        );
+        assert_eq!(
+            metrics.workload_counts()[&WorkloadKind::StorageRead].completed,
+            1
+        );
+        let events = tokio::fs::read_to_string(file.path())
+            .await
+            .expect("events should read");
+        let completed = find_event(&events, "workload-completed");
+        assert_eq!(completed["workload"], "storage-read");
+        assert_eq!(completed["storageReadName"], "fib-zero-key");
+        assert_eq!(completed["storageItemPresent"], false);
+    }
+
+    #[tokio::test]
     async fn receipt_poll_without_submitted_tx_is_skipped() {
         let manifest = receipt_manifest();
         let schedule = vec![ScheduledSimulationEvent::ActorTick(ScheduledActorTick {
@@ -2533,6 +2985,7 @@ mod tests {
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
                 view_calls: &[],
+                storage_reads: &[],
             },
         )
         .await
@@ -2597,6 +3050,7 @@ mod tests {
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
                 view_calls: &[],
+                storage_reads: &[],
             },
         )
         .await
@@ -2674,6 +3128,7 @@ mod tests {
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
                 view_calls: &[],
+                storage_reads: &[],
             },
         )
         .await
@@ -2752,6 +3207,7 @@ mod tests {
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
                 view_calls: &[],
+                storage_reads: &[],
             },
         )
         .await
@@ -2798,6 +3254,7 @@ mod tests {
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
                 view_calls: &[],
+                storage_reads: &[],
             },
         )
         .await
@@ -2948,6 +3405,7 @@ mod tests {
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
                 view_calls: &[],
+                storage_reads: &[],
             },
             Some(&SuccessfulChaosController),
             &mut chaos_events,
@@ -3021,6 +3479,7 @@ mod tests {
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
                 view_calls: &[],
+                storage_reads: &[],
             },
             Some(&SuccessfulChaosController),
             &mut chaos_events,
@@ -3075,6 +3534,7 @@ mod tests {
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
                 view_calls: &[],
+                storage_reads: &[],
             },
             Some(&SuccessfulChaosController),
             &mut chaos_events,
@@ -3132,6 +3592,7 @@ mod tests {
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
                 view_calls: &[],
+                storage_reads: &[],
             },
             Some(&SuccessfulChaosController),
             &mut chaos_events,
@@ -3182,6 +3643,7 @@ mod tests {
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
                 view_calls: &[],
+                storage_reads: &[],
             },
             Some(&FailingChaosController),
             &mut chaos_events,
@@ -3232,6 +3694,26 @@ mod tests {
             "target": {"provider": "existing"},
             "loadShape": [{"duration": "20ms", "users": 1, "ratePerUserHz": 100.0}],
             "workloads": [{"name": "receipt-poll", "weight": 1}]
+        }))
+        .expect("manifest fixture should parse")
+    }
+
+    fn storage_manifest() -> SimulationManifest {
+        serde_json::from_value(json!({
+            "schemaVersion": 1,
+            "kind": "groundhog-simulation",
+            "name": "executor-storage-test",
+            "seed": "seed",
+            "target": {"provider": "existing"},
+            "loadShape": [{"duration": "1ms", "users": 1, "ratePerUserHz": 1000.0}],
+            "workloads": [{"name": "storage-read", "weight": 1}],
+            "contractArtifacts": [{"name": "fibonacci", "wasm": "fibonacci.wasm"}],
+            "storageReads": [{
+                "name": "fib-zero-key",
+                "contract": "fibonacci",
+                "key": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "expectPresent": false
+            }]
         }))
         .expect("manifest fixture should parse")
     }
@@ -3321,6 +3803,18 @@ mod tests {
                 expect_return_data,
             },
             caller: ContractAddress::from([0x66; 32]),
+        }
+    }
+
+    fn prepared_storage_read(expect_present: Option<bool>) -> PreparedStorageReadWorkload {
+        PreparedStorageReadWorkload {
+            read: PreparedStorageRead {
+                name: "fib-zero-key".into(),
+                contract_name: "fibonacci".into(),
+                contract: ContractAddress::from([0x88; 32]),
+                key: vec![0; 32],
+                expect_present,
+            },
         }
     }
 

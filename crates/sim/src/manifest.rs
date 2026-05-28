@@ -26,6 +26,8 @@ pub struct SimulationManifest {
     #[serde(default)]
     pub view_calls: Vec<ViewCallSpec>,
     #[serde(default)]
+    pub storage_reads: Vec<StorageReadSpec>,
+    #[serde(default)]
     pub assertions: AssertionSpec,
     #[serde(default)]
     pub chaos: Vec<ChaosEventSpec>,
@@ -136,6 +138,16 @@ pub struct ViewCallSpec {
     pub calldata: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expect_return_data: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageReadSpec {
+    pub name: String,
+    pub contract: String,
+    pub key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expect_present: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

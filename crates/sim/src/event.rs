@@ -134,8 +134,9 @@ pub struct WorkloadEvent {
     pub completed_at_unix_ms: String,
     pub latency_ms: u64,
     pub rpc_method: &'static str,
-    /// Chain height observed by the workload: tip height for `chain-tip`, or
-    /// receipt commit height for `receipt-poll`.
+    /// Chain height observed by the workload: tip height for `chain-tip`,
+    /// receipt commit height for `receipt-poll`, or storage snapshot height
+    /// for `storage-read`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chain_height: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -160,6 +161,16 @@ pub struct WorkloadEvent {
     pub view_abort_data: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub view_event_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub storage_read_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub storage_contract: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub storage_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub storage_item_present: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub storage_item_kind: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_class: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -221,6 +232,11 @@ mod tests {
                 view_return_data: None,
                 view_abort_data: None,
                 view_event_count: None,
+                storage_read_name: None,
+                storage_contract: None,
+                storage_key: None,
+                storage_item_present: None,
+                storage_item_kind: None,
                 error_class: None,
                 error: None,
             },

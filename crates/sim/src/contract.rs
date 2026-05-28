@@ -35,6 +35,7 @@ const DEFAULT_BLOCK_EXPIRY_OFFSET: i64 = 1_000;
 pub struct ContractSetup {
     pub records: Vec<ContractDeploymentRecord>,
     pub view_calls: Vec<PreparedViewCall>,
+    pub storage_reads: Vec<PreparedStorageRead>,
     pub failed: bool,
 }
 
@@ -46,6 +47,15 @@ pub struct PreparedViewCall {
     pub entrypoint: Vec<u8>,
     pub calldata: Vec<u8>,
     pub expect_return_data: Option<Vec<u8>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PreparedStorageRead {
+    pub name: String,
+    pub contract_name: String,
+    pub contract: ContractAddress,
+    pub key: Vec<u8>,
+    pub expect_present: Option<bool>,
 }
 
 pub async fn deploy_manifest_contracts<C>(
@@ -63,6 +73,7 @@ where
         return Ok(ContractSetup {
             records: Vec::new(),
             view_calls: Vec::new(),
+            storage_reads: Vec::new(),
             failed: false,
         });
     }
@@ -98,15 +109,19 @@ where
         }
     }
 
-    let view_calls = if failed {
-        Vec::new()
+    let (view_calls, storage_reads) = if failed {
+        (Vec::new(), Vec::new())
     } else {
-        prepare_view_calls(manifest, &deployed)?
+        (
+            prepare_view_calls(manifest, &deployed)?,
+            prepare_storage_reads(manifest, &deployed)?,
+        )
     };
 
     Ok(ContractSetup {
         records,
         view_calls,
+        storage_reads,
         failed,
     })
 }
@@ -451,6 +466,31 @@ fn prepare_view_calls(
         .collect()
 }
 
+fn prepare_storage_reads(
+    manifest: &SimulationManifest,
+    deployed: &BTreeMap<String, ContractAddress>,
+) -> Result<Vec<PreparedStorageRead>, SimError> {
+    manifest
+        .storage_reads
+        .iter()
+        .map(|read| {
+            let contract = deployed.get(&read.contract).copied().ok_or_else(|| {
+                SimError::Executor(format!(
+                    "storage read `{}` references undeployed contract `{}`",
+                    read.name, read.contract
+                ))
+            })?;
+            Ok(PreparedStorageRead {
+                name: read.name.clone(),
+                contract_name: read.contract.clone(),
+                contract,
+                key: parse_hex(&read.key)?,
+                expect_present: read.expect_present,
+            })
+        })
+        .collect()
+}
+
 fn parse_hex(value: &str) -> Result<Vec<u8>, SimError> {
     let stripped = value
         .strip_prefix("0x")
@@ -616,6 +656,13 @@ mod tests {
         assert_eq!(record.address_source, Some(DeployAddressSource::Receipt));
         assert_eq!(record.height, Some(42));
         assert_eq!(setup.view_calls.len(), 1);
+        assert_eq!(setup.storage_reads.len(), 1);
+        assert_eq!(setup.storage_reads[0].name, "fib-zero-key");
+        assert_eq!(
+            setup.storage_reads[0].contract,
+            Hex0x(ContractAddress::from([0x77; 32])).0
+        );
+        assert_eq!(setup.storage_reads[0].key, vec![0; 32]);
     }
 
     #[tokio::test]
@@ -696,6 +743,12 @@ mod tests {
                 entrypoint: "0x1111111111111111".into(),
                 calldata: "0x0a".into(),
                 expect_return_data: Some("0x37".into()),
+            }],
+            storage_reads: vec![crate::manifest::StorageReadSpec {
+                name: "fib-zero-key".into(),
+                contract: "fibonacci".into(),
+                key: format!("0x{}", "00".repeat(32)),
+                expect_present: Some(false),
             }],
             assertions: crate::manifest::AssertionSpec::default(),
             chaos: Vec::new(),

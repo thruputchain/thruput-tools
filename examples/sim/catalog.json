@@ -109,6 +109,24 @@
       "runner": "scripts/smoke-sim-scenarios.sh"
     },
     {
+      "id": "local-fibonacci-storage-read-smoke",
+      "path": "local-fibonacci-storage-read-smoke.json",
+      "title": "Local Fibonacci Storage Read Smoke",
+      "summary": "Builds fibonacci.wasm from groundhog-examples, deploys it, and reads an empty storage key through groundhog_getStorageAt.",
+      "provider": "local",
+      "tier": "smoke",
+      "tags": ["local", "contract", "fibonacci", "storage-read", "smoke"],
+      "requiresContracts": true,
+      "contracts": [
+        {
+          "name": "fibonacci",
+          "source": "groundhog-examples/fibonacci",
+          "artifact": "fibonacci.wasm"
+        }
+      ],
+      "runner": "scripts/smoke-sim-scenarios.sh"
+    },
+    {
       "id": "local-wallet-soak",
       "path": "local-wallet-soak.json",
       "title": "Local Wallet Soak",

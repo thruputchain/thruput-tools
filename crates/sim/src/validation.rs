@@ -95,6 +95,42 @@ fn validate_contract_artifacts(manifest: &SimulationManifest) -> Result<(), Vali
         }
     }
 
+    validate_view_calls(manifest, &artifact_names)?;
+    validate_storage_reads(manifest, &artifact_names)?;
+
+    if manifest
+        .workloads
+        .iter()
+        .any(|workload| workload.name == WorkloadKind::ViewCall)
+    {
+        if manifest.contract_artifacts.is_empty() {
+            return Err(ValidationError::MissingContractArtifactsForViewCall);
+        }
+        if manifest.view_calls.is_empty() {
+            return Err(ValidationError::MissingViewCallsForViewCall);
+        }
+    }
+
+    if manifest
+        .workloads
+        .iter()
+        .any(|workload| workload.name == WorkloadKind::StorageRead)
+    {
+        if manifest.contract_artifacts.is_empty() {
+            return Err(ValidationError::MissingContractArtifactsForStorageRead);
+        }
+        if manifest.storage_reads.is_empty() {
+            return Err(ValidationError::MissingStorageReadsForStorageRead);
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_view_calls(
+    manifest: &SimulationManifest,
+    artifact_names: &HashSet<String>,
+) -> Result<(), ValidationError> {
     let mut view_names = HashSet::new();
     for view in &manifest.view_calls {
         let name = view.name.trim();
@@ -130,20 +166,86 @@ fn validate_contract_artifacts(manifest: &SimulationManifest) -> Result<(), Vali
             validate_hex_len(expected, None, "expectReturnData", name)?;
         }
     }
+    Ok(())
+}
 
-    if manifest
-        .workloads
-        .iter()
-        .any(|workload| workload.name == WorkloadKind::ViewCall)
-    {
-        if manifest.contract_artifacts.is_empty() {
-            return Err(ValidationError::MissingContractArtifactsForViewCall);
+fn validate_storage_reads(
+    manifest: &SimulationManifest,
+    artifact_names: &HashSet<String>,
+) -> Result<(), ValidationError> {
+    let mut storage_names = HashSet::new();
+    for read in &manifest.storage_reads {
+        let name = read.name.trim();
+        if name.is_empty() {
+            return Err(ValidationError::EmptyStorageReadName);
         }
-        if manifest.view_calls.is_empty() {
-            return Err(ValidationError::MissingViewCallsForViewCall);
+        if name != read.name {
+            return Err(ValidationError::InvalidContractNameWhitespace {
+                field: "storageReads[].name",
+                value: read.name.clone(),
+            });
         }
+        if read.contract.trim() != read.contract {
+            return Err(ValidationError::InvalidContractNameWhitespace {
+                field: "storageReads[].contract",
+                value: read.contract.clone(),
+            });
+        }
+        if !storage_names.insert(name.to_owned()) {
+            return Err(ValidationError::DuplicateStorageReadName {
+                name: name.to_owned(),
+            });
+        }
+        if !artifact_names.contains(read.contract.trim()) {
+            return Err(ValidationError::UnknownStorageReadContract {
+                read: name.to_owned(),
+                contract: read.contract.clone(),
+            });
+        }
+        validate_storage_hex_len(&read.key, Some(32), "key", name)?;
     }
+    Ok(())
+}
 
+fn validate_storage_hex_len(
+    value: &str,
+    expected_len: Option<usize>,
+    field: &'static str,
+    read: &str,
+) -> Result<(), ValidationError> {
+    let Some(stripped) = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+    else {
+        return Err(ValidationError::InvalidStorageReadHex {
+            read: read.to_owned(),
+            field,
+            reason: "hex value must be 0x-prefixed".into(),
+        });
+    };
+    if stripped.len() % 2 != 0 {
+        return Err(ValidationError::InvalidStorageReadHex {
+            read: read.to_owned(),
+            field,
+            reason: "hex value must contain an even number of digits".into(),
+        });
+    }
+    if let Err(error) = hex::decode(stripped) {
+        return Err(ValidationError::InvalidStorageReadHex {
+            read: read.to_owned(),
+            field,
+            reason: error.to_string(),
+        });
+    }
+    if let Some(expected_len) = expected_len
+        && stripped.len() / 2 != expected_len
+    {
+        return Err(ValidationError::InvalidStorageReadHex {
+            read: read.to_owned(),
+            field,
+            reason: format!("expected {expected_len} bytes"),
+        });
+    }
     Ok(())
 }
 
@@ -335,6 +437,22 @@ pub enum ValidationError {
     MissingContractArtifactsForViewCall,
     #[error("view-call workload requires at least one viewCalls entry")]
     MissingViewCallsForViewCall,
+    #[error("storage read name must not be empty")]
+    EmptyStorageReadName,
+    #[error("duplicate storage read name `{name}`")]
+    DuplicateStorageReadName { name: String },
+    #[error("storage read `{read}` references unknown contract artifact `{contract}`")]
+    UnknownStorageReadContract { read: String, contract: String },
+    #[error("storage read `{read}` field `{field}` is invalid: {reason}")]
+    InvalidStorageReadHex {
+        read: String,
+        field: &'static str,
+        reason: String,
+    },
+    #[error("storage-read workload requires at least one contract artifact")]
+    MissingContractArtifactsForStorageRead,
+    #[error("storage-read workload requires at least one storageReads entry")]
+    MissingStorageReadsForStorageRead,
     #[error("target provider {provider:?} does not support chaos event {kind}")]
     UnsupportedChaos {
         provider: TargetProviderKind,
@@ -445,6 +563,90 @@ mod tests {
     }
 
     #[test]
+    fn validates_storage_read_contract_references_and_key() {
+        let mut manifest = basic_manifest();
+        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
+            name: "fibonacci".into(),
+            wasm: "fibonacci.wasm".into(),
+        }];
+        manifest.storage_reads = vec![crate::manifest::StorageReadSpec {
+            name: "fib-zero-key".into(),
+            contract: "fibonacci".into(),
+            key: format!("0x{}", "00".repeat(32)),
+            expect_present: Some(false),
+        }];
+        manifest.workloads = vec![WorkloadSpec {
+            name: WorkloadKind::StorageRead,
+            weight: 1,
+        }];
+
+        validate_manifest(&manifest).expect("storage-read manifest should validate");
+    }
+
+    #[test]
+    fn rejects_storage_read_without_matching_contract_artifact() {
+        let mut manifest = basic_manifest();
+        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
+            name: "fibonacci".into(),
+            wasm: "fibonacci.wasm".into(),
+        }];
+        manifest.storage_reads = vec![crate::manifest::StorageReadSpec {
+            name: "fib-zero-key".into(),
+            contract: "missing".into(),
+            key: format!("0x{}", "00".repeat(32)),
+            expect_present: None,
+        }];
+
+        let err = validate_manifest(&manifest).expect_err("unknown contract should reject");
+
+        assert!(matches!(
+            err,
+            ValidationError::UnknownStorageReadContract { .. }
+        ));
+    }
+
+    #[test]
+    fn rejects_storage_read_key_that_is_not_32_bytes() {
+        let mut manifest = basic_manifest();
+        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
+            name: "fibonacci".into(),
+            wasm: "fibonacci.wasm".into(),
+        }];
+        manifest.storage_reads = vec![crate::manifest::StorageReadSpec {
+            name: "fib-zero-key".into(),
+            contract: "fibonacci".into(),
+            key: "0x1111".into(),
+            expect_present: None,
+        }];
+
+        let err = validate_manifest(&manifest).expect_err("short key should reject");
+
+        assert!(matches!(err, ValidationError::InvalidStorageReadHex { .. }));
+    }
+
+    #[test]
+    fn rejects_storage_read_contract_reference_whitespace() {
+        let mut manifest = basic_manifest();
+        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
+            name: "fibonacci".into(),
+            wasm: "fibonacci.wasm".into(),
+        }];
+        manifest.storage_reads = vec![crate::manifest::StorageReadSpec {
+            name: "fib-zero-key".into(),
+            contract: " fibonacci ".into(),
+            key: format!("0x{}", "00".repeat(32)),
+            expect_present: None,
+        }];
+
+        let err = validate_manifest(&manifest).expect_err("padded reference should reject");
+
+        assert!(matches!(
+            err,
+            ValidationError::InvalidContractNameWhitespace { .. }
+        ));
+    }
+
+    #[test]
     fn rejects_view_call_without_matching_contract_artifact() {
         let mut manifest = basic_manifest();
         manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
@@ -547,6 +749,28 @@ mod tests {
     }
 
     #[test]
+    fn rejects_storage_read_workload_without_db_gateway() {
+        let mut manifest = basic_manifest();
+        manifest.workloads = vec![WorkloadSpec {
+            name: WorkloadKind::StorageRead,
+            weight: 1,
+        }];
+        let mut runtime = runtime_manifest();
+        runtime.endpoints.db_gateway = None;
+
+        let err = validate_against_runtime(&manifest, &runtime)
+            .expect_err("storage-read should require db gateway");
+
+        assert!(matches!(
+            err,
+            ValidationError::MissingReadPlane {
+                workload: WorkloadKind::StorageRead,
+                endpoint: "dbGateway"
+            }
+        ));
+    }
+
+    #[test]
     fn rejects_actor_count_above_bootstrap_accounts() {
         let mut manifest = basic_manifest();
         manifest.load_shape[0].users = 2;
@@ -628,6 +852,7 @@ mod tests {
             }],
             contract_artifacts: Vec::new(),
             view_calls: Vec::new(),
+            storage_reads: Vec::new(),
             assertions: crate::manifest::AssertionSpec::default(),
             chaos: Vec::new(),
             baseline: None,
