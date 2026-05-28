@@ -464,11 +464,17 @@ chaos, deploy new contracts, or create remote infrastructure.
 - [x] Capture provider logs for simulator-owned local targets.
 - [x] Write target ownership metadata with `startedBySim = true`.
 - [x] Stop the target on completion.
-- [ ] Add sweeper command for sim-owned local targets.
+- [x] Add sweeper command for sim-owned local targets.
+  - [x] Slice E1: write handoff design:
+    `docs/sim/specs/2026-05-27-local-target-sweeper-design.md`.
+  - [x] Review gate E1: lifecycle and artifact review for PID safety,
+    ownership refresh, and report shape.
+  - [x] Slice E2: add ownership process capture and restart refresh.
+  - [x] Slice E3: add `hoglab sweep`, tests, docs, and smoke coverage.
 - [x] Implement `restart-target` chaos for the local provider as whole-target
   stop+restart, matching current `groundhog node` supervisor behavior.
 - [x] Record chaos state transitions in `result.jsonl` and `result.json`.
-- [ ] Support scenario `baseline` and emit baseline diff inside `result.json`.
+- [x] Support scenario `baseline` and emit baseline diff inside `result.json`.
   - [x] Slice D1: write handoff design:
     `docs/sim/specs/2026-05-27-scenario-baseline-result-diff-design.md`.
   - [x] Review gate D1: spec review for artifact shape, path resolution, and

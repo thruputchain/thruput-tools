@@ -11,6 +11,7 @@ pub mod result;
 pub mod run;
 pub mod runtime;
 pub mod scheduler;
+pub mod sweep;
 pub mod target;
 pub mod transaction;
 pub mod util;
@@ -21,8 +22,9 @@ pub use manifest::{SimulationManifest, WorkloadKind};
 pub use nonce::NonceNamespace;
 pub use result::{BaselineDiff, ChaosEventState, MetricAvailability, SimResult, SimRunOutcome};
 pub use run::{ExistingRunOptions, RunOptions, RunSummary, run_target};
+pub use sweep::{SweepEntry, SweepEntryState, SweepReport, sweep_runs};
 pub use target::{
-    ChaosController, ChaosEventOutcome, ExistingTargetProvider, LocalTargetProvider,
+    ChaosController, ChaosEventOutcome, ExistingTargetProvider, LocalTargetProvider, OwnedProcess,
     ResolvedTarget, TargetCapabilities, TargetOverrides, TargetOwnership, TargetProvider,
     TargetProviderContext, TargetProviderFuture, TargetProviderKind, TargetProviderSpec,
 };

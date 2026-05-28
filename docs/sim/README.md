@@ -25,7 +25,8 @@ The `local` provider launches `groundhog node --json`, requests the dev account
 count required by the scenario, reads the node's startup JSON for the effective
 RPC URL and runtime manifest path, runs workloads over public JSON-RPC, and
 stops the node at the end of the run. `target-ownership.json` records
-`startedBySim: true` and `cleanupAllowed: true`.
+`startedBySim: true`, `cleanupAllowed: true`, and best-effort process metadata
+for later orphan sweeping.
 
 Local restart chaos can be exercised with:
 
@@ -133,8 +134,29 @@ them.
 relaunches the whole `groundhog node` process on the same resolved RPC port,
 pauses later scheduled ticks until startup JSON is parsed, records
 `chaos-transition` events, and classifies pending receipt queues lost at restart
-with `errorClass: "target-restarted"`. Sweeper ownership fields and baseline
-diffing remain later Phase 2 work.
+with `errorClass: "target-restarted"`. The refreshed
+`target-ownership.json` process block tracks the latest restarted node.
+
+## Sweeper
+
+`hoglab sweep [root]` scans a runs root, defaulting to `hoglab-runs/`, for
+orphaned simulator-owned local targets:
+
+```bash
+cargo run -p groundhog-sim --bin hoglab -- sweep hoglab-runs --dry-run
+cargo run -p groundhog-sim --bin hoglab -- sweep hoglab-runs --json
+```
+
+The sweeper only considers run directories whose `target-ownership.json` says
+`startedBySim: true`, `cleanupAllowed: true`, and includes a `process` block.
+Before signaling, it validates the live PID's `ps` start-time token, process
+group, and command marker against the recorded values, then sends SIGTERM to
+the recorded process group and escalates to SIGKILL after the bounded grace
+period if needed.
+
+Run `hoglab sweep` only when no simulations are active. It has no heartbeat or
+lock-file protection and intentionally ignores the case where the node has
+already exited but a separately orphaned backend survives.
 
 ## Result Directory
 
@@ -144,7 +166,8 @@ Each run writes a self-contained result directory:
   metadata.
 - `runtime-manifest.json` - copy of the runtime manifest used for validation
   and account derivation.
-- `target-ownership.json` - provider ownership and cleanup metadata.
+- `target-ownership.json` - provider ownership and cleanup metadata, including
+  best-effort process identity for simulator-owned local targets.
 - `result.jsonl` - append-only event stream for run, target, phase, workload,
   chaos transition, assertion, and completion events, plus one
   `metric-availability-recorded` event per run with the run-level availability

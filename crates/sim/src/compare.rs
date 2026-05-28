@@ -579,6 +579,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn load_result_accepts_legacy_target_ownership_without_process() {
+        let file = NamedTempFile::new().expect("temp file should be created");
+        tokio::fs::write(
+            file.path(),
+            serde_json::to_vec(&minimal_result_json(SIM_RESULT_SCHEMA_VERSION)).unwrap(),
+        )
+        .await
+        .expect("result should write");
+
+        let result = load_result(file.path())
+            .await
+            .expect("legacy ownership result should load");
+
+        assert!(result.target_ownership.process.is_none());
+    }
+
+    #[tokio::test]
     async fn load_result_accepts_augmented_baseline_diff_results() {
         let dir = tempdir().expect("temp dir should be created");
         let baseline = result_from_json(minimal_result_json(SIM_RESULT_SCHEMA_VERSION));

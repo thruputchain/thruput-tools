@@ -550,7 +550,9 @@ available, such as submit transaction hash and nonce. Live progress readers tail
 it; `result.json` is the aggregated snapshot written at run end. The
 `target-ownership.json` file records which target resources, if any, the
 simulator created. A sweeper may only clean up resources marked
-`startedBySim`; it must never infer ownership from a stale PID alone.
+`startedBySim`; it must never infer ownership from a stale PID alone. Local
+targets add best-effort process metadata containing the PID, process group,
+port, start-time token, and command marker used by `hoglab sweep`.
 
 Storage-token and NNInt compute metrics are never zero-filled when the public
 receipt path cannot surface them. Result fields should distinguish at least:
@@ -641,6 +643,8 @@ machine without owning process lifecycle.
 - Start `groundhog node` / `hogd-dev`.
 - Capture runtime manifest and logs.
 - Stop the target on completion.
+- Sweep orphaned simulator-owned local targets by validating recorded process
+  identity before signaling.
 - Implement the first chaos primitive: scheduled stop+restart of the whole
   local managed target. Record chaos events in `result.json` and
   `result.jsonl`.
