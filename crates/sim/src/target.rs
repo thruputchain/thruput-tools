@@ -16,6 +16,7 @@ use tokio::time::{Instant, sleep, timeout};
 use crate::error::SimError;
 use crate::manifest::{ChaosEventKind, ChaosEventSpec, SimulationManifest};
 use crate::result::ChaosEventState;
+use crate::util::{command_on_path, write_json_pretty_atomic};
 use crate::validation::{
     ValidationError, required_bootstrap_accounts, validate_existing_target_flags,
     validate_local_target_flags,
@@ -95,6 +96,26 @@ pub struct TargetOwnership {
     pub started_by_sim: bool,
     /// Whether this simulation process may clean up the target.
     pub cleanup_allowed: bool,
+    /// Process identity for simulator-owned local targets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process: Option<OwnedProcess>,
+}
+
+/// Process identity captured for a simulator-owned local target.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+#[serde(rename_all = "camelCase")]
+pub struct OwnedProcess {
+    /// Operating-system process identifier for the `groundhog node` process.
+    pub pid: u32,
+    /// Unix process-group identifier for the node and supervised backend.
+    pub pgid: u32,
+    /// Public JSON-RPC port resolved from node startup JSON.
+    pub port: u16,
+    /// Opaque process start-time token read from `ps` and compared verbatim.
+    pub start_time: String,
+    /// Short command marker expected to appear in the live process command.
+    pub command: String,
 }
 
 impl TargetOwnership {
@@ -104,15 +125,17 @@ impl TargetOwnership {
             provider: TargetProviderKind::Existing,
             started_by_sim: false,
             cleanup_allowed: false,
+            process: None,
         }
     }
 
     /// Return ownership metadata for a simulator-owned local target.
-    pub fn local() -> Self {
+    pub fn local(process: Option<OwnedProcess>) -> Self {
         Self {
             provider: TargetProviderKind::Local,
             started_by_sim: true,
             cleanup_allowed: true,
+            process,
         }
     }
 }
@@ -141,6 +164,8 @@ pub struct TargetOverrides {
 pub struct TargetProviderContext {
     /// Directory where providers may write target-owned logs for this run.
     pub logs_dir: PathBuf,
+    /// Path to the run's target ownership artifact.
+    pub ownership_path: PathBuf,
 }
 
 impl TargetOverrides {
@@ -303,6 +328,7 @@ struct LocalLaunchConfig {
     required_accounts: u32,
     startup_timeout_secs: u64,
     logs_dir: PathBuf,
+    ownership_path: PathBuf,
 }
 
 #[derive(Debug)]
@@ -420,6 +446,7 @@ impl LocalTargetProvider {
             required_accounts,
             startup_timeout_secs,
             logs_dir: context.logs_dir,
+            ownership_path: context.ownership_path,
         };
         let launched = launch_local_node(&launch_config, overrides.port, 0, None).await?;
         let rpc_url = launched.startup.rpc_url.clone();
@@ -432,6 +459,7 @@ impl LocalTargetProvider {
                 return Err(error);
             }
         };
+        let process = capture_owned_process(launched.child.id(), rpc_port).await;
         let runtime_manifest = launched.startup.runtime_manifest.clone();
         *self.state.lock().await = LocalTargetState::Acquired(Box::new(LocalAcquiredTarget {
             child: launched.child,
@@ -444,7 +472,7 @@ impl LocalTargetProvider {
         Ok(ResolvedTarget {
             provider: TargetProviderKind::Local,
             capabilities: self.capabilities(),
-            ownership: TargetOwnership::local(),
+            ownership: TargetOwnership::local(process),
             rpc_url,
             runtime_manifest,
         })
@@ -500,6 +528,18 @@ impl LocalTargetProvider {
             });
         }
         let new_pid = launched.child.id();
+        let new_process = capture_owned_process(new_pid, rpc_port).await;
+        if let Err(error) = write_json_pretty_atomic(
+            launch_config.ownership_path.clone(),
+            &TargetOwnership::local(new_process),
+        )
+        .await
+        {
+            let mut child = launched.child;
+            let _ = terminate_child(&mut child, LOCAL_CLEANUP_GRACE).await;
+            let _ = launched.log_tasks.finish().await;
+            return Err(error);
+        }
         *self.state.lock().await = LocalTargetState::Acquired(Box::new(LocalAcquiredTarget {
             child: launched.child,
             launch_config,
@@ -681,6 +721,93 @@ fn resolve_groundhog_binary(override_path: Option<&Path>) -> Result<PathBuf, Sim
     }
     Err(SimError::GroundhogBinaryNotFound {
         binary: binary.to_string(),
+    })
+}
+
+#[cfg(unix)]
+async fn capture_owned_process(pid: Option<u32>, port: u16) -> Option<OwnedProcess> {
+    let Some(pid) = pid else {
+        eprintln!("warning: local target process id was unavailable; sweep metadata omitted");
+        return None;
+    };
+    if !command_on_path("ps") {
+        eprintln!("warning: `ps` was not found on PATH; local target sweep metadata omitted");
+        return None;
+    }
+    let identity = match read_process_identity(pid).await {
+        Ok(identity) => identity,
+        Err(error) => {
+            eprintln!(
+                "warning: failed to capture local target process identity for pid {pid}: {error}; sweep metadata omitted"
+            );
+            return None;
+        }
+    };
+    Some(OwnedProcess {
+        pid,
+        pgid: identity.pgid,
+        port,
+        start_time: identity.start_time,
+        command: "groundhog node".into(),
+    })
+}
+
+#[cfg(not(unix))]
+async fn capture_owned_process(_pid: Option<u32>, _port: u16) -> Option<OwnedProcess> {
+    None
+}
+
+#[cfg(unix)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CapturedProcessIdentity {
+    start_time: String,
+    pgid: u32,
+}
+
+#[cfg(unix)]
+async fn read_process_identity(pid: u32) -> Result<CapturedProcessIdentity, io::Error> {
+    let output = Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "lstart=,pgid="])
+        .output()
+        .await?;
+    if !output.status.success() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("ps reported no process for pid {pid}"),
+        ));
+    }
+    parse_process_identity(&String::from_utf8_lossy(&output.stdout))
+}
+
+#[cfg(unix)]
+fn parse_process_identity(value: &str) -> Result<CapturedProcessIdentity, io::Error> {
+    let line = value.lines().next().unwrap_or_default();
+    let mut parts = line.split_whitespace();
+    let mut start_tokens = Vec::with_capacity(5);
+    for _ in 0..5 {
+        let Some(token) = parts.next() else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "ps returned an incomplete process start time",
+            ));
+        };
+        start_tokens.push(token);
+    }
+    let process_group = parts.next().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "ps returned an empty process group",
+        )
+    })?;
+    let pgid = process_group.parse::<u32>().map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("ps returned invalid process group `{process_group}`: {error}"),
+        )
+    })?;
+    Ok(CapturedProcessIdentity {
+        start_time: start_tokens.join(" "),
+        pgid,
     })
 }
 
@@ -1054,6 +1181,63 @@ mod tests {
                 .chaos
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn ownership_process_is_additive_and_omitted_when_absent() {
+        let process = OwnedProcess {
+            pid: 12,
+            pgid: 12,
+            port: 9545,
+            start_time: "Wed May 27 12:00:00 2026".into(),
+            command: "groundhog node".into(),
+        };
+        let ownership = TargetOwnership::local(Some(process.clone()));
+        let value = serde_json::to_value(&ownership).expect("ownership should serialize");
+
+        assert_eq!(value["process"]["pid"], 12);
+        assert_eq!(value["process"]["pgid"], 12);
+        assert_eq!(value["process"]["port"], 9545);
+        assert_eq!(value["process"]["startTime"], process.start_time);
+        assert_eq!(value["process"]["command"], process.command);
+
+        let legacy: TargetOwnership = serde_json::from_value(json!({
+            "provider": "existing",
+            "startedBySim": false,
+            "cleanupAllowed": false
+        }))
+        .expect("legacy ownership should deserialize");
+        assert_eq!(legacy, TargetOwnership::existing());
+        let without_process =
+            serde_json::to_value(TargetOwnership::local(None)).expect("ownership should encode");
+        assert!(without_process.get("process").is_none());
+    }
+
+    #[test]
+    fn owned_process_round_trips() {
+        let process = OwnedProcess {
+            pid: 12,
+            pgid: 12,
+            port: 9545,
+            start_time: "Wed May 27 12:00:00 2026".into(),
+            command: "groundhog node".into(),
+        };
+
+        let encoded = serde_json::to_vec(&process).expect("process should serialize");
+        let decoded: OwnedProcess =
+            serde_json::from_slice(&encoded).expect("process should deserialize");
+
+        assert_eq!(decoded, process);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parses_process_identity_with_lstart_and_pgid() {
+        let identity = parse_process_identity("Wed May  7 12:00:00 2026  5678\n")
+            .expect("process identity should parse");
+
+        assert_eq!(identity.start_time, "Wed May 7 12:00:00 2026");
+        assert_eq!(identity.pgid, 5678);
     }
 
     #[tokio::test]
@@ -1430,7 +1614,7 @@ mod tests {
         let target = ResolvedTarget {
             provider: TargetProviderKind::Local,
             capabilities: TargetCapabilities::for_provider(TargetProviderKind::Local),
-            ownership: TargetOwnership::local(),
+            ownership: TargetOwnership::local(None),
             rpc_url: "http://127.0.0.1:9545".into(),
             runtime_manifest: PathBuf::from("/tmp/runtime-manifest.json"),
         };
@@ -1486,6 +1670,7 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    #[allow(clippy::too_many_lines)]
     async fn local_restart_relaunches_on_resolved_port() {
         use std::os::unix::fs::PermissionsExt;
 
@@ -1535,11 +1720,17 @@ while :; do sleep 1; done
                 },
                 TargetProviderContext {
                     logs_dir: dir.path().join("logs"),
+                    ownership_path: dir.path().join("target-ownership.json"),
                 },
             )
             .await
             .expect("fake local target should acquire");
         assert_eq!(target.rpc_url, "http://127.0.0.1:49152");
+        let initial_process = target
+            .ownership
+            .process
+            .as_ref()
+            .expect("local acquire should capture process metadata");
 
         let event = ChaosEventSpec {
             at: crate::manifest::DurationSpec("1s".into()),
@@ -1552,6 +1743,18 @@ while :; do sleep 1; done
         assert_eq!(outcome.state, ChaosEventState::Recovered);
         let detail = outcome.detail.expect("restart detail should report pids");
         assert_restart_detail_has_distinct_pids(&detail);
+        let new_pid = restart_detail_pid(&detail, "newPid");
+        let refreshed: TargetOwnership = serde_json::from_slice(
+            &std::fs::read(dir.path().join("target-ownership.json"))
+                .expect("refreshed ownership should read"),
+        )
+        .expect("refreshed ownership should parse");
+        let refreshed_process = refreshed
+            .process
+            .expect("restart should refresh ownership process metadata");
+        assert_eq!(refreshed_process.pid.to_string(), new_pid);
+        assert_ne!(refreshed_process.pid, initial_process.pid);
+        assert_eq!(refreshed_process.port, 49152);
 
         provider
             .cleanup(&target)
@@ -1609,22 +1812,26 @@ while :; do sleep 1; done
     fn context() -> TargetProviderContext {
         TargetProviderContext {
             logs_dir: PathBuf::from("/tmp/groundhog-sim-target-test-logs"),
+            ownership_path: PathBuf::from("/tmp/groundhog-sim-target-test-ownership.json"),
         }
     }
 
     #[cfg(unix)]
     fn assert_restart_detail_has_distinct_pids(detail: &str) {
-        let old_pid = detail
-            .split_whitespace()
-            .find_map(|part| part.strip_prefix("oldPid="))
-            .expect("old pid should be present");
-        let new_pid = detail
-            .split_whitespace()
-            .find_map(|part| part.strip_prefix("newPid="))
-            .expect("new pid should be present");
+        let old_pid = restart_detail_pid(detail, "oldPid");
+        let new_pid = restart_detail_pid(detail, "newPid");
 
         assert_ne!(old_pid, "unknown");
         assert_ne!(new_pid, "unknown");
         assert_ne!(old_pid, new_pid);
+    }
+
+    #[cfg(unix)]
+    fn restart_detail_pid<'a>(detail: &'a str, key: &str) -> &'a str {
+        let prefix = format!("{key}=");
+        detail
+            .split_whitespace()
+            .find_map(|part| part.strip_prefix(&prefix))
+            .unwrap_or_else(|| panic!("{key} should be present"))
     }
 }

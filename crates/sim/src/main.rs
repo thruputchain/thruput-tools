@@ -5,6 +5,7 @@ use clap::{Parser, Subcommand};
 use groundhog_sim::compare::{ResultDiff, load_result};
 use groundhog_sim::error::SimError;
 use groundhog_sim::run::{RunOptions, run_target};
+use groundhog_sim::sweep::{SweepEntryState, sweep_runs};
 use groundhog_sim::util::load_simulation_manifest;
 use groundhog_sim::validation::validate_manifest;
 
@@ -32,6 +33,8 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Reclaim orphaned simulator-owned local targets.
+    Sweep(SweepArgs),
 }
 
 #[derive(Debug, Parser)]
@@ -65,6 +68,19 @@ struct RunArgs {
     /// Fixed high-32-bit nonce namespace. Requires a fresh target or empty replay cache.
     #[arg(long)]
     nonce_namespace: Option<u64>,
+}
+
+#[derive(Debug, Parser)]
+struct SweepArgs {
+    /// Runs root to scan.
+    #[arg(default_value = "hoglab-runs")]
+    root: PathBuf,
+    /// Validate candidates without sending signals.
+    #[arg(long)]
+    dry_run: bool,
+    /// Emit a single JSON report.
+    #[arg(long)]
+    json: bool,
 }
 
 impl From<RunArgs> for RunOptions {
@@ -111,6 +127,7 @@ async fn run_cli() -> Result<(), SimError> {
             Ok(())
         }
         Command::Compare { run_a, run_b, json } => compare_runs(run_a, run_b, json).await,
+        Command::Sweep(args) => sweep_targets_blocking(args).await,
     }
 }
 
@@ -125,6 +142,66 @@ async fn compare_runs(run_a: PathBuf, run_b: PathBuf, json: bool) -> Result<(), 
         println!("{}", diff.render_text());
     }
     Ok(())
+}
+
+fn sweep_targets(args: &SweepArgs) -> Result<(), SimError> {
+    let report = sweep_runs(&args.root, args.dry_run)?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        let reclaimed = report
+            .entries
+            .iter()
+            .filter(|entry| entry.state == SweepEntryState::Reclaimed)
+            .count();
+        let skipped = report
+            .entries
+            .iter()
+            .filter(|entry| entry.state == SweepEntryState::Skipped)
+            .count();
+        let failed = report
+            .entries
+            .iter()
+            .filter(|entry| entry.state == SweepEntryState::Failed)
+            .count();
+        println!(
+            "sweep: root={} reclaimed={} skipped={} failed={}",
+            report.root, reclaimed, skipped, failed
+        );
+        for entry in &report.entries {
+            match entry.state {
+                SweepEntryState::Reclaimed => println!(
+                    "reclaimed: {} pid={} port={}",
+                    entry.run_dir,
+                    entry.pid.unwrap_or_default(),
+                    entry.port.unwrap_or_default()
+                ),
+                SweepEntryState::Skipped => println!(
+                    "skipped: {} {}",
+                    entry.run_dir,
+                    entry.reason.as_deref().unwrap_or("unknown reason")
+                ),
+                SweepEntryState::Failed => println!(
+                    "failed: {} {}",
+                    entry.run_dir,
+                    entry.error.as_deref().unwrap_or("unknown error")
+                ),
+            }
+        }
+    }
+
+    if report.has_failures() {
+        return Err(SimError::Executor(
+            "one or more validated local targets failed to terminate".into(),
+        ));
+    }
+    Ok(())
+}
+
+async fn sweep_targets_blocking(args: SweepArgs) -> Result<(), SimError> {
+    tokio::task::spawn_blocking(move || sweep_targets(&args))
+        .await
+        .map_err(|error| SimError::Executor(format!("sweep task panicked: {error}")))?
 }
 
 #[cfg(test)]
@@ -155,6 +232,20 @@ mod tests {
                 assert_eq!(args.startup_timeout_secs, Some(5));
             }
             _ => panic!("expected run command"),
+        }
+    }
+
+    #[test]
+    fn sweep_flags_parse() {
+        let cli = Cli::parse_from(["hoglab", "sweep", "/tmp/runs", "--dry-run", "--json"]);
+
+        match cli.command {
+            Command::Sweep(args) => {
+                assert_eq!(args.root, PathBuf::from("/tmp/runs"));
+                assert!(args.dry_run);
+                assert!(args.json);
+            }
+            _ => panic!("expected sweep command"),
         }
     }
 }

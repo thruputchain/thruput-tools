@@ -4,7 +4,8 @@
 # Runs the ignored hoglab process-level smokes against a real hogd-dev binary:
 #   1. local provider launches groundhog node itself
 #   2. local provider restarts its managed node through restart-target chaos
-#   3. existing provider connects to a temporary groundhog node started here
+#   3. sweeper reclaims an orphaned simulator-owned local target
+#   4. existing provider connects to a temporary groundhog node started here
 #
 # Optional environment:
 #   HOGD_DEV_BINARY=/path/to/hogd-dev
@@ -114,6 +115,11 @@ log "running local-provider restart smoke"
 GROUNDHOG_SIM_HOGD_DEV_BINARY="$HOGD_DEV_BINARY" \
 GROUNDHOG_SIM_GROUNDHOG_BINARY="$GROUNDHOG_BINARY" \
     cargo test -p groundhog-sim --test local_target_smoke local_restart_target_chain_tip_smoke -- --ignored --nocapture
+
+log "running local-provider sweeper smoke"
+GROUNDHOG_SIM_HOGD_DEV_BINARY="$HOGD_DEV_BINARY" \
+GROUNDHOG_SIM_GROUNDHOG_BINARY="$GROUNDHOG_BINARY" \
+    cargo test -p groundhog-sim --test local_target_smoke local_target_sweep_orphan_smoke -- --ignored --nocapture
 
 NODE_STDOUT="$WORKDIR/groundhog-node.json"
 NODE_STDERR="$WORKDIR/groundhog-node.stderr"

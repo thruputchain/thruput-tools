@@ -189,6 +189,7 @@ async fn run_with_provider(
     let out_dir = out_dir.unwrap_or_else(|| default_run_dir(&run_id, &loaded_sim.manifest.name));
     let context = TargetProviderContext {
         logs_dir: out_dir.join("logs"),
+        ownership_path: out_dir.join("target-ownership.json"),
     };
     let target = provider
         .acquire(&loaded_sim.manifest, overrides, context)
@@ -296,6 +297,7 @@ async fn run_resolved_target(
         },
     )
     .await?;
+    refresh_result_target_ownership(&mut result, &out_dir).await?;
     attach_baseline_diff(
         &mut result,
         scenario_path,
@@ -452,6 +454,16 @@ async fn attach_baseline_diff(
         path: baseline.display().to_string(),
         diff: ResultDiff::from_results(&baseline_result, result),
     });
+    Ok(())
+}
+
+async fn refresh_result_target_ownership(
+    result: &mut SimResult,
+    out_dir: &Path,
+) -> Result<(), SimError> {
+    let ownership: TargetOwnership =
+        serde_json::from_slice(&tokio::fs::read(out_dir.join("target-ownership.json")).await?)?;
+    result.target_ownership = ownership;
     Ok(())
 }
 
@@ -1079,6 +1091,37 @@ mod tests {
 
         assert!(matches!(error, SimError::Io(_)));
         assert!(current.baseline_diff.is_none());
+    }
+
+    #[tokio::test]
+    async fn refresh_result_target_ownership_uses_latest_artifact() {
+        let dir = tempdir().expect("temp dir should be created");
+        let out_dir = dir.path().join("run");
+        tokio::fs::create_dir_all(&out_dir)
+            .await
+            .expect("run dir should create");
+        let latest = TargetOwnership {
+            provider: TargetProviderKind::Local,
+            started_by_sim: true,
+            cleanup_allowed: true,
+            process: Some(crate::target::OwnedProcess {
+                pid: 42,
+                pgid: 42,
+                port: 9545,
+                start_time: "Wed May 27 12:00:00 2026".into(),
+                command: "groundhog node".into(),
+            }),
+        };
+        write_json_pretty(out_dir.join("target-ownership.json"), &latest)
+            .await
+            .expect("ownership should write");
+        let mut result = result_fixture(1);
+
+        refresh_result_target_ownership(&mut result, &out_dir)
+            .await
+            .expect("ownership should refresh");
+
+        assert_eq!(result.target_ownership, latest);
     }
 
     fn manifest() -> SimulationManifest {

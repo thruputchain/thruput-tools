@@ -91,6 +91,14 @@ pub fn duration_ms(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
+/// Return whether a command name resolves to a regular file on `PATH`.
+pub fn command_on_path(command: &str) -> bool {
+    let Some(paths) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&paths).any(|dir| dir.join(command).is_file())
+}
+
 /// Convert a serializable API value into a JSON string field.
 pub fn json_string<T: Serialize>(value: &T, field: &'static str) -> Result<String, SimError> {
     serde_json::to_value(value)
