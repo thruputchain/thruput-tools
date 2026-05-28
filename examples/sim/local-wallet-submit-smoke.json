@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "kind": "groundhog-simulation",
+  "name": "local-wallet-submit-smoke",
+  "seed": "local-wallet-submit-smoke-v1",
+  "target": {
+    "provider": "local"
+  },
+  "loadShape": [
+    {
+      "duration": "3s",
+      "users": 1,
+      "ratePerUserHz": 1.0
+    }
+  ],
+  "workloads": [
+    {
+      "name": "wallet-submit-smoke",
+      "weight": 1
+    }
+  ],
+  "assertions": {
+    "maxErrorRate": 0.001,
+    "p99SubmitLatencyMs": 500
+  }
+}

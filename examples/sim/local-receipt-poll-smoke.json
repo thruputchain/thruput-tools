@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "kind": "groundhog-simulation",
+  "name": "local-receipt-poll-smoke",
+  "seed": "local-receipt-poll-smoke-v1",
+  "target": {
+    "provider": "local"
+  },
+  "loadShape": [
+    {
+      "duration": "5s",
+      "users": 1,
+      "ratePerUserHz": 2.0
+    }
+  ],
+  "workloads": [
+    {
+      "name": "wallet-submit-smoke",
+      "weight": 1
+    },
+    {
+      "name": "receipt-poll",
+      "weight": 4
+    }
+  ],
+  "assertions": {
+    "maxErrorRate": 0.001,
+    "maxReceiptTimeoutRate": 1.0,
+    "p99SubmitLatencyMs": 750
+  }
+}

@@ -18,6 +18,7 @@ cargo run -p groundhog-cli --features dev-node -- --version
 cargo run -p groundhog-sim --bin hoglab -- run examples/sim/local-chain-tip-smoke.json \
   --groundhog-binary target/debug/groundhog \
   --hogd-dev-binary /path/to/hogd-dev \
+  --hogd-protocol hogp/<hash> \
   --port 0
 ```
 
@@ -36,6 +37,21 @@ cargo run -p groundhog-sim --bin hoglab -- run examples/sim/local-restart-chain-
   --hogd-dev-binary /path/to/hogd-dev \
   --port 0
 ```
+
+Scenario catalog smoke coverage is available as the next rung after the focused
+local lifecycle smoke:
+
+```bash
+scripts/smoke-sim-scenarios.sh
+GROUNDHOG_SIM_RUN_SOAKS=1 scripts/smoke-sim-scenarios.sh
+```
+
+The default catalog runs the fast local ladder and an existing-provider
+baseline scenario. It covers read-only chain-tip, write-only wallet submit,
+submit-plus-receipt polling, mixed read/write/receipt polling, read-only
+restart chaos, and a mixed restart artifact exercise that may fail only when it
+records restart-loss artifacts. The opt-in soak runs
+`examples/sim/local-mixed-wallet-receipt-soak.json`.
 
 Existing-target quickstart:
 
@@ -120,7 +136,10 @@ It rejects `target.rpcUrl`, `target.runtimeManifest`, `--rpc-url`, and
 `--runtime-manifest` because those values are outputs from the launched node.
 Use `--groundhog-binary` to select the supervisor binary, `--hogd-dev-binary`
 to forward a specific backend binary, `--port` to request a port, and
-`--startup-timeout-secs` to bound startup.
+`--startup-timeout-secs` to bound startup. Use `--hogd-protocol` when a local
+`hogd-dev` build is ahead of the protocol token compiled into `groundhog node`;
+it only overrides the intro token and does not make incompatible XDR shapes
+compatible.
 
 The provider sends SIGTERM to the node for graceful shutdown, waits a bounded
 grace period, and escalates to SIGKILL only if the node does not exit.

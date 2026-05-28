@@ -311,4 +311,32 @@ mod tests {
         let err = generate_schedule(&manifest).expect_err("tiny rate should reject");
         assert!(matches!(err, ScheduleError::RateBelowResolution(_)));
     }
+
+    #[test]
+    fn restart_mixed_catalog_keeps_submit_before_restart_and_receipt_after() {
+        let manifest: SimulationManifest = serde_json::from_str(include_str!(
+            "../../../examples/sim/local-restart-mixed-artifact.json"
+        ))
+        .expect("catalog manifest should parse");
+        let events = generate_schedule(&manifest).expect("schedule should generate");
+
+        let mut has_submit_before_restart = false;
+        let mut has_receipt_after_restart = false;
+        for event in events {
+            let ScheduledSimulationEvent::ActorTick(tick) = event else {
+                continue;
+            };
+            let workload =
+                select_workload_for_tick(&manifest, &tick).expect("workload should select");
+            if tick.simulation_time_ms < 2_000 && workload == WorkloadKind::WalletSubmitSmoke {
+                has_submit_before_restart = true;
+            }
+            if tick.simulation_time_ms >= 2_000 && workload == WorkloadKind::ReceiptPoll {
+                has_receipt_after_restart = true;
+            }
+        }
+
+        assert!(has_submit_before_restart);
+        assert!(has_receipt_after_restart);
+    }
 }

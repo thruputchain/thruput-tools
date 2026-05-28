@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "kind": "groundhog-simulation",
+  "name": "local-restart-mixed-artifact",
+  "seed": "local-restart-mixed-artifact-v1",
+  "target": {
+    "provider": "local"
+  },
+  "loadShape": [
+    {
+      "duration": "5s",
+      "users": 1,
+      "ratePerUserHz": 1.0
+    }
+  ],
+  "workloads": [
+    {
+      "name": "chain-tip",
+      "weight": 1
+    },
+    {
+      "name": "wallet-submit-smoke",
+      "weight": 4
+    },
+    {
+      "name": "receipt-poll",
+      "weight": 4
+    }
+  ],
+  "chaos": [
+    {
+      "at": "2s",
+      "kind": "restart-target"
+    }
+  ],
+  "assertions": {
+    "maxErrorRate": 1.0,
+    "maxReceiptTimeoutRate": 1.0,
+    "maxChainStall": "10s",
+    "p99SubmitLatencyMs": 750
+  }
+}

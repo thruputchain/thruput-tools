@@ -484,6 +484,21 @@ chaos, deploy new contracts, or create remote infrastructure.
     and compare reuse.
   - [x] Slice D3: add tests, docs/examples, and verification.
   - [x] Final review gate: full Slice D code review plus test/artifact review.
+- [x] Add a local scenario exerciser catalog for putting the simulator through
+  short read/write/receipt/restart runs before longer scenario development.
+  - [x] Slice F1: write handoff design:
+    `docs/sim/specs/2026-05-28-scenario-exerciser-catalog-design.md`.
+  - [x] Review gate F1: scenario/catalog design review for scope, scenario
+    ladder, and artifact contract.
+  - [x] Slice F2: add runnable local scenario catalog examples.
+  - [x] Review gate F2: schedule and artifact review for deterministic
+    workload coverage.
+  - [x] Slice F3: add `scripts/smoke-sim-scenarios.sh` and ignored smoke
+    coverage for the fast catalog, optional soak, and existing-provider
+    baseline.
+  - [x] Slice F4: document the scenario ladder and tracker state.
+  - [x] Final review gate: full Slice F scenario catalog review plus
+    test/artifact review.
 
 ## Phase 3: Stateful Contract Workloads
 

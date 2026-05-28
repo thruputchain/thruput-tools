@@ -53,6 +53,9 @@ struct RunArgs {
     /// Override the hogd-dev binary path for local target runs.
     #[arg(long)]
     hogd_dev_binary: Option<PathBuf>,
+    /// Override the hogd-dev x23 intro protocol token for local target runs.
+    #[arg(long)]
+    hogd_protocol: Option<String>,
     /// Override the local target JSON-RPC port.
     #[arg(long)]
     port: Option<u16>,
@@ -91,6 +94,7 @@ impl From<RunArgs> for RunOptions {
             runtime_manifest: args.runtime_manifest,
             groundhog_binary: args.groundhog_binary,
             hogd_dev_binary: args.hogd_dev_binary,
+            hogd_protocol: args.hogd_protocol,
             port: args.port,
             startup_timeout_secs: args.startup_timeout_secs,
             out_dir: args.out_dir,
@@ -218,6 +222,8 @@ mod tests {
             "/tmp/groundhog",
             "--hogd-dev-binary",
             "/tmp/hogd-dev",
+            "--hogd-protocol",
+            "hogp/test",
             "--port",
             "0",
             "--startup-timeout-secs",
@@ -228,6 +234,7 @@ mod tests {
             Command::Run(args) => {
                 assert_eq!(args.groundhog_binary, Some(PathBuf::from("/tmp/groundhog")));
                 assert_eq!(args.hogd_dev_binary, Some(PathBuf::from("/tmp/hogd-dev")));
+                assert_eq!(args.hogd_protocol, Some("hogp/test".into()));
                 assert_eq!(args.port, Some(0));
                 assert_eq!(args.startup_timeout_secs, Some(5));
             }
