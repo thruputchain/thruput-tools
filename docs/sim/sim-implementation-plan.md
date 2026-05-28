@@ -4,8 +4,9 @@
 **Status:** Draft execution checklist. Phase 1 existing-target execution,
 reviewer hardening, live hogd-dev smoke, submit/receipt actor state,
 submit/receipt assertion wiring, numeric compare, the target-provider boundary,
-Phase 2 Slice A/B local-provider execution and restart-target chaos, and local
-provider log capture are complete.
+Phase 2 Slice A/B local-provider execution and restart-target chaos, local
+provider log capture, the local sweeper, the scenario catalog, and Phase 3
+Slice G contract deploy + view-call execution are complete.
 
 This plan pairs with [Simulation design](sim-design.md). The design doc owns
 the architectural boundary and long-term shape. This file is the implementation
@@ -502,10 +503,20 @@ chaos, deploy new contracts, or create remote infrastructure.
 
 ## Phase 3: Stateful Contract Workloads
 
-- [ ] Add deploy-at-start contract corpus support.
+- [x] Slice G1: write handoff design:
+  `docs/sim/specs/2026-05-28-contract-deploy-view-scenario-design.md`.
+- [x] Review gate G1: manifest/deploy/view design and artifact contract
+  review.
+- [x] Slice G2: add deploy-at-start contract artifact support and terminal
+  deployment result records.
+- [x] Slice G3: execute `view-call` workloads against deployed contracts.
+- [x] Slice G4: add Fibonacci example scenario and extend scenario smoke
+  artifact checks.
+- [ ] Final review gate: full Slice G contract scenario review plus gated
+  smoke verification.
 - [ ] Add storage-read workloads tied to deployed contracts.
 - [ ] Add events-query workloads tied to deployed contracts.
-- [ ] Add view-call workloads when the runtime manifest advertises view support.
+- [x] Add view-call workloads when the runtime manifest advertises view support.
 - [ ] Add richer actor state machines.
 - [ ] Add read-after-write scenario presets.
 - [ ] Add storage-heavy, event-heavy, calldata-heavy, and compute-heavy

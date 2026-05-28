@@ -22,6 +22,10 @@ pub struct SimulationManifest {
     #[serde(default)]
     pub workloads: Vec<WorkloadSpec>,
     #[serde(default)]
+    pub contract_artifacts: Vec<ContractArtifactSpec>,
+    #[serde(default)]
+    pub view_calls: Vec<ViewCallSpec>,
+    #[serde(default)]
     pub assertions: AssertionSpec,
     #[serde(default)]
     pub chaos: Vec<ChaosEventSpec>,
@@ -114,6 +118,24 @@ fn parse_duration_millis(value: &str) -> Result<u64, DurationParseError> {
 pub struct WorkloadSpec {
     pub name: WorkloadKind,
     pub weight: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractArtifactSpec {
+    pub name: String,
+    pub wasm: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewCallSpec {
+    pub name: String,
+    pub contract: String,
+    pub entrypoint: String,
+    pub calldata: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expect_return_data: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

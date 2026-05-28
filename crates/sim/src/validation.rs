@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use groundhog_rpc_api_types::runtime_manifest::RuntimeManifest;
 
 use crate::manifest::{
@@ -49,6 +51,7 @@ pub fn validate_manifest(manifest: &SimulationManifest) -> Result<(), Validation
             });
         }
     }
+    validate_contract_artifacts(manifest)?;
 
     let capabilities = TargetCapabilities::for_provider(manifest.target.provider);
     for event in &manifest.chaos {
@@ -64,6 +67,125 @@ pub fn validate_manifest(manifest: &SimulationManifest) -> Result<(), Validation
             .map_err(|source| ValidationError::InvalidChaosTime { source })?;
     }
 
+    Ok(())
+}
+
+fn validate_contract_artifacts(manifest: &SimulationManifest) -> Result<(), ValidationError> {
+    let mut artifact_names = HashSet::new();
+    for artifact in &manifest.contract_artifacts {
+        let name = artifact.name.trim();
+        if name.is_empty() {
+            return Err(ValidationError::EmptyContractArtifactName);
+        }
+        if name != artifact.name {
+            return Err(ValidationError::InvalidContractNameWhitespace {
+                field: "contractArtifacts[].name",
+                value: artifact.name.clone(),
+            });
+        }
+        if !artifact_names.insert(name.to_owned()) {
+            return Err(ValidationError::DuplicateContractArtifactName {
+                name: name.to_owned(),
+            });
+        }
+        if artifact.wasm.as_os_str().is_empty() {
+            return Err(ValidationError::EmptyContractArtifactPath {
+                name: name.to_owned(),
+            });
+        }
+    }
+
+    let mut view_names = HashSet::new();
+    for view in &manifest.view_calls {
+        let name = view.name.trim();
+        if name.is_empty() {
+            return Err(ValidationError::EmptyViewCallName);
+        }
+        if name != view.name {
+            return Err(ValidationError::InvalidContractNameWhitespace {
+                field: "viewCalls[].name",
+                value: view.name.clone(),
+            });
+        }
+        if view.contract.trim() != view.contract {
+            return Err(ValidationError::InvalidContractNameWhitespace {
+                field: "viewCalls[].contract",
+                value: view.contract.clone(),
+            });
+        }
+        if !view_names.insert(name.to_owned()) {
+            return Err(ValidationError::DuplicateViewCallName {
+                name: name.to_owned(),
+            });
+        }
+        if !artifact_names.contains(view.contract.trim()) {
+            return Err(ValidationError::UnknownViewCallContract {
+                view: name.to_owned(),
+                contract: view.contract.clone(),
+            });
+        }
+        validate_hex_len(&view.entrypoint, Some(8), "entrypoint", name)?;
+        validate_hex_len(&view.calldata, None, "calldata", name)?;
+        if let Some(expected) = &view.expect_return_data {
+            validate_hex_len(expected, None, "expectReturnData", name)?;
+        }
+    }
+
+    if manifest
+        .workloads
+        .iter()
+        .any(|workload| workload.name == WorkloadKind::ViewCall)
+    {
+        if manifest.contract_artifacts.is_empty() {
+            return Err(ValidationError::MissingContractArtifactsForViewCall);
+        }
+        if manifest.view_calls.is_empty() {
+            return Err(ValidationError::MissingViewCallsForViewCall);
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_hex_len(
+    value: &str,
+    expected_len: Option<usize>,
+    field: &'static str,
+    view: &str,
+) -> Result<(), ValidationError> {
+    let Some(stripped) = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+    else {
+        return Err(ValidationError::InvalidViewCallHex {
+            view: view.to_owned(),
+            field,
+            reason: "hex value must be 0x-prefixed".into(),
+        });
+    };
+    if stripped.len() % 2 != 0 {
+        return Err(ValidationError::InvalidViewCallHex {
+            view: view.to_owned(),
+            field,
+            reason: "hex value must contain an even number of digits".into(),
+        });
+    }
+    if let Err(error) = hex::decode(stripped) {
+        return Err(ValidationError::InvalidViewCallHex {
+            view: view.to_owned(),
+            field,
+            reason: error.to_string(),
+        });
+    }
+    if let Some(expected_len) = expected_len
+        && stripped.len() / 2 != expected_len
+    {
+        return Err(ValidationError::InvalidViewCallHex {
+            view: view.to_owned(),
+            field,
+            reason: format!("expected {expected_len} bytes"),
+        });
+    }
     Ok(())
 }
 
@@ -189,6 +311,30 @@ pub enum ValidationError {
     InvalidRate { index: usize },
     #[error("workload {workload:?} must have a nonzero weight")]
     ZeroWeight { workload: WorkloadKind },
+    #[error("contract artifact name must not be empty")]
+    EmptyContractArtifactName,
+    #[error("contract artifact {name} wasm path must not be empty")]
+    EmptyContractArtifactPath { name: String },
+    #[error("field {field} must not contain leading or trailing whitespace: `{value}`")]
+    InvalidContractNameWhitespace { field: &'static str, value: String },
+    #[error("duplicate contract artifact name `{name}`")]
+    DuplicateContractArtifactName { name: String },
+    #[error("view call name must not be empty")]
+    EmptyViewCallName,
+    #[error("duplicate view call name `{name}`")]
+    DuplicateViewCallName { name: String },
+    #[error("view call `{view}` references unknown contract artifact `{contract}`")]
+    UnknownViewCallContract { view: String, contract: String },
+    #[error("view call `{view}` field `{field}` is invalid: {reason}")]
+    InvalidViewCallHex {
+        view: String,
+        field: &'static str,
+        reason: String,
+    },
+    #[error("view-call workload requires at least one contract artifact")]
+    MissingContractArtifactsForViewCall,
+    #[error("view-call workload requires at least one viewCalls entry")]
+    MissingViewCallsForViewCall,
     #[error("target provider {provider:?} does not support chaos event {kind}")]
     UnsupportedChaos {
         provider: TargetProviderKind,
@@ -273,6 +419,94 @@ mod tests {
                 provider: TargetProviderKind::RemoteSsh,
                 ..
             }
+        ));
+    }
+
+    #[test]
+    fn validates_view_call_contract_references_and_hex() {
+        let mut manifest = basic_manifest();
+        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
+            name: "fibonacci".into(),
+            wasm: "fibonacci.wasm".into(),
+        }];
+        manifest.view_calls = vec![crate::manifest::ViewCallSpec {
+            name: "fib-10".into(),
+            contract: "fibonacci".into(),
+            entrypoint: "0x1111111111111111".into(),
+            calldata: "0x0a".into(),
+            expect_return_data: Some("0x37".into()),
+        }];
+        manifest.workloads = vec![WorkloadSpec {
+            name: WorkloadKind::ViewCall,
+            weight: 1,
+        }];
+
+        validate_manifest(&manifest).expect("view-call manifest should validate");
+    }
+
+    #[test]
+    fn rejects_view_call_without_matching_contract_artifact() {
+        let mut manifest = basic_manifest();
+        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
+            name: "fibonacci".into(),
+            wasm: "fibonacci.wasm".into(),
+        }];
+        manifest.view_calls = vec![crate::manifest::ViewCallSpec {
+            name: "fib-10".into(),
+            contract: "missing".into(),
+            entrypoint: "0x1111111111111111".into(),
+            calldata: "0x0a".into(),
+            expect_return_data: None,
+        }];
+
+        let err = validate_manifest(&manifest).expect_err("unknown contract should reject");
+
+        assert!(matches!(
+            err,
+            ValidationError::UnknownViewCallContract { .. }
+        ));
+    }
+
+    #[test]
+    fn rejects_view_call_entrypoint_that_is_not_eight_bytes() {
+        let mut manifest = basic_manifest();
+        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
+            name: "fibonacci".into(),
+            wasm: "fibonacci.wasm".into(),
+        }];
+        manifest.view_calls = vec![crate::manifest::ViewCallSpec {
+            name: "fib-10".into(),
+            contract: "fibonacci".into(),
+            entrypoint: "0x1111".into(),
+            calldata: "0x0a".into(),
+            expect_return_data: None,
+        }];
+
+        let err = validate_manifest(&manifest).expect_err("short entrypoint should reject");
+
+        assert!(matches!(err, ValidationError::InvalidViewCallHex { .. }));
+    }
+
+    #[test]
+    fn rejects_view_call_contract_reference_whitespace() {
+        let mut manifest = basic_manifest();
+        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
+            name: "fibonacci".into(),
+            wasm: "fibonacci.wasm".into(),
+        }];
+        manifest.view_calls = vec![crate::manifest::ViewCallSpec {
+            name: "fib-10".into(),
+            contract: " fibonacci ".into(),
+            entrypoint: "0x1111111111111111".into(),
+            calldata: "0x0a".into(),
+            expect_return_data: None,
+        }];
+
+        let err = validate_manifest(&manifest).expect_err("padded reference should reject");
+
+        assert!(matches!(
+            err,
+            ValidationError::InvalidContractNameWhitespace { .. }
         ));
     }
 
@@ -392,6 +626,8 @@ mod tests {
                 name: WorkloadKind::ChainTip,
                 weight: 1,
             }],
+            contract_artifacts: Vec::new(),
+            view_calls: Vec::new(),
             assertions: crate::manifest::AssertionSpec::default(),
             chaos: Vec::new(),
             baseline: None,

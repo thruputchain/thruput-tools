@@ -882,6 +882,35 @@ mod tests {
         assert!(diff.chain_progress_delta.is_none());
     }
 
+    #[test]
+    fn compare_ignores_contract_record_differences_for_now() {
+        let a = result_from_json(minimal_result_json(SIM_RESULT_SCHEMA_VERSION));
+        let mut b_json = minimal_result_json(SIM_RESULT_SCHEMA_VERSION);
+        b_json["contracts"] = json!([{
+            "name": "fibonacci",
+            "status": "completed",
+            "wasmPath": "/tmp/fibonacci.wasm",
+            "wasmSha256": format!("0x{}", "11".repeat(32)),
+            "contractHash": format!("0x{}", "22".repeat(32)),
+            "nonce": "123",
+            "deployAddressNonce": format!("0x{}", "33".repeat(32)),
+            "txHash": format!("0x{}", "44".repeat(32)),
+            "address": format!("0x{}", "55".repeat(32)),
+            "addressSource": "derived",
+            "height": 42
+        }]);
+        let b = result_from_json(b_json);
+
+        let diff = ResultDiff::from_results(&a, &b);
+
+        assert!(diff.same_config);
+        assert!(diff.workload_count_deltas.is_empty());
+        assert!(diff.workload_error_deltas.is_empty());
+        assert!(diff.latency_deltas_ms.is_empty());
+        assert!(diff.assertion_transitions.is_empty());
+        assert!(diff.chain_progress_delta.is_none());
+    }
+
     fn result_from_json(value: serde_json::Value) -> SimResult {
         serde_json::from_value(value).expect("result fixture should parse")
     }

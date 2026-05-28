@@ -5,15 +5,18 @@ use std::time::{Duration, Instant};
 
 use groundhog_rpc_api_types::{
     block::ChainTip,
+    hex::{Hex0x, HexBytes},
     receipt::{ExecStatus, TransactionReceipt},
     runtime_manifest::RuntimeManifest,
     transaction::TxHash,
+    view::{RootInvocationOutput, ViewRequest, ViewResponse},
 };
 use groundhog_rpc_client::GroundhogApiClient;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::{Id as TaskId, JoinError, JoinSet};
 
 use crate::actor::{ActorState, DrainedPendingReceipt, ReceiptPollTarget};
+use crate::contract::PreparedViewCall;
 use crate::error::SimError;
 use crate::event::{ChaosTransitionEvent, EventWriter, ResultEvent, WorkloadEvent};
 use crate::manifest::{ChaosEventKind, ChaosEventSpec, SimulationManifest, WorkloadKind};
@@ -49,6 +52,12 @@ pub trait SimRpcClient {
         _tx_hash: TxHash,
     ) -> impl Future<Output = Result<Option<TransactionReceipt>, String>> + Send {
         async { Err("transaction receipt RPC is not implemented by this client".into()) }
+    }
+    fn view(
+        &self,
+        _request: ViewRequest,
+    ) -> impl Future<Output = Result<ViewResponse, String>> + Send {
+        async { Err("view RPC is not implemented by this client".into()) }
     }
 }
 
@@ -88,6 +97,18 @@ where
                 .map_err(|error| error.to_string())
         }
     }
+
+    #[allow(clippy::manual_async_fn)]
+    fn view(
+        &self,
+        request: ViewRequest,
+    ) -> impl Future<Output = Result<ViewResponse, String>> + Send {
+        async move {
+            GroundhogApiClient::view(self, request)
+                .await
+                .map_err(|error| error.to_string())
+        }
+    }
 }
 
 /// Inputs for executing a generated schedule.
@@ -99,6 +120,7 @@ pub struct ScheduleExecution<'a> {
     pub actor_states: &'a mut [ActorState],
     pub event_writer: &'a mut EventWriter,
     pub metrics: &'a mut RunMetricsBuilder,
+    pub view_calls: &'a [PreparedViewCall],
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -112,6 +134,11 @@ where
     C: SimRpcClient + Clone + Send + Sync + 'static,
 {
     let mut chaos_events = Vec::new();
+    let view_calls = Vec::new();
+    let input = ScheduleExecution {
+        view_calls: &view_calls,
+        ..input
+    };
     run_schedule_with_chaos(client, input, None, &mut chaos_events)
         .await
         .map(|_| ())
@@ -136,6 +163,7 @@ where
         actor_states,
         event_writer,
         metrics,
+        view_calls,
     } = input;
     let wallet_entrypoint = runtime_dev_wallet_action_entrypoint(runtime_manifest)?;
     let run_start = Instant::now();
@@ -214,6 +242,7 @@ where
                         .ok_or(SimError::Executor("actor state missing".into()))?,
                     workload,
                     wallet_entrypoint,
+                    view_calls,
                 )?;
                 dispatch_workload(
                     client.clone(),
@@ -408,6 +437,7 @@ fn prepare_workload(
     actor: &mut ActorState,
     workload: WorkloadKind,
     wallet_entrypoint: groundhog_xdr::contract::ContractEntrypointID,
+    view_calls: &[PreparedViewCall],
 ) -> Result<PreparedWorkload, SimError> {
     match workload {
         WorkloadKind::ChainTip => Ok(PreparedWorkload::ChainTip),
@@ -417,6 +447,15 @@ fn prepare_workload(
         WorkloadKind::ReceiptPoll => Ok(PreparedWorkload::ReceiptPoll(PreparedReceiptPoll {
             target: actor.receipt_poll_target(),
         })),
+        WorkloadKind::ViewCall => {
+            let view = view_calls.first().ok_or_else(|| {
+                SimError::Executor("view-call workload requires at least one prepared view".into())
+            })?;
+            Ok(PreparedWorkload::ViewCall(PreparedViewWorkload {
+                view: view.clone(),
+                caller: actor.wallet_address,
+            }))
+        }
         _ => Err(SimError::UnsupportedRuntimeWorkloads(workload_name(
             workload,
         ))),
@@ -448,6 +487,7 @@ fn dispatch_workload<C>(
                 execute_wallet_submit_smoke(client, &tick, tx).await
             }
             PreparedWorkload::ReceiptPoll(poll) => execute_receipt_poll(client, &tick, poll).await,
+            PreparedWorkload::ViewCall(view) => execute_view_call(client, &tick, view).await,
         }
     });
     task_contexts.insert(abort.id(), context);
@@ -582,6 +622,10 @@ fn backpressure_completion(
                 receipt_status: None,
                 receipt_status_detail: None,
                 submit_to_receipt_latency_ms: None,
+                view_result: None,
+                view_return_data: None,
+                view_abort_data: None,
+                view_event_count: None,
                 error_class: Some("simulator-backpressure".into()),
                 error: Some(format!("{scope} in-flight limit reached: {error}")),
             },
@@ -878,6 +922,10 @@ fn target_restarted_workload_completion(
                 receipt_status: None,
                 receipt_status_detail: None,
                 submit_to_receipt_latency_ms: None,
+                view_result: None,
+                view_return_data: None,
+                view_abort_data: None,
+                view_event_count: None,
                 error_class: Some("target-restarted".into()),
                 error: Some(format!(
                     "workload aborted at simulation time {simulation_time_ms} because target restarted"
@@ -919,6 +967,10 @@ fn chaos_failed_workload_completion(
                 receipt_status: None,
                 receipt_status_detail: None,
                 submit_to_receipt_latency_ms: None,
+                view_result: None,
+                view_return_data: None,
+                view_abort_data: None,
+                view_event_count: None,
                 error_class: Some("chaos-failed".into()),
                 error: Some(format!(
                     "workload aborted at simulation time {simulation_time_ms} because chaos failed"
@@ -963,6 +1015,10 @@ fn target_restarted_receipt_completion(
                 submit_to_receipt_latency_ms: Some(duration_ms(
                     Instant::now().saturating_duration_since(receipt.submit_completed_at),
                 )),
+                view_result: None,
+                view_return_data: None,
+                view_abort_data: None,
+                view_event_count: None,
                 error_class: Some("target-restarted".into()),
                 error: Some("pending receipt lost because target restarted".into()),
             },
@@ -1085,6 +1141,10 @@ where
                         receipt_status: None,
                         receipt_status_detail: None,
                         submit_to_receipt_latency_ms: None,
+                        view_result: None,
+                        view_return_data: None,
+                        view_abort_data: None,
+                        view_event_count: None,
                         error_class: None,
                         error: None,
                     },
@@ -1118,6 +1178,10 @@ where
                     receipt_status: None,
                     receipt_status_detail: None,
                     submit_to_receipt_latency_ms: None,
+                    view_result: None,
+                    view_return_data: None,
+                    view_abort_data: None,
+                    view_event_count: None,
                     error_class: Some("rpc-error".into()),
                     error: Some(error),
                 },
@@ -1178,6 +1242,10 @@ where
                         receipt_status: None,
                         receipt_status_detail: None,
                         submit_to_receipt_latency_ms: None,
+                        view_result: None,
+                        view_return_data: None,
+                        view_abort_data: None,
+                        view_event_count: None,
                         error_class: None,
                         error: None,
                     },
@@ -1211,6 +1279,10 @@ where
                     receipt_status: None,
                     receipt_status_detail: None,
                     submit_to_receipt_latency_ms: None,
+                    view_result: None,
+                    view_return_data: None,
+                    view_abort_data: None,
+                    view_event_count: None,
                     error_class: Some("rpc-error".into()),
                     error: Some(error),
                 },
@@ -1371,6 +1443,190 @@ fn receipt_poll_failed(
     }
 }
 
+async fn execute_view_call<C>(
+    client: C,
+    tick: &ScheduledActorTick,
+    prepared: PreparedViewWorkload,
+) -> Result<WorkloadCompletion, SimError>
+where
+    C: SimRpcClient + Clone + Send + Sync + 'static,
+{
+    let started_at_unix_ms = unix_ms()?.to_string();
+    let started = Instant::now();
+    let request = ViewRequest {
+        contract: Hex0x(prepared.view.contract),
+        entrypoint: HexBytes(prepared.view.entrypoint.clone()),
+        calldata: HexBytes(prepared.view.calldata.clone()),
+        caller: Some(Hex0x(prepared.caller)),
+    };
+    let response = client.view(request).await;
+    let latency_ms = duration_ms(started.elapsed());
+    let completed_at_unix_ms = unix_ms()?.to_string();
+
+    match response {
+        Ok(response) => Ok(view_response_completion(
+            tick,
+            &prepared.view,
+            response,
+            started_at_unix_ms,
+            completed_at_unix_ms,
+            latency_ms,
+        )),
+        Err(error) => Ok(WorkloadCompletion {
+            workload: WorkloadKind::ViewCall,
+            latency_ms,
+            error_class: Some("view-rpc-error".into()),
+            chain_tip: None,
+            event: ResultEvent::WorkloadFailed {
+                event: view_workload_event(
+                    tick,
+                    started_at_unix_ms,
+                    completed_at_unix_ms,
+                    latency_ms,
+                )
+                .with_error("view-rpc-error", error),
+            },
+            skipped: false,
+            submitted_transaction: None,
+            observed_receipt: None,
+            receipt_poll: None,
+            submit_to_receipt_latency_ms: None,
+        }),
+    }
+}
+
+fn view_response_completion(
+    tick: &ScheduledActorTick,
+    view: &PreparedViewCall,
+    response: ViewResponse,
+    started_at_unix_ms: String,
+    completed_at_unix_ms: String,
+    latency_ms: u64,
+) -> WorkloadCompletion {
+    let mut event = view_workload_event(tick, started_at_unix_ms, completed_at_unix_ms, latency_ms);
+    event.chain_height = Some(*response.height);
+    event.view_event_count = Some(response.events.len() as u64);
+
+    match response.output {
+        RootInvocationOutput::Return { return_data } => {
+            let actual = format!("0x{}", hex::encode(&return_data.0));
+            event.view_result = Some("return".into());
+            event.view_return_data = Some(actual.clone());
+            if let Some(expected) = &view.expect_return_data
+                && expected.as_slice() != return_data.0.as_slice()
+            {
+                let expected = format!("0x{}", hex::encode(expected));
+                let error = format!(
+                    "view call `{}` on `{}` returned {actual}, expected {expected}",
+                    view.name, view.contract_name
+                );
+                return view_failure_completion(event, latency_ms, "view-return-mismatch", error);
+            }
+            view_success_completion(event, latency_ms)
+        }
+        RootInvocationOutput::Abort { abort_data } => {
+            event.view_result = Some("abort".into());
+            event.view_abort_data = Some(format!("0x{}", hex::encode(abort_data.0)));
+            view_failure_completion(
+                event,
+                latency_ms,
+                "view-aborted",
+                format!("view call `{}` aborted", view.name),
+            )
+        }
+        RootInvocationOutput::Fault => {
+            event.view_result = Some("fault".into());
+            view_failure_completion(
+                event,
+                latency_ms,
+                "view-faulted",
+                format!("view call `{}` faulted", view.name),
+            )
+        }
+        _ => {
+            event.view_result = Some("fault".into());
+            view_failure_completion(
+                event,
+                latency_ms,
+                "view-faulted",
+                format!(
+                    "view call `{}` returned an unknown output variant",
+                    view.name
+                ),
+            )
+        }
+    }
+}
+
+fn view_success_completion(event: WorkloadEvent, latency_ms: u64) -> WorkloadCompletion {
+    WorkloadCompletion {
+        workload: WorkloadKind::ViewCall,
+        latency_ms,
+        error_class: None,
+        chain_tip: None,
+        event: ResultEvent::WorkloadCompleted { event },
+        skipped: false,
+        submitted_transaction: None,
+        observed_receipt: None,
+        receipt_poll: None,
+        submit_to_receipt_latency_ms: None,
+    }
+}
+
+fn view_failure_completion(
+    event: WorkloadEvent,
+    latency_ms: u64,
+    class: impl Into<String>,
+    error: impl Into<String>,
+) -> WorkloadCompletion {
+    let class = class.into();
+    WorkloadCompletion {
+        workload: WorkloadKind::ViewCall,
+        latency_ms,
+        error_class: Some(class.clone()),
+        chain_tip: None,
+        event: ResultEvent::WorkloadFailed {
+            event: event.with_error(class, error),
+        },
+        skipped: false,
+        submitted_transaction: None,
+        observed_receipt: None,
+        receipt_poll: None,
+        submit_to_receipt_latency_ms: None,
+    }
+}
+
+fn view_workload_event(
+    tick: &ScheduledActorTick,
+    started_at_unix_ms: String,
+    completed_at_unix_ms: String,
+    latency_ms: u64,
+) -> WorkloadEvent {
+    WorkloadEvent {
+        actor_id: tick.actor_id,
+        workload: WorkloadKind::ViewCall,
+        scheduled_time_ms: tick.simulation_time_ms,
+        started_at_unix_ms,
+        completed_at_unix_ms,
+        latency_ms,
+        rpc_method: "groundhog_view",
+        chain_height: None,
+        chain_block_hash: None,
+        tx_hash: None,
+        tx_nonce: None,
+        receipt_present: None,
+        receipt_status: None,
+        receipt_status_detail: None,
+        submit_to_receipt_latency_ms: None,
+        view_result: None,
+        view_return_data: None,
+        view_abort_data: None,
+        view_event_count: None,
+        error_class: None,
+        error: None,
+    }
+}
+
 fn receipt_poll_event(
     tick: &ScheduledActorTick,
     times: &ReceiptPollTimes,
@@ -1392,6 +1648,10 @@ fn receipt_poll_event(
         receipt_status: None,
         receipt_status_detail: None,
         submit_to_receipt_latency_ms: None,
+        view_result: None,
+        view_return_data: None,
+        view_abort_data: None,
+        view_event_count: None,
         error_class: None,
         error: None,
     }
@@ -1511,11 +1771,18 @@ enum PreparedWorkload {
     ChainTip,
     WalletSubmitSmoke(BuiltSubmitTransaction),
     ReceiptPoll(PreparedReceiptPoll),
+    ViewCall(PreparedViewWorkload),
 }
 
 #[derive(Debug, Clone, Copy)]
 struct PreparedReceiptPoll {
     target: Option<ReceiptPollTarget>,
+}
+
+#[derive(Debug, Clone)]
+struct PreparedViewWorkload {
+    view: PreparedViewCall,
+    caller: groundhog_xdr::types::ContractAddress,
 }
 
 struct ReceiptPollTimes {
@@ -1589,6 +1856,7 @@ mod tests {
         hex::Hex0x,
         receipt::{ExecStatus, TransactionReceipt},
         runtime_manifest::RuntimeManifest,
+        view::{RootInvocationOutput, ViewResponse},
     };
     use groundhog_signing::derive_dev_account_signer;
     use groundhog_xdr::types::{ContractAddress, SHA256Hash};
@@ -1646,6 +1914,11 @@ mod tests {
     #[derive(Clone)]
     struct SlowReceiptClient {
         requested: Arc<Mutex<Vec<TxHash>>>,
+    }
+
+    #[derive(Clone)]
+    struct ViewClient {
+        response: ViewResponse,
     }
 
     struct SuccessfulChaosController;
@@ -1708,6 +1981,30 @@ mod tests {
             _tx_hex: String,
         ) -> impl Future<Output = Result<TxHash, String>> + Send {
             async { Ok(TxHash(Hex0x(SHA256Hash::from([0x55; 32])))) }
+        }
+    }
+
+    impl SimRpcClient for ViewClient {
+        #[allow(clippy::manual_async_fn)]
+        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, String>> + Send {
+            async { panic!("chain_tip should not be called") }
+        }
+
+        #[allow(clippy::manual_async_fn)]
+        fn send_raw_transaction(
+            &self,
+            _tx_hex: String,
+        ) -> impl Future<Output = Result<TxHash, String>> + Send {
+            async { panic!("send_raw_transaction should not be called") }
+        }
+
+        #[allow(clippy::manual_async_fn)]
+        fn view(
+            &self,
+            _request: ViewRequest,
+        ) -> impl Future<Output = Result<ViewResponse, String>> + Send {
+            let response = self.response.clone();
+            async move { Ok(response) }
         }
     }
 
@@ -1938,6 +2235,7 @@ mod tests {
                 actor_states: &mut actors,
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
+                view_calls: &[],
             },
         )
         .await
@@ -1995,6 +2293,7 @@ mod tests {
                 actor_states: &mut actors,
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
+                view_calls: &[],
             },
         )
         .await
@@ -2046,6 +2345,7 @@ mod tests {
                 actor_states: &mut actors,
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
+                view_calls: &[],
             },
         )
         .await
@@ -2104,6 +2404,7 @@ mod tests {
                 actor_states: &mut actors,
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
+                view_calls: &[],
             },
         )
         .await
@@ -2122,6 +2423,82 @@ mod tests {
             metrics.workload_counts()[&WorkloadKind::WalletSubmitSmoke].failed,
             1
         );
+    }
+
+    #[tokio::test]
+    async fn view_call_records_return_fields() {
+        let tick = ScheduledActorTick {
+            phase_index: 0,
+            actor_id: 0,
+            actor_sequence: 0,
+            simulation_time_ms: 25,
+        };
+        let completion = execute_view_call(
+            ViewClient {
+                response: ViewResponse {
+                    output: RootInvocationOutput::Return {
+                        return_data: HexBytes(vec![0x37]),
+                    },
+                    events: Vec::new(),
+                    height: BlockHeight::from(44),
+                },
+            },
+            &tick,
+            prepared_view(Some(vec![0x37])),
+        )
+        .await
+        .expect("view call should complete");
+
+        assert_eq!(completion.error_class, None);
+        match completion.event {
+            ResultEvent::WorkloadCompleted { event } => {
+                assert_eq!(event.workload, WorkloadKind::ViewCall);
+                assert_eq!(event.rpc_method, "groundhog_view");
+                assert_eq!(event.chain_height, Some(44));
+                assert_eq!(event.view_result.as_deref(), Some("return"));
+                assert_eq!(event.view_return_data.as_deref(), Some("0x37"));
+                assert_eq!(event.view_event_count, Some(0));
+            }
+            other => panic!("expected completed event, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn view_call_return_mismatch_is_failed_workload() {
+        let tick = ScheduledActorTick {
+            phase_index: 0,
+            actor_id: 0,
+            actor_sequence: 0,
+            simulation_time_ms: 25,
+        };
+        let completion = execute_view_call(
+            ViewClient {
+                response: ViewResponse {
+                    output: RootInvocationOutput::Return {
+                        return_data: HexBytes(vec![0x37]),
+                    },
+                    events: Vec::new(),
+                    height: BlockHeight::from(44),
+                },
+            },
+            &tick,
+            prepared_view(Some(vec![0x38])),
+        )
+        .await
+        .expect("view call should complete");
+
+        assert_eq!(
+            completion.error_class.as_deref(),
+            Some("view-return-mismatch")
+        );
+        match completion.event {
+            ResultEvent::WorkloadFailed { event } => {
+                assert_eq!(event.view_result.as_deref(), Some("return"));
+                assert_eq!(event.view_return_data.as_deref(), Some("0x37"));
+                assert_eq!(event.error_class.as_deref(), Some("view-return-mismatch"));
+            }
+            other => panic!("expected failed event, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -2155,6 +2532,7 @@ mod tests {
                 actor_states: &mut actors,
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
+                view_calls: &[],
             },
         )
         .await
@@ -2218,6 +2596,7 @@ mod tests {
                 actor_states: &mut actors,
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
+                view_calls: &[],
             },
         )
         .await
@@ -2294,6 +2673,7 @@ mod tests {
                 actor_states: &mut actors,
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
+                view_calls: &[],
             },
         )
         .await
@@ -2371,6 +2751,7 @@ mod tests {
                 actor_states: &mut actors,
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
+                view_calls: &[],
             },
         )
         .await
@@ -2416,6 +2797,7 @@ mod tests {
                 actor_states: &mut actors,
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
+                view_calls: &[],
             },
         )
         .await
@@ -2565,6 +2947,7 @@ mod tests {
                 actor_states: &mut actors,
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
+                view_calls: &[],
             },
             Some(&SuccessfulChaosController),
             &mut chaos_events,
@@ -2637,6 +3020,7 @@ mod tests {
                 actor_states: &mut actors,
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
+                view_calls: &[],
             },
             Some(&SuccessfulChaosController),
             &mut chaos_events,
@@ -2690,6 +3074,7 @@ mod tests {
                 actor_states: &mut actors,
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
+                view_calls: &[],
             },
             Some(&SuccessfulChaosController),
             &mut chaos_events,
@@ -2746,6 +3131,7 @@ mod tests {
                 actor_states: &mut actors,
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
+                view_calls: &[],
             },
             Some(&SuccessfulChaosController),
             &mut chaos_events,
@@ -2795,6 +3181,7 @@ mod tests {
                 actor_states: &mut actors,
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
+                view_calls: &[],
             },
             Some(&FailingChaosController),
             &mut chaos_events,
@@ -2921,6 +3308,20 @@ mod tests {
             },
             NonceNamespace::new(1).expect("namespace should fit"),
         )]
+    }
+
+    fn prepared_view(expect_return_data: Option<Vec<u8>>) -> PreparedViewWorkload {
+        PreparedViewWorkload {
+            view: PreparedViewCall {
+                name: "fib-10".into(),
+                contract_name: "fibonacci".into(),
+                contract: ContractAddress::from([0x88; 32]),
+                entrypoint: vec![0x11; 8],
+                calldata: vec![0x0a],
+                expect_return_data,
+            },
+            caller: ContractAddress::from([0x66; 32]),
+        }
     }
 
     fn runtime_manifest() -> RuntimeManifest {

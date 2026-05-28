@@ -7,6 +7,7 @@ use groundhog_rpc_client::HttpClientBuilder;
 use crate::actor::{ActorState, build_actor_states};
 use crate::assertions::{determine_outcome, evaluate_assertions};
 use crate::compare::{ResultDiff, load_result};
+use crate::contract::{ContractSetup, deploy_manifest_contracts};
 use crate::error::SimError;
 use crate::event::{EventWriter, ResultEvent};
 use crate::executor::{
@@ -44,6 +45,7 @@ pub struct RunOptions {
     pub hogd_protocol: Option<String>,
     pub port: Option<u16>,
     pub startup_timeout_secs: Option<u64>,
+    pub contract_artifact_root: Option<PathBuf>,
     pub out_dir: Option<PathBuf>,
     pub seed: Option<String>,
     pub nonce_namespace: Option<u64>,
@@ -71,6 +73,7 @@ impl From<ExistingRunOptions> for RunOptions {
             hogd_protocol: None,
             port: None,
             startup_timeout_secs: None,
+            contract_artifact_root: None,
             out_dir: args.out_dir,
             seed: args.seed,
             nonce_namespace: args.nonce_namespace,
@@ -89,6 +92,7 @@ pub async fn run_target(args: RunOptions) -> Result<RunSummary, SimError> {
         hogd_protocol,
         port,
         startup_timeout_secs,
+        contract_artifact_root,
         out_dir,
         seed,
         nonce_namespace,
@@ -118,6 +122,7 @@ pub async fn run_target(args: RunOptions) -> Result<RunSummary, SimError> {
                 overrides,
                 out_dir,
                 nonce_namespace,
+                contract_artifact_root.as_deref(),
             )
             .await
         }
@@ -130,6 +135,7 @@ pub async fn run_target(args: RunOptions) -> Result<RunSummary, SimError> {
                 overrides,
                 out_dir,
                 nonce_namespace,
+                contract_artifact_root.as_deref(),
             )
             .await
         }
@@ -177,6 +183,7 @@ pub async fn run_existing_target(args: ExistingRunOptions) -> Result<RunSummary,
         },
         out_dir,
         nonce_namespace,
+        None,
     )
     .await
 }
@@ -188,6 +195,7 @@ async fn run_with_provider(
     overrides: TargetOverrides,
     out_dir: Option<PathBuf>,
     nonce_namespace: Option<u64>,
+    contract_artifact_root: Option<&Path>,
 ) -> Result<RunSummary, SimError> {
     let run_id = run_id()?;
     let out_dir = out_dir.unwrap_or_else(|| default_run_dir(&run_id, &loaded_sim.manifest.name));
@@ -206,6 +214,7 @@ async fn run_with_provider(
         out_dir,
         run_id,
         nonce_namespace,
+        contract_artifact_root,
     )
     .await;
     let cleanup_result = provider.cleanup(&target).await;
@@ -223,7 +232,7 @@ fn finish_target_run<T>(
     }
 }
 
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 async fn run_resolved_target(
     mut loaded_sim: LoadedSimulationManifest,
     scenario_path: &Path,
@@ -232,6 +241,7 @@ async fn run_resolved_target(
     out_dir: PathBuf,
     run_id: String,
     nonce_namespace: Option<u64>,
+    contract_artifact_root: Option<&Path>,
 ) -> Result<RunSummary, SimError> {
     loaded_sim.manifest.target.rpc_url = Some(target.rpc_url.clone());
     loaded_sim.manifest.target.runtime_manifest = Some(target.runtime_manifest.clone());
@@ -279,6 +289,15 @@ async fn run_resolved_target(
     let client = HttpClientBuilder::default()
         .build(target.rpc_url.clone())
         .map_err(|error| SimError::RpcClient(error.to_string()))?;
+    let contract_setup = deploy_manifest_contracts(
+        client.clone(),
+        &loaded_sim.manifest,
+        scenario_path,
+        contract_artifact_root,
+        &mut actor_states,
+        &mut event_writer,
+    )
+    .await?;
     let scheduled_workloads = schedule
         .iter()
         .filter(|event| matches!(event, ScheduledSimulationEvent::ActorTick(_)))
@@ -298,6 +317,7 @@ async fn run_resolved_target(
             schedule: &schedule,
             phase_starts: &phase_starts,
             event_writer: &mut event_writer,
+            contract_setup,
         },
     )
     .await?;
@@ -332,9 +352,11 @@ pub struct LoadedExecution<'a> {
     pub schedule: &'a [ScheduledSimulationEvent],
     pub phase_starts: &'a [PhaseStart],
     pub event_writer: &'a mut EventWriter,
+    pub contract_setup: ContractSetup,
 }
 
 /// Execute a loaded simulation against a supplied client.
+#[allow(clippy::too_many_lines)]
 pub async fn execute_loaded_simulation<C>(
     client: C,
     input: LoadedExecution<'_>,
@@ -344,21 +366,28 @@ where
 {
     let mut metrics = RunMetricsBuilder::default();
     let mut chaos_events = Vec::new();
-    let schedule_report = run_schedule_with_chaos(
-        client.clone(),
-        ScheduleExecution {
-            manifest: &input.loaded_sim.manifest,
-            runtime_manifest: input.runtime_manifest,
-            schedule: input.schedule,
-            phase_starts: input.phase_starts,
-            actor_states: input.actor_states,
-            event_writer: &mut *input.event_writer,
-            metrics: &mut metrics,
-        },
-        input.chaos_controller,
-        &mut chaos_events,
-    )
-    .await?;
+    let schedule_report = if input.contract_setup.failed {
+        crate::executor::ScheduleRunReport {
+            chaos_failed: false,
+        }
+    } else {
+        run_schedule_with_chaos(
+            client.clone(),
+            ScheduleExecution {
+                manifest: &input.loaded_sim.manifest,
+                runtime_manifest: input.runtime_manifest,
+                schedule: input.schedule,
+                phase_starts: input.phase_starts,
+                actor_states: input.actor_states,
+                event_writer: &mut *input.event_writer,
+                metrics: &mut metrics,
+                view_calls: &input.contract_setup.view_calls,
+            },
+            input.chaos_controller,
+            &mut chaos_events,
+        )
+        .await?
+    };
     let shutdown_simulation_time_ms = input
         .schedule
         .iter()
@@ -413,6 +442,9 @@ where
         })
         .await?;
     let mut outcome = determine_outcome(&assertion_results, failed_workloads);
+    if input.contract_setup.failed {
+        outcome = SimRunOutcome::Failed;
+    }
     if schedule_report.chaos_failed {
         outcome = SimRunOutcome::Failed;
     }
@@ -440,6 +472,7 @@ where
         metric_availability,
         assertion_results,
         chaos_events,
+        contracts: input.contract_setup.records,
     })
 }
 
@@ -541,6 +574,7 @@ struct BuildResultInput<'a> {
     metric_availability: SimMetricAvailability,
     assertion_results: Vec<AssertionResult>,
     chaos_events: Vec<crate::result::ChaosEventRecord>,
+    contracts: Vec<crate::result::ContractDeploymentRecord>,
 }
 
 fn build_result(input: BuildResultInput<'_>) -> Result<SimResult, SimError> {
@@ -578,6 +612,7 @@ fn build_result(input: BuildResultInput<'_>) -> Result<SimResult, SimError> {
         chain_progress: input.finished_metrics.chain_progress,
         assertion_results: input.assertion_results,
         chaos_events: input.chaos_events,
+        contracts: input.contracts,
         baseline_diff: None,
     })
 }
@@ -592,6 +627,7 @@ fn validate_executable_workloads(manifest: &SimulationManifest) -> Result<(), Si
                 WorkloadKind::ChainTip
                     | WorkloadKind::WalletSubmitSmoke
                     | WorkloadKind::ReceiptPoll
+                    | WorkloadKind::ViewCall
             )
         })
         .map(|workload| workload_name(workload.name))
@@ -693,6 +729,7 @@ mod tests {
                 schedule: &schedule,
                 phase_starts: &starts,
                 event_writer: &mut event_writer,
+                contract_setup: empty_contract_setup(),
             },
         )
         .await
@@ -765,6 +802,7 @@ mod tests {
                 schedule: &schedule,
                 phase_starts: &starts,
                 event_writer: &mut event_writer,
+                contract_setup: empty_contract_setup(),
             },
         )
         .await
@@ -899,6 +937,7 @@ mod tests {
             hogd_protocol: None,
             port: None,
             startup_timeout_secs: None,
+            contract_artifact_root: None,
             out_dir: None,
             seed: None,
             nonce_namespace: None,
@@ -930,6 +969,7 @@ mod tests {
             hogd_protocol: None,
             port: None,
             startup_timeout_secs: None,
+            contract_artifact_root: None,
             out_dir: None,
             seed: None,
             nonce_namespace: None,
@@ -1182,6 +1222,14 @@ mod tests {
         }
     }
 
+    fn empty_contract_setup() -> ContractSetup {
+        ContractSetup {
+            records: Vec::new(),
+            view_calls: Vec::new(),
+            failed: false,
+        }
+    }
+
     fn runtime_manifest() -> RuntimeManifest {
         serde_json::from_value(json!({
             "schemaVersion": 1,
@@ -1283,6 +1331,7 @@ mod tests {
             chain_progress: None,
             assertion_results: Vec::new(),
             chaos_events: Vec::new(),
+            contracts: Vec::new(),
             baseline_diff: None,
         }
     }

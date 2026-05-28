@@ -4,7 +4,10 @@ use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 
 use crate::manifest::{ChaosEventKind, WorkloadKind};
-use crate::result::{AssertionResult, ChaosEventState, SimMetricAvailability, SimRunOutcome};
+use crate::result::{
+    AssertionResult, ChaosEventState, ContractDeploymentRecord, SimMetricAvailability,
+    SimRunOutcome,
+};
 use crate::target::TargetProviderKind;
 
 pub const RESULT_EVENT_SCHEMA_VERSION: u32 = 1;
@@ -75,6 +78,18 @@ pub enum ResultEvent {
         #[serde(flatten)]
         event: ChaosTransitionEvent,
     },
+    ContractDeployStarted {
+        #[serde(flatten)]
+        event: ContractDeploymentRecord,
+    },
+    ContractDeployCompleted {
+        #[serde(flatten)]
+        event: ContractDeploymentRecord,
+    },
+    ContractDeployFailed {
+        #[serde(flatten)]
+        event: ContractDeploymentRecord,
+    },
     AssertionChecked {
         #[serde(flatten)]
         assertion: AssertionResult,
@@ -138,6 +153,14 @@ pub struct WorkloadEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub submit_to_receipt_latency_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub view_result: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub view_return_data: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub view_abort_data: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub view_event_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub error_class: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -169,6 +192,7 @@ pub enum EventWriteError {
 
 #[cfg(test)]
 mod tests {
+    use crate::result::{ContractDeploymentStatus, DeployAddressSource};
     use serde_json::json;
     use tempfile::NamedTempFile;
 
@@ -193,6 +217,10 @@ mod tests {
                 receipt_status: None,
                 receipt_status_detail: None,
                 submit_to_receipt_latency_ms: None,
+                view_result: None,
+                view_return_data: None,
+                view_abort_data: None,
+                view_event_count: None,
                 error_class: None,
                 error: None,
             },
@@ -328,6 +356,48 @@ mod tests {
         assert!(value.get("completedAtUnixMs").is_none());
         assert!(value.get("latencyMs").is_none());
         assert!(value.get("detail").is_none());
+    }
+
+    #[test]
+    fn contract_deploy_completed_event_shape_matches_stream_contract() {
+        let event = ResultEvent::ContractDeployCompleted {
+            event: ContractDeploymentRecord {
+                name: "fibonacci".into(),
+                status: ContractDeploymentStatus::Completed,
+                wasm_path: Some("/tmp/fibonacci.wasm".into()),
+                wasm_sha256: Some(format!("0x{}", "11".repeat(32))),
+                contract_hash: Some(format!("0x{}", "22".repeat(32))),
+                nonce: Some("123".into()),
+                deploy_address_nonce: Some(format!("0x{}", "33".repeat(32))),
+                tx_hash: Some(format!("0x{}", "44".repeat(32))),
+                address: Some(format!("0x{}", "55".repeat(32))),
+                address_source: Some(DeployAddressSource::Derived),
+                height: Some(42),
+                error: None,
+            },
+        };
+
+        let value =
+            serde_json::to_value(VersionedEvent::new(&event)).expect("event should serialize");
+
+        assert_eq!(
+            value,
+            json!({
+                "kind": "contract-deploy-completed",
+                "schemaVersion": 1,
+                "name": "fibonacci",
+                "status": "completed",
+                "wasmPath": "/tmp/fibonacci.wasm",
+                "wasmSha256": format!("0x{}", "11".repeat(32)),
+                "contractHash": format!("0x{}", "22".repeat(32)),
+                "nonce": "123",
+                "deployAddressNonce": format!("0x{}", "33".repeat(32)),
+                "txHash": format!("0x{}", "44".repeat(32)),
+                "address": format!("0x{}", "55".repeat(32)),
+                "addressSource": "derived",
+                "height": 42
+            })
+        );
     }
 
     #[tokio::test]

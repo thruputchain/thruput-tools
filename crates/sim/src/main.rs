@@ -18,6 +18,7 @@ struct Cli {
 }
 
 #[derive(Debug, Subcommand)]
+#[allow(clippy::large_enum_variant)]
 enum Command {
     /// Validate a simulation manifest without sending traffic.
     Validate {
@@ -62,6 +63,9 @@ struct RunArgs {
     /// Override the local target startup timeout in seconds.
     #[arg(long)]
     startup_timeout_secs: Option<u64>,
+    /// Root directory used to resolve simulation contract artifact paths.
+    #[arg(long)]
+    contract_artifact_root: Option<PathBuf>,
     /// Override the output directory.
     #[arg(long)]
     out_dir: Option<PathBuf>,
@@ -97,6 +101,7 @@ impl From<RunArgs> for RunOptions {
             hogd_protocol: args.hogd_protocol,
             port: args.port,
             startup_timeout_secs: args.startup_timeout_secs,
+            contract_artifact_root: args.contract_artifact_root,
             out_dir: args.out_dir,
             seed: args.seed,
             nonce_namespace: args.nonce_namespace,
@@ -228,6 +233,8 @@ mod tests {
             "0",
             "--startup-timeout-secs",
             "5",
+            "--contract-artifact-root",
+            "/tmp/contracts",
         ]);
 
         match cli.command {
@@ -237,6 +244,10 @@ mod tests {
                 assert_eq!(args.hogd_protocol, Some("hogp/test".into()));
                 assert_eq!(args.port, Some(0));
                 assert_eq!(args.startup_timeout_secs, Some(5));
+                assert_eq!(
+                    args.contract_artifact_root,
+                    Some(PathBuf::from("/tmp/contracts"))
+                );
             }
             _ => panic!("expected run command"),
         }

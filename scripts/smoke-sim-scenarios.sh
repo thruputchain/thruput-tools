@@ -9,6 +9,7 @@
 #   HOGD_DEV_BINARY=/path/to/hogd-dev
 #   GROUNDHOG_HOGD_DEV_BINARY=/path/to/hogd-dev
 #   GROUNDHOG_BINARY=/path/to/groundhog
+#   GROUNDHOG_EXAMPLES_ROOT=/path/to/groundhog-examples
 #   HOGD_PROTOCOL_OVERRIDE=hogp/<hash>
 #   GROUNDHOG_SIM_RUN_SOAKS=1
 #   KEEP_WORKDIR=1
@@ -179,6 +180,18 @@ find_hogd_dev_binary() {
     die "set HOGD_DEV_BINARY or GROUNDHOG_HOGD_DEV_BINARY to /path/to/hogd-dev"
 }
 
+find_examples_root() {
+    if [[ -n "${GROUNDHOG_EXAMPLES_ROOT:-}" ]]; then
+        expand_user_path "$GROUNDHOG_EXAMPLES_ROOT"
+        return
+    fi
+
+    local sibling="$REPO_ROOT/../groundhog-examples"
+    if [[ -d "$sibling" ]]; then
+        printf '%s\n' "$sibling"
+    fi
+}
+
 WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/groundhog-sim-scenarios.XXXXXX")"
 NODE_PID=""
 RPC_URL=""
@@ -208,10 +221,30 @@ log "building groundhog with dev-node feature"
 cargo build -p groundhog-cli --features dev-node
 [[ -x "$GROUNDHOG_BINARY" ]] || die "groundhog binary is not executable: $GROUNDHOG_BINARY"
 
+EXAMPLES_ROOT="$(find_examples_root)"
+CONTRACT_ARTIFACT_ROOT=""
+if [[ -n "$EXAMPLES_ROOT" ]]; then
+    EXAMPLES_TARGET="$WORKDIR/groundhog-examples-target"
+    log "building groundhog-examples fibonacci contract"
+    (
+        cd "$EXAMPLES_ROOT"
+        "$GROUNDHOG_BINARY" build -p fibonacci --target-dir "$EXAMPLES_TARGET"
+    )
+    CONTRACT_ARTIFACT_ROOT="$EXAMPLES_TARGET/groundhog"
+else
+    log "skipping contract scenario; set GROUNDHOG_EXAMPLES_ROOT to groundhog-examples"
+fi
+
 log "running fast local scenario catalog"
-GROUNDHOG_SIM_HOGD_DEV_BINARY="$HOGD_DEV_BINARY" \
-GROUNDHOG_SIM_GROUNDHOG_BINARY="$GROUNDHOG_BINARY" \
-GROUNDHOG_SIM_CATALOG_ROOT="$WORKDIR/local-catalog-fast" \
+ENV_ARGS=(
+    "GROUNDHOG_SIM_HOGD_DEV_BINARY=$HOGD_DEV_BINARY"
+    "GROUNDHOG_SIM_GROUNDHOG_BINARY=$GROUNDHOG_BINARY"
+    "GROUNDHOG_SIM_CATALOG_ROOT=$WORKDIR/local-catalog-fast"
+)
+if [[ -n "$CONTRACT_ARTIFACT_ROOT" ]]; then
+    ENV_ARGS+=("GROUNDHOG_SIM_CONTRACT_ARTIFACT_ROOT=$CONTRACT_ARTIFACT_ROOT")
+fi
+env "${ENV_ARGS[@]}" \
     cargo test -p groundhog-sim --test local_target_smoke local_scenario_catalog_smoke -- --ignored --nocapture
 
 if [[ "${GROUNDHOG_SIM_RUN_SOAKS:-0}" == "1" ]]; then

@@ -76,6 +76,18 @@ impl ActorState {
         Ok(())
     }
 
+    /// Consume one nonce for a synchronous setup transaction that is tracked
+    /// outside workload receipt queues.
+    pub fn consume_setup_nonce(&mut self) -> Result<(), ActorError> {
+        self.next_nonce_sequence =
+            self.next_nonce_sequence
+                .checked_add(1)
+                .ok_or(ActorError::NonceSequenceExhausted {
+                    actor_id: self.actor_id,
+                })?;
+        Ok(())
+    }
+
     /// Return the next submitted transaction that still needs a receipt.
     pub fn receipt_poll_target(&self) -> Option<ReceiptPollTarget> {
         self.pending_receipts

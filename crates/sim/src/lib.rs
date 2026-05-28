@@ -1,6 +1,7 @@
 pub mod actor;
 pub mod assertions;
 pub mod compare;
+pub mod contract;
 pub mod error;
 pub mod event;
 pub mod executor;
