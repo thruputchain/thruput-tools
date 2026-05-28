@@ -106,15 +106,15 @@ pub enum SweepEntryState {
 
 /// Live process identity read from the operating system during validation.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LiveProcess {
-    pub start_time: String,
-    pub pgid: u32,
-    pub command: String,
+struct LiveProcess {
+    start_time: String,
+    pgid: u32,
+    command: String,
 }
 
 /// Validation result for one recorded process.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ProcessValidation {
+enum ProcessValidation {
     Valid,
     Skipped(String),
 }
@@ -148,9 +148,24 @@ fn sweep_runs_with_ops(
 
     let mut run_dirs = Vec::new();
     for entry in fs::read_dir(root)? {
-        let entry = entry?;
-        if entry.file_type()?.is_dir() {
-            run_dirs.push(entry.path());
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                report.entries.push(SweepEntry::skipped(
+                    root,
+                    format!("directory entry unreadable: {error}"),
+                ));
+                continue;
+            }
+        };
+        let path = entry.path();
+        match entry.file_type() {
+            Ok(file_type) if file_type.is_dir() => run_dirs.push(path),
+            Ok(_) => {}
+            Err(error) => report.entries.push(SweepEntry::skipped(
+                &path,
+                format!("directory entry unreadable: {error}"),
+            )),
         }
     }
     run_dirs.sort();
@@ -224,7 +239,7 @@ fn reclaimable_process(ownership: &TargetOwnership) -> Option<&OwnedProcess> {
     }
 }
 
-pub fn validate_recorded_process(
+fn validate_recorded_process(
     recorded: &OwnedProcess,
     live: Option<&LiveProcess>,
 ) -> ProcessValidation {
@@ -271,6 +286,9 @@ fn read_ps_snapshot(pid: u32) -> Result<Option<LiveProcess>, String> {
         .output()
         .map_err(|error| error.to_string())?;
     if !output.status.success() {
+        // A non-zero `ps` exit is treated as "gone". That may hide a `ps`
+        // malfunction as a skip, but it keeps sweep firmly in the no-wrong-kill
+        // direction.
         return Ok(None);
     }
     let line = String::from_utf8_lossy(&output.stdout);

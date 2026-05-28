@@ -84,11 +84,12 @@ OwnedProcess {
 the type and each field. `TargetOwnership::existing()` leaves `process` `None`;
 `TargetOwnership::local(..)` is given a populated `OwnedProcess`.
 
-`start_time` is captured by running `ps -p <pid> -o lstart=` immediately after
-spawn, trimming the trailing newline/column padding, and storing that opaque
-token. It is never parsed into a timestamp; it is only ever compared against a
-later `ps` reading normalized the same way. This avoids `/proc` parsing and
-per-OS branching and works on both macOS and Linux.
+`start_time` and `pgid` are captured by running
+`ps -p <pid> -o lstart=,pgid=` immediately after spawn. The start-time field is
+normalized for column padding and stored as an opaque token. It is never parsed
+into a timestamp; it is only ever compared against a later `ps` reading
+normalized the same way. This avoids `/proc` parsing and per-OS branching and
+works on both macOS and Linux.
 `command` is the simulator's own short summary of the launch (e.g.
 `"groundhog node"`), not a re-read of the live process; the live command is read
 only at validation time.

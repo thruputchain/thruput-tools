@@ -734,20 +734,20 @@ async fn capture_owned_process(pid: Option<u32>, port: u16) -> Option<OwnedProce
         eprintln!("warning: `ps` was not found on PATH; local target sweep metadata omitted");
         return None;
     }
-    let start_time = match read_process_start_time(pid).await {
-        Ok(start_time) => start_time,
+    let identity = match read_process_identity(pid).await {
+        Ok(identity) => identity,
         Err(error) => {
             eprintln!(
-                "warning: failed to capture local target process start time for pid {pid}: {error}; sweep metadata omitted"
+                "warning: failed to capture local target process identity for pid {pid}: {error}; sweep metadata omitted"
             );
             return None;
         }
     };
     Some(OwnedProcess {
         pid,
-        pgid: pid,
+        pgid: identity.pgid,
         port,
-        start_time,
+        start_time: identity.start_time,
         command: "groundhog node".into(),
     })
 }
@@ -758,9 +758,16 @@ async fn capture_owned_process(_pid: Option<u32>, _port: u16) -> Option<OwnedPro
 }
 
 #[cfg(unix)]
-async fn read_process_start_time(pid: u32) -> Result<String, io::Error> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CapturedProcessIdentity {
+    start_time: String,
+    pgid: u32,
+}
+
+#[cfg(unix)]
+async fn read_process_identity(pid: u32) -> Result<CapturedProcessIdentity, io::Error> {
     let output = Command::new("ps")
-        .args(["-p", &pid.to_string(), "-o", "lstart="])
+        .args(["-p", &pid.to_string(), "-o", "lstart=,pgid="])
         .output()
         .await?;
     if !output.status.success() {
@@ -769,30 +776,39 @@ async fn read_process_start_time(pid: u32) -> Result<String, io::Error> {
             format!("ps reported no process for pid {pid}"),
         ));
     }
-    let start_time =
-        normalize_ps_start_time(&String::from_utf8_lossy(&output.stdout)).ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                "ps returned an empty process start time",
-            )
-        })?;
-    Ok(start_time)
+    parse_process_identity(&String::from_utf8_lossy(&output.stdout))
 }
 
 #[cfg(unix)]
-fn normalize_ps_start_time(value: &str) -> Option<String> {
-    let start_time = value
-        .lines()
-        .next()
-        .unwrap_or_default()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    if start_time.is_empty() {
-        None
-    } else {
-        Some(start_time)
+fn parse_process_identity(value: &str) -> Result<CapturedProcessIdentity, io::Error> {
+    let line = value.lines().next().unwrap_or_default();
+    let mut parts = line.split_whitespace();
+    let mut start_tokens = Vec::with_capacity(5);
+    for _ in 0..5 {
+        let Some(token) = parts.next() else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "ps returned an incomplete process start time",
+            ));
+        };
+        start_tokens.push(token);
     }
+    let process_group = parts.next().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "ps returned an empty process group",
+        )
+    })?;
+    let pgid = process_group.parse::<u32>().map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("ps returned invalid process group `{process_group}`: {error}"),
+        )
+    })?;
+    Ok(CapturedProcessIdentity {
+        start_time: start_tokens.join(" "),
+        pgid,
+    })
 }
 
 struct StartedChildLogCapture {
@@ -1212,6 +1228,16 @@ mod tests {
             serde_json::from_slice(&encoded).expect("process should deserialize");
 
         assert_eq!(decoded, process);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parses_process_identity_with_lstart_and_pgid() {
+        let identity = parse_process_identity("Wed May  7 12:00:00 2026  5678\n")
+            .expect("process identity should parse");
+
+        assert_eq!(identity.start_time, "Wed May 7 12:00:00 2026");
+        assert_eq!(identity.pgid, 5678);
     }
 
     #[tokio::test]
