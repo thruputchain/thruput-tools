@@ -2,12 +2,17 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
+use groundhog_sim::catalog::{
+    ScenarioCatalogEntry, ScenarioContractRef, default_catalog_path, load_catalog,
+    resolve_scenario_path,
+};
 use groundhog_sim::compare::{ResultDiff, load_result};
 use groundhog_sim::error::SimError;
 use groundhog_sim::run::{RunOptions, run_target};
 use groundhog_sim::sweep::{SweepEntryState, sweep_runs};
 use groundhog_sim::util::load_simulation_manifest;
 use groundhog_sim::validation::validate_manifest;
+use serde::Serialize;
 
 #[derive(Debug, Parser)]
 #[command(name = "hoglab")]
@@ -36,6 +41,8 @@ enum Command {
     },
     /// Reclaim orphaned simulator-owned local targets.
     Sweep(SweepArgs),
+    /// List curated simulation scenarios.
+    Catalog(CatalogArgs),
 }
 
 #[derive(Debug, Parser)]
@@ -90,6 +97,19 @@ struct SweepArgs {
     json: bool,
 }
 
+#[derive(Debug, Parser)]
+struct CatalogArgs {
+    /// Scenario catalog path.
+    #[arg(long)]
+    catalog: Option<PathBuf>,
+    /// Only list scenarios carrying this tag.
+    #[arg(long)]
+    tag: Option<String>,
+    /// Emit structured JSON output.
+    #[arg(long)]
+    json: bool,
+}
+
 impl From<RunArgs> for RunOptions {
     fn from(args: RunArgs) -> Self {
         Self {
@@ -137,6 +157,7 @@ async fn run_cli() -> Result<(), SimError> {
         }
         Command::Compare { run_a, run_b, json } => compare_runs(run_a, run_b, json).await,
         Command::Sweep(args) => sweep_targets_blocking(args).await,
+        Command::Catalog(args) => list_catalog(args).await,
     }
 }
 
@@ -213,6 +234,83 @@ async fn sweep_targets_blocking(args: SweepArgs) -> Result<(), SimError> {
         .map_err(|error| SimError::Executor(format!("sweep task panicked: {error}")))?
 }
 
+async fn list_catalog(args: CatalogArgs) -> Result<(), SimError> {
+    let path = args.catalog.unwrap_or_else(default_catalog_path);
+    let catalog = load_catalog(&path).await?;
+    let entries = catalog.filter_by_tag(args.tag.as_deref());
+    let rows = catalog_list_entries(&path, &entries);
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&rows)?);
+    } else {
+        print_catalog_table(&rows);
+    }
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CatalogListEntry<'a> {
+    id: &'a str,
+    title: &'a str,
+    summary: &'a str,
+    provider: &'a str,
+    tier: &'a str,
+    tags: &'a [String],
+    path: String,
+    resolved_path: String,
+    requires_contracts: bool,
+    contracts: &'a [ScenarioContractRef],
+    runner: &'a str,
+}
+
+fn catalog_list_entries<'a>(
+    catalog_path: &std::path::Path,
+    entries: &[&'a ScenarioCatalogEntry],
+) -> Vec<CatalogListEntry<'a>> {
+    entries
+        .iter()
+        .map(|entry| CatalogListEntry {
+            id: &entry.id,
+            title: &entry.title,
+            summary: &entry.summary,
+            provider: &entry.provider,
+            tier: &entry.tier,
+            tags: &entry.tags,
+            path: entry.path.display().to_string(),
+            resolved_path: resolve_scenario_path(catalog_path, &entry.path)
+                .display()
+                .to_string(),
+            requires_contracts: entry.requires_contracts,
+            contracts: &entry.contracts,
+            runner: &entry.runner,
+        })
+        .collect()
+}
+
+fn print_catalog_table(entries: &[CatalogListEntry<'_>]) {
+    for (index, entry) in entries.iter().enumerate() {
+        if index > 0 {
+            println!();
+        }
+        println!("{}", entry.id);
+        println!("  title: {}", entry.title);
+        println!("  summary: {}", entry.summary);
+        println!("  provider: {}  tier: {}", entry.provider, entry.tier);
+        println!("  tags: {}", entry.tags.join(","));
+        println!("  scenario: {}", entry.resolved_path);
+        println!("  runner: {}", entry.runner);
+        if entry.requires_contracts {
+            let contracts = entry
+                .contracts
+                .iter()
+                .map(|contract| format!("{} ({})", contract.name, contract.artifact))
+                .collect::<Vec<_>>()
+                .join(", ");
+            println!("  contracts: {contracts}");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,5 +363,63 @@ mod tests {
             }
             _ => panic!("expected sweep command"),
         }
+    }
+
+    #[test]
+    fn catalog_flags_parse() {
+        let cli = Cli::parse_from([
+            "hoglab",
+            "catalog",
+            "--catalog",
+            "examples/sim/catalog.json",
+            "--tag",
+            "contract",
+            "--json",
+        ]);
+
+        match cli.command {
+            Command::Catalog(args) => {
+                assert_eq!(
+                    args.catalog,
+                    Some(PathBuf::from("examples/sim/catalog.json"))
+                );
+                assert_eq!(args.tag.as_deref(), Some("contract"));
+                assert!(args.json);
+            }
+            _ => panic!("expected catalog command"),
+        }
+    }
+
+    #[test]
+    fn catalog_output_rows_include_resolved_paths() {
+        let entry = ScenarioCatalogEntry {
+            id: "local-fibonacci-view-smoke".into(),
+            path: PathBuf::from("local-fibonacci-view-smoke.json"),
+            title: "Fibonacci".into(),
+            summary: "Deploys and views fibonacci.".into(),
+            provider: "local".into(),
+            tier: "smoke".into(),
+            tags: vec!["local".into(), "contract".into()],
+            requires_contracts: true,
+            contracts: vec![ScenarioContractRef {
+                name: "fibonacci".into(),
+                source: "groundhog-examples/fibonacci".into(),
+                artifact: "fibonacci.wasm".into(),
+            }],
+            runner: "scripts/smoke-sim-scenarios.sh".into(),
+        };
+        let rows =
+            catalog_list_entries(std::path::Path::new("examples/sim/catalog.json"), &[&entry]);
+
+        assert_eq!(rows[0].path, "local-fibonacci-view-smoke.json");
+        assert_eq!(
+            rows[0].resolved_path,
+            "examples/sim/local-fibonacci-view-smoke.json"
+        );
+        let json = serde_json::to_value(&rows).expect("rows should serialize");
+        assert_eq!(
+            json[0]["resolvedPath"],
+            "examples/sim/local-fibonacci-view-smoke.json"
+        );
     }
 }

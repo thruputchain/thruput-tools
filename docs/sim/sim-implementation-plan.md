@@ -5,8 +5,9 @@
 reviewer hardening, live hogd-dev smoke, submit/receipt actor state,
 submit/receipt assertion wiring, numeric compare, the target-provider boundary,
 Phase 2 Slice A/B local-provider execution and restart-target chaos, local
-provider log capture, the local sweeper, the scenario catalog, and Phase 3
-Slice G contract deploy + view-call execution are complete.
+provider log capture, the local sweeper, the scenario exerciser catalog, and
+Phase 3 Slice G contract deploy + view-call execution are complete. Phase 3
+Slice H first-class scenario library catalog is complete.
 
 This plan pairs with [Simulation design](sim-design.md). The design doc owns
 the architectural boundary and long-term shape. This file is the implementation
@@ -512,8 +513,14 @@ chaos, deploy new contracts, or create remote infrastructure.
 - [x] Slice G3: execute `view-call` workloads against deployed contracts.
 - [x] Slice G4: add Fibonacci example scenario and extend scenario smoke
   artifact checks.
-- [ ] Final review gate: full Slice G contract scenario review plus gated
+- [x] Final review gate: full Slice G contract scenario review plus gated
   smoke verification.
+- [x] Slice H1: add a first-class scenario library catalog:
+  `examples/sim/catalog.json`.
+- [x] Slice H2: add `hoglab catalog` with tag filtering and JSON output.
+- [x] Slice H3: document the source-first contract artifact convention.
+- [x] Review gate H: code/API and test/artifact review for catalog metadata,
+  CLI output, docs, and schema compatibility.
 - [ ] Add storage-read workloads tied to deployed contracts.
 - [ ] Add events-query workloads tied to deployed contracts.
 - [x] Add view-call workloads when the runtime manifest advertises view support.

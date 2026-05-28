@@ -1,5 +1,6 @@
 pub mod actor;
 pub mod assertions;
+pub mod catalog;
 pub mod compare;
 pub mod contract;
 pub mod error;

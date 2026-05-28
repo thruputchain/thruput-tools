@@ -42,11 +42,20 @@ Scenario catalog smoke coverage is available as the next rung after the focused
 local lifecycle smoke:
 
 ```bash
+cargo run -p groundhog-sim --bin hoglab -- catalog
+cargo run -p groundhog-sim --bin hoglab -- catalog --tag contract
 scripts/smoke-sim-scenarios.sh
 GROUNDHOG_SIM_RUN_SOAKS=1 scripts/smoke-sim-scenarios.sh
 ```
 
-The default catalog runs the fast local ladder and an existing-provider
+`examples/sim/catalog.json` is the scenario library index. It records each
+scenario's title, provider, tier, tags, runner, and contract artifact
+requirements. `hoglab catalog` lists that library and can filter by tag. The
+human output includes the runnable scenario path resolved from the catalog's
+directory. `hoglab catalog --json` emits the filtered list as an array of
+catalog entries with the catalog-relative `path` plus a `resolvedPath` field
+for scripts that want to invoke `hoglab run` directly. The
+default smoke script runs the fast local ladder and an existing-provider
 baseline scenario. It covers read-only chain-tip, write-only wallet submit,
 submit-plus-receipt polling, mixed read/write/receipt polling, read-only
 restart chaos, a mixed restart artifact exercise that may fail only when it
@@ -60,6 +69,9 @@ paths from that directory. `scripts/smoke-sim-scenarios.sh` detects a sibling
 `../groundhog-examples` checkout or `GROUNDHOG_EXAMPLES_ROOT`, builds
 `fibonacci` into the script workdir, and passes the resulting
 `target/groundhog`-style artifact root into the ignored local catalog smoke.
+The default policy is source-first: keep reusable contracts as source projects,
+compile WASM on demand, and commit `.wasm` files only when exact byte identity
+is the fixture under test.
 
 Existing-target quickstart:
 

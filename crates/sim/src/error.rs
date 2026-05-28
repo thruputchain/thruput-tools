@@ -4,6 +4,8 @@ pub enum SimError {
     #[error("{0}")]
     Validation(#[from] crate::validation::ValidationError),
     #[error("{0}")]
+    Catalog(#[from] crate::catalog::CatalogError),
+    #[error("{0}")]
     RuntimeManifest(#[from] crate::runtime::RuntimeManifestError),
     #[error("{0}")]
     Actor(#[from] crate::actor::ActorError),
