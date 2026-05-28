@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::SimError;
 use crate::target::{OwnedProcess, TargetOwnership};
+use crate::util::command_on_path;
 
 pub const SWEEP_REPORT_SCHEMA_VERSION: u32 = 1;
 const OWNERSHIP_FILE: &str = "target-ownership.json";
@@ -256,23 +257,7 @@ impl SweepOps for RealSweepOps {
     }
 
     fn inspect_process(&self, process_id: u32) -> Result<Option<LiveProcess>, String> {
-        let Some(start_time) = read_ps_field(process_id, "lstart=")? else {
-            return Ok(None);
-        };
-        let Some(process_group) = read_ps_field(process_id, "pgid=")? else {
-            return Ok(None);
-        };
-        let process_group = process_group
-            .parse::<u32>()
-            .map_err(|error| format!("invalid process group `{process_group}`: {error}"))?;
-        let Some(command) = read_ps_field(process_id, "command=")? else {
-            return Ok(None);
-        };
-        Ok(Some(LiveProcess {
-            start_time,
-            pgid: process_group,
-            command,
-        }))
+        read_ps_snapshot(process_id)
     }
 
     fn terminate_process_group(&self, process: &OwnedProcess) -> Result<(), String> {
@@ -280,32 +265,42 @@ impl SweepOps for RealSweepOps {
     }
 }
 
-fn command_on_path(command: &str) -> bool {
-    let Some(paths) = std::env::var_os("PATH") else {
-        return false;
-    };
-    std::env::split_paths(&paths).any(|dir| dir.join(command).is_file())
-}
-
-fn read_ps_field(pid: u32, field: &str) -> Result<Option<String>, String> {
+fn read_ps_snapshot(pid: u32) -> Result<Option<LiveProcess>, String> {
     let output = std::process::Command::new("ps")
-        .args(["-p", &pid.to_string(), "-o", field])
+        .args(["-p", &pid.to_string(), "-o", "lstart=,pgid=,command="])
         .output()
         .map_err(|error| error.to_string())?;
     if !output.status.success() {
         return Ok(None);
     }
-    let value = String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .next()
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-    if value.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(value))
+    let line = String::from_utf8_lossy(&output.stdout);
+    parse_ps_snapshot_line(line.lines().next().unwrap_or_default()).map(Some)
+}
+
+fn parse_ps_snapshot_line(line: &str) -> Result<LiveProcess, String> {
+    let mut parts = line.split_whitespace();
+    let mut start_tokens = Vec::with_capacity(5);
+    for _ in 0..5 {
+        let Some(token) = parts.next() else {
+            return Err("ps output did not include a full lstart token".into());
+        };
+        start_tokens.push(token);
     }
+    let process_group = parts
+        .next()
+        .ok_or_else(|| "ps output did not include a process group".to_string())?;
+    let pgid = process_group
+        .parse::<u32>()
+        .map_err(|error| format!("invalid process group `{process_group}`: {error}"))?;
+    let command = parts.collect::<Vec<_>>().join(" ");
+    if command.is_empty() {
+        return Err("ps output did not include a command".into());
+    }
+    Ok(LiveProcess {
+        start_time: start_tokens.join(" "),
+        pgid,
+        command,
+    })
 }
 
 #[cfg(unix)]
@@ -313,7 +308,7 @@ fn terminate_process_group(process: &OwnedProcess, grace: Duration) -> Result<()
     signal_process_group(process.pgid, libc::SIGTERM)?;
     let deadline = Instant::now() + grace;
     loop {
-        if !process_exists(process.pid) {
+        if !process_group_exists(process.pgid) {
             return Ok(());
         }
         if Instant::now() >= deadline {
@@ -325,13 +320,13 @@ fn terminate_process_group(process: &OwnedProcess, grace: Duration) -> Result<()
     signal_process_group(process.pgid, libc::SIGKILL)?;
     let deadline = Instant::now() + POST_KILL_DRAIN;
     loop {
-        if !process_exists(process.pid) {
+        if !process_group_exists(process.pgid) {
             return Ok(());
         }
         if Instant::now() >= deadline {
             return Err(format!(
-                "pid {} still alive after SIGKILL to process group {}",
-                process.pid, process.pgid
+                "process group {} still alive after SIGKILL",
+                process.pgid
             ));
         }
         thread::sleep(Duration::from_millis(50));
@@ -364,11 +359,14 @@ fn signal_process_group(pgid: u32, signal: libc::c_int) -> Result<(), String> {
 }
 
 #[cfg(unix)]
-fn process_exists(pid: u32) -> bool {
-    let Some(pid) = i32::try_from(pid).ok().filter(|pid| *pid > 0) else {
+fn process_group_exists(pgid: u32) -> bool {
+    let Some(pgid) = i32::try_from(pgid)
+        .ok()
+        .filter(|process_group| *process_group > 0)
+    else {
         return false;
     };
-    let rc = unsafe { libc::kill(pid, 0) };
+    let rc = unsafe { libc::kill(-pgid, 0) };
     rc == 0 || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
@@ -429,6 +427,17 @@ mod tests {
             ),
             ProcessValidation::Skipped("command mismatch".into())
         );
+    }
+
+    #[test]
+    fn parses_single_ps_snapshot_with_lstart_pgid_and_command() {
+        let snapshot =
+            parse_ps_snapshot_line("Wed May  7 12:00:00 2026  5678 /tmp/groundhog node --json")
+                .expect("ps snapshot should parse");
+
+        assert_eq!(snapshot.start_time, "Wed May 7 12:00:00 2026");
+        assert_eq!(snapshot.pgid, 5678);
+        assert_eq!(snapshot.command, "/tmp/groundhog node --json");
     }
 
     #[test]

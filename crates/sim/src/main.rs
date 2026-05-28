@@ -127,7 +127,7 @@ async fn run_cli() -> Result<(), SimError> {
             Ok(())
         }
         Command::Compare { run_a, run_b, json } => compare_runs(run_a, run_b, json).await,
-        Command::Sweep(args) => sweep_targets(&args),
+        Command::Sweep(args) => sweep_targets_blocking(args).await,
     }
 }
 
@@ -196,6 +196,12 @@ fn sweep_targets(args: &SweepArgs) -> Result<(), SimError> {
         ));
     }
     Ok(())
+}
+
+async fn sweep_targets_blocking(args: SweepArgs) -> Result<(), SimError> {
+    tokio::task::spawn_blocking(move || sweep_targets(&args))
+        .await
+        .map_err(|error| SimError::Executor(format!("sweep task panicked: {error}")))?
 }
 
 #[cfg(test)]

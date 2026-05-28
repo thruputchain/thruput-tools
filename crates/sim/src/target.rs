@@ -16,7 +16,7 @@ use tokio::time::{Instant, sleep, timeout};
 use crate::error::SimError;
 use crate::manifest::{ChaosEventKind, ChaosEventSpec, SimulationManifest};
 use crate::result::ChaosEventState;
-use crate::util::write_json_pretty_atomic;
+use crate::util::{command_on_path, write_json_pretty_atomic};
 use crate::validation::{
     ValidationError, required_bootstrap_accounts, validate_existing_target_flags,
     validate_local_target_flags,
@@ -757,13 +757,6 @@ async fn capture_owned_process(_pid: Option<u32>, _port: u16) -> Option<OwnedPro
     None
 }
 
-fn command_on_path(command: &str) -> bool {
-    let Some(paths) = std::env::var_os("PATH") else {
-        return false;
-    };
-    std::env::split_paths(&paths).any(|dir| dir.join(command).is_file())
-}
-
 #[cfg(unix)]
 async fn read_process_start_time(pid: u32) -> Result<String, io::Error> {
     let output = Command::new("ps")
@@ -776,19 +769,30 @@ async fn read_process_start_time(pid: u32) -> Result<String, io::Error> {
             format!("ps reported no process for pid {pid}"),
         ));
     }
-    let start_time = String::from_utf8_lossy(&output.stdout)
+    let start_time =
+        normalize_ps_start_time(&String::from_utf8_lossy(&output.stdout)).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "ps returned an empty process start time",
+            )
+        })?;
+    Ok(start_time)
+}
+
+#[cfg(unix)]
+fn normalize_ps_start_time(value: &str) -> Option<String> {
+    let start_time = value
         .lines()
         .next()
         .unwrap_or_default()
-        .trim()
-        .to_string();
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
     if start_time.is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "ps returned an empty process start time",
-        ));
+        None
+    } else {
+        Some(start_time)
     }
-    Ok(start_time)
 }
 
 struct StartedChildLogCapture {

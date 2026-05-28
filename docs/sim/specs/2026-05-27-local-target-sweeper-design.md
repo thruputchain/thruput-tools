@@ -120,8 +120,9 @@ Discovery:
 
 Validation (the "never kill on a stale PID alone" rule):
 
-- Run separate `ps` reads for `lstart=`, `pgid=`, and `command=` to avoid
-  whitespace-sensitive parsing of fields that contain spaces.
+- Run a single `ps -p <pid> -o lstart=,pgid=,command=` read so start time,
+  process group, and command are captured from one process snapshot. The parser
+  normalizes the five-token `lstart` field before comparison.
 - If `ps` reports no such process, the PID is dead: skip (nothing to reclaim).
 - If the live `lstart` does not equal the recorded `start_time`: the PID was
   recycled to an unrelated process: skip.
