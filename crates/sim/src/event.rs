@@ -172,6 +172,18 @@ pub struct WorkloadEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub storage_item_kind: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_query_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_contract: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_cursor: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_latest_block: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_oldest_block: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub error_class: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -237,6 +249,12 @@ mod tests {
                 storage_key: None,
                 storage_item_present: None,
                 storage_item_kind: None,
+                event_query_name: None,
+                event_contract: None,
+                event_count: None,
+                event_cursor: None,
+                event_latest_block: None,
+                event_oldest_block: None,
                 error_class: None,
                 error: None,
             },
@@ -258,6 +276,69 @@ mod tests {
                 "rpcMethod": "groundhog_chainTip",
                 "chainHeight": 42,
                 "chainBlockHash": "0xabc"
+            })
+        );
+    }
+
+    #[test]
+    fn events_query_workload_event_shape_matches_stream_contract() {
+        let event = ResultEvent::WorkloadCompleted {
+            event: WorkloadEvent {
+                actor_id: 3,
+                workload: WorkloadKind::EventsQuery,
+                scheduled_time_ms: 2_000,
+                started_at_unix_ms: "20".into(),
+                completed_at_unix_ms: "25".into(),
+                latency_ms: 5,
+                rpc_method: "groundhog_getEvents",
+                chain_height: None,
+                chain_block_hash: None,
+                tx_hash: None,
+                tx_nonce: None,
+                receipt_present: None,
+                receipt_status: None,
+                receipt_status_detail: None,
+                submit_to_receipt_latency_ms: None,
+                view_result: None,
+                view_return_data: None,
+                view_abort_data: None,
+                view_event_count: None,
+                storage_read_name: None,
+                storage_contract: None,
+                storage_key: None,
+                storage_item_present: None,
+                storage_item_kind: None,
+                event_query_name: Some("fib-events".into()),
+                event_contract: Some("0x88".into()),
+                event_count: Some(0),
+                event_cursor: Some("0x".into()),
+                event_latest_block: Some(42),
+                event_oldest_block: Some(0),
+                error_class: None,
+                error: None,
+            },
+        };
+
+        let value =
+            serde_json::to_value(VersionedEvent::new(&event)).expect("event should serialize");
+        assert_eq!(
+            value,
+            json!({
+                "kind": "workload-completed",
+                "schemaVersion": 1,
+                "actorId": 3,
+                "workload": "events-query",
+                "scheduledTimeMs": 2000,
+                "startedAtUnixMs": "20",
+                "completedAtUnixMs": "25",
+                "latencyMs": 5,
+                "rpcMethod": "groundhog_getEvents",
+                "eventQueryName": "fib-events",
+                "eventContract": "0x88",
+                "eventCount": 0,
+                "eventCursor": "0x",
+                "eventLatestBlock": 42,
+                "eventOldestBlock": 0
             })
         );
     }

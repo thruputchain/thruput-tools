@@ -4,8 +4,12 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use groundhog_rpc_api_types::{
-    ContractAddress,
+    BlockHeight, ContractAddress,
     block::ChainTip,
+    events::{
+        BlockAnchor, ContractAddressList, EventFilter, EventFilterList, EventPage, EventQuery,
+        EventTopicFilter, IterationOrder, PaginationCursor, TopicList,
+    },
     hex::{Hex0x, HexBytes},
     receipt::{ExecStatus, TransactionReceipt},
     runtime_manifest::RuntimeManifest,
@@ -18,10 +22,13 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::{Id as TaskId, JoinError, JoinSet};
 
 use crate::actor::{ActorState, DrainedPendingReceipt, ReceiptPollTarget};
-use crate::contract::{PreparedStorageRead, PreparedViewCall};
+use crate::contract::{PreparedEventQuery, PreparedStorageRead, PreparedViewCall};
 use crate::error::SimError;
 use crate::event::{ChaosTransitionEvent, EventWriter, ResultEvent, WorkloadEvent};
-use crate::manifest::{ChaosEventKind, ChaosEventSpec, SimulationManifest, WorkloadKind};
+use crate::manifest::{
+    ChaosEventKind, ChaosEventSpec, EventQueryAnchorSpec, EventQueryOrderSpec, SimulationManifest,
+    WorkloadKind,
+};
 use crate::metrics::RunMetricsBuilder;
 use crate::result::{ChainTipObservation, ChaosEventRecord, ChaosEventState};
 use crate::scheduler::{
@@ -33,6 +40,7 @@ use crate::transaction::{
     runtime_dev_wallet_action_entrypoint,
 };
 use crate::util::{duration_ms, json_string, unix_ms, workload_name};
+use xdr_common::VecM;
 
 const DEFAULT_GLOBAL_IN_FLIGHT_LIMIT: usize = 1_024;
 // Actor state is mutated only when a workload completion is recorded. Keep the
@@ -67,6 +75,12 @@ pub trait SimRpcClient {
         _key: HexBytes,
     ) -> impl Future<Output = Result<StorageItemRead, String>> + Send {
         async { Err("storage read RPC is not implemented by this client".into()) }
+    }
+    fn events_query(
+        &self,
+        _query: EventQuery,
+    ) -> impl Future<Output = Result<EventPage, String>> + Send {
+        async { Err("events query RPC is not implemented by this client".into()) }
     }
 }
 
@@ -131,6 +145,18 @@ where
                 .map_err(|error| error.to_string())
         }
     }
+
+    #[allow(clippy::manual_async_fn)]
+    fn events_query(
+        &self,
+        query: EventQuery,
+    ) -> impl Future<Output = Result<EventPage, String>> + Send {
+        async move {
+            GroundhogApiClient::get_events(self, query)
+                .await
+                .map_err(|error| error.to_string())
+        }
+    }
 }
 
 /// Inputs for executing a generated schedule.
@@ -144,6 +170,7 @@ pub struct ScheduleExecution<'a> {
     pub metrics: &'a mut RunMetricsBuilder,
     pub view_calls: &'a [PreparedViewCall],
     pub storage_reads: &'a [PreparedStorageRead],
+    pub event_queries: &'a [PreparedEventQuery],
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -183,6 +210,7 @@ where
         metrics,
         view_calls,
         storage_reads,
+        event_queries,
     } = input;
     let wallet_entrypoint = runtime_dev_wallet_action_entrypoint(runtime_manifest)?;
     let run_start = Instant::now();
@@ -263,6 +291,7 @@ where
                     wallet_entrypoint,
                     view_calls,
                     storage_reads,
+                    event_queries,
                 )?;
                 dispatch_workload(
                     client.clone(),
@@ -459,6 +488,7 @@ fn prepare_workload(
     wallet_entrypoint: groundhog_xdr::contract::ContractEntrypointID,
     view_calls: &[PreparedViewCall],
     storage_reads: &[PreparedStorageRead],
+    event_queries: &[PreparedEventQuery],
 ) -> Result<PreparedWorkload, SimError> {
     match workload {
         WorkloadKind::ChainTip => Ok(PreparedWorkload::ChainTip),
@@ -487,7 +517,17 @@ fn prepare_workload(
                 read: read.clone(),
             }))
         }
-        _ => Err(SimError::UnsupportedRuntimeWorkloads(workload_name(
+        WorkloadKind::EventsQuery => {
+            let query = event_queries.first().ok_or_else(|| {
+                SimError::Executor(
+                    "events-query workload requires at least one prepared event query".into(),
+                )
+            })?;
+            Ok(PreparedWorkload::EventsQuery(PreparedEventQueryWorkload {
+                query: query.clone(),
+            }))
+        }
+        WorkloadKind::StatusPoll => Err(SimError::UnsupportedRuntimeWorkloads(workload_name(
             workload,
         ))),
     }
@@ -520,6 +560,9 @@ fn dispatch_workload<C>(
             PreparedWorkload::ReceiptPoll(poll) => execute_receipt_poll(client, &tick, poll).await,
             PreparedWorkload::ViewCall(view) => execute_view_call(client, &tick, view).await,
             PreparedWorkload::StorageRead(read) => execute_storage_read(client, &tick, read).await,
+            PreparedWorkload::EventsQuery(query) => {
+                execute_events_query(client, &tick, query).await
+            }
         }
     });
     task_contexts.insert(abort.id(), context);
@@ -663,6 +706,12 @@ fn backpressure_completion(
                 storage_key: None,
                 storage_item_present: None,
                 storage_item_kind: None,
+                event_query_name: None,
+                event_contract: None,
+                event_count: None,
+                event_cursor: None,
+                event_latest_block: None,
+                event_oldest_block: None,
                 error_class: Some("simulator-backpressure".into()),
                 error: Some(format!("{scope} in-flight limit reached: {error}")),
             },
@@ -968,6 +1017,12 @@ fn target_restarted_workload_completion(
                 storage_key: None,
                 storage_item_present: None,
                 storage_item_kind: None,
+                event_query_name: None,
+                event_contract: None,
+                event_count: None,
+                event_cursor: None,
+                event_latest_block: None,
+                event_oldest_block: None,
                 error_class: Some("target-restarted".into()),
                 error: Some(format!(
                     "workload aborted at simulation time {simulation_time_ms} because target restarted"
@@ -1018,6 +1073,12 @@ fn chaos_failed_workload_completion(
                 storage_key: None,
                 storage_item_present: None,
                 storage_item_kind: None,
+                event_query_name: None,
+                event_contract: None,
+                event_count: None,
+                event_cursor: None,
+                event_latest_block: None,
+                event_oldest_block: None,
                 error_class: Some("chaos-failed".into()),
                 error: Some(format!(
                     "workload aborted at simulation time {simulation_time_ms} because chaos failed"
@@ -1071,6 +1132,12 @@ fn target_restarted_receipt_completion(
                 storage_key: None,
                 storage_item_present: None,
                 storage_item_kind: None,
+                event_query_name: None,
+                event_contract: None,
+                event_count: None,
+                event_cursor: None,
+                event_latest_block: None,
+                event_oldest_block: None,
                 error_class: Some("target-restarted".into()),
                 error: Some("pending receipt lost because target restarted".into()),
             },
@@ -1149,6 +1216,7 @@ fn chaos_kind_name(kind: ChaosEventKind) -> &'static str {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 async fn execute_chain_tip<C>(
     client: C,
     tick: &ScheduledActorTick,
@@ -1202,6 +1270,12 @@ where
                         storage_key: None,
                         storage_item_present: None,
                         storage_item_kind: None,
+                        event_query_name: None,
+                        event_contract: None,
+                        event_count: None,
+                        event_cursor: None,
+                        event_latest_block: None,
+                        event_oldest_block: None,
                         error_class: None,
                         error: None,
                     },
@@ -1244,6 +1318,12 @@ where
                     storage_key: None,
                     storage_item_present: None,
                     storage_item_kind: None,
+                    event_query_name: None,
+                    event_contract: None,
+                    event_count: None,
+                    event_cursor: None,
+                    event_latest_block: None,
+                    event_oldest_block: None,
                     error_class: Some("rpc-error".into()),
                     error: Some(error),
                 },
@@ -1314,6 +1394,12 @@ where
                         storage_key: None,
                         storage_item_present: None,
                         storage_item_kind: None,
+                        event_query_name: None,
+                        event_contract: None,
+                        event_count: None,
+                        event_cursor: None,
+                        event_latest_block: None,
+                        event_oldest_block: None,
                         error_class: None,
                         error: None,
                     },
@@ -1356,6 +1442,12 @@ where
                     storage_key: None,
                     storage_item_present: None,
                     storage_item_kind: None,
+                    event_query_name: None,
+                    event_contract: None,
+                    event_count: None,
+                    event_cursor: None,
+                    event_latest_block: None,
+                    event_oldest_block: None,
                     error_class: Some("rpc-error".into()),
                     error: Some(error),
                 },
@@ -1700,6 +1792,12 @@ fn view_workload_event(
         storage_key: None,
         storage_item_present: None,
         storage_item_kind: None,
+        event_query_name: None,
+        event_contract: None,
+        event_count: None,
+        event_cursor: None,
+        event_latest_block: None,
+        event_oldest_block: None,
         error_class: None,
         error: None,
     }
@@ -1859,6 +1957,12 @@ fn storage_read_workload_event(
         storage_key: Some(format!("0x{}", hex::encode(&read.key))),
         storage_item_present: None,
         storage_item_kind: None,
+        event_query_name: None,
+        event_contract: None,
+        event_count: None,
+        event_cursor: None,
+        event_latest_block: None,
+        event_oldest_block: None,
         error_class: None,
         error: None,
     }
@@ -1873,6 +1977,190 @@ fn storage_item_kind(item: &StorageItemInfo) -> &'static str {
         StorageItemInfo::ReplayCacheEntry => "replay-cache-entry",
         StorageItemInfo::DeployedContract { .. } => "deployed-contract",
         StorageItemInfo::Unknown { .. } => "unknown",
+    }
+}
+
+async fn execute_events_query<C>(
+    client: C,
+    tick: &ScheduledActorTick,
+    prepared: PreparedEventQueryWorkload,
+) -> Result<WorkloadCompletion, SimError>
+where
+    C: SimRpcClient + Clone + Send + Sync + 'static,
+{
+    let started_at_unix_ms = unix_ms()?.to_string();
+    let started = Instant::now();
+    let request = event_query_request(&prepared.query);
+    let response = client.events_query(request).await;
+    let latency_ms = duration_ms(started.elapsed());
+    let completed_at_unix_ms = unix_ms()?.to_string();
+
+    match response {
+        Ok(response) => Ok(events_query_response_completion(
+            tick,
+            &prepared.query,
+            &response,
+            started_at_unix_ms,
+            completed_at_unix_ms,
+            latency_ms,
+        )),
+        Err(error) => Ok(events_query_failure_completion(
+            events_query_workload_event(
+                tick,
+                &prepared.query,
+                started_at_unix_ms,
+                completed_at_unix_ms,
+                latency_ms,
+            ),
+            latency_ms,
+            "events-query-rpc-error",
+            error,
+        )),
+    }
+}
+
+fn event_query_request(query: &PreparedEventQuery) -> EventQuery {
+    EventQuery {
+        filters: EventFilterList(VecM(vec![EventFilter {
+            contract_addresses: ContractAddressList(VecM(vec![Hex0x(query.contract)])),
+            topics: EventTopicFilter {
+                topic0: TopicList(VecM(Vec::new())),
+                topic1: TopicList(VecM(Vec::new())),
+                topic2: TopicList(VecM(Vec::new())),
+            },
+        }])),
+        order: match query.order {
+            EventQueryOrderSpec::Ascending => IterationOrder::Ascending,
+            EventQueryOrderSpec::Descending => IterationOrder::Descending,
+        },
+        anchor: match query.anchor {
+            EventQueryAnchorSpec::AtBeginning => BlockAnchor::AtBeginning,
+            EventQueryAnchorSpec::AtEnd => BlockAnchor::AtEnd,
+            EventQueryAnchorSpec::AtHeight { height } => BlockAnchor::AtHeight {
+                height: BlockHeight::from(height),
+            },
+        },
+        cursor: PaginationCursor(query.cursor.clone()),
+        limit: query.limit,
+    }
+}
+
+fn events_query_response_completion(
+    tick: &ScheduledActorTick,
+    query: &PreparedEventQuery,
+    response: &EventPage,
+    started_at_unix_ms: String,
+    completed_at_unix_ms: String,
+    latency_ms: u64,
+) -> WorkloadCompletion {
+    let mut event = events_query_workload_event(
+        tick,
+        query,
+        started_at_unix_ms,
+        completed_at_unix_ms,
+        latency_ms,
+    );
+    let event_count = response.events.len() as u64;
+    event.event_count = Some(event_count);
+    event.event_cursor = Some(format!("0x{}", hex::encode(&response.cursor.0)));
+    event.event_latest_block = Some(*response.latest_block);
+    event.event_oldest_block = Some(*response.oldest_block);
+
+    if let Some(expected) = query.expect_min_events
+        && event_count < expected
+    {
+        let error = format!(
+            "event query `{}` on `{}` returned {event_count} events, expected at least {expected}",
+            query.name, query.contract_name
+        );
+        return events_query_failure_completion(
+            event,
+            latency_ms,
+            "event-count-below-minimum",
+            error,
+        );
+    }
+    events_query_success_completion(event, latency_ms)
+}
+
+fn events_query_success_completion(event: WorkloadEvent, latency_ms: u64) -> WorkloadCompletion {
+    WorkloadCompletion {
+        workload: WorkloadKind::EventsQuery,
+        latency_ms,
+        error_class: None,
+        chain_tip: None,
+        event: ResultEvent::WorkloadCompleted { event },
+        skipped: false,
+        submitted_transaction: None,
+        observed_receipt: None,
+        receipt_poll: None,
+        submit_to_receipt_latency_ms: None,
+    }
+}
+
+fn events_query_failure_completion(
+    event: WorkloadEvent,
+    latency_ms: u64,
+    class: impl Into<String>,
+    error: impl Into<String>,
+) -> WorkloadCompletion {
+    let class = class.into();
+    WorkloadCompletion {
+        workload: WorkloadKind::EventsQuery,
+        latency_ms,
+        error_class: Some(class.clone()),
+        chain_tip: None,
+        event: ResultEvent::WorkloadFailed {
+            event: event.with_error(class, error),
+        },
+        skipped: false,
+        submitted_transaction: None,
+        observed_receipt: None,
+        receipt_poll: None,
+        submit_to_receipt_latency_ms: None,
+    }
+}
+
+fn events_query_workload_event(
+    tick: &ScheduledActorTick,
+    query: &PreparedEventQuery,
+    started_at_unix_ms: String,
+    completed_at_unix_ms: String,
+    latency_ms: u64,
+) -> WorkloadEvent {
+    WorkloadEvent {
+        actor_id: tick.actor_id,
+        workload: WorkloadKind::EventsQuery,
+        scheduled_time_ms: tick.simulation_time_ms,
+        started_at_unix_ms,
+        completed_at_unix_ms,
+        latency_ms,
+        rpc_method: "groundhog_getEvents",
+        chain_height: None,
+        chain_block_hash: None,
+        tx_hash: None,
+        tx_nonce: None,
+        receipt_present: None,
+        receipt_status: None,
+        receipt_status_detail: None,
+        submit_to_receipt_latency_ms: None,
+        view_result: None,
+        view_return_data: None,
+        view_abort_data: None,
+        view_event_count: None,
+        storage_read_name: None,
+        storage_contract: None,
+        storage_key: None,
+        storage_item_present: None,
+        storage_item_kind: None,
+        event_query_name: Some(query.name.clone()),
+        event_contract: Some(format!("0x{}", hex::encode(query.contract.as_ref()))),
+        event_count: None,
+        event_cursor: None,
+        event_latest_block: None,
+        event_oldest_block: None,
+        error_class: None,
+        error: None,
     }
 }
 
@@ -1906,6 +2194,12 @@ fn receipt_poll_event(
         storage_key: None,
         storage_item_present: None,
         storage_item_kind: None,
+        event_query_name: None,
+        event_contract: None,
+        event_count: None,
+        event_cursor: None,
+        event_latest_block: None,
+        event_oldest_block: None,
         error_class: None,
         error: None,
     }
@@ -2027,6 +2321,7 @@ enum PreparedWorkload {
     ReceiptPoll(PreparedReceiptPoll),
     ViewCall(PreparedViewWorkload),
     StorageRead(PreparedStorageReadWorkload),
+    EventsQuery(PreparedEventQueryWorkload),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2043,6 +2338,11 @@ struct PreparedViewWorkload {
 #[derive(Debug, Clone)]
 struct PreparedStorageReadWorkload {
     read: PreparedStorageRead,
+}
+
+#[derive(Debug, Clone)]
+struct PreparedEventQueryWorkload {
+    query: PreparedEventQuery,
 }
 
 struct ReceiptPollTimes {
@@ -2190,6 +2490,12 @@ mod tests {
         requested: StorageRequests,
     }
 
+    #[derive(Clone)]
+    struct EventsQueryClient {
+        response: EventPage,
+        requested: Arc<Mutex<Vec<EventQuery>>>,
+    }
+
     struct SuccessfulChaosController;
 
     struct FailingChaosController;
@@ -2304,6 +2610,37 @@ mod tests {
                     .lock()
                     .expect("storage request list should lock")
                     .push((address.0, key.0));
+                Ok(response)
+            }
+        }
+    }
+
+    impl SimRpcClient for EventsQueryClient {
+        #[allow(clippy::manual_async_fn)]
+        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, String>> + Send {
+            async { panic!("chain_tip should not be called") }
+        }
+
+        #[allow(clippy::manual_async_fn)]
+        fn send_raw_transaction(
+            &self,
+            _tx_hex: String,
+        ) -> impl Future<Output = Result<TxHash, String>> + Send {
+            async { panic!("send_raw_transaction should not be called") }
+        }
+
+        #[allow(clippy::manual_async_fn)]
+        fn events_query(
+            &self,
+            query: EventQuery,
+        ) -> impl Future<Output = Result<EventPage, String>> + Send {
+            let response = self.response.clone();
+            let requested = self.requested.clone();
+            async move {
+                requested
+                    .lock()
+                    .expect("event query request list should lock")
+                    .push(query);
                 Ok(response)
             }
         }
@@ -2538,6 +2875,7 @@ mod tests {
                 metrics: &mut metrics,
                 view_calls: &[],
                 storage_reads: &[],
+                event_queries: &[],
             },
         )
         .await
@@ -2597,6 +2935,7 @@ mod tests {
                 metrics: &mut metrics,
                 view_calls: &[],
                 storage_reads: &[],
+                event_queries: &[],
             },
         )
         .await
@@ -2650,6 +2989,7 @@ mod tests {
                 metrics: &mut metrics,
                 view_calls: &[],
                 storage_reads: &[],
+                event_queries: &[],
             },
         )
         .await
@@ -2710,6 +3050,7 @@ mod tests {
                 metrics: &mut metrics,
                 view_calls: &[],
                 storage_reads: &[],
+                event_queries: &[],
             },
         )
         .await
@@ -2928,6 +3269,7 @@ mod tests {
                 metrics: &mut metrics,
                 view_calls: &[],
                 storage_reads: &[storage_read],
+                event_queries: &[],
             },
         )
         .await
@@ -2951,6 +3293,161 @@ mod tests {
         assert_eq!(completed["workload"], "storage-read");
         assert_eq!(completed["storageReadName"], "fib-zero-key");
         assert_eq!(completed["storageItemPresent"], false);
+    }
+
+    #[tokio::test]
+    async fn events_query_records_page_fields() {
+        let tick = ScheduledActorTick {
+            phase_index: 0,
+            actor_id: 0,
+            actor_sequence: 0,
+            simulation_time_ms: 25,
+        };
+        let requested = Arc::new(Mutex::new(Vec::new()));
+        let completion = execute_events_query(
+            EventsQueryClient {
+                response: event_page(Vec::new(), vec![0xab], 45, 1),
+                requested: requested.clone(),
+            },
+            &tick,
+            prepared_event_query(Some(0)),
+        )
+        .await
+        .expect("events query should complete");
+
+        assert!(completion.error_class.is_none());
+        let requests = requested.lock().expect("event request list should lock");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].limit, 10);
+        assert!(matches!(requests[0].order, IterationOrder::Descending));
+        assert!(matches!(requests[0].anchor, BlockAnchor::AtEnd));
+        assert_eq!(requests[0].cursor.0, Vec::<u8>::new());
+        let filter = requests[0]
+            .filters
+            .iter()
+            .next()
+            .expect("request should contain one filter");
+        assert_eq!(requests[0].filters.iter().len(), 1);
+        assert_eq!(
+            filter
+                .contract_addresses
+                .iter()
+                .next()
+                .expect("filter should contain one contract address")
+                .0,
+            ContractAddress::from([0x88; 32])
+        );
+        drop(requests);
+
+        match completion.event {
+            ResultEvent::WorkloadCompleted { event } => {
+                assert_eq!(event.workload, WorkloadKind::EventsQuery);
+                assert_eq!(event.rpc_method, "groundhog_getEvents");
+                assert_eq!(event.event_query_name.as_deref(), Some("fib-events"));
+                assert_eq!(
+                    event.event_contract.as_deref(),
+                    Some(prefixed_hex(0x88).as_str())
+                );
+                assert_eq!(event.event_count, Some(0));
+                assert_eq!(event.event_cursor.as_deref(), Some("0xab"));
+                assert_eq!(event.event_latest_block, Some(45));
+                assert_eq!(event.event_oldest_block, Some(1));
+            }
+            other => panic!("expected completed event, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn events_query_minimum_mismatch_is_failed_workload() {
+        let tick = ScheduledActorTick {
+            phase_index: 0,
+            actor_id: 0,
+            actor_sequence: 0,
+            simulation_time_ms: 25,
+        };
+        let completion = execute_events_query(
+            EventsQueryClient {
+                response: event_page(Vec::new(), Vec::new(), 45, 1),
+                requested: Arc::new(Mutex::new(Vec::new())),
+            },
+            &tick,
+            prepared_event_query(Some(1)),
+        )
+        .await
+        .expect("events query should complete");
+
+        assert_eq!(
+            completion.error_class.as_deref(),
+            Some("event-count-below-minimum")
+        );
+        match completion.event {
+            ResultEvent::WorkloadFailed { event } => {
+                assert_eq!(event.event_count, Some(0));
+                assert_eq!(
+                    event.error_class.as_deref(),
+                    Some("event-count-below-minimum")
+                );
+            }
+            other => panic!("expected failed event, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn run_schedule_executes_events_query_and_records_metrics() {
+        let manifest = events_manifest();
+        let schedule = generate_schedule(&manifest).expect("schedule should generate");
+        let starts = phase_starts(&manifest).expect("phase starts should generate");
+        let file = NamedTempFile::new().expect("temp file should be created");
+        let mut event_writer = EventWriter::create(file.path())
+            .await
+            .expect("event writer should open");
+        let mut metrics = RunMetricsBuilder::default();
+        let mut actors = actor_states();
+        let requested = Arc::new(Mutex::new(Vec::new()));
+        let event_query = prepared_event_query(Some(0)).query;
+
+        run_schedule(
+            EventsQueryClient {
+                response: event_page(Vec::new(), Vec::new(), 45, 1),
+                requested: requested.clone(),
+            },
+            ScheduleExecution {
+                manifest: &manifest,
+                runtime_manifest: &runtime_manifest(),
+                schedule: &schedule,
+                phase_starts: &starts,
+                actor_states: &mut actors,
+                event_writer: &mut event_writer,
+                metrics: &mut metrics,
+                view_calls: &[],
+                storage_reads: &[],
+                event_queries: &[event_query],
+            },
+        )
+        .await
+        .expect("events-query schedule should run");
+
+        assert_eq!(
+            requested
+                .lock()
+                .expect("event query request list should lock")
+                .len(),
+            1
+        );
+        assert_eq!(
+            metrics.workload_counts()[&WorkloadKind::EventsQuery].completed,
+            1
+        );
+        let events = tokio::fs::read_to_string(file.path())
+            .await
+            .expect("events should read");
+        let completed = find_event(&events, "workload-completed");
+        assert_eq!(completed["workload"], "events-query");
+        assert_eq!(completed["eventQueryName"], "fib-events");
+        assert_eq!(completed["eventCount"], 0);
+        assert_eq!(completed["eventCursor"], "0x");
+        assert_eq!(completed["eventLatestBlock"], 45);
+        assert_eq!(completed["eventOldestBlock"], 1);
     }
 
     #[tokio::test]
@@ -2986,6 +3483,7 @@ mod tests {
                 metrics: &mut metrics,
                 view_calls: &[],
                 storage_reads: &[],
+                event_queries: &[],
             },
         )
         .await
@@ -3051,6 +3549,7 @@ mod tests {
                 metrics: &mut metrics,
                 view_calls: &[],
                 storage_reads: &[],
+                event_queries: &[],
             },
         )
         .await
@@ -3129,6 +3628,7 @@ mod tests {
                 metrics: &mut metrics,
                 view_calls: &[],
                 storage_reads: &[],
+                event_queries: &[],
             },
         )
         .await
@@ -3208,6 +3708,7 @@ mod tests {
                 metrics: &mut metrics,
                 view_calls: &[],
                 storage_reads: &[],
+                event_queries: &[],
             },
         )
         .await
@@ -3255,6 +3756,7 @@ mod tests {
                 metrics: &mut metrics,
                 view_calls: &[],
                 storage_reads: &[],
+                event_queries: &[],
             },
         )
         .await
@@ -3406,6 +3908,7 @@ mod tests {
                 metrics: &mut metrics,
                 view_calls: &[],
                 storage_reads: &[],
+                event_queries: &[],
             },
             Some(&SuccessfulChaosController),
             &mut chaos_events,
@@ -3480,6 +3983,7 @@ mod tests {
                 metrics: &mut metrics,
                 view_calls: &[],
                 storage_reads: &[],
+                event_queries: &[],
             },
             Some(&SuccessfulChaosController),
             &mut chaos_events,
@@ -3535,6 +4039,7 @@ mod tests {
                 metrics: &mut metrics,
                 view_calls: &[],
                 storage_reads: &[],
+                event_queries: &[],
             },
             Some(&SuccessfulChaosController),
             &mut chaos_events,
@@ -3593,6 +4098,7 @@ mod tests {
                 metrics: &mut metrics,
                 view_calls: &[],
                 storage_reads: &[],
+                event_queries: &[],
             },
             Some(&SuccessfulChaosController),
             &mut chaos_events,
@@ -3644,6 +4150,7 @@ mod tests {
                 metrics: &mut metrics,
                 view_calls: &[],
                 storage_reads: &[],
+                event_queries: &[],
             },
             Some(&FailingChaosController),
             &mut chaos_events,
@@ -3713,6 +4220,29 @@ mod tests {
                 "contract": "fibonacci",
                 "key": "0x0000000000000000000000000000000000000000000000000000000000000000",
                 "expectPresent": false
+            }]
+        }))
+        .expect("manifest fixture should parse")
+    }
+
+    fn events_manifest() -> SimulationManifest {
+        serde_json::from_value(json!({
+            "schemaVersion": 1,
+            "kind": "groundhog-simulation",
+            "name": "executor-events-test",
+            "seed": "seed",
+            "target": {"provider": "existing"},
+            "loadShape": [{"duration": "1ms", "users": 1, "ratePerUserHz": 1000.0}],
+            "workloads": [{"name": "events-query", "weight": 1}],
+            "contractArtifacts": [{"name": "fibonacci", "wasm": "fibonacci.wasm"}],
+            "eventQueries": [{
+                "name": "fib-events",
+                "contract": "fibonacci",
+                "order": "descending",
+                "anchor": {"kind": "atEnd"},
+                "cursor": "0x",
+                "limit": 10,
+                "expectMinEvents": 0
             }]
         }))
         .expect("manifest fixture should parse")
@@ -3815,6 +4345,35 @@ mod tests {
                 key: vec![0; 32],
                 expect_present,
             },
+        }
+    }
+
+    fn prepared_event_query(expect_min_events: Option<u64>) -> PreparedEventQueryWorkload {
+        PreparedEventQueryWorkload {
+            query: PreparedEventQuery {
+                name: "fib-events".into(),
+                contract_name: "fibonacci".into(),
+                contract: ContractAddress::from([0x88; 32]),
+                order: EventQueryOrderSpec::Descending,
+                anchor: EventQueryAnchorSpec::AtEnd,
+                cursor: Vec::new(),
+                limit: 10,
+                expect_min_events,
+            },
+        }
+    }
+
+    fn event_page(
+        events: Vec<groundhog_rpc_api_types::events::IdentifiedEvent>,
+        cursor: Vec<u8>,
+        latest_block: i64,
+        oldest_block: i64,
+    ) -> EventPage {
+        EventPage {
+            events,
+            cursor: PaginationCursor(cursor),
+            latest_block: BlockHeight::from(latest_block),
+            oldest_block: BlockHeight::from(oldest_block),
         }
     }
 

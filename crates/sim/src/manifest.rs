@@ -28,6 +28,8 @@ pub struct SimulationManifest {
     #[serde(default)]
     pub storage_reads: Vec<StorageReadSpec>,
     #[serde(default)]
+    pub event_queries: Vec<EventQuerySpec>,
+    #[serde(default)]
     pub assertions: AssertionSpec,
     #[serde(default)]
     pub chaos: Vec<ChaosEventSpec>,
@@ -150,6 +152,54 @@ pub struct StorageReadSpec {
     pub expect_present: Option<bool>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EventQuerySpec {
+    pub name: String,
+    pub contract: String,
+    #[serde(default = "default_event_query_order")]
+    pub order: EventQueryOrderSpec,
+    #[serde(default = "default_event_query_anchor")]
+    pub anchor: EventQueryAnchorSpec,
+    #[serde(default = "default_event_query_cursor")]
+    pub cursor: String,
+    #[serde(default = "default_event_query_limit")]
+    pub limit: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expect_min_events: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum EventQueryOrderSpec {
+    Ascending,
+    Descending,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum EventQueryAnchorSpec {
+    AtBeginning,
+    AtEnd,
+    AtHeight { height: i64 },
+}
+
+fn default_event_query_order() -> EventQueryOrderSpec {
+    EventQueryOrderSpec::Descending
+}
+
+fn default_event_query_anchor() -> EventQueryAnchorSpec {
+    EventQueryAnchorSpec::AtEnd
+}
+
+fn default_event_query_cursor() -> String {
+    "0x".into()
+}
+
+fn default_event_query_limit() -> u32 {
+    50
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum WorkloadKind {
@@ -263,6 +313,29 @@ mod tests {
         .expect_err("closed enum should reject unknown workloads");
 
         assert!(err.to_string().contains("unknown variant"));
+    }
+
+    #[test]
+    fn event_query_defaults_match_first_page_at_end() {
+        let manifest: SimulationManifest = serde_json::from_value(json!({
+            "schemaVersion": 1,
+            "kind": "groundhog-simulation",
+            "name": "events",
+            "seed": "seed",
+            "target": {"provider": "existing"},
+            "loadShape": [{"duration": "1s", "users": 1, "ratePerUserHz": 1.0}],
+            "workloads": [{"name": "events-query", "weight": 1}],
+            "contractArtifacts": [{"name": "fibonacci", "wasm": "fibonacci.wasm"}],
+            "eventQueries": [{"name": "fib-events", "contract": "fibonacci"}]
+        }))
+        .expect("minimal event query should parse");
+
+        let query = &manifest.event_queries[0];
+        assert_eq!(query.order, EventQueryOrderSpec::Descending);
+        assert_eq!(query.anchor, EventQueryAnchorSpec::AtEnd);
+        assert_eq!(query.cursor, "0x");
+        assert_eq!(query.limit, 50);
+        assert_eq!(query.expect_min_events, None);
     }
 
     #[test]

@@ -60,12 +60,13 @@ baseline scenario. It covers read-only chain-tip, write-only wallet submit,
 submit-plus-receipt polling, mixed read/write/receipt polling, read-only
 restart chaos, a mixed restart artifact exercise that may fail only when it
 records restart-loss artifacts, and, when `groundhog-examples` is available,
-Fibonacci deploy plus `view-call` and `storage-read` scenarios. The opt-in soak runs
-`examples/sim/local-mixed-wallet-receipt-soak.json`.
+Fibonacci deploy plus `view-call`, `storage-read`, and `events-query`
+scenarios. The opt-in soak runs `examples/sim/local-mixed-wallet-receipt-soak.json`.
 
 Contract artifact scenarios declare `contractArtifacts` plus `viewCalls` or
-`storageReads` in the manifest. `hoglab run --contract-artifact-root <dir>`
-resolves relative WASM paths from that directory.
+`storageReads` or `eventQueries` in the manifest.
+`hoglab run --contract-artifact-root <dir>` resolves relative WASM paths from
+that directory.
 `scripts/smoke-sim-scenarios.sh` detects a sibling `../groundhog-examples`
 checkout or `GROUNDHOG_EXAMPLES_ROOT`, builds `fibonacci` into the script
 workdir, and passes the resulting `target/groundhog`-style artifact root into
@@ -103,9 +104,9 @@ Phase 1 validates the scenario and runtime manifest, derives bootstrap account
 signers from the runtime manifest, writes the result directory skeleton, and
 executes deterministic open-loop traffic through the typed RPC client.
 Supported workloads are `chain-tip`, `wallet-submit-smoke` (dev-wallet
-compatible transactions), `receipt-poll`, `view-call`, and `storage-read` for
-manifests that deploy at least one contract artifact before scheduled load
-starts.
+compatible transactions), `receipt-poll`, `view-call`, `storage-read`, and
+`events-query` for manifests that deploy at least one contract artifact before
+scheduled load starts.
 `receipt-poll` tracks
 actor-submitted transactions in a per-actor FIFO queue until their receipts
 appear and records receipt presence, status, optional reverted/error detail,
@@ -124,6 +125,13 @@ manifest-local contract name. Storage workload events record
 `storageItemKind` when present. `chainHeight` records the storage snapshot
 height. `expectPresent` mismatches fail the workload with
 `errorClass: "storage-presence-mismatch"`.
+
+`events-query` sends `groundhog_getEvents` to the first configured
+`eventQueries` entry, using a deployed-address filter for that entry's
+manifest-local contract name. Event query workload events record
+`eventQueryName`, `eventContract`, `eventCount`, `eventCursor`,
+`eventLatestBlock`, and `eventOldestBlock`. `expectMinEvents` mismatches fail
+the workload with `errorClass: "event-count-below-minimum"`.
 
 After the scheduled load ends, the simulator runs a bounded receipt drain on
 remaining pending transactions (10 second budget, 250 ms retry interval). Drain

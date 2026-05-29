@@ -383,6 +383,7 @@ where
                 metrics: &mut metrics,
                 view_calls: &input.contract_setup.view_calls,
                 storage_reads: &input.contract_setup.storage_reads,
+                event_queries: &input.contract_setup.event_queries,
             },
             input.chaos_controller,
             &mut chaos_events,
@@ -628,6 +629,7 @@ fn validate_executable_workloads(manifest: &SimulationManifest) -> Result<(), Si
                 WorkloadKind::ChainTip
                     | WorkloadKind::WalletSubmitSmoke
                     | WorkloadKind::ReceiptPoll
+                    | WorkloadKind::EventsQuery
                     | WorkloadKind::ViewCall
                     | WorkloadKind::StorageRead
             )
@@ -1229,6 +1231,7 @@ mod tests {
             records: Vec::new(),
             view_calls: Vec::new(),
             storage_reads: Vec::new(),
+            event_queries: Vec::new(),
             failed: false,
         }
     }

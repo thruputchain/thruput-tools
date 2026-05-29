@@ -11,6 +11,7 @@ const LOCAL_FAST_CATALOG: &[CatalogScenario] = &[
         expect_restart_loss: false,
         expect_contract_view: false,
         expect_contract_storage: false,
+        expect_contract_events: false,
         allow_restart_failure: false,
     },
     CatalogScenario {
@@ -21,6 +22,7 @@ const LOCAL_FAST_CATALOG: &[CatalogScenario] = &[
         expect_restart_loss: false,
         expect_contract_view: false,
         expect_contract_storage: false,
+        expect_contract_events: false,
         allow_restart_failure: false,
     },
     CatalogScenario {
@@ -31,6 +33,7 @@ const LOCAL_FAST_CATALOG: &[CatalogScenario] = &[
         expect_restart_loss: false,
         expect_contract_view: false,
         expect_contract_storage: false,
+        expect_contract_events: false,
         allow_restart_failure: false,
     },
     CatalogScenario {
@@ -41,6 +44,7 @@ const LOCAL_FAST_CATALOG: &[CatalogScenario] = &[
         expect_restart_loss: false,
         expect_contract_view: false,
         expect_contract_storage: false,
+        expect_contract_events: false,
         allow_restart_failure: false,
     },
     CatalogScenario {
@@ -51,6 +55,7 @@ const LOCAL_FAST_CATALOG: &[CatalogScenario] = &[
         expect_restart_loss: false,
         expect_contract_view: false,
         expect_contract_storage: false,
+        expect_contract_events: false,
         allow_restart_failure: false,
     },
     CatalogScenario {
@@ -61,6 +66,7 @@ const LOCAL_FAST_CATALOG: &[CatalogScenario] = &[
         expect_restart_loss: true,
         expect_contract_view: false,
         expect_contract_storage: false,
+        expect_contract_events: false,
         allow_restart_failure: true,
     },
 ];
@@ -74,6 +80,7 @@ const LOCAL_CONTRACT_CATALOG: &[CatalogScenario] = &[
         expect_restart_loss: false,
         expect_contract_view: true,
         expect_contract_storage: false,
+        expect_contract_events: false,
         allow_restart_failure: false,
     },
     CatalogScenario {
@@ -84,6 +91,18 @@ const LOCAL_CONTRACT_CATALOG: &[CatalogScenario] = &[
         expect_restart_loss: false,
         expect_contract_view: false,
         expect_contract_storage: true,
+        expect_contract_events: false,
+        allow_restart_failure: false,
+    },
+    CatalogScenario {
+        file: "local-fibonacci-events-query-smoke.json",
+        expect_passed: true,
+        expect_receipt_metrics: false,
+        expect_restart: false,
+        expect_restart_loss: false,
+        expect_contract_view: false,
+        expect_contract_storage: false,
+        expect_contract_events: true,
         allow_restart_failure: false,
     },
 ];
@@ -96,6 +115,7 @@ const LOCAL_SOAK_CATALOG: &[CatalogScenario] = &[CatalogScenario {
     expect_restart_loss: false,
     expect_contract_view: false,
     expect_contract_storage: false,
+    expect_contract_events: false,
     allow_restart_failure: false,
 }];
 
@@ -109,6 +129,7 @@ struct CatalogScenario {
     expect_restart_loss: bool,
     expect_contract_view: bool,
     expect_contract_storage: bool,
+    expect_contract_events: bool,
     allow_restart_failure: bool,
 }
 
@@ -451,7 +472,10 @@ fn run_catalog(catalog: &[CatalogScenario]) {
             .arg(&groundhog_binary)
             .arg("--hogd-dev-binary")
             .arg(&hogd_dev_binary);
-        if scenario.expect_contract_view || scenario.expect_contract_storage {
+        if scenario.expect_contract_view
+            || scenario.expect_contract_storage
+            || scenario.expect_contract_events
+        {
             command.arg("--contract-artifact-root").arg(
                 std::env::var("GROUNDHOG_SIM_CONTRACT_ARTIFACT_ROOT").expect(
                     "set GROUNDHOG_SIM_CONTRACT_ARTIFACT_ROOT for contract catalog scenarios",
@@ -511,6 +535,9 @@ fn run_catalog(catalog: &[CatalogScenario]) {
         }
         if scenario.expect_contract_storage {
             assert_contract_storage_artifacts(&result, &run_dir, scenario.file);
+        }
+        if scenario.expect_contract_events {
+            assert_contract_events_artifacts(&result, &run_dir, scenario.file);
         }
 
         let simulation = std::fs::read_to_string(run_dir.join("simulation.json"))
@@ -723,6 +750,44 @@ fn assert_contract_storage_artifacts(
                 && event["storageItemPresent"] == false
         }),
         "{scenario} should record storage-read fields"
+    );
+}
+
+fn assert_contract_events_artifacts(
+    result: &serde_json::Value,
+    run_dir: &std::path::Path,
+    scenario: &str,
+) {
+    let contracts = result["contracts"]
+        .as_array()
+        .expect("result should contain contracts array");
+    assert_eq!(contracts.len(), 1, "{scenario}");
+    assert_eq!(contracts[0]["name"], "fibonacci", "{scenario}");
+    assert_eq!(contracts[0]["status"], "completed", "{scenario}");
+    assert!(contracts[0]["address"].as_str().is_some(), "{scenario}");
+
+    let metrics = &result["workloadMetrics"]["events-query"]["counts"];
+    assert!(
+        metrics["completed"].as_u64().unwrap_or_default() > 0,
+        "{scenario} should complete events-query workloads"
+    );
+
+    let stream =
+        std::fs::read_to_string(run_dir.join("result.jsonl")).expect("result stream should read");
+    let events = jsonl_values(&stream);
+    assert!(
+        events.iter().any(|event| {
+            event["kind"] == "workload-completed"
+                && event["workload"] == "events-query"
+                && event["rpcMethod"] == "groundhog_getEvents"
+                && event["eventQueryName"] == "fib-events"
+                && event["eventContract"].as_str().is_some()
+                && event["eventCount"].as_u64().is_some()
+                && event["eventCursor"].as_str().is_some()
+                && event["eventLatestBlock"].as_i64().is_some()
+                && event["eventOldestBlock"].as_i64().is_some()
+        }),
+        "{scenario} should record events-query fields"
     );
 }
 

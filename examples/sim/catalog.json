@@ -127,6 +127,24 @@
       "runner": "scripts/smoke-sim-scenarios.sh"
     },
     {
+      "id": "local-fibonacci-events-query-smoke",
+      "path": "local-fibonacci-events-query-smoke.json",
+      "title": "Local Fibonacci Events Query Smoke",
+      "summary": "Builds fibonacci.wasm from groundhog-examples, deploys it, and queries contract events through groundhog_getEvents.",
+      "provider": "local",
+      "tier": "smoke",
+      "tags": ["local", "contract", "fibonacci", "events-query", "indexer", "smoke"],
+      "requiresContracts": true,
+      "contracts": [
+        {
+          "name": "fibonacci",
+          "source": "groundhog-examples/fibonacci",
+          "artifact": "fibonacci.wasm"
+        }
+      ],
+      "runner": "scripts/smoke-sim-scenarios.sh"
+    },
+    {
       "id": "local-wallet-soak",
       "path": "local-wallet-soak.json",
       "title": "Local Wallet Soak",

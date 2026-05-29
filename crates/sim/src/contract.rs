@@ -25,7 +25,9 @@ use crate::event::{EventWriter, ResultEvent};
 use crate::executor::{
     DEFAULT_RECEIPT_DRAIN_RETRY_INTERVAL, DEFAULT_RECEIPT_DRAIN_TIMEOUT, SimRpcClient,
 };
-use crate::manifest::{ContractArtifactSpec, SimulationManifest};
+use crate::manifest::{
+    ContractArtifactSpec, EventQueryAnchorSpec, EventQueryOrderSpec, SimulationManifest,
+};
 use crate::result::{ContractDeploymentRecord, ContractDeploymentStatus, DeployAddressSource};
 use crate::util::{json_string, sha256_hex};
 
@@ -36,6 +38,7 @@ pub struct ContractSetup {
     pub records: Vec<ContractDeploymentRecord>,
     pub view_calls: Vec<PreparedViewCall>,
     pub storage_reads: Vec<PreparedStorageRead>,
+    pub event_queries: Vec<PreparedEventQuery>,
     pub failed: bool,
 }
 
@@ -58,6 +61,18 @@ pub struct PreparedStorageRead {
     pub expect_present: Option<bool>,
 }
 
+#[derive(Debug, Clone)]
+pub struct PreparedEventQuery {
+    pub name: String,
+    pub contract_name: String,
+    pub contract: ContractAddress,
+    pub order: EventQueryOrderSpec,
+    pub anchor: EventQueryAnchorSpec,
+    pub cursor: Vec<u8>,
+    pub limit: u32,
+    pub expect_min_events: Option<u64>,
+}
+
 pub async fn deploy_manifest_contracts<C>(
     client: C,
     manifest: &SimulationManifest,
@@ -74,6 +89,7 @@ where
             records: Vec::new(),
             view_calls: Vec::new(),
             storage_reads: Vec::new(),
+            event_queries: Vec::new(),
             failed: false,
         });
     }
@@ -109,12 +125,13 @@ where
         }
     }
 
-    let (view_calls, storage_reads) = if failed {
-        (Vec::new(), Vec::new())
+    let (view_calls, storage_reads, event_queries) = if failed {
+        (Vec::new(), Vec::new(), Vec::new())
     } else {
         (
             prepare_view_calls(manifest, &deployed)?,
             prepare_storage_reads(manifest, &deployed)?,
+            prepare_event_queries(manifest, &deployed)?,
         )
     };
 
@@ -122,6 +139,7 @@ where
         records,
         view_calls,
         storage_reads,
+        event_queries,
         failed,
     })
 }
@@ -491,6 +509,34 @@ fn prepare_storage_reads(
         .collect()
 }
 
+fn prepare_event_queries(
+    manifest: &SimulationManifest,
+    deployed: &BTreeMap<String, ContractAddress>,
+) -> Result<Vec<PreparedEventQuery>, SimError> {
+    manifest
+        .event_queries
+        .iter()
+        .map(|query| {
+            let contract = deployed.get(&query.contract).copied().ok_or_else(|| {
+                SimError::Executor(format!(
+                    "event query `{}` references undeployed contract `{}`",
+                    query.name, query.contract
+                ))
+            })?;
+            Ok(PreparedEventQuery {
+                name: query.name.clone(),
+                contract_name: query.contract.clone(),
+                contract,
+                order: query.order,
+                anchor: query.anchor.clone(),
+                cursor: parse_hex(&query.cursor)?,
+                limit: query.limit,
+                expect_min_events: query.expect_min_events,
+            })
+        })
+        .collect()
+}
+
 fn parse_hex(value: &str) -> Result<Vec<u8>, SimError> {
     let stripped = value
         .strip_prefix("0x")
@@ -533,7 +579,10 @@ mod tests {
     use tempfile::NamedTempFile;
 
     use crate::event::EventWriter;
-    use crate::manifest::{LoadPhase, ViewCallSpec, WorkloadKind, WorkloadSpec};
+    use crate::manifest::{
+        EventQueryAnchorSpec, EventQueryOrderSpec, EventQuerySpec, LoadPhase, ViewCallSpec,
+        WorkloadKind, WorkloadSpec,
+    };
     use crate::nonce::NonceNamespace;
     use crate::runtime::SimAccount;
     use crate::target::{TargetProviderKind, TargetProviderSpec};
@@ -663,6 +712,13 @@ mod tests {
             Hex0x(ContractAddress::from([0x77; 32])).0
         );
         assert_eq!(setup.storage_reads[0].key, vec![0; 32]);
+        assert_eq!(setup.event_queries.len(), 1);
+        assert_eq!(setup.event_queries[0].name, "fib-events");
+        assert_eq!(
+            setup.event_queries[0].contract,
+            Hex0x(ContractAddress::from([0x77; 32])).0
+        );
+        assert_eq!(setup.event_queries[0].cursor, Vec::<u8>::new());
     }
 
     #[tokio::test]
@@ -749,6 +805,15 @@ mod tests {
                 contract: "fibonacci".into(),
                 key: format!("0x{}", "00".repeat(32)),
                 expect_present: Some(false),
+            }],
+            event_queries: vec![EventQuerySpec {
+                name: "fib-events".into(),
+                contract: "fibonacci".into(),
+                order: EventQueryOrderSpec::Descending,
+                anchor: EventQueryAnchorSpec::AtEnd,
+                cursor: "0x".into(),
+                limit: 10,
+                expect_min_events: Some(0),
             }],
             assertions: crate::manifest::AssertionSpec::default(),
             chaos: Vec::new(),

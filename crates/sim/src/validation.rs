@@ -3,9 +3,12 @@ use std::collections::HashSet;
 use groundhog_rpc_api_types::runtime_manifest::RuntimeManifest;
 
 use crate::manifest::{
-    SIMULATION_KIND, SIMULATION_SCHEMA_VERSION, SimulationManifest, WorkloadKind,
+    EventQueryAnchorSpec, SIMULATION_KIND, SIMULATION_SCHEMA_VERSION, SimulationManifest,
+    WorkloadKind,
 };
 use crate::target::{TargetCapabilities, TargetProviderKind};
+
+const MAX_EVENT_QUERY_CURSOR_BYTES: usize = 256;
 
 pub fn validate_manifest(manifest: &SimulationManifest) -> Result<(), ValidationError> {
     if manifest.schema_version != SIMULATION_SCHEMA_VERSION {
@@ -97,6 +100,7 @@ fn validate_contract_artifacts(manifest: &SimulationManifest) -> Result<(), Vali
 
     validate_view_calls(manifest, &artifact_names)?;
     validate_storage_reads(manifest, &artifact_names)?;
+    validate_event_queries(manifest, &artifact_names)?;
 
     if manifest
         .workloads
@@ -121,6 +125,19 @@ fn validate_contract_artifacts(manifest: &SimulationManifest) -> Result<(), Vali
         }
         if manifest.storage_reads.is_empty() {
             return Err(ValidationError::MissingStorageReadsForStorageRead);
+        }
+    }
+
+    if manifest
+        .workloads
+        .iter()
+        .any(|workload| workload.name == WorkloadKind::EventsQuery)
+    {
+        if manifest.contract_artifacts.is_empty() {
+            return Err(ValidationError::MissingContractArtifactsForEventsQuery);
+        }
+        if manifest.event_queries.is_empty() {
+            return Err(ValidationError::MissingEventQueriesForEventsQuery);
         }
     }
 
@@ -203,6 +220,97 @@ fn validate_storage_reads(
             });
         }
         validate_storage_hex_len(&read.key, Some(32), "key", name)?;
+    }
+    Ok(())
+}
+
+fn validate_event_queries(
+    manifest: &SimulationManifest,
+    artifact_names: &HashSet<String>,
+) -> Result<(), ValidationError> {
+    let mut query_names = HashSet::new();
+    for query in &manifest.event_queries {
+        let name = query.name.trim();
+        if name.is_empty() {
+            return Err(ValidationError::EmptyEventQueryName);
+        }
+        if name != query.name {
+            return Err(ValidationError::InvalidContractNameWhitespace {
+                field: "eventQueries[].name",
+                value: query.name.clone(),
+            });
+        }
+        if query.contract.trim() != query.contract {
+            return Err(ValidationError::InvalidContractNameWhitespace {
+                field: "eventQueries[].contract",
+                value: query.contract.clone(),
+            });
+        }
+        if !query_names.insert(name.to_owned()) {
+            return Err(ValidationError::DuplicateEventQueryName {
+                name: name.to_owned(),
+            });
+        }
+        if !artifact_names.contains(query.contract.trim()) {
+            return Err(ValidationError::UnknownEventQueryContract {
+                query: name.to_owned(),
+                contract: query.contract.clone(),
+            });
+        }
+        validate_event_query_cursor(&query.cursor, "cursor", name)?;
+        if query.limit > 200 {
+            return Err(ValidationError::InvalidEventQueryLimit {
+                query: name.to_owned(),
+                limit: query.limit,
+            });
+        }
+        if let EventQueryAnchorSpec::AtHeight { height } = query.anchor
+            && height < 0
+        {
+            return Err(ValidationError::InvalidEventQueryAnchorHeight {
+                query: name.to_owned(),
+                height,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_event_query_cursor(
+    value: &str,
+    field: &'static str,
+    query: &str,
+) -> Result<(), ValidationError> {
+    let Some(stripped) = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+    else {
+        return Err(ValidationError::InvalidEventQueryHex {
+            query: query.to_owned(),
+            field,
+            reason: "hex value must be 0x-prefixed".into(),
+        });
+    };
+    if stripped.len() % 2 != 0 {
+        return Err(ValidationError::InvalidEventQueryHex {
+            query: query.to_owned(),
+            field,
+            reason: "hex value must contain an even number of digits".into(),
+        });
+    }
+    if let Err(error) = hex::decode(stripped) {
+        return Err(ValidationError::InvalidEventQueryHex {
+            query: query.to_owned(),
+            field,
+            reason: error.to_string(),
+        });
+    }
+    if stripped.len() / 2 > MAX_EVENT_QUERY_CURSOR_BYTES {
+        return Err(ValidationError::InvalidEventQueryHex {
+            query: query.to_owned(),
+            field,
+            reason: format!("expected at most {MAX_EVENT_QUERY_CURSOR_BYTES} bytes"),
+        });
     }
     Ok(())
 }
@@ -453,6 +561,26 @@ pub enum ValidationError {
     MissingContractArtifactsForStorageRead,
     #[error("storage-read workload requires at least one storageReads entry")]
     MissingStorageReadsForStorageRead,
+    #[error("event query name must not be empty")]
+    EmptyEventQueryName,
+    #[error("duplicate event query name `{name}`")]
+    DuplicateEventQueryName { name: String },
+    #[error("event query `{query}` references unknown contract artifact `{contract}`")]
+    UnknownEventQueryContract { query: String, contract: String },
+    #[error("event query `{query}` field `{field}` is invalid: {reason}")]
+    InvalidEventQueryHex {
+        query: String,
+        field: &'static str,
+        reason: String,
+    },
+    #[error("event query `{query}` limit {limit} exceeds 200")]
+    InvalidEventQueryLimit { query: String, limit: u32 },
+    #[error("event query `{query}` anchor height {height} must be non-negative")]
+    InvalidEventQueryAnchorHeight { query: String, height: i64 },
+    #[error("events-query workload requires at least one contract artifact")]
+    MissingContractArtifactsForEventsQuery,
+    #[error("events-query workload requires at least one eventQueries entry")]
+    MissingEventQueriesForEventsQuery,
     #[error("target provider {provider:?} does not support chaos event {kind}")]
     UnsupportedChaos {
         provider: TargetProviderKind,
@@ -504,7 +632,10 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::manifest::{DurationSpec, LoadPhase, WorkloadSpec};
+    use crate::manifest::{
+        DurationSpec, EventQueryAnchorSpec, EventQueryOrderSpec, EventQuerySpec, LoadPhase,
+        WorkloadSpec,
+    };
     use crate::target::TargetProviderSpec;
 
     #[test]
@@ -771,6 +902,111 @@ mod tests {
     }
 
     #[test]
+    fn validates_events_query_manifest() {
+        let mut manifest = basic_manifest();
+        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
+            name: "fibonacci".into(),
+            wasm: "fibonacci.wasm".into(),
+        }];
+        manifest.event_queries = vec![EventQuerySpec {
+            name: "fib-events".into(),
+            contract: "fibonacci".into(),
+            order: EventQueryOrderSpec::Descending,
+            anchor: EventQueryAnchorSpec::AtEnd,
+            cursor: "0x".into(),
+            limit: 10,
+            expect_min_events: Some(0),
+        }];
+        manifest.workloads = vec![WorkloadSpec {
+            name: WorkloadKind::EventsQuery,
+            weight: 1,
+        }];
+
+        validate_manifest(&manifest).expect("event query manifest should validate");
+    }
+
+    #[test]
+    fn rejects_events_query_unknown_contract() {
+        let mut manifest = basic_manifest();
+        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
+            name: "fibonacci".into(),
+            wasm: "fibonacci.wasm".into(),
+        }];
+        manifest.event_queries = vec![EventQuerySpec {
+            name: "fib-events".into(),
+            contract: "missing".into(),
+            order: EventQueryOrderSpec::Descending,
+            anchor: EventQueryAnchorSpec::AtEnd,
+            cursor: "0x".into(),
+            limit: 10,
+            expect_min_events: Some(0),
+        }];
+
+        let err = validate_manifest(&manifest).expect_err("unknown contract should reject");
+
+        assert!(matches!(
+            err,
+            ValidationError::UnknownEventQueryContract { .. }
+        ));
+    }
+
+    #[test]
+    fn rejects_events_query_invalid_cursor_and_anchor() {
+        let mut manifest = basic_manifest();
+        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
+            name: "fibonacci".into(),
+            wasm: "fibonacci.wasm".into(),
+        }];
+        manifest.event_queries = vec![EventQuerySpec {
+            name: "fib-events".into(),
+            contract: "fibonacci".into(),
+            order: EventQueryOrderSpec::Descending,
+            anchor: EventQueryAnchorSpec::AtEnd,
+            cursor: "0x0".into(),
+            limit: 10,
+            expect_min_events: Some(0),
+        }];
+
+        let err = validate_manifest(&manifest).expect_err("odd cursor should reject");
+        assert!(matches!(err, ValidationError::InvalidEventQueryHex { .. }));
+
+        manifest.event_queries[0].cursor = "0x".into();
+        manifest.event_queries[0].anchor = EventQueryAnchorSpec::AtHeight { height: -1 };
+        let err = validate_manifest(&manifest).expect_err("negative height should reject");
+        assert!(matches!(
+            err,
+            ValidationError::InvalidEventQueryAnchorHeight { .. }
+        ));
+
+        manifest.event_queries[0].anchor = EventQueryAnchorSpec::AtEnd;
+        manifest.event_queries[0].cursor = format!("0x{}", "00".repeat(257));
+        let err = validate_manifest(&manifest).expect_err("oversized cursor should reject");
+        assert!(matches!(err, ValidationError::InvalidEventQueryHex { .. }));
+    }
+
+    #[test]
+    fn rejects_events_query_workload_without_indexer() {
+        let mut manifest = basic_manifest();
+        manifest.workloads = vec![WorkloadSpec {
+            name: WorkloadKind::EventsQuery,
+            weight: 1,
+        }];
+        let mut runtime = runtime_manifest();
+        runtime.endpoints.indexer = None;
+
+        let err = validate_against_runtime(&manifest, &runtime)
+            .expect_err("events-query should require indexer");
+
+        assert!(matches!(
+            err,
+            ValidationError::MissingReadPlane {
+                workload: WorkloadKind::EventsQuery,
+                endpoint: "indexer"
+            }
+        ));
+    }
+
+    #[test]
     fn rejects_actor_count_above_bootstrap_accounts() {
         let mut manifest = basic_manifest();
         manifest.load_shape[0].users = 2;
@@ -853,6 +1089,7 @@ mod tests {
             contract_artifacts: Vec::new(),
             view_calls: Vec::new(),
             storage_reads: Vec::new(),
+            event_queries: Vec::new(),
             assertions: crate::manifest::AssertionSpec::default(),
             chaos: Vec::new(),
             baseline: None,

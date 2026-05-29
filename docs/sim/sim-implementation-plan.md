@@ -532,10 +532,20 @@ chaos, deploy new contracts, or create remote infrastructure.
   coverage.
 - [x] Final review gate I: behavior/API and test/artifact review for
   storage-read semantics and artifacts.
-- [ ] Add events-query workloads tied to deployed contracts.
+- [x] Slice J1: write handoff design:
+  `docs/sim/specs/2026-05-29-contract-events-query-scenario-design.md`.
+- [x] Slice J2: add manifest validation and contract setup for
+  `eventQueries`.
+- [x] Slice J3: execute `events-query` workloads against deployed contracts.
+- [x] Slice J4: add Fibonacci events-query example and extend scenario smoke
+  coverage.
+- [x] Final review gate J: behavior/API and test/artifact review for
+  events-query semantics and artifacts.
 - [x] Add view-call workloads when the runtime manifest advertises view support.
 - [ ] Add richer actor state machines.
 - [ ] Add read-after-write scenario presets.
+- [ ] Add positive event-indexing scenarios with contracts that emit events
+  during setup or scheduled load.
 - [ ] Add storage-heavy, event-heavy, calldata-heavy, and compute-heavy
   workloads.
 - [ ] Add NNInt-specific scenario presets.
