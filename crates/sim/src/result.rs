@@ -35,6 +35,8 @@ pub struct SimResult {
     pub assertion_results: Vec<AssertionResult>,
     #[serde(default)]
     pub chaos_events: Vec<ChaosEventRecord>,
+    #[serde(default)]
+    pub contracts: Vec<ContractDeploymentRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub baseline_diff: Option<BaselineDiff>,
 }
@@ -253,6 +255,48 @@ pub enum ChaosEventState {
     Recovered,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractDeploymentRecord {
+    pub name: String,
+    pub status: ContractDeploymentStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wasm_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wasm_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contract_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nonce: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deploy_address_nonce: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tx_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address_source: Option<DeployAddressSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ContractDeploymentStatus {
+    Started,
+    Completed,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DeployAddressSource {
+    Receipt,
+    Derived,
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -330,5 +374,44 @@ mod tests {
                 "detail": "restarted local target oldPid=1 newPid=2"
             })
         );
+    }
+
+    #[test]
+    fn result_defaults_missing_contracts_for_old_artifacts() {
+        let value = json!({
+            "schemaVersion": 1,
+            "runId": "run-1",
+            "name": "old-result",
+            "outcome": "passed",
+            "targetProvider": "existing",
+            "targetOwnership": {
+                "provider": "existing",
+                "startedBySim": false,
+                "cleanupAllowed": false
+            },
+            "nonceNamespace": 1,
+            "manifestHashes": {
+                "simulationManifestSha256": "sim",
+                "runtimeManifestSha256": "runtime",
+                "bootstrapManifest": {
+                    "status": "unsupported",
+                    "reason": "old"
+                }
+            },
+            "metricAvailability": {
+                "storageTokensConsumed": {
+                    "status": "unsupported",
+                    "reason": "old"
+                },
+                "nnintComputeUsed": {
+                    "status": "unsupported",
+                    "reason": "old"
+                }
+            }
+        });
+
+        let result: SimResult = serde_json::from_value(value).expect("old result should parse");
+
+        assert!(result.contracts.is_empty());
     }
 }

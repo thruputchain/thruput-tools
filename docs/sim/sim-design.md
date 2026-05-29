@@ -378,7 +378,7 @@ V1 workloads should be public-RPC and manifest-backed:
   assume the Phase 1 transaction body is a successful contract no-op.
 - `receipt-poll`: poll receipts for submitted transactions.
 - `status-poll`: poll transaction status when that path is meaningful.
-- `events-query`: query events around submitted transactions.
+- `events-query`: query contract events by deployed contract address.
 - `storage-read`: read known wallet or contract storage keys when available.
 - `view-call`: call `groundhog_view` when the runtime advertises a view plane.
 

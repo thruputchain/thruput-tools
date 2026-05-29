@@ -4,6 +4,8 @@ pub enum SimError {
     #[error("{0}")]
     Validation(#[from] crate::validation::ValidationError),
     #[error("{0}")]
+    Catalog(#[from] crate::catalog::CatalogError),
+    #[error("{0}")]
     RuntimeManifest(#[from] crate::runtime::RuntimeManifestError),
     #[error("{0}")]
     Actor(#[from] crate::actor::ActorError),
@@ -20,7 +22,7 @@ pub enum SimError {
     #[error("failed to parse or write JSON: {0}")]
     Json(#[from] serde_json::Error),
     #[error(
-        "execution does not yet support these workloads in Phase 1: {0}. Supported workloads are chain-tip, wallet-submit-smoke, and receipt-poll."
+        "execution does not yet support these workloads: {0}. Supported workloads are chain-tip, wallet-submit-smoke, receipt-poll, view-call, storage-read, and events-query."
     )]
     UnsupportedRuntimeWorkloads(String),
     #[error("failed to build JSON-RPC client: {0}")]

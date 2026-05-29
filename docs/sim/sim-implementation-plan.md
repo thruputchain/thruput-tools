@@ -4,8 +4,11 @@
 **Status:** Draft execution checklist. Phase 1 existing-target execution,
 reviewer hardening, live hogd-dev smoke, submit/receipt actor state,
 submit/receipt assertion wiring, numeric compare, the target-provider boundary,
-Phase 2 Slice A/B local-provider execution and restart-target chaos, and local
-provider log capture are complete.
+Phase 2 Slice A/B local-provider execution and restart-target chaos, local
+provider log capture, the local sweeper, the scenario exerciser catalog, and
+Phase 3 Slice G contract deploy + view-call execution and Slice H first-class
+scenario library catalog are complete. Phase 3 Slice I contract storage-read
+execution is complete.
 
 This plan pairs with [Simulation design](sim-design.md). The design doc owns
 the architectural boundary and long-term shape. This file is the implementation
@@ -321,6 +324,7 @@ chaos, deploy new contracts, or create remote infrastructure.
   - record submit-to-receipt latency when possible
 - [x] Defer `events-query`, `storage-read`, `status-poll`, and `view-call`
   until the first three workloads are stable unless Phase 1 remains small.
+  `view-call` and `storage-read` landed later in Phase 3.
 
 ### Event Stream
 
@@ -484,15 +488,64 @@ chaos, deploy new contracts, or create remote infrastructure.
     and compare reuse.
   - [x] Slice D3: add tests, docs/examples, and verification.
   - [x] Final review gate: full Slice D code review plus test/artifact review.
+- [x] Add a local scenario exerciser catalog for putting the simulator through
+  short read/write/receipt/restart runs before longer scenario development.
+  - [x] Slice F1: write handoff design:
+    `docs/sim/specs/2026-05-28-scenario-exerciser-catalog-design.md`.
+  - [x] Review gate F1: scenario/catalog design review for scope, scenario
+    ladder, and artifact contract.
+  - [x] Slice F2: add runnable local scenario catalog examples.
+  - [x] Review gate F2: schedule and artifact review for deterministic
+    workload coverage.
+  - [x] Slice F3: add `scripts/smoke-sim-scenarios.sh` and ignored smoke
+    coverage for the fast catalog, optional soak, and existing-provider
+    baseline.
+  - [x] Slice F4: document the scenario ladder and tracker state.
+  - [x] Final review gate: full Slice F scenario catalog review plus
+    test/artifact review.
 
 ## Phase 3: Stateful Contract Workloads
 
-- [ ] Add deploy-at-start contract corpus support.
-- [ ] Add storage-read workloads tied to deployed contracts.
-- [ ] Add events-query workloads tied to deployed contracts.
-- [ ] Add view-call workloads when the runtime manifest advertises view support.
+- [x] Slice G1: write handoff design:
+  `docs/sim/specs/2026-05-28-contract-deploy-view-scenario-design.md`.
+- [x] Review gate G1: manifest/deploy/view design and artifact contract
+  review.
+- [x] Slice G2: add deploy-at-start contract artifact support and terminal
+  deployment result records.
+- [x] Slice G3: execute `view-call` workloads against deployed contracts.
+- [x] Slice G4: add Fibonacci example scenario and extend scenario smoke
+  artifact checks.
+- [x] Final review gate: full Slice G contract scenario review plus gated
+  smoke verification.
+- [x] Slice H1: add a first-class scenario library catalog:
+  `examples/sim/catalog.json`.
+- [x] Slice H2: add `hoglab catalog` with tag filtering and JSON output.
+- [x] Slice H3: document the source-first contract artifact convention.
+- [x] Review gate H: code/API and test/artifact review for catalog metadata,
+  CLI output, docs, and schema compatibility.
+- [x] Slice I1: write handoff design:
+  `docs/sim/specs/2026-05-28-contract-storage-read-scenario-design.md`.
+- [x] Slice I2: add manifest validation and contract setup for
+  `storageReads`.
+- [x] Slice I3: execute `storage-read` workloads against deployed contracts.
+- [x] Slice I4: add Fibonacci storage-read example and extend scenario smoke
+  coverage.
+- [x] Final review gate I: behavior/API and test/artifact review for
+  storage-read semantics and artifacts.
+- [x] Slice J1: write handoff design:
+  `docs/sim/specs/2026-05-29-contract-events-query-scenario-design.md`.
+- [x] Slice J2: add manifest validation and contract setup for
+  `eventQueries`.
+- [x] Slice J3: execute `events-query` workloads against deployed contracts.
+- [x] Slice J4: add Fibonacci events-query example and extend scenario smoke
+  coverage.
+- [x] Final review gate J: behavior/API and test/artifact review for
+  events-query semantics and artifacts.
+- [x] Add view-call workloads when the runtime manifest advertises view support.
 - [ ] Add richer actor state machines.
 - [ ] Add read-after-write scenario presets.
+- [ ] Add positive event-indexing scenarios with contracts that emit events
+  during setup or scheduled load.
 - [ ] Add storage-heavy, event-heavy, calldata-heavy, and compute-heavy
   workloads.
 - [ ] Add NNInt-specific scenario presets.

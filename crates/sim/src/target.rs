@@ -152,6 +152,8 @@ pub struct TargetOverrides {
     pub groundhog_binary: Option<PathBuf>,
     /// `hogd-dev` binary path for the `local` provider.
     pub hogd_dev_binary: Option<PathBuf>,
+    /// `hogd-dev` x23 intro protocol token for the `local` provider.
+    pub hogd_protocol: Option<String>,
     /// Public JSON-RPC port requested from the `local` provider.
     pub port: Option<u16>,
     /// Startup timeout in seconds for the `local` provider.
@@ -174,6 +176,8 @@ impl TargetOverrides {
             Some("--groundhog-binary")
         } else if self.hogd_dev_binary.is_some() {
             Some("--hogd-dev-binary")
+        } else if self.hogd_protocol.is_some() {
+            Some("--hogd-protocol")
         } else if self.port.is_some() {
             Some("--port")
         } else if self.startup_timeout_secs.is_some() {
@@ -325,6 +329,7 @@ struct LocalAcquiredTarget {
 struct LocalLaunchConfig {
     groundhog_binary: PathBuf,
     hogd_dev_binary: Option<PathBuf>,
+    hogd_protocol: Option<String>,
     required_accounts: u32,
     startup_timeout_secs: u64,
     logs_dir: PathBuf,
@@ -443,6 +448,7 @@ impl LocalTargetProvider {
         let launch_config = LocalLaunchConfig {
             groundhog_binary: groundhog,
             hogd_dev_binary,
+            hogd_protocol: overrides.hogd_protocol,
             required_accounts,
             startup_timeout_secs,
             logs_dir: context.logs_dir,
@@ -565,6 +571,7 @@ struct LocalNodeStartup {
 fn local_node_args(
     required_accounts: u32,
     hogd_dev_binary: Option<&Path>,
+    hogd_protocol: Option<&str>,
     port: Option<u16>,
     startup_timeout_secs: u64,
 ) -> Vec<String> {
@@ -579,6 +586,10 @@ fn local_node_args(
     if let Some(binary) = hogd_dev_binary {
         args.push("--hogd-dev-binary".to_string());
         args.push(binary.display().to_string());
+    }
+    if let Some(protocol) = hogd_protocol {
+        args.push("--hogd-protocol".to_string());
+        args.push(protocol.to_string());
     }
     if let Some(port) = port {
         args.push("--port".to_string());
@@ -596,6 +607,7 @@ async fn launch_local_node(
     let args = local_node_args(
         config.required_accounts,
         config.hogd_dev_binary.as_deref(),
+        config.hogd_protocol.as_deref(),
         port,
         config.startup_timeout_secs,
     );
@@ -1280,7 +1292,7 @@ mod tests {
             .acquire(
                 &manifest,
                 TargetOverrides {
-                    port: Some(0),
+                    hogd_protocol: Some("hogp/test".into()),
                     ..TargetOverrides::default()
                 },
                 context(),
@@ -1291,7 +1303,7 @@ mod tests {
         assert!(matches!(
             error,
             SimError::Validation(ValidationError::ExistingRejectsLocalLaunchOverride {
-                flag: "--port"
+                flag: "--hogd-protocol"
             })
         ));
     }
@@ -1385,7 +1397,13 @@ mod tests {
 
     #[test]
     fn local_node_args_include_required_account_count() {
-        let args = local_node_args(5, Some(std::path::Path::new("/tmp/hogd-dev")), Some(0), 45);
+        let args = local_node_args(
+            5,
+            Some(std::path::Path::new("/tmp/hogd-dev")),
+            Some("hogp/test"),
+            Some(0),
+            45,
+        );
 
         assert_eq!(
             args,
@@ -1398,6 +1416,8 @@ mod tests {
                 "45",
                 "--hogd-dev-binary",
                 "/tmp/hogd-dev",
+                "--hogd-protocol",
+                "hogp/test",
                 "--port",
                 "0"
             ]
@@ -1414,7 +1434,7 @@ mod tests {
 
     #[test]
     fn restart_args_use_resolved_port() {
-        let args = local_node_args(5, None, Some(49152), 30);
+        let args = local_node_args(5, None, None, Some(49152), 30);
 
         assert_eq!(
             args,

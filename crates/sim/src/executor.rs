@@ -4,19 +4,31 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use groundhog_rpc_api_types::{
+    BlockHeight, ContractAddress,
     block::ChainTip,
+    events::{
+        BlockAnchor, ContractAddressList, EventFilter, EventFilterList, EventPage, EventQuery,
+        EventTopicFilter, IterationOrder, PaginationCursor, TopicList,
+    },
+    hex::{Hex0x, HexBytes},
     receipt::{ExecStatus, TransactionReceipt},
     runtime_manifest::RuntimeManifest,
+    state::{StorageItemInfo, StorageItemRead},
     transaction::TxHash,
+    view::{RootInvocationOutput, ViewRequest, ViewResponse},
 };
 use groundhog_rpc_client::GroundhogApiClient;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::{Id as TaskId, JoinError, JoinSet};
 
 use crate::actor::{ActorState, DrainedPendingReceipt, ReceiptPollTarget};
+use crate::contract::{PreparedEventQuery, PreparedStorageRead, PreparedViewCall};
 use crate::error::SimError;
 use crate::event::{ChaosTransitionEvent, EventWriter, ResultEvent, WorkloadEvent};
-use crate::manifest::{ChaosEventKind, ChaosEventSpec, SimulationManifest, WorkloadKind};
+use crate::manifest::{
+    ChaosEventKind, ChaosEventSpec, EventQueryAnchorSpec, EventQueryOrderSpec, SimulationManifest,
+    WorkloadKind,
+};
 use crate::metrics::RunMetricsBuilder;
 use crate::result::{ChainTipObservation, ChaosEventRecord, ChaosEventState};
 use crate::scheduler::{
@@ -28,6 +40,7 @@ use crate::transaction::{
     runtime_dev_wallet_action_entrypoint,
 };
 use crate::util::{duration_ms, json_string, unix_ms, workload_name};
+use xdr_common::VecM;
 
 const DEFAULT_GLOBAL_IN_FLIGHT_LIMIT: usize = 1_024;
 // Actor state is mutated only when a workload completion is recorded. Keep the
@@ -49,6 +62,25 @@ pub trait SimRpcClient {
         _tx_hash: TxHash,
     ) -> impl Future<Output = Result<Option<TransactionReceipt>, String>> + Send {
         async { Err("transaction receipt RPC is not implemented by this client".into()) }
+    }
+    fn view(
+        &self,
+        _request: ViewRequest,
+    ) -> impl Future<Output = Result<ViewResponse, String>> + Send {
+        async { Err("view RPC is not implemented by this client".into()) }
+    }
+    fn storage_read(
+        &self,
+        _address: ContractAddress,
+        _key: HexBytes,
+    ) -> impl Future<Output = Result<StorageItemRead, String>> + Send {
+        async { Err("storage read RPC is not implemented by this client".into()) }
+    }
+    fn events_query(
+        &self,
+        _query: EventQuery,
+    ) -> impl Future<Output = Result<EventPage, String>> + Send {
+        async { Err("events query RPC is not implemented by this client".into()) }
     }
 }
 
@@ -88,6 +120,43 @@ where
                 .map_err(|error| error.to_string())
         }
     }
+
+    #[allow(clippy::manual_async_fn)]
+    fn view(
+        &self,
+        request: ViewRequest,
+    ) -> impl Future<Output = Result<ViewResponse, String>> + Send {
+        async move {
+            GroundhogApiClient::view(self, request)
+                .await
+                .map_err(|error| error.to_string())
+        }
+    }
+
+    #[allow(clippy::manual_async_fn)]
+    fn storage_read(
+        &self,
+        address: ContractAddress,
+        key: HexBytes,
+    ) -> impl Future<Output = Result<StorageItemRead, String>> + Send {
+        async move {
+            GroundhogApiClient::get_storage_at(self, address, key)
+                .await
+                .map_err(|error| error.to_string())
+        }
+    }
+
+    #[allow(clippy::manual_async_fn)]
+    fn events_query(
+        &self,
+        query: EventQuery,
+    ) -> impl Future<Output = Result<EventPage, String>> + Send {
+        async move {
+            GroundhogApiClient::get_events(self, query)
+                .await
+                .map_err(|error| error.to_string())
+        }
+    }
 }
 
 /// Inputs for executing a generated schedule.
@@ -99,6 +168,9 @@ pub struct ScheduleExecution<'a> {
     pub actor_states: &'a mut [ActorState],
     pub event_writer: &'a mut EventWriter,
     pub metrics: &'a mut RunMetricsBuilder,
+    pub view_calls: &'a [PreparedViewCall],
+    pub storage_reads: &'a [PreparedStorageRead],
+    pub event_queries: &'a [PreparedEventQuery],
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -136,6 +208,9 @@ where
         actor_states,
         event_writer,
         metrics,
+        view_calls,
+        storage_reads,
+        event_queries,
     } = input;
     let wallet_entrypoint = runtime_dev_wallet_action_entrypoint(runtime_manifest)?;
     let run_start = Instant::now();
@@ -214,6 +289,9 @@ where
                         .ok_or(SimError::Executor("actor state missing".into()))?,
                     workload,
                     wallet_entrypoint,
+                    view_calls,
+                    storage_reads,
+                    event_queries,
                 )?;
                 dispatch_workload(
                     client.clone(),
@@ -408,6 +486,9 @@ fn prepare_workload(
     actor: &mut ActorState,
     workload: WorkloadKind,
     wallet_entrypoint: groundhog_xdr::contract::ContractEntrypointID,
+    view_calls: &[PreparedViewCall],
+    storage_reads: &[PreparedStorageRead],
+    event_queries: &[PreparedEventQuery],
 ) -> Result<PreparedWorkload, SimError> {
     match workload {
         WorkloadKind::ChainTip => Ok(PreparedWorkload::ChainTip),
@@ -417,7 +498,36 @@ fn prepare_workload(
         WorkloadKind::ReceiptPoll => Ok(PreparedWorkload::ReceiptPoll(PreparedReceiptPoll {
             target: actor.receipt_poll_target(),
         })),
-        _ => Err(SimError::UnsupportedRuntimeWorkloads(workload_name(
+        WorkloadKind::ViewCall => {
+            let view = view_calls.first().ok_or_else(|| {
+                SimError::Executor("view-call workload requires at least one prepared view".into())
+            })?;
+            Ok(PreparedWorkload::ViewCall(PreparedViewWorkload {
+                view: view.clone(),
+                caller: actor.wallet_address,
+            }))
+        }
+        WorkloadKind::StorageRead => {
+            let read = storage_reads.first().ok_or_else(|| {
+                SimError::Executor(
+                    "storage-read workload requires at least one prepared storage read".into(),
+                )
+            })?;
+            Ok(PreparedWorkload::StorageRead(PreparedStorageReadWorkload {
+                read: read.clone(),
+            }))
+        }
+        WorkloadKind::EventsQuery => {
+            let query = event_queries.first().ok_or_else(|| {
+                SimError::Executor(
+                    "events-query workload requires at least one prepared event query".into(),
+                )
+            })?;
+            Ok(PreparedWorkload::EventsQuery(PreparedEventQueryWorkload {
+                query: query.clone(),
+            }))
+        }
+        WorkloadKind::StatusPoll => Err(SimError::UnsupportedRuntimeWorkloads(workload_name(
             workload,
         ))),
     }
@@ -448,6 +558,11 @@ fn dispatch_workload<C>(
                 execute_wallet_submit_smoke(client, &tick, tx).await
             }
             PreparedWorkload::ReceiptPoll(poll) => execute_receipt_poll(client, &tick, poll).await,
+            PreparedWorkload::ViewCall(view) => execute_view_call(client, &tick, view).await,
+            PreparedWorkload::StorageRead(read) => execute_storage_read(client, &tick, read).await,
+            PreparedWorkload::EventsQuery(query) => {
+                execute_events_query(client, &tick, query).await
+            }
         }
     });
     task_contexts.insert(abort.id(), context);
@@ -582,6 +697,21 @@ fn backpressure_completion(
                 receipt_status: None,
                 receipt_status_detail: None,
                 submit_to_receipt_latency_ms: None,
+                view_result: None,
+                view_return_data: None,
+                view_abort_data: None,
+                view_event_count: None,
+                storage_read_name: None,
+                storage_contract: None,
+                storage_key: None,
+                storage_item_present: None,
+                storage_item_kind: None,
+                event_query_name: None,
+                event_contract: None,
+                event_count: None,
+                event_cursor: None,
+                event_latest_block: None,
+                event_oldest_block: None,
                 error_class: Some("simulator-backpressure".into()),
                 error: Some(format!("{scope} in-flight limit reached: {error}")),
             },
@@ -878,6 +1008,21 @@ fn target_restarted_workload_completion(
                 receipt_status: None,
                 receipt_status_detail: None,
                 submit_to_receipt_latency_ms: None,
+                view_result: None,
+                view_return_data: None,
+                view_abort_data: None,
+                view_event_count: None,
+                storage_read_name: None,
+                storage_contract: None,
+                storage_key: None,
+                storage_item_present: None,
+                storage_item_kind: None,
+                event_query_name: None,
+                event_contract: None,
+                event_count: None,
+                event_cursor: None,
+                event_latest_block: None,
+                event_oldest_block: None,
                 error_class: Some("target-restarted".into()),
                 error: Some(format!(
                     "workload aborted at simulation time {simulation_time_ms} because target restarted"
@@ -919,6 +1064,21 @@ fn chaos_failed_workload_completion(
                 receipt_status: None,
                 receipt_status_detail: None,
                 submit_to_receipt_latency_ms: None,
+                view_result: None,
+                view_return_data: None,
+                view_abort_data: None,
+                view_event_count: None,
+                storage_read_name: None,
+                storage_contract: None,
+                storage_key: None,
+                storage_item_present: None,
+                storage_item_kind: None,
+                event_query_name: None,
+                event_contract: None,
+                event_count: None,
+                event_cursor: None,
+                event_latest_block: None,
+                event_oldest_block: None,
                 error_class: Some("chaos-failed".into()),
                 error: Some(format!(
                     "workload aborted at simulation time {simulation_time_ms} because chaos failed"
@@ -963,6 +1123,21 @@ fn target_restarted_receipt_completion(
                 submit_to_receipt_latency_ms: Some(duration_ms(
                     Instant::now().saturating_duration_since(receipt.submit_completed_at),
                 )),
+                view_result: None,
+                view_return_data: None,
+                view_abort_data: None,
+                view_event_count: None,
+                storage_read_name: None,
+                storage_contract: None,
+                storage_key: None,
+                storage_item_present: None,
+                storage_item_kind: None,
+                event_query_name: None,
+                event_contract: None,
+                event_count: None,
+                event_cursor: None,
+                event_latest_block: None,
+                event_oldest_block: None,
                 error_class: Some("target-restarted".into()),
                 error: Some("pending receipt lost because target restarted".into()),
             },
@@ -1041,6 +1216,7 @@ fn chaos_kind_name(kind: ChaosEventKind) -> &'static str {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 async fn execute_chain_tip<C>(
     client: C,
     tick: &ScheduledActorTick,
@@ -1085,6 +1261,21 @@ where
                         receipt_status: None,
                         receipt_status_detail: None,
                         submit_to_receipt_latency_ms: None,
+                        view_result: None,
+                        view_return_data: None,
+                        view_abort_data: None,
+                        view_event_count: None,
+                        storage_read_name: None,
+                        storage_contract: None,
+                        storage_key: None,
+                        storage_item_present: None,
+                        storage_item_kind: None,
+                        event_query_name: None,
+                        event_contract: None,
+                        event_count: None,
+                        event_cursor: None,
+                        event_latest_block: None,
+                        event_oldest_block: None,
                         error_class: None,
                         error: None,
                     },
@@ -1118,6 +1309,21 @@ where
                     receipt_status: None,
                     receipt_status_detail: None,
                     submit_to_receipt_latency_ms: None,
+                    view_result: None,
+                    view_return_data: None,
+                    view_abort_data: None,
+                    view_event_count: None,
+                    storage_read_name: None,
+                    storage_contract: None,
+                    storage_key: None,
+                    storage_item_present: None,
+                    storage_item_kind: None,
+                    event_query_name: None,
+                    event_contract: None,
+                    event_count: None,
+                    event_cursor: None,
+                    event_latest_block: None,
+                    event_oldest_block: None,
                     error_class: Some("rpc-error".into()),
                     error: Some(error),
                 },
@@ -1131,6 +1337,7 @@ where
     }
 }
 
+#[allow(clippy::too_many_lines)]
 async fn execute_wallet_submit_smoke<C>(
     client: C,
     tick: &ScheduledActorTick,
@@ -1178,6 +1385,21 @@ where
                         receipt_status: None,
                         receipt_status_detail: None,
                         submit_to_receipt_latency_ms: None,
+                        view_result: None,
+                        view_return_data: None,
+                        view_abort_data: None,
+                        view_event_count: None,
+                        storage_read_name: None,
+                        storage_contract: None,
+                        storage_key: None,
+                        storage_item_present: None,
+                        storage_item_kind: None,
+                        event_query_name: None,
+                        event_contract: None,
+                        event_count: None,
+                        event_cursor: None,
+                        event_latest_block: None,
+                        event_oldest_block: None,
                         error_class: None,
                         error: None,
                     },
@@ -1211,6 +1433,21 @@ where
                     receipt_status: None,
                     receipt_status_detail: None,
                     submit_to_receipt_latency_ms: None,
+                    view_result: None,
+                    view_return_data: None,
+                    view_abort_data: None,
+                    view_event_count: None,
+                    storage_read_name: None,
+                    storage_contract: None,
+                    storage_key: None,
+                    storage_item_present: None,
+                    storage_item_kind: None,
+                    event_query_name: None,
+                    event_contract: None,
+                    event_count: None,
+                    event_cursor: None,
+                    event_latest_block: None,
+                    event_oldest_block: None,
                     error_class: Some("rpc-error".into()),
                     error: Some(error),
                 },
@@ -1371,6 +1608,562 @@ fn receipt_poll_failed(
     }
 }
 
+async fn execute_view_call<C>(
+    client: C,
+    tick: &ScheduledActorTick,
+    prepared: PreparedViewWorkload,
+) -> Result<WorkloadCompletion, SimError>
+where
+    C: SimRpcClient + Clone + Send + Sync + 'static,
+{
+    let started_at_unix_ms = unix_ms()?.to_string();
+    let started = Instant::now();
+    let request = ViewRequest {
+        contract: Hex0x(prepared.view.contract),
+        entrypoint: HexBytes(prepared.view.entrypoint.clone()),
+        calldata: HexBytes(prepared.view.calldata.clone()),
+        caller: Some(Hex0x(prepared.caller)),
+    };
+    let response = client.view(request).await;
+    let latency_ms = duration_ms(started.elapsed());
+    let completed_at_unix_ms = unix_ms()?.to_string();
+
+    match response {
+        Ok(response) => Ok(view_response_completion(
+            tick,
+            &prepared.view,
+            response,
+            started_at_unix_ms,
+            completed_at_unix_ms,
+            latency_ms,
+        )),
+        Err(error) => Ok(WorkloadCompletion {
+            workload: WorkloadKind::ViewCall,
+            latency_ms,
+            error_class: Some("view-rpc-error".into()),
+            chain_tip: None,
+            event: ResultEvent::WorkloadFailed {
+                event: view_workload_event(
+                    tick,
+                    started_at_unix_ms,
+                    completed_at_unix_ms,
+                    latency_ms,
+                )
+                .with_error("view-rpc-error", error),
+            },
+            skipped: false,
+            submitted_transaction: None,
+            observed_receipt: None,
+            receipt_poll: None,
+            submit_to_receipt_latency_ms: None,
+        }),
+    }
+}
+
+fn view_response_completion(
+    tick: &ScheduledActorTick,
+    view: &PreparedViewCall,
+    response: ViewResponse,
+    started_at_unix_ms: String,
+    completed_at_unix_ms: String,
+    latency_ms: u64,
+) -> WorkloadCompletion {
+    let mut event = view_workload_event(tick, started_at_unix_ms, completed_at_unix_ms, latency_ms);
+    event.chain_height = Some(*response.height);
+    event.view_event_count = Some(response.events.len() as u64);
+
+    match response.output {
+        RootInvocationOutput::Return { return_data } => {
+            let actual = format!("0x{}", hex::encode(&return_data.0));
+            event.view_result = Some("return".into());
+            event.view_return_data = Some(actual.clone());
+            if let Some(expected) = &view.expect_return_data
+                && expected.as_slice() != return_data.0.as_slice()
+            {
+                let expected = format!("0x{}", hex::encode(expected));
+                let error = format!(
+                    "view call `{}` on `{}` returned {actual}, expected {expected}",
+                    view.name, view.contract_name
+                );
+                return view_failure_completion(event, latency_ms, "view-return-mismatch", error);
+            }
+            view_success_completion(event, latency_ms)
+        }
+        RootInvocationOutput::Abort { abort_data } => {
+            event.view_result = Some("abort".into());
+            event.view_abort_data = Some(format!("0x{}", hex::encode(abort_data.0)));
+            view_failure_completion(
+                event,
+                latency_ms,
+                "view-aborted",
+                format!("view call `{}` aborted", view.name),
+            )
+        }
+        RootInvocationOutput::Fault => {
+            event.view_result = Some("fault".into());
+            view_failure_completion(
+                event,
+                latency_ms,
+                "view-faulted",
+                format!("view call `{}` faulted", view.name),
+            )
+        }
+        _ => {
+            event.view_result = Some("fault".into());
+            view_failure_completion(
+                event,
+                latency_ms,
+                "view-faulted",
+                format!(
+                    "view call `{}` returned an unknown output variant",
+                    view.name
+                ),
+            )
+        }
+    }
+}
+
+fn view_success_completion(event: WorkloadEvent, latency_ms: u64) -> WorkloadCompletion {
+    WorkloadCompletion {
+        workload: WorkloadKind::ViewCall,
+        latency_ms,
+        error_class: None,
+        chain_tip: None,
+        event: ResultEvent::WorkloadCompleted { event },
+        skipped: false,
+        submitted_transaction: None,
+        observed_receipt: None,
+        receipt_poll: None,
+        submit_to_receipt_latency_ms: None,
+    }
+}
+
+fn view_failure_completion(
+    event: WorkloadEvent,
+    latency_ms: u64,
+    class: impl Into<String>,
+    error: impl Into<String>,
+) -> WorkloadCompletion {
+    let class = class.into();
+    WorkloadCompletion {
+        workload: WorkloadKind::ViewCall,
+        latency_ms,
+        error_class: Some(class.clone()),
+        chain_tip: None,
+        event: ResultEvent::WorkloadFailed {
+            event: event.with_error(class, error),
+        },
+        skipped: false,
+        submitted_transaction: None,
+        observed_receipt: None,
+        receipt_poll: None,
+        submit_to_receipt_latency_ms: None,
+    }
+}
+
+fn view_workload_event(
+    tick: &ScheduledActorTick,
+    started_at_unix_ms: String,
+    completed_at_unix_ms: String,
+    latency_ms: u64,
+) -> WorkloadEvent {
+    WorkloadEvent {
+        actor_id: tick.actor_id,
+        workload: WorkloadKind::ViewCall,
+        scheduled_time_ms: tick.simulation_time_ms,
+        started_at_unix_ms,
+        completed_at_unix_ms,
+        latency_ms,
+        rpc_method: "groundhog_view",
+        chain_height: None,
+        chain_block_hash: None,
+        tx_hash: None,
+        tx_nonce: None,
+        receipt_present: None,
+        receipt_status: None,
+        receipt_status_detail: None,
+        submit_to_receipt_latency_ms: None,
+        view_result: None,
+        view_return_data: None,
+        view_abort_data: None,
+        view_event_count: None,
+        storage_read_name: None,
+        storage_contract: None,
+        storage_key: None,
+        storage_item_present: None,
+        storage_item_kind: None,
+        event_query_name: None,
+        event_contract: None,
+        event_count: None,
+        event_cursor: None,
+        event_latest_block: None,
+        event_oldest_block: None,
+        error_class: None,
+        error: None,
+    }
+}
+
+async fn execute_storage_read<C>(
+    client: C,
+    tick: &ScheduledActorTick,
+    prepared: PreparedStorageReadWorkload,
+) -> Result<WorkloadCompletion, SimError>
+where
+    C: SimRpcClient + Clone + Send + Sync + 'static,
+{
+    let started_at_unix_ms = unix_ms()?.to_string();
+    let started = Instant::now();
+    let response = client
+        .storage_read(
+            Hex0x(prepared.read.contract),
+            HexBytes(prepared.read.key.clone()),
+        )
+        .await;
+    let latency_ms = duration_ms(started.elapsed());
+    let completed_at_unix_ms = unix_ms()?.to_string();
+
+    match response {
+        Ok(response) => Ok(storage_read_response_completion(
+            tick,
+            &prepared.read,
+            &response,
+            started_at_unix_ms,
+            completed_at_unix_ms,
+            latency_ms,
+        )),
+        Err(error) => Ok(storage_read_failure_completion(
+            storage_read_workload_event(
+                tick,
+                &prepared.read,
+                started_at_unix_ms,
+                completed_at_unix_ms,
+                latency_ms,
+            ),
+            latency_ms,
+            "storage-read-rpc-error",
+            error,
+        )),
+    }
+}
+
+fn storage_read_response_completion(
+    tick: &ScheduledActorTick,
+    read: &PreparedStorageRead,
+    response: &StorageItemRead,
+    started_at_unix_ms: String,
+    completed_at_unix_ms: String,
+    latency_ms: u64,
+) -> WorkloadCompletion {
+    let mut event = storage_read_workload_event(
+        tick,
+        read,
+        started_at_unix_ms,
+        completed_at_unix_ms,
+        latency_ms,
+    );
+    let present = response.item.is_some();
+    event.chain_height = Some(*response.block_height);
+    event.storage_item_present = Some(present);
+    event.storage_item_kind = response
+        .item
+        .as_ref()
+        .map(storage_item_kind)
+        .map(str::to_owned);
+
+    if let Some(expected) = read.expect_present
+        && expected != present
+    {
+        let error = format!(
+            "storage read `{}` on `{}` present={present}, expected {expected}",
+            read.name, read.contract_name
+        );
+        return storage_read_failure_completion(
+            event,
+            latency_ms,
+            "storage-presence-mismatch",
+            error,
+        );
+    }
+    storage_read_success_completion(event, latency_ms)
+}
+
+fn storage_read_success_completion(event: WorkloadEvent, latency_ms: u64) -> WorkloadCompletion {
+    WorkloadCompletion {
+        workload: WorkloadKind::StorageRead,
+        latency_ms,
+        error_class: None,
+        chain_tip: None,
+        event: ResultEvent::WorkloadCompleted { event },
+        skipped: false,
+        submitted_transaction: None,
+        observed_receipt: None,
+        receipt_poll: None,
+        submit_to_receipt_latency_ms: None,
+    }
+}
+
+fn storage_read_failure_completion(
+    event: WorkloadEvent,
+    latency_ms: u64,
+    class: impl Into<String>,
+    error: impl Into<String>,
+) -> WorkloadCompletion {
+    let class = class.into();
+    WorkloadCompletion {
+        workload: WorkloadKind::StorageRead,
+        latency_ms,
+        error_class: Some(class.clone()),
+        chain_tip: None,
+        event: ResultEvent::WorkloadFailed {
+            event: event.with_error(class, error),
+        },
+        skipped: false,
+        submitted_transaction: None,
+        observed_receipt: None,
+        receipt_poll: None,
+        submit_to_receipt_latency_ms: None,
+    }
+}
+
+fn storage_read_workload_event(
+    tick: &ScheduledActorTick,
+    read: &PreparedStorageRead,
+    started_at_unix_ms: String,
+    completed_at_unix_ms: String,
+    latency_ms: u64,
+) -> WorkloadEvent {
+    WorkloadEvent {
+        actor_id: tick.actor_id,
+        workload: WorkloadKind::StorageRead,
+        scheduled_time_ms: tick.simulation_time_ms,
+        started_at_unix_ms,
+        completed_at_unix_ms,
+        latency_ms,
+        rpc_method: "groundhog_getStorageAt",
+        chain_height: None,
+        chain_block_hash: None,
+        tx_hash: None,
+        tx_nonce: None,
+        receipt_present: None,
+        receipt_status: None,
+        receipt_status_detail: None,
+        submit_to_receipt_latency_ms: None,
+        view_result: None,
+        view_return_data: None,
+        view_abort_data: None,
+        view_event_count: None,
+        storage_read_name: Some(read.name.clone()),
+        storage_contract: Some(format!("0x{}", hex::encode(read.contract.as_ref()))),
+        storage_key: Some(format!("0x{}", hex::encode(&read.key))),
+        storage_item_present: None,
+        storage_item_kind: None,
+        event_query_name: None,
+        event_contract: None,
+        event_count: None,
+        event_cursor: None,
+        event_latest_block: None,
+        event_oldest_block: None,
+        error_class: None,
+        error: None,
+    }
+}
+
+fn storage_item_kind(item: &StorageItemInfo) -> &'static str {
+    match item {
+        StorageItemInfo::NonnegativeInt { .. } => "nonnegative-int",
+        StorageItemInfo::Bytestring { .. } => "bytestring",
+        StorageItemInfo::AuthData => "auth-data",
+        StorageItemInfo::RetrocausalQueue => "retrocausal-queue",
+        StorageItemInfo::ReplayCacheEntry => "replay-cache-entry",
+        StorageItemInfo::DeployedContract { .. } => "deployed-contract",
+        StorageItemInfo::Unknown { .. } => "unknown",
+    }
+}
+
+async fn execute_events_query<C>(
+    client: C,
+    tick: &ScheduledActorTick,
+    prepared: PreparedEventQueryWorkload,
+) -> Result<WorkloadCompletion, SimError>
+where
+    C: SimRpcClient + Clone + Send + Sync + 'static,
+{
+    let started_at_unix_ms = unix_ms()?.to_string();
+    let started = Instant::now();
+    let request = event_query_request(&prepared.query);
+    let response = client.events_query(request).await;
+    let latency_ms = duration_ms(started.elapsed());
+    let completed_at_unix_ms = unix_ms()?.to_string();
+
+    match response {
+        Ok(response) => Ok(events_query_response_completion(
+            tick,
+            &prepared.query,
+            &response,
+            started_at_unix_ms,
+            completed_at_unix_ms,
+            latency_ms,
+        )),
+        Err(error) => Ok(events_query_failure_completion(
+            events_query_workload_event(
+                tick,
+                &prepared.query,
+                started_at_unix_ms,
+                completed_at_unix_ms,
+                latency_ms,
+            ),
+            latency_ms,
+            "events-query-rpc-error",
+            error,
+        )),
+    }
+}
+
+fn event_query_request(query: &PreparedEventQuery) -> EventQuery {
+    EventQuery {
+        filters: EventFilterList(VecM(vec![EventFilter {
+            contract_addresses: ContractAddressList(VecM(vec![Hex0x(query.contract)])),
+            topics: EventTopicFilter {
+                topic0: TopicList(VecM(Vec::new())),
+                topic1: TopicList(VecM(Vec::new())),
+                topic2: TopicList(VecM(Vec::new())),
+            },
+        }])),
+        order: match query.order {
+            EventQueryOrderSpec::Ascending => IterationOrder::Ascending,
+            EventQueryOrderSpec::Descending => IterationOrder::Descending,
+        },
+        anchor: match query.anchor {
+            EventQueryAnchorSpec::AtBeginning => BlockAnchor::AtBeginning,
+            EventQueryAnchorSpec::AtEnd => BlockAnchor::AtEnd,
+            EventQueryAnchorSpec::AtHeight { height } => BlockAnchor::AtHeight {
+                height: BlockHeight::from(height),
+            },
+        },
+        cursor: PaginationCursor(query.cursor.clone()),
+        limit: query.limit,
+    }
+}
+
+fn events_query_response_completion(
+    tick: &ScheduledActorTick,
+    query: &PreparedEventQuery,
+    response: &EventPage,
+    started_at_unix_ms: String,
+    completed_at_unix_ms: String,
+    latency_ms: u64,
+) -> WorkloadCompletion {
+    let mut event = events_query_workload_event(
+        tick,
+        query,
+        started_at_unix_ms,
+        completed_at_unix_ms,
+        latency_ms,
+    );
+    let event_count = response.events.len() as u64;
+    event.event_count = Some(event_count);
+    event.event_cursor = Some(format!("0x{}", hex::encode(&response.cursor.0)));
+    event.event_latest_block = Some(*response.latest_block);
+    event.event_oldest_block = Some(*response.oldest_block);
+
+    if let Some(expected) = query.expect_min_events
+        && event_count < expected
+    {
+        let error = format!(
+            "event query `{}` on `{}` returned {event_count} events, expected at least {expected}",
+            query.name, query.contract_name
+        );
+        return events_query_failure_completion(
+            event,
+            latency_ms,
+            "event-count-below-minimum",
+            error,
+        );
+    }
+    events_query_success_completion(event, latency_ms)
+}
+
+fn events_query_success_completion(event: WorkloadEvent, latency_ms: u64) -> WorkloadCompletion {
+    WorkloadCompletion {
+        workload: WorkloadKind::EventsQuery,
+        latency_ms,
+        error_class: None,
+        chain_tip: None,
+        event: ResultEvent::WorkloadCompleted { event },
+        skipped: false,
+        submitted_transaction: None,
+        observed_receipt: None,
+        receipt_poll: None,
+        submit_to_receipt_latency_ms: None,
+    }
+}
+
+fn events_query_failure_completion(
+    event: WorkloadEvent,
+    latency_ms: u64,
+    class: impl Into<String>,
+    error: impl Into<String>,
+) -> WorkloadCompletion {
+    let class = class.into();
+    WorkloadCompletion {
+        workload: WorkloadKind::EventsQuery,
+        latency_ms,
+        error_class: Some(class.clone()),
+        chain_tip: None,
+        event: ResultEvent::WorkloadFailed {
+            event: event.with_error(class, error),
+        },
+        skipped: false,
+        submitted_transaction: None,
+        observed_receipt: None,
+        receipt_poll: None,
+        submit_to_receipt_latency_ms: None,
+    }
+}
+
+fn events_query_workload_event(
+    tick: &ScheduledActorTick,
+    query: &PreparedEventQuery,
+    started_at_unix_ms: String,
+    completed_at_unix_ms: String,
+    latency_ms: u64,
+) -> WorkloadEvent {
+    WorkloadEvent {
+        actor_id: tick.actor_id,
+        workload: WorkloadKind::EventsQuery,
+        scheduled_time_ms: tick.simulation_time_ms,
+        started_at_unix_ms,
+        completed_at_unix_ms,
+        latency_ms,
+        rpc_method: "groundhog_getEvents",
+        chain_height: None,
+        chain_block_hash: None,
+        tx_hash: None,
+        tx_nonce: None,
+        receipt_present: None,
+        receipt_status: None,
+        receipt_status_detail: None,
+        submit_to_receipt_latency_ms: None,
+        view_result: None,
+        view_return_data: None,
+        view_abort_data: None,
+        view_event_count: None,
+        storage_read_name: None,
+        storage_contract: None,
+        storage_key: None,
+        storage_item_present: None,
+        storage_item_kind: None,
+        event_query_name: Some(query.name.clone()),
+        event_contract: Some(format!("0x{}", hex::encode(query.contract.as_ref()))),
+        event_count: None,
+        event_cursor: None,
+        event_latest_block: None,
+        event_oldest_block: None,
+        error_class: None,
+        error: None,
+    }
+}
+
 fn receipt_poll_event(
     tick: &ScheduledActorTick,
     times: &ReceiptPollTimes,
@@ -1392,6 +2185,21 @@ fn receipt_poll_event(
         receipt_status: None,
         receipt_status_detail: None,
         submit_to_receipt_latency_ms: None,
+        view_result: None,
+        view_return_data: None,
+        view_abort_data: None,
+        view_event_count: None,
+        storage_read_name: None,
+        storage_contract: None,
+        storage_key: None,
+        storage_item_present: None,
+        storage_item_kind: None,
+        event_query_name: None,
+        event_contract: None,
+        event_count: None,
+        event_cursor: None,
+        event_latest_block: None,
+        event_oldest_block: None,
         error_class: None,
         error: None,
     }
@@ -1511,11 +2319,30 @@ enum PreparedWorkload {
     ChainTip,
     WalletSubmitSmoke(BuiltSubmitTransaction),
     ReceiptPoll(PreparedReceiptPoll),
+    ViewCall(PreparedViewWorkload),
+    StorageRead(PreparedStorageReadWorkload),
+    EventsQuery(PreparedEventQueryWorkload),
 }
 
 #[derive(Debug, Clone, Copy)]
 struct PreparedReceiptPoll {
     target: Option<ReceiptPollTarget>,
+}
+
+#[derive(Debug, Clone)]
+struct PreparedViewWorkload {
+    view: PreparedViewCall,
+    caller: groundhog_xdr::types::ContractAddress,
+}
+
+#[derive(Debug, Clone)]
+struct PreparedStorageReadWorkload {
+    read: PreparedStorageRead,
+}
+
+#[derive(Debug, Clone)]
+struct PreparedEventQueryWorkload {
+    query: PreparedEventQuery,
 }
 
 struct ReceiptPollTimes {
@@ -1589,6 +2416,8 @@ mod tests {
         hex::Hex0x,
         receipt::{ExecStatus, TransactionReceipt},
         runtime_manifest::RuntimeManifest,
+        state::StorageItemRead,
+        view::{RootInvocationOutput, ViewResponse},
     };
     use groundhog_signing::derive_dev_account_signer;
     use groundhog_xdr::types::{ContractAddress, SHA256Hash};
@@ -1604,6 +2433,8 @@ mod tests {
     use crate::runtime::SimAccount;
     use crate::scheduler::{generate_schedule, phase_starts};
     use crate::target::{ChaosController, ChaosEventOutcome, TargetProviderFuture};
+
+    type StorageRequests = Arc<Mutex<Vec<(ContractAddress, Vec<u8>)>>>;
 
     #[derive(Clone)]
     struct PanickingClient;
@@ -1646,6 +2477,28 @@ mod tests {
     #[derive(Clone)]
     struct SlowReceiptClient {
         requested: Arc<Mutex<Vec<TxHash>>>,
+    }
+
+    #[derive(Clone)]
+    struct ViewClient {
+        response: ViewResponse,
+    }
+
+    #[derive(Clone)]
+    struct StorageReadClient {
+        response: StorageItemRead,
+        requested: StorageRequests,
+    }
+
+    #[derive(Clone)]
+    struct EventsQueryClient {
+        response: EventPage,
+        requested: Arc<Mutex<Vec<EventQuery>>>,
+    }
+
+    #[derive(Clone)]
+    struct FailingEventsQueryClient {
+        requested: Arc<Mutex<Vec<EventQuery>>>,
     }
 
     struct SuccessfulChaosController;
@@ -1708,6 +2561,123 @@ mod tests {
             _tx_hex: String,
         ) -> impl Future<Output = Result<TxHash, String>> + Send {
             async { Ok(TxHash(Hex0x(SHA256Hash::from([0x55; 32])))) }
+        }
+    }
+
+    impl SimRpcClient for ViewClient {
+        #[allow(clippy::manual_async_fn)]
+        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, String>> + Send {
+            async { panic!("chain_tip should not be called") }
+        }
+
+        #[allow(clippy::manual_async_fn)]
+        fn send_raw_transaction(
+            &self,
+            _tx_hex: String,
+        ) -> impl Future<Output = Result<TxHash, String>> + Send {
+            async { panic!("send_raw_transaction should not be called") }
+        }
+
+        #[allow(clippy::manual_async_fn)]
+        fn view(
+            &self,
+            _request: ViewRequest,
+        ) -> impl Future<Output = Result<ViewResponse, String>> + Send {
+            let response = self.response.clone();
+            async move { Ok(response) }
+        }
+    }
+
+    impl SimRpcClient for StorageReadClient {
+        #[allow(clippy::manual_async_fn)]
+        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, String>> + Send {
+            async { panic!("chain_tip should not be called") }
+        }
+
+        #[allow(clippy::manual_async_fn)]
+        fn send_raw_transaction(
+            &self,
+            _tx_hex: String,
+        ) -> impl Future<Output = Result<TxHash, String>> + Send {
+            async { panic!("send_raw_transaction should not be called") }
+        }
+
+        #[allow(clippy::manual_async_fn)]
+        fn storage_read(
+            &self,
+            address: Hex0x<ContractAddress>,
+            key: HexBytes,
+        ) -> impl Future<Output = Result<StorageItemRead, String>> + Send {
+            let response = self.response.clone();
+            let requested = self.requested.clone();
+            async move {
+                requested
+                    .lock()
+                    .expect("storage request list should lock")
+                    .push((address.0, key.0));
+                Ok(response)
+            }
+        }
+    }
+
+    impl SimRpcClient for EventsQueryClient {
+        #[allow(clippy::manual_async_fn)]
+        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, String>> + Send {
+            async { panic!("chain_tip should not be called") }
+        }
+
+        #[allow(clippy::manual_async_fn)]
+        fn send_raw_transaction(
+            &self,
+            _tx_hex: String,
+        ) -> impl Future<Output = Result<TxHash, String>> + Send {
+            async { panic!("send_raw_transaction should not be called") }
+        }
+
+        #[allow(clippy::manual_async_fn)]
+        fn events_query(
+            &self,
+            query: EventQuery,
+        ) -> impl Future<Output = Result<EventPage, String>> + Send {
+            let response = self.response.clone();
+            let requested = self.requested.clone();
+            async move {
+                requested
+                    .lock()
+                    .expect("event query request list should lock")
+                    .push(query);
+                Ok(response)
+            }
+        }
+    }
+
+    impl SimRpcClient for FailingEventsQueryClient {
+        #[allow(clippy::manual_async_fn)]
+        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, String>> + Send {
+            async { panic!("chain_tip should not be called") }
+        }
+
+        #[allow(clippy::manual_async_fn)]
+        fn send_raw_transaction(
+            &self,
+            _tx_hex: String,
+        ) -> impl Future<Output = Result<TxHash, String>> + Send {
+            async { panic!("send_raw_transaction should not be called") }
+        }
+
+        #[allow(clippy::manual_async_fn)]
+        fn events_query(
+            &self,
+            query: EventQuery,
+        ) -> impl Future<Output = Result<EventPage, String>> + Send {
+            let requested = self.requested.clone();
+            async move {
+                requested
+                    .lock()
+                    .expect("event query request list should lock")
+                    .push(query);
+                Err("simulated events query failure".into())
+            }
         }
     }
 
@@ -1938,6 +2908,9 @@ mod tests {
                 actor_states: &mut actors,
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
+                view_calls: &[],
+                storage_reads: &[],
+                event_queries: &[],
             },
         )
         .await
@@ -1995,6 +2968,9 @@ mod tests {
                 actor_states: &mut actors,
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
+                view_calls: &[],
+                storage_reads: &[],
+                event_queries: &[],
             },
         )
         .await
@@ -2046,6 +3022,9 @@ mod tests {
                 actor_states: &mut actors,
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
+                view_calls: &[],
+                storage_reads: &[],
+                event_queries: &[],
             },
         )
         .await
@@ -2104,6 +3083,9 @@ mod tests {
                 actor_states: &mut actors,
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
+                view_calls: &[],
+                storage_reads: &[],
+                event_queries: &[],
             },
         )
         .await
@@ -2122,6 +3104,487 @@ mod tests {
             metrics.workload_counts()[&WorkloadKind::WalletSubmitSmoke].failed,
             1
         );
+    }
+
+    #[tokio::test]
+    async fn view_call_records_return_fields() {
+        let tick = ScheduledActorTick {
+            phase_index: 0,
+            actor_id: 0,
+            actor_sequence: 0,
+            simulation_time_ms: 25,
+        };
+        let completion = execute_view_call(
+            ViewClient {
+                response: ViewResponse {
+                    output: RootInvocationOutput::Return {
+                        return_data: HexBytes(vec![0x37]),
+                    },
+                    events: Vec::new(),
+                    height: BlockHeight::from(44),
+                },
+            },
+            &tick,
+            prepared_view(Some(vec![0x37])),
+        )
+        .await
+        .expect("view call should complete");
+
+        assert_eq!(completion.error_class, None);
+        match completion.event {
+            ResultEvent::WorkloadCompleted { event } => {
+                assert_eq!(event.workload, WorkloadKind::ViewCall);
+                assert_eq!(event.rpc_method, "groundhog_view");
+                assert_eq!(event.chain_height, Some(44));
+                assert_eq!(event.view_result.as_deref(), Some("return"));
+                assert_eq!(event.view_return_data.as_deref(), Some("0x37"));
+                assert_eq!(event.view_event_count, Some(0));
+            }
+            other => panic!("expected completed event, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn view_call_return_mismatch_is_failed_workload() {
+        let tick = ScheduledActorTick {
+            phase_index: 0,
+            actor_id: 0,
+            actor_sequence: 0,
+            simulation_time_ms: 25,
+        };
+        let completion = execute_view_call(
+            ViewClient {
+                response: ViewResponse {
+                    output: RootInvocationOutput::Return {
+                        return_data: HexBytes(vec![0x37]),
+                    },
+                    events: Vec::new(),
+                    height: BlockHeight::from(44),
+                },
+            },
+            &tick,
+            prepared_view(Some(vec![0x38])),
+        )
+        .await
+        .expect("view call should complete");
+
+        assert_eq!(
+            completion.error_class.as_deref(),
+            Some("view-return-mismatch")
+        );
+        match completion.event {
+            ResultEvent::WorkloadFailed { event } => {
+                assert_eq!(event.view_result.as_deref(), Some("return"));
+                assert_eq!(event.view_return_data.as_deref(), Some("0x37"));
+                assert_eq!(event.error_class.as_deref(), Some("view-return-mismatch"));
+            }
+            other => panic!("expected failed event, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn storage_read_records_absent_item_fields() {
+        let tick = ScheduledActorTick {
+            phase_index: 0,
+            actor_id: 0,
+            actor_sequence: 0,
+            simulation_time_ms: 25,
+        };
+        let requested = Arc::new(Mutex::new(Vec::new()));
+        let completion = execute_storage_read(
+            StorageReadClient {
+                response: StorageItemRead {
+                    block_height: BlockHeight::from(45),
+                    item: None,
+                },
+                requested: requested.clone(),
+            },
+            &tick,
+            prepared_storage_read(Some(false)),
+        )
+        .await
+        .expect("storage read should complete");
+
+        assert_eq!(completion.error_class, None);
+        assert_eq!(
+            requested
+                .lock()
+                .expect("storage request list should lock")
+                .as_slice(),
+            &[(ContractAddress::from([0x88; 32]), vec![0; 32])]
+        );
+        match completion.event {
+            ResultEvent::WorkloadCompleted { event } => {
+                assert_eq!(event.workload, WorkloadKind::StorageRead);
+                assert_eq!(event.rpc_method, "groundhog_getStorageAt");
+                assert_eq!(event.chain_height, Some(45));
+                assert_eq!(event.storage_read_name.as_deref(), Some("fib-zero-key"));
+                assert_eq!(
+                    event.storage_contract.as_deref(),
+                    Some(prefixed_hex(0x88).as_str())
+                );
+                assert_eq!(
+                    event.storage_key.as_deref(),
+                    Some(prefixed_hex(0x00).as_str())
+                );
+                assert_eq!(event.storage_item_present, Some(false));
+                assert_eq!(event.storage_item_kind, None);
+            }
+            other => panic!("expected completed event, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn storage_read_presence_mismatch_is_failed_workload() {
+        let tick = ScheduledActorTick {
+            phase_index: 0,
+            actor_id: 0,
+            actor_sequence: 0,
+            simulation_time_ms: 25,
+        };
+        let completion = execute_storage_read(
+            StorageReadClient {
+                response: StorageItemRead {
+                    block_height: BlockHeight::from(45),
+                    item: None,
+                },
+                requested: Arc::new(Mutex::new(Vec::new())),
+            },
+            &tick,
+            prepared_storage_read(Some(true)),
+        )
+        .await
+        .expect("storage read should complete");
+
+        assert_eq!(
+            completion.error_class.as_deref(),
+            Some("storage-presence-mismatch")
+        );
+        match completion.event {
+            ResultEvent::WorkloadFailed { event } => {
+                assert_eq!(event.storage_item_present, Some(false));
+                assert_eq!(
+                    event.error_class.as_deref(),
+                    Some("storage-presence-mismatch")
+                );
+            }
+            other => panic!("expected failed event, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn run_schedule_executes_storage_read_and_records_metrics() {
+        let manifest = storage_manifest();
+        let schedule = generate_schedule(&manifest).expect("schedule should generate");
+        let starts = phase_starts(&manifest).expect("phase starts should generate");
+        let file = NamedTempFile::new().expect("temp file should be created");
+        let mut event_writer = EventWriter::create(file.path())
+            .await
+            .expect("event writer should open");
+        let mut metrics = RunMetricsBuilder::default();
+        let mut actors = actor_states();
+        let requested = Arc::new(Mutex::new(Vec::new()));
+        let storage_read = prepared_storage_read(Some(false)).read;
+
+        run_schedule(
+            StorageReadClient {
+                response: StorageItemRead {
+                    block_height: BlockHeight::from(45),
+                    item: None,
+                },
+                requested: requested.clone(),
+            },
+            ScheduleExecution {
+                manifest: &manifest,
+                runtime_manifest: &runtime_manifest(),
+                schedule: &schedule,
+                phase_starts: &starts,
+                actor_states: &mut actors,
+                event_writer: &mut event_writer,
+                metrics: &mut metrics,
+                view_calls: &[],
+                storage_reads: &[storage_read],
+                event_queries: &[],
+            },
+        )
+        .await
+        .expect("storage-read schedule should run");
+
+        assert_eq!(
+            requested
+                .lock()
+                .expect("storage request list should lock")
+                .len(),
+            1
+        );
+        assert_eq!(
+            metrics.workload_counts()[&WorkloadKind::StorageRead].completed,
+            1
+        );
+        let events = tokio::fs::read_to_string(file.path())
+            .await
+            .expect("events should read");
+        let completed = find_event(&events, "workload-completed");
+        assert_eq!(completed["workload"], "storage-read");
+        assert_eq!(completed["storageReadName"], "fib-zero-key");
+        assert_eq!(completed["storageItemPresent"], false);
+    }
+
+    #[tokio::test]
+    async fn events_query_records_page_fields() {
+        let tick = ScheduledActorTick {
+            phase_index: 0,
+            actor_id: 0,
+            actor_sequence: 0,
+            simulation_time_ms: 25,
+        };
+        let requested = Arc::new(Mutex::new(Vec::new()));
+        let completion = execute_events_query(
+            EventsQueryClient {
+                response: event_page(Vec::new(), vec![0xab], 45, 1),
+                requested: requested.clone(),
+            },
+            &tick,
+            prepared_event_query(Some(0)),
+        )
+        .await
+        .expect("events query should complete");
+
+        assert!(completion.error_class.is_none());
+        let requests = requested.lock().expect("event request list should lock");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].limit, 10);
+        assert!(matches!(requests[0].order, IterationOrder::Descending));
+        assert!(matches!(requests[0].anchor, BlockAnchor::AtEnd));
+        assert_eq!(requests[0].cursor.0, Vec::<u8>::new());
+        let filter = requests[0]
+            .filters
+            .iter()
+            .next()
+            .expect("request should contain one filter");
+        assert_eq!(requests[0].filters.iter().len(), 1);
+        assert_eq!(
+            filter
+                .contract_addresses
+                .iter()
+                .next()
+                .expect("filter should contain one contract address")
+                .0,
+            ContractAddress::from([0x88; 32])
+        );
+        drop(requests);
+
+        match completion.event {
+            ResultEvent::WorkloadCompleted { event } => {
+                assert_eq!(event.workload, WorkloadKind::EventsQuery);
+                assert_eq!(event.rpc_method, "groundhog_getEvents");
+                assert_eq!(event.event_query_name.as_deref(), Some("fib-events"));
+                assert_eq!(
+                    event.event_contract.as_deref(),
+                    Some(prefixed_hex(0x88).as_str())
+                );
+                assert_eq!(event.event_count, Some(0));
+                assert_eq!(event.event_cursor.as_deref(), Some("0xab"));
+                assert_eq!(event.event_latest_block, Some(45));
+                assert_eq!(event.event_oldest_block, Some(1));
+            }
+            other => panic!("expected completed event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn event_query_request_preserves_cursor_and_anchor_variants() {
+        let mut prepared = prepared_event_query(Some(0)).query;
+        prepared.cursor = vec![0x12, 0x34];
+        prepared.order = EventQueryOrderSpec::Ascending;
+        prepared.anchor = EventQueryAnchorSpec::AtBeginning;
+
+        let request = event_query_request(&prepared);
+
+        assert_eq!(request.cursor.0, vec![0x12, 0x34]);
+        assert!(matches!(request.order, IterationOrder::Ascending));
+        assert!(matches!(request.anchor, BlockAnchor::AtBeginning));
+
+        prepared.anchor = EventQueryAnchorSpec::AtHeight { height: 77 };
+        let request = event_query_request(&prepared);
+
+        assert!(matches!(
+            request.anchor,
+            BlockAnchor::AtHeight { height } if *height == 77
+        ));
+    }
+
+    #[tokio::test]
+    async fn events_query_records_non_empty_response_cursor() {
+        let tick = ScheduledActorTick {
+            phase_index: 0,
+            actor_id: 0,
+            actor_sequence: 0,
+            simulation_time_ms: 25,
+        };
+        let requested = Arc::new(Mutex::new(Vec::new()));
+        let mut prepared = prepared_event_query(Some(0));
+        prepared.query.cursor = vec![0x12, 0x34];
+        let completion = execute_events_query(
+            EventsQueryClient {
+                response: event_page(Vec::new(), vec![0xab, 0xcd], 45, 1),
+                requested: requested.clone(),
+            },
+            &tick,
+            prepared,
+        )
+        .await
+        .expect("events query should complete");
+
+        let requests = requested.lock().expect("event request list should lock");
+        assert_eq!(requests[0].cursor.0, vec![0x12, 0x34]);
+        drop(requests);
+
+        match completion.event {
+            ResultEvent::WorkloadCompleted { event } => {
+                assert_eq!(event.event_cursor.as_deref(), Some("0xabcd"));
+            }
+            other => panic!("expected completed event, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn events_query_minimum_mismatch_is_failed_workload() {
+        let tick = ScheduledActorTick {
+            phase_index: 0,
+            actor_id: 0,
+            actor_sequence: 0,
+            simulation_time_ms: 25,
+        };
+        let completion = execute_events_query(
+            EventsQueryClient {
+                response: event_page(Vec::new(), Vec::new(), 45, 1),
+                requested: Arc::new(Mutex::new(Vec::new())),
+            },
+            &tick,
+            prepared_event_query(Some(1)),
+        )
+        .await
+        .expect("events query should complete");
+
+        assert_eq!(
+            completion.error_class.as_deref(),
+            Some("event-count-below-minimum")
+        );
+        match completion.event {
+            ResultEvent::WorkloadFailed { event } => {
+                assert_eq!(event.event_count, Some(0));
+                assert_eq!(
+                    event.error_class.as_deref(),
+                    Some("event-count-below-minimum")
+                );
+            }
+            other => panic!("expected failed event, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn events_query_rpc_error_is_failed_workload() {
+        let tick = ScheduledActorTick {
+            phase_index: 0,
+            actor_id: 0,
+            actor_sequence: 0,
+            simulation_time_ms: 25,
+        };
+        let requested = Arc::new(Mutex::new(Vec::new()));
+        let completion = execute_events_query(
+            FailingEventsQueryClient {
+                requested: requested.clone(),
+            },
+            &tick,
+            prepared_event_query(Some(0)),
+        )
+        .await
+        .expect("events query should complete as failed workload");
+
+        assert_eq!(
+            requested
+                .lock()
+                .expect("event request list should lock")
+                .len(),
+            1
+        );
+        assert_eq!(
+            completion.error_class.as_deref(),
+            Some("events-query-rpc-error")
+        );
+        match completion.event {
+            ResultEvent::WorkloadFailed { event } => {
+                assert_eq!(event.workload, WorkloadKind::EventsQuery);
+                assert_eq!(event.event_query_name.as_deref(), Some("fib-events"));
+                assert_eq!(event.error_class.as_deref(), Some("events-query-rpc-error"));
+                assert!(
+                    event
+                        .error
+                        .as_deref()
+                        .is_some_and(|error| error.contains("simulated events query failure"))
+                );
+            }
+            other => panic!("expected failed event, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn run_schedule_executes_events_query_and_records_metrics() {
+        let manifest = events_manifest();
+        let schedule = generate_schedule(&manifest).expect("schedule should generate");
+        let starts = phase_starts(&manifest).expect("phase starts should generate");
+        let file = NamedTempFile::new().expect("temp file should be created");
+        let mut event_writer = EventWriter::create(file.path())
+            .await
+            .expect("event writer should open");
+        let mut metrics = RunMetricsBuilder::default();
+        let mut actors = actor_states();
+        let requested = Arc::new(Mutex::new(Vec::new()));
+        let event_query = prepared_event_query(Some(0)).query;
+
+        run_schedule(
+            EventsQueryClient {
+                response: event_page(Vec::new(), Vec::new(), 45, 1),
+                requested: requested.clone(),
+            },
+            ScheduleExecution {
+                manifest: &manifest,
+                runtime_manifest: &runtime_manifest(),
+                schedule: &schedule,
+                phase_starts: &starts,
+                actor_states: &mut actors,
+                event_writer: &mut event_writer,
+                metrics: &mut metrics,
+                view_calls: &[],
+                storage_reads: &[],
+                event_queries: &[event_query],
+            },
+        )
+        .await
+        .expect("events-query schedule should run");
+
+        assert_eq!(
+            requested
+                .lock()
+                .expect("event query request list should lock")
+                .len(),
+            1
+        );
+        assert_eq!(
+            metrics.workload_counts()[&WorkloadKind::EventsQuery].completed,
+            1
+        );
+        let events = tokio::fs::read_to_string(file.path())
+            .await
+            .expect("events should read");
+        let completed = find_event(&events, "workload-completed");
+        assert_eq!(completed["workload"], "events-query");
+        assert_eq!(completed["eventQueryName"], "fib-events");
+        assert_eq!(completed["eventCount"], 0);
+        assert_eq!(completed["eventCursor"], "0x");
+        assert_eq!(completed["eventLatestBlock"], 45);
+        assert_eq!(completed["eventOldestBlock"], 1);
     }
 
     #[tokio::test]
@@ -2155,6 +3618,9 @@ mod tests {
                 actor_states: &mut actors,
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
+                view_calls: &[],
+                storage_reads: &[],
+                event_queries: &[],
             },
         )
         .await
@@ -2218,6 +3684,9 @@ mod tests {
                 actor_states: &mut actors,
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
+                view_calls: &[],
+                storage_reads: &[],
+                event_queries: &[],
             },
         )
         .await
@@ -2294,6 +3763,9 @@ mod tests {
                 actor_states: &mut actors,
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
+                view_calls: &[],
+                storage_reads: &[],
+                event_queries: &[],
             },
         )
         .await
@@ -2371,6 +3843,9 @@ mod tests {
                 actor_states: &mut actors,
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
+                view_calls: &[],
+                storage_reads: &[],
+                event_queries: &[],
             },
         )
         .await
@@ -2416,6 +3891,9 @@ mod tests {
                 actor_states: &mut actors,
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
+                view_calls: &[],
+                storage_reads: &[],
+                event_queries: &[],
             },
         )
         .await
@@ -2565,6 +4043,9 @@ mod tests {
                 actor_states: &mut actors,
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
+                view_calls: &[],
+                storage_reads: &[],
+                event_queries: &[],
             },
             Some(&SuccessfulChaosController),
             &mut chaos_events,
@@ -2637,6 +4118,9 @@ mod tests {
                 actor_states: &mut actors,
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
+                view_calls: &[],
+                storage_reads: &[],
+                event_queries: &[],
             },
             Some(&SuccessfulChaosController),
             &mut chaos_events,
@@ -2690,6 +4174,9 @@ mod tests {
                 actor_states: &mut actors,
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
+                view_calls: &[],
+                storage_reads: &[],
+                event_queries: &[],
             },
             Some(&SuccessfulChaosController),
             &mut chaos_events,
@@ -2746,6 +4233,9 @@ mod tests {
                 actor_states: &mut actors,
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
+                view_calls: &[],
+                storage_reads: &[],
+                event_queries: &[],
             },
             Some(&SuccessfulChaosController),
             &mut chaos_events,
@@ -2795,6 +4285,9 @@ mod tests {
                 actor_states: &mut actors,
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
+                view_calls: &[],
+                storage_reads: &[],
+                event_queries: &[],
             },
             Some(&FailingChaosController),
             &mut chaos_events,
@@ -2845,6 +4338,49 @@ mod tests {
             "target": {"provider": "existing"},
             "loadShape": [{"duration": "20ms", "users": 1, "ratePerUserHz": 100.0}],
             "workloads": [{"name": "receipt-poll", "weight": 1}]
+        }))
+        .expect("manifest fixture should parse")
+    }
+
+    fn storage_manifest() -> SimulationManifest {
+        serde_json::from_value(json!({
+            "schemaVersion": 1,
+            "kind": "groundhog-simulation",
+            "name": "executor-storage-test",
+            "seed": "seed",
+            "target": {"provider": "existing"},
+            "loadShape": [{"duration": "1ms", "users": 1, "ratePerUserHz": 1000.0}],
+            "workloads": [{"name": "storage-read", "weight": 1}],
+            "contractArtifacts": [{"name": "fibonacci", "wasm": "fibonacci.wasm"}],
+            "storageReads": [{
+                "name": "fib-zero-key",
+                "contract": "fibonacci",
+                "key": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "expectPresent": false
+            }]
+        }))
+        .expect("manifest fixture should parse")
+    }
+
+    fn events_manifest() -> SimulationManifest {
+        serde_json::from_value(json!({
+            "schemaVersion": 1,
+            "kind": "groundhog-simulation",
+            "name": "executor-events-test",
+            "seed": "seed",
+            "target": {"provider": "existing"},
+            "loadShape": [{"duration": "1ms", "users": 1, "ratePerUserHz": 1000.0}],
+            "workloads": [{"name": "events-query", "weight": 1}],
+            "contractArtifacts": [{"name": "fibonacci", "wasm": "fibonacci.wasm"}],
+            "eventQueries": [{
+                "name": "fib-events",
+                "contract": "fibonacci",
+                "order": "descending",
+                "anchor": {"kind": "atEnd"},
+                "cursor": "0x",
+                "limit": 10,
+                "expectMinEvents": 0
+            }]
         }))
         .expect("manifest fixture should parse")
     }
@@ -2921,6 +4457,61 @@ mod tests {
             },
             NonceNamespace::new(1).expect("namespace should fit"),
         )]
+    }
+
+    fn prepared_view(expect_return_data: Option<Vec<u8>>) -> PreparedViewWorkload {
+        PreparedViewWorkload {
+            view: PreparedViewCall {
+                name: "fib-10".into(),
+                contract_name: "fibonacci".into(),
+                contract: ContractAddress::from([0x88; 32]),
+                entrypoint: vec![0x11; 8],
+                calldata: vec![0x0a],
+                expect_return_data,
+            },
+            caller: ContractAddress::from([0x66; 32]),
+        }
+    }
+
+    fn prepared_storage_read(expect_present: Option<bool>) -> PreparedStorageReadWorkload {
+        PreparedStorageReadWorkload {
+            read: PreparedStorageRead {
+                name: "fib-zero-key".into(),
+                contract_name: "fibonacci".into(),
+                contract: ContractAddress::from([0x88; 32]),
+                key: vec![0; 32],
+                expect_present,
+            },
+        }
+    }
+
+    fn prepared_event_query(expect_min_events: Option<u64>) -> PreparedEventQueryWorkload {
+        PreparedEventQueryWorkload {
+            query: PreparedEventQuery {
+                name: "fib-events".into(),
+                contract_name: "fibonacci".into(),
+                contract: ContractAddress::from([0x88; 32]),
+                order: EventQueryOrderSpec::Descending,
+                anchor: EventQueryAnchorSpec::AtEnd,
+                cursor: Vec::new(),
+                limit: 10,
+                expect_min_events,
+            },
+        }
+    }
+
+    fn event_page(
+        events: Vec<groundhog_rpc_api_types::events::IdentifiedEvent>,
+        cursor: Vec<u8>,
+        latest_block: i64,
+        oldest_block: i64,
+    ) -> EventPage {
+        EventPage {
+            events,
+            cursor: PaginationCursor(cursor),
+            latest_block: BlockHeight::from(latest_block),
+            oldest_block: BlockHeight::from(oldest_block),
+        }
     }
 
     fn runtime_manifest() -> RuntimeManifest {

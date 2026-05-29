@@ -1,9 +1,14 @@
+use std::collections::HashSet;
+
 use groundhog_rpc_api_types::runtime_manifest::RuntimeManifest;
 
 use crate::manifest::{
-    SIMULATION_KIND, SIMULATION_SCHEMA_VERSION, SimulationManifest, WorkloadKind,
+    EventQueryAnchorSpec, SIMULATION_KIND, SIMULATION_SCHEMA_VERSION, SimulationManifest,
+    WorkloadKind,
 };
 use crate::target::{TargetCapabilities, TargetProviderKind};
+
+const MAX_EVENT_QUERY_CURSOR_BYTES: usize = 256;
 
 pub fn validate_manifest(manifest: &SimulationManifest) -> Result<(), ValidationError> {
     if manifest.schema_version != SIMULATION_SCHEMA_VERSION {
@@ -49,6 +54,7 @@ pub fn validate_manifest(manifest: &SimulationManifest) -> Result<(), Validation
             });
         }
     }
+    validate_contract_artifacts(manifest)?;
 
     let capabilities = TargetCapabilities::for_provider(manifest.target.provider);
     for event in &manifest.chaos {
@@ -64,6 +70,332 @@ pub fn validate_manifest(manifest: &SimulationManifest) -> Result<(), Validation
             .map_err(|source| ValidationError::InvalidChaosTime { source })?;
     }
 
+    Ok(())
+}
+
+fn validate_contract_artifacts(manifest: &SimulationManifest) -> Result<(), ValidationError> {
+    let mut artifact_names = HashSet::new();
+    for artifact in &manifest.contract_artifacts {
+        let name = artifact.name.trim();
+        if name.is_empty() {
+            return Err(ValidationError::EmptyContractArtifactName);
+        }
+        if name != artifact.name {
+            return Err(ValidationError::InvalidContractNameWhitespace {
+                field: "contractArtifacts[].name",
+                value: artifact.name.clone(),
+            });
+        }
+        if !artifact_names.insert(name.to_owned()) {
+            return Err(ValidationError::DuplicateContractArtifactName {
+                name: name.to_owned(),
+            });
+        }
+        if artifact.wasm.as_os_str().is_empty() {
+            return Err(ValidationError::EmptyContractArtifactPath {
+                name: name.to_owned(),
+            });
+        }
+    }
+
+    validate_view_calls(manifest, &artifact_names)?;
+    validate_storage_reads(manifest, &artifact_names)?;
+    validate_event_queries(manifest, &artifact_names)?;
+
+    if manifest
+        .workloads
+        .iter()
+        .any(|workload| workload.name == WorkloadKind::ViewCall)
+    {
+        if manifest.contract_artifacts.is_empty() {
+            return Err(ValidationError::MissingContractArtifactsForViewCall);
+        }
+        if manifest.view_calls.is_empty() {
+            return Err(ValidationError::MissingViewCallsForViewCall);
+        }
+    }
+
+    if manifest
+        .workloads
+        .iter()
+        .any(|workload| workload.name == WorkloadKind::StorageRead)
+    {
+        if manifest.contract_artifacts.is_empty() {
+            return Err(ValidationError::MissingContractArtifactsForStorageRead);
+        }
+        if manifest.storage_reads.is_empty() {
+            return Err(ValidationError::MissingStorageReadsForStorageRead);
+        }
+    }
+
+    if manifest
+        .workloads
+        .iter()
+        .any(|workload| workload.name == WorkloadKind::EventsQuery)
+    {
+        if manifest.contract_artifacts.is_empty() {
+            return Err(ValidationError::MissingContractArtifactsForEventsQuery);
+        }
+        if manifest.event_queries.is_empty() {
+            return Err(ValidationError::MissingEventQueriesForEventsQuery);
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_view_calls(
+    manifest: &SimulationManifest,
+    artifact_names: &HashSet<String>,
+) -> Result<(), ValidationError> {
+    let mut view_names = HashSet::new();
+    for view in &manifest.view_calls {
+        let name = view.name.trim();
+        if name.is_empty() {
+            return Err(ValidationError::EmptyViewCallName);
+        }
+        if name != view.name {
+            return Err(ValidationError::InvalidContractNameWhitespace {
+                field: "viewCalls[].name",
+                value: view.name.clone(),
+            });
+        }
+        if view.contract.trim() != view.contract {
+            return Err(ValidationError::InvalidContractNameWhitespace {
+                field: "viewCalls[].contract",
+                value: view.contract.clone(),
+            });
+        }
+        if !view_names.insert(name.to_owned()) {
+            return Err(ValidationError::DuplicateViewCallName {
+                name: name.to_owned(),
+            });
+        }
+        if !artifact_names.contains(view.contract.trim()) {
+            return Err(ValidationError::UnknownViewCallContract {
+                view: name.to_owned(),
+                contract: view.contract.clone(),
+            });
+        }
+        validate_hex_len(&view.entrypoint, Some(8), "entrypoint", name)?;
+        validate_hex_len(&view.calldata, None, "calldata", name)?;
+        if let Some(expected) = &view.expect_return_data {
+            validate_hex_len(expected, None, "expectReturnData", name)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_storage_reads(
+    manifest: &SimulationManifest,
+    artifact_names: &HashSet<String>,
+) -> Result<(), ValidationError> {
+    let mut storage_names = HashSet::new();
+    for read in &manifest.storage_reads {
+        let name = read.name.trim();
+        if name.is_empty() {
+            return Err(ValidationError::EmptyStorageReadName);
+        }
+        if name != read.name {
+            return Err(ValidationError::InvalidContractNameWhitespace {
+                field: "storageReads[].name",
+                value: read.name.clone(),
+            });
+        }
+        if read.contract.trim() != read.contract {
+            return Err(ValidationError::InvalidContractNameWhitespace {
+                field: "storageReads[].contract",
+                value: read.contract.clone(),
+            });
+        }
+        if !storage_names.insert(name.to_owned()) {
+            return Err(ValidationError::DuplicateStorageReadName {
+                name: name.to_owned(),
+            });
+        }
+        if !artifact_names.contains(read.contract.trim()) {
+            return Err(ValidationError::UnknownStorageReadContract {
+                read: name.to_owned(),
+                contract: read.contract.clone(),
+            });
+        }
+        validate_storage_hex_len(&read.key, Some(32), "key", name)?;
+    }
+    Ok(())
+}
+
+fn validate_event_queries(
+    manifest: &SimulationManifest,
+    artifact_names: &HashSet<String>,
+) -> Result<(), ValidationError> {
+    let mut query_names = HashSet::new();
+    for query in &manifest.event_queries {
+        let name = query.name.trim();
+        if name.is_empty() {
+            return Err(ValidationError::EmptyEventQueryName);
+        }
+        if name != query.name {
+            return Err(ValidationError::InvalidContractNameWhitespace {
+                field: "eventQueries[].name",
+                value: query.name.clone(),
+            });
+        }
+        if query.contract.trim() != query.contract {
+            return Err(ValidationError::InvalidContractNameWhitespace {
+                field: "eventQueries[].contract",
+                value: query.contract.clone(),
+            });
+        }
+        if !query_names.insert(name.to_owned()) {
+            return Err(ValidationError::DuplicateEventQueryName {
+                name: name.to_owned(),
+            });
+        }
+        if !artifact_names.contains(query.contract.trim()) {
+            return Err(ValidationError::UnknownEventQueryContract {
+                query: name.to_owned(),
+                contract: query.contract.clone(),
+            });
+        }
+        validate_event_query_cursor(&query.cursor, "cursor", name)?;
+        if query.limit == 0 || query.limit > 200 {
+            return Err(ValidationError::InvalidEventQueryLimit {
+                query: name.to_owned(),
+                limit: query.limit,
+            });
+        }
+        if let EventQueryAnchorSpec::AtHeight { height } = query.anchor
+            && height < 0
+        {
+            return Err(ValidationError::InvalidEventQueryAnchorHeight {
+                query: name.to_owned(),
+                height,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_event_query_cursor(
+    value: &str,
+    field: &'static str,
+    query: &str,
+) -> Result<(), ValidationError> {
+    let Some(stripped) = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+    else {
+        return Err(ValidationError::InvalidEventQueryHex {
+            query: query.to_owned(),
+            field,
+            reason: "hex value must be 0x-prefixed".into(),
+        });
+    };
+    if stripped.len() % 2 != 0 {
+        return Err(ValidationError::InvalidEventQueryHex {
+            query: query.to_owned(),
+            field,
+            reason: "hex value must contain an even number of digits".into(),
+        });
+    }
+    if let Err(error) = hex::decode(stripped) {
+        return Err(ValidationError::InvalidEventQueryHex {
+            query: query.to_owned(),
+            field,
+            reason: error.to_string(),
+        });
+    }
+    if stripped.len() / 2 > MAX_EVENT_QUERY_CURSOR_BYTES {
+        return Err(ValidationError::InvalidEventQueryHex {
+            query: query.to_owned(),
+            field,
+            reason: format!("expected at most {MAX_EVENT_QUERY_CURSOR_BYTES} bytes"),
+        });
+    }
+    Ok(())
+}
+
+fn validate_storage_hex_len(
+    value: &str,
+    expected_len: Option<usize>,
+    field: &'static str,
+    read: &str,
+) -> Result<(), ValidationError> {
+    let Some(stripped) = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+    else {
+        return Err(ValidationError::InvalidStorageReadHex {
+            read: read.to_owned(),
+            field,
+            reason: "hex value must be 0x-prefixed".into(),
+        });
+    };
+    if stripped.len() % 2 != 0 {
+        return Err(ValidationError::InvalidStorageReadHex {
+            read: read.to_owned(),
+            field,
+            reason: "hex value must contain an even number of digits".into(),
+        });
+    }
+    if let Err(error) = hex::decode(stripped) {
+        return Err(ValidationError::InvalidStorageReadHex {
+            read: read.to_owned(),
+            field,
+            reason: error.to_string(),
+        });
+    }
+    if let Some(expected_len) = expected_len
+        && stripped.len() / 2 != expected_len
+    {
+        return Err(ValidationError::InvalidStorageReadHex {
+            read: read.to_owned(),
+            field,
+            reason: format!("expected {expected_len} bytes"),
+        });
+    }
+    Ok(())
+}
+
+fn validate_hex_len(
+    value: &str,
+    expected_len: Option<usize>,
+    field: &'static str,
+    view: &str,
+) -> Result<(), ValidationError> {
+    let Some(stripped) = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+    else {
+        return Err(ValidationError::InvalidViewCallHex {
+            view: view.to_owned(),
+            field,
+            reason: "hex value must be 0x-prefixed".into(),
+        });
+    };
+    if stripped.len() % 2 != 0 {
+        return Err(ValidationError::InvalidViewCallHex {
+            view: view.to_owned(),
+            field,
+            reason: "hex value must contain an even number of digits".into(),
+        });
+    }
+    if let Err(error) = hex::decode(stripped) {
+        return Err(ValidationError::InvalidViewCallHex {
+            view: view.to_owned(),
+            field,
+            reason: error.to_string(),
+        });
+    }
+    if let Some(expected_len) = expected_len
+        && stripped.len() / 2 != expected_len
+    {
+        return Err(ValidationError::InvalidViewCallHex {
+            view: view.to_owned(),
+            field,
+            reason: format!("expected {expected_len} bytes"),
+        });
+    }
     Ok(())
 }
 
@@ -189,6 +521,66 @@ pub enum ValidationError {
     InvalidRate { index: usize },
     #[error("workload {workload:?} must have a nonzero weight")]
     ZeroWeight { workload: WorkloadKind },
+    #[error("contract artifact name must not be empty")]
+    EmptyContractArtifactName,
+    #[error("contract artifact {name} wasm path must not be empty")]
+    EmptyContractArtifactPath { name: String },
+    #[error("field {field} must not contain leading or trailing whitespace: `{value}`")]
+    InvalidContractNameWhitespace { field: &'static str, value: String },
+    #[error("duplicate contract artifact name `{name}`")]
+    DuplicateContractArtifactName { name: String },
+    #[error("view call name must not be empty")]
+    EmptyViewCallName,
+    #[error("duplicate view call name `{name}`")]
+    DuplicateViewCallName { name: String },
+    #[error("view call `{view}` references unknown contract artifact `{contract}`")]
+    UnknownViewCallContract { view: String, contract: String },
+    #[error("view call `{view}` field `{field}` is invalid: {reason}")]
+    InvalidViewCallHex {
+        view: String,
+        field: &'static str,
+        reason: String,
+    },
+    #[error("view-call workload requires at least one contract artifact")]
+    MissingContractArtifactsForViewCall,
+    #[error("view-call workload requires at least one viewCalls entry")]
+    MissingViewCallsForViewCall,
+    #[error("storage read name must not be empty")]
+    EmptyStorageReadName,
+    #[error("duplicate storage read name `{name}`")]
+    DuplicateStorageReadName { name: String },
+    #[error("storage read `{read}` references unknown contract artifact `{contract}`")]
+    UnknownStorageReadContract { read: String, contract: String },
+    #[error("storage read `{read}` field `{field}` is invalid: {reason}")]
+    InvalidStorageReadHex {
+        read: String,
+        field: &'static str,
+        reason: String,
+    },
+    #[error("storage-read workload requires at least one contract artifact")]
+    MissingContractArtifactsForStorageRead,
+    #[error("storage-read workload requires at least one storageReads entry")]
+    MissingStorageReadsForStorageRead,
+    #[error("event query name must not be empty")]
+    EmptyEventQueryName,
+    #[error("duplicate event query name `{name}`")]
+    DuplicateEventQueryName { name: String },
+    #[error("event query `{query}` references unknown contract artifact `{contract}`")]
+    UnknownEventQueryContract { query: String, contract: String },
+    #[error("event query `{query}` field `{field}` is invalid: {reason}")]
+    InvalidEventQueryHex {
+        query: String,
+        field: &'static str,
+        reason: String,
+    },
+    #[error("event query `{query}` limit {limit} must be between 1 and 200")]
+    InvalidEventQueryLimit { query: String, limit: u32 },
+    #[error("event query `{query}` anchor height {height} must be non-negative")]
+    InvalidEventQueryAnchorHeight { query: String, height: i64 },
+    #[error("events-query workload requires at least one contract artifact")]
+    MissingContractArtifactsForEventsQuery,
+    #[error("events-query workload requires at least one eventQueries entry")]
+    MissingEventQueriesForEventsQuery,
     #[error("target provider {provider:?} does not support chaos event {kind}")]
     UnsupportedChaos {
         provider: TargetProviderKind,
@@ -240,7 +632,10 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::manifest::{DurationSpec, LoadPhase, WorkloadSpec};
+    use crate::manifest::{
+        DurationSpec, EventQueryAnchorSpec, EventQueryOrderSpec, EventQuerySpec, LoadPhase,
+        WorkloadSpec,
+    };
     use crate::target::TargetProviderSpec;
 
     #[test]
@@ -277,6 +672,178 @@ mod tests {
     }
 
     #[test]
+    fn validates_view_call_contract_references_and_hex() {
+        let mut manifest = basic_manifest();
+        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
+            name: "fibonacci".into(),
+            wasm: "fibonacci.wasm".into(),
+        }];
+        manifest.view_calls = vec![crate::manifest::ViewCallSpec {
+            name: "fib-10".into(),
+            contract: "fibonacci".into(),
+            entrypoint: "0x1111111111111111".into(),
+            calldata: "0x0a".into(),
+            expect_return_data: Some("0x37".into()),
+        }];
+        manifest.workloads = vec![WorkloadSpec {
+            name: WorkloadKind::ViewCall,
+            weight: 1,
+        }];
+
+        validate_manifest(&manifest).expect("view-call manifest should validate");
+    }
+
+    #[test]
+    fn validates_storage_read_contract_references_and_key() {
+        let mut manifest = basic_manifest();
+        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
+            name: "fibonacci".into(),
+            wasm: "fibonacci.wasm".into(),
+        }];
+        manifest.storage_reads = vec![crate::manifest::StorageReadSpec {
+            name: "fib-zero-key".into(),
+            contract: "fibonacci".into(),
+            key: format!("0x{}", "00".repeat(32)),
+            expect_present: Some(false),
+        }];
+        manifest.workloads = vec![WorkloadSpec {
+            name: WorkloadKind::StorageRead,
+            weight: 1,
+        }];
+
+        validate_manifest(&manifest).expect("storage-read manifest should validate");
+    }
+
+    #[test]
+    fn rejects_storage_read_without_matching_contract_artifact() {
+        let mut manifest = basic_manifest();
+        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
+            name: "fibonacci".into(),
+            wasm: "fibonacci.wasm".into(),
+        }];
+        manifest.storage_reads = vec![crate::manifest::StorageReadSpec {
+            name: "fib-zero-key".into(),
+            contract: "missing".into(),
+            key: format!("0x{}", "00".repeat(32)),
+            expect_present: None,
+        }];
+
+        let err = validate_manifest(&manifest).expect_err("unknown contract should reject");
+
+        assert!(matches!(
+            err,
+            ValidationError::UnknownStorageReadContract { .. }
+        ));
+    }
+
+    #[test]
+    fn rejects_storage_read_key_that_is_not_32_bytes() {
+        let mut manifest = basic_manifest();
+        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
+            name: "fibonacci".into(),
+            wasm: "fibonacci.wasm".into(),
+        }];
+        manifest.storage_reads = vec![crate::manifest::StorageReadSpec {
+            name: "fib-zero-key".into(),
+            contract: "fibonacci".into(),
+            key: "0x1111".into(),
+            expect_present: None,
+        }];
+
+        let err = validate_manifest(&manifest).expect_err("short key should reject");
+
+        assert!(matches!(err, ValidationError::InvalidStorageReadHex { .. }));
+    }
+
+    #[test]
+    fn rejects_storage_read_contract_reference_whitespace() {
+        let mut manifest = basic_manifest();
+        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
+            name: "fibonacci".into(),
+            wasm: "fibonacci.wasm".into(),
+        }];
+        manifest.storage_reads = vec![crate::manifest::StorageReadSpec {
+            name: "fib-zero-key".into(),
+            contract: " fibonacci ".into(),
+            key: format!("0x{}", "00".repeat(32)),
+            expect_present: None,
+        }];
+
+        let err = validate_manifest(&manifest).expect_err("padded reference should reject");
+
+        assert!(matches!(
+            err,
+            ValidationError::InvalidContractNameWhitespace { .. }
+        ));
+    }
+
+    #[test]
+    fn rejects_view_call_without_matching_contract_artifact() {
+        let mut manifest = basic_manifest();
+        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
+            name: "fibonacci".into(),
+            wasm: "fibonacci.wasm".into(),
+        }];
+        manifest.view_calls = vec![crate::manifest::ViewCallSpec {
+            name: "fib-10".into(),
+            contract: "missing".into(),
+            entrypoint: "0x1111111111111111".into(),
+            calldata: "0x0a".into(),
+            expect_return_data: None,
+        }];
+
+        let err = validate_manifest(&manifest).expect_err("unknown contract should reject");
+
+        assert!(matches!(
+            err,
+            ValidationError::UnknownViewCallContract { .. }
+        ));
+    }
+
+    #[test]
+    fn rejects_view_call_entrypoint_that_is_not_eight_bytes() {
+        let mut manifest = basic_manifest();
+        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
+            name: "fibonacci".into(),
+            wasm: "fibonacci.wasm".into(),
+        }];
+        manifest.view_calls = vec![crate::manifest::ViewCallSpec {
+            name: "fib-10".into(),
+            contract: "fibonacci".into(),
+            entrypoint: "0x1111".into(),
+            calldata: "0x0a".into(),
+            expect_return_data: None,
+        }];
+
+        let err = validate_manifest(&manifest).expect_err("short entrypoint should reject");
+
+        assert!(matches!(err, ValidationError::InvalidViewCallHex { .. }));
+    }
+
+    #[test]
+    fn rejects_view_call_contract_reference_whitespace() {
+        let mut manifest = basic_manifest();
+        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
+            name: "fibonacci".into(),
+            wasm: "fibonacci.wasm".into(),
+        }];
+        manifest.view_calls = vec![crate::manifest::ViewCallSpec {
+            name: "fib-10".into(),
+            contract: " fibonacci ".into(),
+            entrypoint: "0x1111111111111111".into(),
+            calldata: "0x0a".into(),
+            expect_return_data: None,
+        }];
+
+        let err = validate_manifest(&manifest).expect_err("padded reference should reject");
+
+        assert!(matches!(
+            err,
+            ValidationError::InvalidContractNameWhitespace { .. }
+        ));
+    }
+
+    #[test]
     fn validates_local_restart_chaos() {
         let mut manifest = basic_manifest();
         manifest.target.provider = TargetProviderKind::Local;
@@ -307,6 +874,184 @@ mod tests {
             err,
             ValidationError::MissingReadPlane {
                 workload: WorkloadKind::ReceiptPoll,
+                endpoint: "indexer"
+            }
+        ));
+    }
+
+    #[test]
+    fn rejects_storage_read_workload_without_db_gateway() {
+        let mut manifest = basic_manifest();
+        manifest.workloads = vec![WorkloadSpec {
+            name: WorkloadKind::StorageRead,
+            weight: 1,
+        }];
+        let mut runtime = runtime_manifest();
+        runtime.endpoints.db_gateway = None;
+
+        let err = validate_against_runtime(&manifest, &runtime)
+            .expect_err("storage-read should require db gateway");
+
+        assert!(matches!(
+            err,
+            ValidationError::MissingReadPlane {
+                workload: WorkloadKind::StorageRead,
+                endpoint: "dbGateway"
+            }
+        ));
+    }
+
+    #[test]
+    fn validates_events_query_manifest() {
+        let mut manifest = basic_manifest();
+        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
+            name: "fibonacci".into(),
+            wasm: "fibonacci.wasm".into(),
+        }];
+        manifest.event_queries = vec![EventQuerySpec {
+            name: "fib-events".into(),
+            contract: "fibonacci".into(),
+            order: EventQueryOrderSpec::Descending,
+            anchor: EventQueryAnchorSpec::AtEnd,
+            cursor: "0x".into(),
+            limit: 10,
+            expect_min_events: Some(0),
+        }];
+        manifest.workloads = vec![WorkloadSpec {
+            name: WorkloadKind::EventsQuery,
+            weight: 1,
+        }];
+
+        validate_manifest(&manifest).expect("event query manifest should validate");
+    }
+
+    #[test]
+    fn rejects_events_query_unknown_contract() {
+        let mut manifest = basic_manifest();
+        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
+            name: "fibonacci".into(),
+            wasm: "fibonacci.wasm".into(),
+        }];
+        manifest.event_queries = vec![EventQuerySpec {
+            name: "fib-events".into(),
+            contract: "missing".into(),
+            order: EventQueryOrderSpec::Descending,
+            anchor: EventQueryAnchorSpec::AtEnd,
+            cursor: "0x".into(),
+            limit: 10,
+            expect_min_events: Some(0),
+        }];
+
+        let err = validate_manifest(&manifest).expect_err("unknown contract should reject");
+
+        assert!(matches!(
+            err,
+            ValidationError::UnknownEventQueryContract { .. }
+        ));
+    }
+
+    #[test]
+    fn rejects_events_query_invalid_cursor_and_anchor() {
+        let mut manifest = basic_manifest();
+        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
+            name: "fibonacci".into(),
+            wasm: "fibonacci.wasm".into(),
+        }];
+        manifest.event_queries = vec![EventQuerySpec {
+            name: "fib-events".into(),
+            contract: "fibonacci".into(),
+            order: EventQueryOrderSpec::Descending,
+            anchor: EventQueryAnchorSpec::AtEnd,
+            cursor: "0x0".into(),
+            limit: 10,
+            expect_min_events: Some(0),
+        }];
+
+        let err = validate_manifest(&manifest).expect_err("odd cursor should reject");
+        assert!(matches!(err, ValidationError::InvalidEventQueryHex { .. }));
+
+        manifest.event_queries[0].cursor = "0x".into();
+        manifest.event_queries[0].anchor = EventQueryAnchorSpec::AtHeight { height: -1 };
+        let err = validate_manifest(&manifest).expect_err("negative height should reject");
+        assert!(matches!(
+            err,
+            ValidationError::InvalidEventQueryAnchorHeight { .. }
+        ));
+
+        manifest.event_queries[0].anchor = EventQueryAnchorSpec::AtEnd;
+        manifest.event_queries[0].cursor = format!("0x{}", "00".repeat(257));
+        let err = validate_manifest(&manifest).expect_err("oversized cursor should reject");
+        assert!(matches!(err, ValidationError::InvalidEventQueryHex { .. }));
+    }
+
+    #[test]
+    fn rejects_events_query_invalid_limit() {
+        let mut manifest = basic_manifest();
+        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
+            name: "fibonacci".into(),
+            wasm: "fibonacci.wasm".into(),
+        }];
+        manifest.event_queries = vec![EventQuerySpec {
+            name: "fib-events".into(),
+            contract: "fibonacci".into(),
+            order: EventQueryOrderSpec::Descending,
+            anchor: EventQueryAnchorSpec::AtEnd,
+            cursor: "0x".into(),
+            limit: 0,
+            expect_min_events: Some(0),
+        }];
+
+        let err = validate_manifest(&manifest).expect_err("zero limit should reject");
+        assert!(matches!(
+            err,
+            ValidationError::InvalidEventQueryLimit { .. }
+        ));
+
+        manifest.event_queries[0].limit = 201;
+        let err = validate_manifest(&manifest).expect_err("oversized limit should reject");
+        assert!(matches!(
+            err,
+            ValidationError::InvalidEventQueryLimit { .. }
+        ));
+    }
+
+    #[test]
+    fn rejects_events_query_workload_without_event_queries() {
+        let mut manifest = basic_manifest();
+        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
+            name: "fibonacci".into(),
+            wasm: "fibonacci.wasm".into(),
+        }];
+        manifest.workloads = vec![WorkloadSpec {
+            name: WorkloadKind::EventsQuery,
+            weight: 1,
+        }];
+
+        let err = validate_manifest(&manifest).expect_err("empty eventQueries should reject");
+
+        assert!(matches!(
+            err,
+            ValidationError::MissingEventQueriesForEventsQuery
+        ));
+    }
+
+    #[test]
+    fn rejects_events_query_workload_without_indexer() {
+        let mut manifest = basic_manifest();
+        manifest.workloads = vec![WorkloadSpec {
+            name: WorkloadKind::EventsQuery,
+            weight: 1,
+        }];
+        let mut runtime = runtime_manifest();
+        runtime.endpoints.indexer = None;
+
+        let err = validate_against_runtime(&manifest, &runtime)
+            .expect_err("events-query should require indexer");
+
+        assert!(matches!(
+            err,
+            ValidationError::MissingReadPlane {
+                workload: WorkloadKind::EventsQuery,
                 endpoint: "indexer"
             }
         ));
@@ -392,6 +1137,10 @@ mod tests {
                 name: WorkloadKind::ChainTip,
                 weight: 1,
             }],
+            contract_artifacts: Vec::new(),
+            view_calls: Vec::new(),
+            storage_reads: Vec::new(),
+            event_queries: Vec::new(),
             assertions: crate::manifest::AssertionSpec::default(),
             chaos: Vec::new(),
             baseline: None,

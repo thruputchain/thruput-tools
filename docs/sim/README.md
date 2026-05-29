@@ -18,6 +18,7 @@ cargo run -p groundhog-cli --features dev-node -- --version
 cargo run -p groundhog-sim --bin hoglab -- run examples/sim/local-chain-tip-smoke.json \
   --groundhog-binary target/debug/groundhog \
   --hogd-dev-binary /path/to/hogd-dev \
+  --hogd-protocol hogp/<hash> \
   --port 0
 ```
 
@@ -36,6 +37,43 @@ cargo run -p groundhog-sim --bin hoglab -- run examples/sim/local-restart-chain-
   --hogd-dev-binary /path/to/hogd-dev \
   --port 0
 ```
+
+Scenario catalog smoke coverage is available as the next rung after the focused
+local lifecycle smoke:
+
+```bash
+cargo run -p groundhog-sim --bin hoglab -- catalog
+cargo run -p groundhog-sim --bin hoglab -- catalog --tag contract
+scripts/smoke-sim-scenarios.sh
+GROUNDHOG_SIM_RUN_SOAKS=1 scripts/smoke-sim-scenarios.sh
+```
+
+`examples/sim/catalog.json` is the scenario library index. It records each
+scenario's title, provider, tier, tags, runner, and contract artifact
+requirements. `hoglab catalog` lists that library and can filter by tag. The
+human output includes the runnable scenario path resolved from the catalog's
+directory. `hoglab catalog --json` emits the filtered list as an array of
+catalog entries with the catalog-relative `path` plus a `resolvedPath` field
+for scripts that want to invoke `hoglab run` directly. The
+default smoke script runs the fast local ladder and an existing-provider
+baseline scenario. It covers read-only chain-tip, write-only wallet submit,
+submit-plus-receipt polling, mixed read/write/receipt polling, read-only
+restart chaos, a mixed restart artifact exercise that may fail only when it
+records restart-loss artifacts, and, when `groundhog-examples` is available,
+Fibonacci deploy plus `view-call`, `storage-read`, and `events-query`
+scenarios. The opt-in soak runs `examples/sim/local-mixed-wallet-receipt-soak.json`.
+
+Contract artifact scenarios declare `contractArtifacts` plus `viewCalls` or
+`storageReads` or `eventQueries` in the manifest.
+`hoglab run --contract-artifact-root <dir>` resolves relative WASM paths from
+that directory.
+`scripts/smoke-sim-scenarios.sh` detects a sibling `../groundhog-examples`
+checkout or `GROUNDHOG_EXAMPLES_ROOT`, builds `fibonacci` into the script
+workdir, and passes the resulting `target/groundhog`-style artifact root into
+the ignored local catalog smoke.
+The default policy is source-first: keep reusable contracts as source projects,
+compile WASM on demand, and commit `.wasm` files only when exact byte identity
+is the fixture under test.
 
 Existing-target quickstart:
 
@@ -66,10 +104,34 @@ Phase 1 validates the scenario and runtime manifest, derives bootstrap account
 signers from the runtime manifest, writes the result directory skeleton, and
 executes deterministic open-loop traffic through the typed RPC client.
 Supported workloads are `chain-tip`, `wallet-submit-smoke` (dev-wallet
-compatible transactions), and `receipt-poll`. `receipt-poll` tracks
+compatible transactions), `receipt-poll`, `view-call`, `storage-read`, and
+`events-query` for manifests that deploy at least one contract artifact before
+scheduled load starts.
+`receipt-poll` tracks
 actor-submitted transactions in a per-actor FIFO queue until their receipts
 appear and records receipt presence, status, optional reverted/error detail,
 and submit-to-receipt wall-clock latency.
+
+`view-call` sends `groundhog_view` to the first configured `viewCalls` entry,
+using the scheduled actor's wallet address as the simulated caller. Returned
+view outputs record `viewResult`, `viewReturnData`, `viewAbortData`, and
+`viewEventCount` fields in `result.jsonl`; expected-return mismatches fail the
+workload with `errorClass: "view-return-mismatch"`.
+
+`storage-read` sends `groundhog_getStorageAt` to the first configured
+`storageReads` entry, using the deployed address for that entry's
+manifest-local contract name. Storage workload events record
+`storageReadName`, `storageContract`, `storageKey`, `storageItemPresent`, and
+`storageItemKind` when present. `chainHeight` records the storage snapshot
+height. `expectPresent` mismatches fail the workload with
+`errorClass: "storage-presence-mismatch"`.
+
+`events-query` sends `groundhog_getEvents` to the first configured
+`eventQueries` entry, using a deployed-address filter for that entry's
+manifest-local contract name. Event query workload events record
+`eventQueryName`, `eventContract`, `eventCount`, `eventCursor`,
+`eventLatestBlock`, and `eventOldestBlock`. `expectMinEvents` mismatches fail
+the workload with `errorClass: "event-count-below-minimum"`.
 
 After the scheduled load ends, the simulator runs a bounded receipt drain on
 remaining pending transactions (10 second budget, 250 ms retry interval). Drain
@@ -120,7 +182,10 @@ It rejects `target.rpcUrl`, `target.runtimeManifest`, `--rpc-url`, and
 `--runtime-manifest` because those values are outputs from the launched node.
 Use `--groundhog-binary` to select the supervisor binary, `--hogd-dev-binary`
 to forward a specific backend binary, `--port` to request a port, and
-`--startup-timeout-secs` to bound startup.
+`--startup-timeout-secs` to bound startup. Use `--hogd-protocol` when a local
+`hogd-dev` build is ahead of the protocol token compiled into `groundhog node`;
+it only overrides the intro token and does not make incompatible XDR shapes
+compatible.
 
 The provider sends SIGTERM to the node for graceful shutdown, waits a bounded
 grace period, and escalates to SIGKILL only if the node does not exit.
@@ -169,7 +234,7 @@ Each run writes a self-contained result directory:
 - `target-ownership.json` - provider ownership and cleanup metadata, including
   best-effort process identity for simulator-owned local targets.
 - `result.jsonl` - append-only event stream for run, target, phase, workload,
-  chaos transition, assertion, and completion events, plus one
+  contract deployment, chaos transition, assertion, and completion events, plus one
   `metric-availability-recorded` event per run with the run-level availability
   snapshot.
 - `result.json` - final aggregate written atomically at run end.
@@ -217,3 +282,10 @@ final `result.json`; target cleanup still runs.
 Phase 1 runs emit `passed` or `failed` final results. The `aborted` outcome is
 reserved in the schema for a future path that writes a final result after
 mid-run aborts.
+
+Contract-aware runs add `result.json.contracts`, defaulting to `[]`, with one
+record per startup deployment. Records include resolved artifact path, WASM
+hash, contract hash, transaction hash, deployed address, address source, commit
+height, and failure error when applicable. Deploy failures produce a failed run
+without entering scheduled workload dispatch, while still writing terminal
+result artifacts.
