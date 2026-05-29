@@ -43,6 +43,7 @@ pub struct ScenarioContractRef {
 }
 
 impl ScenarioCatalog {
+    /// Return catalog entries matching `tag`, or all entries when no tag is supplied.
     pub fn filter_by_tag<'a>(&'a self, tag: Option<&str>) -> Vec<&'a ScenarioCatalogEntry> {
         self.scenarios
             .iter()
@@ -60,6 +61,11 @@ pub async fn load_catalog(path: &Path) -> Result<ScenarioCatalog, SimError> {
     Ok(catalog)
 }
 
+/// Return the checked-in simulator scenario catalog path.
+///
+/// Prefer the repository-relative path when the command is run from the repo
+/// root. Otherwise fall back to a path derived from the compiled sim crate's
+/// manifest directory.
 pub fn default_catalog_path() -> PathBuf {
     let repo_relative = PathBuf::from("examples/sim/catalog.json");
     if repo_relative.is_file() {
@@ -71,6 +77,11 @@ pub fn default_catalog_path() -> PathBuf {
     fallback.canonicalize().unwrap_or(fallback)
 }
 
+/// Resolve a scenario path relative to the directory containing `catalog_path`.
+///
+/// Absolute `scenario_path` values are returned unchanged. Relative paths are
+/// joined to the catalog file's parent directory so scenario manifests remain
+/// portable regardless of the current working directory.
 pub fn resolve_scenario_path(catalog_path: &Path, scenario_path: &Path) -> PathBuf {
     if scenario_path.is_absolute() {
         scenario_path.to_path_buf()
@@ -82,6 +93,7 @@ pub fn resolve_scenario_path(catalog_path: &Path, scenario_path: &Path) -> PathB
     }
 }
 
+/// Validate catalog metadata and referenced scenario files.
 pub fn validate_catalog(catalog: &ScenarioCatalog, path: &Path) -> Result<(), CatalogError> {
     if catalog.schema_version != SCENARIO_CATALOG_SCHEMA_VERSION {
         return Err(CatalogError::UnsupportedSchema {
