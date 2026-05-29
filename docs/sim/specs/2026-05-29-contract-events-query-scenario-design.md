@@ -75,8 +75,8 @@ aggregation.
 
 Validation rejects duplicate `eventQueries[].name`, unknown contract
 references, non-0x, odd-length, or >256-byte cursors, negative `atHeight`
-anchors, limits above the public 200-item page cap, and `events-query`
-workloads without at least one contract artifact and one `eventQueries` entry.
+anchors, limits outside `1..=200`, and `events-query` workloads without at
+least one contract artifact and one `eventQueries` entry.
 
 ## Execution Semantics
 

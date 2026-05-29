@@ -2496,6 +2496,11 @@ mod tests {
         requested: Arc<Mutex<Vec<EventQuery>>>,
     }
 
+    #[derive(Clone)]
+    struct FailingEventsQueryClient {
+        requested: Arc<Mutex<Vec<EventQuery>>>,
+    }
+
     struct SuccessfulChaosController;
 
     struct FailingChaosController;
@@ -2642,6 +2647,36 @@ mod tests {
                     .expect("event query request list should lock")
                     .push(query);
                 Ok(response)
+            }
+        }
+    }
+
+    impl SimRpcClient for FailingEventsQueryClient {
+        #[allow(clippy::manual_async_fn)]
+        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, String>> + Send {
+            async { panic!("chain_tip should not be called") }
+        }
+
+        #[allow(clippy::manual_async_fn)]
+        fn send_raw_transaction(
+            &self,
+            _tx_hex: String,
+        ) -> impl Future<Output = Result<TxHash, String>> + Send {
+            async { panic!("send_raw_transaction should not be called") }
+        }
+
+        #[allow(clippy::manual_async_fn)]
+        fn events_query(
+            &self,
+            query: EventQuery,
+        ) -> impl Future<Output = Result<EventPage, String>> + Send {
+            let requested = self.requested.clone();
+            async move {
+                requested
+                    .lock()
+                    .expect("event query request list should lock")
+                    .push(query);
+                Err("simulated events query failure".into())
             }
         }
     }
@@ -3357,6 +3392,62 @@ mod tests {
         }
     }
 
+    #[test]
+    fn event_query_request_preserves_cursor_and_anchor_variants() {
+        let mut prepared = prepared_event_query(Some(0)).query;
+        prepared.cursor = vec![0x12, 0x34];
+        prepared.order = EventQueryOrderSpec::Ascending;
+        prepared.anchor = EventQueryAnchorSpec::AtBeginning;
+
+        let request = event_query_request(&prepared);
+
+        assert_eq!(request.cursor.0, vec![0x12, 0x34]);
+        assert!(matches!(request.order, IterationOrder::Ascending));
+        assert!(matches!(request.anchor, BlockAnchor::AtBeginning));
+
+        prepared.anchor = EventQueryAnchorSpec::AtHeight { height: 77 };
+        let request = event_query_request(&prepared);
+
+        assert!(matches!(
+            request.anchor,
+            BlockAnchor::AtHeight { height } if *height == 77
+        ));
+    }
+
+    #[tokio::test]
+    async fn events_query_records_non_empty_response_cursor() {
+        let tick = ScheduledActorTick {
+            phase_index: 0,
+            actor_id: 0,
+            actor_sequence: 0,
+            simulation_time_ms: 25,
+        };
+        let requested = Arc::new(Mutex::new(Vec::new()));
+        let mut prepared = prepared_event_query(Some(0));
+        prepared.query.cursor = vec![0x12, 0x34];
+        let completion = execute_events_query(
+            EventsQueryClient {
+                response: event_page(Vec::new(), vec![0xab, 0xcd], 45, 1),
+                requested: requested.clone(),
+            },
+            &tick,
+            prepared,
+        )
+        .await
+        .expect("events query should complete");
+
+        let requests = requested.lock().expect("event request list should lock");
+        assert_eq!(requests[0].cursor.0, vec![0x12, 0x34]);
+        drop(requests);
+
+        match completion.event {
+            ResultEvent::WorkloadCompleted { event } => {
+                assert_eq!(event.event_cursor.as_deref(), Some("0xabcd"));
+            }
+            other => panic!("expected completed event, got {other:?}"),
+        }
+    }
+
     #[tokio::test]
     async fn events_query_minimum_mismatch_is_failed_workload() {
         let tick = ScheduledActorTick {
@@ -3386,6 +3477,52 @@ mod tests {
                 assert_eq!(
                     event.error_class.as_deref(),
                     Some("event-count-below-minimum")
+                );
+            }
+            other => panic!("expected failed event, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn events_query_rpc_error_is_failed_workload() {
+        let tick = ScheduledActorTick {
+            phase_index: 0,
+            actor_id: 0,
+            actor_sequence: 0,
+            simulation_time_ms: 25,
+        };
+        let requested = Arc::new(Mutex::new(Vec::new()));
+        let completion = execute_events_query(
+            FailingEventsQueryClient {
+                requested: requested.clone(),
+            },
+            &tick,
+            prepared_event_query(Some(0)),
+        )
+        .await
+        .expect("events query should complete as failed workload");
+
+        assert_eq!(
+            requested
+                .lock()
+                .expect("event request list should lock")
+                .len(),
+            1
+        );
+        assert_eq!(
+            completion.error_class.as_deref(),
+            Some("events-query-rpc-error")
+        );
+        match completion.event {
+            ResultEvent::WorkloadFailed { event } => {
+                assert_eq!(event.workload, WorkloadKind::EventsQuery);
+                assert_eq!(event.event_query_name.as_deref(), Some("fib-events"));
+                assert_eq!(event.error_class.as_deref(), Some("events-query-rpc-error"));
+                assert!(
+                    event
+                        .error
+                        .as_deref()
+                        .is_some_and(|error| error.contains("simulated events query failure"))
                 );
             }
             other => panic!("expected failed event, got {other:?}"),

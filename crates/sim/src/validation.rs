@@ -258,7 +258,7 @@ fn validate_event_queries(
             });
         }
         validate_event_query_cursor(&query.cursor, "cursor", name)?;
-        if query.limit > 200 {
+        if query.limit == 0 || query.limit > 200 {
             return Err(ValidationError::InvalidEventQueryLimit {
                 query: name.to_owned(),
                 limit: query.limit,
@@ -573,7 +573,7 @@ pub enum ValidationError {
         field: &'static str,
         reason: String,
     },
-    #[error("event query `{query}` limit {limit} exceeds 200")]
+    #[error("event query `{query}` limit {limit} must be between 1 and 200")]
     InvalidEventQueryLimit { query: String, limit: u32 },
     #[error("event query `{query}` anchor height {height} must be non-negative")]
     InvalidEventQueryAnchorHeight { query: String, height: i64 },
@@ -982,6 +982,57 @@ mod tests {
         manifest.event_queries[0].cursor = format!("0x{}", "00".repeat(257));
         let err = validate_manifest(&manifest).expect_err("oversized cursor should reject");
         assert!(matches!(err, ValidationError::InvalidEventQueryHex { .. }));
+    }
+
+    #[test]
+    fn rejects_events_query_invalid_limit() {
+        let mut manifest = basic_manifest();
+        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
+            name: "fibonacci".into(),
+            wasm: "fibonacci.wasm".into(),
+        }];
+        manifest.event_queries = vec![EventQuerySpec {
+            name: "fib-events".into(),
+            contract: "fibonacci".into(),
+            order: EventQueryOrderSpec::Descending,
+            anchor: EventQueryAnchorSpec::AtEnd,
+            cursor: "0x".into(),
+            limit: 0,
+            expect_min_events: Some(0),
+        }];
+
+        let err = validate_manifest(&manifest).expect_err("zero limit should reject");
+        assert!(matches!(
+            err,
+            ValidationError::InvalidEventQueryLimit { .. }
+        ));
+
+        manifest.event_queries[0].limit = 201;
+        let err = validate_manifest(&manifest).expect_err("oversized limit should reject");
+        assert!(matches!(
+            err,
+            ValidationError::InvalidEventQueryLimit { .. }
+        ));
+    }
+
+    #[test]
+    fn rejects_events_query_workload_without_event_queries() {
+        let mut manifest = basic_manifest();
+        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
+            name: "fibonacci".into(),
+            wasm: "fibonacci.wasm".into(),
+        }];
+        manifest.workloads = vec![WorkloadSpec {
+            name: WorkloadKind::EventsQuery,
+            weight: 1,
+        }];
+
+        let err = validate_manifest(&manifest).expect_err("empty eventQueries should reject");
+
+        assert!(matches!(
+            err,
+            ValidationError::MissingEventQueriesForEventsQuery
+        ));
     }
 
     #[test]
