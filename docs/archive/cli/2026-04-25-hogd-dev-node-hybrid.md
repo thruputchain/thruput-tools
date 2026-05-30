@@ -118,11 +118,11 @@ presentation layer.
 
 Today we already have shared RPC crates:
 
-- `crates/json-rpc/api-types` — JSON-facing types
-- `crates/json-rpc/rpc-api` — jsonrpsee trait definitions
-- `crates/json-rpc/client` — generated typed JSON-RPC client
+- `crates/json-rpc/json-rpc-types` — JSON-facing types
+- `crates/json-rpc/json-rpc-api` — jsonrpsee trait definitions
+- `crates/json-rpc/json-rpc-client` — generated typed JSON-RPC client
 
-The missing piece is a reusable server library. Today `crates/json-rpc/gateway` is a
+The missing piece is a reusable server library. Today `crates/json-rpc/json-rpc-gateway` is a
 binary with internal modules (`api`, `context`, `handlers`, `submitter`,
 `tip_coalescer`). The dev-node separately implements the same
 `GroundhogApiServer` in `crates/dev-node/src/rpc.rs`.
@@ -137,12 +137,12 @@ consumed by the shared server.
 The proposed shape is:
 
 ```text
-crates/json-rpc/rpc-server
+crates/json-rpc/json-rpc-server
   · implements GroundhogApiServer once
   · owns JSON-RPC error mapping, request validation, range checks, middleware hooks
   · depends on backend traits, not concrete production topology
 
-crates/json-rpc/gateway
+crates/json-rpc/json-rpc-gateway
   · production binary
   · wires rpc-server to production scheduler/indexer/coordinator clients
 
@@ -496,7 +496,7 @@ observable node state, not just storage.
 
 ### Stage 1 — Extract reusable Rust RPC server
 
-- Create `crates/json-rpc/rpc-server`, or turn `crates/json-rpc/gateway` into a library plus
+- Create `crates/json-rpc/json-rpc-server`, or turn `crates/json-rpc/json-rpc-gateway` into a library plus
   binary.
 - Move `GroundhogApiServer` implementation and shared handler logic into the
   library.
@@ -507,7 +507,7 @@ observable node state, not just storage.
 
 Stage 1 stands on its own merits. Even if hogd-dev never ships, extracting
 the shared RPC server and backend traits removes the duplicated
-`GroundhogApiServer` implementation across `crates/json-rpc/gateway` and
+`GroundhogApiServer` implementation across `crates/json-rpc/json-rpc-gateway` and
 `crates/dev-node`, and gives the production gateway a cleaner internal seam
 between handler logic and backend adapters. The work de-risks the overall
 proposal: at worst, the codebase ends up with a better-factored gateway.
@@ -619,7 +619,7 @@ boundary without requiring users to manually install hogd.
    one `NodeBackend` trait with grouped methods?
 
 9. **Production gateway reuse.**
-   How much of `crates/json-rpc/gateway` should become `crates/json-rpc/rpc-server` before the
+   How much of `crates/json-rpc/json-rpc-gateway` should become `crates/json-rpc/json-rpc-server` before the
    dev backend exists?
 
 10. **Conformance tests.**

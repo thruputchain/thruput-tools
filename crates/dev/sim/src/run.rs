@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use groundhog_rpc_api_types::runtime_manifest::RuntimeManifest;
-use groundhog_rpc_client::HttpClientBuilder;
+use groundhog_json_rpc_client::HttpClientBuilder;
+use groundhog_json_rpc_types::runtime_manifest::RuntimeManifest;
 
 use crate::actor::{ActorState, build_actor_states};
 use crate::assertions::{determine_outcome, evaluate_assertions};
@@ -649,7 +649,7 @@ fn validate_executable_workloads(manifest: &SimulationManifest) -> Result<(), Si
 
 #[cfg(test)]
 mod tests {
-    use groundhog_rpc_api_types::{BlockHeight, block::ChainTip, hex::Hex0x, transaction::TxHash};
+    use groundhog_json_rpc_types::{BlockHeight, block::ChainTip, hex::Hex0x, transaction::TxHash};
     use groundhog_signing::derive_dev_account_signer;
     use groundhog_xdr::types::{ContractAddress, SHA256Hash};
     use serde_json::json;

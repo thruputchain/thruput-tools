@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::time::Instant;
 
-use groundhog_rpc_api_types::{receipt::TransactionReceipt, transaction::TxHash};
+use groundhog_json_rpc_types::{receipt::TransactionReceipt, transaction::TxHash};
 use groundhog_signing::LocalSigner;
 use groundhog_xdr::types::ContractAddress;
 
@@ -202,7 +202,7 @@ pub enum ActorError {
 
 #[cfg(test)]
 mod tests {
-    use groundhog_rpc_api_types::hex::Hex0x;
+    use groundhog_json_rpc_types::hex::Hex0x;
     use groundhog_signing::derive_dev_account_signer;
     use groundhog_xdr::types::ContractAddress;
     use serde_json::json;
@@ -265,8 +265,8 @@ mod tests {
         assert_eq!(actor.receipt_poll_target().unwrap().tx_hash, tx_hash(1));
         actor.record_receipt(TransactionReceipt {
             tx_hash: tx_hash(1),
-            height: groundhog_rpc_api_types::BlockHeight::from(1),
-            status: groundhog_rpc_api_types::receipt::ExecStatus::Ok,
+            height: groundhog_json_rpc_types::BlockHeight::from(1),
+            status: groundhog_json_rpc_types::receipt::ExecStatus::Ok,
             events: Vec::new(),
             return_data: None,
             abort_data: None,

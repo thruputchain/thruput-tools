@@ -134,7 +134,7 @@ cargo run -p groundhog-bench -- \
 Start the standalone gateway from the same manifest:
 
 ```bash
-cargo run -p groundhog-rpc-gateway -- \
+cargo run -p groundhog-json-rpc-gateway -- \
   --runtime-manifest "$RUNTIME_MANIFEST" \
   --listen 127.0.0.1:9546
 ```

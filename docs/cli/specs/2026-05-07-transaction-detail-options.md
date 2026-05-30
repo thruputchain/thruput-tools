@@ -180,11 +180,11 @@ decision at the time of this spec.
 If A4 is accepted:
 
 - `groundhog_dev_getTransactionDetail` is removed from PR 5 scope.
-- At the time, `crates/json-rpc/rpc-api`'s `GroundhogDevApi` kept `get_accounts` only;
+- At the time, `crates/json-rpc/json-rpc-api`'s `GroundhogDevApi` kept `get_accounts` only;
   that trait has since been removed with the dev-account RPC.
 - The supervisor stub `crates/dev/node-supervisor/src/dev_control.rs`
   drops the `get_transaction_detail` METHOD_NOT_FOUND stub.
-- `TransactionDetail` and friends in `crates/json-rpc/api-types/src/dev.rs`
+- `TransactionDetail` and friends in `crates/json-rpc/json-rpc-types/src/dev.rs`
   are kept (they have unit-test coverage and represent useful future
   shape) but become unused; defer their removal until the followup
   spec picks a final shape.

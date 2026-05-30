@@ -274,7 +274,7 @@ collect_descendants() {
 
 if [[ "${SMOKE_STANDALONE_GATEWAY:-0}" == "1" ]]; then
     log "Building CLI and standalone gateway"
-    cargo build -p groundhog-cli -p groundhog-rpc-gateway --features dev-node --manifest-path "$REPO_ROOT/Cargo.toml"
+    cargo build -p groundhog-cli -p groundhog-json-rpc-gateway --features dev-node --manifest-path "$REPO_ROOT/Cargo.toml"
 else
     log "Building CLI with dev-node feature"
     cargo build -p groundhog-cli --features dev-node --manifest-path "$REPO_ROOT/Cargo.toml"

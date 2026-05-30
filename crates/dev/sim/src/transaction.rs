@@ -1,4 +1,4 @@
-use groundhog_rpc_api_types::runtime_manifest::{RuntimeManifest, RuntimeManifestEntrypointError};
+use groundhog_json_rpc_types::runtime_manifest::{RuntimeManifest, RuntimeManifestEntrypointError};
 use groundhog_signing::{
     BuildDevWalletDoActionTransaction, SignTransactionParams,
     build_dev_wallet_do_action_transaction, sign_and_encode_transaction_hex,
@@ -111,7 +111,7 @@ pub enum TransactionBuildError {
 
 #[cfg(test)]
 mod tests {
-    use groundhog_rpc_api_types::{hex::Hex0x, runtime_manifest::RuntimeManifest};
+    use groundhog_json_rpc_types::{hex::Hex0x, runtime_manifest::RuntimeManifest};
     use groundhog_signing::derive_dev_account_signer;
     use groundhog_xdr::types::ContractAddress;
     use serde_json::json;

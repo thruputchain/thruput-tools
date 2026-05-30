@@ -9,8 +9,8 @@
 
 use std::{future::Future, net::SocketAddr, process::ExitStatus, time::Duration};
 
-use groundhog_rpc_api::GroundhogApiServer;
-use groundhog_rpc_server::{BuildInfo, GroundhogRpcServer, RpcServerConfig};
+use groundhog_json_rpc_api::GroundhogApiServer;
+use groundhog_json_rpc_server::{BuildInfo, GroundhogRpcServer, RpcServerConfig};
 use groundhog_xdr::PROTOCOL_VERSION;
 use jsonrpsee::server::{RpcModule, Server, ServerHandle};
 use serde::Serialize;
@@ -395,8 +395,8 @@ async fn start_rpc_server_with_read<R, V>(
     view_gas_limit: u64,
 ) -> Result<StartedRpcServer, NodeSupervisorError>
 where
-    R: groundhog_rpc_server::ReadPlane,
-    V: groundhog_rpc_server::ViewPlane,
+    R: groundhog_json_rpc_server::ReadPlane,
+    V: groundhog_json_rpc_server::ViewPlane,
 {
     let server = Server::builder()
         .build(listen_address)
@@ -425,7 +425,7 @@ where
     // module starts empty and gets one trait merged in.
     module
         .merge(GroundhogApiServer::into_rpc(core_rpc))
-        .expect("bug: rpc-server methods register without conflicts");
+        .expect("bug: json-rpc-server methods register without conflicts");
 
     let rpc_handle = server.start(module);
     Ok(StartedRpcServer {
@@ -448,8 +448,8 @@ struct StartedRpcServer {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use groundhog_rpc_api::GroundhogApiClient;
-    use groundhog_rpc_api_types::error::codes;
+    use groundhog_json_rpc_api::GroundhogApiClient;
+    use groundhog_json_rpc_types::error::codes;
     use jsonrpsee::core::{ClientError, client::ClientT};
     use jsonrpsee::http_client::HttpClientBuilder;
     use serial_test::serial;

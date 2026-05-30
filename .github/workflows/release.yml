@@ -13,7 +13,6 @@ env:
   RELEASE_TARGET: x86_64-unknown-linux-gnu
   RELEASE_CRATES: >-
     groundhog-cli
-    groundhog-rpc-gateway
 
 permissions:
   contents: write
@@ -53,7 +52,7 @@ jobs:
           done
 
       - name: Build hogway
-        run: cargo build --locked --release -p groundhog-rpc-gateway --bin hogway
+        run: cargo build --locked --release -p groundhog-json-rpc-gateway --bin hogway
 
       - name: Build groundhog CLI
         run: cargo build --locked --release -p groundhog-cli --bin groundhog --features dev-node

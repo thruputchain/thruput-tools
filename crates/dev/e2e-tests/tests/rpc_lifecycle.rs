@@ -11,15 +11,15 @@
 //!
 //! Tests are marked #[ignore] so they don't run in `cargo test --workspace`.
 
-use groundhog_rpc_api_types::ContractAddress;
-use groundhog_rpc_api_types::events::{
+use groundhog_json_rpc_client::{GroundhogApiClient, HttpClientBuilder};
+use groundhog_json_rpc_types::ContractAddress;
+use groundhog_json_rpc_types::events::{
     BlockAnchor, ContractAddressList, EventFilter, EventFilterList, EventQuery, EventTopicFilter,
     IterationOrder, PaginationCursor, TopicList,
 };
-use groundhog_rpc_api_types::hex::{Hex0x, HexBytes};
-use groundhog_rpc_api_types::state::StorageItemInfo;
-use groundhog_rpc_api_types::transaction::TransactionStatus;
-use groundhog_rpc_client::{GroundhogApiClient, HttpClientBuilder};
+use groundhog_json_rpc_types::hex::{Hex0x, HexBytes};
+use groundhog_json_rpc_types::state::StorageItemInfo;
+use groundhog_json_rpc_types::transaction::TransactionStatus;
 use xdr_common::VecM;
 
 fn rpc_url() -> String {
@@ -32,8 +32,8 @@ fn client() -> impl GroundhogApiClient {
         .expect("bug: HTTP client should build")
 }
 
-fn zero_hash() -> groundhog_rpc_api_types::transaction::TxHash {
-    groundhog_rpc_api_types::transaction::TxHash(groundhog_rpc_api_types::hex::Hex0x(
+fn zero_hash() -> groundhog_json_rpc_types::transaction::TxHash {
+    groundhog_json_rpc_types::transaction::TxHash(groundhog_json_rpc_types::hex::Hex0x(
         groundhog_xdr::types::SHA256Hash::from([0u8; 32]),
     ))
 }
@@ -119,7 +119,7 @@ async fn get_storage_at_short_key_is_rejected() {
         .get_storage_at(zero_address(), HexBytes(vec![0u8; 16]))
         .await
         .expect_err("16-byte key must be rejected");
-    // Server returns -32602 (INVALID_PARAMS) per the rpc-server validation.
+    // Server returns -32602 (INVALID_PARAMS) per json-rpc-server validation.
     let s = format!("{err:?}");
     assert!(
         s.contains("32 bytes") || s.contains("-32602") || s.contains("InvalidParams"),

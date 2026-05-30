@@ -164,11 +164,11 @@ This alignment has two concrete consequences for Milestone B's shape:
 ### Rust API State
 
 `TransactionReceipt.return_data: Option<HexBytes>` already exists at
-`crates/json-rpc/api-types/src/receipt.rs:41`. The CLI already attempts to decode
+`crates/json-rpc/json-rpc-types/src/receipt.rs:41`. The CLI already attempts to decode
 it at `crates/tools/cli/src/call.rs:79-82`. Both real read backends currently
 hard-code `return_data: None`:
 
-- `crates/json-rpc/gateway/src/handlers/receipt.rs:79`
+- `crates/json-rpc/json-rpc-gateway/src/handlers/receipt.rs:79`
 - `crates/dev/node-supervisor/src/read_backend.rs:137`
 
 The Rust receipt type does not need a public shape change for the return
@@ -302,12 +302,13 @@ Ryan/hogd needs to decide:
 3. protocol-rs bump and publish.
 4. Rust API + mapping:
    - add `abort_data: Option<HexBytes>` to `TransactionReceipt` in
-     `crates/json-rpc/api-types`;
+     `crates/json-rpc/json-rpc-types`;
    - `gateway/handlers/receipt` maps `Return` -> `return_data`,
      `Abort` -> `abort_data`, `Fault` -> neither;
    - `node-supervisor::read_backend` does the same against hogd-dev's
      `IndexerBlockExplorer` endpoint;
-   - shared conversion helpers live in `api-types` or `rpc-server` if
+   - shared conversion helpers live in `json-rpc-types` or
+     `json-rpc-server` if
      both backends need the same XDR mapping;
    - update OpenRPC and TypeScript codegen artifacts to reflect the new
      receipt field.
@@ -346,15 +347,15 @@ A noun-shaped method also avoids reading as "call a view," which is
 not what the operation does.
 
 The JSON-facing `ViewRequest`, `ViewResponse`, and `RootInvocationOutput`
-types should live in `crates/json-rpc/api-types`. The gateway and node-supervisor
-should map from protocol XDR types into RPC-layer types rather than
-exposing generated XDR unions directly.
+types should live in `crates/json-rpc/json-rpc-types`. The gateway and
+node-supervisor should map from protocol XDR types into RPC-layer types rather
+than exposing generated XDR unions directly.
 
 Adding this method touches the shared Rust RPC surface:
 
-- `crates/json-rpc/rpc-api` trait entry
-- `groundhog-rpc-client` generated typed client
-- `rpc-server` implementation and backend plane
+- `crates/json-rpc/json-rpc-api` trait entry
+- `groundhog-json-rpc-client` generated typed client
+- `json-rpc-server` implementation and backend plane
 - gateway backend adapter
 - node-supervisor backend adapter
 - OpenRPC snapshot/artifact
@@ -555,10 +556,10 @@ optional decoration.
 3. protocol-rs bump and publish, including the follow-up in
    [`2026-05-13-view-rpc-protocol-rs-follow-up.md`](2026-05-13-view-rpc-protocol-rs-follow-up.md).
 4. Rust API:
-   - add `ViewRequest`, `ViewResponse`, and output enum to `api-types`;
-   - add `groundhog_view` to `rpc-api`;
+   - add `ViewRequest`, `ViewResponse`, and output enum to `json-rpc-types`;
+   - add `groundhog_view` to `json-rpc-api`;
    - add a dedicated `ViewPlane` or equivalent backend trait in
-     `rpc-server`;
+     `json-rpc-server`;
    - wire gateway and node-supervisor adapters to hogd service clients;
    - update OpenRPC and TypeScript codegen artifacts.
 5. CLI: add `groundhog view`, reusing alias resolution, calldata

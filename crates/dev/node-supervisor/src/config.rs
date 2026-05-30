@@ -2,7 +2,7 @@
 
 use std::{num::TryFromIntError, path::PathBuf, time::Duration};
 
-use groundhog_rpc_api_types::bootstrap_manifest::{
+use groundhog_json_rpc_types::bootstrap_manifest::{
     BootstrapManifest, BootstrapManifestAccounts, BootstrapManifestDevWallet,
     BootstrapManifestStorageCostModel,
 };
@@ -72,7 +72,7 @@ impl Default for NodeSupervisorConfig {
             rpc_listen_address: DEFAULT_RPC_LISTEN_ADDRESS.to_string(),
             hogd_dev: HogdDevConfig::default(),
             hogd_protocol_override: None,
-            view_gas_limit: groundhog_rpc_server::DEFAULT_VIEW_GAS_LIMIT,
+            view_gas_limit: groundhog_json_rpc_server::DEFAULT_VIEW_GAS_LIMIT,
             view_timeout: DEFAULT_HOGD_DEV_VIEW_TIMEOUT,
         }
     }

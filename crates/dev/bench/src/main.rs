@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use std::{path::Path, process, sync::Arc};
 
 use clap::Parser;
-use groundhog_rpc_api_types::runtime_manifest::{
+use groundhog_json_rpc_types::runtime_manifest::{
     BootstrapAccount, RUNTIME_MANIFEST_SCHEMA_VERSION, RuntimeManifest,
     RuntimeManifestEntrypointError,
 };
@@ -874,7 +874,7 @@ async fn run() -> Result<(), BenchError> {
 
 #[cfg(test)]
 mod tests {
-    use groundhog_rpc_api_types::{hex::Hex0x, runtime_manifest::RuntimeManifest};
+    use groundhog_json_rpc_types::{hex::Hex0x, runtime_manifest::RuntimeManifest};
     use groundhog_xdr::types::{
         ContractAddress as XdrContractAddress, Ed25519PublicKey as XdrEd25519PublicKey, SHA256Hash,
     };

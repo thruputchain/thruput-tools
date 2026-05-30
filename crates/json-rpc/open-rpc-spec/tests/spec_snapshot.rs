@@ -1,14 +1,14 @@
 use std::fs;
 use std::path::PathBuf;
 
-use groundhog_open_rpc_spec::build_spec;
-use groundhog_rpc_api::{
+use groundhog_json_rpc_api::{
     WIRE_FORMAT_VERSION,
     types::{
         error::{ERROR_INFOS, codes, error_info_by_code},
         events::MAX_TOPIC_VALUES_PER_POSITION,
     },
 };
+use groundhog_open_rpc_spec::build_spec;
 use pretty_assertions::assert_eq;
 
 const SNAPSHOT_PATH: &str = "snapshots/groundhog-spec.json";

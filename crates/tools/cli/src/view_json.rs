@@ -1,4 +1,4 @@
-use groundhog_rpc_api_types::{
+use groundhog_json_rpc_types::{
     BlockHeight, ContractAddress, events::EmittedEvent, view::RootInvocationOutput,
 };
 use serde::Serialize;

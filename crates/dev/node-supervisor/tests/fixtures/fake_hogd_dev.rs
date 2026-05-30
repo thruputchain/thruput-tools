@@ -25,7 +25,7 @@ use groundhog_indexer::{
     IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher, IndexerBlockExplorerIntroOutcome,
     Protocol, SignedTransactionHash, TxInfo, TxInfoResult,
 };
-use groundhog_rpc_api_types::hex::Hex0x;
+use groundhog_json_rpc_types::hex::Hex0x;
 use groundhog_scheduler::{
     BlockHash, CoordinatorRegistrationOutcome, DbSchedResult, DbTip, GenesisConfiguration,
     Nomination, OptSignedTransactionBatch, ParallelBatch,

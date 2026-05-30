@@ -1,8 +1,8 @@
 # Groundhog Developer Tools
 
 Off-chain developer tooling for the Groundhog smart-contract platform:
-the `groundhog` CLI, a JSON-RPC gateway, a reusable RPC-server layer,
-a transaction signing library, and a typed JSON-RPC client. The
+the `groundhog` CLI, a JSON-RPC gateway, a reusable JSON-RPC server
+layer, a transaction signing library, and a typed JSON-RPC client. The
 canonical OpenRPC artifact for downstream SDKs is produced from this
 monorepo.
 
@@ -129,9 +129,11 @@ dispatches the binary release workflow on that same tag.
 
 Do not run `.github/workflows/release.yml` directly for normal releases and do
 not manually push `v*` tags. Direct human dispatch of the release workflow
-fails; it must be dispatched by the publish workflow. The release workflow also
-verifies that the matching `groundhog-cli` and `groundhog-rpc-gateway` crate
-versions already exist in the private registry before it uploads binary assets.
+fails; it must be dispatched by the publish workflow. The release workflow
+verifies that the matching `groundhog-cli` crate version already exists in the
+private registry before it uploads binary assets. `hogway` is built from this
+repository for the GitHub Release, but its binary crate is not published to the
+Cargo registry.
 
 The result is one matching version across the Cargo crates, git tag, and
 GitHub Release. Release assets follow this naming pattern:
@@ -178,7 +180,7 @@ Every method declares an `errors[]` array referencing
 `components.errors` in the artifact. Error codes follow Substrate's
 per-module range pattern; the canonical catalog (stable name, code,
 short message, consumer-facing description) lives in
-[`crates/json-rpc/api-types/src/error.rs`](crates/json-rpc/api-types/src/error.rs).
+[`crates/json-rpc/json-rpc-types/src/error.rs`](crates/json-rpc/json-rpc-types/src/error.rs).
 
 Codes worth knowing for retry policy:
 
@@ -211,7 +213,7 @@ Recent and active design notes for the JSON-RPC surface:
 ### Wire-format versioning
 
 The OpenRPC artifact uses its own SemVer in `info.version`, sourced from
-`groundhog_rpc_api::WIRE_FORMAT_VERSION`, rather than the Rust workspace
+`groundhog_json_rpc_api::WIRE_FORMAT_VERSION`, rather than the Rust workspace
 version. SDKs should pin on `wireFormat` from `groundhog_version`;
 workspace releases such as `0.3.x` identify builds, not the JSON-RPC
 contract.
@@ -227,7 +229,7 @@ this repo's docs:
 - `scheduler` — submit-tx + chain-tip plane.
 - `scheduler_coord`, `indexer_block_explorer`, `db_gateway`,
   `view_gateway` — hogd-dev readiness endpoint keys. These name x23
-  services, not public JSON-RPC methods or `rpc-server` planes.
+  services, not public JSON-RPC methods or JSON-RPC server planes.
 - `dev-N` — deterministic dev accounts (`dev-0` ... `dev-N`) the local
   dev backend funds and signs as.
 - `x23` — wire protocol between the supervisor and the `hogd-dev`
@@ -254,18 +256,18 @@ Workspace crates are grouped by boundary instead of kept flat under
 
 | Group | Crate | Description |
 |-------|-------|-------------|
-| JSON-RPC | [`api-types`](crates/json-rpc/api-types/) | Shared JSON-RPC types, including the error catalog |
-| JSON-RPC | [`rpc-api`](crates/json-rpc/rpc-api/) | Shared jsonrpsee trait definitions |
-| JSON-RPC | [`rpc-server`](crates/json-rpc/rpc-server/) | Shared server-side JSON-RPC implementation and validation |
-| JSON-RPC | [`gateway`](crates/json-rpc/gateway/) | JSON-RPC 2.0 gateway server |
-| JSON-RPC | [`client`](crates/json-rpc/client/) | Typed JSON-RPC client |
+| JSON-RPC | [`json-rpc-types`](crates/json-rpc/json-rpc-types/) | Shared JSON-RPC types, including the error catalog |
+| JSON-RPC | [`json-rpc-api`](crates/json-rpc/json-rpc-api/) | Shared jsonrpsee trait definitions |
+| JSON-RPC | [`json-rpc-server`](crates/json-rpc/json-rpc-server/) | Shared server-side JSON-RPC implementation and validation |
+| JSON-RPC | [`json-rpc-gateway`](crates/json-rpc/json-rpc-gateway/) | JSON-RPC 2.0 gateway server |
+| JSON-RPC | [`json-rpc-client`](crates/json-rpc/json-rpc-client/) | Typed JSON-RPC client |
 | JSON-RPC | [`open-rpc`](crates/json-rpc/open-rpc/) | OpenRPC document generator |
 | JSON-RPC | [`open-rpc-macros`](crates/json-rpc/open-rpc-macros/) | `#[open_rpc]` proc macro emitting OpenRPC method descriptors from jsonrpsee `#[rpc]` traits |
 | JSON-RPC | [`open-rpc-spec`](crates/json-rpc/open-rpc-spec/) | Library + binary that assembles the canonical `groundhog-open-rpc-spec` artifact for downstream codegen |
 | x23 | [`x23-transport`](crates/x23/x23-transport/) | Shared x23 connection-pool helpers used by gateway and node-supervisor |
 | Tools | [`cli`](crates/tools/cli/) | `groundhog` CLI for the contract dev workflow |
 | Tools | [`signing`](crates/tools/signing/) | Off-chain transaction signing and construction |
-| Dev | [`node-supervisor`](crates/dev/node-supervisor/) | `groundhog node` facade: supervises `hogd-dev` and serves JSON-RPC via `rpc-server` |
+| Dev | [`node-supervisor`](crates/dev/node-supervisor/) | `groundhog node` facade: supervises `hogd-dev` and serves JSON-RPC via `json-rpc-server` |
 | Dev | [`e2e-tests`](crates/dev/e2e-tests/) | Process-level JSON-RPC smoke tests |
 | Dev | [`bench`](crates/dev/bench/) | Benchmark harnesses |
 | Dev | [`sim`](crates/dev/sim/) | `hoglab` stateful simulation and soak-test harness |
@@ -317,9 +319,9 @@ contributors and LLM assistants. Highlights:
 - Edition 2024, stable Rust, 100-column max, `thiserror` only (no
   `anyhow`), no `.unwrap()` outside tests.
 - Schema ownership: XDR in `protocol-rs/groundhog-xdr` (Rust) and
-  `protocol-ts` (TypeScript); JSON-RPC projections in `api-types`;
-  method surface in `rpc-api`; OpenRPC artifact generated, never
-  hand-authored.
+  `protocol-ts` (TypeScript); JSON-RPC projections in
+  `json-rpc-types`; method surface in `json-rpc-api`; OpenRPC
+  artifact generated, never hand-authored.
 - Wire-format and error-catalog conventions are summarized in the
   "Building on Groundhog" section above and detailed in CLAUDE.md
   "Gateway Conventions".

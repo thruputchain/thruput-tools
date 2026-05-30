@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use groundhog_rpc_api_types::{
+use groundhog_json_rpc_types::{
     hex::HexBytes,
     receipt::{ExecStatus, TransactionReceipt},
     transaction::TxHash,
@@ -617,7 +617,7 @@ mod tests {
     use std::future::Future;
     use std::sync::{Arc, Mutex};
 
-    use groundhog_rpc_api_types::{
+    use groundhog_json_rpc_types::{
         BlockHeight,
         block::ChainTip,
         hex::Hex0x,

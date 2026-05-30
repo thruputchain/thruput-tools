@@ -119,7 +119,7 @@ chaos, deploy new contracts, or create remote infrastructure.
 - [x] Advance actor nonce only after a submit returns a transaction hash, so
   transient RPC submit failures retry the same namespaced nonce.
 - [x] Share runtime-manifest dev-wallet entrypoint parsing through
-  `groundhog-rpc-api-types`.
+  `groundhog-json-rpc-types`.
 - [x] Share sign-and-0x-encode transaction helper through `groundhog-signing`.
 - [x] Add a byte-equal determinism test for wallet-submit-smoke transaction
   construction.
@@ -261,7 +261,7 @@ chaos, deploy new contracts, or create remote infrastructure.
 - [x] `--nonce-namespace <u64>` override for repeatable runs on fresh targets.
 - [x] Reject scenarios whose selected provider does not match the supplied
   target flags.
-- [x] Validate runtime manifest schema version using `api-types`.
+- [x] Validate runtime manifest schema version using `json-rpc-types`.
 - [x] Reject runtime manifests that do not advertise bootstrap accounts.
 - [x] Reject unsupported bootstrap account derivation schemes.
 - [x] Validate bootstrap account public keys against derived signers, matching

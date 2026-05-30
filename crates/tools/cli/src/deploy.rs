@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use groundhog_rpc_api_types::hex::HexBytes;
-use groundhog_rpc_api_types::receipt::TransactionReceipt;
-use groundhog_rpc_api_types::transaction::TxHash;
+use groundhog_json_rpc_types::hex::HexBytes;
+use groundhog_json_rpc_types::receipt::TransactionReceipt;
+use groundhog_json_rpc_types::transaction::TxHash;
 use groundhog_signing::{
     BuildDeployTransaction, DEFAULT_TX_GAS_LIMIT, SignTransactionParams, WALLET_DEPLOY_ENTRYPOINT,
     build_deploy_transaction, derive_deploy_address, sign_and_encode_transaction_hex,
@@ -81,7 +81,7 @@ pub fn run(
     let cwd = std::env::current_dir()?;
     let tx_hash_formatted = format_tx_hash(&tx_hash);
     match &receipt.status {
-        groundhog_rpc_api_types::receipt::ExecStatus::Ok => {
+        groundhog_json_rpc_types::receipt::ExecStatus::Ok => {
             let contract_addr_hex = contract_addr_hex
                 .as_deref()
                 .expect("bug: successful deploy must resolve a contract address");
@@ -104,7 +104,7 @@ pub fn run(
     // Save contract alias
     if matches!(
         &receipt.status,
-        groundhog_rpc_api_types::receipt::ExecStatus::Ok
+        groundhog_json_rpc_types::receipt::ExecStatus::Ok
     ) {
         let project_root = crate::config::find_project_config(&cwd)
             .and_then(|p| p.parent().map(Path::to_path_buf));
@@ -193,7 +193,7 @@ pub(crate) fn submit_prepared_deploy_and_resolve(
     let (tx_hash, receipt) = submit_prepared_deploy(prepared)?;
     let predicted_address = ContractAddress::from(hex_to_32_bytes(&prepared.predicted_address)?);
     let (contract_address, address_source) = match &receipt.status {
-        groundhog_rpc_api_types::receipt::ExecStatus::Ok => {
+        groundhog_json_rpc_types::receipt::ExecStatus::Ok => {
             let (address, source) =
                 resolve_deployed_address(receipt.return_data.as_ref(), &predicted_address)?;
             (Some(address), Some(source))
@@ -418,7 +418,7 @@ mod tests {
         resolve_wasm_path,
     };
     use crate::artifacts::ArtifactOptions;
-    use groundhog_rpc_api_types::hex::HexBytes;
+    use groundhog_json_rpc_types::hex::HexBytes;
     use groundhog_xdr::types::{ContractAddress, SHA256Hash};
     use serial_test::serial;
     use tempfile::TempDir;

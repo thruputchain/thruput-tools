@@ -22,7 +22,8 @@ use groundhog_indexer::{
     IndexerBlockExplorer_IndexerBlockExplorer1_Client, IndexerBlockExplorerIntroOutcome, Protocol,
     TxInfoOutcome, TxInfoResult,
 };
-use groundhog_rpc_api_types::{
+use groundhog_json_rpc_server::{ReadPlane, RpcServerError};
+use groundhog_json_rpc_types::{
     ContractAddress,
     events::{EventPage, EventQuery, IdentifiedEvent},
     hex::{Hex0x, HexBytes, Topic},
@@ -30,7 +31,6 @@ use groundhog_rpc_api_types::{
     state::{StorageItemInfo, StorageItemRead},
     transaction::{TransactionStatus, TxHash},
 };
-use groundhog_rpc_server::{ReadPlane, RpcServerError};
 use groundhog_scheduler::sched_coord::SchedulerCoord_SchedulerCoord1_Client;
 use groundhog_x23_transport::connect;
 use groundhog_xdr::{
@@ -519,7 +519,7 @@ fn map_exec_result(r: ExecResult) -> ExecStatus {
 /// TODO: share with gateway once a common helper crate exists.
 fn parse_emitted_event(
     raw: &TxEmittedEvent,
-) -> Option<groundhog_rpc_api_types::events::EmittedEvent> {
+) -> Option<groundhog_json_rpc_types::events::EmittedEvent> {
     let num_topics = raw.num_topics;
     if num_topics > MAX_TOPICS {
         tracing::warn!(num_topics, "event has too many topics, skipping");
@@ -547,7 +547,7 @@ fn parse_emitted_event(
 
     let data = bytes[topics_len..].to_vec();
 
-    Some(groundhog_rpc_api_types::events::EmittedEvent {
+    Some(groundhog_json_rpc_types::events::EmittedEvent {
         contract_address: Hex0x(raw.contract_address),
         topics,
         data: HexBytes(data),
@@ -575,12 +575,12 @@ mod tests {
         IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher, IndexerBlockExplorerIntroOutcome,
         Protocol, TxInfo, TxInfoResult,
     };
-    use groundhog_rpc_api_types::{
+    use groundhog_json_rpc_server::{ReadPlane, RpcServerError};
+    use groundhog_json_rpc_types::{
         events::{EventFilterList, EventQuery},
         hex::Hex0x,
         transaction::{TransactionStatus, TxHash},
     };
-    use groundhog_rpc_server::{ReadPlane, RpcServerError};
     use groundhog_scheduler::{
         BlockID, CoordinatorRegistrationOutcome, DbSchedResult, GenesisConfiguration, Invocation,
         Nomination, OptSignedTransactionBatch, ParallelSignedTransactionBatch,
@@ -1123,19 +1123,21 @@ mod tests {
     }
 
     fn canned_tx_hash(bytes: [u8; 32]) -> TxHash {
-        TxHash(groundhog_rpc_api_types::hex::Hex0x(SHA256Hash::from(bytes)))
+        TxHash(groundhog_json_rpc_types::hex::Hex0x(SHA256Hash::from(
+            bytes,
+        )))
     }
 
-    fn canned_storage_address() -> groundhog_rpc_api_types::ContractAddress {
+    fn canned_storage_address() -> groundhog_json_rpc_types::ContractAddress {
         Hex0x(ContractAddress::from([0u8; 32]))
     }
 
     fn empty_event_query() -> EventQuery {
         EventQuery {
             filters: EventFilterList(VecM(vec![])),
-            order: groundhog_rpc_api_types::events::IterationOrder::Ascending,
-            anchor: groundhog_rpc_api_types::events::BlockAnchor::AtBeginning,
-            cursor: groundhog_rpc_api_types::events::PaginationCursor(vec![]),
+            order: groundhog_json_rpc_types::events::IterationOrder::Ascending,
+            anchor: groundhog_json_rpc_types::events::BlockAnchor::AtBeginning,
+            cursor: groundhog_json_rpc_types::events::PaginationCursor(vec![]),
             limit: 10,
         }
     }
@@ -1143,9 +1145,9 @@ mod tests {
     fn event_query_with_cursor(cursor: &[u8]) -> EventQuery {
         EventQuery {
             filters: EventFilterList(VecM(vec![])),
-            order: groundhog_rpc_api_types::events::IterationOrder::Ascending,
-            anchor: groundhog_rpc_api_types::events::BlockAnchor::AtBeginning,
-            cursor: groundhog_rpc_api_types::events::PaginationCursor(cursor.to_vec()),
+            order: groundhog_json_rpc_types::events::IterationOrder::Ascending,
+            anchor: groundhog_json_rpc_types::events::BlockAnchor::AtBeginning,
+            cursor: groundhog_json_rpc_types::events::PaginationCursor(cursor.to_vec()),
             limit: 10,
         }
     }
@@ -1212,7 +1214,7 @@ mod tests {
         assert!(
             matches!(
                 result,
-                Err(groundhog_rpc_server::RpcServerError::BackendUnavailable(_))
+                Err(groundhog_json_rpc_server::RpcServerError::BackendUnavailable(_))
             ),
             "indexer rpc-fail should surface BackendUnavailable, got {result:?}"
         );
@@ -1473,7 +1475,7 @@ mod tests {
         assert!(
             matches!(
                 result,
-                Err(groundhog_rpc_server::RpcServerError::BackendUnavailable(_))
+                Err(groundhog_json_rpc_server::RpcServerError::BackendUnavailable(_))
             ),
             "indexer rpc-fail should surface BackendUnavailable, got {result:?}"
         );
@@ -1570,7 +1572,7 @@ mod tests {
         assert!(
             matches!(
                 result,
-                Err(groundhog_rpc_server::RpcServerError::BackendUnavailable(_))
+                Err(groundhog_json_rpc_server::RpcServerError::BackendUnavailable(_))
             ),
             "unknown cursor should surface BackendUnavailable, got {result:?}"
         );
@@ -1590,7 +1592,7 @@ mod tests {
         assert!(
             matches!(
                 result,
-                Err(groundhog_rpc_server::RpcServerError::BackendUnavailable(_))
+                Err(groundhog_json_rpc_server::RpcServerError::BackendUnavailable(_))
             ),
             "indexer rpc-fail should surface BackendUnavailable, got {result:?}"
         );

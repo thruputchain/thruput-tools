@@ -1,11 +1,11 @@
 use std::path::Path;
 
-use groundhog_rpc_api_types::{
+use groundhog_json_rpc_client::{GroundhogApiClient, HttpClientBuilder};
+use groundhog_json_rpc_types::{
     ContractAddress,
     hex::HexBytes,
     view::{RootInvocationOutput, ViewRequest, ViewResponse},
 };
-use groundhog_rpc_client::{GroundhogApiClient, HttpClientBuilder};
 
 use crate::account_resolution::lookup_dev_account_address;
 use crate::artifacts::ArtifactOptions;
@@ -342,7 +342,7 @@ mod tests {
                 return_data: HexBytes(return_data),
             },
             events: vec![],
-            height: groundhog_rpc_api_types::BlockHeight::from(12),
+            height: groundhog_json_rpc_types::BlockHeight::from(12),
         };
 
         assert_eq!(

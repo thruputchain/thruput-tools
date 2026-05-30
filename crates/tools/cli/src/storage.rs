@@ -1,9 +1,9 @@
 use std::path::Path;
 
-use groundhog_rpc_api_types::ContractAddress;
-use groundhog_rpc_api_types::hex::HexBytes;
-use groundhog_rpc_api_types::state::StorageItemRead;
-use groundhog_rpc_client::{GroundhogApiClient, HttpClientBuilder};
+use groundhog_json_rpc_client::{GroundhogApiClient, HttpClientBuilder};
+use groundhog_json_rpc_types::ContractAddress;
+use groundhog_json_rpc_types::hex::HexBytes;
+use groundhog_json_rpc_types::state::StorageItemRead;
 use serde_json::json;
 
 use crate::codec::parse_contract_address;

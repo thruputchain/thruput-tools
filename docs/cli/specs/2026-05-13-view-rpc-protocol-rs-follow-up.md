@@ -330,7 +330,7 @@ a stable published crate and method.
 
 When hogd-dev starts the view service, readiness should advertise it in
 the existing `endpoints` object. Endpoint keys should match x23 service
-names rather than `rpc-server` plane names:
+names rather than `json-rpc-server` plane names:
 
 ```json
 {
@@ -358,7 +358,7 @@ This plan has shipped. The implemented shape is:
 3. Node-supervisor adapts the endpoint in
    `crates/dev/node-supervisor/src/view_backend.rs`.
 4. The standalone gateway adapts the endpoint in
-   `crates/json-rpc/gateway/src/handlers/view.rs`.
+   `crates/json-rpc/json-rpc-gateway/src/handlers/view.rs`.
 5. `ViewPlane::view` is implemented for the node-supervisor and gateway
    backends when a view endpoint is configured.
 7. Map service payloads to public API types:

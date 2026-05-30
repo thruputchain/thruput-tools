@@ -3,12 +3,12 @@
 use std::{fmt, net::SocketAddr, time::Duration};
 
 use async_trait::async_trait;
-use groundhog_rpc_api_types::{
+use groundhog_json_rpc_server::{RpcServerError, ViewPlane};
+use groundhog_json_rpc_types::{
     events::EmittedEvent,
     hex::{Hex0x, HexBytes, Topic},
     view::{RootInvocationOutput, ViewRequest, ViewResponse},
 };
-use groundhog_rpc_server::{RpcServerError, ViewPlane};
 use groundhog_view::{
     AuthClaim, AuthClaim_source_address_claim, ContractEntrypointID, Invocation,
     InvocationFrameOutput, InvokeFlag, Protocol, TransactionViewQuery,
@@ -264,9 +264,9 @@ mod tests {
     use std::time::Duration;
 
     use async_trait::async_trait;
-    use groundhog_rpc_api_types::ContractAddress;
-    use groundhog_rpc_api_types::hex::HexBytes;
-    use groundhog_rpc_server::ViewPlane;
+    use groundhog_json_rpc_server::ViewPlane;
+    use groundhog_json_rpc_types::ContractAddress;
+    use groundhog_json_rpc_types::hex::HexBytes;
     use groundhog_view::{
         InvocationFrameOutput, Protocol, ViewGateway_ViewGateway1,
         ViewGateway_ViewGateway1_Dispatcher, ViewGatewayPayload,
