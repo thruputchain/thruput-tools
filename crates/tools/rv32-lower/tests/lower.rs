@@ -822,6 +822,29 @@ fn build_dispatch_table_rejects_out_of_range_pc() {
 }
 
 #[test]
+fn build_artifact_rejects_code_outside_limits() {
+    use groundhog_rv32_lower::artifact::{MAX_CODE_BYTES, build_artifact};
+    let memory = vec![0u8; 64 * 1024];
+    let entries = [DispatchEntry {
+        method_id: 1,
+        pc: 0,
+    }];
+    assert!(build_artifact(&[], &memory, &entries).is_err()); // empty code
+    let oversized = vec![0u8; MAX_CODE_BYTES + 4];
+    assert!(build_artifact(&oversized, &memory, &entries).is_err()); // > 64 KiB
+}
+
+#[test]
+fn verify_artifact_rejects_oversized_code_size() {
+    let lowered = lower(&assemble(happy_spec())).expect("lowers");
+    let mut bytes = lowered.artifact.clone();
+    // Overwrite code_size (u32 @ 52) with a value past MAX_CODE_BYTES.
+    bytes[52..56].copy_from_slice(&0x0002_0000u32.to_le_bytes());
+    let err = verify_artifact(&bytes).expect_err("should reject");
+    assert!(err.to_string().contains("code size"));
+}
+
+#[test]
 fn metadata_renders_null_build_info_and_entry_shape() {
     let elf = assemble(happy_spec());
     let lowered = lower(&elf).expect("lowers");

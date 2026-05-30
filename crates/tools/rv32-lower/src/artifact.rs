@@ -119,6 +119,14 @@ pub fn build_dispatch_table(entries: &[DispatchEntry], code_size: usize) -> Resu
 /// 64 KiB initial-memory image, and the (already method-id-sorted) dispatch
 /// entries.
 pub fn build_artifact(code: &[u8], memory: &[u8], entries: &[DispatchEntry]) -> Result<Vec<u8>> {
+    // The loader rejects code_size == 0 || > MAX_CODE_BYTES; refuse to emit
+    // such an artifact even when called directly (not via `lower`).
+    if code.is_empty() || code.len() > MAX_CODE_BYTES {
+        return Err(invalid(format!(
+            "code size {} out of range (1..={MAX_CODE_BYTES})",
+            code.len()
+        )));
+    }
     let dispatch_table = build_dispatch_table(entries, code.len())?;
 
     let code_offset = HEADER_BYTES;
@@ -228,10 +236,13 @@ pub fn verify_artifact(artifact: &[u8]) -> Result<()> {
     let disp_size = read_u32(72) as usize;
 
     // Canonical layout: the body is exactly header || code || dispatch ||
-    // memory with no gaps or trailing bytes, the memory image is fully
-    // materialized, and there is at least one dispatch entry. This mirrors the
-    // acceptance set the consensus C++ loader enforces, so the writer's
-    // self-check rejects anything the loader would.
+    // memory with no gaps or trailing bytes, code fits the declared limit, the
+    // memory image is fully materialized, and there is at least one dispatch
+    // entry. This mirrors the acceptance set the consensus C++ loader enforces,
+    // so the writer's self-check rejects anything the loader would.
+    if code_size == 0 || code_size > MAX_CODE_BYTES {
+        return Err(verify("code size out of range"));
+    }
     if init_mem_size != MAX_MEMORY_BYTES {
         return Err(verify("initial_memory_size mismatch"));
     }
