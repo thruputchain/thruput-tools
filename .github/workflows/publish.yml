@@ -21,6 +21,7 @@ env:
     groundhog-json-rpc-client
     groundhog-signing
     groundhog-node-supervisor
+    groundhog-rv32-lower
     groundhog-cli
 
 jobs:

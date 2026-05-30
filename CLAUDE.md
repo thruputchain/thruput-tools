@@ -57,6 +57,13 @@ Developer-facing tools in `crates/tools/`:
 - **signing** — off-chain transaction signing and construction. Signer trait,
   local Ed25519 signer, canonical address derivation, tx builders for deploy
   and call, XDR encoding.
+- **rv32-lower** — `rv32-lower` binary (+ lib `groundhog_rv32_lower`). The
+  `wasm-opt` analog for the rv32 build path: lowers a `riscv32im-unknown-none-elf`
+  contract ELF to a Groundhog v3 RV32 artifact (`.rv32a`). Holds the single Rust
+  source of truth for the artifact format (`artifact` module, mirrors hogd's
+  `artifact.h`). Published to the `groundhog` registry; consumed as a binary
+  (hogd / `groundhog build` shell out to it like `wasm-opt`) or as a library
+  (e.g. sdk_rs). See its README and `hogd/docs/rv32/rv32-author-toolchain.md`.
 
 Local dev and test harnesses in `crates/dev/`:
 
