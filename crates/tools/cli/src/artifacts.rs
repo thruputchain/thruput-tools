@@ -42,11 +42,33 @@ pub fn cargo_wasm_output_path(target_dir: &Path, package_name: &str) -> PathBuf 
         .join(format!("{}.wasm", crate::scaffold::to_snake(package_name)))
 }
 
+/// Return the raw Cargo-produced RV32 ELF output path for a package in the given target directory.
+pub fn cargo_rv32_elf_output_path(target_dir: &Path, package_name: &str) -> PathBuf {
+    target_dir
+        .join("riscv32im-unknown-none-elf/release")
+        .join(package_name)
+}
+
 /// Return the Groundhog-owned processed WASM output path for a package in the given target directory.
 pub fn groundhog_wasm_output_path(target_dir: &Path, package_name: &str) -> PathBuf {
     target_dir
         .join("groundhog")
         .join(format!("{}.wasm", crate::scaffold::to_snake(package_name)))
+}
+
+/// Return the Groundhog-owned RV32 artifact output path for a package in the given target directory.
+pub fn groundhog_rv32_output_path(target_dir: &Path, package_name: &str) -> PathBuf {
+    target_dir
+        .join("groundhog")
+        .join(format!("{}.rv32a", crate::scaffold::to_snake(package_name)))
+}
+
+/// Return the Groundhog-owned RV32 build metadata sidecar path.
+pub fn groundhog_rv32_metadata_output_path(target_dir: &Path, package_name: &str) -> PathBuf {
+    target_dir.join("groundhog").join(format!(
+        "{}.rv32.json",
+        crate::scaffold::to_snake(package_name)
+    ))
 }
 
 /// Ensure passthrough cargo arguments do not override the CLI target directory.
@@ -142,8 +164,9 @@ fn normalize_path_components(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{
-        ArtifactOptions, cargo_wasm_output_path, ensure_no_target_dir_passthrough_conflicts,
-        groundhog_wasm_output_path,
+        ArtifactOptions, cargo_rv32_elf_output_path, cargo_wasm_output_path,
+        ensure_no_target_dir_passthrough_conflicts, groundhog_rv32_metadata_output_path,
+        groundhog_rv32_output_path, groundhog_wasm_output_path,
     };
     use crate::CliError;
     use std::path::PathBuf;
@@ -160,9 +183,37 @@ mod tests {
     }
 
     #[test]
+    fn cargo_rv32_elf_output_path_uses_cargo_layout() {
+        let path =
+            cargo_rv32_elf_output_path(PathBuf::from("/tmp/out").as_path(), "demo-contract-rv32");
+        assert_eq!(
+            path,
+            PathBuf::from("/tmp/out/riscv32im-unknown-none-elf/release/demo-contract-rv32")
+        );
+    }
+
+    #[test]
     fn groundhog_wasm_output_path_uses_flat_groundhog_layout() {
         let path = groundhog_wasm_output_path(PathBuf::from("/tmp/out").as_path(), "demo-contract");
         assert_eq!(path, PathBuf::from("/tmp/out/groundhog/demo_contract.wasm"));
+    }
+
+    #[test]
+    fn groundhog_rv32_output_paths_use_flat_groundhog_layout() {
+        let artifact =
+            groundhog_rv32_output_path(PathBuf::from("/tmp/out").as_path(), "demo-contract-rv32");
+        let metadata = groundhog_rv32_metadata_output_path(
+            PathBuf::from("/tmp/out").as_path(),
+            "demo-contract-rv32",
+        );
+        assert_eq!(
+            artifact,
+            PathBuf::from("/tmp/out/groundhog/demo_contract_rv32.rv32a")
+        );
+        assert_eq!(
+            metadata,
+            PathBuf::from("/tmp/out/groundhog/demo_contract_rv32.rv32.json")
+        );
     }
 
     #[test]

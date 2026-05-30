@@ -6,6 +6,24 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+const RV32_TARGET_TRIPLE: &str = "riscv32im-unknown-none-elf";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BuildTarget {
+    Wasm,
+    Rv32,
+}
+
+impl BuildTarget {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Wasm => "wasm",
+            Self::Rv32 => "rv32",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct BuildResult {
     pub project_name: String,
@@ -28,11 +46,34 @@ pub struct BuildResult {
     pub cargo_stderr: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct Rv32BuildResult {
+    pub project_name: String,
+    pub project_root: PathBuf,
+    #[serde(skip_serializing)]
+    pub target_directory: PathBuf,
+    pub elf: PathBuf,
+    pub rv32: PathBuf,
+    pub metadata: PathBuf,
+    pub size_bytes: u64,
+    pub target: BuildTarget,
+    pub profile: crate::config::ResolvedProfile,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub cargo_stdout: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub cargo_stderr: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub lower_stdout: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub lower_stderr: String,
+}
+
 /// Build the contract to WASM via `cargo build` with
 /// cross-compilation to `wasm32-unknown-unknown`.
 #[allow(clippy::too_many_arguments)]
 pub fn run(
     package: Option<&str>,
+    target: BuildTarget,
     optimize: bool,
     bindings: &[String],
     cargo_args: &[String],
@@ -41,6 +82,38 @@ pub fn run(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
+    if target == BuildTarget::Rv32 {
+        if optimize {
+            return Err(CliError::InvalidBuildOptions(
+                "`--optimize` is only supported for the WASM build target".into(),
+            ));
+        }
+        if !bindings.is_empty() {
+            return Err(CliError::InvalidBuildOptions(
+                "`--bindings` is only supported for the WASM build target".into(),
+            ));
+        }
+        let result = build_rv32_project(package, cargo_args, artifacts, explicit_profile, print)?;
+        print.json(&crate::result::CommandResult::new(
+            cmd,
+            json!({
+                "project_name": result.project_name,
+                "project_root": result.project_root,
+                "target": result.target,
+                "elf": result.elf,
+                "rv32": result.rv32,
+                "metadata": result.metadata,
+                "size_bytes": result.size_bytes,
+                "profile": result.profile,
+                "cargo_stdout": result.cargo_stdout,
+                "cargo_stderr": result.cargo_stderr,
+                "lower_stdout": result.lower_stdout,
+                "lower_stderr": result.lower_stderr,
+            }),
+        ))?;
+        return Ok(());
+    }
+
     let result = build_project(
         package,
         optimize,
@@ -55,6 +128,7 @@ pub fn run(
         json!({
             "project_name": result.project_name,
             "project_root": result.project_root,
+            "target": BuildTarget::Wasm,
             "wasm": result.wasm,
             "size_bytes": result.size_bytes,
             "optimized": result.optimized,
@@ -196,6 +270,132 @@ pub fn build_project(
         cargo_stdout,
         cargo_stderr,
     })
+}
+
+/// Build the current project to an RV32 artifact by compiling an ELF and
+/// lowering it through the standalone `rv32-lower` tool.
+pub fn build_rv32_project(
+    package: Option<&str>,
+    cargo_args: &[String],
+    artifacts: &ArtifactOptions,
+    explicit_profile: Option<&str>,
+    print: &Print,
+) -> Result<Rv32BuildResult, CliError> {
+    crate::require_cargo()?;
+
+    let cwd = std::env::current_dir()?;
+    let metadata = cargo_metadata_with_artifacts(artifacts)?;
+    let pkg_name = resolve_package(&metadata, package, &cwd)?;
+    let rv32_lower = which::which("rv32-lower").map_err(|_| CliError::Rv32LowerNotFound)?;
+
+    artifacts::ensure_no_target_dir_passthrough_conflicts(
+        artifacts,
+        &metadata.workspace_root,
+        cargo_args,
+    )?;
+
+    print.status(format_args!("Compiling {pkg_name} to RV32 ELF..."));
+
+    let mut cmd = Command::new("cargo");
+    cmd.current_dir(&metadata.workspace_root)
+        .env("CARGO_PROFILE_RELEASE_STRIP", "false")
+        .arg("build")
+        .arg("--release")
+        .arg("--target")
+        .arg(RV32_TARGET_TRIPLE)
+        .arg("-p")
+        .arg(pkg_name);
+
+    artifacts.apply_to_command(&mut cmd);
+
+    for arg in cargo_args {
+        cmd.arg(arg);
+    }
+
+    let (cargo_stdout, cargo_stderr) = crate::run_cargo(&mut cmd, print)?;
+
+    let elf = artifacts::cargo_rv32_elf_output_path(&metadata.target_directory, pkg_name);
+    if !elf.try_exists()? {
+        return Err(CliError::Rv32ElfNotFound(elf.display().to_string()));
+    }
+
+    let rv32 = artifacts::groundhog_rv32_output_path(&metadata.target_directory, pkg_name);
+    let lower_metadata =
+        artifacts::groundhog_rv32_metadata_output_path(&metadata.target_directory, pkg_name);
+    if let Some(parent) = rv32.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    print.status("Lowering RV32 ELF...");
+    let mut lower = Command::new(rv32_lower);
+    lower
+        .arg("--elf")
+        .arg(&elf)
+        .arg("--out")
+        .arg(&rv32)
+        .arg("--metadata")
+        .arg(&lower_metadata)
+        .arg("--target-triple")
+        .arg(RV32_TARGET_TRIPLE)
+        .arg("--build-flags")
+        .arg(rv32_build_flags(pkg_name, cargo_args));
+
+    if let Some(version) = rustc_version() {
+        lower.arg("--rustc-version").arg(version);
+    }
+
+    let output = lower.output()?;
+    let lower_stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let lower_stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    if !output.status.success() {
+        return Err(CliError::Rv32LowerFailed {
+            stdout: lower_stdout,
+            stderr: lower_stderr,
+        });
+    }
+
+    let profile = crate::config::resolve_profile(&metadata.workspace_root, explicit_profile)?;
+    let size = fs::metadata(&rv32)?.len();
+    print.status(format_args!("Built {} ({size} bytes)", rv32.display()));
+
+    Ok(Rv32BuildResult {
+        project_name: pkg_name.to_string(),
+        project_root: metadata.workspace_root,
+        target_directory: metadata.target_directory,
+        elf,
+        rv32,
+        metadata: lower_metadata,
+        size_bytes: size,
+        target: BuildTarget::Rv32,
+        profile,
+        cargo_stdout,
+        cargo_stderr,
+        lower_stdout,
+        lower_stderr,
+    })
+}
+
+fn rv32_build_flags(pkg_name: &str, cargo_args: &[String]) -> String {
+    let mut flags = vec![
+        "CARGO_PROFILE_RELEASE_STRIP=false".to_string(),
+        "cargo".to_string(),
+        "build".to_string(),
+        "--release".to_string(),
+        "--target".to_string(),
+        RV32_TARGET_TRIPLE.to_string(),
+        "-p".to_string(),
+        pkg_name.to_string(),
+    ];
+    flags.extend(cargo_args.iter().cloned());
+    flags.join(" ")
+}
+
+fn rustc_version() -> Option<String> {
+    let output = Command::new("rustc").arg("--version").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 #[derive(Debug, serde::Deserialize)]

@@ -9,6 +9,8 @@ pub enum CliError {
     CargoNotFound,
     #[error("wasm-opt not found on PATH")]
     WasmOptNotFound,
+    #[error("rv32-lower not found on PATH")]
+    Rv32LowerNotFound,
     #[error("`.cargo/contract.toml` not found in {0}")]
     ContractTomlNotFound(String),
     #[error("package `{0}` not found in workspace")]
@@ -19,6 +21,8 @@ pub enum CliError {
     CargoMetadataFailed(String),
     #[error("expected WASM artifact not found at {0}")]
     WasmNotFound(String),
+    #[error("expected RV32 ELF not found at {0}")]
+    Rv32ElfNotFound(String),
     #[error("target dir conflicts with CLI passthrough args or config")]
     TargetDirConflict,
     #[error("cargo failed with exit code {0}")]
@@ -52,6 +56,8 @@ pub enum CliError {
     UnsupportedOs(String),
     #[error("wasm-opt optimization failed{}", if .0.is_empty() { String::new() } else { format!(": {}", .0) })]
     WasmOptFailed(String),
+    #[error("rv32-lower failed{}", rv32_lower_error_suffix(.stdout, .stderr))]
+    Rv32LowerFailed { stdout: String, stderr: String },
     #[error("WASM instrumentation failed: {0}")]
     WasmInstrumentFailed(#[from] groundhog_wasm_meter::Error),
     #[error("WASM verification failed after instrumentation: {0}")]
@@ -79,6 +85,8 @@ pub enum CliError {
     IntegrationTestNotFound(String),
     #[error("invalid test options: {0}")]
     InvalidTestOptions(String),
+    #[error("invalid build options: {0}")]
+    InvalidBuildOptions(String),
     #[error("status check found warnings")]
     StatusHasWarnings,
     #[error("command emitted structured failure output")]
@@ -140,11 +148,13 @@ impl CliError {
         match self {
             Self::CargoNotFound => "cargo_not_found",
             Self::WasmOptNotFound => "wasm_opt_not_found",
+            Self::Rv32LowerNotFound => "rv32_lower_not_found",
             Self::ContractTomlNotFound(_) => "contract_toml_not_found",
             Self::PackageNotFound(_) => "package_not_found",
             Self::PackageRequired => "package_required",
             Self::CargoMetadataFailed(_) => "cargo_metadata_failed",
             Self::WasmNotFound(_) => "wasm_not_found",
+            Self::Rv32ElfNotFound(_) => "rv32_elf_not_found",
             Self::TargetDirConflict => "target_dir_conflict",
             Self::CargoFailed(_) | Self::CargoFailedWithOutput { .. } => "cargo_failed",
             Self::DirExists(_) => "dir_exists",
@@ -157,6 +167,7 @@ impl CliError {
             Self::RegistryLoginFailed => "registry_login_failed",
             Self::UnsupportedOs(_) => "unsupported_os",
             Self::WasmOptFailed(_) => "wasm_opt_failed",
+            Self::Rv32LowerFailed { .. } => "rv32_lower_failed",
             Self::WasmInstrumentFailed(_) => "wasm_instrument_failed",
             Self::WasmVerifyFailed(_) => "wasm_verify_failed",
             Self::SpecFailed(_) => "spec_failed",
@@ -169,6 +180,7 @@ impl CliError {
             Self::IntegrationTestsUnavailable => "integration_tests_unavailable",
             Self::IntegrationTestNotFound(_) => "integration_test_not_found",
             Self::InvalidTestOptions(_) => "invalid_test_options",
+            Self::InvalidBuildOptions(_) => "invalid_build_options",
             Self::StatusHasWarnings => "status_has_warnings",
             Self::CommandReportedFailure => "command_reported_failure",
             Self::NodeSupervisor(_) => "node_supervisor_error",
@@ -203,6 +215,10 @@ impl CliError {
                 "install Binaryen (`brew install binaryen`), or \
                  rerun without `--optimize`",
             )),
+            Self::Rv32LowerNotFound => Some(Cow::Borrowed(
+                "install `groundhog-rv32-lower` so the `rv32-lower` binary \
+                 is on your PATH",
+            )),
             Self::ContractTomlNotFound(_) => Some(Cow::Borrowed(
                 "create `.cargo/contract.toml` with WASM build flags, \
                  or run `groundhog new` to scaffold a project",
@@ -223,6 +239,11 @@ impl CliError {
             Self::WasmNotFound(_) => Some(Cow::Borrowed(
                 "run `groundhog build` first, or check that the crate \
                  does not use a custom [lib] name in Cargo.toml",
+            )),
+            Self::Rv32ElfNotFound(_) => Some(Cow::Borrowed(
+                "check that the package builds a binary for \
+                 riscv32im-unknown-none-elf and that its binary name matches \
+                 the package name",
             )),
             Self::TargetDirConflict => Some(Cow::Borrowed(
                 "remove `--target-dir` from passthrough args or \
@@ -318,6 +339,10 @@ impl CliError {
                 "see the wasm-opt error above; the WASM binary \
                  may be invalid or malformed",
             )),
+            Self::Rv32LowerFailed { .. } => Some(Cow::Borrowed(
+                "see the rv32-lower error above; the ELF may be stripped, \
+                 missing `_start`, or missing contract entrypoint symbols",
+            )),
             Self::WasmInstrumentFailed(_) => {
                 Some(Cow::Borrowed("the WASM binary may be invalid or too large"))
             }
@@ -356,13 +381,17 @@ impl CliError {
             Self::InvalidTestOptions(_) => Some(Cow::Borrowed(
                 "remove the conflicting `groundhog test` option and rerun the command",
             )),
+            Self::InvalidBuildOptions(_) => Some(Cow::Borrowed(
+                "remove the unsupported `groundhog build` option for the selected target",
+            )),
         }
     }
 
     /// Optional structured details for JSON error payloads.
     pub fn details_json(&self) -> Option<Value> {
         match self {
-            Self::CargoFailedWithOutput { stdout, stderr, .. } => Some(json!({
+            Self::CargoFailedWithOutput { stdout, stderr, .. }
+            | Self::Rv32LowerFailed { stdout, stderr } => Some(json!({
                 "stdout": stdout,
                 "stderr": stderr,
             })),
@@ -374,5 +403,18 @@ impl CliError {
             }
             _ => None,
         }
+    }
+}
+
+fn rv32_lower_error_suffix(stdout: &str, stderr: &str) -> String {
+    let message = if stderr.trim().is_empty() {
+        stdout.trim()
+    } else {
+        stderr.trim()
+    };
+    if message.is_empty() {
+        String::new()
+    } else {
+        format!(": {message}")
     }
 }

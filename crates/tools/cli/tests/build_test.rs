@@ -483,6 +483,99 @@ fn build_project_recopies_raw_wasm_before_reprocessing_on_repeated_runs() {
     assert_eq!(rebuilt_processed, first_processed);
 }
 
+#[test]
+#[serial]
+fn build_rv32_project_compiles_and_lowers_elf() {
+    let tmp = TempDir::new().unwrap();
+    let project_root =
+        std::fs::canonicalize(tmp.path()).expect("bug: project path should canonicalize");
+    fs::write(
+        project_root.join("Cargo.toml"),
+        "[package]\nname = \"demo-contract-rv32\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+    fs::create_dir_all(project_root.join("src")).unwrap();
+    fs::write(project_root.join("src/main.rs"), "fn main() {}\n").unwrap();
+
+    let target_dir = project_root.join("target");
+    let raw_elf = target_dir
+        .join("riscv32im-unknown-none-elf/release")
+        .join("demo-contract-rv32");
+    let processed_rv32 = target_dir
+        .join("groundhog")
+        .join("demo_contract_rv32.rv32a");
+    let processed_metadata = target_dir
+        .join("groundhog")
+        .join("demo_contract_rv32.rv32.json");
+    let cargo_args_log = project_root.join("cargo-args.log");
+    let metadata_json = format!(
+        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract-rv32","manifest_path":"{}"}}]}}"#,
+        project_root.display(),
+        target_dir.display(),
+        project_root.join("Cargo.toml").display()
+    );
+
+    let fake_bin = project_root.join("bin");
+    fs::create_dir_all(&fake_bin).unwrap();
+    let cargo = fake_bin.join("cargo");
+    fs::write(
+        &cargo,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = \"metadata\" ]; then\n  printf '%s' '{metadata_json}'\n  exit 0\nfi\nif [ \"$CARGO_PROFILE_RELEASE_STRIP\" != \"false\" ]; then\n  echo missing strip env >&2\n  exit 2\nfi\nprintf '%s\\n' \"$*\" > '{}'\n/bin/mkdir -p '{}'\nprintf 'ELF' > '{}'\n",
+            cargo_args_log.display(),
+            raw_elf
+                .parent()
+                .expect("bug: raw elf parent should exist")
+                .display(),
+            raw_elf.display()
+        ),
+    )
+    .unwrap();
+    let rv32_lower = fake_bin.join("rv32-lower");
+    fs::write(
+        &rv32_lower,
+        "#!/bin/sh\nwhile [ \"$#\" -gt 0 ]; do\n  case \"$1\" in\n    --out) out=\"$2\"; shift 2 ;;\n    --metadata) metadata=\"$2\"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\nprintf 'RV32' > \"$out\"\nprintf '{\"ok\":true}\\n' > \"$metadata\"\n",
+    )
+    .unwrap();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for executable in [&cargo, &rv32_lower] {
+            let mut perms = fs::metadata(executable).unwrap().permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(executable, perms).unwrap();
+        }
+    }
+
+    let _cwd = CurrentDirGuard::enter(&project_root);
+    let _path = PathGuard::set(fake_bin.as_os_str());
+
+    let result = groundhog_cli::build::build_rv32_project(
+        Some("demo-contract-rv32"),
+        &["--locked".into()],
+        &groundhog_cli::artifacts::ArtifactOptions::default(),
+        None,
+        &groundhog_cli::Print::quiet(),
+    )
+    .expect("bug: rv32 build should succeed");
+
+    assert_eq!(result.elf, raw_elf);
+    assert_eq!(result.rv32, processed_rv32);
+    assert_eq!(result.metadata, processed_metadata);
+    assert_eq!(result.size_bytes, 4);
+    assert_eq!(fs::read(&processed_rv32).unwrap(), b"RV32");
+    assert_eq!(
+        fs::read_to_string(&processed_metadata).unwrap(),
+        "{\"ok\":true}\n"
+    );
+
+    let cargo_args = fs::read_to_string(cargo_args_log).unwrap();
+    assert!(cargo_args.contains("build --release --target riscv32im-unknown-none-elf"));
+    assert!(cargo_args.contains("-p demo-contract-rv32"));
+    assert!(cargo_args.contains("--locked"));
+}
+
 struct CurrentDirGuard {
     previous: PathBuf,
 }
