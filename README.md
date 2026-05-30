@@ -24,7 +24,7 @@ The `groundhog` CLI runs an isolated Groundhog chain in a `hogd-dev`
 subprocess and gives you a normal dev loop on top:
 
 ```bash
-cargo install --path crates/cli --features dev-node
+cargo install --path crates/tools/cli --features dev-node
 groundhog init                   # one-time environment check
 groundhog login                  # one-time; early-access registry auth
 groundhog new my-counter && cd my-counter
@@ -150,7 +150,7 @@ same way.
 ### The API surface
 
 The JSON-RPC contract lives in the OpenRPC artifact at
-[`crates/open-rpc-spec/snapshots/groundhog-spec.json`](crates/open-rpc-spec/snapshots/groundhog-spec.json),
+[`crates/json-rpc/open-rpc-spec/snapshots/groundhog-spec.json`](crates/json-rpc/open-rpc-spec/snapshots/groundhog-spec.json),
 also published as the `groundhog-open-rpc-spec` crate on the private
 registry. The current public JSON-RPC surface uses one method namespace:
 
@@ -178,7 +178,7 @@ Every method declares an `errors[]` array referencing
 `components.errors` in the artifact. Error codes follow Substrate's
 per-module range pattern; the canonical catalog (stable name, code,
 short message, consumer-facing description) lives in
-[`crates/api-types/src/error.rs`](crates/api-types/src/error.rs).
+[`crates/json-rpc/api-types/src/error.rs`](crates/json-rpc/api-types/src/error.rs).
 
 Codes worth knowing for retry policy:
 
@@ -237,25 +237,38 @@ this repo's docs:
 
 ## Contributing
 
-### Crates
+### Crate Layout
 
-| Crate | Description |
-|-------|-------------|
-| [`cli`](crates/cli/) | `groundhog` CLI for the contract dev workflow |
-| [`gateway`](crates/gateway/) | JSON-RPC 2.0 gateway server |
-| [`signing`](crates/signing/) | Off-chain transaction signing and construction |
-| [`client`](crates/client/) | Typed JSON-RPC client |
-| [`api-types`](crates/api-types/) | Shared RPC types (including the error catalog) |
-| [`rpc-api`](crates/rpc-api/) | Shared jsonrpsee trait definitions |
-| [`rpc-server`](crates/rpc-server/) | Shared server-side JSON-RPC implementation and validation |
-| [`x23-transport`](crates/x23-transport/) | Shared x23 connection-pool helpers (used by gateway and node-supervisor) |
-| [`node-supervisor`](crates/node-supervisor/) | `groundhog node` facade: supervises `hogd-dev` and serves JSON-RPC via `rpc-server`. Chain/submit wired to the hogd-dev scheduler, read wired to the hogd-dev indexer when advertised. |
-| [`open-rpc`](crates/open-rpc/) | OpenRPC document generator: `Project` + `ModuleBuilder` thread a shared `schemars::SchemaGenerator` so named types land in `components.schemas` with `$ref` use sites |
-| [`open-rpc-macros`](crates/open-rpc-macros/) | `#[open_rpc]` proc macro emitting OpenRPC method descriptors from jsonrpsee `#[rpc]` traits |
-| [`open-rpc-spec`](crates/open-rpc-spec/) | Library + binary that assembles the canonical `groundhog-open-rpc-spec` artifact for downstream codegen |
-| [`e2e-tests`](crates/e2e-tests/) | Process-level JSON-RPC smoke tests |
-| [`bench`](crates/bench/) | Benchmark harnesses |
-| [`sim`](crates/sim/) | `hoglab` stateful simulation and soak-test harness. Runs deterministic actor schedules against an existing target, emits `result.jsonl` / `result.json`, and currently covers chain-tip, dev-wallet submit smoke, receipt polling, and Phase 1 assertions. |
+Workspace crates are grouped by boundary instead of kept flat under
+`crates/`:
+
+- [`crates/json-rpc/`](crates/json-rpc/) — public JSON-RPC API surface,
+  gateway, typed client, shared server implementation, and OpenRPC spec
+  generation.
+- [`crates/x23/`](crates/x23/) — internal x23 transport helpers used to reach
+  hogd services.
+- [`crates/tools/`](crates/tools/) — developer-facing tools and supporting
+  libraries.
+- [`crates/dev/`](crates/dev/) — local development, simulation, benchmark, and
+  process-level test harnesses.
+
+| Group | Crate | Description |
+|-------|-------|-------------|
+| JSON-RPC | [`api-types`](crates/json-rpc/api-types/) | Shared JSON-RPC types, including the error catalog |
+| JSON-RPC | [`rpc-api`](crates/json-rpc/rpc-api/) | Shared jsonrpsee trait definitions |
+| JSON-RPC | [`rpc-server`](crates/json-rpc/rpc-server/) | Shared server-side JSON-RPC implementation and validation |
+| JSON-RPC | [`gateway`](crates/json-rpc/gateway/) | JSON-RPC 2.0 gateway server |
+| JSON-RPC | [`client`](crates/json-rpc/client/) | Typed JSON-RPC client |
+| JSON-RPC | [`open-rpc`](crates/json-rpc/open-rpc/) | OpenRPC document generator |
+| JSON-RPC | [`open-rpc-macros`](crates/json-rpc/open-rpc-macros/) | `#[open_rpc]` proc macro emitting OpenRPC method descriptors from jsonrpsee `#[rpc]` traits |
+| JSON-RPC | [`open-rpc-spec`](crates/json-rpc/open-rpc-spec/) | Library + binary that assembles the canonical `groundhog-open-rpc-spec` artifact for downstream codegen |
+| x23 | [`x23-transport`](crates/x23/x23-transport/) | Shared x23 connection-pool helpers used by gateway and node-supervisor |
+| Tools | [`cli`](crates/tools/cli/) | `groundhog` CLI for the contract dev workflow |
+| Tools | [`signing`](crates/tools/signing/) | Off-chain transaction signing and construction |
+| Dev | [`node-supervisor`](crates/dev/node-supervisor/) | `groundhog node` facade: supervises `hogd-dev` and serves JSON-RPC via `rpc-server` |
+| Dev | [`e2e-tests`](crates/dev/e2e-tests/) | Process-level JSON-RPC smoke tests |
+| Dev | [`bench`](crates/dev/bench/) | Benchmark harnesses |
+| Dev | [`sim`](crates/dev/sim/) | `hoglab` stateful simulation and soak-test harness |
 
 ### Local dev setup
 
@@ -278,7 +291,7 @@ CLI node, starts `hogway --runtime-manifest`, and repeats the bench
 checks against the standalone gateway. Set `BENCH_SCENARIO=gateway-baseline`
 or `BENCH_SCENARIO=submit-ramp` for the heavier local scenario library.
 
-For deterministic stateful simulator runs, use `hoglab` from `crates/sim`
+For deterministic stateful simulator runs, use `hoglab` from `crates/dev/sim`
 against an already-started `groundhog node` target:
 
 ```bash
@@ -293,7 +306,7 @@ scope and result-artifact contract.
 
 The `test` subcommand requires `groundhog login` to authenticate
 against the private crate registry that ships the Groundhog contract
-SDK. See [`crates/cli/README.md`](crates/cli/README.md) for the full
+SDK. See [`crates/tools/cli/README.md`](crates/tools/cli/README.md) for the full
 CLI reference.
 
 ### Conventions
@@ -310,7 +323,7 @@ contributors and LLM assistants. Highlights:
 - Wire-format and error-catalog conventions are summarized in the
   "Building on Groundhog" section above and detailed in CLAUDE.md
   "Gateway Conventions".
-- CLI machine-readable output: typed report types in `crates/cli`,
+- CLI machine-readable output: typed report types in `crates/tools/cli`,
   `data.schemaVersion` from v1 onward, `CommandResult` envelope on a
   single stdout stream.
 

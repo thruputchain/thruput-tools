@@ -1,7 +1,7 @@
 # TypeScript Binding Codegen
 
 **Status:** Shipped. The current implementation lives in
-`crates/cli/src/codegen.rs` and is exposed through `groundhog codegen ts` plus
+`crates/tools/cli/src/codegen.rs` and is exposed through `groundhog codegen ts` plus
 `groundhog build --bindings ts`.
 
 Generate typed TypeScript bindings from Groundhog contract specs.
@@ -159,7 +159,7 @@ decided during development.
 ### Spec Loading
 
 The codegen reuses the existing spec extraction in
-`crates/cli/src/contract_spec.rs`:
+`crates/tools/cli/src/contract_spec.rs`:
 
 - `.wasm` input: `load_contract_spec` extracts from the embedded
   `groundhogspecv0` custom section

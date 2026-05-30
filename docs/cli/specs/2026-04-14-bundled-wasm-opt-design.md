@@ -29,7 +29,7 @@ Future tracking issue: <https://github.com/groundhogchain/groundhog-rpc/issues/6
 
 If we decide the UX benefit outweighs the C++ build cost, revisit adding
 `wasm-opt = "0.116.1"` to the workspace and replacing the shell-out in
-`crates/cli/src/build.rs` with `wasm_opt::OptimizationOptions`.
+`crates/tools/cli/src/build.rs` with `wasm_opt::OptimizationOptions`.
 
 Acceptance criteria for that future work:
 

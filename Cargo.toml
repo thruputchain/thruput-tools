@@ -1,21 +1,21 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/api-types",
-    "crates/rpc-api",
-    "crates/rpc-server",
-    "crates/x23-transport",
-    "crates/gateway",
-    "crates/client",
-    "crates/signing",
-    "crates/cli",
-    "crates/node-supervisor",
-    "crates/open-rpc",
-    "crates/open-rpc-macros",
-    "crates/open-rpc-spec",
-    "crates/e2e-tests",
-    "crates/bench",
-    "crates/sim",
+    "crates/json-rpc/api-types",
+    "crates/json-rpc/rpc-api",
+    "crates/json-rpc/rpc-server",
+    "crates/x23/x23-transport",
+    "crates/json-rpc/gateway",
+    "crates/json-rpc/client",
+    "crates/tools/signing",
+    "crates/tools/cli",
+    "crates/dev/node-supervisor",
+    "crates/json-rpc/open-rpc",
+    "crates/json-rpc/open-rpc-macros",
+    "crates/json-rpc/open-rpc-spec",
+    "crates/dev/e2e-tests",
+    "crates/dev/bench",
+    "crates/dev/sim",
 ]
 
 [workspace.package]
@@ -35,15 +35,15 @@ categories = ["development-tools"]
 # above.  Cargo requires explicit versions for dependencies when
 # publishing, as path specifications are stripped out.  Remember to
 # keep this in sync.
-groundhog-rpc-api-types = { path = "crates/api-types", version = "=0.4.0", registry = "groundhog" }
-groundhog-rpc-api = { path = "crates/rpc-api", version = "=0.4.0", registry = "groundhog" }
-groundhog-rpc-server = { path = "crates/rpc-server", version = "=0.4.0", registry = "groundhog" }
-groundhog-x23-transport = { path = "crates/x23-transport", version = "=0.4.0", registry = "groundhog" }
-groundhog-rpc-client = { path = "crates/client", version = "=0.4.0", registry = "groundhog" }
-groundhog-signing = { path = "crates/signing", version = "=0.4.0", registry = "groundhog" }
-groundhog-node-supervisor = { path = "crates/node-supervisor", version = "=0.4.0", registry = "groundhog" }
-groundhog-open-rpc = { path = "crates/open-rpc", version = "=0.4.0", registry = "groundhog" }
-groundhog-open-rpc-macros = { path = "crates/open-rpc-macros", version = "=0.4.0", registry = "groundhog" }
+groundhog-rpc-api-types = { path = "crates/json-rpc/api-types", version = "=0.4.0", registry = "groundhog" }
+groundhog-rpc-api = { path = "crates/json-rpc/rpc-api", version = "=0.4.0", registry = "groundhog" }
+groundhog-rpc-server = { path = "crates/json-rpc/rpc-server", version = "=0.4.0", registry = "groundhog" }
+groundhog-x23-transport = { path = "crates/x23/x23-transport", version = "=0.4.0", registry = "groundhog" }
+groundhog-rpc-client = { path = "crates/json-rpc/client", version = "=0.4.0", registry = "groundhog" }
+groundhog-signing = { path = "crates/tools/signing", version = "=0.4.0", registry = "groundhog" }
+groundhog-node-supervisor = { path = "crates/dev/node-supervisor", version = "=0.4.0", registry = "groundhog" }
+groundhog-open-rpc = { path = "crates/json-rpc/open-rpc", version = "=0.4.0", registry = "groundhog" }
+groundhog-open-rpc-macros = { path = "crates/json-rpc/open-rpc-macros", version = "=0.4.0", registry = "groundhog" }
 
 # --- Groundhog (private registry) ---
 groundhog-xdr = { version = "=0.13.7", registry = "groundhog", features = ["serde", "xdrs", "schema"] }

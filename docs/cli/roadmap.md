@@ -152,7 +152,7 @@ Maintenance rules:
 - [x] Wire contract spec / IDL generation into the CLI workflow
 - [x] Clarify the contract spec / IDL path needed for `call`
 - [x] Signing / tx-building: shared `groundhog-signing` crate landed at
-  `crates/signing/`. Canonical `PubkeyAccountPreimage` XDR address
+  `crates/tools/signing/`. Canonical `PubkeyAccountPreimage` XDR address
   derivation, bridged from `keys.rs`. CLI and RPC gateway now share the
   one off-chain tools workspace.
 - [x] Command result envelope for consistent JSON shape
@@ -169,8 +169,8 @@ Maintenance rules:
 - [x] Local-node observability (transaction detail, events, latest-state
   storage reads)
 - [x] Extract a swappable backend behind plane traits
-  (`SubmitPlane`/`ChainPlane`/`ReadPlane` in `crates/rpc-server`,
-  consumed by `crates/node-supervisor` over `crates/x23-transport`).
+  (`SubmitPlane`/`ChainPlane`/`ReadPlane` in `crates/json-rpc/rpc-server`,
+  consumed by `crates/dev/node-supervisor` over `crates/x23/x23-transport`).
 - Durable local-node backend: `groundhog-node-supervisor` around a
   hogd-owned `hogd-dev` subprocess. PRs landed in order below.
   - [x] PR 1 — supervisor crate scaffold (#30)
@@ -484,7 +484,7 @@ historical Rust-track items are both resolved:
 - `groundhog_getStorageAt` parity + `groundhog storage` CLI wrapper
   shipped.
 - `groundhog node --reset` deferred — `HogdDevConfig` is documented as
-  ephemeral (`crates/node-supervisor/src/config.rs:124-128`), so each
+  ephemeral (`crates/dev/node-supervisor/src/config.rs:124-128`), so each
   start is already a clean slate.  `--reset` only becomes meaningful
   once an optional persisted-state file ships, and would be one flag
   on top of that work, not a standalone item.

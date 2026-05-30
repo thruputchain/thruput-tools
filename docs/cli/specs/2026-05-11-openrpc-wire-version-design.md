@@ -8,7 +8,7 @@ This document preserves the design rationale and original rollout plan.
 ## Context
 
 The canonical OpenRPC artifact at
-`crates/open-rpc-spec/snapshots/groundhog-spec.json` is the external
+`crates/json-rpc/open-rpc-spec/snapshots/groundhog-spec.json` is the external
 contract SDK authors pin on. Its `info.version` currently mirrors the
 Rust workspace version via `env!("CARGO_PKG_VERSION")`, so any workspace
 patch bump (`0.3.1 → 0.3.2`) forces a new spec snapshot even when the
@@ -61,7 +61,7 @@ Two changes, shippable as separate PRs:
 decoupled from `CARGO_PKG_VERSION`:
 
 ```rust
-// crates/rpc-api/src/lib.rs
+// crates/json-rpc/rpc-api/src/lib.rs
 
 /// Wire-format SemVer for the JSON-RPC surface.
 ///
@@ -82,7 +82,7 @@ on `rpc-api`.
 not automatic.
 
 **Enforcement:** the existing snapshot test
-(`crates/open-rpc-spec/tests/spec_snapshot.rs`) already pins the
+(`crates/json-rpc/open-rpc-spec/tests/spec_snapshot.rs`) already pins the
 artifact byte-for-byte. Any change to the spec forces a snapshot
 update; reviewers verify the version bump in the same PR matches the
 nature of the change. No additional CI gate — bump discipline is part

@@ -72,7 +72,7 @@ pub fn default_catalog_path() -> PathBuf {
         return repo_relative;
     }
     let fallback = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
+        .join("../../..")
         .join("examples/sim/catalog.json");
     fallback.canonicalize().unwrap_or(fallback)
 }
@@ -359,7 +359,7 @@ mod tests {
     #[test]
     fn checked_in_catalog_validates() {
         let catalog_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
+            .join("../../..")
             .join("examples/sim/catalog.json");
         let bytes = std::fs::read(&catalog_path).expect("catalog should read");
         let catalog: ScenarioCatalog =

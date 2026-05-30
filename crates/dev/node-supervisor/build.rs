@@ -1,4 +1,4 @@
-// Keep in sync with crates/gateway/build.rs.
+// Keep in sync with crates/json-rpc/gateway/build.rs.
 use std::path::Path;
 use std::process::Command;
 
@@ -6,6 +6,7 @@ fn main() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let repo_root = manifest_dir
         .parent()
+        .and_then(Path::parent)
         .and_then(Path::parent)
         .unwrap_or(manifest_dir);
     watch_git_head(repo_root);

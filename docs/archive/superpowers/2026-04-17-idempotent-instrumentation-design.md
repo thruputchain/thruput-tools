@@ -1,8 +1,8 @@
 # Idempotent Instrumentation and Groundhog-Owned Artifacts
 
 **Archive note:** Shipped implementation plan. The current behavior lives in
-`crates/cli/src/build.rs`, `crates/cli/src/artifacts.rs`, and
-`crates/cli/src/contract_spec.rs`.
+`crates/tools/cli/src/build.rs`, `crates/tools/cli/src/artifacts.rs`, and
+`crates/tools/cli/src/contract_spec.rs`.
 
 ## Problem
 

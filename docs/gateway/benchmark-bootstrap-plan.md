@@ -368,7 +368,7 @@ pretty-printed JSON. The full cost model remains authoritative.
 
 ### Schema Ownership
 
-The manifest Rust types and JSON Schema should live in `crates/api-types`.
+The manifest Rust types and JSON Schema should live in `crates/json-rpc/api-types`.
 Rust consumers can share the typed model, while `schemars` can publish a JSON
 Schema artifact for TypeScript, Python, shell tooling, and C++ producer tests.
 Hogd may produce the JSON from C++ without importing Rust code, but it should
@@ -464,7 +464,7 @@ implemented for the hogd-dev runtime-manifest path.
 
 ### Phase 4: Bootstrap Manifest Input
 
-- [x] Define the shared Rust bootstrap manifest type in `crates/api-types`.
+- [x] Define the shared Rust bootstrap manifest type in `crates/json-rpc/api-types`.
 - [x] Add a local-dev example bootstrap manifest.
 - [x] Add supervisor lowering from current hogd-dev shorthand settings into
   bootstrap intent.

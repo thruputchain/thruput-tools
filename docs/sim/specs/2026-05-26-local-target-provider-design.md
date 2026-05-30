@@ -9,7 +9,7 @@ not seen the brainstorming conversation should be able to build from it.
 
 ## Summary
 
-Add a `LocalTargetProvider` to the `hoglab` simulator (`crates/sim`) that
+Add a `LocalTargetProvider` to the `hoglab` simulator (`crates/dev/sim`) that
 launches a managed `groundhog node` (which supervises a `hogd-dev`
 subprocess), runs a simulation against it, and tears it down on completion.
 This is the first **managed** target provider; Phase 1 shipped only the
@@ -69,7 +69,7 @@ loosely-coupled subsystems; this slice is deliberately just the foundation.
 
 ## Background: what this builds on
 
-- **`TargetProvider` trait** (`crates/sim/src/target.rs`) — dyn-compatible via
+- **`TargetProvider` trait** (`crates/dev/sim/src/target.rs`) — dyn-compatible via
   boxed futures, with `acquire`, `cleanup` (idempotent), `capabilities`, and
   `chaos_controller`. `ExistingTargetProvider` is the only current impl.
   `TargetCapabilities::for_provider(Local)` deliberately declares no chaos
@@ -81,7 +81,7 @@ loosely-coupled subsystems; this slice is deliberately just the foundation.
   a live process handle.
 - **`run.rs`** — already runs `acquire → run → cleanup` via a `finish_target_run`
   helper that gives run-error-wins-over-cleanup-error precedence.
-- **`groundhog node`** (`crates/cli/src/node.rs`, feature `dev-node`) — a
+- **`groundhog node`** (`crates/tools/cli/src/node.rs`, feature `dev-node`) — a
   supervisor that launches and reaps `hogd-dev`, serves public JSON-RPC, and in
   `--json` mode prints a startup payload with `data.rpc_url` and
   `data.runtime_manifest.path` / `.hash`. Its `LocalNodeOptions.dev_account_count`
@@ -95,7 +95,7 @@ loosely-coupled subsystems; this slice is deliberately just the foundation.
 
 Four units, each with one job.
 
-### 1. `LocalTargetProvider` (`crates/sim/src/target.rs`)
+### 1. `LocalTargetProvider` (`crates/dev/sim/src/target.rs`)
 
 Implements `TargetProvider`.
 
@@ -126,16 +126,16 @@ This resolves the deferred plan question "do local-provider process handles
 live on `ResolvedTarget` or in provider-owned state": **provider-owned state.**
 `ResolvedTarget`'s shape does not change.
 
-### 3. `groundhog node --dev-account-count` flag (`crates/cli`)
+### 3. `groundhog node --dev-account-count` flag (`crates/tools/cli`)
 
-Replace the dead `--accounts` flag (`crates/cli/src/main.rs`, currently
+Replace the dead `--accounts` flag (`crates/tools/cli/src/main.rs`, currently
 `#[arg(... hide = true)]` "Deprecated: ignored by the hogd-dev backend") with a
 working `--dev-account-count <N>` wired to the already-plumbed
 `LocalNodeOptions.dev_account_count`. This is the one cross-crate change. It is
 independently useful: there is currently no way for a human to control the
 launched account count from the CLI.
 
-### 4. Provider dispatch (`crates/sim/src/run.rs`)
+### 4. Provider dispatch (`crates/dev/sim/src/run.rs`)
 
 Generalize the current `run_existing_target` into a provider-agnostic path that
 selects the provider from `manifest.target.provider` and runs the shared
@@ -281,7 +281,7 @@ the full launch behind a real-binary smoke test. No process mocking.
 Gate on e.g. `GROUNDHOG_SIM_HOGD_DEV_BINARY`. Launch via the local provider →
 run `chain-tip-smoke` against the sim-launched node → tear down → assert the
 node exited and the port is released. Sibling to the existing
-`crates/sim/tests/existing_target_smoke.rs`.
+`crates/dev/sim/tests/existing_target_smoke.rs`.
 
 ### Deliberately not tested
 
@@ -291,16 +291,16 @@ scaffolding for a non-strategic provider.
 
 ## Anticipated file touch-list (handoff aid, not prescriptive)
 
-- `crates/sim/src/target.rs` — `LocalTargetProvider`, child-handle state.
-- `crates/sim/src/run.rs` — provider dispatch; reuse `finish_target_run`.
-- `crates/sim/src/error.rs` — new `SimError` variants.
-- `crates/sim/src/validation.rs` — allow `local`; reject output-only overrides
+- `crates/dev/sim/src/target.rs` — `LocalTargetProvider`, child-handle state.
+- `crates/dev/sim/src/run.rs` — provider dispatch; reuse `finish_target_run`.
+- `crates/dev/sim/src/error.rs` — new `SimError` variants.
+- `crates/dev/sim/src/validation.rs` — allow `local`; reject output-only overrides
   for local; keep the post-launch account-count backstop.
-- `crates/sim/src/main.rs` — `hoglab run` flags: `--groundhog-binary`,
+- `crates/dev/sim/src/main.rs` — `hoglab run` flags: `--groundhog-binary`,
   `--port`, `--startup-timeout-secs`.
-- `crates/cli/src/main.rs` + `crates/cli/src/node.rs` — replace `--accounts`
+- `crates/tools/cli/src/main.rs` + `crates/tools/cli/src/node.rs` — replace `--accounts`
   with working `--dev-account-count`.
-- `crates/sim/tests/` — gated local-provider smoke.
+- `crates/dev/sim/tests/` — gated local-provider smoke.
 - `docs/sim/sim-implementation-plan.md` — check off Slice A items; keep
   remaining Phase 2 items open.
 - `docs/sim/README.md` — document the `local` provider and its quickstart.

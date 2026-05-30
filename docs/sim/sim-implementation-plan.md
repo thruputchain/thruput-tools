@@ -195,7 +195,7 @@ chaos, deploy new contracts, or create remote infrastructure.
 
 ## Phase 0: Skeleton
 
-- [x] Add a `crates/sim` workspace member named `groundhog-sim`.
+- [x] Add a `crates/dev/sim` workspace member named `groundhog-sim`.
 - [x] Add a `hoglab` binary with `run`, `compare`, and `validate`
   subcommands.
 - [x] Keep the manifest kind as `groundhog-simulation` while using `hoglab`

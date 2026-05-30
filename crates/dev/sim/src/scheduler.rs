@@ -315,7 +315,7 @@ mod tests {
     #[test]
     fn restart_mixed_catalog_keeps_submit_before_restart_and_receipt_after() {
         let manifest: SimulationManifest = serde_json::from_str(include_str!(
-            "../../../examples/sim/local-restart-mixed-artifact.json"
+            "../../../../examples/sim/local-restart-mixed-artifact.json"
         ))
         .expect("catalog manifest should parse");
         let events = generate_schedule(&manifest).expect("schedule should generate");
@@ -343,7 +343,7 @@ mod tests {
     #[test]
     fn positive_event_scenarios_schedule_events_query_after_contract_call() {
         for manifest_json in [include_str!(
-            "../../../examples/sim/local-fibonacci-contract-call-events-smoke.json"
+            "../../../../examples/sim/local-fibonacci-contract-call-events-smoke.json"
         )] {
             let manifest: SimulationManifest =
                 serde_json::from_str(manifest_json).expect("event scenario should parse");

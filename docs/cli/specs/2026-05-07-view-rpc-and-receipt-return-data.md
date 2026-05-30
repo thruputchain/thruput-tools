@@ -164,12 +164,12 @@ This alignment has two concrete consequences for Milestone B's shape:
 ### Rust API State
 
 `TransactionReceipt.return_data: Option<HexBytes>` already exists at
-`crates/api-types/src/receipt.rs:41`. The CLI already attempts to decode
-it at `crates/cli/src/call.rs:79-82`. Both real read backends currently
+`crates/json-rpc/api-types/src/receipt.rs:41`. The CLI already attempts to decode
+it at `crates/tools/cli/src/call.rs:79-82`. Both real read backends currently
 hard-code `return_data: None`:
 
-- `crates/gateway/src/handlers/receipt.rs:79`
-- `crates/node-supervisor/src/read_backend.rs:137`
+- `crates/json-rpc/gateway/src/handlers/receipt.rs:79`
+- `crates/dev/node-supervisor/src/read_backend.rs:137`
 
 The Rust receipt type does not need a public shape change for the return
 case. Once hogd indexes root output, both backends should map
@@ -302,7 +302,7 @@ Ryan/hogd needs to decide:
 3. protocol-rs bump and publish.
 4. Rust API + mapping:
    - add `abort_data: Option<HexBytes>` to `TransactionReceipt` in
-     `crates/api-types`;
+     `crates/json-rpc/api-types`;
    - `gateway/handlers/receipt` maps `Return` -> `return_data`,
      `Abort` -> `abort_data`, `Fault` -> neither;
    - `node-supervisor::read_backend` does the same against hogd-dev's
@@ -346,13 +346,13 @@ A noun-shaped method also avoids reading as "call a view," which is
 not what the operation does.
 
 The JSON-facing `ViewRequest`, `ViewResponse`, and `RootInvocationOutput`
-types should live in `crates/api-types`. The gateway and node-supervisor
+types should live in `crates/json-rpc/api-types`. The gateway and node-supervisor
 should map from protocol XDR types into RPC-layer types rather than
 exposing generated XDR unions directly.
 
 Adding this method touches the shared Rust RPC surface:
 
-- `crates/rpc-api` trait entry
+- `crates/json-rpc/rpc-api` trait entry
 - `groundhog-rpc-client` generated typed client
 - `rpc-server` implementation and backend plane
 - gateway backend adapter
@@ -565,8 +565,8 @@ optional decoration.
    encoding, return decoding, and `dev-N` account lookup where
    applicable.
 6. End-to-end smoke: `groundhog new -> build -> deploy -> call -> view`
-   in `crates/e2e-tests`.
-7. Bench follow-up: add `groundhog_view` to `crates/bench` once the
+   in `crates/dev/e2e-tests`.
+7. Bench follow-up: add `groundhog_view` to `crates/dev/bench` once the
    endpoint is stable.
 
 ## Test Plan
