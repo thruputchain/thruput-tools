@@ -1,8 +1,8 @@
 # RPC Gateway: API Sketch
 
 **Status:** Historical sketch. The current source of truth is the
-`GroundhogApi` trait in `crates/rpc-api` plus the generated OpenRPC snapshot in
-`crates/open-rpc-spec/snapshots/groundhog-spec.json`.
+`GroundhogApi` trait in `crates/json-rpc/rpc-api` plus the generated OpenRPC snapshot in
+`crates/json-rpc/open-rpc-spec/snapshots/groundhog-spec.json`.
 **Context:** Code sketches for [system-design.md](system-design.md).
 Not compilable as-is; intended to communicate shape and decisions.
 
@@ -430,9 +430,9 @@ pub async fn get_transaction_status(
 [workspace]
 resolver = "2"
 members = [
-    "crates/api-types",
-    "crates/gateway",
-    "crates/client",
+    "crates/json-rpc/api-types",
+    "crates/json-rpc/gateway",
+    "crates/json-rpc/client",
 ]
 
 [workspace.dependencies]

@@ -434,7 +434,7 @@ prometheus = "0.13"
 
 ### Phase 1: Submit + Query (Target: private testnet)
 
-The current public surface is generated from `crates/rpc-api`. Reads go through
+The current public surface is generated from `crates/json-rpc/rpc-api`. Reads go through
 x23-backed gateway adapters where the corresponding hogd endpoint exists. HTTP
 transport is the current focus; WebSocket subscriptions remain a later phase.
 

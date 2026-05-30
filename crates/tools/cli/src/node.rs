@@ -389,7 +389,7 @@ pub fn run(
     Err(CliError::Other(
         "`groundhog node` requires the dev-node feature.\n\n  \
          hint: build the CLI with:\n        \
-         cargo install --path crates/cli --features dev-node"
+         cargo install --path crates/tools/cli --features dev-node"
             .into(),
     ))
 }

@@ -348,7 +348,7 @@ impl CliError {
             )),
             Self::IntegrationTestsUnavailable => Some(Cow::Borrowed(
                 "build the CLI with `--features dev-node`, for example: \
-                 `cargo install --path crates/cli --features dev-node`",
+                 `cargo install --path crates/tools/cli --features dev-node`",
             )),
             Self::IntegrationTestNotFound(_) => Some(Cow::Borrowed(
                 "create `tests/integration.rs` before running `groundhog test --integration`",

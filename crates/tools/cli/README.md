@@ -6,13 +6,13 @@ Rust/WASM build and test workflow into a single binary.
 ## Install
 
 ```bash
-cargo install --path crates/cli
+cargo install --path crates/tools/cli
 ```
 
 To include the local dev node:
 
 ```bash
-cargo install --path crates/cli --features dev-node
+cargo install --path crates/tools/cli --features dev-node
 ```
 
 For local development without installing:

@@ -154,7 +154,8 @@ fn local_target_chain_tip_smoke() {
     let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(|path| path.parent())
-        .expect("sim crate should be two levels below repo root")
+        .and_then(|path| path.parent())
+        .expect("sim crate should be three levels below repo root")
         .to_path_buf();
     let scenario = repo_root.join("examples/sim/local-chain-tip-smoke.json");
     let temp = tempfile::tempdir().expect("temp dir should be created");
@@ -221,7 +222,8 @@ fn local_restart_target_chain_tip_smoke() {
     let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(|path| path.parent())
-        .expect("sim crate should be two levels below repo root")
+        .and_then(|path| path.parent())
+        .expect("sim crate should be three levels below repo root")
         .to_path_buf();
     let scenario = repo_root.join("examples/sim/local-restart-chain-tip-smoke.json");
     let temp = tempfile::tempdir().expect("temp dir should be created");
@@ -601,7 +603,8 @@ fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(|path| path.parent())
-        .expect("sim crate should be two levels below repo root")
+        .and_then(|path| path.parent())
+        .expect("sim crate should be three levels below repo root")
         .to_path_buf()
 }
 

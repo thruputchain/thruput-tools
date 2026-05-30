@@ -4,8 +4,8 @@
 //! consistent across the backend capability shapes used in production
 //! gateway and the local hogd-dev supervisor.
 //!
-//! Real backend adapters live in `crates/gateway` and
-//! `crates/node-supervisor`, both of which depend on this crate.
+//! Real backend adapters live in `crates/json-rpc/gateway` and
+//! `crates/dev/node-supervisor`, both of which depend on this crate.
 //! To stay within the public surface
 //! and avoid circular deps, these tests use a programmable mock that can
 //! be configured to mimic each backend shape.

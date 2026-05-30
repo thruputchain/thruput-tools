@@ -356,9 +356,9 @@ This plan has shipped. The implemented shape is:
 2. Runtime manifests carry optional `endpoints.viewGateway`, which
    node-supervisor reads as `readiness.endpoints.view_gateway`.
 3. Node-supervisor adapts the endpoint in
-   `crates/node-supervisor/src/view_backend.rs`.
+   `crates/dev/node-supervisor/src/view_backend.rs`.
 4. The standalone gateway adapts the endpoint in
-   `crates/gateway/src/handlers/view.rs`.
+   `crates/json-rpc/gateway/src/handlers/view.rs`.
 5. `ViewPlane::view` is implemented for the node-supervisor and gateway
    backends when a view endpoint is configured.
 7. Map service payloads to public API types:

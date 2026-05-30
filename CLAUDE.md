@@ -67,7 +67,7 @@ Workspace crates in `crates/`:
   hand-maintained per-method `errors[]` mapping. The published
   `groundhog-open-rpc-spec` crate is consumed by `client-ts` via its
   regen script. A byte-equal snapshot at
-  `crates/open-rpc-spec/snapshots/groundhog-spec.json` guards artifact
+  `crates/json-rpc/open-rpc-spec/snapshots/groundhog-spec.json` guards artifact
   shape; `UPDATE_SNAPSHOTS=1` regenerates after intentional changes.
 - **e2e-tests** — ignored process-level JSON-RPC lifecycle smoke tests.
 - **bench** — benchmark harnesses. `groundhog-bench --runtime-manifest
@@ -116,31 +116,31 @@ runtime), `tower`/`tower-http` (middleware), `clap` (CLI), `prometheus`
   `/xdr`, `/client`). Generated TS bindings emitted by
   `groundhog codegen ts` import from these packages — the CLI never
   re-derives protocol primitives.
-- `crates/api-types` owns shared JSON-RPC types and JSON projections
+- `crates/json-rpc/api-types` owns shared JSON-RPC types and JSON projections
   of XDR types. If the JSON wire format differs from raw XDR (for
   example `0x`-prefixed hex wrappers), model that once here instead of
   redefining it in gateway, client, or CLI code.
-- `crates/api-types/src/bootstrap_manifest.rs` owns the bootstrap
+- `crates/json-rpc/api-types/src/bootstrap_manifest.rs` owns the bootstrap
   manifest input schema for local and benchmark backend launchers.
-  `crates/api-types/src/runtime_manifest.rs` owns the runtime manifest
+  `crates/json-rpc/api-types/src/runtime_manifest.rs` owns the runtime manifest
   output schema shared by `hogd-dev` producers, `groundhog node`,
   `hogway --runtime-manifest`, and `groundhog-bench
   --runtime-manifest`. Public manifest structs are `#[non_exhaustive]`;
   additive fields are expected. Optional endpoints must be absent when
   unavailable, not `null`. Large numeric quantities in manifests are
   decimal strings.
-- `crates/rpc-api` owns JSON-RPC method names, params, and results.
+- `crates/json-rpc/rpc-api` owns JSON-RPC method names, params, and results.
   Trait signatures in `rpc-api/src/lib.rs` are the sole source of
   truth for the public RPC surface.
 - OpenRPC / JSON Schema documents for the RPC surface are generated
   artifacts from Rust traits and Rust types. Do not hand-author or
   maintain parallel schema files for RPC methods or RPC payload types.
 - The canonical JSON-RPC error catalog lives in
-  `crates/api-types/src/error.rs`. See "Gateway Conventions" below for
+  `crates/json-rpc/api-types/src/error.rs`. See "Gateway Conventions" below for
   the OpenRPC projection, the per-method mapping in
-  `crates/open-rpc-spec/src/lib.rs`, and the snapshot-enforced rule
+  `crates/json-rpc/open-rpc-spec/src/lib.rs`, and the snapshot-enforced rule
   that adding a method requires updating that mapping.
-- CLI-only machine-readable output types live in `crates/cli` by
+- CLI-only machine-readable output types live in `crates/tools/cli` by
   default. If a CLI schema embeds chain or runtime data, reuse
   `api-types` nested types instead of copying them.
 - Extract a shared CLI schema crate only after a CLI output type is
@@ -371,7 +371,7 @@ groundhog-bench --url http://127.0.0.1:9546 \
   message, consumer-facing description) plus `codes::ALL` in
   `api-types/src/error.rs`. The OpenRPC artifact projects this into
   `components.errors`; methods carry `errors[]` arrays of `$ref`s. The
-  per-method mapping lives in `crates/open-rpc-spec/src/lib.rs` and is
+  per-method mapping lives in `crates/json-rpc/open-rpc-spec/src/lib.rs` and is
   hand-maintained — adding a method requires updating that mapping or
   the snapshot test fails. Error component `name` / `message` /
   `description` are sibling fields on the error object; `data` stays
@@ -383,7 +383,7 @@ groundhog-bench --url http://127.0.0.1:9546 \
 
 OpenRPC `info.version` is the JSON-RPC wire-format SemVer, not the
 Rust workspace version. The source of truth is `WIRE_FORMAT_VERSION`
-in `crates/rpc-api/src/lib.rs`.
+in `crates/json-rpc/rpc-api/src/lib.rs`.
 
 Bump major for breaking changes to method shape, params, results, or
 errors. Bump minor for additive changes such as new methods, optional
@@ -425,7 +425,7 @@ only; `implementation` and `commitHash` are diagnostic fields.
 When a command's `--json` output is intended as a stable contract for
 downstream tooling (CI, watch consumers, automation):
 
-1. Define the typed report in `crates/cli/src/<cmd>_json.rs` with
+1. Define the typed report in `crates/tools/cli/src/<cmd>_json.rs` with
    `serde::{Serialize, Deserialize}` and `schemars::JsonSchema` derives.
    Use `#[serde(rename_all = "camelCase")]` so the JSON boundary
    matches Groundhog's wire convention.
@@ -445,7 +445,7 @@ downstream tooling (CI, watch consumers, automation):
    fixture (e.g. fake-cargo on `PATH`) and asserts the JSON shape:
    `data.schemaVersion`, success / failure paths, structural fields
    (not just compile-pass). `groundhog test --json` and its
-   integration tests under `crates/cli/tests/` are the reference
+   integration tests under `crates/tools/cli/tests/` are the reference
    shape.
 
 ### Credential security
@@ -483,7 +483,7 @@ For generated artifacts that consumers depend on (currently the
 OpenRPC spec; in future, any wire-format-stable codegen output):
 
 - Check the canonical artifact into the repo (e.g.
-  `crates/open-rpc-spec/snapshots/groundhog-spec.json`).
+  `crates/json-rpc/open-rpc-spec/snapshots/groundhog-spec.json`).
 - The test asserts byte-equal match against the committed file using
   `pretty_assertions::assert_eq` so failure diffs are readable.
 - `UPDATE_SNAPSHOTS=1 cargo test ...` regenerates the snapshot on

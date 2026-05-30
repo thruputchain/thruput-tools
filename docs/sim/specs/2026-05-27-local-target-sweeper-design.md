@@ -60,7 +60,7 @@ ownership-metadata enrichment it depends on.
 
 ### 1. Ownership data model
 
-Add one optional field to `TargetOwnership` (in `crates/sim/src/target.rs`):
+Add one optional field to `TargetOwnership` (in `crates/dev/sim/src/target.rs`):
 
 ```
 TargetOwnership {
@@ -107,7 +107,7 @@ old PID behind.
 
 ### 2. Sweep module
 
-New file `crates/sim/src/sweep.rs`. Pure logic, no CLI concerns.
+New file `crates/dev/sim/src/sweep.rs`. Pure logic, no CLI concerns.
 
 Discovery:
 
@@ -149,7 +149,7 @@ report derives the serde shape used for `--json`.
 
 ### 3. `hoglab sweep` command
 
-Add a `Sweep` subcommand (wired in `crates/sim/src/main.rs`, logic in a thin
+Add a `Sweep` subcommand (wired in `crates/dev/sim/src/main.rs`, logic in a thin
 `run` entrypoint that calls the `sweep` module):
 
 ```

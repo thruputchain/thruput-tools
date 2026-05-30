@@ -151,7 +151,7 @@ Good split:
 ### `groundhog test --integration`
 
 The CLI already ships a short, deterministic, single-actor integration
-harness in `crates/cli/src/test_cmd.rs`. It builds the project to WASM,
+harness in `crates/tools/cli/src/test_cmd.rs`. It builds the project to WASM,
 starts an ephemeral `hogd-dev` on a random port, deploys with `dev-0`, runs
 native libtest with `rpc_url`, `contract_address`, and `runtime_manifest`
 injected via env, and exits pass/fail.
