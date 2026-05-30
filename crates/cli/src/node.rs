@@ -388,8 +388,8 @@ pub fn run(
 ) -> Result<(), CliError> {
     Err(CliError::Other(
         "`groundhog node` requires the dev-node feature.\n\n  \
-         hint: install with `groundhogup` or build with:\n        \
-         cargo install groundhog-cli --features dev-node"
+         hint: build the CLI with:\n        \
+         cargo install --path crates/cli --features dev-node"
             .into(),
     ))
 }
