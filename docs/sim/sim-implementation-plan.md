@@ -541,11 +541,19 @@ chaos, deploy new contracts, or create remote infrastructure.
   coverage.
 - [x] Final review gate J: behavior/API and test/artifact review for
   events-query semantics and artifacts.
+- [x] Slice K1: write handoff design:
+  `docs/sim/specs/2026-05-29-positive-event-indexing-scenarios-design.md`.
+- [x] Slice K2: add manifest validation and contract setup for
+  `contractCalls`.
+- [x] Slice K3: execute `contract-call` workloads through dev-wallet `doAction`
+  with receipt polling and additive artifacts.
+- [x] Slice K4: add positive event-indexing catalog scenario and extend smoke
+  coverage.
 - [x] Add view-call workloads when the runtime manifest advertises view support.
 - [ ] Add richer actor state machines.
 - [ ] Add read-after-write scenario presets.
-- [ ] Add positive event-indexing scenarios with contracts that emit events
-  during setup or scheduled load.
+- [x] Add positive event-indexing scenarios with contracts that emit events
+  during scheduled load.
 - [ ] Add storage-heavy, event-heavy, calldata-heavy, and compute-heavy
   workloads.
 - [ ] Add NNInt-specific scenario presets.

@@ -22,7 +22,9 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::{Id as TaskId, JoinError, JoinSet};
 
 use crate::actor::{ActorState, DrainedPendingReceipt, ReceiptPollTarget};
-use crate::contract::{PreparedEventQuery, PreparedStorageRead, PreparedViewCall};
+use crate::contract::{
+    PreparedContractCall, PreparedEventQuery, PreparedStorageRead, PreparedViewCall,
+};
 use crate::error::SimError;
 use crate::event::{ChaosTransitionEvent, EventWriter, ResultEvent, WorkloadEvent};
 use crate::manifest::{
@@ -36,7 +38,7 @@ use crate::scheduler::{
 };
 use crate::target::ChaosController;
 use crate::transaction::{
-    BuiltSubmitTransaction, build_wallet_submit_smoke_transaction,
+    BuiltSubmitTransaction, build_contract_call_transaction, build_wallet_submit_smoke_transaction,
     runtime_dev_wallet_action_entrypoint,
 };
 use crate::util::{duration_ms, json_string, unix_ms, workload_name};
@@ -169,6 +171,7 @@ pub struct ScheduleExecution<'a> {
     pub event_writer: &'a mut EventWriter,
     pub metrics: &'a mut RunMetricsBuilder,
     pub view_calls: &'a [PreparedViewCall],
+    pub contract_calls: &'a [PreparedContractCall],
     pub storage_reads: &'a [PreparedStorageRead],
     pub event_queries: &'a [PreparedEventQuery],
 }
@@ -209,6 +212,7 @@ where
         event_writer,
         metrics,
         view_calls,
+        contract_calls,
         storage_reads,
         event_queries,
     } = input;
@@ -290,6 +294,7 @@ where
                     workload,
                     wallet_entrypoint,
                     view_calls,
+                    contract_calls,
                     storage_reads,
                     event_queries,
                 )?;
@@ -487,6 +492,7 @@ fn prepare_workload(
     workload: WorkloadKind,
     wallet_entrypoint: groundhog_xdr::contract::ContractEntrypointID,
     view_calls: &[PreparedViewCall],
+    contract_calls: &[PreparedContractCall],
     storage_reads: &[PreparedStorageRead],
     event_queries: &[PreparedEventQuery],
 ) -> Result<PreparedWorkload, SimError> {
@@ -506,6 +512,33 @@ fn prepare_workload(
                 view: view.clone(),
                 caller: actor.wallet_address,
             }))
+        }
+        WorkloadKind::ContractCall => {
+            let call = contract_calls.first().ok_or_else(|| {
+                SimError::Executor(
+                    "contract-call workload requires at least one prepared contract call".into(),
+                )
+            })?;
+            Ok(PreparedWorkload::ContractCall(
+                PreparedContractCallWorkload {
+                    call: call.clone(),
+                    tx: {
+                        let entrypoint: [u8; 8] =
+                            call.entrypoint.as_slice().try_into().map_err(|_| {
+                                SimError::Executor(
+                                    "contract-call prepared entrypoint must be 8 bytes".into(),
+                                )
+                            })?;
+                        build_contract_call_transaction(
+                            actor,
+                            wallet_entrypoint,
+                            call.contract,
+                            groundhog_xdr::contract::ContractEntrypointID::from(entrypoint),
+                            &call.calldata,
+                        )?
+                    },
+                },
+            ))
         }
         WorkloadKind::StorageRead => {
             let read = storage_reads.first().ok_or_else(|| {
@@ -559,6 +592,9 @@ fn dispatch_workload<C>(
             }
             PreparedWorkload::ReceiptPoll(poll) => execute_receipt_poll(client, &tick, poll).await,
             PreparedWorkload::ViewCall(view) => execute_view_call(client, &tick, view).await,
+            PreparedWorkload::ContractCall(call) => {
+                execute_contract_call(client, &tick, call).await
+            }
             PreparedWorkload::StorageRead(read) => execute_storage_read(client, &tick, read).await,
             PreparedWorkload::EventsQuery(query) => {
                 execute_events_query(client, &tick, query).await
@@ -701,6 +737,8 @@ fn backpressure_completion(
                 view_return_data: None,
                 view_abort_data: None,
                 view_event_count: None,
+                contract_call_name: None,
+                contract_call_contract: None,
                 storage_read_name: None,
                 storage_contract: None,
                 storage_key: None,
@@ -927,7 +965,10 @@ async fn record_aborted_for_restart(
         if context.workload == WorkloadKind::ReceiptPoll {
             continue;
         }
-        if context.workload == WorkloadKind::WalletSubmitSmoke {
+        if matches!(
+            context.workload,
+            WorkloadKind::WalletSubmitSmoke | WorkloadKind::ContractCall
+        ) {
             let actor = actor_states
                 .get_mut(context.actor_id as usize)
                 .ok_or(SimError::Executor("actor state missing".into()))?;
@@ -1012,6 +1053,8 @@ fn target_restarted_workload_completion(
                 view_return_data: None,
                 view_abort_data: None,
                 view_event_count: None,
+                contract_call_name: None,
+                contract_call_contract: None,
                 storage_read_name: None,
                 storage_contract: None,
                 storage_key: None,
@@ -1068,6 +1111,8 @@ fn chaos_failed_workload_completion(
                 view_return_data: None,
                 view_abort_data: None,
                 view_event_count: None,
+                contract_call_name: None,
+                contract_call_contract: None,
                 storage_read_name: None,
                 storage_contract: None,
                 storage_key: None,
@@ -1127,6 +1172,8 @@ fn target_restarted_receipt_completion(
                 view_return_data: None,
                 view_abort_data: None,
                 view_event_count: None,
+                contract_call_name: None,
+                contract_call_contract: None,
                 storage_read_name: None,
                 storage_contract: None,
                 storage_key: None,
@@ -1265,6 +1312,8 @@ where
                         view_return_data: None,
                         view_abort_data: None,
                         view_event_count: None,
+                        contract_call_name: None,
+                        contract_call_contract: None,
                         storage_read_name: None,
                         storage_contract: None,
                         storage_key: None,
@@ -1313,6 +1362,8 @@ where
                     view_return_data: None,
                     view_abort_data: None,
                     view_event_count: None,
+                    contract_call_name: None,
+                    contract_call_contract: None,
                     storage_read_name: None,
                     storage_contract: None,
                     storage_key: None,
@@ -1389,6 +1440,8 @@ where
                         view_return_data: None,
                         view_abort_data: None,
                         view_event_count: None,
+                        contract_call_name: None,
+                        contract_call_contract: None,
                         storage_read_name: None,
                         storage_contract: None,
                         storage_key: None,
@@ -1437,6 +1490,8 @@ where
                     view_return_data: None,
                     view_abort_data: None,
                     view_event_count: None,
+                    contract_call_name: None,
+                    contract_call_contract: None,
                     storage_read_name: None,
                     storage_contract: None,
                     storage_key: None,
@@ -1787,6 +1842,223 @@ fn view_workload_event(
         view_return_data: None,
         view_abort_data: None,
         view_event_count: None,
+        contract_call_name: None,
+        contract_call_contract: None,
+        storage_read_name: None,
+        storage_contract: None,
+        storage_key: None,
+        storage_item_present: None,
+        storage_item_kind: None,
+        event_query_name: None,
+        event_contract: None,
+        event_count: None,
+        event_cursor: None,
+        event_latest_block: None,
+        event_oldest_block: None,
+        error_class: None,
+        error: None,
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+async fn execute_contract_call<C>(
+    client: C,
+    tick: &ScheduledActorTick,
+    prepared: PreparedContractCallWorkload,
+) -> Result<WorkloadCompletion, SimError>
+where
+    C: SimRpcClient + Clone + Send + Sync + 'static,
+{
+    let started_at_unix_ms = unix_ms()?.to_string();
+    let started = Instant::now();
+    let submit_response = client
+        .send_raw_transaction(prepared.tx.tx_hex.clone())
+        .await;
+    let submitted_at = Instant::now();
+    let tx_nonce = Some(prepared.tx.nonce.to_string());
+
+    let tx_hash = match submit_response {
+        Ok(tx_hash) => tx_hash,
+        Err(error) => {
+            let latency_ms = duration_ms(submitted_at.duration_since(started));
+            return Ok(contract_call_failure_completion(
+                contract_call_workload_event(
+                    tick,
+                    &prepared.call,
+                    started_at_unix_ms,
+                    unix_ms()?.to_string(),
+                    latency_ms,
+                    None,
+                    tx_nonce,
+                )
+                .with_error("contract-call-submit-rpc-error", error),
+                latency_ms,
+                "contract-call-submit-rpc-error",
+                None,
+                None,
+            ));
+        }
+    };
+
+    let tx_hash_json = json_string(&tx_hash, "txHash")?;
+    let receipt = poll_workload_receipt(client, tx_hash, "contract-call").await;
+    let completed_at = Instant::now();
+    let latency_ms = duration_ms(completed_at.duration_since(started));
+    let submit_to_receipt_latency_ms = Some(duration_ms(
+        completed_at.saturating_duration_since(submitted_at),
+    ));
+    let event = contract_call_workload_event(
+        tick,
+        &prepared.call,
+        started_at_unix_ms,
+        unix_ms()?.to_string(),
+        latency_ms,
+        Some(tx_hash_json),
+        tx_nonce,
+    );
+
+    match receipt {
+        Ok(receipt) => {
+            let status = SimReceiptStatus::from_exec_status(&receipt.status);
+            let event = event.with_receipt(
+                Some(*receipt.height),
+                true,
+                status,
+                submit_to_receipt_latency_ms,
+            );
+            let observed_receipt = Some(ObservedReceipt {
+                actor_id: tick.actor_id,
+                receipt,
+            });
+            let submitted_transaction = Some(SubmittedTransaction {
+                actor_id: tick.actor_id,
+                tx_hash,
+                scheduled_time_ms: tick.simulation_time_ms,
+                completed_at: submitted_at,
+            });
+            if event.receipt_status.as_deref() == Some("ok") {
+                Ok(WorkloadCompletion {
+                    workload: WorkloadKind::ContractCall,
+                    latency_ms,
+                    error_class: None,
+                    chain_tip: None,
+                    event: ResultEvent::WorkloadCompleted { event },
+                    skipped: false,
+                    submitted_transaction,
+                    observed_receipt,
+                    receipt_poll: None,
+                    submit_to_receipt_latency_ms,
+                })
+            } else {
+                Ok(contract_call_failure_completion(
+                    event.with_error(
+                        "contract-call-receipt-status",
+                        format!(
+                            "contract call `{}` receipt status was not ok",
+                            prepared.call.name
+                        ),
+                    ),
+                    latency_ms,
+                    "contract-call-receipt-status",
+                    submitted_transaction,
+                    observed_receipt,
+                ))
+            }
+        }
+        Err(error) => Ok(contract_call_failure_completion(
+            event.with_error("contract-call-receipt-poll-error", error.to_string()),
+            latency_ms,
+            "contract-call-receipt-poll-error",
+            Some(SubmittedTransaction {
+                actor_id: tick.actor_id,
+                tx_hash,
+                scheduled_time_ms: tick.simulation_time_ms,
+                completed_at: submitted_at,
+            }),
+            None,
+        )),
+    }
+}
+
+async fn poll_workload_receipt<C>(
+    client: C,
+    tx_hash: TxHash,
+    workload: &str,
+) -> Result<TransactionReceipt, SimError>
+where
+    C: SimRpcClient + Clone + Send + Sync + 'static,
+{
+    let deadline = Instant::now()
+        .checked_add(DEFAULT_RECEIPT_DRAIN_TIMEOUT)
+        .unwrap_or_else(Instant::now);
+    loop {
+        if let Some(receipt) = client.transaction_receipt(tx_hash).await.map_err(|error| {
+            SimError::Executor(format!("{workload} receipt poll failed: {error}"))
+        })? {
+            return Ok(receipt);
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(SimError::Executor(format!(
+                "{workload} receipt poll timed out"
+            )));
+        }
+        tokio::time::sleep(DEFAULT_RECEIPT_DRAIN_RETRY_INTERVAL.min(remaining)).await;
+    }
+}
+
+fn contract_call_failure_completion(
+    event: WorkloadEvent,
+    latency_ms: u64,
+    class: impl Into<String>,
+    submitted_transaction: Option<SubmittedTransaction>,
+    observed_receipt: Option<ObservedReceipt>,
+) -> WorkloadCompletion {
+    WorkloadCompletion {
+        workload: WorkloadKind::ContractCall,
+        latency_ms,
+        error_class: Some(class.into()),
+        chain_tip: None,
+        event: ResultEvent::WorkloadFailed { event },
+        skipped: false,
+        submitted_transaction,
+        observed_receipt,
+        receipt_poll: None,
+        submit_to_receipt_latency_ms: None,
+    }
+}
+
+fn contract_call_workload_event(
+    tick: &ScheduledActorTick,
+    call: &PreparedContractCall,
+    started_at_unix_ms: String,
+    completed_at_unix_ms: String,
+    latency_ms: u64,
+    tx_hash: Option<String>,
+    tx_nonce: Option<String>,
+) -> WorkloadEvent {
+    WorkloadEvent {
+        actor_id: tick.actor_id,
+        workload: WorkloadKind::ContractCall,
+        scheduled_time_ms: tick.simulation_time_ms,
+        started_at_unix_ms,
+        completed_at_unix_ms,
+        latency_ms,
+        rpc_method: "groundhog_sendRawTransaction",
+        chain_height: None,
+        chain_block_hash: None,
+        tx_hash,
+        tx_nonce,
+        receipt_present: None,
+        receipt_status: None,
+        receipt_status_detail: None,
+        submit_to_receipt_latency_ms: None,
+        view_result: None,
+        view_return_data: None,
+        view_abort_data: None,
+        view_event_count: None,
+        contract_call_name: Some(call.name.clone()),
+        contract_call_contract: Some(format!("0x{}", hex::encode(call.contract.as_ref()))),
         storage_read_name: None,
         storage_contract: None,
         storage_key: None,
@@ -1952,6 +2224,8 @@ fn storage_read_workload_event(
         view_return_data: None,
         view_abort_data: None,
         view_event_count: None,
+        contract_call_name: None,
+        contract_call_contract: None,
         storage_read_name: Some(read.name.clone()),
         storage_contract: Some(format!("0x{}", hex::encode(read.contract.as_ref()))),
         storage_key: Some(format!("0x{}", hex::encode(&read.key))),
@@ -2148,6 +2422,8 @@ fn events_query_workload_event(
         view_return_data: None,
         view_abort_data: None,
         view_event_count: None,
+        contract_call_name: None,
+        contract_call_contract: None,
         storage_read_name: None,
         storage_contract: None,
         storage_key: None,
@@ -2189,6 +2465,8 @@ fn receipt_poll_event(
         view_return_data: None,
         view_abort_data: None,
         view_event_count: None,
+        contract_call_name: None,
+        contract_call_contract: None,
         storage_read_name: None,
         storage_contract: None,
         storage_key: None,
@@ -2320,6 +2598,7 @@ enum PreparedWorkload {
     WalletSubmitSmoke(BuiltSubmitTransaction),
     ReceiptPoll(PreparedReceiptPoll),
     ViewCall(PreparedViewWorkload),
+    ContractCall(PreparedContractCallWorkload),
     StorageRead(PreparedStorageReadWorkload),
     EventsQuery(PreparedEventQueryWorkload),
 }
@@ -2333,6 +2612,12 @@ struct PreparedReceiptPoll {
 struct PreparedViewWorkload {
     view: PreparedViewCall,
     caller: groundhog_xdr::types::ContractAddress,
+}
+
+#[derive(Debug, Clone)]
+struct PreparedContractCallWorkload {
+    call: PreparedContractCall,
+    tx: BuiltSubmitTransaction,
 }
 
 #[derive(Debug, Clone)]
@@ -2399,7 +2684,9 @@ async fn sleep_until_sim_time_draining(
 fn rpc_method(workload: WorkloadKind) -> &'static str {
     match workload {
         WorkloadKind::ChainTip => "groundhog_chainTip",
-        WorkloadKind::WalletSubmitSmoke => "groundhog_sendRawTransaction",
+        WorkloadKind::WalletSubmitSmoke | WorkloadKind::ContractCall => {
+            "groundhog_sendRawTransaction"
+        }
         WorkloadKind::ReceiptPoll => "groundhog_getTransactionReceipt",
         WorkloadKind::StatusPoll => "groundhog_getTransactionStatus",
         WorkloadKind::EventsQuery => "groundhog_getEvents",
@@ -2450,6 +2737,19 @@ mod tests {
     #[derive(Clone)]
     struct FailingSubmitClient {
         submitted: Arc<Mutex<Vec<String>>>,
+    }
+
+    #[derive(Clone)]
+    struct ContractCallClient {
+        submitted: Arc<Mutex<Vec<String>>>,
+        receipts: Arc<Mutex<Vec<TxHash>>>,
+        status: ExecStatus,
+    }
+
+    #[derive(Clone)]
+    struct FailingContractCallReceiptClient {
+        submitted: Arc<Mutex<Vec<String>>>,
+        receipts: Arc<Mutex<Vec<TxHash>>>,
     }
 
     #[derive(Clone)]
@@ -2725,6 +3025,81 @@ mod tests {
         }
     }
 
+    impl SimRpcClient for ContractCallClient {
+        #[allow(clippy::manual_async_fn)]
+        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, String>> + Send {
+            async { Err("chain tip should not be called".into()) }
+        }
+
+        #[allow(clippy::manual_async_fn)]
+        fn send_raw_transaction(
+            &self,
+            tx_hex: String,
+        ) -> impl Future<Output = Result<TxHash, String>> + Send {
+            let submitted = self.submitted.clone();
+            async move {
+                submitted
+                    .lock()
+                    .expect("submitted transaction list should lock")
+                    .push(tx_hex);
+                Ok(tx_hash(0x6c))
+            }
+        }
+
+        #[allow(clippy::manual_async_fn)]
+        fn transaction_receipt(
+            &self,
+            tx_hash: TxHash,
+        ) -> impl Future<Output = Result<Option<TransactionReceipt>, String>> + Send {
+            let receipts = self.receipts.clone();
+            let status = self.status.clone();
+            async move {
+                receipts
+                    .lock()
+                    .expect("receipt request list should lock")
+                    .push(tx_hash);
+                Ok(Some(receipt_with_status(tx_hash, status)))
+            }
+        }
+    }
+
+    impl SimRpcClient for FailingContractCallReceiptClient {
+        #[allow(clippy::manual_async_fn)]
+        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, String>> + Send {
+            async { Err("chain tip should not be called".into()) }
+        }
+
+        #[allow(clippy::manual_async_fn)]
+        fn send_raw_transaction(
+            &self,
+            tx_hex: String,
+        ) -> impl Future<Output = Result<TxHash, String>> + Send {
+            let submitted = self.submitted.clone();
+            async move {
+                submitted
+                    .lock()
+                    .expect("submitted transaction list should lock")
+                    .push(tx_hex);
+                Ok(tx_hash(0x6d))
+            }
+        }
+
+        #[allow(clippy::manual_async_fn)]
+        fn transaction_receipt(
+            &self,
+            tx_hash: TxHash,
+        ) -> impl Future<Output = Result<Option<TransactionReceipt>, String>> + Send {
+            let receipts = self.receipts.clone();
+            async move {
+                receipts
+                    .lock()
+                    .expect("receipt request list should lock")
+                    .push(tx_hash);
+                Err("contract-call receipt failed".into())
+            }
+        }
+    }
+
     impl SimRpcClient for ReceiptClient {
         #[allow(clippy::manual_async_fn)]
         fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, String>> + Send {
@@ -2909,6 +3284,7 @@ mod tests {
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
                 view_calls: &[],
+                contract_calls: &[],
                 storage_reads: &[],
                 event_queries: &[],
             },
@@ -2969,6 +3345,7 @@ mod tests {
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
                 view_calls: &[],
+                contract_calls: &[],
                 storage_reads: &[],
                 event_queries: &[],
             },
@@ -3023,6 +3400,7 @@ mod tests {
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
                 view_calls: &[],
+                contract_calls: &[],
                 storage_reads: &[],
                 event_queries: &[],
             },
@@ -3084,6 +3462,7 @@ mod tests {
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
                 view_calls: &[],
+                contract_calls: &[],
                 storage_reads: &[],
                 event_queries: &[],
             },
@@ -3104,6 +3483,240 @@ mod tests {
             metrics.workload_counts()[&WorkloadKind::WalletSubmitSmoke].failed,
             1
         );
+    }
+
+    #[tokio::test]
+    async fn contract_call_submits_polls_receipt_and_updates_actor_state() {
+        let manifest = contract_call_manifest();
+        let schedule = generate_schedule(&manifest).expect("schedule should generate");
+        let starts = phase_starts(&manifest).expect("phase starts should generate");
+        let file = NamedTempFile::new().expect("temp file should be created");
+        let mut event_writer = EventWriter::create(file.path())
+            .await
+            .expect("event writer should open");
+        let mut metrics = RunMetricsBuilder::default();
+        let mut actors = actor_states();
+        let submitted = Arc::new(Mutex::new(Vec::new()));
+        let receipts = Arc::new(Mutex::new(Vec::new()));
+        let call = prepared_contract_call().call;
+
+        run_schedule(
+            ContractCallClient {
+                submitted: submitted.clone(),
+                receipts: receipts.clone(),
+                status: ExecStatus::Ok,
+            },
+            ScheduleExecution {
+                manifest: &manifest,
+                runtime_manifest: &runtime_manifest(),
+                schedule: &schedule,
+                phase_starts: &starts,
+                actor_states: &mut actors,
+                event_writer: &mut event_writer,
+                metrics: &mut metrics,
+                view_calls: &[],
+                contract_calls: &[call],
+                storage_reads: &[],
+                event_queries: &[],
+            },
+        )
+        .await
+        .expect("contract-call schedule should run");
+
+        assert_eq!(actors[0].next_nonce_sequence, 1);
+        assert_eq!(actors[0].last_submitted_tx_hash, Some(tx_hash(0x6c)));
+        assert_eq!(
+            actors[0]
+                .last_observed_receipt
+                .as_ref()
+                .map(|receipt| receipt.tx_hash),
+            Some(tx_hash(0x6c))
+        );
+        assert_eq!(
+            submitted
+                .lock()
+                .expect("submitted transaction list should lock")
+                .len(),
+            1
+        );
+        assert_eq!(
+            receipts
+                .lock()
+                .expect("receipt list should lock")
+                .as_slice(),
+            &[tx_hash(0x6c)]
+        );
+        assert_eq!(
+            metrics.workload_counts()[&WorkloadKind::ContractCall].completed,
+            1
+        );
+
+        let events = tokio::fs::read_to_string(file.path())
+            .await
+            .expect("events should read");
+        let completed = find_event(&events, "workload-completed");
+        assert_eq!(completed["workload"], "contract-call");
+        assert_eq!(completed["contractCallName"], "events-store-value");
+        assert_eq!(completed["contractCallContract"], prefixed_hex(0x88));
+        assert_eq!(completed["receiptPresent"], true);
+        assert_eq!(completed["receiptStatus"], "ok");
+    }
+
+    #[tokio::test]
+    async fn contract_call_non_ok_receipt_is_failed_workload() {
+        let tick = ScheduledActorTick {
+            phase_index: 0,
+            actor_id: 0,
+            actor_sequence: 0,
+            simulation_time_ms: 25,
+        };
+        let submitted = Arc::new(Mutex::new(Vec::new()));
+        let receipts = Arc::new(Mutex::new(Vec::new()));
+        let completion = execute_contract_call(
+            ContractCallClient {
+                submitted,
+                receipts,
+                status: ExecStatus::DeterministicError {
+                    kind: "deterministic-error".into(),
+                },
+            },
+            &tick,
+            prepared_contract_call(),
+        )
+        .await
+        .expect("contract call should complete");
+
+        assert_eq!(
+            completion.error_class.as_deref(),
+            Some("contract-call-receipt-status")
+        );
+        assert!(completion.submitted_transaction.is_some());
+        assert!(completion.observed_receipt.is_some());
+        match completion.event {
+            ResultEvent::WorkloadFailed { event } => {
+                assert_eq!(event.workload, WorkloadKind::ContractCall);
+                assert_eq!(
+                    event.contract_call_name.as_deref(),
+                    Some("events-store-value")
+                );
+                assert_eq!(event.receipt_status.as_deref(), Some("deterministicError"));
+                assert_eq!(
+                    event.error_class.as_deref(),
+                    Some("contract-call-receipt-status")
+                );
+            }
+            other => panic!("expected failed event, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn contract_call_submit_rpc_error_does_not_advance_actor_nonce() {
+        let manifest = contract_call_manifest();
+        let schedule = generate_schedule(&manifest).expect("schedule should generate");
+        let starts = phase_starts(&manifest).expect("phase starts should generate");
+        let file = NamedTempFile::new().expect("temp file should be created");
+        let mut event_writer = EventWriter::create(file.path())
+            .await
+            .expect("event writer should open");
+        let mut metrics = RunMetricsBuilder::default();
+        let mut actors = actor_states();
+        let submitted = Arc::new(Mutex::new(Vec::new()));
+        let call = prepared_contract_call().call;
+
+        run_schedule(
+            FailingSubmitClient {
+                submitted: submitted.clone(),
+            },
+            ScheduleExecution {
+                manifest: &manifest,
+                runtime_manifest: &runtime_manifest(),
+                schedule: &schedule,
+                phase_starts: &starts,
+                actor_states: &mut actors,
+                event_writer: &mut event_writer,
+                metrics: &mut metrics,
+                view_calls: &[],
+                contract_calls: &[call],
+                storage_reads: &[],
+                event_queries: &[],
+            },
+        )
+        .await
+        .expect("contract-call submit failure should be recorded");
+
+        assert_eq!(actors[0].next_nonce_sequence, 0);
+        assert_eq!(actors[0].last_submitted_tx_hash, None);
+        assert_eq!(
+            metrics.workload_counts()[&WorkloadKind::ContractCall].failed,
+            1
+        );
+        let events = tokio::fs::read_to_string(file.path())
+            .await
+            .expect("events should read");
+        let failed = find_event(&events, "workload-failed");
+        assert_eq!(failed["workload"], "contract-call");
+        assert_eq!(failed["errorClass"], "contract-call-submit-rpc-error");
+        assert!(failed["txHash"].is_null());
+    }
+
+    #[tokio::test]
+    async fn contract_call_receipt_rpc_error_advances_nonce_and_records_pending_tx() {
+        let manifest = contract_call_manifest();
+        let schedule = generate_schedule(&manifest).expect("schedule should generate");
+        let starts = phase_starts(&manifest).expect("phase starts should generate");
+        let file = NamedTempFile::new().expect("temp file should be created");
+        let mut event_writer = EventWriter::create(file.path())
+            .await
+            .expect("event writer should open");
+        let mut metrics = RunMetricsBuilder::default();
+        let mut actors = actor_states();
+        let submitted = Arc::new(Mutex::new(Vec::new()));
+        let receipts = Arc::new(Mutex::new(Vec::new()));
+        let call = prepared_contract_call().call;
+
+        run_schedule(
+            FailingContractCallReceiptClient {
+                submitted: submitted.clone(),
+                receipts: receipts.clone(),
+            },
+            ScheduleExecution {
+                manifest: &manifest,
+                runtime_manifest: &runtime_manifest(),
+                schedule: &schedule,
+                phase_starts: &starts,
+                actor_states: &mut actors,
+                event_writer: &mut event_writer,
+                metrics: &mut metrics,
+                view_calls: &[],
+                contract_calls: &[call],
+                storage_reads: &[],
+                event_queries: &[],
+            },
+        )
+        .await
+        .expect("contract-call receipt failure should be recorded");
+
+        assert_eq!(actors[0].next_nonce_sequence, 1);
+        assert_eq!(actors[0].last_submitted_tx_hash, Some(tx_hash(0x6d)));
+        assert_eq!(actors[0].pending_receipt_count(), 1);
+        assert_eq!(
+            receipts
+                .lock()
+                .expect("receipt list should lock")
+                .as_slice(),
+            &[tx_hash(0x6d)]
+        );
+        assert_eq!(
+            metrics.workload_counts()[&WorkloadKind::ContractCall].failed,
+            1
+        );
+        let events = tokio::fs::read_to_string(file.path())
+            .await
+            .expect("events should read");
+        let failed = find_event(&events, "workload-failed");
+        assert_eq!(failed["workload"], "contract-call");
+        assert_eq!(failed["errorClass"], "contract-call-receipt-poll-error");
+        assert_eq!(failed["txHash"], prefixed_hex(0x6d));
     }
 
     #[tokio::test]
@@ -3303,6 +3916,7 @@ mod tests {
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
                 view_calls: &[],
+                contract_calls: &[],
                 storage_reads: &[storage_read],
                 event_queries: &[],
             },
@@ -3557,6 +4171,7 @@ mod tests {
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
                 view_calls: &[],
+                contract_calls: &[],
                 storage_reads: &[],
                 event_queries: &[event_query],
             },
@@ -3619,6 +4234,7 @@ mod tests {
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
                 view_calls: &[],
+                contract_calls: &[],
                 storage_reads: &[],
                 event_queries: &[],
             },
@@ -3685,6 +4301,7 @@ mod tests {
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
                 view_calls: &[],
+                contract_calls: &[],
                 storage_reads: &[],
                 event_queries: &[],
             },
@@ -3764,6 +4381,7 @@ mod tests {
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
                 view_calls: &[],
+                contract_calls: &[],
                 storage_reads: &[],
                 event_queries: &[],
             },
@@ -3844,6 +4462,7 @@ mod tests {
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
                 view_calls: &[],
+                contract_calls: &[],
                 storage_reads: &[],
                 event_queries: &[],
             },
@@ -3892,6 +4511,7 @@ mod tests {
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
                 view_calls: &[],
+                contract_calls: &[],
                 storage_reads: &[],
                 event_queries: &[],
             },
@@ -4044,6 +4664,7 @@ mod tests {
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
                 view_calls: &[],
+                contract_calls: &[],
                 storage_reads: &[],
                 event_queries: &[],
             },
@@ -4119,6 +4740,7 @@ mod tests {
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
                 view_calls: &[],
+                contract_calls: &[],
                 storage_reads: &[],
                 event_queries: &[],
             },
@@ -4143,6 +4765,42 @@ mod tests {
         let failed = find_event(&events, "workload-failed");
         assert_eq!(failed["errorClass"], "target-restarted");
         assert_eq!(failed["receiptPresent"], false);
+    }
+
+    #[tokio::test]
+    async fn restart_abort_advances_uncertain_contract_call_nonce() {
+        let file = NamedTempFile::new().expect("temp file should be created");
+        let mut event_writer = EventWriter::create(file.path())
+            .await
+            .expect("event writer should open");
+        let mut metrics = RunMetricsBuilder::default();
+        let mut actors = actor_states();
+
+        record_aborted_for_restart(
+            vec![WorkloadTaskContext {
+                actor_id: 0,
+                workload: WorkloadKind::ContractCall,
+                scheduled_time_ms: 10,
+            }],
+            &mut actors,
+            &mut event_writer,
+            &mut metrics,
+            20,
+        )
+        .await
+        .expect("restart abort should record");
+
+        assert_eq!(actors[0].next_nonce_sequence, 1);
+        assert_eq!(
+            metrics.workload_counts()[&WorkloadKind::ContractCall].failed,
+            1
+        );
+        let events = tokio::fs::read_to_string(file.path())
+            .await
+            .expect("events should read");
+        let failed = find_event(&events, "workload-failed");
+        assert_eq!(failed["workload"], "contract-call");
+        assert_eq!(failed["errorClass"], "target-restarted");
     }
 
     #[tokio::test]
@@ -4175,6 +4833,7 @@ mod tests {
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
                 view_calls: &[],
+                contract_calls: &[],
                 storage_reads: &[],
                 event_queries: &[],
             },
@@ -4234,6 +4893,7 @@ mod tests {
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
                 view_calls: &[],
+                contract_calls: &[],
                 storage_reads: &[],
                 event_queries: &[],
             },
@@ -4286,6 +4946,7 @@ mod tests {
                 event_writer: &mut event_writer,
                 metrics: &mut metrics,
                 view_calls: &[],
+                contract_calls: &[],
                 storage_reads: &[],
                 event_queries: &[],
             },
@@ -4357,6 +5018,26 @@ mod tests {
                 "contract": "fibonacci",
                 "key": "0x0000000000000000000000000000000000000000000000000000000000000000",
                 "expectPresent": false
+            }]
+        }))
+        .expect("manifest fixture should parse")
+    }
+
+    fn contract_call_manifest() -> SimulationManifest {
+        serde_json::from_value(json!({
+            "schemaVersion": 1,
+            "kind": "groundhog-simulation",
+            "name": "executor-contract-call-test",
+            "seed": "seed",
+            "target": {"provider": "existing"},
+            "loadShape": [{"duration": "1ms", "users": 1, "ratePerUserHz": 1000.0}],
+            "workloads": [{"name": "contract-call", "weight": 1}],
+            "contractArtifacts": [{"name": "events", "wasm": "events.wasm"}],
+            "contractCalls": [{
+                "name": "events-store-value",
+                "contract": "events",
+                "entrypoint": "0x0c012d3b21f5676d",
+                "calldata": "0x2a64"
             }]
         }))
         .expect("manifest fixture should parse")
@@ -4481,6 +5162,22 @@ mod tests {
                 contract: ContractAddress::from([0x88; 32]),
                 key: vec![0; 32],
                 expect_present,
+            },
+        }
+    }
+
+    fn prepared_contract_call() -> PreparedContractCallWorkload {
+        PreparedContractCallWorkload {
+            call: PreparedContractCall {
+                name: "events-store-value".into(),
+                contract_name: "events".into(),
+                contract: ContractAddress::from([0x88; 32]),
+                entrypoint: vec![0x0c, 0x01, 0x2d, 0x3b, 0x21, 0xf5, 0x67, 0x6d],
+                calldata: vec![0x2a, 0x64],
+            },
+            tx: BuiltSubmitTransaction {
+                tx_hex: "0xsigned".into(),
+                nonce: 4_294_967_296,
             },
         }
     }

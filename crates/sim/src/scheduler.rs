@@ -339,4 +339,36 @@ mod tests {
         assert!(has_submit_before_restart);
         assert!(has_receipt_after_restart);
     }
+
+    #[test]
+    fn positive_event_scenarios_schedule_events_query_after_contract_call() {
+        for manifest_json in [include_str!(
+            "../../../examples/sim/local-fibonacci-contract-call-events-smoke.json"
+        )] {
+            let manifest: SimulationManifest =
+                serde_json::from_str(manifest_json).expect("event scenario should parse");
+            let events = generate_schedule(&manifest).expect("schedule should generate");
+            let mut saw_contract_call = false;
+            let mut saw_query_after_call = false;
+
+            for event in events {
+                let ScheduledSimulationEvent::ActorTick(tick) = event else {
+                    continue;
+                };
+                match select_workload_for_tick(&manifest, &tick).expect("workload should select") {
+                    WorkloadKind::ContractCall => saw_contract_call = true,
+                    WorkloadKind::EventsQuery if saw_contract_call => {
+                        saw_query_after_call = true;
+                    }
+                    _ => {}
+                }
+            }
+
+            assert!(
+                saw_query_after_call,
+                "{} should schedule an events-query after at least one contract-call",
+                manifest.name
+            );
+        }
+    }
 }

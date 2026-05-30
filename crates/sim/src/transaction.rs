@@ -4,6 +4,7 @@ use groundhog_signing::{
     build_dev_wallet_do_action_transaction, sign_and_encode_transaction_hex,
 };
 use groundhog_xdr::contract::ContractEntrypointID;
+use groundhog_xdr::types::ContractAddress;
 
 use crate::actor::ActorState;
 
@@ -42,6 +43,38 @@ pub fn build_wallet_submit_smoke_transaction(
         target_address: actor.wallet_address,
         target_entrypoint: wallet_entrypoint,
         target_calldata: &[],
+        gas_limit: DEV_WALLET_SMOKE_GAS_LIMIT,
+        target_gas_limit: DEV_WALLET_SMOKE_GAS_LIMIT,
+        block_expiry_height: DEV_WALLET_SMOKE_EXPIRY_HEIGHT,
+        nonce,
+    })
+    .map_err(|source| TransactionBuildError::BuildWalletAction { source })?;
+    let tx_hex =
+        sign_and_encode_transaction_hex(tx, &actor.signer, SignTransactionParams::default())
+            .map_err(|source| TransactionBuildError::SignAndEncode { source })?;
+
+    Ok(BuiltSubmitTransaction { tx_hex, nonce })
+}
+
+/// Build a signed dev-wallet transaction that calls a deployed contract.
+///
+/// The actor nonce is read but not advanced here. The executor advances actor
+/// state only after submit semantics determine whether the transaction should
+/// count as submitted.
+pub fn build_contract_call_transaction(
+    actor: &ActorState,
+    wallet_entrypoint: ContractEntrypointID,
+    target_address: ContractAddress,
+    target_entrypoint: ContractEntrypointID,
+    target_calldata: &[u8],
+) -> Result<BuiltSubmitTransaction, TransactionBuildError> {
+    let nonce = actor.current_nonce()?;
+    let tx = build_dev_wallet_do_action_transaction(BuildDevWalletDoActionTransaction {
+        wallet_address: actor.wallet_address,
+        wallet_entrypoint,
+        target_address,
+        target_entrypoint,
+        target_calldata,
         gas_limit: DEV_WALLET_SMOKE_GAS_LIMIT,
         target_gas_limit: DEV_WALLET_SMOKE_GAS_LIMIT,
         block_expiry_height: DEV_WALLET_SMOKE_EXPIRY_HEIGHT,
@@ -138,6 +171,35 @@ mod tests {
 
         assert_eq!(first.tx_hex, second.tx_hex);
         assert_eq!(first.nonce, second.nonce);
+    }
+
+    #[test]
+    fn builds_contract_call_transaction_against_target_contract() {
+        let actor = ActorState::new(
+            0,
+            SimAccount {
+                index: 0,
+                signer: derive_dev_account_signer("seed", 0),
+                wallet_address: Hex0x(ContractAddress::from([0x77; 32])).0,
+            },
+            NonceNamespace::new(0x1234_5678).expect("namespace should fit"),
+        );
+        let wallet_entrypoint = runtime_dev_wallet_action_entrypoint(&runtime_manifest())
+            .expect("entrypoint should parse");
+
+        let tx = build_contract_call_transaction(
+            &actor,
+            wallet_entrypoint,
+            ContractAddress::from([0x88; 32]),
+            groundhog_xdr::contract::ContractEntrypointID::from([0x11; 8]),
+            &[0x2a, 0x64],
+        )
+        .expect("transaction should build");
+
+        assert_eq!(tx.nonce, 0x1234_5678_0000_0000);
+        assert!(tx.tx_hex.starts_with("0x"));
+        assert!(tx.tx_hex.len() > 2);
+        assert_eq!(actor.next_nonce_sequence, 0);
     }
 
     fn runtime_manifest() -> RuntimeManifest {

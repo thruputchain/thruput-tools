@@ -145,6 +145,24 @@
       "runner": "scripts/smoke-sim-scenarios.sh"
     },
     {
+      "id": "local-fibonacci-contract-call-events-smoke",
+      "path": "local-fibonacci-contract-call-events-smoke.json",
+      "title": "Local Fibonacci Contract Call + Events Smoke",
+      "summary": "Builds fibonacci.wasm from groundhog-examples, calls compute(10) through contract-call, and observes the emitted FibComputed event.",
+      "provider": "local",
+      "tier": "smoke",
+      "tags": ["local", "contract", "fibonacci", "contract-call", "events-query", "indexer", "smoke"],
+      "requiresContracts": true,
+      "contracts": [
+        {
+          "name": "fibonacci",
+          "source": "groundhog-examples/fibonacci",
+          "artifact": "fibonacci.wasm"
+        }
+      ],
+      "runner": "scripts/smoke-sim-scenarios.sh"
+    },
+    {
       "id": "local-wallet-soak",
       "path": "local-wallet-soak.json",
       "title": "Local Wallet Soak",
