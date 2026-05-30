@@ -1195,6 +1195,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "groundhog-rv32-lower"
+version = "0.4.1"
+dependencies = [
+ "clap",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "groundhog-serde_arrays"
 version = "0.2.0"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
