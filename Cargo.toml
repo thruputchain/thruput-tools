@@ -19,7 +19,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.3.6"
+version = "0.4.0"
 edition = "2024"
 authors = ["Groundhog Team"]
 license = "Apache-2.0"
@@ -35,15 +35,15 @@ categories = ["development-tools"]
 # above.  Cargo requires explicit versions for dependencies when
 # publishing, as path specifications are stripped out.  Remember to
 # keep this in sync.
-groundhog-rpc-api-types = { path = "crates/api-types", version = "=0.3.6", registry = "groundhog" }
-groundhog-rpc-api = { path = "crates/rpc-api", version = "=0.3.6", registry = "groundhog" }
-groundhog-rpc-server = { path = "crates/rpc-server", version = "=0.3.6", registry = "groundhog" }
-groundhog-x23-transport = { path = "crates/x23-transport", version = "=0.3.6", registry = "groundhog" }
-groundhog-rpc-client = { path = "crates/client", version = "=0.3.6", registry = "groundhog" }
-groundhog-signing = { path = "crates/signing", version = "=0.3.6", registry = "groundhog" }
-groundhog-node-supervisor = { path = "crates/node-supervisor", version = "=0.3.6", registry = "groundhog" }
-groundhog-open-rpc = { path = "crates/open-rpc", version = "=0.3.6", registry = "groundhog" }
-groundhog-open-rpc-macros = { path = "crates/open-rpc-macros", version = "=0.3.6", registry = "groundhog" }
+groundhog-rpc-api-types = { path = "crates/api-types", version = "=0.4.0", registry = "groundhog" }
+groundhog-rpc-api = { path = "crates/rpc-api", version = "=0.4.0", registry = "groundhog" }
+groundhog-rpc-server = { path = "crates/rpc-server", version = "=0.4.0", registry = "groundhog" }
+groundhog-x23-transport = { path = "crates/x23-transport", version = "=0.4.0", registry = "groundhog" }
+groundhog-rpc-client = { path = "crates/client", version = "=0.4.0", registry = "groundhog" }
+groundhog-signing = { path = "crates/signing", version = "=0.4.0", registry = "groundhog" }
+groundhog-node-supervisor = { path = "crates/node-supervisor", version = "=0.4.0", registry = "groundhog" }
+groundhog-open-rpc = { path = "crates/open-rpc", version = "=0.4.0", registry = "groundhog" }
+groundhog-open-rpc-macros = { path = "crates/open-rpc-macros", version = "=0.4.0", registry = "groundhog" }
 
 # --- Groundhog (private registry) ---
 groundhog-xdr = { version = "=0.13.7", registry = "groundhog", features = ["serde", "xdrs", "schema"] }
@@ -55,7 +55,7 @@ groundhog-trace = { version = "=0.13.7", registry = "groundhog" }
 xdrs = { version = "0.7.1", registry = "groundhog", features = ["alloc"] }
 xdr-common = { version = "0.7.1", registry = "groundhog" }
 rpc_driver = { version = "0.8", registry = "groundhog" }
-groundhog-wasm-meter = { version = "0.4.0", registry = "groundhog" }
+groundhog-wasm-meter = { version = "0.8.0", registry = "groundhog" }
 # from the sdk crate
 groundhog-spec-tool = { version = "0.14.7", registry = "groundhog" }
 groundhog-contract-util = { version = "0.14.7", registry = "groundhog" }
