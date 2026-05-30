@@ -25,4 +25,4 @@ pub mod metadata;
 pub use artifact::DispatchEntry;
 pub use error::{LowerError, Result};
 pub use lower::{Lowered, lower};
-pub use metadata::{MetadataInput, render_metadata};
+pub use metadata::{MetadataInput, render_metadata, summary_json};

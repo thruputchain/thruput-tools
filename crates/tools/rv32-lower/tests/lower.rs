@@ -870,6 +870,71 @@ fn metadata_renders_null_build_info_and_entry_shape() {
 }
 
 // ---------------------------------------------------------------------------
+// --json structured output (lib summary + end-to-end CLI).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn summary_json_has_the_expected_shape() {
+    let lowered = lower(&assemble(happy_spec())).expect("lowers");
+    let rendered = groundhog_rv32_lower::summary_json("/tmp/x.rv32a", &lowered);
+    let doc: serde_json::Value = serde_json::from_str(&rendered).expect("valid json");
+    assert_eq!(doc["status"], "ok");
+    assert_eq!(doc["out"], "/tmp/x.rv32a");
+    assert_eq!(doc["code_bytes"], 32);
+    assert_eq!(doc["memory_bytes"], 64 * 1024);
+    assert!(doc["artifact_sha256"].as_str().is_some());
+    let entries = doc["dispatch_entries"].as_array().expect("array");
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[1]["method_id"], "0x00000000000000AA");
+}
+
+#[test]
+fn cli_json_flag_emits_structured_stdout() {
+    use std::process::Command;
+    let dir = std::env::temp_dir();
+    let tag = std::process::id();
+    let elf_path = dir.join(format!("rv32_lower_json_{tag}.elf"));
+    let out_path = dir.join(format!("rv32_lower_json_{tag}.rv32a"));
+    std::fs::write(&elf_path, assemble(happy_spec())).expect("write elf");
+    let bin = env!("CARGO_BIN_EXE_rv32-lower");
+
+    let ok = Command::new(bin)
+        .args([
+            "--elf",
+            elf_path.to_str().unwrap(),
+            "--out",
+            out_path.to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .expect("run rv32-lower");
+    assert!(ok.status.success());
+    let doc: serde_json::Value = serde_json::from_slice(&ok.stdout).expect("stdout is json");
+    assert_eq!(doc["status"], "ok");
+    assert_eq!(doc["code_bytes"], 32);
+    assert_eq!(doc["dispatch_entries"].as_array().unwrap().len(), 2);
+
+    // Error path: a nonexistent ELF still yields a JSON envelope on stdout.
+    let err = Command::new(bin)
+        .args([
+            "--elf",
+            "/nonexistent-rv32-lower-input",
+            "--out",
+            out_path.to_str().unwrap(),
+            "--json",
+        ])
+        .output()
+        .expect("run rv32-lower");
+    assert!(!err.status.success());
+    let err_doc: serde_json::Value = serde_json::from_slice(&err.stdout).expect("stdout is json");
+    assert_eq!(err_doc["status"], "error");
+    assert!(err_doc["message"].as_str().is_some());
+
+    let _ = std::fs::remove_file(&elf_path);
+    let _ = std::fs::remove_file(&out_path);
+}
+
+// ---------------------------------------------------------------------------
 // Opt-in real-ELF parity (skipped unless RV32_LOWER_PARITY_ELF is set).
 // ---------------------------------------------------------------------------
 

@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use serde_json::Value;
 
 use crate::artifact::{DispatchEntry, sha256_hex};
+use crate::lower::Lowered;
 
 /// Inputs for [`render_metadata`].
 #[derive(Debug)]
@@ -74,4 +75,33 @@ pub fn render_metadata(input: &MetadataInput) -> String {
     let mut out = serde_json::to_string_pretty(&doc).expect("bug: metadata serializes");
     out.push('\n');
     out
+}
+
+/// Render a compact, one-line JSON summary of a successful lowering, for
+/// `--json` / scripting: the output path, byte sizes, digests, and the
+/// dispatch table. Distinct from [`render_metadata`] (the on-disk sidecar) —
+/// this is the tool's machine-readable stdout envelope.
+#[must_use]
+pub fn summary_json(out: &str, lowered: &Lowered) -> String {
+    let entries: Vec<Value> = lowered
+        .entries
+        .iter()
+        .map(|entry| {
+            serde_json::json!({
+                "method_id": format!("0x{:016X}", entry.method_id),
+                "pc": entry.pc,
+            })
+        })
+        .collect();
+    let doc = serde_json::json!({
+        "status": "ok",
+        "out": out,
+        "artifact_bytes": lowered.artifact.len(),
+        "artifact_sha256": sha256_hex(&lowered.artifact),
+        "code_bytes": lowered.code.len(),
+        "code_sha256": sha256_hex(&lowered.code),
+        "memory_bytes": lowered.initial_memory.len(),
+        "dispatch_entries": entries,
+    });
+    doc.to_string()
 }

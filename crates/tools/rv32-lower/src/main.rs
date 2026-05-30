@@ -10,7 +10,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
-use groundhog_rv32_lower::{LowerError, MetadataInput, lower, render_metadata};
+use groundhog_rv32_lower::{LowerError, MetadataInput, lower, render_metadata, summary_json};
 
 /// Lower a RISC-V rv32im contract ELF to a Groundhog v3 RV32 artifact.
 #[derive(Parser)]
@@ -34,6 +34,9 @@ struct Cli {
     /// Recorded in metadata if `--metadata` is set.
     #[arg(long)]
     build_flags: Option<String>,
+    /// Emit a structured JSON result to stdout (for scripting / LLM callers).
+    #[arg(long)]
+    json: bool,
 }
 
 fn run(cli: &Cli) -> Result<(), LowerError> {
@@ -54,6 +57,11 @@ fn run(cli: &Cli) -> Result<(), LowerError> {
         });
         fs::write(metadata_path, document)?;
     }
+
+    if cli.json {
+        let out = cli.out.to_string_lossy();
+        println!("{}", summary_json(&out, &lowered));
+    }
     Ok(())
 }
 
@@ -62,7 +70,15 @@ fn main() -> ExitCode {
     match run(&cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("rv32-lower: {error}");
+            if cli.json {
+                // Keep stdout a single machine-readable stream under --json.
+                println!(
+                    "{}",
+                    serde_json::json!({ "status": "error", "message": error.to_string() })
+                );
+            } else {
+                eprintln!("rv32-lower: {error}");
+            }
             ExitCode::FAILURE
         }
     }

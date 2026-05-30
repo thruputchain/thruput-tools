@@ -31,6 +31,14 @@ rv32-lower --elf <elf> --out <contract>.rv32a --metadata <contract>.json \
            --build-flags release
 ```
 
+For scripting / programmatic callers, `--json` emits a single-line result
+envelope on stdout (output path, byte sizes, code/artifact digests, dispatch
+table) on success, or `{"status":"error","message":…}` on failure:
+
+```sh
+rv32-lower --elf <elf> --out <contract>.rv32a --json
+```
+
 The lowerer:
 
 1. Parses the ELF32 section and symbol tables.
