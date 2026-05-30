@@ -13,6 +13,7 @@ env:
   RELEASE_TARGET: x86_64-unknown-linux-gnu
   RELEASE_CRATES: >-
     groundhog-cli
+    groundhog-rv32-lower
 
 permissions:
   contents: write
@@ -57,11 +58,17 @@ jobs:
       - name: Build groundhog CLI
         run: cargo build --locked --release -p groundhog-cli --bin groundhog --features dev-node
 
+      - name: Build rv32-lower
+        run: cargo build --locked --release -p groundhog-rv32-lower --bin rv32-lower
+
       - name: Verify hogway
         run: target/release/hogway --help
 
       - name: Verify groundhog CLI
         run: target/release/groundhog --help
+
+      - name: Verify rv32-lower
+        run: target/release/rv32-lower --help
 
       - name: Prepare artifacts
         run: |
@@ -69,7 +76,7 @@ jobs:
 
           mkdir -p artifacts package
 
-          for app in hogway groundhog; do
+          for app in hogway groundhog rv32-lower; do
             archive_base="${app}-${GITHUB_REF_NAME}-${RELEASE_TARGET}"
             package_dir="package/${archive_base}"
             mkdir -p "$package_dir"
