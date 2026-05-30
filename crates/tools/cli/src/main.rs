@@ -1,4 +1,4 @@
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
 use groundhog_cli::Print;
 use groundhog_cli::config::DEFAULT_PROFILE;
@@ -35,6 +35,21 @@ struct ArtifactArgs {
     /// Directory for cargo build artifacts
     #[arg(long)]
     target_dir: Option<PathBuf>,
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy)]
+enum BuildTargetArg {
+    Wasm,
+    Rv32,
+}
+
+impl From<BuildTargetArg> for groundhog_cli::build::BuildTarget {
+    fn from(value: BuildTargetArg) -> Self {
+        match value {
+            BuildTargetArg::Wasm => Self::Wasm,
+            BuildTargetArg::Rv32 => Self::Rv32,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -76,17 +91,22 @@ enum Command {
         )]
         profile: String,
     },
-    /// Build contract to WASM
+    /// Build contract artifact
     #[command(long_about = "Cross-compile the contract to \
-                      wasm32-unknown-unknown via cargo. \
+                      wasm32-unknown-unknown or \
+                      riscv32im-unknown-none-elf via cargo. \
                       Must be run inside a Groundhog \
                       project.\n\n\
                       --optimize requires wasm-opt \
-                      (install via `brew install binaryen`).")]
+                      (install via `brew install binaryen`). \
+                      --target rv32 requires rv32-lower on PATH.")]
     Build {
         /// Package to build (required in workspaces)
         #[arg(short, long)]
         package: Option<String>,
+        /// Contract artifact target
+        #[arg(long, value_enum, default_value_t = BuildTargetArg::Wasm)]
+        target: BuildTargetArg,
         /// Run wasm-opt after compilation (requires wasm-opt)
         #[arg(long)]
         optimize: bool,
@@ -406,6 +426,7 @@ fn main() {
             .and_then(|cwd| groundhog_cli::status::run(&cwd, Some(&profile), cmd_name, &print)),
         Command::Build {
             package,
+            target,
             optimize,
             bindings,
             profile,
@@ -420,6 +441,7 @@ fn main() {
                 );
                 groundhog_cli::build::run(
                     package.as_deref(),
+                    target.into(),
                     optimize,
                     &bindings,
                     &cargo_args,

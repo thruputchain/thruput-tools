@@ -7,6 +7,7 @@ Rust/WASM build and test workflow into a single binary.
 
 ```bash
 cargo install --path crates/tools/cli
+cargo install --path crates/tools/rv32-lower   # optional, for `build --target rv32`
 ```
 
 To include the local dev node:
@@ -110,6 +111,7 @@ plain `cargo` builds and tests work for the host target:
 | `cargo build` | Build for host (IDE, rust-analyzer) |
 | `cargo test` | Run unit tests on host |
 | `groundhog build` | Cross-compile to WASM (`--no-default-features --release`) |
+| `groundhog build --target rv32` | Cross-compile to RV32 ELF and lower it to `.rv32a` |
 | `groundhog test` | Run executor-backed WASM tests |
 | `groundhog test --integration` | Start hogd-dev, deploy, and run `tests/integration.rs` (`dev-node` feature required) |
 
@@ -156,19 +158,30 @@ groundhog new my-contract --template stub   # minimal template
 
 ### `groundhog build`
 
-Compile the contract to WASM using `build-std` for `core`/`alloc`.
+Compile the contract to WASM using `build-std` for `core`/`alloc`, or compile
+an RV32 contract package and lower it to a Groundhog `.rv32a` artifact.
 
 ```bash
 groundhog build                # release build
 groundhog build --optimize     # + wasm-opt (requires wasm-opt on PATH)
+groundhog build --target rv32 -p counter-rv32
 groundhog build --profile testnet   # resolve profile from groundhog.toml
 groundhog build -- --verbose   # pass extra args to cargo
 ```
 
-Outputs the `.wasm` file path and size on success. When spec generation
-is available, also emits a human-readable `*.spec.json` sidecar next to
-the built WASM. The embedded WASM section remains the source of truth;
+The WASM target outputs the `.wasm` file path and size on success. When spec
+generation is available, it also emits a human-readable `*.spec.json` sidecar
+next to the built WASM. The embedded WASM section remains the source of truth;
 the JSON file is for inspection and external tooling.
+
+The RV32 target requires `rv32-lower` on `PATH`, sets
+`CARGO_PROFILE_RELEASE_STRIP=false` for the current v3 symbol-scanning lowerer,
+then writes `target/groundhog/<package>.rv32a` plus
+`target/groundhog/<package>.rv32.json` build metadata.
+
+This RV32 path currently emits the deployable artifact and lowerer metadata.
+Contract spec sidecars for RV32 are a cross-repo follow-up; today spec
+sidecars are still produced by the WASM custom-section finalization path.
 
 ### `groundhog test`
 
