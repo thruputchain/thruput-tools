@@ -508,6 +508,7 @@ fn build_rv32_project_compiles_and_lowers_elf() {
         .join("groundhog")
         .join("demo_contract_rv32.rv32.json");
     let cargo_args_log = project_root.join("cargo-args.log");
+    let lower_args_log = project_root.join("lower-args.log");
     let metadata_json = format!(
         r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract-rv32","manifest_path":"{}"}}]}}"#,
         project_root.display(),
@@ -534,7 +535,10 @@ fn build_rv32_project_compiles_and_lowers_elf() {
     let rv32_lower = fake_bin.join("rv32-lower");
     fs::write(
         &rv32_lower,
-        "#!/bin/sh\nwhile [ \"$#\" -gt 0 ]; do\n  case \"$1\" in\n    --out) out=\"$2\"; shift 2 ;;\n    --metadata) metadata=\"$2\"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\nprintf 'RV32' > \"$out\"\nprintf '{\"ok\":true}\\n' > \"$metadata\"\n",
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nwhile [ \"$#\" -gt 0 ]; do\n  case \"$1\" in\n    --out) out=\"$2\"; shift 2 ;;\n    --metadata) metadata=\"$2\"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\nprintf 'RV32' > \"$out\"\nprintf '{{\"ok\":true}}\\n' > \"$metadata\"\n",
+            lower_args_log.display()
+        ),
     )
     .unwrap();
 
@@ -578,6 +582,19 @@ fn build_rv32_project_compiles_and_lowers_elf() {
     );
     assert!(cargo_args.contains("-p demo-contract-rv32"));
     assert!(cargo_args.contains("--locked"));
+
+    let lower_args = fs::read_to_string(lower_args_log).unwrap();
+    assert!(lower_args.contains("--elf\n"));
+    assert!(lower_args.contains(&format!("{}\n", raw_elf.display())));
+    assert!(lower_args.contains("--out\n"));
+    assert!(lower_args.contains(&format!("{}\n", processed_rv32.display())));
+    assert!(lower_args.contains("--metadata\n"));
+    assert!(lower_args.contains(&format!("{}\n", processed_metadata.display())));
+    assert!(lower_args.contains("--target-triple\nriscv32im-unknown-none-elf\n"));
+    assert!(lower_args.contains("--build-flags\n"));
+    assert!(lower_args.contains(
+        "CARGO_PROFILE_RELEASE_STRIP=false cargo build --release --no-default-features --features entrypoints --target riscv32im-unknown-none-elf -p demo-contract-rv32 --locked\n"
+    ));
 }
 
 struct CurrentDirGuard {
