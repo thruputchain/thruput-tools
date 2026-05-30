@@ -583,12 +583,322 @@ fn build_json_failure_is_structured() {
 }
 
 #[test]
+fn build_rv32_json_rejects_wasm_only_options_before_metadata() {
+    let tmp = TempDir::new().unwrap();
+    let output = groundhog()
+        .args(["--json", "build", "--target", "rv32", "--optimize"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(stderr["ok"], false);
+    assert_eq!(stderr["command"], "build");
+    assert_eq!(stderr["error"]["code"], "invalid_build_options");
+}
+
+#[test]
+fn build_rv32_json_rejects_bindings_before_metadata() {
+    let tmp = TempDir::new().unwrap();
+    let output = groundhog()
+        .args(["--json", "build", "--target", "rv32", "--bindings", "ts"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(stderr["ok"], false);
+    assert_eq!(stderr["command"], "build");
+    assert_eq!(stderr["error"]["code"], "invalid_build_options");
+}
+
+#[cfg(unix)]
+#[test]
+#[allow(clippy::too_many_lines)]
+fn build_rv32_json_success_reports_artifact_paths() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = TempDir::new().unwrap();
+    std::fs::write(
+        tmp.path().join("Cargo.toml"),
+        "[package]\nname = \"demo-contract-rv32\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(tmp.path().join("src")).unwrap();
+    std::fs::write(tmp.path().join("src/main.rs"), "fn main() {}\n").unwrap();
+
+    let fake_bin = tmp.path().join("bin");
+    std::fs::create_dir_all(&fake_bin).unwrap();
+
+    let target_dir = tmp.path().join("target");
+    let raw_elf = target_dir
+        .join("riscv32im-unknown-none-elf/release")
+        .join("demo_contract_rv32");
+    let rv32 = target_dir
+        .join("groundhog")
+        .join("demo_contract_rv32.rv32a");
+    let metadata = target_dir
+        .join("groundhog")
+        .join("demo_contract_rv32.rv32.json");
+    let metadata_json = serde_json::json!({
+        "workspace_root": tmp.path(),
+        "target_directory": target_dir,
+        "packages": [{
+            "name": "demo-contract-rv32",
+            "manifest_path": tmp.path().join("Cargo.toml"),
+        }],
+    })
+    .to_string();
+
+    let cargo = fake_bin.join("cargo");
+    std::fs::write(
+        &cargo,
+        format!(
+            concat!(
+                "#!/bin/sh\n",
+                "if [ \"$1\" = \"metadata\" ]; then\n",
+                "  printf '%s' '{}'\n",
+                "  exit 0\n",
+                "fi\n",
+                "if [ \"$CARGO_PROFILE_RELEASE_STRIP\" != \"false\" ]; then\n",
+                "  echo missing strip env >&2\n",
+                "  exit 2\n",
+                "fi\n",
+                "/bin/mkdir -p '{}'\n",
+                "printf 'ELF' > '{}'\n",
+                "exit 0\n",
+            ),
+            metadata_json,
+            raw_elf
+                .parent()
+                .expect("bug: raw elf parent should exist")
+                .display(),
+            raw_elf.display()
+        ),
+    )
+    .unwrap();
+    let rv32_lower = fake_bin.join("rv32-lower");
+    std::fs::write(
+        &rv32_lower,
+        concat!(
+            "#!/bin/sh\n",
+            "while [ \"$#\" -gt 0 ]; do\n",
+            "  case \"$1\" in\n",
+            "    --out) out=\"$2\"; shift 2 ;;\n",
+            "    --metadata) metadata=\"$2\"; shift 2 ;;\n",
+            "    *) shift ;;\n",
+            "  esac\n",
+            "done\n",
+            "printf 'RV32' > \"$out\"\n",
+            "printf '{\"ok\":true}\\n' > \"$metadata\"\n",
+        ),
+    )
+    .unwrap();
+
+    for executable in [&cargo, &rv32_lower] {
+        let mut perms = std::fs::metadata(executable).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(executable, perms).unwrap();
+    }
+
+    let output = groundhog()
+        .args([
+            "--json",
+            "build",
+            "--target",
+            "rv32",
+            "-p",
+            "demo-contract-rv32",
+        ])
+        .current_dir(tmp.path())
+        .env("PATH", &fake_bin)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    assert_eq!(std::fs::read(&rv32).unwrap(), b"RV32");
+    assert_eq!(
+        std::fs::read_to_string(&metadata).unwrap(),
+        "{\"ok\":true}\n"
+    );
+
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["ok"], true);
+    assert_eq!(stdout["command"], "build");
+    assert_eq!(stdout["data"]["target"], "rv32");
+    assert_eq!(stdout["data"]["elf"], raw_elf.display().to_string());
+    assert_eq!(stdout["data"]["rv32"], rv32.display().to_string());
+    assert_eq!(stdout["data"]["metadata"], metadata.display().to_string());
+    assert_eq!(stdout["data"]["size_bytes"], 4);
+}
+
+#[cfg(unix)]
+#[test]
+fn build_rv32_json_reports_missing_lowerer_after_metadata() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = TempDir::new().unwrap();
+    std::fs::write(
+        tmp.path().join("Cargo.toml"),
+        "[package]\nname = \"demo-contract-rv32\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+
+    let fake_bin = tmp.path().join("bin");
+    std::fs::create_dir_all(&fake_bin).unwrap();
+    let metadata_json = serde_json::json!({
+        "workspace_root": tmp.path(),
+        "target_directory": tmp.path().join("target"),
+        "packages": [{
+            "name": "demo-contract-rv32",
+            "manifest_path": tmp.path().join("Cargo.toml"),
+        }],
+    })
+    .to_string();
+
+    let cargo = fake_bin.join("cargo");
+    std::fs::write(
+        &cargo,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = \"metadata\" ]; then\n  printf '%s' '{metadata_json}'\n  exit 0\nfi\nexit 1\n"
+        ),
+    )
+    .unwrap();
+    let mut perms = std::fs::metadata(&cargo).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&cargo, perms).unwrap();
+
+    let output = groundhog()
+        .args([
+            "--json",
+            "build",
+            "--target",
+            "rv32",
+            "-p",
+            "demo-contract-rv32",
+        ])
+        .current_dir(tmp.path())
+        .env("PATH", &fake_bin)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(stderr["ok"], false);
+    assert_eq!(stderr["command"], "build");
+    assert_eq!(stderr["error"]["code"], "rv32_lower_not_found");
+}
+
+#[cfg(unix)]
+#[test]
+fn build_rv32_json_reports_lowerer_failure_details() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = TempDir::new().unwrap();
+    std::fs::write(
+        tmp.path().join("Cargo.toml"),
+        "[package]\nname = \"demo-contract-rv32\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+
+    let fake_bin = tmp.path().join("bin");
+    std::fs::create_dir_all(&fake_bin).unwrap();
+
+    let target_dir = tmp.path().join("target");
+    let raw_elf = target_dir
+        .join("riscv32im-unknown-none-elf/release")
+        .join("demo_contract_rv32");
+    let metadata_json = serde_json::json!({
+        "workspace_root": tmp.path(),
+        "target_directory": target_dir,
+        "packages": [{
+            "name": "demo-contract-rv32",
+            "manifest_path": tmp.path().join("Cargo.toml"),
+        }],
+    })
+    .to_string();
+
+    let cargo = fake_bin.join("cargo");
+    std::fs::write(
+        &cargo,
+        format!(
+            concat!(
+                "#!/bin/sh\n",
+                "if [ \"$1\" = \"metadata\" ]; then\n",
+                "  printf '%s' '{}'\n",
+                "  exit 0\n",
+                "fi\n",
+                "/bin/mkdir -p '{}'\n",
+                "printf 'ELF' > '{}'\n",
+                "exit 0\n",
+            ),
+            metadata_json,
+            raw_elf
+                .parent()
+                .expect("bug: raw elf parent should exist")
+                .display(),
+            raw_elf.display()
+        ),
+    )
+    .unwrap();
+    let rv32_lower = fake_bin.join("rv32-lower");
+    std::fs::write(
+        &rv32_lower,
+        "#!/bin/sh\nprintf 'lower stdout\\n'\nprintf 'lower stderr\\n' >&2\nexit 42\n",
+    )
+    .unwrap();
+
+    for executable in [&cargo, &rv32_lower] {
+        let mut perms = std::fs::metadata(executable).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(executable, perms).unwrap();
+    }
+
+    let output = groundhog()
+        .args([
+            "--json",
+            "build",
+            "--target",
+            "rv32",
+            "-p",
+            "demo-contract-rv32",
+        ])
+        .current_dir(tmp.path())
+        .env("PATH", &fake_bin)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(stderr["ok"], false);
+    assert_eq!(stderr["command"], "build");
+    assert_eq!(stderr["error"]["code"], "rv32_lower_failed");
+    assert!(
+        stderr["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("lower stderr")
+    );
+    assert_eq!(stderr["error"]["details"]["stdout"], "lower stdout\n");
+    assert_eq!(stderr["error"]["details"]["stderr"], "lower stderr\n");
+}
+
+#[test]
 fn build_help_mentions_target_dir() {
     let output = groundhog().args(["build", "--help"]).output().unwrap();
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("--target-dir"));
+    assert!(stdout.contains("--target"));
+    assert!(stdout.contains("rv32"));
 }
 
 #[test]
