@@ -6,12 +6,12 @@
 //! pending a hogd-dev stable x23 surface.
 
 use async_trait::async_trait;
-use groundhog_rpc_api_types::{
+use groundhog_json_rpc_server::{ChainPlane, RpcServerError, SubmitPlane, ValidatedTransaction};
+use groundhog_json_rpc_types::{
     BlockHeight,
     block::{BlockInfo, ChainTip},
     hex::Hex0x,
 };
-use groundhog_rpc_server::{ChainPlane, RpcServerError, SubmitPlane, ValidatedTransaction};
 use groundhog_scheduler::{
     DbTip, ParallelBatch, SchedulerGetTipResult, parallel::ParallelSignedTransactionBatch,
     sched_coord::SchedulerCoord_SchedulerCoord1_Client,

@@ -63,7 +63,9 @@ stream? [Petar, Geoff]
   (`protocol-rs/groundhog-xdr/src/types.rs:345`)
 - **Byte format (Q3):** `0x`-prefixed lowercase hex for all byte values
   (hashes, addresses, topics, event data). Decimal integers for heights
-  and counts. Implemented via `Hex0x<T>` wrapper in `api-types/src/hex.rs`
+  and counts. Implemented via `Hex0x<T>` wrapper in
+  `crates/json-rpc/json-rpc-types/src/hex.rs`
   — wraps XDR byte types at the API boundary without modifying
   `groundhog-xdr`. Bare hex (no prefix) is accepted on input for
-  backwards compatibility. (`api-types/src/hex.rs`, `api-types/src/lib.rs`)
+  backwards compatibility. (`json-rpc-types/src/hex.rs`,
+  `json-rpc-types/src/lib.rs`)

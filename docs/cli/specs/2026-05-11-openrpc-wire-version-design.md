@@ -2,7 +2,7 @@
 
 **Date:** 2026-05-11
 **Status:** Shipped. The current code declares
-`groundhog_rpc_api::WIRE_FORMAT_VERSION`; as of 2026-05-23 it is `2.0.0`.
+`groundhog_json_rpc_api::WIRE_FORMAT_VERSION`; as of 2026-05-23 it is `2.0.0`.
 This document preserves the design rationale and original rollout plan.
 
 ## Context
@@ -57,11 +57,11 @@ Two changes, shippable as separate PRs:
 
 ### Part A: independent spec SemVer
 
-`info.version` becomes a hand-maintained constant in **`rpc-api`**,
+`info.version` becomes a hand-maintained constant in **`json-rpc-api`**,
 decoupled from `CARGO_PKG_VERSION`:
 
 ```rust
-// crates/json-rpc/rpc-api/src/lib.rs
+// crates/json-rpc/json-rpc-api/src/lib.rs
 
 /// Wire-format SemVer for the JSON-RPC surface.
 ///
@@ -73,10 +73,10 @@ pub const WIRE_FORMAT_VERSION: &str = "2.0.0";
 ```
 
 `open-rpc-spec::build_spec()` reads
-`groundhog_rpc_api::WIRE_FORMAT_VERSION` for `info.version`. `rpc-api`
-is also the home consumed by `rpc-server` for the `groundhog_version`
+`groundhog_json_rpc_api::WIRE_FORMAT_VERSION` for `info.version`. `json-rpc-api`
+is also the home consumed by `json-rpc-server` for the `groundhog_version`
 RPC in Part C — single source of truth, both consumers already depend
-on `rpc-api`.
+on `json-rpc-api`.
 
 **Current value:** `2.0.0`. Future bumps are intentional PR-author decisions,
 not automatic.
@@ -132,40 +132,40 @@ additive (minor bump).
 
 **Sourcing the values:**
 
-- `wireFormat` — `groundhog_rpc_api::WIRE_FORMAT_VERSION` (see "Where
+- `wireFormat` — `groundhog_json_rpc_api::WIRE_FORMAT_VERSION` (see "Where
   the constant lives" below).
 - `implementation` — injected per-binary via a `BuildInfo` struct
-  passed to the `rpc-server` constructor. Each binary populates it
+  passed to the `json-rpc-server` constructor. Each binary populates it
   from `env!("CARGO_PKG_VERSION")` of its own crate
   (`groundhog-gateway` or `groundhog-node-supervisor`). Using a pure
-  `env!()` inside `rpc-server` would report the `groundhog-rpc-server`
+  `env!()` inside `json-rpc-server` would report the `groundhog-json-rpc-server`
   crate version, which is misleading when binaries diverge later.
 - `commitHash` — same `BuildInfo` struct, populated via `vergen` or a
   `GIT_COMMIT` env var by each binary. `None` if the build had no git
   context. Not derivable inside a library crate.
 
 `BuildInfo` is a tiny struct (`{ implementation_version, commit_hash }`)
-threaded through the existing `rpc-server` server-construction path. No
+threaded through the existing `json-rpc-server` server-construction path. No
 runtime fetching — both fields are `&'static str` resolved at the
 binary's build time.
 
 **Where the wire-format constant lives:**
 
-`WIRE_FORMAT_VERSION` is declared in **`rpc-api`**, not in
-`open-rpc-spec`. Rationale: `rpc-api` already owns the JSON-RPC method
+`WIRE_FORMAT_VERSION` is declared in **`json-rpc-api`**, not in
+`open-rpc-spec`. Rationale: `json-rpc-api` already owns the JSON-RPC method
 surface — the thing being versioned. Both `open-rpc-spec` (consumes it
-for `info.version`) and `rpc-server` (consumes it for
-`groundhog_version`) already depend on `rpc-api`. Putting the constant
-in `open-rpc-spec` would force `rpc-server` to depend on the spec-
+for `info.version`) and `json-rpc-server` (consumes it for
+`groundhog_version`) already depend on `json-rpc-api`. Putting the constant
+in `open-rpc-spec` would force `json-rpc-server` to depend on the spec-
 generator crate just to read a `&'static str`.
 
 **Where the RPC method lives:**
 
-- `api-types::version::VersionInfo` — wire type (`#[non_exhaustive]`,
+- `json-rpc-types::version::VersionInfo` — wire type (`#[non_exhaustive]`,
   camelCase).
-- `rpc-api` — `fn version(&self) -> RpcResult<VersionInfo>` on
+- `json-rpc-api` — `fn version(&self) -> RpcResult<VersionInfo>` on
   `GroundhogApi` trait. Also re-exports `WIRE_FORMAT_VERSION`.
-- `rpc-server` — pure implementation reading
+- `json-rpc-server` — pure implementation reading
   `rpc_api::WIRE_FORMAT_VERSION` for `wireFormat` and the injected
   `BuildInfo` for `implementation` / `commitHash`. No backend trait
   dispatch.
@@ -214,13 +214,13 @@ versions.
 This was the rollout plan when the design was written:
 
 - **PR A: independent spec SemVer.** Add `WIRE_FORMAT_VERSION` to
-  `rpc-api`, wire `open-rpc-spec::build_spec()` through it, update
+  `json-rpc-api`, wire `open-rpc-spec::build_spec()` through it, update
   CLAUDE.md with the bump rules, regenerate the snapshot. Small,
   self-contained. Ships `1.0.0` — the existing artifact has been
   through review and is the stable baseline.
 - **PR C: `groundhog_version` RPC.** New wire type
-  (`api-types::version::VersionInfo`), new trait method on
-  `GroundhogApi`, `BuildInfo` plumbing into the `rpc-server`
+  (`json-rpc-types::version::VersionInfo`), new trait method on
+  `GroundhogApi`, `BuildInfo` plumbing into the `json-rpc-server`
   constructor, gateway and node-supervisor populate `BuildInfo` from
   their own `env!()` and `vergen`. Adding a method is additive, so
   this PR **bumps `WIRE_FORMAT_VERSION` from `1.0.0` to `1.1.0`** in

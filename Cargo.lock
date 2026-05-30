@@ -920,7 +920,7 @@ name = "groundhog-bench"
 version = "0.0.0"
 dependencies = [
  "clap",
- "groundhog-rpc-api-types",
+ "groundhog-json-rpc-types",
  "groundhog-signing",
  "groundhog-xdr",
  "hdrhistogram",
@@ -935,16 +935,16 @@ dependencies = [
 
 [[package]]
 name = "groundhog-cli"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "clap",
  "clap_complete",
  "getrandom 0.2.17",
  "groundhog-contract-spec",
  "groundhog-contract-util",
+ "groundhog-json-rpc-client",
+ "groundhog-json-rpc-types",
  "groundhog-node-supervisor",
- "groundhog-rpc-api-types",
- "groundhog-rpc-client",
  "groundhog-signing",
  "groundhog-spec-tool",
  "groundhog-wasm-meter",
@@ -1000,8 +1000,8 @@ dependencies = [
 name = "groundhog-e2e-tests"
 version = "0.0.0"
 dependencies = [
- "groundhog-rpc-api-types",
- "groundhog-rpc-client",
+ "groundhog-json-rpc-client",
+ "groundhog-json-rpc-types",
  "groundhog-signing",
  "groundhog-xdr",
  "hex",
@@ -1017,6 +1017,99 @@ source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
 checksum = "853027653f41698aa3281863d79486b23f125f3506539f78cc7b57b19af4ab80"
 dependencies = [
  "groundhog-xdr",
+ "xdrs",
+]
+
+[[package]]
+name = "groundhog-json-rpc-api"
+version = "0.4.1"
+dependencies = [
+ "async-trait",
+ "groundhog-json-rpc-types",
+ "groundhog-open-rpc",
+ "groundhog-open-rpc-macros",
+ "jsonrpsee",
+]
+
+[[package]]
+name = "groundhog-json-rpc-client"
+version = "0.4.1"
+dependencies = [
+ "async-trait",
+ "groundhog-json-rpc-api",
+ "groundhog-json-rpc-server",
+ "groundhog-json-rpc-types",
+ "jsonrpsee",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "groundhog-json-rpc-gateway"
+version = "0.4.1"
+dependencies = [
+ "async-trait",
+ "axum",
+ "bytes",
+ "clap",
+ "groundhog-json-rpc-api",
+ "groundhog-json-rpc-server",
+ "groundhog-json-rpc-types",
+ "groundhog-x23-transport",
+ "groundhog-xdr",
+ "groundhog_db_gateway",
+ "groundhog_indexer",
+ "groundhog_scheduler",
+ "groundhog_view",
+ "jsonrpsee",
+ "prometheus",
+ "rpc_driver",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "xdr-common",
+]
+
+[[package]]
+name = "groundhog-json-rpc-server"
+version = "0.4.1"
+dependencies = [
+ "async-trait",
+ "groundhog-json-rpc-api",
+ "groundhog-json-rpc-types",
+ "groundhog-xdr",
+ "hex",
+ "jsonrpsee",
+ "sha2 0.10.9",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "xdr-common",
+ "xdrs",
+]
+
+[[package]]
+name = "groundhog-json-rpc-types"
+version = "0.4.1"
+dependencies = [
+ "bytes",
+ "groundhog-trace",
+ "groundhog-xdr",
+ "groundhog_indexer",
+ "hex",
+ "jsonrpsee-types",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "xdr-common",
  "xdrs",
 ]
 
@@ -1040,12 +1133,12 @@ dependencies = [
 
 [[package]]
 name = "groundhog-node-supervisor"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "async-trait",
- "groundhog-rpc-api",
- "groundhog-rpc-api-types",
- "groundhog-rpc-server",
+ "groundhog-json-rpc-api",
+ "groundhog-json-rpc-server",
+ "groundhog-json-rpc-types",
  "groundhog-signing",
  "groundhog-x23-transport",
  "groundhog-xdr",
@@ -1071,7 +1164,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-open-rpc"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "schemars 1.2.1",
  "serde",
@@ -1080,7 +1173,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-open-rpc-macros"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "groundhog-open-rpc",
  "jsonrpsee",
@@ -1092,106 +1185,13 @@ dependencies = [
 
 [[package]]
 name = "groundhog-open-rpc-spec"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
+ "groundhog-json-rpc-api",
  "groundhog-open-rpc",
- "groundhog-rpc-api",
  "pretty_assertions",
  "semver",
  "serde_json",
-]
-
-[[package]]
-name = "groundhog-rpc-api"
-version = "0.4.0"
-dependencies = [
- "async-trait",
- "groundhog-open-rpc",
- "groundhog-open-rpc-macros",
- "groundhog-rpc-api-types",
- "jsonrpsee",
-]
-
-[[package]]
-name = "groundhog-rpc-api-types"
-version = "0.4.0"
-dependencies = [
- "bytes",
- "groundhog-trace",
- "groundhog-xdr",
- "groundhog_indexer",
- "hex",
- "jsonrpsee-types",
- "schemars 1.2.1",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "xdr-common",
- "xdrs",
-]
-
-[[package]]
-name = "groundhog-rpc-client"
-version = "0.4.0"
-dependencies = [
- "async-trait",
- "groundhog-rpc-api",
- "groundhog-rpc-api-types",
- "groundhog-rpc-server",
- "jsonrpsee",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "groundhog-rpc-gateway"
-version = "0.4.0"
-dependencies = [
- "async-trait",
- "axum",
- "bytes",
- "clap",
- "groundhog-rpc-api",
- "groundhog-rpc-api-types",
- "groundhog-rpc-server",
- "groundhog-x23-transport",
- "groundhog-xdr",
- "groundhog_db_gateway",
- "groundhog_indexer",
- "groundhog_scheduler",
- "groundhog_view",
- "jsonrpsee",
- "prometheus",
- "rpc_driver",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "toml",
- "tower",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "xdr-common",
-]
-
-[[package]]
-name = "groundhog-rpc-server"
-version = "0.4.0"
-dependencies = [
- "async-trait",
- "groundhog-rpc-api",
- "groundhog-rpc-api-types",
- "groundhog-xdr",
- "hex",
- "jsonrpsee",
- "sha2 0.10.9",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "xdr-common",
- "xdrs",
 ]
 
 [[package]]
@@ -1205,7 +1205,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-signing"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "ed25519-dalek",
  "groundhog-xdr",
@@ -1222,8 +1222,8 @@ name = "groundhog-sim"
 version = "0.0.0"
 dependencies = [
  "clap",
- "groundhog-rpc-api-types",
- "groundhog-rpc-client",
+ "groundhog-json-rpc-client",
+ "groundhog-json-rpc-types",
  "groundhog-signing",
  "groundhog-xdr",
  "hdrhistogram",
@@ -1292,7 +1292,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-x23-transport"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "rpc_driver",
  "thiserror 2.0.18",

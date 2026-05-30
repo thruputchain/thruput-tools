@@ -169,7 +169,7 @@ Maintenance rules:
 - [x] Local-node observability (transaction detail, events, latest-state
   storage reads)
 - [x] Extract a swappable backend behind plane traits
-  (`SubmitPlane`/`ChainPlane`/`ReadPlane` in `crates/json-rpc/rpc-server`,
+  (`SubmitPlane`/`ChainPlane`/`ReadPlane` in `crates/json-rpc/json-rpc-server`,
   consumed by `crates/dev/node-supervisor` over `crates/x23/x23-transport`).
 - Durable local-node backend: `groundhog-node-supervisor` around a
   hogd-owned `hogd-dev` subprocess. PRs landed in order below.

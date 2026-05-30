@@ -9,7 +9,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 #[cfg(all(feature = "dev-node", unix))]
-use groundhog_rpc_client::{GroundhogApiClient, HttpClientBuilder};
+use groundhog_json_rpc_client::{GroundhogApiClient, HttpClientBuilder};
 use tempfile::TempDir;
 
 fn groundhog() -> Command {

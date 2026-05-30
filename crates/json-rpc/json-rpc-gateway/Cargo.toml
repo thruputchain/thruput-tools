@@ -1,0 +1,51 @@
+[package]
+name = "groundhog-json-rpc-gateway"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "JSON-RPC gateway server for Groundhog"
+
+exclude = [
+    "tests/",
+]
+
+[[bin]]
+name = "hogway"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+groundhog-json-rpc-api = { workspace = true }
+groundhog-json-rpc-types = { workspace = true }
+groundhog-json-rpc-server = { workspace = true }
+groundhog-x23-transport = { workspace = true }
+groundhog-xdr = { workspace = true }
+groundhog_indexer = { workspace = true }
+groundhog_scheduler = { workspace = true }
+groundhog_db_gateway = { workspace = true }
+groundhog_view = { workspace = true }
+rpc_driver = { workspace = true }
+xdr-common = { workspace = true }
+async-trait = { workspace = true }
+bytes = { workspace = true }
+jsonrpsee = { workspace = true }
+axum = { workspace = true }
+tokio = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+prometheus = { workspace = true }
+clap = { workspace = true }
+toml = { workspace = true }
+thiserror = { workspace = true }

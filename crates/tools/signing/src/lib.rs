@@ -38,7 +38,7 @@ mod tests {
     use groundhog_xdr::types::ContractAddress;
     use sha2::{Digest, Sha256};
 
-    // These pinned vectors currently come from the pre-refactor tx-builder
+    // These pinned vectors currently come from the pre-refactor tx-building
     // output path. They are canonical XDR/hash vectors only; the signed
     // transaction is not auth-valid against empty hogd-dev genesis.
     // Replace or supplement them with runtime-generated canonical vectors when

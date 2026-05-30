@@ -1,9 +1,9 @@
 use std::path::Path;
 
 use groundhog_contract_util::NormalizedMethodSignature;
-use groundhog_rpc_api_types::receipt::ExecStatus;
-use groundhog_rpc_api_types::receipt::TransactionReceipt;
-use groundhog_rpc_api_types::transaction::TxHash;
+use groundhog_json_rpc_types::receipt::ExecStatus;
+use groundhog_json_rpc_types::receipt::TransactionReceipt;
+use groundhog_json_rpc_types::transaction::TxHash;
 use groundhog_signing::{
     BuildDevWalletDoActionTransaction, DEFAULT_TX_GAS_LIMIT, SignTransactionParams,
     build_dev_wallet_do_action_transaction, sign_and_encode_transaction_hex,
@@ -862,7 +862,7 @@ mod tests {
         ContractType, ContractTypeDef, ContractUnionCase, ContractUnionCaseType, ContractUnionDef,
         ContractVectorType,
     };
-    use groundhog_rpc_api_types::receipt::ExecStatus;
+    use groundhog_json_rpc_types::receipt::ExecStatus;
     use serde_json::json;
     use serial_test::serial;
     use tempfile::TempDir;

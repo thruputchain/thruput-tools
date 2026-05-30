@@ -226,8 +226,8 @@ integers. We take the best of both: hex bytes, decimal numbers.
 
 **Note on `groundhog-xdr`:** The XDR crate serializes hash/address types as
 bare hex (no `0x` prefix) via `serde_arrays::hex`. The public RPC boundary wraps
-byte-like values in `api-types` so JSON-RPC clients see the `0x`-prefixed
-format consistently.
+byte-like values in `json-rpc-types` so JSON-RPC clients see the
+`0x`-prefixed format consistently.
 
 ---
 
@@ -311,40 +311,19 @@ encoding so clearly-bogus inputs fail at the JSON-RPC boundary:
 ## Crate Structure
 
 ```
-groundhog-rpc/                          NEW workspace
+groundhog-rpc/                          workspace
 ├── .cargo/config.toml                  private registry config
 ├── Cargo.toml                          workspace root
 ├── crates/
-│   ├── api-types/                      shared RPC types
-│   │   ├── src/
-│   │   │   ├── lib.rs
-│   │   │   ├── hex.rs                  HexBytes, Topic (0x-hex serde)
-│   │   │   ├── receipt.rs              TransactionReceipt, ExecStatus
-│   │   │   ├── block.rs               BlockInfo, ChainTip
-│   │   │   ├── transaction.rs          TxHash, TransactionStatus
-│   │   │   ├── events.rs              EmittedEvent, IdentifiedEvent
-│   │   │   └── error.rs               RPC error codes
-│   │   └── Cargo.toml                  deps: groundhog-xdr, serde, jsonrpsee-types
-│   │
-│   ├── gateway/                        JSON-RPC server binary
-│   │   ├── src/
-│   │   │   ├── main.rs                 tokio::main, CLI, startup
-│   │   │   ├── config.rs              TOML config + CLI args
-│   │   │   ├── context.rs             shared state (x23 clients, metrics)
-│   │   │   ├── api.rs                 jsonrpsee trait definition (#[rpc(server)])
-│   │   │   ├── handlers/
-│   │   │   │   ├── submit.rs          sendRawTransaction
-│   │   │   │   ├── receipt.rs         getTransactionReceipt, getTransactionStatus
-│   │   │   │   ├── blocks.rs          chainTip, getBlockByNumber
-│   │   │   │   └── events.rs          getEvents
-│   │   │   ├── middleware.rs          timeout, metrics, CORS
-│   │   │   └── error.rs              GatewayError → jsonrpsee ErrorObject
-│   │   └── Cargo.toml                 deps: api-types, rpc_driver, jsonrpsee, axum, tokio
-│   │
-│   └── client/                         typed JSON-RPC client library
-│       ├── src/
-│       │   └── lib.rs                  generated from same #[rpc(client)] trait
-│       └── Cargo.toml                  deps: api-types, jsonrpsee-client
+│   └── json-rpc/
+│       ├── json-rpc-types/         shared RPC types
+│       ├── json-rpc-api/               jsonrpsee trait definition
+│       ├── json-rpc-server/            shared server implementation
+│       ├── json-rpc-gateway/           standalone JSON-RPC server binary
+│       ├── json-rpc-client/            typed JSON-RPC client library
+│       ├── open-rpc/                   OpenRPC document generator
+│       ├── open-rpc-macros/            OpenRPC proc macro
+│       └── open-rpc-spec/              canonical generated spec artifact
 ```
 
 ### Dependency Flow
@@ -355,53 +334,42 @@ xdrs           (private registry)
 rpc_driver     (private registry, x23 RPC framework)
        │
        ▼
-api-types      (this workspace — shared by all consumers)
+json-rpc-types   (this workspace — shared by all consumers)
        │
-   ┌───┴───┐
-   ▼       ▼
-gateway   client
-   │       │
-   │       └──→ SDK (sdk_rs), CLI tool, block explorer
+       ▼
+json-rpc-api         (method trait)
+       │
+   ┌───┴─────────┐
+   ▼             ▼
+json-rpc-server json-rpc-client
+   │             │
+   ▼             └──→ SDK, CLI tool, block explorer
+json-rpc-gateway
    │
    └──→ deployed as standalone service
 ```
 
 ### Type Unification
 
-`api-types` is the shared layer between `groundhog-xdr` (wire format)
-and what developers see. It re-exports XDR types where appropriate
-and defines RPC-specific types (receipts, status enums, error codes).
+`json-rpc-types` is the shared layer between `groundhog-xdr` (wire
+format) and what developers see. It re-exports XDR types where appropriate and
+defines RPC-specific types (receipts, status enums, error codes).
 
 **Consumed by:**
-- `gateway` (server-side serialization)
-- `client` (client-side deserialization)
-- `sdk_rs` (via `client` — `GroundhogClient` wraps it)
-- CLI tool (via `client`)
-- Block explorer (via `client`)
+- `json-rpc-gateway` and `json-rpc-server` (server-side serialization)
+- `json-rpc-client` (client-side deserialization)
+- SDKs, CLI tools, and block explorers via the typed client
 
-**Not in `api-types`:** contract-execution types (those stay in
+**Not in `json-rpc-types`:** contract-execution types (those stay in
 `groundhog-xdr` and `sdk`), consensus internals, SCP types.
 
 ### Client Crate Trait Location
 
-The `#[rpc(client, server)]` trait in `gateway/src/api.rs` generates
-both `GroundhogApiServer` (for the gateway) and `GroundhogApiClient`
-(for the client crate). The client crate needs access to the generated
-client code, which means one of:
-
-- **(A)** Move the trait to `api-types` so both `gateway` and `client`
-  can import it. Pro: clean dependency graph. Con: `api-types` gains
-  a `jsonrpsee` proc-macro dependency.
-- **(B)** Keep the trait in `gateway` and have `client` depend on
-  `gateway` (with a feature flag to avoid pulling in the server).
-  Pro: trait stays near handler code. Con: awkward dependency direction.
-- **(C)** Duplicate the trait definition in `client` with only
-  `#[rpc(client)]`. Pro: no cross-dependency. Con: two definitions
-  to keep in sync.
-
-**Recommendation:** **(A)** — move the trait to `api-types`. The
-jsonrpsee macro dependency is lightweight, and it keeps the single
-source of truth for the API surface in the shared crate.
+Resolved: the `#[rpc(client, server)]` trait lives in
+`crates/json-rpc/json-rpc-api/src/lib.rs`. It generates both
+`GroundhogApiServer` for the shared server implementation and
+`GroundhogApiClient` for `json-rpc-client`, keeping one source of truth for the
+public JSON-RPC method surface.
 
 ### Private Registry Dependencies
 
@@ -434,9 +402,10 @@ prometheus = "0.13"
 
 ### Phase 1: Submit + Query (Target: private testnet)
 
-The current public surface is generated from `crates/json-rpc/rpc-api`. Reads go through
-x23-backed gateway adapters where the corresponding hogd endpoint exists. HTTP
-transport is the current focus; WebSocket subscriptions remain a later phase.
+The current public surface is generated from `crates/json-rpc/json-rpc-api`.
+Reads go through x23-backed gateway adapters where the corresponding hogd
+endpoint exists. HTTP transport is the current focus; WebSocket subscriptions
+remain a later phase.
 
 | Method | Data Source | Notes |
 |--------|-----------|-------|
@@ -465,7 +434,7 @@ economic spam controls are later-phase concerns.
 
 ### Phase 3: SDK Client + CLI
 
-- `client` crate auto-generated from `#[rpc(client)]` trait
+- `json-rpc-client` crate auto-generated from `#[rpc(client)]` trait
 - SDK wraps it as `GroundhogClient`
 - CLI uses it for `groundhog tx submit`, `groundhog tx status`, etc.
 

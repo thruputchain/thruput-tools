@@ -10,4 +10,5 @@ The workspace groups crates by protocol boundary and usage:
 - `dev/` contains local development, simulation, benchmark, and process-level
   test harnesses.
 
-Crate package names are intentionally unchanged by this layout.
+JSON-RPC crate package names and directories use explicit `json-rpc-*` names.
+OpenRPC, x23, tools, and dev crate names remain domain-specific.

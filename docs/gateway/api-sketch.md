@@ -1,7 +1,7 @@
 # RPC Gateway: API Sketch
 
 **Status:** Historical sketch. The current source of truth is the
-`GroundhogApi` trait in `crates/json-rpc/rpc-api` plus the generated OpenRPC snapshot in
+`GroundhogApi` trait in `crates/json-rpc/json-rpc-api` plus the generated OpenRPC snapshot in
 `crates/json-rpc/open-rpc-spec/snapshots/groundhog-spec.json`.
 **Context:** Code sketches for [system-design.md](system-design.md).
 Not compilable as-is; intended to communicate shape and decisions.
@@ -35,8 +35,8 @@ for the full table.
 
 Single trait, `#[rpc(client, server)]` generates both the gateway
 server stubs and the typed Rust client library. This is the Substrate
-pattern (jsonrpsee proc macros). The `client` crate gets a working
-`GroundhogApiClient` for free.
+pattern (jsonrpsee proc macros). The `json-rpc-client` crate gets a
+working `GroundhogApiClient` for free.
 
 ```rust
 use jsonrpsee::proc_macros::rpc;
@@ -124,14 +124,14 @@ pub trait GroundhogApi {
 
 ---
 
-## 3. API Types (`api-types` crate)
+## 3. API Types (`json-rpc-types` crate)
 
 These are the RPC-layer types that developers interact with.
 They import from `groundhog-xdr` where the wire type already
 exists and define new types where the RPC needs something different.
 
 ```rust
-// api-types/src/lib.rs
+// crates/json-rpc/json-rpc-types/src/lib.rs
 
 pub mod hex;
 pub mod receipt;
@@ -153,7 +153,7 @@ pub use groundhog_xdr::types::{
 ### Hex Byte Types
 
 ```rust
-// api-types/src/hex.rs
+// crates/json-rpc/json-rpc-types/src/hex.rs
 
 /// Variable-length byte array. Serializes as "0x..." hex string.
 /// Used for event data and other opaque byte fields.
@@ -171,7 +171,7 @@ pub struct Topic(pub [u8; 32]);
 ### Transaction Hash
 
 ```rust
-// api-types/src/transaction.rs
+// crates/json-rpc/json-rpc-types/src/transaction.rs
 
 /// Canonical transaction hash: sha256(xdrs::txs::encode(signed_tx.tx)).
 /// Covers the inner Transaction body (not signatures), matching
@@ -194,7 +194,7 @@ pub enum TransactionStatus {
 ### Receipt
 
 ```rust
-// api-types/src/receipt.rs
+// crates/json-rpc/json-rpc-types/src/receipt.rs
 
 /// Full transaction receipt. Returned by getTransactionReceipt.
 ///
@@ -232,7 +232,7 @@ pub enum ExecStatus {
 ### Block Types
 
 ```rust
-// api-types/src/block.rs
+// crates/json-rpc/json-rpc-types/src/block.rs
 
 /// Current chain tip. Returned by chainTip.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -256,7 +256,7 @@ pub struct BlockInfo {
 ### Events
 
 ```rust
-// api-types/src/events.rs
+// crates/json-rpc/json-rpc-types/src/events.rs
 
 /// A single emitted event.
 ///
@@ -287,7 +287,7 @@ pub struct IdentifiedEvent {
 ### Error Codes
 
 ```rust
-// api-types/src/error.rs
+// crates/json-rpc/json-rpc-types/src/error.rs
 
 /// Groundhog-specific JSON-RPC error codes.
 /// Standard JSON-RPC reserves -32000 to -32099 for server errors.
@@ -312,7 +312,7 @@ pub mod codes {
 ## 4. Gateway Context (Shared State)
 
 ```rust
-// gateway/src/context.rs
+// crates/json-rpc/json-rpc-gateway/src/context.rs
 
 /// Shared state injected into every handler.
 /// All backend connections are behind Arc for cheap cloning.
@@ -430,9 +430,9 @@ pub async fn get_transaction_status(
 [workspace]
 resolver = "2"
 members = [
-    "crates/json-rpc/api-types",
-    "crates/json-rpc/gateway",
-    "crates/json-rpc/client",
+    "crates/json-rpc/json-rpc-types",
+    "crates/json-rpc/json-rpc-gateway",
+    "crates/json-rpc/json-rpc-client",
 ]
 
 [workspace.dependencies]
@@ -480,11 +480,11 @@ thiserror = "2"
 
 - The `#[rpc(client, server)]` macro on the trait generates both
   `GroundhogApiServer` (for the gateway) and `GroundhogApiClient`
-  (for the client crate / SDK / CLI). One definition, two sides.
+  (for `json-rpc-client` / SDK / CLI). One definition, two sides.
   See system-design.md "Client Crate Trait Location" for where the
   trait should live.
 
-- `api-types` should be the single source of truth for every type
+- `json-rpc-types` should be the single source of truth for every type
   that crosses the RPC boundary. The SDK's `GroundhogClient` wraps
   `GroundhogApiClient` and re-exports these types.
 
@@ -505,7 +505,7 @@ thiserror = "2"
 - `TxHash` is `sha256(xdrs::txs::encode(signed_tx.tx))` — the inner
   `Transaction` body, not the full `SignedTransaction`. This matches
   the scheduler's canonical key and the indexer's primary key.
-  The hash computation should live in `api-types` (or a utility
+  The hash computation should live in `json-rpc-types` (or a utility
   in `groundhog-xdr`) so the SDK and gateway compute it identically.
 
 - `storage_delta` deferred from Phase 1 — hogd's `TxInfo` doesn't

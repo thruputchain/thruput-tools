@@ -1,7 +1,7 @@
-use groundhog_rpc_api_types::dev::{StorageDeltaInfo, TransactionDetail, format_gas_summary};
-use groundhog_rpc_api_types::events::EmittedEvent;
-use groundhog_rpc_api_types::hex::HexBytes;
-use groundhog_rpc_api_types::transaction::TxHash;
+use groundhog_json_rpc_types::dev::{StorageDeltaInfo, TransactionDetail, format_gas_summary};
+use groundhog_json_rpc_types::events::EmittedEvent;
+use groundhog_json_rpc_types::hex::HexBytes;
+use groundhog_json_rpc_types::transaction::TxHash;
 use jsonrpsee::core::ClientError;
 use jsonrpsee::types::error::METHOD_NOT_FOUND_CODE;
 
@@ -83,7 +83,7 @@ async fn fetch_transaction_detail(
     rpc_url: &str,
     tx_hash: TxHash,
 ) -> Result<Option<TransactionDetail>, CliError> {
-    use groundhog_rpc_client::HttpClientBuilder;
+    use groundhog_json_rpc_client::HttpClientBuilder;
     use jsonrpsee::core::client::ClientT;
 
     let client = HttpClientBuilder::default()

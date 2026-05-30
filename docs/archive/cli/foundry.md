@@ -231,7 +231,7 @@ format, one key type (Ed25519), one transaction shape.
 
 1. **`groundhog deploy`** — Take compiled WASM, build
    `SignedTransaction` (the `tx-builder` crate has the blueprint),
-   submit via `groundhog-rpc-client`, poll `getTransactionStatus`
+   submit via `groundhog-json-rpc-client`, poll `getTransactionStatus`
    until Committed, print receipt.
 
 2. **`groundhog call`** — Build invocation transaction, submit,
@@ -261,7 +261,7 @@ format, one key type (Ed25519), one transaction shape.
   `groundhog_getTransactionReceipt` working end-to-end.
 - `groundhog_getTransactionStatus` for polling.
 
-**Dependencies:** CLI adds `groundhog-rpc-client` (the auto-generated
+**Dependencies:** CLI adds `groundhog-json-rpc-client` (the auto-generated
 jsonrpsee client) and `ed25519-compact` for keys.
 
 **Why first:** Without deploy+call, nothing else matters. The

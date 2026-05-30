@@ -15,16 +15,16 @@
 //! submit and read have real adapters the type goes away.
 
 use async_trait::async_trait;
-use groundhog_rpc_api_types::{
+use groundhog_json_rpc_server::{
+    ChainPlane, ReadPlane, RpcServerError, SubmitPlane, ValidatedTransaction, ViewPlane,
+};
+use groundhog_json_rpc_types::{
     BlockHeight, ContractAddress,
     block::{BlockInfo, ChainTip},
     events::{EventPage, EventQuery},
     receipt::TransactionReceipt,
     state::StorageItemRead,
     transaction::{TransactionStatus, TxHash},
-};
-use groundhog_rpc_server::{
-    ChainPlane, ReadPlane, RpcServerError, SubmitPlane, ValidatedTransaction, ViewPlane,
 };
 
 /// Backend that returns `NotImplemented` for unwired planes.

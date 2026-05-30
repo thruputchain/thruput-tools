@@ -1,4 +1,4 @@
-// Keep in sync with crates/json-rpc/gateway/build.rs.
+// Keep in sync with crates/json-rpc/json-rpc-gateway/build.rs.
 use std::path::Path;
 use std::process::Command;
 

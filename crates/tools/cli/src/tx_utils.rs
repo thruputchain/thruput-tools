@@ -1,5 +1,5 @@
-use groundhog_rpc_api_types::receipt::{ExecStatus, TransactionReceipt};
-use groundhog_rpc_api_types::transaction::TxHash;
+use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
+use groundhog_json_rpc_types::transaction::TxHash;
 
 use crate::CliError;
 
@@ -43,7 +43,7 @@ pub fn poll_exhausted_error() -> CliError {
 }
 
 pub async fn resolve_block_expiry_height(rpc_url: &str) -> Result<i64, CliError> {
-    use groundhog_rpc_client::{GroundhogApiClient, HttpClientBuilder};
+    use groundhog_json_rpc_client::{GroundhogApiClient, HttpClientBuilder};
 
     let client = HttpClientBuilder::default()
         .build(rpc_url)
@@ -62,7 +62,7 @@ pub async fn submit_and_poll(
     rpc_url: &str,
     tx_hex: &str,
 ) -> Result<(TxHash, TransactionReceipt), CliError> {
-    use groundhog_rpc_client::{GroundhogApiClient, HttpClientBuilder};
+    use groundhog_json_rpc_client::{GroundhogApiClient, HttpClientBuilder};
 
     let client = HttpClientBuilder::default()
         .build(rpc_url)

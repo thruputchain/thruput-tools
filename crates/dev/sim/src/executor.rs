@@ -3,7 +3,8 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use groundhog_rpc_api_types::{
+use groundhog_json_rpc_client::GroundhogApiClient;
+use groundhog_json_rpc_types::{
     BlockHeight, ContractAddress,
     block::ChainTip,
     events::{
@@ -17,7 +18,6 @@ use groundhog_rpc_api_types::{
     transaction::TxHash,
     view::{RootInvocationOutput, ViewRequest, ViewResponse},
 };
-use groundhog_rpc_client::GroundhogApiClient;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::{Id as TaskId, JoinError, JoinSet};
 
@@ -2697,7 +2697,7 @@ fn rpc_method(workload: WorkloadKind) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use groundhog_rpc_api_types::{
+    use groundhog_json_rpc_types::{
         BlockHeight,
         block::ChainTip,
         hex::Hex0x,
@@ -5198,7 +5198,7 @@ mod tests {
     }
 
     fn event_page(
-        events: Vec<groundhog_rpc_api_types::events::IdentifiedEvent>,
+        events: Vec<groundhog_json_rpc_types::events::IdentifiedEvent>,
         cursor: Vec<u8>,
         latest_block: i64,
         oldest_block: i64,

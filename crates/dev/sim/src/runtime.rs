@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use groundhog_rpc_api_types::runtime_manifest::{
+use groundhog_json_rpc_types::runtime_manifest::{
     BootstrapAccount, RUNTIME_MANIFEST_SCHEMA_VERSION, RuntimeManifest,
 };
 use groundhog_signing::{LocalSigner, derive_dev_account_signer};
@@ -141,8 +141,8 @@ pub enum RuntimeManifestError {
 
 #[cfg(test)]
 mod tests {
-    use groundhog_rpc_api_types::hex::Hex0x;
-    use groundhog_rpc_api_types::runtime_manifest::RuntimeManifest;
+    use groundhog_json_rpc_types::hex::Hex0x;
+    use groundhog_json_rpc_types::runtime_manifest::RuntimeManifest;
     use groundhog_signing::derive_dev_account_signer;
     use groundhog_xdr::types::Ed25519PublicKey;
     use serde_json::json;

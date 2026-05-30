@@ -8,7 +8,9 @@ use std::path::{Path, PathBuf};
 #[cfg(any(feature = "dev-node", test))]
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use groundhog_rpc_api_types::runtime_manifest::{RUNTIME_MANIFEST_SCHEMA_VERSION, RuntimeManifest};
+use groundhog_json_rpc_types::runtime_manifest::{
+    RUNTIME_MANIFEST_SCHEMA_VERSION, RuntimeManifest,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::{

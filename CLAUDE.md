@@ -5,78 +5,83 @@ gateway, typed client, transaction building, key management, and CLI.
 
 ## Architecture
 
-Workspace crates in `crates/`:
+Workspace crates in `crates/` are grouped by boundary:
 
-- **api-types** — shared RPC types (receipt, status, block info, events,
-  errors) plus the runtime manifest JSON contract used by local and
+JSON-RPC public surface in `crates/json-rpc/`:
+
+- **json-rpc-types** — shared JSON-RPC types (receipt, status, block info,
+  events, errors) plus the runtime manifest JSON contract used by local and
   benchmark backends. Consumed by gateway, client, CLI, and external tools.
-- **rpc-api** — shared jsonrpsee trait definitions used by the gateway,
+- **json-rpc-api** — shared jsonrpsee trait definitions used by the gateway,
   local node, and client crate.
-- **rpc-server** — reusable server-side `GroundhogApiServer`
-  implementation. Owns shared request validation, public error mapping,
-  and submit/chain/read backend traits used by gateway and hogd-dev
-  supervisor compositions.
-- **x23-transport** — shared x23 connection-pool helpers
-  (`FixedSerialPool` setup, address parsing, typed `ConnectError`).
-  Consumed by gateway and node-supervisor; backend-agnostic. Named for
-  the x23 wire protocol to keep it distinct from the JSON-RPC `rpc-*`
-  family of crates.
-- **gateway** — jsonrpsee server binary. Its backend adapter implements
-  the rpc-server planes over hogd indexer and scheduler x23 RPCs. For
-  dev/bench runs it can load backend endpoints and protocol metadata
+- **json-rpc-server** — reusable server-side `GroundhogApiServer`
+  implementation. Owns shared request validation, public error mapping, and
+  submit/chain/read backend traits used by gateway and hogd-dev supervisor
+  compositions.
+- **json-rpc-gateway** — jsonrpsee server binary. Its backend adapter
+  implements the `json-rpc-server` planes over hogd indexer and scheduler x23
+  RPCs. For dev/bench runs it can load backend endpoints and protocol metadata
   from `--runtime-manifest <path>`.
-- **client** — typed JSON-RPC client generated from the same
-  `#[rpc(client)]` trait as the server. Wraps api-types.
-- **signing** — off-chain transaction signing and construction. Signer
-  trait, local Ed25519 signer, canonical address derivation, tx builders
-  for deploy and call, XDR encoding.
-- **tx-builder** — thin CLI wrapper over signing (temporary).
-- **cli** — `groundhog` binary. Wraps the Rust/WASM build and test
-  workflow plus deploy/call and hogd-dev local-node control. Lib/bin split:
-  all logic in the library crate, `main.rs` is pure dispatch.
-  Subcommand functions take plain Rust types, not clap structs.
-- **node-supervisor** — `groundhog node` facade. Supervises a hogd-owned
-  `hogd-dev` subprocess and embeds `rpc-server` to serve the public
-  JSON-RPC. `chainTip` and `sendRawTransaction` are backed by hogd-dev's
-  `SchedulerCoord` endpoint; receipts, transaction status, and contract
-  events are backed by hogd-dev's `IndexerBlockExplorer` endpoint when
-  advertised in readiness (otherwise the read plane stays stubbed
-  `NotImplemented` per the v1 reduced contract). End-to-end coverage of
-  the read plane is gated on the hogd-dev v1 binary actually exposing the
-  `IndexerBlockExplorer` endpoint with
-  full event-feed wiring. This is the only CLI local-node backend; the
-  legacy native-exec prototype (`crates/dev-node`) was deleted in PR 5,
-  with the git history retaining the source for any future reference.
-  Startup consumes hogd-dev's readiness pointer, verifies the runtime
-  manifest hash and owner-only file permissions, and exposes the manifest
-  path/hash in `groundhog node --json`.
+- **json-rpc-client** — typed JSON-RPC client generated from the same
+  `#[rpc(client)]` trait as the server. Wraps `json-rpc-types`.
 - **open-rpc** — OpenRPC document generator. `Project` owns a single
-  `schemars::SchemaGenerator` shared across modules so named Rust types
-  land once in `components.schemas` and use sites carry `$ref`.
-  `ModuleBuilder` is the threading point. Treated as an internal
-  implementation detail — the external consumer is the generated JSON,
-  not the Rust API.
-- **open-rpc-macros** — `#[open_rpc]` proc macro. Generates a companion
-  struct per jsonrpsee `#[rpc]` trait whose `module_doc(&mut
-  ModuleBuilder)` appends OpenRPC method descriptors. Resolves the
-  `groundhog-open-rpc` crate by package name via `proc_macro_crate` so
-  downstream re-exports work.
-- **open-rpc-spec** — library + binary that assembles the canonical
-  artifact. The binary emits JSON to stdout; the library is the
-  composition point for the workspace's RPC traits and owns the
-  hand-maintained per-method `errors[]` mapping. The published
-  `groundhog-open-rpc-spec` crate is consumed by `client-ts` via its
-  regen script. A byte-equal snapshot at
+  `schemars::SchemaGenerator` shared across modules so named Rust types land
+  once in `components.schemas` and use sites carry `$ref`. `ModuleBuilder` is
+  the threading point. Treated as an internal implementation detail; the
+  external consumer is the generated JSON, not the Rust API.
+- **open-rpc-macros** — `#[open_rpc]` proc macro. Generates a companion struct
+  per jsonrpsee `#[rpc]` trait whose `module_doc(&mut ModuleBuilder)` appends
+  OpenRPC method descriptors. Resolves the `groundhog-open-rpc` crate by
+  package name via `proc_macro_crate` so downstream re-exports work.
+- **open-rpc-spec** — library + binary that assembles the canonical artifact.
+  The binary emits JSON to stdout; the library is the composition point for the
+  workspace's RPC traits and owns the hand-maintained per-method `errors[]`
+  mapping. The published `groundhog-open-rpc-spec` crate is consumed by
+  `client-ts` via its regen script. A byte-equal snapshot at
   `crates/json-rpc/open-rpc-spec/snapshots/groundhog-spec.json` guards artifact
   shape; `UPDATE_SNAPSHOTS=1` regenerates after intentional changes.
+
+Internal x23 support in `crates/x23/`:
+
+- **x23-transport** — shared x23 connection-pool helpers (`FixedSerialPool`
+  setup, address parsing, typed `ConnectError`). Consumed by gateway and
+  node-supervisor; backend-agnostic. Named for the x23 wire protocol to keep it
+  distinct from the public JSON-RPC stack.
+
+Developer-facing tools in `crates/tools/`:
+
+- **cli** — `groundhog` binary. Wraps the Rust/WASM build and test workflow
+  plus deploy/call and hogd-dev local-node control. Lib/bin split: all logic in
+  the library crate, `main.rs` is pure dispatch. Subcommand functions take plain
+  Rust types, not clap structs.
+- **signing** — off-chain transaction signing and construction. Signer trait,
+  local Ed25519 signer, canonical address derivation, tx builders for deploy
+  and call, XDR encoding.
+
+Local dev and test harnesses in `crates/dev/`:
+
+- **node-supervisor** — `groundhog node` facade. Supervises a hogd-owned
+  `hogd-dev` subprocess and embeds `json-rpc-server` to serve the public
+  JSON-RPC. `chainTip` and `sendRawTransaction` are backed by hogd-dev's
+  `SchedulerCoord` endpoint; receipts, transaction status, and contract events
+  are backed by hogd-dev's `IndexerBlockExplorer` endpoint when advertised in
+  readiness (otherwise the read plane stays stubbed `NotImplemented` per the v1
+  reduced contract). End-to-end coverage of the read plane is gated on the
+  hogd-dev v1 binary actually exposing the `IndexerBlockExplorer` endpoint with
+  full event-feed wiring. This is the only CLI local-node backend; the legacy
+  native-exec prototype (`crates/dev-node`) was deleted in PR 5, with the git
+  history retaining the source for any future reference. Startup consumes
+  hogd-dev's readiness pointer, verifies the runtime manifest hash and
+  owner-only file permissions, and exposes the manifest path/hash in
+  `groundhog node --json`.
 - **e2e-tests** — ignored process-level JSON-RPC lifecycle smoke tests.
-- **bench** — benchmark harnesses. `groundhog-bench --runtime-manifest
-  <path>` derives bootstrapped account signers and submits dev-wallet
-  compatible `sendRawTransaction` traffic.
+- **bench** — benchmark harnesses. `groundhog-bench --runtime-manifest <path>`
+  derives bootstrapped account signers and submits dev-wallet compatible
+  `sendRawTransaction` traffic.
 - **sim** — `hoglab` stateful simulation and soak-test harness. Runs
   deterministic actor schedules against an existing target, writes
-  `result.jsonl` / `result.json`, and currently covers chain-tip,
-  dev-wallet submit smoke, receipt polling, and Phase 1 assertions.
+  `result.jsonl` / `result.json`, and currently covers chain-tip, dev-wallet
+  submit smoke, receipt polling, and Phase 1 assertions.
 
 See `docs/gateway/system-design.md` for full gateway design and
 `docs/gateway/api-sketch.md` for the jsonrpsee trait definition.
@@ -116,33 +121,34 @@ runtime), `tower`/`tower-http` (middleware), `clap` (CLI), `prometheus`
   `/xdr`, `/client`). Generated TS bindings emitted by
   `groundhog codegen ts` import from these packages — the CLI never
   re-derives protocol primitives.
-- `crates/json-rpc/api-types` owns shared JSON-RPC types and JSON projections
-  of XDR types. If the JSON wire format differs from raw XDR (for
+- `crates/json-rpc/json-rpc-types` owns shared JSON-RPC types and JSON
+  projections of XDR types. If the JSON wire format differs from raw XDR (for
   example `0x`-prefixed hex wrappers), model that once here instead of
   redefining it in gateway, client, or CLI code.
-- `crates/json-rpc/api-types/src/bootstrap_manifest.rs` owns the bootstrap
-  manifest input schema for local and benchmark backend launchers.
-  `crates/json-rpc/api-types/src/runtime_manifest.rs` owns the runtime manifest
-  output schema shared by `hogd-dev` producers, `groundhog node`,
-  `hogway --runtime-manifest`, and `groundhog-bench
-  --runtime-manifest`. Public manifest structs are `#[non_exhaustive]`;
+- `crates/json-rpc/json-rpc-types/src/bootstrap_manifest.rs` owns the
+  bootstrap manifest input schema for local and benchmark backend launchers.
+  `crates/json-rpc/json-rpc-types/src/runtime_manifest.rs` owns the
+  runtime manifest output schema shared by `hogd-dev` producers,
+  `groundhog node`, `hogway --runtime-manifest`, and
+  `groundhog-bench --runtime-manifest`. Public manifest structs are
+  `#[non_exhaustive]`;
   additive fields are expected. Optional endpoints must be absent when
   unavailable, not `null`. Large numeric quantities in manifests are
   decimal strings.
-- `crates/json-rpc/rpc-api` owns JSON-RPC method names, params, and results.
-  Trait signatures in `rpc-api/src/lib.rs` are the sole source of
-  truth for the public RPC surface.
+- `crates/json-rpc/json-rpc-api` owns JSON-RPC method names, params, and
+  results. Trait signatures in `crates/json-rpc/json-rpc-api/src/lib.rs` are
+  the sole source of truth for the public RPC surface.
 - OpenRPC / JSON Schema documents for the RPC surface are generated
   artifacts from Rust traits and Rust types. Do not hand-author or
   maintain parallel schema files for RPC methods or RPC payload types.
 - The canonical JSON-RPC error catalog lives in
-  `crates/json-rpc/api-types/src/error.rs`. See "Gateway Conventions" below for
-  the OpenRPC projection, the per-method mapping in
+  `crates/json-rpc/json-rpc-types/src/error.rs`. See "Gateway Conventions"
+  below for the OpenRPC projection, the per-method mapping in
   `crates/json-rpc/open-rpc-spec/src/lib.rs`, and the snapshot-enforced rule
   that adding a method requires updating that mapping.
 - CLI-only machine-readable output types live in `crates/tools/cli` by
   default. If a CLI schema embeds chain or runtime data, reuse
-  `api-types` nested types instead of copying them.
+  `json-rpc-types` nested types instead of copying them.
 - Extract a shared CLI schema crate only after a CLI output type is
   reused across commands or crates, or becomes a documented external
   contract broader than a single command.
@@ -161,7 +167,7 @@ cargo fmt --check                # format check (must pass)
 ### Per-crate
 
 ```bash
-cargo test -p groundhog-rpc-api-types    # test a specific crate
+cargo test -p groundhog-json-rpc-types    # test a specific crate
 cargo test -p groundhog-cli              # CLI tests
 ```
 
@@ -177,11 +183,11 @@ directly for normal releases.
 
 `release.yml` is dispatch-only and direct human dispatch fails; it must be
 dispatched by the publish workflow. It verifies that the matching
-`groundhog-cli` and `groundhog-rpc-gateway` crate versions already exist in the
-private registry before uploading binary assets. It builds `hogway` and the
-`groundhog` CLI; the CLI release build uses `--features dev-node` so the
-published binary includes the local `groundhog node` path. The GitHub Release
-assets are per-app, per-target archives:
+`groundhog-cli` crate version already exists in the private registry before
+uploading binary assets. It builds `hogway` from this repository and builds the
+`groundhog` CLI from the published crate; the CLI release build uses `--features
+dev-node` so the published binary includes the local `groundhog node` path. The
+GitHub Release assets are per-app, per-target archives:
 `hogway-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz` and
 `groundhog-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz`, plus `SHA256SUMS`.
 
@@ -336,43 +342,45 @@ groundhog-bench --url http://127.0.0.1:9546 \
 
 ## Gateway Conventions
 
-- Types that cross the RPC boundary live in `api-types`, not in handler
-  code.
-- `api-types` imports from `groundhog-xdr` for wire types and adds
-  RPC-layer types (receipts, status enums, error codes). Don't duplicate
-  XDR types — re-export them.
+- Types that cross the RPC boundary live in `json-rpc-types`, not in
+  handler code.
+- `json-rpc-types` imports from `groundhog-xdr` for wire types and adds
+  RPC-layer types (receipts, status enums, error codes). Don't duplicate XDR
+  types; re-export them.
 - JSON field names use `camelCase` (serde `rename_all`). Enums use
   tagged serialization (`#[serde(tag = "...")]`).
 - Wire format: `0x`-prefixed lowercase hex for all byte values (hashes,
   addresses, topics, event data). Decimal JSON numbers for heights,
   counts, and other quantities. See docs/gateway/system-design.md
   "Wire Format Conventions".
-- Byte fields use `HexBytes` (variable-length) or `Topic` (32-byte
-  fixed) from `api-types/src/hex.rs` — never raw `Vec<u8>` in
+- Byte fields use `HexBytes` (variable-length) or `Topic` (32-byte fixed) from
+  `crates/json-rpc/json-rpc-types/src/hex.rs`; never raw `Vec<u8>` in
   RPC-facing types.
 - `#[non_exhaustive]` on public enums that will gain variants
   (`TransactionStatus`, `ExecStatus`, `SupervisorStop`).
-- The jsonrpsee trait in `rpc-api/src/lib.rs` is the source of truth
-  for the RPC surface. `#[rpc(client, server)]` generates both sides.
-- The public `GroundhogApiServer` implementation lives in `rpc-server`.
-  Concrete binaries provide submit/chain/read backend adapters instead
-  of implementing the public RPC trait directly.
+- The jsonrpsee trait in `crates/json-rpc/json-rpc-api/src/lib.rs` is the
+  source of truth for the RPC surface. `#[rpc(client, server)]` generates both
+  sides.
+- The public `GroundhogApiServer` implementation lives in `json-rpc-server`.
+  Concrete binaries provide submit/chain/read backend adapters instead of
+  implementing the public RPC trait directly.
 - Shared transaction hex/XDR validation and canonical hash computation
-  live in `rpc-server::tx`; do not duplicate that logic in gateway or
-  node-supervisor adapters.
+  live in `groundhog_json_rpc_server::tx`; do not duplicate that logic in
+  gateway or node-supervisor adapters.
 - Gateway handler modules are production backend helpers grouped by
   subsystem (receipt, blocks, events, parsing). Do not add new public
   JSON-RPC handler implementations there.
-- `rpc-server` enforces shared request bounds — currently `getEvents`
+- `json-rpc-server` enforces shared request bounds — currently `getEvents`
   per-page limit and pagination cursor length.  Gateway supplies the
   production limits from `GatewayConfig`.
 - Error codes follow Substrate's per-module range pattern. The
   canonical catalog is `ERROR_INFOS` (stable name, code, short
   message, consumer-facing description) plus `codes::ALL` in
-  `api-types/src/error.rs`. The OpenRPC artifact projects this into
-  `components.errors`; methods carry `errors[]` arrays of `$ref`s. The
-  per-method mapping lives in `crates/json-rpc/open-rpc-spec/src/lib.rs` and is
-  hand-maintained — adding a method requires updating that mapping or
+  `crates/json-rpc/json-rpc-types/src/error.rs`. The OpenRPC artifact
+  projects this into `components.errors`; methods carry `errors[]` arrays of
+  `$ref`s. The per-method mapping lives in
+  `crates/json-rpc/open-rpc-spec/src/lib.rs` and is hand-maintained — adding a
+  method requires updating that mapping or
   the snapshot test fails. Error component `name` / `message` /
   `description` are sibling fields on the error object; `data` stays
   reserved for future typed runtime payloads.
@@ -383,7 +391,7 @@ groundhog-bench --url http://127.0.0.1:9546 \
 
 OpenRPC `info.version` is the JSON-RPC wire-format SemVer, not the
 Rust workspace version. The source of truth is `WIRE_FORMAT_VERSION`
-in `crates/json-rpc/rpc-api/src/lib.rs`.
+in `crates/json-rpc/json-rpc-api/src/lib.rs`.
 
 Bump major for breaking changes to method shape, params, results, or
 errors. Bump minor for additive changes such as new methods, optional
@@ -462,15 +470,18 @@ loading the private key.
 ## Testing
 
 - Unit tests: inline `#[cfg(test)] mod tests` in the source file.
-- Integration tests: `crates/{name}/tests/*.rs`.
+- Integration tests: each crate's `tests/*.rs` directory.
 - Async tests use `#[tokio::test]`.
 - Follow Arrange-Act-Assert pattern.
 - Tests that mutate env vars use `#[serial]` from `serial_test`.
-- `api-types/src/hex.rs` has serde roundtrip tests for `HexBytes`
-  and `Topic`.
-- Unit tests for type conversions (XDR ↔ API types) in `api-types`.
-- Integration tests for handlers using mock x23 backends in `gateway`.
-- The `client` crate should have roundtrip tests against a test server.
+- `crates/json-rpc/json-rpc-types/src/hex.rs` has serde roundtrip tests for
+  `HexBytes` and `Topic`.
+- Unit tests for type conversions (XDR to API types) live in
+  `json-rpc-types`.
+- Integration tests for handlers using mock x23 backends live in
+  `json-rpc-gateway`.
+- The `json-rpc-client` crate should have roundtrip tests against a test
+  server.
 - CLI integration tests run the binary via
   `env!("CARGO_BIN_EXE_groundhog")`.
 - The `build` and `test` CLI commands cannot be fully

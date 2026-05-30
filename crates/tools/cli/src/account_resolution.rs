@@ -1,4 +1,4 @@
-use groundhog_rpc_api_types::{ContractAddress, runtime_manifest::RuntimeManifest};
+use groundhog_json_rpc_types::{ContractAddress, runtime_manifest::RuntimeManifest};
 use groundhog_signing::{DEFAULT_PUBKEY_ACCOUNT_NONCE, LocalSigner, PubkeyAccount, Signer};
 
 use crate::{

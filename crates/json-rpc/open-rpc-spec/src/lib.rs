@@ -1,8 +1,8 @@
-use groundhog_open_rpc::{Project, ProjectInfo};
-use groundhog_rpc_api::{
+use groundhog_json_rpc_api::{
     GroundhogApiOpenRpc, WIRE_FORMAT_VERSION,
     types::error::{ERROR_INFOS, RpcErrorInfo, codes, error_info_by_code},
 };
+use groundhog_open_rpc::{Project, ProjectInfo};
 
 /// Build the canonical `OpenRPC` artifact for the current RPC surface.
 ///

@@ -11,7 +11,7 @@ use std::{
     time::Duration,
 };
 
-use groundhog_rpc_api_types::{
+use groundhog_json_rpc_types::{
     ContractAddress,
     hex::HexBytes,
     runtime_manifest::{RUNTIME_MANIFEST_SCHEMA_VERSION, RuntimeManifest},

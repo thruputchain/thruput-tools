@@ -162,9 +162,9 @@ by seed rather than by construction, with a durable result artifact outside
 the contract project.
 
 The two tools should share substrate but not implementation. The launcher
-path in `node-supervisor`, signers in `signing`, runtime-manifest discovery
-in `api-types`, and the typed client in `client` stay common crates so that
-neither tool forks them.
+path in `node-supervisor`, signers in `signing`, runtime-manifest discovery in
+`json-rpc-types`, and the typed client in `json-rpc-client` stay common
+crates so that neither tool forks them.
 
 Whether `--integration` eventually becomes a scenario preset over the sim
 engine is an explicit open question, not a roadmap item. Convergence is
