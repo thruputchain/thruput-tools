@@ -11,6 +11,7 @@ use serde_json::Value;
 use crate::artifact::{DispatchEntry, sha256_hex};
 
 /// Inputs for [`render_metadata`].
+#[derive(Debug)]
 pub struct MetadataInput<'a> {
     /// The input ELF file bytes (hashed into `elf_sha256`).
     pub elf: &'a [u8],
