@@ -382,6 +382,7 @@ where
                 event_writer: &mut *input.event_writer,
                 metrics: &mut metrics,
                 view_calls: &input.contract_setup.view_calls,
+                contract_calls: &input.contract_setup.contract_calls,
                 storage_reads: &input.contract_setup.storage_reads,
                 event_queries: &input.contract_setup.event_queries,
             },
@@ -629,6 +630,7 @@ fn validate_executable_workloads(manifest: &SimulationManifest) -> Result<(), Si
                 WorkloadKind::ChainTip
                     | WorkloadKind::WalletSubmitSmoke
                     | WorkloadKind::ReceiptPoll
+                    | WorkloadKind::ContractCall
                     | WorkloadKind::EventsQuery
                     | WorkloadKind::ViewCall
                     | WorkloadKind::StorageRead
@@ -1230,6 +1232,7 @@ mod tests {
         ContractSetup {
             records: Vec::new(),
             view_calls: Vec::new(),
+            contract_calls: Vec::new(),
             storage_reads: Vec::new(),
             event_queries: Vec::new(),
             failed: false,

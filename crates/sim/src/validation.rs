@@ -99,6 +99,7 @@ fn validate_contract_artifacts(manifest: &SimulationManifest) -> Result<(), Vali
     }
 
     validate_view_calls(manifest, &artifact_names)?;
+    validate_contract_calls(manifest, &artifact_names)?;
     validate_storage_reads(manifest, &artifact_names)?;
     validate_event_queries(manifest, &artifact_names)?;
 
@@ -125,6 +126,19 @@ fn validate_contract_artifacts(manifest: &SimulationManifest) -> Result<(), Vali
         }
         if manifest.storage_reads.is_empty() {
             return Err(ValidationError::MissingStorageReadsForStorageRead);
+        }
+    }
+
+    if manifest
+        .workloads
+        .iter()
+        .any(|workload| workload.name == WorkloadKind::ContractCall)
+    {
+        if manifest.contract_artifacts.is_empty() {
+            return Err(ValidationError::MissingContractArtifactsForContractCall);
+        }
+        if manifest.contract_calls.is_empty() {
+            return Err(ValidationError::MissingContractCallsForContractCall);
         }
     }
 
@@ -224,6 +238,50 @@ fn validate_storage_reads(
     Ok(())
 }
 
+fn validate_contract_calls(
+    manifest: &SimulationManifest,
+    artifact_names: &HashSet<String>,
+) -> Result<(), ValidationError> {
+    let mut call_names = HashSet::new();
+    for call in &manifest.contract_calls {
+        let name = call.name.trim();
+        if name.is_empty() {
+            return Err(ValidationError::EmptyContractCallName);
+        }
+        if name != call.name {
+            return Err(ValidationError::InvalidContractNameWhitespace {
+                field: "contractCalls[].name",
+                value: call.name.clone(),
+            });
+        }
+        if call.contract.trim() != call.contract {
+            return Err(ValidationError::InvalidContractNameWhitespace {
+                field: "contractCalls[].contract",
+                value: call.contract.clone(),
+            });
+        }
+        if !call_names.insert(name.to_owned()) {
+            return Err(ValidationError::DuplicateContractCallName {
+                name: name.to_owned(),
+            });
+        }
+        if !artifact_names.contains(call.contract.trim()) {
+            return Err(ValidationError::UnknownContractCallContract {
+                call: name.to_owned(),
+                contract: call.contract.clone(),
+            });
+        }
+        validate_contract_call_hex_len(&call.entrypoint, Some(8), "entrypoint", name)?;
+        validate_contract_call_hex_len(&call.calldata, None, "calldata", name)?;
+    }
+    if manifest.contract_calls.len() > 1 {
+        return Err(ValidationError::MultipleContractCallsUnsupported {
+            count: manifest.contract_calls.len(),
+        });
+    }
+    Ok(())
+}
+
 fn validate_event_queries(
     manifest: &SimulationManifest,
     artifact_names: &HashSet<String>,
@@ -272,6 +330,48 @@ fn validate_event_queries(
                 height,
             });
         }
+    }
+    Ok(())
+}
+
+fn validate_contract_call_hex_len(
+    value: &str,
+    expected_len: Option<usize>,
+    field: &'static str,
+    call: &str,
+) -> Result<(), ValidationError> {
+    let Some(stripped) = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+    else {
+        return Err(ValidationError::InvalidContractCallHex {
+            call: call.to_owned(),
+            field,
+            reason: "hex value must be 0x-prefixed".into(),
+        });
+    };
+    if stripped.len() % 2 != 0 {
+        return Err(ValidationError::InvalidContractCallHex {
+            call: call.to_owned(),
+            field,
+            reason: "hex value must contain an even number of digits".into(),
+        });
+    }
+    if let Err(error) = hex::decode(stripped) {
+        return Err(ValidationError::InvalidContractCallHex {
+            call: call.to_owned(),
+            field,
+            reason: error.to_string(),
+        });
+    }
+    if let Some(expected_len) = expected_len
+        && stripped.len() / 2 != expected_len
+    {
+        return Err(ValidationError::InvalidContractCallHex {
+            call: call.to_owned(),
+            field,
+            reason: format!("expected {expected_len} bytes"),
+        });
     }
     Ok(())
 }
@@ -545,6 +645,26 @@ pub enum ValidationError {
     MissingContractArtifactsForViewCall,
     #[error("view-call workload requires at least one viewCalls entry")]
     MissingViewCallsForViewCall,
+    #[error("contract call name must not be empty")]
+    EmptyContractCallName,
+    #[error("duplicate contract call name `{name}`")]
+    DuplicateContractCallName { name: String },
+    #[error("contract call `{call}` references unknown contract artifact `{contract}`")]
+    UnknownContractCallContract { call: String, contract: String },
+    #[error("contract call `{call}` field `{field}` is invalid: {reason}")]
+    InvalidContractCallHex {
+        call: String,
+        field: &'static str,
+        reason: String,
+    },
+    #[error("contract-call workload requires at least one contract artifact")]
+    MissingContractArtifactsForContractCall,
+    #[error("contract-call workload requires at least one contractCalls entry")]
+    MissingContractCallsForContractCall,
+    #[error(
+        "contract-call workload currently supports exactly one contractCalls entry, found {count}"
+    )]
+    MultipleContractCallsUnsupported { count: usize },
     #[error("storage read name must not be empty")]
     EmptyStorageReadName,
     #[error("duplicate storage read name `{name}`")]
@@ -691,6 +811,173 @@ mod tests {
         }];
 
         validate_manifest(&manifest).expect("view-call manifest should validate");
+    }
+
+    #[test]
+    fn validates_contract_call_contract_references_and_hex() {
+        let mut manifest = basic_manifest();
+        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
+            name: "events".into(),
+            wasm: "events.wasm".into(),
+        }];
+        manifest.contract_calls = vec![crate::manifest::ContractCallSpec {
+            name: "events-store-value".into(),
+            contract: "events".into(),
+            entrypoint: "0x0c012d3b21f5676d".into(),
+            calldata: "0x2a64".into(),
+        }];
+        manifest.workloads = vec![WorkloadSpec {
+            name: WorkloadKind::ContractCall,
+            weight: 1,
+        }];
+
+        validate_manifest(&manifest).expect("contract-call manifest should validate");
+    }
+
+    #[test]
+    fn rejects_empty_contract_call_name() {
+        let mut manifest = basic_manifest();
+        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
+            name: "events".into(),
+            wasm: "events.wasm".into(),
+        }];
+        manifest.contract_calls = vec![crate::manifest::ContractCallSpec {
+            name: " ".into(),
+            contract: "events".into(),
+            entrypoint: "0x0c012d3b21f5676d".into(),
+            calldata: "0x2a64".into(),
+        }];
+
+        let err = validate_manifest(&manifest).expect_err("empty name should reject");
+
+        assert!(matches!(err, ValidationError::EmptyContractCallName));
+    }
+
+    #[test]
+    fn rejects_duplicate_contract_call_name() {
+        let mut manifest = basic_manifest();
+        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
+            name: "events".into(),
+            wasm: "events.wasm".into(),
+        }];
+        manifest.contract_calls = vec![
+            crate::manifest::ContractCallSpec {
+                name: "events-store-value".into(),
+                contract: "events".into(),
+                entrypoint: "0x0c012d3b21f5676d".into(),
+                calldata: "0x2a64".into(),
+            },
+            crate::manifest::ContractCallSpec {
+                name: "events-store-value".into(),
+                contract: "events".into(),
+                entrypoint: "0x0c012d3b21f5676d".into(),
+                calldata: "0x2a64".into(),
+            },
+        ];
+
+        let err = validate_manifest(&manifest).expect_err("duplicate name should reject");
+
+        assert!(matches!(
+            err,
+            ValidationError::DuplicateContractCallName { .. }
+        ));
+    }
+
+    #[test]
+    fn rejects_multiple_contract_calls_until_selection_policy_exists() {
+        let mut manifest = basic_manifest();
+        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
+            name: "events".into(),
+            wasm: "events.wasm".into(),
+        }];
+        manifest.contract_calls = vec![
+            crate::manifest::ContractCallSpec {
+                name: "events-store-value".into(),
+                contract: "events".into(),
+                entrypoint: "0x0c012d3b21f5676d".into(),
+                calldata: "0x2a64".into(),
+            },
+            crate::manifest::ContractCallSpec {
+                name: "events-checkpoint".into(),
+                contract: "events".into(),
+                entrypoint: "0xae92627315b69337".into(),
+                calldata: "0x00".into(),
+            },
+        ];
+
+        let err = validate_manifest(&manifest).expect_err("multiple calls should reject");
+
+        assert!(matches!(
+            err,
+            ValidationError::MultipleContractCallsUnsupported { count: 2 }
+        ));
+    }
+
+    #[test]
+    fn rejects_contract_call_without_matching_contract_artifact() {
+        let mut manifest = basic_manifest();
+        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
+            name: "events".into(),
+            wasm: "events.wasm".into(),
+        }];
+        manifest.contract_calls = vec![crate::manifest::ContractCallSpec {
+            name: "events-store-value".into(),
+            contract: "missing".into(),
+            entrypoint: "0x0c012d3b21f5676d".into(),
+            calldata: "0x2a64".into(),
+        }];
+
+        let err = validate_manifest(&manifest).expect_err("unknown contract should reject");
+
+        assert!(matches!(
+            err,
+            ValidationError::UnknownContractCallContract { .. }
+        ));
+    }
+
+    #[test]
+    fn rejects_contract_call_entrypoint_that_is_not_eight_bytes() {
+        let mut manifest = basic_manifest();
+        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
+            name: "events".into(),
+            wasm: "events.wasm".into(),
+        }];
+        manifest.contract_calls = vec![crate::manifest::ContractCallSpec {
+            name: "events-store-value".into(),
+            contract: "events".into(),
+            entrypoint: "0x1111".into(),
+            calldata: "0x2a64".into(),
+        }];
+
+        let err = validate_manifest(&manifest).expect_err("short entrypoint should reject");
+
+        assert!(matches!(
+            err,
+            ValidationError::InvalidContractCallHex {
+                field: "entrypoint",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn rejects_contract_call_workload_without_contract_calls() {
+        let mut manifest = basic_manifest();
+        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
+            name: "events".into(),
+            wasm: "events.wasm".into(),
+        }];
+        manifest.workloads = vec![WorkloadSpec {
+            name: WorkloadKind::ContractCall,
+            weight: 1,
+        }];
+
+        let err = validate_manifest(&manifest).expect_err("empty contractCalls should reject");
+
+        assert!(matches!(
+            err,
+            ValidationError::MissingContractCallsForContractCall
+        ));
     }
 
     #[test]
@@ -1139,6 +1426,7 @@ mod tests {
             }],
             contract_artifacts: Vec::new(),
             view_calls: Vec::new(),
+            contract_calls: Vec::new(),
             storage_reads: Vec::new(),
             event_queries: Vec::new(),
             assertions: crate::manifest::AssertionSpec::default(),

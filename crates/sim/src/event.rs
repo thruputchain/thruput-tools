@@ -162,6 +162,10 @@ pub struct WorkloadEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub view_event_count: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub contract_call_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contract_call_contract: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub storage_read_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub storage_contract: Option<String>,
@@ -244,6 +248,8 @@ mod tests {
                 view_return_data: None,
                 view_abort_data: None,
                 view_event_count: None,
+                contract_call_name: None,
+                contract_call_contract: None,
                 storage_read_name: None,
                 storage_contract: None,
                 storage_key: None,
@@ -303,6 +309,8 @@ mod tests {
                 view_return_data: None,
                 view_abort_data: None,
                 view_event_count: None,
+                contract_call_name: None,
+                contract_call_contract: None,
                 storage_read_name: None,
                 storage_contract: None,
                 storage_key: None,
@@ -339,6 +347,73 @@ mod tests {
                 "eventCursor": "0x",
                 "eventLatestBlock": 42,
                 "eventOldestBlock": 0
+            })
+        );
+    }
+
+    #[test]
+    fn contract_call_workload_event_shape_matches_stream_contract() {
+        let event = ResultEvent::WorkloadCompleted {
+            event: WorkloadEvent {
+                actor_id: 3,
+                workload: WorkloadKind::ContractCall,
+                scheduled_time_ms: 2_000,
+                started_at_unix_ms: "20".into(),
+                completed_at_unix_ms: "30".into(),
+                latency_ms: 10,
+                rpc_method: "groundhog_sendRawTransaction",
+                chain_height: Some(77),
+                chain_block_hash: None,
+                tx_hash: Some(format!("0x{}", "6c".repeat(32))),
+                tx_nonce: Some("4294967296".into()),
+                receipt_present: Some(true),
+                receipt_status: Some("ok".into()),
+                receipt_status_detail: None,
+                submit_to_receipt_latency_ms: Some(8),
+                view_result: None,
+                view_return_data: None,
+                view_abort_data: None,
+                view_event_count: None,
+                contract_call_name: Some("events-store-value".into()),
+                contract_call_contract: Some(format!("0x{}", "88".repeat(32))),
+                storage_read_name: None,
+                storage_contract: None,
+                storage_key: None,
+                storage_item_present: None,
+                storage_item_kind: None,
+                event_query_name: None,
+                event_contract: None,
+                event_count: None,
+                event_cursor: None,
+                event_latest_block: None,
+                event_oldest_block: None,
+                error_class: None,
+                error: None,
+            },
+        };
+
+        let value =
+            serde_json::to_value(VersionedEvent::new(&event)).expect("event should serialize");
+        assert_eq!(
+            value,
+            json!({
+                "kind": "workload-completed",
+                "schemaVersion": 1,
+                "actorId": 3,
+                "workload": "contract-call",
+                "scheduledTimeMs": 2000,
+                "startedAtUnixMs": "20",
+                "completedAtUnixMs": "30",
+                "latencyMs": 10,
+                "rpcMethod": "groundhog_sendRawTransaction",
+                "chainHeight": 77,
+                "txHash": format!("0x{}", "6c".repeat(32)),
+                "txNonce": "4294967296",
+                "receiptPresent": true,
+                "receiptStatus": "ok",
+                "submitToReceiptLatencyMs": 8,
+                "contractCallName": "events-store-value",
+                "contractCallContract": format!("0x{}", "88".repeat(32))
             })
         );
     }

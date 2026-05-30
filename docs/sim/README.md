@@ -60,17 +60,19 @@ baseline scenario. It covers read-only chain-tip, write-only wallet submit,
 submit-plus-receipt polling, mixed read/write/receipt polling, read-only
 restart chaos, a mixed restart artifact exercise that may fail only when it
 records restart-loss artifacts, and, when `groundhog-examples` is available,
-Fibonacci deploy plus `view-call`, `storage-read`, and `events-query`
-scenarios. The opt-in soak runs `examples/sim/local-mixed-wallet-receipt-soak.json`.
+Fibonacci deploy plus `view-call`, `storage-read`, `events-query`, and
+`contract-call` scenarios, including a positive event-indexing smoke that calls
+`compute(10)` and observes the emitted `FibComputed` event. The opt-in soak runs
+`examples/sim/local-mixed-wallet-receipt-soak.json`.
 
-Contract artifact scenarios declare `contractArtifacts` plus `viewCalls` or
-`storageReads` or `eventQueries` in the manifest.
+Contract artifact scenarios declare `contractArtifacts` plus `viewCalls`,
+`contractCalls`, `storageReads`, or `eventQueries` in the manifest.
 `hoglab run --contract-artifact-root <dir>` resolves relative WASM paths from
 that directory.
 `scripts/smoke-sim-scenarios.sh` detects a sibling `../groundhog-examples`
-checkout or `GROUNDHOG_EXAMPLES_ROOT`, builds `fibonacci` into the script
-workdir, and passes the resulting `target/groundhog`-style artifact root into
-the ignored local catalog smoke.
+checkout or `GROUNDHOG_EXAMPLES_ROOT`, builds `fibonacci` and `events` into the
+script workdir, and passes the resulting `target/groundhog`-style artifact root
+into the ignored local catalog smoke.
 The default policy is source-first: keep reusable contracts as source projects,
 compile WASM on demand, and commit `.wasm` files only when exact byte identity
 is the fixture under test.
@@ -104,9 +106,9 @@ Phase 1 validates the scenario and runtime manifest, derives bootstrap account
 signers from the runtime manifest, writes the result directory skeleton, and
 executes deterministic open-loop traffic through the typed RPC client.
 Supported workloads are `chain-tip`, `wallet-submit-smoke` (dev-wallet
-compatible transactions), `receipt-poll`, `view-call`, `storage-read`, and
-`events-query` for manifests that deploy at least one contract artifact before
-scheduled load starts.
+compatible transactions), `receipt-poll`, `contract-call`, `view-call`,
+`storage-read`, and `events-query` for manifests that deploy at least one
+contract artifact before scheduled load starts.
 `receipt-poll` tracks
 actor-submitted transactions in a per-actor FIFO queue until their receipts
 appear and records receipt presence, status, optional reverted/error detail,
@@ -117,6 +119,13 @@ using the scheduled actor's wallet address as the simulated caller. Returned
 view outputs record `viewResult`, `viewReturnData`, `viewAbortData`, and
 `viewEventCount` fields in `result.jsonl`; expected-return mismatches fail the
 workload with `errorClass: "view-return-mismatch"`.
+
+`contract-call` submits a dev-wallet `doAction` transaction to the first
+configured `contractCalls` entry, using raw 8-byte entrypoint and calldata hex
+from the manifest. The workload waits for the transaction receipt before
+completing. Events record `contractCallName`, `contractCallContract`, `txHash`,
+`txNonce`, receipt fields, and submit-to-receipt latency. Non-`ok` receipts fail
+the workload with `errorClass: "contract-call-receipt-status"`.
 
 `storage-read` sends `groundhog_getStorageAt` to the first configured
 `storageReads` entry, using the deployed address for that entry's

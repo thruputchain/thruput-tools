@@ -37,6 +37,7 @@ const DEFAULT_BLOCK_EXPIRY_OFFSET: i64 = 1_000;
 pub struct ContractSetup {
     pub records: Vec<ContractDeploymentRecord>,
     pub view_calls: Vec<PreparedViewCall>,
+    pub contract_calls: Vec<PreparedContractCall>,
     pub storage_reads: Vec<PreparedStorageRead>,
     pub event_queries: Vec<PreparedEventQuery>,
     pub failed: bool,
@@ -50,6 +51,25 @@ pub struct PreparedViewCall {
     pub entrypoint: Vec<u8>,
     pub calldata: Vec<u8>,
     pub expect_return_data: Option<Vec<u8>>,
+}
+
+/// A manifest contract-call target resolved to a deployed contract address.
+///
+/// The executor wraps this target in the scheduled actor's dev-wallet
+/// `doAction` transaction, so the prepared value contains only the inner
+/// contract call details.
+#[derive(Debug, Clone)]
+pub struct PreparedContractCall {
+    /// Manifest-local contract-call name.
+    pub name: String,
+    /// Manifest-local contract artifact name.
+    pub contract_name: String,
+    /// Deployed contract address resolved during startup setup.
+    pub contract: ContractAddress,
+    /// Raw target contract entrypoint selector bytes.
+    pub entrypoint: Vec<u8>,
+    /// Raw target contract calldata bytes.
+    pub calldata: Vec<u8>,
 }
 
 #[derive(Debug, Clone)]
@@ -88,6 +108,7 @@ where
         return Ok(ContractSetup {
             records: Vec::new(),
             view_calls: Vec::new(),
+            contract_calls: Vec::new(),
             storage_reads: Vec::new(),
             event_queries: Vec::new(),
             failed: false,
@@ -125,11 +146,12 @@ where
         }
     }
 
-    let (view_calls, storage_reads, event_queries) = if failed {
-        (Vec::new(), Vec::new(), Vec::new())
+    let (view_calls, contract_calls, storage_reads, event_queries) = if failed {
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new())
     } else {
         (
             prepare_view_calls(manifest, &deployed)?,
+            prepare_contract_calls(manifest, &deployed)?,
             prepare_storage_reads(manifest, &deployed)?,
             prepare_event_queries(manifest, &deployed)?,
         )
@@ -138,6 +160,7 @@ where
     Ok(ContractSetup {
         records,
         view_calls,
+        contract_calls,
         storage_reads,
         event_queries,
         failed,
@@ -509,6 +532,31 @@ fn prepare_storage_reads(
         .collect()
 }
 
+fn prepare_contract_calls(
+    manifest: &SimulationManifest,
+    deployed: &BTreeMap<String, ContractAddress>,
+) -> Result<Vec<PreparedContractCall>, SimError> {
+    manifest
+        .contract_calls
+        .iter()
+        .map(|call| {
+            let contract = deployed.get(&call.contract).copied().ok_or_else(|| {
+                SimError::Executor(format!(
+                    "contract call `{}` references undeployed contract `{}`",
+                    call.name, call.contract
+                ))
+            })?;
+            Ok(PreparedContractCall {
+                name: call.name.clone(),
+                contract_name: call.contract.clone(),
+                contract,
+                entrypoint: parse_hex(&call.entrypoint)?,
+                calldata: parse_hex(&call.calldata)?,
+            })
+        })
+        .collect()
+}
+
 fn prepare_event_queries(
     manifest: &SimulationManifest,
     deployed: &BTreeMap<String, ContractAddress>,
@@ -719,6 +767,14 @@ mod tests {
             Hex0x(ContractAddress::from([0x77; 32])).0
         );
         assert_eq!(setup.event_queries[0].cursor, Vec::<u8>::new());
+        assert_eq!(setup.contract_calls.len(), 1);
+        assert_eq!(setup.contract_calls[0].name, "events-store-value");
+        assert_eq!(
+            setup.contract_calls[0].contract,
+            ContractAddress::from([0x77; 32])
+        );
+        assert_eq!(setup.contract_calls[0].entrypoint, vec![0x11; 8]);
+        assert_eq!(setup.contract_calls[0].calldata, vec![0x2a, 0x64]);
     }
 
     #[tokio::test]
@@ -792,6 +848,12 @@ mod tests {
             contract_artifacts: vec![ContractArtifactSpec {
                 name: "fibonacci".into(),
                 wasm: wasm.to_path_buf(),
+            }],
+            contract_calls: vec![crate::manifest::ContractCallSpec {
+                name: "events-store-value".into(),
+                contract: "fibonacci".into(),
+                entrypoint: "0x1111111111111111".into(),
+                calldata: "0x2a64".into(),
             }],
             view_calls: vec![ViewCallSpec {
                 name: "fib-10".into(),

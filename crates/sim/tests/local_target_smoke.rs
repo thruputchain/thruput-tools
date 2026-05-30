@@ -105,6 +105,17 @@ const LOCAL_CONTRACT_CATALOG: &[CatalogScenario] = &[
         expect_contract_events: true,
         allow_restart_failure: false,
     },
+    CatalogScenario {
+        file: "local-fibonacci-contract-call-events-smoke.json",
+        expect_passed: true,
+        expect_receipt_metrics: false,
+        expect_restart: false,
+        expect_restart_loss: false,
+        expect_contract_view: false,
+        expect_contract_storage: false,
+        expect_contract_events: true,
+        allow_restart_failure: false,
+    },
 ];
 
 const LOCAL_SOAK_CATALOG: &[CatalogScenario] = &[CatalogScenario {
@@ -537,7 +548,8 @@ fn run_catalog(catalog: &[CatalogScenario]) {
             assert_contract_storage_artifacts(&result, &run_dir, scenario.file);
         }
         if scenario.expect_contract_events {
-            assert_contract_events_artifacts(&result, &run_dir, scenario.file);
+            let expected_query = expected_event_query_name(&scenario_path);
+            assert_contract_events_artifacts(&result, &run_dir, scenario.file, &expected_query);
         }
 
         let simulation = std::fs::read_to_string(run_dir.join("simulation.json"))
@@ -546,6 +558,19 @@ fn run_catalog(catalog: &[CatalogScenario]) {
             .expect("simulation artifact should record resolved rpc url");
         assert_rpc_port_closed(&rpc_url);
     }
+}
+
+fn expected_event_query_name(scenario_path: &std::path::Path) -> String {
+    let manifest: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(scenario_path).expect("scenario manifest should read"),
+    )
+    .expect("scenario manifest should parse");
+    manifest["eventQueries"]
+        .as_array()
+        .and_then(|queries| queries.first())
+        .and_then(|query| query["name"].as_str())
+        .expect("contract events scenario should define an event query name")
+        .to_owned()
 }
 
 fn catalog_root() -> (PathBuf, Option<tempfile::TempDir>) {
@@ -757,7 +782,9 @@ fn assert_contract_events_artifacts(
     result: &serde_json::Value,
     run_dir: &std::path::Path,
     scenario: &str,
+    expected_query: &str,
 ) {
+    let positive_events = scenario == "local-fibonacci-contract-call-events-smoke.json";
     let contracts = result["contracts"]
         .as_array()
         .expect("result should contain contracts array");
@@ -775,12 +802,34 @@ fn assert_contract_events_artifacts(
     let stream =
         std::fs::read_to_string(run_dir.join("result.jsonl")).expect("result stream should read");
     let events = jsonl_values(&stream);
+    if positive_events {
+        let contract_call_metrics = &result["workloadMetrics"]["contract-call"]["counts"];
+        assert!(
+            contract_call_metrics["completed"]
+                .as_u64()
+                .unwrap_or_default()
+                > 0,
+            "{scenario} should complete contract-call workloads"
+        );
+        assert!(
+            events.iter().any(|event| {
+                event["kind"] == "workload-completed"
+                    && event["workload"] == "contract-call"
+                    && event["rpcMethod"] == "groundhog_sendRawTransaction"
+                    && event["contractCallName"].as_str().is_some()
+                    && event["contractCallContract"].as_str().is_some()
+                    && event["receiptPresent"] == true
+                    && event["receiptStatus"] == "ok"
+            }),
+            "{scenario} should record contract-call receipt fields"
+        );
+    }
     assert!(
         events.iter().any(|event| {
             event["kind"] == "workload-completed"
                 && event["workload"] == "events-query"
                 && event["rpcMethod"] == "groundhog_getEvents"
-                && event["eventQueryName"] == "fib-events"
+                && event["eventQueryName"] == expected_query
                 && event["eventContract"].as_str().is_some()
                 && event["eventCount"].as_u64().is_some()
                 && event["eventCursor"].as_str().is_some()
@@ -789,6 +838,36 @@ fn assert_contract_events_artifacts(
         }),
         "{scenario} should record events-query fields"
     );
+    if positive_events {
+        assert!(
+            saw_positive_events_query_after_contract_call(&events, expected_query),
+            "{scenario} should observe indexed contract events"
+        );
+    }
+}
+
+fn saw_positive_events_query_after_contract_call(
+    events: &[serde_json::Value],
+    expected_query: &str,
+) -> bool {
+    let mut saw_completed_contract_call = false;
+    for event in events {
+        if event["kind"] == "workload-completed"
+            && event["workload"] == "contract-call"
+            && event["receiptStatus"] == "ok"
+        {
+            saw_completed_contract_call = true;
+        }
+        if saw_completed_contract_call
+            && event["kind"] == "workload-completed"
+            && event["workload"] == "events-query"
+            && event["eventQueryName"] == expected_query
+            && event["eventCount"].as_u64().unwrap_or_default() > 0
+        {
+            return true;
+        }
+    }
+    false
 }
 
 fn assert_port_closed(address: std::net::SocketAddr) {

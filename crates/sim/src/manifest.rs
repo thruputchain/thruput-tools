@@ -26,6 +26,8 @@ pub struct SimulationManifest {
     #[serde(default)]
     pub view_calls: Vec<ViewCallSpec>,
     #[serde(default)]
+    pub contract_calls: Vec<ContractCallSpec>,
+    #[serde(default)]
     pub storage_reads: Vec<StorageReadSpec>,
     #[serde(default)]
     pub event_queries: Vec<EventQuerySpec>,
@@ -142,6 +144,24 @@ pub struct ViewCallSpec {
     pub expect_return_data: Option<String>,
 }
 
+/// A scheduled state-changing contract call available to `contract-call` workloads.
+///
+/// The simulator expects raw entrypoint and calldata hex. It does not inspect
+/// the contract ABI or encode method arguments for this manifest surface. This
+/// slice supports exactly one configured contract call.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractCallSpec {
+    /// Scenario-local call name used in result artifacts.
+    pub name: String,
+    /// Name of the contract artifact this call targets.
+    pub contract: String,
+    /// Eight-byte target contract entrypoint selector as `0x`-prefixed hex.
+    pub entrypoint: String,
+    /// Target contract calldata as `0x`-prefixed hex.
+    pub calldata: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StorageReadSpec {
@@ -210,13 +230,14 @@ pub enum WorkloadKind {
     EventsQuery,
     StorageRead,
     ViewCall,
+    ContractCall,
 }
 
 impl WorkloadKind {
     pub fn requires_indexer(self) -> bool {
         matches!(
             self,
-            Self::ReceiptPoll | Self::StatusPoll | Self::EventsQuery
+            Self::ReceiptPoll | Self::StatusPoll | Self::EventsQuery | Self::ContractCall
         )
     }
 
