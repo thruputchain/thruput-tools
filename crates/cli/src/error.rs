@@ -347,7 +347,8 @@ impl CliError {
                 "this command is planned for a future release",
             )),
             Self::IntegrationTestsUnavailable => Some(Cow::Borrowed(
-                "install with `groundhogup`, or build the CLI with `--features dev-node`",
+                "build the CLI with `--features dev-node`, for example: \
+                 `cargo install --path crates/cli --features dev-node`",
             )),
             Self::IntegrationTestNotFound(_) => Some(Cow::Borrowed(
                 "create `tests/integration.rs` before running `groundhog test --integration`",
