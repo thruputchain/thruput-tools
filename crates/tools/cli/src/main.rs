@@ -99,7 +99,7 @@ enum Command {
                       project.\n\n\
                       --optimize requires wasm-opt \
                       (install via `brew install binaryen`). \
-                      --target rv32 requires rv32-lower on PATH.")]
+                      --target rv32 uses the built-in RV32 lowerer.")]
     Build {
         /// Package to build (required in workspaces)
         #[arg(short, long)]

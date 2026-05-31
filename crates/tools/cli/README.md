@@ -7,7 +7,7 @@ Rust/WASM build and test workflow into a single binary.
 
 ```bash
 cargo install --path crates/tools/cli
-cargo install --path crates/rv32/lower         # optional, for `build --target rv32`
+cargo install --path crates/rv32/lower         # optional, for standalone `rv32-lower`
 ```
 
 To include the local dev node:
@@ -174,7 +174,7 @@ generation is available, it also emits a human-readable `*.spec.json` sidecar
 next to the built WASM. The embedded WASM section remains the source of truth;
 the JSON file is for inspection and external tooling.
 
-The RV32 target requires `rv32-lower` on `PATH`, sets
+The RV32 target uses the built-in `groundhog-rv32-lower` library, sets
 `CARGO_PROFILE_RELEASE_STRIP=false` for the current v3 symbol-scanning lowerer,
 then writes `target/groundhog/<package>.rv32a` plus
 `target/groundhog/<package>.rv32.json` build metadata.

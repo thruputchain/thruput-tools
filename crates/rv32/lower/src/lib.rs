@@ -2,10 +2,10 @@
 //! contract binary into a Groundhog **v3 RV32 artifact** (`.rv32a`).
 //!
 //! This is the production successor to `scripts/rv32_lower.py` in hogd: the
-//! `wasm-opt` analog for the rv32 build path. It is a focused, standalone tool
-//! (and library) — `groundhog build` shells out to the `rv32-lower` binary
-//! rather than embedding it, so the artifact format has exactly one Rust
-//! implementation.
+//! `wasm-opt` analog for the rv32 build path. It is a focused lowerer with two
+//! entrypoints: a standalone `rv32-lower` binary for scripts and interop checks,
+//! and a library API used by `groundhog build --target rv32`. The artifact
+//! format still has exactly one Rust implementation.
 //!
 //! Pipeline ([`lower`]):
 //!   1. [`elf`] — parse the ELF32 section and symbol tables.

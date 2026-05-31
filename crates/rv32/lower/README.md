@@ -4,9 +4,10 @@ Turn a freestanding `riscv32im-unknown-none-elf` contract binary into a
 Groundhog **v3 RV32 artifact** (`.rv32a`).
 
 This is the production successor to hogd's `scripts/rv32_lower.py` — the
-`wasm-opt` analog for the rv32 build path. It is a focused, standalone tool that
-the build flow shells out to (rather than embedding), so the artifact format has
-exactly one Rust implementation.
+`wasm-opt` analog for the rv32 build path. It is a focused lowerer with two
+entrypoints: a standalone `rv32-lower` binary for scripts and interop checks,
+and a library API used by `groundhog build --target rv32`. The artifact format
+still has exactly one Rust implementation.
 
 ## Usage
 
@@ -19,8 +20,9 @@ rv32-lower --elf target/riscv32im-unknown-none-elf/release/<contract>-rv32 \
            --out <contract>.rv32a
 ```
 
-(Invoking this from `groundhog build` as a `wasm-opt`-style shell-out is a later
-phase — see the status note below.)
+`groundhog build --target rv32` invokes the same lowerer in-process through the
+library API; use the binary directly when you need a scriptable lower-level
+tool.
 
 Optional build-metadata sidecar:
 
@@ -94,10 +96,11 @@ See `hogd/docs/rv32/rv32-author-toolchain.md` for the full design.
 It is **published to the private `groundhog` registry** and consumable two ways:
 
 - **as a binary** — `cargo install --registry groundhog groundhog-rv32-lower`
-  puts `rv32-lower` on `$PATH`; hogd's smoke test / `groundhog build` shell out
-  to it the way they do `wasm-opt`;
+  puts `rv32-lower` on `$PATH`; hogd's smoke tests and other scripts can call it
+  directly;
 - **as a library** — add `groundhog-rv32-lower` (registry `groundhog`) as a
-  dependency and call `lower()` / `metadata` directly. Add
+  dependency and call `lower()` / `metadata` directly. `groundhog build --target
+  rv32` uses this path. Add
   `groundhog-rv32-artifact` for direct access to format constants, writer, and
   validator APIs.
 

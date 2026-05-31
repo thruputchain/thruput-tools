@@ -36,6 +36,7 @@ hex = { workspace = true }
 sha2 = { workspace = true }
 zeroize = { workspace = true }
 groundhog-signing = { workspace = true }
+groundhog-rv32-lower = { workspace = true }
 groundhog-wasm-meter = { workspace = true }
 groundhog-contract-spec = { workspace = true }
 groundhog-contract-util = { workspace = true }

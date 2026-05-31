@@ -9,8 +9,6 @@ pub enum CliError {
     CargoNotFound,
     #[error("wasm-opt not found on PATH")]
     WasmOptNotFound,
-    #[error("rv32-lower not found on PATH")]
-    Rv32LowerNotFound,
     #[error("`.cargo/contract.toml` not found in {0}")]
     ContractTomlNotFound(String),
     #[error("package `{0}` not found in workspace")]
@@ -56,8 +54,8 @@ pub enum CliError {
     UnsupportedOs(String),
     #[error("wasm-opt optimization failed{}", if .0.is_empty() { String::new() } else { format!(": {}", .0) })]
     WasmOptFailed(String),
-    #[error("rv32-lower failed{}", rv32_lower_error_suffix(.stdout, .stderr))]
-    Rv32LowerFailed { stdout: String, stderr: String },
+    #[error("RV32 lowering failed: {0}")]
+    Rv32LowerFailed(String),
     #[error("WASM instrumentation failed: {0}")]
     WasmInstrumentFailed(#[from] groundhog_wasm_meter::Error),
     #[error("WASM verification failed after instrumentation: {0}")]
@@ -148,7 +146,6 @@ impl CliError {
         match self {
             Self::CargoNotFound => "cargo_not_found",
             Self::WasmOptNotFound => "wasm_opt_not_found",
-            Self::Rv32LowerNotFound => "rv32_lower_not_found",
             Self::ContractTomlNotFound(_) => "contract_toml_not_found",
             Self::PackageNotFound(_) => "package_not_found",
             Self::PackageRequired => "package_required",
@@ -167,7 +164,7 @@ impl CliError {
             Self::RegistryLoginFailed => "registry_login_failed",
             Self::UnsupportedOs(_) => "unsupported_os",
             Self::WasmOptFailed(_) => "wasm_opt_failed",
-            Self::Rv32LowerFailed { .. } => "rv32_lower_failed",
+            Self::Rv32LowerFailed(_) => "rv32_lower_failed",
             Self::WasmInstrumentFailed(_) => "wasm_instrument_failed",
             Self::WasmVerifyFailed(_) => "wasm_verify_failed",
             Self::SpecFailed(_) => "spec_failed",
@@ -214,10 +211,6 @@ impl CliError {
             Self::WasmOptNotFound => Some(Cow::Borrowed(
                 "install Binaryen (`brew install binaryen`), or \
                  rerun without `--optimize`",
-            )),
-            Self::Rv32LowerNotFound => Some(Cow::Borrowed(
-                "install `groundhog-rv32-lower` so the `rv32-lower` binary \
-                 is on your PATH",
             )),
             Self::ContractTomlNotFound(_) => Some(Cow::Borrowed(
                 "create `.cargo/contract.toml` with WASM build flags, \
@@ -339,9 +332,9 @@ impl CliError {
                 "see the wasm-opt error above; the WASM binary \
                  may be invalid or malformed",
             )),
-            Self::Rv32LowerFailed { .. } => Some(Cow::Borrowed(
-                "see the rv32-lower error above; the ELF may be stripped, \
-                 missing `_start`, or missing contract entrypoint symbols",
+            Self::Rv32LowerFailed(_) => Some(Cow::Borrowed(
+                "the RV32 ELF may be stripped, missing `_start`, or missing \
+                 contract entrypoint symbols",
             )),
             Self::WasmInstrumentFailed(_) => {
                 Some(Cow::Borrowed("the WASM binary may be invalid or too large"))
@@ -390,11 +383,11 @@ impl CliError {
     /// Optional structured details for JSON error payloads.
     pub fn details_json(&self) -> Option<Value> {
         match self {
-            Self::CargoFailedWithOutput { stdout, stderr, .. }
-            | Self::Rv32LowerFailed { stdout, stderr } => Some(json!({
+            Self::CargoFailedWithOutput { stdout, stderr, .. } => Some(json!({
                 "stdout": stdout,
                 "stderr": stderr,
             })),
+            Self::Rv32LowerFailed(message) => Some(json!({ "message": message })),
             Self::CallEncode { path, message } | Self::CallDecode { path, message } => {
                 Some(json!({
                     "path": path,
@@ -403,18 +396,5 @@ impl CliError {
             }
             _ => None,
         }
-    }
-}
-
-fn rv32_lower_error_suffix(stdout: &str, stderr: &str) -> String {
-    let message = if stderr.trim().is_empty() {
-        stdout.trim()
-    } else {
-        stderr.trim()
-    };
-    if message.is_empty() {
-        String::new()
-    } else {
-        format!(": {message}")
     }
 }
