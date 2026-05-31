@@ -502,6 +502,15 @@ pub fn build_artifact(code: &[u8], memory: &[u8], entries: &[DispatchEntry]) -> 
             code.len()
         )));
     }
+    // The loader requires a full materialized image: initial_memory_size must
+    // equal memory_bytes (MAX_MEMORY_BYTES). Reject a wrong-sized image here so
+    // the error lands at the caller rather than as a later verify failure.
+    if memory.len() != MAX_MEMORY_BYTES {
+        return Err(invalid(format!(
+            "initial memory size {} must be exactly {MAX_MEMORY_BYTES}",
+            memory.len()
+        )));
+    }
     let dispatch_table = build_dispatch_table(entries, code.len())?;
 
     let code_offset = HEADER_BYTES;

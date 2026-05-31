@@ -842,6 +842,20 @@ fn build_artifact_rejects_code_outside_limits() {
 }
 
 #[test]
+fn build_artifact_rejects_wrong_memory_size() {
+    use groundhog_rv32_artifact::{MAX_MEMORY_BYTES, build_artifact};
+    let code = vec![0u8; 4];
+    let entries = [DispatchEntry {
+        method_id: 1,
+        pc: 0,
+    }];
+    // The materialized image must be exactly MAX_MEMORY_BYTES.
+    assert!(build_artifact(&code, &vec![0u8; MAX_MEMORY_BYTES - 4], &entries).is_err());
+    assert!(build_artifact(&code, &vec![0u8; MAX_MEMORY_BYTES + 4], &entries).is_err());
+    assert!(build_artifact(&code, &vec![0u8; MAX_MEMORY_BYTES], &entries).is_ok());
+}
+
+#[test]
 fn verify_artifact_rejects_oversized_code_size() {
     let lowered = lower(&assemble(happy_spec())).expect("lowers");
     let mut bytes = lowered.artifact.clone();
