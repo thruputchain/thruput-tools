@@ -945,6 +945,7 @@ dependencies = [
  "groundhog-json-rpc-client",
  "groundhog-json-rpc-types",
  "groundhog-node-supervisor",
+ "groundhog-rv32-lower",
  "groundhog-signing",
  "groundhog-spec-tool",
  "groundhog-wasm-meter",

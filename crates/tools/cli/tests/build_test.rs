@@ -5,6 +5,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
+mod support;
+
 #[test]
 fn resolve_package_with_explicit_name() {
     let meta = groundhog_cli::build::CargoMetadata {
@@ -508,7 +510,8 @@ fn build_rv32_project_compiles_and_lowers_elf() {
         .join("groundhog")
         .join("demo_contract_rv32.rv32.json");
     let cargo_args_log = project_root.join("cargo-args.log");
-    let lower_args_log = project_root.join("lower-args.log");
+    let elf_fixture = project_root.join("fixture.elf");
+    fs::write(&elf_fixture, support::minimal_rv32_elf()).unwrap();
     let metadata_json = format!(
         r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract-rv32","manifest_path":"{}"}}]}}"#,
         project_root.display(),
@@ -522,22 +525,14 @@ fn build_rv32_project_compiles_and_lowers_elf() {
     fs::write(
         &cargo,
         format!(
-            "#!/bin/sh\nif [ \"$1\" = \"metadata\" ]; then\n  printf '%s' '{metadata_json}'\n  exit 0\nfi\nif [ \"$CARGO_PROFILE_RELEASE_STRIP\" != \"false\" ]; then\n  echo missing strip env >&2\n  exit 2\nfi\nprintf '%s\\n' \"$*\" > '{}'\n/bin/mkdir -p '{}'\nprintf 'ELF' > '{}'\n",
+            "#!/bin/sh\nif [ \"$1\" = \"metadata\" ]; then\n  printf '%s' '{metadata_json}'\n  exit 0\nfi\nif [ \"$CARGO_PROFILE_RELEASE_STRIP\" != \"false\" ]; then\n  echo missing strip env >&2\n  exit 2\nfi\nprintf '%s\\n' \"$*\" > '{}'\n/bin/mkdir -p '{}'\n/bin/cp '{}' '{}'\n",
             cargo_args_log.display(),
             raw_elf
                 .parent()
                 .expect("bug: raw elf parent should exist")
                 .display(),
+            elf_fixture.display(),
             raw_elf.display()
-        ),
-    )
-    .unwrap();
-    let rv32_lower = fake_bin.join("rv32-lower");
-    fs::write(
-        &rv32_lower,
-        format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nwhile [ \"$#\" -gt 0 ]; do\n  case \"$1\" in\n    --out) out=\"$2\"; shift 2 ;;\n    --metadata) metadata=\"$2\"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\nprintf 'RV32' > \"$out\"\nprintf '{{\"ok\":true}}\\n' > \"$metadata\"\n",
-            lower_args_log.display()
         ),
     )
     .unwrap();
@@ -545,11 +540,9 @@ fn build_rv32_project_compiles_and_lowers_elf() {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        for executable in [&cargo, &rv32_lower] {
-            let mut perms = fs::metadata(executable).unwrap().permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(executable, perms).unwrap();
-        }
+        let mut perms = fs::metadata(&cargo).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&cargo, perms).unwrap();
     }
 
     let _cwd = CurrentDirGuard::enter(&project_root);
@@ -567,11 +560,13 @@ fn build_rv32_project_compiles_and_lowers_elf() {
     assert_eq!(result.elf, raw_elf);
     assert_eq!(result.rv32, processed_rv32);
     assert_eq!(result.metadata, processed_metadata);
-    assert_eq!(result.size_bytes, 4);
-    assert_eq!(fs::read(&processed_rv32).unwrap(), b"RV32");
+    assert!(result.size_bytes > 64 * 1024);
+    assert!(fs::read(&processed_rv32).unwrap().starts_with(b"GHRV32A1"));
+    let metadata: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&processed_metadata).unwrap()).unwrap();
     assert_eq!(
-        fs::read_to_string(&processed_metadata).unwrap(),
-        "{\"ok\":true}\n"
+        metadata["artifact_format_fingerprint"],
+        "0x38927fa2342c674a"
     );
 
     let cargo_args = fs::read_to_string(cargo_args_log).unwrap();
@@ -582,19 +577,11 @@ fn build_rv32_project_compiles_and_lowers_elf() {
     );
     assert!(cargo_args.contains("-p demo-contract-rv32"));
     assert!(cargo_args.contains("--locked"));
-
-    let lower_args = fs::read_to_string(lower_args_log).unwrap();
-    assert!(lower_args.contains("--elf\n"));
-    assert!(lower_args.contains(&format!("{}\n", raw_elf.display())));
-    assert!(lower_args.contains("--out\n"));
-    assert!(lower_args.contains(&format!("{}\n", processed_rv32.display())));
-    assert!(lower_args.contains("--metadata\n"));
-    assert!(lower_args.contains(&format!("{}\n", processed_metadata.display())));
-    assert!(lower_args.contains("--target-triple\nriscv32im-unknown-none-elf\n"));
-    assert!(lower_args.contains("--build-flags\n"));
-    assert!(lower_args.contains(
-        "CARGO_PROFILE_RELEASE_STRIP=false cargo build --release --no-default-features --features entrypoints --target riscv32im-unknown-none-elf -p demo-contract-rv32 --locked\n"
-    ));
+    assert_eq!(metadata["target_triple"], "riscv32im-unknown-none-elf");
+    assert_eq!(
+        metadata["build_flags"],
+        "CARGO_PROFILE_RELEASE_STRIP=false cargo build --release --no-default-features --features entrypoints --target riscv32im-unknown-none-elf -p demo-contract-rv32 --locked"
+    );
 }
 
 struct CurrentDirGuard {

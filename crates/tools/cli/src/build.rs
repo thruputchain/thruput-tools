@@ -62,10 +62,6 @@ pub struct Rv32BuildResult {
     pub cargo_stdout: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub cargo_stderr: String,
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub lower_stdout: String,
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub lower_stderr: String,
 }
 
 /// Build the contract to WASM via `cargo build` with
@@ -107,8 +103,6 @@ pub fn run(
                 "profile": result.profile,
                 "cargo_stdout": result.cargo_stdout,
                 "cargo_stderr": result.cargo_stderr,
-                "lower_stdout": result.lower_stdout,
-                "lower_stderr": result.lower_stderr,
             }),
         ))?;
         return Ok(());
@@ -273,7 +267,7 @@ pub fn build_project(
 }
 
 /// Build the current project to an RV32 artifact by compiling an ELF and
-/// lowering it through the standalone `rv32-lower` tool.
+/// lowering it through the in-process RV32 lowerer library.
 pub fn build_rv32_project(
     package: Option<&str>,
     cargo_args: &[String],
@@ -286,7 +280,6 @@ pub fn build_rv32_project(
     let cwd = std::env::current_dir()?;
     let metadata = cargo_metadata_with_artifacts(artifacts)?;
     let pkg_name = resolve_package(&metadata, package, &cwd)?;
-    let rv32_lower = which::which("rv32-lower").map_err(|_| CliError::Rv32LowerNotFound)?;
 
     artifacts::ensure_no_target_dir_passthrough_conflicts(
         artifacts,
@@ -330,31 +323,24 @@ pub fn build_rv32_project(
     }
 
     print.status("Lowering RV32 ELF...");
-    let mut lower = Command::new(rv32_lower);
-    lower
-        .arg("--elf")
-        .arg(&elf)
-        .arg("--out")
-        .arg(&rv32)
-        .arg("--metadata")
-        .arg(&lower_metadata)
-        .arg("--target-triple")
-        .arg(RV32_TARGET_TRIPLE)
-        .arg("--build-flags")
-        .arg(rv32_build_flags(pkg_name, cargo_args));
-
-    if let Some(version) = rustc_version() {
-        lower.arg("--rustc-version").arg(version);
-    }
-
-    let output = lower.output()?;
-    let lower_stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    let lower_stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    if !output.status.success() {
-        return Err(CliError::Rv32LowerFailed {
-            stdout: lower_stdout,
-            stderr: lower_stderr,
+    let elf_bytes = fs::read(&elf)?;
+    let lowered = groundhog_rv32_lower::lower(&elf_bytes)
+        .map_err(|error| CliError::Rv32LowerFailed(error.to_string()))?;
+    let lower_metadata_doc =
+        groundhog_rv32_lower::render_metadata(&groundhog_rv32_lower::MetadataInput {
+            elf: &elf_bytes,
+            artifact: &lowered.artifact,
+            code: &lowered.code,
+            initial_memory: &lowered.initial_memory,
+            entries: &lowered.entries,
+            rustc_version: rustc_version(),
+            target_triple: Some(RV32_TARGET_TRIPLE.to_string()),
+            build_flags: Some(rv32_build_flags(pkg_name, cargo_args)),
         });
+    fs::write(&rv32, &lowered.artifact)?;
+    if let Err(error) = fs::write(&lower_metadata, lower_metadata_doc) {
+        let _ = fs::remove_file(&rv32);
+        return Err(error.into());
     }
 
     let profile = crate::config::resolve_profile(&metadata.workspace_root, explicit_profile)?;
@@ -373,8 +359,6 @@ pub fn build_rv32_project(
         profile,
         cargo_stdout,
         cargo_stderr,
-        lower_stdout,
-        lower_stderr,
     })
 }
 

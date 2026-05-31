@@ -12,6 +12,8 @@ use std::time::{Duration, Instant};
 use groundhog_json_rpc_client::{GroundhogApiClient, HttpClientBuilder};
 use tempfile::TempDir;
 
+mod support;
+
 fn groundhog() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_groundhog"));
     command.env_remove("GROUNDHOG_RUNTIME_MANIFEST");
@@ -644,6 +646,8 @@ fn build_rv32_json_success_reports_artifact_paths() {
     let metadata = target_dir
         .join("groundhog")
         .join("demo_contract_rv32.rv32.json");
+    let elf_fixture = tmp.path().join("fixture.elf");
+    std::fs::write(&elf_fixture, support::minimal_rv32_elf()).unwrap();
     let metadata_json = serde_json::json!({
         "workspace_root": tmp.path(),
         "target_directory": target_dir,
@@ -669,7 +673,7 @@ fn build_rv32_json_success_reports_artifact_paths() {
                 "  exit 2\n",
                 "fi\n",
                 "/bin/mkdir -p '{}'\n",
-                "printf 'ELF' > '{}'\n",
+                "/bin/cp '{}' '{}'\n",
                 "exit 0\n",
             ),
             metadata_json,
@@ -677,98 +681,12 @@ fn build_rv32_json_success_reports_artifact_paths() {
                 .parent()
                 .expect("bug: raw elf parent should exist")
                 .display(),
+            elf_fixture.display(),
             raw_elf.display()
         ),
     )
     .unwrap();
-    let rv32_lower = fake_bin.join("rv32-lower");
-    std::fs::write(
-        &rv32_lower,
-        concat!(
-            "#!/bin/sh\n",
-            "while [ \"$#\" -gt 0 ]; do\n",
-            "  case \"$1\" in\n",
-            "    --out) out=\"$2\"; shift 2 ;;\n",
-            "    --metadata) metadata=\"$2\"; shift 2 ;;\n",
-            "    *) shift ;;\n",
-            "  esac\n",
-            "done\n",
-            "printf 'RV32' > \"$out\"\n",
-            "printf '{\"ok\":true}\\n' > \"$metadata\"\n",
-        ),
-    )
-    .unwrap();
 
-    for executable in [&cargo, &rv32_lower] {
-        let mut perms = std::fs::metadata(executable).unwrap().permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(executable, perms).unwrap();
-    }
-
-    let output = groundhog()
-        .args([
-            "--json",
-            "build",
-            "--target",
-            "rv32",
-            "-p",
-            "demo-contract-rv32",
-        ])
-        .current_dir(tmp.path())
-        .env("PATH", &fake_bin)
-        .output()
-        .unwrap();
-
-    assert!(output.status.success());
-    assert!(output.stderr.is_empty());
-    assert_eq!(std::fs::read(&rv32).unwrap(), b"RV32");
-    assert_eq!(
-        std::fs::read_to_string(&metadata).unwrap(),
-        "{\"ok\":true}\n"
-    );
-
-    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["ok"], true);
-    assert_eq!(stdout["command"], "build");
-    assert_eq!(stdout["data"]["target"], "rv32");
-    assert_eq!(stdout["data"]["elf"], raw_elf.display().to_string());
-    assert_eq!(stdout["data"]["rv32"], rv32.display().to_string());
-    assert_eq!(stdout["data"]["metadata"], metadata.display().to_string());
-    assert_eq!(stdout["data"]["size_bytes"], 4);
-}
-
-#[cfg(unix)]
-#[test]
-fn build_rv32_json_reports_missing_lowerer_after_metadata() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let tmp = TempDir::new().unwrap();
-    std::fs::write(
-        tmp.path().join("Cargo.toml"),
-        "[package]\nname = \"demo-contract-rv32\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-    )
-    .unwrap();
-
-    let fake_bin = tmp.path().join("bin");
-    std::fs::create_dir_all(&fake_bin).unwrap();
-    let metadata_json = serde_json::json!({
-        "workspace_root": tmp.path(),
-        "target_directory": tmp.path().join("target"),
-        "packages": [{
-            "name": "demo-contract-rv32",
-            "manifest_path": tmp.path().join("Cargo.toml"),
-        }],
-    })
-    .to_string();
-
-    let cargo = fake_bin.join("cargo");
-    std::fs::write(
-        &cargo,
-        format!(
-            "#!/bin/sh\nif [ \"$1\" = \"metadata\" ]; then\n  printf '%s' '{metadata_json}'\n  exit 0\nfi\nexit 1\n"
-        ),
-    )
-    .unwrap();
     let mut perms = std::fs::metadata(&cargo).unwrap().permissions();
     perms.set_mode(0o755);
     std::fs::set_permissions(&cargo, perms).unwrap();
@@ -787,12 +705,24 @@ fn build_rv32_json_reports_missing_lowerer_after_metadata() {
         .output()
         .unwrap();
 
-    assert!(!output.status.success());
-    assert!(output.stdout.is_empty());
-    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-    assert_eq!(stderr["ok"], false);
-    assert_eq!(stderr["command"], "build");
-    assert_eq!(stderr["error"]["code"], "rv32_lower_not_found");
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    assert!(std::fs::read(&rv32).unwrap().starts_with(b"GHRV32A1"));
+    let metadata_json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&metadata).unwrap()).unwrap();
+    assert_eq!(
+        metadata_json["artifact_format_fingerprint"],
+        "0x38927fa2342c674a"
+    );
+
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["ok"], true);
+    assert_eq!(stdout["command"], "build");
+    assert_eq!(stdout["data"]["target"], "rv32");
+    assert_eq!(stdout["data"]["elf"], raw_elf.display().to_string());
+    assert_eq!(stdout["data"]["rv32"], rv32.display().to_string());
+    assert_eq!(stdout["data"]["metadata"], metadata.display().to_string());
+    assert!(stdout["data"]["size_bytes"].as_u64().unwrap() > 64 * 1024);
 }
 
 #[cfg(unix)]
@@ -835,7 +765,7 @@ fn build_rv32_json_reports_lowerer_failure_details() {
                 "  exit 0\n",
                 "fi\n",
                 "/bin/mkdir -p '{}'\n",
-                "printf 'ELF' > '{}'\n",
+                "printf 'not an elf' > '{}'\n",
                 "exit 0\n",
             ),
             metadata_json,
@@ -847,18 +777,10 @@ fn build_rv32_json_reports_lowerer_failure_details() {
         ),
     )
     .unwrap();
-    let rv32_lower = fake_bin.join("rv32-lower");
-    std::fs::write(
-        &rv32_lower,
-        "#!/bin/sh\nprintf 'lower stdout\\n'\nprintf 'lower stderr\\n' >&2\nexit 42\n",
-    )
-    .unwrap();
 
-    for executable in [&cargo, &rv32_lower] {
-        let mut perms = std::fs::metadata(executable).unwrap().permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(executable, perms).unwrap();
-    }
+    let mut perms = std::fs::metadata(&cargo).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&cargo, perms).unwrap();
 
     let output = groundhog()
         .args([
@@ -884,10 +806,12 @@ fn build_rv32_json_reports_lowerer_failure_details() {
         stderr["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("lower stderr")
+            .contains("input is not an ELF file")
     );
-    assert_eq!(stderr["error"]["details"]["stdout"], "lower stdout\n");
-    assert_eq!(stderr["error"]["details"]["stderr"], "lower stderr\n");
+    assert_eq!(
+        stderr["error"]["details"]["message"],
+        "input is not an ELF file"
+    );
 }
 
 #[test]

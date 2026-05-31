@@ -65,8 +65,8 @@ Developer-facing tools in `crates/tools/` and RV32-specific tooling in
 - **rv32-lower** — `rv32-lower` binary (+ lib `groundhog_rv32_lower`). The
   `wasm-opt` analog for the rv32 build path: lowers a `riscv32im-unknown-none-elf`
   contract ELF to a Groundhog v3 RV32 artifact (`.rv32a`). Published to the
-  `groundhog` registry; consumed as a binary (hogd / `groundhog build` shell out
-  to it like `wasm-opt`) or as a library (e.g. sdk_rs). See its README and
+  `groundhog` registry; consumed as a binary by scripts/hogd and as a library
+  by `groundhog build` and other Rust callers. See its README and
   `hogd/docs/rv32/rv32-author-toolchain.md`.
 
 Local dev and test harnesses in `crates/dev/`:
