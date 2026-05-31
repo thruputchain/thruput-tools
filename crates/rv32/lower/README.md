@@ -62,9 +62,9 @@ The lowerer:
 The crate is also a library (`groundhog_rv32_lower`):
 
 - `lower(&[u8]) -> Result<Lowered>` — the whole pipeline.
-- `artifact` — the v3 format: constants, writer, and `verify_artifact`. **This
-  module is the single Rust source of truth for the on-disk format** and mirrors
-  hogd's `hogd/hogexec/runtime/rv32/artifact.h`.
+- `groundhog-rv32-artifact` — the v3 format crate: constants, writer, and
+  `verify_artifact`. **This crate is the single Rust source of truth for the
+  on-disk format** and mirrors hogd's `hogd/hogexec/runtime/rv32/artifact.h`.
 - `elf` — a minimal, dependency-free ELF32-LE-RISC-V reader.
 - `metadata` — the JSON sidecar (byte-compatible with the python script).
 
@@ -97,10 +97,9 @@ It is **published to the private `groundhog` registry** and consumable two ways:
   puts `rv32-lower` on `$PATH`; hogd's smoke test / `groundhog build` shell out
   to it the way they do `wasm-opt`;
 - **as a library** — add `groundhog-rv32-lower` (registry `groundhog`) as a
-  dependency and call `lower()` / the `artifact` + `metadata` modules directly
-  (e.g. from sdk_rs).
+  dependency and call `lower()` / `metadata` directly. Add
+  `groundhog-rv32-artifact` for direct access to format constants, writer, and
+  validator APIs.
 
-The crate is self-contained, so it can still move to its own repo later; the
-`artifact` module is slated to split out to a standalone `groundhog-rv32-artifact`
-crate (next to `groundhog-xdr` in protocol-rs) with a build-time digest
-cross-check against hogd's `artifact.h`.
+The format surface lives in `groundhog-rv32-artifact` under `crates/rv32/artifact`;
+`rv32-lower` depends on it instead of defining or re-exporting the format.

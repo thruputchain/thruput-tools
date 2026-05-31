@@ -4,9 +4,7 @@
 //! This is the single Rust source of truth for the on-disk format the hogd
 //! RV32 VM loads. It mirrors `hogd/hogexec/runtime/rv32/artifact.h`; the
 //! values below are the load-bearing contract and must stay in lockstep with
-//! that header. (The author-toolchain plan slates this module to split out to
-//! its own `groundhog-rv32-artifact` crate next to `groundhog-xdr`, with hogd
-//! cross-checking the digests at build time. It lives here for now.)
+//! that header.
 //!
 //! Header layout (little-endian, no padding, 172 bytes total):
 //!
@@ -182,6 +180,10 @@ pub const fn compute_format_fingerprint() -> u64 {
 /// Test hook for proving that a folded scalar perturbation moves the digest.
 #[doc(hidden)]
 #[must_use]
+// Sensitivity-test hook only (the perturbation test feeds it
+// FORMAT_VERSION + 1 to prove the digest reacts), NOT version dispatch: the
+// folded domain string is hard-wired to the current format version. At a
+// format bump, bump the domain string and FORMAT_VERSION together.
 pub const fn compute_format_fingerprint_with_format_version(format_version: u32) -> u64 {
     compute_format_fingerprint_with_inputs(
         FORMAT_FINGERPRINT_DOMAIN,
@@ -438,14 +440,14 @@ pub struct DispatchEntry {
 }
 
 /// Raw SHA-256 digest of `bytes`.
-pub(crate) fn sha256(bytes: &[u8]) -> [u8; 32] {
+pub fn sha256(bytes: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     hasher.finalize().into()
 }
 
 /// Lowercase-hex SHA-256 of `bytes` (matches Python `hashlib.hexdigest()`).
-pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
+pub fn sha256_hex(bytes: &[u8]) -> String {
     let digest = sha256(bytes);
     let mut out = String::with_capacity(64);
     for byte in digest {
@@ -498,6 +500,15 @@ pub fn build_artifact(code: &[u8], memory: &[u8], entries: &[DispatchEntry]) -> 
         return Err(invalid(format!(
             "code size {} out of range (1..={MAX_CODE_BYTES})",
             code.len()
+        )));
+    }
+    // The loader requires a full materialized image: initial_memory_size must
+    // equal memory_bytes (MAX_MEMORY_BYTES). Reject a wrong-sized image here so
+    // the error lands at the caller rather than as a later verify failure.
+    if memory.len() != MAX_MEMORY_BYTES {
+        return Err(invalid(format!(
+            "initial memory size {} must be exactly {MAX_MEMORY_BYTES}",
+            memory.len()
         )));
     }
     let dispatch_table = build_dispatch_table(entries, code.len())?;

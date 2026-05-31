@@ -5,9 +5,11 @@
 
 use std::collections::BTreeMap;
 
-use crate::artifact::{self, DispatchEntry};
 use crate::elf::{self, Section, Symbol};
 use crate::error::{Result, invalid};
+use groundhog_rv32_artifact::{
+    DispatchEntry, MAX_CODE_BYTES, MAX_MEMORY_BYTES, build_artifact, verify_artifact,
+};
 
 /// Allocatable sections an rv32 contract image may contain. Anything else with
 /// the ALLOC flag is rejected.
@@ -35,8 +37,8 @@ pub fn lower(elf_bytes: &[u8]) -> Result<Lowered> {
     let symbols = elf::parse_symbols(elf_bytes, &sections)?;
     let (code, initial_memory) = validate_sections(elf_bytes, &sections, &symbols)?;
     let entries = discover_dispatch_entries(&sections, &symbols, code.len())?;
-    let artifact = artifact::build_artifact(&code, &initial_memory, &entries)?;
-    artifact::verify_artifact(&artifact)?;
+    let artifact = build_artifact(&code, &initial_memory, &entries)?;
+    verify_artifact(&artifact)?;
     Ok(Lowered {
         artifact,
         code,
@@ -83,11 +85,8 @@ fn validate_sections(
     if !text.size.is_multiple_of(4) {
         return Err(invalid(".text size must be four-byte aligned"));
     }
-    if text.size as usize > artifact::MAX_CODE_BYTES {
-        return Err(invalid(format!(
-            ".text exceeds {} bytes",
-            artifact::MAX_CODE_BYTES
-        )));
+    if text.size as usize > MAX_CODE_BYTES {
+        return Err(invalid(format!(".text exceeds {MAX_CODE_BYTES} bytes")));
     }
     let text_off = text.offset as usize;
     let text_size = text.size as usize;
@@ -135,7 +134,7 @@ fn validate_sections(
         }
     }
 
-    let mut memory = vec![0u8; artifact::MAX_MEMORY_BYTES];
+    let mut memory = vec![0u8; MAX_MEMORY_BYTES];
     let mut data_ranges: Vec<(String, u32, u32)> = Vec::new();
     for section in sections {
         if (section.sh_type == elf::SHT_REL || section.sh_type == elf::SHT_RELA)
@@ -184,7 +183,7 @@ fn validate_sections(
             }
         }
         data_ranges.push((section.name.clone(), sec_start, sec_end));
-        if sec_end as usize > artifact::MAX_MEMORY_BYTES {
+        if sec_end as usize > MAX_MEMORY_BYTES {
             return Err(invalid(format!(
                 "section {} exceeds memory limit",
                 section.name

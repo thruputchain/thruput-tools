@@ -11,18 +11,17 @@
 //!   1. [`elf`] — parse the ELF32 section and symbol tables.
 //!   2. [`lower::lower`] — validate the layout and materialize the code +
 //!      64 KiB initial-memory image; discover `#[contract]` dispatch entries.
-//!   3. [`artifact`] — pack the v3 header + sections, then self-verify.
+//!   3. `groundhog-rv32-artifact` — pack the v3 header + sections, then
+//!      self-verify.
 //!
-//! See `docs/rv32/rv32-author-toolchain.md` for the surrounding design and the
-//! planned split (format crate → protocol-rs; this tool → its own repo).
+//! See `docs/rv32/rv32-author-toolchain.md` for the surrounding design.
 
-pub mod artifact;
 pub mod elf;
 pub mod error;
 pub mod lower;
 pub mod metadata;
 
-pub use artifact::{DispatchEntry, FORMAT_FINGERPRINT, compute_format_fingerprint};
 pub use error::{LowerError, Result};
+pub use groundhog_rv32_artifact::{DispatchEntry, FORMAT_FINGERPRINT, compute_format_fingerprint};
 pub use lower::{Lowered, lower};
 pub use metadata::{MetadataInput, render_metadata, summary_json};

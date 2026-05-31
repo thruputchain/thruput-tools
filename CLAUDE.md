@@ -48,7 +48,8 @@ Internal x23 support in `crates/x23/`:
   node-supervisor; backend-agnostic. Named for the x23 wire protocol to keep it
   distinct from the public JSON-RPC stack.
 
-Developer-facing tools in `crates/tools/`:
+Developer-facing tools in `crates/tools/` and RV32-specific tooling in
+`crates/rv32/`:
 
 - **cli** — `groundhog` binary. Wraps the Rust/WASM build and test workflow
   plus deploy/call and hogd-dev local-node control. Lib/bin split: all logic in
@@ -57,13 +58,16 @@ Developer-facing tools in `crates/tools/`:
 - **signing** — off-chain transaction signing and construction. Signer trait,
   local Ed25519 signer, canonical address derivation, tx builders for deploy
   and call, XDR encoding.
+- **rv32-artifact** — lib `groundhog_rv32_artifact`. The single Rust source of
+  truth for the Groundhog v3 RV32 artifact format: constants, offsets, format
+  fingerprint, writer, and validator. It is grouped with the lowerer under
+  `crates/rv32/` because this artifact is bespoke RV32 tooling, not XDR.
 - **rv32-lower** — `rv32-lower` binary (+ lib `groundhog_rv32_lower`). The
   `wasm-opt` analog for the rv32 build path: lowers a `riscv32im-unknown-none-elf`
-  contract ELF to a Groundhog v3 RV32 artifact (`.rv32a`). Holds the single Rust
-  source of truth for the artifact format (`artifact` module, mirrors hogd's
-  `artifact.h`). Published to the `groundhog` registry; consumed as a binary
-  (hogd / `groundhog build` shell out to it like `wasm-opt`) or as a library
-  (e.g. sdk_rs). See its README and `hogd/docs/rv32/rv32-author-toolchain.md`.
+  contract ELF to a Groundhog v3 RV32 artifact (`.rv32a`). Published to the
+  `groundhog` registry; consumed as a binary (hogd / `groundhog build` shell out
+  to it like `wasm-opt`) or as a library (e.g. sdk_rs). See its README and
+  `hogd/docs/rv32/rv32-author-toolchain.md`.
 
 Local dev and test harnesses in `crates/dev/`:
 

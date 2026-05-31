@@ -9,11 +9,7 @@
 // The synthetic-ELF builder favors owned specs that tests clone-and-mutate.
 #![allow(clippy::needless_pass_by_value)]
 
-use groundhog_rv32_lower::artifact::{
-    FORMAT_FINGERPRINT, FORMAT_VERSION, compute_format_fingerprint,
-    compute_format_fingerprint_with_domain, compute_format_fingerprint_with_format_version,
-    compute_format_fingerprint_with_magic, verify_artifact,
-};
+use groundhog_rv32_artifact::{FORMAT_FINGERPRINT, verify_artifact};
 use groundhog_rv32_lower::{DispatchEntry, MetadataInput, lower, render_metadata};
 
 // ---------------------------------------------------------------------------
@@ -435,26 +431,6 @@ fn metadata_matches_the_python_sidecar_shape() {
     );
 }
 
-#[test]
-fn format_fingerprint_is_pinned_and_sensitive_to_folded_constants() {
-    assert_eq!(FORMAT_FINGERPRINT, 0x3892_7fa2_342c_674a);
-    assert_eq!(FORMAT_FINGERPRINT, compute_format_fingerprint());
-    assert_ne!(
-        FORMAT_FINGERPRINT,
-        compute_format_fingerprint_with_format_version(FORMAT_VERSION + 1)
-    );
-    let mut magic = *b"GHRV32A1";
-    magic[7] = b'2';
-    assert_ne!(
-        FORMAT_FINGERPRINT,
-        compute_format_fingerprint_with_magic(magic)
-    );
-    assert_ne!(
-        FORMAT_FINGERPRINT,
-        compute_format_fingerprint_with_domain(b"groundhog.rv32.artifact.format.v3.test")
-    );
-}
-
 // ---------------------------------------------------------------------------
 // Rejections.
 // ---------------------------------------------------------------------------
@@ -849,12 +825,12 @@ fn build_dispatch_table_rejects_out_of_range_pc() {
         method_id: 1,
         pc: 100,
     }];
-    assert!(groundhog_rv32_lower::artifact::build_dispatch_table(&entries, 32).is_err());
+    assert!(groundhog_rv32_artifact::build_dispatch_table(&entries, 32).is_err());
 }
 
 #[test]
 fn build_artifact_rejects_code_outside_limits() {
-    use groundhog_rv32_lower::artifact::{MAX_CODE_BYTES, build_artifact};
+    use groundhog_rv32_artifact::{MAX_CODE_BYTES, build_artifact};
     let memory = vec![0u8; 64 * 1024];
     let entries = [DispatchEntry {
         method_id: 1,
@@ -863,6 +839,20 @@ fn build_artifact_rejects_code_outside_limits() {
     assert!(build_artifact(&[], &memory, &entries).is_err()); // empty code
     let oversized = vec![0u8; MAX_CODE_BYTES + 4];
     assert!(build_artifact(&oversized, &memory, &entries).is_err()); // > 64 KiB
+}
+
+#[test]
+fn build_artifact_rejects_wrong_memory_size() {
+    use groundhog_rv32_artifact::{MAX_MEMORY_BYTES, build_artifact};
+    let code = vec![0u8; 4];
+    let entries = [DispatchEntry {
+        method_id: 1,
+        pc: 0,
+    }];
+    // The materialized image must be exactly MAX_MEMORY_BYTES.
+    assert!(build_artifact(&code, &vec![0u8; MAX_MEMORY_BYTES - 4], &entries).is_err());
+    assert!(build_artifact(&code, &vec![0u8; MAX_MEMORY_BYTES + 4], &entries).is_err());
+    assert!(build_artifact(&code, &vec![0u8; MAX_MEMORY_BYTES], &entries).is_ok());
 }
 
 #[test]
