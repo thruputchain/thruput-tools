@@ -8,6 +8,7 @@
 #   HOGD_DEV_BINARY=/path/to/hogd-dev
 #   HOGD_PROTOCOL_OVERRIDE=hogp/<hash>  # intro token only; XDR still validates shape
 #   SMOKE_STANDALONE_GATEWAY=1  # route view/storage checks through hogway
+#   SMOKE_SDK_PATH=/path/to/sdk_rs/crates/sdk  # test scaffold against local SDK
 #   KEEP_WORKDIR=1
 set -euo pipefail
 
@@ -225,6 +226,33 @@ with open(path, "w", encoding="utf-8") as handle:
 PY
 }
 
+override_sdk_path() {
+    local manifest="$1"
+    local sdk_path="$2"
+    [[ -d "$sdk_path" ]] || die "SMOKE_SDK_PATH is not a directory: $sdk_path"
+
+    python3 - "$manifest" "$sdk_path" <<'PY'
+import json
+import pathlib
+import sys
+
+manifest = pathlib.Path(sys.argv[1])
+sdk_path = pathlib.Path(sys.argv[2]).resolve()
+replacement = f'sdk = {{ path = {json.dumps(str(sdk_path))}, features = ["storage"] }}'
+lines = []
+replaced = False
+for line in manifest.read_text(encoding="utf-8").splitlines():
+    if line.startswith("sdk = "):
+        lines.append(replacement)
+        replaced = True
+    else:
+        lines.append(line)
+if not replaced:
+    raise SystemExit("sdk dependency line not found")
+manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")
+PY
+}
+
 run_json() {
     local label="$1"
     shift
@@ -329,6 +357,11 @@ cd "$WORK"
 log "Scaffolding counter contract"
 "$CLI" new "$PROJECT_NAME" --template counter
 cd "$PROJECT_NAME"
+
+if [[ -n "${SMOKE_SDK_PATH:-}" ]]; then
+    log "Using local SDK path: $SMOKE_SDK_PATH"
+    override_sdk_path Cargo.toml "$SMOKE_SDK_PATH"
+fi
 
 log "Building contract WASM"
 "$CLI" build
