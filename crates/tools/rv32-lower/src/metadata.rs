@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
-use crate::artifact::{DispatchEntry, sha256_hex};
+use crate::artifact::{DispatchEntry, FORMAT_FINGERPRINT, sha256_hex};
 use crate::lower::Lowered;
 
 /// Inputs for [`render_metadata`].
@@ -59,6 +59,10 @@ pub fn render_metadata(input: &MetadataInput) -> String {
     let mut doc: BTreeMap<&str, Value> = BTreeMap::new();
     doc.insert("elf_sha256", Value::String(sha256_hex(input.elf)));
     doc.insert("artifact_sha256", Value::String(sha256_hex(input.artifact)));
+    doc.insert(
+        "artifact_format_fingerprint",
+        Value::String(format!("{FORMAT_FINGERPRINT:#018x}")),
+    );
     doc.insert("code_sha256", Value::String(sha256_hex(input.code)));
     doc.insert(
         "initial_memory_sha256",
@@ -97,6 +101,7 @@ pub fn summary_json(out: &str, lowered: &Lowered) -> String {
         "status": "ok",
         "out": out,
         "artifact_bytes": lowered.artifact.len(),
+        "artifact_format_fingerprint": format!("{FORMAT_FINGERPRINT:#018x}"),
         "artifact_sha256": sha256_hex(&lowered.artifact),
         "code_bytes": lowered.code.len(),
         "code_sha256": sha256_hex(&lowered.code),

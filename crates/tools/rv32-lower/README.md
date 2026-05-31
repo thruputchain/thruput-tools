@@ -31,6 +31,14 @@ rv32-lower --elf <elf> --out <contract>.rv32a --metadata <contract>.json \
            --build-flags release
 ```
 
+The sidecar includes `artifact_format_fingerprint`, the pinned v3 format
+contract digest that hogd cross-checks against its C++ runtime constants. To
+print that value without lowering an ELF:
+
+```sh
+rv32-lower --print-format-fingerprint
+```
+
 For scripting / programmatic callers, `--json` emits a single-line result
 envelope on stdout (output path, byte sizes, code/artifact digests, dispatch
 table) on success, or `{"status":"error","message":…}` on failure:
