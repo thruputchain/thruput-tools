@@ -98,6 +98,13 @@ pub const DISPATCH_DIGEST_OFFSET: usize = INITIAL_MEMORY_DIGEST_OFFSET + DIGEST_
 
 const _: () = assert!(DISPATCH_DIGEST_OFFSET + DIGEST_BYTES == HEADER_BYTES);
 
+// Project-specific seeded FNV-1a fold. NOTE: FNV_OFFSET_BASIS is intentionally
+// NOT the canonical 64-bit FNV-1a basis (0xcbf29ce484222325); it is a fixed
+// project seed shared byte-for-byte with hogd's `kFnvOffsetBasis`. It also
+// seeds the consensus gas-schedule digest, so changing it would alter every
+// emitted artifact's gas digest — a v3 format break, not a cleanup. The fold
+// only needs a *consistent* seed across the two implementations, which the
+// cross-repo fingerprint check enforces. Do not "fix" to the canonical value.
 const FNV_OFFSET_BASIS: u64 = 1_469_598_103_934_665_603;
 const FNV_PRIME: u64 = 1_099_511_628_211;
 const FORMAT_FINGERPRINT_DOMAIN: &[u8] = b"groundhog.rv32.artifact.format.v3";
@@ -122,11 +129,14 @@ const fn fnv_digest_bytes(mut digest: u64, bytes: &[u8]) -> u64 {
     digest
 }
 
-const fn fnv_digest_u64(mut digest: u64, mut value: u64) -> u64 {
+const fn fnv_digest_u64(mut digest: u64, value: u64) -> u64 {
+    // Fold the little-endian bytes directly; to_le_bytes() avoids a
+    // `value as u8` truncation cast (clippy::cast_possible_truncation under
+    // -D warnings) while folding the exact same bytes as the C++ side.
+    let bytes = value.to_le_bytes();
     let mut i = 0;
-    while i < 8 {
-        digest = fnv_digest_byte(digest, value as u8);
-        value >>= 8;
+    while i < bytes.len() {
+        digest = fnv_digest_byte(digest, bytes[i]);
         i += 1;
     }
     digest
@@ -162,7 +172,7 @@ const fn fold_layout_field(
 pub const fn compute_format_fingerprint() -> u64 {
     compute_format_fingerprint_with_inputs(
         FORMAT_FINGERPRINT_DOMAIN,
-        &MAGIC,
+        MAGIC,
         FORMAT_VERSION,
         SECTION_DIGEST_ALGORITHM,
         CANONICAL_SECTION_ORDER,
@@ -175,7 +185,7 @@ pub const fn compute_format_fingerprint() -> u64 {
 pub const fn compute_format_fingerprint_with_format_version(format_version: u32) -> u64 {
     compute_format_fingerprint_with_inputs(
         FORMAT_FINGERPRINT_DOMAIN,
-        &MAGIC,
+        MAGIC,
         format_version,
         SECTION_DIGEST_ALGORITHM,
         CANONICAL_SECTION_ORDER,
@@ -188,7 +198,7 @@ pub const fn compute_format_fingerprint_with_format_version(format_version: u32)
 pub const fn compute_format_fingerprint_with_magic(magic: [u8; 8]) -> u64 {
     compute_format_fingerprint_with_inputs(
         FORMAT_FINGERPRINT_DOMAIN,
-        &magic,
+        magic,
         FORMAT_VERSION,
         SECTION_DIGEST_ALGORITHM,
         CANONICAL_SECTION_ORDER,
@@ -201,16 +211,20 @@ pub const fn compute_format_fingerprint_with_magic(magic: [u8; 8]) -> u64 {
 pub const fn compute_format_fingerprint_with_domain(domain: &[u8]) -> u64 {
     compute_format_fingerprint_with_inputs(
         domain,
-        &MAGIC,
+        MAGIC,
         FORMAT_VERSION,
         SECTION_DIGEST_ALGORITHM,
         CANONICAL_SECTION_ORDER,
     )
 }
 
+// Intentionally a long, flat enumeration: it folds every runtime-validated v3
+// format fact in a fixed order. Splitting it would obscure the field list that
+// is the whole point of the fingerprint.
+#[allow(clippy::too_many_lines)]
 const fn compute_format_fingerprint_with_inputs(
     domain: &[u8],
-    magic: &[u8; 8],
+    magic: [u8; 8],
     format_version: u32,
     section_digest_algorithm: &[u8],
     canonical_section_order: &[u8],
@@ -218,7 +232,7 @@ const fn compute_format_fingerprint_with_inputs(
     let mut digest = FNV_OFFSET_BASIS;
     digest = fnv_digest_name(digest, domain);
 
-    digest = format_fingerprint_bytes(digest, b"magic", magic);
+    digest = format_fingerprint_bytes(digest, b"magic", &magic);
     digest = format_fingerprint_u64(digest, b"format_version", format_version as u64);
     digest = format_fingerprint_u64(digest, b"header_bytes", HEADER_BYTES as u64);
     digest = format_fingerprint_u64(digest, b"vm_profile_digest", VM_PROFILE_DIGEST);
@@ -450,6 +464,15 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
 ///   struct DispatchEntry { u64 method_id; u32 pc; u32 _reserved; }
 /// ```
 pub fn build_dispatch_table(entries: &[DispatchEntry], code_size: usize) -> Result<Vec<u8>> {
+    // Enforce the dispatch cap the fingerprint advertises (MAX_DISPATCH_ENTRIES);
+    // otherwise an oversized table could be emitted and only rejected later by
+    // the runtime, despite a successful build.
+    if entries.len() > MAX_DISPATCH_ENTRIES {
+        return Err(invalid(format!(
+            "dispatch table has {} entries, exceeds cap {MAX_DISPATCH_ENTRIES}",
+            entries.len()
+        )));
+    }
     let mut table = Vec::with_capacity(entries.len() * DISPATCH_ENTRY_BYTES);
     for entry in entries {
         if entry.pc as usize >= code_size {
@@ -647,6 +670,12 @@ pub fn verify_artifact(artifact: &[u8]) -> Result<()> {
 fn verify_dispatch_table(dispatch: &[u8], code_size: usize) -> Result<()> {
     if !dispatch.len().is_multiple_of(DISPATCH_ENTRY_BYTES) {
         return Err(verify("dispatch size not a multiple of entry size"));
+    }
+    if dispatch.len() > MAX_DISPATCH_BYTES {
+        return Err(verify(format!(
+            "dispatch size {} exceeds cap {MAX_DISPATCH_BYTES}",
+            dispatch.len()
+        )));
     }
     let mut prev: i128 = -1;
     for (index, entry) in dispatch.chunks_exact(DISPATCH_ENTRY_BYTES).enumerate() {

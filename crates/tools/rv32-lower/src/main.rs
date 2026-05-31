@@ -46,7 +46,17 @@ struct Cli {
 
 fn run(cli: &Cli) -> Result<(), LowerError> {
     if cli.print_format_fingerprint {
-        println!("{FORMAT_FINGERPRINT:#018x}");
+        if cli.json {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "status": "ok",
+                    "artifact_format_fingerprint": format!("{FORMAT_FINGERPRINT:#018x}"),
+                })
+            );
+        } else {
+            println!("{FORMAT_FINGERPRINT:#018x}");
+        }
         return Ok(());
     }
 
