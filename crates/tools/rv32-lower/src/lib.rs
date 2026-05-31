@@ -22,7 +22,7 @@ pub mod error;
 pub mod lower;
 pub mod metadata;
 
-pub use artifact::DispatchEntry;
+pub use artifact::{DispatchEntry, FORMAT_FINGERPRINT, compute_format_fingerprint};
 pub use error::{LowerError, Result};
 pub use lower::{Lowered, lower};
 pub use metadata::{MetadataInput, render_metadata, summary_json};

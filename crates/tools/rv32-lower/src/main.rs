@@ -10,7 +10,9 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
-use groundhog_rv32_lower::{LowerError, MetadataInput, lower, render_metadata, summary_json};
+use groundhog_rv32_lower::{
+    FORMAT_FINGERPRINT, LowerError, MetadataInput, lower, render_metadata, summary_json,
+};
 
 /// Lower a RISC-V rv32im contract ELF to a Groundhog v3 RV32 artifact.
 #[derive(Parser)]
@@ -18,10 +20,10 @@ use groundhog_rv32_lower::{LowerError, MetadataInput, lower, render_metadata, su
 struct Cli {
     /// Input rv32 ELF (the `<contract>-rv32` cargo build output).
     #[arg(long)]
-    elf: PathBuf,
+    elf: Option<PathBuf>,
     /// Output artifact path (`.rv32a`).
     #[arg(long)]
-    out: PathBuf,
+    out: Option<PathBuf>,
     /// Optional JSON sidecar for build metadata.
     #[arg(long)]
     metadata: Option<PathBuf>,
@@ -37,12 +39,39 @@ struct Cli {
     /// Emit a structured JSON result to stdout (for scripting / LLM callers).
     #[arg(long)]
     json: bool,
+    /// Print the pinned v3 artifact-format fingerprint and exit.
+    #[arg(long)]
+    print_format_fingerprint: bool,
 }
 
 fn run(cli: &Cli) -> Result<(), LowerError> {
-    let elf_bytes = fs::read(&cli.elf)?;
+    if cli.print_format_fingerprint {
+        if cli.json {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "status": "ok",
+                    "artifact_format_fingerprint": format!("{FORMAT_FINGERPRINT:#018x}"),
+                })
+            );
+        } else {
+            println!("{FORMAT_FINGERPRINT:#018x}");
+        }
+        return Ok(());
+    }
+
+    let elf = cli
+        .elf
+        .as_ref()
+        .ok_or_else(|| LowerError::Invalid("--elf is required".to_string()))?;
+    let out = cli
+        .out
+        .as_ref()
+        .ok_or_else(|| LowerError::Invalid("--out is required".to_string()))?;
+
+    let elf_bytes = fs::read(elf)?;
     let lowered = lower(&elf_bytes)?;
-    fs::write(&cli.out, &lowered.artifact)?;
+    fs::write(out, &lowered.artifact)?;
 
     if let Some(metadata_path) = &cli.metadata {
         let document = render_metadata(&MetadataInput {
@@ -59,7 +88,7 @@ fn run(cli: &Cli) -> Result<(), LowerError> {
     }
 
     if cli.json {
-        let out = cli.out.to_string_lossy();
+        let out = out.to_string_lossy();
         println!("{}", summary_json(&out, &lowered));
     }
     Ok(())

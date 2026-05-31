@@ -9,7 +9,11 @@
 // The synthetic-ELF builder favors owned specs that tests clone-and-mutate.
 #![allow(clippy::needless_pass_by_value)]
 
-use groundhog_rv32_lower::artifact::verify_artifact;
+use groundhog_rv32_lower::artifact::{
+    FORMAT_FINGERPRINT, FORMAT_VERSION, compute_format_fingerprint,
+    compute_format_fingerprint_with_domain, compute_format_fingerprint_with_format_version,
+    compute_format_fingerprint_with_magic, verify_artifact,
+};
 use groundhog_rv32_lower::{DispatchEntry, MetadataInput, lower, render_metadata};
 
 // ---------------------------------------------------------------------------
@@ -412,6 +416,9 @@ fn metadata_matches_the_python_sidecar_shape() {
     assert!(document.ends_with('\n'), "trailing newline");
     assert!(document.contains("\"method_id\": \"0x00000000000000AA\""));
     assert!(document.contains("\"code_bytes\": 32"));
+    assert!(document.contains(&format!(
+        "\"artifact_format_fingerprint\": \"{FORMAT_FINGERPRINT:#018x}\""
+    )));
     assert!(document.contains("\"rustc_version\": null"));
     assert!(document.contains("\"target_triple\": \"riscv32im-unknown-none-elf\""));
     // Keys are sorted at the top level.
@@ -422,6 +429,30 @@ fn metadata_matches_the_python_sidecar_shape() {
     let parsed: serde_json::Value = serde_json::from_str(&document).expect("valid json");
     assert_eq!(parsed["code_bytes"], 32);
     assert_eq!(parsed["memory_bytes"], 64 * 1024);
+    assert_eq!(
+        parsed["artifact_format_fingerprint"],
+        format!("{FORMAT_FINGERPRINT:#018x}")
+    );
+}
+
+#[test]
+fn format_fingerprint_is_pinned_and_sensitive_to_folded_constants() {
+    assert_eq!(FORMAT_FINGERPRINT, 0x3892_7fa2_342c_674a);
+    assert_eq!(FORMAT_FINGERPRINT, compute_format_fingerprint());
+    assert_ne!(
+        FORMAT_FINGERPRINT,
+        compute_format_fingerprint_with_format_version(FORMAT_VERSION + 1)
+    );
+    let mut magic = *b"GHRV32A1";
+    magic[7] = b'2';
+    assert_ne!(
+        FORMAT_FINGERPRINT,
+        compute_format_fingerprint_with_magic(magic)
+    );
+    assert_ne!(
+        FORMAT_FINGERPRINT,
+        compute_format_fingerprint_with_domain(b"groundhog.rv32.artifact.format.v3.test")
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -882,6 +913,10 @@ fn summary_json_has_the_expected_shape() {
     assert_eq!(doc["out"], "/tmp/x.rv32a");
     assert_eq!(doc["code_bytes"], 32);
     assert_eq!(doc["memory_bytes"], 64 * 1024);
+    assert_eq!(
+        doc["artifact_format_fingerprint"],
+        format!("{FORMAT_FINGERPRINT:#018x}")
+    );
     assert!(doc["artifact_sha256"].as_str().is_some());
     let entries = doc["dispatch_entries"].as_array().expect("array");
     assert_eq!(entries.len(), 2);
@@ -932,6 +967,22 @@ fn cli_json_flag_emits_structured_stdout() {
 
     let _ = std::fs::remove_file(&elf_path);
     let _ = std::fs::remove_file(&out_path);
+}
+
+#[test]
+fn cli_print_format_fingerprint_does_not_require_artifact_args() {
+    use std::process::Command;
+    let bin = env!("CARGO_BIN_EXE_rv32-lower");
+
+    let ok = Command::new(bin)
+        .arg("--print-format-fingerprint")
+        .output()
+        .expect("run rv32-lower");
+    assert!(ok.status.success());
+    assert_eq!(
+        String::from_utf8(ok.stdout).expect("stdout is utf8"),
+        format!("{FORMAT_FINGERPRINT:#018x}\n")
+    );
 }
 
 // ---------------------------------------------------------------------------
