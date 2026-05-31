@@ -11,8 +11,7 @@ categories.workspace = true
 description = "Lower a RISC-V rv32im contract ELF to a Groundhog v3 RV32 artifact (the wasm-opt analog for rv32)"
 # Published to the private `groundhog` registry (inherits the workspace
 # allow-list) so hogd can install / shell out to the `rv32-lower` binary and
-# sdk_rs can depend on the library. The `artifact` module is still slated to
-# split out to a standalone `groundhog-rv32-artifact` crate later.
+# sdk_rs can depend on the library.
 publish.workspace = true
 
 [[bin]]
@@ -24,6 +23,6 @@ workspace = true
 
 [dependencies]
 clap = { workspace = true }
-sha2 = { workspace = true }
+groundhog-rv32-artifact = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

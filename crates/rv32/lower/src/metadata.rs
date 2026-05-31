@@ -6,9 +6,9 @@
 
 use std::collections::BTreeMap;
 
+use groundhog_rv32_artifact::{DispatchEntry, FORMAT_FINGERPRINT, sha256_hex};
 use serde_json::Value;
 
-use crate::artifact::{DispatchEntry, FORMAT_FINGERPRINT, sha256_hex};
 use crate::lower::Lowered;
 
 /// Inputs for [`render_metadata`].

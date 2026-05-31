@@ -935,7 +935,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-cli"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "clap",
  "clap_complete",
@@ -1022,7 +1022,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-json-rpc-api"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "async-trait",
  "groundhog-json-rpc-types",
@@ -1033,7 +1033,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-json-rpc-client"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "async-trait",
  "groundhog-json-rpc-api",
@@ -1047,7 +1047,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-json-rpc-gateway"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "async-trait",
  "axum",
@@ -1079,7 +1079,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-json-rpc-server"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "async-trait",
  "groundhog-json-rpc-api",
@@ -1097,7 +1097,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-json-rpc-types"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "bytes",
  "groundhog-trace",
@@ -1133,7 +1133,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-node-supervisor"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "async-trait",
  "groundhog-json-rpc-api",
@@ -1164,7 +1164,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-open-rpc"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "schemars 1.2.1",
  "serde",
@@ -1173,7 +1173,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-open-rpc-macros"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "groundhog-open-rpc",
  "jsonrpsee",
@@ -1185,7 +1185,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-open-rpc-spec"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "groundhog-json-rpc-api",
  "groundhog-open-rpc",
@@ -1195,12 +1195,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "groundhog-rv32-artifact"
+version = "0.4.5"
+dependencies = [
+ "sha2 0.10.9",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "groundhog-rv32-lower"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "clap",
+ "groundhog-rv32-artifact",
  "serde_json",
- "sha2 0.10.9",
  "thiserror 2.0.18",
 ]
 
@@ -1215,7 +1223,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-signing"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "ed25519-dalek",
  "groundhog-xdr",
@@ -1302,7 +1310,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-x23-transport"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "rpc_driver",
  "thiserror 2.0.18",

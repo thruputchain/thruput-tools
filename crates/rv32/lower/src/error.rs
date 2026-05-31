@@ -16,15 +16,21 @@ pub enum LowerError {
     Io(#[from] std::io::Error),
 }
 
+impl From<groundhog_rv32_artifact::ArtifactError> for LowerError {
+    fn from(error: groundhog_rv32_artifact::ArtifactError) -> Self {
+        match error {
+            groundhog_rv32_artifact::ArtifactError::Invalid(message) => {
+                LowerError::Invalid(message)
+            }
+            groundhog_rv32_artifact::ArtifactError::Verify(message) => LowerError::Verify(message),
+        }
+    }
+}
+
 /// Result alias for the lowerer.
 pub type Result<T> = core::result::Result<T, LowerError>;
 
 /// Construct an [`LowerError::Invalid`] from anything string-like.
 pub(crate) fn invalid(message: impl Into<String>) -> LowerError {
     LowerError::Invalid(message.into())
-}
-
-/// Construct an [`LowerError::Verify`] from anything string-like.
-pub(crate) fn verify(message: impl Into<String>) -> LowerError {
-    LowerError::Verify(message.into())
 }

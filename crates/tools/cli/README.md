@@ -7,7 +7,7 @@ Rust/WASM build and test workflow into a single binary.
 
 ```bash
 cargo install --path crates/tools/cli
-cargo install --path crates/tools/rv32-lower   # optional, for `build --target rv32`
+cargo install --path crates/rv32/lower         # optional, for `build --target rv32`
 ```
 
 To include the local dev node:
