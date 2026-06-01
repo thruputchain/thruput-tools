@@ -41,6 +41,28 @@ pub enum ReadAfterWriteState {
     Known(u64),
 }
 
+impl ReadAfterWriteState {
+    /// Expected counter value after one more increment.
+    ///
+    /// In the `Known` state the increment is provably one past the last known
+    /// committed value, so no baseline is needed. In `NeedsReconcile` the caller
+    /// must supply the reconcile pre-read baseline; omitting it is a usage bug.
+    pub fn expected_after_increment(
+        self,
+        actor_id: u32,
+        reconcile_baseline: Option<u64>,
+    ) -> Result<u64, ActorError> {
+        let base = match self {
+            ReadAfterWriteState::Known(value) => value,
+            ReadAfterWriteState::NeedsReconcile => {
+                reconcile_baseline.ok_or(ActorError::ReadAfterWriteNeedsReconcile { actor_id })?
+            }
+        };
+        base.checked_add(1)
+            .ok_or(ActorError::ReadAfterWriteOverflow { actor_id })
+    }
+}
+
 impl ActorState {
     /// Build actor state from a derived bootstrap account.
     pub fn new(actor_id: u32, account: SimAccount, nonce_namespace: NonceNamespace) -> Self {
@@ -169,18 +191,8 @@ impl ActorState {
         &self,
         reconcile_baseline: Option<u64>,
     ) -> Result<u64, ActorError> {
-        let base = match self.read_after_write {
-            ReadAfterWriteState::Known(value) => value,
-            ReadAfterWriteState::NeedsReconcile => {
-                reconcile_baseline.ok_or(ActorError::ReadAfterWriteNeedsReconcile {
-                    actor_id: self.actor_id,
-                })?
-            }
-        };
-        base.checked_add(1)
-            .ok_or(ActorError::ReadAfterWriteOverflow {
-                actor_id: self.actor_id,
-            })
+        self.read_after_write
+            .expected_after_increment(self.actor_id, reconcile_baseline)
     }
 
     /// Rebase the actor to a known committed counter value.

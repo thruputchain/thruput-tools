@@ -21,7 +21,9 @@ use groundhog_json_rpc_types::{
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::{Id as TaskId, JoinError, JoinSet};
 
-use crate::actor::{ActorState, DrainedPendingReceipt, ReadAfterWriteState, ReceiptPollTarget};
+use crate::actor::{
+    ActorError, ActorState, DrainedPendingReceipt, ReadAfterWriteState, ReceiptPollTarget,
+};
 use crate::contract::{
     PreparedContractCall, PreparedEventQuery, PreparedReadAfterWrite, PreparedStorageRead,
     PreparedViewCall,
@@ -2249,6 +2251,43 @@ fn read_after_write_completion(
     }
 }
 
+fn read_after_write_overflow_completion(
+    tick: &ScheduledActorTick,
+    prepared: &PreparedReadAfterWriteWorkload,
+    started_at_unix_ms: &str,
+    started: &Instant,
+    rpc_method: &'static str,
+    tx_nonce: Option<String>,
+    rebased: bool,
+) -> Result<WorkloadCompletion, SimError> {
+    let latency_ms = duration_ms(started.elapsed());
+    let event = read_after_write_base_event(
+        tick,
+        prepared,
+        started_at_unix_ms.to_owned(),
+        unix_ms()?.to_string(),
+        latency_ms,
+        rpc_method,
+        tx_nonce,
+        None,
+        rebased,
+    )
+    .with_error(
+        "read-after-write-overflow",
+        "read-after-write counter overflowed u64",
+    );
+    Ok(read_after_write_completion(
+        event,
+        false,
+        latency_ms,
+        Some("read-after-write-overflow".into()),
+        None,
+        None,
+        None,
+        None,
+    ))
+}
+
 /// Execute one read-after-write round-trip: reconcile, write, await commit, read
 /// back, and assert. Advances actor state only at known-committed.
 #[allow(clippy::too_many_lines)]
@@ -2267,70 +2306,43 @@ where
 
     // 1. Reconcile (NeedsReconcile only): pre-read to establish the baseline.
     let (expected, rebased) = match prepared.state {
-        ReadAfterWriteState::Known(value) => {
-            let Some(expected) = value.checked_add(1) else {
-                let latency_ms = duration_ms(started.elapsed());
-                let event = read_after_write_base_event(
-                    tick,
-                    &prepared,
-                    started_at_unix_ms.clone(),
-                    unix_ms()?.to_string(),
-                    latency_ms,
-                    "groundhog_sendRawTransaction",
-                    tx_nonce.clone(),
-                    None,
-                    false,
-                )
-                .with_error(
-                    "read-after-write-overflow",
-                    "read-after-write counter overflowed u64",
-                );
-                return Ok(read_after_write_completion(
-                    event,
-                    false,
-                    latency_ms,
-                    Some("read-after-write-overflow".into()),
-                    None,
-                    None,
-                    None,
-                    None,
-                ));
-            };
-            (expected, false)
+        ReadAfterWriteState::Known(_) => {
+            match prepared.state.expected_after_increment(actor_id, None) {
+                Ok(expected) => (expected, false),
+                Err(ActorError::ReadAfterWriteOverflow { .. }) => {
+                    return read_after_write_overflow_completion(
+                        tick,
+                        &prepared,
+                        &started_at_unix_ms,
+                        &started,
+                        "groundhog_sendRawTransaction",
+                        tx_nonce,
+                        false,
+                    );
+                }
+                Err(error) => return Err(error.into()),
+            }
         }
         ReadAfterWriteState::NeedsReconcile => {
             match read_after_write_counter(&client, &prepared).await {
-                Ok(baseline) => {
-                    let Some(expected) = baseline.checked_add(1) else {
-                        let latency_ms = duration_ms(started.elapsed());
-                        let event = read_after_write_base_event(
+                Ok(baseline) => match prepared
+                    .state
+                    .expected_after_increment(actor_id, Some(baseline))
+                {
+                    Ok(expected) => (expected, true),
+                    Err(ActorError::ReadAfterWriteOverflow { .. }) => {
+                        return read_after_write_overflow_completion(
                             tick,
                             &prepared,
-                            started_at_unix_ms.clone(),
-                            unix_ms()?.to_string(),
-                            latency_ms,
+                            &started_at_unix_ms,
+                            &started,
                             "groundhog_view",
-                            tx_nonce.clone(),
-                            None,
+                            tx_nonce,
                             true,
-                        )
-                        .with_error(
-                            "read-after-write-overflow",
-                            "read-after-write counter overflowed u64",
                         );
-                        return Ok(read_after_write_completion(
-                            event,
-                            false,
-                            latency_ms,
-                            Some("read-after-write-overflow".into()),
-                            None,
-                            None,
-                            None,
-                            None,
-                        ));
-                    };
-                    (expected, true)
-                }
+                    }
+                    Err(error) => return Err(error.into()),
+                },
                 Err(failure) => {
                     // Reconcile pre-read failed: stay NeedsReconcile, write nothing.
                     let latency_ms = duration_ms(started.elapsed());
@@ -2558,8 +2570,6 @@ where
         }
         Err(failure) => {
             // Post-commit read failure: keep Known(expected); only observation failed.
-            let mut event = event;
-            event.read_after_write_matched = Some(false);
             let event = event.with_error(failure.class, failure.message);
             Ok(read_after_write_completion(
                 event,
@@ -5993,11 +6003,14 @@ mod tests {
 
     #[derive(Clone)]
     struct ReadAfterWriteClient {
-        reads: Arc<Mutex<std::collections::VecDeque<Result<u64, String>>>>,
+        reads: ReadAfterWriteReadQueue,
         submit: Result<TxHash, String>,
         receipt: Result<Option<TransactionReceipt>, String>,
         view_calls: Arc<Mutex<u32>>,
     }
+
+    type ReadAfterWriteReadQueue =
+        Arc<Mutex<std::collections::VecDeque<Result<ViewResponse, String>>>>;
 
     impl SimRpcClient for ReadAfterWriteClient {
         #[allow(clippy::manual_async_fn)]
@@ -6037,24 +6050,36 @@ mod tests {
                     .expect("read queue should lock")
                     .pop_front()
                     .expect("unexpected read-after-write view call")
-                    .map(read_after_write_view_response)
             }
         }
     }
 
     fn read_after_write_view_response(value: u64) -> ViewResponse {
+        read_after_write_view_response_with_output(RootInvocationOutput::Return {
+            return_data: HexBytes(xdrs::cxs::encode(&value).expect("u64 should encode")),
+        })
+    }
+
+    fn read_after_write_view_response_with_output(output: RootInvocationOutput) -> ViewResponse {
         ViewResponse {
-            output: RootInvocationOutput::Return {
-                return_data: HexBytes(xdrs::cxs::encode(&value).expect("u64 should encode")),
-            },
+            output,
             events: Vec::new(),
             height: BlockHeight::from(77),
         }
     }
 
-    fn read_after_write_reads(
-        values: Vec<Result<u64, String>>,
-    ) -> Arc<Mutex<std::collections::VecDeque<Result<u64, String>>>> {
+    fn read_after_write_reads(values: Vec<Result<u64, String>>) -> ReadAfterWriteReadQueue {
+        read_after_write_response_reads(
+            values
+                .into_iter()
+                .map(|read| read.map(read_after_write_view_response))
+                .collect(),
+        )
+    }
+
+    fn read_after_write_response_reads(
+        values: Vec<Result<ViewResponse, String>>,
+    ) -> ReadAfterWriteReadQueue {
         Arc::new(Mutex::new(values.into_iter().collect()))
     }
 
@@ -6240,6 +6265,104 @@ mod tests {
         assert_eq!(failed["errorClass"], "view-rpc-error");
         assert_eq!(failed["rpcMethod"], "groundhog_view");
         assert_eq!(failed["readAfterWriteExpected"], "6");
+        assert!(failed.get("readAfterWriteObserved").is_none());
+        assert!(failed.get("readAfterWriteMatched").is_none());
+    }
+
+    #[tokio::test]
+    async fn read_after_write_keeps_known_on_post_commit_view_output_failures() {
+        let cases = vec![
+            (
+                "read-decode-error",
+                read_after_write_view_response_with_output(RootInvocationOutput::Return {
+                    return_data: HexBytes(vec![0xff]),
+                }),
+            ),
+            (
+                "view-aborted",
+                read_after_write_view_response_with_output(RootInvocationOutput::Abort {
+                    abort_data: HexBytes(vec![0x01]),
+                }),
+            ),
+            (
+                "view-fault",
+                read_after_write_view_response_with_output(RootInvocationOutput::Fault),
+            ),
+        ];
+
+        for (error_class, response) in cases {
+            let client = ReadAfterWriteClient {
+                reads: read_after_write_response_reads(vec![Ok(response)]),
+                submit: Ok(tx_hash(0x6c)),
+                receipt: Ok(Some(receipt(tx_hash(0x6c)))),
+                view_calls: Arc::new(Mutex::new(0)),
+            };
+
+            let (actors, _metrics, events) = run_read_after_write(client, |actor| {
+                actor.record_read_after_write_committed(5);
+            })
+            .await;
+
+            assert_eq!(
+                actors[0].read_after_write_state(),
+                ReadAfterWriteState::Known(6)
+            );
+            let failed = find_event(&events, "workload-failed");
+            assert_eq!(failed["errorClass"], error_class);
+            assert_eq!(failed["rpcMethod"], "groundhog_view");
+            assert_eq!(failed["readAfterWriteExpected"], "6");
+            assert!(failed.get("readAfterWriteObserved").is_none());
+            assert!(failed.get("readAfterWriteMatched").is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn read_after_write_known_overflow_fails_before_submit() {
+        let view_calls = Arc::new(Mutex::new(0));
+        let client = ReadAfterWriteClient {
+            reads: read_after_write_reads(Vec::new()),
+            submit: Ok(tx_hash(0x6c)),
+            receipt: Ok(Some(receipt(tx_hash(0x6c)))),
+            view_calls: view_calls.clone(),
+        };
+
+        let (actors, _metrics, events) = run_read_after_write(client, |actor| {
+            actor.record_read_after_write_committed(u64::MAX);
+        })
+        .await;
+
+        assert_eq!(*view_calls.lock().expect("view counter"), 0);
+        assert_eq!(
+            actors[0].read_after_write_state(),
+            ReadAfterWriteState::Known(u64::MAX)
+        );
+        assert_eq!(actors[0].next_nonce_sequence, 0);
+        let failed = find_event(&events, "workload-failed");
+        assert_eq!(failed["errorClass"], "read-after-write-overflow");
+        assert_eq!(failed["rpcMethod"], "groundhog_sendRawTransaction");
+        assert!(failed.get("readAfterWriteExpected").is_none());
+    }
+
+    #[tokio::test]
+    async fn read_after_write_reconcile_overflow_fails_before_submit() {
+        let view_calls = Arc::new(Mutex::new(0));
+        let client = ReadAfterWriteClient {
+            reads: read_after_write_reads(vec![Ok(u64::MAX)]),
+            submit: Ok(tx_hash(0x6c)),
+            receipt: Ok(Some(receipt(tx_hash(0x6c)))),
+            view_calls: view_calls.clone(),
+        };
+
+        let (actors, _metrics, events) = run_read_after_write(client, |_| {}).await;
+
+        assert_eq!(*view_calls.lock().expect("view counter"), 1);
+        assert!(actors[0].read_after_write_needs_reconcile());
+        assert_eq!(actors[0].next_nonce_sequence, 0);
+        let failed = find_event(&events, "workload-failed");
+        assert_eq!(failed["errorClass"], "read-after-write-overflow");
+        assert_eq!(failed["rpcMethod"], "groundhog_view");
+        assert_eq!(failed["readAfterWriteRebased"], true);
+        assert!(failed.get("readAfterWriteExpected").is_none());
     }
 
     #[tokio::test]
