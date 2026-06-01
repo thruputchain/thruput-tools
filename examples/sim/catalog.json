@@ -163,6 +163,24 @@
       "runner": "scripts/smoke-sim-scenarios.sh"
     },
     {
+      "id": "local-counter-read-after-write-smoke",
+      "path": "local-counter-read-after-write-smoke.json",
+      "title": "Local Counter Read-After-Write Smoke",
+      "summary": "Builds the caller-counter fixture from groundhog-examples, calls bump(), and verifies get() reads back the committed per-caller counter.",
+      "provider": "local",
+      "tier": "smoke",
+      "tags": ["local", "contract", "caller-counter", "read-after-write", "indexer", "smoke"],
+      "requiresContracts": true,
+      "contracts": [
+        {
+          "name": "caller-counter",
+          "source": "groundhog-examples/caller-counter",
+          "artifact": "caller_counter.wasm"
+        }
+      ],
+      "runner": "scripts/smoke-sim-scenarios.sh"
+    },
+    {
       "id": "local-wallet-soak",
       "path": "local-wallet-soak.json",
       "title": "Local Wallet Soak",
