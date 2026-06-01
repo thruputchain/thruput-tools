@@ -12,9 +12,14 @@ pub struct InterfaceSpec {
     pub interface_version: String,
 }
 
-/// Path to the JSON sidecar next to the compiled WASM.
-fn sidecar_path_for_wasm(wasm: &Path) -> PathBuf {
-    wasm.with_extension("spec.json")
+/// Path to the JSON contract-spec sidecar next to a built artifact.
+fn spec_json_sidecar_path(artifact: &Path) -> PathBuf {
+    artifact.with_extension("spec.json")
+}
+
+/// Path to the XDR contract-spec sidecar next to a built artifact.
+fn spec_xdr_sidecar_path(artifact: &Path) -> PathBuf {
+    artifact.with_extension("spec.xdr")
 }
 
 /// XDR-decode raw bytes into a `ContractSpec`.
@@ -66,6 +71,62 @@ fn load_embedded_contract_spec_from_bytes(bytes: &[u8]) -> Result<Option<Contrac
     let rewritten = groundhog_spec_tool::rewrite::rewrite_wasm_with_spec(bytes)
         .map_err(|e| CliError::SpecFailed(format!("failed to read wasm contract spec: {e}")))?;
     Ok(rewritten.spec)
+}
+
+fn load_rv32_contract_spec_from_bytes(bytes: &[u8]) -> Result<Option<ContractSpec>, CliError> {
+    use groundhog_spec_tool::{FINAL_SECTION_NAME, RAW_SECTION_NAME};
+
+    let sections = groundhog_rv32_lower::elf::parse_elf(bytes)
+        .map_err(|e| CliError::SpecFailed(format!("failed to read rv32 ELF contract spec: {e}")))?;
+    let mut raw_fragments = Vec::new();
+    let mut final_spec = None;
+
+    for section in sections {
+        if section.name != RAW_SECTION_NAME && section.name != FINAL_SECTION_NAME {
+            continue;
+        }
+        let start = section.offset as usize;
+        let end = start
+            .checked_add(section.size as usize)
+            .ok_or_else(|| CliError::SpecFailed("rv32 ELF spec section size overflow".into()))?;
+        let data = bytes.get(start..end).ok_or_else(|| {
+            CliError::SpecFailed(format!(
+                "rv32 ELF spec section {} extends past end of file",
+                section.name
+            ))
+        })?;
+
+        if section.name == RAW_SECTION_NAME {
+            raw_fragments.extend(groundhog_spec_tool::parse_raw_fragments(data).map_err(|e| {
+                CliError::SpecFailed(format!("failed to parse rv32 raw contract spec: {e}"))
+            })?);
+        } else {
+            if final_spec.is_some() {
+                return Err(CliError::SpecFailed(
+                    "rv32 ELF contains multiple finalized contract spec sections".into(),
+                ));
+            }
+            final_spec = Some(load_contract_spec_from_xdr(data)?);
+        }
+    }
+
+    if !raw_fragments.is_empty() {
+        return canonicalize_rv32_raw_fragments(&raw_fragments);
+    }
+
+    Ok(final_spec)
+}
+
+fn canonicalize_rv32_raw_fragments(
+    raw_fragments: &[groundhog_spec_tool::SpecFragment],
+) -> Result<Option<ContractSpec>, CliError> {
+    match groundhog_spec_tool::canonicalize_spec(raw_fragments) {
+        Ok(spec) => Ok(Some(spec)),
+        Err(groundhog_spec_tool::SpecToolError::NoSpecFragments) => Ok(None),
+        Err(e) => Err(CliError::SpecFailed(format!(
+            "failed to canonicalize rv32 contract spec: {e}"
+        ))),
+    }
 }
 
 /// Load only the registered interface ids from a built contract artifact.
@@ -138,7 +199,7 @@ pub struct FinalizedSpec {
 /// Returns `Some(FinalizedSpec)` on success, or `None` when the
 /// contract contains no spec fragments.
 pub fn finalize_spec(wasm: &Path, print: &Print) -> Result<Option<FinalizedSpec>, CliError> {
-    use groundhog_spec_tool::{render_spec_json, rewrite::rewrite_wasm_with_spec};
+    use groundhog_spec_tool::rewrite::rewrite_wasm_with_spec;
 
     let bytes = std::fs::read(wasm)
         .map_err(|e| CliError::Other(format!("failed to read wasm for spec finalization: {e}")))?;
@@ -154,15 +215,43 @@ pub fn finalize_spec(wasm: &Path, print: &Print) -> Result<Option<FinalizedSpec>
         return Ok(None);
     };
 
-    let spec_json_path = sidecar_path_for_wasm(wasm);
+    write_spec_sidecars(wasm, spec, print).map(Some)
+}
 
-    let json_str = render_spec_json(&spec);
+/// Finalize raw contract spec fragments emitted into an RV32 ELF and write sidecars
+/// next to the lowered `.rv32a` artifact.
+pub fn finalize_rv32_spec(
+    elf: &Path,
+    rv32_artifact: &Path,
+    print: &Print,
+) -> Result<Option<FinalizedSpec>, CliError> {
+    let bytes = std::fs::read(elf).map_err(|e| {
+        CliError::Other(format!(
+            "failed to read rv32 ELF for spec finalization: {e}"
+        ))
+    })?;
+    let Some(spec) = load_rv32_contract_spec_from_bytes(&bytes)? else {
+        print.warn("no contract spec found — skipping .spec.json");
+        return Ok(None);
+    };
+
+    write_spec_sidecars(rv32_artifact, spec, print).map(Some)
+}
+
+fn write_spec_sidecars(
+    artifact: &Path,
+    spec: ContractSpec,
+    print: &Print,
+) -> Result<FinalizedSpec, CliError> {
+    let spec_json_path = spec_json_sidecar_path(artifact);
+
+    let json_str = groundhog_spec_tool::render_spec_json(&spec);
     std::fs::write(&spec_json_path, json_str.as_bytes()).map_err(|e| {
         CliError::Other(format!("failed to write {}: {e}", spec_json_path.display()))
     })?;
     print.status(format_args!("Wrote {}", spec_json_path.display()));
 
-    let spec_xdr_path = wasm.with_extension("spec.xdr");
+    let spec_xdr_path = spec_xdr_sidecar_path(artifact);
     let xdr_bytes = xdrs::txs::encode(&spec)
         .map_err(|e| CliError::SpecFailed(format!("failed to encode .spec.xdr: {e}")))?;
     std::fs::write(&spec_xdr_path, &xdr_bytes).map_err(|e| {
@@ -170,11 +259,11 @@ pub fn finalize_spec(wasm: &Path, print: &Print) -> Result<Option<FinalizedSpec>
     })?;
     print.status(format_args!("Wrote {}", spec_xdr_path.display()));
 
-    Ok(Some(FinalizedSpec {
+    Ok(FinalizedSpec {
         spec,
         json_path: spec_json_path,
         xdr_path: spec_xdr_path,
-    }))
+    })
 }
 
 #[cfg(test)]
@@ -186,15 +275,32 @@ mod tests {
     };
 
     use super::{
-        InterfaceSpec, find_method_interfaces, load_contract_spec, load_contract_spec_from_file,
-        load_contract_spec_from_xdr, load_embedded_contract_spec_from_bytes, registered_interfaces,
-        sidecar_path_for_wasm,
+        InterfaceSpec, canonicalize_rv32_raw_fragments, find_method_interfaces, load_contract_spec,
+        load_contract_spec_from_file, load_contract_spec_from_xdr,
+        load_embedded_contract_spec_from_bytes, registered_interfaces, spec_json_sidecar_path,
     };
 
     #[test]
-    fn sidecar_path_replaces_wasm_extension() {
-        let path = sidecar_path_for_wasm(Path::new("/tmp/demo.wasm"));
+    fn spec_json_sidecar_path_replaces_artifact_extension() {
+        let path = spec_json_sidecar_path(Path::new("/tmp/demo.rv32a"));
         assert_eq!(path, Path::new("/tmp/demo.spec.json"));
+    }
+
+    #[test]
+    fn rv32_raw_fragments_without_interfaces_are_no_spec() {
+        let fragments = [groundhog_spec_tool::SpecFragment::SpecTypeDef {
+            type_def: groundhog_spec_tool::ContractTypeDef::TypeDefStruct {
+                struct_def: groundhog_spec_tool::ContractStructDef {
+                    name: spec_string_bytes("Payload"),
+                    fields: vec![].try_into().unwrap(),
+                },
+            },
+        }];
+
+        let spec = canonicalize_rv32_raw_fragments(&fragments)
+            .expect("bug: typedef-only raw fragments should not error");
+
+        assert!(spec.is_none());
     }
 
     #[test]

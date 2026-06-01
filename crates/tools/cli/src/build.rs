@@ -55,6 +55,8 @@ pub struct Rv32BuildResult {
     pub elf: PathBuf,
     pub rv32: PathBuf,
     pub metadata: PathBuf,
+    pub spec_json: Option<PathBuf>,
+    pub spec_xdr: Option<PathBuf>,
     pub size_bytes: u64,
     pub target: BuildTarget,
     pub profile: crate::config::ResolvedProfile,
@@ -99,6 +101,8 @@ pub fn run(
                 "elf": result.elf,
                 "rv32": result.rv32,
                 "metadata": result.metadata,
+                "spec_json": result.spec_json,
+                "spec_xdr": result.spec_xdr,
                 "size_bytes": result.size_bytes,
                 "profile": result.profile,
                 "cargo_stdout": result.cargo_stdout,
@@ -343,6 +347,11 @@ pub fn build_rv32_project(
         return Err(error.into());
     }
 
+    print.status("Checking for contract spec...");
+    let finalized = crate::contract_spec::finalize_rv32_spec(&elf, &rv32, print)?;
+    let spec_json = finalized.as_ref().map(|f| f.json_path.clone());
+    let spec_xdr = finalized.as_ref().map(|f| f.xdr_path.clone());
+
     let profile = crate::config::resolve_profile(&metadata.workspace_root, explicit_profile)?;
     let size = fs::metadata(&rv32)?.len();
     print.status(format_args!("Built {} ({size} bytes)", rv32.display()));
@@ -354,6 +363,8 @@ pub fn build_rv32_project(
         elf,
         rv32,
         metadata: lower_metadata,
+        spec_json,
+        spec_xdr,
         size_bytes: size,
         target: BuildTarget::Rv32,
         profile,

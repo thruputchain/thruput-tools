@@ -30,7 +30,19 @@ fn push_shdr(
 
 /// Minimal valid ELF32-LE RISC-V executable accepted by `groundhog-rv32-lower`.
 #[must_use]
+#[allow(dead_code)]
 pub fn minimal_rv32_elf() -> Vec<u8> {
+    minimal_rv32_elf_with_optional_section(None)
+}
+
+#[must_use]
+#[allow(dead_code)]
+pub fn minimal_rv32_elf_with_section(section_name: &str, section_data: &[u8]) -> Vec<u8> {
+    minimal_rv32_elf_with_optional_section(Some((section_name, section_data)))
+}
+
+#[allow(clippy::too_many_lines)]
+fn minimal_rv32_elf_with_optional_section(extra: Option<(&str, &[u8])>) -> Vec<u8> {
     const SHT_PROGBITS: u32 = 1;
     const SHT_SYMTAB: u32 = 2;
     const SHT_STRTAB: u32 = 3;
@@ -44,6 +56,7 @@ pub fn minimal_rv32_elf() -> Vec<u8> {
 
     let mut shstr = vec![0u8];
     let text_name = add_name(&mut shstr, ".text");
+    let extra_name = extra.map(|(name, _)| add_name(&mut shstr, name));
     let symtab_name = add_name(&mut shstr, ".symtab");
     let strtab_name = add_name(&mut shstr, ".strtab");
     let shstrtab_name = add_name(&mut shstr, ".shstrtab");
@@ -65,6 +78,11 @@ pub fn minimal_rv32_elf() -> Vec<u8> {
     let mut file = vec![0u8; 52];
     let text_off = as_u32(file.len());
     file.extend_from_slice(&text);
+    let extra_off = extra.map(|(_, data)| {
+        let offset = as_u32(file.len());
+        file.extend_from_slice(data);
+        offset
+    });
     let strtab_off = as_u32(file.len());
     file.extend_from_slice(&strtab);
     let symtab_off = as_u32(file.len());
@@ -88,6 +106,23 @@ pub fn minimal_rv32_elf() -> Vec<u8> {
         0,
         0,
     );
+    if let Some(name) = extra_name {
+        let (_, data) = extra.expect("bug: extra name implies extra data");
+        push_shdr(
+            &mut file,
+            name,
+            SHT_PROGBITS,
+            0,
+            0,
+            extra_off.expect("bug: extra data has an offset"),
+            as_u32(data.len()),
+            0,
+            0,
+        );
+    }
+    let symtab_index: u32 = if extra.is_some() { 3 } else { 2 };
+    let strtab_index = symtab_index + 1;
+    let shstrtab_index = strtab_index + 1;
     push_shdr(
         &mut file,
         symtab_name,
@@ -96,7 +131,7 @@ pub fn minimal_rv32_elf() -> Vec<u8> {
         0,
         symtab_off,
         as_u32(symtab.len()),
-        3,
+        strtab_index,
         16,
     );
     push_shdr(
@@ -133,7 +168,15 @@ pub fn minimal_rv32_elf() -> Vec<u8> {
     file[32..36].copy_from_slice(&e_shoff.to_le_bytes());
     file[40..42].copy_from_slice(&52u16.to_le_bytes());
     file[46..48].copy_from_slice(&40u16.to_le_bytes());
-    file[48..50].copy_from_slice(&5u16.to_le_bytes());
-    file[50..52].copy_from_slice(&4u16.to_le_bytes());
+    file[48..50].copy_from_slice(
+        &u16::try_from(shstrtab_index + 1)
+            .expect("bug: test section count fits in u16")
+            .to_le_bytes(),
+    );
+    file[50..52].copy_from_slice(
+        &u16::try_from(shstrtab_index)
+            .expect("bug: test section index fits in u16")
+            .to_le_bytes(),
+    );
     file
 }
