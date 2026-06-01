@@ -290,6 +290,14 @@ optional fields are additive and do not bump the version. The diff also
 surfaces `outcomeA`/`outcomeB` so a `Passed → Aborted` transition is visible
 without inferring it from derived assertion deltas.
 
+Future work: the simulator is already easy to drive as a scenario matrix by
+generating JSON manifests with different load shapes, running each variant, and
+comparing the resulting `result.json` artifacts. A first-class matrix runner
+could make that workflow durable: accept parameter sets such as actor counts,
+rates, durations, workloads, and target binaries; launch each case with stable
+run naming; and emit one comparison table over counts, skips, error classes,
+latency percentiles, assertion results, and selected workload-specific fields.
+
 ## Baselines
 
 A scenario can set `baseline` to a committed `result.json` snapshot or a run
