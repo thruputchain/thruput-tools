@@ -79,7 +79,7 @@ fn load_rv32_contract_spec_from_bytes(bytes: &[u8]) -> Result<Option<ContractSpe
     let sections = groundhog_rv32_lower::elf::parse_elf(bytes)
         .map_err(|e| CliError::SpecFailed(format!("failed to read rv32 ELF contract spec: {e}")))?;
     let mut raw_fragments = Vec::new();
-    let mut final_spec = None;
+    let mut final_data: Option<&[u8]> = None;
 
     for section in sections {
         if section.name != RAW_SECTION_NAME && section.name != FINAL_SECTION_NAME {
@@ -100,21 +100,25 @@ fn load_rv32_contract_spec_from_bytes(bytes: &[u8]) -> Result<Option<ContractSpe
             raw_fragments.extend(groundhog_spec_tool::parse_raw_fragments(data).map_err(|e| {
                 CliError::SpecFailed(format!("failed to parse rv32 raw contract spec: {e}"))
             })?);
-        } else {
-            if final_spec.is_some() {
-                return Err(CliError::SpecFailed(
-                    "rv32 ELF contains multiple finalized contract spec sections".into(),
-                ));
-            }
-            final_spec = Some(load_contract_spec_from_xdr(data)?);
+        } else if final_data.replace(data).is_some() {
+            return Err(CliError::SpecFailed(
+                "rv32 ELF contains multiple finalized contract spec sections".into(),
+            ));
         }
     }
 
+    // Raw fragments win over a finalized section, so decode the finalized
+    // section only when there are no raw fragments. A stale or malformed
+    // `groundhogspecv0` section must not fail the build when the raw fragments
+    // already fully describe the spec.
     if !raw_fragments.is_empty() {
         return canonicalize_rv32_raw_fragments(&raw_fragments);
     }
 
-    Ok(final_spec)
+    match final_data {
+        Some(data) => load_contract_spec_from_xdr(data).map(Some),
+        None => Ok(None),
+    }
 }
 
 fn canonicalize_rv32_raw_fragments(

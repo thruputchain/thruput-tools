@@ -108,11 +108,15 @@ fn minimal_rv32_elf_with_optional_section(extra: Option<(&str, &[u8])>) -> Vec<u
     );
     if let Some(name) = extra_name {
         let (_, data) = extra.expect("bug: extra name implies extra data");
+        // The SDK emits the raw spec fragment as a `static`, which lands in an
+        // ALLOC section. Mark the fixture ALLOC so the lowering step in the
+        // build path exercises the spec-metadata skip rather than the
+        // non-alloc fast path.
         push_shdr(
             &mut file,
             name,
             SHT_PROGBITS,
-            0,
+            SHF_ALLOC,
             0,
             extra_off.expect("bug: extra data has an offset"),
             as_u32(data.len()),
