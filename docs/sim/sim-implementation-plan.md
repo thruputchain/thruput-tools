@@ -588,8 +588,11 @@ chaos, deploy new contracts, or create remote infrastructure.
   coverage, hogd over-rotation, smoke timing, SDK pin) addressed.
 - [x] Add positive event-indexing scenarios with contracts that emit events
   during scheduled load.
-- [ ] Add storage-heavy, event-heavy, calldata-heavy, and compute-heavy
-  workloads.
+- [x] Add storage-heavy, event-heavy, and compute-heavy scenario presets using
+  the existing Fibonacci contract fixture and catalog entries.
+- [ ] Add a calldata-heavy fixture or workload shape; the current runnable
+  contract fixtures do not provide a broad-calldata method that builds cleanly
+  through the local artifact path.
 - [ ] Add NNInt-specific scenario presets.
 
 ## Phase 4: Single Remote Host

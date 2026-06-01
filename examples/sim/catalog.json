@@ -181,6 +181,60 @@
       "runner": "scripts/smoke-sim-scenarios.sh"
     },
     {
+      "id": "local-fibonacci-storage-heavy",
+      "path": "local-fibonacci-storage-heavy.json",
+      "title": "Local Fibonacci Storage-Heavy Preset",
+      "summary": "Builds fibonacci.wasm from groundhog-examples and drives a higher-rate storage-read shape against one deployed contract.",
+      "provider": "local",
+      "tier": "preset",
+      "tags": ["local", "contract", "fibonacci", "storage-read", "storage-heavy", "preset"],
+      "requiresContracts": true,
+      "contracts": [
+        {
+          "name": "fibonacci",
+          "source": "groundhog-examples/fibonacci",
+          "artifact": "fibonacci.wasm"
+        }
+      ],
+      "runner": "hoglab run"
+    },
+    {
+      "id": "local-fibonacci-event-heavy",
+      "path": "local-fibonacci-event-heavy.json",
+      "title": "Local Fibonacci Event-Heavy Preset",
+      "summary": "Builds fibonacci.wasm from groundhog-examples, emits FibComputed events through scheduled contract calls, and queries the indexed event stream.",
+      "provider": "local",
+      "tier": "preset",
+      "tags": ["local", "contract", "fibonacci", "contract-call", "events-query", "event-heavy", "indexer", "preset"],
+      "requiresContracts": true,
+      "contracts": [
+        {
+          "name": "fibonacci",
+          "source": "groundhog-examples/fibonacci",
+          "artifact": "fibonacci.wasm"
+        }
+      ],
+      "runner": "hoglab run"
+    },
+    {
+      "id": "local-fibonacci-compute-heavy",
+      "path": "local-fibonacci-compute-heavy.json",
+      "title": "Local Fibonacci Compute-Heavy Preset",
+      "summary": "Builds fibonacci.wasm from groundhog-examples and submits naive recursive compute(20) contract calls at a conservative rate.",
+      "provider": "local",
+      "tier": "preset",
+      "tags": ["local", "contract", "fibonacci", "contract-call", "compute-heavy", "preset"],
+      "requiresContracts": true,
+      "contracts": [
+        {
+          "name": "fibonacci",
+          "source": "groundhog-examples/fibonacci",
+          "artifact": "fibonacci.wasm"
+        }
+      ],
+      "runner": "hoglab run"
+    },
+    {
       "id": "local-wallet-soak",
       "path": "local-wallet-soak.json",
       "title": "Local Wallet Soak",
