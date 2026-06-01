@@ -560,9 +560,11 @@ fn prepare_workload(
                 query: query.clone(),
             }))
         }
-        WorkloadKind::StatusPoll => Err(SimError::UnsupportedRuntimeWorkloads(workload_name(
-            workload,
-        ))),
+        // read-after-write execution lands in Slice L3; until then the
+        // workload kind validates and schedules but is not runnable.
+        WorkloadKind::StatusPoll | WorkloadKind::ReadAfterWrite => Err(
+            SimError::UnsupportedRuntimeWorkloads(workload_name(workload)),
+        ),
     }
 }
 
@@ -2684,9 +2686,11 @@ async fn sleep_until_sim_time_draining(
 fn rpc_method(workload: WorkloadKind) -> &'static str {
     match workload {
         WorkloadKind::ChainTip => "groundhog_chainTip",
-        WorkloadKind::WalletSubmitSmoke | WorkloadKind::ContractCall => {
-            "groundhog_sendRawTransaction"
-        }
+        // read-after-write reports its write RPC for skipped/aborted ticks; the
+        // executed round-trip sets its own terminal rpc_method in Slice L3.
+        WorkloadKind::WalletSubmitSmoke
+        | WorkloadKind::ContractCall
+        | WorkloadKind::ReadAfterWrite => "groundhog_sendRawTransaction",
         WorkloadKind::ReceiptPoll => "groundhog_getTransactionReceipt",
         WorkloadKind::StatusPoll => "groundhog_getTransactionStatus",
         WorkloadKind::EventsQuery => "groundhog_getEvents",

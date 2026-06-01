@@ -23,6 +23,22 @@ pub struct ActorState {
     pub last_submitted_completed_at: Option<Instant>,
     pub last_observed_receipt: Option<TransactionReceipt>,
     pending_receipts: VecDeque<PendingReceipt>,
+    read_after_write: ReadAfterWriteState,
+}
+
+/// What an actor knows about its read-after-write counter on the target.
+///
+/// The expectation advances only when a write is known committed, so a failed
+/// read-back never desyncs the actor; an unknown commit status (receipt RPC
+/// failure or restart) drops to `NeedsReconcile`, which forces a pre-read to
+/// rebase before the next write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadAfterWriteState {
+    /// No trusted baseline yet (first tick, or after an uncertain outcome). The
+    /// next tick must pre-read to rebase before writing.
+    NeedsReconcile,
+    /// The actor's known committed counter value.
+    Known(u64),
 }
 
 impl ActorState {
@@ -40,6 +56,7 @@ impl ActorState {
             last_submitted_completed_at: None,
             last_observed_receipt: None,
             pending_receipts: VecDeque::new(),
+            read_after_write: ReadAfterWriteState::NeedsReconcile,
         }
     }
 
@@ -132,6 +149,55 @@ impl ActorState {
             .retain(|pending| pending.tx_hash != receipt.tx_hash);
         self.last_observed_receipt = Some(receipt);
     }
+
+    /// Return the actor's current read-after-write counter belief.
+    pub fn read_after_write_state(&self) -> ReadAfterWriteState {
+        self.read_after_write
+    }
+
+    /// Whether the next read-after-write tick must pre-read before writing.
+    pub fn read_after_write_needs_reconcile(&self) -> bool {
+        matches!(self.read_after_write, ReadAfterWriteState::NeedsReconcile)
+    }
+
+    /// Expected counter value after one more increment.
+    ///
+    /// In the `Known` state the increment is provably one past the last known
+    /// committed value, so no baseline is needed. In `NeedsReconcile` the caller
+    /// must supply the reconcile pre-read baseline; omitting it is a usage bug.
+    pub fn read_after_write_expected_after_increment(
+        &self,
+        reconcile_baseline: Option<u64>,
+    ) -> Result<u64, ActorError> {
+        let base = match self.read_after_write {
+            ReadAfterWriteState::Known(value) => value,
+            ReadAfterWriteState::NeedsReconcile => {
+                reconcile_baseline.ok_or(ActorError::ReadAfterWriteNeedsReconcile {
+                    actor_id: self.actor_id,
+                })?
+            }
+        };
+        base.checked_add(1)
+            .ok_or(ActorError::ReadAfterWriteOverflow {
+                actor_id: self.actor_id,
+            })
+    }
+
+    /// Rebase the actor to a known committed counter value.
+    ///
+    /// Call this the moment a write is known committed (an `ok` receipt),
+    /// before reading back, so a later read failure cannot leave the actor
+    /// model behind.
+    pub fn record_read_after_write_committed(&mut self, committed_value: u64) {
+        self.read_after_write = ReadAfterWriteState::Known(committed_value);
+    }
+
+    /// Drop the actor's read-after-write belief, forcing a reconcile pre-read on
+    /// the next tick. Use on read-back mismatch, unknown commit status, or
+    /// restart.
+    pub fn invalidate_read_after_write(&mut self) {
+        self.read_after_write = ReadAfterWriteState::NeedsReconcile;
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -198,6 +264,10 @@ pub enum ActorError {
     ActorIdTooLarge { actor_id: usize },
     #[error("actor {actor_id} exhausted the low 32 nonce sequence bits")]
     NonceSequenceExhausted { actor_id: u32 },
+    #[error("actor {actor_id} read-after-write state needs a reconcile pre-read baseline")]
+    ReadAfterWriteNeedsReconcile { actor_id: u32 },
+    #[error("actor {actor_id} read-after-write counter overflowed u64")]
+    ReadAfterWriteOverflow { actor_id: u32 },
 }
 
 #[cfg(test)]
@@ -287,6 +357,91 @@ mod tests {
         assert!(matches!(
             actor.current_nonce(),
             Err(ActorError::NonceSequenceExhausted { actor_id: 2 })
+        ));
+    }
+
+    #[test]
+    fn read_after_write_starts_needing_reconcile() {
+        let actor = ActorState::new(
+            0,
+            sim_account(1),
+            NonceNamespace::new(1).expect("namespace should fit"),
+        );
+
+        assert!(actor.read_after_write_needs_reconcile());
+        assert_eq!(
+            actor.read_after_write_state(),
+            ReadAfterWriteState::NeedsReconcile
+        );
+    }
+
+    #[test]
+    fn read_after_write_reconcile_requires_baseline_then_advances() {
+        let mut actor = ActorState::new(
+            0,
+            sim_account(1),
+            NonceNamespace::new(1).expect("namespace should fit"),
+        );
+
+        // NeedsReconcile without a pre-read baseline is a usage bug.
+        assert!(matches!(
+            actor.read_after_write_expected_after_increment(None),
+            Err(ActorError::ReadAfterWriteNeedsReconcile { actor_id: 0 })
+        ));
+
+        // Reconcile pre-read observed 5 -> next write should land 6.
+        assert_eq!(
+            actor
+                .read_after_write_expected_after_increment(Some(5))
+                .unwrap(),
+            6
+        );
+
+        // A known-committed write rebases without needing another pre-read.
+        actor.record_read_after_write_committed(6);
+        assert_eq!(
+            actor.read_after_write_state(),
+            ReadAfterWriteState::Known(6)
+        );
+        assert!(!actor.read_after_write_needs_reconcile());
+        assert_eq!(
+            actor
+                .read_after_write_expected_after_increment(None)
+                .unwrap(),
+            7
+        );
+    }
+
+    #[test]
+    fn read_after_write_invalidation_forces_reconcile() {
+        let mut actor = ActorState::new(
+            0,
+            sim_account(1),
+            NonceNamespace::new(1).expect("namespace should fit"),
+        );
+        actor.record_read_after_write_committed(3);
+
+        actor.invalidate_read_after_write();
+
+        assert!(actor.read_after_write_needs_reconcile());
+        assert!(matches!(
+            actor.read_after_write_expected_after_increment(None),
+            Err(ActorError::ReadAfterWriteNeedsReconcile { .. })
+        ));
+    }
+
+    #[test]
+    fn read_after_write_reports_overflow_at_boundary() {
+        let mut actor = ActorState::new(
+            0,
+            sim_account(1),
+            NonceNamespace::new(1).expect("namespace should fit"),
+        );
+        actor.record_read_after_write_committed(u64::MAX);
+
+        assert!(matches!(
+            actor.read_after_write_expected_after_increment(None),
+            Err(ActorError::ReadAfterWriteOverflow { actor_id: 0 })
         ));
     }
 

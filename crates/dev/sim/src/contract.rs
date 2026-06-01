@@ -877,6 +877,7 @@ mod tests {
                 limit: 10,
                 expect_min_events: Some(0),
             }],
+            read_after_write: Vec::new(),
             assertions: crate::manifest::AssertionSpec::default(),
             chaos: Vec::new(),
             baseline: None,
