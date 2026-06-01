@@ -590,6 +590,34 @@ fn rejects_unexpected_alloc_section() {
 }
 
 #[test]
+fn ignores_alloc_contract_spec_metadata_sections() {
+    for name in ["groundhogspecrawv0", "groundhogspecv0"] {
+        let mut spec = happy_spec();
+        spec.extras.push(ExtraSection::progbits(
+            name,
+            SHF_ALLOC,
+            0x1000,
+            vec![1, 2, 3, 4],
+        ));
+        let lowered = lower(&assemble(spec)).expect("spec metadata section is ignored");
+
+        assert_eq!(&lowered.initial_memory[0x1000..0x1004], &[0, 0, 0, 0]);
+    }
+}
+
+#[test]
+fn rejects_executable_contract_spec_metadata_section() {
+    let mut spec = happy_spec();
+    spec.extras.push(ExtraSection::progbits(
+        "groundhogspecrawv0",
+        SHF_ALLOC | SHF_EXECINSTR,
+        0x1000,
+        vec![0u8; 4],
+    ));
+    expect_err(spec, "unexpected executable section");
+}
+
+#[test]
 fn rejects_data_section_overlapping_text() {
     let mut spec = happy_spec();
     // Collides with .text at vaddr 0.
