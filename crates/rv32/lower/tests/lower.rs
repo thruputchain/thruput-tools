@@ -606,6 +606,17 @@ fn ignores_alloc_contract_spec_metadata_sections() {
 }
 
 #[test]
+fn spec_metadata_section_names_match_spec_tool() {
+    assert_eq!(
+        groundhog_rv32_lower::lower::SPEC_METADATA_SECTIONS,
+        [
+            groundhog_spec_tool::RAW_SECTION_NAME,
+            groundhog_spec_tool::FINAL_SECTION_NAME,
+        ]
+    );
+}
+
+#[test]
 fn rejects_executable_contract_spec_metadata_section() {
     let mut spec = happy_spec();
     spec.extras.push(ExtraSection::progbits(

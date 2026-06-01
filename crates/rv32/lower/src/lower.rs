@@ -18,6 +18,8 @@ pub const ALLOC_ALLOWLIST: [&str; 7] = [
 ];
 
 /// Contract spec metadata sections are compile-time sidecars, not VM memory.
+/// These names mirror `groundhog_spec_tool::{RAW_SECTION_NAME, FINAL_SECTION_NAME}`;
+/// keep them local so the production lowerer has no spec-tool dependency.
 pub const SPEC_METADATA_SECTIONS: [&str; 2] = ["groundhogspecrawv0", "groundhogspecv0"];
 
 /// The product of lowering: the serialized artifact plus the pieces that went
