@@ -586,9 +586,6 @@ chaos, deploy new contracts, or create remote infrastructure.
   groundhog-examples, and hogd; no blockers/highs. Findings (dead-helper
   consolidation, `matched` on read failure, decode/abort/fault + overflow test
   coverage, hogd over-rotation, smoke timing, SDK pin) addressed.
-- [ ] Slice L4: add the read-after-write catalog scenario, smoke coverage, and
-  docs. (Covers "Add richer actor state machines" and "Add read-after-write
-  scenario presets".)
 - [x] Add positive event-indexing scenarios with contracts that emit events
   during scheduled load.
 - [ ] Add storage-heavy, event-heavy, calldata-heavy, and compute-heavy
