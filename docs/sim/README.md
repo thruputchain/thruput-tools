@@ -81,10 +81,10 @@ compile WASM on demand, and commit `.wasm` files only when exact byte identity
 is the fixture under test.
 
 The catalog also includes heavier local presets that are not part of the fast
-smoke ladder: `local-fibonacci-storage-heavy`,
+smoke ladder: `local-fibonacci-storage-miss-heavy`,
 `local-fibonacci-event-heavy`, and `local-fibonacci-compute-heavy`. They reuse
-the Fibonacci fixture to stress storage reads, indexed event traffic, and
-recursive contract-call compute with longer or higher-rate load shapes. Run
+the Fibonacci fixture to stress negative storage lookups, indexed event traffic,
+and recursive contract-call compute with longer or higher-rate load shapes. Run
 them directly with `hoglab run` and `--contract-artifact-root` after building
 the required contract artifacts.
 

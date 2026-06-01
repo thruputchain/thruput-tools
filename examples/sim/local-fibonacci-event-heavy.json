@@ -54,7 +54,7 @@
       },
       "cursor": "0x",
       "limit": 100,
-      "expectMinEvents": 0
+      "expectMinEvents": 1
     }
   ],
   "assertions": {

@@ -181,13 +181,13 @@
       "runner": "scripts/smoke-sim-scenarios.sh"
     },
     {
-      "id": "local-fibonacci-storage-heavy",
-      "path": "local-fibonacci-storage-heavy.json",
-      "title": "Local Fibonacci Storage-Heavy Preset",
-      "summary": "Builds fibonacci.wasm from groundhog-examples and drives a higher-rate storage-read shape against one deployed contract.",
+      "id": "local-fibonacci-storage-miss-heavy",
+      "path": "local-fibonacci-storage-miss-heavy.json",
+      "title": "Local Fibonacci Storage Miss Preset",
+      "summary": "Builds fibonacci.wasm from groundhog-examples and drives a higher-rate negative storage lookup shape against one deployed contract.",
       "provider": "local",
       "tier": "preset",
-      "tags": ["local", "contract", "fibonacci", "storage-read", "storage-heavy", "preset"],
+      "tags": ["local", "contract", "fibonacci", "storage-read", "storage-miss", "negative-lookup", "preset"],
       "requiresContracts": true,
       "contracts": [
         {

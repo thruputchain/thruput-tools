@@ -1,14 +1,14 @@
 {
   "schemaVersion": 1,
   "kind": "groundhog-simulation",
-  "name": "local-fibonacci-storage-heavy",
-  "seed": "sim-local-fibonacci-storage-heavy",
+  "name": "local-fibonacci-storage-miss-heavy",
+  "seed": "sim-local-fibonacci-storage-miss-heavy",
   "target": {
     "provider": "local"
   },
   "bootstrap": {
     "accounts": 8,
-    "accountSeed": "sim-local-fibonacci-storage-heavy-accounts",
+    "accountSeed": "sim-local-fibonacci-storage-miss-heavy-accounts",
     "initialStorageTokens": "1000000000",
     "devWalletProfile": "default",
     "storageCostProfile": "default"
@@ -34,7 +34,7 @@
   ],
   "storageReads": [
     {
-      "name": "fib-zero-key",
+      "name": "fib-zero-key-miss",
       "contract": "fibonacci",
       "key": "0x0000000000000000000000000000000000000000000000000000000000000000",
       "expectPresent": false
