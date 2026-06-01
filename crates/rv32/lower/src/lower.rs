@@ -17,6 +17,11 @@ pub const ALLOC_ALLOWLIST: [&str; 7] = [
     ".text", ".rodata", ".srodata", ".data", ".sdata", ".bss", ".sbss",
 ];
 
+/// Contract spec metadata sections are compile-time sidecars, not VM memory.
+/// These names mirror `groundhog_spec_tool::{RAW_SECTION_NAME, FINAL_SECTION_NAME}`;
+/// keep them local so the production lowerer has no spec-tool dependency.
+pub const SPEC_METADATA_SECTIONS: [&str; 2] = ["groundhogspecrawv0", "groundhogspecv0"];
+
 /// The product of lowering: the serialized artifact plus the pieces that went
 /// into it (handy for metadata and tests).
 #[derive(Debug, Clone)]
@@ -49,6 +54,10 @@ pub fn lower(elf_bytes: &[u8]) -> Result<Lowered> {
 
 fn spans_overlap(a_start: u32, a_end: u32, b_start: u32, b_end: u32) -> bool {
     a_start < b_end && b_start < a_end
+}
+
+fn is_spec_metadata_section(name: &str) -> bool {
+    SPEC_METADATA_SECTIONS.contains(&name)
 }
 
 /// Find the single `.text` section, erroring if absent or duplicated.
@@ -150,6 +159,9 @@ fn validate_sections(
                 "unexpected executable section: {}",
                 section.name
             )));
+        }
+        if is_spec_metadata_section(&section.name) {
+            continue;
         }
         if !section.is_alloc() {
             continue;

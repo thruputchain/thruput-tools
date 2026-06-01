@@ -509,9 +509,39 @@ fn build_rv32_project_compiles_and_lowers_elf() {
     let processed_metadata = target_dir
         .join("groundhog")
         .join("demo_contract_rv32.rv32.json");
+    let processed_spec_json = target_dir
+        .join("groundhog")
+        .join("demo_contract_rv32.spec.json");
+    let processed_spec_xdr = target_dir
+        .join("groundhog")
+        .join("demo_contract_rv32.spec.xdr");
     let cargo_args_log = project_root.join("cargo-args.log");
     let elf_fixture = project_root.join("fixture.elf");
-    fs::write(&elf_fixture, support::minimal_rv32_elf()).unwrap();
+    let raw_spec = encode_fragments(&[
+        groundhog_spec_tool::SpecFragment::SpecInterface {
+            interface_fragment: groundhog_spec_tool::SpecInterfaceFragment {
+                interface_name: spec_string("Counter"),
+                interface_version: spec_string("0.1.0"),
+                throws: vec![].try_into().unwrap(),
+            },
+        },
+        groundhog_spec_tool::SpecFragment::SpecMethod {
+            method_fragment: groundhog_spec_tool::SpecMethodFragment {
+                interface_name: spec_string("Counter"),
+                interface_version: spec_string("0.1.0"),
+                method: groundhog_spec_tool::ContractSpecMethod {
+                    name: spec_string("get"),
+                    args: vec![].try_into().unwrap(),
+                    return_type: groundhog_spec_tool::ContractType::U64,
+                },
+            },
+        },
+    ]);
+    fs::write(
+        &elf_fixture,
+        support::minimal_rv32_elf_with_section(groundhog_spec_tool::RAW_SECTION_NAME, &raw_spec),
+    )
+    .unwrap();
     let metadata_json = format!(
         r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract-rv32","manifest_path":"{}"}}]}}"#,
         project_root.display(),
@@ -560,6 +590,8 @@ fn build_rv32_project_compiles_and_lowers_elf() {
     assert_eq!(result.elf, raw_elf);
     assert_eq!(result.rv32, processed_rv32);
     assert_eq!(result.metadata, processed_metadata);
+    assert_eq!(result.spec_json, Some(processed_spec_json.clone()));
+    assert_eq!(result.spec_xdr, Some(processed_spec_xdr.clone()));
     assert!(result.size_bytes > 64 * 1024);
     assert!(fs::read(&processed_rv32).unwrap().starts_with(b"GHRV32A1"));
     let metadata: serde_json::Value =
@@ -568,6 +600,15 @@ fn build_rv32_project_compiles_and_lowers_elf() {
         metadata["artifact_format_fingerprint"],
         "0x38927fa2342c674a"
     );
+    let spec_json: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&processed_spec_json).unwrap()).unwrap();
+    assert_eq!(spec_json["format"], "gh_contract_spec_v1");
+    assert_eq!(spec_json["interfaces"][0]["name"], "Counter");
+    assert_eq!(spec_json["interfaces"][0]["methods"][0]["name"], "get");
+    let spec_xdr = fs::read(&processed_spec_xdr).unwrap();
+    let spec = groundhog_cli::contract_spec::load_contract_spec_from_xdr(&spec_xdr)
+        .expect("bug: rv32 spec sidecar should decode");
+    assert_eq!(spec.interfaces.len(), 1);
 
     let cargo_args = fs::read_to_string(cargo_args_log).unwrap();
     assert!(
@@ -582,6 +623,18 @@ fn build_rv32_project_compiles_and_lowers_elf() {
         metadata["build_flags"],
         "CARGO_PROFILE_RELEASE_STRIP=false cargo build --release --no-default-features --features entrypoints --target riscv32im-unknown-none-elf -p demo-contract-rv32 --locked"
     );
+}
+
+fn spec_string(value: &str) -> groundhog_spec_tool::ContractSpecString {
+    value.try_into().expect("bug: test spec string should fit")
+}
+
+fn encode_fragments(fragments: &[groundhog_spec_tool::SpecFragment]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for fragment in fragments {
+        bytes.extend(xdrs::txs::encode(fragment).expect("bug: test spec fragment should encode"));
+    }
+    bytes
 }
 
 struct CurrentDirGuard {

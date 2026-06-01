@@ -26,3 +26,6 @@ clap = { workspace = true }
 groundhog-rv32-artifact = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+groundhog-spec-tool = { workspace = true }
