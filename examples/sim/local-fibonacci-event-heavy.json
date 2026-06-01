@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "kind": "groundhog-simulation",
+  "name": "local-fibonacci-event-heavy",
+  "seed": "sim-local-fibonacci-event-heavy",
+  "target": {
+    "provider": "local"
+  },
+  "bootstrap": {
+    "accounts": 2,
+    "accountSeed": "sim-local-fibonacci-event-heavy-accounts",
+    "initialStorageTokens": "1000000000",
+    "devWalletProfile": "default",
+    "storageCostProfile": "default"
+  },
+  "loadShape": [
+    {
+      "duration": "20s",
+      "users": 2,
+      "ratePerUserHz": 1.5
+    }
+  ],
+  "workloads": [
+    {
+      "name": "contract-call",
+      "weight": 3
+    },
+    {
+      "name": "events-query",
+      "weight": 7
+    }
+  ],
+  "contractArtifacts": [
+    {
+      "name": "fibonacci",
+      "wasm": "fibonacci.wasm"
+    }
+  ],
+  "contractCalls": [
+    {
+      "name": "fib-compute-10",
+      "contract": "fibonacci",
+      "entrypoint": "0xc573d6c80bb945ad",
+      "calldata": "0x0a"
+    }
+  ],
+  "eventQueries": [
+    {
+      "name": "fib-events",
+      "contract": "fibonacci",
+      "order": "descending",
+      "anchor": {
+        "kind": "atEnd"
+      },
+      "cursor": "0x",
+      "limit": 100,
+      "expectMinEvents": 1
+    }
+  ],
+  "assertions": {
+    "maxErrorRate": 0.001
+  }
+}

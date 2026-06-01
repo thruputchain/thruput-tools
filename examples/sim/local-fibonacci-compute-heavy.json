@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "kind": "groundhog-simulation",
+  "name": "local-fibonacci-compute-heavy",
+  "seed": "sim-local-fibonacci-compute-heavy",
+  "target": {
+    "provider": "local"
+  },
+  "bootstrap": {
+    "accounts": 1,
+    "accountSeed": "sim-local-fibonacci-compute-heavy-accounts",
+    "initialStorageTokens": "1000000000",
+    "devWalletProfile": "default",
+    "storageCostProfile": "default"
+  },
+  "loadShape": [
+    {
+      "duration": "12s",
+      "users": 1,
+      "ratePerUserHz": 0.5
+    }
+  ],
+  "workloads": [
+    {
+      "name": "contract-call",
+      "weight": 1
+    }
+  ],
+  "contractArtifacts": [
+    {
+      "name": "fibonacci",
+      "wasm": "fibonacci.wasm"
+    }
+  ],
+  "contractCalls": [
+    {
+      "name": "fib-compute-20",
+      "contract": "fibonacci",
+      "entrypoint": "0xc573d6c80bb945ad",
+      "calldata": "0x14"
+    }
+  ],
+  "assertions": {
+    "maxErrorRate": 0.001
+  }
+}
