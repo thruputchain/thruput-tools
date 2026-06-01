@@ -3,9 +3,13 @@
 **Date:** 2026-05-31
 **Status:** L1 signed off. State-machine semantics, fixture, submit-failure
 branch, and view-only read decoding finalized per review. v1 read mode is
-view-only; storage read mode is deferred. L2 and L3 complete (contract fixture,
-manifest, validation, `ReadAfterWriteState`, contract setup, and the executor
-round-trip with unit tests). L4 (scenario + smoke + docs) next.
+view-only; storage read mode is deferred. **Complete (L1-L4).** Contract fixture,
+manifest, validation, `ReadAfterWriteState`, contract setup, executor round-trip,
+scenario, and smoke all landed; the live smoke confirmed advancing round-trips
+and surfaced + fixed an hogd ViewGateway staleness bug. End-to-end reviewer-fleet
+findings addressed. Shipped across the `sim-read-after-write` (groundhog-rpc),
+`caller-counter-fixture` (groundhog-examples), and `viewgateway-refresh-on-tip-height`
+(hogd) branches.
 
 ## Goal
 

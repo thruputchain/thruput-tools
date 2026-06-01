@@ -575,9 +575,17 @@ chaos, deploy new contracts, or create remote infrastructure.
   `NeedsReconcile` on mismatch or unknown commit status. Read-back decodes the
   CXS `u64` via `xdrs::cxs::decode`. Six mock-client executor tests cover the
   transition matrix; clippy/fmt/tests green.
-- [ ] Slice L4: read-after-write catalog scenario + smoke coverage (builds the
+- [x] Slice L4: read-after-write catalog scenario + smoke coverage (builds the
   `caller-counter` `.wasm`, runs the live `groundhog_view` caller-identity
-  check) + docs.
+  check) + docs. The live smoke confirmed four advancing round-trips
+  (expected/observed 1/1..4/4, all matched) and surfaced a real hogd
+  ViewGateway staleness bug (public views were pinned at an old committed
+  height); fixed in the `viewgateway-refresh-on-tip-height` hogd branch by
+  refreshing the view snapshot when the committed tip height advances.
+- [x] Final review gate L: end-to-end reviewer fleet across groundhog-rpc,
+  groundhog-examples, and hogd; no blockers/highs. Findings (dead-helper
+  consolidation, `matched` on read failure, decode/abort/fault + overflow test
+  coverage, hogd over-rotation, smoke timing, SDK pin) addressed.
 - [ ] Slice L4: add the read-after-write catalog scenario, smoke coverage, and
   docs. (Covers "Add richer actor state machines" and "Add read-after-write
   scenario presets".)
