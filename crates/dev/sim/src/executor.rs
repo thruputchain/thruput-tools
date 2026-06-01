@@ -232,17 +232,15 @@ where
     let mut chaos_failed = false;
 
     for event in schedule {
-        let drained = drain_completed_workloads(
+        Box::pin(drain_completed_workloads_and_update_in_flight(
             &mut tasks,
             &mut task_contexts,
             actor_states,
             event_writer,
             metrics,
-        )
+            &mut in_flight,
+        ))
         .await?;
-        in_flight = in_flight.checked_sub(drained).ok_or(SimError::Executor(
-            "in-flight workload count underflowed".into(),
-        ))?;
         while let Some(phase) =
             next_phase.next_if(|phase| phase.simulation_time_ms <= event.simulation_time_ms())
         {
@@ -292,6 +290,15 @@ where
                         continue;
                     }
                 };
+                Box::pin(drain_completed_workloads_and_update_in_flight(
+                    &mut tasks,
+                    &mut task_contexts,
+                    actor_states,
+                    event_writer,
+                    metrics,
+                    &mut in_flight,
+                ))
+                .await?;
                 let prepared = prepare_workload(
                     actor_states
                         .get_mut(actor_index)
@@ -662,6 +669,23 @@ async fn drain_completed_workloads(
         drained += 1;
     }
     Ok(drained)
+}
+
+async fn drain_completed_workloads_and_update_in_flight(
+    tasks: &mut JoinSet<Result<WorkloadCompletion, SimError>>,
+    task_contexts: &mut HashMap<TaskId, WorkloadTaskContext>,
+    actor_states: &mut [ActorState],
+    event_writer: &mut EventWriter,
+    metrics: &mut RunMetricsBuilder,
+    in_flight: &mut u64,
+) -> Result<(), SimError> {
+    let drained =
+        drain_completed_workloads(tasks, task_contexts, actor_states, event_writer, metrics)
+            .await?;
+    *in_flight = in_flight.checked_sub(drained).ok_or(SimError::Executor(
+        "in-flight workload count underflowed".into(),
+    ))?;
+    Ok(())
 }
 
 fn join_workload(
@@ -6155,6 +6179,154 @@ mod tests {
             .await
             .expect("events should read");
         (actors, metrics, events)
+    }
+
+    fn completed_read_after_write_update(value: u64) -> WorkloadCompletion {
+        let tick = ScheduledActorTick {
+            phase_index: 0,
+            actor_id: 0,
+            actor_sequence: 0,
+            simulation_time_ms: 0,
+        };
+        let prepared = PreparedReadAfterWriteWorkload {
+            entry: prepared_read_after_write(),
+            tx: BuiltSubmitTransaction {
+                tx_hex: "0xsigned".into(),
+                nonce: 4_294_967_296,
+            },
+            caller: ContractAddress::from([0x99; 32]),
+            state: ReadAfterWriteState::NeedsReconcile,
+        };
+        let mut event = read_after_write_base_event(
+            &tick,
+            &prepared,
+            "0".into(),
+            "0".into(),
+            0,
+            "groundhog_view",
+            Some("4294967296".into()),
+            Some(value),
+            true,
+        );
+        event.tx_hash = Some("0x5a".into());
+        WorkloadCompletion {
+            workload: WorkloadKind::ReadAfterWrite,
+            latency_ms: 0,
+            error_class: None,
+            chain_tip: None,
+            event: ResultEvent::WorkloadCompleted { event },
+            skipped: false,
+            submitted_transaction: Some(SubmittedTransaction {
+                actor_id: 0,
+                tx_hash: tx_hash(0x5a),
+                scheduled_time_ms: 0,
+                completed_at: Instant::now(),
+            }),
+            observed_receipt: None,
+            receipt_poll: None,
+            submit_to_receipt_latency_ms: None,
+            read_after_write_transition: Some(ReadAfterWriteUpdate {
+                actor_id: 0,
+                transition: ReadAfterWriteTransition::SetKnown(value),
+            }),
+        }
+    }
+
+    #[tokio::test]
+    async fn drain_after_permit_reacquire_updates_actor_before_prepare() {
+        let mut tasks = JoinSet::new();
+        let mut task_contexts = HashMap::new();
+        let global = Arc::new(Semaphore::new(1));
+        let actor = Arc::new(Semaphore::new(1));
+        let first_permits = WorkloadPermits {
+            _global: global
+                .clone()
+                .try_acquire_owned()
+                .expect("global permit should acquire"),
+            _actor: actor
+                .clone()
+                .try_acquire_owned()
+                .expect("actor permit should acquire"),
+        };
+        let abort = tasks.spawn(async move {
+            let _permits = first_permits;
+            Ok(completed_read_after_write_update(1))
+        });
+        task_contexts.insert(
+            abort.id(),
+            WorkloadTaskContext {
+                actor_id: 0,
+                workload: WorkloadKind::ReadAfterWrite,
+                scheduled_time_ms: 0,
+            },
+        );
+
+        let tick = ScheduledActorTick {
+            phase_index: 0,
+            actor_id: 0,
+            actor_sequence: 0,
+            simulation_time_ms: 1,
+        };
+        let _second_permits = loop {
+            match acquire_workload_permits(
+                &tick,
+                WorkloadKind::ReadAfterWrite,
+                global.clone(),
+                actor.clone(),
+            )
+            .expect("permit acquisition should not error")
+            {
+                Ok(permits) => break permits,
+                Err(_) => tokio::task::yield_now().await,
+            }
+        };
+
+        let mut actors = actor_states();
+        let mut metrics = RunMetricsBuilder::default();
+        let file = NamedTempFile::new().expect("temp file should be created");
+        let mut event_writer = EventWriter::create(file.path())
+            .await
+            .expect("event writer should open");
+        let mut in_flight = 1;
+        assert!(actors[0].read_after_write_needs_reconcile());
+
+        drain_completed_workloads_and_update_in_flight(
+            &mut tasks,
+            &mut task_contexts,
+            &mut actors,
+            &mut event_writer,
+            &mut metrics,
+            &mut in_flight,
+        )
+        .await
+        .expect("completed task should drain");
+
+        assert_eq!(in_flight, 0);
+        assert_eq!(
+            actors[0].read_after_write_state(),
+            ReadAfterWriteState::Known(1)
+        );
+        assert_eq!(actors[0].next_nonce_sequence, 1);
+        let expected_nonce = actors[0].current_nonce().expect("nonce should build");
+        let runtime = runtime_manifest();
+        let prepared = prepare_workload(
+            &mut actors[0],
+            WorkloadKind::ReadAfterWrite,
+            runtime_dev_wallet_action_entrypoint(&runtime).expect("wallet entrypoint should parse"),
+            &[],
+            &[],
+            &[],
+            &[],
+            &[prepared_read_after_write()],
+        )
+        .expect("read-after-write should prepare");
+        match prepared {
+            PreparedWorkload::ReadAfterWrite(workload) => {
+                assert_eq!(workload.state, ReadAfterWriteState::Known(1));
+                assert_eq!(workload.tx.nonce, expected_nonce);
+            }
+            _ => panic!("expected read-after-write workload"),
+        }
     }
 
     #[tokio::test]

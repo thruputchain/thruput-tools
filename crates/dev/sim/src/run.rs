@@ -960,7 +960,7 @@ mod tests {
             .await
             .expect("scenario should write");
 
-        let error = run_target(RunOptions {
+        let error = Box::pin(run_target(RunOptions {
             scenario,
             rpc_url: Some("http://127.0.0.1:9545".into()),
             runtime_manifest: None,
@@ -973,7 +973,7 @@ mod tests {
             out_dir: None,
             seed: None,
             nonce_namespace: None,
-        })
+        }))
         .await
         .expect_err("local run should reject rpc url before launch");
 
@@ -992,7 +992,7 @@ mod tests {
             .expect("scenario should write");
         let missing = dir.path().join("missing-groundhog");
 
-        let error = run_target(RunOptions {
+        let error = Box::pin(run_target(RunOptions {
             scenario,
             rpc_url: None,
             runtime_manifest: None,
@@ -1005,7 +1005,7 @@ mod tests {
             out_dir: None,
             seed: None,
             nonce_namespace: None,
-        })
+        }))
         .await
         .expect_err("local run should use the local provider");
 

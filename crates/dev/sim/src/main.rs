@@ -131,7 +131,7 @@ impl From<RunArgs> for RunOptions {
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    match run_cli().await {
+    match Box::pin(run_cli()).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("error: {error}");
@@ -150,7 +150,7 @@ async fn run_cli() -> Result<(), SimError> {
             Ok(())
         }
         Command::Run(args) => {
-            let summary = run_target(args.into()).await?;
+            let summary = Box::pin(run_target(args.into())).await?;
             println!("completed run");
             println!("run directory: {}", summary.out_dir.display());
             Ok(())
