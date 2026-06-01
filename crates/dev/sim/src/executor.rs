@@ -21,9 +21,12 @@ use groundhog_json_rpc_types::{
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::{Id as TaskId, JoinError, JoinSet};
 
-use crate::actor::{ActorState, DrainedPendingReceipt, ReceiptPollTarget};
+use crate::actor::{
+    ActorError, ActorState, DrainedPendingReceipt, ReadAfterWriteState, ReceiptPollTarget,
+};
 use crate::contract::{
-    PreparedContractCall, PreparedEventQuery, PreparedStorageRead, PreparedViewCall,
+    PreparedContractCall, PreparedEventQuery, PreparedReadAfterWrite, PreparedStorageRead,
+    PreparedViewCall,
 };
 use crate::error::SimError;
 use crate::event::{ChaosTransitionEvent, EventWriter, ResultEvent, WorkloadEvent};
@@ -174,6 +177,7 @@ pub struct ScheduleExecution<'a> {
     pub contract_calls: &'a [PreparedContractCall],
     pub storage_reads: &'a [PreparedStorageRead],
     pub event_queries: &'a [PreparedEventQuery],
+    pub read_after_write: &'a [PreparedReadAfterWrite],
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -215,6 +219,7 @@ where
         contract_calls,
         storage_reads,
         event_queries,
+        read_after_write,
     } = input;
     let wallet_entrypoint = runtime_dev_wallet_action_entrypoint(runtime_manifest)?;
     let run_start = Instant::now();
@@ -227,17 +232,15 @@ where
     let mut chaos_failed = false;
 
     for event in schedule {
-        let drained = drain_completed_workloads(
+        Box::pin(drain_completed_workloads_and_update_in_flight(
             &mut tasks,
             &mut task_contexts,
             actor_states,
             event_writer,
             metrics,
-        )
+            &mut in_flight,
+        ))
         .await?;
-        in_flight = in_flight.checked_sub(drained).ok_or(SimError::Executor(
-            "in-flight workload count underflowed".into(),
-        ))?;
         while let Some(phase) =
             next_phase.next_if(|phase| phase.simulation_time_ms <= event.simulation_time_ms())
         {
@@ -287,6 +290,15 @@ where
                         continue;
                     }
                 };
+                Box::pin(drain_completed_workloads_and_update_in_flight(
+                    &mut tasks,
+                    &mut task_contexts,
+                    actor_states,
+                    event_writer,
+                    metrics,
+                    &mut in_flight,
+                ))
+                .await?;
                 let prepared = prepare_workload(
                     actor_states
                         .get_mut(actor_index)
@@ -297,6 +309,7 @@ where
                     contract_calls,
                     storage_reads,
                     event_queries,
+                    read_after_write,
                 )?;
                 dispatch_workload(
                     client.clone(),
@@ -487,6 +500,7 @@ fn acquire_workload_permits(
         _actor: actor_permit,
     }))
 }
+#[allow(clippy::too_many_arguments)]
 fn prepare_workload(
     actor: &mut ActorState,
     workload: WorkloadKind,
@@ -495,6 +509,7 @@ fn prepare_workload(
     contract_calls: &[PreparedContractCall],
     storage_reads: &[PreparedStorageRead],
     event_queries: &[PreparedEventQuery],
+    read_after_write: &[PreparedReadAfterWrite],
 ) -> Result<PreparedWorkload, SimError> {
     match workload {
         WorkloadKind::ChainTip => Ok(PreparedWorkload::ChainTip),
@@ -560,6 +575,34 @@ fn prepare_workload(
                 query: query.clone(),
             }))
         }
+        WorkloadKind::ReadAfterWrite => {
+            let entry = read_after_write.first().ok_or_else(|| {
+                SimError::Executor(
+                    "read-after-write workload requires at least one prepared entry".into(),
+                )
+            })?;
+            let write_entrypoint: [u8; 8] =
+                entry.write_entrypoint.as_slice().try_into().map_err(|_| {
+                    SimError::Executor(
+                        "read-after-write prepared write entrypoint must be 8 bytes".into(),
+                    )
+                })?;
+            let tx = build_contract_call_transaction(
+                actor,
+                wallet_entrypoint,
+                entry.contract,
+                groundhog_xdr::contract::ContractEntrypointID::from(write_entrypoint),
+                &entry.write_calldata,
+            )?;
+            Ok(PreparedWorkload::ReadAfterWrite(
+                PreparedReadAfterWriteWorkload {
+                    entry: entry.clone(),
+                    tx,
+                    caller: actor.wallet_address,
+                    state: actor.read_after_write_state(),
+                },
+            ))
+        }
         WorkloadKind::StatusPoll => Err(SimError::UnsupportedRuntimeWorkloads(workload_name(
             workload,
         ))),
@@ -599,6 +642,9 @@ fn dispatch_workload<C>(
             PreparedWorkload::EventsQuery(query) => {
                 execute_events_query(client, &tick, query).await
             }
+            PreparedWorkload::ReadAfterWrite(workload) => {
+                execute_read_after_write(client, &tick, workload).await
+            }
         }
     });
     task_contexts.insert(abort.id(), context);
@@ -623,6 +669,23 @@ async fn drain_completed_workloads(
         drained += 1;
     }
     Ok(drained)
+}
+
+async fn drain_completed_workloads_and_update_in_flight(
+    tasks: &mut JoinSet<Result<WorkloadCompletion, SimError>>,
+    task_contexts: &mut HashMap<TaskId, WorkloadTaskContext>,
+    actor_states: &mut [ActorState],
+    event_writer: &mut EventWriter,
+    metrics: &mut RunMetricsBuilder,
+    in_flight: &mut u64,
+) -> Result<(), SimError> {
+    let drained =
+        drain_completed_workloads(tasks, task_contexts, actor_states, event_writer, metrics)
+            .await?;
+    *in_flight = in_flight.checked_sub(drained).ok_or(SimError::Executor(
+        "in-flight workload count underflowed".into(),
+    ))?;
+    Ok(())
 }
 
 fn join_workload(
@@ -685,6 +748,17 @@ async fn record_completion(
             .get_mut(observed.actor_id as usize)
             .ok_or(SimError::Executor("actor state missing".into()))?;
         actor.record_receipt(observed.receipt);
+    }
+    if let Some(update) = completion.read_after_write_transition {
+        let actor = actor_states
+            .get_mut(update.actor_id as usize)
+            .ok_or(SimError::Executor("actor state missing".into()))?;
+        match update.transition {
+            ReadAfterWriteTransition::SetKnown(value) => {
+                actor.record_read_after_write_committed(value);
+            }
+            ReadAfterWriteTransition::Invalidate => actor.invalidate_read_after_write(),
+        }
     }
     if let Some(receipt_poll) = completion.receipt_poll {
         metrics.record_receipt_poll(receipt_poll.present);
@@ -752,6 +826,12 @@ fn backpressure_completion(
                 event_oldest_block: None,
                 error_class: Some("simulator-backpressure".into()),
                 error: Some(format!("{scope} in-flight limit reached: {error}")),
+                read_after_write_name: None,
+                read_after_write_contract: None,
+                read_after_write_expected: None,
+                read_after_write_observed: None,
+                read_after_write_matched: None,
+                read_after_write_rebased: None,
             },
         },
         workload,
@@ -763,6 +843,7 @@ fn backpressure_completion(
         observed_receipt: None,
         receipt_poll: None,
         submit_to_receipt_latency_ms: None,
+        read_after_write_transition: None,
     })
 }
 
@@ -967,7 +1048,9 @@ async fn record_aborted_for_restart(
         }
         if matches!(
             context.workload,
-            WorkloadKind::WalletSubmitSmoke | WorkloadKind::ContractCall
+            WorkloadKind::WalletSubmitSmoke
+                | WorkloadKind::ContractCall
+                | WorkloadKind::ReadAfterWrite
         ) {
             let actor = actor_states
                 .get_mut(context.actor_id as usize)
@@ -1070,6 +1153,12 @@ fn target_restarted_workload_completion(
                 error: Some(format!(
                     "workload aborted at simulation time {simulation_time_ms} because target restarted"
                 )),
+                read_after_write_name: None,
+                read_after_write_contract: None,
+                read_after_write_expected: None,
+                read_after_write_observed: None,
+                read_after_write_matched: None,
+                read_after_write_rebased: None,
             },
         },
         workload: context.workload,
@@ -1081,6 +1170,14 @@ fn target_restarted_workload_completion(
         observed_receipt: None,
         receipt_poll: None,
         submit_to_receipt_latency_ms: None,
+        read_after_write_transition: if context.workload == WorkloadKind::ReadAfterWrite {
+            Some(ReadAfterWriteUpdate {
+                actor_id: context.actor_id,
+                transition: ReadAfterWriteTransition::Invalidate,
+            })
+        } else {
+            None
+        },
     })
 }
 
@@ -1128,6 +1225,12 @@ fn chaos_failed_workload_completion(
                 error: Some(format!(
                     "workload aborted at simulation time {simulation_time_ms} because chaos failed"
                 )),
+                read_after_write_name: None,
+                read_after_write_contract: None,
+                read_after_write_expected: None,
+                read_after_write_observed: None,
+                read_after_write_matched: None,
+                read_after_write_rebased: None,
             },
         },
         workload: context.workload,
@@ -1139,6 +1242,7 @@ fn chaos_failed_workload_completion(
         observed_receipt: None,
         receipt_poll: None,
         submit_to_receipt_latency_ms: None,
+        read_after_write_transition: None,
     })
 }
 
@@ -1187,6 +1291,12 @@ fn target_restarted_receipt_completion(
                 event_oldest_block: None,
                 error_class: Some("target-restarted".into()),
                 error: Some("pending receipt lost because target restarted".into()),
+                read_after_write_name: None,
+                read_after_write_contract: None,
+                read_after_write_expected: None,
+                read_after_write_observed: None,
+                read_after_write_matched: None,
+                read_after_write_rebased: None,
             },
         },
         workload: WorkloadKind::ReceiptPoll,
@@ -1198,6 +1308,7 @@ fn target_restarted_receipt_completion(
         observed_receipt: None,
         receipt_poll: None,
         submit_to_receipt_latency_ms: None,
+        read_after_write_transition: None,
     })
 }
 
@@ -1327,6 +1438,12 @@ where
                         event_oldest_block: None,
                         error_class: None,
                         error: None,
+                        read_after_write_name: None,
+                        read_after_write_contract: None,
+                        read_after_write_expected: None,
+                        read_after_write_observed: None,
+                        read_after_write_matched: None,
+                        read_after_write_rebased: None,
                     },
                 },
                 skipped: false,
@@ -1334,6 +1451,7 @@ where
                 observed_receipt: None,
                 receipt_poll: None,
                 submit_to_receipt_latency_ms: None,
+                read_after_write_transition: None,
             })
         }
         Err(error) => Ok(WorkloadCompletion {
@@ -1377,6 +1495,12 @@ where
                     event_oldest_block: None,
                     error_class: Some("rpc-error".into()),
                     error: Some(error),
+                    read_after_write_name: None,
+                    read_after_write_contract: None,
+                    read_after_write_expected: None,
+                    read_after_write_observed: None,
+                    read_after_write_matched: None,
+                    read_after_write_rebased: None,
                 },
             },
             skipped: false,
@@ -1384,6 +1508,7 @@ where
             observed_receipt: None,
             receipt_poll: None,
             submit_to_receipt_latency_ms: None,
+            read_after_write_transition: None,
         }),
     }
 }
@@ -1455,12 +1580,19 @@ where
                         event_oldest_block: None,
                         error_class: None,
                         error: None,
+                        read_after_write_name: None,
+                        read_after_write_contract: None,
+                        read_after_write_expected: None,
+                        read_after_write_observed: None,
+                        read_after_write_matched: None,
+                        read_after_write_rebased: None,
                     },
                 },
                 skipped: false,
                 observed_receipt: None,
                 receipt_poll: None,
                 submit_to_receipt_latency_ms: None,
+                read_after_write_transition: None,
             })
         }
         Err(error) => Ok(WorkloadCompletion {
@@ -1505,12 +1637,19 @@ where
                     event_oldest_block: None,
                     error_class: Some("rpc-error".into()),
                     error: Some(error),
+                    read_after_write_name: None,
+                    read_after_write_contract: None,
+                    read_after_write_expected: None,
+                    read_after_write_observed: None,
+                    read_after_write_matched: None,
+                    read_after_write_rebased: None,
                 },
             },
             skipped: false,
             observed_receipt: None,
             receipt_poll: None,
             submit_to_receipt_latency_ms: None,
+            read_after_write_transition: None,
         }),
     }
 }
@@ -1579,6 +1718,7 @@ fn receipt_poll_no_submitted_tx(
         skipped: true,
         receipt_poll: None,
         submit_to_receipt_latency_ms: None,
+        read_after_write_transition: None,
     })
 }
 
@@ -1611,6 +1751,7 @@ fn receipt_poll_present(
         skipped: false,
         receipt_poll: Some(ReceiptPollCompletion { present: true }),
         submit_to_receipt_latency_ms: times.submit_to_receipt_latency,
+        read_after_write_transition: None,
     }
 }
 
@@ -1637,6 +1778,7 @@ fn receipt_poll_absent(
         skipped: false,
         receipt_poll: Some(ReceiptPollCompletion { present: false }),
         submit_to_receipt_latency_ms: None,
+        read_after_write_transition: None,
     }
 }
 
@@ -1660,6 +1802,7 @@ fn receipt_poll_failed(
         skipped: false,
         receipt_poll: None,
         submit_to_receipt_latency_ms: None,
+        read_after_write_transition: None,
     }
 }
 
@@ -1711,6 +1854,7 @@ where
             observed_receipt: None,
             receipt_poll: None,
             submit_to_receipt_latency_ms: None,
+            read_after_write_transition: None,
         }),
     }
 }
@@ -1790,6 +1934,7 @@ fn view_success_completion(event: WorkloadEvent, latency_ms: u64) -> WorkloadCom
         observed_receipt: None,
         receipt_poll: None,
         submit_to_receipt_latency_ms: None,
+        read_after_write_transition: None,
     }
 }
 
@@ -1813,6 +1958,7 @@ fn view_failure_completion(
         observed_receipt: None,
         receipt_poll: None,
         submit_to_receipt_latency_ms: None,
+        read_after_write_transition: None,
     }
 }
 
@@ -1857,6 +2003,12 @@ fn view_workload_event(
         event_oldest_block: None,
         error_class: None,
         error: None,
+        read_after_write_name: None,
+        read_after_write_contract: None,
+        read_after_write_expected: None,
+        read_after_write_observed: None,
+        read_after_write_matched: None,
+        read_after_write_rebased: None,
     }
 }
 
@@ -1948,6 +2100,7 @@ where
                     observed_receipt,
                     receipt_poll: None,
                     submit_to_receipt_latency_ms,
+                    read_after_write_transition: None,
                 })
             } else {
                 Ok(contract_call_failure_completion(
@@ -1977,6 +2130,482 @@ where
             }),
             None,
         )),
+    }
+}
+
+/// A failed read-back of the counter, with the artifact error class.
+struct ReadAfterWriteReadFailure {
+    class: &'static str,
+    message: String,
+}
+
+/// Read the actor's counter via `groundhog_view`, decoding the CXS `u64` return.
+async fn read_after_write_counter<C>(
+    client: &C,
+    prepared: &PreparedReadAfterWriteWorkload,
+) -> Result<u64, ReadAfterWriteReadFailure>
+where
+    C: SimRpcClient + Clone + Send + Sync + 'static,
+{
+    let entry = &prepared.entry;
+    let request = ViewRequest {
+        contract: Hex0x(entry.contract),
+        entrypoint: HexBytes(entry.read_entrypoint.clone()),
+        calldata: HexBytes(entry.read_calldata.clone()),
+        caller: Some(Hex0x(prepared.caller)),
+    };
+    let response = client
+        .view(request)
+        .await
+        .map_err(|error| ReadAfterWriteReadFailure {
+            class: "view-rpc-error",
+            message: error,
+        })?;
+    match response.output {
+        RootInvocationOutput::Return { return_data } => xdrs::cxs::decode::<u64>(&return_data.0)
+            .map_err(|error| ReadAfterWriteReadFailure {
+                class: "read-decode-error",
+                message: format!(
+                    "read-after-write read `{}` return is not a u64: {error}",
+                    entry.name
+                ),
+            }),
+        RootInvocationOutput::Abort { .. } => Err(ReadAfterWriteReadFailure {
+            class: "view-aborted",
+            message: format!("read-after-write read `{}` aborted", entry.name),
+        }),
+        RootInvocationOutput::Fault => Err(ReadAfterWriteReadFailure {
+            class: "view-fault",
+            message: format!("read-after-write read `{}` faulted", entry.name),
+        }),
+        _ => Err(ReadAfterWriteReadFailure {
+            class: "view-unsupported-output",
+            message: format!(
+                "read-after-write read `{}` returned an unsupported view output",
+                entry.name
+            ),
+        }),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn read_after_write_base_event(
+    tick: &ScheduledActorTick,
+    prepared: &PreparedReadAfterWriteWorkload,
+    started_at_unix_ms: String,
+    completed_at_unix_ms: String,
+    latency_ms: u64,
+    rpc_method: &'static str,
+    tx_nonce: Option<String>,
+    expected: Option<u64>,
+    rebased: bool,
+) -> WorkloadEvent {
+    WorkloadEvent {
+        actor_id: tick.actor_id,
+        workload: WorkloadKind::ReadAfterWrite,
+        scheduled_time_ms: tick.simulation_time_ms,
+        started_at_unix_ms,
+        completed_at_unix_ms,
+        latency_ms,
+        rpc_method,
+        chain_height: None,
+        chain_block_hash: None,
+        tx_hash: None,
+        tx_nonce,
+        receipt_present: None,
+        receipt_status: None,
+        receipt_status_detail: None,
+        submit_to_receipt_latency_ms: None,
+        view_result: None,
+        view_return_data: None,
+        view_abort_data: None,
+        view_event_count: None,
+        contract_call_name: None,
+        contract_call_contract: None,
+        storage_read_name: None,
+        storage_contract: None,
+        storage_key: None,
+        storage_item_present: None,
+        storage_item_kind: None,
+        event_query_name: None,
+        event_contract: None,
+        event_count: None,
+        event_cursor: None,
+        event_latest_block: None,
+        event_oldest_block: None,
+        error_class: None,
+        error: None,
+        read_after_write_name: Some(prepared.entry.name.clone()),
+        read_after_write_contract: Some(prepared.entry.contract_name.clone()),
+        read_after_write_expected: expected.map(|value| value.to_string()),
+        read_after_write_observed: None,
+        read_after_write_matched: None,
+        read_after_write_rebased: Some(rebased),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn read_after_write_completion(
+    event: WorkloadEvent,
+    completed: bool,
+    latency_ms: u64,
+    error_class: Option<String>,
+    submitted_transaction: Option<SubmittedTransaction>,
+    observed_receipt: Option<ObservedReceipt>,
+    submit_to_receipt_latency_ms: Option<u64>,
+    transition: Option<ReadAfterWriteUpdate>,
+) -> WorkloadCompletion {
+    let event = if completed {
+        ResultEvent::WorkloadCompleted { event }
+    } else {
+        ResultEvent::WorkloadFailed { event }
+    };
+    WorkloadCompletion {
+        event,
+        workload: WorkloadKind::ReadAfterWrite,
+        latency_ms,
+        error_class,
+        skipped: false,
+        chain_tip: None,
+        submitted_transaction,
+        observed_receipt,
+        receipt_poll: None,
+        submit_to_receipt_latency_ms,
+        read_after_write_transition: transition,
+    }
+}
+
+fn read_after_write_overflow_completion(
+    tick: &ScheduledActorTick,
+    prepared: &PreparedReadAfterWriteWorkload,
+    started_at_unix_ms: &str,
+    started: &Instant,
+    rpc_method: &'static str,
+    tx_nonce: Option<String>,
+    rebased: bool,
+) -> Result<WorkloadCompletion, SimError> {
+    let latency_ms = duration_ms(started.elapsed());
+    let event = read_after_write_base_event(
+        tick,
+        prepared,
+        started_at_unix_ms.to_owned(),
+        unix_ms()?.to_string(),
+        latency_ms,
+        rpc_method,
+        tx_nonce,
+        None,
+        rebased,
+    )
+    .with_error(
+        "read-after-write-overflow",
+        "read-after-write counter overflowed u64",
+    );
+    Ok(read_after_write_completion(
+        event,
+        false,
+        latency_ms,
+        Some("read-after-write-overflow".into()),
+        None,
+        None,
+        None,
+        None,
+    ))
+}
+
+/// Execute one read-after-write round-trip: reconcile, write, await commit, read
+/// back, and assert. Advances actor state only at known-committed.
+#[allow(clippy::too_many_lines)]
+async fn execute_read_after_write<C>(
+    client: C,
+    tick: &ScheduledActorTick,
+    prepared: PreparedReadAfterWriteWorkload,
+) -> Result<WorkloadCompletion, SimError>
+where
+    C: SimRpcClient + Clone + Send + Sync + 'static,
+{
+    let started_at_unix_ms = unix_ms()?.to_string();
+    let started = Instant::now();
+    let actor_id = tick.actor_id;
+    let tx_nonce = Some(prepared.tx.nonce.to_string());
+
+    // 1. Reconcile (NeedsReconcile only): pre-read to establish the baseline.
+    let (expected, rebased) = match prepared.state {
+        ReadAfterWriteState::Known(_) => {
+            match prepared.state.expected_after_increment(actor_id, None) {
+                Ok(expected) => (expected, false),
+                Err(ActorError::ReadAfterWriteOverflow { .. }) => {
+                    return read_after_write_overflow_completion(
+                        tick,
+                        &prepared,
+                        &started_at_unix_ms,
+                        &started,
+                        "groundhog_sendRawTransaction",
+                        tx_nonce,
+                        false,
+                    );
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        ReadAfterWriteState::NeedsReconcile => {
+            match read_after_write_counter(&client, &prepared).await {
+                Ok(baseline) => match prepared
+                    .state
+                    .expected_after_increment(actor_id, Some(baseline))
+                {
+                    Ok(expected) => (expected, true),
+                    Err(ActorError::ReadAfterWriteOverflow { .. }) => {
+                        return read_after_write_overflow_completion(
+                            tick,
+                            &prepared,
+                            &started_at_unix_ms,
+                            &started,
+                            "groundhog_view",
+                            tx_nonce,
+                            true,
+                        );
+                    }
+                    Err(error) => return Err(error.into()),
+                },
+                Err(failure) => {
+                    // Reconcile pre-read failed: stay NeedsReconcile, write nothing.
+                    let latency_ms = duration_ms(started.elapsed());
+                    let event = read_after_write_base_event(
+                        tick,
+                        &prepared,
+                        started_at_unix_ms.clone(),
+                        unix_ms()?.to_string(),
+                        latency_ms,
+                        "groundhog_view",
+                        tx_nonce.clone(),
+                        None,
+                        false,
+                    )
+                    .with_error(failure.class, failure.message);
+                    return Ok(read_after_write_completion(
+                        event,
+                        false,
+                        latency_ms,
+                        Some(failure.class.into()),
+                        None,
+                        None,
+                        None,
+                        None,
+                    ));
+                }
+            }
+        }
+    };
+
+    // 2-3. Submit the write.
+    let submitted_at = Instant::now();
+    let submit = client
+        .send_raw_transaction(prepared.tx.tx_hex.clone())
+        .await;
+    let tx_hash = match submit {
+        Ok(tx_hash) => tx_hash,
+        Err(error) => {
+            // Submit RPC failure: no commit status, state unchanged, nonce not advanced.
+            let latency_ms = duration_ms(started.elapsed());
+            let event = read_after_write_base_event(
+                tick,
+                &prepared,
+                started_at_unix_ms.clone(),
+                unix_ms()?.to_string(),
+                latency_ms,
+                "groundhog_sendRawTransaction",
+                tx_nonce.clone(),
+                Some(expected),
+                rebased,
+            )
+            .with_error("rpc-error", error);
+            return Ok(read_after_write_completion(
+                event,
+                false,
+                latency_ms,
+                Some("rpc-error".into()),
+                None,
+                None,
+                None,
+                None,
+            ));
+        }
+    };
+
+    // 4. Await receipt.
+    let receipt = poll_workload_receipt(client.clone(), tx_hash, "read-after-write").await;
+    let completed_at = Instant::now();
+    let submit_to_receipt_latency_ms = Some(duration_ms(
+        completed_at.saturating_duration_since(submitted_at),
+    ));
+    let tx_hash_json = json_string(&tx_hash, "txHash")?;
+    let submitted_transaction = Some(SubmittedTransaction {
+        actor_id,
+        tx_hash,
+        scheduled_time_ms: tick.simulation_time_ms,
+        completed_at: submitted_at,
+    });
+
+    let receipt = match receipt {
+        Ok(receipt) => receipt,
+        Err(error) => {
+            // Receipt unknown: nonce advanced; commit status unknown -> Invalidate.
+            let latency_ms = duration_ms(started.elapsed());
+            let mut event = read_after_write_base_event(
+                tick,
+                &prepared,
+                started_at_unix_ms.clone(),
+                unix_ms()?.to_string(),
+                latency_ms,
+                "groundhog_getTransactionReceipt",
+                tx_nonce.clone(),
+                Some(expected),
+                rebased,
+            );
+            event.tx_hash = Some(tx_hash_json.clone());
+            let event = event.with_error("rpc-error", error.to_string());
+            return Ok(read_after_write_completion(
+                event,
+                false,
+                latency_ms,
+                Some("rpc-error".into()),
+                submitted_transaction,
+                None,
+                None,
+                Some(ReadAfterWriteUpdate {
+                    actor_id,
+                    transition: ReadAfterWriteTransition::Invalidate,
+                }),
+            ));
+        }
+    };
+
+    let status = SimReceiptStatus::from_exec_status(&receipt.status);
+    let receipt_height = *receipt.height;
+    let committed = matches!(receipt.status, ExecStatus::Ok);
+    let observed_receipt = Some(ObservedReceipt { actor_id, receipt });
+
+    if !committed {
+        // Non-ok receipt: the write did not take effect; do not advance state.
+        let latency_ms = duration_ms(started.elapsed());
+        let mut event = read_after_write_base_event(
+            tick,
+            &prepared,
+            started_at_unix_ms.clone(),
+            unix_ms()?.to_string(),
+            latency_ms,
+            "groundhog_getTransactionReceipt",
+            tx_nonce.clone(),
+            Some(expected),
+            rebased,
+        );
+        event.tx_hash = Some(tx_hash_json.clone());
+        let event = event
+            .with_receipt(
+                Some(receipt_height),
+                true,
+                status,
+                submit_to_receipt_latency_ms,
+            )
+            .with_error(
+                "contract-call-receipt-status",
+                format!(
+                    "read-after-write write `{}` receipt status was not ok",
+                    prepared.entry.name
+                ),
+            );
+        return Ok(read_after_write_completion(
+            event,
+            false,
+            latency_ms,
+            Some("contract-call-receipt-status".into()),
+            submitted_transaction,
+            observed_receipt,
+            submit_to_receipt_latency_ms,
+            None,
+        ));
+    }
+
+    // 5. Known committed: rebase to Known(expected), then read back and assert.
+    let set_known = Some(ReadAfterWriteUpdate {
+        actor_id,
+        transition: ReadAfterWriteTransition::SetKnown(expected),
+    });
+    let read_back = read_after_write_counter(&client, &prepared).await;
+    let latency_ms = duration_ms(started.elapsed());
+    let mut event = read_after_write_base_event(
+        tick,
+        &prepared,
+        started_at_unix_ms,
+        unix_ms()?.to_string(),
+        latency_ms,
+        "groundhog_view",
+        tx_nonce,
+        Some(expected),
+        rebased,
+    );
+    event.tx_hash = Some(tx_hash_json);
+    let event = event.with_receipt(
+        Some(receipt_height),
+        true,
+        status,
+        submit_to_receipt_latency_ms,
+    );
+
+    match read_back {
+        Ok(observed) => {
+            let mut event = event;
+            event.read_after_write_observed = Some(observed.to_string());
+            if observed == expected {
+                event.read_after_write_matched = Some(true);
+                Ok(read_after_write_completion(
+                    event,
+                    true,
+                    latency_ms,
+                    None,
+                    submitted_transaction,
+                    observed_receipt,
+                    submit_to_receipt_latency_ms,
+                    set_known,
+                ))
+            } else {
+                event.read_after_write_matched = Some(false);
+                let event = event.with_error(
+                    "read-after-write-mismatch",
+                    format!(
+                        "read-after-write `{}` read back {observed}, expected {expected}",
+                        prepared.entry.name
+                    ),
+                );
+                Ok(read_after_write_completion(
+                    event,
+                    false,
+                    latency_ms,
+                    Some("read-after-write-mismatch".into()),
+                    submitted_transaction,
+                    observed_receipt,
+                    submit_to_receipt_latency_ms,
+                    Some(ReadAfterWriteUpdate {
+                        actor_id,
+                        transition: ReadAfterWriteTransition::Invalidate,
+                    }),
+                ))
+            }
+        }
+        Err(failure) => {
+            // Post-commit read failure: keep Known(expected); only observation failed.
+            let event = event.with_error(failure.class, failure.message);
+            Ok(read_after_write_completion(
+                event,
+                false,
+                latency_ms,
+                Some(failure.class.into()),
+                submitted_transaction,
+                observed_receipt,
+                submit_to_receipt_latency_ms,
+                set_known,
+            ))
+        }
     }
 }
 
@@ -2025,6 +2654,7 @@ fn contract_call_failure_completion(
         observed_receipt,
         receipt_poll: None,
         submit_to_receipt_latency_ms: None,
+        read_after_write_transition: None,
     }
 }
 
@@ -2072,6 +2702,12 @@ fn contract_call_workload_event(
         event_oldest_block: None,
         error_class: None,
         error: None,
+        read_after_write_name: None,
+        read_after_write_contract: None,
+        read_after_write_expected: None,
+        read_after_write_observed: None,
+        read_after_write_matched: None,
+        read_after_write_rebased: None,
     }
 }
 
@@ -2171,6 +2807,7 @@ fn storage_read_success_completion(event: WorkloadEvent, latency_ms: u64) -> Wor
         observed_receipt: None,
         receipt_poll: None,
         submit_to_receipt_latency_ms: None,
+        read_after_write_transition: None,
     }
 }
 
@@ -2194,6 +2831,7 @@ fn storage_read_failure_completion(
         observed_receipt: None,
         receipt_poll: None,
         submit_to_receipt_latency_ms: None,
+        read_after_write_transition: None,
     }
 }
 
@@ -2239,6 +2877,12 @@ fn storage_read_workload_event(
         event_oldest_block: None,
         error_class: None,
         error: None,
+        read_after_write_name: None,
+        read_after_write_contract: None,
+        read_after_write_expected: None,
+        read_after_write_observed: None,
+        read_after_write_matched: None,
+        read_after_write_rebased: None,
     }
 }
 
@@ -2369,6 +3013,7 @@ fn events_query_success_completion(event: WorkloadEvent, latency_ms: u64) -> Wor
         observed_receipt: None,
         receipt_poll: None,
         submit_to_receipt_latency_ms: None,
+        read_after_write_transition: None,
     }
 }
 
@@ -2392,6 +3037,7 @@ fn events_query_failure_completion(
         observed_receipt: None,
         receipt_poll: None,
         submit_to_receipt_latency_ms: None,
+        read_after_write_transition: None,
     }
 }
 
@@ -2437,6 +3083,12 @@ fn events_query_workload_event(
         event_oldest_block: None,
         error_class: None,
         error: None,
+        read_after_write_name: None,
+        read_after_write_contract: None,
+        read_after_write_expected: None,
+        read_after_write_observed: None,
+        read_after_write_matched: None,
+        read_after_write_rebased: None,
     }
 }
 
@@ -2480,6 +3132,12 @@ fn receipt_poll_event(
         event_oldest_block: None,
         error_class: None,
         error: None,
+        read_after_write_name: None,
+        read_after_write_contract: None,
+        read_after_write_expected: None,
+        read_after_write_observed: None,
+        read_after_write_matched: None,
+        read_after_write_rebased: None,
     }
 }
 
@@ -2568,6 +3226,23 @@ struct WorkloadCompletion {
     observed_receipt: Option<ObservedReceipt>,
     receipt_poll: Option<ReceiptPollCompletion>,
     submit_to_receipt_latency_ms: Option<u64>,
+    read_after_write_transition: Option<ReadAfterWriteUpdate>,
+}
+
+/// A read-after-write actor-state transition produced by an executed round-trip
+/// and applied to `ActorState` in `record_completion`.
+#[derive(Debug, Clone, Copy)]
+struct ReadAfterWriteUpdate {
+    actor_id: u32,
+    transition: ReadAfterWriteTransition,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ReadAfterWriteTransition {
+    /// The write is known committed; rebase to this counter value.
+    SetKnown(u64),
+    /// Commit status is unknown or the read-back mismatched; force a reconcile.
+    Invalidate,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2601,6 +3276,7 @@ enum PreparedWorkload {
     ContractCall(PreparedContractCallWorkload),
     StorageRead(PreparedStorageReadWorkload),
     EventsQuery(PreparedEventQueryWorkload),
+    ReadAfterWrite(PreparedReadAfterWriteWorkload),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2628,6 +3304,18 @@ struct PreparedStorageReadWorkload {
 #[derive(Debug, Clone)]
 struct PreparedEventQueryWorkload {
     query: PreparedEventQuery,
+}
+
+#[derive(Debug, Clone)]
+struct PreparedReadAfterWriteWorkload {
+    entry: PreparedReadAfterWrite,
+    /// The signed dev-wallet `doAction` write transaction (e.g. `bump()`).
+    tx: BuiltSubmitTransaction,
+    /// Caller identity for the `get()` read-back; matches the write's effective
+    /// `msg.sender` (the actor wallet).
+    caller: groundhog_xdr::types::ContractAddress,
+    /// Actor read-after-write belief snapshot at prepare time.
+    state: ReadAfterWriteState,
 }
 
 struct ReceiptPollTimes {
@@ -2684,9 +3372,11 @@ async fn sleep_until_sim_time_draining(
 fn rpc_method(workload: WorkloadKind) -> &'static str {
     match workload {
         WorkloadKind::ChainTip => "groundhog_chainTip",
-        WorkloadKind::WalletSubmitSmoke | WorkloadKind::ContractCall => {
-            "groundhog_sendRawTransaction"
-        }
+        // read-after-write reports its write RPC for skipped/aborted ticks; the
+        // executed round-trip sets its own terminal rpc_method in Slice L3.
+        WorkloadKind::WalletSubmitSmoke
+        | WorkloadKind::ContractCall
+        | WorkloadKind::ReadAfterWrite => "groundhog_sendRawTransaction",
         WorkloadKind::ReceiptPoll => "groundhog_getTransactionReceipt",
         WorkloadKind::StatusPoll => "groundhog_getTransactionStatus",
         WorkloadKind::EventsQuery => "groundhog_getEvents",
@@ -3287,6 +3977,7 @@ mod tests {
                 contract_calls: &[],
                 storage_reads: &[],
                 event_queries: &[],
+                read_after_write: &[],
             },
         )
         .await
@@ -3348,6 +4039,7 @@ mod tests {
                 contract_calls: &[],
                 storage_reads: &[],
                 event_queries: &[],
+                read_after_write: &[],
             },
         )
         .await
@@ -3403,6 +4095,7 @@ mod tests {
                 contract_calls: &[],
                 storage_reads: &[],
                 event_queries: &[],
+                read_after_write: &[],
             },
         )
         .await
@@ -3465,6 +4158,7 @@ mod tests {
                 contract_calls: &[],
                 storage_reads: &[],
                 event_queries: &[],
+                read_after_write: &[],
             },
         )
         .await
@@ -3518,6 +4212,7 @@ mod tests {
                 contract_calls: &[call],
                 storage_reads: &[],
                 event_queries: &[],
+                read_after_write: &[],
             },
         )
         .await
@@ -3639,6 +4334,7 @@ mod tests {
                 contract_calls: &[call],
                 storage_reads: &[],
                 event_queries: &[],
+                read_after_write: &[],
             },
         )
         .await
@@ -3691,6 +4387,7 @@ mod tests {
                 contract_calls: &[call],
                 storage_reads: &[],
                 event_queries: &[],
+                read_after_write: &[],
             },
         )
         .await
@@ -3919,6 +4616,7 @@ mod tests {
                 contract_calls: &[],
                 storage_reads: &[storage_read],
                 event_queries: &[],
+                read_after_write: &[],
             },
         )
         .await
@@ -4174,6 +4872,7 @@ mod tests {
                 contract_calls: &[],
                 storage_reads: &[],
                 event_queries: &[event_query],
+                read_after_write: &[],
             },
         )
         .await
@@ -4237,6 +4936,7 @@ mod tests {
                 contract_calls: &[],
                 storage_reads: &[],
                 event_queries: &[],
+                read_after_write: &[],
             },
         )
         .await
@@ -4304,6 +5004,7 @@ mod tests {
                 contract_calls: &[],
                 storage_reads: &[],
                 event_queries: &[],
+                read_after_write: &[],
             },
         )
         .await
@@ -4384,6 +5085,7 @@ mod tests {
                 contract_calls: &[],
                 storage_reads: &[],
                 event_queries: &[],
+                read_after_write: &[],
             },
         )
         .await
@@ -4465,6 +5167,7 @@ mod tests {
                 contract_calls: &[],
                 storage_reads: &[],
                 event_queries: &[],
+                read_after_write: &[],
             },
         )
         .await
@@ -4514,6 +5217,7 @@ mod tests {
                 contract_calls: &[],
                 storage_reads: &[],
                 event_queries: &[],
+                read_after_write: &[],
             },
         )
         .await
@@ -4667,6 +5371,7 @@ mod tests {
                 contract_calls: &[],
                 storage_reads: &[],
                 event_queries: &[],
+                read_after_write: &[],
             },
             Some(&SuccessfulChaosController),
             &mut chaos_events,
@@ -4743,6 +5448,7 @@ mod tests {
                 contract_calls: &[],
                 storage_reads: &[],
                 event_queries: &[],
+                read_after_write: &[],
             },
             Some(&SuccessfulChaosController),
             &mut chaos_events,
@@ -4804,6 +5510,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn restart_abort_invalidates_read_after_write_and_advances_nonce() {
+        let file = NamedTempFile::new().expect("temp file should be created");
+        let mut event_writer = EventWriter::create(file.path())
+            .await
+            .expect("event writer should open");
+        let mut metrics = RunMetricsBuilder::default();
+        let mut actors = actor_states();
+        actors[0].record_read_after_write_committed(5);
+
+        record_aborted_for_restart(
+            vec![WorkloadTaskContext {
+                actor_id: 0,
+                workload: WorkloadKind::ReadAfterWrite,
+                scheduled_time_ms: 10,
+            }],
+            &mut actors,
+            &mut event_writer,
+            &mut metrics,
+            20,
+        )
+        .await
+        .expect("restart abort should record");
+
+        assert_eq!(actors[0].next_nonce_sequence, 1);
+        assert!(actors[0].read_after_write_needs_reconcile());
+        assert_eq!(
+            metrics.workload_counts()[&WorkloadKind::ReadAfterWrite].failed,
+            1
+        );
+        let events = tokio::fs::read_to_string(file.path())
+            .await
+            .expect("events should read");
+        let failed = find_event(&events, "workload-failed");
+        assert_eq!(failed["workload"], "read-after-write");
+        assert_eq!(failed["errorClass"], "target-restarted");
+    }
+
+    #[tokio::test]
     async fn restart_chaos_does_not_double_count_in_flight_receipt_poll() {
         let manifest = receipt_chaos_manifest();
         let schedule = generate_schedule(&manifest).expect("schedule should generate");
@@ -4836,6 +5580,7 @@ mod tests {
                 contract_calls: &[],
                 storage_reads: &[],
                 event_queries: &[],
+                read_after_write: &[],
             },
             Some(&SuccessfulChaosController),
             &mut chaos_events,
@@ -4896,6 +5641,7 @@ mod tests {
                 contract_calls: &[],
                 storage_reads: &[],
                 event_queries: &[],
+                read_after_write: &[],
             },
             Some(&SuccessfulChaosController),
             &mut chaos_events,
@@ -4949,6 +5695,7 @@ mod tests {
                 contract_calls: &[],
                 storage_reads: &[],
                 event_queries: &[],
+                read_after_write: &[],
             },
             Some(&FailingChaosController),
             &mut chaos_events,
@@ -5276,5 +6023,604 @@ mod tests {
             return_data: None,
             abort_data: None,
         }
+    }
+
+    #[derive(Clone)]
+    struct ReadAfterWriteClient {
+        reads: ReadAfterWriteReadQueue,
+        submit: Result<TxHash, String>,
+        receipt: Result<Option<TransactionReceipt>, String>,
+        view_calls: Arc<Mutex<u32>>,
+    }
+
+    type ReadAfterWriteReadQueue =
+        Arc<Mutex<std::collections::VecDeque<Result<ViewResponse, String>>>>;
+
+    impl SimRpcClient for ReadAfterWriteClient {
+        #[allow(clippy::manual_async_fn)]
+        fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, String>> + Send {
+            async { Err("chain tip should not be called".into()) }
+        }
+
+        #[allow(clippy::manual_async_fn)]
+        fn send_raw_transaction(
+            &self,
+            _tx_hex: String,
+        ) -> impl Future<Output = Result<TxHash, String>> + Send {
+            let submit = self.submit.clone();
+            async move { submit }
+        }
+
+        #[allow(clippy::manual_async_fn)]
+        fn transaction_receipt(
+            &self,
+            _tx_hash: TxHash,
+        ) -> impl Future<Output = Result<Option<TransactionReceipt>, String>> + Send {
+            let receipt = self.receipt.clone();
+            async move { receipt }
+        }
+
+        #[allow(clippy::manual_async_fn)]
+        fn view(
+            &self,
+            _request: ViewRequest,
+        ) -> impl Future<Output = Result<ViewResponse, String>> + Send {
+            let reads = self.reads.clone();
+            let view_calls = self.view_calls.clone();
+            async move {
+                *view_calls.lock().expect("view counter should lock") += 1;
+                reads
+                    .lock()
+                    .expect("read queue should lock")
+                    .pop_front()
+                    .expect("unexpected read-after-write view call")
+            }
+        }
+    }
+
+    fn read_after_write_view_response(value: u64) -> ViewResponse {
+        read_after_write_view_response_with_output(RootInvocationOutput::Return {
+            return_data: HexBytes(xdrs::cxs::encode(&value).expect("u64 should encode")),
+        })
+    }
+
+    fn read_after_write_view_response_with_output(output: RootInvocationOutput) -> ViewResponse {
+        ViewResponse {
+            output,
+            events: Vec::new(),
+            height: BlockHeight::from(77),
+        }
+    }
+
+    fn read_after_write_reads(values: Vec<Result<u64, String>>) -> ReadAfterWriteReadQueue {
+        read_after_write_response_reads(
+            values
+                .into_iter()
+                .map(|read| read.map(read_after_write_view_response))
+                .collect(),
+        )
+    }
+
+    fn read_after_write_response_reads(
+        values: Vec<Result<ViewResponse, String>>,
+    ) -> ReadAfterWriteReadQueue {
+        Arc::new(Mutex::new(values.into_iter().collect()))
+    }
+
+    fn read_after_write_manifest() -> SimulationManifest {
+        serde_json::from_value(json!({
+            "schemaVersion": 1,
+            "kind": "groundhog-simulation",
+            "name": "executor-read-after-write-test",
+            "seed": "seed",
+            "target": {"provider": "existing"},
+            "loadShape": [{"duration": "1ms", "users": 1, "ratePerUserHz": 1000.0}],
+            "workloads": [{"name": "read-after-write", "weight": 1}],
+            "contractArtifacts": [{"name": "caller-counter", "wasm": "caller-counter.wasm"}],
+            "readAfterWrite": [{
+                "name": "counter-roundtrip",
+                "contract": "caller-counter",
+                "write": {"entrypoint": "0x4f4f4f4f4f4f4f4f"},
+                "read": {"entrypoint": "0xdfdfdfdfdfdfdfdf"}
+            }]
+        }))
+        .expect("manifest fixture should parse")
+    }
+
+    fn prepared_read_after_write() -> PreparedReadAfterWrite {
+        PreparedReadAfterWrite {
+            name: "counter-roundtrip".into(),
+            contract_name: "caller-counter".into(),
+            contract: ContractAddress::from([0x88; 32]),
+            write_entrypoint: vec![0x4f; 8],
+            write_calldata: Vec::new(),
+            read_entrypoint: vec![0xdf; 8],
+            read_calldata: Vec::new(),
+        }
+    }
+
+    async fn run_read_after_write(
+        client: ReadAfterWriteClient,
+        setup: impl FnOnce(&mut ActorState),
+    ) -> (Vec<ActorState>, RunMetricsBuilder, String) {
+        let manifest = read_after_write_manifest();
+        let schedule = generate_schedule(&manifest).expect("schedule should generate");
+        let starts = phase_starts(&manifest).expect("phase starts should generate");
+        let file = NamedTempFile::new().expect("temp file should be created");
+        let mut event_writer = EventWriter::create(file.path())
+            .await
+            .expect("event writer should open");
+        let mut metrics = RunMetricsBuilder::default();
+        let mut actors = actor_states();
+        setup(&mut actors[0]);
+        let entry = prepared_read_after_write();
+
+        run_schedule(
+            client,
+            ScheduleExecution {
+                manifest: &manifest,
+                runtime_manifest: &runtime_manifest(),
+                schedule: &schedule,
+                phase_starts: &starts,
+                actor_states: &mut actors,
+                event_writer: &mut event_writer,
+                metrics: &mut metrics,
+                view_calls: &[],
+                contract_calls: &[],
+                storage_reads: &[],
+                event_queries: &[],
+                read_after_write: &[entry],
+            },
+        )
+        .await
+        .expect("read-after-write schedule should run");
+
+        let events = tokio::fs::read_to_string(file.path())
+            .await
+            .expect("events should read");
+        (actors, metrics, events)
+    }
+
+    fn completed_read_after_write_update(value: u64) -> WorkloadCompletion {
+        let tick = ScheduledActorTick {
+            phase_index: 0,
+            actor_id: 0,
+            actor_sequence: 0,
+            simulation_time_ms: 0,
+        };
+        let prepared = PreparedReadAfterWriteWorkload {
+            entry: prepared_read_after_write(),
+            tx: BuiltSubmitTransaction {
+                tx_hex: "0xsigned".into(),
+                nonce: 4_294_967_296,
+            },
+            caller: ContractAddress::from([0x99; 32]),
+            state: ReadAfterWriteState::NeedsReconcile,
+        };
+        let mut event = read_after_write_base_event(
+            &tick,
+            &prepared,
+            "0".into(),
+            "0".into(),
+            0,
+            "groundhog_view",
+            Some("4294967296".into()),
+            Some(value),
+            true,
+        );
+        event.tx_hash = Some("0x5a".into());
+        WorkloadCompletion {
+            workload: WorkloadKind::ReadAfterWrite,
+            latency_ms: 0,
+            error_class: None,
+            chain_tip: None,
+            event: ResultEvent::WorkloadCompleted { event },
+            skipped: false,
+            submitted_transaction: Some(SubmittedTransaction {
+                actor_id: 0,
+                tx_hash: tx_hash(0x5a),
+                scheduled_time_ms: 0,
+                completed_at: Instant::now(),
+            }),
+            observed_receipt: None,
+            receipt_poll: None,
+            submit_to_receipt_latency_ms: None,
+            read_after_write_transition: Some(ReadAfterWriteUpdate {
+                actor_id: 0,
+                transition: ReadAfterWriteTransition::SetKnown(value),
+            }),
+        }
+    }
+
+    #[tokio::test]
+    async fn drain_after_permit_reacquire_updates_actor_before_prepare() {
+        let mut tasks = JoinSet::new();
+        let mut task_contexts = HashMap::new();
+        let global = Arc::new(Semaphore::new(1));
+        let actor = Arc::new(Semaphore::new(1));
+        let first_permits = WorkloadPermits {
+            _global: global
+                .clone()
+                .try_acquire_owned()
+                .expect("global permit should acquire"),
+            _actor: actor
+                .clone()
+                .try_acquire_owned()
+                .expect("actor permit should acquire"),
+        };
+        let abort = tasks.spawn(async move {
+            let _permits = first_permits;
+            Ok(completed_read_after_write_update(1))
+        });
+        task_contexts.insert(
+            abort.id(),
+            WorkloadTaskContext {
+                actor_id: 0,
+                workload: WorkloadKind::ReadAfterWrite,
+                scheduled_time_ms: 0,
+            },
+        );
+
+        let tick = ScheduledActorTick {
+            phase_index: 0,
+            actor_id: 0,
+            actor_sequence: 0,
+            simulation_time_ms: 1,
+        };
+        let _second_permits = loop {
+            match acquire_workload_permits(
+                &tick,
+                WorkloadKind::ReadAfterWrite,
+                global.clone(),
+                actor.clone(),
+            )
+            .expect("permit acquisition should not error")
+            {
+                Ok(permits) => break permits,
+                Err(_) => tokio::task::yield_now().await,
+            }
+        };
+
+        let mut actors = actor_states();
+        let mut metrics = RunMetricsBuilder::default();
+        let file = NamedTempFile::new().expect("temp file should be created");
+        let mut event_writer = EventWriter::create(file.path())
+            .await
+            .expect("event writer should open");
+        let mut in_flight = 1;
+        assert!(actors[0].read_after_write_needs_reconcile());
+
+        drain_completed_workloads_and_update_in_flight(
+            &mut tasks,
+            &mut task_contexts,
+            &mut actors,
+            &mut event_writer,
+            &mut metrics,
+            &mut in_flight,
+        )
+        .await
+        .expect("completed task should drain");
+
+        assert_eq!(in_flight, 0);
+        assert_eq!(
+            actors[0].read_after_write_state(),
+            ReadAfterWriteState::Known(1)
+        );
+        assert_eq!(actors[0].next_nonce_sequence, 1);
+        let expected_nonce = actors[0].current_nonce().expect("nonce should build");
+        let runtime = runtime_manifest();
+        let prepared = prepare_workload(
+            &mut actors[0],
+            WorkloadKind::ReadAfterWrite,
+            runtime_dev_wallet_action_entrypoint(&runtime).expect("wallet entrypoint should parse"),
+            &[],
+            &[],
+            &[],
+            &[],
+            &[prepared_read_after_write()],
+        )
+        .expect("read-after-write should prepare");
+        match prepared {
+            PreparedWorkload::ReadAfterWrite(workload) => {
+                assert_eq!(workload.state, ReadAfterWriteState::Known(1));
+                assert_eq!(workload.tx.nonce, expected_nonce);
+            }
+            _ => panic!("expected read-after-write workload"),
+        }
+    }
+
+    #[tokio::test]
+    async fn read_after_write_round_trip_matches_and_advances_actor() {
+        let view_calls = Arc::new(Mutex::new(0));
+        let client = ReadAfterWriteClient {
+            reads: read_after_write_reads(vec![Ok(0), Ok(1)]),
+            submit: Ok(tx_hash(0x6c)),
+            receipt: Ok(Some(receipt(tx_hash(0x6c)))),
+            view_calls: view_calls.clone(),
+        };
+
+        let (actors, metrics, events) = run_read_after_write(client, |_| {}).await;
+
+        // Reconcile pre-read (0) -> write -> read-back (1) == expected (1).
+        assert_eq!(*view_calls.lock().expect("view counter"), 2);
+        assert_eq!(
+            actors[0].read_after_write_state(),
+            ReadAfterWriteState::Known(1)
+        );
+        assert_eq!(
+            metrics.workload_counts()[&WorkloadKind::ReadAfterWrite].completed,
+            1
+        );
+        let completed = find_event(&events, "workload-completed");
+        assert_eq!(completed["workload"], "read-after-write");
+        assert_eq!(completed["readAfterWriteName"], "counter-roundtrip");
+        assert_eq!(completed["readAfterWriteContract"], "caller-counter");
+        assert_eq!(completed["readAfterWriteExpected"], "1");
+        assert_eq!(completed["readAfterWriteObserved"], "1");
+        assert_eq!(completed["readAfterWriteMatched"], true);
+        assert_eq!(completed["readAfterWriteRebased"], true);
+        assert_eq!(completed["rpcMethod"], "groundhog_view");
+        assert_eq!(completed["receiptStatus"], "ok");
+    }
+
+    #[tokio::test]
+    async fn read_after_write_known_state_skips_pre_read() {
+        let view_calls = Arc::new(Mutex::new(0));
+        let client = ReadAfterWriteClient {
+            reads: read_after_write_reads(vec![Ok(6)]),
+            submit: Ok(tx_hash(0x6c)),
+            receipt: Ok(Some(receipt(tx_hash(0x6c)))),
+            view_calls: view_calls.clone(),
+        };
+
+        let (actors, _metrics, events) = run_read_after_write(client, |actor| {
+            actor.record_read_after_write_committed(5);
+        })
+        .await;
+
+        // Known state needs no reconcile pre-read: one view call (the read-back).
+        assert_eq!(*view_calls.lock().expect("view counter"), 1);
+        assert_eq!(
+            actors[0].read_after_write_state(),
+            ReadAfterWriteState::Known(6)
+        );
+        let completed = find_event(&events, "workload-completed");
+        assert_eq!(completed["readAfterWriteExpected"], "6");
+        assert_eq!(completed["readAfterWriteMatched"], true);
+        assert_eq!(completed["readAfterWriteRebased"], false);
+    }
+
+    #[tokio::test]
+    async fn read_after_write_reconcile_read_failure_is_not_rebased() {
+        let view_calls = Arc::new(Mutex::new(0));
+        let client = ReadAfterWriteClient {
+            reads: read_after_write_reads(vec![Err("read boom".into())]),
+            submit: Ok(tx_hash(0x6c)),
+            receipt: Ok(Some(receipt(tx_hash(0x6c)))),
+            view_calls: view_calls.clone(),
+        };
+
+        let (actors, _metrics, events) = run_read_after_write(client, |_| {}).await;
+
+        assert_eq!(*view_calls.lock().expect("view counter"), 1);
+        assert!(actors[0].read_after_write_needs_reconcile());
+        assert_eq!(actors[0].next_nonce_sequence, 0);
+        let failed = find_event(&events, "workload-failed");
+        assert_eq!(failed["errorClass"], "view-rpc-error");
+        assert_eq!(failed["rpcMethod"], "groundhog_view");
+        assert_eq!(failed["readAfterWriteRebased"], false);
+        assert!(failed.get("readAfterWriteExpected").is_none());
+    }
+
+    #[tokio::test]
+    async fn read_after_write_mismatch_invalidates_actor() {
+        let client = ReadAfterWriteClient {
+            reads: read_after_write_reads(vec![Ok(9)]),
+            submit: Ok(tx_hash(0x6c)),
+            receipt: Ok(Some(receipt(tx_hash(0x6c)))),
+            view_calls: Arc::new(Mutex::new(0)),
+        };
+
+        let (actors, _metrics, events) = run_read_after_write(client, |actor| {
+            actor.record_read_after_write_committed(5);
+        })
+        .await;
+
+        assert!(actors[0].read_after_write_needs_reconcile());
+        let failed = find_event(&events, "workload-failed");
+        assert_eq!(failed["errorClass"], "read-after-write-mismatch");
+        assert_eq!(failed["rpcMethod"], "groundhog_view");
+        assert_eq!(failed["readAfterWriteExpected"], "6");
+        assert_eq!(failed["readAfterWriteObserved"], "9");
+        assert_eq!(failed["readAfterWriteMatched"], false);
+    }
+
+    #[tokio::test]
+    async fn read_after_write_keeps_known_on_post_commit_read_failure() {
+        let client = ReadAfterWriteClient {
+            reads: read_after_write_reads(vec![Err("read boom".into())]),
+            submit: Ok(tx_hash(0x6c)),
+            receipt: Ok(Some(receipt(tx_hash(0x6c)))),
+            view_calls: Arc::new(Mutex::new(0)),
+        };
+
+        let (actors, _metrics, events) = run_read_after_write(client, |actor| {
+            actor.record_read_after_write_committed(5);
+        })
+        .await;
+
+        // Write committed; only the read-back RPC failed, so the actor model
+        // must still advance to the provable committed value.
+        assert_eq!(
+            actors[0].read_after_write_state(),
+            ReadAfterWriteState::Known(6)
+        );
+        let failed = find_event(&events, "workload-failed");
+        assert_eq!(failed["errorClass"], "view-rpc-error");
+        assert_eq!(failed["rpcMethod"], "groundhog_view");
+        assert_eq!(failed["readAfterWriteExpected"], "6");
+        assert!(failed.get("readAfterWriteObserved").is_none());
+        assert!(failed.get("readAfterWriteMatched").is_none());
+    }
+
+    #[tokio::test]
+    async fn read_after_write_keeps_known_on_post_commit_view_output_failures() {
+        let cases = vec![
+            (
+                "read-decode-error",
+                read_after_write_view_response_with_output(RootInvocationOutput::Return {
+                    return_data: HexBytes(vec![0xff]),
+                }),
+            ),
+            (
+                "view-aborted",
+                read_after_write_view_response_with_output(RootInvocationOutput::Abort {
+                    abort_data: HexBytes(vec![0x01]),
+                }),
+            ),
+            (
+                "view-fault",
+                read_after_write_view_response_with_output(RootInvocationOutput::Fault),
+            ),
+        ];
+
+        for (error_class, response) in cases {
+            let client = ReadAfterWriteClient {
+                reads: read_after_write_response_reads(vec![Ok(response)]),
+                submit: Ok(tx_hash(0x6c)),
+                receipt: Ok(Some(receipt(tx_hash(0x6c)))),
+                view_calls: Arc::new(Mutex::new(0)),
+            };
+
+            let (actors, _metrics, events) = run_read_after_write(client, |actor| {
+                actor.record_read_after_write_committed(5);
+            })
+            .await;
+
+            assert_eq!(
+                actors[0].read_after_write_state(),
+                ReadAfterWriteState::Known(6)
+            );
+            let failed = find_event(&events, "workload-failed");
+            assert_eq!(failed["errorClass"], error_class);
+            assert_eq!(failed["rpcMethod"], "groundhog_view");
+            assert_eq!(failed["readAfterWriteExpected"], "6");
+            assert!(failed.get("readAfterWriteObserved").is_none());
+            assert!(failed.get("readAfterWriteMatched").is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn read_after_write_known_overflow_fails_before_submit() {
+        let view_calls = Arc::new(Mutex::new(0));
+        let client = ReadAfterWriteClient {
+            reads: read_after_write_reads(Vec::new()),
+            submit: Ok(tx_hash(0x6c)),
+            receipt: Ok(Some(receipt(tx_hash(0x6c)))),
+            view_calls: view_calls.clone(),
+        };
+
+        let (actors, _metrics, events) = run_read_after_write(client, |actor| {
+            actor.record_read_after_write_committed(u64::MAX);
+        })
+        .await;
+
+        assert_eq!(*view_calls.lock().expect("view counter"), 0);
+        assert_eq!(
+            actors[0].read_after_write_state(),
+            ReadAfterWriteState::Known(u64::MAX)
+        );
+        assert_eq!(actors[0].next_nonce_sequence, 0);
+        let failed = find_event(&events, "workload-failed");
+        assert_eq!(failed["errorClass"], "read-after-write-overflow");
+        assert_eq!(failed["rpcMethod"], "groundhog_sendRawTransaction");
+        assert!(failed.get("readAfterWriteExpected").is_none());
+    }
+
+    #[tokio::test]
+    async fn read_after_write_reconcile_overflow_fails_before_submit() {
+        let view_calls = Arc::new(Mutex::new(0));
+        let client = ReadAfterWriteClient {
+            reads: read_after_write_reads(vec![Ok(u64::MAX)]),
+            submit: Ok(tx_hash(0x6c)),
+            receipt: Ok(Some(receipt(tx_hash(0x6c)))),
+            view_calls: view_calls.clone(),
+        };
+
+        let (actors, _metrics, events) = run_read_after_write(client, |_| {}).await;
+
+        assert_eq!(*view_calls.lock().expect("view counter"), 1);
+        assert!(actors[0].read_after_write_needs_reconcile());
+        assert_eq!(actors[0].next_nonce_sequence, 0);
+        let failed = find_event(&events, "workload-failed");
+        assert_eq!(failed["errorClass"], "read-after-write-overflow");
+        assert_eq!(failed["rpcMethod"], "groundhog_view");
+        assert_eq!(failed["readAfterWriteRebased"], true);
+        assert!(failed.get("readAfterWriteExpected").is_none());
+    }
+
+    #[tokio::test]
+    async fn read_after_write_submit_failure_leaves_state_unchanged() {
+        let client = ReadAfterWriteClient {
+            reads: read_after_write_reads(vec![Ok(3)]),
+            submit: Err("submit boom".into()),
+            receipt: Ok(None),
+            view_calls: Arc::new(Mutex::new(0)),
+        };
+
+        let (actors, _metrics, events) = run_read_after_write(client, |_| {}).await;
+
+        // Submit never landed: nonce not advanced, state stays NeedsReconcile.
+        assert!(actors[0].read_after_write_needs_reconcile());
+        assert_eq!(actors[0].next_nonce_sequence, 0);
+        let failed = find_event(&events, "workload-failed");
+        assert_eq!(failed["errorClass"], "rpc-error");
+        assert_eq!(failed["rpcMethod"], "groundhog_sendRawTransaction");
+    }
+
+    #[tokio::test]
+    async fn read_after_write_receipt_rpc_failure_invalidates_actor() {
+        let client = ReadAfterWriteClient {
+            reads: read_after_write_reads(vec![Ok(3)]),
+            submit: Ok(tx_hash(0x6c)),
+            receipt: Err("receipt boom".into()),
+            view_calls: Arc::new(Mutex::new(0)),
+        };
+
+        let (actors, _metrics, events) = run_read_after_write(client, |_| {}).await;
+
+        assert!(actors[0].read_after_write_needs_reconcile());
+        assert_eq!(actors[0].next_nonce_sequence, 1);
+        let failed = find_event(&events, "workload-failed");
+        assert_eq!(failed["errorClass"], "rpc-error");
+        assert_eq!(failed["rpcMethod"], "groundhog_getTransactionReceipt");
+        assert_eq!(failed["readAfterWriteExpected"], "4");
+    }
+
+    #[tokio::test]
+    async fn read_after_write_non_ok_receipt_does_not_advance() {
+        let client = ReadAfterWriteClient {
+            reads: read_after_write_reads(Vec::new()),
+            submit: Ok(tx_hash(0x6c)),
+            receipt: Ok(Some(receipt_with_status(
+                tx_hash(0x6c),
+                ExecStatus::Reverted { message: None },
+            ))),
+            view_calls: Arc::new(Mutex::new(0)),
+        };
+
+        let (actors, _metrics, events) = run_read_after_write(client, |actor| {
+            actor.record_read_after_write_committed(5);
+        })
+        .await;
+
+        // Non-ok write did not take effect: belief unchanged at Known(5).
+        assert_eq!(
+            actors[0].read_after_write_state(),
+            ReadAfterWriteState::Known(5)
+        );
+        let failed = find_event(&events, "workload-failed");
+        assert_eq!(failed["errorClass"], "contract-call-receipt-status");
+        assert_eq!(failed["rpcMethod"], "groundhog_getTransactionReceipt");
     }
 }

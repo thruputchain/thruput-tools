@@ -62,7 +62,10 @@ restart chaos, a mixed restart artifact exercise that may fail only when it
 records restart-loss artifacts, and, when `groundhog-examples` is available,
 Fibonacci deploy plus `view-call`, `storage-read`, `events-query`, and
 `contract-call` scenarios, including a positive event-indexing smoke that calls
-`compute(10)` and observes the emitted `FibComputed` event. The opt-in soak runs
+`compute(10)` and observes the emitted `FibComputed` event. It also builds the
+`caller-counter` fixture and runs a read-after-write smoke that submits
+`bump()`, waits for the receipt, reads `get()`, and asserts the per-caller
+counter advanced. The opt-in soak runs
 `examples/sim/local-mixed-wallet-receipt-soak.json`.
 
 Contract artifact scenarios declare `contractArtifacts` plus `viewCalls`,
@@ -70,9 +73,9 @@ Contract artifact scenarios declare `contractArtifacts` plus `viewCalls`,
 `hoglab run --contract-artifact-root <dir>` resolves relative WASM paths from
 that directory.
 `scripts/smoke-sim-scenarios.sh` detects a sibling `../groundhog-examples`
-checkout or `GROUNDHOG_EXAMPLES_ROOT`, builds `fibonacci` and `events` into the
-script workdir, and passes the resulting `target/groundhog`-style artifact root
-into the ignored local catalog smoke.
+checkout or `GROUNDHOG_EXAMPLES_ROOT`, builds `fibonacci` and `caller-counter`
+into the script workdir, and passes the resulting `target/groundhog`-style
+artifact root into the ignored local catalog smoke.
 The default policy is source-first: keep reusable contracts as source projects,
 compile WASM on demand, and commit `.wasm` files only when exact byte identity
 is the fixture under test.
@@ -107,8 +110,8 @@ signers from the runtime manifest, writes the result directory skeleton, and
 executes deterministic open-loop traffic through the typed RPC client.
 Supported workloads are `chain-tip`, `wallet-submit-smoke` (dev-wallet
 compatible transactions), `receipt-poll`, `contract-call`, `view-call`,
-`storage-read`, and `events-query` for manifests that deploy at least one
-contract artifact before scheduled load starts.
+`storage-read`, `events-query`, and `read-after-write` for manifests that
+deploy at least one contract artifact before scheduled load starts.
 `receipt-poll` tracks
 actor-submitted transactions in a per-actor FIFO queue until their receipts
 appear and records receipt presence, status, optional reverted/error detail,
@@ -126,6 +129,18 @@ from the manifest. The workload waits for the transaction receipt before
 completing. Events record `contractCallName`, `contractCallContract`, `txHash`,
 `txNonce`, receipt fields, and submit-to-receipt latency. Non-`ok` receipts fail
 the workload with `errorClass: "contract-call-receipt-status"`.
+
+`read-after-write` uses the first configured `readAfterWrite` entry as a coupled
+round-trip. On the first actor tick, or after an invalidation, it reconciles by
+calling the configured read view to establish the actor's baseline. It then
+submits the configured write through dev-wallet `doAction`, waits for an `ok`
+receipt, calls the configured read view again, and requires the observed `u64`
+to match the actor's expected value. JSONL events record
+`readAfterWriteName`, `readAfterWriteContract`, `readAfterWriteExpected`,
+`readAfterWriteObserved`, `readAfterWriteMatched`, and
+`readAfterWriteRebased`. Mismatches fail the workload with
+`errorClass: "read-after-write-mismatch"` and force the actor to reconcile on
+its next tick.
 
 `storage-read` sends `groundhog_getStorageAt` to the first configured
 `storageReads` entry, using the deployed address for that entry's
@@ -274,6 +289,14 @@ rules as `result.json`: only on field rename/removal/meaning change. New
 optional fields are additive and do not bump the version. The diff also
 surfaces `outcomeA`/`outcomeB` so a `Passed → Aborted` transition is visible
 without inferring it from derived assertion deltas.
+
+Future work: the simulator is already easy to drive as a scenario matrix by
+generating JSON manifests with different load shapes, running each variant, and
+comparing the resulting `result.json` artifacts. A first-class matrix runner
+could make that workflow durable: accept parameter sets such as actor counts,
+rates, durations, workloads, and target binaries; launch each case with stable
+run naming; and emit one comparison table over counts, skips, error classes,
+latency percentiles, assertion results, and selected workload-specific fields.
 
 ## Baselines
 

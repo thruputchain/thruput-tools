@@ -385,6 +385,7 @@ where
                 contract_calls: &input.contract_setup.contract_calls,
                 storage_reads: &input.contract_setup.storage_reads,
                 event_queries: &input.contract_setup.event_queries,
+                read_after_write: &input.contract_setup.read_after_write,
             },
             input.chaos_controller,
             &mut chaos_events,
@@ -634,6 +635,7 @@ fn validate_executable_workloads(manifest: &SimulationManifest) -> Result<(), Si
                     | WorkloadKind::EventsQuery
                     | WorkloadKind::ViewCall
                     | WorkloadKind::StorageRead
+                    | WorkloadKind::ReadAfterWrite
             )
         })
         .map(|workload| workload_name(workload.name))
@@ -904,6 +906,30 @@ mod tests {
     }
 
     #[test]
+    fn validate_executable_workloads_accepts_read_after_write() {
+        let manifest: SimulationManifest = serde_json::from_value(json!({
+            "schemaVersion": 1,
+            "kind": "groundhog-simulation",
+            "name": "read-after-write-runtime-gate-test",
+            "seed": "seed",
+            "target": {"provider": "existing"},
+            "loadShape": [{"duration": "1ms", "users": 1, "ratePerUserHz": 1000.0}],
+            "workloads": [{"name": "read-after-write", "weight": 1}],
+            "contractArtifacts": [{"name": "caller-counter", "wasm": "caller-counter.wasm"}],
+            "readAfterWrite": [{
+                "name": "counter-roundtrip",
+                "contract": "caller-counter",
+                "write": {"entrypoint": "0x4fbf8bcef9232a3a"},
+                "read": {"entrypoint": "0xdfc5d5bd6c88f8c4"}
+            }]
+        }))
+        .expect("manifest fixture should parse");
+
+        validate_executable_workloads(&manifest)
+            .expect("read-after-write should be runtime-supported");
+    }
+
+    #[test]
     fn target_run_error_wins_over_cleanup_error() {
         let result = finish_target_run::<()>(
             Err(SimError::Executor("run failed".into())),
@@ -934,7 +960,7 @@ mod tests {
             .await
             .expect("scenario should write");
 
-        let error = run_target(RunOptions {
+        let error = Box::pin(run_target(RunOptions {
             scenario,
             rpc_url: Some("http://127.0.0.1:9545".into()),
             runtime_manifest: None,
@@ -947,7 +973,7 @@ mod tests {
             out_dir: None,
             seed: None,
             nonce_namespace: None,
-        })
+        }))
         .await
         .expect_err("local run should reject rpc url before launch");
 
@@ -966,7 +992,7 @@ mod tests {
             .expect("scenario should write");
         let missing = dir.path().join("missing-groundhog");
 
-        let error = run_target(RunOptions {
+        let error = Box::pin(run_target(RunOptions {
             scenario,
             rpc_url: None,
             runtime_manifest: None,
@@ -979,7 +1005,7 @@ mod tests {
             out_dir: None,
             seed: None,
             nonce_namespace: None,
-        })
+        }))
         .await
         .expect_err("local run should use the local provider");
 
@@ -1235,6 +1261,7 @@ mod tests {
             contract_calls: Vec::new(),
             storage_reads: Vec::new(),
             event_queries: Vec::new(),
+            read_after_write: Vec::new(),
             failed: false,
         }
     }

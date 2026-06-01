@@ -32,6 +32,8 @@ pub struct SimulationManifest {
     #[serde(default)]
     pub event_queries: Vec<EventQuerySpec>,
     #[serde(default)]
+    pub read_after_write: Vec<ReadAfterWriteSpec>,
+    #[serde(default)]
     pub assertions: AssertionSpec,
     #[serde(default)]
     pub chaos: Vec<ChaosEventSpec>,
@@ -220,6 +222,52 @@ fn default_event_query_limit() -> u32 {
     50
 }
 
+/// A read-after-write target: a state-changing write whose committed effect is
+/// read back and asserted against an actor-tracked expectation.
+///
+/// v1 reads are view-only; see the actor-state read-after-write design for the
+/// deferred storage read mode. The simulator uses raw 8-byte entrypoint and raw
+/// calldata hex; it does not encode method arguments. v1 supports exactly one
+/// configured entry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadAfterWriteSpec {
+    /// Scenario-local name used in result artifacts.
+    pub name: String,
+    /// Name of the contract artifact this round-trip targets.
+    pub contract: String,
+    /// The state-changing write submitted through dev-wallet `doAction`.
+    pub write: RawWriteSpec,
+    /// The view read-back issued after the write commits.
+    pub read: RawReadSpec,
+}
+
+/// The write half of a read-after-write round-trip.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RawWriteSpec {
+    /// Eight-byte target contract entrypoint selector as `0x`-prefixed hex.
+    pub entrypoint: String,
+    /// Target contract calldata as `0x`-prefixed hex; empty (`0x`) for no-arg writes.
+    #[serde(default = "default_empty_calldata")]
+    pub calldata: String,
+}
+
+/// The read half of a read-after-write round-trip. View-only in v1.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RawReadSpec {
+    /// Eight-byte view entrypoint selector as `0x`-prefixed hex.
+    pub entrypoint: String,
+    /// View calldata as `0x`-prefixed hex; empty (`0x`) for no-arg reads.
+    #[serde(default = "default_empty_calldata")]
+    pub calldata: String,
+}
+
+fn default_empty_calldata() -> String {
+    "0x".into()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum WorkloadKind {
@@ -231,13 +279,18 @@ pub enum WorkloadKind {
     StorageRead,
     ViewCall,
     ContractCall,
+    ReadAfterWrite,
 }
 
 impl WorkloadKind {
     pub fn requires_indexer(self) -> bool {
         matches!(
             self,
-            Self::ReceiptPoll | Self::StatusPoll | Self::EventsQuery | Self::ContractCall
+            Self::ReceiptPoll
+                | Self::StatusPoll
+                | Self::EventsQuery
+                | Self::ContractCall
+                | Self::ReadAfterWrite
         )
     }
 
@@ -246,7 +299,7 @@ impl WorkloadKind {
     }
 
     pub fn requires_view_gateway(self) -> bool {
-        matches!(self, Self::ViewCall)
+        matches!(self, Self::ViewCall | Self::ReadAfterWrite)
     }
 }
 

@@ -102,6 +102,7 @@ fn validate_contract_artifacts(manifest: &SimulationManifest) -> Result<(), Vali
     validate_contract_calls(manifest, &artifact_names)?;
     validate_storage_reads(manifest, &artifact_names)?;
     validate_event_queries(manifest, &artifact_names)?;
+    validate_read_after_write(manifest, &artifact_names)?;
 
     if manifest
         .workloads
@@ -155,6 +156,107 @@ fn validate_contract_artifacts(manifest: &SimulationManifest) -> Result<(), Vali
         }
     }
 
+    if manifest
+        .workloads
+        .iter()
+        .any(|workload| workload.name == WorkloadKind::ReadAfterWrite)
+    {
+        if manifest.contract_artifacts.is_empty() {
+            return Err(ValidationError::MissingContractArtifactsForReadAfterWrite);
+        }
+        if manifest.read_after_write.is_empty() {
+            return Err(ValidationError::MissingReadAfterWriteEntries);
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_read_after_write(
+    manifest: &SimulationManifest,
+    artifact_names: &HashSet<String>,
+) -> Result<(), ValidationError> {
+    let mut names = HashSet::new();
+    for entry in &manifest.read_after_write {
+        let name = entry.name.trim();
+        if name.is_empty() {
+            return Err(ValidationError::EmptyReadAfterWriteName);
+        }
+        if name != entry.name {
+            return Err(ValidationError::InvalidContractNameWhitespace {
+                field: "readAfterWrite[].name",
+                value: entry.name.clone(),
+            });
+        }
+        if entry.contract.trim() != entry.contract {
+            return Err(ValidationError::InvalidContractNameWhitespace {
+                field: "readAfterWrite[].contract",
+                value: entry.contract.clone(),
+            });
+        }
+        if !names.insert(name.to_owned()) {
+            return Err(ValidationError::DuplicateReadAfterWriteName {
+                name: name.to_owned(),
+            });
+        }
+        if !artifact_names.contains(entry.contract.trim()) {
+            return Err(ValidationError::UnknownReadAfterWriteContract {
+                entry: name.to_owned(),
+                contract: entry.contract.clone(),
+            });
+        }
+        validate_read_after_write_hex(&entry.write.entrypoint, Some(8), "write.entrypoint", name)?;
+        validate_read_after_write_hex(&entry.write.calldata, None, "write.calldata", name)?;
+        validate_read_after_write_hex(&entry.read.entrypoint, Some(8), "read.entrypoint", name)?;
+        validate_read_after_write_hex(&entry.read.calldata, None, "read.calldata", name)?;
+    }
+    if manifest.read_after_write.len() > 1 {
+        return Err(ValidationError::MultipleReadAfterWriteUnsupported {
+            count: manifest.read_after_write.len(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_read_after_write_hex(
+    value: &str,
+    expected_len: Option<usize>,
+    field: &'static str,
+    entry: &str,
+) -> Result<(), ValidationError> {
+    let Some(stripped) = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+    else {
+        return Err(ValidationError::InvalidReadAfterWriteHex {
+            entry: entry.to_owned(),
+            field,
+            reason: "hex value must be 0x-prefixed".into(),
+        });
+    };
+    if stripped.len() % 2 != 0 {
+        return Err(ValidationError::InvalidReadAfterWriteHex {
+            entry: entry.to_owned(),
+            field,
+            reason: "hex value must contain an even number of digits".into(),
+        });
+    }
+    if let Err(error) = hex::decode(stripped) {
+        return Err(ValidationError::InvalidReadAfterWriteHex {
+            entry: entry.to_owned(),
+            field,
+            reason: error.to_string(),
+        });
+    }
+    if let Some(expected_len) = expected_len
+        && stripped.len() / 2 != expected_len
+    {
+        return Err(ValidationError::InvalidReadAfterWriteHex {
+            entry: entry.to_owned(),
+            field,
+            reason: format!("expected {expected_len} bytes"),
+        });
+    }
     Ok(())
 }
 
@@ -701,6 +803,26 @@ pub enum ValidationError {
     MissingContractArtifactsForEventsQuery,
     #[error("events-query workload requires at least one eventQueries entry")]
     MissingEventQueriesForEventsQuery,
+    #[error("read-after-write name must not be empty")]
+    EmptyReadAfterWriteName,
+    #[error("duplicate read-after-write name `{name}`")]
+    DuplicateReadAfterWriteName { name: String },
+    #[error("read-after-write `{entry}` references unknown contract artifact `{contract}`")]
+    UnknownReadAfterWriteContract { entry: String, contract: String },
+    #[error("read-after-write `{entry}` field `{field}` is invalid: {reason}")]
+    InvalidReadAfterWriteHex {
+        entry: String,
+        field: &'static str,
+        reason: String,
+    },
+    #[error("read-after-write workload requires at least one contract artifact")]
+    MissingContractArtifactsForReadAfterWrite,
+    #[error("read-after-write workload requires at least one readAfterWrite entry")]
+    MissingReadAfterWriteEntries,
+    #[error(
+        "read-after-write workload currently supports exactly one readAfterWrite entry, found {count}"
+    )]
+    MultipleReadAfterWriteUnsupported { count: usize },
     #[error("target provider {provider:?} does not support chaos event {kind}")]
     UnsupportedChaos {
         provider: TargetProviderKind,
@@ -1344,6 +1466,131 @@ mod tests {
         ));
     }
 
+    fn read_after_write_entry() -> crate::manifest::ReadAfterWriteSpec {
+        crate::manifest::ReadAfterWriteSpec {
+            name: "counter-roundtrip".into(),
+            contract: "caller-counter".into(),
+            write: crate::manifest::RawWriteSpec {
+                entrypoint: "0x4fbf8bcef9232a3a".into(),
+                calldata: "0x".into(),
+            },
+            read: crate::manifest::RawReadSpec {
+                entrypoint: "0xdfc5d5bd6c88f8c4".into(),
+                calldata: "0x".into(),
+            },
+        }
+    }
+
+    fn read_after_write_manifest() -> SimulationManifest {
+        let mut manifest = basic_manifest();
+        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
+            name: "caller-counter".into(),
+            wasm: "caller-counter.wasm".into(),
+        }];
+        manifest.read_after_write = vec![read_after_write_entry()];
+        manifest.workloads = vec![WorkloadSpec {
+            name: WorkloadKind::ReadAfterWrite,
+            weight: 1,
+        }];
+        manifest
+    }
+
+    #[test]
+    fn validates_read_after_write_references_and_hex() {
+        validate_manifest(&read_after_write_manifest())
+            .expect("read-after-write manifest should validate");
+    }
+
+    #[test]
+    fn rejects_read_after_write_unknown_contract() {
+        let mut manifest = read_after_write_manifest();
+        manifest.read_after_write[0].contract = "missing".into();
+
+        let err = validate_manifest(&manifest).expect_err("unknown contract should reject");
+
+        assert!(matches!(
+            err,
+            ValidationError::UnknownReadAfterWriteContract { .. }
+        ));
+    }
+
+    #[test]
+    fn rejects_read_after_write_short_entrypoint() {
+        let mut manifest = read_after_write_manifest();
+        manifest.read_after_write[0].write.entrypoint = "0x1111".into();
+
+        let err = validate_manifest(&manifest).expect_err("short entrypoint should reject");
+
+        assert!(matches!(
+            err,
+            ValidationError::InvalidReadAfterWriteHex {
+                field: "write.entrypoint",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn rejects_duplicate_read_after_write_name() {
+        let mut manifest = read_after_write_manifest();
+        manifest.read_after_write = vec![read_after_write_entry(), read_after_write_entry()];
+
+        let err = validate_manifest(&manifest).expect_err("duplicate name should reject");
+
+        // Duplicate names are detected before the single-entry cap.
+        assert!(matches!(
+            err,
+            ValidationError::DuplicateReadAfterWriteName { .. }
+        ));
+    }
+
+    #[test]
+    fn rejects_multiple_read_after_write_entries() {
+        let mut manifest = read_after_write_manifest();
+        let mut second = read_after_write_entry();
+        second.name = "second-roundtrip".into();
+        manifest.read_after_write = vec![read_after_write_entry(), second];
+
+        let err = validate_manifest(&manifest).expect_err("multiple entries should reject");
+
+        assert!(matches!(
+            err,
+            ValidationError::MultipleReadAfterWriteUnsupported { count: 2 }
+        ));
+    }
+
+    #[test]
+    fn rejects_read_after_write_workload_without_entries() {
+        let mut manifest = read_after_write_manifest();
+        manifest.read_after_write = Vec::new();
+
+        let err = validate_manifest(&manifest).expect_err("empty readAfterWrite should reject");
+
+        assert!(matches!(err, ValidationError::MissingReadAfterWriteEntries));
+    }
+
+    #[test]
+    fn rejects_read_after_write_workload_without_view_gateway() {
+        let mut manifest = basic_manifest();
+        manifest.workloads = vec![WorkloadSpec {
+            name: WorkloadKind::ReadAfterWrite,
+            weight: 1,
+        }];
+        let runtime = runtime_manifest();
+        assert!(runtime.endpoints.view_gateway.is_none());
+
+        let err = validate_against_runtime(&manifest, &runtime)
+            .expect_err("read-after-write should require view gateway");
+
+        assert!(matches!(
+            err,
+            ValidationError::MissingReadPlane {
+                workload: WorkloadKind::ReadAfterWrite,
+                endpoint: "viewGateway"
+            }
+        ));
+    }
+
     #[test]
     fn rejects_actor_count_above_bootstrap_accounts() {
         let mut manifest = basic_manifest();
@@ -1429,6 +1676,7 @@ mod tests {
             contract_calls: Vec::new(),
             storage_reads: Vec::new(),
             event_queries: Vec::new(),
+            read_after_write: Vec::new(),
             assertions: crate::manifest::AssertionSpec::default(),
             chaos: Vec::new(),
             baseline: None,

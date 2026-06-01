@@ -550,8 +550,45 @@ chaos, deploy new contracts, or create remote infrastructure.
 - [x] Slice K4: add positive event-indexing catalog scenario and extend smoke
   coverage.
 - [x] Add view-call workloads when the runtime manifest advertises view support.
-- [ ] Add richer actor state machines.
-- [ ] Add read-after-write scenario presets.
+- [x] Slice L1: write handoff design:
+  `docs/sim/specs/2026-05-31-actor-state-read-after-write-design.md`. Couples
+  the "richer actor state machines" and "read-after-write scenario presets"
+  bullets into one coupled `read-after-write` workload preset rather than a
+  manifest flow DSL.
+- [x] Review gate L1: architecture + fixture decision reviewed. Approved coupled
+  preset over flow DSL and the per-caller counter fixture; revised the actor
+  state machine to rebase on known-committed writes (not whole-workload success)
+  with a `NeedsReconcile` pre-read for receipt-unknown/restart-aborted writes.
+- [x] Slice L2: per-caller `caller-counter` contract added to
+  `../groundhog-examples` (compiles; selectors bump=`0x4fbf8bcef9232a3a`,
+  get=`0xdfc5d5bd6c88f8c4`, derivation verified against fibonacci
+  compute=`0xc573d6c80bb945ad`); caller identity verified at code level (both
+  paths resolve to `actor.wallet_address`); manifest `readAfterWrite` +
+  `read-after-write` workload kind + validation + the `ReadAfterWriteState`
+  machine (`NeedsReconcile`/`Known(u64)`) landed with unit tests. Contract setup
+  moved to L3 (it is consumed by the executor; standalone it would be dead code).
+  `.wasm` artifact build + live caller-identity check deferred to the L4 smoke.
+- [x] Slice L3: contract setup (`PreparedReadAfterWrite`) plus executor
+  reconcile -> write -> await -> read -> assert, additive artifacts, and the
+  `read-after-write-mismatch` error class. Rebases actor state when the write is
+  known committed; keeps `Known` on a post-commit read RPC failure; sets
+  `NeedsReconcile` on mismatch or unknown commit status. Read-back decodes the
+  CXS `u64` via `xdrs::cxs::decode`. Six mock-client executor tests cover the
+  transition matrix; clippy/fmt/tests green.
+- [x] Slice L4: read-after-write catalog scenario + smoke coverage (builds the
+  `caller-counter` `.wasm`, runs the live `groundhog_view` caller-identity
+  check) + docs. The live smoke confirmed four advancing round-trips
+  (expected/observed 1/1..4/4, all matched) and surfaced a real hogd
+  ViewGateway staleness bug (public views were pinned at an old committed
+  height); fixed in the `viewgateway-refresh-on-tip-height` hogd branch by
+  refreshing the view snapshot when the committed tip height advances.
+- [x] Final review gate L: end-to-end reviewer fleet across groundhog-rpc,
+  groundhog-examples, and hogd; no blockers/highs. Findings (dead-helper
+  consolidation, `matched` on read failure, decode/abort/fault + overflow test
+  coverage, hogd over-rotation, smoke timing, SDK pin) addressed.
+- [ ] Slice L4: add the read-after-write catalog scenario, smoke coverage, and
+  docs. (Covers "Add richer actor state machines" and "Add read-after-write
+  scenario presets".)
 - [x] Add positive event-indexing scenarios with contracts that emit events
   during scheduled load.
 - [ ] Add storage-heavy, event-heavy, calldata-heavy, and compute-heavy

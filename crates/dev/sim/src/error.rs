@@ -24,7 +24,7 @@ pub enum SimError {
     #[error(
         "execution does not yet support these workloads: {0}. Supported workloads are \
          chain-tip, wallet-submit-smoke, receipt-poll, contract-call, view-call, \
-         storage-read, and events-query."
+         storage-read, events-query, and read-after-write."
     )]
     UnsupportedRuntimeWorkloads(String),
     #[error("failed to build JSON-RPC client: {0}")]

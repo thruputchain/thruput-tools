@@ -12,6 +12,7 @@ const LOCAL_FAST_CATALOG: &[CatalogScenario] = &[
         expect_contract_view: false,
         expect_contract_storage: false,
         expect_contract_events: false,
+        expect_read_after_write: false,
         allow_restart_failure: false,
     },
     CatalogScenario {
@@ -23,6 +24,7 @@ const LOCAL_FAST_CATALOG: &[CatalogScenario] = &[
         expect_contract_view: false,
         expect_contract_storage: false,
         expect_contract_events: false,
+        expect_read_after_write: false,
         allow_restart_failure: false,
     },
     CatalogScenario {
@@ -34,6 +36,7 @@ const LOCAL_FAST_CATALOG: &[CatalogScenario] = &[
         expect_contract_view: false,
         expect_contract_storage: false,
         expect_contract_events: false,
+        expect_read_after_write: false,
         allow_restart_failure: false,
     },
     CatalogScenario {
@@ -45,6 +48,7 @@ const LOCAL_FAST_CATALOG: &[CatalogScenario] = &[
         expect_contract_view: false,
         expect_contract_storage: false,
         expect_contract_events: false,
+        expect_read_after_write: false,
         allow_restart_failure: false,
     },
     CatalogScenario {
@@ -56,6 +60,7 @@ const LOCAL_FAST_CATALOG: &[CatalogScenario] = &[
         expect_contract_view: false,
         expect_contract_storage: false,
         expect_contract_events: false,
+        expect_read_after_write: false,
         allow_restart_failure: false,
     },
     CatalogScenario {
@@ -67,6 +72,7 @@ const LOCAL_FAST_CATALOG: &[CatalogScenario] = &[
         expect_contract_view: false,
         expect_contract_storage: false,
         expect_contract_events: false,
+        expect_read_after_write: false,
         allow_restart_failure: true,
     },
 ];
@@ -81,6 +87,7 @@ const LOCAL_CONTRACT_CATALOG: &[CatalogScenario] = &[
         expect_contract_view: true,
         expect_contract_storage: false,
         expect_contract_events: false,
+        expect_read_after_write: false,
         allow_restart_failure: false,
     },
     CatalogScenario {
@@ -92,6 +99,7 @@ const LOCAL_CONTRACT_CATALOG: &[CatalogScenario] = &[
         expect_contract_view: false,
         expect_contract_storage: true,
         expect_contract_events: false,
+        expect_read_after_write: false,
         allow_restart_failure: false,
     },
     CatalogScenario {
@@ -103,6 +111,7 @@ const LOCAL_CONTRACT_CATALOG: &[CatalogScenario] = &[
         expect_contract_view: false,
         expect_contract_storage: false,
         expect_contract_events: true,
+        expect_read_after_write: false,
         allow_restart_failure: false,
     },
     CatalogScenario {
@@ -114,6 +123,19 @@ const LOCAL_CONTRACT_CATALOG: &[CatalogScenario] = &[
         expect_contract_view: false,
         expect_contract_storage: false,
         expect_contract_events: true,
+        expect_read_after_write: false,
+        allow_restart_failure: false,
+    },
+    CatalogScenario {
+        file: "local-counter-read-after-write-smoke.json",
+        expect_passed: true,
+        expect_receipt_metrics: false,
+        expect_restart: false,
+        expect_restart_loss: false,
+        expect_contract_view: false,
+        expect_contract_storage: false,
+        expect_contract_events: false,
+        expect_read_after_write: true,
         allow_restart_failure: false,
     },
 ];
@@ -127,6 +149,7 @@ const LOCAL_SOAK_CATALOG: &[CatalogScenario] = &[CatalogScenario {
     expect_contract_view: false,
     expect_contract_storage: false,
     expect_contract_events: false,
+    expect_read_after_write: false,
     allow_restart_failure: false,
 }];
 
@@ -141,6 +164,7 @@ struct CatalogScenario {
     expect_contract_view: bool,
     expect_contract_storage: bool,
     expect_contract_events: bool,
+    expect_read_after_write: bool,
     allow_restart_failure: bool,
 }
 
@@ -488,6 +512,7 @@ fn run_catalog(catalog: &[CatalogScenario]) {
         if scenario.expect_contract_view
             || scenario.expect_contract_storage
             || scenario.expect_contract_events
+            || scenario.expect_read_after_write
         {
             command.arg("--contract-artifact-root").arg(
                 std::env::var("GROUNDHOG_SIM_CONTRACT_ARTIFACT_ROOT").expect(
@@ -552,6 +577,9 @@ fn run_catalog(catalog: &[CatalogScenario]) {
         if scenario.expect_contract_events {
             let expected_query = expected_event_query_name(&scenario_path);
             assert_contract_events_artifacts(&result, &run_dir, scenario.file, &expected_query);
+        }
+        if scenario.expect_read_after_write {
+            assert_read_after_write_artifacts(&result, &run_dir, scenario.file);
         }
 
         let simulation = std::fs::read_to_string(run_dir.join("simulation.json"))
@@ -847,6 +875,65 @@ fn assert_contract_events_artifacts(
             "{scenario} should observe indexed contract events"
         );
     }
+}
+
+fn assert_read_after_write_artifacts(
+    result: &serde_json::Value,
+    run_dir: &std::path::Path,
+    scenario: &str,
+) {
+    let contracts = result["contracts"]
+        .as_array()
+        .expect("result should contain contracts array");
+    assert_eq!(contracts.len(), 1, "{scenario}");
+    assert_eq!(contracts[0]["name"], "caller-counter", "{scenario}");
+    assert_eq!(contracts[0]["status"], "completed", "{scenario}");
+    assert!(contracts[0]["address"].as_str().is_some(), "{scenario}");
+
+    let metrics = &result["workloadMetrics"]["read-after-write"]["counts"];
+    assert!(
+        metrics["completed"].as_u64().unwrap_or_default() > 0,
+        "{scenario} should complete read-after-write workloads"
+    );
+
+    let stream =
+        std::fs::read_to_string(run_dir.join("result.jsonl")).expect("result stream should read");
+    let events = jsonl_values(&stream);
+    let completed: Vec<_> = events
+        .iter()
+        .filter(|event| {
+            event["kind"] == "workload-completed"
+                && event["workload"] == "read-after-write"
+                && event["rpcMethod"] == "groundhog_view"
+                && event["receiptPresent"] == true
+                && event["receiptStatus"] == "ok"
+                && event["readAfterWriteName"] == "counter-roundtrip"
+                && event["readAfterWriteContract"] == "caller-counter"
+                && event["readAfterWriteMatched"] == true
+        })
+        .collect();
+    assert!(
+        !completed.is_empty(),
+        "{scenario} should record matched read-after-write completions"
+    );
+
+    let mut saw_advanced = false;
+    for event in completed {
+        let expected = event["readAfterWriteExpected"]
+            .as_str()
+            .and_then(|value| value.parse::<u64>().ok())
+            .expect("readAfterWriteExpected should be a decimal string");
+        let observed = event["readAfterWriteObserved"]
+            .as_str()
+            .and_then(|value| value.parse::<u64>().ok())
+            .expect("readAfterWriteObserved should be a decimal string");
+        assert_eq!(observed, expected, "{scenario}");
+        saw_advanced |= expected > 1;
+    }
+    assert!(
+        saw_advanced,
+        "{scenario} should advance beyond the first write"
+    );
 }
 
 fn saw_positive_events_query_after_contract_call(

@@ -230,6 +230,11 @@ if [[ -n "$EXAMPLES_ROOT" ]]; then
         cd "$EXAMPLES_ROOT"
         "$GROUNDHOG_BINARY" build -p fibonacci --target-dir "$EXAMPLES_TARGET"
     )
+    log "building groundhog-examples caller-counter contract"
+    (
+        cd "$EXAMPLES_ROOT"
+        "$GROUNDHOG_BINARY" build -p caller-counter --target-dir "$EXAMPLES_TARGET"
+    )
     CONTRACT_ARTIFACT_ROOT="$EXAMPLES_TARGET/groundhog"
 else
     log "skipping contract scenario; set GROUNDHOG_EXAMPLES_ROOT to groundhog-examples"

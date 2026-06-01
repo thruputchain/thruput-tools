@@ -191,6 +191,18 @@ pub struct WorkloadEvent {
     pub error_class: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub read_after_write_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub read_after_write_contract: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub read_after_write_expected: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub read_after_write_observed: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub read_after_write_matched: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub read_after_write_rebased: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -263,6 +275,12 @@ mod tests {
                 event_oldest_block: None,
                 error_class: None,
                 error: None,
+                read_after_write_name: None,
+                read_after_write_contract: None,
+                read_after_write_expected: None,
+                read_after_write_observed: None,
+                read_after_write_matched: None,
+                read_after_write_rebased: None,
             },
         };
 
@@ -324,6 +342,12 @@ mod tests {
                 event_oldest_block: Some(0),
                 error_class: None,
                 error: None,
+                read_after_write_name: None,
+                read_after_write_contract: None,
+                read_after_write_expected: None,
+                read_after_write_observed: None,
+                read_after_write_matched: None,
+                read_after_write_rebased: None,
             },
         };
 
@@ -389,6 +413,12 @@ mod tests {
                 event_oldest_block: None,
                 error_class: None,
                 error: None,
+                read_after_write_name: None,
+                read_after_write_contract: None,
+                read_after_write_expected: None,
+                read_after_write_observed: None,
+                read_after_write_matched: None,
+                read_after_write_rebased: None,
             },
         };
 

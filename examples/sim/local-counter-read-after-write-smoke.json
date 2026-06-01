@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "kind": "groundhog-simulation",
+  "name": "local-counter-read-after-write-smoke",
+  "seed": "sim-local-counter-read-after-write-smoke",
+  "target": {
+    "provider": "local"
+  },
+  "bootstrap": {
+    "accounts": 1,
+    "accountSeed": "sim-local-counter-read-after-write-smoke-accounts",
+    "initialStorageTokens": "1000000000",
+    "devWalletProfile": "default",
+    "storageCostProfile": "default"
+  },
+  "loadShape": [
+    {
+      "duration": "8s",
+      "users": 1,
+      "ratePerUserHz": 1.0
+    }
+  ],
+  "workloads": [
+    {
+      "name": "read-after-write",
+      "weight": 1
+    }
+  ],
+  "contractArtifacts": [
+    {
+      "name": "caller-counter",
+      "wasm": "caller_counter.wasm"
+    }
+  ],
+  "readAfterWrite": [
+    {
+      "name": "counter-roundtrip",
+      "contract": "caller-counter",
+      "write": {
+        "entrypoint": "0x4fbf8bcef9232a3a",
+        "calldata": "0x"
+      },
+      "read": {
+        "entrypoint": "0xdfc5d5bd6c88f8c4",
+        "calldata": "0x"
+      }
+    }
+  ],
+  "assertions": {
+    "maxErrorRate": 0.001
+  }
+}
