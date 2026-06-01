@@ -3,9 +3,9 @@
 **Date:** 2026-05-31
 **Status:** L1 signed off. State-machine semantics, fixture, submit-failure
 branch, and view-only read decoding finalized per review. v1 read mode is
-view-only; storage read mode is deferred. L2 complete (contract fixture,
-manifest, validation, `ReadAfterWriteState`); contract setup moved to L3 because
-it is consumed by the executor. L3 next.
+view-only; storage read mode is deferred. L2 and L3 complete (contract fixture,
+manifest, validation, `ReadAfterWriteState`, contract setup, and the executor
+round-trip with unit tests). L4 (scenario + smoke + docs) next.
 
 ## Goal
 
@@ -314,9 +314,10 @@ derivation) can be added without breaking v1, when a scenario actually needs it.
   *Review gate L2 passed:* caller-identity verification, state-machine
   determinism, manifest shape, validation. Contract setup is consumed only by the
   executor, so it moved to L3 to avoid a dead-code field.
-- **Slice L3:** contract setup (`PreparedReadAfterWrite`) plus the executor
-  reconcile → write → await → read → assert, additive artifacts, and the
-  `read-after-write-mismatch` error class.
+- **Slice L3 (done):** contract setup (`PreparedReadAfterWrite`) plus the
+  executor reconcile → write → await → read → assert, additive artifacts, and the
+  `read-after-write-mismatch` error class. Read-back decodes the CXS `u64`. Six
+  mock-client executor tests cover the transition matrix.
   *Review gate L3:* commit-vs-read failure handling, rebase correctness, artifact
   shape.
 - **Slice L4:** scenario, catalog entry, smoke coverage (build the fixture), docs.

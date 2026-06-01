@@ -385,6 +385,7 @@ where
                 contract_calls: &input.contract_setup.contract_calls,
                 storage_reads: &input.contract_setup.storage_reads,
                 event_queries: &input.contract_setup.event_queries,
+                read_after_write: &input.contract_setup.read_after_write,
             },
             input.chaos_controller,
             &mut chaos_events,
@@ -1235,6 +1236,7 @@ mod tests {
             contract_calls: Vec::new(),
             storage_reads: Vec::new(),
             event_queries: Vec::new(),
+            read_after_write: Vec::new(),
             failed: false,
         }
     }

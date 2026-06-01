@@ -40,7 +40,24 @@ pub struct ContractSetup {
     pub contract_calls: Vec<PreparedContractCall>,
     pub storage_reads: Vec<PreparedStorageRead>,
     pub event_queries: Vec<PreparedEventQuery>,
+    pub read_after_write: Vec<PreparedReadAfterWrite>,
     pub failed: bool,
+}
+
+/// A manifest read-after-write target resolved to a deployed contract address.
+///
+/// The executor wraps the write in the scheduled actor's dev-wallet `doAction`
+/// transaction and issues the read as a `groundhog_view` call, so this carries
+/// only the inner write/read entrypoints and calldata plus the deployed address.
+#[derive(Debug, Clone)]
+pub struct PreparedReadAfterWrite {
+    pub name: String,
+    pub contract_name: String,
+    pub contract: ContractAddress,
+    pub write_entrypoint: Vec<u8>,
+    pub write_calldata: Vec<u8>,
+    pub read_entrypoint: Vec<u8>,
+    pub read_calldata: Vec<u8>,
 }
 
 #[derive(Debug, Clone)]
@@ -111,6 +128,7 @@ where
             contract_calls: Vec::new(),
             storage_reads: Vec::new(),
             event_queries: Vec::new(),
+            read_after_write: Vec::new(),
             failed: false,
         });
     }
@@ -146,14 +164,15 @@ where
         }
     }
 
-    let (view_calls, contract_calls, storage_reads, event_queries) = if failed {
-        (Vec::new(), Vec::new(), Vec::new(), Vec::new())
+    let (view_calls, contract_calls, storage_reads, event_queries, read_after_write) = if failed {
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new())
     } else {
         (
             prepare_view_calls(manifest, &deployed)?,
             prepare_contract_calls(manifest, &deployed)?,
             prepare_storage_reads(manifest, &deployed)?,
             prepare_event_queries(manifest, &deployed)?,
+            prepare_read_after_write(manifest, &deployed)?,
         )
     };
 
@@ -163,6 +182,7 @@ where
         contract_calls,
         storage_reads,
         event_queries,
+        read_after_write,
         failed,
     })
 }
@@ -557,6 +577,33 @@ fn prepare_contract_calls(
         .collect()
 }
 
+fn prepare_read_after_write(
+    manifest: &SimulationManifest,
+    deployed: &BTreeMap<String, ContractAddress>,
+) -> Result<Vec<PreparedReadAfterWrite>, SimError> {
+    manifest
+        .read_after_write
+        .iter()
+        .map(|entry| {
+            let contract = deployed.get(&entry.contract).copied().ok_or_else(|| {
+                SimError::Executor(format!(
+                    "read-after-write `{}` references undeployed contract `{}`",
+                    entry.name, entry.contract
+                ))
+            })?;
+            Ok(PreparedReadAfterWrite {
+                name: entry.name.clone(),
+                contract_name: entry.contract.clone(),
+                contract,
+                write_entrypoint: parse_hex(&entry.write.entrypoint)?,
+                write_calldata: parse_hex(&entry.write.calldata)?,
+                read_entrypoint: parse_hex(&entry.read.entrypoint)?,
+                read_calldata: parse_hex(&entry.read.calldata)?,
+            })
+        })
+        .collect()
+}
+
 fn prepare_event_queries(
     manifest: &SimulationManifest,
     deployed: &BTreeMap<String, ContractAddress>,
@@ -767,6 +814,14 @@ mod tests {
             Hex0x(ContractAddress::from([0x77; 32])).0
         );
         assert_eq!(setup.event_queries[0].cursor, Vec::<u8>::new());
+        assert_eq!(setup.read_after_write.len(), 1);
+        assert_eq!(setup.read_after_write[0].name, "counter-roundtrip");
+        assert_eq!(
+            setup.read_after_write[0].contract,
+            Hex0x(ContractAddress::from([0x77; 32])).0
+        );
+        assert_eq!(setup.read_after_write[0].write_entrypoint, vec![0x4f; 8]);
+        assert_eq!(setup.read_after_write[0].read_entrypoint, vec![0xdf; 8]);
         assert_eq!(setup.contract_calls.len(), 1);
         assert_eq!(setup.contract_calls[0].name, "events-store-value");
         assert_eq!(
@@ -877,7 +932,18 @@ mod tests {
                 limit: 10,
                 expect_min_events: Some(0),
             }],
-            read_after_write: Vec::new(),
+            read_after_write: vec![crate::manifest::ReadAfterWriteSpec {
+                name: "counter-roundtrip".into(),
+                contract: "fibonacci".into(),
+                write: crate::manifest::RawWriteSpec {
+                    entrypoint: "0x4f4f4f4f4f4f4f4f".into(),
+                    calldata: "0x".into(),
+                },
+                read: crate::manifest::RawReadSpec {
+                    entrypoint: "0xdfdfdfdfdfdfdfdf".into(),
+                    calldata: "0x".into(),
+                },
+            }],
             assertions: crate::manifest::AssertionSpec::default(),
             chaos: Vec::new(),
             baseline: None,

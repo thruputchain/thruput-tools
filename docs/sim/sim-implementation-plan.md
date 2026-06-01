@@ -568,11 +568,16 @@ chaos, deploy new contracts, or create remote infrastructure.
   machine (`NeedsReconcile`/`Known(u64)`) landed with unit tests. Contract setup
   moved to L3 (it is consumed by the executor; standalone it would be dead code).
   `.wasm` artifact build + live caller-identity check deferred to the L4 smoke.
-- [ ] Slice L3: contract setup (`PreparedReadAfterWrite`) plus executor
+- [x] Slice L3: contract setup (`PreparedReadAfterWrite`) plus executor
   reconcile -> write -> await -> read -> assert, additive artifacts, and the
-  `read-after-write-mismatch` error class. Rebase actor state when the write is
-  known committed; keep `Known` on a post-commit read RPC failure; set
-  `NeedsReconcile` on mismatch or unknown commit status.
+  `read-after-write-mismatch` error class. Rebases actor state when the write is
+  known committed; keeps `Known` on a post-commit read RPC failure; sets
+  `NeedsReconcile` on mismatch or unknown commit status. Read-back decodes the
+  CXS `u64` via `xdrs::cxs::decode`. Six mock-client executor tests cover the
+  transition matrix; clippy/fmt/tests green.
+- [ ] Slice L4: read-after-write catalog scenario + smoke coverage (builds the
+  `caller-counter` `.wasm`, runs the live `groundhog_view` caller-identity
+  check) + docs.
 - [ ] Slice L4: add the read-after-write catalog scenario, smoke coverage, and
   docs. (Covers "Add richer actor state machines" and "Add read-after-write
   scenario presets".)
