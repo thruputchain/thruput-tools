@@ -1022,7 +1022,9 @@ async fn record_aborted_for_restart(
         }
         if matches!(
             context.workload,
-            WorkloadKind::WalletSubmitSmoke | WorkloadKind::ContractCall
+            WorkloadKind::WalletSubmitSmoke
+                | WorkloadKind::ContractCall
+                | WorkloadKind::ReadAfterWrite
         ) {
             let actor = actor_states
                 .get_mut(context.actor_id as usize)
@@ -1142,7 +1144,14 @@ fn target_restarted_workload_completion(
         observed_receipt: None,
         receipt_poll: None,
         submit_to_receipt_latency_ms: None,
-        read_after_write_transition: None,
+        read_after_write_transition: if context.workload == WorkloadKind::ReadAfterWrite {
+            Some(ReadAfterWriteUpdate {
+                actor_id: context.actor_id,
+                transition: ReadAfterWriteTransition::Invalidate,
+            })
+        } else {
+            None
+        },
     })
 }
 
@@ -2160,6 +2169,7 @@ fn read_after_write_base_event(
     started_at_unix_ms: String,
     completed_at_unix_ms: String,
     latency_ms: u64,
+    rpc_method: &'static str,
     tx_nonce: Option<String>,
     expected: Option<u64>,
     rebased: bool,
@@ -2171,7 +2181,7 @@ fn read_after_write_base_event(
         started_at_unix_ms,
         completed_at_unix_ms,
         latency_ms,
-        rpc_method: "groundhog_sendRawTransaction",
+        rpc_method,
         chain_height: None,
         chain_block_hash: None,
         tx_hash: None,
@@ -2266,6 +2276,7 @@ where
                     started_at_unix_ms.clone(),
                     unix_ms()?.to_string(),
                     latency_ms,
+                    "groundhog_sendRawTransaction",
                     tx_nonce.clone(),
                     None,
                     false,
@@ -2298,6 +2309,7 @@ where
                             started_at_unix_ms.clone(),
                             unix_ms()?.to_string(),
                             latency_ms,
+                            "groundhog_view",
                             tx_nonce.clone(),
                             None,
                             true,
@@ -2328,6 +2340,7 @@ where
                         started_at_unix_ms.clone(),
                         unix_ms()?.to_string(),
                         latency_ms,
+                        "groundhog_view",
                         tx_nonce.clone(),
                         None,
                         true,
@@ -2364,6 +2377,7 @@ where
                 started_at_unix_ms.clone(),
                 unix_ms()?.to_string(),
                 latency_ms,
+                "groundhog_sendRawTransaction",
                 tx_nonce.clone(),
                 Some(expected),
                 rebased,
@@ -2407,6 +2421,7 @@ where
                 started_at_unix_ms.clone(),
                 unix_ms()?.to_string(),
                 latency_ms,
+                "groundhog_getTransactionReceipt",
                 tx_nonce.clone(),
                 Some(expected),
                 rebased,
@@ -2443,6 +2458,7 @@ where
             started_at_unix_ms.clone(),
             unix_ms()?.to_string(),
             latency_ms,
+            "groundhog_getTransactionReceipt",
             tx_nonce.clone(),
             Some(expected),
             rebased,
@@ -2479,6 +2495,7 @@ where
         actor_id,
         transition: ReadAfterWriteTransition::SetKnown(expected),
     });
+    let read_back = read_after_write_counter(&client, &prepared).await;
     let latency_ms = duration_ms(started.elapsed());
     let mut event = read_after_write_base_event(
         tick,
@@ -2486,6 +2503,7 @@ where
         started_at_unix_ms,
         unix_ms()?.to_string(),
         latency_ms,
+        "groundhog_view",
         tx_nonce,
         Some(expected),
         rebased,
@@ -2498,7 +2516,7 @@ where
         submit_to_receipt_latency_ms,
     );
 
-    match read_after_write_counter(&client, &prepared).await {
+    match read_back {
         Ok(observed) => {
             let mut event = event;
             event.read_after_write_observed = Some(observed.to_string());
@@ -5458,6 +5476,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn restart_abort_invalidates_read_after_write_and_advances_nonce() {
+        let file = NamedTempFile::new().expect("temp file should be created");
+        let mut event_writer = EventWriter::create(file.path())
+            .await
+            .expect("event writer should open");
+        let mut metrics = RunMetricsBuilder::default();
+        let mut actors = actor_states();
+        actors[0].record_read_after_write_committed(5);
+
+        record_aborted_for_restart(
+            vec![WorkloadTaskContext {
+                actor_id: 0,
+                workload: WorkloadKind::ReadAfterWrite,
+                scheduled_time_ms: 10,
+            }],
+            &mut actors,
+            &mut event_writer,
+            &mut metrics,
+            20,
+        )
+        .await
+        .expect("restart abort should record");
+
+        assert_eq!(actors[0].next_nonce_sequence, 1);
+        assert!(actors[0].read_after_write_needs_reconcile());
+        assert_eq!(
+            metrics.workload_counts()[&WorkloadKind::ReadAfterWrite].failed,
+            1
+        );
+        let events = tokio::fs::read_to_string(file.path())
+            .await
+            .expect("events should read");
+        let failed = find_event(&events, "workload-failed");
+        assert_eq!(failed["workload"], "read-after-write");
+        assert_eq!(failed["errorClass"], "target-restarted");
+    }
+
+    #[tokio::test]
     async fn restart_chaos_does_not_double_count_in_flight_receipt_poll() {
         let manifest = receipt_chaos_manifest();
         let schedule = generate_schedule(&manifest).expect("schedule should generate");
@@ -6106,6 +6162,7 @@ mod tests {
         assert_eq!(completed["readAfterWriteObserved"], "1");
         assert_eq!(completed["readAfterWriteMatched"], true);
         assert_eq!(completed["readAfterWriteRebased"], true);
+        assert_eq!(completed["rpcMethod"], "groundhog_view");
         assert_eq!(completed["receiptStatus"], "ok");
     }
 
@@ -6153,6 +6210,7 @@ mod tests {
         assert!(actors[0].read_after_write_needs_reconcile());
         let failed = find_event(&events, "workload-failed");
         assert_eq!(failed["errorClass"], "read-after-write-mismatch");
+        assert_eq!(failed["rpcMethod"], "groundhog_view");
         assert_eq!(failed["readAfterWriteExpected"], "6");
         assert_eq!(failed["readAfterWriteObserved"], "9");
         assert_eq!(failed["readAfterWriteMatched"], false);
@@ -6180,6 +6238,7 @@ mod tests {
         );
         let failed = find_event(&events, "workload-failed");
         assert_eq!(failed["errorClass"], "view-rpc-error");
+        assert_eq!(failed["rpcMethod"], "groundhog_view");
         assert_eq!(failed["readAfterWriteExpected"], "6");
     }
 
@@ -6199,6 +6258,26 @@ mod tests {
         assert_eq!(actors[0].next_nonce_sequence, 0);
         let failed = find_event(&events, "workload-failed");
         assert_eq!(failed["errorClass"], "rpc-error");
+        assert_eq!(failed["rpcMethod"], "groundhog_sendRawTransaction");
+    }
+
+    #[tokio::test]
+    async fn read_after_write_receipt_rpc_failure_invalidates_actor() {
+        let client = ReadAfterWriteClient {
+            reads: read_after_write_reads(vec![Ok(3)]),
+            submit: Ok(tx_hash(0x6c)),
+            receipt: Err("receipt boom".into()),
+            view_calls: Arc::new(Mutex::new(0)),
+        };
+
+        let (actors, _metrics, events) = run_read_after_write(client, |_| {}).await;
+
+        assert!(actors[0].read_after_write_needs_reconcile());
+        assert_eq!(actors[0].next_nonce_sequence, 1);
+        let failed = find_event(&events, "workload-failed");
+        assert_eq!(failed["errorClass"], "rpc-error");
+        assert_eq!(failed["rpcMethod"], "groundhog_getTransactionReceipt");
+        assert_eq!(failed["readAfterWriteExpected"], "4");
     }
 
     #[tokio::test]
@@ -6225,5 +6304,6 @@ mod tests {
         );
         let failed = find_event(&events, "workload-failed");
         assert_eq!(failed["errorClass"], "contract-call-receipt-status");
+        assert_eq!(failed["rpcMethod"], "groundhog_getTransactionReceipt");
     }
 }

@@ -635,6 +635,7 @@ fn validate_executable_workloads(manifest: &SimulationManifest) -> Result<(), Si
                     | WorkloadKind::EventsQuery
                     | WorkloadKind::ViewCall
                     | WorkloadKind::StorageRead
+                    | WorkloadKind::ReadAfterWrite
             )
         })
         .map(|workload| workload_name(workload.name))
@@ -902,6 +903,30 @@ mod tests {
             .expect("result stream should read");
         assert!(!contents.contains("stale"));
         assert!(contents.contains("\"kind\":\"run-completed\""));
+    }
+
+    #[test]
+    fn validate_executable_workloads_accepts_read_after_write() {
+        let manifest: SimulationManifest = serde_json::from_value(json!({
+            "schemaVersion": 1,
+            "kind": "groundhog-simulation",
+            "name": "read-after-write-runtime-gate-test",
+            "seed": "seed",
+            "target": {"provider": "existing"},
+            "loadShape": [{"duration": "1ms", "users": 1, "ratePerUserHz": 1000.0}],
+            "workloads": [{"name": "read-after-write", "weight": 1}],
+            "contractArtifacts": [{"name": "caller-counter", "wasm": "caller-counter.wasm"}],
+            "readAfterWrite": [{
+                "name": "counter-roundtrip",
+                "contract": "caller-counter",
+                "write": {"entrypoint": "0x4fbf8bcef9232a3a"},
+                "read": {"entrypoint": "0xdfc5d5bd6c88f8c4"}
+            }]
+        }))
+        .expect("manifest fixture should parse");
+
+        validate_executable_workloads(&manifest)
+            .expect("read-after-write should be runtime-supported");
     }
 
     #[test]
