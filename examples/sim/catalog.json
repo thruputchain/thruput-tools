@@ -235,6 +235,24 @@
       "runner": "hoglab run"
     },
     {
+      "id": "local-calldata-heavy",
+      "path": "local-calldata-heavy.json",
+      "title": "Local Calldata-Heavy Preset",
+      "summary": "Builds calldata.wasm from groundhog-examples and submits wide sum16 contract calls with sixteen u32 calldata arguments.",
+      "provider": "local",
+      "tier": "preset",
+      "tags": ["local", "contract", "calldata", "contract-call", "calldata-heavy", "preset"],
+      "requiresContracts": true,
+      "contracts": [
+        {
+          "name": "calldata",
+          "source": "groundhog-examples/calldata",
+          "artifact": "calldata.wasm"
+        }
+      ],
+      "runner": "hoglab run"
+    },
+    {
       "id": "local-wallet-soak",
       "path": "local-wallet-soak.json",
       "title": "Local Wallet Soak",

@@ -590,9 +590,9 @@ chaos, deploy new contracts, or create remote infrastructure.
   during scheduled load.
 - [x] Add storage-miss-heavy, event-heavy, and compute-heavy scenario presets
   using the existing Fibonacci contract fixture and catalog entries.
-- [ ] Add a calldata-heavy fixture or workload shape; the current runnable
-  contract fixtures do not provide a broad-calldata method that builds cleanly
-  through the local artifact path.
+- [x] Add calldata-heavy fixture and preset. The fixture lives in
+  `groundhog-examples/calldata`; `examples/sim/local-calldata-heavy.json`
+  drives its `sum16` contract-call path with sixteen u32 calldata arguments.
 - [ ] Add NNInt-specific scenario presets.
 
 ## Phase 4: Single Remote Host

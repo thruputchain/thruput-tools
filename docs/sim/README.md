@@ -73,20 +73,22 @@ Contract artifact scenarios declare `contractArtifacts` plus `viewCalls`,
 `hoglab run --contract-artifact-root <dir>` resolves relative WASM paths from
 that directory.
 `scripts/smoke-sim-scenarios.sh` detects a sibling `../groundhog-examples`
-checkout or `GROUNDHOG_EXAMPLES_ROOT`, builds `fibonacci` and `caller-counter`
-into the script workdir, and passes the resulting `target/groundhog`-style
-artifact root into the ignored local catalog smoke.
+checkout or `GROUNDHOG_EXAMPLES_ROOT`, builds `fibonacci`, `caller-counter`,
+and, when present, `calldata` into the script workdir, and passes the
+resulting `target/groundhog`-style artifact root into the ignored local catalog
+smoke.
 The default policy is source-first: keep reusable contracts as source projects,
 compile WASM on demand, and commit `.wasm` files only when exact byte identity
 is the fixture under test.
 
 The catalog also includes heavier local presets that are not part of the fast
 smoke ladder: `local-fibonacci-storage-miss-heavy`,
-`local-fibonacci-event-heavy`, and `local-fibonacci-compute-heavy`. They reuse
-the Fibonacci fixture to stress negative storage lookups, indexed event traffic,
-and recursive contract-call compute with longer or higher-rate load shapes. Run
-them directly with `hoglab run` and `--contract-artifact-root` after building
-the required contract artifacts.
+`local-fibonacci-event-heavy`, `local-fibonacci-compute-heavy`, and
+`local-calldata-heavy`. They reuse the Fibonacci fixture to stress negative
+storage lookups, indexed event traffic, and recursive contract-call compute,
+plus a dedicated `calldata` fixture for wide u32 calldata. Run them directly
+with `hoglab run` and `--contract-artifact-root` after building the required
+contract artifacts.
 
 Existing-target quickstart:
 
