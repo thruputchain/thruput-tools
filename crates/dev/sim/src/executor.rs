@@ -2355,7 +2355,7 @@ where
                         "groundhog_view",
                         tx_nonce.clone(),
                         None,
-                        true,
+                        false,
                     )
                     .with_error(failure.class, failure.message);
                     return Ok(read_after_write_completion(
@@ -6216,6 +6216,28 @@ mod tests {
         assert_eq!(completed["readAfterWriteExpected"], "6");
         assert_eq!(completed["readAfterWriteMatched"], true);
         assert_eq!(completed["readAfterWriteRebased"], false);
+    }
+
+    #[tokio::test]
+    async fn read_after_write_reconcile_read_failure_is_not_rebased() {
+        let view_calls = Arc::new(Mutex::new(0));
+        let client = ReadAfterWriteClient {
+            reads: read_after_write_reads(vec![Err("read boom".into())]),
+            submit: Ok(tx_hash(0x6c)),
+            receipt: Ok(Some(receipt(tx_hash(0x6c)))),
+            view_calls: view_calls.clone(),
+        };
+
+        let (actors, _metrics, events) = run_read_after_write(client, |_| {}).await;
+
+        assert_eq!(*view_calls.lock().expect("view counter"), 1);
+        assert!(actors[0].read_after_write_needs_reconcile());
+        assert_eq!(actors[0].next_nonce_sequence, 0);
+        let failed = find_event(&events, "workload-failed");
+        assert_eq!(failed["errorClass"], "view-rpc-error");
+        assert_eq!(failed["rpcMethod"], "groundhog_view");
+        assert_eq!(failed["readAfterWriteRebased"], false);
+        assert!(failed.get("readAfterWriteExpected").is_none());
     }
 
     #[tokio::test]

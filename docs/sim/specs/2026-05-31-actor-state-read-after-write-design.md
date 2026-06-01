@@ -215,7 +215,7 @@ State effect is determined by *where* the read failed, not by the class:
 - `readAfterWriteObserved` (decimal string; absent when the read-back RPC failed
   or was a non-`ok`/unknown write);
 - `readAfterWriteMatched` (bool);
-- `readAfterWriteRebased` (bool; true when this tick performed a reconcile
+- `readAfterWriteRebased` (bool; true when this tick completed a reconcile
   pre-read).
 
 `result.json` keys per-workload metrics by `read-after-write` like other
