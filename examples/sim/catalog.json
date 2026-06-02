@@ -166,7 +166,7 @@
       "id": "local-counter-read-after-write-smoke",
       "path": "local-counter-read-after-write-smoke.json",
       "title": "Local Counter Read-After-Write Smoke",
-      "summary": "Builds the caller-counter fixture from groundhog-examples, calls bump(), and verifies get() reads back the committed per-caller counter.",
+      "summary": "Builds the caller-counter simulator fixture from groundhog-examples, calls bump(), and verifies get() reads back the committed per-caller counter.",
       "provider": "local",
       "tier": "smoke",
       "tags": ["local", "contract", "caller-counter", "read-after-write", "indexer", "smoke"],
@@ -174,7 +174,7 @@
       "contracts": [
         {
           "name": "caller-counter",
-          "source": "groundhog-examples/caller-counter",
+          "source": "groundhog-examples/sim-fixtures/caller-counter",
           "artifact": "caller_counter.wasm"
         }
       ],
@@ -238,7 +238,7 @@
       "id": "local-calldata-heavy",
       "path": "local-calldata-heavy.json",
       "title": "Local Calldata-Heavy Preset",
-      "summary": "Builds calldata.wasm from groundhog-examples and submits wide sum16 contract calls with sixteen u32 calldata arguments.",
+      "summary": "Builds the calldata simulator fixture from groundhog-examples and submits wide sum16 contract calls with sixteen u32 calldata arguments.",
       "provider": "local",
       "tier": "preset",
       "tags": ["local", "contract", "calldata", "contract-call", "calldata-heavy", "preset"],
@@ -246,8 +246,26 @@
       "contracts": [
         {
           "name": "calldata",
-          "source": "groundhog-examples/calldata",
+          "source": "groundhog-examples/sim-fixtures/calldata",
           "artifact": "calldata.wasm"
+        }
+      ],
+      "runner": "hoglab run"
+    },
+    {
+      "id": "local-nnint-heavy",
+      "path": "local-nnint-heavy.json",
+      "title": "Local NNInt-Heavy Preset",
+      "summary": "Builds the nnint-stress simulator fixture from groundhog-examples and submits positive churn(50, 17) NNInt contract calls.",
+      "provider": "local",
+      "tier": "preset",
+      "tags": ["local", "contract", "nnint", "contract-call", "nnint-heavy", "preset"],
+      "requiresContracts": true,
+      "contracts": [
+        {
+          "name": "nnint-stress",
+          "source": "groundhog-examples/sim-fixtures/nnint-stress",
+          "artifact": "nnint_stress.wasm"
         }
       ],
       "runner": "hoglab run"

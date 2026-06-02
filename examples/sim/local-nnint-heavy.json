@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "kind": "groundhog-simulation",
+  "name": "local-nnint-heavy",
+  "seed": "sim-local-nnint-heavy",
+  "target": {
+    "provider": "local"
+  },
+  "bootstrap": {
+    "accounts": 2,
+    "accountSeed": "sim-local-nnint-heavy-accounts",
+    "initialStorageTokens": "1000000000",
+    "devWalletProfile": "default",
+    "storageCostProfile": "default"
+  },
+  "loadShape": [
+    {
+      "duration": "20s",
+      "users": 2,
+      "ratePerUserHz": 1.0
+    }
+  ],
+  "workloads": [
+    {
+      "name": "contract-call",
+      "weight": 1
+    }
+  ],
+  "contractArtifacts": [
+    {
+      "name": "nnint-stress",
+      "wasm": "nnint_stress.wasm"
+    }
+  ],
+  "contractCalls": [
+    {
+      "name": "nnint-churn-amount-50-refund-17",
+      "contract": "nnint-stress",
+      "entrypoint": "0x5d2031af9e654e09",
+      "calldata": "0x3211"
+    }
+  ],
+  "assertions": {
+    "maxErrorRate": 0.001
+  }
+}

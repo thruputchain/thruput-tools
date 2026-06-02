@@ -559,8 +559,9 @@ chaos, deploy new contracts, or create remote infrastructure.
   preset over flow DSL and the per-caller counter fixture; revised the actor
   state machine to rebase on known-committed writes (not whole-workload success)
   with a `NeedsReconcile` pre-read for receipt-unknown/restart-aborted writes.
-- [x] Slice L2: per-caller `caller-counter` contract added to
-  `../groundhog-examples` (compiles; selectors bump=`0x4fbf8bcef9232a3a`,
+- [x] Slice L2: per-caller `caller-counter` simulator fixture added to
+  `../groundhog-examples/sim-fixtures` (compiles; selectors
+  bump=`0x4fbf8bcef9232a3a`,
   get=`0xdfc5d5bd6c88f8c4`, derivation verified against fibonacci
   compute=`0xc573d6c80bb945ad`); caller identity verified at code level (both
   paths resolve to `actor.wallet_address`); manifest `readAfterWrite` +
@@ -591,9 +592,14 @@ chaos, deploy new contracts, or create remote infrastructure.
 - [x] Add storage-miss-heavy, event-heavy, and compute-heavy scenario presets
   using the existing Fibonacci contract fixture and catalog entries.
 - [x] Add calldata-heavy fixture and preset. The fixture lives in
-  `groundhog-examples/calldata`; `examples/sim/local-calldata-heavy.json`
-  drives its `sum16` contract-call path with sixteen u32 calldata arguments.
-- [ ] Add NNInt-specific scenario presets.
+  `groundhog-examples/sim-fixtures/calldata`;
+  `examples/sim/local-calldata-heavy.json` drives its `sum16` contract-call
+  path with sixteen u32 calldata arguments.
+- [x] Add NNInt-specific scenario preset. The fixture lives in
+  `groundhog-examples/sim-fixtures/nnint-stress`;
+  `examples/sim/local-nnint-heavy.json` drives its positive `churn`
+  contract-call path through strict increments, commuting increments, bounded
+  decrements, and per-caller `Map<ContractAddress, NNInt>` state.
 
 ## Phase 4: Single Remote Host
 

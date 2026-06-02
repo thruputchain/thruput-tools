@@ -230,19 +230,30 @@ if [[ -n "$EXAMPLES_ROOT" ]]; then
         cd "$EXAMPLES_ROOT"
         "$GROUNDHOG_BINARY" build -p fibonacci --target-dir "$EXAMPLES_TARGET"
     )
-    log "building groundhog-examples caller-counter contract"
+    # Required by the fast read-after-write smoke scenario. Keep this a hard
+    # failure so stale fixture checkouts do not silently skip core smoke coverage.
+    log "building groundhog-examples caller-counter simulator fixture"
     (
         cd "$EXAMPLES_ROOT"
         "$GROUNDHOG_BINARY" build -p caller-counter --target-dir "$EXAMPLES_TARGET"
     )
-    if [[ -d "$EXAMPLES_ROOT/calldata" ]]; then
-        log "building groundhog-examples calldata contract"
+    if [[ -d "$EXAMPLES_ROOT/sim-fixtures/calldata" ]]; then
+        log "building groundhog-examples calldata simulator fixture"
         (
             cd "$EXAMPLES_ROOT"
             "$GROUNDHOG_BINARY" build -p calldata --target-dir "$EXAMPLES_TARGET"
         )
     else
-        log "skipping groundhog-examples calldata contract; fixture not present"
+        log "skipping groundhog-examples calldata simulator fixture; fixture not present"
+    fi
+    if [[ -d "$EXAMPLES_ROOT/sim-fixtures/nnint-stress" ]]; then
+        log "building groundhog-examples nnint-stress simulator fixture"
+        (
+            cd "$EXAMPLES_ROOT"
+            "$GROUNDHOG_BINARY" build -p nnint-stress --target-dir "$EXAMPLES_TARGET"
+        )
+    else
+        log "skipping groundhog-examples nnint-stress simulator fixture; fixture not present"
     fi
     CONTRACT_ARTIFACT_ROOT="$EXAMPLES_TARGET/groundhog"
 else
