@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "kind": "groundhog-simulation",
+  "name": "local-calldata-heavy",
+  "seed": "sim-local-calldata-heavy",
+  "target": {
+    "provider": "local"
+  },
+  "bootstrap": {
+    "accounts": 2,
+    "accountSeed": "sim-local-calldata-heavy-accounts",
+    "initialStorageTokens": "1000000000",
+    "devWalletProfile": "default",
+    "storageCostProfile": "default"
+  },
+  "loadShape": [
+    {
+      "duration": "20s",
+      "users": 2,
+      "ratePerUserHz": 1.0
+    }
+  ],
+  "workloads": [
+    {
+      "name": "contract-call",
+      "weight": 1
+    }
+  ],
+  "contractArtifacts": [
+    {
+      "name": "calldata",
+      "wasm": "calldata.wasm"
+    }
+  ],
+  "contractCalls": [
+    {
+      "name": "sum16-wide",
+      "contract": "calldata",
+      "entrypoint": "0x854da0bb969c7816",
+      "calldata": "0x0102030405060708090a0b0c0d0e0f10"
+    }
+  ],
+  "assertions": {
+    "maxErrorRate": 0.001
+  }
+}

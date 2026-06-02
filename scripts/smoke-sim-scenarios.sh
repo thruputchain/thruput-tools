@@ -235,6 +235,15 @@ if [[ -n "$EXAMPLES_ROOT" ]]; then
         cd "$EXAMPLES_ROOT"
         "$GROUNDHOG_BINARY" build -p caller-counter --target-dir "$EXAMPLES_TARGET"
     )
+    if [[ -d "$EXAMPLES_ROOT/calldata" ]]; then
+        log "building groundhog-examples calldata contract"
+        (
+            cd "$EXAMPLES_ROOT"
+            "$GROUNDHOG_BINARY" build -p calldata --target-dir "$EXAMPLES_TARGET"
+        )
+    else
+        log "skipping groundhog-examples calldata contract; fixture not present"
+    fi
     CONTRACT_ARTIFACT_ROOT="$EXAMPLES_TARGET/groundhog"
 else
     log "skipping contract scenario; set GROUNDHOG_EXAMPLES_ROOT to groundhog-examples"
