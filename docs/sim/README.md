@@ -63,9 +63,9 @@ records restart-loss artifacts, and, when `groundhog-examples` is available,
 Fibonacci deploy plus `view-call`, `storage-read`, `events-query`, and
 `contract-call` scenarios, including a positive event-indexing smoke that calls
 `compute(10)` and observes the emitted `FibComputed` event. It also builds the
-`caller-counter` fixture and runs a read-after-write smoke that submits
-`bump()`, waits for the receipt, reads `get()`, and asserts the per-caller
-counter advanced. The opt-in soak runs
+`sim-fixtures/caller-counter` fixture and runs a read-after-write smoke that
+submits `bump()`, waits for the receipt, reads `get()`, and asserts the
+per-caller counter advanced. The opt-in soak runs
 `examples/sim/local-mixed-wallet-receipt-soak.json`.
 
 Contract artifact scenarios declare `contractArtifacts` plus `viewCalls`,
@@ -73,8 +73,8 @@ Contract artifact scenarios declare `contractArtifacts` plus `viewCalls`,
 `hoglab run --contract-artifact-root <dir>` resolves relative WASM paths from
 that directory.
 `scripts/smoke-sim-scenarios.sh` detects a sibling `../groundhog-examples`
-checkout or `GROUNDHOG_EXAMPLES_ROOT`, builds `fibonacci`, `caller-counter`,
-and, when present, `calldata` into the script workdir, and passes the
+checkout or `GROUNDHOG_EXAMPLES_ROOT`, builds `fibonacci` plus simulator
+fixtures under `sim-fixtures/` into the script workdir, and passes the
 resulting `target/groundhog`-style artifact root into the ignored local catalog
 smoke.
 The default policy is source-first: keep reusable contracts as source projects,
@@ -83,12 +83,12 @@ is the fixture under test.
 
 The catalog also includes heavier local presets that are not part of the fast
 smoke ladder: `local-fibonacci-storage-miss-heavy`,
-`local-fibonacci-event-heavy`, `local-fibonacci-compute-heavy`, and
-`local-calldata-heavy`. They reuse the Fibonacci fixture to stress negative
-storage lookups, indexed event traffic, and recursive contract-call compute,
-plus a dedicated `calldata` fixture for wide u32 calldata. Run them directly
-with `hoglab run` and `--contract-artifact-root` after building the required
-contract artifacts.
+`local-fibonacci-event-heavy`, `local-fibonacci-compute-heavy`,
+`local-calldata-heavy`, and `local-nnint-heavy`. They reuse the Fibonacci
+fixture to stress negative storage lookups, indexed event traffic, and
+recursive contract-call compute, plus dedicated simulator fixtures for wide u32
+calldata and NNInt churn. Run them directly with `hoglab run` and
+`--contract-artifact-root` after building the required contract artifacts.
 
 Existing-target quickstart:
 
