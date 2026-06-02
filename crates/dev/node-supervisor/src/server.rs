@@ -328,6 +328,7 @@ async fn start_rpc_server(
     let view = HogdDevViewBackend::connect_optional(
         readiness.endpoints.view_gateway,
         protocol_version,
+        readiness.protocol.as_deref(),
         view_timeout,
     )
     .await?;
@@ -342,6 +343,7 @@ async fn start_rpc_server(
             readiness.endpoints.db_gateway,
             &scheduler_backend,
             protocol_version,
+            readiness.protocol.as_deref(),
         )
         .await?;
         start_rpc_server_with_read(
@@ -355,7 +357,12 @@ async fn start_rpc_server(
         .await
     } else if let Some(db_gateway_addr) = readiness.endpoints.db_gateway {
         tracing::debug!(%db_gateway_addr, "connecting to hogd-dev DbGateway for storage reads");
-        let read = HogdDevStorageReadBackend::connect(db_gateway_addr, protocol_version).await?;
+        let read = HogdDevStorageReadBackend::connect(
+            db_gateway_addr,
+            protocol_version,
+            readiness.protocol.as_deref(),
+        )
+        .await?;
         start_rpc_server_with_read(
             listen_address,
             scheduler_backend,
@@ -1539,10 +1546,59 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     async fn start_rolls_back_hogd_dev_when_db_gateway_intro_rejected() {
         let err = start_fake_supervisor_expect_error("db-gateway-intro-rejected").await;
 
-        assert!(
-            matches!(err, NodeSupervisorError::DbGatewayIntroRejected { .. }),
-            "expected DbGatewayIntroRejected error, got {err:?}",
-        );
+        let message = err.to_string();
+        match err {
+            NodeSupervisorError::ProtocolIntroRejected {
+                service,
+                outcome,
+                outcome_name,
+                is_protocol_mismatch,
+                protocol,
+                expected_protocol,
+            } => {
+                assert_eq!(service, "DbGateway");
+                assert_eq!(outcome, 1);
+                assert_eq!(outcome_name, "DbGatewayIntroMismatchedProtocol");
+                assert!(is_protocol_mismatch);
+                assert_eq!(protocol, PROTOCOL_VERSION);
+                assert_eq!(expected_protocol.as_deref(), Some("fake-hogd-dev/x23"));
+                assert!(message.contains("DbGateway intro mismatch"));
+                assert!(message.contains(PROTOCOL_VERSION));
+                assert!(message.contains("fake-hogd-dev/x23"));
+                assert!(message.contains("DbGatewayIntroMismatchedProtocol"));
+            }
+            other => panic!("expected ProtocolIntroRejected error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn start_rolls_back_hogd_dev_when_indexer_intro_rejected() {
+        let err = start_fake_supervisor_expect_error("indexer-intro-rejected").await;
+
+        let message = err.to_string();
+        match err {
+            NodeSupervisorError::ProtocolIntroRejected {
+                service,
+                outcome,
+                outcome_name,
+                is_protocol_mismatch,
+                protocol,
+                expected_protocol,
+            } => {
+                assert_eq!(service, "IndexerBlockExplorer");
+                assert_eq!(outcome, 1);
+                assert_eq!(outcome_name, "IntroMismatchedProtocol");
+                assert!(is_protocol_mismatch);
+                assert_eq!(protocol, PROTOCOL_VERSION);
+                assert_eq!(expected_protocol.as_deref(), Some("fake-hogd-dev/x23"));
+                assert!(message.contains("IndexerBlockExplorer intro mismatch"));
+                assert!(message.contains(PROTOCOL_VERSION));
+                assert!(message.contains("fake-hogd-dev/x23"));
+                assert!(message.contains("IntroMismatchedProtocol"));
+            }
+            other => panic!("expected ProtocolIntroRejected error, got {other:?}"),
+        }
     }
 
     #[tokio::test]

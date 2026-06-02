@@ -370,6 +370,13 @@ fn map_node_supervisor_error(err: &groundhog_node_supervisor::NodeSupervisorErro
         groundhog_node_supervisor::NodeSupervisorError::LocalNodeAlreadyRunning { .. } => {
             CliError::LocalNodeAlreadyRunning(message)
         }
+        groundhog_node_supervisor::NodeSupervisorError::ProtocolIntroRejected {
+            expected_protocol,
+            ..
+        } => CliError::NodeSupervisorProtocolIntroRejected {
+            message,
+            expected_protocol: expected_protocol.clone(),
+        },
         _ => CliError::NodeSupervisor(message),
     }
 }
@@ -494,9 +501,12 @@ fn hogd_dev_endpoints_payload(
 mod tests {
     use super::{
         LocalNodeOptions, LocalNodePidFile, default_tracing_filter, hogd_dev_startup_payload,
-        local_node_config,
+        local_node_config, map_node_supervisor_error,
     };
-    use groundhog_node_supervisor::{BackendPlanes, PlaneStatus, parse_readiness_line};
+    use crate::CliError;
+    use groundhog_node_supervisor::{
+        BackendPlanes, NodeSupervisorError, PlaneStatus, parse_readiness_line,
+    };
     use sha2::{Digest, Sha256};
     use std::{fs, path::PathBuf, time::Duration};
     use tempfile::TempDir;
@@ -537,6 +547,37 @@ mod tests {
         .expect("bug: local node config should build");
 
         assert!(config.hogd_dev.pid_file.is_none());
+    }
+
+    #[test]
+    fn protocol_intro_rejection_maps_to_protocol_hint() {
+        let err = NodeSupervisorError::ViewGatewayIntroRejected { outcome: 1 };
+        let cli_error = map_node_supervisor_error(&err);
+
+        assert!(matches!(cli_error, CliError::NodeSupervisor(_)));
+
+        let err = NodeSupervisorError::ProtocolIntroRejected {
+            service: "ViewGateway",
+            outcome: 1,
+            outcome_name: "ViewGatewayIntroMismatchedProtocol",
+            is_protocol_mismatch: true,
+            protocol: "hogp/sent".to_string(),
+            expected_protocol: Some("hogp/expected".to_string()),
+        };
+        let cli_error = map_node_supervisor_error(&err);
+
+        assert!(matches!(
+            cli_error,
+            CliError::NodeSupervisorProtocolIntroRejected { .. }
+        ));
+        assert_eq!(cli_error.code(), "protocol_intro_rejected");
+        assert_eq!(
+            cli_error
+                .hint()
+                .expect("intro rejection should have a specific hint"),
+            "pass `--hogd-protocol hogp/expected` to override, or rebuild groundhog node \
+             against a matching groundhog-xdr"
+        );
     }
 
     #[test]

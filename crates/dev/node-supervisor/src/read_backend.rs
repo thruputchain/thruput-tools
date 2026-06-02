@@ -75,6 +75,7 @@ impl HogdDevReadBackend {
         gateway_endpoint: Option<SocketAddr>,
         scheduler_backend: &HogdDevSchedulerBackend,
         protocol_version: &str,
+        expected_protocol: Option<&str>,
     ) -> Result<Self, NodeSupervisorError> {
         let indexer = connect(
             "hogd-dev indexer",
@@ -100,13 +101,19 @@ impl HogdDevReadBackend {
             })?;
 
         if intro_outcome != IndexerBlockExplorerIntroOutcome::IntroSuccess {
-            return Err(NodeSupervisorError::IndexerIntroRejected {
+            return Err(NodeSupervisorError::ProtocolIntroRejected {
+                service: "IndexerBlockExplorer",
                 outcome: intro_outcome.0,
+                outcome_name: indexer_intro_outcome_name(intro_outcome),
+                is_protocol_mismatch: intro_outcome
+                    == IndexerBlockExplorerIntroOutcome::IntroMismatchedProtocol,
+                protocol: protocol_version.to_string(),
+                expected_protocol: expected_protocol.map(str::to_string),
             });
         }
 
         let db_gateway = if let Some(endpoint) = gateway_endpoint {
-            Some(connect_db_gateway(endpoint, protocol_version).await?)
+            Some(connect_db_gateway(endpoint, protocol_version, expected_protocol).await?)
         } else {
             tracing::warn!(
                 "hogd-dev did not advertise a DbGateway endpoint; getStorageAt is unavailable"
@@ -140,9 +147,10 @@ impl HogdDevStorageReadBackend {
     pub(crate) async fn connect(
         endpoint: SocketAddr,
         protocol_version: &str,
+        expected_protocol: Option<&str>,
     ) -> Result<Self, NodeSupervisorError> {
         Ok(Self {
-            db_gateway: connect_db_gateway(endpoint, protocol_version).await?,
+            db_gateway: connect_db_gateway(endpoint, protocol_version, expected_protocol).await?,
         })
     }
 }
@@ -373,6 +381,7 @@ impl ReadPlane for HogdDevReadBackend {
 async fn connect_db_gateway(
     endpoint: SocketAddr,
     protocol_version: &str,
+    expected_protocol: Option<&str>,
 ) -> Result<DbGateway_DbGateway1_Client, NodeSupervisorError> {
     tracing::debug!(%endpoint, "connecting to hogd-dev DbGateway");
     let client = connect(
@@ -394,12 +403,38 @@ async fn connect_db_gateway(
                 error: e.to_string(),
             })?;
     if intro_outcome != DbGatewayIntroOutcome::DbGatewayIntroSuccess {
-        return Err(NodeSupervisorError::DbGatewayIntroRejected {
+        return Err(NodeSupervisorError::ProtocolIntroRejected {
+            service: "DbGateway",
             outcome: intro_outcome.0,
+            outcome_name: db_gateway_intro_outcome_name(intro_outcome),
+            is_protocol_mismatch: intro_outcome
+                == DbGatewayIntroOutcome::DbGatewayIntroMismatchedProtocol,
+            protocol: protocol_version.to_string(),
+            expected_protocol: expected_protocol.map(str::to_string),
         });
     }
 
     Ok(client)
+}
+
+fn indexer_intro_outcome_name(outcome: IndexerBlockExplorerIntroOutcome) -> &'static str {
+    match outcome.0 {
+        value if value == IndexerBlockExplorerIntroOutcome::IntroSuccess.0 => "IntroSuccess",
+        value if value == IndexerBlockExplorerIntroOutcome::IntroMismatchedProtocol.0 => {
+            "IntroMismatchedProtocol"
+        }
+        _ => "UnknownIndexerBlockExplorerIntroOutcome",
+    }
+}
+
+fn db_gateway_intro_outcome_name(outcome: DbGatewayIntroOutcome) -> &'static str {
+    match outcome.0 {
+        value if value == DbGatewayIntroOutcome::DbGatewayIntroSuccess.0 => "DbGatewayIntroSuccess",
+        value if value == DbGatewayIntroOutcome::DbGatewayIntroMismatchedProtocol.0 => {
+            "DbGatewayIntroMismatchedProtocol"
+        }
+        _ => "UnknownDbGatewayIntroOutcome",
+    }
 }
 
 async fn get_storage_at_from_db_gateway(
@@ -1620,7 +1655,7 @@ mod tests {
         // Act
         let result = tokio::time::timeout(
             Duration::from_secs(5),
-            HogdDevReadBackend::connect(dead_addr, None, &sched_backend, PROTOCOL_VERSION),
+            HogdDevReadBackend::connect(dead_addr, None, &sched_backend, PROTOCOL_VERSION, None),
         )
         .await
         .expect("bug: connect to dead port should return promptly");

@@ -91,6 +91,11 @@ pub enum CliError {
     CommandReportedFailure,
     #[error("node supervisor error: {0}")]
     NodeSupervisor(String),
+    #[error("node supervisor error: {message}")]
+    NodeSupervisorProtocolIntroRejected {
+        message: String,
+        expected_protocol: Option<String>,
+    },
     #[error("local node already running: {0}")]
     LocalNodeAlreadyRunning(String),
     #[error("could not connect to {0}")]
@@ -181,6 +186,7 @@ impl CliError {
             Self::StatusHasWarnings => "status_has_warnings",
             Self::CommandReportedFailure => "command_reported_failure",
             Self::NodeSupervisor(_) => "node_supervisor_error",
+            Self::NodeSupervisorProtocolIntroRejected { .. } => "protocol_intro_rejected",
             Self::LocalNodeAlreadyRunning(_) => "local_node_already_running",
             Self::RpcConnect(_) => "rpc_connect",
             Self::MissingRpcUrl => "missing_rpc_url",
@@ -257,6 +263,20 @@ impl CliError {
             }
             Self::NodeSupervisor(_) => Some(Cow::Borrowed(
                 "check `--hogd-dev-binary`, the hogd-dev process output, and the local node logs",
+            )),
+            Self::NodeSupervisorProtocolIntroRejected {
+                expected_protocol: Some(protocol),
+                ..
+            } => Some(Cow::Owned(format!(
+                "pass `--hogd-protocol {protocol}` to override, or rebuild groundhog node \
+                 against a matching groundhog-xdr"
+            ))),
+            Self::NodeSupervisorProtocolIntroRejected {
+                expected_protocol: None,
+                ..
+            } => Some(Cow::Borrowed(
+                "pass `--hogd-protocol <hogd-protocol>` to override, or rebuild groundhog node \
+                 against a matching groundhog-xdr",
             )),
             Self::LocalNodeAlreadyRunning(_) => Some(Cow::Borrowed(
                 "stop the running `groundhog node` process before starting another local node",
