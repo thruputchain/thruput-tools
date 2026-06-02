@@ -484,6 +484,33 @@ pub enum NodeSupervisorError {
         outcome: i32,
     },
 
+    /// An x23 service rejected the intro handshake with protocol details.
+    #[error(
+        "{}",
+        intro_rejected_message(
+            service,
+            *outcome,
+            outcome_name,
+            *is_protocol_mismatch,
+            protocol,
+            expected_protocol.as_deref()
+        )
+    )]
+    ProtocolIntroRejected {
+        /// x23 service that rejected the intro handshake.
+        service: &'static str,
+        /// Raw outcome discriminant from the x23 service.
+        outcome: i32,
+        /// Decoded intro outcome name when known.
+        outcome_name: &'static str,
+        /// Whether the intro outcome is a protocol mismatch.
+        is_protocol_mismatch: bool,
+        /// Protocol token sent by the Rust supervisor.
+        protocol: String,
+        /// Protocol token advertised by readiness, when available.
+        expected_protocol: Option<String>,
+    },
+
     /// The supervisor could not operate on the hogd-dev PID file.
     #[error("hogd-dev PID file operation failed at {}: {source}", path.display())]
     PidFile {
@@ -505,4 +532,32 @@ pub enum NodeSupervisorError {
         /// Existing hogd-dev PID if it could be read from the PID file.
         pid: Option<u32>,
     },
+}
+
+fn intro_rejected_message(
+    service: &str,
+    outcome: i32,
+    outcome_name: &str,
+    is_protocol_mismatch: bool,
+    protocol: &str,
+    expected_protocol: Option<&str>,
+) -> String {
+    if is_protocol_mismatch {
+        return match expected_protocol {
+            Some(expected_protocol) => format!(
+                "{service} intro mismatch: groundhog node speaks protocol {protocol}, \
+                 hogd-dev expects {expected_protocol} ({outcome_name}; binary is built against \
+                 a different protocol commit)"
+            ),
+            None => format!(
+                "{service} intro mismatch: groundhog node speaks protocol {protocol}, \
+                 but hogd-dev rejected it ({outcome_name})"
+            ),
+        };
+    }
+
+    format!(
+        "hogd-dev {service} intro rejected with outcome {outcome_name} \
+         (discriminant {outcome}); groundhog node speaks protocol {protocol}"
+    )
 }

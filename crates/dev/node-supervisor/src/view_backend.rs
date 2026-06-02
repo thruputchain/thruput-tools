@@ -49,6 +49,7 @@ impl HogdDevViewBackend {
     pub(crate) async fn connect_optional(
         endpoint: Option<SocketAddr>,
         protocol_version: &str,
+        expected_protocol: Option<&str>,
         request_timeout: Duration,
     ) -> Result<Self, NodeSupervisorError> {
         let Some(endpoint) = endpoint else {
@@ -76,8 +77,14 @@ impl HogdDevViewBackend {
             }
         })?;
         if intro_outcome != ViewGatewayIntroOutcome::ViewGatewayIntroSuccess {
-            return Err(NodeSupervisorError::ViewGatewayIntroRejected {
+            return Err(NodeSupervisorError::ProtocolIntroRejected {
+                service: "ViewGateway",
                 outcome: intro_outcome.0,
+                outcome_name: view_gateway_intro_outcome_name(intro_outcome),
+                is_protocol_mismatch: intro_outcome
+                    == ViewGatewayIntroOutcome::ViewGatewayIntroMismatchedProtocol,
+                protocol: protocol_version.to_string(),
+                expected_protocol: expected_protocol.map(str::to_string),
             });
         }
 
@@ -92,6 +99,18 @@ impl HogdDevViewBackend {
             Self::Gateway { .. } => crate::server::PlaneStatus::ViewGateway,
             Self::Stub(_) => crate::server::PlaneStatus::Stub,
         }
+    }
+}
+
+fn view_gateway_intro_outcome_name(outcome: ViewGatewayIntroOutcome) -> &'static str {
+    match outcome.0 {
+        value if value == ViewGatewayIntroOutcome::ViewGatewayIntroSuccess.0 => {
+            "ViewGatewayIntroSuccess"
+        }
+        value if value == ViewGatewayIntroOutcome::ViewGatewayIntroMismatchedProtocol.0 => {
+            "ViewGatewayIntroMismatchedProtocol"
+        }
+        _ => "UnknownViewGatewayIntroOutcome",
     }
 }
 
@@ -439,10 +458,14 @@ mod tests {
 
     #[tokio::test]
     async fn connect_optional_without_endpoint_uses_stub() {
-        let backend =
-            HogdDevViewBackend::connect_optional(None, PROTOCOL_VERSION, Duration::from_secs(1))
-                .await
-                .expect("missing endpoint should not fail startup");
+        let backend = HogdDevViewBackend::connect_optional(
+            None,
+            PROTOCOL_VERSION,
+            None,
+            Duration::from_secs(1),
+        )
+        .await
+        .expect("missing endpoint should not fail startup");
 
         assert_eq!(
             backend.plane_status(),
@@ -466,6 +489,7 @@ mod tests {
             HogdDevViewBackend::connect_optional(
                 Some(dead_addr),
                 PROTOCOL_VERSION,
+                None,
                 Duration::from_secs(1),
             ),
         )
@@ -487,18 +511,39 @@ mod tests {
 
         let result = HogdDevViewBackend::connect_optional(
             Some(addr),
-            PROTOCOL_VERSION,
+            "hogp/sent",
+            Some("hogp/expected"),
             Duration::from_secs(1),
         )
         .await;
 
-        assert!(
-            matches!(
-                result,
-                Err(crate::NodeSupervisorError::ViewGatewayIntroRejected { .. })
-            ),
-            "expected ViewGateway intro rejection, got {result:?}"
-        );
+        let err = result.expect_err("intro rejection should fail startup");
+        let message = err.to_string();
+        match err {
+            crate::NodeSupervisorError::ProtocolIntroRejected {
+                service,
+                outcome,
+                outcome_name,
+                is_protocol_mismatch,
+                protocol,
+                expected_protocol,
+            } => {
+                assert_eq!(service, "ViewGateway");
+                assert_eq!(
+                    outcome,
+                    ViewGatewayIntroOutcome::ViewGatewayIntroMismatchedProtocol.0
+                );
+                assert_eq!(outcome_name, "ViewGatewayIntroMismatchedProtocol");
+                assert!(is_protocol_mismatch);
+                assert_eq!(protocol, "hogp/sent");
+                assert_eq!(expected_protocol.as_deref(), Some("hogp/expected"));
+                assert!(message.contains("ViewGateway intro mismatch"));
+                assert!(message.contains("hogp/sent"));
+                assert!(message.contains("hogp/expected"));
+                assert!(message.contains("ViewGatewayIntroMismatchedProtocol"));
+            }
+            other => panic!("expected ViewGateway intro rejection, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -507,6 +552,7 @@ mod tests {
         let backend = HogdDevViewBackend::connect_optional(
             Some(addr),
             PROTOCOL_VERSION,
+            None,
             Duration::from_millis(10),
         )
         .await

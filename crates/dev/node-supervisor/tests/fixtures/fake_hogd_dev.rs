@@ -191,6 +191,7 @@ fn main() {
         Ok("ready-with-indexer-no-gateway") => run_with_indexer_no_gateway(FakeIndexerMode::Normal),
         Ok("ready-with-gateway") => run_with_db_gateway_no_indexer(FakeDbGatewayMode::Normal),
         Ok("indexer-connect-fail") => run_indexer_connect_fail(),
+        Ok("indexer-intro-rejected") => run_with_indexer(FakeIndexerMode::IntroRejected),
         Ok("indexer-rpc-fail") => run_with_indexer(FakeIndexerMode::RpcFail),
         Ok("indexer-runtime-rpc-fail") => run_with_indexer(FakeIndexerMode::RuntimeRpcFail),
         Ok("db-gateway-connect-fail") => run_db_gateway_connect_fail(),
@@ -995,6 +996,8 @@ fn start_fake_indexer(mode: FakeIndexerMode) -> FakeIndexerRuntime {
 enum FakeIndexerMode {
     /// Normal operation: serve canned committed set and event log.
     Normal,
+    /// Intro returns a protocol mismatch outcome.
+    IntroRejected,
     /// Every RPC method (including intro) returns a `ProgramError`.
     RpcFail,
     /// Intro succeeds but all data-plane RPCs (`get_transaction_info`,
@@ -1142,6 +1145,9 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for FakeIndexer {
     ) -> Result<IndexerBlockExplorerIntroOutcome, ProgramError> {
         if self.mode == FakeIndexerMode::RpcFail {
             return Err(ProgramError::msg("fake indexer rpc-fail mode"));
+        }
+        if self.mode == FakeIndexerMode::IntroRejected {
+            return Ok(IndexerBlockExplorerIntroOutcome::IntroMismatchedProtocol);
         }
         // RuntimeRpcFail: intro succeeds, data-plane RPCs fail.
         Ok(IndexerBlockExplorerIntroOutcome::IntroSuccess)

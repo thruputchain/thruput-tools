@@ -182,7 +182,7 @@ async fn connect_optional_view_gateway(
         Ok(outcome) => Err(ConnectError::StartupRejected {
             service: "view_gateway",
             addr: address.to_string(),
-            reason: outcome.to_string(),
+            reason: view_gateway_intro_rejection_reason(outcome, protocol_version),
         }),
         Err(source) => Err(ConnectError::ConnectFailed {
             service: "view_gateway_intro",
@@ -190,6 +190,25 @@ async fn connect_optional_view_gateway(
             source,
         }),
     }
+}
+
+fn view_gateway_intro_rejection_reason(
+    outcome: ViewGatewayIntroOutcome,
+    protocol_version: &str,
+) -> String {
+    if outcome == ViewGatewayIntroOutcome::ViewGatewayIntroMismatchedProtocol {
+        return format!(
+            "ViewGateway intro mismatch: gateway speaks protocol {protocol_version}, \
+             but the backend rejected it ({outcome}); pass `--hogd-protocol`/\
+             `hogd_protocol_override` for a matching backend protocol, or rebuild the gateway \
+             against a matching groundhog-xdr"
+        );
+    }
+
+    format!(
+        "ViewGateway intro rejected with outcome {outcome}; gateway speaks protocol \
+         {protocol_version}"
+    )
 }
 
 /// Pick a scheduler pool size that covers every concurrent RPC the gateway
@@ -375,10 +394,15 @@ mod tests {
             panic!("configured ViewGateway intro rejection should fail startup");
         };
 
-        assert!(
-            matches!(err, ConnectError::StartupRejected { .. }),
-            "expected StartupRejected, got {err:?}"
-        );
+        match err {
+            ConnectError::StartupRejected { reason, .. } => {
+                assert!(reason.contains("ViewGateway intro mismatch"));
+                assert!(reason.contains(PROTOCOL_VERSION));
+                assert!(reason.contains("ViewGatewayIntroMismatchedProtocol"));
+                assert!(reason.contains("--hogd-protocol"));
+            }
+            other => panic!("expected StartupRejected, got {other:?}"),
+        }
     }
 
     #[tokio::test]

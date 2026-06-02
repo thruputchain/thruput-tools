@@ -105,6 +105,9 @@ pub struct HogdDevReadiness {
     pub status: String,
     /// Local chain network identifier.
     pub network_id: String,
+    /// x23 protocol token expected by hogd-dev services.
+    #[serde(default)]
+    pub protocol: Option<String>,
     /// x23 endpoints available after startup.
     pub endpoints: HogdDevEndpoints,
     /// Public dev-account metadata advertised by hogd-dev.
@@ -789,6 +792,7 @@ fn readiness_from_runtime_manifest(
     Ok(HogdDevReadiness {
         status: "ready".to_string(),
         network_id: manifest.network_id.clone(),
+        protocol: Some(manifest.protocol.clone()),
         endpoints: HogdDevEndpoints {
             scheduler_coord: manifest.endpoints.scheduler,
             indexer_block_explorer: manifest.endpoints.indexer,
@@ -1581,6 +1585,7 @@ mod tests {
 
         assert_eq!(readiness.status, "ready");
         assert_eq!(readiness.network_id, "groundhog-local");
+        assert_eq!(readiness.protocol.as_deref(), Some("hogp/test"));
         assert_eq!(
             readiness.manifest_hash,
             pointer["manifestHash"].as_str().map(str::to_owned)
