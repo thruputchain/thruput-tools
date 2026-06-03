@@ -16,6 +16,12 @@ pub const ALLOC_ALLOWLIST: [&str; 7] = [
     ".text", ".rodata", ".srodata", ".data", ".sdata", ".bss", ".sbss",
 ];
 
+/// Low data addresses reserved as a null guard. The VM stages the data image
+/// at data address 0, so a static landing at address 0 would make a Rust
+/// `&'static` to it a readable null pointer. The SDK linker keeps data above
+/// this guard; the lowerer rejects any data section that reaches into it.
+pub const NULL_GUARD_BYTES: u32 = 8;
+
 /// Contract spec metadata sections are compile-time sidecars, not VM memory.
 /// These names mirror `groundhog_spec_tool::{RAW_SECTION_NAME, FINAL_SECTION_NAME}`;
 /// keep them local so the production lowerer has no spec-tool dependency.
@@ -97,10 +103,6 @@ fn validate_sections(data: &[u8], sections: &[Section]) -> Result<(Vec<u8>, Vec<
         return Err(invalid(".text extends past end of file"));
     }
 
-    // .text starts at 0 (checked above), so text_end == text.size and cannot
-    // overflow a u32 (size <= 64 KiB).
-    let text_end = text.addr + text.size;
-
     let mut memory = vec![0u8; MAX_MEMORY_BYTES];
     // End address of the highest-addressed PROGBITS data section written into
     // the image. The stored prefix is `memory[0..high_water]`; everything above
@@ -137,10 +139,13 @@ fn validate_sections(data: &[u8], sections: &[Section]) -> Result<(Vec<u8>, Vec<
         if section.name == ".text" {
             continue;
         }
-        if section.addr < text_end {
+        // Code (PC space) and data are separate VM memories under the Harvard
+        // split, so a data vaddr inside .text's numeric PC range is legal. Only
+        // the low null guard is off-limits: data must not reach into [0, 8).
+        if section.addr < NULL_GUARD_BYTES {
             return Err(invalid(format!(
-                "data section {} overlaps .text range ending at {text_end}",
-                section.name
+                "data section {} occupies the reserved null guard [0, {NULL_GUARD_BYTES}) at addr {}",
+                section.name, section.addr
             )));
         }
         let sec_start = section.addr;
