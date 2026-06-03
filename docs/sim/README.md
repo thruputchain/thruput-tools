@@ -231,6 +231,11 @@ to forward a specific backend binary, `--port` to request a port, and
 it only overrides the intro token and does not make incompatible XDR shapes
 compatible.
 
+Local targets may set `target.blockDriver` to `instant` or `interval`.
+`instant` is the supervisor default and wakes block production after successful
+submits. `interval` forwards `--block-driver interval` to `groundhog node` and
+uses `target.blockIntervalMs` when supplied; the interval default is 500 ms.
+
 The provider sends SIGTERM to the node for graceful shutdown, waits a bounded
 grace period, and escalates to SIGKILL only if the node does not exit.
 Simulator-owned local target stdout/stderr is captured under `logs/` as

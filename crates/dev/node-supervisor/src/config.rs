@@ -16,6 +16,9 @@ pub const DEFAULT_RPC_LISTEN_ADDRESS: &str = "127.0.0.1:9545";
 /// Default timeout for one hogd-dev `ViewGateway` execution RPC.
 pub const DEFAULT_HOGD_DEV_VIEW_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Default interval for coordinator-like local block production.
+pub const DEFAULT_BLOCK_DRIVER_INTERVAL: Duration = Duration::from_millis(500);
+
 /// Default listen host passed to hogd-dev for internal services.
 pub const DEFAULT_HOGD_DEV_LISTEN_HOST: &str = "127.0.0.1";
 
@@ -64,6 +67,8 @@ pub struct NodeSupervisorConfig {
     pub view_gas_limit: u64,
     /// Maximum time to wait for one hogd-dev `ViewGateway` execution RPC.
     pub view_timeout: Duration,
+    /// Local block production policy for hogd-dev scheduler coordination.
+    pub block_driver: BlockDriverConfig,
 }
 
 impl Default for NodeSupervisorConfig {
@@ -74,6 +79,7 @@ impl Default for NodeSupervisorConfig {
             hogd_protocol_override: None,
             view_gas_limit: groundhog_json_rpc_server::DEFAULT_VIEW_GAS_LIMIT,
             view_timeout: DEFAULT_HOGD_DEV_VIEW_TIMEOUT,
+            block_driver: BlockDriverConfig::default(),
         }
     }
 }
@@ -124,6 +130,82 @@ impl NodeSupervisorConfig {
         self.view_timeout = view_timeout;
         self
     }
+
+    /// Return a copy with a different local block production policy.
+    #[must_use]
+    pub fn with_block_driver(mut self, block_driver: BlockDriverConfig) -> Self {
+        self.block_driver = block_driver;
+        self
+    }
+}
+
+/// Local block production policy used by the hogd-dev supervisor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct BlockDriverConfig {
+    /// Driver wake mode.
+    pub mode: BlockDriverMode,
+    /// Timer interval for [`BlockDriverMode::Interval`].
+    pub interval: Duration,
+}
+
+impl BlockDriverConfig {
+    /// Return an instant submit-wake policy.
+    #[must_use]
+    pub const fn instant() -> Self {
+        Self {
+            mode: BlockDriverMode::Instant,
+            interval: DEFAULT_BLOCK_DRIVER_INTERVAL,
+        }
+    }
+
+    /// Return a fixed-interval policy.
+    #[must_use]
+    pub const fn interval(interval: Duration) -> Self {
+        Self {
+            mode: BlockDriverMode::Interval,
+            interval,
+        }
+    }
+
+    /// Return a copy with a different mode.
+    #[must_use]
+    pub const fn with_mode(mut self, mode: BlockDriverMode) -> Self {
+        self.mode = mode;
+        self
+    }
+
+    /// Return a copy with a different interval.
+    #[must_use]
+    pub const fn with_interval(mut self, interval: Duration) -> Self {
+        self.interval = interval;
+        self
+    }
+
+    pub(crate) fn effective_interval(self) -> Duration {
+        if self.interval.is_zero() {
+            DEFAULT_BLOCK_DRIVER_INTERVAL
+        } else {
+            self.interval
+        }
+    }
+}
+
+impl Default for BlockDriverConfig {
+    fn default() -> Self {
+        Self::instant()
+    }
+}
+
+/// Block driver wake mode.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum BlockDriverMode {
+    /// Submit-plane successes wake the block driver immediately.
+    #[default]
+    Instant,
+    /// A fixed timer drives nomination/commit attempts.
+    Interval,
 }
 
 /// Configuration for the supervised hogd-dev process.
@@ -253,7 +335,15 @@ impl HogdDevConfig {
 mod tests {
     use serde_json::json;
 
-    use super::HogdDevConfig;
+    use super::{BlockDriverConfig, BlockDriverMode, HogdDevConfig};
+
+    #[test]
+    fn block_driver_default_keeps_instant_mode_with_500ms_interval() {
+        let config = BlockDriverConfig::default();
+
+        assert_eq!(config.mode, BlockDriverMode::Instant);
+        assert_eq!(config.interval, std::time::Duration::from_millis(500));
+    }
 
     #[test]
     fn hogd_dev_config_lowers_to_bootstrap_manifest() {

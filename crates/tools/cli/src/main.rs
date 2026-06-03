@@ -52,6 +52,21 @@ impl From<BuildTargetArg> for groundhog_cli::build::BuildTarget {
     }
 }
 
+#[derive(ValueEnum, Debug, Clone, Copy)]
+enum NodeBlockDriverArg {
+    Instant,
+    Interval,
+}
+
+impl From<NodeBlockDriverArg> for groundhog_cli::node::LocalNodeBlockDriverMode {
+    fn from(value: NodeBlockDriverArg) -> Self {
+        match value {
+            NodeBlockDriverArg::Instant => Self::Instant,
+            NodeBlockDriverArg::Interval => Self::Interval,
+        }
+    }
+}
+
 #[derive(Subcommand)]
 enum Command {
     /// Create a new Groundhog contract project
@@ -299,6 +314,12 @@ enum Command {
         /// Override hogd-dev readiness timeout for smoke tests
         #[arg(long, hide = true)]
         startup_timeout_secs: Option<u64>,
+        /// Local block production mode
+        #[arg(long, value_enum)]
+        block_driver: Option<NodeBlockDriverArg>,
+        /// Timer interval for --block-driver interval
+        #[arg(long)]
+        block_interval_ms: Option<u64>,
     },
     /// Manage signing keys
     #[command(long_about = "Ed25519 signing keys stored in \
@@ -583,6 +604,8 @@ fn main() {
             hogd_dev_binary,
             hogd_protocol,
             startup_timeout_secs,
+            block_driver,
+            block_interval_ms,
         } => groundhog_cli::node::run(
             port,
             verbose,
@@ -590,6 +613,8 @@ fn main() {
             hogd_dev_binary,
             hogd_protocol,
             startup_timeout_secs,
+            block_driver.map(Into::into),
+            block_interval_ms,
             cmd_name,
             &print,
         ),
@@ -654,6 +679,30 @@ mod tests {
             Command::Node {
                 dev_account_count, ..
             } => assert_eq!(dev_account_count, Some(3)),
+            _ => panic!("expected node command"),
+        }
+    }
+
+    #[test]
+    fn node_block_driver_flags_parse() {
+        let cli = Cli::parse_from([
+            "groundhog",
+            "node",
+            "--block-driver",
+            "interval",
+            "--block-interval-ms",
+            "250",
+        ]);
+
+        match cli.command {
+            Command::Node {
+                block_driver,
+                block_interval_ms,
+                ..
+            } => {
+                assert!(matches!(block_driver, Some(NodeBlockDriverArg::Interval)));
+                assert_eq!(block_interval_ms, Some(250));
+            }
             _ => panic!("expected node command"),
         }
     }

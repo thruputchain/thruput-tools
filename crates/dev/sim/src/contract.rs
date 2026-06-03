@@ -956,6 +956,8 @@ mod tests {
                 rpc_url: None,
                 runtime_manifest: None,
                 hogd_dev_binary: None,
+                block_driver: None,
+                block_interval_ms: None,
             },
             bootstrap: None,
             load_shape: vec![LoadPhase {

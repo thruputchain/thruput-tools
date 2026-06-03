@@ -61,6 +61,7 @@ pub fn validate_manifest(manifest: &SimulationManifest) -> Result<(), Validation
             .parse_millis()
             .map_err(|source| ValidationError::InvalidResourceSampleInterval { source })?;
     }
+    validate_target_block_driver(manifest)?;
     validate_contract_artifacts(manifest)?;
 
     let capabilities = TargetCapabilities::for_provider(manifest.target.provider);
@@ -77,6 +78,27 @@ pub fn validate_manifest(manifest: &SimulationManifest) -> Result<(), Validation
             .map_err(|source| ValidationError::InvalidChaosTime { source })?;
     }
 
+    Ok(())
+}
+
+fn validate_target_block_driver(manifest: &SimulationManifest) -> Result<(), ValidationError> {
+    if let Some(block_interval_ms) = manifest.target.block_interval_ms
+        && block_interval_ms == 0
+    {
+        return Err(ValidationError::InvalidBlockIntervalMs);
+    }
+    if manifest.target.provider != TargetProviderKind::Local {
+        if manifest.target.block_driver.is_some() {
+            return Err(ValidationError::NonLocalRejectsBlockDriverField {
+                field: "target.blockDriver",
+            });
+        }
+        if manifest.target.block_interval_ms.is_some() {
+            return Err(ValidationError::NonLocalRejectsBlockDriverField {
+                field: "target.blockIntervalMs",
+            });
+        }
+    }
     Ok(())
 }
 
@@ -869,6 +891,10 @@ pub enum ValidationError {
         "local target produces its runtime manifest; do not supply target.runtimeManifest or --runtime-manifest"
     )]
     LocalRejectsRuntimeManifest,
+    #[error("blockIntervalMs must be at least 1")]
+    InvalidBlockIntervalMs,
+    #[error("non-local target does not accept local block-driver field {field}")]
+    NonLocalRejectsBlockDriverField { field: &'static str },
     #[error(
         "scenario requests {requested} actors but runtime manifest advertises {available} bootstrap accounts"
     )]
@@ -1720,6 +1746,46 @@ mod tests {
     }
 
     #[test]
+    fn validate_manifest_accepts_local_block_driver_options() {
+        let mut manifest = basic_manifest();
+        manifest.target.provider = TargetProviderKind::Local;
+        manifest.target.rpc_url = None;
+        manifest.target.runtime_manifest = None;
+        manifest.target.block_driver = Some(crate::target::TargetBlockDriverMode::Interval);
+        manifest.target.block_interval_ms = Some(250);
+
+        validate_manifest(&manifest).expect("local block driver options should be valid");
+    }
+
+    #[test]
+    fn validate_manifest_rejects_non_local_block_driver_options() {
+        let mut manifest = basic_manifest();
+        manifest.target.block_driver = Some(crate::target::TargetBlockDriverMode::Interval);
+
+        let err = validate_manifest(&manifest).expect_err("existing target should reject field");
+
+        assert!(matches!(
+            err,
+            ValidationError::NonLocalRejectsBlockDriverField {
+                field: "target.blockDriver"
+            }
+        ));
+    }
+
+    #[test]
+    fn validate_manifest_rejects_zero_block_interval() {
+        let mut manifest = basic_manifest();
+        manifest.target.provider = TargetProviderKind::Local;
+        manifest.target.rpc_url = None;
+        manifest.target.runtime_manifest = None;
+        manifest.target.block_interval_ms = Some(0);
+
+        let err = validate_manifest(&manifest).expect_err("zero interval should be invalid");
+
+        assert!(matches!(err, ValidationError::InvalidBlockIntervalMs));
+    }
+
+    #[test]
     fn required_bootstrap_accounts_uses_max_phase_users() {
         let mut manifest = basic_manifest();
         manifest.load_shape = vec![
@@ -1757,6 +1823,8 @@ mod tests {
                 rpc_url: Some("http://127.0.0.1:9545".into()),
                 runtime_manifest: Some("runtime-manifest.json".into()),
                 hogd_dev_binary: None,
+                block_driver: None,
+                block_interval_ms: None,
             },
             bootstrap: None,
             load_shape: vec![LoadPhase {

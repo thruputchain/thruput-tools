@@ -51,6 +51,12 @@ pub struct TargetProviderSpec {
     /// `hogd-dev` binary path reserved for the Phase 2 `local` provider.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hogd_dev_binary: Option<PathBuf>,
+    /// Local node block production mode for the `local` provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub block_driver: Option<TargetBlockDriverMode>,
+    /// Timer interval in milliseconds for timer-driven local block production.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub block_interval_ms: Option<u64>,
 }
 
 /// Target provider selected by a simulation manifest.
@@ -61,6 +67,24 @@ pub enum TargetProviderKind {
     Local,
     Existing,
     RemoteSsh,
+}
+
+/// Block production mode forwarded to `groundhog node` for local targets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
+#[serde(rename_all = "kebab-case")]
+pub enum TargetBlockDriverMode {
+    Instant,
+    Interval,
+}
+
+impl TargetBlockDriverMode {
+    fn as_arg(self) -> &'static str {
+        match self {
+            Self::Instant => "instant",
+            Self::Interval => "interval",
+        }
+    }
 }
 
 /// Capabilities advertised by a target provider.
@@ -339,6 +363,8 @@ struct LocalLaunchConfig {
     groundhog_binary: PathBuf,
     hogd_dev_binary: Option<PathBuf>,
     hogd_protocol: Option<String>,
+    block_driver: Option<TargetBlockDriverMode>,
+    block_interval_ms: Option<u64>,
     required_accounts: u32,
     startup_timeout_secs: u64,
     logs_dir: PathBuf,
@@ -462,6 +488,8 @@ impl LocalTargetProvider {
             groundhog_binary: groundhog,
             hogd_dev_binary,
             hogd_protocol: overrides.hogd_protocol,
+            block_driver: manifest.target.block_driver,
+            block_interval_ms: manifest.target.block_interval_ms,
             required_accounts,
             startup_timeout_secs,
             logs_dir: context.logs_dir,
@@ -618,6 +646,8 @@ fn local_node_args(
     required_accounts: u32,
     hogd_dev_binary: Option<&Path>,
     hogd_protocol: Option<&str>,
+    block_driver: Option<TargetBlockDriverMode>,
+    block_interval_ms: Option<u64>,
     port: Option<u16>,
     startup_timeout_secs: u64,
 ) -> Vec<String> {
@@ -637,6 +667,14 @@ fn local_node_args(
         args.push("--hogd-protocol".to_string());
         args.push(protocol.to_string());
     }
+    if let Some(block_driver) = block_driver {
+        args.push("--block-driver".to_string());
+        args.push(block_driver.as_arg().to_string());
+    }
+    if let Some(block_interval_ms) = block_interval_ms {
+        args.push("--block-interval-ms".to_string());
+        args.push(block_interval_ms.to_string());
+    }
     if let Some(port) = port {
         args.push("--port".to_string());
         args.push(port.to_string());
@@ -654,6 +692,8 @@ async fn launch_local_node(
         config.required_accounts,
         config.hogd_dev_binary.as_deref(),
         config.hogd_protocol.as_deref(),
+        config.block_driver,
+        config.block_interval_ms,
         port,
         config.startup_timeout_secs,
     );
@@ -1447,6 +1487,8 @@ mod tests {
             5,
             Some(std::path::Path::new("/tmp/hogd-dev")),
             Some("hogp/test"),
+            Some(TargetBlockDriverMode::Interval),
+            Some(250),
             Some(0),
             45,
         );
@@ -1464,6 +1506,10 @@ mod tests {
                 "/tmp/hogd-dev",
                 "--hogd-protocol",
                 "hogp/test",
+                "--block-driver",
+                "interval",
+                "--block-interval-ms",
+                "250",
                 "--port",
                 "0"
             ]
@@ -1480,7 +1526,7 @@ mod tests {
 
     #[test]
     fn restart_args_use_resolved_port() {
-        let args = local_node_args(5, None, None, Some(49152), 30);
+        let args = local_node_args(5, None, None, None, None, Some(49152), 30);
 
         assert_eq!(
             args,

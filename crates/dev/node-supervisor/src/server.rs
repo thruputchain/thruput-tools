@@ -16,7 +16,7 @@ use jsonrpsee::server::{RpcModule, Server, ServerHandle};
 use serde::Serialize;
 
 use crate::{
-    HogdDevProcess, HogdDevReadiness, NodeSupervisorConfig, NodeSupervisorError,
+    BlockDriverConfig, HogdDevProcess, HogdDevReadiness, NodeSupervisorConfig, NodeSupervisorError,
     block_driver::BlockDriverTask,
     hogd_dev::validate_dev_accounts,
     read_backend::{HogdDevReadBackend, HogdDevStorageReadBackend},
@@ -170,6 +170,7 @@ impl NodeSupervisorHandle {
                 .unwrap_or(PROTOCOL_VERSION),
             config.view_gas_limit,
             config.view_timeout,
+            config.block_driver,
         )
         .await
         {
@@ -320,6 +321,7 @@ async fn start_rpc_server(
     protocol_version: &str,
     view_gas_limit: u64,
     view_timeout: Duration,
+    block_driver_config: BlockDriverConfig,
 ) -> Result<StartedRpcServer, NodeSupervisorError> {
     let scheduler_backend =
         HogdDevSchedulerBackend::connect(readiness.endpoints.scheduler_coord).await?;
@@ -353,6 +355,7 @@ async fn start_rpc_server(
             view,
             BackendPlanes::hogd_dev_full(view_status),
             view_gas_limit,
+            block_driver_config,
         )
         .await
     } else if let Some(db_gateway_addr) = readiness.endpoints.db_gateway {
@@ -370,6 +373,7 @@ async fn start_rpc_server(
             view,
             BackendPlanes::hogd_dev_storage_only(view_status),
             view_gas_limit,
+            block_driver_config,
         )
         .await
     } else {
@@ -388,6 +392,7 @@ async fn start_rpc_server(
                 ..BackendPlanes::hogd_dev_scheduler_only()
             },
             view_gas_limit,
+            block_driver_config,
         )
         .await
     }
@@ -400,6 +405,7 @@ async fn start_rpc_server_with_read<R, V>(
     view: V,
     backend_planes: BackendPlanes,
     view_gas_limit: u64,
+    block_driver_config: BlockDriverConfig,
 ) -> Result<StartedRpcServer, NodeSupervisorError>
 where
     R: groundhog_json_rpc_server::ReadPlane,
@@ -416,7 +422,10 @@ where
         .local_addr()
         .map_err(|source| NodeSupervisorError::RpcLocalAddr { source })?;
 
-    let block_driver = BlockDriverTask::start(scheduler_backend.scheduler_client().clone());
+    let block_driver = BlockDriverTask::start(
+        scheduler_backend.scheduler_client().clone(),
+        block_driver_config,
+    );
     let scheduler_backend = scheduler_backend.with_block_driver(block_driver.trigger());
     let core_rpc = GroundhogRpcServer::new(
         scheduler_backend.clone(),
@@ -464,7 +473,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        HogdDevConfig,
+        BlockDriverConfig, HogdDevConfig,
         test_support::{FAKE_HOGD_DEV_MODE_ENV, fake_hogd_dev_binary},
     };
 
@@ -753,6 +762,63 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             "coalesced submit wakes should not commit one block per submit; tip={}",
             *final_tip.height
         );
+
+        handle.stop().await.expect("bug: clean shutdown");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn interval_block_driver_paces_submit_commit() {
+        let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "automine");
+
+        let hogd = HogdDevConfig::default()
+            .with_binary_path(fake_hogd_dev_binary())
+            .with_startup_timeout(Duration::from_secs(5))
+            .with_shutdown_grace(Duration::from_secs(2));
+        let config = NodeSupervisorConfig::default()
+            .with_rpc_listen_address("127.0.0.1:0")
+            .with_hogd_dev(hogd)
+            .with_block_driver(BlockDriverConfig::interval(Duration::from_millis(500)));
+        let handle = NodeSupervisorHandle::start(config)
+            .await
+            .expect("bug: supervisor should start against fake hogd-dev");
+
+        let url = format!("http://{}", handle.rpc_addr());
+        let client = HttpClientBuilder::default()
+            .build(&url)
+            .expect("bug: jsonrpsee http client builds");
+
+        client
+            .send_raw_transaction(format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}"))
+            .await
+            .expect("bug: sendRawTransaction should dispatch to fake scheduler");
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let early_tip = client
+            .chain_tip()
+            .await
+            .expect("bug: chainTip should dispatch to fake scheduler");
+        assert_eq!(
+            *early_tip.height, 0,
+            "interval mode should not commit immediately from a submit wake"
+        );
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let tip = client
+                .chain_tip()
+                .await
+                .expect("bug: chainTip should dispatch to fake scheduler");
+            if *tip.height == 1 {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "interval block driver did not advance fake scheduler tip before timeout; tip={}",
+                *tip.height
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
 
         handle.stop().await.expect("bug: clean shutdown");
     }

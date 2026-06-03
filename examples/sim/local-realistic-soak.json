@@ -4,7 +4,9 @@
   "name": "local-realistic-soak",
   "seed": "sim-local-realistic-soak",
   "target": {
-    "provider": "local"
+    "provider": "local",
+    "blockDriver": "interval",
+    "blockIntervalMs": 500
   },
   "bootstrap": {
     "accounts": 5,

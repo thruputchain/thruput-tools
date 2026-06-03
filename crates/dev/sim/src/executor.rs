@@ -60,6 +60,8 @@ const DEFAULT_GLOBAL_IN_FLIGHT_LIMIT: usize = 1_024;
 const DEFAULT_PER_ACTOR_IN_FLIGHT_LIMIT: usize = 1;
 pub const DEFAULT_RECEIPT_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
 pub const DEFAULT_RECEIPT_DRAIN_RETRY_INTERVAL: Duration = Duration::from_millis(250);
+const READ_AFTER_WRITE_POST_COMMIT_READ_RETRY_TIMEOUT: Duration = Duration::from_secs(1);
+const READ_AFTER_WRITE_POST_COMMIT_READ_RETRY_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Minimal RPC surface used by the Phase 1 simulator executor.
 pub trait SimRpcClient {
@@ -2525,6 +2527,33 @@ where
     }
 }
 
+/// Read the committed counter after an OK receipt. Some local targets can make
+/// the receipt visible just before the view plane observes the same write.
+async fn read_after_write_counter_after_commit<C>(
+    client: &C,
+    prepared: &PreparedReadAfterWriteWorkload,
+    expected: u64,
+) -> Result<u64, ReadAfterWriteReadFailure>
+where
+    C: SimRpcClient + Clone + Send + Sync + 'static,
+{
+    let deadline = Instant::now()
+        .checked_add(READ_AFTER_WRITE_POST_COMMIT_READ_RETRY_TIMEOUT)
+        .unwrap_or_else(Instant::now);
+    loop {
+        let observed = read_after_write_counter(client, prepared).await?;
+        if observed >= expected {
+            return Ok(observed);
+        }
+
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(observed);
+        }
+        tokio::time::sleep(READ_AFTER_WRITE_POST_COMMIT_READ_RETRY_INTERVAL.min(remaining)).await;
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn read_after_write_base_event(
     tick: &ScheduledActorTick,
@@ -2868,7 +2897,7 @@ where
         actor_id,
         transition: ReadAfterWriteTransition::SetKnown(expected),
     });
-    let read_back = read_after_write_counter(&client, &prepared).await;
+    let read_back = read_after_write_counter_after_commit(&client, &prepared, expected).await;
     let latency_ms = duration_ms(started.elapsed());
     let mut event = read_after_write_base_event(
         tick,
@@ -7010,6 +7039,36 @@ mod tests {
         assert_eq!(completed["readAfterWriteRebased"], true);
         assert_eq!(completed["rpcMethod"], "groundhog_view");
         assert_eq!(completed["receiptStatus"], "ok");
+    }
+
+    #[tokio::test]
+    async fn read_after_write_retries_stale_post_commit_read() {
+        let view_calls = Arc::new(Mutex::new(0));
+        let client = ReadAfterWriteClient {
+            reads: read_after_write_reads(vec![Ok(5), Ok(6)]),
+            submit: Ok(tx_hash(0x6c)),
+            receipt: Ok(Some(receipt(tx_hash(0x6c)))),
+            view_calls: view_calls.clone(),
+        };
+
+        let (actors, metrics, events) = run_read_after_write(client, |actor| {
+            actor.record_read_after_write_committed(5);
+        })
+        .await;
+
+        assert_eq!(*view_calls.lock().expect("view counter"), 2);
+        assert_eq!(
+            actors[0].read_after_write_state(),
+            ReadAfterWriteState::Known(6)
+        );
+        assert_eq!(
+            metrics.workload_counts()[&WorkloadKind::ReadAfterWrite].completed,
+            1
+        );
+        let completed = find_event(&events, "workload-completed");
+        assert_eq!(completed["readAfterWriteExpected"], "6");
+        assert_eq!(completed["readAfterWriteObserved"], "6");
+        assert_eq!(completed["readAfterWriteMatched"], true);
     }
 
     #[tokio::test]
