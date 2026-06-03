@@ -4532,6 +4532,7 @@ mod tests {
                 duration_ms: 20,
                 users: 1,
                 rate_per_user_millihz: 50_000,
+                stagger_actors: false,
             },
             PhaseStart {
                 phase_index: 1,
@@ -4539,6 +4540,7 @@ mod tests {
                 duration_ms: 1,
                 users: 1,
                 rate_per_user_millihz: 1_000,
+                stagger_actors: false,
             },
         ];
         let file = NamedTempFile::new().expect("temp file should be created");

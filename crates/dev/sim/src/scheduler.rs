@@ -16,6 +16,8 @@ pub struct PhaseStart {
     pub duration_ms: u64,
     pub users: u32,
     pub rate_per_user_millihz: u64,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub stagger_actors: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -128,6 +130,8 @@ impl ScheduleCursor {
                     phase_start.simulation_time_ms,
                     phase_start.duration_ms,
                     phase_start.rate_per_user_millihz,
+                    phase_start.users,
+                    phase_start.stagger_actors,
                 )?;
             }
         }
@@ -144,11 +148,19 @@ impl ScheduleCursor {
         phase_start_time_ms: u64,
         phase_duration_ms: u64,
         rate_per_user_millihz: u64,
+        users: u32,
+        stagger_actors: bool,
     ) -> Result<(), ScheduleError> {
         if actor_sequence >= tick_count {
             return Ok(());
         }
-        let offset_ms = tick_offset_ms(actor_sequence, rate_per_user_millihz)?;
+        let offset_ms = actor_tick_offset_ms(
+            actor_sequence,
+            actor_id,
+            users,
+            rate_per_user_millihz,
+            stagger_actors,
+        )?;
         if offset_ms >= phase_duration_ms {
             return Ok(());
         }
@@ -166,6 +178,8 @@ impl ScheduleCursor {
             phase_start_time_ms,
             phase_duration_ms,
             rate_per_user_millihz,
+            users,
+            stagger_actors,
         }));
         Ok(())
     }
@@ -270,6 +284,8 @@ impl ScheduleCursor {
             actor.phase_start_time_ms,
             actor.phase_duration_ms,
             actor.rate_per_user_millihz,
+            actor.users,
+            actor.stagger_actors,
         )
         .expect("bug: validated schedule cursor tick should fit");
         Some(ScheduledSimulationEvent::ActorTick(tick))
@@ -283,6 +299,8 @@ struct ActorTickCursor {
     phase_start_time_ms: u64,
     phase_duration_ms: u64,
     rate_per_user_millihz: u64,
+    users: u32,
+    stagger_actors: bool,
 }
 
 impl Ord for ActorTickCursor {
@@ -314,6 +332,7 @@ pub fn phase_starts(manifest: &SimulationManifest) -> Result<Vec<PhaseStart>, Sc
             duration_ms,
             users: phase.users,
             rate_per_user_millihz: rate_to_millihz(phase.rate_per_user_hz)?,
+            stagger_actors: phase.stagger_actors,
         });
         simulation_time_ms = simulation_time_ms
             .checked_add(duration_ms)
@@ -331,22 +350,43 @@ pub fn schedule_summary(manifest: &SimulationManifest) -> Result<ScheduleSummary
     for phase_start in &starts {
         let tick_count =
             ticks_in_phase(phase_start.duration_ms, phase_start.rate_per_user_millihz)?;
-        scheduled_workloads = scheduled_workloads
-            .checked_add(
-                u64::from(phase_start.users)
-                    .checked_mul(tick_count)
-                    .ok_or(ScheduleError::ScheduleTooLong)?,
-            )
-            .ok_or(ScheduleError::ScheduleTooLong)?;
-        if tick_count > 0 && phase_start.users > 0 {
-            let last_offset = tick_offset_ms(tick_count - 1, phase_start.rate_per_user_millihz)?;
-            if last_offset < phase_start.duration_ms {
-                shutdown_simulation_time_ms = shutdown_simulation_time_ms.max(
-                    phase_start
-                        .simulation_time_ms
-                        .checked_add(last_offset)
-                        .ok_or(ScheduleError::ScheduleTooLong)?,
-                );
+        for actor_id in 0..phase_start.users {
+            let actor_tick_count = if phase_start.stagger_actors {
+                let stagger_offset = actor_stagger_offset_ms(
+                    actor_id,
+                    phase_start.users,
+                    phase_start.rate_per_user_millihz,
+                )?;
+                if stagger_offset >= phase_start.duration_ms {
+                    0
+                } else {
+                    ticks_in_phase(
+                        phase_start.duration_ms - stagger_offset,
+                        phase_start.rate_per_user_millihz,
+                    )?
+                }
+            } else {
+                tick_count
+            };
+            scheduled_workloads = scheduled_workloads
+                .checked_add(actor_tick_count)
+                .ok_or(ScheduleError::ScheduleTooLong)?;
+            if actor_tick_count > 0 {
+                let last_offset = actor_tick_offset_ms(
+                    actor_tick_count - 1,
+                    actor_id,
+                    phase_start.users,
+                    phase_start.rate_per_user_millihz,
+                    phase_start.stagger_actors,
+                )?;
+                if last_offset < phase_start.duration_ms {
+                    shutdown_simulation_time_ms = shutdown_simulation_time_ms.max(
+                        phase_start
+                            .simulation_time_ms
+                            .checked_add(last_offset)
+                            .ok_or(ScheduleError::ScheduleTooLong)?,
+                    );
+                }
             }
         }
     }
@@ -377,7 +417,13 @@ pub fn generate_schedule(
 
         for actor_id in 0..phase.users {
             for actor_sequence in 0..tick_count {
-                let offset_ms = tick_offset_ms(actor_sequence, rate_per_user_millihz)?;
+                let offset_ms = actor_tick_offset_ms(
+                    actor_sequence,
+                    actor_id,
+                    phase.users,
+                    rate_per_user_millihz,
+                    phase.stagger_actors,
+                )?;
                 if offset_ms >= phase_start.duration_ms {
                     continue;
                 }
@@ -529,6 +575,49 @@ fn tick_offset_ms(actor_sequence: u64, rate_per_user_millihz: u64) -> Result<u64
     u64::try_from(offset).map_err(|_| ScheduleError::ScheduleTooLong)
 }
 
+fn actor_tick_offset_ms(
+    actor_sequence: u64,
+    actor_id: u32,
+    users: u32,
+    rate_per_user_millihz: u64,
+    stagger_actors: bool,
+) -> Result<u64, ScheduleError> {
+    let base_offset = tick_offset_ms(actor_sequence, rate_per_user_millihz)?;
+    if !stagger_actors {
+        return Ok(base_offset);
+    }
+    base_offset
+        .checked_add(actor_stagger_offset_ms(
+            actor_id,
+            users,
+            rate_per_user_millihz,
+        )?)
+        .ok_or(ScheduleError::ScheduleTooLong)
+}
+
+fn actor_stagger_offset_ms(
+    actor_id: u32,
+    users: u32,
+    rate_per_user_millihz: u64,
+) -> Result<u64, ScheduleError> {
+    if users <= 1 || actor_id == 0 {
+        return Ok(0);
+    }
+    let denominator = u128::from(rate_per_user_millihz)
+        .checked_mul(u128::from(users))
+        .ok_or(ScheduleError::ScheduleTooLong)?;
+    let offset = u128::from(actor_id)
+        .checked_mul(1_000_000)
+        .ok_or(ScheduleError::ScheduleTooLong)?
+        / denominator;
+    u64::try_from(offset).map_err(|_| ScheduleError::ScheduleTooLong)
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
@@ -673,6 +762,108 @@ mod tests {
             .collect();
 
         assert_eq!(cursor, generated);
+    }
+
+    #[test]
+    fn actors_remain_synchronized_without_staggering() {
+        let manifest: SimulationManifest = serde_json::from_value(json!({
+            "schemaVersion": 1,
+            "kind": "groundhog-simulation",
+            "name": "schedule-sync-test",
+            "seed": "seed-a",
+            "target": {"provider": "existing"},
+            "loadShape": [
+                {"duration": "1s", "users": 4, "ratePerUserHz": 2.0}
+            ],
+            "workloads": [
+                {"name": "chain-tip", "weight": 1}
+            ]
+        }))
+        .expect("manifest fixture should parse");
+        let actor_times: Vec<_> = generate_schedule(&manifest)
+            .expect("schedule should generate")
+            .into_iter()
+            .filter_map(|event| match event {
+                ScheduledSimulationEvent::ActorTick(tick) => {
+                    Some((tick.actor_id, tick.actor_sequence, tick.simulation_time_ms))
+                }
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(
+            actor_times,
+            vec![
+                (0, 0, 0),
+                (1, 0, 0),
+                (2, 0, 0),
+                (3, 0, 0),
+                (0, 1, 500),
+                (1, 1, 500),
+                (2, 1, 500),
+                (3, 1, 500),
+            ]
+        );
+    }
+
+    #[test]
+    fn staggered_actors_are_spread_across_tick_interval() {
+        let manifest: SimulationManifest = serde_json::from_value(json!({
+            "schemaVersion": 1,
+            "kind": "groundhog-simulation",
+            "name": "schedule-stagger-test",
+            "seed": "seed-a",
+            "target": {"provider": "existing"},
+            "loadShape": [
+                {
+                    "duration": "1s",
+                    "users": 4,
+                    "ratePerUserHz": 2.0,
+                    "staggerActors": true
+                }
+            ],
+            "workloads": [
+                {"name": "chain-tip", "weight": 1}
+            ]
+        }))
+        .expect("manifest fixture should parse");
+        let actor_times: Vec<_> = generate_schedule(&manifest)
+            .expect("schedule should generate")
+            .into_iter()
+            .filter_map(|event| match event {
+                ScheduledSimulationEvent::ActorTick(tick) => {
+                    Some((tick.actor_id, tick.actor_sequence, tick.simulation_time_ms))
+                }
+                _ => None,
+            })
+            .collect();
+        let cursor_actor_times: Vec<_> = ScheduleCursor::new(&manifest)
+            .expect("cursor should build")
+            .filter_map(|event| match event {
+                ScheduledSimulationEvent::ActorTick(tick) => {
+                    Some((tick.actor_id, tick.actor_sequence, tick.simulation_time_ms))
+                }
+                _ => None,
+            })
+            .collect();
+        let summary = schedule_summary(&manifest).expect("summary should generate");
+
+        assert_eq!(
+            actor_times,
+            vec![
+                (0, 0, 0),
+                (1, 0, 125),
+                (2, 0, 250),
+                (3, 0, 375),
+                (0, 1, 500),
+                (1, 1, 625),
+                (2, 1, 750),
+                (3, 1, 875),
+            ]
+        );
+        assert_eq!(cursor_actor_times, actor_times);
+        assert_eq!(summary.scheduled_workloads, 8);
+        assert_eq!(summary.shutdown_simulation_time_ms, 875);
     }
 
     #[test]

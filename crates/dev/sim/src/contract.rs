@@ -962,6 +962,7 @@ mod tests {
                 duration: crate::manifest::DurationSpec("1s".into()),
                 users: 1,
                 rate_per_user_hz: 1.0,
+                stagger_actors: false,
             }],
             workloads: vec![WorkloadSpec {
                 name: WorkloadKind::ViewCall,

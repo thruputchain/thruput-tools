@@ -61,6 +61,13 @@ pub struct LoadPhase {
     pub duration: DurationSpec,
     pub users: u32,
     pub rate_per_user_hz: f64,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub stagger_actors: bool,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

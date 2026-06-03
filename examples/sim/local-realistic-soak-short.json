@@ -17,7 +17,8 @@
     {
       "duration": "25s",
       "users": 2,
-      "ratePerUserHz": 1.0
+      "ratePerUserHz": 1.0,
+      "staggerActors": true
     }
   ],
   "workloads": [

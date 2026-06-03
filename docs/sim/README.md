@@ -93,6 +93,13 @@ and `--contract-artifact-root` after building the required contract artifacts.
 Use `local-realistic-soak-short.json` for optional smoke coverage and
 `local-realistic-soak.json` for manual baseline collection.
 
+Each `loadShape` phase may set `staggerActors: true` to deterministically spread
+actors across the per-user tick interval. The default is `false` for exact
+compatibility with older scenario schedules, where all actors at the same rate
+tick on the same simulation millisecond. Use staggering for high-actor dapp
+traffic so the aggregate rate is modeled as a smoother stream instead of large
+synchronized bursts.
+
 Existing-target quickstart:
 
 ```bash

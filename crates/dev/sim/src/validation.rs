@@ -1727,16 +1727,19 @@ mod tests {
                 duration: DurationSpec("1s".into()),
                 users: 2,
                 rate_per_user_hz: 1.0,
+                stagger_actors: false,
             },
             LoadPhase {
                 duration: DurationSpec("1s".into()),
                 users: 5,
                 rate_per_user_hz: 1.0,
+                stagger_actors: false,
             },
             LoadPhase {
                 duration: DurationSpec("1s".into()),
                 users: 3,
                 rate_per_user_hz: 1.0,
+                stagger_actors: false,
             },
         ];
 
@@ -1760,6 +1763,7 @@ mod tests {
                 duration: DurationSpec("1s".into()),
                 users: 1,
                 rate_per_user_hz: 1.0,
+                stagger_actors: false,
             }],
             workloads: vec![WorkloadSpec {
                 name: WorkloadKind::ChainTip,
