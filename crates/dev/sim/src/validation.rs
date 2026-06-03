@@ -6,7 +6,7 @@ use crate::manifest::{
     EventQueryAnchorSpec, SIMULATION_KIND, SIMULATION_SCHEMA_VERSION, SimulationManifest,
     WorkloadKind,
 };
-use crate::target::{TargetCapabilities, TargetProviderKind};
+use crate::target::{TargetBlockDriverMode, TargetCapabilities, TargetProviderKind};
 
 const MAX_EVENT_QUERY_CURSOR_BYTES: usize = 256;
 
@@ -98,6 +98,15 @@ fn validate_target_block_driver(manifest: &SimulationManifest) -> Result<(), Val
                 field: "target.blockIntervalMs",
             });
         }
+        return Ok(());
+    }
+    if manifest.target.block_interval_ms.is_some()
+        && !matches!(
+            manifest.target.block_driver,
+            Some(TargetBlockDriverMode::Interval)
+        )
+    {
+        return Err(ValidationError::BlockIntervalRequiresIntervalDriver);
     }
     Ok(())
 }
@@ -893,6 +902,8 @@ pub enum ValidationError {
     LocalRejectsRuntimeManifest,
     #[error("blockIntervalMs must be at least 1")]
     InvalidBlockIntervalMs,
+    #[error("blockIntervalMs requires target.blockDriver to be interval")]
+    BlockIntervalRequiresIntervalDriver,
     #[error("non-local target does not accept local block-driver field {field}")]
     NonLocalRejectsBlockDriverField { field: &'static str },
     #[error(
@@ -1783,6 +1794,32 @@ mod tests {
         let err = validate_manifest(&manifest).expect_err("zero interval should be invalid");
 
         assert!(matches!(err, ValidationError::InvalidBlockIntervalMs));
+    }
+
+    #[test]
+    fn validate_manifest_rejects_block_interval_without_interval_driver() {
+        let mut manifest = basic_manifest();
+        manifest.target.provider = TargetProviderKind::Local;
+        manifest.target.rpc_url = None;
+        manifest.target.runtime_manifest = None;
+        manifest.target.block_interval_ms = Some(250);
+
+        let err = validate_manifest(&manifest)
+            .expect_err("local interval without interval driver should be invalid");
+
+        assert!(matches!(
+            err,
+            ValidationError::BlockIntervalRequiresIntervalDriver
+        ));
+
+        manifest.target.block_driver = Some(crate::target::TargetBlockDriverMode::Instant);
+        let err = validate_manifest(&manifest)
+            .expect_err("instant block driver interval should be invalid");
+
+        assert!(matches!(
+            err,
+            ValidationError::BlockIntervalRequiresIntervalDriver
+        ));
     }
 
     #[test]

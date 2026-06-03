@@ -606,7 +606,7 @@ fn main() {
             startup_timeout_secs,
             block_driver,
             block_interval_ms,
-        } => groundhog_cli::node::run(
+        } => groundhog_cli::node::run_with_block_driver(
             port,
             verbose,
             dev_account_count,

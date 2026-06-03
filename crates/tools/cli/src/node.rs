@@ -38,6 +38,35 @@ pub fn run(
     hogd_dev_binary: Option<PathBuf>,
     hogd_protocol: Option<String>,
     startup_timeout_secs: Option<u64>,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
+    run_with_block_driver(
+        port,
+        verbose,
+        dev_account_count,
+        hogd_dev_binary,
+        hogd_protocol,
+        startup_timeout_secs,
+        None,
+        None,
+        cmd,
+        print,
+    )
+}
+
+/// Start the experimental hogd-dev local node server with block-driver options.
+///
+/// Requires the `dev-node` feature.
+#[cfg(feature = "dev-node")]
+#[allow(clippy::too_many_arguments)]
+pub fn run_with_block_driver(
+    port: u16,
+    verbose: bool,
+    dev_account_count: Option<usize>,
+    hogd_dev_binary: Option<PathBuf>,
+    hogd_protocol: Option<String>,
+    startup_timeout_secs: Option<u64>,
     block_driver: Option<LocalNodeBlockDriverMode>,
     block_interval_ms: Option<u64>,
     cmd: &'static str,
@@ -361,6 +390,16 @@ fn local_node_config(
             "block interval must be at least 1 ms".into(),
         ));
     }
+    if options.block_interval.is_some()
+        && !matches!(
+            options.block_driver,
+            Some(LocalNodeBlockDriverMode::Interval)
+        )
+    {
+        return Err(CliError::Other(
+            "block interval requires block driver interval mode".into(),
+        ));
+    }
 
     let hogd = options
         .hogd_dev_binary
@@ -432,6 +471,26 @@ fn map_node_supervisor_error(err: &groundhog_node_supervisor::NodeSupervisorErro
 #[cfg(not(feature = "dev-node"))]
 #[allow(clippy::too_many_arguments)]
 pub fn run(
+    _port: u16,
+    _verbose: bool,
+    _dev_account_count: Option<usize>,
+    _hogd_dev_binary: Option<std::path::PathBuf>,
+    _hogd_protocol: Option<String>,
+    _startup_timeout_secs: Option<u64>,
+    _cmd: &'static str,
+    _print: &Print,
+) -> Result<(), CliError> {
+    Err(CliError::Other(
+        "`groundhog node` requires the dev-node feature.\n\n  \
+         hint: build the CLI with:\n        \
+         cargo install --path crates/tools/cli --features dev-node"
+            .into(),
+    ))
+}
+
+#[cfg(not(feature = "dev-node"))]
+#[allow(clippy::too_many_arguments)]
+pub fn run_with_block_driver(
     _port: u16,
     _verbose: bool,
     _dev_account_count: Option<usize>,
@@ -609,12 +668,37 @@ mod tests {
     #[test]
     fn local_node_config_rejects_zero_block_interval() {
         let err = local_node_config(LocalNodeOptions {
+            block_driver: Some(LocalNodeBlockDriverMode::Interval),
             block_interval: Some(Duration::ZERO),
             ..LocalNodeOptions::default()
         })
         .expect_err("zero interval should be rejected");
 
         assert!(matches!(err, CliError::Other(message) if message.contains("block interval")));
+    }
+
+    #[test]
+    fn local_node_config_rejects_block_interval_without_interval_driver() {
+        let err = local_node_config(LocalNodeOptions {
+            block_interval: Some(Duration::from_millis(250)),
+            ..LocalNodeOptions::default()
+        })
+        .expect_err("interval without interval mode should be rejected");
+
+        assert!(
+            matches!(err, CliError::Other(message) if message.contains("requires block driver interval"))
+        );
+
+        let err = local_node_config(LocalNodeOptions {
+            block_driver: Some(LocalNodeBlockDriverMode::Instant),
+            block_interval: Some(Duration::from_millis(250)),
+            ..LocalNodeOptions::default()
+        })
+        .expect_err("instant mode interval should be rejected");
+
+        assert!(
+            matches!(err, CliError::Other(message) if message.contains("requires block driver interval"))
+        );
     }
 
     #[test]

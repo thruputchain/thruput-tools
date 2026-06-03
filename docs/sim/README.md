@@ -66,7 +66,9 @@ Fibonacci deploy plus `view-call`, `storage-read`, `events-query`, and
 `sim-fixtures/caller-counter` fixture and runs a read-after-write smoke that
 submits `bump()`, waits for the receipt, reads `get()`, and asserts the
 per-caller counter advanced. The opt-in soak runs
-`examples/sim/local-mixed-wallet-receipt-soak.json`.
+`examples/sim/local-mixed-wallet-receipt-soak.json`,
+`examples/sim/local-multi-contract-soak.json`, and
+`examples/sim/local-realistic-soak-short.json`.
 
 Contract artifact scenarios declare `contractArtifacts` plus `viewCalls`,
 `contractCalls`, `storageReads`, or `eventQueries` in the manifest.
@@ -155,7 +157,9 @@ round-trip. On the first actor tick, or after an invalidation, it reconciles by
 calling the configured read view to establish the actor's baseline. It then
 submits the configured write through dev-wallet `doAction`, waits for an `ok`
 receipt, calls the configured read view again, and requires the observed `u64`
-to match the actor's expected value. JSONL events record
+to match the actor's expected value. The post-receipt read retries stale values
+for up to one second so short receipt/index/view visibility gaps are measured
+as workload latency instead of immediate mismatches. JSONL events record
 `readAfterWriteName`, `readAfterWriteContract`, `readAfterWriteExpected`,
 `readAfterWriteObserved`, `readAfterWriteMatched`, and
 `readAfterWriteRebased`. Mismatches fail the workload with
@@ -235,6 +239,7 @@ Local targets may set `target.blockDriver` to `instant` or `interval`.
 `instant` is the supervisor default and wakes block production after successful
 submits. `interval` forwards `--block-driver interval` to `groundhog node` and
 uses `target.blockIntervalMs` when supplied; the interval default is 500 ms.
+`target.blockIntervalMs` is valid only with `target.blockDriver: "interval"`.
 
 The provider sends SIGTERM to the node for graceful shutdown, waits a bounded
 grace period, and escalates to SIGKILL only if the node does not exit.

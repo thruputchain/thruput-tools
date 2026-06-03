@@ -1526,7 +1526,15 @@ mod tests {
 
     #[test]
     fn restart_args_use_resolved_port() {
-        let args = local_node_args(5, None, None, None, None, Some(49152), 30);
+        let args = local_node_args(
+            5,
+            None,
+            None,
+            Some(TargetBlockDriverMode::Interval),
+            Some(500),
+            Some(49152),
+            30,
+        );
 
         assert_eq!(
             args,
@@ -1537,6 +1545,10 @@ mod tests {
                 "--json",
                 "--startup-timeout-secs",
                 "30",
+                "--block-driver",
+                "interval",
+                "--block-interval-ms",
+                "500",
                 "--port",
                 "49152"
             ]
