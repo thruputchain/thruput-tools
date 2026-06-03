@@ -12,12 +12,14 @@ use crate::result::{
 
 const MAX_CHAIN_PROGRESS_OBSERVATIONS: usize = 1_024;
 const MAX_RESOURCE_SAMPLES: usize = 1_024;
+pub const SIMULATOR_BACKPRESSURE_ERROR_CLASS: &str = "simulator-backpressure";
 
 #[derive(Debug, Default)]
 pub struct RunMetricsBuilder {
     workloads: BTreeMap<WorkloadKind, WorkloadMetricsBuilder>,
     chain_progress: ChainProgressBuilder,
     resource_timeline: ResourceTimelineBuilder,
+    simulator_backpressure_count: u64,
     simulator_overload_count: u64,
 }
 
@@ -37,8 +39,11 @@ impl RunMetricsBuilder {
     }
 
     pub fn record_skipped(&mut self, workload: WorkloadKind, error_class: impl Into<String>) {
-        self.workload_mut(workload)
-            .record_skipped(error_class.into());
+        let error_class = error_class.into();
+        if error_class == SIMULATOR_BACKPRESSURE_ERROR_CLASS {
+            self.simulator_backpressure_count += 1;
+        }
+        self.workload_mut(workload).record_skipped(error_class);
     }
 
     pub fn record_chain_tip(&mut self, observation: &ChainTipObservation) {
@@ -102,6 +107,10 @@ impl RunMetricsBuilder {
             .values()
             .map(|metrics| metrics.counts.skipped)
             .sum()
+    }
+
+    pub fn simulator_backpressure_count(&self) -> u64 {
+        self.simulator_backpressure_count
     }
 
     pub fn finish(self) -> RunMetrics {
@@ -590,6 +599,19 @@ mod tests {
                 max_ms: 20,
             })
         );
+    }
+
+    #[test]
+    fn simulator_backpressure_count_ignores_other_skips() {
+        let mut metrics = RunMetricsBuilder::default();
+        metrics.record_skipped(WorkloadKind::ReceiptPoll, "no-submitted-transaction");
+        metrics.record_skipped(
+            WorkloadKind::WalletSubmitSmoke,
+            SIMULATOR_BACKPRESSURE_ERROR_CLASS,
+        );
+
+        assert_eq!(metrics.skipped_count(), 2);
+        assert_eq!(metrics.simulator_backpressure_count(), 1);
     }
 
     #[test]

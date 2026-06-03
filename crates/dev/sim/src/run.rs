@@ -444,6 +444,7 @@ where
     let completed_workloads = metrics.completed_count();
     let failed_workloads = metrics.failed_count();
     let skipped_workloads = metrics.skipped_count();
+    let backpressure_workloads = metrics.simulator_backpressure_count();
     let workload_counts = metrics.workload_counts();
     let pending_receipts = input
         .actor_states
@@ -453,7 +454,7 @@ where
     metrics.record_pending_receipts_at_shutdown(pending_receipts);
     let finished_metrics = metrics.finish();
     let metric_availability = SimMetricAvailability::phase_one_defaults();
-    let backpressure_rate = workload_event_rate(skipped_workloads, input.scheduled_workloads);
+    let backpressure_rate = workload_event_rate(backpressure_workloads, input.scheduled_workloads);
     let simulator_overload_rate = workload_event_rate(
         finished_metrics.simulator_overload_count,
         input.scheduled_workloads,
@@ -464,7 +465,7 @@ where
             completed_workloads,
             failed_workloads,
             scheduled_actor_workloads: input.scheduled_workloads,
-            skipped_workloads,
+            backpressure_workloads,
             simulator_overload_count: finished_metrics.simulator_overload_count,
             chain_progress: finished_metrics.chain_progress.as_ref(),
             resource_timeline: finished_metrics.resource_timeline.as_ref(),

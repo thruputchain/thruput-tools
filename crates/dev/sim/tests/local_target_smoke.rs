@@ -621,7 +621,10 @@ fn run_catalog(catalog: &[CatalogScenario]) {
 }
 
 fn assert_multi_contract_artifacts(result: &serde_json::Value, scenario: &str) {
-    if scenario != "local-multi-contract-soak.json" {
+    if !matches!(
+        scenario,
+        "local-multi-contract-soak.json" | "local-realistic-soak-short.json"
+    ) {
         return;
     }
     assert!(
@@ -630,6 +633,23 @@ fn assert_multi_contract_artifacts(result: &serde_json::Value, scenario: &str) {
             .is_some_and(|contracts| contracts.len() > 1),
         "{scenario} should deploy multiple contracts"
     );
+}
+
+fn assert_completed_contract<'a>(
+    result: &'a serde_json::Value,
+    scenario: &str,
+    name: &str,
+) -> &'a serde_json::Value {
+    let contracts = result["contracts"]
+        .as_array()
+        .expect("result should contain contracts array");
+    let contract = contracts
+        .iter()
+        .find(|contract| contract["name"] == name)
+        .unwrap_or_else(|| panic!("{scenario} should contain {name} contract"));
+    assert_eq!(contract["status"], "completed", "{scenario}");
+    assert!(contract["address"].as_str().is_some(), "{scenario}");
+    contract
 }
 
 fn assert_regression_diagnostic_fields(result: &serde_json::Value, scenario: &str) {
@@ -814,21 +834,15 @@ fn assert_contract_view_artifacts(
     run_dir: &std::path::Path,
     scenario: &str,
 ) {
-    let contracts = result["contracts"]
-        .as_array()
-        .expect("result should contain contracts array");
-    assert_eq!(contracts.len(), 1, "{scenario}");
-    assert_eq!(contracts[0]["name"], "fibonacci", "{scenario}");
-    assert_eq!(contracts[0]["status"], "completed", "{scenario}");
+    let contract = assert_completed_contract(result, scenario, "fibonacci");
     assert!(
         matches!(
-            contracts[0]["addressSource"].as_str(),
+            contract["addressSource"].as_str(),
             Some("derived" | "receipt")
         ),
         "{scenario}"
     );
-    assert!(contracts[0]["txHash"].as_str().is_some(), "{scenario}");
-    assert!(contracts[0]["address"].as_str().is_some(), "{scenario}");
+    assert!(contract["txHash"].as_str().is_some(), "{scenario}");
 
     let metrics = &result["workloadMetrics"]["view-call"]["counts"];
     assert!(
@@ -867,13 +881,7 @@ fn assert_contract_storage_artifacts(
     run_dir: &std::path::Path,
     scenario: &str,
 ) {
-    let contracts = result["contracts"]
-        .as_array()
-        .expect("result should contain contracts array");
-    assert_eq!(contracts.len(), 1, "{scenario}");
-    assert_eq!(contracts[0]["name"], "fibonacci", "{scenario}");
-    assert_eq!(contracts[0]["status"], "completed", "{scenario}");
-    assert!(contracts[0]["address"].as_str().is_some(), "{scenario}");
+    assert_completed_contract(result, scenario, "fibonacci");
 
     let metrics = &result["workloadMetrics"]["storage-read"]["counts"];
     assert!(
@@ -907,13 +915,7 @@ fn assert_contract_events_artifacts(
     expected_query: &str,
 ) {
     let positive_events = scenario == "local-fibonacci-contract-call-events-smoke.json";
-    let contracts = result["contracts"]
-        .as_array()
-        .expect("result should contain contracts array");
-    assert_eq!(contracts.len(), 1, "{scenario}");
-    assert_eq!(contracts[0]["name"], "fibonacci", "{scenario}");
-    assert_eq!(contracts[0]["status"], "completed", "{scenario}");
-    assert!(contracts[0]["address"].as_str().is_some(), "{scenario}");
+    assert_completed_contract(result, scenario, "fibonacci");
 
     let metrics = &result["workloadMetrics"]["events-query"]["counts"];
     assert!(
@@ -973,13 +975,7 @@ fn assert_read_after_write_artifacts(
     run_dir: &std::path::Path,
     scenario: &str,
 ) {
-    let contracts = result["contracts"]
-        .as_array()
-        .expect("result should contain contracts array");
-    assert_eq!(contracts.len(), 1, "{scenario}");
-    assert_eq!(contracts[0]["name"], "caller-counter", "{scenario}");
-    assert_eq!(contracts[0]["status"], "completed", "{scenario}");
-    assert!(contracts[0]["address"].as_str().is_some(), "{scenario}");
+    assert_completed_contract(result, scenario, "caller-counter");
 
     let metrics = &result["workloadMetrics"]["read-after-write"]["counts"];
     assert!(

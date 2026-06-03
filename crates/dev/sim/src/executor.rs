@@ -39,7 +39,7 @@ use crate::manifest::{
     ChaosEventKind, ChaosEventSpec, EventQueryAnchorSpec, EventQueryOrderSpec, SimulationManifest,
     WorkloadKind,
 };
-use crate::metrics::RunMetricsBuilder;
+use crate::metrics::{RunMetricsBuilder, SIMULATOR_BACKPRESSURE_ERROR_CLASS};
 use crate::resource::{ResourceSample, TargetResourceSampler};
 use crate::result::{ChainTipObservation, ChaosEventRecord, ChaosEventState, ResourceSamplePoint};
 use crate::scheduler::{
@@ -1159,7 +1159,7 @@ fn backpressure_completion(
                 event_cursor: None,
                 event_latest_block: None,
                 event_oldest_block: None,
-                error_class: Some("simulator-backpressure".into()),
+                error_class: Some(SIMULATOR_BACKPRESSURE_ERROR_CLASS.into()),
                 error: Some(format!("{scope} in-flight limit reached: {error}")),
                 read_after_write_name: None,
                 read_after_write_contract: None,
@@ -1171,7 +1171,7 @@ fn backpressure_completion(
         },
         workload,
         latency_ms: 0,
-        error_class: Some("simulator-backpressure".into()),
+        error_class: Some(SIMULATOR_BACKPRESSURE_ERROR_CLASS.into()),
         skipped: true,
         chain_tip: None,
         submitted_transaction: None,

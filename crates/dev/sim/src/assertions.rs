@@ -48,7 +48,7 @@ pub fn evaluate_assertions(
         results.push(evaluate_max_backpressure_rate(
             max_backpressure_rate,
             input.scheduled_actor_workloads,
-            input.skipped_workloads,
+            input.backpressure_workloads,
         ));
     }
 
@@ -89,7 +89,7 @@ pub struct AssertionEvaluation<'a> {
     pub completed_workloads: u64,
     pub failed_workloads: u64,
     pub scheduled_actor_workloads: u64,
-    pub skipped_workloads: u64,
+    pub backpressure_workloads: u64,
     pub simulator_overload_count: u64,
     pub chain_progress: Option<&'a ChainProgressSummary>,
     pub resource_timeline: Option<&'a ResourceTimeline>,
@@ -239,9 +239,9 @@ fn evaluate_receipt_timeout_rate(
 fn evaluate_max_backpressure_rate(
     max_backpressure_rate: f64,
     scheduled_actor_workloads: u64,
-    skipped_workloads: u64,
+    backpressure_workloads: u64,
 ) -> AssertionResult {
-    let observed = workload_event_rate(skipped_workloads, scheduled_actor_workloads);
+    let observed = workload_event_rate(backpressure_workloads, scheduled_actor_workloads);
     AssertionResult {
         name: "maxBackpressureRate".into(),
         status: if observed <= max_backpressure_rate {
@@ -666,7 +666,7 @@ mod tests {
         completed_workloads: u64,
         failed_workloads: u64,
         scheduled_actor_workloads: u64,
-        skipped_workloads: u64,
+        backpressure_workloads: u64,
         simulator_overload_count: u64,
         chain_progress: Option<&'a ChainProgressSummary>,
         resource_timeline: Option<&'a ResourceTimeline>,
@@ -676,7 +676,7 @@ mod tests {
             completed_workloads,
             failed_workloads,
             scheduled_actor_workloads,
-            skipped_workloads,
+            backpressure_workloads,
             simulator_overload_count,
             chain_progress,
             resource_timeline,
