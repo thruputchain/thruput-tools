@@ -174,10 +174,10 @@ generation is available, it also emits a human-readable `*.spec.json` sidecar
 next to the built WASM. The embedded WASM section remains the source of truth;
 the JSON file is for inspection and external tooling.
 
-The RV32 target uses the built-in `groundhog-rv32-lower` library, sets
-`CARGO_PROFILE_RELEASE_STRIP=false` for the current v3 symbol-scanning lowerer,
-then writes `target/groundhog/<package>.rv32a` plus
-`target/groundhog/<package>.rv32.json` build metadata.
+The RV32 target uses the built-in `groundhog-rv32-lower` library (v4 dispatch
+lives in the guest, so stripped release builds are valid), then writes
+`target/groundhog/<package>.rv32a` plus `target/groundhog/<package>.rv32.json`
+build metadata.
 
 This RV32 path currently emits the deployable artifact and lowerer metadata.
 Contract spec sidecars for RV32 are a cross-repo follow-up; today spec

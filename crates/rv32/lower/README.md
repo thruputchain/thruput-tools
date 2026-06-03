@@ -1,13 +1,12 @@
 # groundhog-rv32-lower
 
 Turn a freestanding `riscv32im-unknown-none-elf` contract binary into a
-Groundhog **v3 RV32 artifact** (`.rv32a`).
+Groundhog **v4 RV32 artifact** (`.rv32a`).
 
-This is the production successor to hogd's `scripts/rv32_lower.py` — the
-`wasm-opt` analog for the rv32 build path. It is a focused lowerer with two
-entrypoints: a standalone `rv32-lower` binary for scripts and interop checks,
-and a library API used by `groundhog build --target rv32`. The artifact format
-still has exactly one Rust implementation.
+This is the `wasm-opt` analog for the rv32 build path. It is a focused lowerer
+with two entrypoints: a standalone `rv32-lower` binary for scripts and interop
+checks, and a library API used by `groundhog build --target rv32`. The artifact
+format has exactly one Rust implementation.
 
 ## Usage
 
@@ -33,7 +32,7 @@ rv32-lower --elf <elf> --out <contract>.rv32a --metadata <contract>.json \
            --build-flags release
 ```
 
-The sidecar includes `artifact_format_fingerprint`, the pinned v3 format
+The sidecar includes `artifact_format_fingerprint`, the pinned v4 format
 contract digest that hogd cross-checks against its C++ runtime constants. To
 print that value without lowering an ELF:
 
@@ -42,8 +41,8 @@ rv32-lower --print-format-fingerprint
 ```
 
 For scripting / programmatic callers, `--json` emits a single-line result
-envelope on stdout (output path, byte sizes, code/artifact digests, dispatch
-table) on success, or `{"status":"error","message":…}` on failure:
+envelope on stdout (output path, byte sizes, code/artifact digests) on success,
+or `{"status":"error","message":…}` on failure:
 
 ```sh
 rv32-lower --elf <elf> --out <contract>.rv32a --json
@@ -51,24 +50,23 @@ rv32-lower --elf <elf> --out <contract>.rv32a --json
 
 The lowerer:
 
-1. Parses the ELF32 section and symbol tables.
-2. Validates the layout (single `.text` at vaddr 0, allowlisted alloc sections,
-   no relocations, no data in `.text`, …) and materializes the 64 KiB
-   initial-memory image.
-3. Discovers `#[contract]` dispatch entries — the SDK macro emits each method as
-   an `#[export_name = "<16-UPPER-HEX>"]` symbol — and maps `method_id → pc`.
-4. Packs the v3 header + sections, hashes each section, and self-verifies.
+1. Parses the ELF32 section table.
+2. Validates the layout (entry point 0, single `.text` at vaddr 0, allowlisted
+   alloc sections, no relocations, …) and materializes the code plus the
+   initial-memory high-water prefix. v4 dispatch lives in the guest, so no
+   symbol scanning is needed and stripped release builds are valid inputs.
+3. Packs the v4 header + sections, hashes each section, and self-verifies.
 
 ## Library
 
 The crate is also a library (`groundhog_rv32_lower`):
 
 - `lower(&[u8]) -> Result<Lowered>` — the whole pipeline.
-- `groundhog-rv32-artifact` — the v3 format crate: constants, writer, and
+- `groundhog-rv32-artifact` — the v4 format crate: constants, writer, and
   `verify_artifact`. **This crate is the single Rust source of truth for the
   on-disk format** and mirrors hogd's `hogd/hogexec/runtime/rv32/artifact.h`.
 - `elf` — a minimal, dependency-free ELF32-LE-RISC-V reader.
-- `metadata` — the JSON sidecar (byte-compatible with the python script).
+- `metadata` — the JSON build-info sidecar emitted next to the artifact.
 
 ## Tests
 
