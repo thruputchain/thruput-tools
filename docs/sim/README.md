@@ -84,11 +84,14 @@ is the fixture under test.
 The catalog also includes heavier local presets that are not part of the fast
 smoke ladder: `local-fibonacci-storage-miss-heavy`,
 `local-fibonacci-event-heavy`, `local-fibonacci-compute-heavy`,
-`local-calldata-heavy`, and `local-nnint-heavy`. They reuse the Fibonacci
-fixture to stress negative storage lookups, indexed event traffic, and
-recursive contract-call compute, plus dedicated simulator fixtures for wide u32
-calldata and NNInt churn. Run them directly with `hoglab run` and
-`--contract-artifact-root` after building the required contract artifacts.
+`local-calldata-heavy`, `local-nnint-heavy`, and the opt-in realistic soak
+presets. They reuse the Fibonacci fixture to stress negative storage lookups,
+indexed event traffic, recursive contract-call compute, weighted hot-contract
+traffic, plus dedicated simulator fixtures for wide u32 calldata, NNInt churn,
+and caller-aware read-after-write state. Run them directly with `hoglab run`
+and `--contract-artifact-root` after building the required contract artifacts.
+Use `local-realistic-soak-short.json` for optional smoke coverage and
+`local-realistic-soak.json` for manual baseline collection.
 
 Existing-target quickstart:
 
@@ -320,6 +323,13 @@ Baseline comparison is diagnostic only. It does not change the run outcome or
 apply regression thresholds. If a configured baseline is missing, invalid, or
 uses an unsupported result schema, the run returns an error before writing the
 final `result.json`; target cleanup still runs.
+
+RSS-growth thresholds in the soak presets are intentionally calibration-bound:
+collect a baseline artifact for each target class before treating
+`maxRssGrowthBytesPerMinute` as a mandatory CI gate. For CPU/perf regression
+tracking outside the run artifact, instruction-count benchmarks such as
+`iai-callgrind` and continuous Criterion tracking through Bencher/CodSpeed-style
+systems are good follow-ons once the local soak signal is stable.
 
 Phase 1 runs emit `passed` or `failed` final results. The `aborted` outcome is
 reserved in the schema for a future path that writes a final result after

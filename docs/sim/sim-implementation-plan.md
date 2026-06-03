@@ -708,13 +708,13 @@ Detailed handoff:
 
 ### Slice 5: Long-Soak Presets + Calibration
 
-- [ ] Add `examples/sim/local-realistic-soak.json` reference preset wiring
+- [x] Add `examples/sim/local-realistic-soak.json` reference preset wiring
   backpressure, simulator-overload, receipt-timeout, and RSS-growth assertions.
-- [ ] Add a reduced-duration optional soak smoke path.
-- [ ] Add the soak preset to the catalog with `soak` / `regression` tags, kept
+- [x] Add a reduced-duration optional soak smoke path.
+- [x] Add the soak preset to the catalog with `soak` / `regression` tags, kept
   out of the fast smoke default.
-- [ ] Document that RSS thresholds are calibrated from baseline artifacts per
+- [x] Document that RSS thresholds are calibrated from baseline artifacts per
   target class before promotion to mandatory CI gates.
-- [ ] Document adjacent CI perf options: Rust instruction-count benchmarks
+- [x] Document adjacent CI perf options: Rust instruction-count benchmarks
   (`iai-callgrind`) for gateway/simulator hot paths, and Bencher/CodSpeed-style
   continuous tracking after thresholds are credible.

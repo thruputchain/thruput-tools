@@ -165,6 +165,18 @@ const LOCAL_SOAK_CATALOG: &[CatalogScenario] = &[
         expect_read_after_write: true,
         allow_restart_failure: false,
     },
+    CatalogScenario {
+        file: "local-realistic-soak-short.json",
+        expect_passed: true,
+        expect_receipt_metrics: true,
+        expect_restart: false,
+        expect_restart_loss: false,
+        expect_contract_view: false,
+        expect_contract_storage: true,
+        expect_contract_events: true,
+        expect_read_after_write: true,
+        allow_restart_failure: false,
+    },
 ];
 
 #[derive(Debug, Clone, Copy)]
@@ -598,6 +610,7 @@ fn run_catalog(catalog: &[CatalogScenario]) {
             assert_read_after_write_artifacts(&result, &run_dir, scenario.file);
         }
         assert_multi_contract_artifacts(&result, scenario.file);
+        assert_regression_diagnostic_fields(&result, scenario.file);
 
         let simulation = std::fs::read_to_string(run_dir.join("simulation.json"))
             .expect("simulation artifact should read");
@@ -616,6 +629,24 @@ fn assert_multi_contract_artifacts(result: &serde_json::Value, scenario: &str) {
             .as_array()
             .is_some_and(|contracts| contracts.len() > 1),
         "{scenario} should deploy multiple contracts"
+    );
+}
+
+fn assert_regression_diagnostic_fields(result: &serde_json::Value, scenario: &str) {
+    if scenario != "local-realistic-soak-short.json" {
+        return;
+    }
+    assert!(
+        result.get("backpressureRate").is_some(),
+        "{scenario} should include backpressureRate"
+    );
+    assert!(
+        result.get("simulatorOverloadRate").is_some(),
+        "{scenario} should include simulatorOverloadRate"
+    );
+    assert!(
+        result.get("resourceTimeline").is_some(),
+        "{scenario} should include resourceTimeline"
     );
 }
 
