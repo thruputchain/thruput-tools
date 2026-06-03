@@ -1,8 +1,7 @@
 //! The optional JSON metadata sidecar emitted next to the artifact.
 //!
-//! Byte-compatible with the `scripts/rv32_lower.py` sidecar: keys sorted at
-//! every level, two-space indentation, a trailing newline, and the build-info
-//! fields always present (`null` when not supplied).
+//! Keys are sorted at every level, two-space indentation, a trailing newline,
+//! and the build-info fields are always present (`null` when not supplied).
 
 use std::collections::BTreeMap;
 

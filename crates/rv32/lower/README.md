@@ -76,7 +76,7 @@ cargo test -p groundhog-rv32-lower
 
 The suite is hermetic: it builds minimal synthetic ELFs in-process (no riscv
 toolchain needed) and exercises the happy path plus every validation/rejection
-rule. To also byte-compare against a real contract / a `rv32_lower.py` golden:
+rule. To also byte-compare against a real contract / a known-good golden artifact:
 
 ```sh
 RV32_LOWER_PARITY_ELF=/path/to/<contract>-rv32 \

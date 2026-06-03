@@ -3,8 +3,8 @@
 //! Most tests build a minimal synthetic ELF32 in-process (no riscv toolchain
 //! required) and exercise the happy path plus every validation/rejection rule.
 //! A final opt-in test (`RV32_LOWER_PARITY_ELF`) lowers a real contract ELF and
-//! optionally byte-compares it against a `scripts/rv32_lower.py` golden — the
-//! same opt-in / out-of-default-CI posture as the hogd Spike oracle.
+//! optionally byte-compares it against a known-good golden artifact — an
+//! opt-in / out-of-default-CI regression check.
 
 // The synthetic-ELF builder favors owned specs that tests clone-and-mutate.
 #![allow(clippy::needless_pass_by_value)]
@@ -807,11 +807,11 @@ fn cli_print_format_fingerprint_does_not_require_artifact_args() {
 }
 
 // ---------------------------------------------------------------------------
-// Opt-in real-ELF parity (skipped unless RV32_LOWER_PARITY_ELF is set).
+// Opt-in real-ELF golden check (skipped unless RV32_LOWER_PARITY_ELF is set).
 // ---------------------------------------------------------------------------
 
 #[test]
-fn matches_python_golden_when_provided() {
+fn matches_golden_when_provided() {
     let Ok(elf_path) = std::env::var("RV32_LOWER_PARITY_ELF") else {
         eprintln!("skipping: RV32_LOWER_PARITY_ELF not set");
         return;
@@ -822,7 +822,7 @@ fn matches_python_golden_when_provided() {
         let golden = std::fs::read(&golden_path).expect("read golden artifact");
         assert_eq!(
             lowered.artifact, golden,
-            "artifact bytes diverge from python golden"
+            "artifact bytes diverge from the golden artifact"
         );
     }
 }
