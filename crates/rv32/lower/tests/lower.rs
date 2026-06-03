@@ -527,16 +527,41 @@ fn rejects_executable_contract_spec_metadata_section() {
 }
 
 #[test]
-fn rejects_data_section_overlapping_text() {
+fn accepts_data_section_inside_the_code_pc_range() {
+    // Harvard split: code (PC space) and data are separate VM memories, so a
+    // data vaddr that numerically falls inside .text's PC range is legal. Here
+    // .text spans [0, 0x20) and .rodata sits at 0x8, inside that range.
     let mut spec = happy_spec();
-    // Collides with .text at vaddr 0.
     spec.extras.push(ExtraSection::progbits(
         ".rodata",
         SHF_ALLOC,
-        0,
-        vec![0u8; 4],
+        0x8,
+        vec![0xAA, 0xBB, 0xCC, 0xDD],
     ));
-    expect_err(spec, "overlaps .text");
+    let lowered = lower(&assemble(spec)).expect("lowers with low-vaddr rodata");
+    // The stored image is the compact [0, high_water) prefix: the 8-byte null
+    // guard plus the 4 rodata bytes, not a code-sized image.
+    assert_eq!(lowered.initial_memory.len(), 0xC);
+    assert_eq!(&lowered.initial_memory[0x8..0xC], &[0xAA, 0xBB, 0xCC, 0xDD]);
+    // [0, 8) stays zero — the reserved null guard.
+    assert_eq!(&lowered.initial_memory[0..0x8], &[0u8; 8]);
+}
+
+#[test]
+fn rejects_data_section_in_the_null_guard() {
+    // Address 0 is reserved so a Rust &'static is never a readable null pointer
+    // (hogd stages the image at data address 0). Any data section reaching into
+    // [0, 8) is rejected — both vaddr 0 and a vaddr inside the guard.
+    for addr in [0, 4] {
+        let mut spec = happy_spec();
+        spec.extras.push(ExtraSection::progbits(
+            ".rodata",
+            SHF_ALLOC,
+            addr,
+            vec![0u8; 4],
+        ));
+        expect_err(spec, "reserved null guard");
+    }
 }
 
 // ---------------------------------------------------------------------------
