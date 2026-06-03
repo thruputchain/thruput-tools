@@ -9,7 +9,7 @@ use crate::target::{TargetOwnership, TargetProviderKind};
 
 pub const SIM_RESULT_SCHEMA_VERSION: u32 = 1;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SimResult {
     pub schema_version: u32,
@@ -29,6 +29,14 @@ pub struct SimResult {
     pub workload_counts: BTreeMap<WorkloadKind, WorkloadCounts>,
     #[serde(default)]
     pub workload_metrics: BTreeMap<WorkloadKind, WorkloadMetrics>,
+    #[serde(default)]
+    pub backpressure_rate: f64,
+    #[serde(default)]
+    pub simulator_overload_rate: f64,
+    #[serde(default)]
+    pub simulator_overload_count: u64,
+    #[serde(default = "default_resource_timeline")]
+    pub resource_timeline: MetricAvailability<ResourceTimeline>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chain_progress: Option<ChainProgressSummary>,
     #[serde(default)]
@@ -42,7 +50,7 @@ pub struct SimResult {
 }
 
 /// Diff of the current run against a baseline result declared by the scenario.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BaselineDiff {
     /// Baseline reference exactly as authored in the scenario manifest, not the
@@ -101,6 +109,12 @@ pub enum MetricAvailability<T> {
     Unavailable { reason: String },
 }
 
+fn default_resource_timeline() -> MetricAvailability<ResourceTimeline> {
+    MetricAvailability::Unavailable {
+        reason: "target resource sampling was not recorded".into(),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SimMetricAvailability {
@@ -119,6 +133,132 @@ impl SimMetricAvailability {
             },
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ResourceSampleScope {
+    /// Aggregate over the target provider's owned process group.
+    ProcessGroup,
+    /// Aggregate over only the target provider's owned root process.
+    NodeProcess,
+}
+
+/// Resource samples and restart-aware aggregates for the target process scope.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceTimeline {
+    /// Scope used by the recorded samples.
+    pub scope: ResourceSampleScope,
+    /// Configured sampling cadence in milliseconds.
+    pub sample_interval_ms: u64,
+    /// Number of observed samples processed, including samples omitted from the retained window.
+    pub sample_count: u64,
+    /// First observed sample.
+    pub first: ResourceSamplePoint,
+    /// Last observed sample.
+    pub last: ResourceSamplePoint,
+    /// Maximum RSS observed across all samples with RSS available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_rss_bytes: Option<u64>,
+    /// Algebraic maximum RSS growth across restart segments, in bytes per wall-clock minute.
+    ///
+    /// Segments with fewer than two RSS observations do not contribute. If every contributing
+    /// segment shrinks, this is the least-negative segment growth rate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_segment_rss_growth_bytes_per_minute: Option<i64>,
+    /// RSS growth for the final restart segment, in bytes per wall-clock minute.
+    ///
+    /// This is absent when the final segment has fewer than two RSS observations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_segment_rss_growth_bytes_per_minute: Option<i64>,
+    /// Maximum thread count observed across samples where thread count was available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peak_threads: Option<u64>,
+    /// Maximum open-fd count observed across samples where fd count was available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peak_open_fds: Option<u64>,
+    /// Sum of monotonic user+system CPU deltas within each restart segment.
+    ///
+    /// CPU counters are never differenced across process identity changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_cpu_ms: Option<u64>,
+    /// Restart-aware per-process-identity segments used for growth and CPU aggregates.
+    #[serde(default)]
+    pub segments: Vec<ResourceSegment>,
+    /// Retained raw sample window, capped for long soaks; aggregate fields include all samples.
+    #[serde(default)]
+    pub samples: Vec<ResourceSamplePoint>,
+}
+
+/// One target resource observation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceSamplePoint {
+    /// Scheduled simulation time for the sample tick.
+    pub simulation_time_ms: u64,
+    /// Wall-clock observation timestamp in Unix milliseconds, encoded as a JSON-safe string.
+    pub observed_at_unix_ms: String,
+    /// Scope used for this sample.
+    pub scope: ResourceSampleScope,
+    /// Root process ID owned by the target provider at sample time.
+    pub root_pid: u32,
+    /// Process group ID when the provider can identify one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pgid: Option<u32>,
+    /// Number of processes included in the point-in-time aggregate.
+    pub process_count: u32,
+    /// Resident set size in bytes when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rss_bytes: Option<u64>,
+    /// User CPU time in milliseconds when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_user_ms: Option<u64>,
+    /// System CPU time in milliseconds when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_system_ms: Option<u64>,
+    /// Thread count when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub threads: Option<u64>,
+    /// Open file descriptor count when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_fds: Option<u64>,
+}
+
+/// Resource aggregate for one continuous target process identity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceSegment {
+    /// Scope used by samples in the segment.
+    pub scope: ResourceSampleScope,
+    /// Root process ID for this segment.
+    pub root_pid: u32,
+    /// Process group ID for this segment when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pgid: Option<u32>,
+    /// Number of observed samples in this segment.
+    pub sample_count: u64,
+    /// Wall-clock timestamp of the first segment sample in Unix milliseconds.
+    pub started_at_unix_ms: String,
+    /// Wall-clock timestamp of the last segment sample in Unix milliseconds.
+    pub ended_at_unix_ms: String,
+    /// First RSS observation in the segment when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_rss_bytes: Option<u64>,
+    /// Last RSS observation in the segment when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_rss_bytes: Option<u64>,
+    /// Maximum RSS observed in the segment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_rss_bytes: Option<u64>,
+    /// RSS growth for this segment in bytes per wall-clock minute.
+    ///
+    /// Absent when the segment has fewer than two RSS observations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rss_growth_bytes_per_minute: Option<i64>,
+    /// Sum of monotonic user+system CPU deltas within this segment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_cpu_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

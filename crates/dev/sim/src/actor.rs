@@ -9,6 +9,8 @@ use crate::manifest::SimulationManifest;
 use crate::nonce::NonceNamespace;
 use crate::runtime::SimAccount;
 
+pub const DEFAULT_PENDING_RECEIPT_LIMIT_PER_ACTOR: usize = 1_024;
+
 /// Mutable per-actor state owned by the simulator runtime.
 #[derive(Debug)]
 pub struct ActorState {
@@ -23,6 +25,7 @@ pub struct ActorState {
     pub last_submitted_completed_at: Option<Instant>,
     pub last_observed_receipt: Option<TransactionReceipt>,
     pending_receipts: VecDeque<PendingReceipt>,
+    pending_receipt_limit: usize,
     read_after_write: ReadAfterWriteState,
 }
 
@@ -78,6 +81,7 @@ impl ActorState {
             last_submitted_completed_at: None,
             last_observed_receipt: None,
             pending_receipts: VecDeque::new(),
+            pending_receipt_limit: DEFAULT_PENDING_RECEIPT_LIMIT_PER_ACTOR,
             read_after_write: ReadAfterWriteState::NeedsReconcile,
         }
     }
@@ -98,7 +102,7 @@ impl ActorState {
         tx_hash: TxHash,
         scheduled_time_ms: u64,
         completed_at: Instant,
-    ) -> Result<(), ActorError> {
+    ) -> Result<PendingReceiptRecordOutcome, ActorError> {
         self.next_nonce_sequence =
             self.next_nonce_sequence
                 .checked_add(1)
@@ -108,11 +112,25 @@ impl ActorState {
         self.last_submitted_tx_hash = Some(tx_hash);
         self.last_submitted_scheduled_time_ms = Some(scheduled_time_ms);
         self.last_submitted_completed_at = Some(completed_at);
+        if self.pending_receipts.len() >= self.pending_receipt_limit {
+            return Ok(PendingReceiptRecordOutcome::Dropped {
+                pending_receipts: self.pending_receipts.len(),
+                pending_receipt_limit: self.pending_receipt_limit,
+            });
+        }
         self.pending_receipts.push_back(PendingReceipt {
             tx_hash,
             submit_completed_at: completed_at,
         });
-        Ok(())
+        Ok(PendingReceiptRecordOutcome::Queued {
+            pending_receipts: self.pending_receipts.len(),
+            pending_receipt_limit: self.pending_receipt_limit,
+        })
+    }
+
+    #[cfg(test)]
+    pub fn set_pending_receipt_limit_for_test(&mut self, limit: usize) {
+        self.pending_receipt_limit = limit;
     }
 
     /// Consume one nonce for a synchronous setup transaction that is tracked
@@ -225,6 +243,18 @@ pub struct DrainedPendingReceipt {
     pub submit_completed_at: Instant,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PendingReceiptRecordOutcome {
+    Queued {
+        pending_receipts: usize,
+        pending_receipt_limit: usize,
+    },
+    Dropped {
+        pending_receipts: usize,
+        pending_receipt_limit: usize,
+    },
+}
+
 #[derive(Debug, Clone, Copy)]
 struct PendingReceipt {
     tx_hash: TxHash,
@@ -328,6 +358,42 @@ mod tests {
             .expect("submitted tx should record");
 
         assert_eq!(actor.current_nonce().unwrap(), 0x1234_5678_0000_0001);
+    }
+
+    #[test]
+    fn pending_receipt_tracking_drops_when_limit_is_reached() {
+        let mut actor = ActorState::new(
+            2,
+            sim_account(9),
+            NonceNamespace::new(0x1234_5678).expect("namespace should fit"),
+        );
+        actor.set_pending_receipt_limit_for_test(1);
+        let now = Instant::now();
+
+        let first = actor
+            .record_submitted_tx(tx_hash(1), 10, now)
+            .expect("first submit should record");
+        let second = actor
+            .record_submitted_tx(tx_hash(2), 20, now)
+            .expect("second submit should still advance actor state");
+
+        assert_eq!(
+            first,
+            PendingReceiptRecordOutcome::Queued {
+                pending_receipts: 1,
+                pending_receipt_limit: 1,
+            }
+        );
+        assert_eq!(
+            second,
+            PendingReceiptRecordOutcome::Dropped {
+                pending_receipts: 1,
+                pending_receipt_limit: 1,
+            }
+        );
+        assert_eq!(actor.pending_receipt_count(), 1);
+        assert_eq!(actor.last_submitted_tx_hash, Some(tx_hash(2)));
+        assert_eq!(actor.next_nonce_sequence, 2);
     }
 
     #[test]

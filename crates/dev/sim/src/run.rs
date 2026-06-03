@@ -5,25 +5,32 @@ use groundhog_json_rpc_client::HttpClientBuilder;
 use groundhog_json_rpc_types::runtime_manifest::RuntimeManifest;
 
 use crate::actor::{ActorState, build_actor_states};
-use crate::assertions::{determine_outcome, evaluate_assertions};
+use crate::assertions::{
+    AssertionEvaluation, determine_outcome, evaluate_assertions, workload_event_rate,
+};
 use crate::compare::{ResultDiff, load_result};
 use crate::contract::{ContractSetup, deploy_manifest_contracts};
 use crate::error::SimError;
 use crate::event::{EventWriter, ResultEvent};
 use crate::executor::{
     DEFAULT_RECEIPT_DRAIN_RETRY_INTERVAL, DEFAULT_RECEIPT_DRAIN_TIMEOUT, ScheduleExecution,
-    SimRpcClient, drain_pending_receipt_polls, run_schedule_with_chaos,
+    SimRpcClient, StreamingScheduleExecution, drain_pending_receipt_polls, run_schedule_with_chaos,
+    run_streaming_schedule_with_chaos,
 };
 use crate::manifest::{ResolvedRunSpec, SimulationManifest, WorkloadKind};
 use crate::metrics::{RunMetrics, RunMetricsBuilder};
 use crate::nonce::NonceNamespace;
+use crate::resource::TargetResourceSampler;
 use crate::result::{
     AssertionResult, BaselineDiff, ManifestHashes, MetricAvailability, ProducerIdentity,
     RuntimeIdentity, SIM_RESULT_SCHEMA_VERSION, SimMetricAvailability, SimResult, SimRunOutcome,
     TargetIdentity, WorkloadCounts,
 };
 use crate::runtime::{derive_accounts, load_runtime_manifest};
-use crate::scheduler::{PhaseStart, ScheduledSimulationEvent, generate_schedule, phase_starts};
+use crate::scheduler::{
+    PhaseStart, ScheduledSimulationEvent, phase_starts, resource_sample_interval_ms,
+    schedule_summary,
+};
 use crate::target::{
     ExistingTargetProvider, LocalTargetProvider, ResolvedTarget, TargetOverrides, TargetOwnership,
     TargetProvider, TargetProviderContext, TargetProviderKind,
@@ -115,7 +122,7 @@ pub async fn run_target(args: RunOptions) -> Result<RunSummary, SimError> {
     match loaded_sim.manifest.target.provider {
         TargetProviderKind::Existing => {
             let provider = ExistingTargetProvider;
-            run_with_provider(
+            Box::pin(run_with_provider(
                 loaded_sim,
                 &scenario_path,
                 &provider,
@@ -123,12 +130,12 @@ pub async fn run_target(args: RunOptions) -> Result<RunSummary, SimError> {
                 out_dir,
                 nonce_namespace,
                 contract_artifact_root.as_deref(),
-            )
+            ))
             .await
         }
         TargetProviderKind::Local => {
             let provider = LocalTargetProvider::new();
-            run_with_provider(
+            Box::pin(run_with_provider(
                 loaded_sim,
                 &scenario_path,
                 &provider,
@@ -136,7 +143,7 @@ pub async fn run_target(args: RunOptions) -> Result<RunSummary, SimError> {
                 out_dir,
                 nonce_namespace,
                 contract_artifact_root.as_deref(),
-            )
+            ))
             .await
         }
         TargetProviderKind::RemoteSsh => {
@@ -172,7 +179,7 @@ pub async fn run_existing_target(args: ExistingRunOptions) -> Result<RunSummary,
     }
     validate_manifest(&loaded_sim.manifest)?;
     let provider = ExistingTargetProvider;
-    run_with_provider(
+    Box::pin(run_with_provider(
         loaded_sim,
         &scenario_path,
         &provider,
@@ -184,7 +191,7 @@ pub async fn run_existing_target(args: ExistingRunOptions) -> Result<RunSummary,
         out_dir,
         nonce_namespace,
         None,
-    )
+    ))
     .await
 }
 
@@ -206,16 +213,17 @@ async fn run_with_provider(
     let target = provider
         .acquire(&loaded_sim.manifest, overrides, context)
         .await?;
-    let run_result = run_resolved_target(
+    let run_result = Box::pin(run_resolved_target(
         loaded_sim,
         scenario_path,
         &target,
         provider.chaos_controller(),
+        provider.resource_sampler(),
         out_dir,
         run_id,
         nonce_namespace,
         contract_artifact_root,
-    )
+    ))
     .await;
     let cleanup_result = provider.cleanup(&target).await;
     finish_target_run(run_result, cleanup_result)
@@ -238,6 +246,7 @@ async fn run_resolved_target(
     scenario_path: &Path,
     target: &ResolvedTarget,
     chaos_controller: Option<&dyn crate::target::ChaosController>,
+    resource_sampler: Option<&dyn TargetResourceSampler>,
     out_dir: PathBuf,
     run_id: String,
     nonce_namespace: Option<u64>,
@@ -266,8 +275,9 @@ async fn run_resolved_target(
         nonce_namespace: nonce_namespace.get(),
     });
     loaded_sim.refresh_sha256()?;
-    let schedule = generate_schedule(&loaded_sim.manifest)?;
     let phase_starts = phase_starts(&loaded_sim.manifest)?;
+    let schedule_summary = schedule_summary(&loaded_sim.manifest)?;
+    let resource_sample_interval_ms = resource_sample_interval_ms(&loaded_sim.manifest)?;
 
     let mut event_writer = prepare_result_directory(
         &out_dir,
@@ -298,10 +308,6 @@ async fn run_resolved_target(
         &mut event_writer,
     )
     .await?;
-    let scheduled_workloads = schedule
-        .iter()
-        .filter(|event| matches!(event, ScheduledSimulationEvent::ActorTick(_)))
-        .count() as u64;
     let mut result = execute_loaded_simulation(
         client,
         LoadedExecution {
@@ -313,8 +319,11 @@ async fn run_resolved_target(
             chaos_controller,
             nonce_namespace,
             actor_states: &mut actor_states,
-            scheduled_workloads,
-            schedule: &schedule,
+            scheduled_workloads: schedule_summary.scheduled_workloads,
+            shutdown_simulation_time_ms: schedule_summary.shutdown_simulation_time_ms,
+            resource_sample_interval_ms,
+            resource_sampler,
+            schedule: None,
             phase_starts: &phase_starts,
             event_writer: &mut event_writer,
             contract_setup,
@@ -349,7 +358,10 @@ pub struct LoadedExecution<'a> {
     pub nonce_namespace: NonceNamespace,
     pub actor_states: &'a mut [ActorState],
     pub scheduled_workloads: u64,
-    pub schedule: &'a [ScheduledSimulationEvent],
+    pub shutdown_simulation_time_ms: u64,
+    pub resource_sample_interval_ms: u64,
+    pub resource_sampler: Option<&'a dyn TargetResourceSampler>,
+    pub schedule: Option<&'a [ScheduledSimulationEvent]>,
     pub phase_starts: &'a [PhaseStart],
     pub event_writer: &'a mut EventWriter,
     pub contract_setup: ContractSetup,
@@ -365,18 +377,19 @@ where
     C: SimRpcClient + Clone + Send + Sync + 'static,
 {
     let mut metrics = RunMetricsBuilder::default();
+    metrics.set_resource_sample_interval_ms(input.resource_sample_interval_ms);
     let mut chaos_events = Vec::new();
     let schedule_report = if input.contract_setup.failed {
         crate::executor::ScheduleRunReport {
             chaos_failed: false,
         }
-    } else {
+    } else if let Some(schedule) = input.schedule {
         run_schedule_with_chaos(
             client.clone(),
             ScheduleExecution {
                 manifest: &input.loaded_sim.manifest,
                 runtime_manifest: input.runtime_manifest,
-                schedule: input.schedule,
+                schedule,
                 phase_starts: input.phase_starts,
                 actor_states: input.actor_states,
                 event_writer: &mut *input.event_writer,
@@ -386,18 +399,34 @@ where
                 storage_reads: &input.contract_setup.storage_reads,
                 event_queries: &input.contract_setup.event_queries,
                 read_after_write: &input.contract_setup.read_after_write,
+                resource_sampler: input.resource_sampler,
+            },
+            input.chaos_controller,
+            &mut chaos_events,
+        )
+        .await?
+    } else {
+        run_streaming_schedule_with_chaos(
+            client.clone(),
+            StreamingScheduleExecution {
+                manifest: &input.loaded_sim.manifest,
+                runtime_manifest: input.runtime_manifest,
+                phase_starts: input.phase_starts,
+                actor_states: input.actor_states,
+                event_writer: &mut *input.event_writer,
+                metrics: &mut metrics,
+                view_calls: &input.contract_setup.view_calls,
+                contract_calls: &input.contract_setup.contract_calls,
+                storage_reads: &input.contract_setup.storage_reads,
+                event_queries: &input.contract_setup.event_queries,
+                read_after_write: &input.contract_setup.read_after_write,
+                resource_sampler: input.resource_sampler,
             },
             input.chaos_controller,
             &mut chaos_events,
         )
         .await?
     };
-    let shutdown_simulation_time_ms = input
-        .schedule
-        .iter()
-        .map(ScheduledSimulationEvent::simulation_time_ms)
-        .max()
-        .unwrap_or_default();
     let reconciled_receipt_polls = if schedule_report.chaos_failed {
         0
     } else {
@@ -406,7 +435,7 @@ where
             input.actor_states,
             &mut *input.event_writer,
             &mut metrics,
-            shutdown_simulation_time_ms,
+            input.shutdown_simulation_time_ms,
             DEFAULT_RECEIPT_DRAIN_TIMEOUT,
             DEFAULT_RECEIPT_DRAIN_RETRY_INTERVAL,
         )
@@ -424,12 +453,23 @@ where
     metrics.record_pending_receipts_at_shutdown(pending_receipts);
     let finished_metrics = metrics.finish();
     let metric_availability = SimMetricAvailability::phase_one_defaults();
+    let backpressure_rate = workload_event_rate(skipped_workloads, input.scheduled_workloads);
+    let simulator_overload_rate = workload_event_rate(
+        finished_metrics.simulator_overload_count,
+        input.scheduled_workloads,
+    );
     let assertion_results = evaluate_assertions(
         &input.loaded_sim.manifest,
-        completed_workloads,
-        failed_workloads,
-        finished_metrics.chain_progress.as_ref(),
-        &finished_metrics.workload_metrics,
+        AssertionEvaluation {
+            completed_workloads,
+            failed_workloads,
+            scheduled_actor_workloads: input.scheduled_workloads,
+            skipped_workloads,
+            simulator_overload_count: finished_metrics.simulator_overload_count,
+            chain_progress: finished_metrics.chain_progress.as_ref(),
+            resource_timeline: finished_metrics.resource_timeline.as_ref(),
+            workload_metrics: &finished_metrics.workload_metrics,
+        },
     );
     for assertion in &assertion_results {
         input
@@ -472,6 +512,8 @@ where
         outcome,
         nonce_namespace: input.nonce_namespace,
         workload_counts,
+        backpressure_rate,
+        simulator_overload_rate,
         finished_metrics,
         metric_availability,
         assertion_results,
@@ -574,6 +616,8 @@ struct BuildResultInput<'a> {
     outcome: SimRunOutcome,
     nonce_namespace: NonceNamespace,
     workload_counts: BTreeMap<WorkloadKind, WorkloadCounts>,
+    backpressure_rate: f64,
+    simulator_overload_rate: f64,
     finished_metrics: RunMetrics,
     metric_availability: SimMetricAvailability,
     assertion_results: Vec<AssertionResult>,
@@ -613,6 +657,15 @@ fn build_result(input: BuildResultInput<'_>) -> Result<SimResult, SimError> {
         metric_availability: input.metric_availability,
         workload_counts: input.workload_counts,
         workload_metrics: input.finished_metrics.workload_metrics,
+        backpressure_rate: input.backpressure_rate,
+        simulator_overload_rate: input.simulator_overload_rate,
+        simulator_overload_count: input.finished_metrics.simulator_overload_count,
+        resource_timeline: input.finished_metrics.resource_timeline.map_or_else(
+            || MetricAvailability::Unavailable {
+                reason: "no target resource samples were observed".into(),
+            },
+            |value| MetricAvailability::Observed { value },
+        ),
         chain_progress: input.finished_metrics.chain_progress,
         assertion_results: input.assertion_results,
         chaos_events: input.chaos_events,
@@ -734,7 +787,15 @@ mod tests {
                 nonce_namespace: NonceNamespace::new(7).expect("nonce namespace should fit"),
                 actor_states: &mut actors,
                 scheduled_workloads: 1,
-                schedule: &schedule,
+                shutdown_simulation_time_ms: schedule
+                    .iter()
+                    .map(ScheduledSimulationEvent::simulation_time_ms)
+                    .max()
+                    .unwrap_or_default(),
+                resource_sample_interval_ms: resource_sample_interval_ms(&loaded_sim.manifest)
+                    .expect("resource interval should resolve"),
+                resource_sampler: None,
+                schedule: Some(&schedule),
                 phase_starts: &starts,
                 event_writer: &mut event_writer,
                 contract_setup: empty_contract_setup(),
@@ -807,7 +868,15 @@ mod tests {
                 nonce_namespace: NonceNamespace::new(7).expect("nonce namespace should fit"),
                 actor_states: &mut actors,
                 scheduled_workloads: 2,
-                schedule: &schedule,
+                shutdown_simulation_time_ms: schedule
+                    .iter()
+                    .map(ScheduledSimulationEvent::simulation_time_ms)
+                    .max()
+                    .unwrap_or_default(),
+                resource_sample_interval_ms: resource_sample_interval_ms(&loaded_sim.manifest)
+                    .expect("resource interval should resolve"),
+                resource_sampler: None,
+                schedule: Some(&schedule),
                 phase_starts: &starts,
                 event_writer: &mut event_writer,
                 contract_setup: empty_contract_setup(),
@@ -1364,6 +1433,12 @@ mod tests {
                 },
             )]),
             workload_metrics: BTreeMap::new(),
+            backpressure_rate: 0.0,
+            simulator_overload_rate: 0.0,
+            simulator_overload_count: 0,
+            resource_timeline: MetricAvailability::Unavailable {
+                reason: "test fixture".into(),
+            },
             chain_progress: None,
             assertion_results: Vec::new(),
             chaos_events: Vec::new(),

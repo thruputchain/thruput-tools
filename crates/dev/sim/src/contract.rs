@@ -946,6 +946,7 @@ mod tests {
             }],
             assertions: crate::manifest::AssertionSpec::default(),
             chaos: Vec::new(),
+            observability: None,
             baseline: None,
             resolved: None,
         }

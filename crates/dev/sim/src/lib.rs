@@ -9,6 +9,7 @@ pub mod executor;
 pub mod manifest;
 pub mod metrics;
 pub mod nonce;
+pub mod resource;
 pub mod result;
 pub mod run;
 pub mod runtime;

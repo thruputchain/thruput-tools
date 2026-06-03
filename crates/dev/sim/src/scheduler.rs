@@ -1,7 +1,12 @@
+use std::cmp::{Ordering, Reverse};
+use std::collections::BinaryHeap;
+
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::manifest::{ChaosEventKind, SimulationManifest, WorkloadKind};
+
+pub const DEFAULT_RESOURCE_SAMPLE_INTERVAL_MS: u64 = 5_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -31,10 +36,18 @@ pub struct ScheduledChaos {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScheduledResourceSample {
+    pub resource_sample_index: u64,
+    pub simulation_time_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum ScheduledSimulationEvent {
     ActorTick(ScheduledActorTick),
     Chaos(ScheduledChaos),
+    ResourceSample(ScheduledResourceSample),
 }
 
 impl ScheduledSimulationEvent {
@@ -42,14 +55,250 @@ impl ScheduledSimulationEvent {
         match self {
             Self::ActorTick(tick) => tick.simulation_time_ms,
             Self::Chaos(chaos) => chaos.simulation_time_ms,
+            Self::ResourceSample(sample) => sample.simulation_time_ms,
         }
     }
 
     fn deterministic_order(&self) -> (u8, usize, u32, u64) {
         match self {
             Self::Chaos(chaos) => (0, chaos.chaos_index, 0, 0),
-            Self::ActorTick(tick) => (1, tick.phase_index, tick.actor_id, tick.actor_sequence),
+            Self::ResourceSample(sample) => (1, 0, 0, sample.resource_sample_index),
+            Self::ActorTick(tick) => (2, tick.phase_index, tick.actor_id, tick.actor_sequence),
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScheduleSummary {
+    pub scheduled_workloads: u64,
+    pub shutdown_simulation_time_ms: u64,
+}
+
+#[derive(Debug)]
+pub struct ScheduleCursor {
+    phase_starts: Vec<PhaseStart>,
+    phase_tick_counts: Vec<u64>,
+    next_phase_index: usize,
+    actor_ticks: BinaryHeap<Reverse<ActorTickCursor>>,
+    chaos: Vec<ScheduledChaos>,
+    next_chaos_index: usize,
+    resource_sample_interval_ms: u64,
+    resource_sample_end_ms: u64,
+    next_resource_sample_index: u64,
+}
+
+impl ScheduleCursor {
+    pub fn new(manifest: &SimulationManifest) -> Result<Self, ScheduleError> {
+        let phase_starts = phase_starts(manifest)?;
+        let phase_tick_counts = phase_starts
+            .iter()
+            .map(|phase_start| {
+                ticks_in_phase(phase_start.duration_ms, phase_start.rate_per_user_millihz)
+            })
+            .collect::<Result<Vec<_>, ScheduleError>>()?;
+        let mut cursor = Self {
+            phase_starts,
+            phase_tick_counts,
+            next_phase_index: 0,
+            actor_ticks: BinaryHeap::new(),
+            chaos: scheduled_chaos(manifest)?,
+            next_chaos_index: 0,
+            resource_sample_interval_ms: resource_sample_interval_ms(manifest)?,
+            resource_sample_end_ms: total_simulation_duration_ms(manifest)?,
+            next_resource_sample_index: 0,
+        };
+        cursor.fill_next_actor_phase()?;
+        Ok(cursor)
+    }
+
+    fn fill_next_actor_phase(&mut self) -> Result<(), ScheduleError> {
+        while self.actor_ticks.is_empty() && self.next_phase_index < self.phase_starts.len() {
+            let phase_start = self.phase_starts[self.next_phase_index].clone();
+            let tick_count = self.phase_tick_counts[self.next_phase_index];
+            self.next_phase_index += 1;
+            if tick_count == 0 || phase_start.users == 0 {
+                continue;
+            }
+            for actor_id in 0..phase_start.users {
+                self.push_actor_tick(
+                    phase_start.phase_index,
+                    actor_id,
+                    0,
+                    tick_count,
+                    phase_start.simulation_time_ms,
+                    phase_start.duration_ms,
+                    phase_start.rate_per_user_millihz,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn push_actor_tick(
+        &mut self,
+        phase_index: usize,
+        actor_id: u32,
+        actor_sequence: u64,
+        tick_count: u64,
+        phase_start_time_ms: u64,
+        phase_duration_ms: u64,
+        rate_per_user_millihz: u64,
+    ) -> Result<(), ScheduleError> {
+        if actor_sequence >= tick_count {
+            return Ok(());
+        }
+        let offset_ms = tick_offset_ms(actor_sequence, rate_per_user_millihz)?;
+        if offset_ms >= phase_duration_ms {
+            return Ok(());
+        }
+        let simulation_time_ms = phase_start_time_ms
+            .checked_add(offset_ms)
+            .ok_or(ScheduleError::ScheduleTooLong)?;
+        self.actor_ticks.push(Reverse(ActorTickCursor {
+            tick: ScheduledActorTick {
+                phase_index,
+                actor_id,
+                actor_sequence,
+                simulation_time_ms,
+            },
+            tick_count,
+            phase_start_time_ms,
+            phase_duration_ms,
+            rate_per_user_millihz,
+        }));
+        Ok(())
+    }
+}
+
+impl Iterator for ScheduleCursor {
+    type Item = ScheduledSimulationEvent;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.actor_ticks.is_empty() {
+            self.fill_next_actor_phase()
+                .expect("bug: validated schedule cursor phase should fit");
+        }
+
+        let next_actor = self
+            .actor_ticks
+            .peek()
+            .map(|Reverse(actor)| actor.tick.clone());
+        let next_chaos = self.chaos.get(self.next_chaos_index).cloned();
+        let next_resource = self.next_resource_sample();
+
+        let mut pick = NextScheduleStream::None;
+        let mut pick_key = (u64::MAX, u8::MAX, usize::MAX, u32::MAX, u64::MAX);
+        if let Some(chaos) = &next_chaos {
+            let key = (chaos.simulation_time_ms, 0, chaos.chaos_index, 0, 0);
+            if key < pick_key {
+                pick = NextScheduleStream::Chaos;
+                pick_key = key;
+            }
+        }
+        if let Some(resource) = &next_resource {
+            let key = (
+                resource.simulation_time_ms,
+                1,
+                0,
+                0,
+                resource.resource_sample_index,
+            );
+            if key < pick_key {
+                pick = NextScheduleStream::Resource;
+                pick_key = key;
+            }
+        }
+        if let Some(actor) = &next_actor {
+            let key = (
+                actor.simulation_time_ms,
+                2,
+                actor.phase_index,
+                actor.actor_id,
+                actor.actor_sequence,
+            );
+            if key < pick_key {
+                pick = NextScheduleStream::Actor;
+            }
+        }
+
+        match pick {
+            NextScheduleStream::Chaos => {
+                self.next_chaos_index += 1;
+                next_chaos.map(ScheduledSimulationEvent::Chaos)
+            }
+            NextScheduleStream::Resource => {
+                self.next_resource_sample_index += 1;
+                next_resource.map(ScheduledSimulationEvent::ResourceSample)
+            }
+            NextScheduleStream::Actor => self.pop_actor_tick(),
+            NextScheduleStream::None => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NextScheduleStream {
+    Chaos,
+    Resource,
+    Actor,
+    None,
+}
+
+impl ScheduleCursor {
+    fn next_resource_sample(&self) -> Option<ScheduledResourceSample> {
+        let simulation_time_ms = self
+            .next_resource_sample_index
+            .checked_mul(self.resource_sample_interval_ms)?;
+        if simulation_time_ms > self.resource_sample_end_ms {
+            return None;
+        }
+        Some(ScheduledResourceSample {
+            resource_sample_index: self.next_resource_sample_index,
+            simulation_time_ms,
+        })
+    }
+
+    fn pop_actor_tick(&mut self) -> Option<ScheduledSimulationEvent> {
+        let Reverse(actor) = self.actor_ticks.pop()?;
+        let tick = actor.tick.clone();
+        self.push_actor_tick(
+            actor.tick.phase_index,
+            actor.tick.actor_id,
+            actor.tick.actor_sequence + 1,
+            actor.tick_count,
+            actor.phase_start_time_ms,
+            actor.phase_duration_ms,
+            actor.rate_per_user_millihz,
+        )
+        .expect("bug: validated schedule cursor tick should fit");
+        Some(ScheduledSimulationEvent::ActorTick(tick))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ActorTickCursor {
+    tick: ScheduledActorTick,
+    tick_count: u64,
+    phase_start_time_ms: u64,
+    phase_duration_ms: u64,
+    rate_per_user_millihz: u64,
+}
+
+impl Ord for ActorTickCursor {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.tick
+            .simulation_time_ms
+            .cmp(&other.tick.simulation_time_ms)
+            .then_with(|| self.tick.phase_index.cmp(&other.tick.phase_index))
+            .then_with(|| self.tick.actor_id.cmp(&other.tick.actor_id))
+            .then_with(|| self.tick.actor_sequence.cmp(&other.tick.actor_sequence))
+    }
+}
+
+impl PartialOrd for ActorTickCursor {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
@@ -72,6 +321,47 @@ pub fn phase_starts(manifest: &SimulationManifest) -> Result<Vec<PhaseStart>, Sc
     }
 
     Ok(starts)
+}
+
+pub fn schedule_summary(manifest: &SimulationManifest) -> Result<ScheduleSummary, ScheduleError> {
+    let starts = phase_starts(manifest)?;
+    let mut scheduled_workloads = 0_u64;
+    let mut shutdown_simulation_time_ms = 0_u64;
+
+    for phase_start in &starts {
+        let tick_count =
+            ticks_in_phase(phase_start.duration_ms, phase_start.rate_per_user_millihz)?;
+        scheduled_workloads = scheduled_workloads
+            .checked_add(
+                u64::from(phase_start.users)
+                    .checked_mul(tick_count)
+                    .ok_or(ScheduleError::ScheduleTooLong)?,
+            )
+            .ok_or(ScheduleError::ScheduleTooLong)?;
+        if tick_count > 0 && phase_start.users > 0 {
+            let last_offset = tick_offset_ms(tick_count - 1, phase_start.rate_per_user_millihz)?;
+            if last_offset < phase_start.duration_ms {
+                shutdown_simulation_time_ms = shutdown_simulation_time_ms.max(
+                    phase_start
+                        .simulation_time_ms
+                        .checked_add(last_offset)
+                        .ok_or(ScheduleError::ScheduleTooLong)?,
+                );
+            }
+        }
+    }
+
+    for chaos in scheduled_chaos(manifest)? {
+        shutdown_simulation_time_ms = shutdown_simulation_time_ms.max(chaos.simulation_time_ms);
+    }
+    if let Some(last_resource_sample_time_ms) = last_resource_sample_time_ms(manifest)? {
+        shutdown_simulation_time_ms = shutdown_simulation_time_ms.max(last_resource_sample_time_ms);
+    }
+
+    Ok(ScheduleSummary {
+        scheduled_workloads,
+        shutdown_simulation_time_ms,
+    })
 }
 
 pub fn generate_schedule(
@@ -112,6 +402,11 @@ pub fn generate_schedule(
             kind: chaos.kind,
         }));
     }
+    events.extend(
+        scheduled_resource_samples(manifest)?
+            .into_iter()
+            .map(ScheduledSimulationEvent::ResourceSample),
+    );
 
     events.sort_by(|a, b| {
         a.simulation_time_ms()
@@ -120,6 +415,72 @@ pub fn generate_schedule(
     });
 
     Ok(events)
+}
+
+fn scheduled_chaos(manifest: &SimulationManifest) -> Result<Vec<ScheduledChaos>, ScheduleError> {
+    let mut chaos = manifest
+        .chaos
+        .iter()
+        .enumerate()
+        .map(|(chaos_index, chaos)| {
+            Ok(ScheduledChaos {
+                chaos_index,
+                simulation_time_ms: chaos.at.parse_millis()?,
+                kind: chaos.kind,
+            })
+        })
+        .collect::<Result<Vec<_>, ScheduleError>>()?;
+    chaos.sort_by_key(|chaos| (chaos.simulation_time_ms, chaos.chaos_index));
+    Ok(chaos)
+}
+
+fn scheduled_resource_samples(
+    manifest: &SimulationManifest,
+) -> Result<Vec<ScheduledResourceSample>, ScheduleError> {
+    let interval_ms = resource_sample_interval_ms(manifest)?;
+    let end_ms = total_simulation_duration_ms(manifest)?;
+    let count = end_ms
+        .checked_div(interval_ms)
+        .ok_or(ScheduleError::ScheduleTooLong)?
+        .checked_add(1)
+        .ok_or(ScheduleError::ScheduleTooLong)?;
+    (0..count)
+        .map(|resource_sample_index| {
+            Ok(ScheduledResourceSample {
+                resource_sample_index,
+                simulation_time_ms: resource_sample_index
+                    .checked_mul(interval_ms)
+                    .ok_or(ScheduleError::ScheduleTooLong)?,
+            })
+        })
+        .collect()
+}
+
+pub fn resource_sample_interval_ms(manifest: &SimulationManifest) -> Result<u64, ScheduleError> {
+    manifest
+        .observability
+        .as_ref()
+        .and_then(|observability| observability.resource_sample_interval.as_ref())
+        .map_or(Ok(DEFAULT_RESOURCE_SAMPLE_INTERVAL_MS), |interval| {
+            interval.parse_millis().map_err(ScheduleError::Duration)
+        })
+}
+
+fn total_simulation_duration_ms(manifest: &SimulationManifest) -> Result<u64, ScheduleError> {
+    manifest.load_shape.iter().try_fold(0_u64, |total, phase| {
+        total
+            .checked_add(phase.duration.parse_millis()?)
+            .ok_or(ScheduleError::ScheduleTooLong)
+    })
+}
+
+fn last_resource_sample_time_ms(
+    manifest: &SimulationManifest,
+) -> Result<Option<u64>, ScheduleError> {
+    let end_ms = total_simulation_duration_ms(manifest)?;
+    let interval_ms = resource_sample_interval_ms(manifest)?;
+    // DurationSpec::parse_millis rejects zero, so the truncating division is safe.
+    Ok(Some((end_ms / interval_ms) * interval_ms))
 }
 
 pub fn select_workload_for_tick(
@@ -301,6 +662,118 @@ mod tests {
                 ..
             }))
         ));
+    }
+
+    #[test]
+    fn schedule_cursor_matches_generated_schedule() {
+        let manifest = manifest();
+        let generated = generate_schedule(&manifest).expect("schedule should generate");
+        let cursor: Vec<_> = ScheduleCursor::new(&manifest)
+            .expect("cursor should build")
+            .collect();
+
+        assert_eq!(cursor, generated);
+    }
+
+    #[test]
+    fn schedule_cursor_preserves_tie_breaks_across_phases_and_chaos() {
+        let manifest: SimulationManifest = serde_json::from_value(json!({
+            "schemaVersion": 1,
+            "kind": "groundhog-simulation",
+            "name": "schedule-tie-test",
+            "seed": "seed-a",
+            "target": {"provider": "existing"},
+            "loadShape": [
+                {"duration": "2s", "users": 2, "ratePerUserHz": 2000.0},
+                {"duration": "1s", "users": 1, "ratePerUserHz": 2.0}
+            ],
+            "workloads": [
+                {"name": "chain-tip", "weight": 1}
+            ],
+            "chaos": [{"at": "1ms", "kind": "restart-target"}]
+        }))
+        .expect("manifest fixture should parse");
+        let generated = generate_schedule(&manifest).expect("schedule should generate");
+        let cursor: Vec<_> = ScheduleCursor::new(&manifest)
+            .expect("cursor should build")
+            .collect();
+
+        assert_eq!(cursor, generated);
+        let one_ms_events: Vec<_> = cursor
+            .iter()
+            .filter(|event| event.simulation_time_ms() == 1)
+            .collect();
+        assert!(matches!(
+            one_ms_events.first(),
+            Some(ScheduledSimulationEvent::Chaos(_))
+        ));
+        assert!(
+            one_ms_events
+                .iter()
+                .skip(1)
+                .all(|event| matches!(event, ScheduledSimulationEvent::ActorTick(_)))
+        );
+    }
+
+    #[test]
+    fn schedule_cursor_orders_chaos_resource_then_actor_at_same_time() {
+        let manifest: SimulationManifest = serde_json::from_value(json!({
+            "schemaVersion": 1,
+            "kind": "groundhog-simulation",
+            "name": "schedule-resource-tie-test",
+            "seed": "seed-a",
+            "target": {"provider": "existing"},
+            "loadShape": [
+                {"duration": "2ms", "users": 1, "ratePerUserHz": 1000.0}
+            ],
+            "workloads": [
+                {"name": "chain-tip", "weight": 1}
+            ],
+            "chaos": [{"at": "1ms", "kind": "restart-target"}],
+            "observability": {"resourceSampleInterval": "1ms"}
+        }))
+        .expect("manifest fixture should parse");
+        let generated = generate_schedule(&manifest).expect("schedule should generate");
+        let cursor: Vec<_> = ScheduleCursor::new(&manifest)
+            .expect("cursor should build")
+            .collect();
+
+        assert_eq!(cursor, generated);
+        let one_ms_events: Vec<_> = cursor
+            .iter()
+            .filter(|event| event.simulation_time_ms() == 1)
+            .collect();
+        assert!(matches!(
+            one_ms_events.as_slice(),
+            [
+                ScheduledSimulationEvent::Chaos(_),
+                ScheduledSimulationEvent::ResourceSample(_),
+                ScheduledSimulationEvent::ActorTick(_)
+            ]
+        ));
+    }
+
+    #[test]
+    fn schedule_summary_matches_generated_schedule_counts_and_shutdown_time() {
+        let manifest = manifest();
+        let generated = generate_schedule(&manifest).expect("schedule should generate");
+        let summary = schedule_summary(&manifest).expect("summary should generate");
+
+        assert_eq!(
+            summary.scheduled_workloads,
+            generated
+                .iter()
+                .filter(|event| matches!(event, ScheduledSimulationEvent::ActorTick(_)))
+                .count() as u64
+        );
+        assert_eq!(
+            summary.shutdown_simulation_time_ms,
+            generated
+                .iter()
+                .map(ScheduledSimulationEvent::simulation_time_ms)
+                .max()
+                .unwrap_or_default()
+        );
     }
 
     #[test]

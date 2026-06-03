@@ -54,6 +54,13 @@ pub fn validate_manifest(manifest: &SimulationManifest) -> Result<(), Validation
             });
         }
     }
+    if let Some(observability) = &manifest.observability
+        && let Some(interval) = &observability.resource_sample_interval
+    {
+        interval
+            .parse_millis()
+            .map_err(|source| ValidationError::InvalidResourceSampleInterval { source })?;
+    }
     validate_contract_artifacts(manifest)?;
 
     let capabilities = TargetCapabilities::for_provider(manifest.target.provider);
@@ -717,6 +724,11 @@ pub enum ValidationError {
         #[source]
         source: crate::manifest::DurationParseError,
     },
+    #[error("observability.resourceSampleInterval is invalid: {source}")]
+    InvalidResourceSampleInterval {
+        #[source]
+        source: crate::manifest::DurationParseError,
+    },
     #[error("load phase {index} must have at least one user")]
     InvalidUsers { index: usize },
     #[error("load phase {index} ratePerUserHz must be positive")]
@@ -910,6 +922,21 @@ mod tests {
                 provider: TargetProviderKind::RemoteSsh,
                 ..
             }
+        ));
+    }
+
+    #[test]
+    fn rejects_invalid_resource_sample_interval() {
+        let mut manifest = basic_manifest();
+        manifest.observability = Some(crate::manifest::ObservabilitySpec {
+            resource_sample_interval: Some(DurationSpec("0s".into())),
+        });
+
+        let err = validate_manifest(&manifest).expect_err("zero interval should reject");
+
+        assert!(matches!(
+            err,
+            ValidationError::InvalidResourceSampleInterval { .. }
         ));
     }
 
@@ -1679,6 +1706,7 @@ mod tests {
             read_after_write: Vec::new(),
             assertions: crate::manifest::AssertionSpec::default(),
             chaos: Vec::new(),
+            observability: None,
             baseline: None,
             resolved: None,
         }

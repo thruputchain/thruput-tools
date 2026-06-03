@@ -10,6 +10,10 @@ Phase 3 Slice G contract deploy + view-call execution and Slice H first-class
 scenario library catalog are complete. Phase 3 Slice I contract storage-read
 execution is complete.
 
+Phase 6 (realistic soak + local observability) is proposed ahead of the
+remaining Phase 4 (`remote-ssh`) and Phase 5 (infra hooks) work; see
+`docs/sim/specs/2026-06-02-realistic-soak-observability-design.md`.
+
 This plan pairs with [Simulation design](sim-design.md). The design doc owns
 the architectural boundary and long-term shape. This file is the implementation
 tracker, with detail focused on Phase 1.
@@ -173,7 +177,7 @@ chaos, deploy new contracts, or create remote infrastructure.
   sim.
 - [ ] Add `wallet-submit-smoke` coverage to the ignored existing-target smoke
   test once the local smoke fixture can reliably provide a runtime manifest.
-- [ ] Replace `ChainProgressBuilder`'s retained uncapped observations with
+- [x] Replace `ChainProgressBuilder`'s retained uncapped observations with
   streaming max-stall computation before long Phase 2 soaks make chain-tip
   observation memory material.
 - [ ] Decide how `simulator-backpressure` skipped completions interact with run
@@ -187,7 +191,7 @@ chaos, deploy new contracts, or create remote infrastructure.
 - [x] Replace receipt-poll's v1 latest-transaction slot with per-transaction
   receipt tracking before wiring `maxReceiptTimeoutRate`; otherwise a newer
   submit can hide timeout state for an older unreceipted transaction.
-- [ ] Cap per-actor pending receipt queues and emit simulator overload events
+- [x] Cap per-actor pending receipt queues and emit simulator overload events
   when submit rate exceeds receipt tracking capacity.
 - [ ] Decide whether pre-submit receipt-poll ticks should remain
   `WorkloadSkipped` with `errorClass: "no-submitted-transaction"` or move to a
@@ -617,3 +621,100 @@ chaos, deploy new contracts, or create remote infrastructure.
 - [ ] Keep simulator core independent of OpenTofu state.
 - [ ] Evaluate whether `ops` / `hogctl` should provide a target provider
   adapter or remain a separate orchestration layer.
+
+## Phase 6: Realistic Soak + Local Observability
+
+Proposed ahead of Phases 4-5. Makes the local/existing path able to run
+trustworthy, diagnostic multi-hour JSON-RPC traffic soaks for leak and
+perf-regression hunting without standing up the deployed validator's
+Prometheus/Loki/Grafana stack. Full rationale and per-slice file lists:
+`docs/sim/specs/2026-06-02-realistic-soak-observability-design.md`.
+
+### Slice 1: Soak Substrate Hardening
+
+- [x] Replace production schedule execution's fully materialized event `Vec`
+  with a deterministic k-way merge cursor for workload and chaos streams,
+  keeping collection helpers for tests and small smokes. Resource samples join
+  this cursor in Slice 2.
+- [x] Preserve current phase-start handling, chaos ordering, actor ordering, and
+  scheduled-workload counts under cursor execution, reproducing the existing
+  global `sort_by` order exactly when resource samples are absent.
+- [x] Replace `ChainProgressBuilder`'s uncapped observations with streaming
+  max-stall computation, preserving `ChainProgressSummary` fields.
+- [x] Cap per-actor pending-receipt tracking; emit `simulator-overload` instead
+  of growing the queue unbounded.
+- [x] Surface simulator-overload counts/events without changing existing
+  workload event shapes.
+- [x] Unit-test cursor parity with existing schedules, including a multi-phase
+  chaos tie-break case; test streaming max-stall past the public sample cap and
+  the pending-receipt cap.
+
+### Slice 2: Restart-Aware Target Resource Sampler
+
+Detailed handoff:
+`docs/sim/specs/2026-06-03-resource-sampler-handoff.md`.
+
+- [x] Add `crates/dev/sim/src/resource.rs` process/process-group resource read
+  (`/proc` on Linux, `Unavailable` fallback elsewhere; no external crates).
+- [x] Add optional `observability.resourceSampleInterval` with default `5s` and
+  record the resolved interval in `result.json`.
+- [x] Add `ResourceSample` cursor events ordered after chaos and before actor
+  ticks.
+- [x] Expose a restart-aware local-provider `resource_sampler()` that samples
+  current owned process-group state; `existing` returns `None`.
+- [x] Handle resource-sample ticks in the executor without acquiring workload
+  permits; emit `resource-sample` `result.jsonl` records.
+- [x] Add `MetricAvailability<ResourceTimeline>` with first/last/max RSS,
+  worst-segment wall-clock bytes/min RSS growth, peak threads/fds, per-segment
+  total CPU, total samples, and a capped sample window.
+- [x] Unit-test `/proc` parsing, process-group aggregation, per-field
+  availability, restart PID segment boundaries, wall-clock RSS growth, CPU reset
+  handling, timeline math, and sample-cap preservation. Non-Linux fallback is
+  covered by the local smoke acceptance path rather than a target-specific unit.
+- [x] Extend local smoke to assert Linux runs carry an observed
+  `resourceTimeline` with at least two samples; non-Linux may be unavailable.
+- [x] Document an optional local-provider diagnostic-env hook for heap profiles
+  when the target binary explicitly supports one; do not assume a single
+  allocator across Rust gateway, Go `chuckd`, and C++ `hogd-dev`/`hog*`.
+  Current `hogd` checkout shows sanitizer hints but no obvious jemalloc hook.
+
+### Slice 3: Regression Gates
+
+- [x] Add `maxBackpressureRate`, `maxSimulatorOverloadRate`, and
+  `maxRssGrowthBytesPerMinute` to `AssertionSpec` (additive).
+- [x] Surface `backpressureRate` and `simulatorOverloadRate` in `result.json`.
+  Both use manifest-scheduled actor ticks as the denominator; resource samples,
+  chaos events, setup work, and tail receipt-drain polls are excluded.
+- [x] Evaluate the new assertions, recording checks and failing the run/exit code
+  when exceeded.
+- [x] Compare RSS growth / peak RSS / total CPU, backpressure rate, and overload
+  rate as numeric deltas, skipping unavailable resource timelines.
+- [x] Unit-test pass-at-zero, pass-below-threshold, fail-above-threshold,
+  unsupported RSS with too few samples in any segment, restart-segmented RSS
+  growth, and compare numeric-skip behavior.
+
+### Slice 4: Multi-Contract Corpus + Hot Contract / Hot Account
+
+- [ ] Add optional per-call/per-query `weight` fields for contract/view/storage/
+  event/read-after-write targets, defaulting to `1`.
+- [ ] Add deploy-at-start support for a contract corpus with per-contract
+  deployment records.
+- [ ] Add seeded weighted target selection across prepared targets (pure, no
+  stateful RNG).
+- [ ] Add `examples/sim/local-multi-contract-soak.json` and a catalog entry with
+  `multi-contract` / `hot-contract` / `soak` tags.
+- [ ] Unit-test corpus deploy records, deterministic weighted target selection,
+  and default-weight compatibility.
+
+### Slice 5: Long-Soak Presets + Calibration
+
+- [ ] Add `examples/sim/local-realistic-soak.json` reference preset wiring
+  backpressure, simulator-overload, receipt-timeout, and RSS-growth assertions.
+- [ ] Add a reduced-duration optional soak smoke path.
+- [ ] Add the soak preset to the catalog with `soak` / `regression` tags, kept
+  out of the fast smoke default.
+- [ ] Document that RSS thresholds are calibrated from baseline artifacts per
+  target class before promotion to mandatory CI gates.
+- [ ] Document adjacent CI perf options: Rust instruction-count benchmarks
+  (`iai-callgrind`) for gateway/simulator hot paths, and Bencher/CodSpeed-style
+  continuous tracking after thresholds are credible.

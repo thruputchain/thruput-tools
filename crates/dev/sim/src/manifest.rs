@@ -38,6 +38,8 @@ pub struct SimulationManifest {
     #[serde(default)]
     pub chaos: Vec<ChaosEventSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observability: Option<ObservabilitySpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub baseline: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved: Option<ResolvedRunSpec>,
@@ -310,6 +312,13 @@ pub struct ChaosEventSpec {
     pub kind: ChaosEventKind,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ObservabilitySpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_sample_interval: Option<DurationSpec>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ChaosEventKind {
@@ -323,6 +332,12 @@ pub struct AssertionSpec {
     pub max_error_rate: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_receipt_timeout_rate: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_backpressure_rate: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_simulator_overload_rate: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_rss_growth_bytes_per_minute: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_chain_stall: Option<DurationSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -371,6 +386,46 @@ mod tests {
             manifest.baseline.unwrap(),
             PathBuf::from("baselines/local-wallet-soak.json")
         );
+    }
+
+    #[test]
+    fn parses_optional_observability_without_serializing_empty_object() {
+        let manifest: SimulationManifest = serde_json::from_value(json!({
+            "schemaVersion": 1,
+            "kind": "groundhog-simulation",
+            "name": "observed",
+            "seed": "seed",
+            "target": {"provider": "existing"},
+            "loadShape": [{"duration": "10s", "users": 1, "ratePerUserHz": 1.0}],
+            "workloads": [{"name": "chain-tip", "weight": 1}],
+            "observability": {"resourceSampleInterval": "1s"}
+        }))
+        .expect("manifest should parse");
+
+        assert_eq!(
+            manifest
+                .observability
+                .as_ref()
+                .and_then(|observability| observability.resource_sample_interval.as_ref())
+                .expect("interval should parse")
+                .parse_millis()
+                .unwrap(),
+            1_000
+        );
+
+        let without_observability: SimulationManifest = serde_json::from_value(json!({
+            "schemaVersion": 1,
+            "kind": "groundhog-simulation",
+            "name": "unobserved",
+            "seed": "seed",
+            "target": {"provider": "existing"},
+            "loadShape": [{"duration": "10s", "users": 1, "ratePerUserHz": 1.0}],
+            "workloads": [{"name": "chain-tip", "weight": 1}]
+        }))
+        .expect("manifest should parse");
+        let value =
+            serde_json::to_value(&without_observability).expect("manifest should serialize");
+        assert!(value.get("observability").is_none());
     }
 
     #[test]

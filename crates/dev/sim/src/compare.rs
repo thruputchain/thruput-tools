@@ -7,7 +7,8 @@ use crate::error::SimError;
 use crate::manifest::WorkloadKind;
 use crate::result::{
     AssertionResult, AssertionStatus, ChainProgressSummary, LatencySummary, MetricAvailability,
-    SIM_RESULT_SCHEMA_VERSION, SimResult, SimRunOutcome, WorkloadCounts, WorkloadMetrics,
+    ResourceTimeline, SIM_RESULT_SCHEMA_VERSION, SimResult, SimRunOutcome, WorkloadCounts,
+    WorkloadMetrics,
 };
 
 /// Schema version for the JSON shape emitted by `hoglab compare --json`.
@@ -35,7 +36,7 @@ pub async fn load_result(path: &Path) -> Result<SimResult, SimError> {
 }
 
 /// Identity and availability diff for two run results.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[allow(clippy::struct_excessive_bools)]
 #[serde(rename_all = "camelCase")]
 pub struct ResultDiff {
@@ -58,6 +59,8 @@ pub struct ResultDiff {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chain_progress_delta: Option<ChainProgressDelta>,
     pub metric_numeric_deltas: Vec<MetricNumericDelta>,
+    #[serde(default)]
+    pub metric_float_deltas: Vec<MetricFloatDelta>,
     pub numeric_skips: Vec<NumericSkip>,
 }
 
@@ -99,6 +102,7 @@ impl ResultDiff {
                 b.chain_progress.as_ref(),
             ),
             metric_numeric_deltas: metric_diffs.deltas,
+            metric_float_deltas: metric_diffs.float_deltas,
             numeric_skips: metric_diffs.skips,
         }
     }
@@ -119,6 +123,7 @@ impl ResultDiff {
                 "latency delta workloads: {}\n",
                 "assertion transitions: {}\n",
                 "metric numeric deltas: {}\n",
+                "metric float deltas: {}\n",
                 "numeric skips: {}"
             ),
             self.same_config,
@@ -136,6 +141,7 @@ impl ResultDiff {
             self.latency_deltas_ms.len(),
             self.assertion_transitions.len(),
             self.metric_numeric_deltas.len(),
+            self.metric_float_deltas.len(),
             self.numeric_skips.len()
         )
     }
@@ -219,6 +225,14 @@ pub struct MetricNumericDelta {
     pub value: i64,
 }
 
+/// Floating-point metric delta for metrics observed on both sides.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetricFloatDelta {
+    pub metric: String,
+    pub value: f64,
+}
+
 /// Numeric metric comparison skipped because at least one side has no value.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -230,6 +244,7 @@ pub struct NumericSkip {
 
 struct MetricDiffs {
     deltas: Vec<MetricNumericDelta>,
+    float_deltas: Vec<MetricFloatDelta>,
     skips: Vec<NumericSkip>,
 }
 
@@ -376,6 +391,7 @@ fn chain_progress_delta(
 
 fn metric_diffs(a: &SimResult, b: &SimResult) -> MetricDiffs {
     let mut deltas = Vec::new();
+    let mut float_deltas = Vec::new();
     let mut skips = Vec::new();
     collect_metric_diff(
         "storageTokensConsumed",
@@ -391,7 +407,29 @@ fn metric_diffs(a: &SimResult, b: &SimResult) -> MetricDiffs {
         &mut deltas,
         &mut skips,
     );
-    MetricDiffs { deltas, skips }
+    collect_rate_diff(
+        "backpressureRate",
+        a.backpressure_rate,
+        b.backpressure_rate,
+        &mut float_deltas,
+    );
+    collect_rate_diff(
+        "simulatorOverloadRate",
+        a.simulator_overload_rate,
+        b.simulator_overload_rate,
+        &mut float_deltas,
+    );
+    collect_resource_metric_diffs(
+        &a.resource_timeline,
+        &b.resource_timeline,
+        &mut deltas,
+        &mut skips,
+    );
+    MetricDiffs {
+        deltas,
+        float_deltas,
+        skips,
+    }
 }
 
 fn collect_metric_diff(
@@ -414,6 +452,115 @@ fn collect_metric_diff(
             status_b: availability_status(b),
         }),
     }
+}
+
+fn collect_rate_diff(metric: &'static str, a: f64, b: f64, deltas: &mut Vec<MetricFloatDelta>) {
+    let value = b - a;
+    if value != 0.0 {
+        deltas.push(MetricFloatDelta {
+            metric: metric.into(),
+            value,
+        });
+    }
+}
+
+fn collect_resource_metric_diffs(
+    a: &MetricAvailability<ResourceTimeline>,
+    b: &MetricAvailability<ResourceTimeline>,
+    deltas: &mut Vec<MetricNumericDelta>,
+    skips: &mut Vec<NumericSkip>,
+) {
+    match (a, b) {
+        (MetricAvailability::Observed { value: a }, MetricAvailability::Observed { value: b }) => {
+            collect_optional_i64_delta(
+                "resourceTimeline.maxSegmentRssGrowthBytesPerMinute",
+                a.max_segment_rss_growth_bytes_per_minute,
+                b.max_segment_rss_growth_bytes_per_minute,
+                deltas,
+                skips,
+            );
+            collect_optional_u64_delta(
+                "resourceTimeline.maxRssBytes",
+                a.max_rss_bytes,
+                b.max_rss_bytes,
+                deltas,
+                skips,
+            );
+            collect_optional_u64_delta(
+                "resourceTimeline.totalCpuMs",
+                a.total_cpu_ms,
+                b.total_cpu_ms,
+                deltas,
+                skips,
+            );
+        }
+        _ if resource_timeline_observed(a) || resource_timeline_observed(b) => {
+            for metric in [
+                "resourceTimeline.maxSegmentRssGrowthBytesPerMinute",
+                "resourceTimeline.maxRssBytes",
+                "resourceTimeline.totalCpuMs",
+            ] {
+                skips.push(NumericSkip {
+                    metric: metric.into(),
+                    status_a: availability_status(a),
+                    status_b: availability_status(b),
+                });
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_optional_i64_delta(
+    metric: &'static str,
+    a: Option<i64>,
+    b: Option<i64>,
+    deltas: &mut Vec<MetricNumericDelta>,
+    skips: &mut Vec<NumericSkip>,
+) {
+    match (a, b) {
+        (Some(a), Some(b)) => deltas.push(MetricNumericDelta {
+            metric: metric.into(),
+            value: b - a,
+        }),
+        _ => skips.push(NumericSkip {
+            metric: metric.into(),
+            status_a: option_status(a.is_some()),
+            status_b: option_status(b.is_some()),
+        }),
+    }
+}
+
+fn collect_optional_u64_delta(
+    metric: &'static str,
+    a: Option<u64>,
+    b: Option<u64>,
+    deltas: &mut Vec<MetricNumericDelta>,
+    skips: &mut Vec<NumericSkip>,
+) {
+    match (a, b) {
+        (Some(a), Some(b)) => deltas.push(MetricNumericDelta {
+            metric: metric.into(),
+            value: delta_u64(a, b),
+        }),
+        _ => skips.push(NumericSkip {
+            metric: metric.into(),
+            status_a: option_status(a.is_some()),
+            status_b: option_status(b.is_some()),
+        }),
+    }
+}
+
+fn option_status(observed: bool) -> String {
+    if observed {
+        "observed".into()
+    } else {
+        "unavailable".into()
+    }
+}
+
+fn resource_timeline_observed(timeline: &MetricAvailability<ResourceTimeline>) -> bool {
+    matches!(timeline, MetricAvailability::Observed { .. })
 }
 
 fn workload_keys(
@@ -793,6 +940,69 @@ mod tests {
     }
 
     #[test]
+    fn compare_reports_rate_float_deltas() {
+        let mut a_json = minimal_result_json(SIM_RESULT_SCHEMA_VERSION);
+        a_json["backpressureRate"] = json!(0.1);
+        let mut b_json = minimal_result_json(SIM_RESULT_SCHEMA_VERSION);
+        b_json["backpressureRate"] = json!(0.25);
+        b_json["simulatorOverloadRate"] = json!(0.01);
+
+        let diff = ResultDiff::from_results(&result_from_json(a_json), &result_from_json(b_json));
+
+        assert!(diff.metric_float_deltas.iter().any(|delta| {
+            delta.metric == "backpressureRate" && (delta.value - 0.15).abs() < 1e-12
+        }));
+        assert!(diff.metric_float_deltas.iter().any(|delta| {
+            delta.metric == "simulatorOverloadRate" && (delta.value - 0.01).abs() < 1e-12
+        }));
+    }
+
+    #[test]
+    fn compare_reports_resource_timeline_numeric_deltas() {
+        let mut a_json = minimal_result_json(SIM_RESULT_SCHEMA_VERSION);
+        a_json["resourceTimeline"] = resource_timeline_json(100, 1_000, 5);
+        let mut b_json = minimal_result_json(SIM_RESULT_SCHEMA_VERSION);
+        b_json["resourceTimeline"] = resource_timeline_json(250, 1_500, 7);
+
+        let diff = ResultDiff::from_results(&result_from_json(a_json), &result_from_json(b_json));
+
+        assert!(diff.metric_numeric_deltas.iter().any(|delta| {
+            delta.metric == "resourceTimeline.maxSegmentRssGrowthBytesPerMinute"
+                && delta.value == 150
+        }));
+        assert!(
+            diff.metric_numeric_deltas.iter().any(|delta| {
+                delta.metric == "resourceTimeline.maxRssBytes" && delta.value == 500
+            })
+        );
+        assert!(
+            diff.metric_numeric_deltas
+                .iter()
+                .any(|delta| { delta.metric == "resourceTimeline.totalCpuMs" && delta.value == 2 })
+        );
+    }
+
+    #[test]
+    fn compare_skips_resource_deltas_when_only_one_side_is_available() {
+        let a_json = minimal_result_json(SIM_RESULT_SCHEMA_VERSION);
+        let mut b_json = minimal_result_json(SIM_RESULT_SCHEMA_VERSION);
+        b_json["resourceTimeline"] = resource_timeline_json(250, 1_500, 7);
+
+        let diff = ResultDiff::from_results(&result_from_json(a_json), &result_from_json(b_json));
+
+        assert!(
+            diff.metric_numeric_deltas
+                .iter()
+                .all(|delta| { !delta.metric.starts_with("resourceTimeline.") })
+        );
+        assert!(diff.numeric_skips.iter().any(|skip| {
+            skip.metric == "resourceTimeline.maxRssBytes"
+                && skip.status_a == "unavailable"
+                && skip.status_b == "observed"
+        }));
+    }
+
+    #[test]
     fn compare_diff_carries_schema_version_in_json() {
         let result = result_from_json(minimal_result_json(SIM_RESULT_SCHEMA_VERSION));
 
@@ -923,6 +1133,63 @@ mod tests {
             "p99Ms": base,
             "p999Ms": base,
             "maxMs": base
+        })
+    }
+
+    fn resource_timeline_json(
+        max_growth: i64,
+        max_rss_bytes: u64,
+        total_cpu_ms: u64,
+    ) -> serde_json::Value {
+        json!({
+            "status": "observed",
+            "value": {
+                "scope": "process-group",
+                "sampleIntervalMs": 1000,
+                "sampleCount": 2,
+                "first": resource_sample_json(0, 42, 900),
+                "last": resource_sample_json(1000, 42, max_rss_bytes),
+                "maxRssBytes": max_rss_bytes,
+                "maxSegmentRssGrowthBytesPerMinute": max_growth,
+                "lastSegmentRssGrowthBytesPerMinute": max_growth,
+                "peakThreads": 1,
+                "peakOpenFds": 2,
+                "totalCpuMs": total_cpu_ms,
+                "segments": [{
+                    "scope": "process-group",
+                    "rootPid": 42,
+                    "pgid": 42,
+                    "sampleCount": 2,
+                    "startedAtUnixMs": "0",
+                    "endedAtUnixMs": "1000",
+                    "firstRssBytes": 900,
+                    "lastRssBytes": max_rss_bytes,
+                    "maxRssBytes": max_rss_bytes,
+                    "rssGrowthBytesPerMinute": max_growth,
+                    "totalCpuMs": total_cpu_ms
+                }],
+                "samples": []
+            }
+        })
+    }
+
+    fn resource_sample_json(
+        simulation_time_ms: u64,
+        root_pid: u32,
+        rss_bytes: u64,
+    ) -> serde_json::Value {
+        json!({
+            "simulationTimeMs": simulation_time_ms,
+            "observedAtUnixMs": simulation_time_ms.to_string(),
+            "scope": "process-group",
+            "rootPid": root_pid,
+            "pgid": root_pid,
+            "processCount": 1,
+            "rssBytes": rss_bytes,
+            "cpuUserMs": 1,
+            "cpuSystemMs": 0,
+            "threads": 1,
+            "openFds": 2
         })
     }
 

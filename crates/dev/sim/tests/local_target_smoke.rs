@@ -207,6 +207,8 @@ fn local_target_chain_tip_smoke() {
     assert!(temp.path().join("target-ownership.json").exists());
     assert!(temp.path().join("logs/local-node-0.stdout.log").exists());
     assert!(temp.path().join("logs/local-node-0.stderr.log").exists());
+    let result = read_result(temp.path());
+    assert_local_resource_timeline(&result, "local-chain-tip-smoke");
 
     let simulation = std::fs::read_to_string(temp.path().join("simulation.json"))
         .expect("simulation artifact should read");
@@ -660,6 +662,37 @@ fn assert_present_receipt_metrics(result: &serde_json::Value, scenario: &str) {
     assert!(
         present > 0,
         "{scenario} should observe at least one submitted receipt"
+    );
+}
+
+#[cfg(target_os = "linux")]
+fn assert_local_resource_timeline(result: &serde_json::Value, scenario: &str) {
+    let resource = &result["resourceTimeline"];
+    assert_eq!(
+        resource["status"], "observed",
+        "{scenario} should observe local resource timeline on Linux"
+    );
+    assert!(
+        resource["value"]["sampleCount"]
+            .as_u64()
+            .unwrap_or_default()
+            >= 2,
+        "{scenario} should observe at least two resource samples"
+    );
+}
+
+#[cfg(not(target_os = "linux"))]
+fn assert_local_resource_timeline(result: &serde_json::Value, scenario: &str) {
+    let resource = &result["resourceTimeline"];
+    assert_eq!(
+        resource["status"], "unavailable",
+        "{scenario} should mark resource timeline unavailable on non-Linux"
+    );
+    assert!(
+        resource["reason"]
+            .as_str()
+            .is_some_and(|reason| !reason.is_empty()),
+        "{scenario} should explain resource timeline unavailability"
     );
 }
 

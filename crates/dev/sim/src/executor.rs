@@ -22,22 +22,28 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::{Id as TaskId, JoinError, JoinSet};
 
 use crate::actor::{
-    ActorError, ActorState, DrainedPendingReceipt, ReadAfterWriteState, ReceiptPollTarget,
+    ActorError, ActorState, DrainedPendingReceipt, PendingReceiptRecordOutcome,
+    ReadAfterWriteState, ReceiptPollTarget,
 };
 use crate::contract::{
     PreparedContractCall, PreparedEventQuery, PreparedReadAfterWrite, PreparedStorageRead,
     PreparedViewCall,
 };
 use crate::error::SimError;
-use crate::event::{ChaosTransitionEvent, EventWriter, ResultEvent, WorkloadEvent};
+use crate::event::{
+    ChaosTransitionEvent, EventWriter, ResourceSampleEvent, ResourceSampleStatus, ResultEvent,
+    SimulatorOverloadEvent, WorkloadEvent,
+};
 use crate::manifest::{
     ChaosEventKind, ChaosEventSpec, EventQueryAnchorSpec, EventQueryOrderSpec, SimulationManifest,
     WorkloadKind,
 };
 use crate::metrics::RunMetricsBuilder;
-use crate::result::{ChainTipObservation, ChaosEventRecord, ChaosEventState};
+use crate::resource::{ResourceSample, TargetResourceSampler};
+use crate::result::{ChainTipObservation, ChaosEventRecord, ChaosEventState, ResourceSamplePoint};
 use crate::scheduler::{
-    PhaseStart, ScheduledActorTick, ScheduledSimulationEvent, select_workload_for_tick,
+    PhaseStart, ScheduleCursor, ScheduledActorTick, ScheduledSimulationEvent,
+    select_workload_for_tick,
 };
 use crate::target::ChaosController;
 use crate::transaction::{
@@ -178,6 +184,23 @@ pub struct ScheduleExecution<'a> {
     pub storage_reads: &'a [PreparedStorageRead],
     pub event_queries: &'a [PreparedEventQuery],
     pub read_after_write: &'a [PreparedReadAfterWrite],
+    pub resource_sampler: Option<&'a dyn TargetResourceSampler>,
+}
+
+/// Inputs for executing a generated schedule stream.
+pub struct StreamingScheduleExecution<'a> {
+    pub manifest: &'a SimulationManifest,
+    pub runtime_manifest: &'a RuntimeManifest,
+    pub phase_starts: &'a [PhaseStart],
+    pub actor_states: &'a mut [ActorState],
+    pub event_writer: &'a mut EventWriter,
+    pub metrics: &'a mut RunMetricsBuilder,
+    pub view_calls: &'a [PreparedViewCall],
+    pub contract_calls: &'a [PreparedContractCall],
+    pub storage_reads: &'a [PreparedStorageRead],
+    pub event_queries: &'a [PreparedEventQuery],
+    pub read_after_write: &'a [PreparedReadAfterWrite],
+    pub resource_sampler: Option<&'a dyn TargetResourceSampler>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -220,7 +243,97 @@ where
         storage_reads,
         event_queries,
         read_after_write,
+        resource_sampler,
     } = input;
+    run_schedule_events_with_chaos(
+        client,
+        manifest,
+        runtime_manifest,
+        schedule.iter().cloned(),
+        phase_starts,
+        actor_states,
+        event_writer,
+        metrics,
+        view_calls,
+        contract_calls,
+        storage_reads,
+        event_queries,
+        read_after_write,
+        resource_sampler,
+        chaos_controller,
+        chaos_events,
+    )
+    .await
+}
+
+pub async fn run_streaming_schedule_with_chaos<C>(
+    client: C,
+    input: StreamingScheduleExecution<'_>,
+    chaos_controller: Option<&dyn ChaosController>,
+    chaos_events: &mut Vec<ChaosEventRecord>,
+) -> Result<ScheduleRunReport, SimError>
+where
+    C: SimRpcClient + Clone + Send + Sync + 'static,
+{
+    let StreamingScheduleExecution {
+        manifest,
+        runtime_manifest,
+        phase_starts,
+        actor_states,
+        event_writer,
+        metrics,
+        view_calls,
+        contract_calls,
+        storage_reads,
+        event_queries,
+        read_after_write,
+        resource_sampler,
+    } = input;
+    let cursor = ScheduleCursor::new(manifest)?;
+    run_schedule_events_with_chaos(
+        client,
+        manifest,
+        runtime_manifest,
+        cursor,
+        phase_starts,
+        actor_states,
+        event_writer,
+        metrics,
+        view_calls,
+        contract_calls,
+        storage_reads,
+        event_queries,
+        read_after_write,
+        resource_sampler,
+        chaos_controller,
+        chaos_events,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+async fn run_schedule_events_with_chaos<C, I>(
+    client: C,
+    manifest: &SimulationManifest,
+    runtime_manifest: &RuntimeManifest,
+    events: I,
+    phase_starts: &[PhaseStart],
+    actor_states: &mut [ActorState],
+    event_writer: &mut EventWriter,
+    metrics: &mut RunMetricsBuilder,
+    view_calls: &[PreparedViewCall],
+    contract_calls: &[PreparedContractCall],
+    storage_reads: &[PreparedStorageRead],
+    event_queries: &[PreparedEventQuery],
+    read_after_write: &[PreparedReadAfterWrite],
+    resource_sampler: Option<&dyn TargetResourceSampler>,
+    chaos_controller: Option<&dyn ChaosController>,
+    chaos_events: &mut Vec<ChaosEventRecord>,
+) -> Result<ScheduleRunReport, SimError>
+where
+    C: SimRpcClient + Clone + Send + Sync + 'static,
+    I: IntoIterator<Item = ScheduledSimulationEvent>,
+{
     let wallet_entrypoint = runtime_dev_wallet_action_entrypoint(runtime_manifest)?;
     let run_start = Instant::now();
     let mut next_phase = phase_starts.iter().peekable();
@@ -231,7 +344,7 @@ where
     let mut in_flight = 0_u64;
     let mut chaos_failed = false;
 
-    for event in schedule {
+    for event in events {
         Box::pin(drain_completed_workloads_and_update_in_flight(
             &mut tasks,
             &mut task_contexts,
@@ -257,7 +370,7 @@ where
             .await?;
             write_phase_started(event_writer, phase).await?;
         }
-        match event {
+        match &event {
             ScheduledSimulationEvent::ActorTick(tick) => {
                 sleep_until_sim_time_draining(
                     run_start,
@@ -358,6 +471,26 @@ where
                 if chaos_failed {
                     break;
                 }
+            }
+            ScheduledSimulationEvent::ResourceSample(sample) => {
+                sleep_until_sim_time_draining(
+                    run_start,
+                    sample.simulation_time_ms,
+                    &mut tasks,
+                    &mut task_contexts,
+                    event_writer,
+                    metrics,
+                    actor_states,
+                    &mut in_flight,
+                )
+                .await?;
+                record_resource_sample(
+                    sample.simulation_time_ms,
+                    resource_sampler,
+                    event_writer,
+                    metrics,
+                )
+                .await?;
             }
         }
     }
@@ -733,15 +866,33 @@ async fn record_completion(
     event_writer: &mut EventWriter,
     metrics: &mut RunMetricsBuilder,
 ) -> Result<(), SimError> {
+    let mut overload_event = None;
     if let Some(submitted) = completion.submitted_transaction {
         let actor = actor_states
             .get_mut(submitted.actor_id as usize)
             .ok_or(SimError::Executor("actor state missing".into()))?;
-        actor.record_submitted_tx(
+        let pending_outcome = actor.record_submitted_tx(
             submitted.tx_hash,
             submitted.scheduled_time_ms,
             submitted.completed_at,
         )?;
+        if let PendingReceiptRecordOutcome::Dropped {
+            pending_receipts,
+            pending_receipt_limit,
+        } = pending_outcome
+        {
+            metrics.record_simulator_overload();
+            overload_event = Some(ResultEvent::SimulatorOverload {
+                event: SimulatorOverloadEvent {
+                    actor_id: submitted.actor_id,
+                    scheduled_time_ms: submitted.scheduled_time_ms,
+                    tx_hash: json_string(&submitted.tx_hash, "txHash")?,
+                    reason: "pending receipt tracking limit reached".into(),
+                    pending_receipts,
+                    pending_receipt_limit,
+                },
+            });
+        }
     }
     if let Some(observed) = completion.observed_receipt {
         let actor = actor_states
@@ -776,10 +927,80 @@ async fn record_completion(
         metrics.record_success(completion.workload, completion.latency_ms);
     }
     if let Some(observation) = completion.chain_tip {
-        metrics.record_chain_tip(observation);
+        metrics.record_chain_tip(&observation);
     }
     event_writer.write(&completion.event).await?;
+    if let Some(event) = overload_event {
+        event_writer.write(&event).await?;
+    }
     Ok(())
+}
+
+async fn record_resource_sample(
+    scheduled_time_ms: u64,
+    resource_sampler: Option<&dyn TargetResourceSampler>,
+    event_writer: &mut EventWriter,
+    metrics: &mut RunMetricsBuilder,
+) -> Result<(), SimError> {
+    let sample = match resource_sampler {
+        Some(sampler) => sampler.sample(scheduled_time_ms).await,
+        None => ResourceSample::unavailable(
+            scheduled_time_ms,
+            "target provider does not expose process resource sampling",
+        ),
+    };
+    if let ResourceSample::Observed(point) = &sample {
+        metrics.record_resource_sample(point);
+    }
+    event_writer.write(&resource_sample_event(&sample)).await?;
+    Ok(())
+}
+
+fn resource_sample_event(sample: &ResourceSample) -> ResultEvent {
+    match sample {
+        ResourceSample::Observed(point) => ResultEvent::ResourceSample {
+            event: observed_resource_sample_event(point),
+        },
+        ResourceSample::Unavailable {
+            scheduled_time_ms,
+            observed_at_unix_ms,
+            reason,
+        } => ResultEvent::ResourceSample {
+            event: ResourceSampleEvent {
+                scheduled_time_ms: *scheduled_time_ms,
+                observed_at_unix_ms: observed_at_unix_ms.clone(),
+                status: ResourceSampleStatus::Unavailable,
+                reason: Some(reason.clone()),
+                scope: None,
+                root_pid: None,
+                pgid: None,
+                process_count: None,
+                rss_bytes: None,
+                cpu_user_ms: None,
+                cpu_system_ms: None,
+                threads: None,
+                open_fds: None,
+            },
+        },
+    }
+}
+
+fn observed_resource_sample_event(point: &ResourceSamplePoint) -> ResourceSampleEvent {
+    ResourceSampleEvent {
+        scheduled_time_ms: point.simulation_time_ms,
+        observed_at_unix_ms: point.observed_at_unix_ms.clone(),
+        status: ResourceSampleStatus::Observed,
+        reason: None,
+        scope: Some(point.scope.clone()),
+        root_pid: Some(point.root_pid),
+        pgid: point.pgid,
+        process_count: Some(point.process_count),
+        rss_bytes: point.rss_bytes,
+        cpu_user_ms: point.cpu_user_ms,
+        cpu_system_ms: point.cpu_system_ms,
+        threads: point.threads,
+        open_fds: point.open_fds,
+    }
 }
 
 fn backpressure_completion(
@@ -3399,7 +3620,10 @@ mod tests {
     use groundhog_signing::derive_dev_account_signer;
     use groundhog_xdr::types::{ContractAddress, SHA256Hash};
     use serde_json::json;
-    use std::sync::Mutex;
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicU64, Ordering},
+    };
     use tempfile::NamedTempFile;
 
     use super::*;
@@ -3407,6 +3631,7 @@ mod tests {
     use crate::manifest::SimulationManifest;
     use crate::metrics::RunMetricsBuilder;
     use crate::nonce::NonceNamespace;
+    use crate::result::ResourceSampleScope;
     use crate::runtime::SimAccount;
     use crate::scheduler::{generate_schedule, phase_starts};
     use crate::target::{ChaosController, ChaosEventOutcome, TargetProviderFuture};
@@ -3494,6 +3719,32 @@ mod tests {
     struct SuccessfulChaosController;
 
     struct FailingChaosController;
+
+    struct StubResourceSampler {
+        calls: Arc<AtomicU64>,
+    }
+
+    impl TargetResourceSampler for StubResourceSampler {
+        fn sample(&self, scheduled_time_ms: u64) -> crate::resource::ResourceSamplerFuture<'_> {
+            let calls = self.calls.clone();
+            Box::pin(async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                ResourceSample::Observed(ResourceSamplePoint {
+                    simulation_time_ms: scheduled_time_ms,
+                    observed_at_unix_ms: "1000".into(),
+                    scope: ResourceSampleScope::ProcessGroup,
+                    root_pid: 4242,
+                    pgid: Some(4242),
+                    process_count: 1,
+                    rss_bytes: Some(12_345),
+                    cpu_user_ms: Some(7),
+                    cpu_system_ms: Some(11),
+                    threads: Some(3),
+                    open_fds: Some(5),
+                })
+            })
+        }
+    }
 
     impl ChaosController for SuccessfulChaosController {
         fn execute<'a>(
@@ -3952,6 +4203,71 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_schedule_records_resource_sample_without_workload_accounting() {
+        let manifest = manifest();
+        let schedule = vec![ScheduledSimulationEvent::ResourceSample(
+            crate::scheduler::ScheduledResourceSample {
+                resource_sample_index: 0,
+                simulation_time_ms: 0,
+            },
+        )];
+        let starts = phase_starts(&manifest).expect("phase starts should generate");
+        let file = NamedTempFile::new().expect("temp file should be created");
+        let mut event_writer = EventWriter::create(file.path())
+            .await
+            .expect("event writer should open");
+        let mut metrics = RunMetricsBuilder::default();
+        let mut actors = actor_states();
+        let calls = Arc::new(AtomicU64::new(0));
+        let sampler = StubResourceSampler {
+            calls: calls.clone(),
+        };
+
+        run_schedule(
+            DelayedClient,
+            ScheduleExecution {
+                manifest: &manifest,
+                runtime_manifest: &runtime_manifest(),
+                schedule: &schedule,
+                phase_starts: &starts,
+                actor_states: &mut actors,
+                event_writer: &mut event_writer,
+                metrics: &mut metrics,
+                view_calls: &[],
+                contract_calls: &[],
+                storage_reads: &[],
+                event_queries: &[],
+                read_after_write: &[],
+                resource_sampler: Some(&sampler),
+            },
+        )
+        .await
+        .expect("resource sample schedule should run");
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(metrics.completed_count(), 0);
+        assert_eq!(metrics.failed_count(), 0);
+        assert_eq!(metrics.skipped_count(), 0);
+        assert_eq!(metrics.simulator_overload_count(), 0);
+
+        let events = tokio::fs::read_to_string(file.path())
+            .await
+            .expect("events should read");
+        let event = find_event(&events, "resource-sample");
+        assert_eq!(event["status"], "observed");
+        assert_eq!(event["rootPid"], 4242);
+        assert_eq!(event["rssBytes"], 12_345);
+
+        let timeline = metrics
+            .finish()
+            .resource_timeline
+            .expect("resource sample should produce a timeline");
+        assert_eq!(timeline.sample_count, 1);
+        assert_eq!(timeline.first.root_pid, 4242);
+        assert!(timeline.segments[0].rss_growth_bytes_per_minute.is_none());
+    }
+
+    #[tokio::test]
     async fn run_schedule_reports_workload_panics_with_context() {
         let manifest = manifest();
         let schedule = generate_schedule(&manifest).expect("schedule should generate");
@@ -3978,6 +4294,7 @@ mod tests {
                 storage_reads: &[],
                 event_queries: &[],
                 read_after_write: &[],
+                resource_sampler: None,
             },
         )
         .await
@@ -4040,6 +4357,7 @@ mod tests {
                 storage_reads: &[],
                 event_queries: &[],
                 read_after_write: &[],
+                resource_sampler: None,
             },
         )
         .await
@@ -4096,6 +4414,7 @@ mod tests {
                 storage_reads: &[],
                 event_queries: &[],
                 read_after_write: &[],
+                resource_sampler: None,
             },
         )
         .await
@@ -4159,6 +4478,7 @@ mod tests {
                 storage_reads: &[],
                 event_queries: &[],
                 read_after_write: &[],
+                resource_sampler: None,
             },
         )
         .await
@@ -4177,6 +4497,103 @@ mod tests {
             metrics.workload_counts()[&WorkloadKind::WalletSubmitSmoke].failed,
             1
         );
+    }
+
+    #[tokio::test]
+    async fn record_completion_emits_simulator_overload_when_receipt_tracking_is_full() {
+        let file = NamedTempFile::new().expect("temp file should be created");
+        let mut event_writer = EventWriter::create(file.path())
+            .await
+            .expect("event writer should open");
+        let mut metrics = RunMetricsBuilder::default();
+        let mut actors = actor_states();
+        actors[0].set_pending_receipt_limit_for_test(1);
+        actors[0]
+            .record_submitted_tx(tx_hash(0x10), 10, Instant::now())
+            .expect("seed pending receipt should record");
+
+        record_completion(
+            WorkloadCompletion {
+                event: ResultEvent::WorkloadCompleted {
+                    event: WorkloadEvent {
+                        actor_id: 0,
+                        workload: WorkloadKind::WalletSubmitSmoke,
+                        scheduled_time_ms: 20,
+                        started_at_unix_ms: "100".into(),
+                        completed_at_unix_ms: "101".into(),
+                        latency_ms: 1,
+                        rpc_method: "groundhog_sendRawTransaction",
+                        chain_height: None,
+                        chain_block_hash: None,
+                        tx_hash: Some(prefixed_hex(0x20)),
+                        tx_nonce: None,
+                        receipt_present: None,
+                        receipt_status: None,
+                        receipt_status_detail: None,
+                        submit_to_receipt_latency_ms: None,
+                        view_result: None,
+                        view_return_data: None,
+                        view_abort_data: None,
+                        view_event_count: None,
+                        contract_call_name: None,
+                        contract_call_contract: None,
+                        storage_read_name: None,
+                        storage_contract: None,
+                        storage_key: None,
+                        storage_item_present: None,
+                        storage_item_kind: None,
+                        event_query_name: None,
+                        event_contract: None,
+                        event_count: None,
+                        event_cursor: None,
+                        event_latest_block: None,
+                        event_oldest_block: None,
+                        error_class: None,
+                        error: None,
+                        read_after_write_name: None,
+                        read_after_write_contract: None,
+                        read_after_write_expected: None,
+                        read_after_write_observed: None,
+                        read_after_write_matched: None,
+                        read_after_write_rebased: None,
+                    },
+                },
+                workload: WorkloadKind::WalletSubmitSmoke,
+                latency_ms: 1,
+                error_class: None,
+                skipped: false,
+                chain_tip: None,
+                submitted_transaction: Some(SubmittedTransaction {
+                    actor_id: 0,
+                    tx_hash: tx_hash(0x20),
+                    scheduled_time_ms: 20,
+                    completed_at: Instant::now(),
+                }),
+                observed_receipt: None,
+                receipt_poll: None,
+                submit_to_receipt_latency_ms: None,
+                read_after_write_transition: None,
+            },
+            &mut actors,
+            &mut event_writer,
+            &mut metrics,
+        )
+        .await
+        .expect("completion should record");
+
+        assert_eq!(actors[0].pending_receipt_count(), 1);
+        assert_eq!(metrics.simulator_overload_count(), 1);
+        let events: Vec<serde_json::Value> = tokio::fs::read_to_string(file.path())
+            .await
+            .expect("events should read")
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("event should parse"))
+            .collect();
+        assert_eq!(events[0]["kind"], "workload-completed");
+        assert_eq!(events[1]["kind"], "simulator-overload");
+        assert_eq!(events[1]["txHash"], prefixed_hex(0x20));
+        assert_eq!(events[1]["pendingReceipts"], 1);
+        assert_eq!(events[1]["pendingReceiptLimit"], 1);
     }
 
     #[tokio::test]
@@ -4213,6 +4630,7 @@ mod tests {
                 storage_reads: &[],
                 event_queries: &[],
                 read_after_write: &[],
+                resource_sampler: None,
             },
         )
         .await
@@ -4335,6 +4753,7 @@ mod tests {
                 storage_reads: &[],
                 event_queries: &[],
                 read_after_write: &[],
+                resource_sampler: None,
             },
         )
         .await
@@ -4388,6 +4807,7 @@ mod tests {
                 storage_reads: &[],
                 event_queries: &[],
                 read_after_write: &[],
+                resource_sampler: None,
             },
         )
         .await
@@ -4617,6 +5037,7 @@ mod tests {
                 storage_reads: &[storage_read],
                 event_queries: &[],
                 read_after_write: &[],
+                resource_sampler: None,
             },
         )
         .await
@@ -4873,6 +5294,7 @@ mod tests {
                 storage_reads: &[],
                 event_queries: &[event_query],
                 read_after_write: &[],
+                resource_sampler: None,
             },
         )
         .await
@@ -4937,6 +5359,7 @@ mod tests {
                 storage_reads: &[],
                 event_queries: &[],
                 read_after_write: &[],
+                resource_sampler: None,
             },
         )
         .await
@@ -5005,6 +5428,7 @@ mod tests {
                 storage_reads: &[],
                 event_queries: &[],
                 read_after_write: &[],
+                resource_sampler: None,
             },
         )
         .await
@@ -5086,6 +5510,7 @@ mod tests {
                 storage_reads: &[],
                 event_queries: &[],
                 read_after_write: &[],
+                resource_sampler: None,
             },
         )
         .await
@@ -5168,6 +5593,7 @@ mod tests {
                 storage_reads: &[],
                 event_queries: &[],
                 read_after_write: &[],
+                resource_sampler: None,
             },
         )
         .await
@@ -5218,6 +5644,7 @@ mod tests {
                 storage_reads: &[],
                 event_queries: &[],
                 read_after_write: &[],
+                resource_sampler: None,
             },
         )
         .await
@@ -5372,6 +5799,7 @@ mod tests {
                 storage_reads: &[],
                 event_queries: &[],
                 read_after_write: &[],
+                resource_sampler: None,
             },
             Some(&SuccessfulChaosController),
             &mut chaos_events,
@@ -5449,6 +5877,7 @@ mod tests {
                 storage_reads: &[],
                 event_queries: &[],
                 read_after_write: &[],
+                resource_sampler: None,
             },
             Some(&SuccessfulChaosController),
             &mut chaos_events,
@@ -5581,6 +6010,7 @@ mod tests {
                 storage_reads: &[],
                 event_queries: &[],
                 read_after_write: &[],
+                resource_sampler: None,
             },
             Some(&SuccessfulChaosController),
             &mut chaos_events,
@@ -5642,6 +6072,7 @@ mod tests {
                 storage_reads: &[],
                 event_queries: &[],
                 read_after_write: &[],
+                resource_sampler: None,
             },
             Some(&SuccessfulChaosController),
             &mut chaos_events,
@@ -5696,6 +6127,7 @@ mod tests {
                 storage_reads: &[],
                 event_queries: &[],
                 read_after_write: &[],
+                resource_sampler: None,
             },
             Some(&FailingChaosController),
             &mut chaos_events,
@@ -6170,6 +6602,7 @@ mod tests {
                 storage_reads: &[],
                 event_queries: &[],
                 read_after_write: &[entry],
+                resource_sampler: None,
             },
         )
         .await
