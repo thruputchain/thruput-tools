@@ -295,7 +295,6 @@ pub fn build_rv32_project(
 
     let mut cmd = Command::new("cargo");
     cmd.current_dir(&metadata.workspace_root)
-        .env("CARGO_PROFILE_RELEASE_STRIP", "false")
         .arg("build")
         .arg("--release")
         .arg("--no-default-features")
@@ -336,7 +335,7 @@ pub fn build_rv32_project(
             artifact: &lowered.artifact,
             code: &lowered.code,
             initial_memory: &lowered.initial_memory,
-            entries: &lowered.entries,
+            memory_bytes: lowered.memory_bytes,
             rustc_version: rustc_version(),
             target_triple: Some(RV32_TARGET_TRIPLE.to_string()),
             build_flags: Some(rv32_build_flags(pkg_name, cargo_args)),
@@ -375,7 +374,6 @@ pub fn build_rv32_project(
 
 fn rv32_build_flags(pkg_name: &str, cargo_args: &[String]) -> String {
     let mut flags = vec![
-        "CARGO_PROFILE_RELEASE_STRIP=false".to_string(),
         "cargo".to_string(),
         "build".to_string(),
         "--release".to_string(),

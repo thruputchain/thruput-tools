@@ -353,8 +353,8 @@ impl CliError {
                  may be invalid or malformed",
             )),
             Self::Rv32LowerFailed(_) => Some(Cow::Borrowed(
-                "the RV32 ELF may be stripped, missing `_start`, or missing \
-                 contract entrypoint symbols",
+                "the RV32 ELF may have a malformed `.text`/data layout or a \
+                 nonzero entry point; see the lower error above",
             )),
             Self::WasmInstrumentFailed(_) => {
                 Some(Cow::Borrowed("the WASM binary may be invalid or too large"))

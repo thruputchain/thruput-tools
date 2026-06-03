@@ -668,10 +668,6 @@ fn build_rv32_json_success_reports_artifact_paths() {
                 "  printf '%s' '{}'\n",
                 "  exit 0\n",
                 "fi\n",
-                "if [ \"$CARGO_PROFILE_RELEASE_STRIP\" != \"false\" ]; then\n",
-                "  echo missing strip env >&2\n",
-                "  exit 2\n",
-                "fi\n",
                 "/bin/mkdir -p '{}'\n",
                 "/bin/cp '{}' '{}'\n",
                 "exit 0\n",
@@ -712,7 +708,7 @@ fn build_rv32_json_success_reports_artifact_paths() {
         serde_json::from_str(&std::fs::read_to_string(&metadata).unwrap()).unwrap();
     assert_eq!(
         metadata_json["artifact_format_fingerprint"],
-        "0x38927fa2342c674a"
+        "0x373c4a7cf1a42ef8"
     );
 
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -722,7 +718,8 @@ fn build_rv32_json_success_reports_artifact_paths() {
     assert_eq!(stdout["data"]["elf"], raw_elf.display().to_string());
     assert_eq!(stdout["data"]["rv32"], rv32.display().to_string());
     assert_eq!(stdout["data"]["metadata"], metadata.display().to_string());
-    assert!(stdout["data"]["size_bytes"].as_u64().unwrap() > 64 * 1024);
+    // v4 stores only the high-water prefix, so the artifact is well under 64 KiB.
+    assert!(stdout["data"]["size_bytes"].as_u64().unwrap() < 64 * 1024);
 }
 
 #[cfg(unix)]

@@ -1,32 +1,24 @@
 //! A minimal, dependency-free ELF32 little-endian RISC-V reader.
 //!
-//! Just enough to drive the lowerer: the section table (with names resolved
-//! via the section-header string table) and the symbol table (with names
-//! resolved via the linked string table). Mirrors the parser in
-//! `scripts/rv32_lower.py`.
+//! Just enough to drive the lowerer: the section table, with names resolved
+//! via the section-header string table. v4 dispatch lives in the guest, so the
+//! lowerer no longer reads the symbol table; the entry contract is `e_entry ==
+//! 0` plus the `.text` layout rules.
 
 use crate::error::{Result, invalid};
 
 // Section header types.
-pub const SHT_SYMTAB: u32 = 2;
-pub const SHT_STRTAB: u32 = 3;
 pub const SHT_RELA: u32 = 4;
 pub const SHT_NOBITS: u32 = 8;
 pub const SHT_REL: u32 = 9;
 // Section header flags.
 pub const SHF_ALLOC: u32 = 0x2;
 pub const SHF_EXECINSTR: u32 = 0x4;
-// Symbol types / bindings.
-pub const STT_OBJECT: u8 = 1;
-pub const STT_FUNC: u8 = 2;
-pub const STB_GLOBAL: u8 = 1;
-pub const STB_WEAK: u8 = 2;
 // `e_machine` for RISC-V.
 pub const EM_RISCV: u16 = 243;
 
 const EHDR_BYTES: usize = 52;
 const SHDR_BYTES: usize = 40;
-const SYM_BYTES: usize = 16;
 
 /// A parsed section header.
 #[derive(Debug, Clone)]
@@ -55,17 +47,6 @@ impl Section {
     pub fn is_nobits(&self) -> bool {
         self.sh_type == SHT_NOBITS
     }
-}
-
-/// A parsed symbol-table entry.
-#[derive(Debug, Clone)]
-pub struct Symbol {
-    pub name: String,
-    pub value: u32,
-    pub size: u32,
-    pub sym_type: u8,
-    pub bind: u8,
-    pub section_index: u16,
 }
 
 fn read_u16(data: &[u8], off: usize) -> Result<u16> {
@@ -206,76 +187,4 @@ pub fn parse_elf(data: &[u8]) -> Result<Vec<Section>> {
         });
     }
     Ok(sections)
-}
-
-/// Parse every symbol table in the ELF, resolving names via each table's
-/// linked string table.
-pub fn parse_symbols(data: &[u8], sections: &[Section]) -> Result<Vec<Symbol>> {
-    let mut symbols = Vec::new();
-    for section in sections {
-        if section.sh_type != SHT_SYMTAB {
-            continue;
-        }
-        let strings = sections
-            .get(section.link as usize)
-            .ok_or_else(|| invalid("symbol table has invalid string table link"))?;
-        if strings.sh_type != SHT_STRTAB {
-            return Err(invalid("symbol table link must point to a string table"));
-        }
-        if section.entsize as usize != SYM_BYTES {
-            return Err(invalid("unexpected ELF32 symbol size"));
-        }
-        // Reject a symbol table whose size is not a whole number of entries.
-        // A partial trailing entry is ill-formed, and tolerating it would
-        // either silently drop a symbol (here) or fabricate one from adjacent
-        // file bytes (the Python reference's `unpack_from` over a stride
-        // range) -- diverging the two lowerers' symbol sets on malformed input.
-        if !(section.size as usize).is_multiple_of(SYM_BYTES) {
-            return Err(invalid(
-                "symbol table size is not a multiple of the entry size",
-            ));
-        }
-
-        let str_off = strings.offset as usize;
-        let str_end = str_off
-            .checked_add(strings.size as usize)
-            .ok_or_else(|| invalid("string table overflow"))?;
-        // Deliberately stricter than the Python reference, which slices and so
-        // silently clamps a past-EOF string table; we reject it outright.
-        let string_blob = data
-            .get(str_off..str_end)
-            .ok_or_else(|| invalid("string table out of range"))?;
-
-        let start = section.offset as usize;
-        let end = start
-            .checked_add(section.size as usize)
-            .ok_or_else(|| invalid("symbol table overflow"))?;
-        if end > data.len() {
-            return Err(invalid("symbol table extends past end of file"));
-        }
-
-        let mut off = start;
-        while off + SYM_BYTES <= end {
-            let st_name = read_u32(data, off)?;
-            let st_value = read_u32(data, off + 4)?;
-            let st_size = read_u32(data, off + 8)?;
-            let st_info = data[off + 12];
-            let st_shndx = read_u16(data, off + 14)?;
-            let name = if st_name != 0 {
-                read_c_string(string_blob, st_name as usize)?
-            } else {
-                String::new()
-            };
-            symbols.push(Symbol {
-                name,
-                value: st_value,
-                size: st_size,
-                sym_type: st_info & 0x0f,
-                bind: (st_info >> 4) & 0x0f,
-                section_index: st_shndx,
-            });
-            off += SYM_BYTES;
-        }
-    }
-    Ok(symbols)
 }

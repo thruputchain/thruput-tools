@@ -555,7 +555,7 @@ fn build_rv32_project_compiles_and_lowers_elf() {
     fs::write(
         &cargo,
         format!(
-            "#!/bin/sh\nif [ \"$1\" = \"metadata\" ]; then\n  printf '%s' '{metadata_json}'\n  exit 0\nfi\nif [ \"$CARGO_PROFILE_RELEASE_STRIP\" != \"false\" ]; then\n  echo missing strip env >&2\n  exit 2\nfi\nprintf '%s\\n' \"$*\" > '{}'\n/bin/mkdir -p '{}'\n/bin/cp '{}' '{}'\n",
+            "#!/bin/sh\nif [ \"$1\" = \"metadata\" ]; then\n  printf '%s' '{metadata_json}'\n  exit 0\nfi\nprintf '%s\\n' \"$*\" > '{}'\n/bin/mkdir -p '{}'\n/bin/cp '{}' '{}'\n",
             cargo_args_log.display(),
             raw_elf
                 .parent()
@@ -592,13 +592,15 @@ fn build_rv32_project_compiles_and_lowers_elf() {
     assert_eq!(result.metadata, processed_metadata);
     assert_eq!(result.spec_json, Some(processed_spec_json.clone()));
     assert_eq!(result.spec_xdr, Some(processed_spec_xdr.clone()));
-    assert!(result.size_bytes > 64 * 1024);
+    // v4 stores only the high-water prefix; the spec-metadata section is
+    // skipped, so the artifact is header + code, far below the old full image.
+    assert!(result.size_bytes < 64 * 1024);
     assert!(fs::read(&processed_rv32).unwrap().starts_with(b"GHRV32A1"));
     let metadata: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&processed_metadata).unwrap()).unwrap();
     assert_eq!(
         metadata["artifact_format_fingerprint"],
-        "0x38927fa2342c674a"
+        "0x373c4a7cf1a42ef8"
     );
     let spec_json: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&processed_spec_json).unwrap()).unwrap();
@@ -621,7 +623,7 @@ fn build_rv32_project_compiles_and_lowers_elf() {
     assert_eq!(metadata["target_triple"], "riscv32im-unknown-none-elf");
     assert_eq!(
         metadata["build_flags"],
-        "CARGO_PROFILE_RELEASE_STRIP=false cargo build --release --no-default-features --features entrypoints --target riscv32im-unknown-none-elf -p demo-contract-rv32 --locked"
+        "cargo build --release --no-default-features --features entrypoints --target riscv32im-unknown-none-elf -p demo-contract-rv32 --locked"
     );
 }
 

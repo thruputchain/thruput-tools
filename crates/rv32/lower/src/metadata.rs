@@ -1,12 +1,11 @@
 //! The optional JSON metadata sidecar emitted next to the artifact.
 //!
-//! Byte-compatible with the `scripts/rv32_lower.py` sidecar: keys sorted at
-//! every level, two-space indentation, a trailing newline, and the build-info
-//! fields always present (`null` when not supplied).
+//! Keys are sorted at every level, two-space indentation, a trailing newline,
+//! and the build-info fields are always present (`null` when not supplied).
 
 use std::collections::BTreeMap;
 
-use groundhog_rv32_artifact::{DispatchEntry, FORMAT_FINGERPRINT, sha256_hex};
+use groundhog_rv32_artifact::{FORMAT_FINGERPRINT, sha256_hex};
 use serde_json::Value;
 
 use crate::lower::Lowered;
@@ -20,10 +19,10 @@ pub struct MetadataInput<'a> {
     pub artifact: &'a [u8],
     /// The code section.
     pub code: &'a [u8],
-    /// The initial-memory image.
+    /// The stored initial-memory prefix.
     pub initial_memory: &'a [u8],
-    /// Discovered dispatch entries (sorted by method id).
-    pub entries: &'a [DispatchEntry],
+    /// Total guest data address space (the `sp` top), in bytes.
+    pub memory_bytes: usize,
     /// Recorded `rustc` version (emitted as `null` when absent).
     pub rustc_version: Option<String>,
     /// Recorded target triple (emitted as `null` when absent).
@@ -41,21 +40,6 @@ fn optional(value: Option<&String>) -> Value {
 pub fn render_metadata(input: &MetadataInput) -> String {
     // BTreeMap guarantees sorted keys independent of serde_json feature flags,
     // matching Python's `json.dumps(sort_keys=True)`.
-    let entries: Vec<Value> = input
-        .entries
-        .iter()
-        .map(|entry| {
-            let mut map: BTreeMap<&str, Value> = BTreeMap::new();
-            map.insert(
-                "method_id",
-                Value::String(format!("0x{:016X}", entry.method_id)),
-            );
-            map.insert("pc", Value::from(entry.pc));
-            // to_value of a BTreeMap yields a sorted object.
-            serde_json::to_value(map).expect("bug: dispatch entry serializes")
-        })
-        .collect();
-
     let mut doc: BTreeMap<&str, Value> = BTreeMap::new();
     doc.insert("elf_sha256", Value::String(sha256_hex(input.elf)));
     doc.insert("artifact_sha256", Value::String(sha256_hex(input.artifact)));
@@ -69,9 +53,12 @@ pub fn render_metadata(input: &MetadataInput) -> String {
         Value::String(sha256_hex(input.initial_memory)),
     );
     doc.insert("code_bytes", Value::from(input.code.len()));
-    doc.insert("memory_bytes", Value::from(input.initial_memory.len()));
+    doc.insert("memory_bytes", Value::from(input.memory_bytes));
+    doc.insert(
+        "initial_memory_bytes",
+        Value::from(input.initial_memory.len()),
+    );
     doc.insert("artifact_bytes", Value::from(input.artifact.len()));
-    doc.insert("dispatch_entries", Value::Array(entries));
     doc.insert("rustc_version", optional(input.rustc_version.as_ref()));
     doc.insert("target_triple", optional(input.target_triple.as_ref()));
     doc.insert("build_flags", optional(input.build_flags.as_ref()));
@@ -82,21 +69,11 @@ pub fn render_metadata(input: &MetadataInput) -> String {
 }
 
 /// Render a compact, one-line JSON summary of a successful lowering, for
-/// `--json` / scripting: the output path, byte sizes, digests, and the
-/// dispatch table. Distinct from [`render_metadata`] (the on-disk sidecar) —
-/// this is the tool's machine-readable stdout envelope.
+/// `--json` / scripting: the output path, byte sizes, and digests. Distinct
+/// from [`render_metadata`] (the on-disk sidecar) — this is the tool's
+/// machine-readable stdout envelope.
 #[must_use]
 pub fn summary_json(out: &str, lowered: &Lowered) -> String {
-    let entries: Vec<Value> = lowered
-        .entries
-        .iter()
-        .map(|entry| {
-            serde_json::json!({
-                "method_id": format!("0x{:016X}", entry.method_id),
-                "pc": entry.pc,
-            })
-        })
-        .collect();
     let doc = serde_json::json!({
         "status": "ok",
         "out": out,
@@ -105,8 +82,8 @@ pub fn summary_json(out: &str, lowered: &Lowered) -> String {
         "artifact_sha256": sha256_hex(&lowered.artifact),
         "code_bytes": lowered.code.len(),
         "code_sha256": sha256_hex(&lowered.code),
-        "memory_bytes": lowered.initial_memory.len(),
-        "dispatch_entries": entries,
+        "memory_bytes": lowered.memory_bytes,
+        "initial_memory_bytes": lowered.initial_memory.len(),
     });
     doc.to_string()
 }

@@ -14,7 +14,7 @@ use groundhog_rv32_lower::{
     FORMAT_FINGERPRINT, LowerError, MetadataInput, lower, render_metadata, summary_json,
 };
 
-/// Lower a RISC-V rv32im contract ELF to a Groundhog v3 RV32 artifact.
+/// Lower a RISC-V rv32im contract ELF to a Groundhog v4 RV32 artifact.
 #[derive(Parser)]
 #[command(name = "rv32-lower", version, about)]
 struct Cli {
@@ -39,7 +39,7 @@ struct Cli {
     /// Emit a structured JSON result to stdout (for scripting / LLM callers).
     #[arg(long)]
     json: bool,
-    /// Print the pinned v3 artifact-format fingerprint and exit.
+    /// Print the pinned v4 artifact-format fingerprint and exit.
     #[arg(long)]
     print_format_fingerprint: bool,
 }
@@ -79,7 +79,7 @@ fn run(cli: &Cli) -> Result<(), LowerError> {
             artifact: &lowered.artifact,
             code: &lowered.code,
             initial_memory: &lowered.initial_memory,
-            entries: &lowered.entries,
+            memory_bytes: lowered.memory_bytes,
             rustc_version: cli.rustc_version.clone(),
             target_triple: cli.target_triple.clone(),
             build_flags: cli.build_flags.clone(),

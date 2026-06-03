@@ -3,20 +3,22 @@
 //! Most tests build a minimal synthetic ELF32 in-process (no riscv toolchain
 //! required) and exercise the happy path plus every validation/rejection rule.
 //! A final opt-in test (`RV32_LOWER_PARITY_ELF`) lowers a real contract ELF and
-//! optionally byte-compares it against a `scripts/rv32_lower.py` golden — the
-//! same opt-in / out-of-default-CI posture as the hogd Spike oracle.
+//! optionally byte-compares it against a known-good golden artifact — an
+//! opt-in / out-of-default-CI regression check.
 
 // The synthetic-ELF builder favors owned specs that tests clone-and-mutate.
 #![allow(clippy::needless_pass_by_value)]
 
 use groundhog_rv32_artifact::{FORMAT_FINGERPRINT, verify_artifact};
-use groundhog_rv32_lower::{DispatchEntry, MetadataInput, lower, render_metadata};
+use groundhog_rv32_lower::{MetadataInput, lower, render_metadata};
 
 // ---------------------------------------------------------------------------
 // Minimal ELF32 little-endian RISC-V builder.
 // ---------------------------------------------------------------------------
 
-// Section/symbol constants (subset, mirrors elf.rs).
+// Section/symbol constants (subset, mirrors elf.rs). A `.symtab` is still
+// assembled so the reader's generic section parse is exercised, but the lowerer
+// no longer interprets symbols, so only the structural shape matters here.
 const SHT_PROGBITS: u32 = 1;
 const SHT_SYMTAB: u32 = 2;
 const SHT_STRTAB: u32 = 3;
@@ -25,12 +27,8 @@ const SHT_NOBITS: u32 = 8;
 const SHT_REL: u32 = 9;
 const SHF_ALLOC: u32 = 0x2;
 const SHF_EXECINSTR: u32 = 0x4;
-const STT_NOTYPE: u8 = 0;
-const STT_OBJECT: u8 = 1;
 const STT_FUNC: u8 = 2;
-const STB_LOCAL: u8 = 0;
 const STB_GLOBAL: u8 = 1;
-const STB_WEAK: u8 = 2;
 const EM_RISCV: u16 = 243;
 
 fn as_u32(value: usize) -> u32 {
@@ -90,9 +88,9 @@ struct ElfSpec {
     text_addr: u32,
     extras: Vec<ExtraSection>,
     syms: Vec<SymSpec>,
-    /// Override the `.symtab` `sh_size` (for malformed-size tests). Defaults to
-    /// the true byte length.
-    bad_symtab_size: Option<u32>,
+    /// When true, omit the `.symtab`/`.strtab` sections entirely (a stripped
+    /// release build). v4 lowering must accept these.
+    strip: bool,
 }
 
 fn add_name(blob: &mut Vec<u8>, name: &str) -> u32 {
@@ -128,7 +126,8 @@ fn assemble(spec: ElfSpec) -> Vec<u8> {
     let extra_count = spec.extras.len();
     let symtab_idx = as_u32(2 + extra_count);
     let strtab_idx = symtab_idx + 1;
-    let section_count = 2 + extra_count + 3;
+    let symbol_sections = if spec.strip { 0 } else { 2 };
+    let section_count = 2 + extra_count + symbol_sections + 1;
 
     // Section-header string table.
     let mut shstr = vec![0u8];
@@ -225,28 +224,30 @@ fn assemble(spec: ElfSpec) -> Vec<u8> {
             0,
         );
     }
-    push_shdr(
-        &mut file,
-        symtab_name,
-        SHT_SYMTAB,
-        0,
-        0,
-        symtab_off,
-        spec.bad_symtab_size.unwrap_or_else(|| as_u32(symtab.len())),
-        strtab_idx,
-        16,
-    );
-    push_shdr(
-        &mut file,
-        strtab_name,
-        SHT_STRTAB,
-        0,
-        0,
-        strtab_off,
-        as_u32(strtab.len()),
-        0,
-        0,
-    );
+    if !spec.strip {
+        push_shdr(
+            &mut file,
+            symtab_name,
+            SHT_SYMTAB,
+            0,
+            0,
+            symtab_off,
+            as_u32(symtab.len()),
+            strtab_idx,
+            16,
+        );
+        push_shdr(
+            &mut file,
+            strtab_name,
+            SHT_STRTAB,
+            0,
+            0,
+            strtab_off,
+            as_u32(strtab.len()),
+            0,
+            0,
+        );
+    }
     push_shdr(
         &mut file,
         shstrtab_name,
@@ -321,19 +322,7 @@ fn happy_spec() -> ElfSpec {
                 shndx: 1,
             },
         ],
-        bad_symtab_size: None,
-    }
-}
-
-/// A `SymSpec` for a `.text` (shndx 1) symbol with the given binding/type.
-fn text_sym(name: &'static str, value: u32, sym_type: u8, bind: u8) -> SymSpec {
-    SymSpec {
-        name,
-        value,
-        size: 0,
-        sym_type,
-        bind,
-        shndx: 1,
+        strip: false,
     }
 }
 
@@ -356,25 +345,25 @@ fn lowers_a_minimal_contract() {
     let elf = assemble(happy_spec());
     let lowered = lower(&elf).expect("happy path lowers");
 
-    // Dispatch entries are sorted by method id (0x10 before 0xAA).
-    assert_eq!(
-        lowered.entries,
-        vec![
-            DispatchEntry {
-                method_id: 0x10,
-                pc: 16
-            },
-            DispatchEntry {
-                method_id: 0xAA,
-                pc: 4
-            },
-        ]
-    );
     assert_eq!(lowered.code.len(), 32);
-    assert_eq!(lowered.initial_memory.len(), 64 * 1024);
-    // header + code + 2 dispatch entries + 64 KiB memory.
-    assert_eq!(lowered.artifact.len(), 172 + 32 + 32 + 64 * 1024);
+    assert_eq!(lowered.memory_bytes, 64 * 1024);
+    // No data sections, so the stored initial-memory prefix is empty.
+    assert_eq!(lowered.initial_memory.len(), 0);
+    // header (132) + code (32) + empty initial memory.
+    assert_eq!(lowered.artifact.len(), 132 + 32);
     assert_eq!(&lowered.artifact[..8], b"GHRV32A1");
+    verify_artifact(&lowered.artifact).expect("artifact self-verifies");
+}
+
+#[test]
+fn lowers_a_stripped_elf() {
+    // A stripped release build has no .symtab; v4 lowering must accept it
+    // because the entry contract is e_entry == 0 plus the .text layout.
+    let mut spec = happy_spec();
+    spec.strip = true;
+    spec.syms.clear();
+    let lowered = lower(&assemble(spec)).expect("stripped elf lowers");
+    assert_eq!(lowered.code.len(), 32);
     verify_artifact(&lowered.artifact).expect("artifact self-verifies");
 }
 
@@ -388,14 +377,20 @@ fn copies_data_sections_into_the_memory_image() {
         vec![0xDE, 0xAD, 0xBE, 0xEF],
     ));
     let lowered = lower(&assemble(spec)).expect("lowers with rodata");
+    // The stored prefix runs from 0 to the section's high-water end (0x104),
+    // not the full 64 KiB address space.
+    assert_eq!(lowered.initial_memory.len(), 0x104);
+    assert!(lowered.initial_memory.len() < lowered.memory_bytes);
     assert_eq!(
         &lowered.initial_memory[0x100..0x104],
         &[0xDE, 0xAD, 0xBE, 0xEF]
     );
+    // The high-water prefix is materially smaller than the old full image.
+    assert!(lowered.artifact.len() < 132 + 32 + 64 * 1024);
 }
 
 #[test]
-fn metadata_matches_the_python_sidecar_shape() {
+fn metadata_has_sorted_keys_and_expected_shape() {
     let elf = assemble(happy_spec());
     let lowered = lower(&elf).expect("lowers");
     let document = render_metadata(&MetadataInput {
@@ -403,14 +398,13 @@ fn metadata_matches_the_python_sidecar_shape() {
         artifact: &lowered.artifact,
         code: &lowered.code,
         initial_memory: &lowered.initial_memory,
-        entries: &lowered.entries,
+        memory_bytes: lowered.memory_bytes,
         rustc_version: None,
         target_triple: Some("riscv32im-unknown-none-elf".to_string()),
         build_flags: None,
     });
 
     assert!(document.ends_with('\n'), "trailing newline");
-    assert!(document.contains("\"method_id\": \"0x00000000000000AA\""));
     assert!(document.contains("\"code_bytes\": 32"));
     assert!(document.contains(&format!(
         "\"artifact_format_fingerprint\": \"{FORMAT_FINGERPRINT:#018x}\""
@@ -425,6 +419,8 @@ fn metadata_matches_the_python_sidecar_shape() {
     let parsed: serde_json::Value = serde_json::from_str(&document).expect("valid json");
     assert_eq!(parsed["code_bytes"], 32);
     assert_eq!(parsed["memory_bytes"], 64 * 1024);
+    assert_eq!(parsed["initial_memory_bytes"], 0);
+    assert!(parsed.get("dispatch_entries").is_none());
     assert_eq!(
         parsed["artifact_format_fingerprint"],
         format!("{FORMAT_FINGERPRINT:#018x}")
@@ -461,106 +457,6 @@ fn rejects_unaligned_text_size() {
     let mut spec = happy_spec();
     spec.text = vec![0u8; 30];
     expect_err(spec, ".text size must be four-byte aligned");
-}
-
-#[test]
-fn rejects_missing_start() {
-    let mut spec = happy_spec();
-    spec.syms.retain(|s| s.name != "_start");
-    expect_err(spec, "_start symbol is missing");
-}
-
-#[test]
-fn rejects_entry_point_that_is_not_a_function() {
-    let mut spec = happy_spec();
-    // A NOTYPE entry-shaped symbol slips past the data-in-.text checks and is
-    // caught in dispatch discovery.
-    spec.syms.push(SymSpec {
-        name: "00000000000000BB",
-        value: 8,
-        size: 0,
-        sym_type: STT_NOTYPE,
-        bind: STB_GLOBAL,
-        shndx: 1,
-    });
-    expect_err(spec, "is not a function");
-}
-
-#[test]
-fn rejects_misaligned_entry_point() {
-    let mut spec = happy_spec();
-    spec.syms.push(SymSpec {
-        name: "00000000000000CC",
-        value: 2,
-        size: 0,
-        sym_type: STT_FUNC,
-        bind: STB_GLOBAL,
-        shndx: 1,
-    });
-    expect_err(spec, "not four-byte aligned");
-}
-
-#[test]
-fn rejects_entry_point_outside_text() {
-    let mut spec = happy_spec();
-    spec.syms.push(SymSpec {
-        name: "00000000000000DD",
-        value: 64,
-        size: 0,
-        sym_type: STT_FUNC,
-        bind: STB_GLOBAL,
-        shndx: 1,
-    });
-    expect_err(spec, "falls outside .text");
-}
-
-#[test]
-fn rejects_entry_point_not_resolving_to_text() {
-    let mut spec = happy_spec();
-    spec.syms.push(SymSpec {
-        name: "00000000000000EE",
-        value: 4,
-        size: 0,
-        sym_type: STT_FUNC,
-        bind: STB_GLOBAL,
-        shndx: 0, // NULL section, not .text
-    });
-    expect_err(spec, "does not resolve to .text");
-}
-
-#[test]
-fn rejects_duplicate_entry_with_conflicting_pc() {
-    let mut spec = happy_spec();
-    spec.syms.push(SymSpec {
-        name: "00000000000000AA", // same id as a happy entry, different pc
-        value: 8,
-        size: 0,
-        sym_type: STT_FUNC,
-        bind: STB_GLOBAL,
-        shndx: 1,
-    });
-    expect_err(spec, "duplicate dispatch entry");
-}
-
-#[test]
-fn rejects_when_no_entry_points_present() {
-    let mut spec = happy_spec();
-    spec.syms.retain(|s| s.name == "_start");
-    expect_err(spec, "no #[contract] entry-point symbols found");
-}
-
-#[test]
-fn rejects_object_symbol_in_text() {
-    let mut spec = happy_spec();
-    spec.syms.push(SymSpec {
-        name: "a_data_blob",
-        value: 8,
-        size: 4,
-        sym_type: STT_OBJECT,
-        bind: STB_GLOBAL,
-        shndx: 1,
-    });
-    expect_err(spec, "data symbol");
 }
 
 #[test]
@@ -601,7 +497,9 @@ fn ignores_alloc_contract_spec_metadata_sections() {
         ));
         let lowered = lower(&assemble(spec)).expect("spec metadata section is ignored");
 
-        assert_eq!(&lowered.initial_memory[0x1000..0x1004], &[0, 0, 0, 0]);
+        // The spec section is not copied into VM memory, so it does not raise
+        // the high-water mark: with no real data sections the prefix is empty.
+        assert_eq!(lowered.initial_memory.len(), 0);
     }
 }
 
@@ -647,42 +545,6 @@ fn rejects_data_section_overlapping_text() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn skips_lowercase_hex_symbol() {
-    // Lowercase hex is not the entrypoint shape; with only a lowercase candidate
-    // left, discovery finds no entries.
-    let mut spec = happy_spec();
-    spec.syms.retain(|s| s.name == "_start");
-    spec.syms
-        .push(text_sym("00000000000000aa", 4, STT_FUNC, STB_GLOBAL));
-    expect_err(spec, "no #[contract] entry-point symbols found");
-}
-
-#[test]
-fn accepts_weak_binding_entry() {
-    let mut spec = happy_spec();
-    spec.syms
-        .push(text_sym("00000000000000BC", 8, STT_FUNC, STB_WEAK));
-    let lowered = lower(&assemble(spec)).expect("weak entry lowers");
-    assert!(
-        lowered
-            .entries
-            .iter()
-            .any(|e| e.method_id == 0xBC && e.pc == 8)
-    );
-}
-
-#[test]
-fn skips_local_binding_hex_symbol() {
-    // A local symbol matching the hex shape is a name collision, not an export.
-    let mut spec = happy_spec();
-    spec.syms
-        .push(text_sym("00000000000000BD", 8, STT_FUNC, STB_LOCAL));
-    let lowered = lower(&assemble(spec)).expect("lowers");
-    assert_eq!(lowered.entries.len(), 2);
-    assert!(lowered.entries.iter().all(|e| e.method_id != 0xBD));
-}
-
-#[test]
 fn rejects_code_larger_than_max() {
     let mut spec = happy_spec();
     spec.text = vec![0u8; 64 * 1024 + 4]; // 4-byte aligned, over the limit
@@ -699,50 +561,6 @@ fn rejects_multiple_text_sections() {
         vec![0u8; 4],
     ));
     expect_err(spec, "expected exactly one .text section");
-}
-
-#[test]
-fn rejects_start_not_at_vaddr_zero() {
-    let mut spec = happy_spec();
-    for sym in &mut spec.syms {
-        if sym.name == "_start" {
-            sym.value = 4;
-        }
-    }
-    expect_err(spec, "_start must be at vaddr 0");
-}
-
-#[test]
-fn rejects_start_not_a_function() {
-    let mut spec = happy_spec();
-    for sym in &mut spec.syms {
-        if sym.name == "_start" {
-            sym.sym_type = STT_NOTYPE;
-        }
-    }
-    expect_err(spec, "_start must be a function");
-}
-
-#[test]
-fn rejects_object_symbol_resolving_into_text() {
-    // STT_OBJECT in a *data* section whose value nonetheless lands in the .text
-    // range -> caught by the value-based object check, not the in-.text one.
-    let mut spec = happy_spec();
-    spec.extras.push(ExtraSection::progbits(
-        ".rodata",
-        SHF_ALLOC,
-        0x100,
-        vec![0u8; 4],
-    ));
-    spec.syms.push(SymSpec {
-        name: "obj",
-        value: 4, // inside [0, text_end)
-        size: 0,
-        sym_type: STT_OBJECT,
-        bind: STB_GLOBAL,
-        shndx: 2, // the .rodata extra, not .text
-    });
-    expect_err(spec, "resolves into .text");
 }
 
 #[test]
@@ -778,12 +596,13 @@ fn rejects_section_exceeding_memory_limit() {
 
 #[test]
 fn handles_nobits_bss_section() {
-    // NOBITS carries a size but no file content; the region stays zero and the
-    // lowerer must not try to read file bytes for it.
+    // NOBITS carries a size but no file content; it is not stored (the runtime
+    // zero-fills it), so it does not raise the high-water mark. With only a
+    // .bss the stored prefix is empty.
     let mut spec = happy_spec();
     spec.extras.push(ExtraSection::nobits(".bss", 0x200, 0x100));
     let lowered = lower(&assemble(spec)).expect("lowers with .bss");
-    assert!(lowered.initial_memory[0x200..0x300].iter().all(|&b| b == 0));
+    assert_eq!(lowered.initial_memory.len(), 0);
 }
 
 #[test]
@@ -798,14 +617,6 @@ fn rejects_sht_rel_relocations() {
         size_override: None,
     });
     expect_err(spec, "relocations are not allowed");
-}
-
-#[test]
-fn rejects_symtab_size_not_multiple_of_entry() {
-    let mut spec = happy_spec();
-    // 4 symbols (incl. the null entry) -> 64 bytes; claim a non-multiple of 16.
-    spec.bad_symtab_size = Some(64 + 4);
-    expect_err(spec, "not a multiple of the entry size");
 }
 
 #[test]
@@ -829,14 +640,14 @@ fn malformed_inputs_error_without_panicking() {
 }
 
 // ---------------------------------------------------------------------------
-// Artifact self-check (verify_artifact) failure paths + dispatch bound.
+// Artifact self-check (verify_artifact) failure paths.
 // ---------------------------------------------------------------------------
 
 #[test]
 fn verify_artifact_rejects_corrupted_code_digest() {
     let lowered = lower(&assemble(happy_spec())).expect("lowers");
     let mut bytes = lowered.artifact.clone();
-    bytes[76] ^= 0xFF; // first byte of the code digest
+    bytes[68] ^= 0xFF; // first byte of the code digest (v4 offset 68)
     assert!(verify_artifact(&bytes).is_err());
 }
 
@@ -859,39 +670,23 @@ fn verify_artifact_rejects_nonzero_flags() {
 }
 
 #[test]
-fn build_dispatch_table_rejects_out_of_range_pc() {
-    let entries = [DispatchEntry {
-        method_id: 1,
-        pc: 100,
-    }];
-    assert!(groundhog_rv32_artifact::build_dispatch_table(&entries, 32).is_err());
-}
-
-#[test]
 fn build_artifact_rejects_code_outside_limits() {
     use groundhog_rv32_artifact::{MAX_CODE_BYTES, build_artifact};
-    let memory = vec![0u8; 64 * 1024];
-    let entries = [DispatchEntry {
-        method_id: 1,
-        pc: 0,
-    }];
-    assert!(build_artifact(&[], &memory, &entries).is_err()); // empty code
+    let memory: Vec<u8> = Vec::new();
+    assert!(build_artifact(&[], &memory).is_err()); // empty code
     let oversized = vec![0u8; MAX_CODE_BYTES + 4];
-    assert!(build_artifact(&oversized, &memory, &entries).is_err()); // > 64 KiB
+    assert!(build_artifact(&oversized, &memory).is_err()); // > 64 KiB
 }
 
 #[test]
-fn build_artifact_rejects_wrong_memory_size() {
+fn build_artifact_accepts_prefix_up_to_max_memory() {
     use groundhog_rv32_artifact::{MAX_MEMORY_BYTES, build_artifact};
     let code = vec![0u8; 4];
-    let entries = [DispatchEntry {
-        method_id: 1,
-        pc: 0,
-    }];
-    // The materialized image must be exactly MAX_MEMORY_BYTES.
-    assert!(build_artifact(&code, &vec![0u8; MAX_MEMORY_BYTES - 4], &entries).is_err());
-    assert!(build_artifact(&code, &vec![0u8; MAX_MEMORY_BYTES + 4], &entries).is_err());
-    assert!(build_artifact(&code, &vec![0u8; MAX_MEMORY_BYTES], &entries).is_ok());
+    // A short prefix and a full-size prefix are both valid; only > MAX is not.
+    assert!(build_artifact(&code, &[]).is_ok());
+    assert!(build_artifact(&code, &vec![0u8; MAX_MEMORY_BYTES - 4]).is_ok());
+    assert!(build_artifact(&code, &vec![0u8; MAX_MEMORY_BYTES]).is_ok());
+    assert!(build_artifact(&code, &vec![0u8; MAX_MEMORY_BYTES + 4]).is_err());
 }
 
 #[test]
@@ -905,7 +700,7 @@ fn verify_artifact_rejects_oversized_code_size() {
 }
 
 #[test]
-fn metadata_renders_null_build_info_and_entry_shape() {
+fn metadata_renders_null_build_info() {
     let elf = assemble(happy_spec());
     let lowered = lower(&elf).expect("lowers");
     let doc = render_metadata(&MetadataInput {
@@ -913,7 +708,7 @@ fn metadata_renders_null_build_info_and_entry_shape() {
         artifact: &lowered.artifact,
         code: &lowered.code,
         initial_memory: &lowered.initial_memory,
-        entries: &lowered.entries,
+        memory_bytes: lowered.memory_bytes,
         rustc_version: None,
         target_triple: None,
         build_flags: None,
@@ -923,10 +718,8 @@ fn metadata_renders_null_build_info_and_entry_shape() {
     assert!(doc.contains("\"build_flags\": null"));
 
     let parsed: serde_json::Value = serde_json::from_str(&doc).expect("valid json");
-    let entries = parsed["dispatch_entries"].as_array().expect("array");
-    assert_eq!(entries.len(), 2);
-    assert_eq!(entries[0]["method_id"], "0x0000000000000010");
-    assert_eq!(entries[0]["pc"], 16);
+    assert!(parsed.get("dispatch_entries").is_none());
+    assert_eq!(parsed["memory_bytes"], 64 * 1024);
 }
 
 // ---------------------------------------------------------------------------
@@ -947,9 +740,8 @@ fn summary_json_has_the_expected_shape() {
         format!("{FORMAT_FINGERPRINT:#018x}")
     );
     assert!(doc["artifact_sha256"].as_str().is_some());
-    let entries = doc["dispatch_entries"].as_array().expect("array");
-    assert_eq!(entries.len(), 2);
-    assert_eq!(entries[1]["method_id"], "0x00000000000000AA");
+    assert_eq!(doc["initial_memory_bytes"], 0);
+    assert!(doc.get("dispatch_entries").is_none());
 }
 
 #[test]
@@ -976,7 +768,7 @@ fn cli_json_flag_emits_structured_stdout() {
     let doc: serde_json::Value = serde_json::from_slice(&ok.stdout).expect("stdout is json");
     assert_eq!(doc["status"], "ok");
     assert_eq!(doc["code_bytes"], 32);
-    assert_eq!(doc["dispatch_entries"].as_array().unwrap().len(), 2);
+    assert!(doc.get("dispatch_entries").is_none());
 
     // Error path: a nonexistent ELF still yields a JSON envelope on stdout.
     let err = Command::new(bin)
@@ -1015,11 +807,11 @@ fn cli_print_format_fingerprint_does_not_require_artifact_args() {
 }
 
 // ---------------------------------------------------------------------------
-// Opt-in real-ELF parity (skipped unless RV32_LOWER_PARITY_ELF is set).
+// Opt-in real-ELF golden check (skipped unless RV32_LOWER_PARITY_ELF is set).
 // ---------------------------------------------------------------------------
 
 #[test]
-fn matches_python_golden_when_provided() {
+fn matches_golden_when_provided() {
     let Ok(elf_path) = std::env::var("RV32_LOWER_PARITY_ELF") else {
         eprintln!("skipping: RV32_LOWER_PARITY_ELF not set");
         return;
@@ -1030,7 +822,7 @@ fn matches_python_golden_when_provided() {
         let golden = std::fs::read(&golden_path).expect("read golden artifact");
         assert_eq!(
             lowered.artifact, golden,
-            "artifact bytes diverge from python golden"
+            "artifact bytes diverge from the golden artifact"
         );
     }
 }
