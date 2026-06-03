@@ -15,6 +15,9 @@ use tokio::time::{Instant, sleep, timeout};
 
 use crate::error::SimError;
 use crate::manifest::{ChaosEventKind, ChaosEventSpec, SimulationManifest};
+use crate::resource::{
+    ResourceSample, ResourceSamplerFuture, TargetResourceSampler, sample_process_group,
+};
 use crate::result::ChaosEventState;
 use crate::util::{command_on_path, write_json_pretty_atomic};
 use crate::validation::{
@@ -237,6 +240,11 @@ pub trait TargetProvider {
         None
     }
 
+    /// Return the resource sampler for providers with owned process identity.
+    fn resource_sampler(&self) -> Option<&dyn TargetResourceSampler> {
+        None
+    }
+
     /// Clean up target resources acquired for a run.
     ///
     /// Implementations must be idempotent because future managed providers may
@@ -322,6 +330,7 @@ struct LocalAcquiredTarget {
     log_tasks: LocalLogTasks,
     rpc_url: String,
     rpc_port: u16,
+    process: Option<OwnedProcess>,
     next_launch_index: u32,
 }
 
@@ -428,6 +437,10 @@ impl TargetProvider for LocalTargetProvider {
     fn chaos_controller(&self) -> Option<&dyn ChaosController> {
         Some(self)
     }
+
+    fn resource_sampler(&self) -> Option<&dyn TargetResourceSampler> {
+        Some(self)
+    }
 }
 
 impl LocalTargetProvider {
@@ -473,6 +486,7 @@ impl LocalTargetProvider {
             log_tasks: launched.log_tasks,
             rpc_url: rpc_url.clone(),
             rpc_port,
+            process: process.clone(),
             next_launch_index: 1,
         }));
         Ok(ResolvedTarget {
@@ -493,6 +507,37 @@ impl ChaosController for LocalTargetProvider {
         Box::pin(async move {
             match event.kind {
                 ChaosEventKind::RestartTarget => self.restart_target().await,
+            }
+        })
+    }
+}
+
+impl TargetResourceSampler for LocalTargetProvider {
+    fn sample(&self, scheduled_time_ms: u64) -> ResourceSamplerFuture<'_> {
+        Box::pin(async move {
+            let process = {
+                let state = self.state.lock().await;
+                match &*state {
+                    LocalTargetState::Acquired(acquired) => acquired.process.clone(),
+                    LocalTargetState::Idle | LocalTargetState::Acquiring => None,
+                }
+            };
+            let Some(process) = process else {
+                return ResourceSample::unavailable(
+                    scheduled_time_ms,
+                    "local target process identity is unavailable",
+                );
+            };
+            match tokio::task::spawn_blocking(move || {
+                sample_process_group(process.pid, process.pgid, scheduled_time_ms)
+            })
+            .await
+            {
+                Ok(sample) => sample,
+                Err(error) => ResourceSample::unavailable(
+                    scheduled_time_ms,
+                    format!("target resource sampling task failed: {error}"),
+                ),
             }
         })
     }
@@ -537,7 +582,7 @@ impl LocalTargetProvider {
         let new_process = capture_owned_process(new_pid, rpc_port).await;
         if let Err(error) = write_json_pretty_atomic(
             launch_config.ownership_path.clone(),
-            &TargetOwnership::local(new_process),
+            &TargetOwnership::local(new_process.clone()),
         )
         .await
         {
@@ -552,6 +597,7 @@ impl LocalTargetProvider {
             log_tasks: launched.log_tasks,
             rpc_url: expected_rpc_url,
             rpc_port,
+            process: new_process,
             next_launch_index: launch_index + 1,
         }));
 
@@ -1775,6 +1821,16 @@ while :; do sleep 1; done
         assert_eq!(refreshed_process.pid.to_string(), new_pid);
         assert_ne!(refreshed_process.pid, initial_process.pid);
         assert_eq!(refreshed_process.port, 49152);
+
+        #[cfg(target_os = "linux")]
+        {
+            let sample = provider.sample(2_000).await;
+            let ResourceSample::Observed(point) = sample else {
+                panic!("linux local target sampler should observe the relaunched process");
+            };
+            assert_eq!(point.root_pid, refreshed_process.pid);
+            assert_eq!(point.pgid, Some(refreshed_process.pgid));
+        }
 
         provider
             .cleanup(&target)

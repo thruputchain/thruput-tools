@@ -5,8 +5,8 @@ use tokio::io::AsyncWriteExt;
 
 use crate::manifest::{ChaosEventKind, WorkloadKind};
 use crate::result::{
-    AssertionResult, ChaosEventState, ContractDeploymentRecord, SimMetricAvailability,
-    SimRunOutcome,
+    AssertionResult, ChaosEventState, ContractDeploymentRecord, ResourceSampleScope,
+    SimMetricAvailability, SimRunOutcome,
 };
 use crate::target::TargetProviderKind;
 
@@ -73,6 +73,14 @@ pub enum ResultEvent {
     WorkloadSkipped {
         #[serde(flatten)]
         event: WorkloadEvent,
+    },
+    SimulatorOverload {
+        #[serde(flatten)]
+        event: SimulatorOverloadEvent,
+    },
+    ResourceSample {
+        #[serde(flatten)]
+        event: ResourceSampleEvent,
     },
     ChaosTransition {
         #[serde(flatten)]
@@ -203,6 +211,52 @@ pub struct WorkloadEvent {
     pub read_after_write_matched: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub read_after_write_rebased: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SimulatorOverloadEvent {
+    pub actor_id: u32,
+    pub scheduled_time_ms: u64,
+    pub tx_hash: String,
+    pub reason: String,
+    pub pending_receipts: usize,
+    pub pending_receipt_limit: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ResourceSampleStatus {
+    Observed,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceSampleEvent {
+    pub scheduled_time_ms: u64,
+    pub observed_at_unix_ms: String,
+    pub status: ResourceSampleStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<ResourceSampleScope>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root_pid: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pgid: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub process_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rss_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu_user_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu_system_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub threads: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub open_fds: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -497,6 +551,42 @@ mod tests {
                     "status": "unsupported",
                     "reason": "public receipt path does not surface NNInt compute usage"
                 }
+            })
+        );
+    }
+
+    #[test]
+    fn resource_sample_unavailable_event_shape_matches_stream_contract() {
+        let event = ResultEvent::ResourceSample {
+            event: ResourceSampleEvent {
+                scheduled_time_ms: 5_000,
+                observed_at_unix_ms: "100".into(),
+                status: ResourceSampleStatus::Unavailable,
+                reason: Some("target provider does not expose process resource sampling".into()),
+                scope: None,
+                root_pid: None,
+                pgid: None,
+                process_count: None,
+                rss_bytes: None,
+                cpu_user_ms: None,
+                cpu_system_ms: None,
+                threads: None,
+                open_fds: None,
+            },
+        };
+
+        let value =
+            serde_json::to_value(VersionedEvent::new(&event)).expect("event should serialize");
+
+        assert_eq!(
+            value,
+            json!({
+                "kind": "resource-sample",
+                "schemaVersion": 1,
+                "scheduledTimeMs": 5000,
+                "observedAtUnixMs": "100",
+                "status": "unavailable",
+                "reason": "target provider does not expose process resource sampling"
             })
         );
     }

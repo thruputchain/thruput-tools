@@ -271,6 +271,75 @@
       "runner": "hoglab run"
     },
     {
+      "id": "local-multi-contract-soak",
+      "path": "local-multi-contract-soak.json",
+      "title": "Local Multi-Contract Hot-Contract Soak",
+      "summary": "Deploys fibonacci plus caller-counter and drives weighted hot/cold contract-call targets with events, storage, and read-after-write traffic.",
+      "provider": "local",
+      "tier": "soak",
+      "tags": ["local", "contract", "multi-contract", "hot-contract", "mixed", "events-query", "read-after-write", "soak"],
+      "requiresContracts": true,
+      "contracts": [
+        {
+          "name": "fibonacci",
+          "source": "groundhog-examples/fibonacci",
+          "artifact": "fibonacci.wasm"
+        },
+        {
+          "name": "caller-counter",
+          "source": "groundhog-examples/sim-fixtures/caller-counter",
+          "artifact": "caller_counter.wasm"
+        }
+      ],
+      "runner": "hoglab run"
+    },
+    {
+      "id": "local-realistic-soak",
+      "path": "local-realistic-soak.json",
+      "title": "Local Realistic Regression Soak",
+      "summary": "Multi-minute mixed JSON-RPC soak with wallet, receipt, events, storage, read-after-write, weighted hot-contract traffic, and regression gates.",
+      "provider": "local",
+      "tier": "regression",
+      "tags": ["local", "contract", "multi-contract", "hot-contract", "mixed", "events-query", "read-after-write", "soak", "regression"],
+      "requiresContracts": true,
+      "contracts": [
+        {
+          "name": "fibonacci",
+          "source": "groundhog-examples/fibonacci",
+          "artifact": "fibonacci.wasm"
+        },
+        {
+          "name": "caller-counter",
+          "source": "groundhog-examples/sim-fixtures/caller-counter",
+          "artifact": "caller_counter.wasm"
+        }
+      ],
+      "runner": "hoglab run"
+    },
+    {
+      "id": "local-realistic-soak-short",
+      "path": "local-realistic-soak-short.json",
+      "title": "Local Realistic Soak Short Smoke",
+      "summary": "Reduced-duration version of the realistic soak for opt-in local smoke coverage of regression fields and multi-contract traffic.",
+      "provider": "local",
+      "tier": "soak-smoke",
+      "tags": ["local", "contract", "multi-contract", "hot-contract", "mixed", "events-query", "read-after-write", "soak", "smoke", "regression"],
+      "requiresContracts": true,
+      "contracts": [
+        {
+          "name": "fibonacci",
+          "source": "groundhog-examples/fibonacci",
+          "artifact": "fibonacci.wasm"
+        },
+        {
+          "name": "caller-counter",
+          "source": "groundhog-examples/sim-fixtures/caller-counter",
+          "artifact": "caller_counter.wasm"
+        }
+      ],
+      "runner": "GROUNDHOG_SIM_RUN_SOAKS=1 scripts/smoke-sim-scenarios.sh"
+    },
+    {
       "id": "local-wallet-soak",
       "path": "local-wallet-soak.json",
       "title": "Local Wallet Soak",

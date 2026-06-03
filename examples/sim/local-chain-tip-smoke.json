@@ -22,5 +22,8 @@
   "assertions": {
     "maxErrorRate": 0.001,
     "maxChainStall": "10s"
+  },
+  "observability": {
+    "resourceSampleInterval": "1s"
   }
 }

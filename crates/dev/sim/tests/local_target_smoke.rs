@@ -140,18 +140,44 @@ const LOCAL_CONTRACT_CATALOG: &[CatalogScenario] = &[
     },
 ];
 
-const LOCAL_SOAK_CATALOG: &[CatalogScenario] = &[CatalogScenario {
-    file: "local-mixed-wallet-receipt-soak.json",
-    expect_passed: true,
-    expect_receipt_metrics: true,
-    expect_restart: false,
-    expect_restart_loss: false,
-    expect_contract_view: false,
-    expect_contract_storage: false,
-    expect_contract_events: false,
-    expect_read_after_write: false,
-    allow_restart_failure: false,
-}];
+const LOCAL_SOAK_CATALOG: &[CatalogScenario] = &[
+    CatalogScenario {
+        file: "local-mixed-wallet-receipt-soak.json",
+        expect_passed: true,
+        expect_receipt_metrics: true,
+        expect_restart: false,
+        expect_restart_loss: false,
+        expect_contract_view: false,
+        expect_contract_storage: false,
+        expect_contract_events: false,
+        expect_read_after_write: false,
+        allow_restart_failure: false,
+    },
+    CatalogScenario {
+        file: "local-multi-contract-soak.json",
+        expect_passed: true,
+        expect_receipt_metrics: false,
+        expect_restart: false,
+        expect_restart_loss: false,
+        expect_contract_view: false,
+        expect_contract_storage: true,
+        expect_contract_events: true,
+        expect_read_after_write: true,
+        allow_restart_failure: false,
+    },
+    CatalogScenario {
+        file: "local-realistic-soak-short.json",
+        expect_passed: true,
+        expect_receipt_metrics: true,
+        expect_restart: false,
+        expect_restart_loss: false,
+        expect_contract_view: false,
+        expect_contract_storage: true,
+        expect_contract_events: true,
+        expect_read_after_write: true,
+        allow_restart_failure: false,
+    },
+];
 
 #[derive(Debug, Clone, Copy)]
 #[allow(clippy::struct_excessive_bools)]
@@ -207,6 +233,8 @@ fn local_target_chain_tip_smoke() {
     assert!(temp.path().join("target-ownership.json").exists());
     assert!(temp.path().join("logs/local-node-0.stdout.log").exists());
     assert!(temp.path().join("logs/local-node-0.stderr.log").exists());
+    let result = read_result(temp.path());
+    assert_local_resource_timeline(&result, "local-chain-tip-smoke");
 
     let simulation = std::fs::read_to_string(temp.path().join("simulation.json"))
         .expect("simulation artifact should read");
@@ -581,6 +609,8 @@ fn run_catalog(catalog: &[CatalogScenario]) {
         if scenario.expect_read_after_write {
             assert_read_after_write_artifacts(&result, &run_dir, scenario.file);
         }
+        assert_multi_contract_artifacts(&result, scenario.file);
+        assert_regression_diagnostic_fields(&result, scenario.file);
 
         let simulation = std::fs::read_to_string(run_dir.join("simulation.json"))
             .expect("simulation artifact should read");
@@ -588,6 +618,61 @@ fn run_catalog(catalog: &[CatalogScenario]) {
             .expect("simulation artifact should record resolved rpc url");
         assert_rpc_port_closed(&rpc_url);
     }
+}
+
+fn assert_multi_contract_artifacts(result: &serde_json::Value, scenario: &str) {
+    if !matches!(
+        scenario,
+        "local-multi-contract-soak.json" | "local-realistic-soak-short.json"
+    ) {
+        return;
+    }
+    assert!(
+        result["contracts"]
+            .as_array()
+            .is_some_and(|contracts| contracts.len() > 1),
+        "{scenario} should deploy multiple contracts"
+    );
+}
+
+fn assert_completed_contract<'a>(
+    result: &'a serde_json::Value,
+    scenario: &str,
+    name: &str,
+) -> &'a serde_json::Value {
+    let contracts = result["contracts"]
+        .as_array()
+        .expect("result should contain contracts array");
+    let contract = contracts
+        .iter()
+        .find(|contract| contract["name"] == name)
+        .unwrap_or_else(|| panic!("{scenario} should contain {name} contract"));
+    assert_eq!(contract["status"], "completed", "{scenario}");
+    assert!(contract["address"].as_str().is_some(), "{scenario}");
+    contract
+}
+
+fn assert_regression_diagnostic_fields(result: &serde_json::Value, scenario: &str) {
+    if scenario != "local-realistic-soak-short.json" {
+        return;
+    }
+    assert!(
+        result.get("backpressureRate").is_some(),
+        "{scenario} should include backpressureRate"
+    );
+    assert_eq!(
+        result["backpressureRate"].as_f64(),
+        Some(0.0),
+        "{scenario} should not count warm-up skips as backpressure"
+    );
+    assert!(
+        result.get("simulatorOverloadRate").is_some(),
+        "{scenario} should include simulatorOverloadRate"
+    );
+    assert!(
+        result.get("resourceTimeline").is_some(),
+        "{scenario} should include resourceTimeline"
+    );
 }
 
 fn expected_event_query_name(scenario_path: &std::path::Path) -> String {
@@ -663,6 +748,37 @@ fn assert_present_receipt_metrics(result: &serde_json::Value, scenario: &str) {
     );
 }
 
+#[cfg(target_os = "linux")]
+fn assert_local_resource_timeline(result: &serde_json::Value, scenario: &str) {
+    let resource = &result["resourceTimeline"];
+    assert_eq!(
+        resource["status"], "observed",
+        "{scenario} should observe local resource timeline on Linux"
+    );
+    assert!(
+        resource["value"]["sampleCount"]
+            .as_u64()
+            .unwrap_or_default()
+            >= 2,
+        "{scenario} should observe at least two resource samples"
+    );
+}
+
+#[cfg(not(target_os = "linux"))]
+fn assert_local_resource_timeline(result: &serde_json::Value, scenario: &str) {
+    let resource = &result["resourceTimeline"];
+    assert_eq!(
+        resource["status"], "unavailable",
+        "{scenario} should mark resource timeline unavailable on non-Linux"
+    );
+    assert!(
+        resource["reason"]
+            .as_str()
+            .is_some_and(|reason| !reason.is_empty()),
+        "{scenario} should explain resource timeline unavailability"
+    );
+}
+
 fn assert_restart_artifacts(result: &serde_json::Value, run_dir: &std::path::Path, scenario: &str) {
     let chaos_events = result["chaosEvents"]
         .as_array()
@@ -723,21 +839,15 @@ fn assert_contract_view_artifacts(
     run_dir: &std::path::Path,
     scenario: &str,
 ) {
-    let contracts = result["contracts"]
-        .as_array()
-        .expect("result should contain contracts array");
-    assert_eq!(contracts.len(), 1, "{scenario}");
-    assert_eq!(contracts[0]["name"], "fibonacci", "{scenario}");
-    assert_eq!(contracts[0]["status"], "completed", "{scenario}");
+    let contract = assert_completed_contract(result, scenario, "fibonacci");
     assert!(
         matches!(
-            contracts[0]["addressSource"].as_str(),
+            contract["addressSource"].as_str(),
             Some("derived" | "receipt")
         ),
         "{scenario}"
     );
-    assert!(contracts[0]["txHash"].as_str().is_some(), "{scenario}");
-    assert!(contracts[0]["address"].as_str().is_some(), "{scenario}");
+    assert!(contract["txHash"].as_str().is_some(), "{scenario}");
 
     let metrics = &result["workloadMetrics"]["view-call"]["counts"];
     assert!(
@@ -776,13 +886,7 @@ fn assert_contract_storage_artifacts(
     run_dir: &std::path::Path,
     scenario: &str,
 ) {
-    let contracts = result["contracts"]
-        .as_array()
-        .expect("result should contain contracts array");
-    assert_eq!(contracts.len(), 1, "{scenario}");
-    assert_eq!(contracts[0]["name"], "fibonacci", "{scenario}");
-    assert_eq!(contracts[0]["status"], "completed", "{scenario}");
-    assert!(contracts[0]["address"].as_str().is_some(), "{scenario}");
+    assert_completed_contract(result, scenario, "fibonacci");
 
     let metrics = &result["workloadMetrics"]["storage-read"]["counts"];
     assert!(
@@ -816,13 +920,7 @@ fn assert_contract_events_artifacts(
     expected_query: &str,
 ) {
     let positive_events = scenario == "local-fibonacci-contract-call-events-smoke.json";
-    let contracts = result["contracts"]
-        .as_array()
-        .expect("result should contain contracts array");
-    assert_eq!(contracts.len(), 1, "{scenario}");
-    assert_eq!(contracts[0]["name"], "fibonacci", "{scenario}");
-    assert_eq!(contracts[0]["status"], "completed", "{scenario}");
-    assert!(contracts[0]["address"].as_str().is_some(), "{scenario}");
+    assert_completed_contract(result, scenario, "fibonacci");
 
     let metrics = &result["workloadMetrics"]["events-query"]["counts"];
     assert!(
@@ -882,13 +980,7 @@ fn assert_read_after_write_artifacts(
     run_dir: &std::path::Path,
     scenario: &str,
 ) {
-    let contracts = result["contracts"]
-        .as_array()
-        .expect("result should contain contracts array");
-    assert_eq!(contracts.len(), 1, "{scenario}");
-    assert_eq!(contracts[0]["name"], "caller-counter", "{scenario}");
-    assert_eq!(contracts[0]["status"], "completed", "{scenario}");
-    assert!(contracts[0]["address"].as_str().is_some(), "{scenario}");
+    assert_completed_contract(result, scenario, "caller-counter");
 
     let metrics = &result["workloadMetrics"]["read-after-write"]["counts"];
     assert!(

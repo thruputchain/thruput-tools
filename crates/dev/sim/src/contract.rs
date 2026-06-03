@@ -53,6 +53,7 @@ pub struct ContractSetup {
 pub struct PreparedReadAfterWrite {
     pub name: String,
     pub contract_name: String,
+    pub weight: u32,
     pub contract: ContractAddress,
     pub write_entrypoint: Vec<u8>,
     pub write_calldata: Vec<u8>,
@@ -64,6 +65,7 @@ pub struct PreparedReadAfterWrite {
 pub struct PreparedViewCall {
     pub name: String,
     pub contract_name: String,
+    pub weight: u32,
     pub contract: ContractAddress,
     pub entrypoint: Vec<u8>,
     pub calldata: Vec<u8>,
@@ -81,6 +83,8 @@ pub struct PreparedContractCall {
     pub name: String,
     /// Manifest-local contract artifact name.
     pub contract_name: String,
+    /// Relative selection weight among configured contract-call targets.
+    pub weight: u32,
     /// Deployed contract address resolved during startup setup.
     pub contract: ContractAddress,
     /// Raw target contract entrypoint selector bytes.
@@ -93,6 +97,7 @@ pub struct PreparedContractCall {
 pub struct PreparedStorageRead {
     pub name: String,
     pub contract_name: String,
+    pub weight: u32,
     pub contract: ContractAddress,
     pub key: Vec<u8>,
     pub expect_present: Option<bool>,
@@ -102,6 +107,7 @@ pub struct PreparedStorageRead {
 pub struct PreparedEventQuery {
     pub name: String,
     pub contract_name: String,
+    pub weight: u32,
     pub contract: ContractAddress,
     pub order: EventQueryOrderSpec,
     pub anchor: EventQueryAnchorSpec,
@@ -514,6 +520,7 @@ fn prepare_view_calls(
             Ok(PreparedViewCall {
                 name: view.name.clone(),
                 contract_name: view.contract.clone(),
+                weight: view.weight,
                 contract,
                 entrypoint: parse_hex(&view.entrypoint)?,
                 calldata: parse_hex(&view.calldata)?,
@@ -544,6 +551,7 @@ fn prepare_storage_reads(
             Ok(PreparedStorageRead {
                 name: read.name.clone(),
                 contract_name: read.contract.clone(),
+                weight: read.weight,
                 contract,
                 key: parse_hex(&read.key)?,
                 expect_present: read.expect_present,
@@ -569,6 +577,7 @@ fn prepare_contract_calls(
             Ok(PreparedContractCall {
                 name: call.name.clone(),
                 contract_name: call.contract.clone(),
+                weight: call.weight,
                 contract,
                 entrypoint: parse_hex(&call.entrypoint)?,
                 calldata: parse_hex(&call.calldata)?,
@@ -594,6 +603,7 @@ fn prepare_read_after_write(
             Ok(PreparedReadAfterWrite {
                 name: entry.name.clone(),
                 contract_name: entry.contract.clone(),
+                weight: entry.weight,
                 contract,
                 write_entrypoint: parse_hex(&entry.write.entrypoint)?,
                 write_calldata: parse_hex(&entry.write.calldata)?,
@@ -621,6 +631,7 @@ fn prepare_event_queries(
             Ok(PreparedEventQuery {
                 name: query.name.clone(),
                 contract_name: query.contract.clone(),
+                weight: query.weight,
                 contract,
                 order: query.order,
                 anchor: query.anchor.clone(),
@@ -833,6 +844,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn deploy_contract_corpus_records_each_artifact() {
+        let wasm = NamedTempFile::new().expect("wasm temp should create");
+        std::fs::write(wasm.path(), b"\0asm").expect("wasm fixture should write");
+        let mut manifest = manifest(wasm.path());
+        manifest.contract_artifacts.push(ContractArtifactSpec {
+            name: "events".into(),
+            wasm: wasm.path().to_path_buf(),
+        });
+        let file = NamedTempFile::new().expect("event temp should create");
+        let mut event_writer = EventWriter::create(file.path())
+            .await
+            .expect("event writer should open");
+        let mut actors = actor_states();
+        let tx_hash = TxHash(Hex0x(SHA256Hash::from([0x5a; 32])));
+        let receipt = deploy_receipt(tx_hash, ExecStatus::Ok, Some(vec![0x77; 32]));
+        let submitted = Arc::new(Mutex::new(Vec::new()));
+
+        let setup = deploy_manifest_contracts(
+            DeployClient {
+                tx_hash,
+                receipt: Some(receipt),
+                submitted: submitted.clone(),
+                tip_height: 15_000_000,
+            },
+            &manifest,
+            Path::new("/repo/examples/sim/demo.json"),
+            None,
+            &mut actors,
+            &mut event_writer,
+        )
+        .await
+        .expect("deploy should run");
+
+        assert!(!setup.failed);
+        assert_eq!(setup.records.len(), 2);
+        assert_eq!(setup.records[0].name, "fibonacci");
+        assert_eq!(setup.records[1].name, "events");
+        assert_eq!(
+            setup
+                .records
+                .iter()
+                .map(|record| record.status)
+                .collect::<Vec<_>>(),
+            vec![
+                ContractDeploymentStatus::Completed,
+                ContractDeploymentStatus::Completed
+            ]
+        );
+        assert_eq!(actors[0].next_nonce_sequence, 2);
+        assert_eq!(
+            submitted.lock().expect("submitted list should lock").len(),
+            2
+        );
+    }
+
+    #[tokio::test]
     async fn deploy_contract_failure_preserves_post_submit_fields() {
         let wasm = NamedTempFile::new().expect("wasm temp should create");
         std::fs::write(wasm.path(), b"\0asm").expect("wasm fixture should write");
@@ -907,12 +974,14 @@ mod tests {
             contract_calls: vec![crate::manifest::ContractCallSpec {
                 name: "events-store-value".into(),
                 contract: "fibonacci".into(),
+                weight: 1,
                 entrypoint: "0x1111111111111111".into(),
                 calldata: "0x2a64".into(),
             }],
             view_calls: vec![ViewCallSpec {
                 name: "fib-10".into(),
                 contract: "fibonacci".into(),
+                weight: 1,
                 entrypoint: "0x1111111111111111".into(),
                 calldata: "0x0a".into(),
                 expect_return_data: Some("0x37".into()),
@@ -920,12 +989,14 @@ mod tests {
             storage_reads: vec![crate::manifest::StorageReadSpec {
                 name: "fib-zero-key".into(),
                 contract: "fibonacci".into(),
+                weight: 1,
                 key: format!("0x{}", "00".repeat(32)),
                 expect_present: Some(false),
             }],
             event_queries: vec![EventQuerySpec {
                 name: "fib-events".into(),
                 contract: "fibonacci".into(),
+                weight: 1,
                 order: EventQueryOrderSpec::Descending,
                 anchor: EventQueryAnchorSpec::AtEnd,
                 cursor: "0x".into(),
@@ -935,6 +1006,7 @@ mod tests {
             read_after_write: vec![crate::manifest::ReadAfterWriteSpec {
                 name: "counter-roundtrip".into(),
                 contract: "fibonacci".into(),
+                weight: 1,
                 write: crate::manifest::RawWriteSpec {
                     entrypoint: "0x4f4f4f4f4f4f4f4f".into(),
                     calldata: "0x".into(),
@@ -946,6 +1018,7 @@ mod tests {
             }],
             assertions: crate::manifest::AssertionSpec::default(),
             chaos: Vec::new(),
+            observability: None,
             baseline: None,
             resolved: None,
         }

@@ -274,10 +274,16 @@ env "${ENV_ARGS[@]}" \
 
 if [[ "${GROUNDHOG_SIM_RUN_SOAKS:-0}" == "1" ]]; then
     log "running gated local scenario soak"
-    GROUNDHOG_SIM_HOGD_DEV_BINARY="$HOGD_DEV_BINARY" \
-    GROUNDHOG_SIM_GROUNDHOG_BINARY="$GROUNDHOG_BINARY" \
-    GROUNDHOG_SIM_CATALOG_ROOT="$WORKDIR/local-catalog-soak" \
-    GROUNDHOG_SIM_RUN_SOAKS=1 \
+    SOAK_ENV_ARGS=(
+        "GROUNDHOG_SIM_HOGD_DEV_BINARY=$HOGD_DEV_BINARY"
+        "GROUNDHOG_SIM_GROUNDHOG_BINARY=$GROUNDHOG_BINARY"
+        "GROUNDHOG_SIM_CATALOG_ROOT=$WORKDIR/local-catalog-soak"
+        "GROUNDHOG_SIM_RUN_SOAKS=1"
+    )
+    if [[ -n "$CONTRACT_ARTIFACT_ROOT" ]]; then
+        SOAK_ENV_ARGS+=("GROUNDHOG_SIM_CONTRACT_ARTIFACT_ROOT=$CONTRACT_ARTIFACT_ROOT")
+    fi
+    env "${SOAK_ENV_ARGS[@]}" \
         cargo test -p groundhog-sim --test local_target_smoke local_scenario_catalog_soak -- --ignored --nocapture
 else
     log "skipping local scenario soak; set GROUNDHOG_SIM_RUN_SOAKS=1 to run it"

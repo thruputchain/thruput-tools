@@ -54,6 +54,13 @@ pub fn validate_manifest(manifest: &SimulationManifest) -> Result<(), Validation
             });
         }
     }
+    if let Some(observability) = &manifest.observability
+        && let Some(interval) = &observability.resource_sample_interval
+    {
+        interval
+            .parse_millis()
+            .map_err(|source| ValidationError::InvalidResourceSampleInterval { source })?;
+    }
     validate_contract_artifacts(manifest)?;
 
     let capabilities = TargetCapabilities::for_provider(manifest.target.provider);
@@ -205,15 +212,11 @@ fn validate_read_after_write(
                 contract: entry.contract.clone(),
             });
         }
+        validate_target_weight("readAfterWrite", name, entry.weight)?;
         validate_read_after_write_hex(&entry.write.entrypoint, Some(8), "write.entrypoint", name)?;
         validate_read_after_write_hex(&entry.write.calldata, None, "write.calldata", name)?;
         validate_read_after_write_hex(&entry.read.entrypoint, Some(8), "read.entrypoint", name)?;
         validate_read_after_write_hex(&entry.read.calldata, None, "read.calldata", name)?;
-    }
-    if manifest.read_after_write.len() > 1 {
-        return Err(ValidationError::MultipleReadAfterWriteUnsupported {
-            count: manifest.read_after_write.len(),
-        });
     }
     Ok(())
 }
@@ -293,6 +296,7 @@ fn validate_view_calls(
                 contract: view.contract.clone(),
             });
         }
+        validate_target_weight("viewCalls", name, view.weight)?;
         validate_hex_len(&view.entrypoint, Some(8), "entrypoint", name)?;
         validate_hex_len(&view.calldata, None, "calldata", name)?;
         if let Some(expected) = &view.expect_return_data {
@@ -335,6 +339,7 @@ fn validate_storage_reads(
                 contract: read.contract.clone(),
             });
         }
+        validate_target_weight("storageReads", name, read.weight)?;
         validate_storage_hex_len(&read.key, Some(32), "key", name)?;
     }
     Ok(())
@@ -373,13 +378,9 @@ fn validate_contract_calls(
                 contract: call.contract.clone(),
             });
         }
+        validate_target_weight("contractCalls", name, call.weight)?;
         validate_contract_call_hex_len(&call.entrypoint, Some(8), "entrypoint", name)?;
         validate_contract_call_hex_len(&call.calldata, None, "calldata", name)?;
-    }
-    if manifest.contract_calls.len() > 1 {
-        return Err(ValidationError::MultipleContractCallsUnsupported {
-            count: manifest.contract_calls.len(),
-        });
     }
     Ok(())
 }
@@ -417,6 +418,7 @@ fn validate_event_queries(
                 contract: query.contract.clone(),
             });
         }
+        validate_target_weight("eventQueries", name, query.weight)?;
         validate_event_query_cursor(&query.cursor, "cursor", name)?;
         if query.limit == 0 || query.limit > 200 {
             return Err(ValidationError::InvalidEventQueryLimit {
@@ -432,6 +434,20 @@ fn validate_event_queries(
                 height,
             });
         }
+    }
+    Ok(())
+}
+
+fn validate_target_weight(
+    field: &'static str,
+    name: &str,
+    weight: u32,
+) -> Result<(), ValidationError> {
+    if weight == 0 {
+        return Err(ValidationError::ZeroTargetWeight {
+            field,
+            name: name.to_owned(),
+        });
     }
     Ok(())
 }
@@ -717,12 +733,19 @@ pub enum ValidationError {
         #[source]
         source: crate::manifest::DurationParseError,
     },
+    #[error("observability.resourceSampleInterval is invalid: {source}")]
+    InvalidResourceSampleInterval {
+        #[source]
+        source: crate::manifest::DurationParseError,
+    },
     #[error("load phase {index} must have at least one user")]
     InvalidUsers { index: usize },
     #[error("load phase {index} ratePerUserHz must be positive")]
     InvalidRate { index: usize },
     #[error("workload {workload:?} must have a nonzero weight")]
     ZeroWeight { workload: WorkloadKind },
+    #[error("{field} target `{name}` must have a nonzero weight")]
+    ZeroTargetWeight { field: &'static str, name: String },
     #[error("contract artifact name must not be empty")]
     EmptyContractArtifactName,
     #[error("contract artifact {name} wasm path must not be empty")]
@@ -763,10 +786,6 @@ pub enum ValidationError {
     MissingContractArtifactsForContractCall,
     #[error("contract-call workload requires at least one contractCalls entry")]
     MissingContractCallsForContractCall,
-    #[error(
-        "contract-call workload currently supports exactly one contractCalls entry, found {count}"
-    )]
-    MultipleContractCallsUnsupported { count: usize },
     #[error("storage read name must not be empty")]
     EmptyStorageReadName,
     #[error("duplicate storage read name `{name}`")]
@@ -819,10 +838,6 @@ pub enum ValidationError {
     MissingContractArtifactsForReadAfterWrite,
     #[error("read-after-write workload requires at least one readAfterWrite entry")]
     MissingReadAfterWriteEntries,
-    #[error(
-        "read-after-write workload currently supports exactly one readAfterWrite entry, found {count}"
-    )]
-    MultipleReadAfterWriteUnsupported { count: usize },
     #[error("target provider {provider:?} does not support chaos event {kind}")]
     UnsupportedChaos {
         provider: TargetProviderKind,
@@ -914,6 +929,44 @@ mod tests {
     }
 
     #[test]
+    fn rejects_invalid_resource_sample_interval() {
+        let mut manifest = basic_manifest();
+        manifest.observability = Some(crate::manifest::ObservabilitySpec {
+            resource_sample_interval: Some(DurationSpec("0s".into())),
+        });
+
+        let err = validate_manifest(&manifest).expect_err("zero interval should reject");
+
+        assert!(matches!(
+            err,
+            ValidationError::InvalidResourceSampleInterval { .. }
+        ));
+    }
+
+    #[test]
+    fn checked_in_soak_presets_parse_and_validate() {
+        for (name, manifest_json) in [
+            (
+                "local-multi-contract-soak",
+                include_str!("../../../../examples/sim/local-multi-contract-soak.json"),
+            ),
+            (
+                "local-realistic-soak",
+                include_str!("../../../../examples/sim/local-realistic-soak.json"),
+            ),
+            (
+                "local-realistic-soak-short",
+                include_str!("../../../../examples/sim/local-realistic-soak-short.json"),
+            ),
+        ] {
+            let manifest: SimulationManifest = serde_json::from_str(manifest_json)
+                .unwrap_or_else(|error| panic!("{name} should parse: {error}"));
+            validate_manifest(&manifest)
+                .unwrap_or_else(|error| panic!("{name} should validate: {error}"));
+        }
+    }
+
+    #[test]
     fn validates_view_call_contract_references_and_hex() {
         let mut manifest = basic_manifest();
         manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
@@ -923,6 +976,7 @@ mod tests {
         manifest.view_calls = vec![crate::manifest::ViewCallSpec {
             name: "fib-10".into(),
             contract: "fibonacci".into(),
+            weight: 1,
             entrypoint: "0x1111111111111111".into(),
             calldata: "0x0a".into(),
             expect_return_data: Some("0x37".into()),
@@ -945,6 +999,7 @@ mod tests {
         manifest.contract_calls = vec![crate::manifest::ContractCallSpec {
             name: "events-store-value".into(),
             contract: "events".into(),
+            weight: 1,
             entrypoint: "0x0c012d3b21f5676d".into(),
             calldata: "0x2a64".into(),
         }];
@@ -966,6 +1021,7 @@ mod tests {
         manifest.contract_calls = vec![crate::manifest::ContractCallSpec {
             name: " ".into(),
             contract: "events".into(),
+            weight: 1,
             entrypoint: "0x0c012d3b21f5676d".into(),
             calldata: "0x2a64".into(),
         }];
@@ -986,12 +1042,14 @@ mod tests {
             crate::manifest::ContractCallSpec {
                 name: "events-store-value".into(),
                 contract: "events".into(),
+                weight: 1,
                 entrypoint: "0x0c012d3b21f5676d".into(),
                 calldata: "0x2a64".into(),
             },
             crate::manifest::ContractCallSpec {
                 name: "events-store-value".into(),
                 contract: "events".into(),
+                weight: 1,
                 entrypoint: "0x0c012d3b21f5676d".into(),
                 calldata: "0x2a64".into(),
             },
@@ -1006,7 +1064,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_multiple_contract_calls_until_selection_policy_exists() {
+    fn validates_multiple_contract_calls_for_weighted_selection() {
         let mut manifest = basic_manifest();
         manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
             name: "events".into(),
@@ -1016,22 +1074,49 @@ mod tests {
             crate::manifest::ContractCallSpec {
                 name: "events-store-value".into(),
                 contract: "events".into(),
+                weight: 1,
                 entrypoint: "0x0c012d3b21f5676d".into(),
                 calldata: "0x2a64".into(),
             },
             crate::manifest::ContractCallSpec {
                 name: "events-checkpoint".into(),
                 contract: "events".into(),
+                weight: 1,
                 entrypoint: "0xae92627315b69337".into(),
                 calldata: "0x00".into(),
             },
         ];
+        manifest.workloads = vec![WorkloadSpec {
+            name: WorkloadKind::ContractCall,
+            weight: 1,
+        }];
 
-        let err = validate_manifest(&manifest).expect_err("multiple calls should reject");
+        validate_manifest(&manifest).expect("multiple contract calls should validate");
+    }
+
+    #[test]
+    fn rejects_zero_contract_call_weight() {
+        let mut manifest = basic_manifest();
+        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
+            name: "events".into(),
+            wasm: "events.wasm".into(),
+        }];
+        manifest.contract_calls = vec![crate::manifest::ContractCallSpec {
+            name: "events-store-value".into(),
+            contract: "events".into(),
+            weight: 0,
+            entrypoint: "0x0c012d3b21f5676d".into(),
+            calldata: "0x2a64".into(),
+        }];
+
+        let err = validate_manifest(&manifest).expect_err("zero target weight should reject");
 
         assert!(matches!(
             err,
-            ValidationError::MultipleContractCallsUnsupported { count: 2 }
+            ValidationError::ZeroTargetWeight {
+                field: "contractCalls",
+                ..
+            }
         ));
     }
 
@@ -1045,6 +1130,7 @@ mod tests {
         manifest.contract_calls = vec![crate::manifest::ContractCallSpec {
             name: "events-store-value".into(),
             contract: "missing".into(),
+            weight: 1,
             entrypoint: "0x0c012d3b21f5676d".into(),
             calldata: "0x2a64".into(),
         }];
@@ -1067,6 +1153,7 @@ mod tests {
         manifest.contract_calls = vec![crate::manifest::ContractCallSpec {
             name: "events-store-value".into(),
             contract: "events".into(),
+            weight: 1,
             entrypoint: "0x1111".into(),
             calldata: "0x2a64".into(),
         }];
@@ -1112,6 +1199,7 @@ mod tests {
         manifest.storage_reads = vec![crate::manifest::StorageReadSpec {
             name: "fib-zero-key".into(),
             contract: "fibonacci".into(),
+            weight: 1,
             key: format!("0x{}", "00".repeat(32)),
             expect_present: Some(false),
         }];
@@ -1133,6 +1221,7 @@ mod tests {
         manifest.storage_reads = vec![crate::manifest::StorageReadSpec {
             name: "fib-zero-key".into(),
             contract: "missing".into(),
+            weight: 1,
             key: format!("0x{}", "00".repeat(32)),
             expect_present: None,
         }];
@@ -1155,6 +1244,7 @@ mod tests {
         manifest.storage_reads = vec![crate::manifest::StorageReadSpec {
             name: "fib-zero-key".into(),
             contract: "fibonacci".into(),
+            weight: 1,
             key: "0x1111".into(),
             expect_present: None,
         }];
@@ -1174,6 +1264,7 @@ mod tests {
         manifest.storage_reads = vec![crate::manifest::StorageReadSpec {
             name: "fib-zero-key".into(),
             contract: " fibonacci ".into(),
+            weight: 1,
             key: format!("0x{}", "00".repeat(32)),
             expect_present: None,
         }];
@@ -1196,6 +1287,7 @@ mod tests {
         manifest.view_calls = vec![crate::manifest::ViewCallSpec {
             name: "fib-10".into(),
             contract: "missing".into(),
+            weight: 1,
             entrypoint: "0x1111111111111111".into(),
             calldata: "0x0a".into(),
             expect_return_data: None,
@@ -1219,6 +1311,7 @@ mod tests {
         manifest.view_calls = vec![crate::manifest::ViewCallSpec {
             name: "fib-10".into(),
             contract: "fibonacci".into(),
+            weight: 1,
             entrypoint: "0x1111".into(),
             calldata: "0x0a".into(),
             expect_return_data: None,
@@ -1239,6 +1332,7 @@ mod tests {
         manifest.view_calls = vec![crate::manifest::ViewCallSpec {
             name: "fib-10".into(),
             contract: " fibonacci ".into(),
+            weight: 1,
             entrypoint: "0x1111111111111111".into(),
             calldata: "0x0a".into(),
             expect_return_data: None,
@@ -1320,6 +1414,7 @@ mod tests {
         manifest.event_queries = vec![EventQuerySpec {
             name: "fib-events".into(),
             contract: "fibonacci".into(),
+            weight: 1,
             order: EventQueryOrderSpec::Descending,
             anchor: EventQueryAnchorSpec::AtEnd,
             cursor: "0x".into(),
@@ -1344,6 +1439,7 @@ mod tests {
         manifest.event_queries = vec![EventQuerySpec {
             name: "fib-events".into(),
             contract: "missing".into(),
+            weight: 1,
             order: EventQueryOrderSpec::Descending,
             anchor: EventQueryAnchorSpec::AtEnd,
             cursor: "0x".into(),
@@ -1369,6 +1465,7 @@ mod tests {
         manifest.event_queries = vec![EventQuerySpec {
             name: "fib-events".into(),
             contract: "fibonacci".into(),
+            weight: 1,
             order: EventQueryOrderSpec::Descending,
             anchor: EventQueryAnchorSpec::AtEnd,
             cursor: "0x0".into(),
@@ -1403,6 +1500,7 @@ mod tests {
         manifest.event_queries = vec![EventQuerySpec {
             name: "fib-events".into(),
             contract: "fibonacci".into(),
+            weight: 1,
             order: EventQueryOrderSpec::Descending,
             anchor: EventQueryAnchorSpec::AtEnd,
             cursor: "0x".into(),
@@ -1470,6 +1568,7 @@ mod tests {
         crate::manifest::ReadAfterWriteSpec {
             name: "counter-roundtrip".into(),
             contract: "caller-counter".into(),
+            weight: 1,
             write: crate::manifest::RawWriteSpec {
                 entrypoint: "0x4fbf8bcef9232a3a".into(),
                 calldata: "0x".into(),
@@ -1545,18 +1644,13 @@ mod tests {
     }
 
     #[test]
-    fn rejects_multiple_read_after_write_entries() {
+    fn validates_multiple_read_after_write_entries_for_weighted_selection() {
         let mut manifest = read_after_write_manifest();
         let mut second = read_after_write_entry();
         second.name = "second-roundtrip".into();
         manifest.read_after_write = vec![read_after_write_entry(), second];
 
-        let err = validate_manifest(&manifest).expect_err("multiple entries should reject");
-
-        assert!(matches!(
-            err,
-            ValidationError::MultipleReadAfterWriteUnsupported { count: 2 }
-        ));
+        validate_manifest(&manifest).expect("multiple read-after-write entries should validate");
     }
 
     #[test]
@@ -1679,6 +1773,7 @@ mod tests {
             read_after_write: Vec::new(),
             assertions: crate::manifest::AssertionSpec::default(),
             chaos: Vec::new(),
+            observability: None,
             baseline: None,
             resolved: None,
         }
