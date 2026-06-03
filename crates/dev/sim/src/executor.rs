@@ -18,6 +18,7 @@ use groundhog_json_rpc_types::{
     transaction::TxHash,
     view::{RootInvocationOutput, ViewRequest, ViewResponse},
 };
+use sha2::{Digest, Sha256};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::{Id as TaskId, JoinError, JoinSet};
 
@@ -413,6 +414,8 @@ where
                 ))
                 .await?;
                 let prepared = prepare_workload(
+                    manifest,
+                    tick,
                     actor_states
                         .get_mut(actor_index)
                         .ok_or(SimError::Executor("actor state missing".into()))?,
@@ -635,6 +638,8 @@ fn acquire_workload_permits(
 }
 #[allow(clippy::too_many_arguments)]
 fn prepare_workload(
+    manifest: &SimulationManifest,
+    tick: &ScheduledActorTick,
     actor: &mut ActorState,
     workload: WorkloadKind,
     wallet_entrypoint: groundhog_xdr::contract::ContractEntrypointID,
@@ -653,93 +658,202 @@ fn prepare_workload(
             target: actor.receipt_poll_target(),
         })),
         WorkloadKind::ViewCall => {
-            let view = view_calls.first().ok_or_else(|| {
-                SimError::Executor("view-call workload requires at least one prepared view".into())
-            })?;
+            let view = select_weighted_target(
+                manifest,
+                workload,
+                tick,
+                view_calls,
+                "view-call workload requires at least one prepared view",
+            )?;
             Ok(PreparedWorkload::ViewCall(PreparedViewWorkload {
                 view: view.clone(),
                 caller: actor.wallet_address,
             }))
         }
         WorkloadKind::ContractCall => {
-            let call = contract_calls.first().ok_or_else(|| {
-                SimError::Executor(
-                    "contract-call workload requires at least one prepared contract call".into(),
-                )
-            })?;
-            Ok(PreparedWorkload::ContractCall(
-                PreparedContractCallWorkload {
-                    call: call.clone(),
-                    tx: {
-                        let entrypoint: [u8; 8] =
-                            call.entrypoint.as_slice().try_into().map_err(|_| {
-                                SimError::Executor(
-                                    "contract-call prepared entrypoint must be 8 bytes".into(),
-                                )
-                            })?;
-                        build_contract_call_transaction(
-                            actor,
-                            wallet_entrypoint,
-                            call.contract,
-                            groundhog_xdr::contract::ContractEntrypointID::from(entrypoint),
-                            &call.calldata,
-                        )?
-                    },
-                },
-            ))
+            let call = select_weighted_target(
+                manifest,
+                workload,
+                tick,
+                contract_calls,
+                "contract-call workload requires at least one prepared contract call",
+            )?;
+            prepare_contract_call_workload(actor, wallet_entrypoint, call)
+                .map(PreparedWorkload::ContractCall)
         }
         WorkloadKind::StorageRead => {
-            let read = storage_reads.first().ok_or_else(|| {
-                SimError::Executor(
-                    "storage-read workload requires at least one prepared storage read".into(),
-                )
-            })?;
+            let read = select_weighted_target(
+                manifest,
+                workload,
+                tick,
+                storage_reads,
+                "storage-read workload requires at least one prepared storage read",
+            )?;
             Ok(PreparedWorkload::StorageRead(PreparedStorageReadWorkload {
                 read: read.clone(),
             }))
         }
         WorkloadKind::EventsQuery => {
-            let query = event_queries.first().ok_or_else(|| {
-                SimError::Executor(
-                    "events-query workload requires at least one prepared event query".into(),
-                )
-            })?;
+            let query = select_weighted_target(
+                manifest,
+                workload,
+                tick,
+                event_queries,
+                "events-query workload requires at least one prepared event query",
+            )?;
             Ok(PreparedWorkload::EventsQuery(PreparedEventQueryWorkload {
                 query: query.clone(),
             }))
         }
         WorkloadKind::ReadAfterWrite => {
-            let entry = read_after_write.first().ok_or_else(|| {
-                SimError::Executor(
-                    "read-after-write workload requires at least one prepared entry".into(),
-                )
-            })?;
-            let write_entrypoint: [u8; 8] =
-                entry.write_entrypoint.as_slice().try_into().map_err(|_| {
-                    SimError::Executor(
-                        "read-after-write prepared write entrypoint must be 8 bytes".into(),
-                    )
-                })?;
-            let tx = build_contract_call_transaction(
-                actor,
-                wallet_entrypoint,
-                entry.contract,
-                groundhog_xdr::contract::ContractEntrypointID::from(write_entrypoint),
-                &entry.write_calldata,
+            let entry = select_weighted_target(
+                manifest,
+                workload,
+                tick,
+                read_after_write,
+                "read-after-write workload requires at least one prepared entry",
             )?;
-            Ok(PreparedWorkload::ReadAfterWrite(
-                PreparedReadAfterWriteWorkload {
-                    entry: entry.clone(),
-                    tx,
-                    caller: actor.wallet_address,
-                    state: actor.read_after_write_state(),
-                },
-            ))
+            prepare_read_after_write_workload(actor, wallet_entrypoint, entry)
+                .map(PreparedWorkload::ReadAfterWrite)
         }
         WorkloadKind::StatusPoll => Err(SimError::UnsupportedRuntimeWorkloads(workload_name(
             workload,
         ))),
     }
+}
+
+fn prepare_contract_call_workload(
+    actor: &mut ActorState,
+    wallet_entrypoint: groundhog_xdr::contract::ContractEntrypointID,
+    call: &PreparedContractCall,
+) -> Result<PreparedContractCallWorkload, SimError> {
+    let entrypoint: [u8; 8] = call.entrypoint.as_slice().try_into().map_err(|_| {
+        SimError::Executor("contract-call prepared entrypoint must be 8 bytes".into())
+    })?;
+    Ok(PreparedContractCallWorkload {
+        call: call.clone(),
+        tx: build_contract_call_transaction(
+            actor,
+            wallet_entrypoint,
+            call.contract,
+            groundhog_xdr::contract::ContractEntrypointID::from(entrypoint),
+            &call.calldata,
+        )?,
+    })
+}
+
+fn prepare_read_after_write_workload(
+    actor: &mut ActorState,
+    wallet_entrypoint: groundhog_xdr::contract::ContractEntrypointID,
+    entry: &PreparedReadAfterWrite,
+) -> Result<PreparedReadAfterWriteWorkload, SimError> {
+    let write_entrypoint: [u8; 8] = entry.write_entrypoint.as_slice().try_into().map_err(|_| {
+        SimError::Executor("read-after-write prepared write entrypoint must be 8 bytes".into())
+    })?;
+    Ok(PreparedReadAfterWriteWorkload {
+        entry: entry.clone(),
+        tx: build_contract_call_transaction(
+            actor,
+            wallet_entrypoint,
+            entry.contract,
+            groundhog_xdr::contract::ContractEntrypointID::from(write_entrypoint),
+            &entry.write_calldata,
+        )?,
+        caller: actor.wallet_address,
+        state: actor.read_after_write_state(),
+    })
+}
+
+trait WeightedPreparedTarget {
+    fn weight(&self) -> u32;
+}
+
+impl WeightedPreparedTarget for PreparedViewCall {
+    fn weight(&self) -> u32 {
+        self.weight
+    }
+}
+
+impl WeightedPreparedTarget for PreparedContractCall {
+    fn weight(&self) -> u32 {
+        self.weight
+    }
+}
+
+impl WeightedPreparedTarget for PreparedStorageRead {
+    fn weight(&self) -> u32 {
+        self.weight
+    }
+}
+
+impl WeightedPreparedTarget for PreparedEventQuery {
+    fn weight(&self) -> u32 {
+        self.weight
+    }
+}
+
+impl WeightedPreparedTarget for PreparedReadAfterWrite {
+    fn weight(&self) -> u32 {
+        self.weight
+    }
+}
+
+fn select_weighted_target<'a, T: WeightedPreparedTarget>(
+    manifest: &SimulationManifest,
+    workload: WorkloadKind,
+    tick: &ScheduledActorTick,
+    targets: &'a [T],
+    missing_message: &'static str,
+) -> Result<&'a T, SimError> {
+    if targets.is_empty() {
+        return Err(SimError::Executor(missing_message.into()));
+    }
+    let total_weight = targets.iter().try_fold(0_u64, |total, target| {
+        total
+            .checked_add(u64::from(target.weight()))
+            .ok_or(SimError::Executor(
+                "target selection weight overflow".into(),
+            ))
+    })?;
+    if total_weight == 0 {
+        return Err(SimError::Executor(
+            "target selection requires at least one nonzero weight".into(),
+        ));
+    }
+    let mut draw = weighted_target_draw(manifest, workload, tick, total_weight);
+    for target in targets {
+        let weight = u64::from(target.weight());
+        if draw < weight {
+            return Ok(target);
+        }
+        draw -= weight;
+    }
+    Err(SimError::Executor(
+        "bug: weighted target draw escaped target list".into(),
+    ))
+}
+
+fn weighted_target_draw(
+    manifest: &SimulationManifest,
+    workload: WorkloadKind,
+    tick: &ScheduledActorTick,
+    total_weight: u64,
+) -> u64 {
+    let mut hasher = Sha256::new();
+    hasher.update(manifest.seed.as_bytes());
+    hasher.update([0]);
+    hasher.update(manifest.name.as_bytes());
+    hasher.update([0]);
+    hasher.update(workload_name(workload).as_bytes());
+    hasher.update([0]);
+    hasher.update(tick.phase_index.to_le_bytes());
+    hasher.update(tick.actor_id.to_le_bytes());
+    hasher.update(tick.actor_sequence.to_le_bytes());
+    hasher.update(tick.simulation_time_ms.to_le_bytes());
+    let digest = hasher.finalize();
+    let mut bytes = [0_u8; 8];
+    bytes.copy_from_slice(&digest[..8]);
+    u64::from_le_bytes(bytes) % total_weight
 }
 
 fn dispatch_workload<C>(
@@ -4267,6 +4381,96 @@ mod tests {
         assert!(timeline.segments[0].rss_growth_bytes_per_minute.is_none());
     }
 
+    #[test]
+    fn weighted_target_selection_is_deterministic_and_tracks_configured_skew() {
+        let manifest = manifest();
+        let targets = vec![
+            PreparedContractCall {
+                name: "hot".into(),
+                contract_name: "events".into(),
+                weight: 9,
+                contract: ContractAddress::from([0x88; 32]),
+                entrypoint: vec![0x11; 8],
+                calldata: Vec::new(),
+            },
+            PreparedContractCall {
+                name: "cold".into(),
+                contract_name: "events".into(),
+                weight: 1,
+                contract: ContractAddress::from([0x89; 32]),
+                entrypoint: vec![0x22; 8],
+                calldata: Vec::new(),
+            },
+        ];
+        let mut hot = 0_u64;
+        let mut cold = 0_u64;
+
+        for actor_sequence in 0..10_000 {
+            let tick = ScheduledActorTick {
+                phase_index: 0,
+                actor_id: 0,
+                actor_sequence,
+                simulation_time_ms: actor_sequence,
+            };
+            let first = select_weighted_target(
+                &manifest,
+                WorkloadKind::ContractCall,
+                &tick,
+                &targets,
+                "missing target",
+            )
+            .expect("target should select");
+            let second = select_weighted_target(
+                &manifest,
+                WorkloadKind::ContractCall,
+                &tick,
+                &targets,
+                "missing target",
+            )
+            .expect("target should select again");
+            assert_eq!(first.name, second.name);
+            match first.name.as_str() {
+                "hot" => hot += 1,
+                "cold" => cold += 1,
+                other => panic!("unexpected target {other}"),
+            }
+        }
+
+        assert_eq!(hot + cold, 10_000);
+        assert!((8_700..=9_300).contains(&hot), "hot count was {hot}");
+        assert!((700..=1_300).contains(&cold), "cold count was {cold}");
+    }
+
+    #[test]
+    fn weighted_target_selection_preserves_single_target_default() {
+        let manifest = manifest();
+        let tick = ScheduledActorTick {
+            phase_index: 0,
+            actor_id: 0,
+            actor_sequence: 0,
+            simulation_time_ms: 0,
+        };
+        let targets = vec![PreparedStorageRead {
+            name: "only".into(),
+            contract_name: "fibonacci".into(),
+            weight: 1,
+            contract: ContractAddress::from([0x88; 32]),
+            key: vec![0; 32],
+            expect_present: None,
+        }];
+
+        let selected = select_weighted_target(
+            &manifest,
+            WorkloadKind::StorageRead,
+            &tick,
+            &targets,
+            "missing target",
+        )
+        .expect("single target should select");
+
+        assert_eq!(selected.name, "only");
+    }
+
     #[tokio::test]
     async fn run_schedule_reports_workload_panics_with_context() {
         let manifest = manifest();
@@ -6324,6 +6528,7 @@ mod tests {
             view: PreparedViewCall {
                 name: "fib-10".into(),
                 contract_name: "fibonacci".into(),
+                weight: 1,
                 contract: ContractAddress::from([0x88; 32]),
                 entrypoint: vec![0x11; 8],
                 calldata: vec![0x0a],
@@ -6338,6 +6543,7 @@ mod tests {
             read: PreparedStorageRead {
                 name: "fib-zero-key".into(),
                 contract_name: "fibonacci".into(),
+                weight: 1,
                 contract: ContractAddress::from([0x88; 32]),
                 key: vec![0; 32],
                 expect_present,
@@ -6350,6 +6556,7 @@ mod tests {
             call: PreparedContractCall {
                 name: "events-store-value".into(),
                 contract_name: "events".into(),
+                weight: 1,
                 contract: ContractAddress::from([0x88; 32]),
                 entrypoint: vec![0x0c, 0x01, 0x2d, 0x3b, 0x21, 0xf5, 0x67, 0x6d],
                 calldata: vec![0x2a, 0x64],
@@ -6366,6 +6573,7 @@ mod tests {
             query: PreparedEventQuery {
                 name: "fib-events".into(),
                 contract_name: "fibonacci".into(),
+                weight: 1,
                 contract: ContractAddress::from([0x88; 32]),
                 order: EventQueryOrderSpec::Descending,
                 anchor: EventQueryAnchorSpec::AtEnd,
@@ -6563,6 +6771,7 @@ mod tests {
         PreparedReadAfterWrite {
             name: "counter-roundtrip".into(),
             contract_name: "caller-counter".into(),
+            weight: 1,
             contract: ContractAddress::from([0x88; 32]),
             write_entrypoint: vec![0x4f; 8],
             write_calldata: Vec::new(),
@@ -6742,7 +6951,10 @@ mod tests {
         assert_eq!(actors[0].next_nonce_sequence, 1);
         let expected_nonce = actors[0].current_nonce().expect("nonce should build");
         let runtime = runtime_manifest();
+        let manifest = read_after_write_manifest();
         let prepared = prepare_workload(
+            &manifest,
+            &tick,
             &mut actors[0],
             WorkloadKind::ReadAfterWrite,
             runtime_dev_wallet_action_entrypoint(&runtime).expect("wallet entrypoint should parse"),

@@ -695,15 +695,15 @@ Detailed handoff:
 
 ### Slice 4: Multi-Contract Corpus + Hot Contract / Hot Account
 
-- [ ] Add optional per-call/per-query `weight` fields for contract/view/storage/
+- [x] Add optional per-call/per-query `weight` fields for contract/view/storage/
   event/read-after-write targets, defaulting to `1`.
-- [ ] Add deploy-at-start support for a contract corpus with per-contract
+- [x] Add deploy-at-start support for a contract corpus with per-contract
   deployment records.
-- [ ] Add seeded weighted target selection across prepared targets (pure, no
+- [x] Add seeded weighted target selection across prepared targets (pure, no
   stateful RNG).
-- [ ] Add `examples/sim/local-multi-contract-soak.json` and a catalog entry with
+- [x] Add `examples/sim/local-multi-contract-soak.json` and a catalog entry with
   `multi-contract` / `hot-contract` / `soak` tags.
-- [ ] Unit-test corpus deploy records, deterministic weighted target selection,
+- [x] Unit-test corpus deploy records, deterministic weighted target selection,
   and default-weight compatibility.
 
 ### Slice 5: Long-Soak Presets + Calibration

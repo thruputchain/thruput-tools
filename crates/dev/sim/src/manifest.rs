@@ -142,6 +142,11 @@ pub struct ContractArtifactSpec {
 pub struct ViewCallSpec {
     pub name: String,
     pub contract: String,
+    #[serde(
+        default = "default_target_weight",
+        skip_serializing_if = "is_default_target_weight"
+    )]
+    pub weight: u32,
     pub entrypoint: String,
     pub calldata: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -160,6 +165,12 @@ pub struct ContractCallSpec {
     pub name: String,
     /// Name of the contract artifact this call targets.
     pub contract: String,
+    /// Relative selection weight among configured contract-call targets.
+    #[serde(
+        default = "default_target_weight",
+        skip_serializing_if = "is_default_target_weight"
+    )]
+    pub weight: u32,
     /// Eight-byte target contract entrypoint selector as `0x`-prefixed hex.
     pub entrypoint: String,
     /// Target contract calldata as `0x`-prefixed hex.
@@ -171,6 +182,11 @@ pub struct ContractCallSpec {
 pub struct StorageReadSpec {
     pub name: String,
     pub contract: String,
+    #[serde(
+        default = "default_target_weight",
+        skip_serializing_if = "is_default_target_weight"
+    )]
+    pub weight: u32,
     pub key: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expect_present: Option<bool>,
@@ -181,6 +197,11 @@ pub struct StorageReadSpec {
 pub struct EventQuerySpec {
     pub name: String,
     pub contract: String,
+    #[serde(
+        default = "default_target_weight",
+        skip_serializing_if = "is_default_target_weight"
+    )]
+    pub weight: u32,
     #[serde(default = "default_event_query_order")]
     pub order: EventQueryOrderSpec,
     #[serde(default = "default_event_query_anchor")]
@@ -238,6 +259,12 @@ pub struct ReadAfterWriteSpec {
     pub name: String,
     /// Name of the contract artifact this round-trip targets.
     pub contract: String,
+    /// Relative selection weight among configured read-after-write targets.
+    #[serde(
+        default = "default_target_weight",
+        skip_serializing_if = "is_default_target_weight"
+    )]
+    pub weight: u32,
     /// The state-changing write submitted through dev-wallet `doAction`.
     pub write: RawWriteSpec,
     /// The view read-back issued after the write commits.
@@ -268,6 +295,15 @@ pub struct RawReadSpec {
 
 fn default_empty_calldata() -> String {
     "0x".into()
+}
+
+fn default_target_weight() -> u32 {
+    1
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_default_target_weight(weight: &u32) -> bool {
+    *weight == default_target_weight()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -460,11 +496,38 @@ mod tests {
         .expect("minimal event query should parse");
 
         let query = &manifest.event_queries[0];
+        assert_eq!(query.weight, 1);
         assert_eq!(query.order, EventQueryOrderSpec::Descending);
         assert_eq!(query.anchor, EventQueryAnchorSpec::AtEnd);
         assert_eq!(query.cursor, "0x");
         assert_eq!(query.limit, 50);
         assert_eq!(query.expect_min_events, None);
+    }
+
+    #[test]
+    fn default_target_weights_are_not_serialized() {
+        let manifest: SimulationManifest = serde_json::from_value(json!({
+            "schemaVersion": 1,
+            "kind": "groundhog-simulation",
+            "name": "weights",
+            "seed": "seed",
+            "target": {"provider": "existing"},
+            "loadShape": [{"duration": "1s", "users": 1, "ratePerUserHz": 1.0}],
+            "workloads": [{"name": "contract-call", "weight": 1}],
+            "contractArtifacts": [{"name": "events", "wasm": "events.wasm"}],
+            "contractCalls": [{
+                "name": "events-store-value",
+                "contract": "events",
+                "entrypoint": "0x0c012d3b21f5676d",
+                "calldata": "0x2a64"
+            }]
+        }))
+        .expect("manifest should parse");
+
+        let json = serde_json::to_value(&manifest).expect("manifest should serialize");
+
+        assert_eq!(manifest.contract_calls[0].weight, 1);
+        assert!(json["contractCalls"][0].get("weight").is_none());
     }
 
     #[test]

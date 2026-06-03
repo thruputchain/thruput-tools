@@ -140,18 +140,32 @@ const LOCAL_CONTRACT_CATALOG: &[CatalogScenario] = &[
     },
 ];
 
-const LOCAL_SOAK_CATALOG: &[CatalogScenario] = &[CatalogScenario {
-    file: "local-mixed-wallet-receipt-soak.json",
-    expect_passed: true,
-    expect_receipt_metrics: true,
-    expect_restart: false,
-    expect_restart_loss: false,
-    expect_contract_view: false,
-    expect_contract_storage: false,
-    expect_contract_events: false,
-    expect_read_after_write: false,
-    allow_restart_failure: false,
-}];
+const LOCAL_SOAK_CATALOG: &[CatalogScenario] = &[
+    CatalogScenario {
+        file: "local-mixed-wallet-receipt-soak.json",
+        expect_passed: true,
+        expect_receipt_metrics: true,
+        expect_restart: false,
+        expect_restart_loss: false,
+        expect_contract_view: false,
+        expect_contract_storage: false,
+        expect_contract_events: false,
+        expect_read_after_write: false,
+        allow_restart_failure: false,
+    },
+    CatalogScenario {
+        file: "local-multi-contract-soak.json",
+        expect_passed: true,
+        expect_receipt_metrics: false,
+        expect_restart: false,
+        expect_restart_loss: false,
+        expect_contract_view: false,
+        expect_contract_storage: true,
+        expect_contract_events: true,
+        expect_read_after_write: true,
+        allow_restart_failure: false,
+    },
+];
 
 #[derive(Debug, Clone, Copy)]
 #[allow(clippy::struct_excessive_bools)]
@@ -583,6 +597,7 @@ fn run_catalog(catalog: &[CatalogScenario]) {
         if scenario.expect_read_after_write {
             assert_read_after_write_artifacts(&result, &run_dir, scenario.file);
         }
+        assert_multi_contract_artifacts(&result, scenario.file);
 
         let simulation = std::fs::read_to_string(run_dir.join("simulation.json"))
             .expect("simulation artifact should read");
@@ -590,6 +605,18 @@ fn run_catalog(catalog: &[CatalogScenario]) {
             .expect("simulation artifact should record resolved rpc url");
         assert_rpc_port_closed(&rpc_url);
     }
+}
+
+fn assert_multi_contract_artifacts(result: &serde_json::Value, scenario: &str) {
+    if scenario != "local-multi-contract-soak.json" {
+        return;
+    }
+    assert!(
+        result["contracts"]
+            .as_array()
+            .is_some_and(|contracts| contracts.len() > 1),
+        "{scenario} should deploy multiple contracts"
+    );
 }
 
 fn expected_event_query_name(scenario_path: &std::path::Path) -> String {
