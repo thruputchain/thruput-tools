@@ -316,12 +316,9 @@ mod linux {
 
     impl FieldSum {
         fn add(&mut self, value: Option<u64>) {
-            match value {
-                Some(value) => {
-                    self.observed = true;
-                    self.value = self.value.saturating_add(value);
-                }
-                None => {}
+            if let Some(value) = value {
+                self.observed = true;
+                self.value = self.value.saturating_add(value);
             }
         }
 
