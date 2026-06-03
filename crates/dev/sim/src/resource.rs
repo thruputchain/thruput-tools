@@ -4,23 +4,33 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::result::ResourceSamplePoint;
 
+/// Boxed future returned by a target resource sampler.
 pub type ResourceSamplerFuture<'a> = Pin<Box<dyn Future<Output = ResourceSample> + Send + 'a>>;
 
+/// Samples coarse resource usage for the currently owned target process.
 pub trait TargetResourceSampler {
+    /// Return a best-effort resource sample for the scheduled simulation time.
     fn sample(&self, scheduled_time_ms: u64) -> ResourceSamplerFuture<'_>;
 }
 
+/// Resource sampling result for one scheduled sampler tick.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResourceSample {
+    /// The sampler observed at least one target process.
     Observed(ResourceSamplePoint),
+    /// Sampling was not supported or no target process could be read.
     Unavailable {
+        /// Scheduled simulation time for this sampler tick.
         scheduled_time_ms: u64,
+        /// Wall-clock observation timestamp in Unix milliseconds.
         observed_at_unix_ms: String,
+        /// Human-readable reason sampling was unavailable.
         reason: String,
     },
 }
 
 impl ResourceSample {
+    /// Build an unavailable sample using the current wall-clock timestamp.
     pub fn unavailable(scheduled_time_ms: u64, reason: impl Into<String>) -> Self {
         Self::Unavailable {
             scheduled_time_ms,
@@ -30,11 +40,18 @@ impl ResourceSample {
     }
 }
 
+/// Sample a process group owned by a local target.
+///
+/// On Linux this walks `/proc` and aggregates readable processes in `pgid`.
+/// Other platforms return `ResourceSample::Unavailable`.
 #[cfg(target_os = "linux")]
 pub fn sample_process_group(root_pid: u32, pgid: u32, scheduled_time_ms: u64) -> ResourceSample {
     linux::sample_process_group(root_pid, pgid, scheduled_time_ms)
 }
 
+/// Sample a process group owned by a local target.
+///
+/// On Linux this walks `/proc`; other platforms return `ResourceSample::Unavailable`.
 #[cfg(not(target_os = "linux"))]
 pub fn sample_process_group(_root_pid: u32, _pgid: u32, scheduled_time_ms: u64) -> ResourceSample {
     ResourceSample::unavailable(
@@ -54,14 +71,14 @@ fn observed_at_unix_ms() -> String {
 mod linux {
     use std::fs;
     use std::io;
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
 
     use super::{ResourceSample, observed_at_unix_ms};
     use crate::result::{ResourceSamplePoint, ResourceSampleScope};
 
     pub fn sample_process_group(
         root_pid: u32,
-        pgid: u32,
+        process_group_id: u32,
         scheduled_time_ms: u64,
     ) -> ResourceSample {
         let page_size = page_size_bytes();
@@ -80,13 +97,16 @@ mod linux {
 
         for entry in proc_entries.flatten() {
             let file_name = entry.file_name();
-            let Some(pid) = file_name.to_str().and_then(|name| name.parse::<u32>().ok()) else {
+            let Some(process_id) = file_name.to_str().and_then(|name| name.parse::<u32>().ok())
+            else {
                 continue;
             };
-            let Some(process) = read_process(entry.path(), pid, page_size, ticks_per_second) else {
+            let proc_path = entry.path();
+            let Some(process) = read_process(&proc_path, process_id, page_size, ticks_per_second)
+            else {
                 continue;
             };
-            if process.pgid != pgid {
+            if process.pgid != process_group_id {
                 continue;
             }
             aggregate.add(process);
@@ -95,7 +115,7 @@ mod linux {
         if aggregate.process_count == 0 {
             return ResourceSample::unavailable(
                 scheduled_time_ms,
-                format!("no readable processes found for process group {pgid}"),
+                format!("no readable processes found for process group {process_group_id}"),
             );
         }
 
@@ -104,7 +124,7 @@ mod linux {
             observed_at_unix_ms: observed_at_unix_ms(),
             scope: ResourceSampleScope::ProcessGroup,
             root_pid,
-            pgid: Some(pgid),
+            pgid: Some(process_group_id),
             process_count: aggregate.process_count,
             rss_bytes: aggregate.rss_bytes.finish(),
             cpu_user_ms: aggregate.cpu_user_ms.finish(),
@@ -115,14 +135,14 @@ mod linux {
     }
 
     fn read_process(
-        proc_path: PathBuf,
-        pid: u32,
+        proc_path: &Path,
+        process_id: u32,
         page_size: u64,
         ticks_per_second: u64,
     ) -> Option<ProcessSample> {
         let stat = fs::read_to_string(proc_path.join("stat")).ok()?;
         let stat = parse_stat(&stat, page_size, ticks_per_second).ok()?;
-        if stat.pid != pid {
+        if stat.pid != process_id {
             return None;
         }
         let status = fs::read_to_string(proc_path.join("status"))
@@ -171,7 +191,7 @@ mod linux {
             .parse::<u32>()
             .map_err(|error| format!("invalid stat pid: {error}"))?;
         let fields: Vec<_> = value[close + 1..].split_whitespace().collect();
-        let pgid = parse_field::<u32>(&fields, 2, "pgrp")?;
+        let process_group_id = parse_field::<u32>(&fields, 2, "pgrp")?;
         let utime_ticks = parse_field::<u64>(&fields, 11, "utime").ok();
         let stime_ticks = parse_field::<u64>(&fields, 12, "stime").ok();
         let threads = parse_field::<u64>(&fields, 17, "num_threads").ok();
@@ -181,7 +201,7 @@ mod linux {
             .and_then(|pages| pages.checked_mul(page_size));
         Ok(ProcStat {
             pid,
-            pgid,
+            pgid: process_group_id,
             rss_bytes,
             cpu_user_ms: utime_ticks.and_then(|ticks| ticks_to_ms(ticks, ticks_per_second)),
             cpu_system_ms: stime_ticks.and_then(|ticks| ticks_to_ms(ticks, ticks_per_second)),
@@ -257,7 +277,7 @@ mod linux {
             .unwrap_or(100)
     }
 
-    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     struct ProcessSample {
         pgid: u32,
         rss_bytes: Option<u64>,
@@ -292,7 +312,6 @@ mod linux {
     struct FieldSum {
         value: u64,
         observed: bool,
-        unavailable: bool,
     }
 
     impl FieldSum {
@@ -302,12 +321,12 @@ mod linux {
                     self.observed = true;
                     self.value = self.value.saturating_add(value);
                 }
-                None => self.unavailable = true,
+                None => {}
             }
         }
 
         fn finish(self) -> Option<u64> {
-            if self.observed && !self.unavailable {
+            if self.observed {
                 Some(self.value)
             } else {
                 None
@@ -342,7 +361,7 @@ mod linux {
         }
 
         #[test]
-        fn aggregate_uses_none_when_any_process_field_is_unavailable() {
+        fn aggregate_sums_available_process_fields() {
             let mut aggregate = ResourceAggregate::default();
             aggregate.add(ProcessSample {
                 pgid: 1,
@@ -363,6 +382,23 @@ mod linux {
 
             assert_eq!(aggregate.rss_bytes.finish(), Some(30));
             assert_eq!(aggregate.cpu_user_ms.finish(), Some(3));
+            assert_eq!(aggregate.open_fds.finish(), Some(4));
+        }
+
+        #[test]
+        fn aggregate_uses_none_when_no_process_has_field() {
+            let mut aggregate = ResourceAggregate::default();
+            aggregate.add(ProcessSample {
+                pgid: 1,
+                rss_bytes: None,
+                cpu_user_ms: None,
+                cpu_system_ms: None,
+                threads: None,
+                open_fds: None,
+            });
+
+            assert_eq!(aggregate.rss_bytes.finish(), None);
+            assert_eq!(aggregate.cpu_user_ms.finish(), None);
             assert_eq!(aggregate.open_fds.finish(), None);
         }
     }

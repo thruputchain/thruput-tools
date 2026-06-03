@@ -187,13 +187,14 @@ impl Iterator for ScheduleCursor {
         let next_chaos = self.chaos.get(self.next_chaos_index).cloned();
         let next_resource = self.next_resource_sample();
 
-        let mut pick = NextScheduleStream::None;
-        let mut pick_key = (u64::MAX, u8::MAX, usize::MAX, u32::MAX, u64::MAX);
+        let mut pick = (
+            NextScheduleStream::None,
+            (u64::MAX, u8::MAX, usize::MAX, u32::MAX, u64::MAX),
+        );
         if let Some(chaos) = &next_chaos {
             let key = (chaos.simulation_time_ms, 0, chaos.chaos_index, 0, 0);
-            if key < pick_key {
-                pick = NextScheduleStream::Chaos;
-                pick_key = key;
+            if key < pick.1 {
+                pick = (NextScheduleStream::Chaos, key);
             }
         }
         if let Some(resource) = &next_resource {
@@ -204,9 +205,8 @@ impl Iterator for ScheduleCursor {
                 0,
                 resource.resource_sample_index,
             );
-            if key < pick_key {
-                pick = NextScheduleStream::Resource;
-                pick_key = key;
+            if key < pick.1 {
+                pick = (NextScheduleStream::Resource, key);
             }
         }
         if let Some(actor) = &next_actor {
@@ -217,12 +217,12 @@ impl Iterator for ScheduleCursor {
                 actor.actor_id,
                 actor.actor_sequence,
             );
-            if key < pick_key {
-                pick = NextScheduleStream::Actor;
+            if key < pick.1 {
+                pick = (NextScheduleStream::Actor, key);
             }
         }
 
-        match pick {
+        match pick.0 {
             NextScheduleStream::Chaos => {
                 self.next_chaos_index += 1;
                 next_chaos.map(ScheduledSimulationEvent::Chaos)
