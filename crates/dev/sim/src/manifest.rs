@@ -157,7 +157,7 @@ pub struct ViewCallSpec {
 ///
 /// The simulator expects raw entrypoint and calldata hex. It does not inspect
 /// the contract ABI or encode method arguments for this manifest surface. This
-/// slice supports exactly one configured contract call.
+/// surface supports one or more configured targets selected by relative weight.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContractCallSpec {
@@ -250,8 +250,8 @@ fn default_event_query_limit() -> u32 {
 ///
 /// v1 reads are view-only; see the actor-state read-after-write design for the
 /// deferred storage read mode. The simulator uses raw 8-byte entrypoint and raw
-/// calldata hex; it does not encode method arguments. v1 supports exactly one
-/// configured entry.
+/// calldata hex; it does not encode method arguments. The workload supports one
+/// or more configured entries selected by relative weight.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReadAfterWriteSpec {

@@ -840,13 +840,15 @@ fn weighted_target_draw(
     total_weight: u64,
 ) -> u64 {
     let mut hasher = Sha256::new();
+    hasher.update(b"hoglab weighted target selection v1");
     hasher.update(manifest.seed.as_bytes());
     hasher.update([0]);
     hasher.update(manifest.name.as_bytes());
     hasher.update([0]);
     hasher.update(workload_name(workload).as_bytes());
     hasher.update([0]);
-    hasher.update(tick.phase_index.to_le_bytes());
+    let phase_index = u64::try_from(tick.phase_index).expect("bug: phase index should fit u64");
+    hasher.update(phase_index.to_le_bytes());
     hasher.update(tick.actor_id.to_le_bytes());
     hasher.update(tick.actor_sequence.to_le_bytes());
     hasher.update(tick.simulation_time_ms.to_le_bytes());
@@ -4407,7 +4409,7 @@ mod tests {
 
         for actor_sequence in 0..10_000 {
             let tick = ScheduledActorTick {
-                phase_index: 0,
+                phase_index: 7,
                 actor_id: 0,
                 actor_sequence,
                 simulation_time_ms: actor_sequence,

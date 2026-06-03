@@ -660,6 +660,11 @@ fn assert_regression_diagnostic_fields(result: &serde_json::Value, scenario: &st
         result.get("backpressureRate").is_some(),
         "{scenario} should include backpressureRate"
     );
+    assert_eq!(
+        result["backpressureRate"].as_f64(),
+        Some(0.0),
+        "{scenario} should not count warm-up skips as backpressure"
+    );
     assert!(
         result.get("simulatorOverloadRate").is_some(),
         "{scenario} should include simulatorOverloadRate"

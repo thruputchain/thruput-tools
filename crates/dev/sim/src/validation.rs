@@ -944,6 +944,29 @@ mod tests {
     }
 
     #[test]
+    fn checked_in_soak_presets_parse_and_validate() {
+        for (name, manifest_json) in [
+            (
+                "local-multi-contract-soak",
+                include_str!("../../../../examples/sim/local-multi-contract-soak.json"),
+            ),
+            (
+                "local-realistic-soak",
+                include_str!("../../../../examples/sim/local-realistic-soak.json"),
+            ),
+            (
+                "local-realistic-soak-short",
+                include_str!("../../../../examples/sim/local-realistic-soak-short.json"),
+            ),
+        ] {
+            let manifest: SimulationManifest = serde_json::from_str(manifest_json)
+                .unwrap_or_else(|error| panic!("{name} should parse: {error}"));
+            validate_manifest(&manifest)
+                .unwrap_or_else(|error| panic!("{name} should validate: {error}"));
+        }
+    }
+
+    #[test]
     fn validates_view_call_contract_references_and_hex() {
         let mut manifest = basic_manifest();
         manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {

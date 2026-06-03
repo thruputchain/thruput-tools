@@ -326,10 +326,13 @@ final `result.json`; target cleanup still runs.
 
 RSS-growth thresholds in the soak presets are intentionally calibration-bound:
 collect a baseline artifact for each target class before treating
-`maxRssGrowthBytesPerMinute` as a mandatory CI gate. For CPU/perf regression
-tracking outside the run artifact, instruction-count benchmarks such as
-`iai-callgrind` and continuous Criterion tracking through Bencher/CodSpeed-style
-systems are good follow-ons once the local soak signal is stable.
+`maxRssGrowthBytesPerMinute` as a mandatory CI gate. End-to-end RSS gating is
+Linux-only for now; on macOS the local resource sampler reports
+`resourceTimeline` as unavailable and RSS-growth assertions evaluate as
+unsupported. For CPU/perf regression tracking outside the run artifact,
+instruction-count benchmarks such as `iai-callgrind` and continuous Criterion
+tracking through Bencher/CodSpeed-style systems are good follow-ons once the
+local soak signal is stable.
 
 Phase 1 runs emit `passed` or `failed` final results. The `aborted` outcome is
 reserved in the schema for a future path that writes a final result after
