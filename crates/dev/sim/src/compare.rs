@@ -476,6 +476,7 @@ fn collect_resource_metric_diffs(
                 "resourceTimeline.maxSegmentRssGrowthBytesPerMinute",
                 a.max_segment_rss_growth_bytes_per_minute,
                 b.max_segment_rss_growth_bytes_per_minute,
+                "insufficient-samples",
                 deltas,
                 skips,
             );
@@ -483,6 +484,7 @@ fn collect_resource_metric_diffs(
                 "resourceTimeline.maxRssBytes",
                 a.max_rss_bytes,
                 b.max_rss_bytes,
+                "no-data",
                 deltas,
                 skips,
             );
@@ -490,6 +492,7 @@ fn collect_resource_metric_diffs(
                 "resourceTimeline.totalCpuMs",
                 a.total_cpu_ms,
                 b.total_cpu_ms,
+                "no-data",
                 deltas,
                 skips,
             );
@@ -515,6 +518,7 @@ fn collect_optional_i64_delta(
     metric: &'static str,
     a: Option<i64>,
     b: Option<i64>,
+    missing_status: &'static str,
     deltas: &mut Vec<MetricNumericDelta>,
     skips: &mut Vec<NumericSkip>,
 ) {
@@ -525,8 +529,8 @@ fn collect_optional_i64_delta(
         }),
         _ => skips.push(NumericSkip {
             metric: metric.into(),
-            status_a: option_status(a.is_some()),
-            status_b: option_status(b.is_some()),
+            status_a: option_status(a.is_some(), missing_status),
+            status_b: option_status(b.is_some(), missing_status),
         }),
     }
 }
@@ -535,6 +539,7 @@ fn collect_optional_u64_delta(
     metric: &'static str,
     a: Option<u64>,
     b: Option<u64>,
+    missing_status: &'static str,
     deltas: &mut Vec<MetricNumericDelta>,
     skips: &mut Vec<NumericSkip>,
 ) {
@@ -545,17 +550,17 @@ fn collect_optional_u64_delta(
         }),
         _ => skips.push(NumericSkip {
             metric: metric.into(),
-            status_a: option_status(a.is_some()),
-            status_b: option_status(b.is_some()),
+            status_a: option_status(a.is_some(), missing_status),
+            status_b: option_status(b.is_some(), missing_status),
         }),
     }
 }
 
-fn option_status(observed: bool) -> String {
+fn option_status(observed: bool, missing_status: &'static str) -> String {
     if observed {
         "observed".into()
     } else {
-        "unavailable".into()
+        missing_status.into()
     }
 }
 
@@ -980,6 +985,29 @@ mod tests {
                 .iter()
                 .any(|delta| { delta.metric == "resourceTimeline.totalCpuMs" && delta.value == 2 })
         );
+    }
+
+    #[test]
+    fn compare_reports_insufficient_samples_for_missing_rss_growth() {
+        let mut a_json = minimal_result_json(SIM_RESULT_SCHEMA_VERSION);
+        a_json["resourceTimeline"] = resource_timeline_json(100, 1_000, 5);
+        a_json["resourceTimeline"]["value"]["maxSegmentRssGrowthBytesPerMinute"] = json!(null);
+        let mut b_json = minimal_result_json(SIM_RESULT_SCHEMA_VERSION);
+        b_json["resourceTimeline"] = resource_timeline_json(250, 1_500, 7);
+        b_json["resourceTimeline"]["value"]["maxSegmentRssGrowthBytesPerMinute"] = json!(null);
+
+        let diff = ResultDiff::from_results(&result_from_json(a_json), &result_from_json(b_json));
+
+        assert!(
+            diff.metric_numeric_deltas.iter().all(|delta| {
+                delta.metric != "resourceTimeline.maxSegmentRssGrowthBytesPerMinute"
+            })
+        );
+        assert!(diff.numeric_skips.iter().any(|skip| {
+            skip.metric == "resourceTimeline.maxSegmentRssGrowthBytesPerMinute"
+                && skip.status_a == "insufficient-samples"
+                && skip.status_b == "insufficient-samples"
+        }));
     }
 
     #[test]
