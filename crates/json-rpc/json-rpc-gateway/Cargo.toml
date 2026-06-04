@@ -16,7 +16,7 @@ exclude = [
 ]
 
 [[bin]]
-name = "hogd_gateway"
+name = "hogd-gateway"
 path = "src/main.rs"
 
 [lints]
