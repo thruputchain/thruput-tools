@@ -320,6 +320,9 @@ enum Command {
         /// Timer interval for --block-driver interval
         #[arg(long)]
         block_interval_ms: Option<u64>,
+        /// Maximum simultaneous public JSON-RPC connections
+        #[arg(long)]
+        rpc_max_connections: Option<u32>,
     },
     /// Manage signing keys
     #[command(long_about = "Ed25519 signing keys stored in \
@@ -606,6 +609,7 @@ fn main() {
             startup_timeout_secs,
             block_driver,
             block_interval_ms,
+            rpc_max_connections,
         } => groundhog_cli::node::run_with_block_driver(
             port,
             verbose,
@@ -615,6 +619,7 @@ fn main() {
             startup_timeout_secs,
             block_driver.map(Into::into),
             block_interval_ms,
+            rpc_max_connections,
             cmd_name,
             &print,
         ),
@@ -692,16 +697,20 @@ mod tests {
             "interval",
             "--block-interval-ms",
             "250",
+            "--rpc-max-connections",
+            "512",
         ]);
 
         match cli.command {
             Command::Node {
                 block_driver,
                 block_interval_ms,
+                rpc_max_connections,
                 ..
             } => {
                 assert!(matches!(block_driver, Some(NodeBlockDriverArg::Interval)));
                 assert_eq!(block_interval_ms, Some(250));
+                assert_eq!(rpc_max_connections, Some(512));
             }
             _ => panic!("expected node command"),
         }

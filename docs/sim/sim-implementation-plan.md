@@ -75,7 +75,8 @@ chaos, deploy new contracts, or create remote infrastructure.
 - [x] Change the scheduler to emit deterministic actor ticks; workload choice
   now happens at dispatch time so actor state can participate later.
 - [x] Dispatch workload execution asynchronously with global and per-actor
-  in-flight bounds.
+  in-flight bounds, using separate actor lanes for writes, receipt polling, and
+  read-only work.
 - [x] Use bounded latency histograms instead of retaining every latency sample.
 - [x] Cap chain-progress samples in `result.json` while preserving total
   observation count and first/last/max heights, without rewriting earlier
@@ -187,6 +188,10 @@ chaos, deploy new contracts, or create remote infrastructure.
   dedicated `maxBackpressureRate` assertion and surfaced as `backpressureRate`
   in `result.json`; that rate counts only `simulator-backpressure` skips, not
   deterministic warm-up skips such as `no-submitted-transaction`.
+- [x] Cap simulator-side JSON-RPC client concurrency with
+  `target.maxRpcClientConcurrency` and record the effective default in
+  `simulation.json`, so high-rate tests queue through the load generator
+  instead of failing during initial HTTP connection-pool expansion.
 - [x] Replace receipt-poll's v1 latest-transaction slot with per-transaction
   receipt tracking before wiring `maxReceiptTimeoutRate`; otherwise a newer
   submit can hide timeout state for an older unreceipted transaction.

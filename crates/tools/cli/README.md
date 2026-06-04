@@ -326,6 +326,7 @@ groundhog node
 groundhog node --port 9546
 groundhog node --hogd-dev-binary /path/to/hogd-dev
 groundhog node --hogd-dev-binary /path/to/hogd-dev --hogd-protocol hogp/<hash>
+groundhog node --rpc-max-connections 2000
 groundhog node -v
 RUST_LOG=groundhog_node_supervisor=debug,hogd_dev=debug groundhog node
 ```
@@ -334,6 +335,8 @@ RUST_LOG=groundhog_node_supervisor=debug,hogd_dev=debug groundhog node
 backend planes, endpoint metadata, and the local dev-account surface for
 scripting. Stdout is reserved for this startup payload in JSON mode.
 Operational logs go to stderr, and `--verbose` is honored in JSON mode.
+`--rpc-max-connections` controls the public JSON-RPC simultaneous connection
+cap; the default is 2000.
 
 `--hogd-protocol` overrides the protocol token used for hogd-dev x23 intro
 handshakes. It is useful when a local `hogd-dev` build is slightly ahead of

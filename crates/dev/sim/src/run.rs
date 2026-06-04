@@ -41,6 +41,8 @@ use crate::util::{
 };
 use crate::validation::{validate_against_runtime, validate_manifest};
 
+pub const DEFAULT_RPC_CLIENT_CONCURRENCY: u32 = 512;
+
 /// Options for running a simulation.
 #[derive(Debug, Clone)]
 pub struct RunOptions {
@@ -254,6 +256,8 @@ async fn run_resolved_target(
 ) -> Result<RunSummary, SimError> {
     loaded_sim.manifest.target.rpc_url = Some(target.rpc_url.clone());
     loaded_sim.manifest.target.runtime_manifest = Some(target.runtime_manifest.clone());
+    let rpc_client_concurrency = effective_rpc_client_concurrency(&loaded_sim.manifest);
+    loaded_sim.manifest.target.max_rpc_client_concurrency = Some(rpc_client_concurrency);
 
     let loaded_runtime = load_runtime_manifest(&target.runtime_manifest).await?;
     let accounts = derive_accounts(&loaded_runtime.manifest)?;
@@ -297,6 +301,7 @@ async fn run_resolved_target(
     .await?;
 
     let client = HttpClientBuilder::default()
+        .max_concurrent_requests(usize::try_from(rpc_client_concurrency).unwrap_or(usize::MAX))
         .build(target.rpc_url.clone())
         .map_err(|error| SimError::RpcClient(error.to_string()))?;
     let contract_setup = deploy_manifest_contracts(
@@ -345,6 +350,13 @@ async fn run_resolved_target(
         return Err(SimError::RunFailed(summary.out_dir.display().to_string()));
     }
     Ok(summary)
+}
+
+fn effective_rpc_client_concurrency(manifest: &SimulationManifest) -> u32 {
+    manifest
+        .target
+        .max_rpc_client_concurrency
+        .unwrap_or(DEFAULT_RPC_CLIENT_CONCURRENCY)
 }
 
 /// Inputs for executing an already-loaded simulation.
@@ -661,6 +673,7 @@ fn build_result(input: BuildResultInput<'_>) -> Result<SimResult, SimError> {
         backpressure_rate: input.backpressure_rate,
         simulator_overload_rate: input.simulator_overload_rate,
         simulator_overload_count: input.finished_metrics.simulator_overload_count,
+        diagnostics: input.finished_metrics.diagnostics,
         resource_timeline: input.finished_metrics.resource_timeline.map_or_else(
             || MetricAvailability::Unavailable {
                 reason: "no target resource samples were observed".into(),
@@ -1437,6 +1450,7 @@ mod tests {
             backpressure_rate: 0.0,
             simulator_overload_rate: 0.0,
             simulator_overload_count: 0,
+            diagnostics: crate::result::RunDiagnostics::default(),
             resource_timeline: MetricAvailability::Unavailable {
                 reason: "test fixture".into(),
             },

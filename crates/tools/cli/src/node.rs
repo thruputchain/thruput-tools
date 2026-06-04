@@ -50,6 +50,7 @@ pub fn run(
         startup_timeout_secs,
         None,
         None,
+        None,
         cmd,
         print,
     )
@@ -69,6 +70,7 @@ pub fn run_with_block_driver(
     startup_timeout_secs: Option<u64>,
     block_driver: Option<LocalNodeBlockDriverMode>,
     block_interval_ms: Option<u64>,
+    rpc_max_connections: Option<u32>,
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
@@ -85,6 +87,7 @@ pub fn run_with_block_driver(
                 dev_account_count,
                 block_driver,
                 block_interval: block_interval_ms.map(Duration::from_millis),
+                rpc_max_connections,
                 ..LocalNodeOptions::default()
             },
             cmd,
@@ -115,6 +118,8 @@ pub struct LocalNodeOptions {
     pub block_driver: Option<LocalNodeBlockDriverMode>,
     /// Override the interval used by timer-driven block production.
     pub block_interval: Option<Duration>,
+    /// Override the public JSON-RPC simultaneous connection cap.
+    pub rpc_max_connections: Option<u32>,
 }
 
 /// PID-file behavior for local hogd-dev startup.
@@ -400,6 +405,14 @@ fn local_node_config(
             "block interval requires block driver interval mode".into(),
         ));
     }
+    if options
+        .rpc_max_connections
+        .is_some_and(|max_connections| max_connections == 0)
+    {
+        return Err(CliError::Other(
+            "RPC max connections must be at least 1".into(),
+        ));
+    }
 
     let hogd = options
         .hogd_dev_binary
@@ -424,6 +437,10 @@ fn local_node_config(
     let config = NodeSupervisorConfig::default()
         .with_rpc_listen_address(format!("127.0.0.1:{}", options.port))
         .with_hogd_dev(hogd);
+    let config = match options.rpc_max_connections {
+        Some(max_connections) => config.with_rpc_max_connections(max_connections),
+        None => config,
+    };
     let config = match (options.block_driver, options.block_interval) {
         (None, None) => config,
         (mode, interval) => {
@@ -499,6 +516,7 @@ pub fn run_with_block_driver(
     _startup_timeout_secs: Option<u64>,
     _block_driver: Option<LocalNodeBlockDriverMode>,
     _block_interval_ms: Option<u64>,
+    _rpc_max_connections: Option<u32>,
     _cmd: &'static str,
     _print: &Print,
 ) -> Result<(), CliError> {
@@ -632,6 +650,7 @@ mod tests {
             dev_account_count: Some(3),
             block_driver: Some(LocalNodeBlockDriverMode::Interval),
             block_interval: Some(Duration::from_millis(250)),
+            rpc_max_connections: Some(512),
         })
         .expect("bug: local node config should build");
 
@@ -652,6 +671,18 @@ mod tests {
             groundhog_node_supervisor::BlockDriverMode::Interval
         );
         assert_eq!(config.block_driver.interval, Duration::from_millis(250));
+        assert_eq!(config.rpc_max_connections, 512);
+    }
+
+    #[test]
+    fn local_node_config_rejects_zero_rpc_max_connections() {
+        let err = local_node_config(LocalNodeOptions {
+            rpc_max_connections: Some(0),
+            ..LocalNodeOptions::default()
+        })
+        .expect_err("zero connection cap should be rejected");
+
+        assert!(matches!(err, CliError::Other(message) if message.contains("max connections")));
     }
 
     #[test]

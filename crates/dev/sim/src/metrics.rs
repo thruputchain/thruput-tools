@@ -5,9 +5,9 @@ use hdrhistogram::Histogram;
 
 use crate::manifest::WorkloadKind;
 use crate::result::{
-    ChainProgressSummary, ChainTipObservation, LatencySummary, ReceiptPollSummary,
-    ResourceSamplePoint, ResourceSampleScope, ResourceSegment, ResourceTimeline, WorkloadCounts,
-    WorkloadMetrics,
+    ChainProgressSummary, ChainTipObservation, ErrorClassSummary, LatencySummary,
+    ReceiptPollSummary, ResourceSampleFailureSummary, ResourceSamplePoint, ResourceSampleScope,
+    ResourceSegment, ResourceTimeline, RunDiagnostics, WorkloadCounts, WorkloadMetrics,
 };
 
 const MAX_CHAIN_PROGRESS_OBSERVATIONS: usize = 1_024;
@@ -19,6 +19,7 @@ pub struct RunMetricsBuilder {
     workloads: BTreeMap<WorkloadKind, WorkloadMetricsBuilder>,
     chain_progress: ChainProgressBuilder,
     resource_timeline: ResourceTimelineBuilder,
+    diagnostics: RunDiagnosticsBuilder,
     simulator_backpressure_count: u64,
     simulator_overload_count: u64,
 }
@@ -56,6 +57,23 @@ impl RunMetricsBuilder {
 
     pub fn record_resource_sample(&mut self, sample: &ResourceSamplePoint) {
         self.resource_timeline.record(sample);
+    }
+
+    pub fn record_resource_sample_failure(&mut self, scheduled_time_ms: u64, reason: &str) {
+        self.diagnostics
+            .record_resource_sample_failure(scheduled_time_ms, reason);
+    }
+
+    pub fn record_error_diagnostic(
+        &mut self,
+        workload: WorkloadKind,
+        rpc_method: &str,
+        scheduled_time_ms: u64,
+        error_class: &str,
+        error: Option<&str>,
+    ) {
+        self.diagnostics
+            .record_error(workload, rpc_method, scheduled_time_ms, error_class, error);
     }
 
     pub fn record_submit_to_receipt_latency(&mut self, workload: WorkloadKind, latency_ms: u64) {
@@ -121,11 +139,13 @@ impl RunMetricsBuilder {
             .collect();
         let chain_progress = self.chain_progress.finish();
         let resource_timeline = self.resource_timeline.finish();
+        let diagnostics = self.diagnostics.finish();
 
         RunMetrics {
             workload_metrics,
             chain_progress,
             resource_timeline,
+            diagnostics,
             simulator_overload_count: self.simulator_overload_count,
         }
     }
@@ -140,7 +160,154 @@ pub struct RunMetrics {
     pub workload_metrics: BTreeMap<WorkloadKind, WorkloadMetrics>,
     pub chain_progress: Option<ChainProgressSummary>,
     pub resource_timeline: Option<ResourceTimeline>,
+    pub diagnostics: RunDiagnostics,
     pub simulator_overload_count: u64,
+}
+
+#[derive(Debug, Default)]
+struct RunDiagnosticsBuilder {
+    error_classes: BTreeMap<String, ErrorClassSummaryBuilder>,
+    resource_sample_failures: BTreeMap<String, ResourceSampleFailureSummaryBuilder>,
+}
+
+impl RunDiagnosticsBuilder {
+    fn record_error(
+        &mut self,
+        workload: WorkloadKind,
+        rpc_method: &str,
+        scheduled_time_ms: u64,
+        error_class: &str,
+        error: Option<&str>,
+    ) {
+        self.error_classes
+            .entry(error_class.into())
+            .or_insert_with(|| ErrorClassSummaryBuilder::new(error_class, scheduled_time_ms))
+            .record(workload, rpc_method, scheduled_time_ms, error);
+    }
+
+    fn record_resource_sample_failure(&mut self, scheduled_time_ms: u64, reason: &str) {
+        self.resource_sample_failures
+            .entry(reason.into())
+            .or_insert_with(|| ResourceSampleFailureSummaryBuilder::new(reason, scheduled_time_ms))
+            .record(scheduled_time_ms);
+    }
+
+    fn finish(self) -> RunDiagnostics {
+        let mut error_classes: Vec<_> = self
+            .error_classes
+            .into_values()
+            .map(ErrorClassSummaryBuilder::finish)
+            .collect();
+        error_classes.sort_by(|left, right| {
+            right
+                .count
+                .cmp(&left.count)
+                .then_with(|| left.error_class.cmp(&right.error_class))
+        });
+        let mut resource_sample_failures: Vec<_> = self
+            .resource_sample_failures
+            .into_values()
+            .map(ResourceSampleFailureSummaryBuilder::finish)
+            .collect();
+        resource_sample_failures.sort_by(|left, right| {
+            right
+                .count
+                .cmp(&left.count)
+                .then_with(|| left.reason.cmp(&right.reason))
+        });
+        RunDiagnostics {
+            error_classes,
+            resource_sample_failures,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ErrorClassSummaryBuilder {
+    error_class: String,
+    count: u64,
+    first_scheduled_time_ms: u64,
+    last_scheduled_time_ms: u64,
+    workloads: BTreeMap<WorkloadKind, u64>,
+    rpc_methods: BTreeMap<String, u64>,
+    sample_error: Option<String>,
+}
+
+impl ErrorClassSummaryBuilder {
+    fn new(error_class: &str, scheduled_time_ms: u64) -> Self {
+        Self {
+            error_class: error_class.into(),
+            count: 0,
+            first_scheduled_time_ms: scheduled_time_ms,
+            last_scheduled_time_ms: scheduled_time_ms,
+            workloads: BTreeMap::new(),
+            rpc_methods: BTreeMap::new(),
+            sample_error: None,
+        }
+    }
+
+    fn record(
+        &mut self,
+        workload: WorkloadKind,
+        rpc_method: &str,
+        scheduled_time_ms: u64,
+        error: Option<&str>,
+    ) {
+        self.count += 1;
+        self.first_scheduled_time_ms = self.first_scheduled_time_ms.min(scheduled_time_ms);
+        self.last_scheduled_time_ms = self.last_scheduled_time_ms.max(scheduled_time_ms);
+        *self.workloads.entry(workload).or_default() += 1;
+        *self.rpc_methods.entry(rpc_method.into()).or_default() += 1;
+        if self.sample_error.is_none() {
+            self.sample_error = error.map(str::to_string);
+        }
+    }
+
+    fn finish(self) -> ErrorClassSummary {
+        ErrorClassSummary {
+            error_class: self.error_class,
+            count: self.count,
+            first_scheduled_time_ms: self.first_scheduled_time_ms,
+            last_scheduled_time_ms: self.last_scheduled_time_ms,
+            workloads: self.workloads,
+            rpc_methods: self.rpc_methods,
+            sample_error: self.sample_error,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ResourceSampleFailureSummaryBuilder {
+    reason: String,
+    count: u64,
+    first_scheduled_time_ms: u64,
+    last_scheduled_time_ms: u64,
+}
+
+impl ResourceSampleFailureSummaryBuilder {
+    fn new(reason: &str, scheduled_time_ms: u64) -> Self {
+        Self {
+            reason: reason.into(),
+            count: 0,
+            first_scheduled_time_ms: scheduled_time_ms,
+            last_scheduled_time_ms: scheduled_time_ms,
+        }
+    }
+
+    fn record(&mut self, scheduled_time_ms: u64) {
+        self.count += 1;
+        self.first_scheduled_time_ms = self.first_scheduled_time_ms.min(scheduled_time_ms);
+        self.last_scheduled_time_ms = self.last_scheduled_time_ms.max(scheduled_time_ms);
+    }
+
+    fn finish(self) -> ResourceSampleFailureSummary {
+        ResourceSampleFailureSummary {
+            reason: self.reason,
+            count: self.count,
+            first_scheduled_time_ms: self.first_scheduled_time_ms,
+            last_scheduled_time_ms: self.last_scheduled_time_ms,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -825,6 +992,72 @@ mod tests {
         assert_eq!(timeline.peak_threads, Some(4));
         assert_eq!(timeline.peak_open_fds, None);
         assert_eq!(timeline.last.rss_bytes, Some(1_024));
+    }
+
+    #[test]
+    fn diagnostics_summarize_error_classes_and_resource_failures() {
+        let mut metrics = RunMetricsBuilder::default();
+        metrics.record_error_diagnostic(
+            WorkloadKind::ChainTip,
+            "groundhog_chainTip",
+            2_000,
+            "rpc-error",
+            Some("Request rejected `429`"),
+        );
+        metrics.record_error_diagnostic(
+            WorkloadKind::EventsQuery,
+            "groundhog_getEvents",
+            1_000,
+            "rpc-error",
+            Some("Request rejected `429`"),
+        );
+        metrics.record_error_diagnostic(
+            WorkloadKind::StorageRead,
+            "groundhog_getStorageAt",
+            3_000,
+            "storage-read-rpc-error",
+            Some("client error"),
+        );
+        metrics.record_resource_sample_failure(25_000, "failed to read /proc");
+        metrics.record_resource_sample_failure(30_000, "failed to read /proc");
+
+        let diagnostics = metrics.finish().diagnostics;
+
+        assert_eq!(diagnostics.error_classes.len(), 2);
+        assert_eq!(diagnostics.error_classes[0].error_class, "rpc-error");
+        assert_eq!(diagnostics.error_classes[0].count, 2);
+        assert_eq!(diagnostics.error_classes[0].first_scheduled_time_ms, 1_000);
+        assert_eq!(diagnostics.error_classes[0].last_scheduled_time_ms, 2_000);
+        assert_eq!(
+            diagnostics.error_classes[0]
+                .workloads
+                .get(&WorkloadKind::ChainTip),
+            Some(&1)
+        );
+        assert_eq!(
+            diagnostics.error_classes[0]
+                .rpc_methods
+                .get("groundhog_getEvents"),
+            Some(&1)
+        );
+        assert_eq!(
+            diagnostics.error_classes[0].sample_error.as_deref(),
+            Some("Request rejected `429`")
+        );
+        assert_eq!(diagnostics.resource_sample_failures.len(), 1);
+        assert_eq!(
+            diagnostics.resource_sample_failures[0].reason,
+            "failed to read /proc"
+        );
+        assert_eq!(diagnostics.resource_sample_failures[0].count, 2);
+        assert_eq!(
+            diagnostics.resource_sample_failures[0].first_scheduled_time_ms,
+            25_000
+        );
+        assert_eq!(
+            diagnostics.resource_sample_failures[0].last_scheduled_time_ms,
+            30_000
+        );
     }
 
     fn resource_sample(

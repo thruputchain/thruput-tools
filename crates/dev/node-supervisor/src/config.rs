@@ -13,6 +13,9 @@ use groundhog_signing::{
 /// Default JSON-RPC listen address for `groundhog node`.
 pub const DEFAULT_RPC_LISTEN_ADDRESS: &str = "127.0.0.1:9545";
 
+/// Default maximum simultaneous public JSON-RPC connections for `groundhog node`.
+pub const DEFAULT_RPC_MAX_CONNECTIONS: u32 = 2_000;
+
 /// Default timeout for one hogd-dev `ViewGateway` execution RPC.
 pub const DEFAULT_HOGD_DEV_VIEW_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -55,6 +58,8 @@ pub const DEFAULT_HOGD_DEV_STORAGE_COST_MODEL_PROFILE: &str = "hogd-default";
 pub struct NodeSupervisorConfig {
     /// Public JSON-RPC listen address exposed by the Rust facade.
     pub rpc_listen_address: String,
+    /// Maximum simultaneous public JSON-RPC connections.
+    pub rpc_max_connections: u32,
     /// Configuration for the supervised hogd-dev child process.
     pub hogd_dev: HogdDevConfig,
     /// Optional protocol string used for hogd-dev intro handshakes.
@@ -75,6 +80,7 @@ impl Default for NodeSupervisorConfig {
     fn default() -> Self {
         Self {
             rpc_listen_address: DEFAULT_RPC_LISTEN_ADDRESS.to_string(),
+            rpc_max_connections: DEFAULT_RPC_MAX_CONNECTIONS,
             hogd_dev: HogdDevConfig::default(),
             hogd_protocol_override: None,
             view_gas_limit: groundhog_json_rpc_server::DEFAULT_VIEW_GAS_LIMIT,
@@ -89,6 +95,13 @@ impl NodeSupervisorConfig {
     #[must_use]
     pub fn with_rpc_listen_address(mut self, listen_address: impl Into<String>) -> Self {
         self.rpc_listen_address = listen_address.into();
+        self
+    }
+
+    /// Return a copy with a different public JSON-RPC connection cap.
+    #[must_use]
+    pub const fn with_rpc_max_connections(mut self, max_connections: u32) -> Self {
+        self.rpc_max_connections = max_connections;
         self
     }
 

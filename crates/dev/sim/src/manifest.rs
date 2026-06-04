@@ -409,7 +409,7 @@ mod tests {
             "kind": "groundhog-simulation",
             "name": "local-wallet-soak",
             "seed": "seed",
-            "target": {"provider": "existing"},
+            "target": {"provider": "existing", "maxRpcClientConcurrency": 256},
             "loadShape": [{"duration": "10s", "users": 2, "ratePerUserHz": 1.5}],
             "workloads": [
                 {"name": "chain-tip", "weight": 10},
@@ -420,6 +420,7 @@ mod tests {
         .expect("manifest should parse");
 
         assert_eq!(manifest.target.provider, TargetProviderKind::Existing);
+        assert_eq!(manifest.target.max_rpc_client_concurrency, Some(256));
         assert_eq!(manifest.workloads[1].name, WorkloadKind::WalletSubmitSmoke);
         assert_eq!(
             manifest.load_shape[0].duration.parse_millis().unwrap(),

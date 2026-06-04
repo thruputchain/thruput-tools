@@ -6,7 +6,9 @@
   "target": {
     "provider": "local",
     "blockDriver": "interval",
-    "blockIntervalMs": 500
+    "blockIntervalMs": 500,
+    "maxRpcConnections": 2000,
+    "maxRpcClientConcurrency": 512
   },
   "bootstrap": {
     "accounts": 5,

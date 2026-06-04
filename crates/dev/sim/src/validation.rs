@@ -87,6 +87,16 @@ fn validate_target_block_driver(manifest: &SimulationManifest) -> Result<(), Val
     {
         return Err(ValidationError::InvalidBlockIntervalMs);
     }
+    if let Some(max_rpc_connections) = manifest.target.max_rpc_connections
+        && max_rpc_connections == 0
+    {
+        return Err(ValidationError::InvalidMaxRpcConnections);
+    }
+    if let Some(max_rpc_client_concurrency) = manifest.target.max_rpc_client_concurrency
+        && max_rpc_client_concurrency == 0
+    {
+        return Err(ValidationError::InvalidMaxRpcClientConcurrency);
+    }
     if manifest.target.provider != TargetProviderKind::Local {
         if manifest.target.block_driver.is_some() {
             return Err(ValidationError::NonLocalRejectsBlockDriverField {
@@ -96,6 +106,11 @@ fn validate_target_block_driver(manifest: &SimulationManifest) -> Result<(), Val
         if manifest.target.block_interval_ms.is_some() {
             return Err(ValidationError::NonLocalRejectsBlockDriverField {
                 field: "target.blockIntervalMs",
+            });
+        }
+        if manifest.target.max_rpc_connections.is_some() {
+            return Err(ValidationError::NonLocalRejectsRpcConnectionField {
+                field: "target.maxRpcConnections",
             });
         }
         return Ok(());
@@ -906,6 +921,12 @@ pub enum ValidationError {
     BlockIntervalRequiresIntervalDriver,
     #[error("non-local target does not accept local block-driver field {field}")]
     NonLocalRejectsBlockDriverField { field: &'static str },
+    #[error("maxRpcConnections must be at least 1")]
+    InvalidMaxRpcConnections,
+    #[error("maxRpcClientConcurrency must be at least 1")]
+    InvalidMaxRpcClientConcurrency,
+    #[error("non-local target does not accept local RPC connection field {field}")]
+    NonLocalRejectsRpcConnectionField { field: &'static str },
     #[error(
         "scenario requests {requested} actors but runtime manifest advertises {available} bootstrap accounts"
     )]
@@ -1764,8 +1785,59 @@ mod tests {
         manifest.target.runtime_manifest = None;
         manifest.target.block_driver = Some(crate::target::TargetBlockDriverMode::Interval);
         manifest.target.block_interval_ms = Some(250);
+        manifest.target.max_rpc_connections = Some(512);
 
         validate_manifest(&manifest).expect("local block driver options should be valid");
+    }
+
+    #[test]
+    fn validate_manifest_rejects_non_local_max_rpc_connections() {
+        let mut manifest = basic_manifest();
+        manifest.target.max_rpc_connections = Some(512);
+
+        let err = validate_manifest(&manifest).expect_err("existing target should reject field");
+
+        assert!(matches!(
+            err,
+            ValidationError::NonLocalRejectsRpcConnectionField {
+                field: "target.maxRpcConnections"
+            }
+        ));
+    }
+
+    #[test]
+    fn validate_manifest_rejects_zero_max_rpc_connections() {
+        let mut manifest = basic_manifest();
+        manifest.target.provider = TargetProviderKind::Local;
+        manifest.target.rpc_url = None;
+        manifest.target.runtime_manifest = None;
+        manifest.target.max_rpc_connections = Some(0);
+
+        let err = validate_manifest(&manifest).expect_err("zero connection cap should be invalid");
+
+        assert!(matches!(err, ValidationError::InvalidMaxRpcConnections));
+    }
+
+    #[test]
+    fn validate_manifest_accepts_existing_rpc_client_concurrency() {
+        let mut manifest = basic_manifest();
+        manifest.target.max_rpc_client_concurrency = Some(512);
+
+        validate_manifest(&manifest).expect("existing target client concurrency should be valid");
+    }
+
+    #[test]
+    fn validate_manifest_rejects_zero_rpc_client_concurrency() {
+        let mut manifest = basic_manifest();
+        manifest.target.max_rpc_client_concurrency = Some(0);
+
+        let err =
+            validate_manifest(&manifest).expect_err("zero client concurrency should be invalid");
+
+        assert!(matches!(
+            err,
+            ValidationError::InvalidMaxRpcClientConcurrency
+        ));
     }
 
     #[test]
@@ -1862,6 +1934,8 @@ mod tests {
                 hogd_dev_binary: None,
                 block_driver: None,
                 block_interval_ms: None,
+                max_rpc_connections: None,
+                max_rpc_client_concurrency: None,
             },
             bootstrap: None,
             load_shape: vec![LoadPhase {

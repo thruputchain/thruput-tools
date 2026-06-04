@@ -7,12 +7,12 @@
 //! latest-state storage reads can be backed by hogd-dev's `DbGateway`
 //! endpoint independently.
 
-use std::{future::Future, net::SocketAddr, process::ExitStatus, time::Duration};
+use std::{future::Future, io, net::SocketAddr, process::ExitStatus, time::Duration};
 
 use groundhog_json_rpc_api::GroundhogApiServer;
 use groundhog_json_rpc_server::{BuildInfo, GroundhogRpcServer, RpcServerConfig};
 use groundhog_xdr::PROTOCOL_VERSION;
-use jsonrpsee::server::{RpcModule, Server, ServerHandle};
+use jsonrpsee::server::{RpcModule, Server, ServerConfig, ServerHandle};
 use serde::Serialize;
 
 use crate::{
@@ -171,6 +171,7 @@ impl NodeSupervisorHandle {
             config.view_gas_limit,
             config.view_timeout,
             config.block_driver,
+            config.rpc_max_connections,
         )
         .await
         {
@@ -322,6 +323,7 @@ async fn start_rpc_server(
     view_gas_limit: u64,
     view_timeout: Duration,
     block_driver_config: BlockDriverConfig,
+    rpc_max_connections: u32,
 ) -> Result<StartedRpcServer, NodeSupervisorError> {
     let scheduler_backend =
         HogdDevSchedulerBackend::connect(readiness.endpoints.scheduler_coord).await?;
@@ -353,9 +355,12 @@ async fn start_rpc_server(
             scheduler_backend,
             read,
             view,
-            BackendPlanes::hogd_dev_full(view_status),
-            view_gas_limit,
-            block_driver_config,
+            RpcServerOptions {
+                backend_planes: BackendPlanes::hogd_dev_full(view_status),
+                view_gas_limit,
+                block_driver_config,
+                rpc_max_connections,
+            },
         )
         .await
     } else if let Some(db_gateway_addr) = readiness.endpoints.db_gateway {
@@ -371,9 +376,12 @@ async fn start_rpc_server(
             scheduler_backend,
             read,
             view,
-            BackendPlanes::hogd_dev_storage_only(view_status),
-            view_gas_limit,
-            block_driver_config,
+            RpcServerOptions {
+                backend_planes: BackendPlanes::hogd_dev_storage_only(view_status),
+                view_gas_limit,
+                block_driver_config,
+                rpc_max_connections,
+            },
         )
         .await
     } else {
@@ -387,15 +395,26 @@ async fn start_rpc_server(
             scheduler_backend,
             StubBackend::new(),
             view,
-            BackendPlanes {
-                view: view_status,
-                ..BackendPlanes::hogd_dev_scheduler_only()
+            RpcServerOptions {
+                backend_planes: BackendPlanes {
+                    view: view_status,
+                    ..BackendPlanes::hogd_dev_scheduler_only()
+                },
+                view_gas_limit,
+                block_driver_config,
+                rpc_max_connections,
             },
-            view_gas_limit,
-            block_driver_config,
         )
         .await
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RpcServerOptions {
+    backend_planes: BackendPlanes,
+    view_gas_limit: u64,
+    block_driver_config: BlockDriverConfig,
+    rpc_max_connections: u32,
 }
 
 async fn start_rpc_server_with_read<R, V>(
@@ -403,15 +422,18 @@ async fn start_rpc_server_with_read<R, V>(
     scheduler_backend: HogdDevSchedulerBackend,
     read: R,
     view: V,
-    backend_planes: BackendPlanes,
-    view_gas_limit: u64,
-    block_driver_config: BlockDriverConfig,
+    options: RpcServerOptions,
 ) -> Result<StartedRpcServer, NodeSupervisorError>
 where
     R: groundhog_json_rpc_server::ReadPlane,
     V: groundhog_json_rpc_server::ViewPlane,
 {
+    ensure_rpc_nofile_limit(options.rpc_max_connections)?;
+    let server_config = ServerConfig::builder()
+        .max_connections(options.rpc_max_connections)
+        .build();
     let server = Server::builder()
+        .set_config(server_config)
         .build(listen_address)
         .await
         .map_err(|source| NodeSupervisorError::RpcBind {
@@ -424,7 +446,7 @@ where
 
     let block_driver = BlockDriverTask::start(
         scheduler_backend.scheduler_client().clone(),
-        block_driver_config,
+        options.block_driver_config,
     );
     let scheduler_backend = scheduler_backend.with_block_driver(block_driver.trigger());
     let core_rpc = GroundhogRpcServer::new(
@@ -432,7 +454,7 @@ where
         scheduler_backend,
         read,
         view,
-        RpcServerConfig::default().with_view_gas_limit(view_gas_limit),
+        RpcServerConfig::default().with_view_gas_limit(options.view_gas_limit),
         BuildInfo::new(env!("CARGO_PKG_VERSION"), option_env!("GIT_COMMIT")),
     );
     let mut module = RpcModule::new(());
@@ -447,9 +469,78 @@ where
     Ok(StartedRpcServer {
         handle: rpc_handle,
         addr: rpc_addr,
-        backend_planes,
+        backend_planes: options.backend_planes,
         block_driver,
     })
+}
+
+const RPC_NOFILE_LIMIT_FLOOR: u64 = 4_096;
+const RPC_NOFILE_LIMIT_HEADROOM: u64 = 512;
+
+fn desired_rpc_nofile_limit(rpc_max_connections: u32) -> u64 {
+    u64::from(rpc_max_connections)
+        .saturating_add(RPC_NOFILE_LIMIT_HEADROOM)
+        .max(RPC_NOFILE_LIMIT_FLOOR)
+}
+
+#[cfg(unix)]
+fn ensure_rpc_nofile_limit(rpc_max_connections: u32) -> Result<(), NodeSupervisorError> {
+    let target = desired_rpc_nofile_limit(rpc_max_connections);
+    let target_rlim = libc::rlim_t::try_from(target).unwrap_or(libc::RLIM_INFINITY);
+    let mut limits = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    let rc = unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &raw mut limits) };
+    if rc != 0 {
+        return Err(NodeSupervisorError::RpcNofileLimit {
+            target,
+            source: io::Error::last_os_error(),
+        });
+    }
+    if limits.rlim_cur >= target_rlim {
+        return Ok(());
+    }
+
+    let new_soft = if limits.rlim_max == libc::RLIM_INFINITY {
+        target_rlim
+    } else {
+        target_rlim.min(limits.rlim_max)
+    };
+    if new_soft <= limits.rlim_cur {
+        tracing::warn!(
+            current = limits.rlim_cur,
+            hard = limits.rlim_max,
+            target,
+            "JSON-RPC nofile hard limit is below the requested connection budget"
+        );
+        return Ok(());
+    }
+
+    let updated = libc::rlimit {
+        rlim_cur: new_soft,
+        rlim_max: limits.rlim_max,
+    };
+    let rc = unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &raw const updated) };
+    if rc != 0 {
+        return Err(NodeSupervisorError::RpcNofileLimit {
+            target,
+            source: io::Error::last_os_error(),
+        });
+    }
+    tracing::debug!(
+        previous = limits.rlim_cur,
+        current = new_soft,
+        hard = limits.rlim_max,
+        target,
+        "raised JSON-RPC nofile soft limit"
+    );
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn ensure_rpc_nofile_limit(_rpc_max_connections: u32) -> Result<(), NodeSupervisorError> {
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -1110,6 +1201,15 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         assert_eq!(planes.chain, PlaneStatus::Scheduler);
         assert_eq!(planes.read, PlaneStatus::DbGateway);
         assert_eq!(planes.view, PlaneStatus::Stub);
+    }
+
+    #[test]
+    fn desired_rpc_nofile_limit_uses_floor_and_headroom() {
+        assert_eq!(desired_rpc_nofile_limit(10), RPC_NOFILE_LIMIT_FLOOR);
+        assert_eq!(
+            desired_rpc_nofile_limit(8_192),
+            8_192 + RPC_NOFILE_LIMIT_HEADROOM
+        );
     }
 
     #[test]

@@ -309,7 +309,8 @@ segment. It is not `last.cpuUserMs + last.cpuSystemMs` when restarts occur.
 Backpressure and simulator overload are separate signals:
 
 - **`simulator-backpressure`** means a scheduled workload was skipped because a
-  global or per-actor in-flight limit was reached. It contributes to
+  global or per-actor in-flight limit was reached. Per-actor diagnostics name
+  the lane (`actor-write`, `actor-receipt`, or `actor-read`). It contributes to
   `backpressureRate`.
 - **`simulator-overload`** means the simulator intentionally stopped tracking
   some internal state to preserve bounded memory, currently per-actor pending

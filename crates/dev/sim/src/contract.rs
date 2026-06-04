@@ -958,6 +958,8 @@ mod tests {
                 hogd_dev_binary: None,
                 block_driver: None,
                 block_interval_ms: None,
+                max_rpc_connections: None,
+                max_rpc_client_concurrency: None,
             },
             bootstrap: None,
             load_shape: vec![LoadPhase {

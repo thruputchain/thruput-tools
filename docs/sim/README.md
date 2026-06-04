@@ -134,6 +134,12 @@ Supported workloads are `chain-tip`, `wallet-submit-smoke` (dev-wallet
 compatible transactions), `receipt-poll`, `contract-call`, `view-call`,
 `storage-read`, `events-query`, and `read-after-write` for manifests that
 deploy at least one contract artifact before scheduled load starts.
+The executor bounds in-flight work globally and per actor. Per-actor limits are
+lane-based: nonce-bearing write flows (`wallet-submit-smoke`, `contract-call`,
+and `read-after-write`) serialize on an actor write lane, receipt polling uses a
+separate receipt lane, and read-only chain/event/storage/view workloads use a
+read lane. Backpressure diagnostics include the lane name, for example
+`actor-write`, `actor-receipt`, `actor-read`, or `global`.
 `receipt-poll` tracks
 actor-submitted transactions in a per-actor FIFO queue until their receipts
 appear and records receipt presence, status, optional reverted/error detail,
@@ -190,7 +196,12 @@ timing/workload details until a dedicated drain counter is added.
 
 `result.json` aggregates per-workload latency, success-only submit latency,
 submit-to-receipt latency percentiles, and `receiptPoll.{present, absent,
-pendingAtShutdown}` counts. Phase 1 assertions cover:
+pendingAtShutdown}` counts. It also includes `diagnostics.errorClasses` when
+failures or skipped workloads occur, with count, first/last scheduled time,
+affected workloads, affected RPC methods, and one sample error string per error
+class. `diagnostics.resourceSampleFailures` summarizes unavailable
+`resource-sample` reasons such as `/proc` read failures or file descriptor
+pressure. Phase 1 assertions cover:
 
 - `maxErrorRate` over `completed + failed` workloads (skipped excluded).
 - `maxChainStall` over all chain-tip observations in simulation-time order; the
@@ -207,6 +218,10 @@ pendingAtShutdown}` counts. Phase 1 assertions cover:
 Receipt-poll ticks before an actor has submitted a transaction are emitted as
 skipped with `errorClass: "no-submitted-transaction"`; error-rate consumers
 should treat that as scheduler warm-up rather than RPC failure.
+Skipped events with `errorClass: "simulator-backpressure"` are scheduler
+capacity diagnostics. Their `error` field identifies whether the limit was the
+global in-flight guard or an actor lane such as `actor-write`, `actor-receipt`,
+or `actor-read`.
 
 ## Existing Provider
 
@@ -240,6 +255,14 @@ Local targets may set `target.blockDriver` to `instant` or `interval`.
 submits. `interval` forwards `--block-driver interval` to `groundhog node` and
 uses `target.blockIntervalMs` when supplied; the interval default is 500 ms.
 `target.blockIntervalMs` is valid only with `target.blockDriver: "interval"`.
+Local targets may also set `target.maxRpcConnections` to forward
+`--rpc-max-connections` to `groundhog node`; the local-node default is 2000.
+All target providers may set `target.maxRpcClientConcurrency` to cap
+simulator-side concurrent JSON-RPC requests. If omitted, hoglab records and
+uses the default 512-request cap in normalized `simulation.json`. This prevents
+high-rate scenarios from turning initial HTTP connection-pool expansion into
+spurious connect failures; gateway saturation still shows up as latency,
+workload failures, 429s, or simulator backpressure in the result artifacts.
 
 The provider sends SIGTERM to the node for graceful shutdown, waits a bounded
 grace period, and escalates to SIGKILL only if the node does not exit.

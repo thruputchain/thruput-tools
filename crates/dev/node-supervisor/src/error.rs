@@ -361,6 +361,17 @@ pub enum NodeSupervisorError {
         source: io::Error,
     },
 
+    /// The supervisor could not raise the process file-descriptor limit for JSON-RPC.
+    #[cfg(unix)]
+    #[error("failed to raise JSON-RPC nofile limit toward {target}: {source}")]
+    RpcNofileLimit {
+        /// Desired soft nofile limit.
+        target: u64,
+        /// Underlying OS error.
+        #[source]
+        source: io::Error,
+    },
+
     /// The supervisor could not read the JSON-RPC server's bound address.
     #[error("failed to read JSON-RPC bound address: {source}")]
     RpcLocalAddr {

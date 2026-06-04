@@ -54,10 +54,13 @@ use crate::transaction::{
 use crate::util::{duration_ms, json_string, unix_ms, workload_name};
 use xdr_common::VecM;
 
-const DEFAULT_GLOBAL_IN_FLIGHT_LIMIT: usize = 1_024;
-// Actor state is mutated only when a workload completion is recorded. Keep the
-// per-actor limit at one unless nonce/state ownership is redesigned.
-const DEFAULT_PER_ACTOR_IN_FLIGHT_LIMIT: usize = 1;
+const DEFAULT_GLOBAL_IN_FLIGHT_LIMIT: usize = 8_192;
+// Nonce-bearing workloads still serialize per actor. Read-only and receipt
+// lanes are independent so app-style reads do not wait behind block-bound
+// writes from the same simulated wallet.
+const DEFAULT_PER_ACTOR_WRITE_IN_FLIGHT_LIMIT: usize = 1;
+const DEFAULT_PER_ACTOR_RECEIPT_IN_FLIGHT_LIMIT: usize = 4;
+const DEFAULT_PER_ACTOR_READ_IN_FLIGHT_LIMIT: usize = 8;
 pub const DEFAULT_RECEIPT_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
 pub const DEFAULT_RECEIPT_DRAIN_RETRY_INTERVAL: Duration = Duration::from_millis(250);
 const READ_AFTER_WRITE_POST_COMMIT_READ_RETRY_TIMEOUT: Duration = Duration::from_secs(1);
@@ -343,7 +346,7 @@ where
     let mut tasks = JoinSet::new();
     let mut task_contexts = HashMap::new();
     let global_in_flight = Arc::new(Semaphore::new(DEFAULT_GLOBAL_IN_FLIGHT_LIMIT));
-    let actor_in_flight = actor_semaphores(phase_starts);
+    let actor_in_flight = actor_in_flight_lanes(phase_starts);
     let mut in_flight = 0_u64;
     let mut chaos_failed = false;
 
@@ -397,8 +400,7 @@ where
                     global_in_flight.clone(),
                     actor_in_flight
                         .get(actor_index)
-                        .ok_or(SimError::Executor("actor semaphore missing".into()))?
-                        .clone(),
+                        .ok_or(SimError::Executor("actor in-flight lanes missing".into()))?,
                 )? {
                     Ok(permits) => permits,
                     Err(skipped) => {
@@ -593,22 +595,73 @@ where
     }
 }
 
-fn actor_semaphores(phase_starts: &[PhaseStart]) -> Vec<Arc<Semaphore>> {
+fn actor_in_flight_lanes(phase_starts: &[PhaseStart]) -> Vec<ActorInFlightLanes> {
     let max_users = phase_starts
         .iter()
         .map(|phase| phase.users)
         .max()
         .unwrap_or_default();
     (0..max_users)
-        .map(|_| Arc::new(Semaphore::new(DEFAULT_PER_ACTOR_IN_FLIGHT_LIMIT)))
+        .map(|_| ActorInFlightLanes {
+            write: Arc::new(Semaphore::new(DEFAULT_PER_ACTOR_WRITE_IN_FLIGHT_LIMIT)),
+            receipt: Arc::new(Semaphore::new(DEFAULT_PER_ACTOR_RECEIPT_IN_FLIGHT_LIMIT)),
+            read: Arc::new(Semaphore::new(DEFAULT_PER_ACTOR_READ_IN_FLIGHT_LIMIT)),
+        })
         .collect()
+}
+
+#[derive(Debug, Clone)]
+struct ActorInFlightLanes {
+    write: Arc<Semaphore>,
+    receipt: Arc<Semaphore>,
+    read: Arc<Semaphore>,
+}
+
+impl ActorInFlightLanes {
+    fn semaphore(&self, lane: ActorInFlightLane) -> Arc<Semaphore> {
+        match lane {
+            ActorInFlightLane::Write => self.write.clone(),
+            ActorInFlightLane::Receipt => self.receipt.clone(),
+            ActorInFlightLane::Read => self.read.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ActorInFlightLane {
+    Write,
+    Receipt,
+    Read,
+}
+
+impl ActorInFlightLane {
+    const fn scope(self) -> &'static str {
+        match self {
+            Self::Write => "actor-write",
+            Self::Receipt => "actor-receipt",
+            Self::Read => "actor-read",
+        }
+    }
+}
+
+const fn actor_in_flight_lane(workload: WorkloadKind) -> ActorInFlightLane {
+    match workload {
+        WorkloadKind::WalletSubmitSmoke
+        | WorkloadKind::ContractCall
+        | WorkloadKind::ReadAfterWrite => ActorInFlightLane::Write,
+        WorkloadKind::ReceiptPoll | WorkloadKind::StatusPoll => ActorInFlightLane::Receipt,
+        WorkloadKind::ChainTip
+        | WorkloadKind::EventsQuery
+        | WorkloadKind::StorageRead
+        | WorkloadKind::ViewCall => ActorInFlightLane::Read,
+    }
 }
 
 fn acquire_workload_permits(
     tick: &ScheduledActorTick,
     workload: WorkloadKind,
     global_in_flight: Arc<Semaphore>,
-    actor_in_flight: Arc<Semaphore>,
+    actor_in_flight: &ActorInFlightLanes,
 ) -> Result<Result<WorkloadPermits, WorkloadCompletion>, SimError> {
     let global_permit = match global_in_flight.try_acquire_owned() {
         Ok(permit) => permit,
@@ -621,14 +674,15 @@ fn acquire_workload_permits(
             )?));
         }
     };
-    let actor_permit = match actor_in_flight.try_acquire_owned() {
+    let lane = actor_in_flight_lane(workload);
+    let actor_permit = match actor_in_flight.semaphore(lane).try_acquire_owned() {
         Ok(permit) => permit,
         Err(error) => {
             drop(global_permit);
             return Ok(Err(backpressure_completion(
                 tick,
                 workload,
-                "actor",
+                lane.scope(),
                 &error.to_string(),
             )?));
         }
@@ -1035,7 +1089,16 @@ async fn record_completion(
     if let Some(latency_ms) = completion.submit_to_receipt_latency_ms {
         metrics.record_submit_to_receipt_latency(completion.workload, latency_ms);
     }
-    if let Some(error_class) = completion.error_class {
+    if let Some(error_class) = completion.error_class.as_deref() {
+        if let Some(event) = workload_event(&completion.event) {
+            metrics.record_error_diagnostic(
+                completion.workload,
+                event.rpc_method,
+                event.scheduled_time_ms,
+                error_class,
+                event.error.as_deref(),
+            );
+        }
         if completion.skipped {
             metrics.record_skipped(completion.workload, error_class);
         } else {
@@ -1054,6 +1117,15 @@ async fn record_completion(
     Ok(())
 }
 
+fn workload_event(event: &ResultEvent) -> Option<&WorkloadEvent> {
+    match event {
+        ResultEvent::WorkloadCompleted { event }
+        | ResultEvent::WorkloadFailed { event }
+        | ResultEvent::WorkloadSkipped { event } => Some(event),
+        _ => None,
+    }
+}
+
 async fn record_resource_sample(
     scheduled_time_ms: u64,
     resource_sampler: Option<&dyn TargetResourceSampler>,
@@ -1069,6 +1141,13 @@ async fn record_resource_sample(
     };
     if let ResourceSample::Observed(point) = &sample {
         metrics.record_resource_sample(point);
+    } else if let ResourceSample::Unavailable {
+        scheduled_time_ms,
+        reason,
+        ..
+    } = &sample
+    {
+        metrics.record_resource_sample_failure(*scheduled_time_ms, reason);
     }
     event_writer.write(&resource_sample_event(&sample)).await?;
     Ok(())
@@ -6912,13 +6991,18 @@ mod tests {
         let mut tasks = JoinSet::new();
         let mut task_contexts = HashMap::new();
         let global = Arc::new(Semaphore::new(1));
-        let actor = Arc::new(Semaphore::new(1));
+        let actor_lanes = ActorInFlightLanes {
+            write: Arc::new(Semaphore::new(1)),
+            receipt: Arc::new(Semaphore::new(DEFAULT_PER_ACTOR_RECEIPT_IN_FLIGHT_LIMIT)),
+            read: Arc::new(Semaphore::new(DEFAULT_PER_ACTOR_READ_IN_FLIGHT_LIMIT)),
+        };
         let first_permits = WorkloadPermits {
             _global: global
                 .clone()
                 .try_acquire_owned()
                 .expect("global permit should acquire"),
-            _actor: actor
+            _actor: actor_lanes
+                .write
                 .clone()
                 .try_acquire_owned()
                 .expect("actor permit should acquire"),
@@ -6947,7 +7031,7 @@ mod tests {
                 &tick,
                 WorkloadKind::ReadAfterWrite,
                 global.clone(),
-                actor.clone(),
+                &actor_lanes,
             )
             .expect("permit acquisition should not error")
             {
@@ -7005,6 +7089,65 @@ mod tests {
             }
             _ => panic!("expected read-after-write workload"),
         }
+    }
+
+    #[test]
+    fn actor_in_flight_lanes_isolate_independent_workloads() {
+        let tick = ScheduledActorTick {
+            phase_index: 0,
+            actor_id: 0,
+            actor_sequence: 0,
+            simulation_time_ms: 0,
+        };
+        let global = Arc::new(Semaphore::new(8));
+        let actor_lanes = ActorInFlightLanes {
+            write: Arc::new(Semaphore::new(1)),
+            receipt: Arc::new(Semaphore::new(1)),
+            read: Arc::new(Semaphore::new(1)),
+        };
+
+        let Ok(_write) = acquire_workload_permits(
+            &tick,
+            WorkloadKind::ContractCall,
+            global.clone(),
+            &actor_lanes,
+        )
+        .expect("permit acquisition should not error") else {
+            panic!("first write should acquire");
+        };
+        let Ok(_read) = acquire_workload_permits(
+            &tick,
+            WorkloadKind::EventsQuery,
+            global.clone(),
+            &actor_lanes,
+        )
+        .expect("permit acquisition should not error") else {
+            panic!("read lane should acquire while write lane is busy");
+        };
+        let Ok(_receipt) = acquire_workload_permits(
+            &tick,
+            WorkloadKind::ReceiptPoll,
+            global.clone(),
+            &actor_lanes,
+        )
+        .expect("permit acquisition should not error") else {
+            panic!("receipt lane should acquire while write lane is busy");
+        };
+
+        let Err(skipped) =
+            acquire_workload_permits(&tick, WorkloadKind::WalletSubmitSmoke, global, &actor_lanes)
+                .expect("permit acquisition should not error")
+        else {
+            panic!("second write should hit the write lane limit");
+        };
+        let event = workload_event(&skipped.event).expect("skipped event should be workload event");
+        assert_eq!(event.error_class.as_deref(), Some("simulator-backpressure"));
+        assert!(
+            event
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("actor-write in-flight limit reached"))
+        );
     }
 
     #[tokio::test]
