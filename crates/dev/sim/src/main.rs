@@ -15,7 +15,7 @@ use groundhog_sim::validation::validate_manifest;
 use serde::Serialize;
 
 #[derive(Debug, Parser)]
-#[command(name = "hoglab")]
+#[command(name = "hogsim")]
 #[command(about = "Groundhog stateful simulation and soak-test harness")]
 struct Cli {
     #[command(subcommand)]
@@ -87,7 +87,7 @@ struct RunArgs {
 #[derive(Debug, Parser)]
 struct SweepArgs {
     /// Runs root to scan.
-    #[arg(default_value = "hoglab-runs")]
+    #[arg(default_value = "hogsim-runs")]
     root: PathBuf,
     /// Validate candidates without sending signals.
     #[arg(long)]
@@ -318,7 +318,7 @@ mod tests {
     #[test]
     fn run_local_launch_flags_parse() {
         let cli = Cli::parse_from([
-            "hoglab",
+            "hogsim",
             "run",
             "scenario.json",
             "--groundhog-binary",
@@ -353,7 +353,7 @@ mod tests {
 
     #[test]
     fn sweep_flags_parse() {
-        let cli = Cli::parse_from(["hoglab", "sweep", "/tmp/runs", "--dry-run", "--json"]);
+        let cli = Cli::parse_from(["hogsim", "sweep", "/tmp/runs", "--dry-run", "--json"]);
 
         match cli.command {
             Command::Sweep(args) => {
@@ -368,7 +368,7 @@ mod tests {
     #[test]
     fn catalog_flags_parse() {
         let cli = Cli::parse_from([
-            "hoglab",
+            "hogsim",
             "catalog",
             "--catalog",
             "examples/sim/catalog.json",

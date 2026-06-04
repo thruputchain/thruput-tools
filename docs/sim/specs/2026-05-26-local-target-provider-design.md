@@ -9,7 +9,7 @@ not seen the brainstorming conversation should be able to build from it.
 
 ## Summary
 
-Add a `LocalTargetProvider` to the `hoglab` simulator (`crates/dev/sim`) that
+Add a `LocalTargetProvider` to the `hogsim` simulator (`crates/dev/sim`) that
 launches a managed `groundhog node` (which supervises a `hogd-dev`
 subprocess), runs a simulation against it, and tears it down on completion.
 This is the first **managed** target provider; Phase 1 shipped only the
@@ -152,7 +152,7 @@ interaction with the node.
 
 ### Binary resolution (inputs)
 
-- **`groundhog` binary:** resolved from a new `hoglab run --groundhog-binary
+- **`groundhog` binary:** resolved from a new `hogsim run --groundhog-binary
   <path>` override, else looked up as `groundhog` on `PATH` (per the CLAUDE.md
   `which`-first convention). Absent → clear error naming the override.
 - **`hogd-dev` binary:** sim forwards `--hogd-dev-binary` to the node *only if*
@@ -201,7 +201,7 @@ cleanup(target):
 
 ### Ports
 
-Default to the node's own `9545`, with an optional `hoglab run --port`
+Default to the node's own `9545`, with an optional `hogsim run --port`
 passthrough. Sim always reads the actual `rpc_url` back from startup JSON
 rather than assuming the port.
 
@@ -222,7 +222,7 @@ every run.
 - Child exits before emitting startup JSON, or the startup timeout elapses →
   capture the child's stderr, kill it, return an error with that context (so a
   bad `--hogd-dev-binary` or protocol skew is diagnosable). Startup timeout has
-  a sane default, overridable via `hoglab run --startup-timeout-secs`.
+  a sane default, overridable via `hogsim run --startup-timeout-secs`.
 - Startup JSON present but unparseable / missing `data.rpc_url` → error citing
   the field, kill the child.
 
@@ -230,12 +230,12 @@ New `SimError` variants (thiserror, no anyhow), each with enough context to
 diagnose without re-running — e.g. `GroundhogBinaryNotFound`, `LocalNodeSpawn`,
 `LocalNodeStartupTimeout`, `LocalNodeStartupExit`.
 
-### Explicitly out of scope: panic / SIGKILL-of-hoglab orphan safety
+### Explicitly out of scope: panic / SIGKILL-of-hogsim orphan safety
 
 The common stop path is terminal Ctrl-C, which delivers SIGINT to the whole
 process group — `groundhog node` already cleans up hogd-dev on a catchable
-signal, for free. The only genuinely-leaky case is hoglab dying *without* the
-node receiving a signal (a panic, or SIGKILL of just hoglab). The durable fix
+signal, for free. The only genuinely-leaky case is hogsim dying *without* the
+node receiving a signal (a panic, or SIGKILL of just hogsim). The durable fix
 for that belongs in `groundhog node` (cooperative shutdown: parent-death
 detection or an explicit shutdown channel), which benefits every programmatic
 caller — not a sim-side `Drop` guard or signal handler. Tracked as a follow-up
@@ -296,7 +296,7 @@ scaffolding for a non-strategic provider.
 - `crates/dev/sim/src/error.rs` — new `SimError` variants.
 - `crates/dev/sim/src/validation.rs` — allow `local`; reject output-only overrides
   for local; keep the post-launch account-count backstop.
-- `crates/dev/sim/src/main.rs` — `hoglab run` flags: `--groundhog-binary`,
+- `crates/dev/sim/src/main.rs` — `hogsim run` flags: `--groundhog-binary`,
   `--port`, `--startup-timeout-secs`.
 - `crates/tools/cli/src/main.rs` + `crates/tools/cli/src/node.rs` — replace `--accounts`
   with working `--dev-account-count`.

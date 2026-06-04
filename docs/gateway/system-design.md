@@ -44,7 +44,7 @@ embedding it in chuckd or chuckd-rs. Reasons:
 
 ```
                    ┌───────────────────────────────────┐
-                   │        hogway gateway      │
+                   │        hogd_gateway service      │
   Developers ──────│  jsonrpsee (HTTP + WS)            │
   SDKs             │  ┌─────────┐  ┌────────────────┐  │
   Block Explorer   │  │ Handlers│  │ Subscriptions  │  │

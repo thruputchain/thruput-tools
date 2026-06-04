@@ -18,7 +18,7 @@ fn existing_target_chain_tip_smoke() {
     let (run_dir, _temp_guard) = existing_smoke_run_dir("chain-tip-smoke");
     eprintln!("existing chain-tip run dir {}", run_dir.display());
 
-    let status = Command::new(env!("CARGO_BIN_EXE_hoglab"))
+    let status = Command::new(env!("CARGO_BIN_EXE_hogsim"))
         .arg("run")
         .arg(&scenario)
         .arg("--rpc-url")
@@ -28,9 +28,9 @@ fn existing_target_chain_tip_smoke() {
         .arg("--out-dir")
         .arg(&run_dir)
         .status()
-        .expect("hoglab should launch");
+        .expect("hogsim should launch");
 
-    assert!(status.success(), "hoglab run failed with status {status}");
+    assert!(status.success(), "hogsim run failed with status {status}");
     assert_common_existing_artifacts(&run_dir);
 }
 
@@ -51,7 +51,7 @@ fn existing_target_chain_tip_baseline_smoke() {
     let (run_dir, _temp_guard) = existing_smoke_run_dir("chain-tip-smoke-baseline");
     eprintln!("existing baseline run dir {}", run_dir.display());
 
-    let status = Command::new(env!("CARGO_BIN_EXE_hoglab"))
+    let status = Command::new(env!("CARGO_BIN_EXE_hogsim"))
         .arg("run")
         .arg(&scenario)
         .arg("--rpc-url")
@@ -61,9 +61,9 @@ fn existing_target_chain_tip_baseline_smoke() {
         .arg("--out-dir")
         .arg(&run_dir)
         .status()
-        .expect("hoglab should launch");
+        .expect("hogsim should launch");
 
-    assert!(status.success(), "hoglab run failed with status {status}");
+    assert!(status.success(), "hogsim run failed with status {status}");
     assert_common_existing_artifacts(&run_dir);
     let result: serde_json::Value = serde_json::from_slice(
         &std::fs::read(run_dir.join("result.json")).expect("result should read"),

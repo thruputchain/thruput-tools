@@ -9,7 +9,7 @@ seen the planning conversation should be able to build from it.
 
 ## Summary
 
-Add a `hoglab sweep` command that reclaims orphaned simulator-owned local
+Add a `hogsim sweep` command that reclaims orphaned simulator-owned local
 targets, and add the `target-ownership.json` process-identity fields the
 sweeper needs to act safely. A sim-owned `groundhog node` (and the `hogd-dev`
 child it supervises) is left running when the simulator process dies before its
@@ -36,7 +36,7 @@ ownership-metadata enrichment it depends on.
   restart. The existing provider leaves it absent.
 - A `sweep` module that scans a runs root, validates recorded PIDs, and
   terminates validated orphans by process group.
-- A `hoglab sweep [root] [--dry-run] [--json]` subcommand.
+- A `hogsim sweep [root] [--dry-run] [--json]` subcommand.
 - PID-recycle safety: validate a live PID's start time, process-group id, and
   command against the recorded values before signaling. Never terminate on a
   bare PID.
@@ -48,7 +48,7 @@ ownership-metadata enrichment it depends on.
 - The "node already dead, `hogd-dev` orphaned on its own" case. The sweeper
   validates through the node PID; if the node is gone it cannot validate the
   surviving child and skips it. Documented as a limitation.
-- Detecting or avoiding a concurrently active run. `hoglab sweep` is documented
+- Detecting or avoiding a concurrently active run. `hogsim sweep` is documented
   as a tool to run when no simulations are active. There is no heartbeat or lock
   file.
 - Mutating or deleting swept run-directory artifacts. The sweeper terminates
@@ -111,7 +111,7 @@ New file `crates/dev/sim/src/sweep.rs`. Pure logic, no CLI concerns.
 
 Discovery:
 
-- Input is a runs-root directory (default `hoglab-runs/`).
+- Input is a runs-root directory (default `hogsim-runs/`).
 - Read each immediate child run directory's `target-ownership.json`.
 - Immediate child directories without `target-ownership.json` are ignored, so
   arbitrary files or non-run directories under the root do not add report noise.
@@ -133,7 +133,7 @@ Validation (the "never kill on a stale PID alone" rule):
 - Only an entry that passes all validation checks is eligible for termination.
 
 Termination (PID-based, because the `Child` handle does not exist in a fresh
-`hoglab sweep` process):
+`hogsim sweep` process):
 
 - `kill(-pgid, SIGTERM)`.
 - Poll `kill(pid, 0)` until the process is gone, up to a bounded grace
@@ -147,16 +147,16 @@ Output: a `SweepReport` listing, per run directory, one of
 `reclaimed { pid, port }`, `skipped { reason }`, or `failed { error }`. The
 report derives the serde shape used for `--json`.
 
-### 3. `hoglab sweep` command
+### 3. `hogsim sweep` command
 
 Add a `Sweep` subcommand (wired in `crates/dev/sim/src/main.rs`, logic in a thin
 `run` entrypoint that calls the `sweep` module):
 
 ```
-hoglab sweep [root] [--dry-run] [--json]
+hogsim sweep [root] [--dry-run] [--json]
 ```
 
-- `root` defaults to `hoglab-runs/`.
+- `root` defaults to `hogsim-runs/`.
 - Default behavior terminates validated orphans and prints a human-readable
   summary of what was reclaimed, skipped, and failed.
 - `--dry-run` performs discovery and validation and prints the candidate list
@@ -172,10 +172,10 @@ hoglab sweep [root] [--dry-run] [--json]
 ```json
 {
   "schemaVersion": 1,
-  "root": "hoglab-runs",
+  "root": "hogsim-runs",
   "entries": [
-    { "runDir": "hoglab-runs/1710000000-000000000-soak", "state": "reclaimed", "pid": 41234, "port": 9545 },
-    { "runDir": "hoglab-runs/1709000000-000000000-smoke", "state": "skipped", "reason": "pid not alive" }
+    { "runDir": "hogsim-runs/1710000000-000000000-soak", "state": "reclaimed", "pid": 41234, "port": 9545 },
+    { "runDir": "hogsim-runs/1709000000-000000000-smoke", "state": "skipped", "reason": "pid not alive" }
   ]
 }
 ```
@@ -215,9 +215,9 @@ Unit tests:
 Process-level smoke (ignored, gated by `GROUNDHOG_SIM_HOGD_DEV_BINARY` and a
 `groundhog` binary with dev-node support):
 
-- Start a long local run through `hoglab run`, wait for
-  `target-ownership.json` with process metadata, kill the `hoglab` parent
-  process so the local target is orphaned, run `hoglab sweep`, and assert the
+- Start a long local run through `hogsim run`, wait for
+  `target-ownership.json` with process metadata, kill the `hogsim` parent
+  process so the local target is orphaned, run `hogsim sweep`, and assert the
   entry is `reclaimed` and the RPC port is released afterward.
 
 ## Review Gates

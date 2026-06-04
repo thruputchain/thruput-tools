@@ -15,7 +15,7 @@ Use it for local benchmark runs:
   `.groundhog/local-node.json`. The local-node fallback applies only when the
   profile RPC URL is unset or already loopback, and in that case the state file
   also supplies the matching RPC URL.
-- `hogway --runtime-manifest <path>` starts the standalone gateway from
+- `hogd_gateway --runtime-manifest <path>` starts the standalone gateway from
   the same backend endpoints.
 - `groundhog-bench --runtime-manifest <path>` derives the bootstrapped account
   signers and submits auth-valid `sendRawTransaction` traffic.
@@ -36,12 +36,12 @@ generated clients.
 
 The script:
 
-1. Builds `groundhog`, `hogway`, and `groundhog-bench`.
+1. Builds `groundhog`, `hogd_gateway`, and `groundhog-bench`.
 2. Starts `groundhog node` against the `hogd-dev` binary.
 3. Reads `data.runtime_manifest.path` from the CLI startup JSON.
 4. Runs `groundhog-bench` against the CLI node for `chainTip` and
    `sendRawTransaction`.
-5. Starts `hogway --runtime-manifest <path>`.
+5. Starts `hogd_gateway --runtime-manifest <path>`.
 6. Runs the same benchmark checks against the standalone gateway.
 
 Useful knobs:
@@ -151,7 +151,7 @@ cargo run -p groundhog-bench -- \
   --duration 30
 ```
 
-CLI flags on `hogway` are still explicit overrides. For example,
+CLI flags on `hogd_gateway` are still explicit overrides. For example,
 `--scheduler` can intentionally replace the manifest scheduler endpoint. TOML
 configuration conflicts with manifest backend fields are rejected so a benchmark
 run does not silently target a mixed topology.

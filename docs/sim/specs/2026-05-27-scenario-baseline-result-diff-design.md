@@ -9,12 +9,12 @@ not seen the planning conversation should be able to build from it.
 
 ## Summary
 
-Honor the simulation manifest's optional `baseline` field during `hoglab run`.
+Honor the simulation manifest's optional `baseline` field during `hogsim run`.
 When present, the runner loads the referenced committed `result.json`, compares
 it with the just-completed in-memory result, and embeds the structured
 baseline-anchored diff inside the final `result.json`.
 
-The existing `hoglab compare` logic remains the single source of truth for
+The existing `hogsim compare` logic remains the single source of truth for
 diff semantics. Baseline diffing is an in-run use of that same structured diff,
 not a second comparison format.
 
@@ -28,14 +28,14 @@ target, local `restart-target` chaos, and provider log capture.
 - Resolve `baseline` relative to the scenario manifest path when it is not
   absolute.
 - Accept either a direct `result.json` path or a completed run directory, using
-  the same loading semantics as `hoglab compare`.
+  the same loading semantics as `hogsim compare`.
 - Reject unsupported baseline `result.json` schema versions with the existing
   unsupported-schema error.
-- Compute the diff as `current - baseline`, matching `hoglab compare`'s
+- Compute the diff as `current - baseline`, matching `hogsim compare`'s
   existing `b - a` convention.
 - Embed the result under an additive optional field in `result.json`; no schema
   bump is required.
-- Preserve `hoglab compare` output shape and behavior.
+- Preserve `hogsim compare` output shape and behavior.
 - Add unit coverage for path resolution, embedded diff shape, no-baseline
   omission, schema rejection, and compare JSON round-tripping.
 - Update simulator docs and the Phase 2 tracker.
@@ -69,13 +69,13 @@ target, local `restart-target` chaos, and provider log capture.
 
 The `path` value is the manifest-authored path string. This keeps the artifact
 stable across machines and output directories. The diff is exactly the
-structured compare diff that `hoglab compare --json` emits today, with the
+structured compare diff that `hogsim compare --json` emits today, with the
 baseline result as side A and the current run result as side B.
 
 If `baseline` is absent, `baselineDiff` is omitted from serialized
 `result.json` and defaults to `null`/`None` when older results are read.
 New augmented results must still deserialize through `load_result` and remain
-valid inputs to `hoglab compare`.
+valid inputs to `hogsim compare`.
 
 ## Runner Semantics
 
@@ -130,7 +130,7 @@ Each gate uses two reviewer passes:
   - unsupported baseline result schema returns the existing schema error;
   - `SimResult` can deserialize older results without `baselineDiff`;
   - augmented `SimResult` files with `baselineDiff` still load through
-    `load_result` and remain comparable with `hoglab compare`;
+    `load_result` and remain comparable with `hogsim compare`;
   - `ResultDiff` still serializes to the existing compare JSON shape.
 - CLI/runner smoke:
   - create a tiny existing-target scenario fixture with a baseline result and

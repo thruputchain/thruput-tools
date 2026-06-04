@@ -78,7 +78,7 @@ Implementation status:
   transaction detail, exposes events, and supports latest-state storage
   reads through `groundhog_getStorageAt`.
 - Runtime-manifest producer/consumer work has landed for `groundhog node`,
-  `hogway --runtime-manifest`, and `groundhog-bench
+  `hogd_gateway --runtime-manifest`, and `groundhog-bench
   --runtime-manifest`. CLI `dev-N` wallet-address resolution now uses a
   configured runtime manifest (`GROUNDHOG_RUNTIME_MANIFEST` or
   `profile.<name>.runtime_manifest`). The former local-only dev-account RPC
@@ -202,7 +202,7 @@ Maintenance rules:
     | sdk 0.13.0 (normal fresh resolution today)  | 0.9.4                | `hogp/850287355957` |
     | sdk_rs HEAD path checkout (0.14.0)          | 0.10.1               | `hogp/500463c1d97f` |
     | sdk 0.14.0 (published, template default)    | 0.12.0               | `hogp/830b7810ee93` |
-    | hogd-dev / hogway current protocol   | 0.13.6               | `hogp/020ed23d4e2f` |
+    | hogd-dev / hogd_gateway current protocol   | 0.13.6               | `hogp/020ed23d4e2f` |
 
     The protocol hash is the first 12 chars of the `protocol/`
     submodule git commit baked into hogd at build time
@@ -499,7 +499,7 @@ parked until a real hogd-owned dev method needs them.
   gateway, and benchmark harness.
 - `groundhog-bench --runtime-manifest` now derives valid dev-wallet submit
   workloads from `bootstrapAccounts`.
-- `hogway --runtime-manifest` now starts the standalone gateway from
+- `hogd_gateway --runtime-manifest` now starts the standalone gateway from
   advertised backend endpoints.
 - CLI `dev-N` wallet-address resolution now uses a configured runtime
   manifest, and the dev-account RPC compatibility path has been removed

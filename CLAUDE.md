@@ -89,7 +89,7 @@ Local dev and test harnesses in `crates/dev/`:
 - **bench** — benchmark harnesses. `groundhog-bench --runtime-manifest <path>`
   derives bootstrapped account signers and submits dev-wallet compatible
   `sendRawTransaction` traffic.
-- **sim** — `hoglab` stateful simulation and soak-test harness. Runs
+- **sim** — `hogsim` stateful simulation and soak-test harness. Runs
   deterministic actor schedules against an existing target, writes
   `result.jsonl` / `result.json`, and currently covers chain-tip, dev-wallet
   submit smoke, receipt polling, and Phase 1 assertions.
@@ -140,7 +140,7 @@ runtime), `tower`/`tower-http` (middleware), `clap` (CLI), `prometheus`
   bootstrap manifest input schema for local and benchmark backend launchers.
   `crates/json-rpc/json-rpc-types/src/runtime_manifest.rs` owns the
   runtime manifest output schema shared by `hogd-dev` producers,
-  `groundhog node`, `hogway --runtime-manifest`, and
+  `groundhog node`, `hogd_gateway --runtime-manifest`, and
   `groundhog-bench --runtime-manifest`. Public manifest structs are
   `#[non_exhaustive]`;
   additive fields are expected. Optional endpoints must be absent when
@@ -195,11 +195,11 @@ directly for normal releases.
 `release.yml` is dispatch-only and direct human dispatch fails; it must be
 dispatched by the publish workflow. It verifies that the matching
 `groundhog-cli` crate version already exists in the private registry before
-uploading binary assets. It builds `hogway` from this repository and builds the
+uploading binary assets. It builds `hogd_gateway` from this repository and builds the
 `groundhog` CLI from the published crate; the CLI release build uses `--features
 dev-node` so the published binary includes the local `groundhog node` path. The
 GitHub Release assets are per-app, per-target archives:
-`hogway-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz` and
+`hogd_gateway-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz` and
 `groundhog-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz`, plus `SHA256SUMS`.
 
 Keep the Cargo workspace version, internal `=X.Y.Z` workspace dependency pins,
@@ -217,7 +217,7 @@ HOGD_DEV_BINARY=/path/to/hogd-dev scripts/smoke-runtime-manifest-bench.sh
 
 The script starts `groundhog node`, reads `data.runtime_manifest.path`
 from the CLI startup JSON, runs `groundhog-bench` against the CLI node,
-starts `hogway --runtime-manifest <path>`, and runs the same
+starts `hogd_gateway --runtime-manifest <path>`, and runs the same
 bench checks against the standalone gateway. `BENCH_RATE`,
 `BENCH_DURATION`, and `BENCH_ACCOUNTS` can tune the run.
 Use `BENCH_SCENARIO=gateway-baseline` or `BENCH_SCENARIO=submit-ramp`
@@ -248,12 +248,12 @@ or cache-write errors, rerun the same command with escalation rather than
 rewriting the workflow. Use absolute paths for `hogd-dev` because quoted `~`
 does not expand.
 
-For simulator existing-target work, `hoglab` can still run against an
+For simulator existing-target work, `hogsim` can still run against an
 already-started target:
 
 ```bash
-cargo run -p groundhog-sim --bin hoglab -- validate examples/sim/local-wallet-soak.json
-cargo run -p groundhog-sim --bin hoglab -- run examples/sim/local-wallet-soak.json \
+cargo run -p groundhog-sim --bin hogsim -- validate examples/sim/local-wallet-soak.json
+cargo run -p groundhog-sim --bin hogsim -- run examples/sim/local-wallet-soak.json \
   --rpc-url http://127.0.0.1:9545 \
   --runtime-manifest "$RUNTIME_MANIFEST"
 ```
@@ -292,7 +292,7 @@ For manual gateway/bench runs, start `groundhog node --json`, extract
 `data.runtime_manifest.path`, then pass it to both consumers:
 
 ```bash
-hogway --runtime-manifest "$RUNTIME_MANIFEST" --listen 127.0.0.1:9546
+hogd_gateway --runtime-manifest "$RUNTIME_MANIFEST" --listen 127.0.0.1:9546
 groundhog-bench --url http://127.0.0.1:9546 \
   --runtime-manifest "$RUNTIME_MANIFEST" \
   --method sendRawTransaction
@@ -582,7 +582,7 @@ history retains the design context for anything not currently active.
   ports, genesis hash, wallet addresses, and hashes are runtime state.
 - `docs/gateway/open-questions.md` — cross-team open and resolved
   questions for the gateway design.
-- `docs/sim/README.md` — `hoglab` quickstart, existing-provider contract,
+- `docs/sim/README.md` — `hogsim` quickstart, existing-provider contract,
   result-directory layout, and compare semantics.
 - `docs/sim/sim-design.md` — simulator design: provider boundary,
   workload model, chaos taxonomy, result/comparison artifacts.

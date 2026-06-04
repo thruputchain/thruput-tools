@@ -11,7 +11,7 @@
       "tier": "smoke",
       "tags": ["existing", "read-only", "chain-tip", "smoke"],
       "requiresContracts": false,
-      "runner": "hoglab run"
+      "runner": "hogsim run"
     },
     {
       "id": "chain-tip-smoke-baseline",
@@ -196,7 +196,7 @@
           "artifact": "fibonacci.wasm"
         }
       ],
-      "runner": "hoglab run"
+      "runner": "hogsim run"
     },
     {
       "id": "local-fibonacci-event-heavy",
@@ -214,7 +214,7 @@
           "artifact": "fibonacci.wasm"
         }
       ],
-      "runner": "hoglab run"
+      "runner": "hogsim run"
     },
     {
       "id": "local-fibonacci-compute-heavy",
@@ -232,7 +232,7 @@
           "artifact": "fibonacci.wasm"
         }
       ],
-      "runner": "hoglab run"
+      "runner": "hogsim run"
     },
     {
       "id": "local-calldata-heavy",
@@ -250,7 +250,7 @@
           "artifact": "calldata.wasm"
         }
       ],
-      "runner": "hoglab run"
+      "runner": "hogsim run"
     },
     {
       "id": "local-nnint-heavy",
@@ -268,7 +268,7 @@
           "artifact": "nnint_stress.wasm"
         }
       ],
-      "runner": "hoglab run"
+      "runner": "hogsim run"
     },
     {
       "id": "local-multi-contract-soak",
@@ -291,7 +291,7 @@
           "artifact": "caller_counter.wasm"
         }
       ],
-      "runner": "hoglab run"
+      "runner": "hogsim run"
     },
     {
       "id": "local-realistic-soak",
@@ -314,7 +314,7 @@
           "artifact": "caller_counter.wasm"
         }
       ],
-      "runner": "hoglab run"
+      "runner": "hogsim run"
     },
     {
       "id": "local-realistic-soak-short",
@@ -348,7 +348,7 @@
       "tier": "soak",
       "tags": ["local", "write", "wallet-submit", "soak"],
       "requiresContracts": false,
-      "runner": "hoglab run"
+      "runner": "hogsim run"
     },
     {
       "id": "local-mixed-wallet-receipt-soak",

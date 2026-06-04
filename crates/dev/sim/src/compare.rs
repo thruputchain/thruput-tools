@@ -11,7 +11,7 @@ use crate::result::{
     WorkloadMetrics,
 };
 
-/// Schema version for the JSON shape emitted by `hoglab compare --json`.
+/// Schema version for the JSON shape emitted by `hogsim compare --json`.
 ///
 /// Bump when an existing field changes meaning, is removed, or is renamed.
 /// Purely additive fields (new optional keys) do not require a bump.

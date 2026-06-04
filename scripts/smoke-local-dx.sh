@@ -7,14 +7,14 @@
 # Optional environment:
 #   HOGD_DEV_BINARY=/path/to/hogd-dev
 #   HOGD_PROTOCOL_OVERRIDE=hogp/<hash>  # intro token only; XDR still validates shape
-#   SMOKE_STANDALONE_GATEWAY=1  # route view/storage checks through hogway
+#   SMOKE_STANDALONE_GATEWAY=1  # route view/storage checks through hogd_gateway
 #   SMOKE_SDK_PATH=/path/to/sdk_rs/crates/sdk  # test scaffold against local SDK
 #   KEEP_WORKDIR=1
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CLI="$REPO_ROOT/target/debug/groundhog"
-GATEWAY="$REPO_ROOT/target/debug/hogway"
+GATEWAY="$REPO_ROOT/target/debug/hogd_gateway"
 PROJECT_NAME="smoke-counter"
 INITIAL_VALUE=7
 INCREMENT_AMOUNT=5

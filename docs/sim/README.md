@@ -6,7 +6,7 @@ models, target orchestration, and result artifacts.
 Start here:
 
 - [Simulation design](sim-design.md) - draft boundary and phased plan for
-  the `hoglab` CLI and Groundhog simulation facility.
+  the `hogsim` CLI and Groundhog simulation facility.
 - [Implementation plan](sim-implementation-plan.md) - execution checklist with
   Phase 1 details.
 
@@ -15,7 +15,7 @@ Current local-provider quickstart:
 ```bash
 cargo run -p groundhog-cli --features dev-node -- --version
 
-cargo run -p groundhog-sim --bin hoglab -- run examples/sim/local-chain-tip-smoke.json \
+cargo run -p groundhog-sim --bin hogsim -- run examples/sim/local-chain-tip-smoke.json \
   --groundhog-binary target/debug/groundhog \
   --hogd-dev-binary /path/to/hogd-dev \
   --hogd-protocol hogp/<hash> \
@@ -32,7 +32,7 @@ for later orphan sweeping.
 Local restart chaos can be exercised with:
 
 ```bash
-cargo run -p groundhog-sim --bin hoglab -- run examples/sim/local-restart-chain-tip-smoke.json \
+cargo run -p groundhog-sim --bin hogsim -- run examples/sim/local-restart-chain-tip-smoke.json \
   --groundhog-binary target/debug/groundhog \
   --hogd-dev-binary /path/to/hogd-dev \
   --port 0
@@ -42,19 +42,19 @@ Scenario catalog smoke coverage is available as the next rung after the focused
 local lifecycle smoke:
 
 ```bash
-cargo run -p groundhog-sim --bin hoglab -- catalog
-cargo run -p groundhog-sim --bin hoglab -- catalog --tag contract
+cargo run -p groundhog-sim --bin hogsim -- catalog
+cargo run -p groundhog-sim --bin hogsim -- catalog --tag contract
 scripts/smoke-sim-scenarios.sh
 GROUNDHOG_SIM_RUN_SOAKS=1 scripts/smoke-sim-scenarios.sh
 ```
 
 `examples/sim/catalog.json` is the scenario library index. It records each
 scenario's title, provider, tier, tags, runner, and contract artifact
-requirements. `hoglab catalog` lists that library and can filter by tag. The
+requirements. `hogsim catalog` lists that library and can filter by tag. The
 human output includes the runnable scenario path resolved from the catalog's
-directory. `hoglab catalog --json` emits the filtered list as an array of
+directory. `hogsim catalog --json` emits the filtered list as an array of
 catalog entries with the catalog-relative `path` plus a `resolvedPath` field
-for scripts that want to invoke `hoglab run` directly. The
+for scripts that want to invoke `hogsim run` directly. The
 default smoke script runs the fast local ladder and an existing-provider
 baseline scenario. It covers read-only chain-tip, write-only wallet submit,
 submit-plus-receipt polling, mixed read/write/receipt polling, read-only
@@ -72,7 +72,7 @@ per-caller counter advanced. The opt-in soak runs
 
 Contract artifact scenarios declare `contractArtifacts` plus `viewCalls`,
 `contractCalls`, `storageReads`, or `eventQueries` in the manifest.
-`hoglab run --contract-artifact-root <dir>` resolves relative WASM paths from
+`hogsim run --contract-artifact-root <dir>` resolves relative WASM paths from
 that directory.
 `scripts/smoke-sim-scenarios.sh` detects a sibling `../groundhog-examples`
 checkout or `GROUNDHOG_EXAMPLES_ROOT`, builds `fibonacci` plus simulator
@@ -90,7 +90,7 @@ smoke ladder: `local-fibonacci-storage-miss-heavy`,
 presets. They reuse the Fibonacci fixture to stress negative storage lookups,
 indexed event traffic, recursive contract-call compute, weighted hot-contract
 traffic, plus dedicated simulator fixtures for wide u32 calldata, NNInt churn,
-and caller-aware read-after-write state. Run them directly with `hoglab run`
+and caller-aware read-after-write state. Run them directly with `hogsim run`
 and `--contract-artifact-root` after building the required contract artifacts.
 Use `local-realistic-soak-short.json` for optional smoke coverage and
 `local-realistic-soak.json` for manual baseline collection.
@@ -112,9 +112,9 @@ cargo run -p groundhog-cli --features dev-node -- --json node \
 
 RUNTIME_MANIFEST=$(jq -r '.data.runtime_manifest.path' /tmp/groundhog-node.json)
 
-cargo run -p groundhog-sim --bin hoglab -- validate examples/sim/local-wallet-soak.json
+cargo run -p groundhog-sim --bin hogsim -- validate examples/sim/local-wallet-soak.json
 
-cargo run -p groundhog-sim --bin hoglab -- run examples/sim/local-wallet-soak.json \
+cargo run -p groundhog-sim --bin hogsim -- run examples/sim/local-wallet-soak.json \
   --rpc-url http://127.0.0.1:9545 \
   --runtime-manifest "$RUNTIME_MANIFEST"
 ```
@@ -233,7 +233,7 @@ requires:
 - a runtime manifest path, supplied by `target.runtimeManifest` or
   `--runtime-manifest`.
 
-CLI overrides win over manifest fields. After resolution, `hoglab` writes the
+CLI overrides win over manifest fields. After resolution, `hogsim` writes the
 effective RPC URL, runtime manifest path, and nonce namespace into
 `simulation.json` under `resolved`. `target-ownership.json` records
 `startedBySim: false` and `cleanupAllowed: false`.
@@ -258,7 +258,7 @@ uses `target.blockIntervalMs` when supplied; the interval default is 500 ms.
 Local targets may also set `target.maxRpcConnections` to forward
 `--rpc-max-connections` to `groundhog node`; the local-node default is 2000.
 All target providers may set `client.maxConcurrentRequests` to cap
-simulator-side concurrent JSON-RPC requests. If omitted, hoglab records and
+simulator-side concurrent JSON-RPC requests. If omitted, hogsim records and
 uses the default 512-request cap in normalized `simulation.json`. The simulator
 builds a pool of typed HTTP clients and round-robins permitted requests across
 them; `client.poolSize` overrides the pool size, otherwise the default is the
@@ -287,12 +287,12 @@ with `errorClass: "target-restarted"`. The refreshed
 
 ## Sweeper
 
-`hoglab sweep [root]` scans a runs root, defaulting to `hoglab-runs/`, for
+`hogsim sweep [root]` scans a runs root, defaulting to `hogsim-runs/`, for
 orphaned simulator-owned local targets:
 
 ```bash
-cargo run -p groundhog-sim --bin hoglab -- sweep hoglab-runs --dry-run
-cargo run -p groundhog-sim --bin hoglab -- sweep hoglab-runs --json
+cargo run -p groundhog-sim --bin hogsim -- sweep hogsim-runs --dry-run
+cargo run -p groundhog-sim --bin hogsim -- sweep hogsim-runs --json
 ```
 
 The sweeper only considers run directories whose `target-ownership.json` says
@@ -302,7 +302,7 @@ group, and command marker against the recorded values, then sends SIGTERM to
 the recorded process group and escalates to SIGKILL after the bounded grace
 period if needed.
 
-Run `hoglab sweep` only when no simulations are active. It has no heartbeat or
+Run `hogsim sweep` only when no simulations are active. It has no heartbeat or
 lock-file protection and intentionally ignores the case where the node has
 already exited but a separately orphaned backend survives.
 
@@ -326,7 +326,7 @@ Each run writes a self-contained result directory:
 
 ## Compare Semantics
 
-`hoglab compare <run-a> <run-b>` accepts either run directories or direct
+`hogsim compare <run-a> <run-b>` accepts either run directories or direct
 `result.json` paths. It is a pure artifact comparison; it does not read the
 original target, runtime manifest path, or event stream.
 
@@ -361,8 +361,8 @@ latency percentiles, assertion results, and selected workload-specific fields.
 
 A scenario can set `baseline` to a committed `result.json` snapshot or a run
 directory containing one. Relative baseline paths resolve from the scenario
-file's directory. When present, `hoglab run` embeds `baselineDiff` in the final
-`result.json`; the diff uses the same shape as `hoglab compare --json` and is
+file's directory. When present, `hogsim run` embeds `baselineDiff` in the final
+`result.json`; the diff uses the same shape as `hogsim compare --json` and is
 computed as current run minus baseline.
 
 Baseline comparison is diagnostic only. It does not change the run outcome or
