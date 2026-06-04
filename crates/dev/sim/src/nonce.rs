@@ -11,7 +11,7 @@ impl NonceNamespace {
 
     pub fn generate(seed: &str, scenario_name: &str, run_id: &str) -> Self {
         let mut hasher = Sha256::new();
-        hasher.update(b"hoglab nonce namespace v1");
+        hasher.update(b"hogsim nonce namespace v1");
         hasher.update(seed.as_bytes());
         hasher.update(b"\0");
         hasher.update(scenario_name.as_bytes());

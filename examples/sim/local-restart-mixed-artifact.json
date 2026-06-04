@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "kind": "groundhog-simulation",
   "name": "local-restart-mixed-artifact",
-  "seed": "local-restart-mixed-artifact-v1",
+  "seed": "local-restart-mixed-artifact-v2",
   "target": {
     "provider": "local"
   },

@@ -648,7 +648,7 @@ fn select_workload(
     total_weight: u32,
 ) -> WorkloadKind {
     let mut hasher = Sha256::new();
-    hasher.update(b"hoglab workload selection v1");
+    hasher.update(b"hogsim workload selection v1");
     hasher.update(seed.as_bytes());
     hasher.update(scenario_name.as_bytes());
     let phase_index = u64::try_from(phase_index).expect("bug: phase index should fit u64");

@@ -919,7 +919,7 @@ fn weighted_target_draw(
     total_weight: u64,
 ) -> u64 {
     let mut hasher = Sha256::new();
-    hasher.update(b"hoglab weighted target selection v1");
+    hasher.update(b"hogsim weighted target selection v1");
     hasher.update(manifest.seed.as_bytes());
     hasher.update([0]);
     hasher.update(manifest.name.as_bytes());
