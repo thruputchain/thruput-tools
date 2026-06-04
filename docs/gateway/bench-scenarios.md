@@ -6,7 +6,7 @@ we can compare results over time instead of rebuilding one-off shell commands.
 
 All scenarios start a real `hogd-dev` through `groundhog node`, read
 `data.runtime_manifest.path` from startup JSON, start a standalone
-`hogd-gateway --runtime-manifest`, and run `groundhog-bench` against the
+`hog-gateway --runtime-manifest`, and run `groundhog-bench` against the
 selected target.
 
 ```bash

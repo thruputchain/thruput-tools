@@ -81,7 +81,7 @@ groundhog --json node --hogd-dev-binary /path/to/hogd-dev > /tmp/node.json
 
 # in other terminals
 RUNTIME_MANIFEST=$(jq -r '.data.runtime_manifest.path' /tmp/node.json)
-hogd-gateway --runtime-manifest "$RUNTIME_MANIFEST" --listen 127.0.0.1:9546
+hog-gateway --runtime-manifest "$RUNTIME_MANIFEST" --listen 127.0.0.1:9546
 groundhog-bench --url http://127.0.0.1:9546 \
   --runtime-manifest "$RUNTIME_MANIFEST" \
   --method sendRawTransaction
@@ -116,7 +116,7 @@ There are two release workflows, but only one human entrypoint:
 - `.github/workflows/publish.yml` publishes the Rust crates to the private
   `groundhog` Cargo registry and owns release orchestration.
 - `.github/workflows/release.yml` is dispatch-only and internal to
-  `publish.yml`. It builds Linux `hogd-gateway`, `groundhog`, and `rv32-lower`
+  `publish.yml`. It builds Linux `hog-gateway`, `groundhog`, and `rv32-lower`
   binaries, packages each app as a per-target `.tar.gz`, and attaches the
   archives plus `SHA256SUMS` to a GitHub Release.
 
@@ -132,7 +132,7 @@ not manually push `v*` tags. Direct human dispatch of the release workflow
 fails; it must be dispatched by the publish workflow. The release workflow
 verifies that the matching `groundhog-cli` and `groundhog-rv32-lower` crate
 versions already exist in the private registry before it uploads binary assets.
-`hogd-gateway` is built from this repository for the GitHub Release, but its binary
+`hog-gateway` is built from this repository for the GitHub Release, but its binary
 crate is not published to the Cargo registry; `groundhog-rv32-lower`, by
 contrast, is published, so it is consumable as a library (e.g. from sdk_rs) as
 well as via its `rv32-lower` binary.
@@ -141,14 +141,14 @@ The result is one matching version across the Cargo crates, git tag, and
 GitHub Release. Release assets follow this naming pattern:
 
 ```text
-hogd-gateway-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz
+hog-gateway-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz
 groundhog-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz
 rv32-lower-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz
 SHA256SUMS
 ```
 
 Each archive contains one app binary plus `README.md` and `LICENSE`. The
-release repo can consume the `hogd-gateway` archive by pinning `groundhog-rpc` in
+release repo can consume the `hog-gateway` archive by pinning `groundhog-rpc` in
 `release-manifest.toml`; CLI packaging can consume the `groundhog` archive the
 same way.
 
@@ -292,7 +292,7 @@ the user-facing CLI loop (`new` → `build` → `node` → `deploy` →
 For the runtime-manifest gateway/bench path, run
 `scripts/smoke-runtime-manifest-bench.sh`. It starts `groundhog node`,
 extracts the generated runtime manifest, runs `groundhog-bench` against the
-CLI node, starts `hogd-gateway --runtime-manifest`, and repeats the bench
+CLI node, starts `hog-gateway --runtime-manifest`, and repeats the bench
 checks against the standalone gateway. Set `BENCH_SCENARIO=gateway-baseline`
 or `BENCH_SCENARIO=submit-ramp` for the heavier local scenario library.
 

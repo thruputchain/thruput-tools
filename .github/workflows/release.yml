@@ -52,8 +52,8 @@ jobs:
             echo "OK: ${crate}@${VERSION} exists in the groundhog registry"
           done
 
-      - name: Build hogd_gateway
-        run: cargo build --locked --release -p groundhog-json-rpc-gateway --bin hogd_gateway
+      - name: Build hog-gateway
+        run: cargo build --locked --release -p groundhog-json-rpc-gateway --bin hog-gateway
 
       - name: Build groundhog CLI
         run: cargo build --locked --release -p groundhog-cli --bin groundhog --features dev-node
@@ -61,8 +61,8 @@ jobs:
       - name: Build rv32-lower
         run: cargo build --locked --release -p groundhog-rv32-lower --bin rv32-lower
 
-      - name: Verify hogd_gateway
-        run: target/release/hogd_gateway --help
+      - name: Verify hog-gateway
+        run: target/release/hog-gateway --help
 
       - name: Verify groundhog CLI
         run: target/release/groundhog --help
@@ -76,7 +76,7 @@ jobs:
 
           mkdir -p artifacts package
 
-          for app in hogd_gateway groundhog rv32-lower; do
+          for app in hog-gateway groundhog rv32-lower; do
             archive_base="${app}-${GITHUB_REF_NAME}-${RELEASE_TARGET}"
             package_dir="package/${archive_base}"
             mkdir -p "$package_dir"

@@ -140,7 +140,7 @@ runtime), `tower`/`tower-http` (middleware), `clap` (CLI), `prometheus`
   bootstrap manifest input schema for local and benchmark backend launchers.
   `crates/json-rpc/json-rpc-types/src/runtime_manifest.rs` owns the
   runtime manifest output schema shared by `hogd-dev` producers,
-  `groundhog node`, `hogd-gateway --runtime-manifest`, and
+  `groundhog node`, `hog-gateway --runtime-manifest`, and
   `groundhog-bench --runtime-manifest`. Public manifest structs are
   `#[non_exhaustive]`;
   additive fields are expected. Optional endpoints must be absent when
@@ -195,11 +195,11 @@ directly for normal releases.
 `release.yml` is dispatch-only and direct human dispatch fails; it must be
 dispatched by the publish workflow. It verifies that the matching
 `groundhog-cli` crate version already exists in the private registry before
-uploading binary assets. It builds `hogd-gateway` from this repository and builds the
+uploading binary assets. It builds `hog-gateway` from this repository and builds the
 `groundhog` CLI from the published crate; the CLI release build uses `--features
 dev-node` so the published binary includes the local `groundhog node` path. The
 GitHub Release assets are per-app, per-target archives:
-`hogd-gateway-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz` and
+`hog-gateway-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz` and
 `groundhog-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz`, plus `SHA256SUMS`.
 
 Keep the Cargo workspace version, internal `=X.Y.Z` workspace dependency pins,
@@ -217,7 +217,7 @@ HOGD_DEV_BINARY=/path/to/hogd-dev scripts/smoke-runtime-manifest-bench.sh
 
 The script starts `groundhog node`, reads `data.runtime_manifest.path`
 from the CLI startup JSON, runs `groundhog-bench` against the CLI node,
-starts `hogd-gateway --runtime-manifest <path>`, and runs the same
+starts `hog-gateway --runtime-manifest <path>`, and runs the same
 bench checks against the standalone gateway. `BENCH_RATE`,
 `BENCH_DURATION`, and `BENCH_ACCOUNTS` can tune the run.
 Use `BENCH_SCENARIO=gateway-baseline` or `BENCH_SCENARIO=submit-ramp`
@@ -292,7 +292,7 @@ For manual gateway/bench runs, start `groundhog node --json`, extract
 `data.runtime_manifest.path`, then pass it to both consumers:
 
 ```bash
-hogd-gateway --runtime-manifest "$RUNTIME_MANIFEST" --listen 127.0.0.1:9546
+hog-gateway --runtime-manifest "$RUNTIME_MANIFEST" --listen 127.0.0.1:9546
 groundhog-bench --url http://127.0.0.1:9546 \
   --runtime-manifest "$RUNTIME_MANIFEST" \
   --method sendRawTransaction

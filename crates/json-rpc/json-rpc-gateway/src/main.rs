@@ -26,7 +26,7 @@ const MAX_RUNTIME_MANIFEST_BYTES: u64 = 1024 * 1024;
 
 /// Groundhog JSON-RPC gateway.
 #[derive(Parser)]
-#[command(name = "hogd-gateway", about = "Groundhog JSON-RPC gateway")]
+#[command(name = "hog-gateway", about = "Groundhog JSON-RPC gateway")]
 struct Cli {
     /// Path to TOML config file
     #[arg(long)]
@@ -140,7 +140,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     let handle = server.start(api_impl.into_rpc());
 
-    tracing::info!("hogd-gateway listening");
+    tracing::info!("hog-gateway listening");
 
     // Graceful shutdown on SIGINT/SIGTERM.
     tokio::signal::ctrl_c().await?;
