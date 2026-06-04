@@ -116,9 +116,9 @@ There are two release workflows, but only one human entrypoint:
 - `.github/workflows/publish.yml` publishes the Rust crates to the private
   `groundhog` Cargo registry and owns release orchestration.
 - `.github/workflows/release.yml` is dispatch-only and internal to
-  `publish.yml`. It builds Linux `hog-gateway`, `groundhog`, and `rv32-lower`
-  binaries, packages each app as a per-target `.tar.gz`, and attaches the
-  archives plus `SHA256SUMS` to a GitHub Release.
+  `publish.yml`. It builds Linux `hog-gateway`, `groundhog`, `rv32-lower`, and
+  `hogsim` binaries, packages each app as a per-target `.tar.gz`, and attaches
+  the archives plus `SHA256SUMS` to a GitHub Release.
 
 For a normal release, bump the workspace version in `Cargo.toml` and keep the
 internal workspace dependency pins in sync. Then run the **Release package**
@@ -133,9 +133,10 @@ fails; it must be dispatched by the publish workflow. The release workflow
 verifies that the matching `groundhog-cli` and `groundhog-rv32-lower` crate
 versions already exist in the private registry before it uploads binary assets.
 `hog-gateway` is built from this repository for the GitHub Release, but its binary
-crate is not published to the Cargo registry; `groundhog-rv32-lower`, by
-contrast, is published, so it is consumable as a library (e.g. from sdk_rs) as
-well as via its `rv32-lower` binary.
+crate is not published to the Cargo registry. `hogsim` is also a binary release
+artifact only. `groundhog-rv32-lower`, by contrast, is published, so it is
+consumable as a library (e.g. from sdk_rs) as well as via its `rv32-lower`
+binary.
 
 The result is one matching version across the Cargo crates, git tag, and
 GitHub Release. Release assets follow this naming pattern:
@@ -144,13 +145,14 @@ GitHub Release. Release assets follow this naming pattern:
 hog-gateway-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz
 groundhog-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz
 rv32-lower-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz
+hogsim-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz
 SHA256SUMS
 ```
 
 Each archive contains one app binary plus `README.md` and `LICENSE`. The
 release repo can consume the `hog-gateway` archive by pinning `groundhog-rpc` in
 `release-manifest.toml`; CLI packaging can consume the `groundhog` archive the
-same way.
+same way, and simulator packaging can consume the `hogsim` archive.
 
 ### The API surface
 

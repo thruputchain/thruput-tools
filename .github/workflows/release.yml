@@ -61,6 +61,9 @@ jobs:
       - name: Build rv32-lower
         run: cargo build --locked --release -p groundhog-rv32-lower --bin rv32-lower
 
+      - name: Build hogsim
+        run: cargo build --locked --release -p groundhog-sim --bin hogsim
+
       - name: Verify hog-gateway
         run: target/release/hog-gateway --help
 
@@ -70,13 +73,16 @@ jobs:
       - name: Verify rv32-lower
         run: target/release/rv32-lower --help
 
+      - name: Verify hogsim
+        run: target/release/hogsim --help
+
       - name: Prepare artifacts
         run: |
           set -euo pipefail
 
           mkdir -p artifacts package
 
-          for app in hog-gateway groundhog rv32-lower; do
+          for app in hog-gateway groundhog rv32-lower hogsim; do
             archive_base="${app}-${GITHUB_REF_NAME}-${RELEASE_TARGET}"
             package_dir="package/${archive_base}"
             mkdir -p "$package_dir"

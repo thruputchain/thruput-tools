@@ -194,13 +194,16 @@ directly for normal releases.
 
 `release.yml` is dispatch-only and direct human dispatch fails; it must be
 dispatched by the publish workflow. It verifies that the matching
-`groundhog-cli` crate version already exists in the private registry before
-uploading binary assets. It builds `hog-gateway` from this repository and builds the
-`groundhog` CLI from the published crate; the CLI release build uses `--features
-dev-node` so the published binary includes the local `groundhog node` path. The
-GitHub Release assets are per-app, per-target archives:
+`groundhog-cli` and `groundhog-rv32-lower` crate versions already exist in the
+private registry before uploading binary assets. It builds `hog-gateway` and
+`hogsim` from this repository and builds the `groundhog` CLI from the published
+crate; the CLI release build uses `--features dev-node` so the published binary
+includes the local `groundhog node` path. The GitHub Release assets are per-app,
+per-target archives:
 `hog-gateway-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz` and
-`groundhog-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz`, plus `SHA256SUMS`.
+`groundhog-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz`,
+`rv32-lower-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz`, and
+`hogsim-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz`, plus `SHA256SUMS`.
 
 Keep the Cargo workspace version, internal `=X.Y.Z` workspace dependency pins,
 git tag, and GitHub Release tag aligned. The release repo downloads component
