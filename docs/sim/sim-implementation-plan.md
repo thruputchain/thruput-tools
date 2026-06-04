@@ -23,7 +23,7 @@ tracker, with detail focused on Phase 1.
 The first useful simulator should run against an already-started target:
 
 ```bash
-hoglab run examples/sim/chain-tip-smoke.json \
+hogsim run examples/sim/chain-tip-smoke.json \
   --rpc-url http://127.0.0.1:9545 \
   --runtime-manifest /tmp/hogd-dev/runtime-manifest.json
 ```
@@ -75,7 +75,8 @@ chaos, deploy new contracts, or create remote infrastructure.
 - [x] Change the scheduler to emit deterministic actor ticks; workload choice
   now happens at dispatch time so actor state can participate later.
 - [x] Dispatch workload execution asynchronously with global and per-actor
-  in-flight bounds.
+  in-flight bounds, using separate actor lanes for writes, receipt polling, and
+  read-only work.
 - [x] Use bounded latency histograms instead of retaining every latency sample.
 - [x] Cap chain-progress samples in `result.json` while preserving total
   observation count and first/last/max heights, without rewriting earlier
@@ -146,7 +147,7 @@ chaos, deploy new contracts, or create remote infrastructure.
 - [ ] Add doc comments and `#[non_exhaustive]` to public library API before
   treating `groundhog-sim` as a stable downstream dependency.
 - [ ] Give `groundhog node` cooperative shutdown for programmatic parents
-  (parent-death detection or an explicit shutdown channel) so a hoglab panic
+  (parent-death detection or an explicit shutdown channel) so a hogsim panic
   or SIGKILL cannot orphan the node + hogd-dev tree. This is the durable home
   for managed-target robustness; the local provider deliberately does not add
   a sim-side panic guard or signal handler. Normal-path teardown is a graceful
@@ -160,7 +161,7 @@ chaos, deploy new contracts, or create remote infrastructure.
   config in provider-owned state; `ResolvedTarget` remains pure result data.
 - [ ] Replace ad-hoc CLI output and silent internal drops with the eventual
   logging/printing discipline.
-- [ ] Add `--json` to `hoglab validate` and `hoglab run` so all hoglab
+- [ ] Add `--json` to `hogsim validate` and `hogsim run` so all hogsim
   subcommands match the CLAUDE.md machine-readable-output convention. Each
   needs a typed payload: validate emits a manifest-validation report;
   run emits a run summary (outcome, counts, out-dir, run id).
@@ -187,6 +188,11 @@ chaos, deploy new contracts, or create remote infrastructure.
   dedicated `maxBackpressureRate` assertion and surfaced as `backpressureRate`
   in `result.json`; that rate counts only `simulator-backpressure` skips, not
   deterministic warm-up skips such as `no-submitted-transaction`.
+- [x] Cap simulator-side JSON-RPC client concurrency with
+  `client.maxConcurrentRequests`, record the effective default in
+  `simulation.json`, and use a configurable HTTP client pool so high-rate tests
+  queue through the load generator while still exercising many-client socket
+  behavior.
 - [x] Replace receipt-poll's v1 latest-transaction slot with per-transaction
   receipt tracking before wiring `maxReceiptTimeoutRate`; otherwise a newer
   submit can hide timeout state for an older unreceipted transaction.
@@ -199,9 +205,9 @@ chaos, deploy new contracts, or create remote infrastructure.
 ## Phase 0: Skeleton
 
 - [x] Add a `crates/dev/sim` workspace member named `groundhog-sim`.
-- [x] Add a `hoglab` binary with `run`, `compare`, and `validate`
+- [x] Add a `hogsim` binary with `run`, `compare`, and `validate`
   subcommands.
-- [x] Keep the manifest kind as `groundhog-simulation` while using `hoglab`
+- [x] Keep the manifest kind as `groundhog-simulation` while using `hogsim`
   as the user-facing CLI name.
 - [x] Add typed simulation manifest structs.
   - Include `baseline` as an optional typed path; Phase 2 adds automatic
@@ -256,7 +262,7 @@ chaos, deploy new contracts, or create remote infrastructure.
 
 ### Inputs
 
-- [x] `hoglab run <scenario-path>`
+- [x] `hogsim run <scenario-path>`
 - [x] `--rpc-url <url>` override.
 - [x] `--runtime-manifest <path>` override.
 - [x] `--out-dir <path>` override.
@@ -406,7 +412,7 @@ chaos, deploy new contracts, or create remote infrastructure.
 
 ### Comparison
 
-- [x] Add `hoglab compare <run-a> <run-b>`.
+- [x] Add `hogsim compare <run-a> <run-b>`.
 - [x] Accept either run directories or direct `result.json` paths.
 - [x] Compare per-workload counts and errors.
 - [x] Compare latency percentiles.
@@ -477,7 +483,7 @@ chaos, deploy new contracts, or create remote infrastructure.
   - [x] Review gate E1: lifecycle and artifact review for PID safety,
     ownership refresh, and report shape.
   - [x] Slice E2: add ownership process capture and restart refresh.
-  - [x] Slice E3: add `hoglab sweep`, tests, docs, and smoke coverage.
+  - [x] Slice E3: add `hogsim sweep`, tests, docs, and smoke coverage.
 - [x] Implement `restart-target` chaos for the local provider as whole-target
   stop+restart, matching current `groundhog node` supervisor behavior.
 - [x] Record chaos state transitions in `result.jsonl` and `result.json`.
@@ -522,7 +528,7 @@ chaos, deploy new contracts, or create remote infrastructure.
   smoke verification.
 - [x] Slice H1: add a first-class scenario library catalog:
   `examples/sim/catalog.json`.
-- [x] Slice H2: add `hoglab catalog` with tag filtering and JSON output.
+- [x] Slice H2: add `hogsim catalog` with tag filtering and JSON output.
 - [x] Slice H3: document the source-first contract artifact convention.
 - [x] Review gate H: code/API and test/artifact review for catalog metadata,
   CLI output, docs, and schema compatibility.

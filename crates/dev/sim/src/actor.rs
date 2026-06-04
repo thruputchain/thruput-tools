@@ -121,6 +121,7 @@ impl ActorState {
         self.pending_receipts.push_back(PendingReceipt {
             tx_hash,
             submit_completed_at: completed_at,
+            receipt_poll_in_flight: false,
         });
         Ok(PendingReceiptRecordOutcome::Queued {
             pending_receipts: self.pending_receipts.len(),
@@ -145,7 +146,22 @@ impl ActorState {
         Ok(())
     }
 
+    /// Reserve the next submitted transaction that still needs a receipt poll.
+    pub fn reserve_receipt_poll_target(&mut self) -> Option<ReceiptPollTarget> {
+        self.pending_receipts
+            .iter_mut()
+            .find(|pending| !pending.receipt_poll_in_flight)
+            .map(|pending| {
+                pending.receipt_poll_in_flight = true;
+                ReceiptPollTarget {
+                    tx_hash: pending.tx_hash,
+                    submit_completed_at: pending.submit_completed_at,
+                }
+            })
+    }
+
     /// Return the next submitted transaction that still needs a receipt.
+    #[cfg(test)]
     pub fn receipt_poll_target(&self) -> Option<ReceiptPollTarget> {
         self.pending_receipts
             .front()
@@ -153,6 +169,17 @@ impl ActorState {
                 tx_hash: pending.tx_hash,
                 submit_completed_at: pending.submit_completed_at,
             })
+    }
+
+    /// Release a previously reserved receipt-poll target that still needs retrying.
+    pub fn release_receipt_poll_target(&mut self, tx_hash: TxHash) {
+        if let Some(pending) = self
+            .pending_receipts
+            .iter_mut()
+            .find(|pending| pending.tx_hash == tx_hash)
+        {
+            pending.receipt_poll_in_flight = false;
+        }
     }
 
     /// Return the number of submitted transactions still waiting for receipts.
@@ -259,6 +286,7 @@ pub enum PendingReceiptRecordOutcome {
 struct PendingReceipt {
     tx_hash: TxHash,
     submit_completed_at: Instant,
+    receipt_poll_in_flight: bool,
 }
 
 /// Construct actor state for the maximum actor count requested by a scenario.
@@ -421,6 +449,41 @@ mod tests {
         });
 
         assert_eq!(actor.receipt_poll_target().unwrap().tx_hash, tx_hash(2));
+    }
+
+    #[test]
+    fn actor_reserves_distinct_receipt_poll_targets() {
+        let mut actor = ActorState::new(
+            2,
+            sim_account(9),
+            NonceNamespace::new(0x1234_5678).expect("namespace should fit"),
+        );
+        actor
+            .record_submitted_tx(tx_hash(1), 10, Instant::now())
+            .expect("first tx should record");
+        actor
+            .record_submitted_tx(tx_hash(2), 20, Instant::now())
+            .expect("second tx should record");
+
+        let first = actor
+            .reserve_receipt_poll_target()
+            .expect("first receipt should reserve");
+        let second = actor
+            .reserve_receipt_poll_target()
+            .expect("second receipt should reserve");
+
+        assert_eq!(first.tx_hash, tx_hash(1));
+        assert_eq!(second.tx_hash, tx_hash(2));
+        assert!(actor.reserve_receipt_poll_target().is_none());
+
+        actor.release_receipt_poll_target(first.tx_hash);
+        assert_eq!(
+            actor
+                .reserve_receipt_poll_target()
+                .expect("released receipt should reserve again")
+                .tx_hash,
+            tx_hash(1)
+        );
     }
 
     #[test]

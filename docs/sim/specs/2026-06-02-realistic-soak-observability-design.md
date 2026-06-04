@@ -13,7 +13,7 @@ boundary, chaos taxonomy) and is tracked slice-by-slice in
 
 ## Goal
 
-Make `hoglab` able to generate long, realistic, multi-contract / multi-actor
+Make `hogsim` able to generate long, realistic, multi-contract / multi-actor
 **pure JSON-RPC traffic** against the **local** provider and produce a result
 artifact that can detect slow leaks, simulator overload, and throughput
 regressions rather than merely fall over when one happens.
@@ -43,7 +43,7 @@ The deployed "validator" topology (full `hogd*` suite + `chuckd` coordinator +
 soak metrics there belong in that stack. This phase is **not** trying to
 reimplement that.
 
-The value here is the local loop: a developer (or CI) soaking `hoglab` at the
+The value here is the local loop: a developer (or CI) soaking `hogsim` at the
 local provider should get leak/regression signal **in the run artifact itself**,
 with no metrics infra to stand up. A self-contained RSS/CPU sampler in
 `result.json` is the right altitude for "build up from the local provider before
@@ -56,7 +56,7 @@ run, never becomes a hard dependency, and degrades to `unavailable` (the existin
 `MetricAvailability` mechanism) on any platform or target where it cannot read
 process stats. No new external crates for the metrics backend; no scrape server.
 
-**Traffic boundary:** `hoglab`'s durable job is to generate deterministic
+**Traffic boundary:** `hogsim`'s durable job is to generate deterministic
 JSON-RPC traffic, record what happened, and evaluate artifact-local assertions.
 Process sampling and heap/profile adjuncts are diagnostics for targets that the
 local provider owns. They must not turn the simulator into a replacement for the
@@ -151,7 +151,7 @@ The sample interval is additive manifest configuration:
 }
 ```
 
-If absent, `hoglab` uses `5s`. `observability` is optional and must be
+If absent, `hogsim` uses `5s`. `observability` is optional and must be
 `#[serde(default, skip_serializing_if = "Option::is_none")]` so existing
 scenarios normalize exactly as they do today rather than gaining
 `"observability": {}`. The resolved interval is recorded in `result.json` as
@@ -309,7 +309,8 @@ segment. It is not `last.cpuUserMs + last.cpuSystemMs` when restarts occur.
 Backpressure and simulator overload are separate signals:
 
 - **`simulator-backpressure`** means a scheduled workload was skipped because a
-  global or per-actor in-flight limit was reached. It contributes to
+  global or per-actor in-flight limit was reached. Per-actor diagnostics name
+  the lane (`actor-write`, `actor-receipt`, or `actor-read`). It contributes to
   `backpressureRate`.
 - **`simulator-overload`** means the simulator intentionally stopped tracking
   some internal state to preserve bounded memory, currently per-actor pending
@@ -350,7 +351,7 @@ RSS/process sampling answers **whether** the target process group is growing. It
 does not explain **where** allocations come from. Phase 6 keeps attribution
 optional and target-specific so the core JSON-RPC traffic harness does not
 depend on one language runtime or allocator. These hooks are most useful during
-simplified localhost runs and can be expanded later when `hoglab` is pointed at
+simplified localhost runs and can be expanded later when `hogsim` is pointed at
 the real deployed multi-process system.
 
 - **Heap attribution:** add an opt-in local-provider diagnostic environment only

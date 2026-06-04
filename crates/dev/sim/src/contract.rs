@@ -956,12 +956,18 @@ mod tests {
                 rpc_url: None,
                 runtime_manifest: None,
                 hogd_dev_binary: None,
+                block_driver: None,
+                block_interval_ms: None,
+                max_rpc_connections: None,
+                max_rpc_client_concurrency: None,
             },
+            client: None,
             bootstrap: None,
             load_shape: vec![LoadPhase {
                 duration: crate::manifest::DurationSpec("1s".into()),
                 users: 1,
                 rate_per_user_hz: 1.0,
+                stagger_actors: false,
             }],
             workloads: vec![WorkloadSpec {
                 name: WorkloadKind::ViewCall,

@@ -75,7 +75,7 @@ pub fn run_id() -> Result<String, SimError> {
 
 /// Default output directory for a run.
 pub fn default_run_dir(run_id: &str, name: &str) -> PathBuf {
-    PathBuf::from("hoglab-runs").join(format!("{run_id}-{name}"))
+    PathBuf::from("hogsim-runs").join(format!("{run_id}-{name}"))
 }
 
 /// Current Unix time in milliseconds.

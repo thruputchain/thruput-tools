@@ -210,7 +210,7 @@ fn local_target_chain_tip_smoke() {
     let scenario = repo_root.join("examples/sim/local-chain-tip-smoke.json");
     let temp = tempfile::tempdir().expect("temp dir should be created");
 
-    let mut command = Command::new(env!("CARGO_BIN_EXE_hoglab"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_hogsim"));
     command
         .arg("run")
         .arg(&scenario)
@@ -225,9 +225,9 @@ fn local_target_chain_tip_smoke() {
         .arg("--out-dir")
         .arg(temp.path())
         .status()
-        .expect("hoglab should launch");
+        .expect("hogsim should launch");
 
-    assert!(status.success(), "hoglab run failed with status {status}");
+    assert!(status.success(), "hogsim run failed with status {status}");
     assert!(temp.path().join("result.json").exists());
     assert!(temp.path().join("result.jsonl").exists());
     assert!(temp.path().join("target-ownership.json").exists());
@@ -280,7 +280,7 @@ fn local_restart_target_chain_tip_smoke() {
     let scenario = repo_root.join("examples/sim/local-restart-chain-tip-smoke.json");
     let temp = tempfile::tempdir().expect("temp dir should be created");
 
-    let mut command = Command::new(env!("CARGO_BIN_EXE_hoglab"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_hogsim"));
     command
         .arg("run")
         .arg(&scenario)
@@ -295,9 +295,9 @@ fn local_restart_target_chain_tip_smoke() {
         .arg("--out-dir")
         .arg(temp.path())
         .status()
-        .expect("hoglab should launch");
+        .expect("hogsim should launch");
 
-    assert!(status.success(), "hoglab run failed with status {status}");
+    assert!(status.success(), "hogsim run failed with status {status}");
     assert!(temp.path().join("logs/local-node-0.stdout.log").exists());
     assert!(temp.path().join("logs/local-node-0.stderr.log").exists());
     assert!(
@@ -396,7 +396,7 @@ fn local_target_sweep_orphan_smoke() {
     )
     .expect("scenario should write");
 
-    let mut command = Command::new(env!("CARGO_BIN_EXE_hoglab"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_hogsim"));
     command
         .arg("run")
         .arg(&scenario)
@@ -411,22 +411,22 @@ fn local_target_sweep_orphan_smoke() {
         .arg("--out-dir")
         .arg(&run_dir)
         .spawn()
-        .expect("hoglab should launch");
+        .expect("hogsim should launch");
 
     let ownership_path = run_dir.join("target-ownership.json");
     let ownership = wait_for_ownership_process(&ownership_path);
-    child.kill().expect("hoglab parent should be killable");
-    child.wait().expect("hoglab parent should reap");
+    child.kill().expect("hogsim parent should be killable");
+    child.wait().expect("hogsim parent should reap");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_hoglab"))
+    let output = Command::new(env!("CARGO_BIN_EXE_hogsim"))
         .arg("sweep")
         .arg(root.path())
         .arg("--json")
         .output()
-        .expect("hoglab sweep should launch");
+        .expect("hogsim sweep should launch");
     assert!(
         output.status.success(),
-        "hoglab sweep failed: status={} stdout={} stderr={}",
+        "hogsim sweep failed: status={} stdout={} stderr={}",
         output.status,
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
@@ -529,7 +529,7 @@ fn run_catalog(catalog: &[CatalogScenario]) {
     for scenario in catalog {
         let scenario_path = repo_root.join("examples/sim").join(scenario.file);
         let run_dir = root.join(scenario.file.trim_end_matches(".json"));
-        let mut command = Command::new(env!("CARGO_BIN_EXE_hoglab"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_hogsim"));
         command
             .arg("run")
             .arg(&scenario_path)
@@ -555,7 +555,7 @@ fn run_catalog(catalog: &[CatalogScenario]) {
             .arg("--out-dir")
             .arg(&run_dir)
             .output()
-            .expect("hoglab should launch");
+            .expect("hogsim should launch");
 
         if scenario.allow_restart_failure {
             assert!(

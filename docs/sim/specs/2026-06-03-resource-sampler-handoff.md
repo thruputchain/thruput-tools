@@ -8,12 +8,12 @@ local targets.
 ## Goal
 
 Embed a best-effort target resource timeline in the local run artifact so a
-developer running `hoglab` against the simulator-owned local target can see RSS,
+developer running `hogsim` against the simulator-owned local target can see RSS,
 CPU, thread, and fd behavior without standing up Prometheus or the deployed
 validator observability stack.
 
 The sampler is diagnostic. It must not change workload dispatch, make `existing`
-targets guess process identity, or turn `hoglab` into a general process monitor.
+targets guess process identity, or turn `hogsim` into a general process monitor.
 The durable simulator job remains deterministic JSON-RPC traffic generation plus
 artifact-local assertions and summaries.
 

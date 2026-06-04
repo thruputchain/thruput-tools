@@ -15,6 +15,17 @@ use std::process::ExitStatus;
 #[cfg(feature = "dev-node")]
 use std::time::Duration;
 
+/// Block production mode for the supervised local node.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum LocalNodeBlockDriverMode {
+    /// Submit-plane successes wake block production immediately.
+    #[default]
+    Instant,
+    /// A fixed timer drives block production.
+    Interval,
+}
+
 /// Start the experimental hogd-dev local node server.
 ///
 /// Requires the `dev-node` feature.
@@ -30,6 +41,39 @@ pub fn run(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
+    run_with_block_driver(
+        port,
+        verbose,
+        dev_account_count,
+        hogd_dev_binary,
+        hogd_protocol,
+        startup_timeout_secs,
+        None,
+        None,
+        None,
+        cmd,
+        print,
+    )
+}
+
+/// Start the experimental hogd-dev local node server with block-driver options.
+///
+/// Requires the `dev-node` feature.
+#[cfg(feature = "dev-node")]
+#[allow(clippy::too_many_arguments)]
+pub fn run_with_block_driver(
+    port: u16,
+    verbose: bool,
+    dev_account_count: Option<usize>,
+    hogd_dev_binary: Option<PathBuf>,
+    hogd_protocol: Option<String>,
+    startup_timeout_secs: Option<u64>,
+    block_driver: Option<LocalNodeBlockDriverMode>,
+    block_interval_ms: Option<u64>,
+    rpc_max_connections: Option<u32>,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
     init_tracing(default_tracing_filter(verbose, print.is_json()));
 
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
@@ -41,6 +85,9 @@ pub fn run(
                 hogd_protocol,
                 startup_timeout: startup_timeout_secs.map(Duration::from_secs),
                 dev_account_count,
+                block_driver,
+                block_interval: block_interval_ms.map(Duration::from_millis),
+                rpc_max_connections,
                 ..LocalNodeOptions::default()
             },
             cmd,
@@ -67,6 +114,12 @@ pub struct LocalNodeOptions {
     pub pid_file: LocalNodePidFile,
     /// Override the deterministic dev-account count.
     pub dev_account_count: Option<usize>,
+    /// Override the local block production mode.
+    pub block_driver: Option<LocalNodeBlockDriverMode>,
+    /// Override the interval used by timer-driven block production.
+    pub block_interval: Option<Duration>,
+    /// Override the public JSON-RPC simultaneous connection cap.
+    pub rpc_max_connections: Option<u32>,
 }
 
 /// PID-file behavior for local hogd-dev startup.
@@ -334,6 +387,33 @@ fn local_node_config(
 ) -> Result<groundhog_node_supervisor::NodeSupervisorConfig, CliError> {
     use groundhog_node_supervisor::{HogdDevConfig, NodeSupervisorConfig};
 
+    if options
+        .block_interval
+        .is_some_and(|interval| interval.is_zero())
+    {
+        return Err(CliError::Other(
+            "block interval must be at least 1 ms".into(),
+        ));
+    }
+    if options.block_interval.is_some()
+        && !matches!(
+            options.block_driver,
+            Some(LocalNodeBlockDriverMode::Interval)
+        )
+    {
+        return Err(CliError::Other(
+            "block interval requires block driver interval mode".into(),
+        ));
+    }
+    if options
+        .rpc_max_connections
+        .is_some_and(|max_connections| max_connections == 0)
+    {
+        return Err(CliError::Other(
+            "RPC max connections must be at least 1".into(),
+        ));
+    }
+
     let hogd = options
         .hogd_dev_binary
         .map_or_else(HogdDevConfig::default, |binary| {
@@ -357,6 +437,30 @@ fn local_node_config(
     let config = NodeSupervisorConfig::default()
         .with_rpc_listen_address(format!("127.0.0.1:{}", options.port))
         .with_hogd_dev(hogd);
+    let config = match options.rpc_max_connections {
+        Some(max_connections) => config.with_rpc_max_connections(max_connections),
+        None => config,
+    };
+    let config = match (options.block_driver, options.block_interval) {
+        (None, None) => config,
+        (mode, interval) => {
+            let mut block_driver = config.block_driver;
+            if let Some(mode) = mode {
+                block_driver = block_driver.with_mode(match mode {
+                    LocalNodeBlockDriverMode::Instant => {
+                        groundhog_node_supervisor::BlockDriverMode::Instant
+                    }
+                    LocalNodeBlockDriverMode::Interval => {
+                        groundhog_node_supervisor::BlockDriverMode::Interval
+                    }
+                });
+            }
+            if let Some(interval) = interval {
+                block_driver = block_driver.with_interval(interval);
+            }
+            config.with_block_driver(block_driver)
+        }
+    };
     Ok(match options.hogd_protocol {
         Some(protocol) => config.with_hogd_protocol_override(protocol),
         None => config,
@@ -390,6 +494,29 @@ pub fn run(
     _hogd_dev_binary: Option<std::path::PathBuf>,
     _hogd_protocol: Option<String>,
     _startup_timeout_secs: Option<u64>,
+    _cmd: &'static str,
+    _print: &Print,
+) -> Result<(), CliError> {
+    Err(CliError::Other(
+        "`groundhog node` requires the dev-node feature.\n\n  \
+         hint: build the CLI with:\n        \
+         cargo install --path crates/tools/cli --features dev-node"
+            .into(),
+    ))
+}
+
+#[cfg(not(feature = "dev-node"))]
+#[allow(clippy::too_many_arguments)]
+pub fn run_with_block_driver(
+    _port: u16,
+    _verbose: bool,
+    _dev_account_count: Option<usize>,
+    _hogd_dev_binary: Option<std::path::PathBuf>,
+    _hogd_protocol: Option<String>,
+    _startup_timeout_secs: Option<u64>,
+    _block_driver: Option<LocalNodeBlockDriverMode>,
+    _block_interval_ms: Option<u64>,
+    _rpc_max_connections: Option<u32>,
     _cmd: &'static str,
     _print: &Print,
 ) -> Result<(), CliError> {
@@ -500,8 +627,8 @@ fn hogd_dev_endpoints_payload(
 #[cfg(all(test, feature = "dev-node"))]
 mod tests {
     use super::{
-        LocalNodeOptions, LocalNodePidFile, default_tracing_filter, hogd_dev_startup_payload,
-        local_node_config, map_node_supervisor_error,
+        LocalNodeBlockDriverMode, LocalNodeOptions, LocalNodePidFile, default_tracing_filter,
+        hogd_dev_startup_payload, local_node_config, map_node_supervisor_error,
     };
     use crate::CliError;
     use groundhog_node_supervisor::{
@@ -521,6 +648,9 @@ mod tests {
             startup_timeout: Some(Duration::from_secs(30)),
             pid_file: LocalNodePidFile::Path(PathBuf::from("/tmp/hogd-dev-test.pid")),
             dev_account_count: Some(3),
+            block_driver: Some(LocalNodeBlockDriverMode::Interval),
+            block_interval: Some(Duration::from_millis(250)),
+            rpc_max_connections: Some(512),
         })
         .expect("bug: local node config should build");
 
@@ -536,6 +666,23 @@ mod tests {
         );
         assert_eq!(config.hogd_dev.dev_account_count, 3);
         assert_eq!(config.hogd_dev.startup_timeout, Duration::from_secs(30));
+        assert_eq!(
+            config.block_driver.mode,
+            groundhog_node_supervisor::BlockDriverMode::Interval
+        );
+        assert_eq!(config.block_driver.interval, Duration::from_millis(250));
+        assert_eq!(config.rpc_max_connections, 512);
+    }
+
+    #[test]
+    fn local_node_config_rejects_zero_rpc_max_connections() {
+        let err = local_node_config(LocalNodeOptions {
+            rpc_max_connections: Some(0),
+            ..LocalNodeOptions::default()
+        })
+        .expect_err("zero connection cap should be rejected");
+
+        assert!(matches!(err, CliError::Other(message) if message.contains("max connections")));
     }
 
     #[test]
@@ -547,6 +694,42 @@ mod tests {
         .expect("bug: local node config should build");
 
         assert!(config.hogd_dev.pid_file.is_none());
+    }
+
+    #[test]
+    fn local_node_config_rejects_zero_block_interval() {
+        let err = local_node_config(LocalNodeOptions {
+            block_driver: Some(LocalNodeBlockDriverMode::Interval),
+            block_interval: Some(Duration::ZERO),
+            ..LocalNodeOptions::default()
+        })
+        .expect_err("zero interval should be rejected");
+
+        assert!(matches!(err, CliError::Other(message) if message.contains("block interval")));
+    }
+
+    #[test]
+    fn local_node_config_rejects_block_interval_without_interval_driver() {
+        let err = local_node_config(LocalNodeOptions {
+            block_interval: Some(Duration::from_millis(250)),
+            ..LocalNodeOptions::default()
+        })
+        .expect_err("interval without interval mode should be rejected");
+
+        assert!(
+            matches!(err, CliError::Other(message) if message.contains("requires block driver interval"))
+        );
+
+        let err = local_node_config(LocalNodeOptions {
+            block_driver: Some(LocalNodeBlockDriverMode::Instant),
+            block_interval: Some(Duration::from_millis(250)),
+            ..LocalNodeOptions::default()
+        })
+        .expect_err("instant mode interval should be rejected");
+
+        assert!(
+            matches!(err, CliError::Other(message) if message.contains("requires block driver interval"))
+        );
     }
 
     #[test]

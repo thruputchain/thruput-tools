@@ -9,7 +9,7 @@
 Turn the growing `examples/sim/` directory into a discoverable scenario library.
 The executable scenario manifests remain the source of run behavior, but a
 checked-in catalog file records scenario purpose, tags, runner tier, provider,
-and contract artifact requirements. `hoglab catalog` lists the catalog and can
+and contract artifact requirements. `hogsim catalog` lists the catalog and can
 filter by tag.
 
 This slice is intentionally metadata-only: it does not change scheduling,
@@ -21,7 +21,7 @@ workload execution, target lifecycle, or result semantics.
 
 - Add `examples/sim/catalog.json`.
 - Add typed catalog loading/validation in `groundhog-sim`.
-- Add `hoglab catalog [--catalog <path>] [--tag <tag>] [--json]`.
+- Add `hogsim catalog [--catalog <path>] [--tag <tag>] [--json]`.
 - Document the scenario library workflow and the source-first contract artifact
   convention.
 - Add unit tests for catalog parsing, duplicate IDs, missing paths, and tag
@@ -65,7 +65,7 @@ workload execution, target lifecycle, or result semantics.
 ```
 
 Relative scenario paths resolve from the catalog file's parent directory.
-`hoglab catalog --json` emits a filtered array of display entries with the
+`hogsim catalog --json` emits a filtered array of display entries with the
 catalog-relative `path` preserved and an added `resolvedPath` string for the
 runnable manifest path. The human output also prints the resolved path.
 `contracts[].source` is descriptive metadata, not a path the simulator builds.
@@ -79,7 +79,7 @@ Default to source-first contract scenarios:
 - Keep reusable contracts in `groundhog-examples` or a future contract fixtures
   workspace.
 - Build WASM artifacts into a temporary target directory in scripts.
-- Pass the build output with `hoglab run --contract-artifact-root`.
+- Pass the build output with `hogsim run --contract-artifact-root`.
 - Commit `.wasm` only for a fixture where exact byte identity is the test
   subject.
 
@@ -88,4 +88,4 @@ Default to source-first contract scenarios:
 - `cargo fmt`
 - `cargo test -p groundhog-sim`
 - `cargo clippy -p groundhog-sim --all-targets -- -D warnings`
-- `cargo run -p groundhog-sim --bin hoglab -- catalog --tag contract`
+- `cargo run -p groundhog-sim --bin hogsim -- catalog --tag contract`

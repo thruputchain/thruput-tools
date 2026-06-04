@@ -6,7 +6,7 @@ use crate::manifest::{
     EventQueryAnchorSpec, SIMULATION_KIND, SIMULATION_SCHEMA_VERSION, SimulationManifest,
     WorkloadKind,
 };
-use crate::target::{TargetCapabilities, TargetProviderKind};
+use crate::target::{TargetBlockDriverMode, TargetCapabilities, TargetProviderKind};
 
 const MAX_EVENT_QUERY_CURSOR_BYTES: usize = 256;
 
@@ -61,6 +61,8 @@ pub fn validate_manifest(manifest: &SimulationManifest) -> Result<(), Validation
             .parse_millis()
             .map_err(|source| ValidationError::InvalidResourceSampleInterval { source })?;
     }
+    validate_target_block_driver(manifest)?;
+    validate_client(manifest)?;
     validate_contract_artifacts(manifest)?;
 
     let capabilities = TargetCapabilities::for_provider(manifest.target.provider);
@@ -77,6 +79,74 @@ pub fn validate_manifest(manifest: &SimulationManifest) -> Result<(), Validation
             .map_err(|source| ValidationError::InvalidChaosTime { source })?;
     }
 
+    Ok(())
+}
+
+fn validate_client(manifest: &SimulationManifest) -> Result<(), ValidationError> {
+    if let Some(client) = &manifest.client {
+        if let Some(max_concurrent_requests) = client.max_concurrent_requests
+            && max_concurrent_requests == 0
+        {
+            return Err(ValidationError::InvalidMaxRpcClientConcurrency);
+        }
+        if let Some(pool_size) = client.pool_size
+            && pool_size == 0
+        {
+            return Err(ValidationError::InvalidRpcClientPoolSize);
+        }
+        if let (Some(target), Some(client)) = (
+            manifest.target.max_rpc_client_concurrency,
+            client.max_concurrent_requests,
+        ) && target != client
+        {
+            return Err(ValidationError::ConflictingRpcClientConcurrency { target, client });
+        }
+    }
+    Ok(())
+}
+
+fn validate_target_block_driver(manifest: &SimulationManifest) -> Result<(), ValidationError> {
+    if let Some(block_interval_ms) = manifest.target.block_interval_ms
+        && block_interval_ms == 0
+    {
+        return Err(ValidationError::InvalidBlockIntervalMs);
+    }
+    if let Some(max_rpc_connections) = manifest.target.max_rpc_connections
+        && max_rpc_connections == 0
+    {
+        return Err(ValidationError::InvalidMaxRpcConnections);
+    }
+    if let Some(max_rpc_client_concurrency) = manifest.target.max_rpc_client_concurrency
+        && max_rpc_client_concurrency == 0
+    {
+        return Err(ValidationError::InvalidMaxRpcClientConcurrency);
+    }
+    if manifest.target.provider != TargetProviderKind::Local {
+        if manifest.target.block_driver.is_some() {
+            return Err(ValidationError::NonLocalRejectsBlockDriverField {
+                field: "target.blockDriver",
+            });
+        }
+        if manifest.target.block_interval_ms.is_some() {
+            return Err(ValidationError::NonLocalRejectsBlockDriverField {
+                field: "target.blockIntervalMs",
+            });
+        }
+        if manifest.target.max_rpc_connections.is_some() {
+            return Err(ValidationError::NonLocalRejectsRpcConnectionField {
+                field: "target.maxRpcConnections",
+            });
+        }
+        return Ok(());
+    }
+    if manifest.target.block_interval_ms.is_some()
+        && !matches!(
+            manifest.target.block_driver,
+            Some(TargetBlockDriverMode::Interval)
+        )
+    {
+        return Err(ValidationError::BlockIntervalRequiresIntervalDriver);
+    }
     Ok(())
 }
 
@@ -869,6 +939,24 @@ pub enum ValidationError {
         "local target produces its runtime manifest; do not supply target.runtimeManifest or --runtime-manifest"
     )]
     LocalRejectsRuntimeManifest,
+    #[error("blockIntervalMs must be at least 1")]
+    InvalidBlockIntervalMs,
+    #[error("blockIntervalMs requires target.blockDriver to be interval")]
+    BlockIntervalRequiresIntervalDriver,
+    #[error("non-local target does not accept local block-driver field {field}")]
+    NonLocalRejectsBlockDriverField { field: &'static str },
+    #[error("maxRpcConnections must be at least 1")]
+    InvalidMaxRpcConnections,
+    #[error("client.maxConcurrentRequests must be at least 1")]
+    InvalidMaxRpcClientConcurrency,
+    #[error("client.poolSize must be at least 1")]
+    InvalidRpcClientPoolSize,
+    #[error(
+        "target.maxRpcClientConcurrency ({target}) conflicts with client.maxConcurrentRequests ({client})"
+    )]
+    ConflictingRpcClientConcurrency { target: u32, client: u32 },
+    #[error("non-local target does not accept local RPC connection field {field}")]
+    NonLocalRejectsRpcConnectionField { field: &'static str },
     #[error(
         "scenario requests {requested} actors but runtime manifest advertises {available} bootstrap accounts"
     )]
@@ -1720,6 +1808,170 @@ mod tests {
     }
 
     #[test]
+    fn validate_manifest_accepts_local_block_driver_options() {
+        let mut manifest = basic_manifest();
+        manifest.target.provider = TargetProviderKind::Local;
+        manifest.target.rpc_url = None;
+        manifest.target.runtime_manifest = None;
+        manifest.target.block_driver = Some(crate::target::TargetBlockDriverMode::Interval);
+        manifest.target.block_interval_ms = Some(250);
+        manifest.target.max_rpc_connections = Some(512);
+
+        validate_manifest(&manifest).expect("local block driver options should be valid");
+    }
+
+    #[test]
+    fn validate_manifest_rejects_non_local_max_rpc_connections() {
+        let mut manifest = basic_manifest();
+        manifest.target.max_rpc_connections = Some(512);
+
+        let err = validate_manifest(&manifest).expect_err("existing target should reject field");
+
+        assert!(matches!(
+            err,
+            ValidationError::NonLocalRejectsRpcConnectionField {
+                field: "target.maxRpcConnections"
+            }
+        ));
+    }
+
+    #[test]
+    fn validate_manifest_rejects_zero_max_rpc_connections() {
+        let mut manifest = basic_manifest();
+        manifest.target.provider = TargetProviderKind::Local;
+        manifest.target.rpc_url = None;
+        manifest.target.runtime_manifest = None;
+        manifest.target.max_rpc_connections = Some(0);
+
+        let err = validate_manifest(&manifest).expect_err("zero connection cap should be invalid");
+
+        assert!(matches!(err, ValidationError::InvalidMaxRpcConnections));
+    }
+
+    #[test]
+    fn validate_manifest_accepts_existing_rpc_client_concurrency() {
+        let mut manifest = basic_manifest();
+        manifest.client = Some(crate::manifest::ClientSpec {
+            max_concurrent_requests: Some(512),
+            pool_size: Some(8),
+        });
+
+        validate_manifest(&manifest).expect("existing target client concurrency should be valid");
+    }
+
+    #[test]
+    fn validate_manifest_rejects_zero_rpc_client_concurrency() {
+        let mut manifest = basic_manifest();
+        manifest.client = Some(crate::manifest::ClientSpec {
+            max_concurrent_requests: Some(0),
+            pool_size: None,
+        });
+
+        let err =
+            validate_manifest(&manifest).expect_err("zero client concurrency should be invalid");
+
+        assert!(matches!(
+            err,
+            ValidationError::InvalidMaxRpcClientConcurrency
+        ));
+    }
+
+    #[test]
+    fn validate_manifest_rejects_zero_rpc_client_pool_size() {
+        let mut manifest = basic_manifest();
+        manifest.client = Some(crate::manifest::ClientSpec {
+            max_concurrent_requests: None,
+            pool_size: Some(0),
+        });
+
+        let err = validate_manifest(&manifest).expect_err("zero client pool should be invalid");
+
+        assert!(matches!(err, ValidationError::InvalidRpcClientPoolSize));
+    }
+
+    #[test]
+    fn validate_manifest_accepts_legacy_target_rpc_client_concurrency() {
+        let mut manifest = basic_manifest();
+        manifest.target.max_rpc_client_concurrency = Some(512);
+
+        validate_manifest(&manifest).expect("legacy target client concurrency should be valid");
+    }
+
+    #[test]
+    fn validate_manifest_rejects_conflicting_rpc_client_concurrency() {
+        let mut manifest = basic_manifest();
+        manifest.target.max_rpc_client_concurrency = Some(512);
+        manifest.client = Some(crate::manifest::ClientSpec {
+            max_concurrent_requests: Some(256),
+            pool_size: None,
+        });
+
+        let err = validate_manifest(&manifest).expect_err("conflicting cap should be invalid");
+
+        assert!(matches!(
+            err,
+            ValidationError::ConflictingRpcClientConcurrency {
+                target: 512,
+                client: 256
+            }
+        ));
+    }
+
+    #[test]
+    fn validate_manifest_rejects_non_local_block_driver_options() {
+        let mut manifest = basic_manifest();
+        manifest.target.block_driver = Some(crate::target::TargetBlockDriverMode::Interval);
+
+        let err = validate_manifest(&manifest).expect_err("existing target should reject field");
+
+        assert!(matches!(
+            err,
+            ValidationError::NonLocalRejectsBlockDriverField {
+                field: "target.blockDriver"
+            }
+        ));
+    }
+
+    #[test]
+    fn validate_manifest_rejects_zero_block_interval() {
+        let mut manifest = basic_manifest();
+        manifest.target.provider = TargetProviderKind::Local;
+        manifest.target.rpc_url = None;
+        manifest.target.runtime_manifest = None;
+        manifest.target.block_interval_ms = Some(0);
+
+        let err = validate_manifest(&manifest).expect_err("zero interval should be invalid");
+
+        assert!(matches!(err, ValidationError::InvalidBlockIntervalMs));
+    }
+
+    #[test]
+    fn validate_manifest_rejects_block_interval_without_interval_driver() {
+        let mut manifest = basic_manifest();
+        manifest.target.provider = TargetProviderKind::Local;
+        manifest.target.rpc_url = None;
+        manifest.target.runtime_manifest = None;
+        manifest.target.block_interval_ms = Some(250);
+
+        let err = validate_manifest(&manifest)
+            .expect_err("local interval without interval driver should be invalid");
+
+        assert!(matches!(
+            err,
+            ValidationError::BlockIntervalRequiresIntervalDriver
+        ));
+
+        manifest.target.block_driver = Some(crate::target::TargetBlockDriverMode::Instant);
+        let err = validate_manifest(&manifest)
+            .expect_err("instant block driver interval should be invalid");
+
+        assert!(matches!(
+            err,
+            ValidationError::BlockIntervalRequiresIntervalDriver
+        ));
+    }
+
+    #[test]
     fn required_bootstrap_accounts_uses_max_phase_users() {
         let mut manifest = basic_manifest();
         manifest.load_shape = vec![
@@ -1727,16 +1979,19 @@ mod tests {
                 duration: DurationSpec("1s".into()),
                 users: 2,
                 rate_per_user_hz: 1.0,
+                stagger_actors: false,
             },
             LoadPhase {
                 duration: DurationSpec("1s".into()),
                 users: 5,
                 rate_per_user_hz: 1.0,
+                stagger_actors: false,
             },
             LoadPhase {
                 duration: DurationSpec("1s".into()),
                 users: 3,
                 rate_per_user_hz: 1.0,
+                stagger_actors: false,
             },
         ];
 
@@ -1754,12 +2009,18 @@ mod tests {
                 rpc_url: Some("http://127.0.0.1:9545".into()),
                 runtime_manifest: Some("runtime-manifest.json".into()),
                 hogd_dev_binary: None,
+                block_driver: None,
+                block_interval_ms: None,
+                max_rpc_connections: None,
+                max_rpc_client_concurrency: None,
             },
+            client: None,
             bootstrap: None,
             load_shape: vec![LoadPhase {
                 duration: DurationSpec("1s".into()),
                 users: 1,
                 rate_per_user_hz: 1.0,
+                stagger_actors: false,
             }],
             workloads: vec![WorkloadSpec {
                 name: WorkloadKind::ChainTip,

@@ -5,12 +5,12 @@
 
 ## Purpose
 
-`hoglab` is the CLI for Groundhog's stateful traffic and soak-test facility.
+`hogsim` is the CLI for Groundhog's stateful traffic and soak-test facility.
 It should answer a different question than the current benchmark harness:
 
 - `groundhog-bench`: how does a specific public RPC path behave under a known
   request schedule?
-- `hoglab`: how does a bootstrapped Groundhog system behave over time
+- `hogsim`: how does a bootstrapped Groundhog system behave over time
   under realistic users, contracts, reads, writes, bursts, and assertions?
 
 The first implementation target is intentionally small: localhost
@@ -20,7 +20,7 @@ target model should leave room for later infra providers.
 
 ## Wedge
 
-Two things should set `hoglab` apart from a generic L1 soak harness.
+Two things should set `hogsim` apart from a generic L1 soak harness.
 
 First, it exercises the Groundhog storage-token economy directly. Storage
 tokens consumed, NNInt compute used, and per-account fairness are first-class
@@ -42,7 +42,7 @@ external script.
 - Do not integrate `hogd/loadgen` in v1. That facility is useful for
   protocol-native direct injection, but it is too specific for the simulator's
   first boundary.
-- Do not make `hoglab` an infrastructure platform or a replacement for
+- Do not make `hogsim` an infrastructure platform or a replacement for
   `ops`.
 - Do not make simulation manifests another genesis format. Bootstrap intent is
   already owned by the bootstrap manifest, and observed runtime state is already
@@ -156,7 +156,7 @@ starts an ephemeral `hogd-dev` on a random port, deploys with `dev-0`, runs
 native libtest with `rpc_url`, `contract_address`, and `runtime_manifest`
 injected via env, and exits pass/fail.
 
-`hoglab` lives on the opposite axis: long-running, multi-actor,
+`hogsim` lives on the opposite axis: long-running, multi-actor,
 statistical assertions against thresholds rather than booleans, deterministic
 by seed rather than by construction, with a durable result artifact outside
 the contract project.
@@ -301,7 +301,7 @@ Example v1 shape:
   },
   "bootstrap": {
     "accounts": 100,
-    "accountSeed": "hoglab-accounts",
+    "accountSeed": "hogsim-accounts",
     "initialStorageTokens": "1000000000",
     "devWalletProfile": "hogd-dev-default",
     "storageCostProfile": "hogd-default"
@@ -498,7 +498,7 @@ single "restart the whole target" worldview while still keeping v1 small.
 Every run should emit one result directory:
 
 ```text
-hoglab-runs/<timestamp>-<name>/
+hogsim-runs/<timestamp>-<name>/
   simulation.json
   bootstrap-manifest.json        # present only when sim launched the target
   runtime-manifest.json
@@ -552,7 +552,7 @@ it; `result.json` is the aggregated snapshot written at run end. The
 simulator created. A sweeper may only clean up resources marked
 `startedBySim`; it must never infer ownership from a stale PID alone. Local
 targets add best-effort process metadata containing the PID, process group,
-port, start-time token, and command marker used by `hoglab sweep`.
+port, start-time token, and command marker used by `hogsim sweep`.
 
 Storage-token and NNInt compute metrics are never zero-filled when the public
 receipt path cannot surface them. Result fields should distinguish at least:
@@ -566,7 +566,7 @@ it should never be the only source of truth.
 
 ### Comparison
 
-`hoglab compare <run-a> <run-b>` is a pure function on two
+`hogsim compare <run-a> <run-b>` is a pure function on two
 `result.json` files. It produces a structured diff covering:
 
 - per-workload count and error deltas;
@@ -599,7 +599,7 @@ transition is visible without inferring it from derived assertion deltas. Phase
 writes a final result after mid-run aborts.
 
 A scenario may set `baseline: <path>` pointing at a committed `result.json`
-snapshot. When set, `hoglab run` automatically emits a
+snapshot. When set, `hogsim run` automatically emits a
 baseline-anchored diff inside the final `result.json`. Baseline files are
 just committed result snapshots; there is no separate baseline schema.
 
@@ -613,7 +613,7 @@ the primitive and the artifact; downstream tooling composes them.
 ### Phase 0: Spec And Skeleton
 
 - Write this design note.
-- Add a simulator crate and `hoglab` binary name to the workspace plan.
+- Add a simulator crate and `hogsim` binary name to the workspace plan.
 - Define typed simulation manifest and result structs, including the
   `ChaosEvent` enum, target ownership metadata, metric availability, and the
   optional `baseline` field.
@@ -631,7 +631,7 @@ the primitive and the artifact; downstream tooling composes them.
 - Emit machine-readable results, including `result.jsonl` event stream and
   storage-token / NNInt compute availability fields. Mark those metrics
   `unsupported` until the public receipt path surfaces them.
-- Ship `hoglab compare <run-a> <run-b>` as a pure pairwise diff.
+- Ship `hogsim compare <run-a> <run-b>` as a pure pairwise diff.
 
 This phase can run against a manually started local node or a dedicated remote
 machine without owning process lifecycle.
@@ -680,7 +680,7 @@ project.
 The first useful command should look like:
 
 ```bash
-hoglab run examples/sim/chain-tip-smoke.json \
+hogsim run examples/sim/chain-tip-smoke.json \
   --rpc-url http://127.0.0.1:9545 \
   --runtime-manifest /tmp/hogd-dev/runtime-manifest.json
 ```

@@ -383,7 +383,7 @@ mod tests {
             } else {
                 json!([])
             },
-            "runner": "hoglab run"
+            "runner": "hogsim run"
         })
     }
 }

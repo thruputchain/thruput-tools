@@ -6,7 +6,7 @@ publish = false
 description = "Simulation and soak-test harness for Groundhog JSON-RPC targets"
 
 [[bin]]
-name = "hoglab"
+name = "hogsim"
 path = "src/main.rs"
 
 [dependencies]

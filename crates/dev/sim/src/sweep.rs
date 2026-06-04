@@ -462,18 +462,18 @@ mod tests {
     fn sweep_report_serializes_flat_json_shape() {
         let report = SweepReport {
             schema_version: SWEEP_REPORT_SCHEMA_VERSION,
-            root: "hoglab-runs".into(),
+            root: "hogsim-runs".into(),
             entries: vec![
-                SweepEntry::reclaimed(Path::new("hoglab-runs/a"), &owned_process()),
-                SweepEntry::skipped(Path::new("hoglab-runs/b"), "pid not alive"),
+                SweepEntry::reclaimed(Path::new("hogsim-runs/a"), &owned_process()),
+                SweepEntry::skipped(Path::new("hogsim-runs/b"), "pid not alive"),
             ],
         };
 
         let value = serde_json::to_value(report).expect("report should serialize");
 
         assert_eq!(value["schemaVersion"], json!(1));
-        assert_eq!(value["root"], json!("hoglab-runs"));
-        assert_eq!(value["entries"][0]["runDir"], json!("hoglab-runs/a"));
+        assert_eq!(value["root"], json!("hogsim-runs"));
+        assert_eq!(value["entries"][0]["runDir"], json!("hogsim-runs/a"));
         assert_eq!(value["entries"][0]["state"], json!("reclaimed"));
         assert_eq!(value["entries"][0]["pid"], json!(1234));
         assert_eq!(value["entries"][0]["port"], json!(9545));

@@ -16,7 +16,7 @@ use tokio::time::{Instant, sleep, timeout};
 use crate::error::SimError;
 use crate::manifest::{ChaosEventKind, ChaosEventSpec, SimulationManifest};
 use crate::resource::{
-    ResourceSample, ResourceSamplerFuture, TargetResourceSampler, sample_process_group,
+    ResourceSample, ResourceSampleRequest, ResourceSamplerFuture, TargetResourceSampler,
 };
 use crate::result::ChaosEventState;
 use crate::util::{command_on_path, write_json_pretty_atomic};
@@ -51,6 +51,18 @@ pub struct TargetProviderSpec {
     /// `hogd-dev` binary path reserved for the Phase 2 `local` provider.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hogd_dev_binary: Option<PathBuf>,
+    /// Local node block production mode for the `local` provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub block_driver: Option<TargetBlockDriverMode>,
+    /// Timer interval in milliseconds for timer-driven local block production.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub block_interval_ms: Option<u64>,
+    /// Maximum simultaneous public JSON-RPC connections for the local node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_rpc_connections: Option<u32>,
+    /// Compatibility alias for `client.maxConcurrentRequests`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_rpc_client_concurrency: Option<u32>,
 }
 
 /// Target provider selected by a simulation manifest.
@@ -61,6 +73,24 @@ pub enum TargetProviderKind {
     Local,
     Existing,
     RemoteSsh,
+}
+
+/// Block production mode forwarded to `groundhog node` for local targets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
+#[serde(rename_all = "kebab-case")]
+pub enum TargetBlockDriverMode {
+    Instant,
+    Interval,
+}
+
+impl TargetBlockDriverMode {
+    fn as_arg(self) -> &'static str {
+        match self {
+            Self::Instant => "instant",
+            Self::Interval => "interval",
+        }
+    }
 }
 
 /// Capabilities advertised by a target provider.
@@ -339,6 +369,9 @@ struct LocalLaunchConfig {
     groundhog_binary: PathBuf,
     hogd_dev_binary: Option<PathBuf>,
     hogd_protocol: Option<String>,
+    block_driver: Option<TargetBlockDriverMode>,
+    block_interval_ms: Option<u64>,
+    max_rpc_connections: Option<u32>,
     required_accounts: u32,
     startup_timeout_secs: u64,
     logs_dir: PathBuf,
@@ -462,6 +495,9 @@ impl LocalTargetProvider {
             groundhog_binary: groundhog,
             hogd_dev_binary,
             hogd_protocol: overrides.hogd_protocol,
+            block_driver: manifest.target.block_driver,
+            block_interval_ms: manifest.target.block_interval_ms,
+            max_rpc_connections: manifest.target.max_rpc_connections,
             required_accounts,
             startup_timeout_secs,
             logs_dir: context.logs_dir,
@@ -523,21 +559,15 @@ impl TargetResourceSampler for LocalTargetProvider {
                 }
             };
             let Some(process) = process else {
-                return ResourceSample::unavailable(
+                return ResourceSampleRequest::Ready(ResourceSample::unavailable(
                     scheduled_time_ms,
                     "local target process identity is unavailable",
-                );
+                ));
             };
-            match tokio::task::spawn_blocking(move || {
-                sample_process_group(process.pid, process.pgid, scheduled_time_ms)
-            })
-            .await
-            {
-                Ok(sample) => sample,
-                Err(error) => ResourceSample::unavailable(
-                    scheduled_time_ms,
-                    format!("target resource sampling task failed: {error}"),
-                ),
+            ResourceSampleRequest::ProcessGroup {
+                root_pid: process.pid,
+                pgid: process.pgid,
+                scheduled_time_ms,
             }
         })
     }
@@ -614,30 +644,48 @@ struct LocalNodeStartup {
     runtime_manifest: PathBuf,
 }
 
-fn local_node_args(
+#[derive(Debug, Clone, Copy)]
+struct LocalNodeArgOptions<'a> {
     required_accounts: u32,
-    hogd_dev_binary: Option<&Path>,
-    hogd_protocol: Option<&str>,
+    hogd_dev_binary: Option<&'a Path>,
+    hogd_protocol: Option<&'a str>,
+    block_driver: Option<TargetBlockDriverMode>,
+    block_interval_ms: Option<u64>,
+    max_rpc_connections: Option<u32>,
     port: Option<u16>,
     startup_timeout_secs: u64,
-) -> Vec<String> {
+}
+
+fn local_node_args(options: LocalNodeArgOptions<'_>) -> Vec<String> {
     let mut args = vec![
         "node".to_string(),
         "--dev-account-count".to_string(),
-        required_accounts.to_string(),
+        options.required_accounts.to_string(),
         "--json".to_string(),
         "--startup-timeout-secs".to_string(),
-        startup_timeout_secs.to_string(),
+        options.startup_timeout_secs.to_string(),
     ];
-    if let Some(binary) = hogd_dev_binary {
+    if let Some(binary) = options.hogd_dev_binary {
         args.push("--hogd-dev-binary".to_string());
         args.push(binary.display().to_string());
     }
-    if let Some(protocol) = hogd_protocol {
+    if let Some(protocol) = options.hogd_protocol {
         args.push("--hogd-protocol".to_string());
         args.push(protocol.to_string());
     }
-    if let Some(port) = port {
+    if let Some(block_driver) = options.block_driver {
+        args.push("--block-driver".to_string());
+        args.push(block_driver.as_arg().to_string());
+    }
+    if let Some(block_interval_ms) = options.block_interval_ms {
+        args.push("--block-interval-ms".to_string());
+        args.push(block_interval_ms.to_string());
+    }
+    if let Some(max_connections) = options.max_rpc_connections {
+        args.push("--rpc-max-connections".to_string());
+        args.push(max_connections.to_string());
+    }
+    if let Some(port) = options.port {
         args.push("--port".to_string());
         args.push(port.to_string());
     }
@@ -650,13 +698,16 @@ async fn launch_local_node(
     launch_index: u32,
     launch_attempt: Option<usize>,
 ) -> Result<LocalLaunchedTarget, SimError> {
-    let args = local_node_args(
-        config.required_accounts,
-        config.hogd_dev_binary.as_deref(),
-        config.hogd_protocol.as_deref(),
+    let args = local_node_args(LocalNodeArgOptions {
+        required_accounts: config.required_accounts,
+        hogd_dev_binary: config.hogd_dev_binary.as_deref(),
+        hogd_protocol: config.hogd_protocol.as_deref(),
+        block_driver: config.block_driver,
+        block_interval_ms: config.block_interval_ms,
+        max_rpc_connections: config.max_rpc_connections,
         port,
-        config.startup_timeout_secs,
-    );
+        startup_timeout_secs: config.startup_timeout_secs,
+    });
     let mut command = Command::new(&config.groundhog_binary);
     command
         .args(&args)
@@ -1443,13 +1494,16 @@ mod tests {
 
     #[test]
     fn local_node_args_include_required_account_count() {
-        let args = local_node_args(
-            5,
-            Some(std::path::Path::new("/tmp/hogd-dev")),
-            Some("hogp/test"),
-            Some(0),
-            45,
-        );
+        let args = local_node_args(LocalNodeArgOptions {
+            required_accounts: 5,
+            hogd_dev_binary: Some(std::path::Path::new("/tmp/hogd-dev")),
+            hogd_protocol: Some("hogp/test"),
+            block_driver: Some(TargetBlockDriverMode::Interval),
+            block_interval_ms: Some(250),
+            max_rpc_connections: Some(512),
+            port: Some(0),
+            startup_timeout_secs: 45,
+        });
 
         assert_eq!(
             args,
@@ -1464,6 +1518,12 @@ mod tests {
                 "/tmp/hogd-dev",
                 "--hogd-protocol",
                 "hogp/test",
+                "--block-driver",
+                "interval",
+                "--block-interval-ms",
+                "250",
+                "--rpc-max-connections",
+                "512",
                 "--port",
                 "0"
             ]
@@ -1480,7 +1540,16 @@ mod tests {
 
     #[test]
     fn restart_args_use_resolved_port() {
-        let args = local_node_args(5, None, None, Some(49152), 30);
+        let args = local_node_args(LocalNodeArgOptions {
+            required_accounts: 5,
+            hogd_dev_binary: None,
+            hogd_protocol: None,
+            block_driver: Some(TargetBlockDriverMode::Interval),
+            block_interval_ms: Some(500),
+            max_rpc_connections: None,
+            port: Some(49152),
+            startup_timeout_secs: 30,
+        });
 
         assert_eq!(
             args,
@@ -1491,6 +1560,10 @@ mod tests {
                 "--json",
                 "--startup-timeout-secs",
                 "30",
+                "--block-driver",
+                "interval",
+                "--block-interval-ms",
+                "500",
                 "--port",
                 "49152"
             ]
@@ -1824,7 +1897,7 @@ while :; do sleep 1; done
 
         #[cfg(target_os = "linux")]
         {
-            let sample = provider.sample(2_000).await;
+            let sample = provider.sample(2_000).await.run().await;
             let ResourceSample::Observed(point) = sample else {
                 panic!("linux local target sampler should observe the relaunched process");
             };

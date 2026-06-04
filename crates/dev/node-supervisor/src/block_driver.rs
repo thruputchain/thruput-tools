@@ -14,28 +14,41 @@ use groundhog_scheduler::{
 use tokio::{
     sync::{Notify, oneshot},
     task::JoinHandle,
+    time::MissedTickBehavior,
 };
+
+use crate::config::{BlockDriverConfig, BlockDriverMode};
 
 /// Cheap wake handle held by submit-plane adapters.
 #[derive(Clone)]
 pub(crate) struct BlockDriverTrigger {
-    notify: Arc<Notify>,
+    notify: Option<Arc<Notify>>,
 }
 
 impl fmt::Debug for BlockDriverTrigger {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("BlockDriverTrigger").finish_non_exhaustive()
+        f.debug_struct("BlockDriverTrigger")
+            .field("enabled", &self.notify.is_some())
+            .finish_non_exhaustive()
     }
 }
 
 impl BlockDriverTrigger {
     fn new(notify: Arc<Notify>) -> Self {
-        Self { notify }
+        Self {
+            notify: Some(notify),
+        }
+    }
+
+    fn noop() -> Self {
+        Self { notify: None }
     }
 
     /// Wake the block driver after the scheduler submit RPC succeeds.
     pub(crate) fn trigger_after_submit(&self) {
-        self.notify.notify_one();
+        if let Some(notify) = &self.notify {
+            notify.notify_one();
+        }
     }
 }
 
@@ -49,11 +62,27 @@ pub(crate) struct BlockDriverTask {
 
 impl BlockDriverTask {
     /// Start a coalescing block driver for the supplied scheduler client.
-    pub(crate) fn start(scheduler: SchedulerCoord_SchedulerCoord1_Client) -> Self {
-        let notify = Arc::new(Notify::new());
-        let trigger = BlockDriverTrigger::new(Arc::clone(&notify));
+    pub(crate) fn start(
+        scheduler: SchedulerCoord_SchedulerCoord1_Client,
+        config: BlockDriverConfig,
+    ) -> Self {
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let join = tokio::spawn(run_driver(scheduler, notify, shutdown_rx));
+        let (trigger, join) = match config.mode {
+            BlockDriverMode::Instant => {
+                let notify = Arc::new(Notify::new());
+                let trigger = BlockDriverTrigger::new(Arc::clone(&notify));
+                let join = tokio::spawn(run_instant_driver(scheduler, notify, shutdown_rx));
+                (trigger, join)
+            }
+            BlockDriverMode::Interval => {
+                let join = tokio::spawn(run_interval_driver(
+                    scheduler,
+                    config.effective_interval(),
+                    shutdown_rx,
+                ));
+                (BlockDriverTrigger::noop(), join)
+            }
+        };
         Self {
             trigger,
             shutdown: Some(shutdown_tx),
@@ -77,7 +106,7 @@ impl BlockDriverTask {
     }
 }
 
-async fn run_driver(
+async fn run_instant_driver(
     scheduler: SchedulerCoord_SchedulerCoord1_Client,
     notify: Arc<Notify>,
     mut shutdown: oneshot::Receiver<()>,
@@ -97,6 +126,38 @@ async fn run_driver(
             }
             _ = &mut shutdown => {
                 tracing::debug!("hogd-dev block driver stopping");
+                return;
+            }
+        }
+    }
+}
+
+async fn run_interval_driver(
+    scheduler: SchedulerCoord_SchedulerCoord1_Client,
+    interval: std::time::Duration,
+    mut shutdown: oneshot::Receiver<()>,
+) {
+    let mut ticker = tokio::time::interval(interval);
+    ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    // `interval` ticks immediately on creation. Consume that tick so the
+    // local node's first block opportunity reflects the configured cadence.
+    ticker.tick().await;
+
+    loop {
+        tokio::select! {
+            _ = ticker.tick() => {
+                tokio::select! {
+                    result = drive_one_block(&scheduler) => {
+                        log_drive_result(result);
+                    }
+                    _ = &mut shutdown => {
+                        tracing::debug!("hogd-dev interval block driver stopping");
+                        return;
+                    }
+                }
+            }
+            _ = &mut shutdown => {
+                tracing::debug!("hogd-dev interval block driver stopping");
                 return;
             }
         }

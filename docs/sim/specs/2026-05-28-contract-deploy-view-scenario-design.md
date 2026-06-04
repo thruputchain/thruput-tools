@@ -27,7 +27,7 @@ executable when the manifest declares a deployed contract and a raw view call.
 ### In scope
 
 - Add manifest fields for compiled contract artifacts and named view calls.
-- Add a `hoglab run --contract-artifact-root` override so committed scenarios
+- Add a `hogsim run --contract-artifact-root` override so committed scenarios
   can refer to portable artifact filenames while smoke scripts build examples
   into a temporary directory.
 - Deploy declared contract artifacts synchronously after target resolution and
@@ -50,7 +50,7 @@ executable when the manifest declares a deployed contract and a raw view call.
 
 - Typed ABI or method-name encoding in simulator manifests.
 - Contract source checkout, build orchestration, or dependency management inside
-  `hoglab run`; scripts may build examples before invoking hoglab.
+  `hogsim run`; scripts may build examples before invoking hogsim.
 - `events-query` and `storage-read` execution.
 - Cross-contract examples such as `cross-call`.
 - Stateful mutation workloads beyond the deploy transaction itself.
@@ -303,7 +303,7 @@ scenario:
 
 ```sh
 groundhog build -p fibonacci --target-dir "$WORKDIR/groundhog-examples-target"
-hoglab run examples/sim/local-fibonacci-view-smoke.json \
+hogsim run examples/sim/local-fibonacci-view-smoke.json \
   --contract-artifact-root "$WORKDIR/groundhog-examples-target/groundhog"
 ```
 

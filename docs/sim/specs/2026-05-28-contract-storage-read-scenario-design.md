@@ -128,5 +128,5 @@ Each gate uses two reviewers:
 - `cargo fmt`
 - `cargo test -p groundhog-sim`
 - `cargo clippy -p groundhog-sim --all-targets -- -D warnings`
-- `cargo run -p groundhog-sim --bin hoglab -- catalog --tag storage-read`
+- `cargo run -p groundhog-sim --bin hogsim -- catalog --tag storage-read`
 - gated: `scripts/smoke-sim-scenarios.sh`

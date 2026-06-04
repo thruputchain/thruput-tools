@@ -9,7 +9,7 @@
 Build a small scenario catalog and smoke runner that exercise the simulator with
 the workloads available today: `chain-tip`, `wallet-submit-smoke`, and
 `receipt-poll`. Phase 2 has enough target lifecycle, restart chaos, logs,
-sweeping, baseline diffing, and result artifacts to start using `hoglab` as an
+sweeping, baseline diffing, and result artifacts to start using `hogsim` as an
 operator tool. This slice deliberately puts the current surface through real
 local runs before adding Phase 3 contract-state workloads.
 
@@ -28,7 +28,7 @@ operators which scenario to run first.
 - Cover read-only, write-only, mixed read/write, receipt polling, restart chaos,
   baseline-backed, and longer opt-in soak use cases.
 - Add a scenario catalog smoke script that builds the local `groundhog` binary,
-  starts managed local targets through `hoglab run`, and validates result
+  starts managed local targets through `hogsim run`, and validates result
   artifacts.
 - Extend ignored smoke coverage so the catalog script can run one named test
   instead of duplicating all result parsing in shell.
@@ -106,7 +106,7 @@ Add `scripts/smoke-sim-scenarios.sh`.
   `GROUNDHOG_SIM_RUN_SOAKS=1`.
 - Print each run directory. Fail immediately if any scenario exits non-zero or
   expected artifacts are missing, except `local-restart-mixed-artifact.json`,
-  where a non-zero `hoglab run` exit is acceptable only if `result.json` exists
+  where a non-zero `hogsim run` exit is acceptable only if `result.json` exists
   and contains restart chaos transitions plus restart-related failures.
 - Keep the default fast catalog around 60-90 seconds after the `groundhog`
   build. Only `GROUNDHOG_SIM_RUN_SOAKS=1` may exceed that budget.

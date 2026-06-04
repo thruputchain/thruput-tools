@@ -4,7 +4,13 @@
   "name": "local-realistic-soak",
   "seed": "sim-local-realistic-soak",
   "target": {
-    "provider": "local"
+    "provider": "local",
+    "blockDriver": "interval",
+    "blockIntervalMs": 500,
+    "maxRpcConnections": 2000
+  },
+  "client": {
+    "maxConcurrentRequests": 512
   },
   "bootstrap": {
     "accounts": 5,
@@ -17,7 +23,8 @@
     {
       "duration": "10m",
       "users": 5,
-      "ratePerUserHz": 1.0
+      "ratePerUserHz": 1.0,
+      "staggerActors": true
     }
   ],
   "workloads": [

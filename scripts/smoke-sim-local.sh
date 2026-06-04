@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Simulator local-target smoke tests.
 #
-# Runs the ignored hoglab process-level smokes against a real hogd-dev binary:
+# Runs the ignored hogsim process-level smokes against a real hogd-dev binary:
 #   1. local provider launches groundhog node itself
 #   2. local provider restarts its managed node through restart-target chaos
 #   3. sweeper reclaims an orphaned simulator-owned local target

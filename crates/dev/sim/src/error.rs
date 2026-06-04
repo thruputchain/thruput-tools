@@ -30,7 +30,7 @@ pub enum SimError {
     #[error("failed to build JSON-RPC client: {0}")]
     RpcClient(String),
     #[error(
-        "groundhog binary `{binary}` was not found; pass --groundhog-binary to hoglab run for local targets"
+        "groundhog binary `{binary}` was not found; pass --groundhog-binary to hogsim run for local targets"
     )]
     GroundhogBinaryNotFound { binary: String },
     #[error("failed to spawn local groundhog node `{binary}`: {source}")]

@@ -6,7 +6,7 @@ models, target orchestration, and result artifacts.
 Start here:
 
 - [Simulation design](sim-design.md) - draft boundary and phased plan for
-  the `hoglab` CLI and Groundhog simulation facility.
+  the `hogsim` CLI and Groundhog simulation facility.
 - [Implementation plan](sim-implementation-plan.md) - execution checklist with
   Phase 1 details.
 
@@ -15,7 +15,7 @@ Current local-provider quickstart:
 ```bash
 cargo run -p groundhog-cli --features dev-node -- --version
 
-cargo run -p groundhog-sim --bin hoglab -- run examples/sim/local-chain-tip-smoke.json \
+cargo run -p groundhog-sim --bin hogsim -- run examples/sim/local-chain-tip-smoke.json \
   --groundhog-binary target/debug/groundhog \
   --hogd-dev-binary /path/to/hogd-dev \
   --hogd-protocol hogp/<hash> \
@@ -32,7 +32,7 @@ for later orphan sweeping.
 Local restart chaos can be exercised with:
 
 ```bash
-cargo run -p groundhog-sim --bin hoglab -- run examples/sim/local-restart-chain-tip-smoke.json \
+cargo run -p groundhog-sim --bin hogsim -- run examples/sim/local-restart-chain-tip-smoke.json \
   --groundhog-binary target/debug/groundhog \
   --hogd-dev-binary /path/to/hogd-dev \
   --port 0
@@ -42,19 +42,19 @@ Scenario catalog smoke coverage is available as the next rung after the focused
 local lifecycle smoke:
 
 ```bash
-cargo run -p groundhog-sim --bin hoglab -- catalog
-cargo run -p groundhog-sim --bin hoglab -- catalog --tag contract
+cargo run -p groundhog-sim --bin hogsim -- catalog
+cargo run -p groundhog-sim --bin hogsim -- catalog --tag contract
 scripts/smoke-sim-scenarios.sh
 GROUNDHOG_SIM_RUN_SOAKS=1 scripts/smoke-sim-scenarios.sh
 ```
 
 `examples/sim/catalog.json` is the scenario library index. It records each
 scenario's title, provider, tier, tags, runner, and contract artifact
-requirements. `hoglab catalog` lists that library and can filter by tag. The
+requirements. `hogsim catalog` lists that library and can filter by tag. The
 human output includes the runnable scenario path resolved from the catalog's
-directory. `hoglab catalog --json` emits the filtered list as an array of
+directory. `hogsim catalog --json` emits the filtered list as an array of
 catalog entries with the catalog-relative `path` plus a `resolvedPath` field
-for scripts that want to invoke `hoglab run` directly. The
+for scripts that want to invoke `hogsim run` directly. The
 default smoke script runs the fast local ladder and an existing-provider
 baseline scenario. It covers read-only chain-tip, write-only wallet submit,
 submit-plus-receipt polling, mixed read/write/receipt polling, read-only
@@ -66,11 +66,13 @@ Fibonacci deploy plus `view-call`, `storage-read`, `events-query`, and
 `sim-fixtures/caller-counter` fixture and runs a read-after-write smoke that
 submits `bump()`, waits for the receipt, reads `get()`, and asserts the
 per-caller counter advanced. The opt-in soak runs
-`examples/sim/local-mixed-wallet-receipt-soak.json`.
+`examples/sim/local-mixed-wallet-receipt-soak.json`,
+`examples/sim/local-multi-contract-soak.json`, and
+`examples/sim/local-realistic-soak-short.json`.
 
 Contract artifact scenarios declare `contractArtifacts` plus `viewCalls`,
 `contractCalls`, `storageReads`, or `eventQueries` in the manifest.
-`hoglab run --contract-artifact-root <dir>` resolves relative WASM paths from
+`hogsim run --contract-artifact-root <dir>` resolves relative WASM paths from
 that directory.
 `scripts/smoke-sim-scenarios.sh` detects a sibling `../groundhog-examples`
 checkout or `GROUNDHOG_EXAMPLES_ROOT`, builds `fibonacci` plus simulator
@@ -88,10 +90,17 @@ smoke ladder: `local-fibonacci-storage-miss-heavy`,
 presets. They reuse the Fibonacci fixture to stress negative storage lookups,
 indexed event traffic, recursive contract-call compute, weighted hot-contract
 traffic, plus dedicated simulator fixtures for wide u32 calldata, NNInt churn,
-and caller-aware read-after-write state. Run them directly with `hoglab run`
+and caller-aware read-after-write state. Run them directly with `hogsim run`
 and `--contract-artifact-root` after building the required contract artifacts.
 Use `local-realistic-soak-short.json` for optional smoke coverage and
 `local-realistic-soak.json` for manual baseline collection.
+
+Each `loadShape` phase may set `staggerActors: true` to deterministically spread
+actors across the per-user tick interval. The default is `false` for exact
+compatibility with older scenario schedules, where all actors at the same rate
+tick on the same simulation millisecond. Use staggering for high-actor dapp
+traffic so the aggregate rate is modeled as a smoother stream instead of large
+synchronized bursts.
 
 Existing-target quickstart:
 
@@ -103,9 +112,9 @@ cargo run -p groundhog-cli --features dev-node -- --json node \
 
 RUNTIME_MANIFEST=$(jq -r '.data.runtime_manifest.path' /tmp/groundhog-node.json)
 
-cargo run -p groundhog-sim --bin hoglab -- validate examples/sim/local-wallet-soak.json
+cargo run -p groundhog-sim --bin hogsim -- validate examples/sim/local-wallet-soak.json
 
-cargo run -p groundhog-sim --bin hoglab -- run examples/sim/local-wallet-soak.json \
+cargo run -p groundhog-sim --bin hogsim -- run examples/sim/local-wallet-soak.json \
   --rpc-url http://127.0.0.1:9545 \
   --runtime-manifest "$RUNTIME_MANIFEST"
 ```
@@ -125,6 +134,12 @@ Supported workloads are `chain-tip`, `wallet-submit-smoke` (dev-wallet
 compatible transactions), `receipt-poll`, `contract-call`, `view-call`,
 `storage-read`, `events-query`, and `read-after-write` for manifests that
 deploy at least one contract artifact before scheduled load starts.
+The executor bounds in-flight work globally and per actor. Per-actor limits are
+lane-based: nonce-bearing write flows (`wallet-submit-smoke`, `contract-call`,
+and `read-after-write`) serialize on an actor write lane, receipt polling uses a
+separate receipt lane, and read-only chain/event/storage/view workloads use a
+read lane. Backpressure diagnostics include the lane name, for example
+`actor-write`, `actor-receipt`, `actor-read`, or `global`.
 `receipt-poll` tracks
 actor-submitted transactions in a per-actor FIFO queue until their receipts
 appear and records receipt presence, status, optional reverted/error detail,
@@ -148,7 +163,9 @@ round-trip. On the first actor tick, or after an invalidation, it reconciles by
 calling the configured read view to establish the actor's baseline. It then
 submits the configured write through dev-wallet `doAction`, waits for an `ok`
 receipt, calls the configured read view again, and requires the observed `u64`
-to match the actor's expected value. JSONL events record
+to match the actor's expected value. The post-receipt read retries stale values
+for up to one second so short receipt/index/view visibility gaps are measured
+as workload latency instead of immediate mismatches. JSONL events record
 `readAfterWriteName`, `readAfterWriteContract`, `readAfterWriteExpected`,
 `readAfterWriteObserved`, `readAfterWriteMatched`, and
 `readAfterWriteRebased`. Mismatches fail the workload with
@@ -179,7 +196,12 @@ timing/workload details until a dedicated drain counter is added.
 
 `result.json` aggregates per-workload latency, success-only submit latency,
 submit-to-receipt latency percentiles, and `receiptPoll.{present, absent,
-pendingAtShutdown}` counts. Phase 1 assertions cover:
+pendingAtShutdown}` counts. It also includes `diagnostics.errorClasses` when
+failures or skipped workloads occur, with count, first/last scheduled time,
+affected workloads, affected RPC methods, and one sample error string per error
+class. `diagnostics.resourceSampleFailures` summarizes unavailable
+`resource-sample` reasons such as `/proc` read failures or file descriptor
+pressure. Phase 1 assertions cover:
 
 - `maxErrorRate` over `completed + failed` workloads (skipped excluded).
 - `maxChainStall` over all chain-tip observations in simulation-time order; the
@@ -196,6 +218,10 @@ pendingAtShutdown}` counts. Phase 1 assertions cover:
 Receipt-poll ticks before an actor has submitted a transaction are emitted as
 skipped with `errorClass: "no-submitted-transaction"`; error-rate consumers
 should treat that as scheduler warm-up rather than RPC failure.
+Skipped events with `errorClass: "simulator-backpressure"` are scheduler
+capacity diagnostics. Their `error` field identifies whether the limit was the
+global in-flight guard or an actor lane such as `actor-write`, `actor-receipt`,
+or `actor-read`.
 
 ## Existing Provider
 
@@ -207,7 +233,7 @@ requires:
 - a runtime manifest path, supplied by `target.runtimeManifest` or
   `--runtime-manifest`.
 
-CLI overrides win over manifest fields. After resolution, `hoglab` writes the
+CLI overrides win over manifest fields. After resolution, `hogsim` writes the
 effective RPC URL, runtime manifest path, and nonce namespace into
 `simulation.json` under `resolved`. `target-ownership.json` records
 `startedBySim: false` and `cleanupAllowed: false`.
@@ -223,6 +249,26 @@ to forward a specific backend binary, `--port` to request a port, and
 `hogd-dev` build is ahead of the protocol token compiled into `groundhog node`;
 it only overrides the intro token and does not make incompatible XDR shapes
 compatible.
+
+Local targets may set `target.blockDriver` to `instant` or `interval`.
+`instant` is the supervisor default and wakes block production after successful
+submits. `interval` forwards `--block-driver interval` to `groundhog node` and
+uses `target.blockIntervalMs` when supplied; the interval default is 500 ms.
+`target.blockIntervalMs` is valid only with `target.blockDriver: "interval"`.
+Local targets may also set `target.maxRpcConnections` to forward
+`--rpc-max-connections` to `groundhog node`; the local-node default is 2000.
+All target providers may set `client.maxConcurrentRequests` to cap
+simulator-side concurrent JSON-RPC requests. If omitted, hogsim records and
+uses the default 512-request cap in normalized `simulation.json`. The simulator
+builds a pool of typed HTTP clients and round-robins permitted requests across
+them; `client.poolSize` overrides the pool size, otherwise the default is the
+peak simulated user count capped by `client.maxConcurrentRequests`. The legacy
+`target.maxRpcClientConcurrency` field is still accepted as an alias when it
+does not conflict with `client.maxConcurrentRequests`. This prevents high-rate
+scenarios from turning initial HTTP connection-pool expansion into spurious
+connect failures while still exercising many-client socket behavior; gateway
+saturation still shows up as latency, workload failures, 429s, or simulator
+backpressure in the result artifacts.
 
 The provider sends SIGTERM to the node for graceful shutdown, waits a bounded
 grace period, and escalates to SIGKILL only if the node does not exit.
@@ -241,12 +287,12 @@ with `errorClass: "target-restarted"`. The refreshed
 
 ## Sweeper
 
-`hoglab sweep [root]` scans a runs root, defaulting to `hoglab-runs/`, for
+`hogsim sweep [root]` scans a runs root, defaulting to `hogsim-runs/`, for
 orphaned simulator-owned local targets:
 
 ```bash
-cargo run -p groundhog-sim --bin hoglab -- sweep hoglab-runs --dry-run
-cargo run -p groundhog-sim --bin hoglab -- sweep hoglab-runs --json
+cargo run -p groundhog-sim --bin hogsim -- sweep hogsim-runs --dry-run
+cargo run -p groundhog-sim --bin hogsim -- sweep hogsim-runs --json
 ```
 
 The sweeper only considers run directories whose `target-ownership.json` says
@@ -256,7 +302,7 @@ group, and command marker against the recorded values, then sends SIGTERM to
 the recorded process group and escalates to SIGKILL after the bounded grace
 period if needed.
 
-Run `hoglab sweep` only when no simulations are active. It has no heartbeat or
+Run `hogsim sweep` only when no simulations are active. It has no heartbeat or
 lock-file protection and intentionally ignores the case where the node has
 already exited but a separately orphaned backend survives.
 
@@ -280,7 +326,7 @@ Each run writes a self-contained result directory:
 
 ## Compare Semantics
 
-`hoglab compare <run-a> <run-b>` accepts either run directories or direct
+`hogsim compare <run-a> <run-b>` accepts either run directories or direct
 `result.json` paths. It is a pure artifact comparison; it does not read the
 original target, runtime manifest path, or event stream.
 
@@ -315,8 +361,8 @@ latency percentiles, assertion results, and selected workload-specific fields.
 
 A scenario can set `baseline` to a committed `result.json` snapshot or a run
 directory containing one. Relative baseline paths resolve from the scenario
-file's directory. When present, `hoglab run` embeds `baselineDiff` in the final
-`result.json`; the diff uses the same shape as `hoglab compare --json` and is
+file's directory. When present, `hogsim run` embeds `baselineDiff` in the final
+`result.json`; the diff uses the same shape as `hogsim compare --json` and is
 computed as current run minus baseline.
 
 Baseline comparison is diagnostic only. It does not change the run outcome or

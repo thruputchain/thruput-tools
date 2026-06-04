@@ -35,6 +35,8 @@ pub struct SimResult {
     pub simulator_overload_rate: f64,
     #[serde(default)]
     pub simulator_overload_count: u64,
+    #[serde(default, skip_serializing_if = "RunDiagnostics::is_empty")]
+    pub diagnostics: RunDiagnostics,
     #[serde(default = "default_resource_timeline")]
     pub resource_timeline: MetricAvailability<ResourceTimeline>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -259,6 +261,50 @@ pub struct ResourceSegment {
     /// Sum of monotonic user+system CPU deltas within this segment.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_cpu_ms: Option<u64>,
+}
+
+/// Compact failure diagnostics promoted from the JSONL event stream.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunDiagnostics {
+    /// Cross-workload error-class counts with first/last occurrence and sample text.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub error_classes: Vec<ErrorClassSummary>,
+    /// Resource-sample failures that did not contribute to the observed resource timeline.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resource_sample_failures: Vec<ResourceSampleFailureSummary>,
+}
+
+impl RunDiagnostics {
+    pub fn is_empty(&self) -> bool {
+        self.error_classes.is_empty() && self.resource_sample_failures.is_empty()
+    }
+}
+
+/// Summary of one workload error class.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ErrorClassSummary {
+    pub error_class: String,
+    pub count: u64,
+    pub first_scheduled_time_ms: u64,
+    pub last_scheduled_time_ms: u64,
+    #[serde(default)]
+    pub workloads: BTreeMap<WorkloadKind, u64>,
+    #[serde(default)]
+    pub rpc_methods: BTreeMap<String, u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample_error: Option<String>,
+}
+
+/// Summary of one resource-sample failure reason.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceSampleFailureSummary {
+    pub reason: String,
+    pub count: u64,
+    pub first_scheduled_time_ms: u64,
+    pub last_scheduled_time_ms: u64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
