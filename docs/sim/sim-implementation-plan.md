@@ -189,9 +189,10 @@ chaos, deploy new contracts, or create remote infrastructure.
   in `result.json`; that rate counts only `simulator-backpressure` skips, not
   deterministic warm-up skips such as `no-submitted-transaction`.
 - [x] Cap simulator-side JSON-RPC client concurrency with
-  `target.maxRpcClientConcurrency` and record the effective default in
-  `simulation.json`, so high-rate tests queue through the load generator
-  instead of failing during initial HTTP connection-pool expansion.
+  `client.maxConcurrentRequests`, record the effective default in
+  `simulation.json`, and use a configurable HTTP client pool so high-rate tests
+  queue through the load generator while still exercising many-client socket
+  behavior.
 - [x] Replace receipt-poll's v1 latest-transaction slot with per-transaction
   receipt tracking before wiring `maxReceiptTimeoutRate`; otherwise a newer
   submit can hide timeout state for an older unreceipted transaction.

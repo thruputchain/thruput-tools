@@ -1,8 +1,24 @@
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
 
-use groundhog_json_rpc_client::HttpClientBuilder;
-use groundhog_json_rpc_types::runtime_manifest::RuntimeManifest;
+use groundhog_json_rpc_client::{GroundhogApiClient, HttpClient, HttpClientBuilder};
+use groundhog_json_rpc_types::{
+    ContractAddress,
+    block::ChainTip,
+    events::{EventPage, EventQuery},
+    hex::HexBytes,
+    receipt::TransactionReceipt,
+    runtime_manifest::RuntimeManifest,
+    state::StorageItemRead,
+    transaction::TxHash,
+    view::{ViewRequest, ViewResponse},
+};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::actor::{ActorState, build_actor_states};
 use crate::assertions::{
@@ -17,7 +33,7 @@ use crate::executor::{
     SimRpcClient, StreamingScheduleExecution, drain_pending_receipt_polls, run_schedule_with_chaos,
     run_streaming_schedule_with_chaos,
 };
-use crate::manifest::{ResolvedRunSpec, SimulationManifest, WorkloadKind};
+use crate::manifest::{ClientSpec, ResolvedRunSpec, SimulationManifest, WorkloadKind};
 use crate::metrics::{RunMetrics, RunMetricsBuilder};
 use crate::nonce::NonceNamespace;
 use crate::resource::TargetResourceSampler;
@@ -42,6 +58,150 @@ use crate::util::{
 use crate::validation::{validate_against_runtime, validate_manifest};
 
 pub const DEFAULT_RPC_CLIENT_CONCURRENCY: u32 = 512;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RpcClientConfig {
+    max_concurrent_requests: u32,
+    pool_size: u32,
+}
+
+impl RpcClientConfig {
+    fn into_manifest_spec(self) -> ClientSpec {
+        ClientSpec {
+            max_concurrent_requests: Some(self.max_concurrent_requests),
+            pool_size: Some(self.pool_size),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct SimHttpClientPool {
+    clients: Arc<Vec<HttpClient>>,
+    next_client: Arc<AtomicUsize>,
+    request_limit: Arc<Semaphore>,
+}
+
+impl SimHttpClientPool {
+    fn new(rpc_url: &str, config: RpcClientConfig) -> Result<Self, SimError> {
+        if config.pool_size == 0 || config.max_concurrent_requests == 0 {
+            return Err(SimError::RpcClient(
+                "simulator RPC client pool and request limits must be at least 1".into(),
+            ));
+        }
+        let pool_size = usize::try_from(config.pool_size).unwrap_or(usize::MAX);
+        let mut clients = Vec::with_capacity(pool_size);
+        for _ in 0..pool_size {
+            clients.push(
+                HttpClientBuilder::default()
+                    .build(rpc_url)
+                    .map_err(|error| SimError::RpcClient(error.to_string()))?,
+            );
+        }
+
+        Ok(Self {
+            clients: Arc::new(clients),
+            next_client: Arc::new(AtomicUsize::new(0)),
+            request_limit: Arc::new(Semaphore::new(
+                usize::try_from(config.max_concurrent_requests).unwrap_or(usize::MAX),
+            )),
+        })
+    }
+
+    async fn acquire_client(&self) -> Result<(OwnedSemaphorePermit, HttpClient), String> {
+        let permit = self
+            .request_limit
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| "simulator RPC client limiter closed".to_string())?;
+        let index = self.next_client.fetch_add(1, Ordering::Relaxed) % self.clients.len();
+        Ok((permit, self.clients[index].clone()))
+    }
+}
+
+impl SimRpcClient for SimHttpClientPool {
+    #[allow(clippy::manual_async_fn)]
+    fn chain_tip(&self) -> impl Future<Output = Result<ChainTip, String>> + Send {
+        let pool = self.clone();
+        async move {
+            let (_permit, client) = pool.acquire_client().await?;
+            GroundhogApiClient::chain_tip(&client)
+                .await
+                .map_err(|error| error.to_string())
+        }
+    }
+
+    #[allow(clippy::manual_async_fn)]
+    fn send_raw_transaction(
+        &self,
+        tx_hex: String,
+    ) -> impl Future<Output = Result<TxHash, String>> + Send {
+        let pool = self.clone();
+        async move {
+            let (_permit, client) = pool.acquire_client().await?;
+            GroundhogApiClient::send_raw_transaction(&client, tx_hex)
+                .await
+                .map_err(|error| error.to_string())
+        }
+    }
+
+    #[allow(clippy::manual_async_fn)]
+    fn transaction_receipt(
+        &self,
+        tx_hash: TxHash,
+    ) -> impl Future<Output = Result<Option<TransactionReceipt>, String>> + Send {
+        let pool = self.clone();
+        async move {
+            let (_permit, client) = pool.acquire_client().await?;
+            GroundhogApiClient::get_transaction_receipt(&client, tx_hash)
+                .await
+                .map_err(|error| error.to_string())
+        }
+    }
+
+    #[allow(clippy::manual_async_fn)]
+    fn view(
+        &self,
+        request: ViewRequest,
+    ) -> impl Future<Output = Result<ViewResponse, String>> + Send {
+        let pool = self.clone();
+        async move {
+            let (_permit, client) = pool.acquire_client().await?;
+            GroundhogApiClient::view(&client, request)
+                .await
+                .map_err(|error| error.to_string())
+        }
+    }
+
+    #[allow(clippy::manual_async_fn)]
+    fn storage_read(
+        &self,
+        address: ContractAddress,
+        key: HexBytes,
+    ) -> impl Future<Output = Result<StorageItemRead, String>> + Send {
+        let pool = self.clone();
+        async move {
+            let (_permit, client) = pool.acquire_client().await?;
+            GroundhogApiClient::get_storage_at(&client, address, key)
+                .await
+                .map_err(|error| error.to_string())
+        }
+    }
+
+    #[allow(clippy::manual_async_fn)]
+    fn events_query(
+        &self,
+        query: EventQuery,
+    ) -> impl Future<Output = Result<EventPage, String>> + Send {
+        let pool = self.clone();
+        async move {
+            let (_permit, client) = pool.acquire_client().await?;
+            GroundhogApiClient::get_events(&client, query)
+                .await
+                .map_err(|error| error.to_string())
+        }
+    }
+}
 
 /// Options for running a simulation.
 #[derive(Debug, Clone)]
@@ -256,8 +416,9 @@ async fn run_resolved_target(
 ) -> Result<RunSummary, SimError> {
     loaded_sim.manifest.target.rpc_url = Some(target.rpc_url.clone());
     loaded_sim.manifest.target.runtime_manifest = Some(target.runtime_manifest.clone());
-    let rpc_client_concurrency = effective_rpc_client_concurrency(&loaded_sim.manifest);
-    loaded_sim.manifest.target.max_rpc_client_concurrency = Some(rpc_client_concurrency);
+    let rpc_client_config = effective_rpc_client_config(&loaded_sim.manifest);
+    loaded_sim.manifest.client = Some(rpc_client_config.into_manifest_spec());
+    loaded_sim.manifest.target.max_rpc_client_concurrency = None;
 
     let loaded_runtime = load_runtime_manifest(&target.runtime_manifest).await?;
     let accounts = derive_accounts(&loaded_runtime.manifest)?;
@@ -300,10 +461,7 @@ async fn run_resolved_target(
     )
     .await?;
 
-    let client = HttpClientBuilder::default()
-        .max_concurrent_requests(usize::try_from(rpc_client_concurrency).unwrap_or(usize::MAX))
-        .build(target.rpc_url.clone())
-        .map_err(|error| SimError::RpcClient(error.to_string()))?;
+    let client = SimHttpClientPool::new(&target.rpc_url, rpc_client_config)?;
     let contract_setup = deploy_manifest_contracts(
         client.clone(),
         &loaded_sim.manifest,
@@ -352,11 +510,37 @@ async fn run_resolved_target(
     Ok(summary)
 }
 
-fn effective_rpc_client_concurrency(manifest: &SimulationManifest) -> u32 {
+fn effective_rpc_client_config(manifest: &SimulationManifest) -> RpcClientConfig {
+    let max_concurrent_requests = manifest
+        .client
+        .as_ref()
+        .and_then(|client| client.max_concurrent_requests)
+        .or(manifest.target.max_rpc_client_concurrency)
+        .unwrap_or(DEFAULT_RPC_CLIENT_CONCURRENCY);
+    let pool_size = manifest
+        .client
+        .as_ref()
+        .and_then(|client| client.pool_size)
+        .unwrap_or_else(|| default_rpc_client_pool_size(manifest, max_concurrent_requests));
+
+    RpcClientConfig {
+        max_concurrent_requests,
+        pool_size,
+    }
+}
+
+fn default_rpc_client_pool_size(
+    manifest: &SimulationManifest,
+    max_concurrent_requests: u32,
+) -> u32 {
     manifest
-        .target
-        .max_rpc_client_concurrency
-        .unwrap_or(DEFAULT_RPC_CLIENT_CONCURRENCY)
+        .load_shape
+        .iter()
+        .map(|phase| phase.users)
+        .max()
+        .unwrap_or(1)
+        .min(max_concurrent_requests)
+        .max(1)
 }
 
 /// Inputs for executing an already-loaded simulation.
@@ -763,6 +947,58 @@ mod tests {
         ) -> TargetProviderFuture<'a, Result<ChaosEventOutcome, SimError>> {
             Box::pin(async { Err(SimError::Executor("restart failed".into())) })
         }
+    }
+
+    #[test]
+    fn effective_rpc_client_config_defaults_pool_to_peak_users() {
+        let mut manifest = manifest();
+        manifest.load_shape[0].users = 1_000;
+
+        let config = effective_rpc_client_config(&manifest);
+
+        assert_eq!(
+            config,
+            RpcClientConfig {
+                max_concurrent_requests: DEFAULT_RPC_CLIENT_CONCURRENCY,
+                pool_size: DEFAULT_RPC_CLIENT_CONCURRENCY,
+            }
+        );
+    }
+
+    #[test]
+    fn effective_rpc_client_config_uses_explicit_client_config() {
+        let mut manifest = manifest();
+        manifest.client = Some(ClientSpec {
+            max_concurrent_requests: Some(128),
+            pool_size: Some(32),
+        });
+
+        let config = effective_rpc_client_config(&manifest);
+
+        assert_eq!(
+            config,
+            RpcClientConfig {
+                max_concurrent_requests: 128,
+                pool_size: 32,
+            }
+        );
+    }
+
+    #[test]
+    fn effective_rpc_client_config_accepts_legacy_target_concurrency() {
+        let mut manifest = manifest();
+        manifest.load_shape[0].users = 100;
+        manifest.target.max_rpc_client_concurrency = Some(64);
+
+        let config = effective_rpc_client_config(&manifest);
+
+        assert_eq!(
+            config,
+            RpcClientConfig {
+                max_concurrent_requests: 64,
+                pool_size: 64,
+            }
+        );
     }
 
     #[tokio::test]

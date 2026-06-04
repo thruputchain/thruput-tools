@@ -40,7 +40,7 @@ use crate::manifest::{
     WorkloadKind,
 };
 use crate::metrics::{RunMetricsBuilder, SIMULATOR_BACKPRESSURE_ERROR_CLASS};
-use crate::resource::{ResourceSample, TargetResourceSampler};
+use crate::resource::{ResourceSample, ResourceSampleRequest, TargetResourceSampler};
 use crate::result::{ChainTipObservation, ChaosEventRecord, ChaosEventState, ResourceSamplePoint};
 use crate::scheduler::{
     PhaseStart, ScheduleCursor, ScheduledActorTick, ScheduledSimulationEvent,
@@ -345,6 +345,8 @@ where
     let mut next_phase = phase_starts.iter().peekable();
     let mut tasks = JoinSet::new();
     let mut task_contexts = HashMap::new();
+    let mut resource_tasks = JoinSet::new();
+    let mut resource_task_contexts = HashMap::new();
     let global_in_flight = Arc::new(Semaphore::new(DEFAULT_GLOBAL_IN_FLIGHT_LIMIT));
     let actor_in_flight = actor_in_flight_lanes(phase_starts);
     let mut in_flight = 0_u64;
@@ -359,6 +361,13 @@ where
             metrics,
             &mut in_flight,
         ))
+        .await?;
+        drain_completed_resource_samples(
+            &mut resource_tasks,
+            &mut resource_task_contexts,
+            event_writer,
+            metrics,
+        )
         .await?;
         while let Some(phase) =
             next_phase.next_if(|phase| phase.simulation_time_ms <= event.simulation_time_ms())
@@ -491,11 +500,11 @@ where
                     &mut in_flight,
                 )
                 .await?;
-                record_resource_sample(
+                dispatch_resource_sample(
                     sample.simulation_time_ms,
                     resource_sampler,
-                    event_writer,
-                    metrics,
+                    &mut resource_tasks,
+                    &mut resource_task_contexts,
                 )
                 .await?;
             }
@@ -518,6 +527,13 @@ where
         }
     }
     while in_flight > 0 {
+        drain_completed_resource_samples(
+            &mut resource_tasks,
+            &mut resource_task_contexts,
+            event_writer,
+            metrics,
+        )
+        .await?;
         let joined = tasks
             .join_next_with_id()
             .await
@@ -528,6 +544,13 @@ where
             "in-flight workload count underflowed".into(),
         ))?;
     }
+    drain_all_resource_samples(
+        &mut resource_tasks,
+        &mut resource_task_contexts,
+        event_writer,
+        metrics,
+    )
+    .await?;
     Ok(ScheduleRunReport { chaos_failed })
 }
 
@@ -554,7 +577,7 @@ where
 
     loop {
         for actor_index in 0..actor_states.len() {
-            while let Some(target) = actor_states[actor_index].receipt_poll_target() {
+            while let Some(target) = actor_states[actor_index].reserve_receipt_poll_target() {
                 let tick = ScheduledActorTick {
                     phase_index: 0,
                     actor_id: actor_states[actor_index].actor_id,
@@ -582,7 +605,7 @@ where
         }
         if actor_states
             .iter()
-            .all(|actor| actor.receipt_poll_target().is_none())
+            .all(|actor| actor.pending_receipt_count() == 0)
         {
             return Ok(drained);
         }
@@ -711,7 +734,7 @@ fn prepare_workload(
             build_wallet_submit_smoke_transaction(actor, wallet_entrypoint)?,
         )),
         WorkloadKind::ReceiptPoll => Ok(PreparedWorkload::ReceiptPoll(PreparedReceiptPoll {
-            target: actor.receipt_poll_target(),
+            target: actor.reserve_receipt_poll_target(),
         })),
         WorkloadKind::ViewCall => {
             let view = select_weighted_target(
@@ -1072,6 +1095,12 @@ async fn record_completion(
             .ok_or(SimError::Executor("actor state missing".into()))?;
         actor.record_receipt(observed.receipt);
     }
+    if let Some(release) = completion.release_receipt_poll {
+        let actor = actor_states
+            .get_mut(release.actor_id as usize)
+            .ok_or(SimError::Executor("actor state missing".into()))?;
+        actor.release_receipt_poll_target(release.tx_hash);
+    }
     if let Some(update) = completion.read_after_write_transition {
         let actor = actor_states
             .get_mut(update.actor_id as usize)
@@ -1126,19 +1155,78 @@ fn workload_event(event: &ResultEvent) -> Option<&WorkloadEvent> {
     }
 }
 
-async fn record_resource_sample(
+async fn dispatch_resource_sample(
     scheduled_time_ms: u64,
     resource_sampler: Option<&dyn TargetResourceSampler>,
+    tasks: &mut JoinSet<ResourceSample>,
+    task_contexts: &mut HashMap<TaskId, ResourceSampleTaskContext>,
+) -> Result<(), SimError> {
+    let request = match resource_sampler {
+        Some(sampler) => sampler.sample(scheduled_time_ms).await,
+        None => ResourceSampleRequest::Ready(ResourceSample::unavailable(
+            scheduled_time_ms,
+            "target provider does not expose process resource sampling",
+        )),
+    };
+    let abort = tasks.spawn(async move { request.run().await });
+    task_contexts.insert(abort.id(), ResourceSampleTaskContext { scheduled_time_ms });
+    Ok(())
+}
+
+async fn drain_completed_resource_samples(
+    tasks: &mut JoinSet<ResourceSample>,
+    task_contexts: &mut HashMap<TaskId, ResourceSampleTaskContext>,
+    event_writer: &mut EventWriter,
+    metrics: &mut RunMetricsBuilder,
+) -> Result<u64, SimError> {
+    let mut drained = 0_u64;
+    while let Some(joined) = tasks.try_join_next_with_id() {
+        let sample = join_resource_sample(joined, task_contexts)?;
+        record_resource_sample(sample, event_writer, metrics).await?;
+        drained += 1;
+    }
+    Ok(drained)
+}
+
+async fn drain_all_resource_samples(
+    tasks: &mut JoinSet<ResourceSample>,
+    task_contexts: &mut HashMap<TaskId, ResourceSampleTaskContext>,
     event_writer: &mut EventWriter,
     metrics: &mut RunMetricsBuilder,
 ) -> Result<(), SimError> {
-    let sample = match resource_sampler {
-        Some(sampler) => sampler.sample(scheduled_time_ms).await,
-        None => ResourceSample::unavailable(
-            scheduled_time_ms,
-            "target provider does not expose process resource sampling",
-        ),
-    };
+    while let Some(joined) = tasks.join_next_with_id().await {
+        let sample = join_resource_sample(joined, task_contexts)?;
+        record_resource_sample(sample, event_writer, metrics).await?;
+    }
+    Ok(())
+}
+
+fn join_resource_sample(
+    joined: Result<(TaskId, ResourceSample), JoinError>,
+    task_contexts: &mut HashMap<TaskId, ResourceSampleTaskContext>,
+) -> Result<ResourceSample, SimError> {
+    match joined {
+        Ok((task_id, sample)) => {
+            task_contexts.remove(&task_id);
+            Ok(sample)
+        }
+        Err(error) => {
+            let context = task_contexts.remove(&error.id()).ok_or_else(|| {
+                SimError::Executor(format!("missing resource sample task context for {error}"))
+            })?;
+            Ok(ResourceSample::unavailable(
+                context.scheduled_time_ms,
+                format!("target resource sampling task failed: {error}"),
+            ))
+        }
+    }
+}
+
+async fn record_resource_sample(
+    sample: ResourceSample,
+    event_writer: &mut EventWriter,
+    metrics: &mut RunMetricsBuilder,
+) -> Result<(), SimError> {
     if let ResourceSample::Observed(point) = &sample {
         metrics.record_resource_sample(point);
     } else if let ResourceSample::Unavailable {
@@ -1261,6 +1349,7 @@ fn backpressure_completion(
         observed_receipt: None,
         receipt_poll: None,
         submit_to_receipt_latency_ms: None,
+        release_receipt_poll: None,
         read_after_write_transition: None,
     })
 }
@@ -1586,6 +1675,7 @@ fn target_restarted_workload_completion(
         chain_tip: None,
         submitted_transaction: None,
         observed_receipt: None,
+        release_receipt_poll: None,
         receipt_poll: None,
         submit_to_receipt_latency_ms: None,
         read_after_write_transition: if context.workload == WorkloadKind::ReadAfterWrite {
@@ -1658,6 +1748,7 @@ fn chaos_failed_workload_completion(
         chain_tip: None,
         submitted_transaction: None,
         observed_receipt: None,
+        release_receipt_poll: None,
         receipt_poll: None,
         submit_to_receipt_latency_ms: None,
         read_after_write_transition: None,
@@ -1724,6 +1815,7 @@ fn target_restarted_receipt_completion(
         chain_tip: None,
         submitted_transaction: None,
         observed_receipt: None,
+        release_receipt_poll: None,
         receipt_poll: None,
         submit_to_receipt_latency_ms: None,
         read_after_write_transition: None,
@@ -1867,6 +1959,7 @@ where
                 skipped: false,
                 submitted_transaction: None,
                 observed_receipt: None,
+                release_receipt_poll: None,
                 receipt_poll: None,
                 submit_to_receipt_latency_ms: None,
                 read_after_write_transition: None,
@@ -1924,6 +2017,7 @@ where
             skipped: false,
             submitted_transaction: None,
             observed_receipt: None,
+            release_receipt_poll: None,
             receipt_poll: None,
             submit_to_receipt_latency_ms: None,
             read_after_write_transition: None,
@@ -2008,6 +2102,7 @@ where
                 },
                 skipped: false,
                 observed_receipt: None,
+                release_receipt_poll: None,
                 receipt_poll: None,
                 submit_to_receipt_latency_ms: None,
                 read_after_write_transition: None,
@@ -2065,6 +2160,7 @@ where
             },
             skipped: false,
             observed_receipt: None,
+            release_receipt_poll: None,
             receipt_poll: None,
             submit_to_receipt_latency_ms: None,
             read_after_write_transition: None,
@@ -2101,8 +2197,14 @@ where
 
     match response {
         Ok(Some(receipt)) => Ok(receipt_poll_present(tick, tx_hash_json, &times, receipt)),
-        Ok(None) => Ok(receipt_poll_absent(tick, tx_hash_json, &times)),
-        Err(error) => Ok(receipt_poll_failed(tick, tx_hash_json, &times, error)),
+        Ok(None) => Ok(receipt_poll_absent(tick, tx_hash, tx_hash_json, &times)),
+        Err(error) => Ok(receipt_poll_failed(
+            tick,
+            tx_hash,
+            tx_hash_json,
+            &times,
+            error,
+        )),
     }
 }
 
@@ -2117,6 +2219,7 @@ fn receipt_poll_no_submitted_tx(
         chain_tip: None,
         submitted_transaction: None,
         observed_receipt: None,
+        release_receipt_poll: None,
         event: ResultEvent::WorkloadSkipped {
             event: receipt_poll_event(
                 tick,
@@ -2169,12 +2272,14 @@ fn receipt_poll_present(
         skipped: false,
         receipt_poll: Some(ReceiptPollCompletion { present: true }),
         submit_to_receipt_latency_ms: times.submit_to_receipt_latency,
+        release_receipt_poll: None,
         read_after_write_transition: None,
     }
 }
 
 fn receipt_poll_absent(
     tick: &ScheduledActorTick,
+    tx_hash: TxHash,
     tx_hash_json: String,
     times: &ReceiptPollTimes,
 ) -> WorkloadCompletion {
@@ -2196,12 +2301,17 @@ fn receipt_poll_absent(
         skipped: false,
         receipt_poll: Some(ReceiptPollCompletion { present: false }),
         submit_to_receipt_latency_ms: None,
+        release_receipt_poll: Some(ReceiptPollLeaseRelease {
+            actor_id: tick.actor_id,
+            tx_hash,
+        }),
         read_after_write_transition: None,
     }
 }
 
 fn receipt_poll_failed(
     tick: &ScheduledActorTick,
+    tx_hash: TxHash,
     tx_hash_json: String,
     times: &ReceiptPollTimes,
     error: String,
@@ -2220,6 +2330,10 @@ fn receipt_poll_failed(
         skipped: false,
         receipt_poll: None,
         submit_to_receipt_latency_ms: None,
+        release_receipt_poll: Some(ReceiptPollLeaseRelease {
+            actor_id: tick.actor_id,
+            tx_hash,
+        }),
         read_after_write_transition: None,
     }
 }
@@ -2270,6 +2384,7 @@ where
             skipped: false,
             submitted_transaction: None,
             observed_receipt: None,
+            release_receipt_poll: None,
             receipt_poll: None,
             submit_to_receipt_latency_ms: None,
             read_after_write_transition: None,
@@ -2350,6 +2465,7 @@ fn view_success_completion(event: WorkloadEvent, latency_ms: u64) -> WorkloadCom
         skipped: false,
         submitted_transaction: None,
         observed_receipt: None,
+        release_receipt_poll: None,
         receipt_poll: None,
         submit_to_receipt_latency_ms: None,
         read_after_write_transition: None,
@@ -2374,6 +2490,7 @@ fn view_failure_completion(
         skipped: false,
         submitted_transaction: None,
         observed_receipt: None,
+        release_receipt_poll: None,
         receipt_poll: None,
         submit_to_receipt_latency_ms: None,
         read_after_write_transition: None,
@@ -2516,6 +2633,7 @@ where
                     skipped: false,
                     submitted_transaction,
                     observed_receipt,
+                    release_receipt_poll: None,
                     receipt_poll: None,
                     submit_to_receipt_latency_ms,
                     read_after_write_transition: None,
@@ -2714,6 +2832,7 @@ fn read_after_write_completion(
         chain_tip: None,
         submitted_transaction,
         observed_receipt,
+        release_receipt_poll: None,
         receipt_poll: None,
         submit_to_receipt_latency_ms,
         read_after_write_transition: transition,
@@ -3097,6 +3216,7 @@ fn contract_call_failure_completion(
         skipped: false,
         submitted_transaction,
         observed_receipt,
+        release_receipt_poll: None,
         receipt_poll: None,
         submit_to_receipt_latency_ms: None,
         read_after_write_transition: None,
@@ -3250,6 +3370,7 @@ fn storage_read_success_completion(event: WorkloadEvent, latency_ms: u64) -> Wor
         skipped: false,
         submitted_transaction: None,
         observed_receipt: None,
+        release_receipt_poll: None,
         receipt_poll: None,
         submit_to_receipt_latency_ms: None,
         read_after_write_transition: None,
@@ -3274,6 +3395,7 @@ fn storage_read_failure_completion(
         skipped: false,
         submitted_transaction: None,
         observed_receipt: None,
+        release_receipt_poll: None,
         receipt_poll: None,
         submit_to_receipt_latency_ms: None,
         read_after_write_transition: None,
@@ -3456,6 +3578,7 @@ fn events_query_success_completion(event: WorkloadEvent, latency_ms: u64) -> Wor
         skipped: false,
         submitted_transaction: None,
         observed_receipt: None,
+        release_receipt_poll: None,
         receipt_poll: None,
         submit_to_receipt_latency_ms: None,
         read_after_write_transition: None,
@@ -3480,6 +3603,7 @@ fn events_query_failure_completion(
         skipped: false,
         submitted_transaction: None,
         observed_receipt: None,
+        release_receipt_poll: None,
         receipt_poll: None,
         submit_to_receipt_latency_ms: None,
         read_after_write_transition: None,
@@ -3669,6 +3793,7 @@ struct WorkloadCompletion {
     chain_tip: Option<ChainTipObservation>,
     submitted_transaction: Option<SubmittedTransaction>,
     observed_receipt: Option<ObservedReceipt>,
+    release_receipt_poll: Option<ReceiptPollLeaseRelease>,
     receipt_poll: Option<ReceiptPollCompletion>,
     submit_to_receipt_latency_ms: Option<u64>,
     read_after_write_transition: Option<ReadAfterWriteUpdate>,
@@ -3701,6 +3826,12 @@ struct SubmittedTransaction {
 struct ObservedReceipt {
     actor_id: u32,
     receipt: TransactionReceipt,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ReceiptPollLeaseRelease {
+    actor_id: u32,
+    tx_hash: TxHash,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -3774,6 +3905,11 @@ struct ReceiptPollTimes {
 struct WorkloadTaskContext {
     actor_id: u32,
     workload: WorkloadKind,
+    scheduled_time_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ResourceSampleTaskContext {
     scheduled_time_ms: u64,
 }
 
@@ -3953,7 +4089,7 @@ mod tests {
             let calls = self.calls.clone();
             Box::pin(async move {
                 calls.fetch_add(1, Ordering::SeqCst);
-                ResourceSample::Observed(ResourceSamplePoint {
+                ResourceSampleRequest::Ready(ResourceSample::Observed(ResourceSamplePoint {
                     simulation_time_ms: scheduled_time_ms,
                     observed_at_unix_ms: "1000".into(),
                     scope: ResourceSampleScope::ProcessGroup,
@@ -3965,7 +4101,7 @@ mod tests {
                     cpu_system_ms: Some(11),
                     threads: Some(3),
                     open_fds: Some(5),
-                })
+                }))
             })
         }
     }
@@ -4889,6 +5025,7 @@ mod tests {
                 receipt_poll: None,
                 submit_to_receipt_latency_ms: None,
                 read_after_write_transition: None,
+                release_receipt_poll: None,
             },
             &mut actors,
             &mut event_writer,
@@ -6983,6 +7120,7 @@ mod tests {
                 actor_id: 0,
                 transition: ReadAfterWriteTransition::SetKnown(value),
             }),
+            release_receipt_poll: None,
         }
     }
 

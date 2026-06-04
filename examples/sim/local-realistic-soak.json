@@ -7,8 +7,10 @@
     "provider": "local",
     "blockDriver": "interval",
     "blockIntervalMs": 500,
-    "maxRpcConnections": 2000,
-    "maxRpcClientConcurrency": 512
+    "maxRpcConnections": 2000
+  },
+  "client": {
+    "maxConcurrentRequests": 512
   },
   "bootstrap": {
     "accounts": 5,

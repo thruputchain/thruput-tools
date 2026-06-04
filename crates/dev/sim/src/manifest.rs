@@ -16,6 +16,8 @@ pub struct SimulationManifest {
     pub seed: String,
     pub target: TargetProviderSpec,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client: Option<ClientSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bootstrap: Option<BootstrapSpec>,
     #[serde(default)]
     pub load_shape: Vec<LoadPhase>,
@@ -43,6 +45,15 @@ pub struct SimulationManifest {
     pub baseline: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved: Option<ResolvedRunSpec>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_concurrent_requests: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pool_size: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -409,7 +420,8 @@ mod tests {
             "kind": "groundhog-simulation",
             "name": "local-wallet-soak",
             "seed": "seed",
-            "target": {"provider": "existing", "maxRpcClientConcurrency": 256},
+            "target": {"provider": "existing"},
+            "client": {"maxConcurrentRequests": 256, "poolSize": 8},
             "loadShape": [{"duration": "10s", "users": 2, "ratePerUserHz": 1.5}],
             "workloads": [
                 {"name": "chain-tip", "weight": 10},
@@ -420,7 +432,17 @@ mod tests {
         .expect("manifest should parse");
 
         assert_eq!(manifest.target.provider, TargetProviderKind::Existing);
-        assert_eq!(manifest.target.max_rpc_client_concurrency, Some(256));
+        assert_eq!(
+            manifest
+                .client
+                .as_ref()
+                .and_then(|client| client.max_concurrent_requests),
+            Some(256)
+        );
+        assert_eq!(
+            manifest.client.as_ref().and_then(|client| client.pool_size),
+            Some(8)
+        );
         assert_eq!(manifest.workloads[1].name, WorkloadKind::WalletSubmitSmoke);
         assert_eq!(
             manifest.load_shape[0].duration.parse_millis().unwrap(),

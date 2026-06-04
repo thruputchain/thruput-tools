@@ -257,12 +257,18 @@ uses `target.blockIntervalMs` when supplied; the interval default is 500 ms.
 `target.blockIntervalMs` is valid only with `target.blockDriver: "interval"`.
 Local targets may also set `target.maxRpcConnections` to forward
 `--rpc-max-connections` to `groundhog node`; the local-node default is 2000.
-All target providers may set `target.maxRpcClientConcurrency` to cap
+All target providers may set `client.maxConcurrentRequests` to cap
 simulator-side concurrent JSON-RPC requests. If omitted, hoglab records and
-uses the default 512-request cap in normalized `simulation.json`. This prevents
-high-rate scenarios from turning initial HTTP connection-pool expansion into
-spurious connect failures; gateway saturation still shows up as latency,
-workload failures, 429s, or simulator backpressure in the result artifacts.
+uses the default 512-request cap in normalized `simulation.json`. The simulator
+builds a pool of typed HTTP clients and round-robins permitted requests across
+them; `client.poolSize` overrides the pool size, otherwise the default is the
+peak simulated user count capped by `client.maxConcurrentRequests`. The legacy
+`target.maxRpcClientConcurrency` field is still accepted as an alias when it
+does not conflict with `client.maxConcurrentRequests`. This prevents high-rate
+scenarios from turning initial HTTP connection-pool expansion into spurious
+connect failures while still exercising many-client socket behavior; gateway
+saturation still shows up as latency, workload failures, 429s, or simulator
+backpressure in the result artifacts.
 
 The provider sends SIGTERM to the node for graceful shutdown, waits a bounded
 grace period, and escalates to SIGKILL only if the node does not exit.

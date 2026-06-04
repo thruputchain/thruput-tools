@@ -16,7 +16,7 @@ use tokio::time::{Instant, sleep, timeout};
 use crate::error::SimError;
 use crate::manifest::{ChaosEventKind, ChaosEventSpec, SimulationManifest};
 use crate::resource::{
-    ResourceSample, ResourceSamplerFuture, TargetResourceSampler, sample_process_group,
+    ResourceSample, ResourceSampleRequest, ResourceSamplerFuture, TargetResourceSampler,
 };
 use crate::result::ChaosEventState;
 use crate::util::{command_on_path, write_json_pretty_atomic};
@@ -60,7 +60,7 @@ pub struct TargetProviderSpec {
     /// Maximum simultaneous public JSON-RPC connections for the local node.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_rpc_connections: Option<u32>,
-    /// Maximum simultaneous simulator JSON-RPC client requests.
+    /// Compatibility alias for `client.maxConcurrentRequests`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_rpc_client_concurrency: Option<u32>,
 }
@@ -559,21 +559,15 @@ impl TargetResourceSampler for LocalTargetProvider {
                 }
             };
             let Some(process) = process else {
-                return ResourceSample::unavailable(
+                return ResourceSampleRequest::Ready(ResourceSample::unavailable(
                     scheduled_time_ms,
                     "local target process identity is unavailable",
-                );
+                ));
             };
-            match tokio::task::spawn_blocking(move || {
-                sample_process_group(process.pid, process.pgid, scheduled_time_ms)
-            })
-            .await
-            {
-                Ok(sample) => sample,
-                Err(error) => ResourceSample::unavailable(
-                    scheduled_time_ms,
-                    format!("target resource sampling task failed: {error}"),
-                ),
+            ResourceSampleRequest::ProcessGroup {
+                root_pid: process.pid,
+                pgid: process.pgid,
+                scheduled_time_ms,
             }
         })
     }
@@ -1903,7 +1897,7 @@ while :; do sleep 1; done
 
         #[cfg(target_os = "linux")]
         {
-            let sample = provider.sample(2_000).await;
+            let sample = provider.sample(2_000).await.run().await;
             let ResourceSample::Observed(point) = sample else {
                 panic!("linux local target sampler should observe the relaunched process");
             };

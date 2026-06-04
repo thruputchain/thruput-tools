@@ -372,6 +372,16 @@ pub enum NodeSupervisorError {
         source: io::Error,
     },
 
+    /// The configured JSON-RPC connection budget exceeds the hard file-descriptor limit.
+    #[cfg(unix)]
+    #[error("JSON-RPC nofile hard limit {hard} is below requested target {target}")]
+    RpcNofileHardLimit {
+        /// Desired soft nofile limit.
+        target: u64,
+        /// Current hard nofile limit.
+        hard: u64,
+    },
+
     /// The supervisor could not read the JSON-RPC server's bound address.
     #[error("failed to read JSON-RPC bound address: {source}")]
     RpcLocalAddr {

@@ -5,11 +5,49 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::result::ResourceSamplePoint;
 
 /// Boxed future returned by a target resource sampler.
-pub type ResourceSamplerFuture<'a> = Pin<Box<dyn Future<Output = ResourceSample> + Send + 'a>>;
+pub type ResourceSamplerFuture<'a> =
+    Pin<Box<dyn Future<Output = ResourceSampleRequest> + Send + 'a>>;
+
+/// Owned work needed to collect one resource sample.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResourceSampleRequest {
+    /// A sample result is already available without blocking work.
+    Ready(ResourceSample),
+    /// Sample a process group owned by a local target.
+    ProcessGroup {
+        root_pid: u32,
+        pgid: u32,
+        scheduled_time_ms: u64,
+    },
+}
+
+impl ResourceSampleRequest {
+    /// Execute this sample request without borrowing the target provider.
+    pub async fn run(self) -> ResourceSample {
+        match self {
+            Self::Ready(sample) => sample,
+            Self::ProcessGroup {
+                root_pid,
+                pgid,
+                scheduled_time_ms,
+            } => match tokio::task::spawn_blocking(move || {
+                sample_process_group(root_pid, pgid, scheduled_time_ms)
+            })
+            .await
+            {
+                Ok(sample) => sample,
+                Err(error) => ResourceSample::unavailable(
+                    scheduled_time_ms,
+                    format!("target resource sampling task failed: {error}"),
+                ),
+            },
+        }
+    }
+}
 
 /// Samples coarse resource usage for the currently owned target process.
 pub trait TargetResourceSampler {
-    /// Return a best-effort resource sample for the scheduled simulation time.
+    /// Return owned work for a best-effort resource sample.
     fn sample(&self, scheduled_time_ms: u64) -> ResourceSamplerFuture<'_>;
 }
 
@@ -102,13 +140,15 @@ mod linux {
                 continue;
             };
             let proc_path = entry.path();
-            let Some(process) = read_process(&proc_path, process_id, page_size, ticks_per_second)
-            else {
+            let Some(process) = read_process(
+                &proc_path,
+                process_id,
+                process_group_id,
+                page_size,
+                ticks_per_second,
+            ) else {
                 continue;
             };
-            if process.pgid != process_group_id {
-                continue;
-            }
             aggregate.add(process);
         }
 
@@ -137,12 +177,13 @@ mod linux {
     fn read_process(
         proc_path: &Path,
         process_id: u32,
+        process_group_id: u32,
         page_size: u64,
         ticks_per_second: u64,
     ) -> Option<ProcessSample> {
         let stat = fs::read_to_string(proc_path.join("stat")).ok()?;
         let stat = parse_stat(&stat, page_size, ticks_per_second).ok()?;
-        if stat.pid != process_id {
+        if stat.pid != process_id || stat.pgid != process_group_id {
             return None;
         }
         let status = fs::read_to_string(proc_path.join("status"))

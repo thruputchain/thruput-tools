@@ -486,7 +486,6 @@ fn desired_rpc_nofile_limit(rpc_max_connections: u32) -> u64 {
 #[cfg(unix)]
 fn ensure_rpc_nofile_limit(rpc_max_connections: u32) -> Result<(), NodeSupervisorError> {
     let target = desired_rpc_nofile_limit(rpc_max_connections);
-    let target_rlim = libc::rlim_t::try_from(target).unwrap_or(libc::RLIM_INFINITY);
     let mut limits = libc::rlimit {
         rlim_cur: 0,
         rlim_max: 0,
@@ -498,24 +497,9 @@ fn ensure_rpc_nofile_limit(rpc_max_connections: u32) -> Result<(), NodeSuperviso
             source: io::Error::last_os_error(),
         });
     }
-    if limits.rlim_cur >= target_rlim {
+    let Some(new_soft) = rpc_nofile_soft_limit_update(target, limits)? else {
         return Ok(());
-    }
-
-    let new_soft = if limits.rlim_max == libc::RLIM_INFINITY {
-        target_rlim
-    } else {
-        target_rlim.min(limits.rlim_max)
     };
-    if new_soft <= limits.rlim_cur {
-        tracing::warn!(
-            current = limits.rlim_cur,
-            hard = limits.rlim_max,
-            target,
-            "JSON-RPC nofile hard limit is below the requested connection budget"
-        );
-        return Ok(());
-    }
 
     let updated = libc::rlimit {
         rlim_cur: new_soft,
@@ -536,6 +520,29 @@ fn ensure_rpc_nofile_limit(rpc_max_connections: u32) -> Result<(), NodeSuperviso
         "raised JSON-RPC nofile soft limit"
     );
     Ok(())
+}
+
+#[cfg(unix)]
+fn rpc_nofile_soft_limit_update(
+    target: u64,
+    limits: libc::rlimit,
+) -> Result<Option<libc::rlim_t>, NodeSupervisorError> {
+    let target_rlim = libc::rlim_t::try_from(target).unwrap_or(libc::RLIM_INFINITY);
+    if limits.rlim_cur >= target_rlim {
+        return Ok(None);
+    }
+    if limits.rlim_max != libc::RLIM_INFINITY && limits.rlim_max < target_rlim {
+        return Err(NodeSupervisorError::RpcNofileHardLimit {
+            target,
+            hard: limits.rlim_max,
+        });
+    }
+
+    if limits.rlim_max == libc::RLIM_INFINITY {
+        Ok(Some(target_rlim))
+    } else {
+        Ok(Some(target_rlim.min(limits.rlim_max)))
+    }
 }
 
 #[cfg(not(unix))]
@@ -1210,6 +1217,57 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             desired_rpc_nofile_limit(8_192),
             8_192 + RPC_NOFILE_LIMIT_HEADROOM
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rpc_nofile_soft_limit_update_fails_when_hard_limit_is_too_low() {
+        let err = rpc_nofile_soft_limit_update(
+            8_704,
+            libc::rlimit {
+                rlim_cur: 4_096,
+                rlim_max: 8_192,
+            },
+        )
+        .expect_err("hard limit below target should fail");
+
+        assert!(matches!(
+            err,
+            NodeSupervisorError::RpcNofileHardLimit {
+                target: 8_704,
+                hard: 8_192
+            }
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rpc_nofile_soft_limit_update_returns_needed_soft_limit() {
+        let update = rpc_nofile_soft_limit_update(
+            8_704,
+            libc::rlimit {
+                rlim_cur: 4_096,
+                rlim_max: 16_384,
+            },
+        )
+        .expect("hard limit permits target");
+
+        assert_eq!(update, Some(8_704));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rpc_nofile_soft_limit_update_skips_when_soft_limit_is_high_enough() {
+        let update = rpc_nofile_soft_limit_update(
+            8_704,
+            libc::rlimit {
+                rlim_cur: 16_384,
+                rlim_max: 16_384,
+            },
+        )
+        .expect("existing soft limit should pass");
+
+        assert_eq!(update, None);
     }
 
     #[test]

@@ -961,6 +961,7 @@ mod tests {
                 max_rpc_connections: None,
                 max_rpc_client_concurrency: None,
             },
+            client: None,
             bootstrap: None,
             load_shape: vec![LoadPhase {
                 duration: crate::manifest::DurationSpec("1s".into()),

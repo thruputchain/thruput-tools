@@ -62,6 +62,7 @@ pub fn validate_manifest(manifest: &SimulationManifest) -> Result<(), Validation
             .map_err(|source| ValidationError::InvalidResourceSampleInterval { source })?;
     }
     validate_target_block_driver(manifest)?;
+    validate_client(manifest)?;
     validate_contract_artifacts(manifest)?;
 
     let capabilities = TargetCapabilities::for_provider(manifest.target.provider);
@@ -78,6 +79,29 @@ pub fn validate_manifest(manifest: &SimulationManifest) -> Result<(), Validation
             .map_err(|source| ValidationError::InvalidChaosTime { source })?;
     }
 
+    Ok(())
+}
+
+fn validate_client(manifest: &SimulationManifest) -> Result<(), ValidationError> {
+    if let Some(client) = &manifest.client {
+        if let Some(max_concurrent_requests) = client.max_concurrent_requests
+            && max_concurrent_requests == 0
+        {
+            return Err(ValidationError::InvalidMaxRpcClientConcurrency);
+        }
+        if let Some(pool_size) = client.pool_size
+            && pool_size == 0
+        {
+            return Err(ValidationError::InvalidRpcClientPoolSize);
+        }
+        if let (Some(target), Some(client)) = (
+            manifest.target.max_rpc_client_concurrency,
+            client.max_concurrent_requests,
+        ) && target != client
+        {
+            return Err(ValidationError::ConflictingRpcClientConcurrency { target, client });
+        }
+    }
     Ok(())
 }
 
@@ -923,8 +947,14 @@ pub enum ValidationError {
     NonLocalRejectsBlockDriverField { field: &'static str },
     #[error("maxRpcConnections must be at least 1")]
     InvalidMaxRpcConnections,
-    #[error("maxRpcClientConcurrency must be at least 1")]
+    #[error("client.maxConcurrentRequests must be at least 1")]
     InvalidMaxRpcClientConcurrency,
+    #[error("client.poolSize must be at least 1")]
+    InvalidRpcClientPoolSize,
+    #[error(
+        "target.maxRpcClientConcurrency ({target}) conflicts with client.maxConcurrentRequests ({client})"
+    )]
+    ConflictingRpcClientConcurrency { target: u32, client: u32 },
     #[error("non-local target does not accept local RPC connection field {field}")]
     NonLocalRejectsRpcConnectionField { field: &'static str },
     #[error(
@@ -1821,7 +1851,10 @@ mod tests {
     #[test]
     fn validate_manifest_accepts_existing_rpc_client_concurrency() {
         let mut manifest = basic_manifest();
-        manifest.target.max_rpc_client_concurrency = Some(512);
+        manifest.client = Some(crate::manifest::ClientSpec {
+            max_concurrent_requests: Some(512),
+            pool_size: Some(8),
+        });
 
         validate_manifest(&manifest).expect("existing target client concurrency should be valid");
     }
@@ -1829,7 +1862,10 @@ mod tests {
     #[test]
     fn validate_manifest_rejects_zero_rpc_client_concurrency() {
         let mut manifest = basic_manifest();
-        manifest.target.max_rpc_client_concurrency = Some(0);
+        manifest.client = Some(crate::manifest::ClientSpec {
+            max_concurrent_requests: Some(0),
+            pool_size: None,
+        });
 
         let err =
             validate_manifest(&manifest).expect_err("zero client concurrency should be invalid");
@@ -1837,6 +1873,47 @@ mod tests {
         assert!(matches!(
             err,
             ValidationError::InvalidMaxRpcClientConcurrency
+        ));
+    }
+
+    #[test]
+    fn validate_manifest_rejects_zero_rpc_client_pool_size() {
+        let mut manifest = basic_manifest();
+        manifest.client = Some(crate::manifest::ClientSpec {
+            max_concurrent_requests: None,
+            pool_size: Some(0),
+        });
+
+        let err = validate_manifest(&manifest).expect_err("zero client pool should be invalid");
+
+        assert!(matches!(err, ValidationError::InvalidRpcClientPoolSize));
+    }
+
+    #[test]
+    fn validate_manifest_accepts_legacy_target_rpc_client_concurrency() {
+        let mut manifest = basic_manifest();
+        manifest.target.max_rpc_client_concurrency = Some(512);
+
+        validate_manifest(&manifest).expect("legacy target client concurrency should be valid");
+    }
+
+    #[test]
+    fn validate_manifest_rejects_conflicting_rpc_client_concurrency() {
+        let mut manifest = basic_manifest();
+        manifest.target.max_rpc_client_concurrency = Some(512);
+        manifest.client = Some(crate::manifest::ClientSpec {
+            max_concurrent_requests: Some(256),
+            pool_size: None,
+        });
+
+        let err = validate_manifest(&manifest).expect_err("conflicting cap should be invalid");
+
+        assert!(matches!(
+            err,
+            ValidationError::ConflictingRpcClientConcurrency {
+                target: 512,
+                client: 256
+            }
         ));
     }
 
@@ -1937,6 +2014,7 @@ mod tests {
                 max_rpc_connections: None,
                 max_rpc_client_concurrency: None,
             },
+            client: None,
             bootstrap: None,
             load_shape: vec![LoadPhase {
                 duration: DurationSpec("1s".into()),
