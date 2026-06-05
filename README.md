@@ -20,22 +20,22 @@ Two audiences land here. Skip to whichever fits:
 
 ### Local dev path
 
-The `groundhog` CLI runs an isolated Groundhog chain in a `hogd-dev`
+The `groundhog` CLI runs an isolated Groundhog chain in a `hog-devnode`
 subprocess and gives you a normal dev loop on top:
 
 ```bash
-cargo install --path crates/tools/cli --features dev-node
+cargo install --path crates/tools/cli
 groundhog init                   # one-time environment check
 groundhog login                  # one-time; early-access registry auth
 groundhog new my-counter && cd my-counter
 groundhog build
 groundhog test                   # executor-backed WASM tests
 # in another terminal
-groundhog node --hogd-dev-binary /path/to/hogd-dev
+groundhog node --hog-devnode-binary /path/to/hog-devnode
 groundhog deploy
 groundhog call my-counter get
 # one-command local-node integration path
-GROUNDHOG_HOGD_DEV_BINARY=/path/to/hogd-dev groundhog test --integration
+GROUNDHOG_HOG_DEVNODE_BINARY=/path/to/hog-devnode groundhog test --integration
 ```
 
 `groundhog login` is currently required for the Groundhog contract SDK
@@ -43,7 +43,7 @@ to resolve from the private crate registry that `groundhog new` writes
 into the project's `Cargo.toml`. This is an early-access constraint
 and will relax when the SDK ships publicly.
 
-`hogd-dev` is the single-process Groundhog node implementation used
+`hog-devnode` is the single-process Groundhog node implementation used
 for development — scheduler, indexer, and storage in one binary. The
 `groundhog node` supervisor manages its lifecycle and serves the
 public JSON-RPC on top, so every CLI command (`deploy`, `call`,
@@ -52,7 +52,7 @@ an SDK would.
 
 `groundhog node` keeps stdout script-safe. In human mode stdout carries
 status lines; in `--json` mode stdout carries the startup JSON payload.
-Child-process logs are requested from `hogd-dev` as newline-delimited JSON on
+Child-process logs are requested from `hog-devnode` as newline-delimited JSON on
 stderr, parsed by `node-supervisor`, and re-emitted through Rust `tracing` with
 `hogd_timestamp_ms`, `hogd_target`, `hogd_file`, `hogd_line`, and
 `hogd_fields` metadata.
@@ -61,15 +61,14 @@ The default `groundhog node` output is the quiet golden path; use
 with `--json` because logs stay on stderr, and `RUST_LOG` for exact tracing
 filters.
 
-With the CLI's `dev-node` feature enabled, `groundhog test
---integration` uses that same local-node path without a separate
-terminal: it builds the WASM artifact, starts an ephemeral hogd-dev
-node, deploys with `dev-0`, runs `tests/integration.rs`, then shuts the
-node down. The test process receives `GROUNDHOG_RPC_URL`,
+`groundhog test --integration` uses that same local-node path without a
+separate terminal: it builds the WASM artifact, starts an ephemeral
+hog-devnode node, deploys with `dev-0`, runs `tests/integration.rs`,
+then shuts the node down. The test process receives `GROUNDHOG_RPC_URL`,
 `GROUNDHOG_CONTRACT_ADDRESS`, `GROUNDHOG_PROFILE=integration`,
 `GROUNDHOG_DEFAULT_KEY=dev-0`, and `GROUNDHOG_RUNTIME_MANIFEST`.
 
-For gateway and benchmark runs, `hogd-dev` also writes a runtime manifest
+For gateway and benchmark runs, `hog-devnode` also writes a runtime manifest
 describing the live x23 endpoints, bootstrapped dev wallets, and funding
 state. `groundhog node --json` reports the manifest under
 `data.runtime_manifest.path`; the standalone gateway and benchmark harness can
@@ -77,7 +76,7 @@ consume the same file:
 
 ```bash
 # in one terminal
-groundhog --json node --hogd-dev-binary /path/to/hogd-dev > /tmp/node.json
+groundhog --json node --hog-devnode-binary /path/to/hog-devnode > /tmp/node.json
 
 # in other terminals
 RUNTIME_MANIFEST=$(jq -r '.data.runtime_manifest.path' /tmp/node.json)
@@ -87,7 +86,7 @@ groundhog-bench --url http://127.0.0.1:9546 \
   --method sendRawTransaction
 ```
 
-When testing a local `hogd-dev` build whose `hogp/<hash>` is newer than the
+When testing a local `hog-devnode` build whose `hogp/<hash>` is newer than the
 published Rust protocol crates, pass the token explicitly with
 `groundhog node --hogd-protocol hogp/<hash>`. This only overrides the intro
 handshake string; if the XDR wire shape has actually changed, the generated
@@ -228,16 +227,16 @@ contract.
 Terms you'll encounter in the CLI output, the OpenRPC artifact, or
 this repo's docs:
 
-- `hogd-dev` — single-process Groundhog node implementation used for
+- `hog-devnode` — single-process Groundhog node implementation used for
   local development.
 - `indexer` — receipt / event / transaction-status query plane.
 - `scheduler` — submit-tx + chain-tip plane.
 - `scheduler_coord`, `indexer_block_explorer`, `db_gateway`,
-  `view_gateway` — hogd-dev readiness endpoint keys. These name x23
+  `view_gateway` — hog-devnode readiness endpoint keys. These name x23
   services, not public JSON-RPC methods or JSON-RPC server planes.
 - `dev-N` — deterministic dev accounts (`dev-0` ... `dev-N`) the local
   dev backend funds and signs as.
-- `x23` — wire protocol between the supervisor and the `hogd-dev`
+- `x23` — wire protocol between the supervisor and the `hog-devnode`
   subprocess. Internal; SDKs don't touch it.
 
 ---
@@ -272,7 +271,7 @@ Workspace crates are grouped by boundary instead of kept flat under
 | x23 | [`x23-transport`](crates/x23/x23-transport/) | Shared x23 connection-pool helpers used by gateway and node-supervisor |
 | Tools | [`cli`](crates/tools/cli/) | `groundhog` CLI for the contract dev workflow |
 | Tools | [`signing`](crates/tools/signing/) | Off-chain transaction signing and construction |
-| Dev | [`node-supervisor`](crates/dev/node-supervisor/) | `groundhog node` facade: supervises `hogd-dev` and serves JSON-RPC via `json-rpc-server` |
+| Dev | [`node-supervisor`](crates/dev/node-supervisor/) | `groundhog node` facade: supervises `hog-devnode` and serves JSON-RPC via `json-rpc-server` |
 | Dev | [`e2e-tests`](crates/dev/e2e-tests/) | Process-level JSON-RPC smoke tests |
 | Dev | [`bench`](crates/dev/bench/) | Benchmark harnesses |
 | Dev | [`sim`](crates/dev/sim/) | `hogsim` stateful simulation and soak-test harness |
@@ -288,8 +287,8 @@ cargo fmt --check
 
 The standard contributor smoke is `scripts/smoke-local-dx.sh` — runs
 the user-facing CLI loop (`new` → `build` → `node` → `deploy` →
-`call` → view → storage) against a real `hogd-dev` binary. Set
-`HOGD_DEV_BINARY=/path/to/hogd-dev` and invoke.
+`call` → view → storage) against a real `hog-devnode` binary. Set
+`HOG_DEVNODE_BINARY=/path/to/hog-devnode` and invoke.
 
 For the runtime-manifest gateway/bench path, run
 `scripts/smoke-runtime-manifest-bench.sh`. It starts `groundhog node`,
@@ -359,7 +358,7 @@ components:
   crate this repo depends on).
 - `protocol-ts` — TypeScript bindings for the same. The peer for
   Rust↔TS parity.
-- `hogd` — the canonical Groundhog node. `hogd-dev` is the developer-
+- `hogd` — the canonical Groundhog node. `hog-devnode` is the developer-
   loop variant this repo's `groundhog node` supervises.
 
 See [`docs/gateway/system-design.md`](docs/gateway/system-design.md)

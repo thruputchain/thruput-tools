@@ -20,7 +20,6 @@ const FAILURE_CACHE_VERSION: u8 = 1;
 const WATCH_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const WATCH_DEBOUNCE: Duration = Duration::from_millis(350);
 const WASM_TEST_TARGET: &str = "test_wasm";
-#[cfg(any(feature = "dev-node", test))]
 const INTEGRATION_TEST_TARGET: &str = "integration";
 
 /// Explicit controls for the `test_wasm` harness invocation.
@@ -106,7 +105,6 @@ struct WatchContext {
     ignored_dirs: Vec<PathBuf>,
 }
 
-#[cfg(feature = "dev-node")]
 struct IntegrationRun {
     report: TestReport,
     failed_code: Option<i32>,
@@ -194,27 +192,17 @@ pub fn run_integration_with_options(
         ));
     }
 
-    #[cfg(feature = "dev-node")]
-    {
-        run_integration_with_dev_node(
-            package,
-            options,
-            cargo_args,
-            artifacts,
-            explicit_profile,
-            cmd,
-            print,
-        )
-    }
-
-    #[cfg(not(feature = "dev-node"))]
-    {
-        let _ = (package, cargo_args, artifacts, explicit_profile, cmd, print);
-        Err(CliError::IntegrationTestsUnavailable)
-    }
+    run_integration_with_dev_node(
+        package,
+        options,
+        cargo_args,
+        artifacts,
+        explicit_profile,
+        cmd,
+        print,
+    )
 }
 
-#[cfg(feature = "dev-node")]
 #[allow(clippy::too_many_arguments)]
 fn run_integration_with_dev_node(
     package: Option<&str>,
@@ -262,7 +250,6 @@ fn run_integration_with_dev_node(
     handle_integration_outcome(result, stop_result.map(|_| ()), cmd, print)
 }
 
-#[cfg(feature = "dev-node")]
 fn handle_integration_outcome(
     result: Result<IntegrationRun, CliError>,
     stop_result: Result<(), CliError>,
@@ -293,19 +280,17 @@ fn handle_integration_outcome(
     }
 }
 
-#[cfg(feature = "dev-node")]
 fn local_node_shutdown_warning(context: &'static str, error: &CliError) -> crate::checks::Finding {
     crate::checks::Finding {
         level: crate::checks::FindingLevel::Warn,
         code: "local_node_shutdown_failed",
         message: format!("local node shutdown failed after {context}: {error}"),
         hint: Some(std::borrow::Cow::Borrowed(
-            "check for a lingering hogd-dev process if the next local-node command fails",
+            "check for a lingering hog-devnode process if the next local-node command fails",
         )),
     }
 }
 
-#[cfg(feature = "dev-node")]
 #[allow(clippy::too_many_arguments)]
 fn run_integration_against_node(
     build: &crate::build::BuildResult,
@@ -394,7 +379,6 @@ fn run_integration_against_node(
     })
 }
 
-#[cfg(feature = "dev-node")]
 fn finish_integration_run(
     run: &IntegrationRun,
     cmd: &'static str,
@@ -421,7 +405,6 @@ fn finish_integration_run(
     Ok(())
 }
 
-#[cfg(any(feature = "dev-node", test))]
 fn integration_test_environment(
     rpc_url: &str,
     contract_address: &str,
@@ -442,7 +425,6 @@ fn integration_test_environment(
     env
 }
 
-#[cfg(feature = "dev-node")]
 fn ensure_integration_test_target_exists(project_root: &Path) -> Result<(), CliError> {
     let path = project_root.join("tests").join("integration.rs");
     if path.try_exists()? {
@@ -1399,7 +1381,6 @@ mod tests {
     };
     use crate::test_json::{TestCase, TestCaseStatus, TestSummarySource};
     use crate::{CliError, Print};
-    #[cfg(feature = "dev-node")]
     use std::collections::BTreeMap;
     use std::fs;
     use std::path::PathBuf;
@@ -1413,7 +1394,6 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "dev-node")]
     fn integration_run(success: bool) -> super::IntegrationRun {
         let profile = crate::config::ResolvedProfile {
             name: "integration".into(),
@@ -1454,29 +1434,6 @@ mod tests {
             report,
             failed_code: if success { None } else { Some(101) },
         }
-    }
-
-    #[cfg(not(feature = "dev-node"))]
-    #[test]
-    fn integration_path_reports_unavailable_before_wasm_build() {
-        let options = TestOptions::default();
-
-        let err = super::run_integration_with_options(
-            None,
-            &options,
-            &IntegrationTestOptions::default(),
-            &[],
-            &crate::artifacts::ArtifactOptions::default(),
-            None,
-            "test",
-            &Print::quiet(),
-        )
-        .unwrap_err();
-
-        assert!(
-            matches!(err, CliError::IntegrationTestsUnavailable),
-            "expected IntegrationTestsUnavailable, got: {err:?}"
-        );
     }
 
     #[test]
@@ -1626,7 +1583,6 @@ mod tests {
         )));
     }
 
-    #[cfg(feature = "dev-node")]
     #[test]
     fn integration_preflight_requires_documented_test_target() {
         let tmp = TempDir::new().expect("bug: temp dir should be created");
@@ -1643,7 +1599,6 @@ mod tests {
             .expect("bug: integration test target should exist");
     }
 
-    #[cfg(feature = "dev-node")]
     #[test]
     fn integration_outcome_emits_report_when_tests_pass_and_shutdown_fails() {
         super::handle_integration_outcome(
@@ -1655,7 +1610,6 @@ mod tests {
         .expect("bug: passing tests should not fail only because cleanup failed");
     }
 
-    #[cfg(feature = "dev-node")]
     #[test]
     fn integration_outcome_preserves_failed_tests_when_shutdown_fails() {
         let err = super::handle_integration_outcome(
@@ -1668,7 +1622,6 @@ mod tests {
         assert!(matches!(err, CliError::CargoFailed(101)));
     }
 
-    #[cfg(feature = "dev-node")]
     #[test]
     fn integration_outcome_preserves_failed_tests_after_clean_shutdown() {
         let err = super::handle_integration_outcome(
@@ -1681,7 +1634,6 @@ mod tests {
         assert!(matches!(err, CliError::CargoFailed(101)));
     }
 
-    #[cfg(feature = "dev-node")]
     #[test]
     fn integration_outcome_preserves_run_error_after_clean_shutdown() {
         let err = super::handle_integration_outcome(

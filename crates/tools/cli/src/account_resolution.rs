@@ -194,7 +194,7 @@ mod tests {
             "protocol": "hogp/test",
             "genesisHash": format!("0x{}", "42".repeat(32)),
             "producer": {
-                "binary": "hogd-dev",
+                "binary": "hog-devnode",
                 "version": "0.1.0"
             },
             "endpoints": {
@@ -297,7 +297,7 @@ mod tests {
             "protocol": "hogp/test",
             "genesisHash": format!("0x{}", "42".repeat(32)),
             "producer": {
-                "binary": "hogd-dev",
+                "binary": "hog-devnode",
                 "version": "0.1.0"
             },
             "endpoints": {

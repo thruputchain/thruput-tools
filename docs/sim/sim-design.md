@@ -96,7 +96,7 @@ For v1, sim only needs the existing local-dev shape:
   "networkId": "groundhog-local",
   "profile": "local-dev",
   "devWallet": {
-    "profile": "hogd-dev-default"
+    "profile": "hog-devnode-default"
   },
   "bootstrapAccounts": {
     "count": 100,
@@ -246,7 +246,7 @@ supervisor path. This is the default developer workflow.
 
 Required inputs:
 
-- `hogdDevBinary`
+- `hogDevnodeBinary`
 - account count / seed / funding
 - optional RPC port
 - startup timeout
@@ -297,13 +297,13 @@ Example v1 shape:
   "seed": "local-wallet-soak-v1",
   "target": {
     "provider": "local",
-    "hogdDevBinary": "../hogd/build/hogd/hogd_dev/hogd-dev"
+    "hogDevnodeBinary": "../hogd/build/hogd/devnode/hog-devnode"
   },
   "bootstrap": {
     "accounts": 100,
     "accountSeed": "hogsim-accounts",
     "initialStorageTokens": "1000000000",
-    "devWalletProfile": "hogd-dev-default",
+    "devWalletProfile": "hog-devnode-default",
     "storageCostProfile": "hogd-default"
   },
   "duration": "30m",

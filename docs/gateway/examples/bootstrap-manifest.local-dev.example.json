@@ -4,7 +4,7 @@
   "networkId": "groundhog-local",
   "profile": "local-dev",
   "devWallet": {
-    "profile": "hogd-dev-default"
+    "profile": "hog-devnode-default"
   },
   "bootstrapAccounts": {
     "count": 100,

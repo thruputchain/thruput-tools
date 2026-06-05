@@ -4,21 +4,21 @@ This is the starter library for repeatable local benchmark runs that use the
 runtime manifest handoff. The goal is to keep useful runs named and scripted so
 we can compare results over time instead of rebuilding one-off shell commands.
 
-All scenarios start a real `hogd-dev` through `groundhog node`, read
+All scenarios start a real `hog-devnode` through `groundhog node`, read
 `data.runtime_manifest.path` from startup JSON, start a standalone
 `hog-gateway --runtime-manifest`, and run `groundhog-bench` against the
 selected target.
 
 ```bash
-HOGD_DEV_BINARY=/path/to/hogd-dev \
+HOG_DEVNODE_BINARY=/path/to/hog-devnode \
   BENCH_SCENARIO=smoke \
   scripts/smoke-runtime-manifest-bench.sh
 ```
 
-Set `NODE_STARTUP_TIMEOUT_SECS` higher for slow debug `hogd-dev` builds. Set
+Set `NODE_STARTUP_TIMEOUT_SECS` higher for slow debug `hog-devnode` builds. Set
 `NODE_VERBOSE=1` when a scenario stalls before readiness; the script will print
-forwarded hogd-dev logs on startup failure.
-Set `HOGD_PROTOCOL_OVERRIDE=hogp/<hash>` when the local `hogd-dev` build is
+forwarded hog-devnode logs on startup failure.
+Set `HOGD_PROTOCOL_OVERRIDE=hogp/<hash>` when the local `hog-devnode` build is
 ahead of the published Rust protocol crates. This only overrides x23 intro
 tokens; generated XDR clients still fail if the wire shape has changed.
 
@@ -29,7 +29,7 @@ tokens; generated XDR clients still fail if the wire shape has changed.
 Fast correctness check for CLI, gateway, and bench integration.
 
 ```bash
-HOGD_DEV_BINARY=/path/to/hogd-dev \
+HOG_DEVNODE_BINARY=/path/to/hog-devnode \
   scripts/smoke-runtime-manifest-bench.sh
 ```
 
@@ -50,7 +50,7 @@ Use this before and after runtime-manifest or benchmark-account changes.
 Simple standalone-gateway baseline with one read pass and one submit pass.
 
 ```bash
-HOGD_DEV_BINARY=/path/to/hogd-dev \
+HOG_DEVNODE_BINARY=/path/to/hog-devnode \
   BENCH_SCENARIO=gateway-baseline \
   scripts/smoke-runtime-manifest-bench.sh
 ```
@@ -67,7 +67,7 @@ GATEWAY_BASELINE_CHAIN_RATE=500 \
 GATEWAY_BASELINE_SUBMIT_RATE=200 \
 GATEWAY_BASELINE_DURATION=60 \
 GATEWAY_BASELINE_ACCOUNTS=20 \
-HOGD_DEV_BINARY=/path/to/hogd-dev \
+HOG_DEVNODE_BINARY=/path/to/hog-devnode \
 BENCH_SCENARIO=gateway-baseline \
 scripts/smoke-runtime-manifest-bench.sh
 ```
@@ -78,7 +78,7 @@ Standalone-gateway submit ramp. This is the first pressure scenario for the
 manifest-funded dev-wallet path.
 
 ```bash
-HOGD_DEV_BINARY=/path/to/hogd-dev \
+HOG_DEVNODE_BINARY=/path/to/hog-devnode \
   BENCH_SCENARIO=submit-ramp \
   scripts/smoke-runtime-manifest-bench.sh
 ```
@@ -95,14 +95,14 @@ Useful knobs:
 SUBMIT_RAMP_RATES="100 250 500 1000 2000" \
 SUBMIT_RAMP_DURATION=60 \
 SUBMIT_RAMP_ACCOUNTS=25 \
-HOGD_DEV_BINARY=/path/to/hogd-dev \
+HOG_DEVNODE_BINARY=/path/to/hog-devnode \
 BENCH_SCENARIO=submit-ramp \
 scripts/smoke-runtime-manifest-bench.sh
 ```
 
 ## Current Local Reference
 
-On a local `hogd-dev` runtime manifest from May 22, 2026, the standalone
+On a local `hog-devnode` runtime manifest from May 22, 2026, the standalone
 gateway submit ramp completed with zero benchmark errors:
 
 | Scenario | Requests | p50 | p95 | p99 | Max |
@@ -112,7 +112,7 @@ gateway submit ramp completed with zero benchmark errors:
 | 1000 rps, 30s | 30,004 | 1,004 us | 1,252 us | 1,668 us | 2,545 us |
 
 These numbers are a sanity baseline, not a performance claim. Treat them as a
-local regression reference for the current development machine and hogd-dev
+local regression reference for the current development machine and hog-devnode
 build.
 
 ## Toward Real Traffic Simulation

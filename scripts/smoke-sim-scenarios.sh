@@ -2,12 +2,14 @@
 # Simulator scenario catalog smoke tests.
 #
 # Runs the fast local scenario ladder plus the existing-provider baseline
-# example against a real hogd-dev binary. The longer local soak is opt-in with
+# example against a real hog-devnode binary. The longer local soak is opt-in with
 # GROUNDHOG_SIM_RUN_SOAKS=1.
 #
 # Optional environment:
-#   HOGD_DEV_BINARY=/path/to/hogd-dev
-#   GROUNDHOG_HOGD_DEV_BINARY=/path/to/hogd-dev
+#   HOG_DEVNODE_BINARY=/path/to/hog-devnode
+#   GROUNDHOG_HOG_DEVNODE_BINARY=/path/to/hog-devnode
+#   HOGD_DEV_BINARY=/path/to/hogd-dev  # legacy
+#   GROUNDHOG_HOGD_DEV_BINARY=/path/to/hogd-dev  # legacy
 #   GROUNDHOG_BINARY=/path/to/groundhog
 #   GROUNDHOG_EXAMPLES_ROOT=/path/to/groundhog-examples
 #   HOGD_PROTOCOL_OVERRIDE=hogp/<hash>
@@ -157,6 +159,14 @@ PY
 }
 
 find_hogd_dev_binary() {
+    if [[ -n "${HOG_DEVNODE_BINARY:-}" ]]; then
+        expand_user_path "$HOG_DEVNODE_BINARY"
+        return
+    fi
+    if [[ -n "${GROUNDHOG_HOG_DEVNODE_BINARY:-}" ]]; then
+        expand_user_path "$GROUNDHOG_HOG_DEVNODE_BINARY"
+        return
+    fi
     if [[ -n "${HOGD_DEV_BINARY:-}" ]]; then
         expand_user_path "$HOGD_DEV_BINARY"
         return
@@ -166,18 +176,24 @@ find_hogd_dev_binary() {
         return
     fi
 
-    local sibling="$REPO_ROOT/../hogd/build/hogd/hogd_dev/hogd-dev"
-    if [[ -x "$sibling" ]]; then
-        printf '%s\n' "$sibling"
-        return
-    fi
+    for sibling in \
+        "$REPO_ROOT/../hogd/build/hogd/hogd_dev/hog-devnode" \
+        "$REPO_ROOT/../hogd/build/hogd/hogd_dev/hogd-dev"
+    do
+        if [[ -x "$sibling" ]]; then
+            printf '%s\n' "$sibling"
+            return
+        fi
+    done
 
-    if command -v hogd-dev >/dev/null 2>&1; then
-        command -v hogd-dev
-        return
-    fi
+    for binary in hog-devnode hogd-dev; do
+        if command -v "$binary" >/dev/null 2>&1; then
+            command -v "$binary"
+            return
+        fi
+    done
 
-    die "set HOGD_DEV_BINARY or GROUNDHOG_HOGD_DEV_BINARY to /path/to/hogd-dev"
+    die "set HOG_DEVNODE_BINARY or GROUNDHOG_HOG_DEVNODE_BINARY to /path/to/hog-devnode"
 }
 
 find_examples_root() {
@@ -210,15 +226,15 @@ cleanup() {
 trap cleanup EXIT
 
 HOGD_DEV_BINARY="$(find_hogd_dev_binary)"
-[[ -x "$HOGD_DEV_BINARY" ]] || die "hogd-dev binary is not executable: $HOGD_DEV_BINARY"
+[[ -x "$HOGD_DEV_BINARY" ]] || die "hog-devnode binary is not executable: $HOGD_DEV_BINARY"
 HOGD_PROTOCOL="$(detect_hogd_protocol "$HOGD_DEV_BINARY")"
 if [[ -n "$HOGD_PROTOCOL" ]]; then
     export GROUNDHOG_SIM_HOGD_PROTOCOL="$HOGD_PROTOCOL"
     log "using hogd protocol override: $HOGD_PROTOCOL"
 fi
 
-log "building groundhog with dev-node feature"
-cargo build -p groundhog-cli --features dev-node
+log "building groundhog"
+cargo build -p groundhog-cli
 [[ -x "$GROUNDHOG_BINARY" ]] || die "groundhog binary is not executable: $GROUNDHOG_BINARY"
 
 EXAMPLES_ROOT="$(find_examples_root)"
@@ -262,7 +278,7 @@ fi
 
 log "running fast local scenario catalog"
 ENV_ARGS=(
-    "GROUNDHOG_SIM_HOGD_DEV_BINARY=$HOGD_DEV_BINARY"
+    "GROUNDHOG_SIM_HOG_DEVNODE_BINARY=$HOGD_DEV_BINARY"
     "GROUNDHOG_SIM_GROUNDHOG_BINARY=$GROUNDHOG_BINARY"
     "GROUNDHOG_SIM_CATALOG_ROOT=$WORKDIR/local-catalog-fast"
 )
@@ -275,7 +291,7 @@ env "${ENV_ARGS[@]}" \
 if [[ "${GROUNDHOG_SIM_RUN_SOAKS:-0}" == "1" ]]; then
     log "running gated local scenario soak"
     SOAK_ENV_ARGS=(
-        "GROUNDHOG_SIM_HOGD_DEV_BINARY=$HOGD_DEV_BINARY"
+        "GROUNDHOG_SIM_HOG_DEVNODE_BINARY=$HOGD_DEV_BINARY"
         "GROUNDHOG_SIM_GROUNDHOG_BINARY=$GROUNDHOG_BINARY"
         "GROUNDHOG_SIM_CATALOG_ROOT=$WORKDIR/local-catalog-soak"
         "GROUNDHOG_SIM_RUN_SOAKS=1"
@@ -293,7 +309,7 @@ NODE_STDOUT="$WORKDIR/groundhog-node.json"
 NODE_STDERR="$WORKDIR/groundhog-node.stderr"
 
 log "starting temporary groundhog node for existing-provider baseline scenario"
-NODE_ARGS=(--json node --hogd-dev-binary "$HOGD_DEV_BINARY" --port 0)
+NODE_ARGS=(--json node --hog-devnode-binary "$HOGD_DEV_BINARY" --port 0)
 if [[ -n "$HOGD_PROTOCOL" ]]; then
     NODE_ARGS+=(--hogd-protocol "$HOGD_PROTOCOL")
 fi

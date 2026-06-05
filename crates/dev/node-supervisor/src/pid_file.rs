@@ -331,7 +331,8 @@ fn matches_expected_program(program: &str, expected_program: &OsStr) -> bool {
         .and_then(OsStr::to_str)
         .unwrap_or_default();
 
-    !expected.is_empty() && program == expected
+    !expected.is_empty()
+        && (program == expected || (expected == "hog-devnode" && program == "hogd-dev"))
 }
 
 #[cfg(unix)]
@@ -605,6 +606,22 @@ mod tests {
         assert!(!matches_expected_program(
             "hogd-de",
             std::ffi::OsStr::new("hogd-dev")
+        ));
+    }
+
+    #[test]
+    fn matches_expected_program_accepts_legacy_devnode_name() {
+        assert!(matches_expected_program(
+            "hogd-dev",
+            std::ffi::OsStr::new("hog-devnode")
+        ));
+        assert!(matches_expected_program(
+            "hogd-dev",
+            std::ffi::OsStr::new("/usr/local/bin/hog-devnode")
+        ));
+        assert!(!matches_expected_program(
+            "hogd-dev",
+            std::ffi::OsStr::new("hog-mempool")
         ));
     }
 

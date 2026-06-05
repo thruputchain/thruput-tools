@@ -420,7 +420,7 @@ mod tests {
             "protocol": "hogp/test",
             "genesisHash": hash(0x42),
             "producer": {
-                "binary": "hogd-dev",
+                "binary": "hog-devnode",
                 "version": "0.1.0",
                 "commitHash": "abcdef0",
             },

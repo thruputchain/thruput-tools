@@ -16,7 +16,7 @@ JSON-RPC public surface in `crates/json-rpc/`:
   local node, and client crate.
 - **json-rpc-server** — reusable server-side `GroundhogApiServer`
   implementation. Owns shared request validation, public error mapping, and
-  submit/chain/read backend traits used by gateway and hogd-dev supervisor
+  submit/chain/read backend traits used by gateway and hog-devnode supervisor
   compositions.
 - **json-rpc-gateway** — jsonrpsee server binary. Its backend adapter
   implements the `json-rpc-server` planes over hogd indexer and scheduler x23
@@ -52,7 +52,7 @@ Developer-facing tools in `crates/tools/` and RV32-specific tooling in
 `crates/rv32/`:
 
 - **cli** — `groundhog` binary. Wraps the Rust/WASM build and test workflow
-  plus deploy/call and hogd-dev local-node control. Lib/bin split: all logic in
+  plus deploy/call and hog-devnode local-node control. Lib/bin split: all logic in
   the library crate, `main.rs` is pure dispatch. Subcommand functions take plain
   Rust types, not clap structs.
 - **signing** — off-chain transaction signing and construction. Signer trait,
@@ -73,9 +73,9 @@ Local dev and test harnesses in `crates/dev/`:
 
 - **node-supervisor** — `groundhog node` facade. Supervises a hogd-owned
   `hogd-dev` subprocess and embeds `json-rpc-server` to serve the public
-  JSON-RPC. `chainTip` and `sendRawTransaction` are backed by hogd-dev's
+  JSON-RPC. `chainTip` and `sendRawTransaction` are backed by hog-devnode's
   `SchedulerCoord` endpoint; receipts, transaction status, and contract events
-  are backed by hogd-dev's `IndexerBlockExplorer` endpoint when advertised in
+  are backed by hog-devnode's `IndexerBlockExplorer` endpoint when advertised in
   readiness (otherwise the read plane stays stubbed `NotImplemented` per the v1
   reduced contract). End-to-end coverage of the read plane is gated on the
   hogd-dev v1 binary actually exposing the `IndexerBlockExplorer` endpoint with
@@ -197,8 +197,8 @@ dispatched by the publish workflow. It verifies that the matching
 `groundhog-cli` and `groundhog-rv32-lower` crate versions already exist in the
 private registry before uploading binary assets. It builds `hog-gateway` and
 `hogsim` from this repository and builds the `groundhog` CLI from the published
-crate; the CLI release build uses `--features dev-node` so the published binary
-includes the local `groundhog node` path. The GitHub Release assets are per-app,
+crate; the published binary includes the local `groundhog node` path. The
+GitHub Release assets are per-app,
 per-target archives:
 `hog-gateway-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz` and
 `groundhog-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz`,
@@ -211,11 +211,11 @@ assets from the pinned `groundhog-rpc` tag.
 
 ### Runtime Manifest Smoke
 
-Use this for the local gateway/bench path once a real `hogd-dev` binary
+Use this for the local gateway/bench path once a real `hog-devnode` binary
 is available:
 
 ```bash
-HOGD_DEV_BINARY=/path/to/hogd-dev scripts/smoke-runtime-manifest-bench.sh
+HOG_DEVNODE_BINARY=/path/to/hog-devnode scripts/smoke-runtime-manifest-bench.sh
 ```
 
 The script starts `groundhog node`, reads `data.runtime_manifest.path`
@@ -230,7 +230,7 @@ for the repeatable local benchmark scenarios documented in
 The broader local-DX smoke remains:
 
 ```bash
-HOGD_DEV_BINARY=/path/to/hogd-dev scripts/smoke-local-dx.sh
+HOG_DEVNODE_BINARY=/path/to/hog-devnode scripts/smoke-local-dx.sh
 ```
 
 With `SMOKE_STANDALONE_GATEWAY=1`, that script also starts the standalone
@@ -241,14 +241,14 @@ For simulator local-target work, use the script so the local-provider and
 existing-provider process smokes stay in sync:
 
 ```bash
-GROUNDHOG_HOGD_DEV_BINARY=/path/to/hogd-dev scripts/smoke-sim-local.sh
+GROUNDHOG_HOG_DEVNODE_BINARY=/path/to/hog-devnode scripts/smoke-sim-local.sh
 ```
 
-These smokes start `groundhog node`, run `hogd-dev`, connect to localhost, and
+These smokes start `groundhog node`, run `hog-devnode`, connect to localhost, and
 write the node PID file under `~/.cache/groundhog`; Codex should run them
 outside the sandbox. If they fail with permission, localhost-connect, network,
 or cache-write errors, rerun the same command with escalation rather than
-rewriting the workflow. Use absolute paths for `hogd-dev` because quoted `~`
+rewriting the workflow. Use absolute paths for `hog-devnode` because quoted `~`
 does not expand.
 
 For simulator existing-target work, `hogsim` can still run against an
@@ -278,15 +278,15 @@ cargo run -p groundhog-cli -- deploy       # from inside a project
 cargo run -p groundhog-cli -- call my-counter get
 cargo run -p groundhog-cli -- keys generate alice
 cargo run -p groundhog-cli -- keys ls
-# Experimental local node backed by hogd-dev (Cargo feature is still dev-node)
-cargo run -p groundhog-cli --features dev-node -- node --hogd-dev-binary /path/to/hogd-dev
+# Local node backed by hog-devnode
+cargo run -p groundhog-cli -- node --hog-devnode-binary /path/to/hog-devnode
 # Machine-readable startup metadata includes data.rpc_url and
 # data.runtime_manifest.path/hash.
-cargo run -p groundhog-cli --features dev-node -- --json node --hogd-dev-binary /path/to/hogd-dev
+cargo run -p groundhog-cli -- --json node --hog-devnode-binary /path/to/hog-devnode
 # Typical local loop
 # 1. cargo run -p groundhog-cli -- new my-counter && cd my-counter
 # 2. cargo run -p groundhog-cli -- build
-# 3. cargo run -p groundhog-cli --features dev-node -- node --hogd-dev-binary /path/to/hogd-dev  # separate terminal
+# 3. cargo run -p groundhog-cli -- node --hog-devnode-binary /path/to/hog-devnode  # separate terminal
 # 4. cargo run -p groundhog-cli -- deploy
 # 5. cargo run -p groundhog-cli -- call my-counter get
 ```

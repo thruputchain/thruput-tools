@@ -1,19 +1,16 @@
-//! `groundhog node` — start the experimental hogd-dev local node.
+//! `groundhog node` — start the hog-devnode local node.
 
 use crate::{CliError, Print};
 
-#[cfg(feature = "dev-node")]
 use crate::result::CommandResult;
-#[cfg(feature = "dev-node")]
 use serde_json::json;
-#[cfg(feature = "dev-node")]
 use std::net::SocketAddr;
-#[cfg(feature = "dev-node")]
 use std::path::PathBuf;
-#[cfg(feature = "dev-node")]
 use std::process::ExitStatus;
-#[cfg(feature = "dev-node")]
 use std::time::Duration;
+
+const HOG_DEVNODE_PID_FILE: &str = "hog-devnode.pid";
+const LEGACY_HOGD_DEV_PID_FILE: &str = "hogd-dev.pid";
 
 /// Block production mode for the supervised local node.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -26,10 +23,8 @@ pub enum LocalNodeBlockDriverMode {
     Interval,
 }
 
-/// Start the experimental hogd-dev local node server.
+/// Start the hog-devnode local node server.
 ///
-/// Requires the `dev-node` feature.
-#[cfg(feature = "dev-node")]
 #[allow(clippy::too_many_arguments)]
 pub fn run(
     port: u16,
@@ -56,10 +51,8 @@ pub fn run(
     )
 }
 
-/// Start the experimental hogd-dev local node server with block-driver options.
+/// Start the hog-devnode local node server with block-driver options.
 ///
-/// Requires the `dev-node` feature.
-#[cfg(feature = "dev-node")]
 #[allow(clippy::too_many_arguments)]
 pub fn run_with_block_driver(
     port: u16,
@@ -97,14 +90,13 @@ pub fn run_with_block_driver(
     })
 }
 
-/// Startup options for a local hogd-dev-backed node.
-#[cfg(feature = "dev-node")]
+/// Startup options for a local hog-devnode-backed node.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct LocalNodeOptions {
     /// Public JSON-RPC port. Use `0` to ask the OS for a free port.
     pub port: u16,
-    /// Explicit hogd-dev binary path.
+    /// Explicit hog-devnode binary path.
     pub hogd_dev_binary: Option<PathBuf>,
     /// Override hogd protocol string for local cross-repo smoke tests.
     pub hogd_protocol: Option<String>,
@@ -123,7 +115,6 @@ pub struct LocalNodeOptions {
 }
 
 /// PID-file behavior for local hogd-dev startup.
-#[cfg(feature = "dev-node")]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum LocalNodePidFile {
@@ -137,7 +128,6 @@ pub enum LocalNodePidFile {
 }
 
 /// Running local node and the startup metadata callers need for orchestration.
-#[cfg(feature = "dev-node")]
 #[derive(Debug)]
 #[must_use = "local nodes keep hogd-dev running until stop, stopped, or run_until consumes them"]
 pub struct StartedLocalNode {
@@ -147,7 +137,6 @@ pub struct StartedLocalNode {
     backend_planes: groundhog_node_supervisor::BackendPlanes,
 }
 
-#[cfg(feature = "dev-node")]
 impl StartedLocalNode {
     /// Bound JSON-RPC listen address.
     pub fn rpc_addr(&self) -> SocketAddr {
@@ -159,7 +148,7 @@ impl StartedLocalNode {
         format!("http://{}", self.rpc_addr)
     }
 
-    /// Parsed hogd-dev readiness payload.
+    /// Parsed hog-devnode readiness payload.
     pub fn readiness(&self) -> &groundhog_node_supervisor::HogdDevReadiness {
         &self.readiness
     }
@@ -203,7 +192,6 @@ impl StartedLocalNode {
 }
 
 /// Start a reusable local node without taking over the terminal.
-#[cfg(feature = "dev-node")]
 pub async fn start_local_node(options: LocalNodeOptions) -> Result<StartedLocalNode, CliError> {
     use groundhog_node_supervisor::NodeSupervisorHandle;
 
@@ -223,7 +211,6 @@ pub async fn start_local_node(options: LocalNodeOptions) -> Result<StartedLocalN
     })
 }
 
-#[cfg(feature = "dev-node")]
 async fn run_hogd_dev(
     options: LocalNodeOptions,
     cmd: &'static str,
@@ -281,13 +268,13 @@ async fn run_hogd_dev(
     match outcome {
         SupervisorStop::HogdExited(status) => {
             if !print.is_json() {
-                print.status(format_args!("hogd-dev exited with status {status}"));
+                print.status(format_args!("hog-devnode exited with status {status}"));
             }
             if status.success() {
                 Ok(())
             } else {
                 Err(CliError::NodeSupervisor(format!(
-                    "hogd-dev exited with status {status}"
+                    "hog-devnode exited with status {status}"
                 )))
             }
         }
@@ -298,7 +285,6 @@ async fn run_hogd_dev(
     }
 }
 
-#[cfg(feature = "dev-node")]
 async fn wait_for_stop_signal() -> Result<(), std::io::Error> {
     #[cfg(unix)]
     {
@@ -315,37 +301,36 @@ async fn wait_for_stop_signal() -> Result<(), std::io::Error> {
     }
 }
 
-#[cfg(feature = "dev-node")]
 fn print_started_local_node(
     started: &StartedLocalNode,
     local_state_result: &Result<Option<PathBuf>, CliError>,
     print: &Print,
 ) {
-    print.status("Groundhog Local Node (experimental)");
+    print.status("Groundhog Local Node");
     print.status(format_args!("Chain: {}", started.readiness().network_id));
     if started.backend_planes().read.is_indexer_backed() {
-        print.warn("backend: hogd-dev (chainTip, submit, and reads live)");
+        print.warn("backend: hog-devnode (chainTip, submit, and reads live)");
     } else {
         print.warn(
-            "backend: hogd-dev (chainTip and submit live; read methods return NOT_IMPLEMENTED)",
+            "backend: hog-devnode (chainTip and submit live; read methods return NOT_IMPLEMENTED)",
         );
     }
     print.status(format_args!("Listening on {}", started.rpc_url()));
     print.status(format_args!(
-        "hogd-dev SchedulerCoord: {}",
+        "hog-devnode SchedulerCoord: {}",
         started.readiness().endpoints.scheduler_coord
     ));
     if let Some(indexer) = started.readiness().endpoints.indexer_block_explorer {
-        print.status(format_args!("hogd-dev IndexerBlockExplorer: {indexer}"));
+        print.status(format_args!("hog-devnode IndexerBlockExplorer: {indexer}"));
     }
     if let Some(db_gateway) = started.readiness().endpoints.db_gateway {
-        print.status(format_args!("hogd-dev DbGateway: {db_gateway}"));
+        print.status(format_args!("hog-devnode DbGateway: {db_gateway}"));
     }
     if let Some(view_gateway) = started.readiness().endpoints.view_gateway {
-        print.status(format_args!("hogd-dev ViewGateway: {view_gateway}"));
+        print.status(format_args!("hog-devnode ViewGateway: {view_gateway}"));
     }
     if let Some(dev_control) = started.readiness().endpoints.dev_control {
-        print.status(format_args!("hogd-dev dev control: {dev_control}"));
+        print.status(format_args!("hog-devnode dev control: {dev_control}"));
     }
     if let Some(path) = &started.readiness().manifest_path {
         print.status(format_args!("runtime manifest: {}", path.display()));
@@ -366,7 +351,6 @@ fn print_started_local_node(
     }
 }
 
-#[cfg(feature = "dev-node")]
 fn write_started_local_node_state(started: &StartedLocalNode) -> Result<Option<PathBuf>, CliError> {
     let manifest_path = started
         .readiness()
@@ -374,14 +358,13 @@ fn write_started_local_node_state(started: &StartedLocalNode) -> Result<Option<P
         .as_deref()
         .ok_or_else(|| {
             CliError::NodeSupervisor(
-                "hogd-dev readiness did not include runtime manifest path".into(),
+                "hog-devnode readiness did not include runtime manifest path".into(),
             )
         })?;
     let cwd = std::env::current_dir()?;
     crate::runtime_manifest::write_local_node_state(&cwd, &started.rpc_url(), manifest_path)
 }
 
-#[cfg(feature = "dev-node")]
 fn local_node_config(
     options: LocalNodeOptions,
 ) -> Result<groundhog_node_supervisor::NodeSupervisorConfig, CliError> {
@@ -421,7 +404,7 @@ fn local_node_config(
         });
     let hogd = match options.pid_file {
         LocalNodePidFile::GlobalCache => {
-            hogd.with_pid_file(crate::config::cache_dir()?.join("hogd-dev.pid"))
+            hogd.with_pid_file(global_local_node_pid_file(&crate::config::cache_dir()?))
         }
         LocalNodePidFile::Path(path) => hogd.with_pid_file(path),
         LocalNodePidFile::Disabled => hogd,
@@ -467,7 +450,14 @@ fn local_node_config(
     })
 }
 
-#[cfg(feature = "dev-node")]
+fn global_local_node_pid_file(cache_dir: &std::path::Path) -> PathBuf {
+    let legacy = cache_dir.join(LEGACY_HOGD_DEV_PID_FILE);
+    if legacy.exists() {
+        return legacy;
+    }
+    cache_dir.join(HOG_DEVNODE_PID_FILE)
+}
+
 fn map_node_supervisor_error(err: &groundhog_node_supervisor::NodeSupervisorError) -> CliError {
     let message = err.to_string();
     match err {
@@ -485,50 +475,6 @@ fn map_node_supervisor_error(err: &groundhog_node_supervisor::NodeSupervisorErro
     }
 }
 
-#[cfg(not(feature = "dev-node"))]
-#[allow(clippy::too_many_arguments)]
-pub fn run(
-    _port: u16,
-    _verbose: bool,
-    _dev_account_count: Option<usize>,
-    _hogd_dev_binary: Option<std::path::PathBuf>,
-    _hogd_protocol: Option<String>,
-    _startup_timeout_secs: Option<u64>,
-    _cmd: &'static str,
-    _print: &Print,
-) -> Result<(), CliError> {
-    Err(CliError::Other(
-        "`groundhog node` requires the dev-node feature.\n\n  \
-         hint: build the CLI with:\n        \
-         cargo install --path crates/tools/cli --features dev-node"
-            .into(),
-    ))
-}
-
-#[cfg(not(feature = "dev-node"))]
-#[allow(clippy::too_many_arguments)]
-pub fn run_with_block_driver(
-    _port: u16,
-    _verbose: bool,
-    _dev_account_count: Option<usize>,
-    _hogd_dev_binary: Option<std::path::PathBuf>,
-    _hogd_protocol: Option<String>,
-    _startup_timeout_secs: Option<u64>,
-    _block_driver: Option<LocalNodeBlockDriverMode>,
-    _block_interval_ms: Option<u64>,
-    _rpc_max_connections: Option<u32>,
-    _cmd: &'static str,
-    _print: &Print,
-) -> Result<(), CliError> {
-    Err(CliError::Other(
-        "`groundhog node` requires the dev-node feature.\n\n  \
-         hint: build the CLI with:\n        \
-         cargo install --path crates/tools/cli --features dev-node"
-            .into(),
-    ))
-}
-
-#[cfg(feature = "dev-node")]
 fn default_tracing_filter(verbose: bool, json: bool) -> &'static str {
     if verbose {
         "groundhog_node_supervisor=info,hogd_dev=info"
@@ -539,7 +485,6 @@ fn default_tracing_filter(verbose: bool, json: bool) -> &'static str {
     }
 }
 
-#[cfg(feature = "dev-node")]
 fn init_tracing(default_filter: &str) {
     use tracing_subscriber::EnvFilter;
 
@@ -553,19 +498,19 @@ fn init_tracing(default_filter: &str) {
         .try_init();
 }
 
-#[cfg(feature = "dev-node")]
 fn hogd_dev_startup_payload(
     addr: std::net::SocketAddr,
     readiness: &groundhog_node_supervisor::HogdDevReadiness,
     backend_planes: groundhog_node_supervisor::BackendPlanes,
 ) -> serde_json::Value {
     json!({
+        "schemaVersion": 1,
         "chain": readiness.network_id,
         "mode": "dev",
-        "experimental": true,
+        "experimental": false,
         "backend": {
             "kind": "hogd_dev",
-            "stability": "experimental",
+            "stability": "supported",
             "planes": backend_planes,
             "endpoints": hogd_dev_endpoints_payload(readiness),
         },
@@ -574,7 +519,6 @@ fn hogd_dev_startup_payload(
     })
 }
 
-#[cfg(feature = "dev-node")]
 fn runtime_manifest_payload(
     readiness: &groundhog_node_supervisor::HogdDevReadiness,
 ) -> serde_json::Value {
@@ -588,7 +532,6 @@ fn runtime_manifest_payload(
     }
 }
 
-#[cfg(feature = "dev-node")]
 fn hogd_dev_endpoints_payload(
     readiness: &groundhog_node_supervisor::HogdDevReadiness,
 ) -> serde_json::Value {
@@ -624,11 +567,12 @@ fn hogd_dev_endpoints_payload(
     serde_json::Value::Object(endpoints)
 }
 
-#[cfg(all(test, feature = "dev-node"))]
+#[cfg(test)]
 mod tests {
     use super::{
         LocalNodeBlockDriverMode, LocalNodeOptions, LocalNodePidFile, default_tracing_filter,
-        hogd_dev_startup_payload, local_node_config, map_node_supervisor_error,
+        global_local_node_pid_file, hogd_dev_startup_payload, local_node_config,
+        map_node_supervisor_error,
     };
     use crate::CliError;
     use groundhog_node_supervisor::{
@@ -640,13 +584,13 @@ mod tests {
 
     #[test]
     fn local_node_config_sets_supervisor_startup_options() {
-        let binary = PathBuf::from("/tmp/hogd-dev-test");
+        let binary = PathBuf::from("/tmp/hog-devnode-test");
         let config = local_node_config(LocalNodeOptions {
             port: 0,
             hogd_dev_binary: Some(binary.clone()),
             hogd_protocol: Some("test-protocol".into()),
             startup_timeout: Some(Duration::from_secs(30)),
-            pid_file: LocalNodePidFile::Path(PathBuf::from("/tmp/hogd-dev-test.pid")),
+            pid_file: LocalNodePidFile::Path(PathBuf::from("/tmp/hog-devnode-test.pid")),
             dev_account_count: Some(3),
             block_driver: Some(LocalNodeBlockDriverMode::Interval),
             block_interval: Some(Duration::from_millis(250)),
@@ -662,7 +606,7 @@ mod tests {
         );
         assert_eq!(
             config.hogd_dev.pid_file.as_deref(),
-            Some(std::path::Path::new("/tmp/hogd-dev-test.pid"))
+            Some(std::path::Path::new("/tmp/hog-devnode-test.pid"))
         );
         assert_eq!(config.hogd_dev.dev_account_count, 3);
         assert_eq!(config.hogd_dev.startup_timeout, Duration::from_secs(30));
@@ -694,6 +638,18 @@ mod tests {
         .expect("bug: local node config should build");
 
         assert!(config.hogd_dev.pid_file.is_none());
+    }
+
+    #[test]
+    fn global_pid_file_prefers_legacy_path_during_migration() {
+        let tmp = TempDir::new().expect("bug: temp dir should be created");
+        let new_path = tmp.path().join("hog-devnode.pid");
+        let legacy_path = tmp.path().join("hogd-dev.pid");
+
+        assert_eq!(global_local_node_pid_file(tmp.path()), new_path);
+
+        fs::write(&legacy_path, "").expect("bug: legacy pid file should write");
+        assert_eq!(global_local_node_pid_file(tmp.path()), legacy_path);
     }
 
     #[test]
@@ -841,7 +797,7 @@ mod tests {
           "networkId": "groundhog-local",
           "protocol": "hogp/test",
           "genesisHash": "0x4242424242424242424242424242424242424242424242424242424242424242",
-          "producer": {"binary": "hogd-dev", "version": "0.1.0", "commitHash": "abcdef0"},
+          "producer": {"binary": "hog-devnode", "version": "0.1.0", "commitHash": "abcdef0"},
           "endpoints": {"scheduler": "127.0.0.1:12345"},
           "bootstrapAccountDerivation": {
             "scheme": "groundhog-bootstrap-account-v1",

@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Runtime-manifest gateway/bench smoke and scenario runner.
 #
-# Starts a real hogd-dev-backed `groundhog node`, extracts the runtime manifest
+# Starts a real hog-devnode-backed `groundhog node`, extracts the runtime manifest
 # path from the CLI startup JSON, starts a standalone gateway from the same
 # manifest, then runs a named groundhog-bench scenario.
 #
 # Optional environment:
-#   HOGD_DEV_BINARY=/path/to/hogd-dev
+#   HOG_DEVNODE_BINARY=/path/to/hog-devnode
+#   HOGD_DEV_BINARY=/path/to/hogd-dev  # legacy
 #   HOGD_PROTOCOL_OVERRIDE=hogp/<hash>  # intro token only; XDR still validates shape
 #   NODE_STARTUP_TIMEOUT_SECS=60
 #   NODE_VERBOSE=1
@@ -140,23 +141,33 @@ PY
 }
 
 find_hogd_dev_binary() {
+    if [[ -n "${HOG_DEVNODE_BINARY:-}" ]]; then
+        printf '%s\n' "$HOG_DEVNODE_BINARY"
+        return
+    fi
     if [[ -n "${HOGD_DEV_BINARY:-}" ]]; then
         printf '%s\n' "$HOGD_DEV_BINARY"
         return
     fi
 
-    local sibling="$REPO_ROOT/../hogd/build/hogd/hogd_dev/hogd-dev"
-    if [[ -x "$sibling" ]]; then
-        printf '%s\n' "$sibling"
-        return
-    fi
+    for sibling in \
+        "$REPO_ROOT/../hogd/build/hogd/hogd_dev/hog-devnode" \
+        "$REPO_ROOT/../hogd/build/hogd/hogd_dev/hogd-dev"
+    do
+        if [[ -x "$sibling" ]]; then
+            printf '%s\n' "$sibling"
+            return
+        fi
+    done
 
-    if command -v hogd-dev >/dev/null 2>&1; then
-        command -v hogd-dev
-        return
-    fi
+    for binary in hog-devnode hogd-dev; do
+        if command -v "$binary" >/dev/null 2>&1; then
+            command -v "$binary"
+            return
+        fi
+    done
 
-    die "set HOGD_DEV_BINARY=/path/to/hogd-dev"
+    die "set HOG_DEVNODE_BINARY=/path/to/hog-devnode"
 }
 
 detect_hogd_protocol() {
@@ -186,7 +197,7 @@ PY
         fi
     fi
 
-    # Older hogd-dev builds printed protocol metadata for --help.
+    # Older devnode builds printed protocol metadata for --help.
     # Strip ANSI color escapes before extracting the protocol marker.
     local output
     output="$("$binary" --help 2>&1 || true)"
@@ -297,10 +308,10 @@ check_process_logs() {
 
 log "Building CLI, gateway, and bench"
 cargo build -p groundhog-cli -p groundhog-json-rpc-gateway -p groundhog-bench \
-    --features dev-node --manifest-path "$REPO_ROOT/Cargo.toml"
+    --manifest-path "$REPO_ROOT/Cargo.toml"
 
 HOGD_DEV_BINARY="$(find_hogd_dev_binary)"
-[[ -x "$HOGD_DEV_BINARY" ]] || die "hogd-dev binary is not executable: $HOGD_DEV_BINARY"
+[[ -x "$HOGD_DEV_BINARY" ]] || die "hog-devnode binary is not executable: $HOGD_DEV_BINARY"
 HOGD_PROTOCOL="$(detect_hogd_protocol "$HOGD_DEV_BINARY")"
 
 WORK="$(mktemp -d)"
@@ -347,7 +358,7 @@ NODE_ARGS=(
     0
     --startup-timeout-secs
     "$NODE_STARTUP_TIMEOUT_SECS"
-    --hogd-dev-binary
+    --hog-devnode-binary
     "$HOGD_DEV_BINARY"
 )
 if [[ -n "$HOGD_PROTOCOL" ]]; then

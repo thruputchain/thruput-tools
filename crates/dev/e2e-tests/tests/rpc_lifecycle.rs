@@ -4,7 +4,7 @@
 //! Set `RPC_URL` env var to override the default (http://127.0.0.1:9545).
 //!
 //! Start a local node first:
-//!   cargo run -p groundhog-cli --features dev-node -- node --hogd-dev-binary /path/to/hogd-dev
+//!   cargo run -p groundhog-cli -- node --hog-devnode-binary /path/to/hog-devnode
 //!
 //! Then run:
 //!   cargo test -p groundhog-e2e-tests -- --ignored

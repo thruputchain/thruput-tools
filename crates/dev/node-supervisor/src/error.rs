@@ -45,21 +45,21 @@ impl fmt::Display for ChildSignal {
 #[non_exhaustive]
 pub enum NodeSupervisorError {
     /// A configured binary path does not exist.
-    #[error("configured hogd-dev binary path does not exist: {}", path.display())]
+    #[error("configured hog-devnode binary path does not exist: {}", path.display())]
     ConfiguredPathMissing {
         /// Missing configured path.
         path: PathBuf,
     },
 
     /// A configured binary path exists but is not executable.
-    #[error("configured hogd-dev binary path is not executable: {}", path.display())]
+    #[error("configured hog-devnode binary path is not executable: {}", path.display())]
     ConfiguredPathNotExecutable {
         /// Non-executable configured path.
         path: PathBuf,
     },
 
-    /// The supervisor could not locate a hogd-dev binary.
-    #[error("hogd-dev binary not found")]
+    /// The supervisor could not locate a devnode binary.
+    #[error("hog-devnode binary not found")]
     HogdDevNotFound,
 
     /// The supervisor could not determine its current executable path.

@@ -13,11 +13,11 @@ Start here:
 Current local-provider quickstart:
 
 ```bash
-cargo run -p groundhog-cli --features dev-node -- --version
+cargo run -p groundhog-cli -- --version
 
 cargo run -p groundhog-sim --bin hogsim -- run examples/sim/local-chain-tip-smoke.json \
   --groundhog-binary target/debug/groundhog \
-  --hogd-dev-binary /path/to/hogd-dev \
+  --hog-devnode-binary /path/to/hog-devnode \
   --hogd-protocol hogp/<hash> \
   --port 0
 ```
@@ -34,7 +34,7 @@ Local restart chaos can be exercised with:
 ```bash
 cargo run -p groundhog-sim --bin hogsim -- run examples/sim/local-restart-chain-tip-smoke.json \
   --groundhog-binary target/debug/groundhog \
-  --hogd-dev-binary /path/to/hogd-dev \
+  --hog-devnode-binary /path/to/hog-devnode \
   --port 0
 ```
 
@@ -105,8 +105,8 @@ synchronized bursts.
 Existing-target quickstart:
 
 ```bash
-cargo run -p groundhog-cli --features dev-node -- --json node \
-  --hogd-dev-binary /path/to/hogd-dev \
+cargo run -p groundhog-cli -- --json node \
+  --hog-devnode-binary /path/to/hog-devnode \
   --hogd-protocol hogp/<hash> \
   > /tmp/groundhog-node.json
 
@@ -119,7 +119,7 @@ cargo run -p groundhog-sim --bin hogsim -- run examples/sim/local-wallet-soak.js
   --runtime-manifest "$RUNTIME_MANIFEST"
 ```
 
-`--hogd-protocol` is optional. Use it when a local `hogd-dev` build advertises a
+`--hogd-protocol` is optional. Use it when a local `hog-devnode` build advertises a
 newer `hogp/<hash>` than the Rust protocol crates linked into `groundhog node`.
 It only overrides the intro token; incompatible XDR shapes still fail through
 the generated client.
@@ -243,10 +243,10 @@ effective RPC URL, runtime manifest path, and nonce namespace into
 The `local` target provider launches and owns a local `groundhog node` process.
 It rejects `target.rpcUrl`, `target.runtimeManifest`, `--rpc-url`, and
 `--runtime-manifest` because those values are outputs from the launched node.
-Use `--groundhog-binary` to select the supervisor binary, `--hogd-dev-binary`
+Use `--groundhog-binary` to select the supervisor binary, `--hog-devnode-binary`
 to forward a specific backend binary, `--port` to request a port, and
 `--startup-timeout-secs` to bound startup. Use `--hogd-protocol` when a local
-`hogd-dev` build is ahead of the protocol token compiled into `groundhog node`;
+`hog-devnode` build is ahead of the protocol token compiled into `groundhog node`;
 it only overrides the intro token and does not make incompatible XDR shapes
 compatible.
 

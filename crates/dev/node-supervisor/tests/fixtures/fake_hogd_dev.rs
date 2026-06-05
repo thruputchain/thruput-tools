@@ -458,7 +458,7 @@ fn readiness_pointer(endpoints: &Value) -> String {
 
 fn runtime_manifest(endpoints: &Value, config: &FakeStartupConfig) -> Value {
     let mut producer = serde_json::Map::new();
-    producer.insert("binary".to_string(), json!("hogd-dev"));
+    producer.insert("binary".to_string(), json!("hog-devnode"));
     producer.insert("version".to_string(), json!(env!("CARGO_PKG_VERSION")));
     if let Some(commit_hash) = option_env!("GROUNDHOG_GIT_COMMIT") {
         producer.insert("commitHash".to_string(), json!(commit_hash));

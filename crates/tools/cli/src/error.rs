@@ -77,8 +77,6 @@ pub enum CliError {
     JsonUnsupported(&'static str),
     #[error("not yet implemented")]
     NotImplemented,
-    #[error("`groundhog test --integration` requires the dev-node feature")]
-    IntegrationTestsUnavailable,
     #[error("integration test target not found at {0}")]
     IntegrationTestNotFound(String),
     #[error("invalid test options: {0}")]
@@ -179,7 +177,6 @@ impl CliError {
             Self::KeyNameInvalid => "key_name_invalid",
             Self::JsonUnsupported(_) => "json_unsupported",
             Self::NotImplemented => "not_implemented",
-            Self::IntegrationTestsUnavailable => "integration_tests_unavailable",
             Self::IntegrationTestNotFound(_) => "integration_test_not_found",
             Self::InvalidTestOptions(_) => "invalid_test_options",
             Self::InvalidBuildOptions(_) => "invalid_build_options",
@@ -262,7 +259,7 @@ impl CliError {
                 Some(Cow::Borrowed("available templates: `counter`, `stub`"))
             }
             Self::NodeSupervisor(_) => Some(Cow::Borrowed(
-                "check `--hogd-dev-binary`, the hogd-dev process output, and the local node logs",
+                "check `--hog-devnode-binary`, the hog-devnode process output, and the local node logs",
             )),
             Self::NodeSupervisorProtocolIntroRejected {
                 expected_protocol: Some(protocol),
@@ -295,7 +292,7 @@ impl CliError {
                 "check the RPC endpoint and node logs for details",
             )),
             Self::LocalDevAccountUnavailable { .. } => Some(Cow::Borrowed(
-                "run `groundhog node` backed by hogd-dev, or use a stored key for non-local endpoints",
+                "run `groundhog node` backed by hog-devnode, or use a stored key for non-local endpoints",
             )),
             Self::WalletAddressDerivationFailed { .. } => Some(Cow::Borrowed(
                 "check the stored public key material, or regenerate the key",
@@ -383,10 +380,6 @@ impl CliError {
             ))),
             Self::NotImplemented => Some(Cow::Borrowed(
                 "this command is planned for a future release",
-            )),
-            Self::IntegrationTestsUnavailable => Some(Cow::Borrowed(
-                "build the CLI with `--features dev-node`, for example: \
-                 `cargo install --path crates/tools/cli --features dev-node`",
             )),
             Self::IntegrationTestNotFound(_) => Some(Cow::Borrowed(
                 "create `tests/integration.rs` before running `groundhog test --integration`",

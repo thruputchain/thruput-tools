@@ -2050,7 +2050,7 @@ mod tests {
             "protocol": "hogp/test",
             "genesisHash": prefixed_hex(0x11),
             "producer": {
-                "binary": "hogd-dev",
+                "binary": "hog-devnode",
                 "version": "0.1.0",
                 "commitHash": "abcdef"
             },

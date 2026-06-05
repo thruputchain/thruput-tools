@@ -24,8 +24,9 @@ mod test_support;
 pub use config::{BlockDriverConfig, BlockDriverMode, HogdDevConfig, NodeSupervisorConfig};
 pub use error::NodeSupervisorError;
 pub use hogd_dev::{
-    DEFAULT_HOGD_DEV_BINARY, HOGD_DEV_BINARY_ENV, HogdDevEndpoints, HogdDevProcess,
-    HogdDevReadiness, build_hogd_dev_spec, parse_readiness_line, resolve_hogd_dev_binary,
+    DEFAULT_HOGD_DEV_BINARY, HOG_DEVNODE_BINARY_ENV, HOGD_DEV_BINARY_ENV, HogdDevEndpoints,
+    HogdDevProcess, HogdDevReadiness, build_hogd_dev_spec, parse_readiness_line,
+    resolve_hogd_dev_binary,
 };
 pub use process::{ChildProcessSpec, ChildSupervisor, SupervisedChild};
 pub use server::{BackendPlanes, NodeSupervisorHandle, PlaneStatus, SupervisorStop};
