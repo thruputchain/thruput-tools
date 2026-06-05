@@ -237,6 +237,7 @@ fn node_hogd_dev_binary_json_starts_supervisor() {
 
     assert_eq!(payload["ok"], true);
     assert_eq!(payload["command"], "node");
+    assert_eq!(payload["data"]["schemaVersion"], 1);
     assert_eq!(payload["data"]["experimental"], false);
     assert_eq!(payload["data"]["backend"]["kind"], "hogd_dev");
     assert_eq!(payload["data"]["backend"]["stability"], "supported");

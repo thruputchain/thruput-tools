@@ -49,7 +49,12 @@ pub struct TargetProviderSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_manifest: Option<PathBuf>,
     /// `hog-devnode` binary path reserved for the Phase 2 `local` provider.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "hogDevnodeBinary",
+        alias = "hogdDevBinary",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub hogd_dev_binary: Option<PathBuf>,
     /// Local node block production mode for the `local` provider.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1409,7 +1414,7 @@ mod tests {
     async fn existing_provider_rejects_non_existing_manifest_provider() {
         let manifest = manifest(&json!({
             "provider": "local",
-            "hogdDevBinary": "/tmp/hog-devnode"
+            "hogDevnodeBinary": "/tmp/hog-devnode"
         }));
 
         let error = ExistingTargetProvider
@@ -1490,6 +1495,38 @@ mod tests {
             error,
             SimError::GroundhogBinaryNotFound { binary } if binary == missing.display().to_string()
         ));
+    }
+
+    #[test]
+    fn target_provider_spec_accepts_legacy_hogd_dev_binary_key() {
+        let spec: TargetProviderSpec = serde_json::from_value(json!({
+            "provider": "local",
+            "hogdDevBinary": "/tmp/hog-devnode"
+        }))
+        .expect("legacy hogdDevBinary key should deserialize");
+
+        assert_eq!(
+            spec.hogd_dev_binary,
+            Some(PathBuf::from("/tmp/hog-devnode"))
+        );
+    }
+
+    #[test]
+    fn target_provider_spec_serializes_hog_devnode_binary_key() {
+        let value = serde_json::to_value(TargetProviderSpec {
+            provider: TargetProviderKind::Local,
+            rpc_url: None,
+            runtime_manifest: None,
+            hogd_dev_binary: Some(PathBuf::from("/tmp/hog-devnode")),
+            block_driver: None,
+            block_interval_ms: None,
+            max_rpc_connections: None,
+            max_rpc_client_concurrency: None,
+        })
+        .expect("target provider spec should serialize");
+
+        assert_eq!(value["hogDevnodeBinary"], "/tmp/hog-devnode");
+        assert!(value.get("hogdDevBinary").is_none());
     }
 
     #[test]

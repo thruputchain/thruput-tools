@@ -246,7 +246,7 @@ supervisor path. This is the default developer workflow.
 
 Required inputs:
 
-- `hogdDevBinary`
+- `hogDevnodeBinary`
 - account count / seed / funding
 - optional RPC port
 - startup timeout
@@ -297,7 +297,7 @@ Example v1 shape:
   "seed": "local-wallet-soak-v1",
   "target": {
     "provider": "local",
-    "hogdDevBinary": "../hogd/build/hogd/hogd_dev/hogd-dev"
+    "hogDevnodeBinary": "../hogd/build/hogd/devnode/hog-devnode"
   },
   "bootstrap": {
     "accounts": 100,

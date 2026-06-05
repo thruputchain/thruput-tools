@@ -9,6 +9,9 @@ use std::path::PathBuf;
 use std::process::ExitStatus;
 use std::time::Duration;
 
+const HOG_DEVNODE_PID_FILE: &str = "hog-devnode.pid";
+const LEGACY_HOGD_DEV_PID_FILE: &str = "hogd-dev.pid";
+
 /// Block production mode for the supervised local node.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[non_exhaustive]
@@ -401,7 +404,7 @@ fn local_node_config(
         });
     let hogd = match options.pid_file {
         LocalNodePidFile::GlobalCache => {
-            hogd.with_pid_file(crate::config::cache_dir()?.join("hog-devnode.pid"))
+            hogd.with_pid_file(global_local_node_pid_file(&crate::config::cache_dir()?))
         }
         LocalNodePidFile::Path(path) => hogd.with_pid_file(path),
         LocalNodePidFile::Disabled => hogd,
@@ -445,6 +448,14 @@ fn local_node_config(
         Some(protocol) => config.with_hogd_protocol_override(protocol),
         None => config,
     })
+}
+
+fn global_local_node_pid_file(cache_dir: &std::path::Path) -> PathBuf {
+    let legacy = cache_dir.join(LEGACY_HOGD_DEV_PID_FILE);
+    if legacy.exists() {
+        return legacy;
+    }
+    cache_dir.join(HOG_DEVNODE_PID_FILE)
 }
 
 fn map_node_supervisor_error(err: &groundhog_node_supervisor::NodeSupervisorError) -> CliError {
@@ -493,6 +504,7 @@ fn hogd_dev_startup_payload(
     backend_planes: groundhog_node_supervisor::BackendPlanes,
 ) -> serde_json::Value {
     json!({
+        "schemaVersion": 1,
         "chain": readiness.network_id,
         "mode": "dev",
         "experimental": false,
@@ -559,7 +571,8 @@ fn hogd_dev_endpoints_payload(
 mod tests {
     use super::{
         LocalNodeBlockDriverMode, LocalNodeOptions, LocalNodePidFile, default_tracing_filter,
-        hogd_dev_startup_payload, local_node_config, map_node_supervisor_error,
+        global_local_node_pid_file, hogd_dev_startup_payload, local_node_config,
+        map_node_supervisor_error,
     };
     use crate::CliError;
     use groundhog_node_supervisor::{
@@ -625,6 +638,18 @@ mod tests {
         .expect("bug: local node config should build");
 
         assert!(config.hogd_dev.pid_file.is_none());
+    }
+
+    #[test]
+    fn global_pid_file_prefers_legacy_path_during_migration() {
+        let tmp = TempDir::new().expect("bug: temp dir should be created");
+        let new_path = tmp.path().join("hog-devnode.pid");
+        let legacy_path = tmp.path().join("hogd-dev.pid");
+
+        assert_eq!(global_local_node_pid_file(tmp.path()), new_path);
+
+        fs::write(&legacy_path, "").expect("bug: legacy pid file should write");
+        assert_eq!(global_local_node_pid_file(tmp.path()), legacy_path);
     }
 
     #[test]
