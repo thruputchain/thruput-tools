@@ -218,7 +218,7 @@ fn node_hogd_dev_binary_json_starts_supervisor() {
         .arg("node")
         .arg("--port")
         .arg("0")
-        .arg("--hogd-dev-binary")
+        .arg("--hog-devnode-binary")
         .arg(fake)
         .env("GROUNDHOG_FAKE_HOGD_DEV_MODE", "ready-with-indexer")
         .env("GROUNDHOG_FAKE_HOGD_DEV_PID_FILE", &pid_path)
@@ -285,13 +285,13 @@ fn node_hogd_dev_binary_json_starts_supervisor() {
 #[test]
 fn node_hogd_dev_missing_binary_fails_without_native_fallback() {
     let tmp = TempDir::new().unwrap();
-    let missing = tmp.path().join("missing-hogd-dev");
+    let missing = tmp.path().join("missing-hog-devnode");
     let output = groundhog()
         .arg("--json")
         .arg("node")
         .arg("--port")
         .arg("0")
-        .arg("--hogd-dev-binary")
+        .arg("--hog-devnode-binary")
         .arg(&missing)
         .output()
         .unwrap();
@@ -311,7 +311,7 @@ fn node_hogd_dev_missing_binary_fails_without_native_fallback() {
         stderr["error"]["message"]
             .as_str()
             .expect("bug: message string")
-            .contains("configured hogd-dev binary path does not exist"),
+            .contains("configured hog-devnode binary path does not exist"),
     );
 }
 
@@ -831,7 +831,7 @@ fn test_help_mentions_target_dir() {
     assert!(stdout.contains("--target-dir"));
     assert!(stdout.contains("--watch"));
     assert!(stdout.contains("--integration"));
-    assert!(stdout.contains("hogd-dev"));
+    assert!(stdout.contains("hog-devnode"));
     assert!(stdout.contains("tests/integration.rs"));
     assert!(!stdout.contains("not wired yet"));
 }
@@ -845,10 +845,10 @@ fn node_help_mentions_hogd_dev_binary_and_log_contract() {
     assert!(stdout.contains("-v, --verbose"));
     assert!(stdout.contains("--verbose"));
     assert!(stdout.contains("--verbose is also honored with --json"));
-    assert!(stdout.contains("--hogd-dev-binary"));
+    assert!(stdout.contains("--hog-devnode-binary"));
     assert!(stdout.contains("--dev-account-count"));
     assert!(stdout.contains("--hogd-protocol"));
-    assert!(stdout.contains("GROUNDHOG_HOGD_DEV_BINARY"));
+    assert!(stdout.contains("GROUNDHOG_HOG_DEVNODE_BINARY"));
     assert!(stdout.contains("RUST_LOG"));
     assert!(stdout.contains("hogd_timestamp_ms"));
     assert!(stdout.contains("hogd_target"));
@@ -1122,7 +1122,7 @@ fn test_integration_reports_local_node_startup_failure() {
         ])
         .current_dir(tmp.path())
         .env("PATH", &fake_bin)
-        .env("GROUNDHOG_HOGD_DEV_BINARY", &hogd_dev)
+        .env("GROUNDHOG_HOG_DEVNODE_BINARY", &hogd_dev)
         .env("GROUNDHOG_FAKE_HOGD_DEV_MODE", "exit-7")
         .output()
         .unwrap();
@@ -3144,7 +3144,7 @@ fn write_runtime_manifest_with_seed(
         "protocol": "hogp/test",
         "genesisHash": format!("0x{}", "42".repeat(32)),
         "producer": {
-            "binary": "hogd-dev",
+            "binary": "hog-devnode",
             "version": "0.1.0"
         },
         "endpoints": {

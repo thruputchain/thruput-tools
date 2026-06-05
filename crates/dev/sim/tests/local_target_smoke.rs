@@ -195,10 +195,9 @@ struct CatalogScenario {
 }
 
 #[test]
-#[ignore = "requires GROUNDHOG_SIM_HOGD_DEV_BINARY and a groundhog binary with dev-node support"]
+#[ignore = "requires GROUNDHOG_SIM_HOG_DEVNODE_BINARY and a groundhog binary with dev-node support"]
 fn local_target_chain_tip_smoke() {
-    let hogd_dev_binary = std::env::var("GROUNDHOG_SIM_HOGD_DEV_BINARY")
-        .expect("set GROUNDHOG_SIM_HOGD_DEV_BINARY to a hogd-dev binary");
+    let hogd_dev_binary = hog_devnode_binary_env();
     let groundhog_binary =
         std::env::var("GROUNDHOG_SIM_GROUNDHOG_BINARY").unwrap_or_else(|_| "groundhog".into());
     let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -216,7 +215,7 @@ fn local_target_chain_tip_smoke() {
         .arg(&scenario)
         .arg("--groundhog-binary")
         .arg(groundhog_binary)
-        .arg("--hogd-dev-binary")
+        .arg("--hog-devnode-binary")
         .arg(hogd_dev_binary);
     add_hogd_protocol_arg(&mut command);
     let status = command
@@ -244,7 +243,7 @@ fn local_target_chain_tip_smoke() {
 }
 
 #[test]
-#[ignore = "requires GROUNDHOG_SIM_HOGD_DEV_BINARY and a groundhog binary with dev-node support"]
+#[ignore = "requires GROUNDHOG_SIM_HOG_DEVNODE_BINARY and a groundhog binary with dev-node support"]
 fn local_scenario_catalog_smoke() {
     run_catalog(LOCAL_FAST_CATALOG);
     if std::env::var("GROUNDHOG_SIM_CONTRACT_ARTIFACT_ROOT").is_ok() {
@@ -255,7 +254,7 @@ fn local_scenario_catalog_smoke() {
 }
 
 #[test]
-#[ignore = "requires GROUNDHOG_SIM_HOGD_DEV_BINARY, GROUNDHOG_SIM_RUN_SOAKS=1, and a groundhog binary with dev-node support"]
+#[ignore = "requires GROUNDHOG_SIM_HOG_DEVNODE_BINARY, GROUNDHOG_SIM_RUN_SOAKS=1, and a groundhog binary with dev-node support"]
 fn local_scenario_catalog_soak() {
     if std::env::var("GROUNDHOG_SIM_RUN_SOAKS").as_deref() != Ok("1") {
         eprintln!("skipping soak catalog; set GROUNDHOG_SIM_RUN_SOAKS=1 to run it");
@@ -265,10 +264,9 @@ fn local_scenario_catalog_soak() {
 }
 
 #[test]
-#[ignore = "requires GROUNDHOG_SIM_HOGD_DEV_BINARY and a groundhog binary with dev-node support"]
+#[ignore = "requires GROUNDHOG_SIM_HOG_DEVNODE_BINARY and a groundhog binary with dev-node support"]
 fn local_restart_target_chain_tip_smoke() {
-    let hogd_dev_binary = std::env::var("GROUNDHOG_SIM_HOGD_DEV_BINARY")
-        .expect("set GROUNDHOG_SIM_HOGD_DEV_BINARY to a hogd-dev binary");
+    let hogd_dev_binary = hog_devnode_binary_env();
     let groundhog_binary =
         std::env::var("GROUNDHOG_SIM_GROUNDHOG_BINARY").unwrap_or_else(|_| "groundhog".into());
     let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -286,7 +284,7 @@ fn local_restart_target_chain_tip_smoke() {
         .arg(&scenario)
         .arg("--groundhog-binary")
         .arg(groundhog_binary)
-        .arg("--hogd-dev-binary")
+        .arg("--hog-devnode-binary")
         .arg(hogd_dev_binary);
     add_hogd_protocol_arg(&mut command);
     let status = command
@@ -372,10 +370,9 @@ fn local_restart_target_chain_tip_smoke() {
 }
 
 #[test]
-#[ignore = "requires GROUNDHOG_SIM_HOGD_DEV_BINARY and a groundhog binary with dev-node support"]
+#[ignore = "requires GROUNDHOG_SIM_HOG_DEVNODE_BINARY and a groundhog binary with dev-node support"]
 fn local_target_sweep_orphan_smoke() {
-    let hogd_dev_binary = std::env::var("GROUNDHOG_SIM_HOGD_DEV_BINARY")
-        .expect("set GROUNDHOG_SIM_HOGD_DEV_BINARY to a hogd-dev binary");
+    let hogd_dev_binary = hog_devnode_binary_env();
     let groundhog_binary =
         std::env::var("GROUNDHOG_SIM_GROUNDHOG_BINARY").unwrap_or_else(|_| "groundhog".into());
     let root = tempfile::tempdir().expect("temp dir should be created");
@@ -402,7 +399,7 @@ fn local_target_sweep_orphan_smoke() {
         .arg(&scenario)
         .arg("--groundhog-binary")
         .arg(groundhog_binary)
-        .arg("--hogd-dev-binary")
+        .arg("--hog-devnode-binary")
         .arg(hogd_dev_binary);
     add_hogd_protocol_arg(&mut command);
     let mut child = command
@@ -518,8 +515,7 @@ fn assert_rpc_port_closed(rpc_url: &str) {
 }
 
 fn run_catalog(catalog: &[CatalogScenario]) {
-    let hogd_dev_binary = std::env::var("GROUNDHOG_SIM_HOGD_DEV_BINARY")
-        .expect("set GROUNDHOG_SIM_HOGD_DEV_BINARY to a hogd-dev binary");
+    let hogd_dev_binary = hog_devnode_binary_env();
     let groundhog_binary =
         std::env::var("GROUNDHOG_SIM_GROUNDHOG_BINARY").unwrap_or_else(|_| "groundhog".into());
     let repo_root = repo_root();
@@ -535,7 +531,7 @@ fn run_catalog(catalog: &[CatalogScenario]) {
             .arg(&scenario_path)
             .arg("--groundhog-binary")
             .arg(&groundhog_binary)
-            .arg("--hogd-dev-binary")
+            .arg("--hog-devnode-binary")
             .arg(&hogd_dev_binary);
         if scenario.expect_contract_view
             || scenario.expect_contract_storage
@@ -618,6 +614,12 @@ fn run_catalog(catalog: &[CatalogScenario]) {
             .expect("simulation artifact should record resolved rpc url");
         assert_rpc_port_closed(&rpc_url);
     }
+}
+
+fn hog_devnode_binary_env() -> String {
+    std::env::var("GROUNDHOG_SIM_HOG_DEVNODE_BINARY")
+        .or_else(|_| std::env::var("GROUNDHOG_SIM_HOGD_DEV_BINARY"))
+        .expect("set GROUNDHOG_SIM_HOG_DEVNODE_BINARY to a hog-devnode binary")
 }
 
 fn assert_multi_contract_artifacts(result: &serde_json::Value, scenario: &str) {

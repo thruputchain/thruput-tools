@@ -144,7 +144,7 @@ enum Command {
     /// Build and test the contract under WASM or local-node execution
     #[command(long_about = "Builds the contract to WASM, then runs \
                       the test_wasm target on the host. With \
-                      --integration, starts an ephemeral hogd-dev \
+                      --integration, starts an ephemeral hog-devnode \
                       local node, deploys the contract, and runs \
                       the integration test target with RPC environment \
                       variables.")]
@@ -178,7 +178,7 @@ enum Command {
         /// With --json, emits one newline-delimited JSON record per run.
         #[arg(long)]
         watch: bool,
-        /// Run tests/integration.rs against an ephemeral hogd-dev local node
+        /// Run tests/integration.rs against an ephemeral hog-devnode local node
         #[arg(long)]
         integration: bool,
         /// Config profile to use
@@ -290,28 +290,32 @@ enum Command {
     /// Start an experimental local development node
     #[command(
         long_about = "Start an experimental local development node \
-                      backed by a supervised hogd-dev process. The \
+                      backed by a supervised hog-devnode process. The \
                       native_exec/test_ffi prototype backend is no longer \
                       wired into this command.",
-        after_help = "Protocol override:\n  --hogd-protocol hogp/<hash> overrides the x23 intro token used for local\n  hogd-dev handshakes. This is useful when a local hogd-dev build is ahead of\n  the published Rust protocol crates; generated XDR clients still fail if the\n  wire shape is actually incompatible.\n\nLogging:\n  By default, groundhog node prints its own lifecycle/status output and keeps forwarded\n  hogd-dev info logs quiet. Use --verbose for the normal debugging view, or RUST_LOG\n  for exact tracing filters. --verbose is also honored with --json; logs stay on stderr.\n\nEnvironment:\n  GROUNDHOG_HOGD_DEV_BINARY  Default hogd-dev binary path when --hogd-dev-binary is omitted\n  RUST_LOG                    Overrides --verbose and controls supervisor/forwarded logs\n\nChild log bridge:\n  hogd-dev readiness is read from stdout. hogd-dev logs are requested as JSON on stderr,\n  parsed by node-supervisor, and re-emitted through tracing with hogd_timestamp_ms,\n  hogd_target, hogd_file, hogd_line, and hogd_fields metadata."
+        after_help = "Protocol override:\n  --hogd-protocol hogp/<hash> overrides the x23 intro token used for local\n  hog-devnode handshakes. This is useful when a local hog-devnode build is ahead of\n  the published Rust protocol crates; generated XDR clients still fail if the\n  wire shape is actually incompatible.\n\nLogging:\n  By default, groundhog node prints its own lifecycle/status output and keeps forwarded\n  hog-devnode info logs quiet. Use --verbose for the normal debugging view, or RUST_LOG\n  for exact tracing filters. --verbose is also honored with --json; logs stay on stderr.\n\nEnvironment:\n  GROUNDHOG_HOG_DEVNODE_BINARY  Default hog-devnode binary path when --hog-devnode-binary is omitted\n  GROUNDHOG_HOGD_DEV_BINARY     Legacy alias for GROUNDHOG_HOG_DEVNODE_BINARY\n  RUST_LOG                      Overrides --verbose and controls supervisor/forwarded logs\n\nChild log bridge:\n  hog-devnode readiness is read from stdout. hog-devnode logs are requested as JSON on stderr,\n  parsed by node-supervisor, and re-emitted through tracing with hogd_timestamp_ms,\n  hogd_target, hogd_file, hogd_line, and hogd_fields metadata."
     )]
     Node {
         /// Port to listen on
         #[arg(long, default_value = "9545")]
         port: u16,
-        /// Show forwarded hogd-dev info logs in addition to supervisor status
+        /// Show forwarded hog-devnode info logs in addition to supervisor status
         #[arg(long, short = 'v')]
         verbose: bool,
         /// Number of deterministic dev accounts to bootstrap
         #[arg(long)]
         dev_account_count: Option<usize>,
-        /// Explicit hogd-dev binary path
-        #[arg(long)]
+        /// Explicit hog-devnode binary path
+        #[arg(
+            long = "hog-devnode-binary",
+            alias = "hogd-dev-binary",
+            value_name = "HOG_DEVNODE_BINARY"
+        )]
         hogd_dev_binary: Option<std::path::PathBuf>,
-        /// Override hogd-dev x23 intro protocol token
+        /// Override hog-devnode x23 intro protocol token
         #[arg(long)]
         hogd_protocol: Option<String>,
-        /// Override hogd-dev readiness timeout for smoke tests
+        /// Override hog-devnode readiness timeout for smoke tests
         #[arg(long, hide = true)]
         startup_timeout_secs: Option<u64>,
         /// Local block production mode

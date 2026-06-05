@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Simulator local-target smoke tests.
 #
-# Runs the ignored hogsim process-level smokes against a real hogd-dev binary:
+# Runs the ignored hogsim process-level smokes against a real hog-devnode binary:
 #   1. local provider launches groundhog node itself
 #   2. local provider restarts its managed node through restart-target chaos
 #   3. sweeper reclaims an orphaned simulator-owned local target
@@ -10,8 +10,10 @@
 # For the broader scenario ladder, run scripts/smoke-sim-scenarios.sh.
 #
 # Optional environment:
-#   HOGD_DEV_BINARY=/path/to/hogd-dev
-#   GROUNDHOG_HOGD_DEV_BINARY=/path/to/hogd-dev
+#   HOG_DEVNODE_BINARY=/path/to/hog-devnode
+#   GROUNDHOG_HOG_DEVNODE_BINARY=/path/to/hog-devnode
+#   HOGD_DEV_BINARY=/path/to/hogd-dev  # legacy
+#   GROUNDHOG_HOGD_DEV_BINARY=/path/to/hogd-dev  # legacy
 #   GROUNDHOG_BINARY=/path/to/groundhog
 #   HOGD_PROTOCOL_OVERRIDE=hogp/<hash>
 #   KEEP_WORKDIR=1
@@ -159,6 +161,14 @@ PY
 }
 
 find_hogd_dev_binary() {
+    if [[ -n "${HOG_DEVNODE_BINARY:-}" ]]; then
+        expand_user_path "$HOG_DEVNODE_BINARY"
+        return
+    fi
+    if [[ -n "${GROUNDHOG_HOG_DEVNODE_BINARY:-}" ]]; then
+        expand_user_path "$GROUNDHOG_HOG_DEVNODE_BINARY"
+        return
+    fi
     if [[ -n "${HOGD_DEV_BINARY:-}" ]]; then
         expand_user_path "$HOGD_DEV_BINARY"
         return
@@ -168,18 +178,24 @@ find_hogd_dev_binary() {
         return
     fi
 
-    local sibling="$REPO_ROOT/../hogd/build/hogd/hogd_dev/hogd-dev"
-    if [[ -x "$sibling" ]]; then
-        printf '%s\n' "$sibling"
-        return
-    fi
+    for sibling in \
+        "$REPO_ROOT/../hogd/build/hogd/hogd_dev/hog-devnode" \
+        "$REPO_ROOT/../hogd/build/hogd/hogd_dev/hogd-dev"
+    do
+        if [[ -x "$sibling" ]]; then
+            printf '%s\n' "$sibling"
+            return
+        fi
+    done
 
-    if command -v hogd-dev >/dev/null 2>&1; then
-        command -v hogd-dev
-        return
-    fi
+    for binary in hog-devnode hogd-dev; do
+        if command -v "$binary" >/dev/null 2>&1; then
+            command -v "$binary"
+            return
+        fi
+    done
 
-    die "set HOGD_DEV_BINARY or GROUNDHOG_HOGD_DEV_BINARY to /path/to/hogd-dev"
+    die "set HOG_DEVNODE_BINARY or GROUNDHOG_HOG_DEVNODE_BINARY to /path/to/hog-devnode"
 }
 
 WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/groundhog-sim-smoke.XXXXXX")"
@@ -200,7 +216,7 @@ cleanup() {
 trap cleanup EXIT
 
 HOGD_DEV_BINARY="$(find_hogd_dev_binary)"
-[[ -x "$HOGD_DEV_BINARY" ]] || die "hogd-dev binary is not executable: $HOGD_DEV_BINARY"
+[[ -x "$HOGD_DEV_BINARY" ]] || die "hog-devnode binary is not executable: $HOGD_DEV_BINARY"
 HOGD_PROTOCOL="$(detect_hogd_protocol "$HOGD_DEV_BINARY")"
 if [[ -n "$HOGD_PROTOCOL" ]]; then
     export GROUNDHOG_SIM_HOGD_PROTOCOL="$HOGD_PROTOCOL"
@@ -212,17 +228,17 @@ cargo build -p groundhog-cli --features dev-node
 [[ -x "$GROUNDHOG_BINARY" ]] || die "groundhog binary is not executable: $GROUNDHOG_BINARY"
 
 log "running local-provider smoke"
-GROUNDHOG_SIM_HOGD_DEV_BINARY="$HOGD_DEV_BINARY" \
+GROUNDHOG_SIM_HOG_DEVNODE_BINARY="$HOGD_DEV_BINARY" \
 GROUNDHOG_SIM_GROUNDHOG_BINARY="$GROUNDHOG_BINARY" \
     cargo test -p groundhog-sim --test local_target_smoke local_target_chain_tip_smoke -- --ignored --nocapture
 
 log "running local-provider restart smoke"
-GROUNDHOG_SIM_HOGD_DEV_BINARY="$HOGD_DEV_BINARY" \
+GROUNDHOG_SIM_HOG_DEVNODE_BINARY="$HOGD_DEV_BINARY" \
 GROUNDHOG_SIM_GROUNDHOG_BINARY="$GROUNDHOG_BINARY" \
     cargo test -p groundhog-sim --test local_target_smoke local_restart_target_chain_tip_smoke -- --ignored --nocapture
 
 log "running local-provider sweeper smoke"
-GROUNDHOG_SIM_HOGD_DEV_BINARY="$HOGD_DEV_BINARY" \
+GROUNDHOG_SIM_HOG_DEVNODE_BINARY="$HOGD_DEV_BINARY" \
 GROUNDHOG_SIM_GROUNDHOG_BINARY="$GROUNDHOG_BINARY" \
     cargo test -p groundhog-sim --test local_target_smoke local_target_sweep_orphan_smoke -- --ignored --nocapture
 
@@ -230,7 +246,7 @@ NODE_STDOUT="$WORKDIR/groundhog-node.json"
 NODE_STDERR="$WORKDIR/groundhog-node.stderr"
 
 log "starting temporary groundhog node for existing-provider smoke"
-NODE_ARGS=(--json node --hogd-dev-binary "$HOGD_DEV_BINARY" --port 0)
+NODE_ARGS=(--json node --hog-devnode-binary "$HOGD_DEV_BINARY" --port 0)
 if [[ -n "$HOGD_PROTOCOL" ]]; then
     NODE_ARGS+=(--hogd-protocol "$HOGD_PROTOCOL")
 fi

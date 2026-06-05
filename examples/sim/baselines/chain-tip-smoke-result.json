@@ -17,7 +17,7 @@
     "protocol": "hogp/test",
     "genesisHash": "0x4242424242424242424242424242424242424242424242424242424242424242",
     "producer": {
-      "binary": "hogd-dev",
+      "binary": "hog-devnode",
       "version": "0.1.0"
     }
   },

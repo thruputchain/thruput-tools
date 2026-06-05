@@ -6,7 +6,7 @@
   "target": {
     "provider": "existing",
     "rpcUrl": "http://127.0.0.1:9545",
-    "runtimeManifest": "/tmp/hogd-dev/runtime-manifest.json"
+    "runtimeManifest": "/tmp/hog-devnode/runtime-manifest.json"
   },
   "baseline": "baselines/chain-tip-smoke-result.json",
   "loadShape": [

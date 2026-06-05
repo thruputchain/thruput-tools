@@ -48,7 +48,7 @@ pub struct TargetProviderSpec {
     /// Runtime manifest path for the `existing` provider.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_manifest: Option<PathBuf>,
-    /// `hogd-dev` binary path reserved for the Phase 2 `local` provider.
+    /// `hog-devnode` binary path reserved for the Phase 2 `local` provider.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hogd_dev_binary: Option<PathBuf>,
     /// Local node block production mode for the `local` provider.
@@ -183,9 +183,9 @@ pub struct TargetOverrides {
     pub runtime_manifest: Option<PathBuf>,
     /// `groundhog` binary path for the `local` provider.
     pub groundhog_binary: Option<PathBuf>,
-    /// `hogd-dev` binary path for the `local` provider.
+    /// `hog-devnode` binary path for the `local` provider.
     pub hogd_dev_binary: Option<PathBuf>,
-    /// `hogd-dev` x23 intro protocol token for the `local` provider.
+    /// `hog-devnode` x23 intro protocol token for the `local` provider.
     pub hogd_protocol: Option<String>,
     /// Public JSON-RPC port requested from the `local` provider.
     pub port: Option<u16>,
@@ -208,7 +208,7 @@ impl TargetOverrides {
         if self.groundhog_binary.is_some() {
             Some("--groundhog-binary")
         } else if self.hogd_dev_binary.is_some() {
-            Some("--hogd-dev-binary")
+            Some("--hog-devnode-binary")
         } else if self.hogd_protocol.is_some() {
             Some("--hogd-protocol")
         } else if self.port.is_some() {
@@ -666,7 +666,7 @@ fn local_node_args(options: LocalNodeArgOptions<'_>) -> Vec<String> {
         options.startup_timeout_secs.to_string(),
     ];
     if let Some(binary) = options.hogd_dev_binary {
-        args.push("--hogd-dev-binary".to_string());
+        args.push("--hog-devnode-binary".to_string());
         args.push(binary.display().to_string());
     }
     if let Some(protocol) = options.hogd_protocol {
@@ -1409,7 +1409,7 @@ mod tests {
     async fn existing_provider_rejects_non_existing_manifest_provider() {
         let manifest = manifest(&json!({
             "provider": "local",
-            "hogdDevBinary": "/tmp/hogd-dev"
+            "hogdDevBinary": "/tmp/hog-devnode"
         }));
 
         let error = ExistingTargetProvider
@@ -1496,7 +1496,7 @@ mod tests {
     fn local_node_args_include_required_account_count() {
         let args = local_node_args(LocalNodeArgOptions {
             required_accounts: 5,
-            hogd_dev_binary: Some(std::path::Path::new("/tmp/hogd-dev")),
+            hogd_dev_binary: Some(std::path::Path::new("/tmp/hog-devnode")),
             hogd_protocol: Some("hogp/test"),
             block_driver: Some(TargetBlockDriverMode::Interval),
             block_interval_ms: Some(250),
@@ -1514,8 +1514,8 @@ mod tests {
                 "--json",
                 "--startup-timeout-secs",
                 "45",
-                "--hogd-dev-binary",
-                "/tmp/hogd-dev",
+                "--hog-devnode-binary",
+                "/tmp/hog-devnode",
                 "--hogd-protocol",
                 "hogp/test",
                 "--block-driver",

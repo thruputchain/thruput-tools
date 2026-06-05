@@ -1,4 +1,4 @@
-//! hogd-dev process adapter.
+//! hog-devnode process adapter.
 
 use std::{
     env,
@@ -32,16 +32,22 @@ use crate::{
     pid_file::PidGuard,
 };
 
-/// Default hogd-dev binary name.
-pub const DEFAULT_HOGD_DEV_BINARY: &str = "hogd-dev";
+/// Default devnode binary name.
+pub const DEFAULT_HOGD_DEV_BINARY: &str = "hog-devnode";
 
-/// Environment variable used to override the hogd-dev binary path.
+/// Legacy devnode binary name accepted during the rename transition.
+pub const LEGACY_HOGD_DEV_BINARY: &str = "hogd-dev";
+
+/// Environment variable used to override the devnode binary path.
+pub const HOG_DEVNODE_BINARY_ENV: &str = "GROUNDHOG_HOG_DEVNODE_BINARY";
+
+/// Legacy environment variable used to override the devnode binary path.
 pub const HOGD_DEV_BINARY_ENV: &str = "GROUNDHOG_HOGD_DEV_BINARY";
 
 /// Environment variable used to request structured JSON logs from hogd-dev.
 pub const HOGD_LOG_FORMAT_ENV: &str = "HOGD_LOG_FORMAT";
 
-/// Maximum accepted hogd-dev readiness line length.
+/// Maximum accepted hog-devnode readiness line length.
 pub const MAX_READINESS_LINE_BYTES: usize = 64 * 1024;
 
 /// Maximum accepted hogd-dev stderr log line length.
@@ -83,7 +89,7 @@ pub struct HogdDevEndpoints {
     pub dev_control: Option<SocketAddr>,
 }
 
-/// Public dev-account metadata advertised by hogd-dev readiness.
+/// Public dev-account metadata advertised by hog-devnode readiness.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[non_exhaustive]
 pub(crate) struct HogdDevReadyAccount {
@@ -97,7 +103,7 @@ pub(crate) struct HogdDevReadyAccount {
     pub initial_storage_tokens: u64,
 }
 
-/// hogd-dev readiness payload.
+/// hog-devnode readiness payload.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[non_exhaustive]
 pub struct HogdDevReadiness {
@@ -116,7 +122,7 @@ pub struct HogdDevReadiness {
     /// Full runtime manifest loaded from the advertised readiness pointer.
     #[serde(default)]
     pub runtime_manifest: Option<RuntimeManifest>,
-    /// Runtime manifest file path advertised by hogd-dev readiness.
+    /// Runtime manifest file path advertised by hog-devnode readiness.
     #[serde(default)]
     pub manifest_path: Option<PathBuf>,
     /// SHA-256 hash of the exact runtime manifest file bytes.
@@ -145,7 +151,7 @@ struct HogdDevReadinessPointer {
     manifest_hash: String,
 }
 
-/// Validate hogd-dev readiness account metadata against local dev-account config.
+/// Validate hog-devnode readiness account metadata against local dev-account config.
 pub(crate) fn validate_dev_accounts(
     readiness: &HogdDevReadiness,
     config: &HogdDevConfig,
@@ -153,7 +159,7 @@ pub(crate) fn validate_dev_accounts(
     let manifest = readiness.runtime_manifest.as_ref().ok_or_else(|| {
         NodeSupervisorError::InvalidRuntimeManifest {
             program: DEFAULT_HOGD_DEV_BINARY.to_string(),
-            reason: "hogd-dev readiness must advertise a runtime manifest".to_string(),
+            reason: "hog-devnode readiness must advertise a runtime manifest".to_string(),
         }
     })?;
     validate_dev_account_count(config.dev_account_count, readiness.dev_accounts.len())?;
@@ -185,14 +191,14 @@ pub struct HogdDevProcess {
 }
 
 impl HogdDevProcess {
-    /// Start hogd-dev using the configured binary lookup.
+    /// Start hog-devnode using the configured binary lookup.
     #[tracing::instrument(skip_all, fields(listen_host = %config.listen_host))]
     pub async fn start(config: &HogdDevConfig) -> Result<Self, NodeSupervisorError> {
         let binary = resolve_hogd_dev_binary(config)?;
         Self::start_with_binary(config, binary).await
     }
 
-    /// Start hogd-dev from an already-resolved binary path.
+    /// Start hog-devnode from an already-resolved binary path.
     #[tracing::instrument(skip_all, fields(binary = %binary.as_ref().display()))]
     pub async fn start_with_binary(
         config: &HogdDevConfig,
@@ -437,10 +443,14 @@ pub(crate) fn build_hogd_dev_spec_with_bootstrap_manifest(
     spec
 }
 
-/// Resolve the hogd-dev binary path using the v1 lookup order.
+/// Resolve the devnode binary path using the v1 lookup order.
 pub fn resolve_hogd_dev_binary(config: &HogdDevConfig) -> Result<PathBuf, NodeSupervisorError> {
     if let Some(binary_path) = &config.binary_path {
         return validate_configured_binary(binary_path);
+    }
+
+    if let Some(env_path) = env::var_os(HOG_DEVNODE_BINARY_ENV) {
+        return validate_configured_binary(Path::new(&env_path));
     }
 
     if let Some(env_path) = env::var_os(HOGD_DEV_BINARY_ENV) {
@@ -450,17 +460,21 @@ pub fn resolve_hogd_dev_binary(config: &HogdDevConfig) -> Result<PathBuf, NodeSu
     let current_exe =
         env::current_exe().map_err(|source| NodeSupervisorError::CurrentExe { source })?;
     if let Some(parent) = current_exe.parent() {
-        let sibling = parent.join(DEFAULT_HOGD_DEV_BINARY);
-        if is_executable_file(&sibling) {
-            return Ok(sibling);
+        for binary in [DEFAULT_HOGD_DEV_BINARY, LEGACY_HOGD_DEV_BINARY] {
+            let sibling = parent.join(binary);
+            if is_executable_file(&sibling) {
+                return Ok(sibling);
+            }
         }
     }
 
     if let Some(path) = env::var_os("PATH") {
         for dir in env::split_paths(&path) {
-            let candidate = dir.join(DEFAULT_HOGD_DEV_BINARY);
-            if is_executable_file(&candidate) {
-                return Ok(candidate);
+            for binary in [DEFAULT_HOGD_DEV_BINARY, LEGACY_HOGD_DEV_BINARY] {
+                let candidate = dir.join(binary);
+                if is_executable_file(&candidate) {
+                    return Ok(candidate);
+                }
             }
         }
     }
@@ -468,7 +482,7 @@ pub fn resolve_hogd_dev_binary(config: &HogdDevConfig) -> Result<PathBuf, NodeSu
     Err(NodeSupervisorError::HogdDevNotFound)
 }
 
-/// Parse one hogd-dev readiness line.
+/// Parse one hog-devnode readiness line.
 pub fn parse_readiness_line(
     program: &str,
     line: &str,
@@ -1128,7 +1142,7 @@ async fn kill_unready_child(child: &mut SupervisedChild) {
                 target: "hogd_dev",
                 %error,
                 program = child.program(),
-                "failed to kill unready hogd-dev process group"
+                "failed to kill unready hog-devnode process group"
             );
         }
         if let Err(error) = child.wait().await {
@@ -1377,9 +1391,10 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        DEFAULT_HOGD_DEV_BINARY, HOGD_DEV_BINARY_ENV, HOGD_LOG_FORMAT_ENV, HogdDevProcess,
-        build_hogd_dev_spec, build_hogd_dev_spec_with_bootstrap_manifest, parse_readiness_line,
-        resolve_hogd_dev_binary, validate_dev_accounts, write_bootstrap_manifest,
+        DEFAULT_HOGD_DEV_BINARY, HOG_DEVNODE_BINARY_ENV, HOGD_DEV_BINARY_ENV, HOGD_LOG_FORMAT_ENV,
+        HogdDevProcess, build_hogd_dev_spec, build_hogd_dev_spec_with_bootstrap_manifest,
+        parse_readiness_line, resolve_hogd_dev_binary, validate_dev_accounts,
+        write_bootstrap_manifest,
     };
     use crate::{
         HogdDevConfig, NodeSupervisorError,
@@ -1393,12 +1408,12 @@ mod tests {
     fn command_shape_matches_contract() {
         let config = HogdDevConfig::default().with_listen_host("127.0.0.2");
         let spec = build_hogd_dev_spec_with_bootstrap_manifest(
-            "/tmp/hogd-dev",
+            "/tmp/hog-devnode",
             &config,
             "/tmp/bootstrap-manifest.json",
         );
 
-        assert_eq!(spec.program(), std::ffi::OsStr::new("/tmp/hogd-dev"));
+        assert_eq!(spec.program(), std::ffi::OsStr::new("/tmp/hog-devnode"));
         let args = spec.program_args();
         assert_eq!(
             args,
@@ -1422,7 +1437,7 @@ mod tests {
     #[test]
     fn public_command_builder_keeps_shorthand_compatibility() {
         let config = HogdDevConfig::default().with_listen_host("127.0.0.2");
-        let spec = build_hogd_dev_spec("/tmp/hogd-dev", &config);
+        let spec = build_hogd_dev_spec("/tmp/hog-devnode", &config);
 
         assert_eq!(
             spec.program_args(),
@@ -2232,7 +2247,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("bug: system time should be after epoch")
             .as_nanos();
-        env::temp_dir().join(format!("missing-hogd-dev-{unique}"))
+        env::temp_dir().join(format!("missing-hog-devnode-{unique}"))
     }
 
     fn manifest_readiness_line(endpoints: &str, accounts: &str) -> String {
@@ -2262,7 +2277,7 @@ mod tests {
               "networkId":"groundhog-local",
               "protocol":"hogp/test",
               "genesisHash":"0x{}",
-              "producer":{{"binary":"hogd-dev","version":"0.1.0","commitHash":"abcdef0"}},
+              "producer":{{"binary":"hog-devnode","version":"0.1.0","commitHash":"abcdef0"}},
               "endpoints":{endpoints},
               "bootstrapAccountDerivation":{{
                 "scheme":"{derivation_scheme}",
@@ -2358,7 +2373,8 @@ mod tests {
     fn env_binary_path_resolves() {
         let tmp = TempDir::new().expect("bug: temp dir should be created");
         let path = executable_file(tmp.path(), DEFAULT_HOGD_DEV_BINARY);
-        let _guard = EnvGuard::set(HOGD_DEV_BINARY_ENV, &path);
+        let _legacy_guard = EnvGuard::remove(HOGD_DEV_BINARY_ENV);
+        let _guard = EnvGuard::set(HOG_DEVNODE_BINARY_ENV, &path);
 
         assert_eq!(
             resolve_hogd_dev_binary(&HogdDevConfig::default())
@@ -2369,9 +2385,25 @@ mod tests {
 
     #[test]
     #[serial]
+    fn legacy_env_binary_path_resolves() {
+        let tmp = TempDir::new().expect("bug: temp dir should be created");
+        let path = executable_file(tmp.path(), DEFAULT_HOGD_DEV_BINARY);
+        let _env_guard = EnvGuard::remove(HOG_DEVNODE_BINARY_ENV);
+        let _guard = EnvGuard::set(HOGD_DEV_BINARY_ENV, &path);
+
+        assert_eq!(
+            resolve_hogd_dev_binary(&HogdDevConfig::default())
+                .expect("bug: legacy env path should resolve"),
+            path
+        );
+    }
+
+    #[test]
+    #[serial]
     fn path_binary_resolves() {
         let tmp = TempDir::new().expect("bug: temp dir should be created");
         let path = executable_file(tmp.path(), DEFAULT_HOGD_DEV_BINARY);
+        let _new_env_guard = EnvGuard::remove(HOG_DEVNODE_BINARY_ENV);
         let _env_guard = EnvGuard::remove(HOGD_DEV_BINARY_ENV);
         let _path_guard = EnvGuard::set("PATH", tmp.path());
 
@@ -2392,7 +2424,7 @@ mod tests {
         let sibling = sibling_dir.join(DEFAULT_HOGD_DEV_BINARY);
         assert!(
             !sibling.exists(),
-            "test would clobber existing sibling hogd-dev at {}",
+            "test would clobber existing sibling hog-devnode at {}",
             sibling.display()
         );
         fs::write(&sibling, b"").expect("bug: sibling file should be written");
@@ -2401,6 +2433,7 @@ mod tests {
         let _file_guard = FileGuard {
             path: sibling.clone(),
         };
+        let _new_env_guard = EnvGuard::remove(HOG_DEVNODE_BINARY_ENV);
         let _env_guard = EnvGuard::remove(HOGD_DEV_BINARY_ENV);
         let empty_path = TempDir::new().expect("bug: temp dir should be created");
         let _path_guard = EnvGuard::set("PATH", empty_path.path());
@@ -2416,11 +2449,12 @@ mod tests {
     #[serial]
     fn missing_binary_returns_typed_error() {
         let tmp = TempDir::new().expect("bug: temp dir should be created");
+        let _new_env_guard = EnvGuard::remove(HOG_DEVNODE_BINARY_ENV);
         let _env_guard = EnvGuard::remove(HOGD_DEV_BINARY_ENV);
         let _path_guard = EnvGuard::set("PATH", tmp.path());
 
         let err = resolve_hogd_dev_binary(&HogdDevConfig::default())
-            .expect_err("bug: missing hogd-dev should fail");
+            .expect_err("bug: missing hog-devnode should fail");
 
         assert!(matches!(err, NodeSupervisorError::HogdDevNotFound));
     }

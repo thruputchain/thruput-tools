@@ -47,10 +47,10 @@ cargo fmt --check
 ## Runtime Manifest Mode
 
 For local benchmark runs, start a backend producer first. `groundhog node
---json` supervises `hogd-dev` and reports the generated manifest path:
+--json` supervises `hog-devnode` and reports the generated manifest path:
 
 ```bash
-groundhog --json node --hogd-dev-binary /path/to/hogd-dev > /tmp/node.json
+groundhog --json node --hog-devnode-binary /path/to/hog-devnode > /tmp/node.json
 RUNTIME_MANIFEST=$(jq -r '.data.runtime_manifest.path' /tmp/node.json)
 ```
 
@@ -76,7 +76,7 @@ are rejected.
 For repeatable local runs, use the scenario runner:
 
 ```bash
-BENCH_SCENARIO=gateway-baseline HOGD_DEV_BINARY=/path/to/hogd-dev \
+BENCH_SCENARIO=gateway-baseline HOG_DEVNODE_BINARY=/path/to/hog-devnode \
   scripts/smoke-runtime-manifest-bench.sh
 ```
 

@@ -1593,7 +1593,7 @@ mod tests {
             "protocol": "hogp/test",
             "genesisHash": prefixed_hex(0x42),
             "producer": {
-                "binary": "hogd-dev",
+                "binary": "hog-devnode",
                 "version": "0.1.0"
             },
             "endpoints": {
@@ -1660,7 +1660,7 @@ mod tests {
                 protocol: "hogp/test".into(),
                 genesis_hash: prefixed_hex(0x42),
                 producer: ProducerIdentity {
-                    binary: "hogd-dev".into(),
+                    binary: "hog-devnode".into(),
                     version: "0.1.0".into(),
                     commit_hash: None,
                 },

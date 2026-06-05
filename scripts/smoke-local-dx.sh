@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Real local-DX smoke test.
 #
-# Exercises the user-facing CLI path against a real hogd-dev binary:
+# Exercises the user-facing CLI path against a real hog-devnode binary:
 #   groundhog new -> build -> node -> deploy -> call -> view -> storage
 #
 # Optional environment:
-#   HOGD_DEV_BINARY=/path/to/hogd-dev
+#   HOG_DEVNODE_BINARY=/path/to/hog-devnode
+#   HOGD_DEV_BINARY=/path/to/hogd-dev  # legacy
 #   HOGD_PROTOCOL_OVERRIDE=hogp/<hash>  # intro token only; XDR still validates shape
 #   SMOKE_STANDALONE_GATEWAY=1  # route view/storage checks through hog-gateway
 #   SMOKE_SDK_PATH=/path/to/sdk_rs/crates/sdk  # test scaffold against local SDK
@@ -139,23 +140,33 @@ PY
 }
 
 find_hogd_dev_binary() {
+    if [[ -n "${HOG_DEVNODE_BINARY:-}" ]]; then
+        printf '%s\n' "$HOG_DEVNODE_BINARY"
+        return
+    fi
     if [[ -n "${HOGD_DEV_BINARY:-}" ]]; then
         printf '%s\n' "$HOGD_DEV_BINARY"
         return
     fi
 
-    local sibling="$REPO_ROOT/../hogd/build/hogd/hogd_dev/hogd-dev"
-    if [[ -x "$sibling" ]]; then
-        printf '%s\n' "$sibling"
-        return
-    fi
+    for sibling in \
+        "$REPO_ROOT/../hogd/build/hogd/hogd_dev/hog-devnode" \
+        "$REPO_ROOT/../hogd/build/hogd/hogd_dev/hogd-dev"
+    do
+        if [[ -x "$sibling" ]]; then
+            printf '%s\n' "$sibling"
+            return
+        fi
+    done
 
-    if command -v hogd-dev >/dev/null 2>&1; then
-        command -v hogd-dev
-        return
-    fi
+    for binary in hog-devnode hogd-dev; do
+        if command -v "$binary" >/dev/null 2>&1; then
+            command -v "$binary"
+            return
+        fi
+    done
 
-    die "set HOGD_DEV_BINARY=/path/to/hogd-dev"
+    die "set HOG_DEVNODE_BINARY=/path/to/hog-devnode"
 }
 
 detect_hogd_protocol() {
@@ -185,7 +196,7 @@ PY
         fi
     fi
 
-    # Older hogd-dev builds printed protocol metadata for --help.
+    # Older devnode builds printed protocol metadata for --help.
     # Strip ANSI color escapes before extracting the protocol marker.
     local output
     output="$("$binary" --help 2>&1 || true)"
@@ -309,10 +320,10 @@ else
 fi
 
 HOGD_DEV_BINARY="$(find_hogd_dev_binary)"
-[[ -x "$HOGD_DEV_BINARY" ]] || die "hogd-dev binary is not executable: $HOGD_DEV_BINARY"
+[[ -x "$HOGD_DEV_BINARY" ]] || die "hog-devnode binary is not executable: $HOGD_DEV_BINARY"
 
 HOGD_PROTOCOL="$(detect_hogd_protocol "$HOGD_DEV_BINARY")"
-NODE_ARGS=(--json node --port 0 --hogd-dev-binary "$HOGD_DEV_BINARY")
+NODE_ARGS=(--json node --port 0 --hog-devnode-binary "$HOGD_DEV_BINARY")
 if [[ -n "$HOGD_PROTOCOL" ]]; then
     NODE_ARGS+=(--hogd-protocol "$HOGD_PROTOCOL")
     log "Using hogd protocol override: $HOGD_PROTOCOL"

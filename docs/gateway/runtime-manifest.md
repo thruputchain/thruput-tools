@@ -1,7 +1,7 @@
 # Runtime Manifest Quickstart
 
 The runtime manifest is the handoff from a running backend to Rust tools that
-need to connect to it. `hogd-dev` writes the manifest after genesis,
+need to connect to it. `hog-devnode` writes the manifest after genesis,
 dev-wallet installation, account funding, and endpoint binding are complete.
 
 Use it for local benchmark runs:
@@ -25,10 +25,10 @@ Use it for local benchmark runs:
 Run the end-to-end local benchmark smoke:
 
 ```bash
-HOGD_DEV_BINARY=/path/to/hogd-dev scripts/smoke-runtime-manifest-bench.sh
+HOG_DEVNODE_BINARY=/path/to/hog-devnode scripts/smoke-runtime-manifest-bench.sh
 ```
 
-If the local `hogd-dev` binary advertises a newer `hogp/<hash>` than the Rust
+If the local `hog-devnode` binary advertises a newer `hogp/<hash>` than the Rust
 protocol crates linked into `groundhog node`, set
 `HOGD_PROTOCOL_OVERRIDE=hogp/<hash>`. The script passes it through as
 `--hogd-protocol`; incompatible XDR shape changes still fail through the
@@ -37,7 +37,7 @@ generated clients.
 The script:
 
 1. Builds `groundhog`, `hog-gateway`, and `groundhog-bench`.
-2. Starts `groundhog node` against the `hogd-dev` binary.
+2. Starts `groundhog node` against the `hog-devnode` binary.
 3. Reads `data.runtime_manifest.path` from the CLI startup JSON.
 4. Runs `groundhog-bench` against the CLI node for `chainTip` and
    `sendRawTransaction`.
@@ -50,17 +50,17 @@ Useful knobs:
 NODE_STARTUP_TIMEOUT_SECS=90 \
 NODE_VERBOSE=1 \
 BENCH_RATE=100 BENCH_DURATION=30 BENCH_ACCOUNTS=10 \
-  HOGD_DEV_BINARY=/path/to/hogd-dev \
+  HOG_DEVNODE_BINARY=/path/to/hog-devnode \
   scripts/smoke-runtime-manifest-bench.sh
 ```
 
 Named benchmark scenarios live in the same runner:
 
 ```bash
-BENCH_SCENARIO=gateway-baseline HOGD_DEV_BINARY=/path/to/hogd-dev \
+BENCH_SCENARIO=gateway-baseline HOG_DEVNODE_BINARY=/path/to/hog-devnode \
   scripts/smoke-runtime-manifest-bench.sh
 
-BENCH_SCENARIO=submit-ramp HOGD_DEV_BINARY=/path/to/hogd-dev \
+BENCH_SCENARIO=submit-ramp HOG_DEVNODE_BINARY=/path/to/hog-devnode \
   scripts/smoke-runtime-manifest-bench.sh
 ```
 
@@ -75,11 +75,11 @@ Start the local node and capture the startup JSON:
 cargo run -p groundhog-cli --features dev-node -- \
   --json node \
   --port 9545 \
-  --hogd-dev-binary /path/to/hogd-dev \
+  --hog-devnode-binary /path/to/hog-devnode \
   > /tmp/groundhog-node.json
 ```
 
-Add `--hogd-protocol hogp/<hash>` when the local `hogd-dev` binary advertises a
+Add `--hogd-protocol hogp/<hash>` when the local `hog-devnode` binary advertises a
 newer protocol token than the currently published Rust protocol crates. The
 override is only used for x23 intro handshakes. Real XDR shape mismatches still
 surface as generated-client decode or RPC failures.
@@ -181,7 +181,7 @@ Readiness stdout is a single bounded JSON pointer line:
 {
   "schemaVersion": 1,
   "status": "ready",
-  "manifestPath": "/tmp/hogd-dev/runtime-manifest.json",
+  "manifestPath": "/tmp/hog-devnode/runtime-manifest.json",
   "manifestHash": "0x..."
 }
 ```

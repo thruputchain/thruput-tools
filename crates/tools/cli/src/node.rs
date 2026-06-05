@@ -1,4 +1,4 @@
-//! `groundhog node` — start the experimental hogd-dev local node.
+//! `groundhog node` — start the experimental hog-devnode local node.
 
 use crate::{CliError, Print};
 
@@ -26,7 +26,7 @@ pub enum LocalNodeBlockDriverMode {
     Interval,
 }
 
-/// Start the experimental hogd-dev local node server.
+/// Start the experimental hog-devnode local node server.
 ///
 /// Requires the `dev-node` feature.
 #[cfg(feature = "dev-node")]
@@ -56,7 +56,7 @@ pub fn run(
     )
 }
 
-/// Start the experimental hogd-dev local node server with block-driver options.
+/// Start the experimental hog-devnode local node server with block-driver options.
 ///
 /// Requires the `dev-node` feature.
 #[cfg(feature = "dev-node")]
@@ -97,14 +97,14 @@ pub fn run_with_block_driver(
     })
 }
 
-/// Startup options for a local hogd-dev-backed node.
+/// Startup options for a local hog-devnode-backed node.
 #[cfg(feature = "dev-node")]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct LocalNodeOptions {
     /// Public JSON-RPC port. Use `0` to ask the OS for a free port.
     pub port: u16,
-    /// Explicit hogd-dev binary path.
+    /// Explicit hog-devnode binary path.
     pub hogd_dev_binary: Option<PathBuf>,
     /// Override hogd protocol string for local cross-repo smoke tests.
     pub hogd_protocol: Option<String>,
@@ -159,7 +159,7 @@ impl StartedLocalNode {
         format!("http://{}", self.rpc_addr)
     }
 
-    /// Parsed hogd-dev readiness payload.
+    /// Parsed hog-devnode readiness payload.
     pub fn readiness(&self) -> &groundhog_node_supervisor::HogdDevReadiness {
         &self.readiness
     }
@@ -281,13 +281,13 @@ async fn run_hogd_dev(
     match outcome {
         SupervisorStop::HogdExited(status) => {
             if !print.is_json() {
-                print.status(format_args!("hogd-dev exited with status {status}"));
+                print.status(format_args!("hog-devnode exited with status {status}"));
             }
             if status.success() {
                 Ok(())
             } else {
                 Err(CliError::NodeSupervisor(format!(
-                    "hogd-dev exited with status {status}"
+                    "hog-devnode exited with status {status}"
                 )))
             }
         }
@@ -324,28 +324,28 @@ fn print_started_local_node(
     print.status("Groundhog Local Node (experimental)");
     print.status(format_args!("Chain: {}", started.readiness().network_id));
     if started.backend_planes().read.is_indexer_backed() {
-        print.warn("backend: hogd-dev (chainTip, submit, and reads live)");
+        print.warn("backend: hog-devnode (chainTip, submit, and reads live)");
     } else {
         print.warn(
-            "backend: hogd-dev (chainTip and submit live; read methods return NOT_IMPLEMENTED)",
+            "backend: hog-devnode (chainTip and submit live; read methods return NOT_IMPLEMENTED)",
         );
     }
     print.status(format_args!("Listening on {}", started.rpc_url()));
     print.status(format_args!(
-        "hogd-dev SchedulerCoord: {}",
+        "hog-devnode SchedulerCoord: {}",
         started.readiness().endpoints.scheduler_coord
     ));
     if let Some(indexer) = started.readiness().endpoints.indexer_block_explorer {
-        print.status(format_args!("hogd-dev IndexerBlockExplorer: {indexer}"));
+        print.status(format_args!("hog-devnode IndexerBlockExplorer: {indexer}"));
     }
     if let Some(db_gateway) = started.readiness().endpoints.db_gateway {
-        print.status(format_args!("hogd-dev DbGateway: {db_gateway}"));
+        print.status(format_args!("hog-devnode DbGateway: {db_gateway}"));
     }
     if let Some(view_gateway) = started.readiness().endpoints.view_gateway {
-        print.status(format_args!("hogd-dev ViewGateway: {view_gateway}"));
+        print.status(format_args!("hog-devnode ViewGateway: {view_gateway}"));
     }
     if let Some(dev_control) = started.readiness().endpoints.dev_control {
-        print.status(format_args!("hogd-dev dev control: {dev_control}"));
+        print.status(format_args!("hog-devnode dev control: {dev_control}"));
     }
     if let Some(path) = &started.readiness().manifest_path {
         print.status(format_args!("runtime manifest: {}", path.display()));
@@ -374,7 +374,7 @@ fn write_started_local_node_state(started: &StartedLocalNode) -> Result<Option<P
         .as_deref()
         .ok_or_else(|| {
             CliError::NodeSupervisor(
-                "hogd-dev readiness did not include runtime manifest path".into(),
+                "hog-devnode readiness did not include runtime manifest path".into(),
             )
         })?;
     let cwd = std::env::current_dir()?;
@@ -421,7 +421,7 @@ fn local_node_config(
         });
     let hogd = match options.pid_file {
         LocalNodePidFile::GlobalCache => {
-            hogd.with_pid_file(crate::config::cache_dir()?.join("hogd-dev.pid"))
+            hogd.with_pid_file(crate::config::cache_dir()?.join("hog-devnode.pid"))
         }
         LocalNodePidFile::Path(path) => hogd.with_pid_file(path),
         LocalNodePidFile::Disabled => hogd,
@@ -640,13 +640,13 @@ mod tests {
 
     #[test]
     fn local_node_config_sets_supervisor_startup_options() {
-        let binary = PathBuf::from("/tmp/hogd-dev-test");
+        let binary = PathBuf::from("/tmp/hog-devnode-test");
         let config = local_node_config(LocalNodeOptions {
             port: 0,
             hogd_dev_binary: Some(binary.clone()),
             hogd_protocol: Some("test-protocol".into()),
             startup_timeout: Some(Duration::from_secs(30)),
-            pid_file: LocalNodePidFile::Path(PathBuf::from("/tmp/hogd-dev-test.pid")),
+            pid_file: LocalNodePidFile::Path(PathBuf::from("/tmp/hog-devnode-test.pid")),
             dev_account_count: Some(3),
             block_driver: Some(LocalNodeBlockDriverMode::Interval),
             block_interval: Some(Duration::from_millis(250)),
@@ -662,7 +662,7 @@ mod tests {
         );
         assert_eq!(
             config.hogd_dev.pid_file.as_deref(),
-            Some(std::path::Path::new("/tmp/hogd-dev-test.pid"))
+            Some(std::path::Path::new("/tmp/hog-devnode-test.pid"))
         );
         assert_eq!(config.hogd_dev.dev_account_count, 3);
         assert_eq!(config.hogd_dev.startup_timeout, Duration::from_secs(30));
@@ -841,7 +841,7 @@ mod tests {
           "networkId": "groundhog-local",
           "protocol": "hogp/test",
           "genesisHash": "0x4242424242424242424242424242424242424242424242424242424242424242",
-          "producer": {"binary": "hogd-dev", "version": "0.1.0", "commitHash": "abcdef0"},
+          "producer": {"binary": "hog-devnode", "version": "0.1.0", "commitHash": "abcdef0"},
           "endpoints": {"scheduler": "127.0.0.1:12345"},
           "bootstrapAccountDerivation": {
             "scheme": "groundhog-bootstrap-account-v1",

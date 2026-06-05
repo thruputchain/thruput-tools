@@ -28,7 +28,7 @@ The shared problem is bootstrap, not JSON-RPC service discovery alone. A useful
 benchmark stack needs genesis, the dev-wallet contract, funded accounts, wallet
 addresses, storage-cost settings, protocol identity, and backend endpoints.
 
-The first implementation target is `hogd-dev`: it is the fastest place to
+The first implementation target is `hog-devnode`: it is the fastest place to
 prototype the manifest producer and validate the CLI/bench/gateway consumers.
 The contract should not be hogd-dev-specific. The same bootstrap/runtime shapes
 must also work for a production-style backend made of discrete hogd processes
@@ -117,7 +117,7 @@ artifact, while the hash verifies that the backend bootstrapped the intended
 bytes.
 
 Producers should treat the bootstrap manifest as a small, trusted operator
-input. Concrete bounds the `hogd-dev` consumer enforces today:
+input. Concrete bounds the `hog-devnode` consumer enforces today:
 
 - The manifest file must be a regular file. Symlinks, FIFOs, devices, and
   directories are rejected.
@@ -167,7 +167,7 @@ Readiness stdout remains a small, bounded lifecycle protocol:
 {
   "schemaVersion": 1,
   "status": "ready",
-  "manifestPath": "/tmp/hogd-dev-xyz/runtime-manifest.json",
+  "manifestPath": "/tmp/hog-devnode-xyz/runtime-manifest.json",
   "manifestHash": "0x..."
 }
 ```
@@ -182,7 +182,7 @@ The runtime manifest file contains the full payload:
   "protocol": "hogp/...",
   "genesisHash": "0x...",
   "producer": {
-    "binary": "hogd-dev",
+    "binary": "hog-devnode",
     "version": "...",
     "commitHash": "..."
   },
@@ -363,7 +363,7 @@ pretty-printed JSON. The full cost model remains authoritative.
   addresses.
 - Derives local-only dev private keys from the advertised derivation scheme,
   seed, and index rather than reading private keys from the manifest.
-- Targets the gateway HTTP JSON-RPC endpoint, not hogd-dev directly, when the
+- Targets the gateway HTTP JSON-RPC endpoint, not hog-devnode directly, when the
   goal is gateway benchmarking.
 
 ### Schema Ownership
@@ -460,7 +460,7 @@ manifest.
 
 Deliverable: the gateway can start against a bootstrapped backend without
 hand-copying ports or generating an intermediate config file. This phase is
-implemented for the hogd-dev runtime-manifest path.
+implemented for the hog-devnode runtime-manifest path.
 
 ### Phase 4: Bootstrap Manifest Input
 
@@ -529,13 +529,13 @@ the full-stack benchnet needs a portable bootstrap input.
 The scope appears manageable because the codebase already has:
 
 - backend plane traits and a production gateway composition;
-- hogd-dev process supervision and readiness parsing;
+- hog-devnode process supervision and readiness parsing;
 - deterministic dev-key derivation;
 - backend-advertised wallet address resolution;
 - runtime-manifest account discovery for CLI and benchmark workloads;
 - an initial open-loop benchmark harness.
 
 The runtime-manifest handoff and portable bootstrap-manifest input are now in
-place for `hogd-dev`. The remaining design work is to use that input/runtime
+place for `hog-devnode`. The remaining design work is to use that input/runtime
 pair in the full-stack benchnet harness for hogd/chuckd topologies without
 changing the meaning of `groundhog node`.
