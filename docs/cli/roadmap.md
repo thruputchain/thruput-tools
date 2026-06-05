@@ -117,7 +117,7 @@ Maintenance rules:
 - [x] `groundhog call`
 - [x] `groundhog view`
 - [x] `groundhog storage`
-- [x] `groundhog node` (feature-gated)
+- [x] `groundhog node`
 - [x] `groundhog init`
 - [x] `groundhog status`
 - [x] `groundhog keys`

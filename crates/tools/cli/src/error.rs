@@ -259,7 +259,7 @@ impl CliError {
                 Some(Cow::Borrowed("available templates: `counter`, `stub`"))
             }
             Self::NodeSupervisor(_) => Some(Cow::Borrowed(
-                "check `--hogd-dev-binary`, the hogd-dev process output, and the local node logs",
+                "check `--hog-devnode-binary`, the hog-devnode process output, and the local node logs",
             )),
             Self::NodeSupervisorProtocolIntroRejected {
                 expected_protocol: Some(protocol),
@@ -292,7 +292,7 @@ impl CliError {
                 "check the RPC endpoint and node logs for details",
             )),
             Self::LocalDevAccountUnavailable { .. } => Some(Cow::Borrowed(
-                "run `groundhog node` backed by hogd-dev, or use a stored key for non-local endpoints",
+                "run `groundhog node` backed by hog-devnode, or use a stored key for non-local endpoints",
             )),
             Self::WalletAddressDerivationFailed { .. } => Some(Cow::Borrowed(
                 "check the stored public key material, or regenerate the key",

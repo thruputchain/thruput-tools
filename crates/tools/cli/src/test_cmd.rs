@@ -286,7 +286,7 @@ fn local_node_shutdown_warning(context: &'static str, error: &CliError) -> crate
         code: "local_node_shutdown_failed",
         message: format!("local node shutdown failed after {context}: {error}"),
         hint: Some(std::borrow::Cow::Borrowed(
-            "check for a lingering hogd-dev process if the next local-node command fails",
+            "check for a lingering hog-devnode process if the next local-node command fails",
         )),
     }
 }
