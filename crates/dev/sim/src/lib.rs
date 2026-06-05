@@ -24,7 +24,7 @@ pub use error::SimError;
 pub use manifest::{ClientSpec, SimulationManifest, WorkloadKind};
 pub use nonce::NonceNamespace;
 pub use result::{BaselineDiff, ChaosEventState, MetricAvailability, SimResult, SimRunOutcome};
-pub use run::{ExistingRunOptions, RunOptions, RunSummary, run_target};
+pub use run::{ExistingRunOptions, RunOptions, RunSummary, RunSummaryCounts, run_target};
 pub use sweep::{SweepEntry, SweepEntryState, SweepReport, sweep_runs};
 pub use target::{
     ChaosController, ChaosEventOutcome, ExistingTargetProvider, LocalTargetProvider, OwnedProcess,

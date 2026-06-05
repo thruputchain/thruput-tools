@@ -161,7 +161,7 @@ chaos, deploy new contracts, or create remote infrastructure.
   config in provider-owned state; `ResolvedTarget` remains pure result data.
 - [ ] Replace ad-hoc CLI output and silent internal drops with the eventual
   logging/printing discipline.
-- [ ] Add `--json` to `hogsim validate` and `hogsim run` so all hogsim
+- [x] Add `--json` to `hogsim validate` and `hogsim run` so all hogsim
   subcommands match the CLAUDE.md machine-readable-output convention. Each
   needs a typed payload: validate emits a manifest-validation report;
   run emits a run summary (outcome, counts, out-dir, run id).

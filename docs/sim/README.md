@@ -112,12 +112,18 @@ cargo run -p groundhog-cli -- --json node \
 
 RUNTIME_MANIFEST=$(jq -r '.data.runtime_manifest.path' /tmp/groundhog-node.json)
 
-cargo run -p groundhog-sim --bin hogsim -- validate examples/sim/local-wallet-soak.json
+cargo run -p groundhog-sim --bin hogsim -- validate examples/sim/local-wallet-soak.json --json
 
 cargo run -p groundhog-sim --bin hogsim -- run examples/sim/local-wallet-soak.json \
   --rpc-url http://127.0.0.1:9545 \
-  --runtime-manifest "$RUNTIME_MANIFEST"
+  --runtime-manifest "$RUNTIME_MANIFEST" \
+  --json
 ```
+
+`hogsim validate --json` and `hogsim run --json` emit the same top-level command
+envelope as the main CLI: `ok`, `command`, `warnings`, and a versioned `data`
+payload. The run payload includes the run id, outcome, aggregate workload counts,
+run directory, and paths to `result.json`, `result.jsonl`, and `simulation.json`.
 
 `--hogd-protocol` is optional. Use it when a local `hog-devnode` build advertises a
 newer `hogp/<hash>` than the Rust protocol crates linked into `groundhog node`.

@@ -320,8 +320,37 @@ pub async fn run_target(args: RunOptions) -> Result<RunSummary, SimError> {
 /// Summary of a completed simulation run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunSummary {
+    pub run_id: String,
     pub out_dir: PathBuf,
     pub outcome: SimRunOutcome,
+    pub counts: RunSummaryCounts,
+}
+
+/// Aggregate workload counts for a completed simulation run.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RunSummaryCounts {
+    pub scheduled: u64,
+    pub completed: u64,
+    pub failed: u64,
+    pub skipped: u64,
+}
+
+impl RunSummaryCounts {
+    fn from_workloads(
+        scheduled: u64,
+        workload_counts: &BTreeMap<WorkloadKind, WorkloadCounts>,
+    ) -> Self {
+        let mut counts = Self {
+            scheduled,
+            ..Self::default()
+        };
+        for workload in workload_counts.values() {
+            counts.completed += workload.completed;
+            counts.failed += workload.failed;
+            counts.skipped += workload.skipped;
+        }
+        counts
+    }
 }
 
 /// Run a simulation against an already-started target.
@@ -501,9 +530,18 @@ async fn run_resolved_target(
     )
     .await?;
     let outcome = result.outcome;
+    let counts = RunSummaryCounts::from_workloads(
+        schedule_summary.scheduled_workloads,
+        &result.workload_counts,
+    );
     write_json_pretty_atomic(out_dir.join("result.json"), &result).await?;
 
-    let summary = RunSummary { out_dir, outcome };
+    let summary = RunSummary {
+        run_id,
+        out_dir,
+        outcome,
+        counts,
+    };
     if outcome == SimRunOutcome::Failed {
         return Err(SimError::RunFailed(summary.out_dir.display().to_string()));
     }

@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
@@ -8,11 +8,15 @@ use groundhog_sim::catalog::{
 };
 use groundhog_sim::compare::{ResultDiff, load_result};
 use groundhog_sim::error::SimError;
-use groundhog_sim::run::{RunOptions, run_target};
+use groundhog_sim::manifest::SimulationManifest;
+use groundhog_sim::result::{SimResult, SimRunOutcome};
+use groundhog_sim::run::{RunOptions, RunSummary, run_target};
 use groundhog_sim::sweep::{SweepEntryState, sweep_runs};
 use groundhog_sim::util::load_simulation_manifest;
 use groundhog_sim::validation::validate_manifest;
 use serde::Serialize;
+
+const HOGSIM_COMMAND_JSON_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Parser)]
 #[command(name = "hogsim")]
@@ -29,6 +33,9 @@ enum Command {
     Validate {
         /// Simulation manifest path.
         scenario: PathBuf,
+        /// Emit structured JSON output.
+        #[arg(long)]
+        json: bool,
     },
     /// Run a simulation against the configured target provider.
     Run(RunArgs),
@@ -86,6 +93,9 @@ struct RunArgs {
     /// Fixed high-32-bit nonce namespace. Requires a fresh target or empty replay cache.
     #[arg(long)]
     nonce_namespace: Option<u64>,
+    /// Emit structured JSON output.
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -147,21 +157,211 @@ async fn main() -> ExitCode {
 async fn run_cli() -> Result<(), SimError> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Validate { scenario } => {
+        Command::Validate { scenario, json } => {
             let loaded = load_simulation_manifest(&scenario).await?;
             validate_manifest(&loaded.manifest)?;
-            println!("valid: {}", scenario.display());
+            let report = ValidateReport::new(&scenario, &loaded.manifest);
+            if json {
+                print_json_command("validate", true, &report)?;
+            } else {
+                println!("valid: {}", scenario.display());
+            }
             Ok(())
         }
         Command::Run(args) => {
-            let summary = Box::pin(run_target(args.into())).await?;
-            println!("completed run");
-            println!("run directory: {}", summary.out_dir.display());
+            let json = args.json;
+            if json {
+                match Box::pin(run_target(args.into())).await {
+                    Ok(summary) => print_json_command("run", true, &RunReport::from(summary))?,
+                    Err(SimError::RunFailed(out_dir)) => {
+                        let report = RunReport::from_failed_result(PathBuf::from(&out_dir)).await?;
+                        print_json_command("run", false, &report)?;
+                        return Err(SimError::RunFailed(out_dir));
+                    }
+                    Err(error) => return Err(error),
+                }
+            } else {
+                let summary = Box::pin(run_target(args.into())).await?;
+                println!("completed run");
+                println!("run directory: {}", summary.out_dir.display());
+            }
             Ok(())
         }
         Command::Compare { run_a, run_b, json } => compare_runs(run_a, run_b, json).await,
         Command::Sweep(args) => sweep_targets_blocking(args).await,
         Command::Catalog(args) => list_catalog(args).await,
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HogsimCommandResult<'a, T: Serialize> {
+    ok: bool,
+    command: &'a str,
+    warnings: Vec<String>,
+    data: T,
+}
+
+fn print_json_command<T: Serialize>(
+    command: &'static str,
+    ok: bool,
+    data: &T,
+) -> Result<(), SimError> {
+    let result = HogsimCommandResult {
+        ok,
+        command,
+        warnings: Vec::new(),
+        data,
+    };
+    println!("{}", serde_json::to_string_pretty(&result)?);
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ValidateReport {
+    schema_version: u32,
+    status: &'static str,
+    scenario: String,
+    name: String,
+    target_provider: String,
+    load_phases: usize,
+    workloads: usize,
+    contract_artifacts: usize,
+    assertions: AssertionReport,
+    chaos_events: usize,
+}
+
+impl ValidateReport {
+    fn new(scenario: &std::path::Path, manifest: &SimulationManifest) -> Self {
+        Self {
+            schema_version: HOGSIM_COMMAND_JSON_SCHEMA_VERSION,
+            status: "valid",
+            scenario: scenario.display().to_string(),
+            name: manifest.name.clone(),
+            target_provider: serde_json::to_value(manifest.target.provider)
+                .ok()
+                .and_then(|value| value.as_str().map(str::to_owned))
+                .unwrap_or_else(|| format!("{:?}", manifest.target.provider)),
+            load_phases: manifest.load_shape.len(),
+            workloads: manifest.workloads.len(),
+            contract_artifacts: manifest.contract_artifacts.len(),
+            assertions: AssertionReport::from_manifest(manifest),
+            chaos_events: manifest.chaos.len(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AssertionReport {
+    configured: usize,
+}
+
+impl AssertionReport {
+    fn from_manifest(manifest: &SimulationManifest) -> Self {
+        let assertions = &manifest.assertions;
+        let configured = [
+            assertions.max_error_rate.is_some(),
+            assertions.max_chain_stall.is_some(),
+            assertions.p99_submit_latency_ms.is_some(),
+            assertions.max_receipt_timeout_rate.is_some(),
+            assertions.max_backpressure_rate.is_some(),
+            assertions.max_simulator_overload_rate.is_some(),
+            assertions.max_rss_growth_bytes_per_minute.is_some(),
+        ]
+        .into_iter()
+        .filter(|configured| *configured)
+        .count();
+        Self { configured }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RunReport {
+    schema_version: u32,
+    status: &'static str,
+    outcome: SimRunOutcome,
+    run_id: String,
+    out_dir: String,
+    counts: RunReportCounts,
+    result_json: String,
+    result_jsonl: String,
+    simulation_json: String,
+}
+
+impl From<RunSummary> for RunReport {
+    fn from(summary: RunSummary) -> Self {
+        Self {
+            schema_version: HOGSIM_COMMAND_JSON_SCHEMA_VERSION,
+            status: "completed",
+            outcome: summary.outcome,
+            run_id: summary.run_id,
+            counts: RunReportCounts {
+                scheduled: summary.counts.scheduled,
+                completed: summary.counts.completed,
+                failed: summary.counts.failed,
+                skipped: summary.counts.skipped,
+            },
+            result_json: summary.out_dir.join("result.json").display().to_string(),
+            result_jsonl: summary.out_dir.join("result.jsonl").display().to_string(),
+            simulation_json: summary
+                .out_dir
+                .join("simulation.json")
+                .display()
+                .to_string(),
+            out_dir: summary.out_dir.display().to_string(),
+        }
+    }
+}
+
+impl RunReport {
+    async fn from_failed_result(out_dir: PathBuf) -> Result<Self, SimError> {
+        let result = load_result(&out_dir).await?;
+        Ok(Self::from_result(&out_dir, &result))
+    }
+
+    fn from_result(out_dir: &Path, result: &SimResult) -> Self {
+        let counts = RunReportCounts::from_result(result);
+        Self {
+            schema_version: HOGSIM_COMMAND_JSON_SCHEMA_VERSION,
+            status: "completed",
+            outcome: result.outcome,
+            run_id: result.run_id.clone(),
+            counts,
+            result_json: out_dir.join("result.json").display().to_string(),
+            result_jsonl: out_dir.join("result.jsonl").display().to_string(),
+            simulation_json: out_dir.join("simulation.json").display().to_string(),
+            out_dir: out_dir.display().to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RunReportCounts {
+    scheduled: u64,
+    completed: u64,
+    failed: u64,
+    skipped: u64,
+}
+
+impl RunReportCounts {
+    fn from_result(result: &SimResult) -> Self {
+        let mut counts = Self {
+            scheduled: 0,
+            completed: 0,
+            failed: 0,
+            skipped: 0,
+        };
+        for workload in result.workload_counts.values() {
+            counts.completed += workload.completed;
+            counts.failed += workload.failed;
+            counts.skipped += workload.skipped;
+        }
+        counts.scheduled = counts.completed + counts.failed + counts.skipped;
+        counts
     }
 }
 
@@ -337,6 +537,7 @@ mod tests {
             "5",
             "--contract-artifact-root",
             "/tmp/contracts",
+            "--json",
         ]);
 
         match cli.command {
@@ -353,9 +554,96 @@ mod tests {
                     args.contract_artifact_root,
                     Some(PathBuf::from("/tmp/contracts"))
                 );
+                assert!(args.json);
             }
             _ => panic!("expected run command"),
         }
+    }
+
+    #[test]
+    fn validate_json_flag_parse() {
+        let cli = Cli::parse_from(["hogsim", "validate", "scenario.json", "--json"]);
+
+        match cli.command {
+            Command::Validate { scenario, json } => {
+                assert_eq!(scenario, PathBuf::from("scenario.json"));
+                assert!(json);
+            }
+            _ => panic!("expected validate command"),
+        }
+    }
+
+    #[test]
+    fn validate_report_uses_json_envelope_and_schema_version() {
+        let manifest: SimulationManifest = serde_json::from_value(serde_json::json!({
+            "schemaVersion": 1,
+            "kind": "groundhog-simulation",
+            "name": "local-smoke",
+            "seed": "seed",
+            "target": { "provider": "local" },
+            "loadShape": [
+                { "duration": "1s", "users": 1, "ratePerUserHz": 1.0 }
+            ],
+            "workloads": [{ "name": "chain-tip", "weight": 1 }],
+            "assertions": { "maxErrorRate": 0.0 }
+        }))
+        .expect("bug: manifest fixture should parse");
+        let report = ValidateReport::new(std::path::Path::new("scenario.json"), &manifest);
+        let envelope = HogsimCommandResult {
+            ok: true,
+            command: "validate",
+            warnings: Vec::new(),
+            data: report,
+        };
+        let json = serde_json::to_value(envelope).expect("bug: report should serialize");
+
+        assert_eq!(json["ok"], true);
+        assert_eq!(json["command"], "validate");
+        assert_eq!(json["data"]["schemaVersion"], 1);
+        assert_eq!(json["data"]["status"], "valid");
+        assert_eq!(json["data"]["targetProvider"], "local");
+        assert_eq!(json["data"]["assertions"]["configured"], 1);
+    }
+
+    #[test]
+    fn run_report_uses_json_envelope_and_artifact_paths() {
+        let report = RunReport::from(RunSummary {
+            run_id: "run-1".into(),
+            out_dir: PathBuf::from("hogsim-runs/run-1-local-smoke"),
+            outcome: SimRunOutcome::Passed,
+            counts: groundhog_sim::run::RunSummaryCounts {
+                scheduled: 5,
+                completed: 4,
+                failed: 0,
+                skipped: 1,
+            },
+        });
+        let envelope = HogsimCommandResult {
+            ok: true,
+            command: "run",
+            warnings: Vec::new(),
+            data: report,
+        };
+        let json = serde_json::to_value(envelope).expect("bug: report should serialize");
+
+        assert_eq!(json["ok"], true);
+        assert_eq!(json["command"], "run");
+        assert_eq!(json["data"]["schemaVersion"], 1);
+        assert_eq!(json["data"]["status"], "completed");
+        assert_eq!(json["data"]["outcome"], "passed");
+        assert_eq!(json["data"]["runId"], "run-1");
+        assert_eq!(json["data"]["counts"]["scheduled"], 5);
+        assert_eq!(json["data"]["counts"]["completed"], 4);
+        assert_eq!(json["data"]["counts"]["failed"], 0);
+        assert_eq!(json["data"]["counts"]["skipped"], 1);
+        assert_eq!(
+            json["data"]["resultJson"],
+            "hogsim-runs/run-1-local-smoke/result.json"
+        );
+        assert_eq!(
+            json["data"]["resultJsonl"],
+            "hogsim-runs/run-1-local-smoke/result.jsonl"
+        );
     }
 
     #[test]
