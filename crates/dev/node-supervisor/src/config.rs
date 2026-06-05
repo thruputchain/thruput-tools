@@ -46,8 +46,8 @@ pub const HOGD_DEV_BOOTSTRAP_MANIFEST_KIND: &str = "groundhog-bootstrap";
 /// Default bootstrap profile requested from hogd-dev.
 pub const DEFAULT_HOGD_DEV_BOOTSTRAP_PROFILE: &str = "local-dev";
 
-/// Default dev-wallet profile requested from hogd-dev.
-pub const DEFAULT_HOGD_DEV_WALLET_PROFILE: &str = "hogd-dev-default";
+/// Default dev-wallet profile requested from hog-devnode.
+pub const DEFAULT_HOGD_DEV_WALLET_PROFILE: &str = "hog-devnode-default";
 
 /// Default storage-cost model profile requested from hogd-dev.
 pub const DEFAULT_HOGD_DEV_STORAGE_COST_MODEL_PROFILE: &str = "hogd-default";
@@ -379,7 +379,7 @@ mod tests {
                 "networkId": "groundhog-bench-local",
                 "profile": "local-dev",
                 "devWallet": {
-                    "profile": "hogd-dev-default",
+                    "profile": "hog-devnode-default",
                 },
                 "bootstrapAccounts": {
                     "count": 3,

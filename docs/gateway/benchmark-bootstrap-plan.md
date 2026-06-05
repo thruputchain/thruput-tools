@@ -93,7 +93,7 @@ Input to a backend launcher. Describes desired genesis/bootstrap state.
   "networkId": "groundhog-bench-local",
   "profile": "local-dev",
   "devWallet": {
-    "profile": "hogd-dev-default",
+    "profile": "hog-devnode-default",
     "artifactHint": "./dev-wallet.wasm",
     "contentHash": "0x...",
     "deployEntrypoint": "0xadac498222148e4f",

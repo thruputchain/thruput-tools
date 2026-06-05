@@ -96,7 +96,7 @@ For v1, sim only needs the existing local-dev shape:
   "networkId": "groundhog-local",
   "profile": "local-dev",
   "devWallet": {
-    "profile": "hogd-dev-default"
+    "profile": "hog-devnode-default"
   },
   "bootstrapAccounts": {
     "count": 100,
@@ -303,7 +303,7 @@ Example v1 shape:
     "accounts": 100,
     "accountSeed": "hogsim-accounts",
     "initialStorageTokens": "1000000000",
-    "devWalletProfile": "hogd-dev-default",
+    "devWalletProfile": "hog-devnode-default",
     "storageCostProfile": "hogd-default"
   },
   "duration": "30m",

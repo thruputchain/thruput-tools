@@ -1475,7 +1475,7 @@ mod tests {
         assert_eq!(value["kind"], "groundhog-bootstrap");
         assert_eq!(value["networkId"], "groundhog-local");
         assert_eq!(value["profile"], "local-dev");
-        assert_eq!(value["devWallet"]["profile"], "hogd-dev-default");
+        assert_eq!(value["devWallet"]["profile"], "hog-devnode-default");
         assert_eq!(value["bootstrapAccounts"]["count"], 2);
         assert_eq!(value["bootstrapAccounts"]["seed"], "manifest-seed");
         assert_eq!(value["bootstrapAccounts"]["initialStorageTokens"], "1234");
