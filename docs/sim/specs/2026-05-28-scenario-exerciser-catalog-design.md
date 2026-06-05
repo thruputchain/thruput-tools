@@ -96,7 +96,7 @@ Add `scripts/smoke-sim-scenarios.sh`.
   `HOGD_DEV_BINARY` or `GROUNDHOG_HOGD_DEV_BINARY`, optional
   `GROUNDHOG_BINARY`, optional `HOGD_PROTOCOL_OVERRIDE=hogp/<hash>`, and
   `KEEP_WORKDIR=1`.
-- Build `groundhog` with `--features dev-node`.
+- Build `groundhog`.
 - Run a new ignored Rust smoke test that executes the fast local catalog with
   managed local targets and validates result artifacts.
 - Run the existing-provider baseline scenario by starting one temporary

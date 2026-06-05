@@ -195,7 +195,7 @@ struct CatalogScenario {
 }
 
 #[test]
-#[ignore = "requires GROUNDHOG_SIM_HOG_DEVNODE_BINARY and a groundhog binary with dev-node support"]
+#[ignore = "requires GROUNDHOG_SIM_HOG_DEVNODE_BINARY and a groundhog binary"]
 fn local_target_chain_tip_smoke() {
     let hogd_dev_binary = hog_devnode_binary_env();
     let groundhog_binary =
@@ -243,7 +243,7 @@ fn local_target_chain_tip_smoke() {
 }
 
 #[test]
-#[ignore = "requires GROUNDHOG_SIM_HOG_DEVNODE_BINARY and a groundhog binary with dev-node support"]
+#[ignore = "requires GROUNDHOG_SIM_HOG_DEVNODE_BINARY and a groundhog binary"]
 fn local_scenario_catalog_smoke() {
     run_catalog(LOCAL_FAST_CATALOG);
     if std::env::var("GROUNDHOG_SIM_CONTRACT_ARTIFACT_ROOT").is_ok() {
@@ -254,7 +254,7 @@ fn local_scenario_catalog_smoke() {
 }
 
 #[test]
-#[ignore = "requires GROUNDHOG_SIM_HOG_DEVNODE_BINARY, GROUNDHOG_SIM_RUN_SOAKS=1, and a groundhog binary with dev-node support"]
+#[ignore = "requires GROUNDHOG_SIM_HOG_DEVNODE_BINARY, GROUNDHOG_SIM_RUN_SOAKS=1, and a groundhog binary"]
 fn local_scenario_catalog_soak() {
     if std::env::var("GROUNDHOG_SIM_RUN_SOAKS").as_deref() != Ok("1") {
         eprintln!("skipping soak catalog; set GROUNDHOG_SIM_RUN_SOAKS=1 to run it");
@@ -264,7 +264,7 @@ fn local_scenario_catalog_soak() {
 }
 
 #[test]
-#[ignore = "requires GROUNDHOG_SIM_HOG_DEVNODE_BINARY and a groundhog binary with dev-node support"]
+#[ignore = "requires GROUNDHOG_SIM_HOG_DEVNODE_BINARY and a groundhog binary"]
 fn local_restart_target_chain_tip_smoke() {
     let hogd_dev_binary = hog_devnode_binary_env();
     let groundhog_binary =
@@ -370,7 +370,7 @@ fn local_restart_target_chain_tip_smoke() {
 }
 
 #[test]
-#[ignore = "requires GROUNDHOG_SIM_HOG_DEVNODE_BINARY and a groundhog binary with dev-node support"]
+#[ignore = "requires GROUNDHOG_SIM_HOG_DEVNODE_BINARY and a groundhog binary"]
 fn local_target_sweep_orphan_smoke() {
     let hogd_dev_binary = hog_devnode_binary_env();
     let groundhog_binary =

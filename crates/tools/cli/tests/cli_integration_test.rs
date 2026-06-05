@@ -1,14 +1,14 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::process::Command;
-#[cfg(all(feature = "dev-node", unix))]
+#[cfg(unix)]
 use std::process::{ExitStatus, Stdio};
-#[cfg(all(feature = "dev-node", unix))]
+#[cfg(unix)]
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-#[cfg(all(feature = "dev-node", unix))]
+#[cfg(unix)]
 use groundhog_json_rpc_client::{GroundhogApiClient, HttpClientBuilder};
 use tempfile::TempDir;
 
@@ -20,7 +20,6 @@ fn groundhog() -> Command {
     command
 }
 
-#[cfg(feature = "dev-node")]
 fn workspace_root() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -32,7 +31,6 @@ fn workspace_root() -> std::path::PathBuf {
         .to_path_buf()
 }
 
-#[cfg(feature = "dev-node")]
 fn target_dir() -> std::path::PathBuf {
     let root = workspace_root();
     match std::env::var_os("CARGO_TARGET_DIR") {
@@ -48,7 +46,6 @@ fn target_dir() -> std::path::PathBuf {
     }
 }
 
-#[cfg(feature = "dev-node")]
 fn fake_hogd_dev_binary() -> std::path::PathBuf {
     let binary = target_dir()
         .join("debug")
@@ -83,7 +80,7 @@ fn fake_hogd_dev_binary() -> std::path::PathBuf {
     binary
 }
 
-#[cfg(all(feature = "dev-node", unix))]
+#[cfg(unix)]
 fn send_sigint(child: &std::process::Child) {
     let pid = i32::try_from(child.id()).expect("bug: child pid should fit i32");
     // SAFETY: sends SIGINT to the spawned CLI process id.
@@ -91,7 +88,7 @@ fn send_sigint(child: &std::process::Child) {
     assert_eq!(rc, 0, "failed to send SIGINT to child pid {pid}");
 }
 
-#[cfg(all(feature = "dev-node", unix))]
+#[cfg(unix)]
 fn wait_child(mut child: std::process::Child, timeout: Duration) -> ExitStatus {
     let deadline = Instant::now() + timeout;
     loop {
@@ -106,10 +103,10 @@ fn wait_child(mut child: std::process::Child, timeout: Duration) -> ExitStatus {
     }
 }
 
-#[cfg(all(feature = "dev-node", unix))]
+#[cfg(unix)]
 struct ChildGuard(Option<std::process::Child>);
 
-#[cfg(all(feature = "dev-node", unix))]
+#[cfg(unix)]
 impl ChildGuard {
     fn new(child: std::process::Child) -> Self {
         Self(Some(child))
@@ -128,7 +125,7 @@ impl ChildGuard {
     }
 }
 
-#[cfg(all(feature = "dev-node", unix))]
+#[cfg(unix)]
 impl Drop for ChildGuard {
     fn drop(&mut self) {
         if let Some(child) = self.0.as_mut() {
@@ -138,7 +135,7 @@ impl Drop for ChildGuard {
     }
 }
 
-#[cfg(all(feature = "dev-node", unix))]
+#[cfg(unix)]
 fn read_pid_file(path: &std::path::Path) -> i32 {
     std::fs::read_to_string(path)
         .expect("bug: fake hogd-dev should write pid file")
@@ -147,7 +144,7 @@ fn read_pid_file(path: &std::path::Path) -> i32 {
         .expect("bug: fake hogd-dev pid should parse")
 }
 
-#[cfg(all(feature = "dev-node", unix))]
+#[cfg(unix)]
 fn wait_pid_gone(pid: i32, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     loop {
@@ -164,7 +161,7 @@ fn wait_pid_gone(pid: i32, timeout: Duration) -> bool {
     }
 }
 
-#[cfg(all(feature = "dev-node", unix))]
+#[cfg(unix)]
 fn read_line_with_timeout(
     stdout: std::process::ChildStdout,
     timeout: Duration,
@@ -207,7 +204,7 @@ fn version_flag_works() {
     assert!(stdout.contains("groundhog"));
 }
 
-#[cfg(all(feature = "dev-node", unix))]
+#[cfg(unix)]
 #[test]
 fn node_hogd_dev_binary_json_starts_supervisor() {
     let fake = fake_hogd_dev_binary();
@@ -281,7 +278,6 @@ fn node_hogd_dev_binary_json_starts_supervisor() {
     );
 }
 
-#[cfg(feature = "dev-node")]
 #[test]
 fn node_hogd_dev_missing_binary_fails_without_native_fallback() {
     let tmp = TempDir::new().unwrap();
@@ -959,32 +955,6 @@ fn test_json_failure_is_structured() {
     assert_eq!(stderr["error"]["code"], "cargo_metadata_failed");
 }
 
-#[cfg(not(feature = "dev-node"))]
-#[test]
-fn test_integration_json_reports_unavailable() {
-    let tmp = TempDir::new().unwrap();
-    let output = groundhog()
-        .arg("--json")
-        .arg("test")
-        .arg("--integration")
-        .current_dir(tmp.path())
-        .output()
-        .unwrap();
-
-    assert!(!output.status.success());
-    assert!(output.stdout.is_empty());
-    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-    assert_eq!(stderr["ok"], false);
-    assert_eq!(stderr["command"], "test");
-    assert_eq!(stderr["error"]["code"], "integration_tests_unavailable");
-    assert!(
-        stderr["error"]["hint"]
-            .as_str()
-            .expect("bug: hint should be present")
-            .contains("dev-node")
-    );
-}
-
 #[test]
 fn test_integration_rejects_rerun() {
     let tmp = TempDir::new().unwrap();
@@ -1043,7 +1013,7 @@ fn test_integration_rejects_watch() {
     );
 }
 
-#[cfg(all(feature = "dev-node", unix))]
+#[cfg(unix)]
 #[test]
 fn test_integration_reports_local_node_startup_failure() {
     use std::os::unix::fs::PermissionsExt;

@@ -1,18 +1,12 @@
-//! `groundhog node` — start the experimental hog-devnode local node.
+//! `groundhog node` — start the hog-devnode local node.
 
 use crate::{CliError, Print};
 
-#[cfg(feature = "dev-node")]
 use crate::result::CommandResult;
-#[cfg(feature = "dev-node")]
 use serde_json::json;
-#[cfg(feature = "dev-node")]
 use std::net::SocketAddr;
-#[cfg(feature = "dev-node")]
 use std::path::PathBuf;
-#[cfg(feature = "dev-node")]
 use std::process::ExitStatus;
-#[cfg(feature = "dev-node")]
 use std::time::Duration;
 
 /// Block production mode for the supervised local node.
@@ -26,10 +20,8 @@ pub enum LocalNodeBlockDriverMode {
     Interval,
 }
 
-/// Start the experimental hog-devnode local node server.
+/// Start the hog-devnode local node server.
 ///
-/// Requires the `dev-node` feature.
-#[cfg(feature = "dev-node")]
 #[allow(clippy::too_many_arguments)]
 pub fn run(
     port: u16,
@@ -56,10 +48,8 @@ pub fn run(
     )
 }
 
-/// Start the experimental hog-devnode local node server with block-driver options.
+/// Start the hog-devnode local node server with block-driver options.
 ///
-/// Requires the `dev-node` feature.
-#[cfg(feature = "dev-node")]
 #[allow(clippy::too_many_arguments)]
 pub fn run_with_block_driver(
     port: u16,
@@ -98,7 +88,6 @@ pub fn run_with_block_driver(
 }
 
 /// Startup options for a local hog-devnode-backed node.
-#[cfg(feature = "dev-node")]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct LocalNodeOptions {
@@ -123,7 +112,6 @@ pub struct LocalNodeOptions {
 }
 
 /// PID-file behavior for local hogd-dev startup.
-#[cfg(feature = "dev-node")]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum LocalNodePidFile {
@@ -137,7 +125,6 @@ pub enum LocalNodePidFile {
 }
 
 /// Running local node and the startup metadata callers need for orchestration.
-#[cfg(feature = "dev-node")]
 #[derive(Debug)]
 #[must_use = "local nodes keep hogd-dev running until stop, stopped, or run_until consumes them"]
 pub struct StartedLocalNode {
@@ -147,7 +134,6 @@ pub struct StartedLocalNode {
     backend_planes: groundhog_node_supervisor::BackendPlanes,
 }
 
-#[cfg(feature = "dev-node")]
 impl StartedLocalNode {
     /// Bound JSON-RPC listen address.
     pub fn rpc_addr(&self) -> SocketAddr {
@@ -203,7 +189,6 @@ impl StartedLocalNode {
 }
 
 /// Start a reusable local node without taking over the terminal.
-#[cfg(feature = "dev-node")]
 pub async fn start_local_node(options: LocalNodeOptions) -> Result<StartedLocalNode, CliError> {
     use groundhog_node_supervisor::NodeSupervisorHandle;
 
@@ -223,7 +208,6 @@ pub async fn start_local_node(options: LocalNodeOptions) -> Result<StartedLocalN
     })
 }
 
-#[cfg(feature = "dev-node")]
 async fn run_hogd_dev(
     options: LocalNodeOptions,
     cmd: &'static str,
@@ -298,7 +282,6 @@ async fn run_hogd_dev(
     }
 }
 
-#[cfg(feature = "dev-node")]
 async fn wait_for_stop_signal() -> Result<(), std::io::Error> {
     #[cfg(unix)]
     {
@@ -315,13 +298,12 @@ async fn wait_for_stop_signal() -> Result<(), std::io::Error> {
     }
 }
 
-#[cfg(feature = "dev-node")]
 fn print_started_local_node(
     started: &StartedLocalNode,
     local_state_result: &Result<Option<PathBuf>, CliError>,
     print: &Print,
 ) {
-    print.status("Groundhog Local Node (experimental)");
+    print.status("Groundhog Local Node");
     print.status(format_args!("Chain: {}", started.readiness().network_id));
     if started.backend_planes().read.is_indexer_backed() {
         print.warn("backend: hog-devnode (chainTip, submit, and reads live)");
@@ -366,7 +348,6 @@ fn print_started_local_node(
     }
 }
 
-#[cfg(feature = "dev-node")]
 fn write_started_local_node_state(started: &StartedLocalNode) -> Result<Option<PathBuf>, CliError> {
     let manifest_path = started
         .readiness()
@@ -381,7 +362,6 @@ fn write_started_local_node_state(started: &StartedLocalNode) -> Result<Option<P
     crate::runtime_manifest::write_local_node_state(&cwd, &started.rpc_url(), manifest_path)
 }
 
-#[cfg(feature = "dev-node")]
 fn local_node_config(
     options: LocalNodeOptions,
 ) -> Result<groundhog_node_supervisor::NodeSupervisorConfig, CliError> {
@@ -467,7 +447,6 @@ fn local_node_config(
     })
 }
 
-#[cfg(feature = "dev-node")]
 fn map_node_supervisor_error(err: &groundhog_node_supervisor::NodeSupervisorError) -> CliError {
     let message = err.to_string();
     match err {
@@ -485,50 +464,6 @@ fn map_node_supervisor_error(err: &groundhog_node_supervisor::NodeSupervisorErro
     }
 }
 
-#[cfg(not(feature = "dev-node"))]
-#[allow(clippy::too_many_arguments)]
-pub fn run(
-    _port: u16,
-    _verbose: bool,
-    _dev_account_count: Option<usize>,
-    _hogd_dev_binary: Option<std::path::PathBuf>,
-    _hogd_protocol: Option<String>,
-    _startup_timeout_secs: Option<u64>,
-    _cmd: &'static str,
-    _print: &Print,
-) -> Result<(), CliError> {
-    Err(CliError::Other(
-        "`groundhog node` requires the dev-node feature.\n\n  \
-         hint: build the CLI with:\n        \
-         cargo install --path crates/tools/cli --features dev-node"
-            .into(),
-    ))
-}
-
-#[cfg(not(feature = "dev-node"))]
-#[allow(clippy::too_many_arguments)]
-pub fn run_with_block_driver(
-    _port: u16,
-    _verbose: bool,
-    _dev_account_count: Option<usize>,
-    _hogd_dev_binary: Option<std::path::PathBuf>,
-    _hogd_protocol: Option<String>,
-    _startup_timeout_secs: Option<u64>,
-    _block_driver: Option<LocalNodeBlockDriverMode>,
-    _block_interval_ms: Option<u64>,
-    _rpc_max_connections: Option<u32>,
-    _cmd: &'static str,
-    _print: &Print,
-) -> Result<(), CliError> {
-    Err(CliError::Other(
-        "`groundhog node` requires the dev-node feature.\n\n  \
-         hint: build the CLI with:\n        \
-         cargo install --path crates/tools/cli --features dev-node"
-            .into(),
-    ))
-}
-
-#[cfg(feature = "dev-node")]
 fn default_tracing_filter(verbose: bool, json: bool) -> &'static str {
     if verbose {
         "groundhog_node_supervisor=info,hogd_dev=info"
@@ -539,7 +474,6 @@ fn default_tracing_filter(verbose: bool, json: bool) -> &'static str {
     }
 }
 
-#[cfg(feature = "dev-node")]
 fn init_tracing(default_filter: &str) {
     use tracing_subscriber::EnvFilter;
 
@@ -553,7 +487,6 @@ fn init_tracing(default_filter: &str) {
         .try_init();
 }
 
-#[cfg(feature = "dev-node")]
 fn hogd_dev_startup_payload(
     addr: std::net::SocketAddr,
     readiness: &groundhog_node_supervisor::HogdDevReadiness,
@@ -562,10 +495,10 @@ fn hogd_dev_startup_payload(
     json!({
         "chain": readiness.network_id,
         "mode": "dev",
-        "experimental": true,
+        "experimental": false,
         "backend": {
             "kind": "hogd_dev",
-            "stability": "experimental",
+            "stability": "supported",
             "planes": backend_planes,
             "endpoints": hogd_dev_endpoints_payload(readiness),
         },
@@ -574,7 +507,6 @@ fn hogd_dev_startup_payload(
     })
 }
 
-#[cfg(feature = "dev-node")]
 fn runtime_manifest_payload(
     readiness: &groundhog_node_supervisor::HogdDevReadiness,
 ) -> serde_json::Value {
@@ -588,7 +520,6 @@ fn runtime_manifest_payload(
     }
 }
 
-#[cfg(feature = "dev-node")]
 fn hogd_dev_endpoints_payload(
     readiness: &groundhog_node_supervisor::HogdDevReadiness,
 ) -> serde_json::Value {
@@ -624,7 +555,7 @@ fn hogd_dev_endpoints_payload(
     serde_json::Value::Object(endpoints)
 }
 
-#[cfg(all(test, feature = "dev-node"))]
+#[cfg(test)]
 mod tests {
     use super::{
         LocalNodeBlockDriverMode, LocalNodeOptions, LocalNodePidFile, default_tracing_filter,

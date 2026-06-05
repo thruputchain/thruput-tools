@@ -233,8 +233,8 @@ if [[ -n "$HOGD_PROTOCOL" ]]; then
     log "using hogd protocol override: $HOGD_PROTOCOL"
 fi
 
-log "building groundhog with dev-node feature"
-cargo build -p groundhog-cli --features dev-node
+log "building groundhog"
+cargo build -p groundhog-cli
 [[ -x "$GROUNDHOG_BINARY" ]] || die "groundhog binary is not executable: $GROUNDHOG_BINARY"
 
 EXAMPLES_ROOT="$(find_examples_root)"

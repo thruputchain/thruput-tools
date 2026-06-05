@@ -287,9 +287,9 @@ enum Command {
         )]
         profile: String,
     },
-    /// Start an experimental local development node
+    /// Start a local development node
     #[command(
-        long_about = "Start an experimental local development node \
+        long_about = "Start a local development node \
                       backed by a supervised hog-devnode process. The \
                       native_exec/test_ffi prototype backend is no longer \
                       wired into this command.",

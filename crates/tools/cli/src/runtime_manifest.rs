@@ -2,10 +2,8 @@
 
 use std::ffi::OsStr;
 use std::io::Read;
-#[cfg(any(feature = "dev-node", test))]
 use std::io::Write;
 use std::path::{Path, PathBuf};
-#[cfg(any(feature = "dev-node", test))]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use groundhog_json_rpc_types::runtime_manifest::{
@@ -102,7 +100,6 @@ pub(crate) fn apply_local_node_state_for_dev_key(
     Ok(())
 }
 
-#[cfg(any(feature = "dev-node", test))]
 pub(crate) fn write_local_node_state(
     start: &Path,
     rpc_url: &str,
@@ -125,7 +122,6 @@ pub(crate) fn write_local_node_state(
     Ok(Some(path))
 }
 
-#[cfg(any(feature = "dev-node", test))]
 pub(crate) fn remove_local_node_state_if_matches(
     path: &Path,
     rpc_url: &str,
@@ -304,7 +300,6 @@ fn open_regular_file_no_symlink(path: &Path, key_name: &str) -> Result<std::fs::
     std::fs::File::open(path).map_err(|source| manifest_error(path, key_name, &source))
 }
 
-#[cfg(any(feature = "dev-node", test))]
 fn write_file_atomically(path: &Path, bytes: &[u8]) -> Result<(), CliError> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let file_name = path

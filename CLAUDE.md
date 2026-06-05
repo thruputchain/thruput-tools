@@ -197,8 +197,8 @@ dispatched by the publish workflow. It verifies that the matching
 `groundhog-cli` and `groundhog-rv32-lower` crate versions already exist in the
 private registry before uploading binary assets. It builds `hog-gateway` and
 `hogsim` from this repository and builds the `groundhog` CLI from the published
-crate; the CLI release build uses `--features dev-node` so the published binary
-includes the local `groundhog node` path. The GitHub Release assets are per-app,
+crate; the published binary includes the local `groundhog node` path. The
+GitHub Release assets are per-app,
 per-target archives:
 `hog-gateway-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz` and
 `groundhog-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz`,
@@ -278,15 +278,15 @@ cargo run -p groundhog-cli -- deploy       # from inside a project
 cargo run -p groundhog-cli -- call my-counter get
 cargo run -p groundhog-cli -- keys generate alice
 cargo run -p groundhog-cli -- keys ls
-# Experimental local node backed by hog-devnode (Cargo feature is still dev-node)
-cargo run -p groundhog-cli --features dev-node -- node --hog-devnode-binary /path/to/hog-devnode
+# Local node backed by hog-devnode
+cargo run -p groundhog-cli -- node --hog-devnode-binary /path/to/hog-devnode
 # Machine-readable startup metadata includes data.rpc_url and
 # data.runtime_manifest.path/hash.
-cargo run -p groundhog-cli --features dev-node -- --json node --hog-devnode-binary /path/to/hog-devnode
+cargo run -p groundhog-cli -- --json node --hog-devnode-binary /path/to/hog-devnode
 # Typical local loop
 # 1. cargo run -p groundhog-cli -- new my-counter && cd my-counter
 # 2. cargo run -p groundhog-cli -- build
-# 3. cargo run -p groundhog-cli --features dev-node -- node --hog-devnode-binary /path/to/hog-devnode  # separate terminal
+# 3. cargo run -p groundhog-cli -- node --hog-devnode-binary /path/to/hog-devnode  # separate terminal
 # 4. cargo run -p groundhog-cli -- deploy
 # 5. cargo run -p groundhog-cli -- call my-counter get
 ```

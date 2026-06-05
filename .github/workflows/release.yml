@@ -56,7 +56,7 @@ jobs:
         run: cargo build --locked --release -p groundhog-json-rpc-gateway --bin hog-gateway
 
       - name: Build groundhog CLI
-        run: cargo build --locked --release -p groundhog-cli --bin groundhog --features dev-node
+        run: cargo build --locked --release -p groundhog-cli --bin groundhog
 
       - name: Build rv32-lower
         run: cargo build --locked --release -p groundhog-rv32-lower --bin rv32-lower

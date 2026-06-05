@@ -28,7 +28,7 @@ What exists today:
 - `groundhog test`
 - `groundhog deploy`
 - `groundhog call`
-- `groundhog node` (feature-gated behind `dev-node`)
+- `groundhog node`
 - `groundhog init` (interactive first-run wizard)
 - `groundhog status` (non-interactive diagnostic)
 - `groundhog keys`

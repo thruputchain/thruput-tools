@@ -24,7 +24,7 @@ The `groundhog` CLI runs an isolated Groundhog chain in a `hog-devnode`
 subprocess and gives you a normal dev loop on top:
 
 ```bash
-cargo install --path crates/tools/cli --features dev-node
+cargo install --path crates/tools/cli
 groundhog init                   # one-time environment check
 groundhog login                  # one-time; early-access registry auth
 groundhog new my-counter && cd my-counter
@@ -61,11 +61,10 @@ The default `groundhog node` output is the quiet golden path; use
 with `--json` because logs stay on stderr, and `RUST_LOG` for exact tracing
 filters.
 
-With the CLI's `dev-node` feature enabled, `groundhog test
---integration` uses that same local-node path without a separate
-terminal: it builds the WASM artifact, starts an ephemeral hog-devnode
-node, deploys with `dev-0`, runs `tests/integration.rs`, then shuts the
-node down. The test process receives `GROUNDHOG_RPC_URL`,
+`groundhog test --integration` uses that same local-node path without a
+separate terminal: it builds the WASM artifact, starts an ephemeral
+hog-devnode node, deploys with `dev-0`, runs `tests/integration.rs`,
+then shuts the node down. The test process receives `GROUNDHOG_RPC_URL`,
 `GROUNDHOG_CONTRACT_ADDRESS`, `GROUNDHOG_PROFILE=integration`,
 `GROUNDHOG_DEFAULT_KEY=dev-0`, and `GROUNDHOG_RUNTIME_MANIFEST`.
 

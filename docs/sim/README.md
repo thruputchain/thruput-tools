@@ -13,7 +13,7 @@ Start here:
 Current local-provider quickstart:
 
 ```bash
-cargo run -p groundhog-cli --features dev-node -- --version
+cargo run -p groundhog-cli -- --version
 
 cargo run -p groundhog-sim --bin hogsim -- run examples/sim/local-chain-tip-smoke.json \
   --groundhog-binary target/debug/groundhog \
@@ -105,7 +105,7 @@ synchronized bursts.
 Existing-target quickstart:
 
 ```bash
-cargo run -p groundhog-cli --features dev-node -- --json node \
+cargo run -p groundhog-cli -- --json node \
   --hog-devnode-binary /path/to/hog-devnode \
   --hogd-protocol hogp/<hash> \
   > /tmp/groundhog-node.json

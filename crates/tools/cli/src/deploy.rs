@@ -240,7 +240,6 @@ pub(crate) fn prepare_deploy(
 }
 
 /// Build and sign a deploy transaction for a known WASM artifact and RPC endpoint.
-#[cfg(feature = "dev-node")]
 pub(crate) fn prepare_deploy_for_rpc_with_manifest(
     wasm_path: &Path,
     rpc_url: &str,

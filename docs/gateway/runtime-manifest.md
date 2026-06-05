@@ -72,7 +72,7 @@ defaults, and the current local reference run.
 Start the local node and capture the startup JSON:
 
 ```bash
-cargo run -p groundhog-cli --features dev-node -- \
+cargo run -p groundhog-cli -- \
   --json node \
   --port 9545 \
   --hog-devnode-binary /path/to/hog-devnode \

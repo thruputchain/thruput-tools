@@ -308,7 +308,7 @@ check_process_logs() {
 
 log "Building CLI, gateway, and bench"
 cargo build -p groundhog-cli -p groundhog-json-rpc-gateway -p groundhog-bench \
-    --features dev-node --manifest-path "$REPO_ROOT/Cargo.toml"
+    --manifest-path "$REPO_ROOT/Cargo.toml"
 
 HOGD_DEV_BINARY="$(find_hogd_dev_binary)"
 [[ -x "$HOGD_DEV_BINARY" ]] || die "hog-devnode binary is not executable: $HOGD_DEV_BINARY"
