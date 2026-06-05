@@ -1,6 +1,6 @@
 [package]
 name = "groundhog-sim"
-version = "0.0.0"
+version.workspace = true
 edition.workspace = true
 publish = false
 description = "Simulation and soak-test harness for Groundhog JSON-RPC targets"

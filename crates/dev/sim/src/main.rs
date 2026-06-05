@@ -20,7 +20,7 @@ const HOGSIM_COMMAND_JSON_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Parser)]
 #[command(name = "hogsim")]
-#[command(about = "Groundhog stateful simulation and soak-test harness")]
+#[command(version, about = "Groundhog stateful simulation and soak-test harness")]
 struct Cli {
     #[command(subcommand)]
     command: Command,

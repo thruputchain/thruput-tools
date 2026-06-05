@@ -1,6 +1,6 @@
 [package]
 name = "groundhog-bench"
-version = "0.0.0"
+version.workspace = true
 edition.workspace = true
 publish = false
 description = "Benchmark harness for Groundhog JSON-RPC endpoints"
