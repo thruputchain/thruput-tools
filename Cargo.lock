@@ -917,7 +917,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-bench"
-version = "0.0.0"
+version = "0.5.3"
 dependencies = [
  "clap",
  "groundhog-json-rpc-types",
@@ -1239,7 +1239,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-sim"
-version = "0.0.0"
+version = "0.5.3"
 dependencies = [
  "clap",
  "groundhog-json-rpc-client",

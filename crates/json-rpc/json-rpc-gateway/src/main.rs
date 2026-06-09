@@ -26,7 +26,7 @@ const MAX_RUNTIME_MANIFEST_BYTES: u64 = 1024 * 1024;
 
 /// Groundhog JSON-RPC gateway.
 #[derive(Parser)]
-#[command(name = "hog-gateway", about = "Groundhog JSON-RPC gateway")]
+#[command(name = "hog-gateway", version, about = "Groundhog JSON-RPC gateway")]
 struct Cli {
     /// Path to TOML config file
     #[arg(long)]

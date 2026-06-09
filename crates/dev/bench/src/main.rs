@@ -101,7 +101,7 @@ enum BenchError {
 
 /// Groundhog JSON-RPC benchmark harness.
 #[derive(Parser)]
-#[command(name = "groundhog-bench")]
+#[command(name = "groundhog-bench", version)]
 struct Cli {
     /// JSON-RPC server URL.
     #[arg(long, default_value = "http://127.0.0.1:9545")]
