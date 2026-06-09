@@ -82,6 +82,19 @@ jobs:
           registry-name: groundhog
           registry-token: ${{ secrets.GROUNDHOG_REGISTRY_TOKEN }}
 
+      # Build and upload rustdoc to groundhog.dev/docs. The tag was created
+      # locally by cargo-version-tag, so HEAD is the tagged commit here.
+      - name: publish docs
+        uses: ./actions/cargo-doc
+        with:
+          packages: ${{ env.PUBLISH_PACKAGES }}
+          version: ${{ steps.publish-tag.outputs.version }}
+          registry-name: groundhog
+          registry-token: ${{ secrets.GROUNDHOG_REGISTRY_TOKEN }}
+          toolchain: nightly-2026-01-30
+          force: 'true'
+          expected-tag: ${{ steps.publish-tag.outputs.tag }}
+
       - name: push tag
         run: |
           git remote set-url origin https://${{ github.actor }}:${{ github.token }}@github.com/${{ github.repository }}.git
