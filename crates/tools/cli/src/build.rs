@@ -28,6 +28,11 @@ impl BuildTarget {
 pub struct BuildResult {
     pub project_name: String,
     pub project_root: PathBuf,
+    /// Manifest directory of the built package. In a single-package project
+    /// this equals `project_root`; in a workspace it is the member's own
+    /// directory (e.g. `<workspace>/erc20`).
+    #[serde(skip_serializing)]
+    pub package_root: PathBuf,
     #[serde(skip_serializing)]
     pub target_directory: PathBuf,
     pub wasm: PathBuf,
@@ -143,6 +148,7 @@ pub fn run(
 
 /// Build the current project and return the artifact metadata without
 /// printing a final command payload.
+#[allow(clippy::too_many_lines)]
 pub fn build_project(
     package: Option<&str>,
     optimize: bool,
@@ -158,6 +164,16 @@ pub fn build_project(
     let metadata = cargo_metadata_with_artifacts(artifacts)?;
     let pkg_name = resolve_package(&metadata, package, &cwd)?;
     let contract_toml = require_contract_toml(&metadata.workspace_root)?;
+
+    // The built package's own directory. Equals `workspace_root` for a
+    // single-package project, but is the member directory in a workspace —
+    // which is where its `tests/` live.
+    let package_root = metadata
+        .packages
+        .iter()
+        .find(|p| p.name == pkg_name)
+        .and_then(|p| p.manifest_path.parent())
+        .map_or_else(|| metadata.workspace_root.clone(), Path::to_path_buf);
 
     if optimize {
         which::which("wasm-opt").map_err(|_| CliError::WasmOptNotFound)?;
@@ -257,6 +273,7 @@ pub fn build_project(
     Ok(BuildResult {
         project_name: pkg_name.to_string(),
         project_root: metadata.workspace_root,
+        package_root,
         target_directory: metadata.target_directory,
         wasm,
         size_bytes: size,

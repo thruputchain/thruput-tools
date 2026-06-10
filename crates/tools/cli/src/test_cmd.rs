@@ -233,7 +233,7 @@ fn run_integration_with_dev_node(
         &build.project_root,
         cargo_args,
     )?;
-    ensure_integration_test_target_exists(&build.project_root)?;
+    ensure_integration_test_target_exists(&build.package_root)?;
 
     // Prefer the explicit `--hogd-protocol` flag; otherwise honor the
     // `GROUNDHOG_HOGD_PROTOCOL` env var.
