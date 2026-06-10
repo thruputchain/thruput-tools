@@ -80,9 +80,17 @@ export const PingEvent = {
   `@groundhogchain/xdr`); no client-ts changes required.
 - The structural `{ topics; data }` parameter matches `EmittedEvent`
   from both receipts and `getEvents()` pages.
-- `null` means "not this event" (topic-0 mismatch). A matching
-  signature with an undecodable payload throws, like the existing
-  codec paths — that is corrupt data, not a different event.
+- `null` is reserved for dispatch: topic 0 absent or not equal to
+  `signature` means "not this event". Once the signature matches, any
+  inconsistency throws, consistent with the rest of the TS codec layer
+  (`XdrReader`, union codecs, and `decodeCalldata` all throw on
+  malformed data; none return null): wrong topic count → throw;
+  payload XDR decode failure → the codec's throw propagates uncaught;
+  trailing bytes after the payload fields → throw (the same check
+  `decodeCalldata` performs). The event signature is
+  `sha256(MAJOR_VERSION :: CRATE_NAME :: TYPE_NAME)` — identity, not
+  shape — so these strict checks are the only guard against decoding
+  with bindings whose event shape has drifted within a major version.
 - `signature` doubles as the `topic0` filter value for `getEvents`;
   no separate `eventSignatures` map.
 
