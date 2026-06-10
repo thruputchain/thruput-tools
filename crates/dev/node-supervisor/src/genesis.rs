@@ -1,11 +1,12 @@
 //! hogd-dev genesis compatibility probe.
 
 use groundhog_scheduler::{
-    DbSchedResult, GenesisConfiguration, SchedulerGetTipResult,
-    sched_coord::SchedulerCoord_SchedulerCoord1_Client,
+    DbSchedResult, SchedulerGetTipResult, sched_coord::SchedulerCoord_SchedulerCoord1_Client,
 };
 use groundhog_xdr::{
-    genesis::InitialConfigurationList, storage_cost::StorageCostModelXdr, types::ExtensionPoint,
+    genesis::{GenesisConfiguration, InitialConfigurationList},
+    storage_cost::StorageCostModelXdr,
+    types::ExtensionPoint,
 };
 
 use crate::NodeSupervisorError;

@@ -415,7 +415,36 @@ mod tests {
             .try_into()
             .unwrap(),
             type_defs: vec![].try_into().unwrap(),
+            events: vec![].try_into().unwrap(),
         }
+    }
+
+    #[test]
+    fn rendered_spec_json_includes_events() {
+        let mut spec = sample_contract_spec();
+        spec.events = vec![groundhog_contract_spec::ContractEventDef {
+            name: spec_string_bytes("PingEvent"),
+            signature: groundhog_xdr::event::Topic::from([0xAB; 32]),
+            topics: vec![ContractField {
+                name: spec_string_bytes("tag"),
+                ty: ContractType::U64,
+            }]
+            .try_into()
+            .unwrap(),
+            fields: vec![].try_into().unwrap(),
+        }]
+        .try_into()
+        .unwrap();
+
+        let json = groundhog_spec_tool::render_spec_json(&spec);
+        assert!(
+            json.contains("\"events\""),
+            "rendered spec JSON missing events: {json}"
+        );
+        assert!(
+            json.contains("\"PingEvent\""),
+            "rendered spec JSON missing event name: {json}"
+        );
     }
 
     fn sample_multi_interface_contract_spec() -> ContractSpec {
@@ -449,6 +478,7 @@ mod tests {
             .try_into()
             .unwrap(),
             type_defs: vec![].try_into().unwrap(),
+            events: vec![].try_into().unwrap(),
         }
     }
 

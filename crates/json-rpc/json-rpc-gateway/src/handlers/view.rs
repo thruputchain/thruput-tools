@@ -6,9 +6,13 @@ use groundhog_json_rpc_types::{
     hex::HexBytes,
     view::{RootInvocationOutput, ViewRequest, ViewResponse},
 };
-use groundhog_view::{
-    AuthClaim, AuthClaim_source_address_claim, ContractEntrypointID, Invocation,
-    InvocationFrameOutput, InvokeFlag, TransactionViewQuery, ViewGatewayResult,
+use groundhog_view::ViewGatewayResult;
+use groundhog_xdr::{
+    auth_claim::{AuthClaim, AuthClaim_source_address_claim},
+    contract::ContractEntrypointID,
+    invoke_flag::InvokeFlag,
+    transaction::{Invocation, InvocationFrameOutput},
+    view::TransactionViewQuery,
 };
 use xdr_common::{BytesM, VecM};
 
@@ -160,8 +164,9 @@ mod tests {
 
     use async_trait::async_trait;
     use groundhog_json_rpc_types::ContractAddress;
+    use groundhog_scp::network::Protocol;
     use groundhog_view::{
-        Protocol, ViewGateway_ViewGateway1, ViewGateway_ViewGateway1_Client,
+        ViewGateway_ViewGateway1, ViewGateway_ViewGateway1_Client,
         ViewGateway_ViewGateway1_Dispatcher, ViewGatewayIntroOutcome, ViewGatewayPayload,
     };
     use groundhog_xdr::event::TxEmittedEvent;

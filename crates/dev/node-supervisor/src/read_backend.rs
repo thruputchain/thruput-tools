@@ -13,13 +13,12 @@
 use std::{fmt, net::SocketAddr};
 
 use async_trait::async_trait;
+use groundhog_db_gateway::AddressAndKeyBatch;
 use groundhog_db_gateway::{
-    AddressAndKey, AddressAndKeyBatch, DbGateway_DbGateway1_Client, DbGatewayIntroOutcome,
-    DbGatewayItemResult, DbGatewayResult, Protocol as DbGatewayProtocol, RPCError, StorageKey,
-    StorageKeyContractData,
+    DbGateway_DbGateway1_Client, DbGatewayIntroOutcome, DbGatewayItemResult, DbGatewayResult,
 };
 use groundhog_indexer::{
-    IndexerBlockExplorer_IndexerBlockExplorer1_Client, IndexerBlockExplorerIntroOutcome, Protocol,
+    IndexerBlockExplorer_IndexerBlockExplorer1_Client, IndexerBlockExplorerIntroOutcome,
     TxInfoOutcome, TxInfoResult,
 };
 use groundhog_json_rpc_server::{ReadPlane, RpcServerError};
@@ -31,12 +30,14 @@ use groundhog_json_rpc_types::{
     state::{StorageItemInfo, StorageItemRead},
     transaction::{TransactionStatus, TxHash},
 };
-use groundhog_scheduler::sched_coord::SchedulerCoord_SchedulerCoord1_Client;
+use groundhog_scheduler::{RPCError, sched_coord::SchedulerCoord_SchedulerCoord1_Client};
+use groundhog_scp::network::Protocol;
 use groundhog_x23_transport::connect;
 use groundhog_xdr::{
     event::TxEmittedEvent,
     exec_result::ExecResult,
     transaction::{InvocationFrameOutput, SignedTransactionHash},
+    types::{AddressAndKey, StorageKey, StorageKeyContractData},
 };
 use xdr_common::VecM;
 
@@ -393,7 +394,7 @@ async fn connect_db_gateway(
     .await
     .map_err(|source| NodeSupervisorError::DbGatewayConnect { endpoint, source })?;
 
-    let protocol: DbGatewayProtocol = xdr_common::StringM(protocol_version.as_bytes().to_vec());
+    let protocol: Protocol = xdr_common::StringM(protocol_version.as_bytes().to_vec());
     let intro_outcome =
         client
             .dbgateway_intro(&protocol)
@@ -598,17 +599,17 @@ mod tests {
     use std::{collections::HashMap, net::SocketAddr, time::Duration};
 
     use async_trait::async_trait;
+    use groundhog_coordinator::ValidatorID;
+    use groundhog_db_gateway::AddressAndKeyBatch;
     use groundhog_db_gateway::{
-        AddressAndKeyBatch, DbGateway_DbGateway1, DbGateway_DbGateway1_Client,
-        DbGateway_DbGateway1_Dispatcher, DbGatewayIntroOutcome, DbGatewayItemResult,
-        DbGatewayPayload, DbGatewayResult, Protocol as DbGatewayProtocol, RPCError,
+        DbGateway_DbGateway1, DbGateway_DbGateway1_Client, DbGateway_DbGateway1_Dispatcher,
+        DbGatewayIntroOutcome, DbGatewayItemResult, DbGatewayPayload, DbGatewayResult,
     };
     use groundhog_indexer::{
-        BlockHeight as IdxBlockHeight, EventPage as IdxEventPage,
-        IdentifiedEvent as IdxIdentifiedEvent, IndexerBlockExplorer_IndexerBlockExplorer1,
+        EventPage as IdxEventPage, IndexerBlockExplorer_IndexerBlockExplorer1,
         IndexerBlockExplorer_IndexerBlockExplorer1_Client,
         IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher, IndexerBlockExplorerIntroOutcome,
-        Protocol, TxInfo, TxInfoResult,
+        TxInfo, TxInfoResult,
     };
     use groundhog_json_rpc_server::{ReadPlane, RpcServerError};
     use groundhog_json_rpc_types::{
@@ -616,17 +617,24 @@ mod tests {
         hex::Hex0x,
         transaction::{TransactionStatus, TxHash},
     };
+    use groundhog_scheduler::rpc_types::RPCError;
+    use groundhog_scheduler::{BlockID, Nomination, ParallelSignedTransactionBatch};
     use groundhog_scheduler::{
-        BlockID, CoordinatorRegistrationOutcome, DbSchedResult, GenesisConfiguration, Invocation,
-        Nomination, OptSignedTransactionBatch, ParallelSignedTransactionBatch,
-        SchedulerCommitOutcome, SchedulerGetTipResult, SchedulerNominationResult,
-        SchedulerValidationResult, SignedTransaction, SignedTransactionHashBatch, Transaction,
-        Uniquifier, ValidatorID,
+        CoordinatorRegistrationOutcome, DbSchedResult, SchedulerCommitOutcome,
+        SchedulerGetTipResult, SchedulerNominationResult, SchedulerValidationResult,
         sched_coord::{
             SchedulerCoord_SchedulerCoord1, SchedulerCoord_SchedulerCoord1_Client,
             SchedulerCoord_SchedulerCoord1_Dispatcher,
         },
     };
+    use groundhog_scp::network::Protocol;
+    use groundhog_xdr::event::IdentifiedEvent as IdxIdentifiedEvent;
+    use groundhog_xdr::genesis::GenesisConfiguration;
+    use groundhog_xdr::transaction::{
+        Invocation, OptSignedTransactionBatch, SignedTransaction, SignedTransactionHashBatch,
+        Transaction, Uniquifier,
+    };
+    use groundhog_xdr::types::BlockHeight as IdxBlockHeight;
     use groundhog_xdr::{
         PROTOCOL_VERSION,
         event::TxEmittedEvent,
@@ -678,8 +686,9 @@ mod tests {
     /// pending-detection path. The transaction is not valid on-chain; it only
     /// needs to be `Some(...)` so `Option::is_some()` returns true.
     fn dummy_signed_transaction() -> SignedTransaction {
-        use groundhog_scheduler::{ContractEntrypointID, GasAmount};
         use groundhog_xdr::auth_claim::{AuthClaim, AuthClaim_source_address_claim};
+        use groundhog_xdr::contract::ContractEntrypointID;
+        use groundhog_xdr::types::GasAmount;
         SignedTransaction {
             tx: Transaction {
                 invocation: Invocation {
@@ -1022,7 +1031,7 @@ mod tests {
     impl DbGateway_DbGateway1 for FakeDbGateway {
         async fn dbgateway_intro(
             &self,
-            _arg0: DbGatewayProtocol,
+            _arg0: Protocol,
         ) -> Result<DbGatewayIntroOutcome, ProgramError> {
             Ok(DbGatewayIntroOutcome::DbGatewayIntroSuccess)
         }

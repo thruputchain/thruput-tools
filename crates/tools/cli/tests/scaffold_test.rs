@@ -22,7 +22,7 @@ fn scaffold_counter_creates_expected_files() {
     assert!(cargo.contains(r#"name = "my-counter""#));
     assert!(cargo.contains("registry = \"groundhog\""));
     assert!(!cargo.contains("sdk/spec"));
-    assert!(cargo.contains(r#"sdk = { version = "0.14.11""#));
+    assert!(cargo.contains(r#"sdk = { version = "0.15.0""#));
 
     let lib = fs::read_to_string(dir.join("src/lib.rs")).unwrap();
     assert!(lib.contains("mod implementation"));
@@ -31,6 +31,9 @@ fn scaffold_counter_creates_expected_files() {
     assert!(imp.contains("pub struct Counter"));
     assert!(imp.contains("#[contract_exception]"));
     assert!(!imp.contains("#[contract_error]"));
+    // Under sdk 0.15.0's declaration-based event inclusion, the event only
+    // lands in the contract spec when declared via emits(...).
+    assert!(imp.contains("#[contract(throws = CounterError, emits(PingEvent))]"));
 
     let test = fs::read_to_string(dir.join("tests/test.rs")).unwrap();
     assert!(test.contains("register_mock_contract"));

@@ -3,7 +3,8 @@ use std::{sync::Arc, time::Duration};
 use groundhog_db_gateway::DbGateway_DbGateway1_Client;
 use groundhog_indexer::IndexerBlockExplorer_IndexerBlockExplorer1_Client;
 use groundhog_scheduler::sched_coord::SchedulerCoord_SchedulerCoord1_Client;
-use groundhog_view::{Protocol, ViewGateway_ViewGateway1_Client, ViewGatewayIntroOutcome};
+use groundhog_scp::network::Protocol;
+use groundhog_view::{ViewGateway_ViewGateway1_Client, ViewGatewayIntroOutcome};
 use groundhog_x23_transport::{ConnectError, connect, try_connect};
 use groundhog_xdr::PROTOCOL_VERSION;
 use tokio::sync::RwLock;
@@ -245,9 +246,9 @@ fn view_gateway_pool_size() -> usize {
 mod tests {
     use async_trait::async_trait;
     use groundhog_view::{
-        TransactionViewQuery, ViewGateway_ViewGateway1, ViewGateway_ViewGateway1_Dispatcher,
-        ViewGatewayResult,
+        ViewGateway_ViewGateway1, ViewGateway_ViewGateway1_Dispatcher, ViewGatewayResult,
     };
+    use groundhog_xdr::view::TransactionViewQuery;
     use rpc_driver::{ProgramError, RpcServer, ServiceMap};
     use tokio::net::TcpListener;
 

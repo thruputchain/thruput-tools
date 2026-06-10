@@ -14,29 +14,33 @@ use std::{
 };
 
 use async_trait::async_trait;
+use groundhog_coordinator::{ValidatorID, ValidatorPublicInfo};
+use groundhog_db_gateway::AddressAndKeyBatch;
 use groundhog_db_gateway::{
-    AddressAndKeyBatch, DbGateway_DbGateway1, DbGateway_DbGateway1_Dispatcher,
-    DbGatewayIntroOutcome, DbGatewayItemResult, DbGatewayPayload, DbGatewayResult,
-    Protocol as DbGatewayProtocol, RPCError, StorageKey,
+    DbGateway_DbGateway1, DbGateway_DbGateway1_Dispatcher, DbGatewayIntroOutcome,
+    DbGatewayItemResult, DbGatewayPayload, DbGatewayResult,
 };
 use groundhog_indexer::{
-    BlockHeight, EventPage, EventQuery, IdentifiedEvent,
-    IndexerBlockExplorer_IndexerBlockExplorer1,
+    EventPage, EventQuery, IndexerBlockExplorer_IndexerBlockExplorer1,
     IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher, IndexerBlockExplorerIntroOutcome,
-    Protocol, SignedTransactionHash, TxInfo, TxInfoResult,
+    TxInfo, TxInfoResult,
 };
 use groundhog_json_rpc_types::hex::Hex0x;
 use groundhog_scheduler::{
-    BlockHash, CoordinatorRegistrationOutcome, DbSchedResult, DbTip, GenesisConfiguration,
-    Nomination, OptSignedTransactionBatch, ParallelBatch,
+    CoordinatorRegistrationOutcome, DbSchedResult, DbTip, Nomination, ParallelBatch,
     ParallelNondeterministicProposalDataBatch, ParallelSignedTransactionBatch,
-    ParallelSignedTransactionHashBatch, SchedulerCommitOutcome, SchedulerGetTipResult,
+    ParallelSignedTransactionHashBatch, RPCError, SchedulerCommitOutcome, SchedulerGetTipResult,
     SchedulerNominatedBlock, SchedulerNominationResult, SchedulerValidationResult,
-    SignedTransactionHashBatch, ValidatorID, ValidatorPublicInfo,
     sched_coord::{SchedulerCoord_SchedulerCoord1, SchedulerCoord_SchedulerCoord1_Dispatcher},
 };
+use groundhog_scp::network::Protocol;
+use groundhog_xdr::event::IdentifiedEvent;
+use groundhog_xdr::genesis::GenesisConfiguration;
 use groundhog_xdr::storage_item::WireStorageItem;
-use groundhog_xdr::types::{Ed25519PublicKey, SHA256Hash};
+use groundhog_xdr::transaction::{
+    OptSignedTransactionBatch, SignedTransactionHash, SignedTransactionHashBatch,
+};
+use groundhog_xdr::types::{BlockHash, BlockHeight, Ed25519PublicKey, SHA256Hash, StorageKey};
 use rpc_driver::{ProgramError, RpcServer, ServiceMap};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -911,7 +915,7 @@ struct FakeDbGateway {
 impl DbGateway_DbGateway1 for FakeDbGateway {
     async fn dbgateway_intro(
         &self,
-        _arg0: DbGatewayProtocol,
+        _arg0: Protocol,
     ) -> Result<DbGatewayIntroOutcome, ProgramError> {
         match self.mode {
             FakeDbGatewayMode::Normal => {}

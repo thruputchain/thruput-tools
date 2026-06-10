@@ -3,9 +3,9 @@
 use std::fmt::Write as _;
 
 use groundhog_contract_spec::{
-    ContractEnumDef, ContractExceptionType, ContractField, ContractSpec, ContractSpecInterface,
-    ContractSpecMethod, ContractStructDef, ContractType, ContractTypeDef, ContractUnionCaseType,
-    ContractUnionDef,
+    ContractEnumDef, ContractEventDef, ContractExceptionType, ContractField, ContractSpec,
+    ContractSpecInterface, ContractSpecMethod, ContractStructDef, ContractType, ContractTypeDef,
+    ContractUnionCaseType, ContractUnionDef,
 };
 use groundhog_contract_util::{NormalizedMethodSignature, contract_entrypoint_id};
 
@@ -219,6 +219,11 @@ pub fn generate_ts_bindings(spec: &ContractSpec, source_name: &str) -> Result<St
         }
     }
 
+    // 8. Event types and decoders
+    if !spec.events.is_empty() {
+        emit_event_sections(&mut out, spec)?;
+    }
+
     Ok(out)
 }
 
@@ -264,6 +269,7 @@ fn emit_imports(out: &mut String, spec: &ContractSpec) {
         .type_defs
         .iter()
         .any(|d| matches!(d, ContractTypeDef::TypeDefUnion { .. }));
+    let has_events = !spec.events.is_empty();
     let mut cs_imports: Vec<&str> = vec![
         "ContractTypeKind",
         "ContractTypeDefKind",
@@ -271,6 +277,9 @@ fn emit_imports(out: &mut String, spec: &ContractSpec) {
     ];
     if has_unions {
         cs_imports.push("ContractUnionCaseKind");
+    }
+    if has_events {
+        cs_imports.push("topic");
     }
     let _ = writeln!(
         out,
@@ -295,6 +304,15 @@ fn emit_imports(out: &mut String, spec: &ContractSpec) {
         out,
         "import {{ createInvocation }} from \"@groundhogchain/client\";"
     );
+
+    // Event decoder imports
+    if has_events {
+        let _ = writeln!(
+            out,
+            "import {{ resolveCodec }} from \"@groundhogchain/client\";"
+        );
+        let _ = writeln!(out, "import {{ CxsReader }} from \"@groundhogchain/xdr\";");
+    }
 }
 
 /// Emit the `entrypoints` const mapping method names to their IDs.
@@ -341,7 +359,42 @@ fn emit_spec_literal(out: &mut String, spec: &ContractSpec) -> Result<(), CliErr
     }
     let _ = writeln!(out, "  ],");
 
+    // events
+    let _ = writeln!(out, "  events: [");
+    for event in spec.events.iter() {
+        emit_spec_event_literal(out, event)?;
+    }
+    let _ = writeln!(out, "  ],");
+
     let _ = writeln!(out, "}};");
+    Ok(())
+}
+
+/// Emit a single event entry inside the spec literal.
+fn emit_spec_event_literal(out: &mut String, event: &ContractEventDef) -> Result<(), CliError> {
+    let name = spec_string_text(&event.name)?;
+    let sig_hex = hex::encode(event.signature.into_inner());
+    let _ = writeln!(out, "    {{");
+    let _ = writeln!(out, "      name: s(\"{name}\"),");
+    let _ = writeln!(out, "      signature: topic(fromHex(\"{sig_hex}\")),");
+
+    let _ = writeln!(out, "      topics: [");
+    for field in event.topics.iter() {
+        let fname = spec_string_text(&field.name)?;
+        let ty_lit = spec_type_to_ts_literal(&field.ty)?;
+        let _ = writeln!(out, "        {{ name: s(\"{fname}\"), ty: {ty_lit} }},");
+    }
+    let _ = writeln!(out, "      ],");
+
+    let _ = writeln!(out, "      fields: [");
+    for field in event.fields.iter() {
+        let fname = spec_string_text(&field.name)?;
+        let ty_lit = spec_type_to_ts_literal(&field.ty)?;
+        let _ = writeln!(out, "        {{ name: s(\"{fname}\"), ty: {ty_lit} }},");
+    }
+    let _ = writeln!(out, "      ],");
+
+    let _ = writeln!(out, "    }},");
     Ok(())
 }
 
@@ -675,6 +728,208 @@ fn emit_method_function(
     Ok(())
 }
 
+/// Emit per-event interface/const pairs, the per-contract event union, and
+/// the combined `decodeEvent` dispatcher.
+fn emit_event_sections(out: &mut String, spec: &ContractSpec) -> Result<(), CliError> {
+    let union_name = event_union_name(spec)?;
+
+    // Event names share the file's top-level type namespace with type defs
+    // and with the combined-decoder union.
+    for event in spec.events.iter() {
+        let event_name = spec_string_text(&event.name)?;
+        if event_name == union_name {
+            return Err(CliError::SpecFailed(format!(
+                "event \"{event_name}\" collides with the generated \"{union_name}\" event union"
+            )));
+        }
+        for def in spec.type_defs.iter() {
+            let def_name = match def {
+                ContractTypeDef::TypeDefStruct { struct_def } => {
+                    spec_string_text(&struct_def.name)?
+                }
+                ContractTypeDef::TypeDefEnum { enum_def } => spec_string_text(&enum_def.name)?,
+                ContractTypeDef::TypeDefUnion { union_def } => spec_string_text(&union_def.name)?,
+                _ => continue,
+            };
+            if def_name == event_name {
+                return Err(CliError::SpecFailed(format!(
+                    "event \"{event_name}\" collides with a type definition of the same name"
+                )));
+            }
+        }
+    }
+    for def in spec.type_defs.iter() {
+        let def_name = match def {
+            ContractTypeDef::TypeDefStruct { struct_def } => spec_string_text(&struct_def.name)?,
+            ContractTypeDef::TypeDefEnum { enum_def } => spec_string_text(&enum_def.name)?,
+            ContractTypeDef::TypeDefUnion { union_def } => spec_string_text(&union_def.name)?,
+            _ => continue,
+        };
+        if def_name == union_name {
+            return Err(CliError::SpecFailed(format!(
+                "type definition \"{def_name}\" collides with the generated \
+                 \"{union_name}\" event union"
+            )));
+        }
+    }
+
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "function topicEquals(a: Uint8Array | undefined, b: Uint8Array): boolean {{"
+    );
+    let _ = writeln!(
+        out,
+        "  if (a === undefined || a.length !== b.length) return false;"
+    );
+    let _ = writeln!(
+        out,
+        "  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;"
+    );
+    let _ = writeln!(out, "  return true;");
+    let _ = writeln!(out, "}}");
+
+    for (idx, event) in spec.events.iter().enumerate() {
+        let _ = writeln!(out);
+        emit_event_decl(out, event, idx)?;
+    }
+
+    let _ = writeln!(out);
+    emit_decode_event(out, spec)?;
+    Ok(())
+}
+
+/// Emit the same-named interface + const pair for one event. TypeScript
+/// declaration merging makes the event name both the decoded-event type
+/// and the value carrying its signature and decoder.
+fn emit_event_decl(out: &mut String, event: &ContractEventDef, idx: usize) -> Result<(), CliError> {
+    let name = spec_string_text(&event.name)?;
+    let sig_hex = hex::encode(event.signature.into_inner());
+
+    // Topic values are hashes on the wire, so topic fields are always raw
+    // Uint8Array; payload fields are typed.
+    let mut topic_fields = String::new();
+    for field in event.topics.iter() {
+        let fname = spec_string_text(&field.name)?;
+        if !topic_fields.is_empty() {
+            topic_fields.push(' ');
+        }
+        let _ = write!(topic_fields, "{fname}: Uint8Array;");
+    }
+    let payload_fields = emit_inline_struct_fields(event.fields.iter())?;
+
+    let _ = writeln!(out, "export interface {name} {{");
+    let _ = writeln!(out, "  name: \"{name}\";");
+    let _ = writeln!(out, "  topics: {{ {topic_fields} }};");
+    let _ = writeln!(out, "  fields: {{ {payload_fields} }};");
+    let _ = writeln!(out, "}}");
+
+    let n_topics = event.topics.len() + 1; // +1 for the signature at topic 0
+    let _ = writeln!(out, "export const {name} = {{");
+    let _ = writeln!(
+        out,
+        "  /** Topic-0 signature hash from the contract spec. */"
+    );
+    let _ = writeln!(out, "  signature: fromHex(\"{sig_hex}\"),");
+    let _ = writeln!(
+        out,
+        "  /** Returns null if topic 0 does not identify this event. */"
+    );
+    let _ = writeln!(
+        out,
+        "  decode(event: {{ topics: Uint8Array[]; data: Uint8Array }}): {name} | null {{"
+    );
+    let _ = writeln!(
+        out,
+        "    if (!topicEquals(event.topics[0], {name}.signature)) return null;"
+    );
+    let _ = writeln!(out, "    if (event.topics.length !== {n_topics}) {{");
+    let _ = writeln!(
+        out,
+        "      throw new Error(`{name}: expected {n_topics} topics, got ${{event.topics.length}}`);"
+    );
+    let _ = writeln!(out, "    }}");
+
+    // Topic field mapping (topics[1..]).
+    let mut topic_entries = String::new();
+    for (i, field) in event.topics.iter().enumerate() {
+        let fname = spec_string_text(&field.name)?;
+        if !topic_entries.is_empty() {
+            topic_entries.push_str(", ");
+        }
+        let _ = write!(topic_entries, "{fname}: event.topics[{}]", i + 1);
+    }
+
+    // Payload decode, in declaration order, CXS-encoded like calldata.
+    let _ = writeln!(out, "    const r = new CxsReader(event.data);");
+    let mut field_entries = String::new();
+    for (i, field) in event.fields.iter().enumerate() {
+        let fname = spec_string_text(&field.name)?;
+        let ts_ty = ts_type_ref(&field.ty)?;
+        let _ = writeln!(
+            out,
+            "    const f{i} = resolveCodec(spec.events[{idx}].fields[{i}].ty, namedCodecs).decode(r) as {ts_ty};"
+        );
+        if !field_entries.is_empty() {
+            field_entries.push_str(", ");
+        }
+        let _ = write!(field_entries, "{fname}: f{i}");
+    }
+    let _ = writeln!(out, "    if (r.remaining !== 0) {{");
+    let _ = writeln!(
+        out,
+        "      throw new Error(`{name}: ${{r.remaining}} trailing bytes after payload`);"
+    );
+    let _ = writeln!(out, "    }}");
+
+    let _ = writeln!(
+        out,
+        "    return {{ name: \"{name}\", topics: {{ {topic_entries} }}, fields: {{ {field_entries} }} }};"
+    );
+    let _ = writeln!(out, "  }},");
+    let _ = writeln!(out, "}} as const;");
+    Ok(())
+}
+
+/// Name of the per-contract event union: the first interface name plus
+/// `Event`. The generated file is per-contract, so all events share it.
+fn event_union_name(spec: &ContractSpec) -> Result<String, CliError> {
+    let first_iface = spec.interfaces.iter().next().ok_or_else(|| {
+        CliError::SpecFailed("contract spec with events has no interfaces".into())
+    })?;
+    Ok(format!("{}Event", spec_string_text(&first_iface.name)?))
+}
+
+/// Emit the per-contract event union and combined decoder.
+fn emit_decode_event(out: &mut String, spec: &ContractSpec) -> Result<(), CliError> {
+    let union_name = event_union_name(spec)?;
+
+    let event_names: Vec<&str> = spec
+        .events
+        .iter()
+        .map(|e| spec_string_text(&e.name))
+        .collect::<Result<_, _>>()?;
+
+    let _ = writeln!(
+        out,
+        "export type {union_name} = {};",
+        event_names.join(" | "),
+    );
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "export function decodeEvent(event: {{ topics: Uint8Array[]; data: Uint8Array }}): {union_name} | null {{"
+    );
+    let chain = event_names
+        .iter()
+        .map(|n| format!("{n}.decode(event)"))
+        .collect::<Vec<_>>()
+        .join(" ?? ");
+    let _ = writeln!(out, "  return {chain};");
+    let _ = writeln!(out, "}}");
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -683,7 +938,7 @@ fn emit_method_function(
 mod tests {
     use super::*;
     use groundhog_contract_spec::{
-        ContractArrayType, ContractEnumDef, ContractEnumVariant, ContractSpec,
+        ContractArrayType, ContractEnumDef, ContractEnumVariant, ContractEventDef, ContractSpec,
         ContractSpecInterface, ContractSpecMethod, ContractSpecString, ContractStructDef,
         ContractUnionCase, ContractVectorType,
     };
@@ -901,6 +1156,167 @@ export type Result =
         assert_eq!(emit_type_def(&def).unwrap(), expected);
     }
 
+    /// An event with one topic field and one payload field.
+    fn ping_event_def() -> ContractEventDef {
+        ContractEventDef {
+            name: spec_string("PingEvent"),
+            signature: groundhog_xdr::event::Topic::from([0xAB; 32]),
+            topics: vec![ContractField {
+                name: spec_string("tag"),
+                ty: ContractType::U64,
+            }]
+            .try_into()
+            .unwrap(),
+            fields: vec![ContractField {
+                name: spec_string("note"),
+                ty: ContractType::String,
+            }]
+            .try_into()
+            .unwrap(),
+        }
+    }
+
+    /// A one-interface spec whose only content is `ping_event_def`.
+    fn spec_with_events() -> ContractSpec {
+        ContractSpec {
+            interfaces: vec![ContractSpecInterface {
+                name: spec_string("Counter"),
+                vers: spec_string("0.1.0"),
+                throws: vec![].try_into().unwrap(),
+                methods: vec![].try_into().unwrap(),
+            }]
+            .try_into()
+            .unwrap(),
+            type_defs: vec![].try_into().unwrap(),
+            events: vec![ping_event_def()].try_into().unwrap(),
+        }
+    }
+
+    #[test]
+    fn spec_literal_includes_events() {
+        let output = generate_ts_bindings(&spec_with_events(), "counter.wasm").unwrap();
+        assert!(
+            output.contains("events: ["),
+            "spec literal missing events array:\n{output}"
+        );
+        assert!(
+            output.contains(&format!(
+                "signature: topic(fromHex(\"{}\"))",
+                "ab".repeat(32)
+            )),
+            "event signature literal missing:\n{output}"
+        );
+        assert!(
+            output.contains("{ name: s(\"tag\"), ty: { v: ContractTypeKind.U64 } }"),
+            "event topic field literal missing:\n{output}"
+        );
+        assert!(
+            output.contains("{ name: s(\"note\"), ty: { v: ContractTypeKind.String } }"),
+            "event payload field literal missing:\n{output}"
+        );
+    }
+
+    #[test]
+    fn generates_event_types_and_decoders() {
+        let output = generate_ts_bindings(&spec_with_events(), "counter.wasm").unwrap();
+
+        // interface + companion const (declaration merging)
+        assert!(
+            output.contains("export interface PingEvent {"),
+            "missing interface:\n{output}"
+        );
+        assert!(
+            output.contains("name: \"PingEvent\";"),
+            "missing name discriminant:\n{output}"
+        );
+        assert!(
+            output.contains("topics: { tag: Uint8Array; };"),
+            "missing topics shape:\n{output}"
+        );
+        assert!(
+            output.contains("fields: { note: string; };"),
+            "missing fields shape:\n{output}"
+        );
+        assert!(
+            output.contains("export const PingEvent = {"),
+            "missing companion const:\n{output}"
+        );
+        assert!(
+            output.contains(&format!("signature: fromHex(\"{}\")", "ab".repeat(32))),
+            "missing signature const:\n{output}"
+        );
+        assert!(
+            output.contains(
+                "decode(event: { topics: Uint8Array[]; data: Uint8Array }): PingEvent | null"
+            ),
+            "missing per-event decode:\n{output}"
+        );
+
+        // combined union + dispatcher
+        assert!(
+            output.contains("export type CounterEvent = PingEvent;"),
+            "missing union:\n{output}"
+        );
+        assert!(
+            output.contains(
+                "export function decodeEvent(event: { topics: Uint8Array[]; data: Uint8Array }): CounterEvent | null"
+            ),
+            "missing decodeEvent:\n{output}"
+        );
+        assert!(
+            output.contains("return PingEvent.decode(event);"),
+            "missing dispatch body:\n{output}"
+        );
+
+        // decoder internals
+        assert!(
+            output.contains("CxsReader"),
+            "decoder must use CxsReader:\n{output}"
+        );
+        assert!(
+            output.contains("resolveCodec"),
+            "decoder must use resolveCodec:\n{output}"
+        );
+    }
+
+    #[test]
+    fn no_event_section_without_events() {
+        let output = generate_ts_bindings(&counter_spec(), "counter.wasm").unwrap();
+        assert!(
+            !output.contains("decodeEvent"),
+            "unexpected decodeEvent:\n{output}"
+        );
+        assert!(
+            !output.contains("CxsReader"),
+            "unexpected decoder imports:\n{output}"
+        );
+    }
+
+    #[test]
+    fn event_name_colliding_with_union_name_errors() {
+        // The combined-decoder union is named "{FirstInterface}Event"; an
+        // event with that exact name would collide in TS's type namespace.
+        let mut spec = spec_with_events();
+        let mut event = ping_event_def();
+        event.name = spec_string("CounterEvent");
+        spec.events = vec![event].try_into().unwrap();
+        assert!(generate_ts_bindings(&spec, "counter.wasm").is_err());
+    }
+
+    #[test]
+    fn event_name_colliding_with_type_def_errors() {
+        let mut spec = spec_with_events();
+        spec.type_defs = vec![ContractTypeDef::TypeDefStruct {
+            struct_def: ContractStructDef {
+                name: spec_string("PingEvent"),
+                fields: vec![].try_into().unwrap(),
+            },
+        }]
+        .try_into()
+        .unwrap();
+        assert!(generate_ts_bindings(&spec, "counter.wasm").is_err());
+    }
+
     /// Build a minimal counter contract spec: `get() -> U64` and
     /// `increment(amount: U64) -> Void`.
     fn counter_spec() -> ContractSpec {
@@ -932,6 +1348,7 @@ export type Result =
             .try_into()
             .unwrap(),
             type_defs: vec![].try_into().unwrap(),
+            events: vec![].try_into().unwrap(),
         }
     }
 
@@ -1070,6 +1487,7 @@ export type Result =
             }]
             .try_into()
             .unwrap(),
+            events: vec![].try_into().unwrap(),
         }
     }
 
@@ -1213,6 +1631,7 @@ export type Result =
             }]
             .try_into()
             .unwrap(),
+            events: vec![].try_into().unwrap(),
         }
     }
 
