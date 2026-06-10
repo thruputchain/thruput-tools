@@ -41,7 +41,17 @@ pub struct TestOptions {
 
 /// Options for the `groundhog test --integration` orchestration path.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct IntegrationTestOptions {}
+pub struct IntegrationTestOptions {
+    /// Override the x23 protocol token used when launching the ephemeral
+    /// hog-devnode node (mirrors `groundhog node --hogd-protocol`). Useful
+    /// when the local hog-devnode build is ahead of the published protocol
+    /// crates. When `None`, falls back to the `GROUNDHOG_HOGD_PROTOCOL`
+    /// environment variable.
+    pub hogd_protocol: Option<String>,
+}
+
+/// Environment fallback for the integration node's protocol override.
+const HOGD_PROTOCOL_ENV: &str = "GROUNDHOG_HOGD_PROTOCOL";
 
 /// Boolean controls forwarded to the selected libtest harness.
 #[derive(Debug, Clone, Default)]
@@ -174,7 +184,7 @@ pub fn run_with_options(
 pub fn run_integration_with_options(
     package: Option<&str>,
     options: &TestOptions,
-    _integration: &IntegrationTestOptions,
+    integration: &IntegrationTestOptions,
     cargo_args: &[String],
     artifacts: &ArtifactOptions,
     explicit_profile: Option<&str>,
@@ -195,6 +205,7 @@ pub fn run_integration_with_options(
     run_integration_with_dev_node(
         package,
         options,
+        integration,
         cargo_args,
         artifacts,
         explicit_profile,
@@ -207,6 +218,7 @@ pub fn run_integration_with_options(
 fn run_integration_with_dev_node(
     package: Option<&str>,
     options: &TestOptions,
+    integration: &IntegrationTestOptions,
     cargo_args: &[String],
     artifacts: &ArtifactOptions,
     explicit_profile: Option<&str>,
@@ -223,12 +235,20 @@ fn run_integration_with_dev_node(
     )?;
     ensure_integration_test_target_exists(&build.project_root)?;
 
+    // Prefer the explicit `--hogd-protocol` flag; otherwise honor the
+    // `GROUNDHOG_HOGD_PROTOCOL` env var.
+    let hogd_protocol = integration
+        .hogd_protocol
+        .clone()
+        .or_else(|| std::env::var(HOGD_PROTOCOL_ENV).ok());
+
     print.status("Starting ephemeral local node for integration tests...");
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
     let started = rt.block_on(crate::node::start_local_node(
         crate::node::LocalNodeOptions {
             port: 0,
             pid_file: crate::node::LocalNodePidFile::Disabled,
+            hogd_protocol,
             ..crate::node::LocalNodeOptions::default()
         },
     ))?;
