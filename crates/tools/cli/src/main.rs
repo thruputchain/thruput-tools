@@ -181,6 +181,12 @@ enum Command {
         /// Run tests/integration.rs against an ephemeral hog-devnode local node
         #[arg(long)]
         integration: bool,
+        /// Override the x23 protocol token for the ephemeral integration node
+        ///
+        /// (Only used with --integration)
+        /// Falls back to the GROUNDHOG_HOGD_PROTOCOL env var.
+        #[arg(long = "hogd-protocol")]
+        hogd_protocol: Option<String>,
         /// Config profile to use
         #[arg(
             long = "profile",
@@ -490,6 +496,7 @@ fn main() {
             rerun,
             watch,
             integration,
+            hogd_protocol,
             profile,
             artifacts,
             cargo_args,
@@ -516,7 +523,7 @@ fn main() {
                     groundhog_cli::test_cmd::run_integration_with_options(
                         package.as_deref(),
                         &options,
-                        &groundhog_cli::test_cmd::IntegrationTestOptions::default(),
+                        &groundhog_cli::test_cmd::IntegrationTestOptions { hogd_protocol },
                         &cargo_args,
                         &artifacts,
                         Some(&profile),
