@@ -731,9 +731,17 @@ fn emit_method_function(
 /// Emit per-event interface/const pairs, the per-contract event union, and
 /// the combined `decodeEvent` dispatcher.
 fn emit_event_sections(out: &mut String, spec: &ContractSpec) -> Result<(), CliError> {
-    // Event names share the file's top-level namespace with type defs.
+    let union_name = event_union_name(spec)?;
+
+    // Event names share the file's top-level type namespace with type defs
+    // and with the combined-decoder union.
     for event in spec.events.iter() {
         let event_name = spec_string_text(&event.name)?;
+        if event_name == union_name {
+            return Err(CliError::SpecFailed(format!(
+                "event \"{event_name}\" collides with the generated \"{union_name}\" event union"
+            )));
+        }
         for def in spec.type_defs.iter() {
             let def_name = match def {
                 ContractTypeDef::TypeDefStruct { struct_def } => {
@@ -748,6 +756,20 @@ fn emit_event_sections(out: &mut String, spec: &ContractSpec) -> Result<(), CliE
                     "event \"{event_name}\" collides with a type definition of the same name"
                 )));
             }
+        }
+    }
+    for def in spec.type_defs.iter() {
+        let def_name = match def {
+            ContractTypeDef::TypeDefStruct { struct_def } => spec_string_text(&struct_def.name)?,
+            ContractTypeDef::TypeDefEnum { enum_def } => spec_string_text(&enum_def.name)?,
+            ContractTypeDef::TypeDefUnion { union_def } => spec_string_text(&union_def.name)?,
+            _ => continue,
+        };
+        if def_name == union_name {
+            return Err(CliError::SpecFailed(format!(
+                "type definition \"{def_name}\" collides with the generated \
+                 \"{union_name}\" event union"
+            )));
         }
     }
 
@@ -869,14 +891,18 @@ fn emit_event_decl(out: &mut String, event: &ContractEventDef, idx: usize) -> Re
     Ok(())
 }
 
-/// Emit the per-contract event union and combined decoder. The union is
-/// named after the first interface; the generated file is per-contract,
-/// so all events share it.
-fn emit_decode_event(out: &mut String, spec: &ContractSpec) -> Result<(), CliError> {
+/// Name of the per-contract event union: the first interface name plus
+/// `Event`. The generated file is per-contract, so all events share it.
+fn event_union_name(spec: &ContractSpec) -> Result<String, CliError> {
     let first_iface = spec.interfaces.iter().next().ok_or_else(|| {
         CliError::SpecFailed("contract spec with events has no interfaces".into())
     })?;
-    let union_name = format!("{}Event", spec_string_text(&first_iface.name)?);
+    Ok(format!("{}Event", spec_string_text(&first_iface.name)?))
+}
+
+/// Emit the per-contract event union and combined decoder.
+fn emit_decode_event(out: &mut String, spec: &ContractSpec) -> Result<(), CliError> {
+    let union_name = event_union_name(spec)?;
 
     let event_names: Vec<&str> = spec
         .events
@@ -1264,6 +1290,17 @@ export type Result =
             !output.contains("CxsReader"),
             "unexpected decoder imports:\n{output}"
         );
+    }
+
+    #[test]
+    fn event_name_colliding_with_union_name_errors() {
+        // The combined-decoder union is named "{FirstInterface}Event"; an
+        // event with that exact name would collide in TS's type namespace.
+        let mut spec = spec_with_events();
+        let mut event = ping_event_def();
+        event.name = spec_string("CounterEvent");
+        spec.events = vec![event].try_into().unwrap();
+        assert!(generate_ts_bindings(&spec, "counter.wasm").is_err());
     }
 
     #[test]

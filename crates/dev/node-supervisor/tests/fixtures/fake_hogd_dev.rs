@@ -34,7 +34,6 @@ use groundhog_scheduler::{
     sched_coord::{SchedulerCoord_SchedulerCoord1, SchedulerCoord_SchedulerCoord1_Dispatcher},
 };
 use groundhog_scp::network::Protocol;
-use groundhog_scp::network::Protocol as DbGatewayProtocol;
 use groundhog_xdr::event::IdentifiedEvent;
 use groundhog_xdr::genesis::GenesisConfiguration;
 use groundhog_xdr::storage_item::WireStorageItem;
@@ -916,7 +915,7 @@ struct FakeDbGateway {
 impl DbGateway_DbGateway1 for FakeDbGateway {
     async fn dbgateway_intro(
         &self,
-        _arg0: DbGatewayProtocol,
+        _arg0: Protocol,
     ) -> Result<DbGatewayIntroOutcome, ProgramError> {
         match self.mode {
             FakeDbGatewayMode::Normal => {}

@@ -32,7 +32,6 @@ use groundhog_json_rpc_types::{
 };
 use groundhog_scheduler::{RPCError, sched_coord::SchedulerCoord_SchedulerCoord1_Client};
 use groundhog_scp::network::Protocol;
-use groundhog_scp::network::Protocol as DbGatewayProtocol;
 use groundhog_x23_transport::connect;
 use groundhog_xdr::{
     event::TxEmittedEvent,
@@ -395,7 +394,7 @@ async fn connect_db_gateway(
     .await
     .map_err(|source| NodeSupervisorError::DbGatewayConnect { endpoint, source })?;
 
-    let protocol: DbGatewayProtocol = xdr_common::StringM(protocol_version.as_bytes().to_vec());
+    let protocol: Protocol = xdr_common::StringM(protocol_version.as_bytes().to_vec());
     let intro_outcome =
         client
             .dbgateway_intro(&protocol)
@@ -629,7 +628,6 @@ mod tests {
         },
     };
     use groundhog_scp::network::Protocol;
-    use groundhog_scp::network::Protocol as DbGatewayProtocol;
     use groundhog_xdr::event::IdentifiedEvent as IdxIdentifiedEvent;
     use groundhog_xdr::genesis::GenesisConfiguration;
     use groundhog_xdr::transaction::{
@@ -1033,7 +1031,7 @@ mod tests {
     impl DbGateway_DbGateway1 for FakeDbGateway {
         async fn dbgateway_intro(
             &self,
-            _arg0: DbGatewayProtocol,
+            _arg0: Protocol,
         ) -> Result<DbGatewayIntroOutcome, ProgramError> {
             Ok(DbGatewayIntroOutcome::DbGatewayIntroSuccess)
         }
