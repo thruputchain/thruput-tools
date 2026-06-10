@@ -14,14 +14,16 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use groundhog_db_gateway::AddressAndKeyBatch;
 use groundhog_db_gateway::{
-    AddressAndKey, AddressAndKeyBatch, DbGateway_DbGateway1_Client, DbGatewayItemResult,
-    DbGatewayPayload, DbGatewayResult, RPCError, StorageKey, StorageKeyContractData,
+    DbGateway_DbGateway1_Client, DbGatewayItemResult, DbGatewayPayload, DbGatewayResult,
 };
 use groundhog_json_rpc_types::{
     ContractAddress,
     state::{StorageItemInfo, StorageItemRead},
 };
+use groundhog_scheduler::RPCError;
+use groundhog_xdr::types::{AddressAndKey, StorageKey, StorageKeyContractData};
 use tokio::sync::{RwLock, oneshot};
 use xdr_common::VecM;
 

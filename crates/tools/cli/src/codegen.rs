@@ -932,6 +932,7 @@ export type Result =
             .try_into()
             .unwrap(),
             type_defs: vec![].try_into().unwrap(),
+            events: vec![].try_into().unwrap(),
         }
     }
 
@@ -1070,6 +1071,7 @@ export type Result =
             }]
             .try_into()
             .unwrap(),
+            events: vec![].try_into().unwrap(),
         }
     }
 
@@ -1213,6 +1215,7 @@ export type Result =
             }]
             .try_into()
             .unwrap(),
+            events: vec![].try_into().unwrap(),
         }
     }
 

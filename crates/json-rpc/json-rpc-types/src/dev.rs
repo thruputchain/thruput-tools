@@ -160,7 +160,7 @@ impl From<&SyscallTrace> for SyscallInfo {
     fn from(syscall: &SyscallTrace) -> Self {
         Self {
             name: syscall_name(&syscall.body).into(),
-            number: syscall.body.syscall_number().0,
+            number: u64::from(syscall.body.syscall_number().0),
             gas_remaining_at_start: syscall.gas_remaining_at_start,
             gas_remaining_at_end: syscall.gas_remaining_at_end,
             status: SyscallStatusInfo::from(&syscall.status),

@@ -9,13 +9,17 @@ use groundhog_json_rpc_types::{
     hex::{Hex0x, HexBytes, Topic},
     view::{RootInvocationOutput, ViewRequest, ViewResponse},
 };
-use groundhog_view::{
-    AuthClaim, AuthClaim_source_address_claim, ContractEntrypointID, Invocation,
-    InvocationFrameOutput, InvokeFlag, Protocol, TransactionViewQuery,
-    ViewGateway_ViewGateway1_Client, ViewGatewayIntroOutcome, ViewGatewayResult,
-};
+use groundhog_scp::network::Protocol;
+use groundhog_view::{ViewGateway_ViewGateway1_Client, ViewGatewayIntroOutcome, ViewGatewayResult};
 use groundhog_x23_transport::connect;
-use groundhog_xdr::event::TxEmittedEvent;
+use groundhog_xdr::{
+    auth_claim::{AuthClaim, AuthClaim_source_address_claim},
+    contract::ContractEntrypointID,
+    event::TxEmittedEvent,
+    invoke_flag::InvokeFlag,
+    transaction::{Invocation, InvocationFrameOutput},
+    view::TransactionViewQuery,
+};
 use xdr_common::{BytesM, StringM, VecM};
 
 use crate::{NodeSupervisorError, stub_backend::StubBackend};
@@ -286,11 +290,12 @@ mod tests {
     use groundhog_json_rpc_server::ViewPlane;
     use groundhog_json_rpc_types::ContractAddress;
     use groundhog_json_rpc_types::hex::HexBytes;
+    use groundhog_scp::network::Protocol;
     use groundhog_view::{
-        InvocationFrameOutput, Protocol, ViewGateway_ViewGateway1,
-        ViewGateway_ViewGateway1_Dispatcher, ViewGatewayPayload,
+        ViewGateway_ViewGateway1, ViewGateway_ViewGateway1_Dispatcher, ViewGatewayPayload,
     };
     use groundhog_xdr::PROTOCOL_VERSION;
+    use groundhog_xdr::transaction::InvocationFrameOutput;
     use rpc_driver::{ProgramError, RpcServer, ServiceMap};
     use tokio::net::TcpListener;
 

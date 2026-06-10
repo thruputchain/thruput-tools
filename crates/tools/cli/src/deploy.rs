@@ -275,7 +275,7 @@ fn prepare_deploy_transaction(
 
     let contract = groundhog_xdr::contract::Contract::kWasmi {
         wasmi_contract: groundhog_xdr::contract::ContractBlob {
-            wasm: xdr_common::BytesM(wasm_bytes),
+            data: xdr_common::BytesM(wasm_bytes),
         },
     };
 

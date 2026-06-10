@@ -319,7 +319,7 @@ fn prepare_deploy(
     let wasm_sha256 = sha256_hex(&wasm_bytes);
     let contract = Contract::kWasmi {
         wasmi_contract: ContractBlob {
-            wasm: BytesM(wasm_bytes),
+            data: BytesM(wasm_bytes),
         },
     };
     let contract_xdr = xdrs::txs::encode(&contract)

@@ -415,6 +415,7 @@ mod tests {
             .try_into()
             .unwrap(),
             type_defs: vec![].try_into().unwrap(),
+            events: vec![].try_into().unwrap(),
         }
     }
 
@@ -449,6 +450,7 @@ mod tests {
             .try_into()
             .unwrap(),
             type_defs: vec![].try_into().unwrap(),
+            events: vec![].try_into().unwrap(),
         }
     }
 
