@@ -3,9 +3,9 @@
 use std::fmt::Write as _;
 
 use groundhog_contract_spec::{
-    ContractEnumDef, ContractExceptionType, ContractField, ContractSpec, ContractSpecInterface,
-    ContractSpecMethod, ContractStructDef, ContractType, ContractTypeDef, ContractUnionCaseType,
-    ContractUnionDef,
+    ContractEnumDef, ContractEventDef, ContractExceptionType, ContractField, ContractSpec,
+    ContractSpecInterface, ContractSpecMethod, ContractStructDef, ContractType, ContractTypeDef,
+    ContractUnionCaseType, ContractUnionDef,
 };
 use groundhog_contract_util::{NormalizedMethodSignature, contract_entrypoint_id};
 
@@ -264,6 +264,7 @@ fn emit_imports(out: &mut String, spec: &ContractSpec) {
         .type_defs
         .iter()
         .any(|d| matches!(d, ContractTypeDef::TypeDefUnion { .. }));
+    let has_events = !spec.events.is_empty();
     let mut cs_imports: Vec<&str> = vec![
         "ContractTypeKind",
         "ContractTypeDefKind",
@@ -271,6 +272,9 @@ fn emit_imports(out: &mut String, spec: &ContractSpec) {
     ];
     if has_unions {
         cs_imports.push("ContractUnionCaseKind");
+    }
+    if has_events {
+        cs_imports.push("topic");
     }
     let _ = writeln!(
         out,
@@ -341,7 +345,42 @@ fn emit_spec_literal(out: &mut String, spec: &ContractSpec) -> Result<(), CliErr
     }
     let _ = writeln!(out, "  ],");
 
+    // events
+    let _ = writeln!(out, "  events: [");
+    for event in spec.events.iter() {
+        emit_spec_event_literal(out, event)?;
+    }
+    let _ = writeln!(out, "  ],");
+
     let _ = writeln!(out, "}};");
+    Ok(())
+}
+
+/// Emit a single event entry inside the spec literal.
+fn emit_spec_event_literal(out: &mut String, event: &ContractEventDef) -> Result<(), CliError> {
+    let name = spec_string_text(&event.name)?;
+    let sig_hex = hex::encode(event.signature.into_inner());
+    let _ = writeln!(out, "    {{");
+    let _ = writeln!(out, "      name: s(\"{name}\"),");
+    let _ = writeln!(out, "      signature: topic(fromHex(\"{sig_hex}\")),");
+
+    let _ = writeln!(out, "      topics: [");
+    for field in event.topics.iter() {
+        let fname = spec_string_text(&field.name)?;
+        let ty_lit = spec_type_to_ts_literal(&field.ty)?;
+        let _ = writeln!(out, "        {{ name: s(\"{fname}\"), ty: {ty_lit} }},");
+    }
+    let _ = writeln!(out, "      ],");
+
+    let _ = writeln!(out, "      fields: [");
+    for field in event.fields.iter() {
+        let fname = spec_string_text(&field.name)?;
+        let ty_lit = spec_type_to_ts_literal(&field.ty)?;
+        let _ = writeln!(out, "        {{ name: s(\"{fname}\"), ty: {ty_lit} }},");
+    }
+    let _ = writeln!(out, "      ],");
+
+    let _ = writeln!(out, "    }},");
     Ok(())
 }
 
@@ -683,7 +722,7 @@ fn emit_method_function(
 mod tests {
     use super::*;
     use groundhog_contract_spec::{
-        ContractArrayType, ContractEnumDef, ContractEnumVariant, ContractSpec,
+        ContractArrayType, ContractEnumDef, ContractEnumVariant, ContractEventDef, ContractSpec,
         ContractSpecInterface, ContractSpecMethod, ContractSpecString, ContractStructDef,
         ContractUnionCase, ContractVectorType,
     };
@@ -899,6 +938,66 @@ export type Result =
   | { case: \"Err\" }
   | { case: \"Detail\"; value: { code: bigint; msg: string; } };";
         assert_eq!(emit_type_def(&def).unwrap(), expected);
+    }
+
+    /// An event with one topic field and one payload field.
+    fn ping_event_def() -> ContractEventDef {
+        ContractEventDef {
+            name: spec_string("PingEvent"),
+            signature: groundhog_xdr::event::Topic::from([0xAB; 32]),
+            topics: vec![ContractField {
+                name: spec_string("tag"),
+                ty: ContractType::U64,
+            }]
+            .try_into()
+            .unwrap(),
+            fields: vec![ContractField {
+                name: spec_string("note"),
+                ty: ContractType::String,
+            }]
+            .try_into()
+            .unwrap(),
+        }
+    }
+
+    /// A one-interface spec whose only content is `ping_event_def`.
+    fn spec_with_events() -> ContractSpec {
+        ContractSpec {
+            interfaces: vec![ContractSpecInterface {
+                name: spec_string("Counter"),
+                vers: spec_string("0.1.0"),
+                throws: vec![].try_into().unwrap(),
+                methods: vec![].try_into().unwrap(),
+            }]
+            .try_into()
+            .unwrap(),
+            type_defs: vec![].try_into().unwrap(),
+            events: vec![ping_event_def()].try_into().unwrap(),
+        }
+    }
+
+    #[test]
+    fn spec_literal_includes_events() {
+        let output = generate_ts_bindings(&spec_with_events(), "counter.wasm").unwrap();
+        assert!(
+            output.contains("events: ["),
+            "spec literal missing events array:\n{output}"
+        );
+        assert!(
+            output.contains(&format!(
+                "signature: topic(fromHex(\"{}\"))",
+                "ab".repeat(32)
+            )),
+            "event signature literal missing:\n{output}"
+        );
+        assert!(
+            output.contains("{ name: s(\"tag\"), ty: { v: ContractTypeKind.U64 } }"),
+            "event topic field literal missing:\n{output}"
+        );
+        assert!(
+            output.contains("{ name: s(\"note\"), ty: { v: ContractTypeKind.String } }"),
+            "event payload field literal missing:\n{output}"
+        );
     }
 
     /// Build a minimal counter contract spec: `get() -> U64` and
