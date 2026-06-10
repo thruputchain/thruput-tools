@@ -184,8 +184,8 @@ enum Command {
         /// Override the x23 protocol token for the ephemeral integration node
         ///
         /// (Only used with --integration)
-        /// Falls back to the GROUNDHOG_HOGD_PROTOCOL env var.
-        #[arg(long = "hogd-protocol")]
+        /// Falls back to the `GROUNDHOG_HOGD_PROTOCOL` env var.
+        #[arg(long = "hogd-protocol", requires = "integration")]
         hogd_protocol: Option<String>,
         /// Config profile to use
         #[arg(
