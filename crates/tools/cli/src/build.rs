@@ -165,19 +165,12 @@ pub fn build_project(
 
     print.status(format_args!("Compiling {pkg_name} to WASM..."));
 
-    let mut cmd = Command::new("cargo");
-    cmd.current_dir(&metadata.workspace_root)
-        .arg("--config")
-        .arg(&contract_toml)
-        .arg("build")
-        .arg("--release")
-        .arg("--no-default-features")
-        .arg("--features")
-        .arg("entrypoints")
-        .arg("--target")
-        .arg("wasm32-unknown-unknown")
-        .arg("-p")
-        .arg(pkg_name);
+    let mut cmd = wasm_build_command(
+        &metadata.workspace_root,
+        &contract_toml,
+        pkg_name,
+        cargo_args,
+    );
 
     artifacts::ensure_no_target_dir_passthrough_conflicts(
         artifacts,
@@ -268,6 +261,39 @@ pub fn build_project(
         cargo_stdout,
         cargo_stderr,
     })
+}
+
+/// Assemble the cargo invocation for the wasm contract build.
+///
+/// The build is scoped to the cdylib target with `--lib`: a project's RV32
+/// bin wrapper satisfies its `required-features = ["entrypoints"]` here and
+/// would otherwise be built for wasm too — its output filename collides with
+/// the cdylib's, and under lto=true/codegen-units=1 building the bin perturbs
+/// the cdylib codegen (and thus gas). Cargo rejects a repeated `--lib`, so
+/// one supplied via passthrough args is honored instead.
+fn wasm_build_command(
+    workspace_root: &Path,
+    contract_toml: &Path,
+    pkg_name: &str,
+    cargo_args: &[String],
+) -> Command {
+    let mut cmd = Command::new("cargo");
+    cmd.current_dir(workspace_root)
+        .arg("--config")
+        .arg(contract_toml)
+        .arg("build")
+        .arg("--release")
+        .arg("--no-default-features")
+        .arg("--features")
+        .arg("entrypoints")
+        .arg("--target")
+        .arg("wasm32-unknown-unknown")
+        .arg("-p")
+        .arg(pkg_name);
+    if !cargo_args.iter().any(|arg| arg == "--lib") {
+        cmd.arg("--lib");
+    }
+    cmd
 }
 
 /// Build the current project to an RV32 artifact by compiling an ELF and
