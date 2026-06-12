@@ -50,13 +50,14 @@ Every scaffolded contract project has this layout:
 src/
   lib.rs              # no_std gate, mock registration, re-exports
   implementation.rs   # all contract logic
+  main.rs             # rv32 bin wrapper (entrypoints-gated, no_std/no_main)
 tests/
   test.rs             # native integration tests
   test_wasm.rs        # wasm executor tests
 Cargo.toml
 rust-toolchain.toml
 .cargo/
-  config.toml         # host + wasm defaults
+  config.toml         # host + wasm + rv32 defaults
   contract.toml       # overlay used by groundhog build/test
 ```
 

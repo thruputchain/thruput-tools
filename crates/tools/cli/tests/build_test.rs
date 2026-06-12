@@ -343,6 +343,7 @@ fn build_project_reports_groundhog_processed_wasm_path() {
         .join("wasm32-unknown-unknown/release")
         .join("demo_contract.wasm");
     let processed_wasm = target_dir.join("groundhog").join("demo_contract.wasm");
+    let cargo_args_log = project_root.join("cargo-args.log");
     let metadata_json = format!(
         r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract","manifest_path":"{}"}}]}}"#,
         project_root.display(),
@@ -356,7 +357,8 @@ fn build_project_reports_groundhog_processed_wasm_path() {
     fs::write(
         &cargo,
         format!(
-            "#!/bin/sh\nif [ \"$1\" = \"metadata\" ]; then\n  printf '%s' '{metadata_json}'\n  exit 0\nfi\n/bin/mkdir -p '{}'\nprintf '\\000asm\\001\\000\\000\\000' > '{}'\n",
+            "#!/bin/sh\nif [ \"$1\" = \"metadata\" ]; then\n  printf '%s' '{metadata_json}'\n  exit 0\nfi\nprintf '%s\\n' \"$*\" > '{}'\n/bin/mkdir -p '{}'\nprintf '\\000asm\\001\\000\\000\\000' > '{}'\n",
+            cargo_args_log.display(),
             raw_wasm
                 .parent()
                 .expect("bug: raw wasm parent should exist")
@@ -391,6 +393,13 @@ fn build_project_reports_groundhog_processed_wasm_path() {
     assert_eq!(result.wasm, processed_wasm);
     assert!(processed_wasm.exists());
     assert_eq!(fs::read(&raw_wasm).unwrap(), b"\0asm\x01\0\0\0");
+
+    // `--lib` keeps the wasm build scoped to the cdylib target so a project's
+    // RV32 bin wrapper is neither built for wasm (output filename collision
+    // with the cdylib) nor allowed to perturb the cdylib codegen under
+    // lto=true/codegen-units=1.
+    let cargo_args = fs::read_to_string(cargo_args_log).unwrap();
+    assert!(cargo_args.contains("--lib"), "cargo args: {cargo_args}");
 }
 
 #[test]
@@ -620,6 +629,9 @@ fn build_rv32_project_compiles_and_lowers_elf() {
     );
     assert!(cargo_args.contains("-p demo-contract-rv32"));
     assert!(cargo_args.contains("--locked"));
+    // The rv32 build must include the bin target; only the wasm build is
+    // scoped with --lib.
+    assert!(!cargo_args.contains("--lib"), "cargo args: {cargo_args}");
     assert_eq!(metadata["target_triple"], "riscv32im-unknown-none-elf");
     assert_eq!(
         metadata["build_flags"],

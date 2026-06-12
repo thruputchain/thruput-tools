@@ -15,6 +15,7 @@ fn scaffold_counter_creates_expected_files() {
     assert!(dir.join(".cargo/contract.toml").exists());
     assert!(dir.join("src/lib.rs").exists());
     assert!(dir.join("src/implementation.rs").exists());
+    assert!(dir.join("src/main.rs").exists());
     assert!(dir.join("tests/test.rs").exists());
     assert!(dir.join("tests/test_wasm.rs").exists());
 
@@ -23,6 +24,30 @@ fn scaffold_counter_creates_expected_files() {
     assert!(cargo.contains("registry = \"groundhog\""));
     assert!(!cargo.contains("sdk/spec"));
     assert!(cargo.contains(r#"sdk = { version = "0.15.0""#));
+    // RV32 bin wrapper target: the bin name must be the snake-case package
+    // name because `groundhog build --target rv32` looks for the ELF at
+    // `release/<snake_name>`.
+    assert!(cargo.contains("[[bin]]"));
+    assert!(cargo.contains(r#"name = "my_counter""#));
+    assert!(cargo.contains(r#"required-features = ["entrypoints"]"#));
+    // The host test harness must not try to link the no_std bin when the
+    // entrypoints feature is enabled.
+    assert!(cargo.contains("test = false"));
+    assert!(cargo.contains("bench = false"));
+
+    let main = fs::read_to_string(dir.join("src/main.rs")).unwrap();
+    assert!(main.contains("#![no_std]"));
+    assert!(main.contains("#![no_main]"));
+    assert!(main.contains("extern crate my_counter;"));
+
+    let config = fs::read_to_string(dir.join(".cargo/config.toml")).unwrap();
+    assert!(config.contains("[target.riscv32im-unknown-none-elf]"));
+    assert!(config.contains("target-feature=+unaligned-scalar-mem"));
+    assert!(config.contains("link-arg=-Tgroundhog-rv32.ld"));
+    assert!(config.contains("trap-unreachable=false"));
+
+    let toolchain = fs::read_to_string(dir.join("rust-toolchain.toml")).unwrap();
+    assert!(toolchain.contains("riscv32im-unknown-none-elf"));
 
     let lib = fs::read_to_string(dir.join("src/lib.rs")).unwrap();
     assert!(lib.contains("mod implementation"));
@@ -68,6 +93,9 @@ fn scaffold_stub_has_empty_contract() {
     assert!(dir.join("tests/test_wasm.rs").exists());
     let test_wasm = fs::read_to_string(dir.join("tests/test_wasm.rs")).unwrap();
     assert!(test_wasm.contains("load_wasm_contract"));
+
+    let main = fs::read_to_string(dir.join("src/main.rs")).unwrap();
+    assert!(main.contains("extern crate my_stub;"));
 }
 
 #[test]

@@ -7,6 +7,7 @@ const CARGO_CONFIG: &str = include_str!("../templates/config.toml.tmpl");
 const CONTRACT_TOML: &str = include_str!("../templates/contract.toml.tmpl");
 const GROUNDHOG_TOML: &str = include_str!("../templates/groundhog.toml.tmpl");
 const RUST_TOOLCHAIN: &str = include_str!("../templates/rust-toolchain.toml.tmpl");
+const RV32_MAIN: &str = include_str!("../templates/main.rs.tmpl");
 
 const COUNTER_LIB: &str = include_str!("../templates/counter/lib.rs.tmpl");
 const COUNTER_IMPL: &str = include_str!("../templates/counter/implementation.rs.tmpl");
@@ -89,6 +90,7 @@ pub fn generate(dir: &Path, name: &str, template: &str) -> Result<(), CliError> 
     fs::write(dir.join(".cargo/contract.toml"), apply(CONTRACT_TOML, name))?;
     fs::write(dir.join("src/lib.rs"), apply(lib_tmpl, name))?;
     fs::write(dir.join("src/implementation.rs"), apply(impl_tmpl, name))?;
+    fs::write(dir.join("src/main.rs"), apply(RV32_MAIN, name))?;
     fs::write(dir.join("tests/test.rs"), apply(test_tmpl, name))?;
     fs::write(dir.join("tests/test_wasm.rs"), apply(test_wasm_tmpl, name))?;
 
