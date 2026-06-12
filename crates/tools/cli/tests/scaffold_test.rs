@@ -30,6 +30,10 @@ fn scaffold_counter_creates_expected_files() {
     assert!(cargo.contains("[[bin]]"));
     assert!(cargo.contains(r#"name = "my_counter""#));
     assert!(cargo.contains(r#"required-features = ["entrypoints"]"#));
+    // The host test harness must not try to link the no_std bin when the
+    // entrypoints feature is enabled.
+    assert!(cargo.contains("test = false"));
+    assert!(cargo.contains("bench = false"));
 
     let main = fs::read_to_string(dir.join("src/main.rs")).unwrap();
     assert!(main.contains("#![no_std]"));
