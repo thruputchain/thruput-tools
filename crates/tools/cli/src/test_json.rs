@@ -33,6 +33,7 @@ pub struct TestReport {
 /// Execution mode used for this `groundhog test` report.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum TestMode {
     #[default]
     Wasm,
@@ -45,6 +46,7 @@ pub enum TestMode {
 pub struct IntegrationTestInfo {
     pub rpc_url: String,
     pub contract_address: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub runtime_manifest: Option<PathBuf>,
     pub default_key: String,
 }

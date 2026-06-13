@@ -374,7 +374,10 @@ fn run_integration_against_node(
         rpc_url: rpc_url.to_owned(),
         contract_address,
         runtime_manifest: profile.runtime_manifest.clone(),
-        default_key: "dev-0".into(),
+        default_key: profile
+            .default_key
+            .clone()
+            .unwrap_or_else(|| "dev-0".into()),
     };
 
     let report = build_test_report(
@@ -1497,10 +1500,7 @@ mod tests {
             json["integration"]["contractAddress"],
             format!("0x{}", "11".repeat(32))
         );
-        assert_eq!(
-            json["integration"]["runtimeManifest"],
-            serde_json::Value::Null
-        );
+        assert!(json["integration"].get("runtimeManifest").is_none());
     }
 
     #[test]
