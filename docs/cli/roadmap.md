@@ -544,8 +544,11 @@ not enough to make RV32 the default deploy/test/sim artifact yet:
   `wasmSha256`.
 - CLI deploy transaction construction is artifact-aware and branches to
   `Contract::kWasmi` or `Contract::kRv32`.  Simulation still wraps artifact
-  bytes as `Contract::kWasmi`.  The remaining deploy gate is proving that the
-  pinned/minimum `hog-devnode` runtime executes `kRv32` contracts end-to-end.
+  bytes as `Contract::kWasmi`.  The current local runtime gate is blocked:
+  `groundhog deploy --target rv32` against `hog-devnode` protocol
+  `hogp/7874f05decb9` commits with `deterministicError { kind: "unknown" }`,
+  while the same scaffold, node, and protocol still pass the WASM
+  deploy/call/view smoke.
 
 Minimal sequence to flip the default without papering over WASM assumptions:
 
@@ -555,9 +558,11 @@ Minimal sequence to flip the default without papering over WASM assumptions:
    `Contract::kRv32`.
 2. Shipped in the stacked CLI branch: `groundhog test --json` schema v3 reports
    artifact metadata instead of the top-level `wasm` field.
-3. Prove the pinned/minimum `hog-devnode` executes a deployed `kRv32` contract
-   end-to-end. Keep WASM as an explicit fallback target for differential
-   debugging rather than deleting it.
+3. Blocked as of 2026-06-13: prove the pinned/minimum `hog-devnode` executes a
+   deployed `kRv32` contract end-to-end. The current proof builds `.rv32a` and
+   submits a `kRv32` deploy, but the receipt is `deterministicError { kind:
+   "unknown" }` with no contract address. Keep WASM as an explicit fallback
+   target for differential debugging rather than deleting it.
 4. Switch `groundhog test --integration` to build/deploy the default artifact
    through the shared resolver, and keep host integration tests unchanged except
    for artifact metadata in the report.

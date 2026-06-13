@@ -24,9 +24,12 @@ fallback for differential debugging.
   `artifact.kind` and `artifact.path` instead of a top-level `wasm` field.
 - `hogsim` manifest and result contracts are named around `wasm`, `wasmPath`,
   and `wasmSha256`, and sim deploy also uses `Contract::kWasmi`.
-- The pinned XDR dependency already exposes `Contract::kRv32`; the remaining
-  deploy gate is proving the pinned/minimum `hog-devnode` runtime executes
-  `kRv32` contracts end-to-end.
+- The pinned XDR dependency already exposes `Contract::kRv32`, but the current
+  local `hog-devnode` runtime proof is blocked: with protocol
+  `hogp/7874f05decb9`, `groundhog deploy --target rv32` submits a `kRv32`
+  deploy that commits with `deterministicError { kind: "unknown" }` and no
+  contract address. The same scaffold, node, and protocol still deploy and call
+  successfully through WASM.
 
 ## Non-Goals
 
@@ -144,6 +147,8 @@ Acceptance:
 
 ## PR 3: Live RV32 Runtime Proof
 
+Status: blocked by current local `hog-devnode` RV32 deploy behavior.
+
 Goal: prove the current pinned/minimum `hog-devnode` executes `kRv32`.
 
 Tasks:
@@ -160,6 +165,19 @@ Acceptance:
   result.
 - Any required protocol token/version is documented in the roadmap or
   process-contract docs.
+
+Result on 2026-06-13:
+
+- Built a fresh counter scaffold with `groundhog build --target rv32`.
+- Started local `hog-devnode` with `--hogd-protocol hogp/7874f05decb9`.
+- `groundhog --json deploy --target rv32` emitted `artifact_kind: "rv32"` and
+  committed at height 2, but the receipt status was
+  `deterministicError { kind: "unknown" }`; `address` and `address_source` were
+  `null`.
+- Rebuilt the same scaffold as WASM and verified the same node/protocol can
+  deploy, call `initialize`, call `increment`, and `view get` returning `12`.
+- Do not proceed to PR 4 until `hog-devnode` executes `kRv32` deploys
+  successfully or exposes an actionable RV32 runtime error.
 
 ## PR 4: RV32 Integration Execution
 
