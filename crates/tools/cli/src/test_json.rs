@@ -9,7 +9,7 @@ use crate::config::ResolvedProfile;
 ///
 /// Bump this when the shape or semantics of `TestReport` change in a
 /// way that could break existing machine consumers.
-pub const TEST_JSON_SCHEMA_VERSION: u32 = 1;
+pub const TEST_JSON_SCHEMA_VERSION: u32 = 2;
 
 /// Structured machine-readable report for `groundhog test --json`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -149,7 +149,7 @@ mod tests {
     #[test]
     fn missing_mode_deserializes_as_wasm_for_v1_compatibility() {
         let json = serde_json::json!({
-            "schemaVersion": TEST_JSON_SCHEMA_VERSION,
+            "schemaVersion": 1,
             "projectRoot": "/project",
             "profile": {
                 "name": "default",
@@ -187,6 +187,7 @@ mod tests {
         let report: TestReport = serde_json::from_value(json).expect("v1 report should parse");
 
         assert_eq!(report.mode, TestMode::Wasm);
+        assert_eq!(report.schema_version, 1);
         assert!(report.integration.is_none());
     }
 }
