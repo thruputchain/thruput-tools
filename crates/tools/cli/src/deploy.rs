@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 use xdr_common::VecM;
 
 use crate::account_resolution::resolve_wallet_address;
-use crate::artifacts::ArtifactOptions;
+use crate::artifacts::{ArtifactKind, ArtifactOptions, ResolvedArtifact};
 use crate::config::{ResolvedProfile, resolve_default_key, resolve_profile};
 use crate::dev_detail::{fetch_transaction_detail_blocking, print_transaction_detail};
 use crate::keys::load_local_signer;
@@ -37,7 +37,8 @@ pub(crate) enum DeployAddressSource {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PreparedDeploy {
     pub(crate) rpc_url: String,
-    pub(crate) wasm_bytes_len: usize,
+    pub(crate) artifact: ResolvedArtifact,
+    pub(crate) artifact_bytes_len: usize,
     pub(crate) predicted_address: String,
     pub(crate) tx_hex: String,
 }
@@ -53,21 +54,24 @@ pub(crate) struct SubmittedDeploy {
 
 /// Deploy a contract to the network.
 pub fn run(
-    wasm_path: &Option<String>,
+    artifact_path: Option<&Path>,
+    target: ArtifactKind,
     dry_run: bool,
     artifacts: &ArtifactOptions,
     profile: &str,
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    let prepared = prepare_deploy(wasm_path.as_deref(), artifacts, profile, print)?;
+    let prepared = prepare_deploy(artifact_path, target, artifacts, profile, print)?;
     if dry_run {
         return print_dry_run(&prepared, cmd, print);
     }
 
     print.status(format_args!(
-        "Deploying contract ({} bytes) to {}...",
-        prepared.wasm_bytes_len, prepared.rpc_url
+        "Deploying {} artifact ({} bytes) to {}...",
+        prepared.artifact.kind.as_str(),
+        prepared.artifact_bytes_len,
+        prepared.rpc_url
     ));
 
     let submitted = submit_prepared_deploy_and_resolve(&prepared)?;
@@ -132,6 +136,9 @@ pub fn run(
         cmd,
         json!({
             "tx_hash": tx_hash_formatted,
+            "artifact_kind": prepared.artifact.kind.as_str(),
+            "artifact_path": &prepared.artifact.path,
+            "artifact_bytes": prepared.artifact_bytes_len,
             "address": contract_addr_hex,
             "address_source": match address_source {
                 Some(DeployAddressSource::Receipt) => Some("receipt"),
@@ -153,8 +160,10 @@ fn print_dry_run(
     print: &Print,
 ) -> Result<(), CliError> {
     print.status(format_args!(
-        "Prepared dry-run deploy ({} bytes) to {}.",
-        prepared.wasm_bytes_len, prepared.rpc_url
+        "Prepared dry-run deploy for {} artifact ({} bytes) to {}.",
+        prepared.artifact.kind.as_str(),
+        prepared.artifact_bytes_len,
+        prepared.rpc_url
     ));
     print.status(format_args!(
         "  predicted address: {}",
@@ -169,7 +178,9 @@ fn print_dry_run(
             "dry_run": true,
             "submitted": false,
             "rpc_url": prepared.rpc_url,
-            "wasm_bytes": prepared.wasm_bytes_len,
+            "artifact_kind": prepared.artifact.kind.as_str(),
+            "artifact_path": &prepared.artifact.path,
+            "artifact_bytes": prepared.artifact_bytes_len,
             "predicted_address": prepared.predicted_address,
             "signed_tx": prepared.tx_hex,
         }),
@@ -209,10 +220,11 @@ pub(crate) fn submit_prepared_deploy_and_resolve(
     })
 }
 
-/// Resolve WASM, build and sign a deploy transaction without submitting it.
+/// Resolve an artifact, build and sign a deploy transaction without submitting it.
 #[allow(clippy::too_many_lines)]
 pub(crate) fn prepare_deploy(
-    wasm_path: Option<&str>,
+    artifact_path: Option<&Path>,
+    target: ArtifactKind,
     artifacts: &ArtifactOptions,
     profile: &str,
     print: &Print,
@@ -228,25 +240,32 @@ pub(crate) fn prepare_deploy(
     let key_name = key_name.ok_or(CliError::MissingSigningKey)?;
     apply_local_node_state_for_dev_key(&mut resolved, &key_name)?;
     resolved.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
-    let wasm_bytes = if let Some(path) = wasm_path {
-        std::fs::read(path)?
-    } else {
-        let resolved_wasm = resolve_wasm_path(&cwd, artifacts)?;
-        warn_if_stale(&resolved_wasm, &cwd, print);
-        std::fs::read(&resolved_wasm)?
-    };
 
-    prepare_deploy_transaction(wasm_bytes, &resolved, &key_name)
+    let artifact = if let Some(path) = artifact_path {
+        ResolvedArtifact {
+            kind: crate::artifacts::infer_artifact_kind(path)?,
+            path: path.to_path_buf(),
+        }
+    } else {
+        let path = crate::artifacts::resolve_groundhog_artifact_path(&cwd, artifacts, target)?;
+        let artifact = ResolvedArtifact { kind: target, path };
+        warn_if_stale(&artifact, &cwd, print);
+        artifact
+    };
+    let artifact_bytes = std::fs::read(&artifact.path)?;
+
+    prepare_deploy_transaction(artifact, artifact_bytes, &resolved, &key_name)
 }
 
-/// Build and sign a deploy transaction for a known WASM artifact and RPC endpoint.
+/// Build and sign a deploy transaction for a known artifact and RPC endpoint.
 pub(crate) fn prepare_deploy_for_rpc_with_manifest(
-    wasm_path: &Path,
+    artifact_path: &Path,
+    artifact_kind: ArtifactKind,
     rpc_url: &str,
     key_name: &str,
     runtime_manifest: Option<PathBuf>,
 ) -> Result<PreparedDeploy, CliError> {
-    let wasm_bytes = std::fs::read(wasm_path)?;
+    let artifact_bytes = std::fs::read(artifact_path)?;
     let profile = ResolvedProfile {
         name: "integration".into(),
         rpc_url: Some(rpc_url.into()),
@@ -255,27 +274,42 @@ pub(crate) fn prepare_deploy_for_rpc_with_manifest(
         contracts: std::collections::BTreeMap::default(),
         source: None,
     };
-    prepare_deploy_transaction(wasm_bytes, &profile, key_name)
+    prepare_deploy_transaction(
+        ResolvedArtifact {
+            kind: artifact_kind,
+            path: artifact_path.to_path_buf(),
+        },
+        artifact_bytes,
+        &profile,
+        key_name,
+    )
 }
 
 #[allow(clippy::too_many_lines)]
 fn prepare_deploy_transaction(
-    wasm_bytes: Vec<u8>,
+    artifact: ResolvedArtifact,
+    artifact_bytes: Vec<u8>,
     profile: &ResolvedProfile,
     key_name: &str,
 ) -> Result<PreparedDeploy, CliError> {
     let rpc_url = profile.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
     let signer = load_local_signer(key_name)?;
 
-    let wasm_bytes_len = wasm_bytes.len();
+    let artifact_bytes_len = artifact_bytes.len();
 
     // Build the deploy transaction — invokes the sender's wallet contract.
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
     let wallet_address = resolve_wallet_address(profile, key_name, &signer)?;
 
-    let contract = groundhog_xdr::contract::Contract::kWasmi {
-        wasmi_contract: groundhog_xdr::contract::ContractBlob {
-            data: xdr_common::BytesM(wasm_bytes),
+    let blob = groundhog_xdr::contract::ContractBlob {
+        data: xdr_common::BytesM(artifact_bytes),
+    };
+    let contract = match artifact.kind {
+        ArtifactKind::Wasm => groundhog_xdr::contract::Contract::kWasmi {
+            wasmi_contract: blob,
+        },
+        ArtifactKind::Rv32 => groundhog_xdr::contract::Contract::kRv32 {
+            rv32_contract: blob,
         },
     };
 
@@ -321,7 +355,8 @@ fn prepare_deploy_transaction(
 
     Ok(PreparedDeploy {
         rpc_url: rpc_url.to_owned(),
-        wasm_bytes_len,
+        artifact,
+        artifact_bytes_len,
         predicted_address: format!("0x{}", hex::encode(predicted_address.as_ref())),
         tx_hex,
     })
@@ -336,19 +371,8 @@ fn hex_to_32_bytes(hex_str: &str) -> Result<[u8; 32], CliError> {
         .map_err(|_| CliError::Other("predicted address must be exactly 32 bytes".into()))
 }
 
-fn resolve_wasm_path(cwd: &Path, artifacts: &ArtifactOptions) -> Result<PathBuf, CliError> {
-    let metadata = crate::build::cargo_metadata_with_artifacts(artifacts)?;
-    let pkg_name = crate::build::resolve_package(&metadata, None, cwd)?;
-    let wasm = crate::artifacts::groundhog_wasm_output_path(&metadata.target_directory, pkg_name);
-
-    if !wasm.try_exists()? {
-        return Err(CliError::WasmNotFound(wasm.display().to_string()));
-    }
-    Ok(wasm)
-}
-
-fn warn_if_stale(wasm: &Path, project_start: &Path, print: &Print) {
-    let Ok(wasm_mtime) = std::fs::metadata(wasm).and_then(|m| m.modified()) else {
+fn warn_if_stale(artifact: &ResolvedArtifact, project_start: &Path, print: &Print) {
+    let Ok(artifact_mtime) = std::fs::metadata(&artifact.path).and_then(|m| m.modified()) else {
         return;
     };
     let src_dir = match crate::config::find_project_config(project_start)
@@ -357,11 +381,12 @@ fn warn_if_stale(wasm: &Path, project_start: &Path, print: &Print) {
         Some(d) if d.is_dir() => d,
         _ => return,
     };
-    if newest_source_mtime(&src_dir).is_some_and(|t| t > wasm_mtime) {
-        print.warn(
-            "source files are newer than the WASM artifact — \
-             run `groundhog build` to avoid deploying stale code",
-        );
+    if newest_source_mtime(&src_dir).is_some_and(|t| t > artifact_mtime) {
+        print.warn(format_args!(
+            "source files are newer than the {} artifact — run `groundhog build --target {}` to avoid deploying stale code",
+            artifact.kind.as_str(),
+            artifact.kind.as_str()
+        ));
     }
 }
 
@@ -414,9 +439,8 @@ mod tests {
 
     use super::{
         DeployAddressSource, derive_deploy_address, hex_to_32_bytes, resolve_deployed_address,
-        resolve_wasm_path,
     };
-    use crate::artifacts::ArtifactOptions;
+    use crate::artifacts::{ArtifactKind, ArtifactOptions, resolve_groundhog_artifact_path};
     use groundhog_json_rpc_types::hex::HexBytes;
     use groundhog_xdr::types::{ContractAddress, SHA256Hash};
     use serial_test::serial;
@@ -483,7 +507,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn resolve_wasm_path_uses_explicit_target_dir() {
+    fn resolve_artifact_path_uses_explicit_target_dir() {
         let project = create_temp_project("demo-contract");
         let project_root =
             std::fs::canonicalize(project.path()).expect("bug: project path should canonicalize");
@@ -499,10 +523,30 @@ mod tests {
 
         let artifacts = ArtifactOptions::new(Some(custom_target));
         let _cwd = CurrentDirGuard::enter(&project_root);
-        let resolved = resolve_wasm_path(&project_root, &artifacts)
-            .expect("bug: wasm should resolve from explicit target dir");
+        let resolved =
+            resolve_groundhog_artifact_path(&project_root, &artifacts, ArtifactKind::Wasm)
+                .expect("bug: wasm should resolve from explicit target dir");
 
         assert_eq!(resolved, expected_wasm);
+    }
+
+    #[test]
+    #[serial]
+    fn resolve_artifact_path_reports_selected_missing_artifact() {
+        let project = create_temp_project("demo-contract");
+        let project_root =
+            std::fs::canonicalize(project.path()).expect("bug: project path should canonicalize");
+        let custom_target = project_root.join("custom-target");
+        let expected_rv32 = custom_target.join("groundhog").join("demo_contract.rv32a");
+
+        let artifacts = ArtifactOptions::new(Some(custom_target));
+        let _cwd = CurrentDirGuard::enter(&project_root);
+        let err = resolve_groundhog_artifact_path(&project_root, &artifacts, ArtifactKind::Rv32)
+            .expect_err("bug: missing rv32 artifact should error");
+
+        assert!(
+            matches!(err, crate::CliError::ArtifactNotFound { kind: "rv32", path } if path == expected_rv32.display().to_string())
+        );
     }
 
     fn create_temp_project(package_name: &str) -> TempDir {

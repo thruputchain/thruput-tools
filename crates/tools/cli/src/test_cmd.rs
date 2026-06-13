@@ -328,6 +328,7 @@ fn run_integration_against_node(
     ));
     let prepared = crate::deploy::prepare_deploy_for_rpc_with_manifest(
         &build.wasm,
+        crate::artifacts::ArtifactKind::Wasm,
         rpc_url,
         "dev-0",
         runtime_manifest.clone(),

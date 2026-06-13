@@ -1325,7 +1325,7 @@ fn deploy_dry_run_json_outputs_prepared_transaction() {
             "--json",
             "deploy",
             "--dry-run",
-            "--wasm",
+            "--artifact",
             wasm_path.to_str().unwrap(),
         ])
         .current_dir(&project)
@@ -1349,7 +1349,12 @@ fn deploy_dry_run_json_outputs_prepared_transaction() {
     assert_eq!(stdout["data"]["dry_run"], true);
     assert_eq!(stdout["data"]["submitted"], false);
     assert_eq!(stdout["data"]["rpc_url"], rpc_url);
-    assert_eq!(stdout["data"]["wasm_bytes"], 8);
+    assert_eq!(stdout["data"]["artifact_kind"], "wasm");
+    assert_eq!(
+        stdout["data"]["artifact_path"].as_str().unwrap(),
+        wasm_path.to_string_lossy()
+    );
+    assert_eq!(stdout["data"]["artifact_bytes"], 8);
     assert!(
         stdout["data"]["predicted_address"]
             .as_str()
@@ -1361,6 +1366,140 @@ fn deploy_dry_run_json_outputs_prepared_transaction() {
             .as_str()
             .unwrap()
             .starts_with("0x")
+    );
+    assert_eq!(
+        signed_tx_deploy_contract_kind(stdout["data"]["signed_tx"].as_str().unwrap()),
+        "wasm"
+    );
+}
+
+#[test]
+fn deploy_dry_run_json_accepts_rv32_artifact() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
+    )
+    .unwrap();
+
+    let generate = groundhog()
+        .args(["keys", "generate", "alice"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    assert!(
+        generate.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&generate.stderr)
+    );
+
+    let rv32_path = tmp.path().join("test.rv32a");
+    std::fs::write(&rv32_path, b"rv32-artifact").unwrap();
+
+    let output = groundhog()
+        .args([
+            "--json",
+            "deploy",
+            "--dry-run",
+            "--artifact",
+            rv32_path.to_str().unwrap(),
+        ])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["ok"], true);
+    assert_eq!(stdout["command"], "deploy");
+    assert_eq!(stdout["data"]["artifact_kind"], "rv32");
+    assert_eq!(
+        stdout["data"]["artifact_path"].as_str().unwrap(),
+        rv32_path.to_string_lossy()
+    );
+    assert_eq!(stdout["data"]["artifact_bytes"], 13);
+    assert_eq!(
+        signed_tx_deploy_contract_kind(stdout["data"]["signed_tx"].as_str().unwrap()),
+        "rv32"
+    );
+}
+
+#[test]
+fn deploy_dry_run_auto_resolves_rv32_artifact_by_target() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    std::fs::write(project.join("src/lib.rs"), "pub fn demo() {}\n").unwrap();
+    std::fs::write(
+        project.join("Cargo.toml"),
+        "[package]\nname = \"demo-contract\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+
+    let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
+    )
+    .unwrap();
+
+    let artifact_path = project.join("target/groundhog/demo_contract.rv32a");
+    std::fs::create_dir_all(artifact_path.parent().unwrap()).unwrap();
+    std::fs::write(&artifact_path, b"rv32-auto").unwrap();
+
+    let generate = groundhog()
+        .args(["keys", "generate", "alice"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    assert!(
+        generate.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&generate.stderr)
+    );
+
+    let output = groundhog()
+        .args(["--json", "deploy", "--dry-run", "--target", "rv32"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["data"]["artifact_kind"], "rv32");
+    assert_eq!(
+        stdout["data"]["artifact_path"].as_str().unwrap(),
+        std::fs::canonicalize(&artifact_path)
+            .unwrap()
+            .to_string_lossy()
+    );
+    assert_eq!(stdout["data"]["artifact_bytes"], 9);
+    assert_eq!(
+        signed_tx_deploy_contract_kind(stdout["data"]["signed_tx"].as_str().unwrap()),
+        "rv32"
     );
 }
 
@@ -1390,7 +1529,7 @@ fn deploy_dry_run_uses_manifest_dev_wallet_address_without_dev_rpc() {
             "--json",
             "deploy",
             "--dry-run",
-            "--wasm",
+            "--artifact",
             wasm_path.to_str().unwrap(),
         ])
         .current_dir(&project)
@@ -1436,7 +1575,7 @@ fn deploy_dry_run_uses_project_local_node_state_rpc_and_manifest() {
             "--json",
             "deploy",
             "--dry-run",
-            "--wasm",
+            "--artifact",
             wasm_path.to_str().unwrap(),
         ])
         .current_dir(&project)
@@ -1487,7 +1626,7 @@ fn deploy_dry_run_runtime_manifest_env_overrides_profile() {
             "--json",
             "deploy",
             "--dry-run",
-            "--wasm",
+            "--artifact",
             wasm_path.to_str().unwrap(),
         ])
         .current_dir(&project)
@@ -1536,7 +1675,7 @@ fn deploy_dry_run_blank_runtime_manifest_env_falls_back_to_profile() {
             "--json",
             "deploy",
             "--dry-run",
-            "--wasm",
+            "--artifact",
             wasm_path.to_str().unwrap(),
         ])
         .current_dir(&project)
@@ -1587,7 +1726,7 @@ fn deploy_dry_run_rejects_runtime_manifest_symlink() {
             "--json",
             "deploy",
             "--dry-run",
-            "--wasm",
+            "--artifact",
             wasm_path.to_str().unwrap(),
         ])
         .current_dir(&project)
@@ -1630,7 +1769,7 @@ fn deploy_dry_run_rejects_manifest_public_key_mismatch_before_rpc() {
             "--json",
             "deploy",
             "--dry-run",
-            "--wasm",
+            "--artifact",
             wasm_path.to_str().unwrap(),
         ])
         .current_dir(&project)
@@ -1679,7 +1818,7 @@ fn deploy_dry_run_rejects_manifest_seed_that_does_not_match_signer() {
             "--json",
             "deploy",
             "--dry-run",
-            "--wasm",
+            "--artifact",
             wasm_path.to_str().unwrap(),
         ])
         .current_dir(&project)
@@ -1717,7 +1856,7 @@ fn deploy_dev_key_requires_runtime_manifest() {
             "--json",
             "deploy",
             "--dry-run",
-            "--wasm",
+            "--artifact",
             wasm_path.to_str().unwrap(),
         ])
         .current_dir(&project)
@@ -1768,7 +1907,12 @@ fn deploy_live_json_submits_and_returns_receipt() {
     std::fs::write(&wasm_path, b"\0asm\x01\0\0\0").unwrap();
 
     let output = groundhog()
-        .args(["--json", "deploy", "--wasm", wasm_path.to_str().unwrap()])
+        .args([
+            "--json",
+            "deploy",
+            "--artifact",
+            wasm_path.to_str().unwrap(),
+        ])
         .current_dir(&project)
         .env("XDG_CONFIG_HOME", &config_home)
         .output()
@@ -1833,7 +1977,12 @@ fn deploy_live_json_includes_transaction_detail_when_dev_method_exists() {
     std::fs::write(&wasm_path, b"\0asm\x01\0\0\0").unwrap();
 
     let output = groundhog()
-        .args(["--json", "deploy", "--wasm", wasm_path.to_str().unwrap()])
+        .args([
+            "--json",
+            "deploy",
+            "--artifact",
+            wasm_path.to_str().unwrap(),
+        ])
         .current_dir(&project)
         .env("XDG_CONFIG_HOME", &config_home)
         .output()
@@ -3189,6 +3338,23 @@ fn signed_tx_invoked_address(tx_hex: &str) -> String {
         "0x{}",
         hex::encode(signed_tx.tx.invocation.invoked_address.as_ref())
     )
+}
+
+fn signed_tx_deploy_contract_kind(tx_hex: &str) -> &'static str {
+    let bytes = hex::decode(tx_hex.strip_prefix("0x").unwrap_or(tx_hex)).unwrap();
+    let signed_tx: groundhog_xdr::transaction::SignedTransaction =
+        xdrs::txs::decode(&bytes).unwrap();
+    let contract = signed_tx
+        .tx
+        .contracts_to_deploy
+        .0
+        .first()
+        .expect("bug: deploy tx should include contract bytes");
+    match contract {
+        groundhog_xdr::contract::Contract::kWasmi { .. } => "wasm",
+        groundhog_xdr::contract::Contract::kRv32 { .. } => "rv32",
+        _ => "other",
+    }
 }
 
 enum DevDetailRpcResponse {

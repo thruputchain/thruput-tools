@@ -239,15 +239,16 @@ The first generated key automatically becomes the default.
 
 ### `groundhog deploy`
 
-Deploy a contract to the active profile's RPC URL. Resolves the WASM
-artifact automatically unless `--wasm` is provided, submits a signed
-deploy transaction, polls for the receipt, prints the deployed address,
-and saves a contract alias into the active profile when running inside a
-project.
+Deploy a contract to the active profile's RPC URL. Resolves the selected
+artifact automatically unless `--artifact` is provided, submits a signed
+deploy transaction, polls for the receipt, prints the deployed address, and
+saves a contract alias into the active profile when running inside a project.
 
 ```bash
 groundhog deploy
 groundhog deploy --profile testnet
+groundhog deploy --artifact target/groundhog/counter.rv32a
+groundhog deploy --target rv32
 groundhog deploy --json
 ```
 

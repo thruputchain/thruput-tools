@@ -9,6 +9,34 @@ pub struct ArtifactOptions {
     target_dir: Option<PathBuf>,
 }
 
+/// Contract artifact runtime kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArtifactKind {
+    /// WebAssembly artifact emitted as `.wasm`.
+    Wasm,
+    /// Lowered RV32 artifact emitted as `.rv32a`.
+    Rv32,
+}
+
+impl ArtifactKind {
+    /// Return the stable wire spelling used in CLI JSON and messages.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Wasm => "wasm",
+            Self::Rv32 => "rv32",
+        }
+    }
+}
+
+/// Artifact path paired with the runtime kind inferred or selected by the CLI.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedArtifact {
+    /// Runtime kind used to wrap artifact bytes for deploy.
+    pub kind: ArtifactKind,
+    /// Resolved artifact path on disk.
+    pub path: PathBuf,
+}
+
 impl ArtifactOptions {
     /// Create artifact options from an optional target directory.
     pub fn new(target_dir: Option<PathBuf>) -> Self {
@@ -69,6 +97,49 @@ pub fn groundhog_rv32_metadata_output_path(target_dir: &Path, package_name: &str
         "{}.rv32.json",
         crate::scaffold::to_snake(package_name)
     ))
+}
+
+/// Return the Groundhog-owned processed artifact output path for a package.
+pub fn groundhog_artifact_output_path(
+    target_dir: &Path,
+    package_name: &str,
+    kind: ArtifactKind,
+) -> PathBuf {
+    match kind {
+        ArtifactKind::Wasm => groundhog_wasm_output_path(target_dir, package_name),
+        ArtifactKind::Rv32 => groundhog_rv32_output_path(target_dir, package_name),
+    }
+}
+
+/// Infer artifact kind from a path extension.
+pub fn infer_artifact_kind(path: &Path) -> Result<ArtifactKind, CliError> {
+    match path.extension().and_then(|extension| extension.to_str()) {
+        Some("wasm") => Ok(ArtifactKind::Wasm),
+        Some("rv32a") => Ok(ArtifactKind::Rv32),
+        _ => Err(CliError::UnsupportedArtifactExtension(
+            path.display().to_string(),
+        )),
+    }
+}
+
+/// Resolve a Groundhog-owned build artifact for the package implied by `cwd`.
+pub fn resolve_groundhog_artifact_path(
+    cwd: &Path,
+    artifacts: &ArtifactOptions,
+    kind: ArtifactKind,
+) -> Result<PathBuf, CliError> {
+    let metadata = crate::build::cargo_metadata_with_artifacts(artifacts)?;
+    let pkg_name = crate::build::resolve_package(&metadata, None, cwd)?;
+    let path = groundhog_artifact_output_path(&metadata.target_directory, pkg_name, kind);
+
+    if !path.try_exists()? {
+        return Err(CliError::ArtifactNotFound {
+            kind: kind.as_str(),
+            path: path.display().to_string(),
+        });
+    }
+
+    Ok(path)
 }
 
 /// Ensure passthrough cargo arguments do not override the CLI target directory.
@@ -164,9 +235,10 @@ fn normalize_path_components(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{
-        ArtifactOptions, cargo_rv32_elf_output_path, cargo_wasm_output_path,
-        ensure_no_target_dir_passthrough_conflicts, groundhog_rv32_metadata_output_path,
-        groundhog_rv32_output_path, groundhog_wasm_output_path,
+        ArtifactKind, ArtifactOptions, cargo_rv32_elf_output_path, cargo_wasm_output_path,
+        ensure_no_target_dir_passthrough_conflicts, groundhog_artifact_output_path,
+        groundhog_rv32_metadata_output_path, groundhog_rv32_output_path,
+        groundhog_wasm_output_path, infer_artifact_kind,
     };
     use crate::CliError;
     use std::path::PathBuf;
@@ -213,6 +285,40 @@ mod tests {
         assert_eq!(
             metadata,
             PathBuf::from("/tmp/out/groundhog/demo_contract_rv32.rv32.json")
+        );
+    }
+
+    #[test]
+    fn groundhog_artifact_output_path_uses_kind_extension() {
+        let target_dir = PathBuf::from("/tmp/out");
+
+        assert_eq!(
+            groundhog_artifact_output_path(&target_dir, "demo-contract", ArtifactKind::Wasm),
+            PathBuf::from("/tmp/out/groundhog/demo_contract.wasm")
+        );
+        assert_eq!(
+            groundhog_artifact_output_path(&target_dir, "demo-contract", ArtifactKind::Rv32),
+            PathBuf::from("/tmp/out/groundhog/demo_contract.rv32a")
+        );
+    }
+
+    #[test]
+    fn infer_artifact_kind_uses_extension() {
+        assert_eq!(
+            infer_artifact_kind(PathBuf::from("contract.wasm").as_path())
+                .expect("bug: wasm should infer"),
+            ArtifactKind::Wasm
+        );
+        assert_eq!(
+            infer_artifact_kind(PathBuf::from("contract.rv32a").as_path())
+                .expect("bug: rv32 should infer"),
+            ArtifactKind::Rv32
+        );
+
+        let err = infer_artifact_kind(PathBuf::from("contract.bin").as_path())
+            .expect_err("bug: unsupported extension should error");
+        assert!(
+            matches!(err, CliError::UnsupportedArtifactExtension(path) if path == "contract.bin")
         );
     }
 
