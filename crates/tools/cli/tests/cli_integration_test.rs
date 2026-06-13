@@ -708,7 +708,7 @@ fn build_rv32_json_success_reports_artifact_paths() {
         serde_json::from_str(&std::fs::read_to_string(&metadata).unwrap()).unwrap();
     assert_eq!(
         metadata_json["artifact_format_fingerprint"],
-        "0x373c4a7cf1a42ef8"
+        "0x3aed01915d1a5e1d"
     );
 
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
