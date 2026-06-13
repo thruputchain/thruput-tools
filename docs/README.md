@@ -15,8 +15,9 @@ This directory has two kinds of documents:
   local-node, gateway, and benchmark handoff contract.
 - [Gateway benchmark bootstrap plan](gateway/benchmark-bootstrap-plan.md) -
   active benchmark/bootstrap roadmap, including bootstrap-manifest input.
-- [Groundhog simulation](sim/) - draft design for stateful end-to-end chain
-  traffic, soak tests, and simulation target boundaries.
+- [Groundhog simulation](sim/) - current `hogsim` docs for stateful
+  end-to-end chain traffic, soak tests, target orchestration, and result
+  artifacts.
 - [Benchmark scenario library](gateway/bench-scenarios.md) - repeatable local
   benchmark scenarios.
 - [Gateway roadmap](gateway/roadmap.md) - high-level gateway product roadmap.
@@ -27,7 +28,7 @@ This directory has two kinds of documents:
   background and current backend topology notes.
 - [Gateway open questions](gateway/open-questions.md) - remaining cross-team
   questions and resolved decisions.
-- [Hogd-dev process contract](cli/specs/2026-04-29-hogd-dev-process-contract.md)
+- [Hog-devnode process contract](cli/specs/2026-04-29-hogd-dev-process-contract.md)
   - current `groundhog node` child-process contract.
 - [CLI specs](cli/specs/) - active or recently shipped CLI/developer-tooling
   specs.

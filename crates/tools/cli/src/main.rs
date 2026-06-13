@@ -52,6 +52,15 @@ impl From<BuildTargetArg> for groundhog_cli::build::BuildTarget {
     }
 }
 
+impl From<BuildTargetArg> for groundhog_cli::artifacts::ArtifactKind {
+    fn from(value: BuildTargetArg) -> Self {
+        match value {
+            BuildTargetArg::Wasm => Self::Wasm,
+            BuildTargetArg::Rv32 => Self::Rv32,
+        }
+    }
+}
+
 #[derive(ValueEnum, Debug, Clone, Copy)]
 enum NodeBlockDriverArg {
     Instant,
@@ -204,9 +213,12 @@ enum Command {
     },
     /// Deploy a contract
     Deploy {
-        /// Path to compiled .wasm (default: auto-detect)
+        /// Path to compiled .wasm or .rv32a (default: auto-detect)
         #[arg(long)]
-        wasm: Option<String>,
+        artifact: Option<PathBuf>,
+        /// Artifact target to auto-detect when --artifact is omitted
+        #[arg(long, value_enum, conflicts_with = "artifact")]
+        target: Option<BuildTargetArg>,
         /// Build and sign the deploy transaction without submitting it
         #[arg(long)]
         dry_run: bool,
@@ -545,7 +557,8 @@ fn main() {
                 }
             }),
         Command::Deploy {
-            wasm,
+            artifact,
+            target,
             dry_run,
             profile,
             artifacts,
@@ -556,7 +569,15 @@ fn main() {
                     artifacts.target_dir,
                     &cwd,
                 );
-                groundhog_cli::deploy::run(&wasm, dry_run, &artifacts, &profile, cmd_name, &print)
+                groundhog_cli::deploy::run(
+                    artifact.as_deref(),
+                    target.unwrap_or(BuildTargetArg::Wasm).into(),
+                    dry_run,
+                    &artifacts,
+                    &profile,
+                    cmd_name,
+                    &print,
+                )
             }),
         Command::Call {
             contract,

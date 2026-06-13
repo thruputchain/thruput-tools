@@ -21,6 +21,10 @@ pub enum CliError {
     WasmNotFound(String),
     #[error("expected RV32 ELF not found at {0}")]
     Rv32ElfNotFound(String),
+    #[error("expected {kind} artifact not found at {path}")]
+    ArtifactNotFound { kind: &'static str, path: String },
+    #[error("unsupported artifact extension for {0}; expected .wasm or .rv32a")]
+    UnsupportedArtifactExtension(String),
     #[error("target dir conflicts with CLI passthrough args or config")]
     TargetDirConflict,
     #[error("cargo failed with exit code {0}")]
@@ -155,6 +159,8 @@ impl CliError {
             Self::CargoMetadataFailed(_) => "cargo_metadata_failed",
             Self::WasmNotFound(_) => "wasm_not_found",
             Self::Rv32ElfNotFound(_) => "rv32_elf_not_found",
+            Self::ArtifactNotFound { .. } => "artifact_not_found",
+            Self::UnsupportedArtifactExtension(_) => "unsupported_artifact_extension",
             Self::TargetDirConflict => "target_dir_conflict",
             Self::CargoFailed(_) | Self::CargoFailedWithOutput { .. } => "cargo_failed",
             Self::DirExists(_) => "dir_exists",
@@ -241,6 +247,12 @@ impl CliError {
                  riscv32im-unknown-none-elf and that its binary name matches \
                  the package name",
             )),
+            Self::ArtifactNotFound { kind, .. } => Some(Cow::Owned(format!(
+                "run `groundhog build --target {kind}` first, or pass `--artifact <path>`"
+            ))),
+            Self::UnsupportedArtifactExtension(_) => {
+                Some(Cow::Borrowed("pass a `.wasm` or `.rv32a` artifact path"))
+            }
             Self::TargetDirConflict => Some(Cow::Borrowed(
                 "remove `--target-dir` from passthrough args or \
                  config when using the CLI target directory option",

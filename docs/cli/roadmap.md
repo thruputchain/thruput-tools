@@ -352,7 +352,7 @@ Goal: ship the minimum complete network workflow.
    - Implement `groundhog keys rm`
 
 4. **Deploy**
-   - Resolve WASM path automatically unless `--wasm` is given.
+   - Resolve the selected artifact automatically unless `--artifact` is given.
    - Build a signed deploy transaction.
    - Submit via RPC client.
    - Poll until committed or failed.
@@ -443,9 +443,9 @@ Goal: make `groundhog test` fast, inspectable, and CI-friendly.
      path, persistence-aware integration runs, and multi-contract orchestration.
 
 2. **Output controls**
-   - verbosity levels
-   - better event/log display
-   - optional machine-readable test output
+   - Shipped: machine-readable `groundhog test --json` output for WASM and
+     integration modes.
+   - Remaining follow-ups: human verbosity levels and better event/log display.
 
 3. **Groundhog-native reporting**
    - storage cost report
@@ -522,6 +522,63 @@ parked until a real hogd-owned dev method needs them.
   extension and indexer migration; Rust mapping follows protocol-rs
   publish.  The Rust scaffolding for `abort_data` already exists; both
   backends hardcode `return_data: None` until hogd supplies the bytes.
+
+**RV32 default runtime pivot:**
+
+Detailed task plan: [RV32 default execution plan](specs/2026-06-12-rv32-default-execution-plan.md).
+
+Current shipped pieces are enough to build and inspect RV32 artifacts, but
+not enough to make RV32 the default deploy/test/sim artifact yet:
+
+- `groundhog build --target rv32` compiles
+  `riscv32im-unknown-none-elf`, lowers through the in-process RV32 lowerer,
+  writes `target/groundhog/<contract>.rv32a`, and finalizes contract-spec
+  sidecars from the ELF/artifact pair.
+- Fresh scaffolds include the RV32 bin wrapper required by that build path.
+- The default command surface still chooses WASM: `groundhog build` defaults
+  to `--target wasm`; `groundhog deploy` auto-resolves WASM unless
+  `--target rv32` or `--artifact <path>` is provided; `groundhog test
+  --integration` calls the WASM build path and deploys `build.wasm`;
+  `groundhog test --json` still exposes a top-level `wasm` field; `hogsim`
+  manifests and result records are named around `wasm` / `wasmPath` /
+  `wasmSha256`.
+- CLI deploy transaction construction is artifact-aware and branches to
+  `Contract::kWasmi` or `Contract::kRv32`.  Simulation still wraps artifact
+  bytes as `Contract::kWasmi`.  The remaining deploy gate is proving that the
+  pinned/minimum `hog-devnode` runtime executes `kRv32` contracts end-to-end.
+
+Minimal sequence to flip the default without papering over WASM assumptions:
+
+1. Shipped in the CLI branch: shared deploy artifact model/resolver with
+   explicit kind (`wasm` or `rv32`), `deploy --artifact`, `deploy --target`, and
+   deploy transaction construction branching to `Contract::kWasmi` or
+   `Contract::kRv32`.
+2. Add artifact metadata to `groundhog test --json` instead of assuming the
+   top-level `wasm` field is the durable contract. This is a breaking
+   machine-output change, so bump its schema version again when the field
+   changes.
+3. Prove the pinned/minimum `hog-devnode` executes a deployed `kRv32` contract
+   end-to-end. Keep WASM as an explicit fallback target for differential
+   debugging rather than deleting it.
+4. Switch `groundhog test --integration` to build/deploy the default artifact
+   through the shared resolver, and keep host integration tests unchanged except
+   for artifact metadata in the report.
+5. Intentionally break and migrate `hogsim` manifests/results from `wasm`-only
+   fields to an artifact kind/path/hash shape, then update scenario docs and
+   fixtures in the same change.  No compatibility shim is needed before we have
+   external users.
+6. Before flipping the default, run a repeatable differential check for a
+   fixture contract: build WASM and RV32 artifacts, deploy and call both, and
+   assert identical observable results.  After that plus integration-test and
+   sim smoke pass with RV32, change `groundhog build`'s default target to RV32
+   and rename CLI help away from WASM-specific language. Keep `--target wasm`
+   for differential debugging.
+
+Defaulting to RV32 also means older `hog-devnode` binaries that cannot execute
+`kRv32` will fail at runtime.  Because there are no external CLI users yet,
+prefer pinning/documenting the minimum `hog-devnode` protocol/runtime version
+over adding a compatibility capability probe unless a real multi-version need
+appears.
 
 **Phase 3 testing DX, after `--integration` v1:**
 
