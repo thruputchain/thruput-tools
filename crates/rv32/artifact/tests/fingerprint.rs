@@ -6,8 +6,8 @@ use groundhog_rv32_artifact::{FORMAT_FINGERPRINT, compute_format_fingerprint};
 
 #[test]
 fn fingerprint_is_pinned() {
-    assert_eq!(compute_format_fingerprint(), 0x373c_4a7c_f1a4_2ef8);
-    assert_eq!(FORMAT_FINGERPRINT, 0x373c_4a7c_f1a4_2ef8);
+    assert_eq!(compute_format_fingerprint(), 0x3aed_0191_5d1a_5e1d);
+    assert_eq!(FORMAT_FINGERPRINT, 0x3aed_0191_5d1a_5e1d);
 }
 
 #[test]
