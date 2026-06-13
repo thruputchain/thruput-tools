@@ -23,7 +23,7 @@ members = [
 [workspace.package]
 version = "0.5.7"
 edition = "2024"
-authors = ["Groundhog Team"]
+authors = ["Stellar Development Foundation"]
 license = "Apache-2.0"
 publish = ["groundhog"]
 repository = "https://github.com/groundhogchain/groundhog-rpc"

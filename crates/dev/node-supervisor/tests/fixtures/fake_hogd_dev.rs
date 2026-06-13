@@ -173,7 +173,7 @@ fn main() {
         Ok("timeout") => {
             eprintln!(r#"{{"level":"info","message":"waiting"}}"#);
             loop {
-                thread::sleep(Duration::from_secs(60));
+                thread::sleep(Duration::from_mins(1));
             }
         }
         Ok("oversized-readiness") => {
@@ -184,12 +184,12 @@ fn main() {
                 .flush()
                 .expect("bug: fake child stdout should flush");
             loop {
-                thread::sleep(Duration::from_secs(60));
+                thread::sleep(Duration::from_mins(1));
             }
         }
         Ok("exit-7") => process::exit(7),
         Ok("hang") => loop {
-            thread::sleep(Duration::from_secs(60));
+            thread::sleep(Duration::from_mins(1));
         },
         Ok("ready-with-indexer") => run_with_indexer(FakeIndexerMode::Normal),
         Ok("ready-with-indexer-no-gateway") => run_with_indexer_no_gateway(FakeIndexerMode::Normal),
@@ -279,7 +279,7 @@ fn run_with_helper() {
 
 fn run_ignore_term_loop() {
     loop {
-        thread::sleep(Duration::from_secs(60));
+        thread::sleep(Duration::from_mins(1));
     }
 }
 

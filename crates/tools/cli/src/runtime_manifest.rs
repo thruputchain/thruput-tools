@@ -308,8 +308,7 @@ fn write_file_atomically(path: &Path, bytes: &[u8]) -> Result<(), CliError> {
         .unwrap_or("local-node.json");
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0);
+        .map_or(0, |duration| duration.as_nanos());
     let tmp_path = parent.join(format!(".{file_name}.{}.{}.tmp", std::process::id(), nonce));
 
     let result = (|| -> Result<(), CliError> {
