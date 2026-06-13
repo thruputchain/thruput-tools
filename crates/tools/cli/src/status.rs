@@ -126,7 +126,7 @@ fn render_keys(report: &checks::StatusReport, print: &Print) {
     } else {
         for key in &report.keys.keys {
             let marker = if key.is_default { "*" } else { " " };
-            print.status(format_args!("key:{marker} {} {}", key.name, key.address,));
+            print.status(format_args!("key:{marker} {} {}", key.name, key.address));
         }
     }
 
@@ -135,7 +135,7 @@ fn render_keys(report: &checks::StatusReport, print: &Print) {
     if !report.keys.keys.is_empty() {
         if let Some(name) = report.effective_default_key.as_deref() {
             let source = report.effective_default_key_source.unwrap_or("global");
-            print.status(format_args!("default key ({source}): {name}",));
+            print.status(format_args!("default key ({source}): {name}"));
         } else {
             print.status("default key: none selected");
         }
@@ -176,7 +176,7 @@ fn render_findings(report: &checks::StatusReport, print: &Print) {
     for finding in report.all_findings() {
         match finding.level {
             FindingLevel::Warn => {
-                print.warn(format_args!("{}: {}", finding.code, finding.message,));
+                print.warn(format_args!("{}: {}", finding.code, finding.message));
             }
             FindingLevel::Info => {
                 print.status(format_args!("info: {}", finding.message));

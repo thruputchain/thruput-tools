@@ -480,7 +480,7 @@ fn emit_spec_type_def_literal(out: &mut String, def: &ContractTypeDef) -> Result
             for field in struct_def.fields.iter() {
                 let fname = spec_string_text(&field.name)?;
                 let ty_lit = spec_type_to_ts_literal(&field.ty)?;
-                let _ = writeln!(out, "          {{ name: s(\"{fname}\"), ty: {ty_lit} }},",);
+                let _ = writeln!(out, "          {{ name: s(\"{fname}\"), ty: {ty_lit} }},");
             }
             let _ = writeln!(out, "        ],");
             let _ = writeln!(out, "      }},");
@@ -577,7 +577,7 @@ fn emit_spec_union_case_literal(
                 }
                 let fname = spec_string_text(&field.name)?;
                 let ty_lit = spec_type_to_ts_literal(&field.ty)?;
-                let _ = write!(fields_str, "{{ name: s(\"{fname}\"), ty: {ty_lit} }}",);
+                let _ = write!(fields_str, "{{ name: s(\"{fname}\"), ty: {ty_lit} }}");
             }
             fields_str.push(']');
             let _ = writeln!(
