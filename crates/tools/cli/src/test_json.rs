@@ -36,7 +36,7 @@ pub struct TestReport {
 #[serde(rename_all = "camelCase")]
 pub struct TestArtifactInfo {
     /// Artifact runtime kind, currently `wasm` or `rv32`.
-    pub kind: String,
+    pub kind: ArtifactKind,
     /// Path to the built artifact used by this test run.
     pub path: PathBuf,
 }
@@ -45,7 +45,7 @@ impl TestArtifactInfo {
     /// Build serialized test artifact metadata from the shared artifact kind.
     pub fn new(kind: ArtifactKind, path: &std::path::Path) -> Self {
         Self {
-            kind: kind.as_str().to_owned(),
+            kind,
             path: path.to_path_buf(),
         }
     }
@@ -212,7 +212,7 @@ mod tests {
 
         assert_eq!(report.mode, TestMode::Wasm);
         assert_eq!(report.schema_version, 3);
-        assert_eq!(report.artifact.kind, "wasm");
+        assert_eq!(report.artifact.kind, ArtifactKind::Wasm);
         assert_eq!(
             report.artifact.path,
             PathBuf::from("/project/target/demo.wasm")

@@ -1,4 +1,7 @@
 use crate::CliError;
+use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::borrow::Cow;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -25,6 +28,57 @@ impl ArtifactKind {
             Self::Wasm => "wasm",
             Self::Rv32 => "rv32",
         }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "wasm" => Some(Self::Wasm),
+            "rv32" => Some(Self::Rv32),
+            _ => None,
+        }
+    }
+}
+
+impl Serialize for ArtifactKind {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for ArtifactKind {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::parse(&value).ok_or_else(|| {
+            serde::de::Error::custom(format!(
+                "unknown artifact kind `{value}`, expected `{}` or `{}`",
+                Self::Wasm.as_str(),
+                Self::Rv32.as_str()
+            ))
+        })
+    }
+}
+
+impl JsonSchema for ArtifactKind {
+    fn schema_name() -> Cow<'static, str> {
+        "ArtifactKind".into()
+    }
+
+    fn schema_id() -> Cow<'static, str> {
+        concat!(module_path!(), "::ArtifactKind").into()
+    }
+
+    fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "type": "string",
+            "enum": [ArtifactKind::Wasm.as_str(), ArtifactKind::Rv32.as_str()],
+            "description": "Contract artifact runtime kind."
+        })
     }
 }
 
@@ -320,6 +374,24 @@ mod tests {
         assert!(
             matches!(err, CliError::UnsupportedArtifactExtension(path) if path == "contract.bin")
         );
+    }
+
+    #[test]
+    fn artifact_kind_serde_and_schema_use_wire_strings() {
+        assert_eq!(
+            serde_json::to_value(ArtifactKind::Wasm).expect("bug: wasm should serialize"),
+            serde_json::json!("wasm")
+        );
+        assert_eq!(
+            serde_json::from_value::<ArtifactKind>(serde_json::json!("rv32"))
+                .expect("bug: rv32 should deserialize"),
+            ArtifactKind::Rv32
+        );
+        assert!(serde_json::from_value::<ArtifactKind>(serde_json::json!("rv32a")).is_err());
+
+        let schema = serde_json::to_value(schemars::schema_for!(ArtifactKind))
+            .expect("bug: artifact schema should serialize");
+        assert_eq!(schema["enum"], serde_json::json!(["wasm", "rv32"]));
     }
 
     #[test]
