@@ -1200,6 +1200,7 @@ fn test_json_failed_run_emits_report_on_stdout() {
     let schema_version = groundhog_cli::test_json::TEST_JSON_SCHEMA_VERSION;
     assert_eq!(stdout["data"]["schemaVersion"], schema_version);
     assert_eq!(stdout["data"]["mode"], "wasm");
+    assert_wasm_test_artifact(&stdout["data"]);
     assert!(stdout["data"]["projectRoot"].as_str().is_some());
     assert_eq!(stdout["data"]["success"], false);
     assert_eq!(stdout["data"]["summary"]["source"], "parsed");
@@ -1216,6 +1217,17 @@ fn test_json_failed_run_emits_report_on_stdout() {
         "tests::fails"
     );
     assert_eq!(stdout["data"]["runs"][0]["tests"][1]["status"], "failed");
+}
+
+fn assert_wasm_test_artifact(data: &serde_json::Value) {
+    assert_eq!(data["artifact"]["kind"], "wasm");
+    assert!(
+        data["artifact"]["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("target/groundhog/demo_contract.wasm")
+    );
+    assert!(data.get("wasm").is_none());
 }
 
 #[test]

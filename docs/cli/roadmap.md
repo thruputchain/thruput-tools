@@ -539,8 +539,8 @@ not enough to make RV32 the default deploy/test/sim artifact yet:
   to `--target wasm`; `groundhog deploy` auto-resolves WASM unless
   `--target rv32` or `--artifact <path>` is provided; `groundhog test
   --integration` calls the WASM build path and deploys `build.wasm`;
-  `groundhog test --json` still exposes a top-level `wasm` field; `hogsim`
-  manifests and result records are named around `wasm` / `wasmPath` /
+  `groundhog test --json` reports artifact kind/path metadata; `hogsim`
+  manifests and result records are still named around `wasm` / `wasmPath` /
   `wasmSha256`.
 - CLI deploy transaction construction is artifact-aware and branches to
   `Contract::kWasmi` or `Contract::kRv32`.  Simulation still wraps artifact
@@ -553,10 +553,8 @@ Minimal sequence to flip the default without papering over WASM assumptions:
    explicit kind (`wasm` or `rv32`), `deploy --artifact`, `deploy --target`, and
    deploy transaction construction branching to `Contract::kWasmi` or
    `Contract::kRv32`.
-2. Add artifact metadata to `groundhog test --json` instead of assuming the
-   top-level `wasm` field is the durable contract. This is a breaking
-   machine-output change, so bump its schema version again when the field
-   changes.
+2. Shipped in the stacked CLI branch: `groundhog test --json` schema v3 reports
+   artifact metadata instead of the top-level `wasm` field.
 3. Prove the pinned/minimum `hog-devnode` executes a deployed `kRv32` contract
    end-to-end. Keep WASM as an explicit fallback target for differential
    debugging rather than deleting it.

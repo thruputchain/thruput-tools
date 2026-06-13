@@ -202,7 +202,8 @@ single newline-delimited JSON record; successful runs are written to
 stdout with `ok` set to `true` or `false` as appropriate. The
 machine-readable payload is versioned with `data.schemaVersion` and
 includes structured per-run and per-test results rather than only
-aggregated cargo output text.
+aggregated cargo output text. Schema v3 reports the built artifact under
+`data.artifact` with `kind` and `path` fields.
 
 `groundhog test --integration` builds the WASM artifact, starts an ephemeral
 hog-devnode local node, deploys the contract with `dev-0`, then runs the

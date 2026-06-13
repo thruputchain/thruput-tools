@@ -3,13 +3,14 @@ use std::path::PathBuf;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::artifacts::ArtifactKind;
 use crate::config::ResolvedProfile;
 
 /// Schema version for the `groundhog test --json` payload.
 ///
 /// Bump this when the shape or semantics of `TestReport` change in a
 /// way that could break existing machine consumers.
-pub const TEST_JSON_SCHEMA_VERSION: u32 = 2;
+pub const TEST_JSON_SCHEMA_VERSION: u32 = 3;
 
 /// Structured machine-readable report for `groundhog test --json`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -20,7 +21,7 @@ pub struct TestReport {
     pub mode: TestMode,
     pub project_root: PathBuf,
     pub profile: ResolvedProfile,
-    pub wasm: PathBuf,
+    pub artifact: TestArtifactInfo,
     pub success: bool,
     pub summary: TestSummary,
     pub runs: Vec<TestRun>,
@@ -28,6 +29,26 @@ pub struct TestReport {
     pub watch: TestWatchInfo,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub integration: Option<IntegrationTestInfo>,
+}
+
+/// Built contract artifact metadata for a `groundhog test --json` report.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TestArtifactInfo {
+    /// Artifact runtime kind, currently `wasm` or `rv32`.
+    pub kind: ArtifactKind,
+    /// Path to the built artifact used by this test run.
+    pub path: PathBuf,
+}
+
+impl TestArtifactInfo {
+    /// Build serialized test artifact metadata from the shared artifact kind.
+    pub fn new(kind: ArtifactKind, path: &std::path::Path) -> Self {
+        Self {
+            kind,
+            path: path.to_path_buf(),
+        }
+    }
 }
 
 /// Execution mode used for this `groundhog test` report.
@@ -147,9 +168,63 @@ mod tests {
     use super::*;
 
     #[test]
-    fn missing_mode_deserializes_as_wasm_for_v1_compatibility() {
+    fn missing_mode_deserializes_as_wasm_default() {
         let json = serde_json::json!({
-            "schemaVersion": 1,
+            "schemaVersion": 3,
+            "projectRoot": "/project",
+            "profile": {
+                "name": "default",
+                "rpcUrl": null,
+                "defaultKey": null,
+                "runtimeManifest": null,
+                "contracts": {},
+                "source": null
+            },
+            "artifact": {
+                "kind": "wasm",
+                "path": "/project/target/demo.wasm"
+            },
+            "success": true,
+            "summary": {
+                "source": "empty",
+                "total": 0,
+                "passed": 0,
+                "failed": 0,
+                "ignored": 0,
+                "measured": 0,
+                "filteredOut": 0
+            },
+            "runs": [],
+            "rerun": {
+                "enabled": false,
+                "cachePath": "/project/target/groundhog/test-failures/demo.json",
+                "cachedTests": [],
+                "cachedTestsAfter": [],
+                "executedTests": [],
+                "failedTests": []
+            },
+            "watch": {
+                "enabled": false
+            }
+        });
+
+        let report: TestReport = serde_json::from_value(json).expect("v3 report should parse");
+
+        assert_eq!(report.mode, TestMode::Wasm);
+        assert_eq!(report.schema_version, 3);
+        assert_eq!(report.artifact.kind, ArtifactKind::Wasm);
+        assert_eq!(
+            report.artifact.path,
+            PathBuf::from("/project/target/demo.wasm")
+        );
+        assert!(report.integration.is_none());
+    }
+
+    #[test]
+    fn old_reports_without_artifact_fail_deserialization() {
+        let json = serde_json::json!({
+            "schemaVersion": 2,
+            "mode": "wasm",
             "projectRoot": "/project",
             "profile": {
                 "name": "default",
@@ -184,10 +259,11 @@ mod tests {
             }
         });
 
-        let report: TestReport = serde_json::from_value(json).expect("v1 report should parse");
+        let err = serde_json::from_value::<TestReport>(json).expect_err("v2 report should fail");
 
-        assert_eq!(report.mode, TestMode::Wasm);
-        assert_eq!(report.schema_version, 1);
-        assert!(report.integration.is_none());
+        assert!(
+            err.to_string().contains("missing field `artifact`"),
+            "unexpected error: {err}"
+        );
     }
 }

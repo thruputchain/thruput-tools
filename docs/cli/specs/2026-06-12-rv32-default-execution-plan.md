@@ -20,7 +20,8 @@ fallback for differential debugging.
   `--artifact`, auto-resolves by `--target`, and wraps deploy bytes as
   `Contract::kWasmi` or `Contract::kRv32` by artifact kind.
 - `groundhog test --integration` builds WASM and deploys `build.wasm`.
-- `groundhog test --json` still exposes a top-level `wasm` field.
+- `groundhog test --json` schema v3 reports artifact metadata under
+  `artifact.kind` and `artifact.path` instead of a top-level `wasm` field.
 - `hogsim` manifest and result contracts are named around `wasm`, `wasmPath`,
   and `wasmSha256`, and sim deploy also uses `Contract::kWasmi`.
 - The pinned XDR dependency already exposes `Contract::kRv32`; the remaining
@@ -110,6 +111,8 @@ Acceptance:
 - `cargo test -p groundhog-cli deploy_` passes.
 
 ## PR 2: Test JSON Artifact Metadata
+
+Status: implemented in the stacked CLI branch.
 
 Goal: make `groundhog test --json` artifact-neutral before switching
 integration execution to RV32.
