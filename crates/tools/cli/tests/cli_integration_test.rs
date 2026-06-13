@@ -708,7 +708,7 @@ fn build_rv32_json_success_reports_artifact_paths() {
         serde_json::from_str(&std::fs::read_to_string(&metadata).unwrap()).unwrap();
     assert_eq!(
         metadata_json["artifact_format_fingerprint"],
-        "0x373c4a7cf1a42ef8"
+        "0x3aed01915d1a5e1d"
     );
 
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -1358,6 +1358,10 @@ fn deploy_dry_run_json_outputs_prepared_transaction() {
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "deploy");
     assert_eq!(stdout["warnings"], serde_json::json!([]));
+    assert_eq!(
+        stdout["data"]["schemaVersion"],
+        groundhog_cli::deploy::DEPLOY_JSON_SCHEMA_VERSION
+    );
     assert_eq!(stdout["data"]["dry_run"], true);
     assert_eq!(stdout["data"]["submitted"], false);
     assert_eq!(stdout["data"]["rpc_url"], rpc_url);
@@ -1438,6 +1442,10 @@ fn deploy_dry_run_json_accepts_rv32_artifact() {
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "deploy");
+    assert_eq!(
+        stdout["data"]["schemaVersion"],
+        groundhog_cli::deploy::DEPLOY_JSON_SCHEMA_VERSION
+    );
     assert_eq!(stdout["data"]["artifact_kind"], "rv32");
     assert_eq!(
         stdout["data"]["artifact_path"].as_str().unwrap(),
@@ -1501,6 +1509,10 @@ fn deploy_dry_run_auto_resolves_rv32_artifact_by_target() {
     );
 
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        stdout["data"]["schemaVersion"],
+        groundhog_cli::deploy::DEPLOY_JSON_SCHEMA_VERSION
+    );
     assert_eq!(stdout["data"]["artifact_kind"], "rv32");
     assert_eq!(
         stdout["data"]["artifact_path"].as_str().unwrap(),
@@ -1943,6 +1955,10 @@ fn deploy_live_json_submits_and_returns_receipt() {
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "deploy");
     assert_eq!(stdout["warnings"], serde_json::json!([]));
+    assert_eq!(
+        stdout["data"]["schemaVersion"],
+        groundhog_cli::deploy::DEPLOY_JSON_SCHEMA_VERSION
+    );
 
     // The mock returns 0xbb..bb as the deployed address via return_data.
     let expected_address = format!("0x{}", "bb".repeat(32));

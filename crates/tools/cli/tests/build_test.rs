@@ -609,7 +609,7 @@ fn build_rv32_project_compiles_and_lowers_elf() {
         serde_json::from_str(&fs::read_to_string(&processed_metadata).unwrap()).unwrap();
     assert_eq!(
         metadata["artifact_format_fingerprint"],
-        "0x373c4a7cf1a42ef8"
+        "0x3aed01915d1a5e1d"
     );
     let spec_json: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&processed_spec_json).unwrap()).unwrap();

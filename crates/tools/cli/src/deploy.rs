@@ -27,6 +27,8 @@ use crate::tx_utils::{
 };
 use crate::{CliError, Print};
 
+pub const DEPLOY_JSON_SCHEMA_VERSION: u32 = 2;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DeployAddressSource {
     Receipt,
@@ -135,6 +137,7 @@ pub fn run(
     print.json(&CommandResult::new(
         cmd,
         json!({
+            "schemaVersion": DEPLOY_JSON_SCHEMA_VERSION,
             "tx_hash": tx_hash_formatted,
             "artifact_kind": prepared.artifact.kind.as_str(),
             "artifact_path": &prepared.artifact.path,
@@ -175,6 +178,7 @@ fn print_dry_run(
     print.json(&CommandResult::new(
         cmd,
         json!({
+            "schemaVersion": DEPLOY_JSON_SCHEMA_VERSION,
             "dry_run": true,
             "submitted": false,
             "rpc_url": prepared.rpc_url,
