@@ -1,8 +1,8 @@
 use crate::artifacts::{self, ArtifactOptions};
 use crate::result::CommandResult;
 use crate::test_json::{
-    TEST_JSON_SCHEMA_VERSION, TestCase, TestCaseStatus, TestReport, TestRerunInfo, TestRun,
-    TestSummary, TestSummarySource, TestWatchInfo,
+    IntegrationTestInfo, TEST_JSON_SCHEMA_VERSION, TestCase, TestCaseStatus, TestMode, TestReport,
+    TestRerunInfo, TestRun, TestSummary, TestSummarySource, TestWatchInfo,
 };
 use crate::{CliError, Print};
 use serde::{Deserialize, Serialize};
@@ -368,7 +368,14 @@ fn run_integration_against_node(
     profile.source = None;
     profile
         .contracts
-        .insert(build.project_name.clone(), contract_address);
+        .insert(build.project_name.clone(), contract_address.clone());
+
+    let integration_info = IntegrationTestInfo {
+        rpc_url: rpc_url.to_owned(),
+        contract_address,
+        runtime_manifest: profile.runtime_manifest.clone(),
+        default_key: "dev-0".into(),
+    };
 
     let report = build_test_report(
         &build.project_root,
@@ -386,6 +393,8 @@ fn run_integration_against_node(
                 .flat_map(|output| extract_failed_tests(&output.stdout, &output.stderr)),
         ),
         false,
+        TestMode::Integration,
+        Some(integration_info),
     );
 
     let failed_code = outputs
@@ -571,6 +580,8 @@ fn run_once_with_options(
         &executed_tests,
         &failed_tests,
         options.watch,
+        TestMode::Wasm,
+        None,
     );
 
     if let Some(failed) = outputs.iter().find(|output| !output.success) {
@@ -788,6 +799,8 @@ fn finish_empty_rerun(
         &[],
         &[],
         watch_enabled,
+        TestMode::Wasm,
+        None,
     );
     print.json(&CommandResult::new(cmd, &report))?;
     Ok(())
@@ -883,6 +896,8 @@ fn build_test_report(
     executed_tests: &[String],
     failed_tests: &[String],
     watch_enabled: bool,
+    mode: TestMode,
+    integration: Option<IntegrationTestInfo>,
 ) -> TestReport {
     let runs = outputs.iter().map(parse_test_run).collect::<Vec<_>>();
     let summary = aggregate_summary(&runs);
@@ -890,6 +905,7 @@ fn build_test_report(
 
     TestReport {
         schema_version: TEST_JSON_SCHEMA_VERSION,
+        mode,
         project_root: project_root.to_path_buf(),
         profile: profile.clone(),
         wasm: wasm.to_path_buf(),
@@ -907,6 +923,7 @@ fn build_test_report(
         watch: TestWatchInfo {
             enabled: watch_enabled,
         },
+        integration,
     }
 }
 
@@ -1399,7 +1416,10 @@ mod tests {
         read_failure_cache, should_stop_rerun, should_watch_file, test_command,
         update_failure_cache, watch_snapshot, write_failure_cache,
     };
-    use crate::test_json::{TestCase, TestCaseStatus, TestSummarySource};
+    use crate::test_json::{
+        IntegrationTestInfo, TEST_JSON_SCHEMA_VERSION, TestCase, TestCaseStatus, TestMode,
+        TestSummarySource,
+    };
     use crate::{CliError, Print};
     use std::collections::BTreeMap;
     use std::fs;
@@ -1448,12 +1468,71 @@ mod tests {
             &[],
             &[],
             false,
+            TestMode::Integration,
+            Some(IntegrationTestInfo {
+                rpc_url: "http://127.0.0.1:1234".into(),
+                contract_address: format!("0x{}", "11".repeat(32)),
+                runtime_manifest: None,
+                default_key: "dev-0".into(),
+            }),
         );
 
         super::IntegrationRun {
             report,
             failed_code: if success { None } else { Some(101) },
         }
+    }
+
+    #[test]
+    fn integration_report_serializes_mode_and_node_metadata() {
+        let run = integration_run(true);
+
+        let json = serde_json::to_value(&run.report).expect("bug: report should serialize");
+
+        assert_eq!(json["schemaVersion"], TEST_JSON_SCHEMA_VERSION);
+        assert_eq!(json["mode"], "integration");
+        assert_eq!(json["integration"]["rpcUrl"], "http://127.0.0.1:1234");
+        assert_eq!(json["integration"]["defaultKey"], "dev-0");
+        assert_eq!(
+            json["integration"]["contractAddress"],
+            format!("0x{}", "11".repeat(32))
+        );
+        assert_eq!(
+            json["integration"]["runtimeManifest"],
+            serde_json::Value::Null
+        );
+    }
+
+    #[test]
+    fn wasm_report_serializes_mode_without_integration_metadata() {
+        let profile = crate::config::ResolvedProfile {
+            name: "default".into(),
+            rpc_url: None,
+            default_key: None,
+            runtime_manifest: None,
+            contracts: BTreeMap::new(),
+            source: None,
+        };
+        let report = super::build_test_report(
+            std::path::Path::new("/project"),
+            &profile,
+            std::path::Path::new("/project/target/demo.wasm"),
+            &[],
+            false,
+            std::path::Path::new("/project/target/.groundhog/failures.json"),
+            &[],
+            &[],
+            &[],
+            &[],
+            false,
+            TestMode::Wasm,
+            None,
+        );
+
+        let json = serde_json::to_value(&report).expect("bug: report should serialize");
+
+        assert_eq!(json["mode"], "wasm");
+        assert!(json.get("integration").is_none());
     }
 
     #[test]

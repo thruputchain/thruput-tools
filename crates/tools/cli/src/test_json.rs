@@ -16,6 +16,8 @@ pub const TEST_JSON_SCHEMA_VERSION: u32 = 1;
 #[serde(rename_all = "camelCase")]
 pub struct TestReport {
     pub schema_version: u32,
+    #[serde(default)]
+    pub mode: TestMode,
     pub project_root: PathBuf,
     pub profile: ResolvedProfile,
     pub wasm: PathBuf,
@@ -24,6 +26,27 @@ pub struct TestReport {
     pub runs: Vec<TestRun>,
     pub rerun: TestRerunInfo,
     pub watch: TestWatchInfo,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub integration: Option<IntegrationTestInfo>,
+}
+
+/// Execution mode used for this `groundhog test` report.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum TestMode {
+    #[default]
+    Wasm,
+    Integration,
+}
+
+/// Integration-node metadata for `groundhog test --integration --json`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct IntegrationTestInfo {
+    pub rpc_url: String,
+    pub contract_address: String,
+    pub runtime_manifest: Option<PathBuf>,
+    pub default_key: String,
 }
 
 /// Summary counts for one test invocation or aggregated test report.
@@ -115,4 +138,53 @@ pub struct TestRerunInfo {
 #[serde(rename_all = "camelCase")]
 pub struct TestWatchInfo {
     pub enabled: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_mode_deserializes_as_wasm_for_v1_compatibility() {
+        let json = serde_json::json!({
+            "schemaVersion": TEST_JSON_SCHEMA_VERSION,
+            "projectRoot": "/project",
+            "profile": {
+                "name": "default",
+                "rpcUrl": null,
+                "defaultKey": null,
+                "runtimeManifest": null,
+                "contracts": {},
+                "source": null
+            },
+            "wasm": "/project/target/demo.wasm",
+            "success": true,
+            "summary": {
+                "source": "empty",
+                "total": 0,
+                "passed": 0,
+                "failed": 0,
+                "ignored": 0,
+                "measured": 0,
+                "filteredOut": 0
+            },
+            "runs": [],
+            "rerun": {
+                "enabled": false,
+                "cachePath": "/project/target/groundhog/test-failures/demo.json",
+                "cachedTests": [],
+                "cachedTestsAfter": [],
+                "executedTests": [],
+                "failedTests": []
+            },
+            "watch": {
+                "enabled": false
+            }
+        });
+
+        let report: TestReport = serde_json::from_value(json).expect("v1 report should parse");
+
+        assert_eq!(report.mode, TestMode::Wasm);
+        assert!(report.integration.is_none());
+    }
 }
