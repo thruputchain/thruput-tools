@@ -1197,7 +1197,9 @@ fn test_json_failed_run_emits_report_on_stdout() {
     assert_eq!(stdout["ok"], false);
     assert_eq!(stdout["command"], "test");
     assert!(stdout["warnings"].as_array().unwrap().is_empty());
-    assert_eq!(stdout["data"]["schemaVersion"], 1);
+    let schema_version = groundhog_cli::test_json::TEST_JSON_SCHEMA_VERSION;
+    assert_eq!(stdout["data"]["schemaVersion"], schema_version);
+    assert_eq!(stdout["data"]["mode"], "wasm");
     assert!(stdout["data"]["projectRoot"].as_str().is_some());
     assert_eq!(stdout["data"]["success"], false);
     assert_eq!(stdout["data"]["summary"]["source"], "parsed");
