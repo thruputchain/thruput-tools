@@ -143,11 +143,13 @@ enum Command {
     },
     /// Build and test the contract under WASM or local-node execution
     #[command(long_about = "Builds the contract to WASM, then runs \
-                      the test_wasm target on the host. With \
-                      --integration, starts an ephemeral hog-devnode \
-                      local node, deploys the contract, and runs \
-                      the integration test target with RPC environment \
-                      variables.")]
+                       the test_wasm target on the host. With \
+                       --integration, starts an ephemeral hog-devnode \
+                       local node, deploys the contract, and runs \
+                       the integration test target with RPC environment \
+                       variables. With --json, emits a structured report \
+                       with mode, summary, per-test cases, and integration \
+                       node metadata when applicable.")]
     Test {
         /// Package to test (required in workspaces)
         #[arg(short, long)]

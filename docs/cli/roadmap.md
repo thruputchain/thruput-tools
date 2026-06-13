@@ -83,6 +83,9 @@ Implementation status:
   configured runtime manifest (`GROUNDHOG_RUNTIME_MANIFEST` or
   `profile.<name>.runtime_manifest`). The former local-only dev-account RPC
   has been removed from the OpenRPC surface.
+- `groundhog test --json` now emits a stable machine-readable report for both
+  WASM and integration modes, including explicit `mode` and integration-node
+  metadata for `groundhog test --integration --json`.
 - The legacy native-exec local-node backend (`crates/dev-node`) was
   retired in PR 5 once hogd-dev proved out the published-SDK scaffold
   loop. The durable backend is a Rust supervisor
@@ -265,7 +268,8 @@ Maintenance rules:
 - [x] `groundhog test --skip`
 - [x] `groundhog test --rerun`
 - [x] `groundhog test --watch`
-- [ ] Better test output controls / machine-readable output
+- [x] Machine-readable `groundhog test --json` output for WASM and integration
+- [ ] Better human test output controls
 - [ ] Storage cost reporting
 - [ ] `groundhog inspect`
 
@@ -523,7 +527,6 @@ parked until a real hogd-owned dev method needs them.
 
 1. Add better test output controls:
    - human verbosity levels
-   - optional machine-readable output
    - event / delta snippets on failures
 2. Extend `groundhog test --integration`:
    - `--watch` / `--rerun` support for RPC-backed tests
