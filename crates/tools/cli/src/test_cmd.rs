@@ -1,8 +1,8 @@
 use crate::artifacts::{self, ArtifactOptions};
 use crate::result::CommandResult;
 use crate::test_json::{
-    IntegrationTestInfo, TEST_JSON_SCHEMA_VERSION, TestCase, TestCaseStatus, TestMode, TestReport,
-    TestRerunInfo, TestRun, TestSummary, TestSummarySource, TestWatchInfo,
+    IntegrationTestInfo, TEST_JSON_SCHEMA_VERSION, TestArtifactInfo, TestCase, TestCaseStatus,
+    TestMode, TestReport, TestRerunInfo, TestRun, TestSummary, TestSummarySource, TestWatchInfo,
 };
 use crate::{CliError, Print};
 use serde::{Deserialize, Serialize};
@@ -384,7 +384,7 @@ fn run_integration_against_node(
     let report = build_test_report(
         &build.project_root,
         &profile,
-        &build.wasm,
+        TestArtifactInfo::new(crate::artifacts::ArtifactKind::Wasm, &build.wasm),
         &outputs,
         false,
         &failure_cache_path(&build.target_directory, &build.project_name),
@@ -575,7 +575,7 @@ fn run_once_with_options(
     let report = build_test_report(
         &build.project_root,
         &profile,
-        &build.wasm,
+        TestArtifactInfo::new(crate::artifacts::ArtifactKind::Wasm, &build.wasm),
         &outputs,
         options.rerun,
         &cache_path,
@@ -794,7 +794,7 @@ fn finish_empty_rerun(
     let report = build_test_report(
         &build.project_root,
         profile,
-        &build.wasm,
+        TestArtifactInfo::new(crate::artifacts::ArtifactKind::Wasm, &build.wasm),
         &[],
         true,
         cache_path,
@@ -891,7 +891,7 @@ fn should_stop_rerun(options: &TestOptions, outputs: &[TestRunOutput]) -> bool {
 fn build_test_report(
     project_root: &Path,
     profile: &crate::config::ResolvedProfile,
-    wasm: &Path,
+    artifact: TestArtifactInfo,
     outputs: &[TestRunOutput],
     rerun_enabled: bool,
     cache_path: &Path,
@@ -912,7 +912,7 @@ fn build_test_report(
         mode,
         project_root: project_root.to_path_buf(),
         profile: profile.clone(),
-        wasm: wasm.to_path_buf(),
+        artifact,
         success,
         summary,
         runs,
@@ -1421,8 +1421,8 @@ mod tests {
         update_failure_cache, watch_snapshot, write_failure_cache,
     };
     use crate::test_json::{
-        IntegrationTestInfo, TEST_JSON_SCHEMA_VERSION, TestCase, TestCaseStatus, TestMode,
-        TestSummarySource,
+        IntegrationTestInfo, TEST_JSON_SCHEMA_VERSION, TestArtifactInfo, TestCase, TestCaseStatus,
+        TestMode, TestSummarySource,
     };
     use crate::{CliError, Print};
     use std::collections::BTreeMap;
@@ -1463,7 +1463,10 @@ mod tests {
         let report = super::build_test_report(
             std::path::Path::new("/project"),
             &profile,
-            std::path::Path::new("/project/target/demo.wasm"),
+            TestArtifactInfo::new(
+                crate::artifacts::ArtifactKind::Wasm,
+                std::path::Path::new("/project/target/demo.wasm"),
+            ),
             &outputs,
             false,
             std::path::Path::new("/project/target/.groundhog/failures.json"),
@@ -1495,6 +1498,9 @@ mod tests {
 
         assert_eq!(json["schemaVersion"], TEST_JSON_SCHEMA_VERSION);
         assert_eq!(json["mode"], "integration");
+        assert_eq!(json["artifact"]["kind"], "wasm");
+        assert_eq!(json["artifact"]["path"], "/project/target/demo.wasm");
+        assert!(json.get("wasm").is_none());
         assert_eq!(json["integration"]["rpcUrl"], "http://127.0.0.1:1234");
         assert_eq!(json["integration"]["defaultKey"], "dev-0");
         assert_eq!(
@@ -1517,7 +1523,10 @@ mod tests {
         let report = super::build_test_report(
             std::path::Path::new("/project"),
             &profile,
-            std::path::Path::new("/project/target/demo.wasm"),
+            TestArtifactInfo::new(
+                crate::artifacts::ArtifactKind::Wasm,
+                std::path::Path::new("/project/target/demo.wasm"),
+            ),
             &[],
             false,
             std::path::Path::new("/project/target/.groundhog/failures.json"),
@@ -1533,6 +1542,9 @@ mod tests {
         let json = serde_json::to_value(&report).expect("bug: report should serialize");
 
         assert_eq!(json["mode"], "wasm");
+        assert_eq!(json["artifact"]["kind"], "wasm");
+        assert_eq!(json["artifact"]["path"], "/project/target/demo.wasm");
+        assert!(json.get("wasm").is_none());
         assert!(json.get("integration").is_none());
     }
 
