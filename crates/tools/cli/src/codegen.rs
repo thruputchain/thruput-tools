@@ -189,14 +189,15 @@ pub fn generate_ts_bindings(spec: &ContractSpec, source_name: &str) -> Result<St
             ))
         })
         .collect::<Result<_, CliError>>()?;
-    validate_public_name_collisions(spec)?;
+    let public_method_names = public_method_names(spec)?;
+    validate_public_name_collisions(spec, &public_method_names)?;
     emit_header(&mut out, source_name, &interfaces);
 
     // 2. Imports
     emit_imports(&mut out, spec);
 
     // 3. Entrypoints
-    emit_entrypoints(&mut out, spec)?;
+    emit_entrypoints(&mut out, spec, &public_method_names)?;
 
     // 4. Named type declarations
     for def in spec.type_defs.iter() {
@@ -213,11 +214,16 @@ pub fn generate_ts_bindings(spec: &ContractSpec, source_name: &str) -> Result<St
     let _ = writeln!(out, "const namedCodecs = buildNamedCodecs(spec.type_defs);");
 
     // 7. Per-method functions
-    for iface in spec.interfaces.iter() {
+    for (iface_index, iface) in spec.interfaces.iter().enumerate() {
         let iface_name = spec_string_text(&iface.name)?;
-        for method in iface.methods.iter() {
+        for (method_index, method) in iface.methods.iter().enumerate() {
             let _ = writeln!(out);
-            emit_method_function(&mut out, iface_name, method)?;
+            emit_method_function(
+                &mut out,
+                iface_name,
+                method,
+                &public_method_names[iface_index][method_index],
+            )?;
         }
     }
 
@@ -318,18 +324,22 @@ fn emit_imports(out: &mut String, spec: &ContractSpec) {
 }
 
 /// Emit the `entrypoints` const mapping method names to their IDs.
-fn emit_entrypoints(out: &mut String, spec: &ContractSpec) -> Result<(), CliError> {
+fn emit_entrypoints(
+    out: &mut String,
+    spec: &ContractSpec,
+    public_method_names: &[Vec<String>],
+) -> Result<(), CliError> {
     let _ = writeln!(out);
     let _ = writeln!(out, "const s = contractSpecString;");
     let _ = writeln!(out);
     let _ = writeln!(out, "const entrypoints = {{");
 
-    for iface in spec.interfaces.iter() {
+    for (iface_index, iface) in spec.interfaces.iter().enumerate() {
         let iface_name = spec_string_text(&iface.name)?;
         let iface_vers = spec_string_text(&iface.vers)?;
-        for method in iface.methods.iter() {
+        for (method_index, method) in iface.methods.iter().enumerate() {
             let method_name = spec_string_text(&method.name)?;
-            let public_method_name = to_camel_case(method_name);
+            let public_method_name = &public_method_names[iface_index][method_index];
             let sig = NormalizedMethodSignature::new(method_name);
             let id = contract_entrypoint_id(Some(iface_name), iface_vers, &sig);
             let hex = hex::encode(id.as_ref());
@@ -668,9 +678,9 @@ fn emit_method_function(
     out: &mut String,
     iface_name: &str,
     method: &ContractSpecMethod,
+    public_method_name: &str,
 ) -> Result<(), CliError> {
     let method_name = spec_string_text(&method.name)?;
-    let public_method_name = to_camel_case(method_name);
     let has_args = !method.args.is_empty();
 
     // Function signature
@@ -939,7 +949,10 @@ fn emit_decode_event(out: &mut String, spec: &ContractSpec) -> Result<(), CliErr
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn validate_public_name_collisions(spec: &ContractSpec) -> Result<(), CliError> {
+fn validate_public_name_collisions(
+    spec: &ContractSpec,
+    public_method_names: &[Vec<String>],
+) -> Result<(), CliError> {
     let mut top_level_values = BTreeMap::new();
     for name in [
         "contractEntrypointID",
@@ -1022,20 +1035,85 @@ fn validate_public_name_collisions(spec: &ContractSpec) -> Result<(), CliError> 
         }
     }
 
-    for iface in spec.interfaces.iter() {
-        for method in iface.methods.iter() {
+    for (iface_index, iface) in spec.interfaces.iter().enumerate() {
+        let iface_name = spec_string_text(&iface.name)?;
+        for (method_index, method) in iface.methods.iter().enumerate() {
             let method_name = spec_string_text(&method.name)?;
-            let public_method_name = to_camel_case(method_name);
             reserve_ts_value_name(
                 &mut top_level_values,
-                public_method_name,
-                format!("method \"{method_name}\""),
+                public_method_names[iface_index][method_index].clone(),
+                format!("method \"{iface_name}.{method_name}\""),
             )?;
             validate_method_arg_name_collisions(method_name, method)?;
         }
     }
 
     Ok(())
+}
+
+fn public_method_names(spec: &ContractSpec) -> Result<Vec<Vec<String>>, CliError> {
+    let mut base_name_counts = BTreeMap::new();
+    for iface in spec.interfaces.iter() {
+        for method in iface.methods.iter() {
+            let method_name = spec_string_text(&method.name)?;
+            *base_name_counts
+                .entry(to_camel_case(method_name))
+                .or_insert(0) += 1;
+        }
+    }
+    let interface_suffixes = unique_interface_suffixes(spec)?;
+
+    spec.interfaces
+        .iter()
+        .enumerate()
+        .map(|(iface_index, iface)| {
+            iface
+                .methods
+                .iter()
+                .map(|method| {
+                    let method_name = spec_string_text(&method.name)?;
+                    let base_name = to_camel_case(method_name);
+                    if base_name_counts[&base_name] > 1 {
+                        Ok(format!("{base_name}{}", interface_suffixes[iface_index]))
+                    } else {
+                        Ok(base_name)
+                    }
+                })
+                .collect::<Result<Vec<_>, CliError>>()
+        })
+        .collect()
+}
+
+fn unique_interface_suffixes(spec: &ContractSpec) -> Result<Vec<String>, CliError> {
+    let iface_words: Vec<Vec<String>> = spec
+        .interfaces
+        .iter()
+        .map(|iface| Ok(split_identifier_words(spec_string_text(&iface.name)?)))
+        .collect::<Result<_, CliError>>()?;
+
+    let mut suffixes = Vec::with_capacity(iface_words.len());
+    for (iface_index, words) in iface_words.iter().enumerate() {
+        let mut suffix = None;
+        for suffix_len in 1..=words.len() {
+            let candidate = words[words.len() - suffix_len..].join("");
+            let is_unique = iface_words
+                .iter()
+                .enumerate()
+                .filter(|(other_index, _)| *other_index != iface_index)
+                .all(|(_, other_words)| {
+                    other_words.len() < suffix_len
+                        || other_words[other_words.len() - suffix_len..].join("") != candidate
+                });
+            if is_unique {
+                suffix = Some(candidate);
+                break;
+            }
+        }
+
+        suffixes.push(suffix.unwrap_or_else(|| words.join("")));
+    }
+
+    Ok(suffixes)
 }
 
 fn reserve_ts_value_name(
@@ -1086,6 +1164,59 @@ fn to_camel_case(name: &str) -> String {
     }
 
     out
+}
+
+fn upper_first(name: &str) -> String {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return String::new();
+    };
+
+    let mut out = String::new();
+    out.extend(first.to_uppercase());
+    out.extend(chars);
+    out
+}
+
+fn split_identifier_words(name: &str) -> Vec<String> {
+    let chars: Vec<char> = name.chars().collect();
+    if chars.is_empty() {
+        return vec![String::new()];
+    }
+
+    let mut words = Vec::new();
+    let mut current = String::new();
+    for (i, ch) in chars.iter().enumerate() {
+        let prev = i.checked_sub(1).and_then(|prev| chars.get(prev));
+        let next = chars.get(i + 1);
+        let starts_word = i > 0
+            && (*ch == '_'
+                || prev == Some(&'_')
+                || (ch.is_uppercase()
+                    && (prev.is_some_and(|prev| prev.is_lowercase() || prev.is_ascii_digit())
+                        || next.is_some_and(|next| next.is_lowercase()))));
+
+        if *ch == '_' {
+            if !current.is_empty() {
+                words.push(upper_first(&to_camel_case(&current)));
+                current.clear();
+            }
+        } else if starts_word {
+            if !current.is_empty() {
+                words.push(upper_first(&to_camel_case(&current)));
+            }
+            current.clear();
+            current.push(*ch);
+        } else {
+            current.push(*ch);
+        }
+    }
+
+    if !current.is_empty() {
+        words.push(upper_first(&to_camel_case(&current)));
+    }
+
+    words
 }
 
 #[cfg(test)]
@@ -1509,6 +1640,62 @@ export type Result =
 
         let err = generate_ts_bindings(&spec, "counter.wasm").unwrap_err();
         assert!(err.to_string().contains("getBalance"));
+    }
+
+    #[test]
+    fn duplicate_method_names_across_interfaces_are_disambiguated() {
+        let spec = ContractSpec {
+            interfaces: vec![
+                ContractSpecInterface {
+                    name: spec_string("ERC20"),
+                    vers: spec_string("0.1.0"),
+                    throws: vec![].try_into().unwrap(),
+                    methods: vec![ContractSpecMethod {
+                        name: spec_string("initialize"),
+                        args: vec![ContractField {
+                            name: spec_string("administrator"),
+                            ty: ContractType::Address,
+                        }]
+                        .try_into()
+                        .unwrap(),
+                        return_type: ContractType::Void,
+                    }]
+                    .try_into()
+                    .unwrap(),
+                },
+                ContractSpecInterface {
+                    name: spec_string("ERC20Metadata"),
+                    vers: spec_string("0.1.0"),
+                    throws: vec![].try_into().unwrap(),
+                    methods: vec![ContractSpecMethod {
+                        name: spec_string("initialize"),
+                        args: vec![ContractField {
+                            name: spec_string("name"),
+                            ty: ContractType::String,
+                        }]
+                        .try_into()
+                        .unwrap(),
+                        return_type: ContractType::Void,
+                    }]
+                    .try_into()
+                    .unwrap(),
+                },
+            ]
+            .try_into()
+            .unwrap(),
+            type_defs: vec![].try_into().unwrap(),
+            events: vec![].try_into().unwrap(),
+        };
+
+        let output = generate_ts_bindings(&spec, "token.wasm").unwrap();
+        assert!(output.contains("initializeERC20:"));
+        assert!(output.contains("initializeMetadata:"));
+        assert!(output.contains("export function initializeERC20("));
+        assert!(output.contains("export function initializeMetadata("));
+        assert!(output.contains("entrypoint: entrypoints.initializeERC20,"));
+        assert!(output.contains("entrypoint: entrypoints.initializeMetadata,"));
+        assert!(output.contains("spec, \"ERC20\", \"initialize\""));
+        assert!(output.contains("spec, \"ERC20Metadata\", \"initialize\""));
     }
 
     #[test]
