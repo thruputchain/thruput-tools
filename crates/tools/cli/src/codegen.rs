@@ -1061,12 +1061,11 @@ fn public_method_names(spec: &ContractSpec) -> Result<Vec<Vec<String>>, CliError
                 .or_insert(0) += 1;
         }
     }
-    let interface_suffixes = unique_interface_suffixes(spec)?;
-
     spec.interfaces
         .iter()
-        .enumerate()
-        .map(|(iface_index, iface)| {
+        .map(|iface| {
+            let iface_name = spec_string_text(&iface.name)?;
+            let iface_suffix = upper_first(&to_camel_case(iface_name));
             iface
                 .methods
                 .iter()
@@ -1074,7 +1073,7 @@ fn public_method_names(spec: &ContractSpec) -> Result<Vec<Vec<String>>, CliError
                     let method_name = spec_string_text(&method.name)?;
                     let base_name = to_camel_case(method_name);
                     if base_name_counts[&base_name] > 1 {
-                        Ok(format!("{base_name}{}", interface_suffixes[iface_index]))
+                        Ok(format!("{base_name}{iface_suffix}"))
                     } else {
                         Ok(base_name)
                     }
@@ -1082,38 +1081,6 @@ fn public_method_names(spec: &ContractSpec) -> Result<Vec<Vec<String>>, CliError
                 .collect::<Result<Vec<_>, CliError>>()
         })
         .collect()
-}
-
-fn unique_interface_suffixes(spec: &ContractSpec) -> Result<Vec<String>, CliError> {
-    let iface_words: Vec<Vec<String>> = spec
-        .interfaces
-        .iter()
-        .map(|iface| Ok(split_identifier_words(spec_string_text(&iface.name)?)))
-        .collect::<Result<_, CliError>>()?;
-
-    let mut suffixes = Vec::with_capacity(iface_words.len());
-    for (iface_index, words) in iface_words.iter().enumerate() {
-        let mut suffix = None;
-        for suffix_len in 1..=words.len() {
-            let candidate = words[words.len() - suffix_len..].join("");
-            let is_unique = iface_words
-                .iter()
-                .enumerate()
-                .filter(|(other_index, _)| *other_index != iface_index)
-                .all(|(_, other_words)| {
-                    other_words.len() < suffix_len
-                        || other_words[other_words.len() - suffix_len..].join("") != candidate
-                });
-            if is_unique {
-                suffix = Some(candidate);
-                break;
-            }
-        }
-
-        suffixes.push(suffix.unwrap_or_else(|| words.join("")));
-    }
-
-    Ok(suffixes)
 }
 
 fn reserve_ts_value_name(
@@ -1184,47 +1151,6 @@ fn upper_first(name: &str) -> String {
     out.extend(first.to_uppercase());
     out.extend(chars);
     out
-}
-
-fn split_identifier_words(name: &str) -> Vec<String> {
-    let chars: Vec<char> = name.chars().collect();
-    if chars.is_empty() {
-        return vec![String::new()];
-    }
-
-    let mut words = Vec::new();
-    let mut current = String::new();
-    for (i, ch) in chars.iter().enumerate() {
-        let prev = i.checked_sub(1).and_then(|prev| chars.get(prev));
-        let next = chars.get(i + 1);
-        let starts_word = i > 0
-            && (*ch == '_'
-                || prev == Some(&'_')
-                || (ch.is_uppercase()
-                    && (prev.is_some_and(|prev| prev.is_lowercase() || prev.is_ascii_digit())
-                        || next.is_some_and(|next| next.is_lowercase()))));
-
-        if *ch == '_' {
-            if !current.is_empty() {
-                words.push(upper_first(&to_camel_case(&current)));
-                current.clear();
-            }
-        } else if starts_word {
-            if !current.is_empty() {
-                words.push(upper_first(&to_camel_case(&current)));
-            }
-            current.clear();
-            current.push(*ch);
-        } else {
-            current.push(*ch);
-        }
-    }
-
-    if !current.is_empty() {
-        words.push(upper_first(&to_camel_case(&current)));
-    }
-
-    words
 }
 
 #[cfg(test)]
@@ -1705,11 +1631,11 @@ export type Result =
 
         let output = generate_ts_bindings(&spec, "token.wasm").unwrap();
         assert!(output.contains("initializeERC20:"));
-        assert!(output.contains("initializeMetadata:"));
+        assert!(output.contains("initializeERC20Metadata:"));
         assert!(output.contains("export function initializeERC20("));
-        assert!(output.contains("export function initializeMetadata("));
+        assert!(output.contains("export function initializeERC20Metadata("));
         assert!(output.contains("entrypoint: entrypoints.initializeERC20,"));
-        assert!(output.contains("entrypoint: entrypoints.initializeMetadata,"));
+        assert!(output.contains("entrypoint: entrypoints.initializeERC20Metadata,"));
         assert!(output.contains("spec, \"ERC20\", \"initialize\""));
         assert!(output.contains("spec, \"ERC20Metadata\", \"initialize\""));
     }
