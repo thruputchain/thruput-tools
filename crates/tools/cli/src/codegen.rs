@@ -327,12 +327,13 @@ fn emit_entrypoints(out: &mut String, spec: &ContractSpec) -> Result<(), CliErro
         let iface_vers = spec_string_text(&iface.vers)?;
         for method in iface.methods.iter() {
             let method_name = spec_string_text(&method.name)?;
+            let public_method_name = to_camel_case(method_name);
             let sig = NormalizedMethodSignature::new(method_name);
             let id = contract_entrypoint_id(Some(iface_name), iface_vers, &sig);
             let hex = hex::encode(id.as_ref());
             let _ = writeln!(
                 out,
-                "  {method_name}: contractEntrypointID(fromHex(\"{hex}\")),",
+                "  {public_method_name}: contractEntrypointID(fromHex(\"{hex}\")),",
             );
         }
     }
@@ -667,11 +668,12 @@ fn emit_method_function(
     method: &ContractSpecMethod,
 ) -> Result<(), CliError> {
     let method_name = spec_string_text(&method.name)?;
+    let public_method_name = to_camel_case(method_name);
     let has_args = !method.args.is_empty();
 
     // Function signature
     if has_args {
-        let _ = writeln!(out, "export function {method_name}(");
+        let _ = writeln!(out, "export function {public_method_name}(");
         let _ = writeln!(out, "  contract: ContractAddress,");
         let _ = writeln!(out, "  gasLimit: GasAmount,");
         let mut args_fields = String::new();
@@ -686,7 +688,7 @@ fn emit_method_function(
         let _ = writeln!(out, "  args: {{ {args_fields} }},");
         let _ = writeln!(out, "): Invocation {{");
     } else {
-        let _ = writeln!(out, "export function {method_name}(");
+        let _ = writeln!(out, "export function {public_method_name}(");
         let _ = writeln!(out, "  contract: ContractAddress,");
         let _ = writeln!(out, "  gasLimit: GasAmount,");
         let _ = writeln!(out, "): Invocation {{");
@@ -695,7 +697,7 @@ fn emit_method_function(
     // Body
     let _ = writeln!(out, "  return createInvocation({{");
     let _ = writeln!(out, "    invoked_address: contract,");
-    let _ = writeln!(out, "    entrypoint: entrypoints.{method_name},");
+    let _ = writeln!(out, "    entrypoint: entrypoints.{public_method_name},");
     let _ = writeln!(out, "    gas_limit: gasLimit,");
 
     if has_args {
@@ -934,6 +936,24 @@ fn emit_decode_event(out: &mut String, spec: &ContractSpec) -> Result<(), CliErr
 // Helpers
 // ---------------------------------------------------------------------------
 
+fn to_camel_case(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    let mut uppercase_next = false;
+
+    for ch in name.chars() {
+        if ch == '_' {
+            uppercase_next = true;
+        } else if uppercase_next {
+            out.extend(ch.to_uppercase());
+            uppercase_next = false;
+        } else {
+            out.push(ch);
+        }
+    }
+
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -945,6 +965,24 @@ mod tests {
 
     fn spec_string(s: &str) -> ContractSpecString {
         s.try_into().unwrap()
+    }
+
+    #[test]
+    fn camel_case_leaves_single_word_names_unchanged() {
+        assert_eq!(to_camel_case("transfer"), "transfer");
+        assert_eq!(to_camel_case("get"), "get");
+    }
+
+    #[test]
+    fn camel_case_rewrites_snake_case_names() {
+        assert_eq!(to_camel_case("get_balance"), "getBalance");
+        assert_eq!(to_camel_case("get_balance_of"), "getBalanceOf");
+        assert_eq!(to_camel_case("contract_owner"), "contractOwner");
+    }
+
+    #[test]
+    fn camel_case_leaves_already_camel_names_unchanged() {
+        assert_eq!(to_camel_case("getBalanceOf"), "getBalanceOf");
     }
 
     #[test]
