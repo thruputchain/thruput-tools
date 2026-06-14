@@ -1,5 +1,6 @@
 //! TypeScript binding code generation from contract specs.
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use groundhog_contract_spec::{
@@ -188,6 +189,7 @@ pub fn generate_ts_bindings(spec: &ContractSpec, source_name: &str) -> Result<St
             ))
         })
         .collect::<Result<_, CliError>>()?;
+    validate_public_name_collisions(spec)?;
     emit_header(&mut out, source_name, &interfaces);
 
     // 2. Imports
@@ -937,6 +939,137 @@ fn emit_decode_event(out: &mut String, spec: &ContractSpec) -> Result<(), CliErr
 // Helpers
 // ---------------------------------------------------------------------------
 
+fn validate_public_name_collisions(spec: &ContractSpec) -> Result<(), CliError> {
+    let mut top_level_values = BTreeMap::new();
+    for name in [
+        "contractEntrypointID",
+        "fromHex",
+        "ContractTypeKind",
+        "ContractTypeDefKind",
+        "contractSpecString",
+        "encodeCalldata",
+        "buildNamedCodecs",
+        "createInvocation",
+        "s",
+        "entrypoints",
+        "spec",
+        "namedCodecs",
+    ] {
+        reserve_ts_value_name(
+            &mut top_level_values,
+            name.to_owned(),
+            "generated binding".into(),
+        )?;
+    }
+
+    if spec
+        .type_defs
+        .iter()
+        .any(|d| matches!(d, ContractTypeDef::TypeDefUnion { .. }))
+    {
+        reserve_ts_value_name(
+            &mut top_level_values,
+            "ContractUnionCaseKind".into(),
+            "generated union import".into(),
+        )?;
+    }
+
+    for def in spec.type_defs.iter() {
+        if let ContractTypeDef::TypeDefEnum { enum_def } = def {
+            let enum_name = spec_string_text(&enum_def.name)?;
+            reserve_ts_value_name(
+                &mut top_level_values,
+                enum_name.to_owned(),
+                format!("enum \"{enum_name}\""),
+            )?;
+        }
+    }
+
+    if !spec.events.is_empty() {
+        reserve_ts_value_name(
+            &mut top_level_values,
+            "topic".into(),
+            "generated event import".into(),
+        )?;
+        reserve_ts_value_name(
+            &mut top_level_values,
+            "resolveCodec".into(),
+            "generated event import".into(),
+        )?;
+        reserve_ts_value_name(
+            &mut top_level_values,
+            "CxsReader".into(),
+            "generated event import".into(),
+        )?;
+        reserve_ts_value_name(
+            &mut top_level_values,
+            "topicEquals".into(),
+            "generated event decoder".into(),
+        )?;
+        reserve_ts_value_name(
+            &mut top_level_values,
+            "decodeEvent".into(),
+            "generated event decoder".into(),
+        )?;
+
+        for event in spec.events.iter() {
+            let event_name = spec_string_text(&event.name)?;
+            reserve_ts_value_name(
+                &mut top_level_values,
+                event_name.to_owned(),
+                format!("event \"{event_name}\""),
+            )?;
+        }
+    }
+
+    for iface in spec.interfaces.iter() {
+        for method in iface.methods.iter() {
+            let method_name = spec_string_text(&method.name)?;
+            let public_method_name = to_camel_case(method_name);
+            reserve_ts_value_name(
+                &mut top_level_values,
+                public_method_name,
+                format!("method \"{method_name}\""),
+            )?;
+            validate_method_arg_name_collisions(method_name, method)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn reserve_ts_value_name(
+    names: &mut BTreeMap<String, String>,
+    name: String,
+    source: String,
+) -> Result<(), CliError> {
+    if let Some(existing) = names.get(&name) {
+        return Err(CliError::SpecFailed(format!(
+            "generated TypeScript value name \"{name}\" collides between {existing} and {source}"
+        )));
+    }
+    names.insert(name, source);
+    Ok(())
+}
+
+fn validate_method_arg_name_collisions(
+    method_name: &str,
+    method: &ContractSpecMethod,
+) -> Result<(), CliError> {
+    let mut args: BTreeMap<String, &str> = BTreeMap::new();
+    for arg in method.args.iter() {
+        let arg_name = spec_string_text(&arg.name)?;
+        let public_arg_name = to_camel_case(arg_name);
+        if let Some(existing) = args.get(&public_arg_name) {
+            return Err(CliError::SpecFailed(format!(
+                "method \"{method_name}\" argument names \"{existing}\" and \"{arg_name}\" both map to \"{public_arg_name}\""
+            )));
+        }
+        args.insert(public_arg_name, arg_name);
+    }
+    Ok(())
+}
+
 fn to_camel_case(name: &str) -> String {
     let mut out = String::with_capacity(name.len());
     let mut uppercase_next = false;
@@ -1356,39 +1489,129 @@ export type Result =
         assert!(generate_ts_bindings(&spec, "counter.wasm").is_err());
     }
 
-    /// Build a minimal counter contract spec: `get() -> U64` and
-    /// `increment(amount: U64) -> Void`.
-    fn counter_spec() -> ContractSpec {
+    #[test]
+    fn method_name_public_collision_errors() {
+        let spec = counter_spec_with_methods(
+            vec![
+                ContractSpecMethod {
+                    name: spec_string("get_balance"),
+                    args: vec![].try_into().unwrap(),
+                    return_type: ContractType::U64,
+                },
+                ContractSpecMethod {
+                    name: spec_string("getBalance"),
+                    args: vec![].try_into().unwrap(),
+                    return_type: ContractType::U64,
+                },
+            ],
+            false,
+        );
+
+        let err = generate_ts_bindings(&spec, "counter.wasm").unwrap_err();
+        assert!(err.to_string().contains("getBalance"));
+    }
+
+    #[test]
+    fn method_arg_name_public_collision_errors() {
+        let spec = counter_spec_with_methods(
+            vec![ContractSpecMethod {
+                name: spec_string("set_owner"),
+                args: vec![
+                    ContractField {
+                        name: spec_string("owner_id"),
+                        ty: ContractType::Address,
+                    },
+                    ContractField {
+                        name: spec_string("ownerId"),
+                        ty: ContractType::Address,
+                    },
+                ]
+                .try_into()
+                .unwrap(),
+                return_type: ContractType::Void,
+            }],
+            false,
+        );
+
+        let err = generate_ts_bindings(&spec, "counter.wasm").unwrap_err();
+        assert!(err.to_string().contains("ownerId"));
+    }
+
+    #[test]
+    fn method_name_colliding_with_import_errors() {
+        let spec = counter_spec_with_methods(
+            vec![ContractSpecMethod {
+                name: spec_string("from_hex"),
+                args: vec![].try_into().unwrap(),
+                return_type: ContractType::Void,
+            }],
+            false,
+        );
+
+        let err = generate_ts_bindings(&spec, "counter.wasm").unwrap_err();
+        assert!(err.to_string().contains("fromHex"));
+    }
+
+    #[test]
+    fn method_name_colliding_with_event_decoder_errors() {
+        let spec = counter_spec_with_methods(
+            vec![ContractSpecMethod {
+                name: spec_string("decode_event"),
+                args: vec![].try_into().unwrap(),
+                return_type: ContractType::Void,
+            }],
+            true,
+        );
+
+        let err = generate_ts_bindings(&spec, "counter.wasm").unwrap_err();
+        assert!(err.to_string().contains("decodeEvent"));
+    }
+
+    fn counter_spec_with_methods(
+        methods: Vec<ContractSpecMethod>,
+        include_events: bool,
+    ) -> ContractSpec {
         ContractSpec {
             interfaces: vec![ContractSpecInterface {
                 name: spec_string("Counter"),
                 vers: spec_string("0.1.0"),
                 throws: vec![].try_into().unwrap(),
-                methods: vec![
-                    ContractSpecMethod {
-                        name: spec_string("get"),
-                        args: vec![].try_into().unwrap(),
-                        return_type: ContractType::U64,
-                    },
-                    ContractSpecMethod {
-                        name: spec_string("increment"),
-                        args: vec![ContractField {
-                            name: spec_string("amount"),
-                            ty: ContractType::U64,
-                        }]
-                        .try_into()
-                        .unwrap(),
-                        return_type: ContractType::Void,
-                    },
-                ]
-                .try_into()
-                .unwrap(),
+                methods: methods.try_into().unwrap(),
             }]
             .try_into()
             .unwrap(),
             type_defs: vec![].try_into().unwrap(),
-            events: vec![].try_into().unwrap(),
+            events: if include_events {
+                vec![ping_event_def()].try_into().unwrap()
+            } else {
+                vec![].try_into().unwrap()
+            },
         }
+    }
+
+    /// Build a minimal counter contract spec: `get() -> U64` and
+    /// `increment(amount: U64) -> Void`.
+    fn counter_spec() -> ContractSpec {
+        counter_spec_with_methods(
+            vec![
+                ContractSpecMethod {
+                    name: spec_string("get"),
+                    args: vec![].try_into().unwrap(),
+                    return_type: ContractType::U64,
+                },
+                ContractSpecMethod {
+                    name: spec_string("increment"),
+                    args: vec![ContractField {
+                        name: spec_string("amount"),
+                        ty: ContractType::U64,
+                    }]
+                    .try_into()
+                    .unwrap(),
+                    return_type: ContractType::Void,
+                },
+            ],
+            false,
+        )
     }
 
     #[test]
