@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "kind": "groundhog-simulation",
   "name": "local-fibonacci-storage-miss-heavy",
   "seed": "sim-local-fibonacci-storage-miss-heavy",
@@ -29,7 +29,10 @@
   "contractArtifacts": [
     {
       "name": "fibonacci",
-      "wasm": "fibonacci.wasm"
+      "artifact": {
+        "kind": "wasm",
+        "path": "fibonacci.wasm"
+      }
     }
   ],
   "storageReads": [

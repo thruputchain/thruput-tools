@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "kind": "groundhog-simulation",
   "name": "local-fibonacci-contract-call-events-smoke",
   "seed": "sim-local-fibonacci-contract-call-events-smoke",
@@ -33,7 +33,10 @@
   "contractArtifacts": [
     {
       "name": "fibonacci",
-      "wasm": "fibonacci.wasm"
+      "artifact": {
+        "kind": "wasm",
+        "path": "fibonacci.wasm"
+      }
     }
   ],
   "contractCalls": [

@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "kind": "groundhog-simulation",
   "name": "local-mixed-wallet-receipt-soak",
   "seed": "local-mixed-wallet-receipt-soak-v1",

@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "kind": "groundhog-simulation",
   "name": "local-multi-contract-soak",
   "seed": "sim-local-multi-contract-soak",
@@ -41,11 +41,17 @@
   "contractArtifacts": [
     {
       "name": "fibonacci",
-      "wasm": "fibonacci.wasm"
+      "artifact": {
+        "kind": "wasm",
+        "path": "fibonacci.wasm"
+      }
     },
     {
       "name": "caller-counter",
-      "wasm": "caller_counter.wasm"
+      "artifact": {
+        "kind": "wasm",
+        "path": "caller_counter.wasm"
+      }
     }
   ],
   "contractCalls": [

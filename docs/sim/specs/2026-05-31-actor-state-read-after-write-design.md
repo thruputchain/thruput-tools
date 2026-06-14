@@ -246,7 +246,7 @@ deferred.
 ```json
 {
   "workloads": [{ "name": "read-after-write", "weight": 1 }],
-  "contractArtifacts": [{ "name": "caller-counter", "wasm": "caller-counter.wasm" }],
+  "contractArtifacts": [{ "name": "caller-counter", "artifact": { "kind": "wasm", "path": "caller-counter.wasm" } }],
   "readAfterWrite": [
     {
       "name": "counter-roundtrip",

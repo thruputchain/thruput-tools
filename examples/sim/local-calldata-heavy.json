@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "kind": "groundhog-simulation",
   "name": "local-calldata-heavy",
   "seed": "sim-local-calldata-heavy",
@@ -29,7 +29,10 @@
   "contractArtifacts": [
     {
       "name": "calldata",
-      "wasm": "calldata.wasm"
+      "artifact": {
+        "kind": "wasm",
+        "path": "calldata.wasm"
+      }
     }
   ],
   "contractCalls": [

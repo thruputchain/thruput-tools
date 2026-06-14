@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::target::TargetProviderSpec;
 
-pub const SIMULATION_SCHEMA_VERSION: u32 = 1;
+pub const SIMULATION_SCHEMA_VERSION: u32 = 2;
 pub const SIMULATION_KIND: &str = "groundhog-simulation";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -152,7 +152,22 @@ pub struct WorkloadSpec {
 #[serde(rename_all = "camelCase")]
 pub struct ContractArtifactSpec {
     pub name: String,
-    pub wasm: PathBuf,
+    pub artifact: ContractArtifactRef,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractArtifactRef {
+    pub kind: ContractArtifactKind,
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
+#[serde(rename_all = "kebab-case")]
+pub enum ContractArtifactKind {
+    Wasm,
+    Rv32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -416,7 +431,7 @@ mod tests {
     #[test]
     fn parses_manifest_with_baseline_and_closed_workload_enum() {
         let manifest: SimulationManifest = serde_json::from_value(json!({
-            "schemaVersion": 1,
+            "schemaVersion": SIMULATION_SCHEMA_VERSION,
             "kind": "groundhog-simulation",
             "name": "local-wallet-soak",
             "seed": "seed",
@@ -457,7 +472,7 @@ mod tests {
     #[test]
     fn parses_optional_observability_without_serializing_empty_object() {
         let manifest: SimulationManifest = serde_json::from_value(json!({
-            "schemaVersion": 1,
+            "schemaVersion": SIMULATION_SCHEMA_VERSION,
             "kind": "groundhog-simulation",
             "name": "observed",
             "seed": "seed",
@@ -520,7 +535,7 @@ mod tests {
             "target": {"provider": "existing"},
             "loadShape": [{"duration": "1s", "users": 1, "ratePerUserHz": 1.0}],
             "workloads": [{"name": "events-query", "weight": 1}],
-            "contractArtifacts": [{"name": "fibonacci", "wasm": "fibonacci.wasm"}],
+            "contractArtifacts": [{"name": "fibonacci", "artifact": {"kind": "wasm", "path": "fibonacci.wasm"}}],
             "eventQueries": [{"name": "fib-events", "contract": "fibonacci"}]
         }))
         .expect("minimal event query should parse");
@@ -544,7 +559,7 @@ mod tests {
             "target": {"provider": "existing"},
             "loadShape": [{"duration": "1s", "users": 1, "ratePerUserHz": 1.0}],
             "workloads": [{"name": "contract-call", "weight": 1}],
-            "contractArtifacts": [{"name": "events", "wasm": "events.wasm"}],
+            "contractArtifacts": [{"name": "events", "artifact": {"kind": "wasm", "path": "events.wasm"}}],
             "contractCalls": [{
                 "name": "events-store-value",
                 "contract": "events",

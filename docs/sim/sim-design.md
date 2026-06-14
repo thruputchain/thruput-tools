@@ -287,11 +287,11 @@ The simulation manifest describes traffic and assertions, not chain genesis.
 It may include a bootstrap section as input to a target provider, but that
 section lowers into the canonical bootstrap manifest.
 
-Example v1 shape:
+Example current shape:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "kind": "groundhog-simulation",
   "name": "local-wallet-soak",
   "seed": "local-wallet-soak-v1",

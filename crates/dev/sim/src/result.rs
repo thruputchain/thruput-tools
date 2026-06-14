@@ -4,10 +4,10 @@ use hdrhistogram::Histogram;
 use serde::{Deserialize, Serialize};
 
 use crate::compare::ResultDiff;
-use crate::manifest::WorkloadKind;
+use crate::manifest::{ContractArtifactKind, WorkloadKind};
 use crate::target::{TargetOwnership, TargetProviderKind};
 
-pub const SIM_RESULT_SCHEMA_VERSION: u32 = 1;
+pub const SIM_RESULT_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -447,9 +447,11 @@ pub struct ContractDeploymentRecord {
     pub name: String,
     pub status: ContractDeploymentStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub wasm_path: Option<String>,
+    pub artifact_kind: Option<ContractArtifactKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub wasm_sha256: Option<String>,
+    pub artifact_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_sha256: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub contract_hash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

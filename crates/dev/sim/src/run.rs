@@ -1265,14 +1265,14 @@ mod tests {
     #[test]
     fn validate_executable_workloads_accepts_read_after_write() {
         let manifest: SimulationManifest = serde_json::from_value(json!({
-            "schemaVersion": 1,
+            "schemaVersion": crate::manifest::SIMULATION_SCHEMA_VERSION,
             "kind": "groundhog-simulation",
             "name": "read-after-write-runtime-gate-test",
             "seed": "seed",
             "target": {"provider": "existing"},
             "loadShape": [{"duration": "1ms", "users": 1, "ratePerUserHz": 1000.0}],
             "workloads": [{"name": "read-after-write", "weight": 1}],
-            "contractArtifacts": [{"name": "caller-counter", "wasm": "caller-counter.wasm"}],
+            "contractArtifacts": [{"name": "caller-counter", "artifact": {"kind": "wasm", "path": "caller-counter.wasm"}}],
             "readAfterWrite": [{
                 "name": "counter-roundtrip",
                 "contract": "caller-counter",
@@ -1561,7 +1561,7 @@ mod tests {
 
     fn manifest() -> SimulationManifest {
         serde_json::from_value(json!({
-            "schemaVersion": 1,
+            "schemaVersion": crate::manifest::SIMULATION_SCHEMA_VERSION,
             "kind": "groundhog-simulation",
             "name": "orchestration-test",
             "seed": "seed",
@@ -1588,7 +1588,7 @@ mod tests {
 
     fn local_manifest_bytes() -> Vec<u8> {
         serde_json::to_vec_pretty(&json!({
-            "schemaVersion": 1,
+            "schemaVersion": crate::manifest::SIMULATION_SCHEMA_VERSION,
             "kind": "groundhog-simulation",
             "name": "local-test",
             "seed": "seed",

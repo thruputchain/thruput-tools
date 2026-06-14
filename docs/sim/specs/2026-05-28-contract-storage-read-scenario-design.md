@@ -55,7 +55,7 @@ contract and expects absence.
     { "name": "storage-read", "weight": 1 }
   ],
   "contractArtifacts": [
-    { "name": "fibonacci", "wasm": "fibonacci.wasm" }
+    { "name": "fibonacci", "artifact": { "kind": "wasm", "path": "fibonacci.wasm" } }
   ],
   "storageReads": [
     {
@@ -89,7 +89,7 @@ least one contract artifact and one `storageReads` entry.
 
 ## Artifacts
 
-`result.jsonl` workload events remain schemaVersion 1 and gain optional
+`result.jsonl` workload events use the current event schema version and include optional
 additive fields:
 
 - `storageReadName`;

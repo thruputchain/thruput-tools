@@ -6644,7 +6644,7 @@ mod tests {
             "target": {"provider": "existing"},
             "loadShape": [{"duration": "1ms", "users": 1, "ratePerUserHz": 1000.0}],
             "workloads": [{"name": "storage-read", "weight": 1}],
-            "contractArtifacts": [{"name": "fibonacci", "wasm": "fibonacci.wasm"}],
+            "contractArtifacts": [{"name": "fibonacci", "artifact": {"kind": "wasm", "path": "fibonacci.wasm"}}],
             "storageReads": [{
                 "name": "fib-zero-key",
                 "contract": "fibonacci",
@@ -6664,7 +6664,7 @@ mod tests {
             "target": {"provider": "existing"},
             "loadShape": [{"duration": "1ms", "users": 1, "ratePerUserHz": 1000.0}],
             "workloads": [{"name": "contract-call", "weight": 1}],
-            "contractArtifacts": [{"name": "events", "wasm": "events.wasm"}],
+            "contractArtifacts": [{"name": "events", "artifact": {"kind": "wasm", "path": "events.wasm"}}],
             "contractCalls": [{
                 "name": "events-store-value",
                 "contract": "events",
@@ -6684,7 +6684,7 @@ mod tests {
             "target": {"provider": "existing"},
             "loadShape": [{"duration": "1ms", "users": 1, "ratePerUserHz": 1000.0}],
             "workloads": [{"name": "events-query", "weight": 1}],
-            "contractArtifacts": [{"name": "fibonacci", "wasm": "fibonacci.wasm"}],
+            "contractArtifacts": [{"name": "fibonacci", "artifact": {"kind": "wasm", "path": "fibonacci.wasm"}}],
             "eventQueries": [{
                 "name": "fib-events",
                 "contract": "fibonacci",
@@ -7005,7 +7005,7 @@ mod tests {
             "target": {"provider": "existing"},
             "loadShape": [{"duration": "1ms", "users": 1, "ratePerUserHz": 1000.0}],
             "workloads": [{"name": "read-after-write", "weight": 1}],
-            "contractArtifacts": [{"name": "caller-counter", "wasm": "caller-counter.wasm"}],
+            "contractArtifacts": [{"name": "caller-counter", "artifact": {"kind": "wasm", "path": "caller-counter.wasm"}}],
             "readAfterWrite": [{
                 "name": "counter-roundtrip",
                 "contract": "caller-counter",

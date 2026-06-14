@@ -10,7 +10,7 @@ use crate::result::{
 };
 use crate::target::TargetProviderKind;
 
-pub const RESULT_EVENT_SCHEMA_VERSION: u32 = 1;
+pub const RESULT_EVENT_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug)]
 pub struct EventWriter {
@@ -285,6 +285,7 @@ pub enum EventWriteError {
 
 #[cfg(test)]
 mod tests {
+    use crate::manifest::ContractArtifactKind;
     use crate::result::{ContractDeploymentStatus, DeployAddressSource};
     use serde_json::json;
     use tempfile::NamedTempFile;
@@ -344,7 +345,7 @@ mod tests {
             value,
             json!({
                 "kind": "workload-completed",
-                "schemaVersion": 1,
+                "schemaVersion": RESULT_EVENT_SCHEMA_VERSION,
                 "actorId": 7,
                 "workload": "chain-tip",
                 "scheduledTimeMs": 1000,
@@ -411,7 +412,7 @@ mod tests {
             value,
             json!({
                 "kind": "workload-completed",
-                "schemaVersion": 1,
+                "schemaVersion": RESULT_EVENT_SCHEMA_VERSION,
                 "actorId": 3,
                 "workload": "events-query",
                 "scheduledTimeMs": 2000,
@@ -482,7 +483,7 @@ mod tests {
             value,
             json!({
                 "kind": "workload-completed",
-                "schemaVersion": 1,
+                "schemaVersion": RESULT_EVENT_SCHEMA_VERSION,
                 "actorId": 3,
                 "workload": "contract-call",
                 "scheduledTimeMs": 2000,
@@ -519,7 +520,7 @@ mod tests {
             value,
             json!({
                 "kind": "run-started",
-                "schemaVersion": 1,
+                "schemaVersion": RESULT_EVENT_SCHEMA_VERSION,
                 "runId": "run-1",
                 "targetProvider": "existing",
                 "rpcUrl": "http://127.0.0.1:9545",
@@ -542,7 +543,7 @@ mod tests {
             value,
             json!({
                 "kind": "metric-availability-recorded",
-                "schemaVersion": 1,
+                "schemaVersion": RESULT_EVENT_SCHEMA_VERSION,
                 "storageTokensConsumed": {
                     "status": "unsupported",
                     "reason": "public receipt path does not surface storage-token deltas"
@@ -582,7 +583,7 @@ mod tests {
             value,
             json!({
                 "kind": "resource-sample",
-                "schemaVersion": 1,
+                "schemaVersion": RESULT_EVENT_SCHEMA_VERSION,
                 "scheduledTimeMs": 5000,
                 "observedAtUnixMs": "100",
                 "status": "unavailable",
@@ -613,7 +614,7 @@ mod tests {
             value,
             json!({
                 "kind": "chaos-transition",
-                "schemaVersion": 1,
+                "schemaVersion": RESULT_EVENT_SCHEMA_VERSION,
                 "chaosIndex": 0,
                 "chaosKind": "restart-target",
                 "state": "recovered",
@@ -656,8 +657,9 @@ mod tests {
             event: ContractDeploymentRecord {
                 name: "fibonacci".into(),
                 status: ContractDeploymentStatus::Completed,
-                wasm_path: Some("/tmp/fibonacci.wasm".into()),
-                wasm_sha256: Some(format!("0x{}", "11".repeat(32))),
+                artifact_kind: Some(ContractArtifactKind::Wasm),
+                artifact_path: Some("/tmp/fibonacci.wasm".into()),
+                artifact_sha256: Some(format!("0x{}", "11".repeat(32))),
                 contract_hash: Some(format!("0x{}", "22".repeat(32))),
                 nonce: Some("123".into()),
                 deploy_address_nonce: Some(format!("0x{}", "33".repeat(32))),
@@ -676,11 +678,12 @@ mod tests {
             value,
             json!({
                 "kind": "contract-deploy-completed",
-                "schemaVersion": 1,
+                "schemaVersion": RESULT_EVENT_SCHEMA_VERSION,
                 "name": "fibonacci",
                 "status": "completed",
-                "wasmPath": "/tmp/fibonacci.wasm",
-                "wasmSha256": format!("0x{}", "11".repeat(32)),
+                "artifactKind": "wasm",
+                "artifactPath": "/tmp/fibonacci.wasm",
+                "artifactSha256": format!("0x{}", "11".repeat(32)),
                 "contractHash": format!("0x{}", "22".repeat(32)),
                 "nonce": "123",
                 "deployAddressNonce": format!("0x{}", "33".repeat(32)),
@@ -720,7 +723,7 @@ mod tests {
             contents,
             concat!(
                 "{\"kind\":\"existing\"}\n",
-                "{\"schemaVersion\":1,\"kind\":\"run-completed\",\"outcome\":\"passed\",",
+                "{\"schemaVersion\":2,\"kind\":\"run-completed\",\"outcome\":\"passed\",",
                 "\"scheduledWorkloads\":0,\"completedWorkloads\":0,",
                 "\"failedWorkloads\":0,\"skippedWorkloads\":0}\n"
             )

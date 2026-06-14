@@ -26,7 +26,8 @@ use crate::executor::{
     DEFAULT_RECEIPT_DRAIN_RETRY_INTERVAL, DEFAULT_RECEIPT_DRAIN_TIMEOUT, SimRpcClient,
 };
 use crate::manifest::{
-    ContractArtifactSpec, EventQueryAnchorSpec, EventQueryOrderSpec, SimulationManifest,
+    ContractArtifactKind, ContractArtifactSpec, EventQueryAnchorSpec, EventQueryOrderSpec,
+    SimulationManifest,
 };
 use crate::result::{ContractDeploymentRecord, ContractDeploymentStatus, DeployAddressSource};
 use crate::util::{json_string, sha256_hex};
@@ -205,12 +206,17 @@ async fn deploy_one_contract<C>(
 where
     C: SimRpcClient + Clone + Send + Sync + 'static,
 {
-    let wasm_path = resolve_wasm_path(scenario_path, contract_artifact_root, &artifact.wasm);
+    let artifact_path = resolve_artifact_path(
+        scenario_path,
+        contract_artifact_root,
+        &artifact.artifact.path,
+    );
     let mut record = ContractDeploymentRecord {
         name: artifact.name.clone(),
         status: ContractDeploymentStatus::Started,
-        wasm_path: Some(wasm_path.display().to_string()),
-        wasm_sha256: None,
+        artifact_kind: Some(artifact.artifact.kind),
+        artifact_path: Some(artifact_path.display().to_string()),
+        artifact_sha256: None,
         contract_hash: None,
         nonce: None,
         deploy_address_nonce: None,
@@ -221,7 +227,12 @@ where
         error: None,
     };
 
-    let prepared = match prepare_deploy(&wasm_path, actor, block_expiry_height) {
+    let prepared = match prepare_deploy(
+        artifact.artifact.kind,
+        &artifact_path,
+        actor,
+        block_expiry_height,
+    ) {
         Ok(prepared) => prepared,
         Err(error) => {
             record.status = ContractDeploymentStatus::Failed;
@@ -235,7 +246,7 @@ where
         }
     };
 
-    record.wasm_sha256 = Some(prepared.wasm_sha256.clone());
+    record.artifact_sha256 = Some(prepared.artifact_sha256.clone());
     record.contract_hash = Some(prepared.contract_hash.clone());
     record.nonce = Some(prepared.tx_nonce.to_string());
     record.deploy_address_nonce = Some(prepared.deploy_address_nonce.clone());
@@ -284,42 +295,49 @@ fn apply_deploy_progress(record: &mut ContractDeploymentRecord, progress: &Deplo
     }
 }
 
-fn resolve_wasm_path(
+fn resolve_artifact_path(
     scenario_path: &Path,
     contract_artifact_root: Option<&Path>,
-    wasm: &Path,
+    artifact: &Path,
 ) -> PathBuf {
-    if wasm.is_absolute() {
-        return wasm.to_path_buf();
+    if artifact.is_absolute() {
+        return artifact.to_path_buf();
     }
     if let Some(root) = contract_artifact_root {
-        return root.join(wasm);
+        return root.join(artifact);
     }
     scenario_path
         .parent()
         .unwrap_or_else(|| Path::new("."))
-        .join(wasm)
+        .join(artifact)
 }
 
 struct PreparedDeploy {
     tx_hex: String,
     tx_nonce: u64,
     predicted_address: ContractAddress,
-    wasm_sha256: String,
+    artifact_sha256: String,
     contract_hash: String,
     deploy_address_nonce: String,
 }
 
 fn prepare_deploy(
-    wasm_path: &Path,
+    artifact_kind: ContractArtifactKind,
+    artifact_path: &Path,
     actor: &ActorState,
     block_expiry_height: i64,
 ) -> Result<PreparedDeploy, SimError> {
-    let wasm_bytes = std::fs::read(wasm_path)?;
-    let wasm_sha256 = sha256_hex(&wasm_bytes);
-    let contract = Contract::kWasmi {
-        wasmi_contract: ContractBlob {
-            data: BytesM(wasm_bytes),
+    let artifact_bytes = std::fs::read(artifact_path)?;
+    let artifact_sha256 = sha256_hex(&artifact_bytes);
+    let blob = ContractBlob {
+        data: BytesM(artifact_bytes),
+    };
+    let contract = match artifact_kind {
+        ContractArtifactKind::Wasm => Contract::kWasmi {
+            wasmi_contract: blob,
+        },
+        ContractArtifactKind::Rv32 => Contract::kRv32 {
+            rv32_contract: blob,
         },
     };
     let contract_xdr = xdrs::txs::encode(&contract)
@@ -354,7 +372,7 @@ fn prepare_deploy(
         tx_hex,
         tx_nonce,
         predicted_address,
-        wasm_sha256,
+        artifact_sha256,
         contract_hash: format!("0x{}", hex::encode(contract_hash.as_ref())),
         deploy_address_nonce: format!("0x{}", hex::encode(deploy_address_nonce.as_ref())),
     })
@@ -754,7 +772,7 @@ mod tests {
         let scenario = Path::new("/repo/examples/sim/demo.json");
         let root = Path::new("/tmp/artifacts");
 
-        let path = resolve_wasm_path(scenario, Some(root), Path::new("fibonacci.wasm"));
+        let path = resolve_artifact_path(scenario, Some(root), Path::new("fibonacci.wasm"));
 
         assert_eq!(path, PathBuf::from("/tmp/artifacts/fibonacci.wasm"));
     }
@@ -763,7 +781,7 @@ mod tests {
     fn resolves_relative_artifact_against_scenario_dir_without_override() {
         let scenario = Path::new("/repo/examples/sim/demo.json");
 
-        let path = resolve_wasm_path(scenario, None, Path::new("fibonacci.wasm"));
+        let path = resolve_artifact_path(scenario, None, Path::new("fibonacci.wasm"));
 
         assert_eq!(path, PathBuf::from("/repo/examples/sim/fibonacci.wasm"));
     }
@@ -850,7 +868,10 @@ mod tests {
         let mut manifest = manifest(wasm.path());
         manifest.contract_artifacts.push(ContractArtifactSpec {
             name: "events".into(),
-            wasm: wasm.path().to_path_buf(),
+            artifact: crate::manifest::ContractArtifactRef {
+                kind: ContractArtifactKind::Wasm,
+                path: wasm.path().to_path_buf(),
+            },
         });
         let file = NamedTempFile::new().expect("event temp should create");
         let mut event_writer = EventWriter::create(file.path())
@@ -945,7 +966,31 @@ mod tests {
         }));
     }
 
-    fn manifest(wasm: &Path) -> SimulationManifest {
+    #[test]
+    fn prepare_deploy_wraps_rv32_artifact_as_rv32_contract() {
+        let rv32 = NamedTempFile::new().expect("rv32 temp should create");
+        let bytes = b"rv32 artifact bytes".to_vec();
+        std::fs::write(rv32.path(), &bytes).expect("rv32 fixture should write");
+        let actors = actor_states();
+
+        let prepared = prepare_deploy(ContractArtifactKind::Rv32, rv32.path(), &actors[0], 42)
+            .expect("rv32 deploy should prepare");
+
+        let contract = Contract::kRv32 {
+            rv32_contract: ContractBlob {
+                data: BytesM(bytes),
+            },
+        };
+        let contract_xdr = xdrs::txs::encode(&contract).expect("contract XDR should encode");
+        let contract_hash_bytes: [u8; 32] = Sha256::digest(&contract_xdr).into();
+
+        assert_eq!(
+            prepared.contract_hash,
+            format!("0x{}", hex::encode(contract_hash_bytes))
+        );
+    }
+
+    fn manifest(artifact_path: &Path) -> SimulationManifest {
         SimulationManifest {
             schema_version: crate::manifest::SIMULATION_SCHEMA_VERSION,
             kind: crate::manifest::SIMULATION_KIND.into(),
@@ -975,7 +1020,10 @@ mod tests {
             }],
             contract_artifacts: vec![ContractArtifactSpec {
                 name: "fibonacci".into(),
-                wasm: wasm.to_path_buf(),
+                artifact: crate::manifest::ContractArtifactRef {
+                    kind: ContractArtifactKind::Wasm,
+                    path: artifact_path.to_path_buf(),
+                },
             }],
             contract_calls: vec![crate::manifest::ContractCallSpec {
                 name: "events-store-value".into(),
