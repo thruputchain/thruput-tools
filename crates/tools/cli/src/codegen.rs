@@ -679,11 +679,12 @@ fn emit_method_function(
         let mut args_fields = String::new();
         for (i, arg) in method.args.iter().enumerate() {
             let arg_name = spec_string_text(&arg.name)?;
+            let public_arg_name = to_camel_case(arg_name);
             let ts_ty = ts_type_ref(&arg.ty)?;
             if i > 0 {
                 args_fields.push_str("; ");
             }
-            let _ = write!(args_fields, "{arg_name}: {ts_ty}");
+            let _ = write!(args_fields, "{public_arg_name}: {ts_ty}");
         }
         let _ = writeln!(out, "  args: {{ {args_fields} }},");
         let _ = writeln!(out, "): Invocation {{");
@@ -706,7 +707,7 @@ fn emit_method_function(
             .iter()
             .map(|arg| {
                 let name = spec_string_text(&arg.name)?;
-                Ok(format!("args.{name}"))
+                Ok(format!("args.{}", to_camel_case(name)))
             })
             .collect::<Result<_, CliError>>()?;
         let _ = writeln!(
