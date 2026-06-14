@@ -527,8 +527,9 @@ parked until a real hogd-owned dev method needs them.
 
 Detailed task plan: [RV32 default execution plan](specs/2026-06-12-rv32-default-execution-plan.md).
 
-Current shipped pieces are enough to build and inspect RV32 artifacts, but
-not enough to make RV32 the default deploy/test/sim artifact yet:
+Current shipped pieces are enough to build, inspect, deploy, and integration-test
+RV32 artifacts explicitly, but not enough to make RV32 the default
+deploy/test/sim artifact yet:
 
 - `groundhog build --target rv32` compiles
   `riscv32im-unknown-none-elf`, lowers through the in-process RV32 lowerer,
@@ -538,17 +539,15 @@ not enough to make RV32 the default deploy/test/sim artifact yet:
 - The default command surface still chooses WASM: `groundhog build` defaults
   to `--target wasm`; `groundhog deploy` auto-resolves WASM unless
   `--target rv32` or `--artifact <path>` is provided; `groundhog test
-  --integration` calls the WASM build path and deploys `build.wasm`;
-  `groundhog test --json` reports artifact kind/path metadata; `hogsim`
-  manifests and result records are still named around `wasm` / `wasmPath` /
-  `wasmSha256`.
+  --integration` defaults to `--target wasm` unless `--target rv32` is
+  provided; `groundhog test --json` reports artifact kind/path metadata;
+  `hogsim` manifests and result records are still named around `wasm` /
+  `wasmPath` / `wasmSha256`.
 - CLI deploy transaction construction is artifact-aware and branches to
-  `Contract::kWasmi` or `Contract::kRv32`.  Simulation still wraps artifact
-  bytes as `Contract::kWasmi`.  The current local runtime gate is blocked:
-  `groundhog deploy --target rv32` against `hog-devnode` protocol
-  `hogp/7874f05decb9` commits with `deterministicError { kind: "unknown" }`,
-  while the same scaffold, node, and protocol still pass the WASM
-  deploy/call/view smoke.
+  `Contract::kWasmi` or `Contract::kRv32`. `groundhog test --integration
+  --target rv32` builds and deploys RV32 against a hogd runtime with gas v3 /
+  artifact v4 support. Simulation still wraps artifact bytes as
+  `Contract::kWasmi`.
 
 Minimal sequence to flip the default without papering over WASM assumptions:
 
@@ -558,14 +557,13 @@ Minimal sequence to flip the default without papering over WASM assumptions:
    `Contract::kRv32`.
 2. Shipped in the stacked CLI branch: `groundhog test --json` schema v3 reports
    artifact metadata instead of the top-level `wasm` field.
-3. Blocked as of 2026-06-13: prove the pinned/minimum `hog-devnode` executes a
-   deployed `kRv32` contract end-to-end. The current proof builds `.rv32a` and
-   submits a `kRv32` deploy, but the receipt is `deterministicError { kind:
-   "unknown" }` with no contract address. Keep WASM as an explicit fallback
-   target for differential debugging rather than deleting it.
-4. Switch `groundhog test --integration` to build/deploy the default artifact
-   through the shared resolver, and keep host integration tests unchanged except
-   for artifact metadata in the report.
+3. Shipped in hogd #2640: `hog-devnode` executes deployed `kRv32` contracts
+   with gas table v3, artifact format v4, and canonical UNIMP support. Keep
+   WASM as an explicit fallback target for differential debugging rather than
+   deleting it.
+4. Shipped in this branch: `groundhog test --integration --target rv32` builds
+   and deploys RV32 through the shared artifact model, while host integration
+   tests stay unchanged except for artifact metadata in the report.
 5. Intentionally break and migrate `hogsim` manifests/results from `wasm`-only
    fields to an artifact kind/path/hash shape, then update scenario docs and
    fixtures in the same change.  No compatibility shim is needed before we have

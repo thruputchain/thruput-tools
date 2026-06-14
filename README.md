@@ -34,7 +34,7 @@ groundhog test                   # executor-backed WASM tests
 groundhog node --hog-devnode-binary /path/to/hog-devnode
 groundhog deploy
 groundhog call my-counter get
-# one-command local-node integration path
+# one-command local-node integration path; add --target rv32 for RV32 artifacts
 GROUNDHOG_HOG_DEVNODE_BINARY=/path/to/hog-devnode groundhog test --integration
 ```
 
@@ -62,11 +62,12 @@ with `--json` because logs stay on stderr, and `RUST_LOG` for exact tracing
 filters.
 
 `groundhog test --integration` uses that same local-node path without a
-separate terminal: it builds the WASM artifact, starts an ephemeral
-hog-devnode node, deploys with `dev-0`, runs `tests/integration.rs`,
-then shuts the node down. The test process receives `GROUNDHOG_RPC_URL`,
-`GROUNDHOG_CONTRACT_ADDRESS`, `GROUNDHOG_PROFILE=integration`,
-`GROUNDHOG_DEFAULT_KEY=dev-0`, and `GROUNDHOG_RUNTIME_MANIFEST`.
+separate terminal: it builds the selected artifact (`--target wasm` by default,
+or `--target rv32`), starts an ephemeral hog-devnode node, deploys with
+`dev-0`, runs `tests/integration.rs`, then shuts the node down. The test
+process receives `GROUNDHOG_RPC_URL`, `GROUNDHOG_CONTRACT_ADDRESS`,
+`GROUNDHOG_PROFILE=integration`, `GROUNDHOG_DEFAULT_KEY=dev-0`, and
+`GROUNDHOG_RUNTIME_MANIFEST`.
 
 For gateway and benchmark runs, `hog-devnode` also writes a runtime manifest
 describing the live x23 endpoints, bootstrapped dev wallets, and funding

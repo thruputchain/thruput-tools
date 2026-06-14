@@ -19,17 +19,15 @@ fallback for differential debugging.
 - `groundhog deploy` accepts explicit `.wasm` and `.rv32a` artifacts through
   `--artifact`, auto-resolves by `--target`, and wraps deploy bytes as
   `Contract::kWasmi` or `Contract::kRv32` by artifact kind.
-- `groundhog test --integration` builds WASM and deploys `build.wasm`.
+- `groundhog test --integration` defaults to WASM and accepts `--target rv32`
+  to build/deploy an RV32 artifact against `hog-devnode`.
 - `groundhog test --json` schema v3 reports artifact metadata under
   `artifact.kind` and `artifact.path` instead of a top-level `wasm` field.
 - `hogsim` manifest and result contracts are named around `wasm`, `wasmPath`,
   and `wasmSha256`, and sim deploy also uses `Contract::kWasmi`.
-- The pinned XDR dependency already exposes `Contract::kRv32`, but the current
-  local `hog-devnode` runtime proof is blocked: with protocol
-  `hogp/7874f05decb9`, `groundhog deploy --target rv32` submits a `kRv32`
-  deploy that commits with `deterministicError { kind: "unknown" }` and no
-  contract address. The same scaffold, node, and protocol still deploy and call
-  successfully through WASM.
+- The pinned XDR dependency exposes `Contract::kRv32`, and hogd #2640 unblocked
+  local `hog-devnode` RV32 execution for gas table v3 / artifact format v4.
+  Simulation still needs to branch deploys by artifact kind.
 
 ## Non-Goals
 
@@ -176,10 +174,12 @@ Result on 2026-06-13:
   `null`.
 - Rebuilt the same scaffold as WASM and verified the same node/protocol can
   deploy, call `initialize`, call `increment`, and `view get` returning `12`.
-- Do not proceed to PR 4 until `hog-devnode` executes `kRv32` deploys
-  successfully or exposes an actionable RV32 runtime error.
+- Resolved by hogd #2640: `hog-devnode` now accepts gas table v3 / artifact v4
+  RV32 artifacts and executes `kRv32` deploys successfully.
 
 ## PR 4: RV32 Integration Execution
+
+Status: shipped in this branch.
 
 Goal: make `groundhog test --integration` build and deploy RV32 through the
 artifact model.
@@ -203,7 +203,8 @@ Files:
 
 Acceptance:
 
-- `groundhog --json test --integration --hogd-protocol ...` deploys RV32.
+- `groundhog --json test --integration --target rv32 --hogd-protocol ...`
+  deploys RV32.
 - JSON reports `artifact.kind = "rv32"`.
 - Host WASM test behavior remains stable.
 - Explicit WASM integration execution remains available.
@@ -303,13 +304,13 @@ Run the relevant subset for each PR, and the full matrix before PR 7 lands:
 - `groundhog build --target rv32`
 - `groundhog --json deploy --artifact target/groundhog/<name>.rv32a --dry-run`
 - Live `hog-devnode` RV32 deploy/call smoke
-- `groundhog --json test --integration --hogd-protocol <token>`
+- `groundhog --json test --integration --target rv32 --hogd-protocol <token>`
 - `hogsim` RV32 scenario smoke
 
 ## Open Follow-Ups
 
-- Confirm the exact minimum `hog-devnode` binary/protocol/runtime version after
-  the first successful live `kRv32` deploy/call smoke.
+- Record the exact released `hog-devnode` binary/protocol/runtime version that
+  includes hogd #2640 once it is cut.
 - Decide whether the differential gate lives as an automated test, a smoke
   script, or a documented release checklist command.
 - Update bootstrap/runtime docs that still reference `dev-wallet.wasm` once the

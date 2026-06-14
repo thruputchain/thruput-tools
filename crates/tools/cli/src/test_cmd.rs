@@ -1,4 +1,4 @@
-use crate::artifacts::{self, ArtifactOptions};
+use crate::artifacts::{self, ArtifactKind, ArtifactOptions, ResolvedArtifact};
 use crate::result::CommandResult;
 use crate::test_json::{
     IntegrationTestInfo, TEST_JSON_SCHEMA_VERSION, TestArtifactInfo, TestCase, TestCaseStatus,
@@ -40,7 +40,7 @@ pub struct TestOptions {
 }
 
 /// Options for the `groundhog test --integration` orchestration path.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IntegrationTestOptions {
     /// Override the x23 protocol token used when launching the ephemeral
     /// hog-devnode node (mirrors `groundhog node --hogd-protocol`). Useful
@@ -48,6 +48,18 @@ pub struct IntegrationTestOptions {
     /// crates. When `None`, falls back to the `GROUNDHOG_HOGD_PROTOCOL`
     /// environment variable.
     pub hogd_protocol: Option<String>,
+    /// Contract artifact target to build, deploy, and report for the
+    /// integration run.
+    pub target: crate::build::BuildTarget,
+}
+
+impl Default for IntegrationTestOptions {
+    fn default() -> Self {
+        Self {
+            hogd_protocol: None,
+            target: crate::build::BuildTarget::Wasm,
+        }
+    }
 }
 
 /// Environment fallback for the integration node's protocol override.
@@ -118,6 +130,15 @@ struct WatchContext {
 struct IntegrationRun {
     report: TestReport,
     failed_code: Option<i32>,
+}
+
+struct IntegrationBuild {
+    project_name: String,
+    project_root: PathBuf,
+    package_root: PathBuf,
+    target_directory: PathBuf,
+    profile: crate::config::ResolvedProfile,
+    artifact: ResolvedArtifact,
 }
 
 /// Build the contract to WASM, then run WASM tests
@@ -225,8 +246,13 @@ fn run_integration_with_dev_node(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    let build =
-        crate::build::build_project(package, false, &[], artifacts, explicit_profile, &[], print)?;
+    let build = build_integration_artifact(
+        package,
+        integration.target,
+        artifacts,
+        explicit_profile,
+        print,
+    )?;
     let host_target = host_target()?;
     artifacts::ensure_no_target_dir_passthrough_conflicts(
         artifacts,
@@ -313,7 +339,7 @@ fn local_node_shutdown_warning(context: &'static str, error: &CliError) -> crate
 
 #[allow(clippy::too_many_arguments)]
 fn run_integration_against_node(
-    build: &crate::build::BuildResult,
+    build: &IntegrationBuild,
     host_target: &str,
     rpc_url: &str,
     runtime_manifest: Option<std::path::PathBuf>,
@@ -327,8 +353,8 @@ fn run_integration_against_node(
         build.project_name
     ));
     let prepared = crate::deploy::prepare_deploy_for_rpc_with_manifest(
-        &build.wasm,
-        crate::artifacts::ArtifactKind::Wasm,
+        &build.artifact.path,
+        build.artifact.kind,
         rpc_url,
         "dev-0",
         runtime_manifest.clone(),
@@ -384,7 +410,7 @@ fn run_integration_against_node(
     let report = build_test_report(
         &build.project_root,
         &profile,
-        TestArtifactInfo::new(crate::artifacts::ArtifactKind::Wasm, &build.wasm),
+        TestArtifactInfo::new(build.artifact.kind, &build.artifact.path),
         &outputs,
         false,
         &failure_cache_path(&build.target_directory, &build.project_name),
@@ -410,6 +436,54 @@ fn run_integration_against_node(
         report,
         failed_code,
     })
+}
+
+fn build_integration_artifact(
+    package: Option<&str>,
+    target: crate::build::BuildTarget,
+    artifacts: &ArtifactOptions,
+    explicit_profile: Option<&str>,
+    print: &Print,
+) -> Result<IntegrationBuild, CliError> {
+    match target {
+        crate::build::BuildTarget::Wasm => {
+            let build = crate::build::build_project(
+                package,
+                false,
+                &[],
+                artifacts,
+                explicit_profile,
+                &[],
+                print,
+            )?;
+            Ok(IntegrationBuild {
+                project_name: build.project_name,
+                project_root: build.project_root,
+                package_root: build.package_root,
+                target_directory: build.target_directory,
+                profile: build.profile,
+                artifact: ResolvedArtifact {
+                    kind: ArtifactKind::Wasm,
+                    path: build.wasm,
+                },
+            })
+        }
+        crate::build::BuildTarget::Rv32 => {
+            let build =
+                crate::build::build_rv32_project(package, &[], artifacts, explicit_profile, print)?;
+            Ok(IntegrationBuild {
+                project_name: build.project_name,
+                project_root: build.project_root,
+                package_root: build.package_root,
+                target_directory: build.target_directory,
+                profile: build.profile,
+                artifact: ResolvedArtifact {
+                    kind: ArtifactKind::Rv32,
+                    path: build.rv32,
+                },
+            })
+        }
+    }
 }
 
 fn finish_integration_run(
@@ -1438,7 +1512,11 @@ mod tests {
         }
     }
 
-    fn integration_run(success: bool) -> super::IntegrationRun {
+    fn integration_run(
+        success: bool,
+        artifact_kind: crate::artifacts::ArtifactKind,
+        artifact_path: &std::path::Path,
+    ) -> super::IntegrationRun {
         let profile = crate::config::ResolvedProfile {
             name: "integration".into(),
             rpc_url: Some("http://127.0.0.1:1234".into()),
@@ -1463,10 +1541,7 @@ mod tests {
         let report = super::build_test_report(
             std::path::Path::new("/project"),
             &profile,
-            TestArtifactInfo::new(
-                crate::artifacts::ArtifactKind::Wasm,
-                std::path::Path::new("/project/target/demo.wasm"),
-            ),
+            TestArtifactInfo::new(artifact_kind, artifact_path),
             &outputs,
             false,
             std::path::Path::new("/project/target/.groundhog/failures.json"),
@@ -1492,7 +1567,11 @@ mod tests {
 
     #[test]
     fn integration_report_serializes_mode_and_node_metadata() {
-        let run = integration_run(true);
+        let run = integration_run(
+            true,
+            crate::artifacts::ArtifactKind::Wasm,
+            std::path::Path::new("/project/target/demo.wasm"),
+        );
 
         let json = serde_json::to_value(&run.report).expect("bug: report should serialize");
 
@@ -1508,6 +1587,22 @@ mod tests {
             format!("0x{}", "11".repeat(32))
         );
         assert!(json["integration"].get("runtimeManifest").is_none());
+    }
+
+    #[test]
+    fn integration_report_serializes_rv32_artifact_metadata() {
+        let run = integration_run(
+            true,
+            crate::artifacts::ArtifactKind::Rv32,
+            std::path::Path::new("/project/target/demo.rv32a"),
+        );
+
+        let json = serde_json::to_value(&run.report).expect("bug: report should serialize");
+
+        assert_eq!(json["mode"], "integration");
+        assert_eq!(json["artifact"]["kind"], "rv32");
+        assert_eq!(json["artifact"]["path"], "/project/target/demo.rv32a");
+        assert!(json.get("wasm").is_none());
     }
 
     #[test]
@@ -1714,7 +1809,11 @@ mod tests {
     #[test]
     fn integration_outcome_emits_report_when_tests_pass_and_shutdown_fails() {
         super::handle_integration_outcome(
-            Ok(integration_run(true)),
+            Ok(integration_run(
+                true,
+                crate::artifacts::ArtifactKind::Wasm,
+                std::path::Path::new("/project/target/demo.wasm"),
+            )),
             Err(CliError::NodeSupervisor("stop failed".into())),
             "test",
             &Print::quiet(),
@@ -1725,7 +1824,11 @@ mod tests {
     #[test]
     fn integration_outcome_preserves_failed_tests_when_shutdown_fails() {
         let err = super::handle_integration_outcome(
-            Ok(integration_run(false)),
+            Ok(integration_run(
+                false,
+                crate::artifacts::ArtifactKind::Wasm,
+                std::path::Path::new("/project/target/demo.wasm"),
+            )),
             Err(CliError::NodeSupervisor("stop failed".into())),
             "test",
             &Print::quiet(),
@@ -1737,7 +1840,11 @@ mod tests {
     #[test]
     fn integration_outcome_preserves_failed_tests_after_clean_shutdown() {
         let err = super::handle_integration_outcome(
-            Ok(integration_run(false)),
+            Ok(integration_run(
+                false,
+                crate::artifacts::ArtifactKind::Wasm,
+                std::path::Path::new("/project/target/demo.wasm"),
+            )),
             Ok(()),
             "test",
             &Print::quiet(),
