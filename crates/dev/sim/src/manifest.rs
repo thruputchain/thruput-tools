@@ -430,7 +430,7 @@ mod tests {
     #[test]
     fn parses_manifest_with_baseline_and_closed_workload_enum() {
         let manifest: SimulationManifest = serde_json::from_value(json!({
-            "schemaVersion": 1,
+            "schemaVersion": SIMULATION_SCHEMA_VERSION,
             "kind": "groundhog-simulation",
             "name": "local-wallet-soak",
             "seed": "seed",
@@ -471,7 +471,7 @@ mod tests {
     #[test]
     fn parses_optional_observability_without_serializing_empty_object() {
         let manifest: SimulationManifest = serde_json::from_value(json!({
-            "schemaVersion": 1,
+            "schemaVersion": SIMULATION_SCHEMA_VERSION,
             "kind": "groundhog-simulation",
             "name": "observed",
             "seed": "seed",
