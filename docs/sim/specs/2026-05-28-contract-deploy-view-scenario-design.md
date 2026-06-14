@@ -59,14 +59,18 @@ executable when the manifest declares a deployed contract and a raw view call.
 
 ## Manifest Additions
 
-Keep the schema additive under `schemaVersion: 1`.
+The artifact-neutral contract artifact shape is a breaking manifest/result/event
+schema change under `schemaVersion: 2`.
 
 ```json
 {
   "contractArtifacts": [
     {
       "name": "fibonacci",
-      "wasm": "fibonacci.wasm"
+      "artifact": {
+        "kind": "wasm",
+        "path": "fibonacci.wasm"
+      }
     }
   ],
   "viewCalls": [
@@ -85,7 +89,8 @@ Keep the schema additive under `schemaVersion: 1`.
 ```
 
 - `contractArtifacts[].name` is a stable manifest-local identifier.
-- `contractArtifacts[].wasm` is resolved relative to
+- `contractArtifacts[].artifact.kind` is `wasm` or `rv32`.
+- `contractArtifacts[].artifact.path` is resolved relative to
   `--contract-artifact-root` when supplied, otherwise relative to the scenario
   file directory.
 - `viewCalls[].contract` references a deployed `contractArtifacts[].name`.
@@ -113,8 +118,9 @@ by `groundhog view` and `groundhog call`.
 
 Deployment runs once per declared artifact, before the generated schedule starts.
 
-1. Load and hash the WASM artifact.
-2. Wrap it as a `groundhog_xdr::contract::Contract::kWasmi` blob.
+1. Load and hash the contract artifact.
+2. Wrap it as a `groundhog_xdr::contract::Contract::kWasmi` or
+   `Contract::kRv32` blob based on artifact kind.
 3. Compute the contract hash as `sha256(xdr_encode(contract))`.
 4. Set `tx_nonce = actor0.current_nonce()`.
 5. Set `deploy_address_nonce = sha256(tx_nonce.to_le_bytes())`.
@@ -191,8 +197,9 @@ Additive JSONL events:
 Add `result.json.contracts`, defaulting to `[]`, with records containing:
 
 - `name`
-- `wasmPath`
-- `wasmSha256`
+- `artifactKind`
+- `artifactPath`
+- `artifactSha256`
 - `contractHash`
 - `txHash`
 - `nonce`
@@ -202,18 +209,19 @@ Add `result.json.contracts`, defaulting to `[]`, with records containing:
 - `height`
 - `error`
 
-Required fields in every contract record: `name`, `status`, and `wasmPath`
+Required fields in every contract record: `name`, `status`, and `artifactPath`
 when the path was resolved. Optional fields are omitted, not written as `null`.
-Stage-specific fields are required once available: after WASM load,
-`wasmSha256`; after contract wrapping, `contractHash`; after deploy transaction
+Stage-specific fields are required once available: after artifact load,
+`artifactSha256`; after contract wrapping, `contractHash`; after deploy transaction
 build, `nonce` and `deployAddressNonce`; after submit, `txHash`; after receipt,
 `height`; after successful address resolution, `address` and `addressSource`.
 Pre-load artifact failures therefore produce a failed record with `name`,
-`status: "failed"`, optional `wasmPath`, and `error`, but no hashes or nonce.
+`status: "failed"`, optional `artifactPath`, and `error`, but no hashes or nonce.
 
-- `wasmPath` is the resolved absolute or run-working-directory path used by the
+- `artifactKind` is `wasm` or `rv32`.
+- `artifactPath` is the resolved absolute or run-working-directory path used by the
   simulator, not the manifest-relative string.
-- `wasmSha256`, `contractHash`, `txHash`, and `address` are `0x`-prefixed hex.
+- `artifactSha256`, `contractHash`, `txHash`, and `address` are `0x`-prefixed hex.
 - `nonce` is a decimal string containing `tx_nonce`.
 - `deployAddressNonce` is optional `0x`-prefixed hex and is recorded when the
   deploy transaction is built.
@@ -226,11 +234,13 @@ Example started event:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "kind": "contract-deploy-started",
   "name": "fibonacci",
-  "wasmPath": "/tmp/.../fibonacci.wasm",
-  "wasmSha256": "0x...",
+  "status": "started",
+  "artifactKind": "wasm",
+  "artifactPath": "/tmp/.../fibonacci.wasm",
+  "artifactSha256": "0x...",
   "contractHash": "0x...",
   "nonce": "123",
   "deployAddressNonce": "0x..."
@@ -241,12 +251,13 @@ Example completed event:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "kind": "contract-deploy-completed",
   "name": "fibonacci",
   "status": "completed",
-  "wasmPath": "/tmp/.../fibonacci.wasm",
-  "wasmSha256": "0x...",
+  "artifactKind": "wasm",
+  "artifactPath": "/tmp/.../fibonacci.wasm",
+  "artifactSha256": "0x...",
   "contractHash": "0x...",
   "nonce": "123",
   "deployAddressNonce": "0x...",
@@ -261,12 +272,13 @@ Example failed event:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "kind": "contract-deploy-failed",
   "name": "fibonacci",
   "status": "failed",
-  "wasmPath": "/tmp/.../fibonacci.wasm",
-  "wasmSha256": "0x...",
+  "artifactKind": "wasm",
+  "artifactPath": "/tmp/.../fibonacci.wasm",
+  "artifactSha256": "0x...",
   "contractHash": "0x...",
   "nonce": "123",
   "deployAddressNonce": "0x...",
@@ -276,13 +288,9 @@ Example failed event:
 }
 ```
 
-The schema remains `schemaVersion: 1`. New readers must accept older
-`result.json` files by defaulting missing `contracts` to `[]`. Older readers may
-drop unknown `contracts` on reserialize; that is acceptable and should be
-documented as additive forward evolution rather than bidirectional round-trip
-compatibility. Tests must cover loading old results, loading new contract
-results, and compare behavior that ignores `contracts` until baseline
-comparison semantics are intentionally extended.
+The result and deployment-event schemas are `schemaVersion: 2`. Tests must cover
+new contract results and compare behavior that ignores `contracts` until
+baseline comparison semantics are intentionally extended.
 
 ## Scenario
 

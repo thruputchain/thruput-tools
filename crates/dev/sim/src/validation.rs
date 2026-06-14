@@ -168,7 +168,7 @@ fn validate_contract_artifacts(manifest: &SimulationManifest) -> Result<(), Vali
                 name: name.to_owned(),
             });
         }
-        if artifact.wasm.as_os_str().is_empty() {
+        if artifact.artifact.path.as_os_str().is_empty() {
             return Err(ValidationError::EmptyContractArtifactPath {
                 name: name.to_owned(),
             });
@@ -818,7 +818,7 @@ pub enum ValidationError {
     ZeroTargetWeight { field: &'static str, name: String },
     #[error("contract artifact name must not be empty")]
     EmptyContractArtifactName,
-    #[error("contract artifact {name} wasm path must not be empty")]
+    #[error("contract artifact {name} path must not be empty")]
     EmptyContractArtifactPath { name: String },
     #[error("field {field} must not contain leading or trailing whitespace: `{value}`")]
     InvalidContractNameWhitespace { field: &'static str, value: String },
@@ -1057,10 +1057,7 @@ mod tests {
     #[test]
     fn validates_view_call_contract_references_and_hex() {
         let mut manifest = basic_manifest();
-        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
-            name: "fibonacci".into(),
-            wasm: "fibonacci.wasm".into(),
-        }];
+        manifest.contract_artifacts = vec![contract_artifact("fibonacci", "fibonacci.wasm")];
         manifest.view_calls = vec![crate::manifest::ViewCallSpec {
             name: "fib-10".into(),
             contract: "fibonacci".into(),
@@ -1078,12 +1075,23 @@ mod tests {
     }
 
     #[test]
-    fn validates_contract_call_contract_references_and_hex() {
+    fn validates_rv32_contract_artifact_kind() {
         let mut manifest = basic_manifest();
         manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
-            name: "events".into(),
-            wasm: "events.wasm".into(),
+            name: "counter".into(),
+            artifact: crate::manifest::ContractArtifactRef {
+                kind: crate::manifest::ContractArtifactKind::Rv32,
+                path: "counter.rv32a".into(),
+            },
         }];
+
+        validate_manifest(&manifest).expect("rv32 contract artifact should validate");
+    }
+
+    #[test]
+    fn validates_contract_call_contract_references_and_hex() {
+        let mut manifest = basic_manifest();
+        manifest.contract_artifacts = vec![contract_artifact("events", "events.wasm")];
         manifest.contract_calls = vec![crate::manifest::ContractCallSpec {
             name: "events-store-value".into(),
             contract: "events".into(),
@@ -1102,10 +1110,7 @@ mod tests {
     #[test]
     fn rejects_empty_contract_call_name() {
         let mut manifest = basic_manifest();
-        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
-            name: "events".into(),
-            wasm: "events.wasm".into(),
-        }];
+        manifest.contract_artifacts = vec![contract_artifact("events", "events.wasm")];
         manifest.contract_calls = vec![crate::manifest::ContractCallSpec {
             name: " ".into(),
             contract: "events".into(),
@@ -1122,10 +1127,7 @@ mod tests {
     #[test]
     fn rejects_duplicate_contract_call_name() {
         let mut manifest = basic_manifest();
-        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
-            name: "events".into(),
-            wasm: "events.wasm".into(),
-        }];
+        manifest.contract_artifacts = vec![contract_artifact("events", "events.wasm")];
         manifest.contract_calls = vec![
             crate::manifest::ContractCallSpec {
                 name: "events-store-value".into(),
@@ -1154,10 +1156,7 @@ mod tests {
     #[test]
     fn validates_multiple_contract_calls_for_weighted_selection() {
         let mut manifest = basic_manifest();
-        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
-            name: "events".into(),
-            wasm: "events.wasm".into(),
-        }];
+        manifest.contract_artifacts = vec![contract_artifact("events", "events.wasm")];
         manifest.contract_calls = vec![
             crate::manifest::ContractCallSpec {
                 name: "events-store-value".into(),
@@ -1185,10 +1184,7 @@ mod tests {
     #[test]
     fn rejects_zero_contract_call_weight() {
         let mut manifest = basic_manifest();
-        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
-            name: "events".into(),
-            wasm: "events.wasm".into(),
-        }];
+        manifest.contract_artifacts = vec![contract_artifact("events", "events.wasm")];
         manifest.contract_calls = vec![crate::manifest::ContractCallSpec {
             name: "events-store-value".into(),
             contract: "events".into(),
@@ -1211,10 +1207,7 @@ mod tests {
     #[test]
     fn rejects_contract_call_without_matching_contract_artifact() {
         let mut manifest = basic_manifest();
-        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
-            name: "events".into(),
-            wasm: "events.wasm".into(),
-        }];
+        manifest.contract_artifacts = vec![contract_artifact("events", "events.wasm")];
         manifest.contract_calls = vec![crate::manifest::ContractCallSpec {
             name: "events-store-value".into(),
             contract: "missing".into(),
@@ -1234,10 +1227,7 @@ mod tests {
     #[test]
     fn rejects_contract_call_entrypoint_that_is_not_eight_bytes() {
         let mut manifest = basic_manifest();
-        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
-            name: "events".into(),
-            wasm: "events.wasm".into(),
-        }];
+        manifest.contract_artifacts = vec![contract_artifact("events", "events.wasm")];
         manifest.contract_calls = vec![crate::manifest::ContractCallSpec {
             name: "events-store-value".into(),
             contract: "events".into(),
@@ -1260,10 +1250,7 @@ mod tests {
     #[test]
     fn rejects_contract_call_workload_without_contract_calls() {
         let mut manifest = basic_manifest();
-        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
-            name: "events".into(),
-            wasm: "events.wasm".into(),
-        }];
+        manifest.contract_artifacts = vec![contract_artifact("events", "events.wasm")];
         manifest.workloads = vec![WorkloadSpec {
             name: WorkloadKind::ContractCall,
             weight: 1,
@@ -1280,10 +1267,7 @@ mod tests {
     #[test]
     fn validates_storage_read_contract_references_and_key() {
         let mut manifest = basic_manifest();
-        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
-            name: "fibonacci".into(),
-            wasm: "fibonacci.wasm".into(),
-        }];
+        manifest.contract_artifacts = vec![contract_artifact("fibonacci", "fibonacci.wasm")];
         manifest.storage_reads = vec![crate::manifest::StorageReadSpec {
             name: "fib-zero-key".into(),
             contract: "fibonacci".into(),
@@ -1302,10 +1286,7 @@ mod tests {
     #[test]
     fn rejects_storage_read_without_matching_contract_artifact() {
         let mut manifest = basic_manifest();
-        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
-            name: "fibonacci".into(),
-            wasm: "fibonacci.wasm".into(),
-        }];
+        manifest.contract_artifacts = vec![contract_artifact("fibonacci", "fibonacci.wasm")];
         manifest.storage_reads = vec![crate::manifest::StorageReadSpec {
             name: "fib-zero-key".into(),
             contract: "missing".into(),
@@ -1325,10 +1306,7 @@ mod tests {
     #[test]
     fn rejects_storage_read_key_that_is_not_32_bytes() {
         let mut manifest = basic_manifest();
-        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
-            name: "fibonacci".into(),
-            wasm: "fibonacci.wasm".into(),
-        }];
+        manifest.contract_artifacts = vec![contract_artifact("fibonacci", "fibonacci.wasm")];
         manifest.storage_reads = vec![crate::manifest::StorageReadSpec {
             name: "fib-zero-key".into(),
             contract: "fibonacci".into(),
@@ -1345,10 +1323,7 @@ mod tests {
     #[test]
     fn rejects_storage_read_contract_reference_whitespace() {
         let mut manifest = basic_manifest();
-        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
-            name: "fibonacci".into(),
-            wasm: "fibonacci.wasm".into(),
-        }];
+        manifest.contract_artifacts = vec![contract_artifact("fibonacci", "fibonacci.wasm")];
         manifest.storage_reads = vec![crate::manifest::StorageReadSpec {
             name: "fib-zero-key".into(),
             contract: " fibonacci ".into(),
@@ -1368,10 +1343,7 @@ mod tests {
     #[test]
     fn rejects_view_call_without_matching_contract_artifact() {
         let mut manifest = basic_manifest();
-        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
-            name: "fibonacci".into(),
-            wasm: "fibonacci.wasm".into(),
-        }];
+        manifest.contract_artifacts = vec![contract_artifact("fibonacci", "fibonacci.wasm")];
         manifest.view_calls = vec![crate::manifest::ViewCallSpec {
             name: "fib-10".into(),
             contract: "missing".into(),
@@ -1392,10 +1364,7 @@ mod tests {
     #[test]
     fn rejects_view_call_entrypoint_that_is_not_eight_bytes() {
         let mut manifest = basic_manifest();
-        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
-            name: "fibonacci".into(),
-            wasm: "fibonacci.wasm".into(),
-        }];
+        manifest.contract_artifacts = vec![contract_artifact("fibonacci", "fibonacci.wasm")];
         manifest.view_calls = vec![crate::manifest::ViewCallSpec {
             name: "fib-10".into(),
             contract: "fibonacci".into(),
@@ -1413,10 +1382,7 @@ mod tests {
     #[test]
     fn rejects_view_call_contract_reference_whitespace() {
         let mut manifest = basic_manifest();
-        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
-            name: "fibonacci".into(),
-            wasm: "fibonacci.wasm".into(),
-        }];
+        manifest.contract_artifacts = vec![contract_artifact("fibonacci", "fibonacci.wasm")];
         manifest.view_calls = vec![crate::manifest::ViewCallSpec {
             name: "fib-10".into(),
             contract: " fibonacci ".into(),
@@ -1495,10 +1461,7 @@ mod tests {
     #[test]
     fn validates_events_query_manifest() {
         let mut manifest = basic_manifest();
-        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
-            name: "fibonacci".into(),
-            wasm: "fibonacci.wasm".into(),
-        }];
+        manifest.contract_artifacts = vec![contract_artifact("fibonacci", "fibonacci.wasm")];
         manifest.event_queries = vec![EventQuerySpec {
             name: "fib-events".into(),
             contract: "fibonacci".into(),
@@ -1520,10 +1483,7 @@ mod tests {
     #[test]
     fn rejects_events_query_unknown_contract() {
         let mut manifest = basic_manifest();
-        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
-            name: "fibonacci".into(),
-            wasm: "fibonacci.wasm".into(),
-        }];
+        manifest.contract_artifacts = vec![contract_artifact("fibonacci", "fibonacci.wasm")];
         manifest.event_queries = vec![EventQuerySpec {
             name: "fib-events".into(),
             contract: "missing".into(),
@@ -1546,10 +1506,7 @@ mod tests {
     #[test]
     fn rejects_events_query_invalid_cursor_and_anchor() {
         let mut manifest = basic_manifest();
-        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
-            name: "fibonacci".into(),
-            wasm: "fibonacci.wasm".into(),
-        }];
+        manifest.contract_artifacts = vec![contract_artifact("fibonacci", "fibonacci.wasm")];
         manifest.event_queries = vec![EventQuerySpec {
             name: "fib-events".into(),
             contract: "fibonacci".into(),
@@ -1581,10 +1538,7 @@ mod tests {
     #[test]
     fn rejects_events_query_invalid_limit() {
         let mut manifest = basic_manifest();
-        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
-            name: "fibonacci".into(),
-            wasm: "fibonacci.wasm".into(),
-        }];
+        manifest.contract_artifacts = vec![contract_artifact("fibonacci", "fibonacci.wasm")];
         manifest.event_queries = vec![EventQuerySpec {
             name: "fib-events".into(),
             contract: "fibonacci".into(),
@@ -1613,10 +1567,7 @@ mod tests {
     #[test]
     fn rejects_events_query_workload_without_event_queries() {
         let mut manifest = basic_manifest();
-        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
-            name: "fibonacci".into(),
-            wasm: "fibonacci.wasm".into(),
-        }];
+        manifest.contract_artifacts = vec![contract_artifact("fibonacci", "fibonacci.wasm")];
         manifest.workloads = vec![WorkloadSpec {
             name: WorkloadKind::EventsQuery,
             weight: 1,
@@ -1670,10 +1621,8 @@ mod tests {
 
     fn read_after_write_manifest() -> SimulationManifest {
         let mut manifest = basic_manifest();
-        manifest.contract_artifacts = vec![crate::manifest::ContractArtifactSpec {
-            name: "caller-counter".into(),
-            wasm: "caller-counter.wasm".into(),
-        }];
+        manifest.contract_artifacts =
+            vec![contract_artifact("caller-counter", "caller-counter.wasm")];
         manifest.read_after_write = vec![read_after_write_entry()];
         manifest.workloads = vec![WorkloadSpec {
             name: WorkloadKind::ReadAfterWrite,
@@ -2037,6 +1986,16 @@ mod tests {
             observability: None,
             baseline: None,
             resolved: None,
+        }
+    }
+
+    fn contract_artifact(name: &str, path: &str) -> crate::manifest::ContractArtifactSpec {
+        crate::manifest::ContractArtifactSpec {
+            name: name.into(),
+            artifact: crate::manifest::ContractArtifactRef {
+                kind: crate::manifest::ContractArtifactKind::Wasm,
+                path: path.into(),
+            },
         }
     }
 

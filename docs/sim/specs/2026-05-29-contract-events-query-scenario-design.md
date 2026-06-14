@@ -57,7 +57,7 @@ aggregation.
     { "name": "events-query", "weight": 1 }
   ],
   "contractArtifacts": [
-    { "name": "fibonacci", "wasm": "fibonacci.wasm" }
+    { "name": "fibonacci", "artifact": { "kind": "wasm", "path": "fibonacci.wasm" } }
   ],
   "eventQueries": [
     {
@@ -96,7 +96,7 @@ least one contract artifact and one `eventQueries` entry.
 
 ## Artifacts
 
-`result.jsonl` workload events remain schemaVersion 1 and gain optional
+`result.jsonl` workload events use the current event schema version and include optional
 additive fields:
 
 - `eventQueryName`;

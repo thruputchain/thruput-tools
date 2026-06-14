@@ -72,7 +72,7 @@ per-caller counter advanced. The opt-in soak runs
 
 Contract artifact scenarios declare `contractArtifacts` plus `viewCalls`,
 `contractCalls`, `storageReads`, or `eventQueries` in the manifest.
-`hogsim run --contract-artifact-root <dir>` resolves relative WASM paths from
+`hogsim run --contract-artifact-root <dir>` resolves relative artifact paths from
 that directory.
 `scripts/smoke-sim-scenarios.sh` detects a sibling `../groundhog-examples`
 checkout or `GROUNDHOG_EXAMPLES_ROOT`, builds `fibonacci` plus simulator
@@ -391,8 +391,8 @@ reserved in the schema for a future path that writes a final result after
 mid-run aborts.
 
 Contract-aware runs add `result.json.contracts`, defaulting to `[]`, with one
-record per startup deployment. Records include resolved artifact path, WASM
-hash, contract hash, transaction hash, deployed address, address source, commit
-height, and failure error when applicable. Deploy failures produce a failed run
-without entering scheduled workload dispatch, while still writing terminal
-result artifacts.
+record per startup deployment. Records include `artifactKind`, resolved
+`artifactPath`, `artifactSha256`, contract hash, transaction hash, deployed
+address, address source, commit height, and failure error when applicable.
+Deploy failures produce a failed run without entering scheduled workload
+dispatch, while still writing terminal result artifacts.

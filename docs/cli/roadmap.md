@@ -540,14 +540,13 @@ deploy/test/sim artifact yet:
   to `--target wasm`; `groundhog deploy` auto-resolves WASM unless
   `--target rv32` or `--artifact <path>` is provided; `groundhog test
   --integration` defaults to `--target wasm` unless `--target rv32` is
-  provided; `groundhog test --json` reports artifact kind/path metadata;
-  `hogsim` manifests and result records are still named around `wasm` /
-  `wasmPath` / `wasmSha256`.
+  provided; `groundhog test --json` reports artifact kind/path metadata.
 - CLI deploy transaction construction is artifact-aware and branches to
   `Contract::kWasmi` or `Contract::kRv32`. `groundhog test --integration
   --target rv32` builds and deploys RV32 against a hogd runtime with gas v3 /
-  artifact v4 support. Simulation still wraps artifact bytes as
-  `Contract::kWasmi`.
+  artifact v4 support. `hogsim` manifests and deployment records now carry
+  artifact kind/path/hash metadata and sim deploy branches to `Contract::kWasmi`
+  or `Contract::kRv32`.
 
 Minimal sequence to flip the default without papering over WASM assumptions:
 

@@ -1127,8 +1127,9 @@ mod tests {
         b_json["contracts"] = json!([{
             "name": "fibonacci",
             "status": "completed",
-            "wasmPath": "/tmp/fibonacci.wasm",
-            "wasmSha256": format!("0x{}", "11".repeat(32)),
+            "artifactKind": "wasm",
+            "artifactPath": "/tmp/fibonacci.wasm",
+            "artifactSha256": format!("0x{}", "11".repeat(32)),
             "contractHash": format!("0x{}", "22".repeat(32)),
             "nonce": "123",
             "deployAddressNonce": format!("0x{}", "33".repeat(32)),

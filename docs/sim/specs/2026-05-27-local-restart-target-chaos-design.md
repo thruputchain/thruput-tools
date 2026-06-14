@@ -168,7 +168,7 @@ Add a `chaos-transition` result event:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "kind": "chaos-transition",
   "chaosIndex": 0,
   "chaosKind": "restart-target",

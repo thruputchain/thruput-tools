@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "kind": "groundhog-simulation",
   "name": "local-counter-read-after-write-smoke",
   "seed": "sim-local-counter-read-after-write-smoke",
@@ -29,7 +29,10 @@
   "contractArtifacts": [
     {
       "name": "caller-counter",
-      "wasm": "caller_counter.wasm"
+      "artifact": {
+        "kind": "wasm",
+        "path": "caller_counter.wasm"
+      }
     }
   ],
   "readAfterWrite": [

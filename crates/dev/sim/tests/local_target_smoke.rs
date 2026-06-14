@@ -381,7 +381,7 @@ fn local_target_sweep_orphan_smoke() {
     std::fs::write(
         &scenario,
         r#"{
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "kind": "groundhog-simulation",
   "name": "local-sweep-orphan-smoke",
   "seed": "local-sweep-orphan-smoke",

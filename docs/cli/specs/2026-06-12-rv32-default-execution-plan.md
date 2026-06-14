@@ -23,11 +23,11 @@ fallback for differential debugging.
   to build/deploy an RV32 artifact against `hog-devnode`.
 - `groundhog test --json` schema v3 reports artifact metadata under
   `artifact.kind` and `artifact.path` instead of a top-level `wasm` field.
-- `hogsim` manifest and result contracts are named around `wasm`, `wasmPath`,
-  and `wasmSha256`, and sim deploy also uses `Contract::kWasmi`.
+- `hogsim` manifests and result contracts now use artifact-neutral
+  kind/path/hash fields, and sim deploy branches to `Contract::kWasmi` or
+  `Contract::kRv32`.
 - The pinned XDR dependency exposes `Contract::kRv32`, and hogd #2640 unblocked
   local `hog-devnode` RV32 execution for gas table v3 / artifact format v4.
-  Simulation still needs to branch deploys by artifact kind.
 
 ## Non-Goals
 
@@ -228,10 +228,8 @@ Tasks:
    }
    ```
 
-2. Replace result fields:
-   - `wasmPath` -> `artifactPath`
-   - `wasmSha256` -> `artifactSha256`
-   - add `artifactKind`
+2. Replace legacy WASM-specific result path/hash fields with `artifactPath`,
+   `artifactSha256`, and `artifactKind`.
 3. Branch sim deploy by artifact kind:
    - `wasm` -> `Contract::kWasmi`
    - `rv32` -> `Contract::kRv32`
@@ -253,7 +251,7 @@ Acceptance:
 
 - `cargo test -p groundhog-sim` passes.
 - Sim result records include artifact kind/path/hash.
-- No intentional `wasmPath` or `wasmSha256` result fields remain.
+- No intentional legacy WASM-specific result path/hash fields remain.
 - An RV32 sim smoke deploys successfully.
 
 ## PR 6: WASM/RV32 Differential Gate

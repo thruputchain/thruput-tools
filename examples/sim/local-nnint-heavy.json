@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "kind": "groundhog-simulation",
   "name": "local-nnint-heavy",
   "seed": "sim-local-nnint-heavy",
@@ -29,7 +29,10 @@
   "contractArtifacts": [
     {
       "name": "nnint-stress",
-      "wasm": "nnint_stress.wasm"
+      "artifact": {
+        "kind": "wasm",
+        "path": "nnint_stress.wasm"
+      }
     }
   ],
   "contractCalls": [

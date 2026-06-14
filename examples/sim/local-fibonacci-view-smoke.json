@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "kind": "groundhog-simulation",
   "name": "local-fibonacci-view-smoke",
   "seed": "sim-local-fibonacci-view-smoke",
@@ -29,7 +29,10 @@
   "contractArtifacts": [
     {
       "name": "fibonacci",
-      "wasm": "fibonacci.wasm"
+      "artifact": {
+        "kind": "wasm",
+        "path": "fibonacci.wasm"
+      }
     }
   ],
   "viewCalls": [
