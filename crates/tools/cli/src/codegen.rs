@@ -821,6 +821,9 @@ fn emit_event_decl(out: &mut String, event: &ContractEventDef, idx: usize) -> Re
     let name = spec_string_text(&event.name)?;
     let sig_hex = hex::encode(event.signature.into_inner());
 
+    // Decoded contract data shapes preserve spec field names. This generator
+    // only camelCases method helper names and their public args; struct,
+    // union, and event fields remain source-cased.
     // Topic values are hashes on the wire, so topic fields are always raw
     // Uint8Array; payload fields are typed.
     let mut topic_fields = String::new();
@@ -1052,6 +1055,11 @@ fn validate_public_name_collisions(
 }
 
 fn public_method_names(spec: &ContractSpec) -> Result<Vec<Vec<String>>, CliError> {
+    // Duplicate method names are disambiguated within the current generated
+    // module. Adding a new colliding method can therefore rename a previously
+    // unsuffixed helper (for example, `transfer` -> `transferCounter`). Stable
+    // names across spec evolution would require always suffixing methods or
+    // preserving prior generated API state, both broader API choices.
     let mut base_name_counts = BTreeMap::new();
     for iface in spec.interfaces.iter() {
         for method in iface.methods.iter() {
