@@ -163,6 +163,7 @@ pub struct ContractArtifactRef {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 #[serde(rename_all = "kebab-case")]
 pub enum ContractArtifactKind {
     Wasm,
