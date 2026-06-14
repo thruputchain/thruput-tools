@@ -829,6 +829,8 @@ fn test_help_mentions_target_dir() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("--target-dir"));
+    assert!(stdout.contains("--target"));
+    assert!(stdout.contains("rv32"));
     assert!(stdout.contains("--watch"));
     assert!(stdout.contains("--integration"));
     assert!(stdout.contains("hog-devnode"));
@@ -1103,6 +1105,100 @@ fn test_integration_reports_local_node_startup_failure() {
 
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
+    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(stderr["ok"], false);
+    assert_eq!(stderr["command"], "test");
+    assert_eq!(stderr["error"]["code"], "node_supervisor_error");
+}
+
+#[cfg(unix)]
+#[test]
+fn test_integration_rv32_build_reaches_local_node_startup() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let hogd_dev = fake_hogd_dev_binary();
+    let tmp = TempDir::new().unwrap();
+    std::fs::write(
+        tmp.path().join("Cargo.toml"),
+        "[package]\nname = \"demo-contract\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(tmp.path().join("tests")).unwrap();
+    std::fs::write(tmp.path().join("tests/integration.rs"), "").unwrap();
+
+    let fake_bin = tmp.path().join("bin");
+    std::fs::create_dir_all(&fake_bin).unwrap();
+    let cargo = fake_bin.join("cargo");
+    let target_dir = tmp.path().join("target");
+    let raw_elf = target_dir
+        .join("riscv32im-unknown-none-elf/release")
+        .join("demo_contract");
+    let elf_fixture = tmp.path().join("fixture.elf");
+    std::fs::write(&elf_fixture, support::minimal_rv32_elf()).unwrap();
+    let metadata_json = serde_json::json!({
+        "workspace_root": tmp.path(),
+        "target_directory": target_dir,
+        "packages": [{
+            "name": "demo-contract",
+            "manifest_path": tmp.path().join("Cargo.toml"),
+        }],
+    })
+    .to_string();
+    std::fs::write(
+        &cargo,
+        format!(
+            concat!(
+                "#!/bin/sh\n",
+                "if [ \"$1\" = \"metadata\" ]; then\n",
+                "  printf '%s' '{}'\n",
+                "  exit 0\n",
+                "fi\n",
+                "if [ \"$1\" = \"build\" ]; then\n",
+                "  /bin/mkdir -p '{}'\n",
+                "  /bin/cp '{}' '{}'\n",
+                "  exit 0\n",
+                "fi\n",
+                "exit 1\n",
+            ),
+            metadata_json,
+            raw_elf
+                .parent()
+                .expect("bug: raw elf parent should exist")
+                .display(),
+            elf_fixture.display(),
+            raw_elf.display(),
+        ),
+    )
+    .unwrap();
+    let mut perms = std::fs::metadata(&cargo).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&cargo, perms).unwrap();
+
+    let output = groundhog()
+        .args([
+            "--json",
+            "test",
+            "--integration",
+            "--target",
+            "rv32",
+            "-p",
+            "demo-contract",
+        ])
+        .current_dir(tmp.path())
+        .env("PATH", &fake_bin)
+        .env("GROUNDHOG_HOG_DEVNODE_BINARY", &hogd_dev)
+        .env("GROUNDHOG_FAKE_HOGD_DEV_MODE", "exit-7")
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(
+        tmp.path()
+            .join("target/groundhog/demo_contract.rv32a")
+            .is_file(),
+        "integration --target rv32 should lower an RV32 artifact before node startup",
+    );
     let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(stderr["ok"], false);
     assert_eq!(stderr["command"], "test");

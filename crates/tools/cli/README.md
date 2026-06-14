@@ -102,7 +102,7 @@ plain `cargo` builds and tests work for the host target:
 | `groundhog build` | Cross-compile to WASM (`--no-default-features --release`) |
 | `groundhog build --target rv32` | Cross-compile to RV32 ELF and lower it to `.rv32a` |
 | `groundhog test` | Run executor-backed WASM tests |
-| `groundhog test --integration` | Start hog-devnode, deploy, and run `tests/integration.rs` |
+| `groundhog test --integration` | Start hog-devnode, deploy WASM or RV32, and run `tests/integration.rs` |
 
 The `dev` feature enables `std` for native compilation.
 `groundhog build` passes `--no-default-features` to disable it
@@ -189,7 +189,8 @@ groundhog test --fail-fast                  # stop the WASM harness on first fai
 groundhog test --show-output                # show captured stdout for passing tests
 groundhog test --no-capture                 # stream test stdout/stderr
 groundhog test --test-threads 1             # set WASM harness thread count
-groundhog test --integration                # local node + deploy + tests/integration.rs
+groundhog test --integration                # local node + WASM deploy + tests/integration.rs
+groundhog test --integration --target rv32  # local node + RV32 deploy + tests/integration.rs
 ```
 
 `groundhog test` records failing libtest names under the package's Cargo
@@ -205,12 +206,13 @@ includes structured per-run and per-test results rather than only
 aggregated cargo output text. Schema v3 reports the built artifact under
 `data.artifact` with `kind` and `path` fields.
 
-`groundhog test --integration` builds the WASM artifact, starts an ephemeral
-hog-devnode local node, deploys the contract with `dev-0`, then runs the
-`tests/integration.rs` target. The test process receives `GROUNDHOG_RPC_URL`,
-`GROUNDHOG_CONTRACT_ADDRESS`, `GROUNDHOG_PROFILE`, and
-`GROUNDHOG_DEFAULT_KEY`. `--watch` and `--rerun` are intentionally
-deferred for this integration path.
+`groundhog test --integration` builds the selected artifact (`--target wasm` by
+default, or `--target rv32`), starts an ephemeral hog-devnode local node,
+deploys the contract with `dev-0`, then runs the `tests/integration.rs` target.
+The test process receives `GROUNDHOG_RPC_URL`, `GROUNDHOG_CONTRACT_ADDRESS`,
+`GROUNDHOG_PROFILE`, `GROUNDHOG_DEFAULT_KEY`, and `GROUNDHOG_RUNTIME_MANIFEST`
+when the local node advertises a runtime manifest. `--watch` and `--rerun` are
+intentionally deferred for this integration path.
 
 If `hog-devnode` is not next to the `groundhog` binary or on `PATH`, point
 the runner at the binary:

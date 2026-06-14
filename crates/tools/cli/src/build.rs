@@ -55,6 +55,11 @@ pub struct BuildResult {
 pub struct Rv32BuildResult {
     pub project_name: String,
     pub project_root: PathBuf,
+    /// Manifest directory of the built package. In a single-package project
+    /// this equals `project_root`; in a workspace it is the member's own
+    /// directory.
+    #[serde(skip_serializing)]
+    pub package_root: PathBuf,
     #[serde(skip_serializing)]
     pub target_directory: PathBuf,
     pub elf: PathBuf,
@@ -327,6 +332,12 @@ pub fn build_rv32_project(
     let cwd = std::env::current_dir()?;
     let metadata = cargo_metadata_with_artifacts(artifacts)?;
     let pkg_name = resolve_package(&metadata, package, &cwd)?;
+    let package_root = metadata
+        .packages
+        .iter()
+        .find(|p| p.name == pkg_name)
+        .and_then(|p| p.manifest_path.parent())
+        .map_or_else(|| metadata.workspace_root.clone(), Path::to_path_buf);
 
     artifacts::ensure_no_target_dir_passthrough_conflicts(
         artifacts,
@@ -401,6 +412,7 @@ pub fn build_rv32_project(
     Ok(Rv32BuildResult {
         project_name: pkg_name.to_string(),
         project_root: metadata.workspace_root,
+        package_root,
         target_directory: metadata.target_directory,
         elf,
         rv32,
