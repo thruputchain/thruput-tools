@@ -1709,7 +1709,7 @@ export type Result =
                     ContractSpecMethod {
                         name: spec_string("get_balance_of"),
                         args: vec![ContractField {
-                            name: spec_string("addr"),
+                            name: spec_string("account_id"),
                             ty: ContractType::Address,
                         }]
                         .try_into()
@@ -1792,12 +1792,20 @@ export type Result =
             "transfer function missing"
         );
         assert!(
-            output.contains("export function get_balance("),
-            "get_balance function missing"
+            output.contains("export function getBalance("),
+            "getBalance function missing"
         );
         assert!(
-            output.contains("export function get_balance_of("),
-            "get_balance_of function missing"
+            output.contains("export function getBalanceOf("),
+            "getBalanceOf function missing"
+        );
+        assert!(
+            !output.contains("export function get_balance("),
+            "get_balance function should be camelCase"
+        );
+        assert!(
+            !output.contains("export function get_balance_of("),
+            "get_balance_of function should be camelCase"
         );
 
         // Typed arguments
@@ -1813,14 +1821,30 @@ export type Result =
         );
 
         let get_balance_of_fn = output
-            .split("export function get_balance_of(")
+            .split("export function getBalanceOf(")
             .nth(1)
             .unwrap();
         let get_balance_of_sig =
             &get_balance_of_fn[..get_balance_of_fn.find("): Invocation").unwrap()];
         assert!(
-            get_balance_of_sig.contains("addr: ContractAddress"),
-            "get_balance_of 'addr' arg type mismatch"
+            get_balance_of_sig.contains("accountId: ContractAddress"),
+            "getBalanceOf 'accountId' arg type mismatch"
+        );
+        assert!(
+            output.contains("entrypoint: entrypoints.getBalanceOf"),
+            "getBalanceOf should read the camelCase entrypoint key"
+        );
+        assert!(
+            output.contains("\"get_balance_of\""),
+            "source method name should be preserved for encodeCalldata/spec lookup"
+        );
+        assert!(
+            output.contains("name: s(\"account_id\")"),
+            "source arg name should be preserved in the spec literal"
+        );
+        assert!(
+            output.contains("args.accountId"),
+            "calldata extraction should read the camelCase public arg"
         );
 
         // Spec literal contains exception selector
