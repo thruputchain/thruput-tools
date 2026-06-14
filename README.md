@@ -36,6 +36,8 @@ groundhog deploy
 groundhog call my-counter get
 # one-command local-node integration path; add --target rv32 for RV32 artifacts
 GROUNDHOG_HOG_DEVNODE_BINARY=/path/to/hog-devnode groundhog test --integration
+# pre-default-flip differential gate: WASM and RV32 must both pass the same tests
+GROUNDHOG_HOG_DEVNODE_BINARY=/path/to/hog-devnode groundhog test --integration --differential
 ```
 
 `groundhog login` is currently required for the Groundhog contract SDK
@@ -68,6 +70,11 @@ or `--target rv32`), starts an ephemeral hog-devnode node, deploys with
 process receives `GROUNDHOG_RPC_URL`, `GROUNDHOG_CONTRACT_ADDRESS`,
 `GROUNDHOG_PROFILE=integration`, `GROUNDHOG_DEFAULT_KEY=dev-0`, and
 `GROUNDHOG_RUNTIME_MANIFEST`.
+
+`groundhog test --integration --differential` is the pre-default-flip gate: it
+builds both WASM and RV32 artifacts, runs the same integration target against
+isolated ephemeral nodes, and fails unless both runs pass with matching parsed
+test outcomes.
 
 For gateway and benchmark runs, `hog-devnode` also writes a runtime manifest
 describing the live x23 endpoints, bootstrapped dev wallets, and funding

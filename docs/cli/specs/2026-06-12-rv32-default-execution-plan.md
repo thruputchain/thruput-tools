@@ -256,6 +256,8 @@ Acceptance:
 
 ## PR 6: WASM/RV32 Differential Gate
 
+Status: implemented in this branch.
+
 Goal: make the default flip defensible and repeatable.
 
 Tasks:
@@ -270,6 +272,17 @@ Acceptance:
 - One documented command or automated check proves WASM and RV32 observable
   behavior match for the fixture contract.
 - The check is referenced as the exit criterion for flipping the default.
+
+Command:
+
+```bash
+groundhog test --integration --differential --hogd-protocol <token>
+```
+
+The command builds both artifact kinds, deploys each to an isolated ephemeral
+`hog-devnode`, runs the same `tests/integration.rs` target, and fails unless the
+WASM and RV32 runs both pass with matching parsed test outcomes. The integration
+tests remain responsible for asserting method status and return data.
 
 ## PR 7: Flip Defaults To RV32
 

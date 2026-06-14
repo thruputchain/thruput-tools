@@ -157,7 +157,9 @@ enum Command {
                        local node, deploys the selected artifact \
                        (--target wasm by default, or --target rv32), and \
                        runs the integration test target with RPC environment \
-                       variables. With --json, emits a structured report \
+                       variables. With --integration --differential, runs the \
+                       same integration target against WASM and RV32 artifacts \
+                       on isolated local nodes. With --json, emits a structured report \
                        with mode, artifact metadata, summary, per-test cases, \
                        and integration node metadata when applicable.")]
     Test {
@@ -196,6 +198,9 @@ enum Command {
         /// Contract artifact target to deploy for integration tests
         #[arg(long, value_enum, requires = "integration")]
         target: Option<BuildTargetArg>,
+        /// Run integration tests against both WASM and RV32 artifacts
+        #[arg(long, requires = "integration", conflicts_with = "target")]
+        differential: bool,
         /// Override the x23 protocol token for the ephemeral integration node
         ///
         /// (Only used with --integration)
@@ -515,6 +520,7 @@ fn main() {
             watch,
             integration,
             target,
+            differential,
             hogd_protocol,
             profile,
             artifacts,
@@ -545,6 +551,7 @@ fn main() {
                         &groundhog_cli::test_cmd::IntegrationTestOptions {
                             hogd_protocol,
                             target: target.unwrap_or(BuildTargetArg::Wasm).into(),
+                            differential,
                         },
                         &cargo_args,
                         &artifacts,
