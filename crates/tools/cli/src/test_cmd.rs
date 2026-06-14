@@ -163,7 +163,7 @@ impl IntegrationDifferentialReport {
 }
 
 fn test_outcomes(report: &TestReport) -> Vec<(String, TestCaseStatus)> {
-    report
+    let mut outcomes: Vec<_> = report
         .runs
         .iter()
         .flat_map(|run| {
@@ -171,7 +171,9 @@ fn test_outcomes(report: &TestReport) -> Vec<(String, TestCaseStatus)> {
                 .iter()
                 .map(|case| (case.name.clone(), case.status))
         })
-        .collect()
+        .collect();
+    outcomes.sort_by(|a, b| a.0.cmp(&b.0));
+    outcomes
 }
 
 struct IntegrationBuild {
@@ -672,6 +674,7 @@ fn finish_integration_differential_run(
     } else {
         print.json(&CommandResult::with_warnings(cmd, warnings, &report))?;
     }
+    print.status("WASM/RV32 differential integration gate passed.");
     Ok(())
 }
 
@@ -1809,6 +1812,45 @@ mod tests {
 
         assert!(!report.success);
         assert!(!report.same_test_outcomes);
+    }
+
+    #[test]
+    fn differential_report_ignores_test_output_order() {
+        let mut wasm = integration_run(
+            true,
+            crate::artifacts::ArtifactKind::Wasm,
+            std::path::Path::new("/project/target/demo.wasm"),
+        );
+        let mut rv32 = integration_run(
+            true,
+            crate::artifacts::ArtifactKind::Rv32,
+            std::path::Path::new("/project/target/demo.rv32a"),
+        );
+        wasm.report.runs[0].tests = vec![
+            TestCase {
+                name: "tests::first".into(),
+                status: TestCaseStatus::Passed,
+            },
+            TestCase {
+                name: "tests::second".into(),
+                status: TestCaseStatus::Passed,
+            },
+        ];
+        rv32.report.runs[0].tests = vec![
+            TestCase {
+                name: "tests::second".into(),
+                status: TestCaseStatus::Passed,
+            },
+            TestCase {
+                name: "tests::first".into(),
+                status: TestCaseStatus::Passed,
+            },
+        ];
+
+        let report = super::IntegrationDifferentialReport::new(wasm, rv32);
+
+        assert!(report.success);
+        assert!(report.same_test_outcomes);
     }
 
     #[test]
