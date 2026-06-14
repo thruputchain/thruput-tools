@@ -818,7 +818,7 @@ fn build_help_mentions_target_dir() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("--target-dir"));
-    assert!(stdout.contains("--target"));
+    assert!(stdout.contains("--target <TARGET>"));
     assert!(stdout.contains("rv32"));
 }
 
@@ -829,7 +829,7 @@ fn test_help_mentions_target_dir() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("--target-dir"));
-    assert!(stdout.contains("--target"));
+    assert!(stdout.contains("--target <TARGET>"));
     assert!(stdout.contains("rv32"));
     assert!(stdout.contains("--watch"));
     assert!(stdout.contains("--integration"));
@@ -1054,7 +1054,7 @@ fn test_integration_reports_local_node_startup_failure() {
             concat!(
                 "#!/bin/sh\n",
                 "if [ \"$1\" = \"metadata\" ]; then\n",
-                "  printf '%s' '{}'\n",
+                "  printf '%s' \"$GROUNDHOG_TEST_METADATA_JSON\"\n",
                 "  exit 0\n",
                 "fi\n",
                 "if [ \"$1\" = \"--config\" ]; then\n",
@@ -1072,7 +1072,6 @@ fn test_integration_reports_local_node_startup_failure() {
                 "fi\n",
                 "exit 0\n",
             ),
-            metadata_json,
             tmp.path()
                 .join("target/wasm32-unknown-unknown/release")
                 .display(),
@@ -1098,6 +1097,7 @@ fn test_integration_reports_local_node_startup_failure() {
         ])
         .current_dir(tmp.path())
         .env("PATH", &fake_bin)
+        .env("GROUNDHOG_TEST_METADATA_JSON", metadata_json)
         .env("GROUNDHOG_HOG_DEVNODE_BINARY", &hogd_dev)
         .env("GROUNDHOG_FAKE_HOGD_DEV_MODE", "exit-7")
         .output()
@@ -1150,7 +1150,7 @@ fn test_integration_rv32_build_reaches_local_node_startup() {
             concat!(
                 "#!/bin/sh\n",
                 "if [ \"$1\" = \"metadata\" ]; then\n",
-                "  printf '%s' '{}'\n",
+                "  printf '%s' \"$GROUNDHOG_TEST_METADATA_JSON\"\n",
                 "  exit 0\n",
                 "fi\n",
                 "if [ \"$1\" = \"build\" ]; then\n",
@@ -1160,7 +1160,6 @@ fn test_integration_rv32_build_reaches_local_node_startup() {
                 "fi\n",
                 "exit 1\n",
             ),
-            metadata_json,
             raw_elf
                 .parent()
                 .expect("bug: raw elf parent should exist")
@@ -1186,6 +1185,7 @@ fn test_integration_rv32_build_reaches_local_node_startup() {
         ])
         .current_dir(tmp.path())
         .env("PATH", &fake_bin)
+        .env("GROUNDHOG_TEST_METADATA_JSON", metadata_json)
         .env("GROUNDHOG_HOG_DEVNODE_BINARY", &hogd_dev)
         .env("GROUNDHOG_FAKE_HOGD_DEV_MODE", "exit-7")
         .output()
