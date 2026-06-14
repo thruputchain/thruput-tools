@@ -1149,17 +1149,25 @@ fn validate_method_arg_name_collisions(
 }
 
 fn to_camel_case(name: &str) -> String {
+    let chars: Vec<char> = name.chars().collect();
     let mut out = String::with_capacity(name.len());
     let mut uppercase_next = false;
 
-    for ch in name.chars() {
-        if ch == '_' {
-            uppercase_next = true;
+    for (i, ch) in chars.iter().enumerate() {
+        if *ch == '_' {
+            let has_prior_word = chars[..i].iter().any(|ch| *ch != '_');
+            let has_later_word = chars[i + 1..].iter().any(|ch| *ch != '_');
+            if has_prior_word && has_later_word {
+                uppercase_next = true;
+            } else {
+                out.push('_');
+                uppercase_next = false;
+            }
         } else if uppercase_next {
             out.extend(ch.to_uppercase());
             uppercase_next = false;
         } else {
-            out.push(ch);
+            out.push(*ch);
         }
     }
 
@@ -1243,6 +1251,14 @@ mod tests {
         assert_eq!(to_camel_case("get_balance"), "getBalance");
         assert_eq!(to_camel_case("get_balance_of"), "getBalanceOf");
         assert_eq!(to_camel_case("contract_owner"), "contractOwner");
+    }
+
+    #[test]
+    fn camel_case_preserves_leading_and_trailing_underscores() {
+        assert_eq!(to_camel_case("default_"), "default_");
+        assert_eq!(to_camel_case("_"), "_");
+        assert_eq!(to_camel_case("_owner_id"), "_ownerId");
+        assert_eq!(to_camel_case("owner_id_"), "ownerId_");
     }
 
     #[test]
