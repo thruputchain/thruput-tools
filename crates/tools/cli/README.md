@@ -191,6 +191,7 @@ groundhog test --no-capture                 # stream test stdout/stderr
 groundhog test --test-threads 1             # set WASM harness thread count
 groundhog test --integration                # local node + WASM deploy + tests/integration.rs
 groundhog test --integration --target rv32  # local node + RV32 deploy + tests/integration.rs
+groundhog test --integration --differential # gate: WASM and RV32 both pass same tests
 ```
 
 `groundhog test` records failing libtest names under the package's Cargo
@@ -213,6 +214,12 @@ The test process receives `GROUNDHOG_RPC_URL`, `GROUNDHOG_CONTRACT_ADDRESS`,
 `GROUNDHOG_PROFILE`, `GROUNDHOG_DEFAULT_KEY`, and `GROUNDHOG_RUNTIME_MANIFEST`
 when the local node advertises a runtime manifest. `--watch` and `--rerun` are
 intentionally deferred for this integration path.
+
+`groundhog test --integration --differential` builds both artifact kinds and
+runs `tests/integration.rs` twice against isolated ephemeral local nodes. The
+command fails unless the WASM and RV32 runs both pass and report matching parsed
+test outcomes. This is the release gate before changing the default artifact
+target to RV32.
 
 If `hog-devnode` is not next to the `groundhog` binary or on `PATH`, point
 the runner at the binary:

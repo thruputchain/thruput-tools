@@ -51,6 +51,9 @@ pub struct IntegrationTestOptions {
     /// Contract artifact target to build, deploy, and report for the
     /// integration run.
     pub target: crate::build::BuildTarget,
+    /// Run the integration target once with WASM and once with RV32 and require
+    /// both observable test outcomes to match.
+    pub differential: bool,
 }
 
 impl Default for IntegrationTestOptions {
@@ -58,6 +61,7 @@ impl Default for IntegrationTestOptions {
         Self {
             hogd_protocol: None,
             target: crate::build::BuildTarget::Wasm,
+            differential: false,
         }
     }
 }
@@ -130,6 +134,46 @@ struct WatchContext {
 struct IntegrationRun {
     report: TestReport,
     failed_code: Option<i32>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct IntegrationDifferentialReport {
+    schema_version: u32,
+    mode: &'static str,
+    success: bool,
+    same_test_outcomes: bool,
+    wasm: TestReport,
+    rv32: TestReport,
+}
+
+impl IntegrationDifferentialReport {
+    fn new(wasm: IntegrationRun, rv32: IntegrationRun) -> Self {
+        let same_test_outcomes = test_outcomes(&wasm.report) == test_outcomes(&rv32.report);
+        let success = wasm.report.success && rv32.report.success && same_test_outcomes;
+        Self {
+            schema_version: TEST_JSON_SCHEMA_VERSION,
+            mode: "integration-differential",
+            success,
+            same_test_outcomes,
+            wasm: wasm.report,
+            rv32: rv32.report,
+        }
+    }
+}
+
+fn test_outcomes(report: &TestReport) -> Vec<(String, TestCaseStatus)> {
+    let mut outcomes: Vec<_> = report
+        .runs
+        .iter()
+        .flat_map(|run| {
+            run.tests
+                .iter()
+                .map(|case| (case.name.clone(), case.status))
+        })
+        .collect();
+    outcomes.sort_by(|a, b| a.0.cmp(&b.0));
+    outcomes
 }
 
 struct IntegrationBuild {
@@ -223,6 +267,19 @@ pub fn run_integration_with_options(
         ));
     }
 
+    if integration.differential {
+        return run_integration_differential_with_dev_nodes(
+            package,
+            options,
+            integration,
+            cargo_args,
+            artifacts,
+            explicit_profile,
+            cmd,
+            print,
+        );
+    }
+
     run_integration_with_dev_node(
         package,
         options,
@@ -236,7 +293,7 @@ pub fn run_integration_with_options(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn run_integration_with_dev_node(
+fn run_integration_differential_with_dev_nodes(
     package: Option<&str>,
     options: &TestOptions,
     integration: &IntegrationTestOptions,
@@ -246,13 +303,48 @@ fn run_integration_with_dev_node(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    let build = build_integration_artifact(
+    print.status("Running WASM/RV32 differential integration gate...");
+    let wasm = run_integration_target_with_dev_node(
         package,
-        integration.target,
+        crate::build::BuildTarget::Wasm,
+        options,
+        integration,
+        cargo_args,
         artifacts,
         explicit_profile,
         print,
     )?;
+    let rv32 = run_integration_target_with_dev_node(
+        package,
+        crate::build::BuildTarget::Rv32,
+        options,
+        integration,
+        cargo_args,
+        artifacts,
+        explicit_profile,
+        print,
+    )?;
+    let warnings = wasm.1.into_iter().chain(rv32.1).collect::<Vec<_>>();
+    finish_integration_differential_run(
+        &IntegrationDifferentialReport::new(wasm.0, rv32.0),
+        cmd,
+        print,
+        warnings,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_integration_target_with_dev_node(
+    package: Option<&str>,
+    target: crate::build::BuildTarget,
+    options: &TestOptions,
+    integration: &IntegrationTestOptions,
+    cargo_args: &[String],
+    artifacts: &ArtifactOptions,
+    explicit_profile: Option<&str>,
+    print: &Print,
+) -> Result<(IntegrationRun, Vec<crate::checks::Finding>), CliError> {
+    let build = build_integration_artifact(package, target, artifacts, explicit_profile, print)?;
     let host_target = host_target()?;
     artifacts::ensure_no_target_dir_passthrough_conflicts(
         artifacts,
@@ -261,14 +353,15 @@ fn run_integration_with_dev_node(
     )?;
     ensure_integration_test_target_exists(&build.package_root)?;
 
-    // Prefer the explicit `--hogd-protocol` flag; otherwise honor the
-    // `GROUNDHOG_HOGD_PROTOCOL` env var.
     let hogd_protocol = integration
         .hogd_protocol
         .clone()
         .or_else(|| std::env::var(HOGD_PROTOCOL_ENV).ok());
 
-    print.status("Starting ephemeral local node for integration tests...");
+    print.status(format_args!(
+        "Starting ephemeral local node for {:?} integration tests...",
+        build.artifact.kind
+    ));
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
     let started = rt.block_on(crate::node::start_local_node(
         crate::node::LocalNodeOptions {
@@ -291,11 +384,57 @@ fn run_integration_with_dev_node(
         artifacts,
         print,
     );
-
     let stop_result = rt.block_on(started.stop());
-    handle_integration_outcome(result, stop_result.map(|_| ()), cmd, print)
+
+    match (result, stop_result) {
+        (Ok(run), Ok(_)) => Ok((run, Vec::new())),
+        (Ok(run), Err(error)) => {
+            let warning = local_node_shutdown_warning(
+                if run.failed_code.is_some() {
+                    "integration test failure"
+                } else {
+                    "successful integration test run"
+                },
+                &error,
+            );
+            print.warn(&warning.message);
+            Ok((run, vec![warning]))
+        }
+        (Err(error), Ok(_)) => Err(error),
+        (Err(error), Err(stop_error)) => {
+            print.warn(format_args!(
+                "local node shutdown failed after integration test error: {stop_error}"
+            ));
+            Err(error)
+        }
+    }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn run_integration_with_dev_node(
+    package: Option<&str>,
+    options: &TestOptions,
+    integration: &IntegrationTestOptions,
+    cargo_args: &[String],
+    artifacts: &ArtifactOptions,
+    explicit_profile: Option<&str>,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
+    let (run, warnings) = run_integration_target_with_dev_node(
+        package,
+        integration.target,
+        options,
+        integration,
+        cargo_args,
+        artifacts,
+        explicit_profile,
+        print,
+    )?;
+    finish_integration_run(&run, cmd, print, warnings)
+}
+
+#[cfg(test)]
 fn handle_integration_outcome(
     result: Result<IntegrationRun, CliError>,
     stop_result: Result<(), CliError>,
@@ -509,6 +648,33 @@ fn finish_integration_run(
     } else {
         print.json(&CommandResult::with_warnings(cmd, warnings, &run.report))?;
     }
+    Ok(())
+}
+
+fn finish_integration_differential_run(
+    report: &IntegrationDifferentialReport,
+    cmd: &'static str,
+    print: &Print,
+    warnings: Vec<crate::checks::Finding>,
+) -> Result<(), CliError> {
+    if !report.success {
+        if print.is_json() {
+            print.json(&CommandResult::failure_with_warnings(
+                cmd, warnings, &report,
+            ))?;
+            return Err(CliError::CommandReportedFailure);
+        }
+        return Err(CliError::Other(
+            "WASM/RV32 differential integration gate failed".into(),
+        ));
+    }
+
+    if warnings.is_empty() {
+        print.json(&CommandResult::new(cmd, &report))?;
+    } else {
+        print.json(&CommandResult::with_warnings(cmd, warnings, &report))?;
+    }
+    print.status("WASM/RV32 differential integration gate passed.");
     Ok(())
 }
 
@@ -1603,6 +1769,88 @@ mod tests {
         assert_eq!(json["artifact"]["kind"], "rv32");
         assert_eq!(json["artifact"]["path"], "/project/target/demo.rv32a");
         assert!(json.get("wasm").is_none());
+    }
+
+    #[test]
+    fn differential_report_requires_matching_wasm_and_rv32_outcomes() {
+        let wasm = integration_run(
+            true,
+            crate::artifacts::ArtifactKind::Wasm,
+            std::path::Path::new("/project/target/demo.wasm"),
+        );
+        let rv32 = integration_run(
+            true,
+            crate::artifacts::ArtifactKind::Rv32,
+            std::path::Path::new("/project/target/demo.rv32a"),
+        );
+
+        let report = super::IntegrationDifferentialReport::new(wasm, rv32);
+        let json = serde_json::to_value(&report).expect("bug: report should serialize");
+
+        assert!(report.success);
+        assert!(report.same_test_outcomes);
+        assert_eq!(json["schemaVersion"], TEST_JSON_SCHEMA_VERSION);
+        assert_eq!(json["mode"], "integration-differential");
+        assert_eq!(json["wasm"]["artifact"]["kind"], "wasm");
+        assert_eq!(json["rv32"]["artifact"]["kind"], "rv32");
+    }
+
+    #[test]
+    fn differential_report_fails_when_test_outcomes_differ() {
+        let wasm = integration_run(
+            true,
+            crate::artifacts::ArtifactKind::Wasm,
+            std::path::Path::new("/project/target/demo.wasm"),
+        );
+        let rv32 = integration_run(
+            false,
+            crate::artifacts::ArtifactKind::Rv32,
+            std::path::Path::new("/project/target/demo.rv32a"),
+        );
+
+        let report = super::IntegrationDifferentialReport::new(wasm, rv32);
+
+        assert!(!report.success);
+        assert!(!report.same_test_outcomes);
+    }
+
+    #[test]
+    fn differential_report_ignores_test_output_order() {
+        let mut wasm = integration_run(
+            true,
+            crate::artifacts::ArtifactKind::Wasm,
+            std::path::Path::new("/project/target/demo.wasm"),
+        );
+        let mut rv32 = integration_run(
+            true,
+            crate::artifacts::ArtifactKind::Rv32,
+            std::path::Path::new("/project/target/demo.rv32a"),
+        );
+        wasm.report.runs[0].tests = vec![
+            TestCase {
+                name: "tests::first".into(),
+                status: TestCaseStatus::Passed,
+            },
+            TestCase {
+                name: "tests::second".into(),
+                status: TestCaseStatus::Passed,
+            },
+        ];
+        rv32.report.runs[0].tests = vec![
+            TestCase {
+                name: "tests::second".into(),
+                status: TestCaseStatus::Passed,
+            },
+            TestCase {
+                name: "tests::first".into(),
+                status: TestCaseStatus::Passed,
+            },
+        ];
+
+        let report = super::IntegrationDifferentialReport::new(wasm, rv32);
+
+        assert!(report.success);
+        assert!(report.same_test_outcomes);
     }
 
     #[test]

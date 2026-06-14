@@ -547,6 +547,9 @@ deploy/test/sim artifact yet:
   artifact v4 support. `hogsim` manifests and deployment records now carry
   artifact kind/path/hash metadata and sim deploy branches to `Contract::kWasmi`
   or `Contract::kRv32`.
+- `groundhog test --integration --differential` builds WASM and RV32 artifacts,
+  runs the same `tests/integration.rs` target against isolated ephemeral local
+  nodes, and fails unless both runs pass with matching parsed test outcomes.
 
 Minimal sequence to flip the default without papering over WASM assumptions:
 
@@ -567,12 +570,14 @@ Minimal sequence to flip the default without papering over WASM assumptions:
    fields to an artifact kind/path/hash shape, then update scenario docs and
    fixtures in the same change.  No compatibility shim is needed before we have
    external users.
-6. Before flipping the default, run a repeatable differential check for a
-   fixture contract: build WASM and RV32 artifacts, deploy and call both, and
-   assert identical observable results.  After that plus integration-test and
-   sim smoke pass with RV32, change `groundhog build`'s default target to RV32
-   and rename CLI help away from WASM-specific language. Keep `--target wasm`
-   for differential debugging.
+6. Shipped in this branch: `groundhog test --integration --differential` is the
+   repeatable gate that builds WASM and RV32 artifacts, deploys both on isolated
+   local nodes, runs the same integration tests, and requires matching parsed
+   outcomes.
+7. After the differential gate plus integration-test and sim smoke pass with
+   RV32, change `groundhog build`'s default target to RV32 and rename CLI help
+   away from WASM-specific language. Keep `--target wasm` for differential
+   debugging.
 
 Defaulting to RV32 also means older `hog-devnode` binaries that cannot execute
 `kRv32` will fail at runtime.  Because there are no external CLI users yet,

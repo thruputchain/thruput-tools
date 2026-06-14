@@ -833,6 +833,7 @@ fn test_help_mentions_target_dir() {
     assert!(stdout.contains("rv32"));
     assert!(stdout.contains("--watch"));
     assert!(stdout.contains("--integration"));
+    assert!(stdout.contains("--differential"));
     assert!(stdout.contains("hog-devnode"));
     assert!(stdout.contains("tests/integration.rs"));
     assert!(!stdout.contains("not wired yet"));
