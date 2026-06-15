@@ -34,6 +34,10 @@ Known pre-PR7 blocker:
 
 - Do not remove WASM. Keep explicit `--target wasm`, explicit `.wasm` deploys,
   and WASM sim artifacts for differential debugging.
+- Revisit removing the WASM contract path entirely after the full RV32 examples
+  matrix and downstream runtime gates are consistently green. At that point the
+  CLI/scaffold feature split between `entrypoints` and `rv32-entrypoints`, WASM
+  deploy fallback, and differential gate can be simplified away.
 - Do not add compatibility shims for old CLI JSON or old `hogsim` schemas.
 - Do not make host unit tests execute RV32. The default flip concerns artifact
   build/deploy/integration/sim execution first.
