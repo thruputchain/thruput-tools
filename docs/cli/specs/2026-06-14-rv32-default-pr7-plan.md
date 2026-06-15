@@ -1,6 +1,6 @@
 # PR 7: RV32 Default Finalization Plan
 
-Status: draft plan
+Status: RV32 default slice shipped; full examples matrix deferred
 
 Owner: CLI / dev tooling
 

@@ -502,7 +502,7 @@ fn build_rv32_project_compiles_and_lowers_elf() {
         std::fs::canonicalize(tmp.path()).expect("bug: project path should canonicalize");
     fs::write(
         project_root.join("Cargo.toml"),
-        "[package]\nname = \"demo-contract-rv32\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        "[package]\nname = \"demo-contract-rv32\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\nentrypoints = []\nrv32-entrypoints = [\"entrypoints\"]\n",
     )
     .unwrap();
     fs::create_dir_all(project_root.join("src")).unwrap();
@@ -552,7 +552,7 @@ fn build_rv32_project_compiles_and_lowers_elf() {
     )
     .unwrap();
     let metadata_json = format!(
-        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract-rv32","manifest_path":"{}"}}]}}"#,
+        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract-rv32","manifest_path":"{}","features":{{"entrypoints":[],"rv32-entrypoints":["entrypoints"]}}}}]}}"#,
         project_root.display(),
         target_dir.display(),
         project_root.join("Cargo.toml").display()

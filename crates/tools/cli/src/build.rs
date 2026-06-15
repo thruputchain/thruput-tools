@@ -332,6 +332,7 @@ pub fn build_rv32_project(
     let cwd = std::env::current_dir()?;
     let metadata = cargo_metadata_with_artifacts(artifacts)?;
     let pkg_name = resolve_package(&metadata, package, &cwd)?;
+    let rv32_feature = rv32_entrypoints_feature(&metadata, pkg_name);
     let package_root = metadata
         .packages
         .iter()
@@ -353,7 +354,7 @@ pub fn build_rv32_project(
         .arg("--release")
         .arg("--no-default-features")
         .arg("--features")
-        .arg("rv32-entrypoints")
+        .arg(rv32_feature)
         .arg("--target")
         .arg(RV32_TARGET_TRIPLE)
         .arg("-p")
@@ -394,7 +395,7 @@ pub fn build_rv32_project(
             memory_bytes: lowered.memory_bytes,
             rustc_version: rustc_version(),
             target_triple: Some(RV32_TARGET_TRIPLE.to_string()),
-            build_flags: Some(rv32_build_flags(pkg_name, cargo_args)),
+            build_flags: Some(rv32_build_flags(pkg_name, rv32_feature, cargo_args)),
         });
     fs::write(&rv32, &lowered.artifact)?;
     if let Err(error) = fs::write(&lower_metadata, lower_metadata_doc) {
@@ -429,14 +430,32 @@ pub fn build_rv32_project(
     })
 }
 
-fn rv32_build_flags(pkg_name: &str, cargo_args: &[String]) -> String {
+fn rv32_entrypoints_feature(metadata: &CargoMetadata, pkg_name: &str) -> &'static str {
+    metadata
+        .packages
+        .iter()
+        .find(|package| package.name == pkg_name)
+        .and_then(|package| manifest_has_feature(&package.manifest_path, "rv32-entrypoints"))
+        .unwrap_or("entrypoints")
+}
+
+fn manifest_has_feature(manifest_path: &Path, feature: &str) -> Option<&'static str> {
+    let contents = fs::read_to_string(manifest_path).ok()?;
+    let manifest = toml::from_str::<toml::Value>(&contents).ok()?;
+    manifest
+        .get("features")
+        .and_then(|features| features.get(feature))
+        .map(|_| "rv32-entrypoints")
+}
+
+fn rv32_build_flags(pkg_name: &str, rv32_feature: &str, cargo_args: &[String]) -> String {
     let mut flags = vec![
         "cargo".to_string(),
         "build".to_string(),
         "--release".to_string(),
         "--no-default-features".to_string(),
         "--features".to_string(),
-        "rv32-entrypoints".to_string(),
+        rv32_feature.to_string(),
         "--target".to_string(),
         RV32_TARGET_TRIPLE.to_string(),
         "-p".to_string(),
@@ -535,5 +554,57 @@ fn require_contract_toml(workspace_root: &Path) -> Result<PathBuf, CliError> {
         Err(CliError::ContractTomlNotFound(
             workspace_root.display().to_string(),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CargoMetadata, MetadataPackage, rv32_entrypoints_feature};
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+    #[test]
+    fn rv32_feature_prefers_new_wrapper_feature_when_present() {
+        let tmp = TempDir::new().expect("bug: tempdir should be created");
+        let manifest = tmp.path().join("Cargo.toml");
+        std::fs::write(
+            &manifest,
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\nentrypoints = []\nrv32-entrypoints = [\"entrypoints\"]\n",
+        )
+        .expect("bug: manifest should be written");
+        let metadata = metadata_for(manifest);
+
+        assert_eq!(
+            rv32_entrypoints_feature(&metadata, "demo"),
+            "rv32-entrypoints"
+        );
+    }
+
+    #[test]
+    fn rv32_feature_falls_back_for_legacy_entrypoints_only_manifests() {
+        let tmp = TempDir::new().expect("bug: tempdir should be created");
+        let manifest = tmp.path().join("Cargo.toml");
+        std::fs::write(
+            &manifest,
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\nentrypoints = []\n",
+        )
+        .expect("bug: manifest should be written");
+        let metadata = metadata_for(manifest);
+
+        assert_eq!(rv32_entrypoints_feature(&metadata, "demo"), "entrypoints");
+    }
+
+    fn metadata_for(manifest_path: PathBuf) -> CargoMetadata {
+        CargoMetadata {
+            workspace_root: manifest_path
+                .parent()
+                .expect("bug: manifest should have parent")
+                .to_path_buf(),
+            target_directory: PathBuf::from("target"),
+            packages: vec![MetadataPackage {
+                name: "demo".into(),
+                manifest_path,
+            }],
+        }
     }
 }
