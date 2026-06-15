@@ -42,15 +42,15 @@
     {
       "name": "fibonacci",
       "artifact": {
-        "kind": "wasm",
-        "path": "fibonacci.wasm"
+        "kind": "rv32",
+        "path": "fibonacci.rv32a"
       }
     },
     {
       "name": "caller-counter",
       "artifact": {
-        "kind": "wasm",
-        "path": "caller_counter.wasm"
+        "kind": "rv32",
+        "path": "caller_counter.rv32a"
       }
     }
   ],

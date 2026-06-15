@@ -30,8 +30,8 @@
     {
       "name": "fibonacci",
       "artifact": {
-        "kind": "wasm",
-        "path": "fibonacci.wasm"
+        "kind": "rv32",
+        "path": "fibonacci.rv32a"
       }
     }
   ],

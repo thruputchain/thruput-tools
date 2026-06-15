@@ -28,15 +28,15 @@ cargo install --path crates/tools/cli
 groundhog init                   # one-time environment check
 groundhog login                  # one-time; early-access registry auth
 groundhog new my-counter && cd my-counter
-groundhog build
+groundhog build                   # RV32 artifact by default
 groundhog test                   # executor-backed WASM tests
 # in another terminal
 groundhog node --hog-devnode-binary /path/to/hog-devnode
 groundhog deploy
 groundhog call my-counter get
-# one-command local-node integration path; add --target rv32 for RV32 artifacts
+# one-command local-node integration path; add --target wasm for WASM artifacts
 GROUNDHOG_HOG_DEVNODE_BINARY=/path/to/hog-devnode groundhog test --integration
-# pre-default-flip differential gate: WASM and RV32 must both pass the same tests
+# differential gate: WASM and RV32 must both pass the same tests
 GROUNDHOG_HOG_DEVNODE_BINARY=/path/to/hog-devnode groundhog test --integration --differential
 ```
 
@@ -64,14 +64,14 @@ with `--json` because logs stay on stderr, and `RUST_LOG` for exact tracing
 filters.
 
 `groundhog test --integration` uses that same local-node path without a
-separate terminal: it builds the selected artifact (`--target wasm` by default,
-or `--target rv32`), starts an ephemeral hog-devnode node, deploys with
+separate terminal: it builds the selected artifact (`--target rv32` by default,
+or `--target wasm`), starts an ephemeral hog-devnode node, deploys with
 `dev-0`, runs `tests/integration.rs`, then shuts the node down. The test
 process receives `GROUNDHOG_RPC_URL`, `GROUNDHOG_CONTRACT_ADDRESS`,
 `GROUNDHOG_PROFILE=integration`, `GROUNDHOG_DEFAULT_KEY=dev-0`, and
 `GROUNDHOG_RUNTIME_MANIFEST`.
 
-`groundhog test --integration --differential` is the pre-default-flip gate: it
+`groundhog test --integration --differential` is the differential gate: it
 builds both WASM and RV32 artifacts, runs the same integration target against
 isolated ephemeral nodes, and fails unless both runs pass with matching parsed
 test outcomes.

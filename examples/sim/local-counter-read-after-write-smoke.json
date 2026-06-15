@@ -30,8 +30,8 @@
     {
       "name": "caller-counter",
       "artifact": {
-        "kind": "wasm",
-        "path": "caller_counter.wasm"
+        "kind": "rv32",
+        "path": "caller_counter.rv32a"
       }
     }
   ],

@@ -10,10 +10,13 @@ fn test_deploy() {
     let test_contract = register_mock_contract(&env);
     let contract_hash = test_contract.as_hash().clone();
 
-    contract_exec(env, move || {
-        deploy_contract(
-            &NONCE, &contract_hash,
-        );
+    env.transact(|tx| {
+        let caller = <ContractAddress as Named>::named("test_deploy");
+        tx.call(&caller).run(move || {
+            deploy_contract(
+                &NONCE, &contract_hash,
+            );
+        })
     })
-    .unwrap_or_else(|e| panic!("Test failed: {e:?}"));
+    .assert_success();
 }

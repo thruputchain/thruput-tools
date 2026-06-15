@@ -94,7 +94,7 @@
       "id": "local-fibonacci-view-smoke",
       "path": "local-fibonacci-view-smoke.json",
       "title": "Local Fibonacci Deploy + View Smoke",
-      "summary": "Builds fibonacci.wasm from groundhog-examples, deploys it, and calls compute(10) through groundhog_view.",
+      "summary": "Builds fibonacci.rv32a from groundhog-examples, deploys it, and calls compute(10) through groundhog_view.",
       "provider": "local",
       "tier": "smoke",
       "tags": ["local", "contract", "fibonacci", "view-call", "smoke"],
@@ -103,7 +103,7 @@
         {
           "name": "fibonacci",
           "source": "groundhog-examples/fibonacci",
-          "artifact": "fibonacci.wasm"
+          "artifact": "fibonacci.rv32a"
         }
       ],
       "runner": "scripts/smoke-sim-scenarios.sh"
@@ -112,7 +112,7 @@
       "id": "local-fibonacci-storage-read-smoke",
       "path": "local-fibonacci-storage-read-smoke.json",
       "title": "Local Fibonacci Storage Read Smoke",
-      "summary": "Builds fibonacci.wasm from groundhog-examples, deploys it, and reads an empty storage key through groundhog_getStorageAt.",
+      "summary": "Builds fibonacci.rv32a from groundhog-examples, deploys it, and reads an empty storage key through groundhog_getStorageAt.",
       "provider": "local",
       "tier": "smoke",
       "tags": ["local", "contract", "fibonacci", "storage-read", "smoke"],
@@ -121,7 +121,7 @@
         {
           "name": "fibonacci",
           "source": "groundhog-examples/fibonacci",
-          "artifact": "fibonacci.wasm"
+          "artifact": "fibonacci.rv32a"
         }
       ],
       "runner": "scripts/smoke-sim-scenarios.sh"
@@ -130,7 +130,7 @@
       "id": "local-fibonacci-events-query-smoke",
       "path": "local-fibonacci-events-query-smoke.json",
       "title": "Local Fibonacci Events Query Smoke",
-      "summary": "Builds fibonacci.wasm from groundhog-examples, deploys it, and queries contract events through groundhog_getEvents.",
+      "summary": "Builds fibonacci.rv32a from groundhog-examples, deploys it, and queries contract events through groundhog_getEvents.",
       "provider": "local",
       "tier": "smoke",
       "tags": ["local", "contract", "fibonacci", "events-query", "indexer", "smoke"],
@@ -139,7 +139,7 @@
         {
           "name": "fibonacci",
           "source": "groundhog-examples/fibonacci",
-          "artifact": "fibonacci.wasm"
+          "artifact": "fibonacci.rv32a"
         }
       ],
       "runner": "scripts/smoke-sim-scenarios.sh"
@@ -148,7 +148,7 @@
       "id": "local-fibonacci-contract-call-events-smoke",
       "path": "local-fibonacci-contract-call-events-smoke.json",
       "title": "Local Fibonacci Contract Call + Events Smoke",
-      "summary": "Builds fibonacci.wasm from groundhog-examples, calls compute(10) through contract-call, and observes the emitted FibComputed event.",
+      "summary": "Builds fibonacci.rv32a from groundhog-examples, calls compute(10) through contract-call, and observes the emitted FibComputed event.",
       "provider": "local",
       "tier": "smoke",
       "tags": ["local", "contract", "fibonacci", "contract-call", "events-query", "indexer", "smoke"],
@@ -157,7 +157,7 @@
         {
           "name": "fibonacci",
           "source": "groundhog-examples/fibonacci",
-          "artifact": "fibonacci.wasm"
+          "artifact": "fibonacci.rv32a"
         }
       ],
       "runner": "scripts/smoke-sim-scenarios.sh"
@@ -175,7 +175,7 @@
         {
           "name": "caller-counter",
           "source": "groundhog-examples/sim-fixtures/caller-counter",
-          "artifact": "caller_counter.wasm"
+          "artifact": "caller_counter.rv32a"
         }
       ],
       "runner": "scripts/smoke-sim-scenarios.sh"
@@ -184,7 +184,7 @@
       "id": "local-fibonacci-storage-miss-heavy",
       "path": "local-fibonacci-storage-miss-heavy.json",
       "title": "Local Fibonacci Storage Miss Preset",
-      "summary": "Builds fibonacci.wasm from groundhog-examples and drives a higher-rate negative storage lookup shape against one deployed contract.",
+      "summary": "Builds fibonacci.rv32a from groundhog-examples and drives a higher-rate negative storage lookup shape against one deployed contract.",
       "provider": "local",
       "tier": "preset",
       "tags": ["local", "contract", "fibonacci", "storage-read", "storage-miss", "negative-lookup", "preset"],
@@ -193,7 +193,7 @@
         {
           "name": "fibonacci",
           "source": "groundhog-examples/fibonacci",
-          "artifact": "fibonacci.wasm"
+          "artifact": "fibonacci.rv32a"
         }
       ],
       "runner": "hogsim run"
@@ -202,7 +202,7 @@
       "id": "local-fibonacci-event-heavy",
       "path": "local-fibonacci-event-heavy.json",
       "title": "Local Fibonacci Event-Heavy Preset",
-      "summary": "Builds fibonacci.wasm from groundhog-examples, emits FibComputed events through scheduled contract calls, and queries the indexed event stream.",
+      "summary": "Builds fibonacci.rv32a from groundhog-examples, emits FibComputed events through scheduled contract calls, and queries the indexed event stream.",
       "provider": "local",
       "tier": "preset",
       "tags": ["local", "contract", "fibonacci", "contract-call", "events-query", "event-heavy", "indexer", "preset"],
@@ -211,7 +211,7 @@
         {
           "name": "fibonacci",
           "source": "groundhog-examples/fibonacci",
-          "artifact": "fibonacci.wasm"
+          "artifact": "fibonacci.rv32a"
         }
       ],
       "runner": "hogsim run"
@@ -220,7 +220,7 @@
       "id": "local-fibonacci-compute-heavy",
       "path": "local-fibonacci-compute-heavy.json",
       "title": "Local Fibonacci Compute-Heavy Preset",
-      "summary": "Builds fibonacci.wasm from groundhog-examples and submits naive recursive compute(20) contract calls at a conservative rate.",
+      "summary": "Builds fibonacci.rv32a from groundhog-examples and submits naive recursive compute(20) contract calls at a conservative rate.",
       "provider": "local",
       "tier": "preset",
       "tags": ["local", "contract", "fibonacci", "contract-call", "compute-heavy", "preset"],
@@ -229,7 +229,7 @@
         {
           "name": "fibonacci",
           "source": "groundhog-examples/fibonacci",
-          "artifact": "fibonacci.wasm"
+          "artifact": "fibonacci.rv32a"
         }
       ],
       "runner": "hogsim run"
@@ -247,7 +247,7 @@
         {
           "name": "calldata",
           "source": "groundhog-examples/sim-fixtures/calldata",
-          "artifact": "calldata.wasm"
+          "artifact": "calldata.rv32a"
         }
       ],
       "runner": "hogsim run"
@@ -265,7 +265,7 @@
         {
           "name": "nnint-stress",
           "source": "groundhog-examples/sim-fixtures/nnint-stress",
-          "artifact": "nnint_stress.wasm"
+          "artifact": "nnint_stress.rv32a"
         }
       ],
       "runner": "hogsim run"
@@ -283,12 +283,12 @@
         {
           "name": "fibonacci",
           "source": "groundhog-examples/fibonacci",
-          "artifact": "fibonacci.wasm"
+          "artifact": "fibonacci.rv32a"
         },
         {
           "name": "caller-counter",
           "source": "groundhog-examples/sim-fixtures/caller-counter",
-          "artifact": "caller_counter.wasm"
+          "artifact": "caller_counter.rv32a"
         }
       ],
       "runner": "hogsim run"
@@ -306,12 +306,12 @@
         {
           "name": "fibonacci",
           "source": "groundhog-examples/fibonacci",
-          "artifact": "fibonacci.wasm"
+          "artifact": "fibonacci.rv32a"
         },
         {
           "name": "caller-counter",
           "source": "groundhog-examples/sim-fixtures/caller-counter",
-          "artifact": "caller_counter.wasm"
+          "artifact": "caller_counter.rv32a"
         }
       ],
       "runner": "hogsim run"
@@ -329,12 +329,12 @@
         {
           "name": "fibonacci",
           "source": "groundhog-examples/fibonacci",
-          "artifact": "fibonacci.wasm"
+          "artifact": "fibonacci.rv32a"
         },
         {
           "name": "caller-counter",
           "source": "groundhog-examples/sim-fixtures/caller-counter",
-          "artifact": "caller_counter.wasm"
+          "artifact": "caller_counter.rv32a"
         }
       ],
       "runner": "GROUNDHOG_SIM_RUN_SOAKS=1 scripts/smoke-sim-scenarios.sh"

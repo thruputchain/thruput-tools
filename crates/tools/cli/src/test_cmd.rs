@@ -60,7 +60,7 @@ impl Default for IntegrationTestOptions {
     fn default() -> Self {
         Self {
             hogd_protocol: None,
-            target: crate::build::BuildTarget::Wasm,
+            target: crate::build::BuildTarget::Rv32,
             differential: false,
         }
     }

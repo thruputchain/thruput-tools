@@ -1,7 +1,7 @@
 # groundhog
 
 CLI tools for Groundhog smart contract development. Wraps the
-Rust/WASM build and test workflow into a single binary.
+Rust/RV32 build path, WASM fallback, and test workflow into a single binary.
 
 ## Install
 
@@ -22,7 +22,7 @@ For a full local-DX smoke against a real `hog-devnode` binary:
 scripts/smoke-local-dx.sh
 ```
 
-The smoke scaffolds a counter project, builds the WASM, starts `groundhog node`,
+The smoke scaffolds a counter project, builds the default artifact, starts `groundhog node`,
 deploys, submits calls through `dev-0`, exercises `groundhog view`, and
 performs a raw `groundhog storage` read for the counter's `value` slot.
 
@@ -53,7 +53,7 @@ groundhog login
 # Create a new contract project (counter template)
 groundhog new my-counter && cd my-counter
 
-# Build the WASM contract
+# Build the RV32 contract artifact
 groundhog build
 
 # Run contract's tests against the WASM executor
@@ -99,8 +99,8 @@ plain `cargo` builds and tests work for the host target:
 |---------|-------------|
 | `cargo build` | Build for host (IDE, rust-analyzer) |
 | `cargo test` | Run unit tests on host |
-| `groundhog build` | Cross-compile to WASM (`--no-default-features --release`) |
-| `groundhog build --target rv32` | Cross-compile to RV32 ELF and lower it to `.rv32a` |
+| `groundhog build` | Cross-compile to RV32 ELF and lower it to `.rv32a` |
+| `groundhog build --target wasm` | Cross-compile to WASM (`--no-default-features --release`) |
 | `groundhog test` | Run executor-backed WASM tests |
 | `groundhog test --integration` | Start hog-devnode, deploy WASM or RV32, and run `tests/integration.rs` |
 
@@ -147,13 +147,13 @@ groundhog new my-contract --template stub   # minimal template
 
 ### `groundhog build`
 
-Compile the contract to WASM using `build-std` for `core`/`alloc`, or compile
-an RV32 contract package and lower it to a Groundhog `.rv32a` artifact.
+Compile the contract to RV32 and lower it to a Groundhog `.rv32a` artifact by
+default, or build the explicit WASM fallback target.
 
 ```bash
-groundhog build                # release build
-groundhog build --optimize     # + wasm-opt (requires wasm-opt on PATH)
-groundhog build --target rv32 -p counter-rv32
+groundhog build                # RV32 release artifact
+groundhog build --target wasm  # explicit WASM fallback
+groundhog build --target wasm --optimize  # + wasm-opt (requires wasm-opt on PATH)
 groundhog build --profile testnet   # resolve profile from groundhog.toml
 groundhog build -- --verbose   # pass extra args to cargo
 ```
@@ -189,8 +189,8 @@ groundhog test --fail-fast                  # stop the WASM harness on first fai
 groundhog test --show-output                # show captured stdout for passing tests
 groundhog test --no-capture                 # stream test stdout/stderr
 groundhog test --test-threads 1             # set WASM harness thread count
-groundhog test --integration                # local node + WASM deploy + tests/integration.rs
-groundhog test --integration --target rv32  # local node + RV32 deploy + tests/integration.rs
+groundhog test --integration                # local node + RV32 deploy + tests/integration.rs
+groundhog test --integration --target wasm  # local node + WASM deploy + tests/integration.rs
 groundhog test --integration --differential # gate: WASM and RV32 both pass same tests
 ```
 
@@ -207,8 +207,8 @@ includes structured per-run and per-test results rather than only
 aggregated cargo output text. Schema v3 reports the built artifact under
 `data.artifact` with `kind` and `path` fields.
 
-`groundhog test --integration` builds the selected artifact (`--target wasm` by
-default, or `--target rv32`), starts an ephemeral hog-devnode local node,
+`groundhog test --integration` builds the selected artifact (`--target rv32` by
+default, or `--target wasm`), starts an ephemeral hog-devnode local node,
 deploys the contract with `dev-0`, then runs the `tests/integration.rs` target.
 The test process receives `GROUNDHOG_RPC_URL`, `GROUNDHOG_CONTRACT_ADDRESS`,
 `GROUNDHOG_PROFILE`, `GROUNDHOG_DEFAULT_KEY`, and `GROUNDHOG_RUNTIME_MANIFEST`
@@ -218,8 +218,8 @@ intentionally deferred for this integration path.
 `groundhog test --integration --differential` builds both artifact kinds and
 runs `tests/integration.rs` twice against isolated ephemeral local nodes. The
 command fails unless the WASM and RV32 runs both pass and report matching parsed
-test outcomes. This is the release gate before changing the default artifact
-target to RV32.
+test outcomes. Use this when debugging differences between the default RV32 path
+and the explicit WASM fallback.
 
 If `hog-devnode` is not next to the `groundhog` binary or on `PATH`, point
 the runner at the binary:

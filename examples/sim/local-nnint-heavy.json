@@ -30,8 +30,8 @@
     {
       "name": "nnint-stress",
       "artifact": {
-        "kind": "wasm",
-        "path": "nnint_stress.wasm"
+        "kind": "rv32",
+        "path": "nnint_stress.rv32a"
       }
     }
   ],
