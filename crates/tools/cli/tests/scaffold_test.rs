@@ -29,7 +29,8 @@ fn scaffold_counter_creates_expected_files() {
     // `release/<snake_name>`.
     assert!(cargo.contains("[[bin]]"));
     assert!(cargo.contains(r#"name = "my_counter""#));
-    assert!(cargo.contains(r#"required-features = ["entrypoints"]"#));
+    assert!(cargo.contains(r#"rv32-entrypoints = ["entrypoints"]"#));
+    assert!(cargo.contains(r#"required-features = ["rv32-entrypoints"]"#));
     // The host test harness must not try to link the no_std bin when the
     // entrypoints feature is enabled.
     assert!(cargo.contains("test = false"));
@@ -65,7 +66,8 @@ fn scaffold_counter_creates_expected_files() {
     assert!(test.contains("CounterClient"));
     assert!(test.contains("fn setup()"));
     assert!(test.contains("test_contract.as_hash().clone()"));
-    assert!(test.contains("contract_exec(env, move ||"));
+    assert!(test.contains("env.transact(|tx|"));
+    assert!(test.contains("tx.call(&caller).run(move ||"));
     assert!(test.contains("MY_COUNTER_NONCE"));
 
     let test_wasm = fs::read_to_string(dir.join("tests/test_wasm.rs")).unwrap();

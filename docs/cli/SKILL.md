@@ -39,7 +39,7 @@ When generating or editing a contract, default to this workflow:
 4. Prefer `#[contract_exception]` for contract-facing errors.
 5. Prefer `NNInt` or `Map<_, NNInt>` for counters and balances.
 6. Write native tests that use `register_mock_contract(&env)`,
-   `test_contract.as_hash().clone()`, and `contract_exec(...)`.
+   `test_contract.as_hash().clone()`, and `env.transact(...)`.
 7. Whenever a method changes, update the tests in the same pass.
 
 ## Project Structure
@@ -243,15 +243,18 @@ fn setup() -> (TestEnvironmentHandle, SHA256Hash) {
 fn test_initialize_and_deposit() {
     let (env, contract_hash) = setup();
 
-    contract_exec(env, move || {
-        let addr = deploy_contract(&NONCE, &contract_hash);
-        let client = MyContractClient::new(&addr);
+    env.transact(|tx| {
+        let caller = <ContractAddress as Named>::named("test_initialize_and_deposit");
+        tx.call(&caller).run(move || {
+            let addr = deploy_contract(&NONCE, &contract_hash);
+            let client = MyContractClient::new(&addr);
 
-        client.initialize(/* args */);
-        client.deposit(100);
-        assert_eq!(client.get_balance(), 100);
+            client.initialize(/* args */);
+            client.deposit(100);
+            assert_eq!(client.get_balance(), 100);
+        })
     })
-    .unwrap_or_else(|e| panic!("Test failed: {e:?}"));
+    .assert_success();
 }
 ```
 
@@ -262,8 +265,8 @@ fn test_initialize_and_deposit() {
 - `register_mock_contract(&env)` registers the package for native tests.
 - `test_contract.as_hash().clone()` gives the package hash used by
   `deploy_contract(...)`.
-- `contract_exec(env, move || { ... })` executes the test body with
-  contract semantics and commits on success.
+- `env.transact(|tx| tx.call(&caller).run(move || { ... })).assert_success()`
+  executes the test body with contract semantics and commits on success.
 - `MyContractClient::new(&addr)` constructs the generated typed client.
 
 ### Test guidance

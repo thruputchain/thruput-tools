@@ -528,18 +528,17 @@ parked until a real hogd-owned dev method needs them.
 Detailed task plan: [RV32 default execution plan](specs/2026-06-12-rv32-default-execution-plan.md).
 
 Current shipped pieces are enough to build, inspect, deploy, and integration-test
-RV32 artifacts explicitly, but not enough to make RV32 the default
-deploy/test/sim artifact yet:
+RV32 artifacts as the default deploy/test artifact:
 
 - `groundhog build --target rv32` compiles
   `riscv32im-unknown-none-elf`, lowers through the in-process RV32 lowerer,
   writes `target/groundhog/<contract>.rv32a`, and finalizes contract-spec
   sidecars from the ELF/artifact pair.
 - Fresh scaffolds include the RV32 bin wrapper required by that build path.
-- The default command surface still chooses WASM: `groundhog build` defaults
-  to `--target wasm`; `groundhog deploy` auto-resolves WASM unless
-  `--target rv32` or `--artifact <path>` is provided; `groundhog test
-  --integration` defaults to `--target wasm` unless `--target rv32` is
+- The default command surface chooses RV32: `groundhog build` defaults
+  to `--target rv32`; `groundhog deploy` auto-resolves RV32 unless
+  `--target wasm` or `--artifact <path>` is provided; `groundhog test
+  --integration` defaults to `--target rv32` unless `--target wasm` is
   provided; `groundhog test --json` reports artifact kind/path metadata.
 - CLI deploy transaction construction is artifact-aware and branches to
   `Contract::kWasmi` or `Contract::kRv32`. `groundhog test --integration
@@ -574,10 +573,9 @@ Minimal sequence to flip the default without papering over WASM assumptions:
    repeatable gate that builds WASM and RV32 artifacts, deploys both on isolated
    local nodes, runs the same integration tests, and requires matching parsed
    outcomes.
-7. After the differential gate plus integration-test and sim smoke pass with
-   RV32, change `groundhog build`'s default target to RV32 and rename CLI help
-   away from WASM-specific language. Keep `--target wasm` for differential
-   debugging.
+7. Shipped in PR7: after the differential gate plus integration-test and sim
+   smoke passed with RV32, `groundhog build` defaults to RV32 and CLI help names
+   WASM as the explicit fallback for differential debugging.
 
 Defaulting to RV32 also means older `hog-devnode` binaries that cannot execute
 `kRv32` will fail at runtime.  Because there are no external CLI users yet,

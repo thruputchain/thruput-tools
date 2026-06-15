@@ -624,10 +624,11 @@ fn build_rv32_project_compiles_and_lowers_elf() {
     let cargo_args = fs::read_to_string(cargo_args_log).unwrap();
     assert!(
         cargo_args.contains(
-            "build --release --no-default-features --features entrypoints --target riscv32im-unknown-none-elf"
+            "build --release --no-default-features --features rv32-entrypoints --target riscv32im-unknown-none-elf"
         )
     );
     assert!(cargo_args.contains("-p demo-contract-rv32"));
+    assert!(cargo_args.contains("--bin demo_contract_rv32"));
     assert!(cargo_args.contains("--locked"));
     // The rv32 build must include the bin target; only the wasm build is
     // scoped with --lib.
@@ -635,7 +636,7 @@ fn build_rv32_project_compiles_and_lowers_elf() {
     assert_eq!(metadata["target_triple"], "riscv32im-unknown-none-elf");
     assert_eq!(
         metadata["build_flags"],
-        "cargo build --release --no-default-features --features entrypoints --target riscv32im-unknown-none-elf -p demo-contract-rv32 --locked"
+        "cargo build --release --no-default-features --features rv32-entrypoints --target riscv32im-unknown-none-elf -p demo-contract-rv32 --bin demo_contract_rv32 --locked"
     );
 }
 

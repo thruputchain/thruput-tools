@@ -129,7 +129,7 @@ enum Command {
         #[arg(short, long)]
         package: Option<String>,
         /// Contract artifact target
-        #[arg(long, value_enum, default_value_t = BuildTargetArg::Wasm)]
+        #[arg(long, value_enum, default_value_t = BuildTargetArg::Rv32)]
         target: BuildTargetArg,
         /// Run wasm-opt after compilation (requires wasm-opt)
         #[arg(long)]
@@ -155,7 +155,7 @@ enum Command {
                        the test_wasm target on the host. With \
                        --integration, starts an ephemeral hog-devnode \
                        local node, deploys the selected artifact \
-                       (--target wasm by default, or --target rv32), and \
+                       (--target rv32 by default, or --target wasm), and \
                        runs the integration test target with RPC environment \
                        variables. With --integration --differential, runs the \
                        same integration target against WASM and RV32 artifacts \
@@ -550,7 +550,7 @@ fn main() {
                         &options,
                         &groundhog_cli::test_cmd::IntegrationTestOptions {
                             hogd_protocol,
-                            target: target.unwrap_or(BuildTargetArg::Wasm).into(),
+                            target: target.unwrap_or(BuildTargetArg::Rv32).into(),
                             differential,
                         },
                         &cargo_args,
@@ -586,7 +586,7 @@ fn main() {
                 );
                 groundhog_cli::deploy::run(
                     artifact.as_deref(),
-                    target.unwrap_or(BuildTargetArg::Wasm).into(),
+                    target.unwrap_or(BuildTargetArg::Rv32).into(),
                     dry_run,
                     &artifacts,
                     &profile,

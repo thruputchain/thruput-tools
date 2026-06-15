@@ -287,8 +287,8 @@ pub fn build_project(
 
 /// Assemble the cargo invocation for the wasm contract build.
 ///
-/// The build is scoped to the cdylib target with `--lib`: a project's RV32
-/// bin wrapper satisfies its `required-features = ["entrypoints"]` here and
+/// The build is scoped to the cdylib target with `--lib`: older project RV32
+/// bin wrappers may satisfy `required-features = ["entrypoints"]` here and
 /// would otherwise be built for wasm too — its output filename collides with
 /// the cdylib's, and under lto=true/codegen-units=1 building the bin perturbs
 /// the cdylib codegen (and thus gas). Cargo rejects a repeated `--lib`, so
@@ -353,11 +353,13 @@ pub fn build_rv32_project(
         .arg("--release")
         .arg("--no-default-features")
         .arg("--features")
-        .arg("entrypoints")
+        .arg("rv32-entrypoints")
         .arg("--target")
         .arg(RV32_TARGET_TRIPLE)
         .arg("-p")
-        .arg(pkg_name);
+        .arg(pkg_name)
+        .arg("--bin")
+        .arg(crate::scaffold::to_snake(pkg_name));
 
     artifacts.apply_to_command(&mut cmd);
 
@@ -434,11 +436,13 @@ fn rv32_build_flags(pkg_name: &str, cargo_args: &[String]) -> String {
         "--release".to_string(),
         "--no-default-features".to_string(),
         "--features".to_string(),
-        "entrypoints".to_string(),
+        "rv32-entrypoints".to_string(),
         "--target".to_string(),
         RV32_TARGET_TRIPLE.to_string(),
         "-p".to_string(),
         pkg_name.to_string(),
+        "--bin".to_string(),
+        crate::scaffold::to_snake(pkg_name),
     ];
     flags.extend(cargo_args.iter().cloned());
     flags.join(" ")

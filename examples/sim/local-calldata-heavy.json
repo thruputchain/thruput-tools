@@ -30,8 +30,8 @@
     {
       "name": "calldata",
       "artifact": {
-        "kind": "wasm",
-        "path": "calldata.wasm"
+        "kind": "rv32",
+        "path": "calldata.rv32a"
       }
     }
   ],

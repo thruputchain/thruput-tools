@@ -621,7 +621,7 @@ fn build_rv32_json_rejects_bindings_before_metadata() {
 #[cfg(unix)]
 #[test]
 #[allow(clippy::too_many_lines)]
-fn build_rv32_json_success_reports_artifact_paths() {
+fn build_default_json_success_reports_rv32_artifact_paths() {
     use std::os::unix::fs::PermissionsExt;
 
     let tmp = TempDir::new().unwrap();
@@ -688,14 +688,7 @@ fn build_rv32_json_success_reports_artifact_paths() {
     std::fs::set_permissions(&cargo, perms).unwrap();
 
     let output = groundhog()
-        .args([
-            "--json",
-            "build",
-            "--target",
-            "rv32",
-            "-p",
-            "demo-contract-rv32",
-        ])
+        .args(["--json", "build", "-p", "demo-contract-rv32"])
         .current_dir(tmp.path())
         .env("PATH", &fake_bin)
         .output()
@@ -1091,6 +1084,8 @@ fn test_integration_reports_local_node_startup_failure() {
             "--json",
             "test",
             "--integration",
+            "--target",
+            "wasm",
             "-p",
             "demo-contract",
             "--",
@@ -1114,7 +1109,7 @@ fn test_integration_reports_local_node_startup_failure() {
 
 #[cfg(unix)]
 #[test]
-fn test_integration_rv32_build_reaches_local_node_startup() {
+fn test_integration_default_rv32_build_reaches_local_node_startup() {
     use std::os::unix::fs::PermissionsExt;
 
     let hogd_dev = fake_hogd_dev_binary();
@@ -1175,15 +1170,7 @@ fn test_integration_rv32_build_reaches_local_node_startup() {
     std::fs::set_permissions(&cargo, perms).unwrap();
 
     let output = groundhog()
-        .args([
-            "--json",
-            "test",
-            "--integration",
-            "--target",
-            "rv32",
-            "-p",
-            "demo-contract",
-        ])
+        .args(["--json", "test", "--integration", "-p", "demo-contract"])
         .current_dir(tmp.path())
         .env("PATH", &fake_bin)
         .env("GROUNDHOG_TEST_METADATA_JSON", metadata_json)
@@ -1198,7 +1185,7 @@ fn test_integration_rv32_build_reaches_local_node_startup() {
         tmp.path()
             .join("target/groundhog/demo_contract.rv32a")
             .is_file(),
-        "integration --target rv32 should lower an RV32 artifact before node startup",
+        "integration should lower an RV32 artifact before node startup by default",
     );
     let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(stderr["ok"], false);
@@ -1556,7 +1543,7 @@ fn deploy_dry_run_json_accepts_rv32_artifact() {
 }
 
 #[test]
-fn deploy_dry_run_auto_resolves_rv32_artifact_by_target() {
+fn deploy_dry_run_auto_resolves_rv32_artifact_by_default() {
     let tmp = TempDir::new().unwrap();
     let config_home = tmp.path().join("config-home");
     let project = tmp.path().join("project");
@@ -1591,7 +1578,7 @@ fn deploy_dry_run_auto_resolves_rv32_artifact_by_target() {
     );
 
     let output = groundhog()
-        .args(["--json", "deploy", "--dry-run", "--target", "rv32"])
+        .args(["--json", "deploy", "--dry-run"])
         .current_dir(&project)
         .env("XDG_CONFIG_HOME", &config_home)
         .output()
