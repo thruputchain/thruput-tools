@@ -189,15 +189,15 @@ pub fn generate_ts_bindings(spec: &ContractSpec, source_name: &str) -> Result<St
             ))
         })
         .collect::<Result<_, CliError>>()?;
-    let public_method_names = public_method_names(spec)?;
-    validate_public_name_collisions(spec, &public_method_names)?;
+    let public_method_names_by_interface = public_method_names_by_interface(spec)?;
+    validate_public_name_collisions(spec, &public_method_names_by_interface)?;
     emit_header(&mut out, source_name, &interfaces);
 
     // 2. Imports
     emit_imports(&mut out, spec);
 
     // 3. Entrypoints
-    emit_entrypoints(&mut out, spec, &public_method_names)?;
+    emit_entrypoints(&mut out, spec, &public_method_names_by_interface)?;
 
     // 4. Named type declarations
     for def in spec.type_defs.iter() {
@@ -213,18 +213,14 @@ pub fn generate_ts_bindings(spec: &ContractSpec, source_name: &str) -> Result<St
     let _ = writeln!(out);
     let _ = writeln!(out, "const namedCodecs = buildNamedCodecs(spec.type_defs);");
 
-    // 7. Per-method functions
+    // 7. Per-interface method objects
     for (iface_index, iface) in spec.interfaces.iter().enumerate() {
-        let iface_name = spec_string_text(&iface.name)?;
-        for (method_index, method) in iface.methods.iter().enumerate() {
-            let _ = writeln!(out);
-            emit_method_function(
-                &mut out,
-                iface_name,
-                method,
-                &public_method_names[iface_index][method_index],
-            )?;
-        }
+        let _ = writeln!(out);
+        emit_interface_object(
+            &mut out,
+            iface,
+            &public_method_names_by_interface[iface_index],
+        )?;
     }
 
     // 8. Event types and decoders
@@ -323,7 +319,7 @@ fn emit_imports(out: &mut String, spec: &ContractSpec) {
     }
 }
 
-/// Emit the `entrypoints` const mapping method names to their IDs.
+/// Emit the `entrypoints` const mapping interface/method names to their IDs.
 fn emit_entrypoints(
     out: &mut String,
     spec: &ContractSpec,
@@ -337,6 +333,7 @@ fn emit_entrypoints(
     for (iface_index, iface) in spec.interfaces.iter().enumerate() {
         let iface_name = spec_string_text(&iface.name)?;
         let iface_vers = spec_string_text(&iface.vers)?;
+        let _ = writeln!(out, "  {iface_name}: {{");
         for (method_index, method) in iface.methods.iter().enumerate() {
             let method_name = spec_string_text(&method.name)?;
             let public_method_name = &public_method_names[iface_index][method_index];
@@ -345,9 +342,10 @@ fn emit_entrypoints(
             let hex = hex::encode(id.as_ref());
             let _ = writeln!(
                 out,
-                "  {public_method_name}: contractEntrypointID(fromHex(\"{hex}\")),",
+                "    {public_method_name}: contractEntrypointID(fromHex(\"{hex}\")),",
             );
         }
+        let _ = writeln!(out, "  }},");
     }
 
     let _ = writeln!(out, "}} as const;");
@@ -673,8 +671,23 @@ fn spec_type_to_ts_literal(ty: &ContractType) -> Result<String, CliError> {
     }
 }
 
-/// Emit an exported TypeScript function for a single contract method.
-fn emit_method_function(
+/// Emit the exported object that groups methods for one contract interface.
+fn emit_interface_object(
+    out: &mut String,
+    iface: &ContractSpecInterface,
+    public_method_names: &[String],
+) -> Result<(), CliError> {
+    let iface_name = spec_string_text(&iface.name)?;
+    let _ = writeln!(out, "export const {iface_name} = {{");
+    for (method_index, method) in iface.methods.iter().enumerate() {
+        emit_interface_method(out, iface_name, method, &public_method_names[method_index])?;
+    }
+    let _ = writeln!(out, "}} as const;");
+    Ok(())
+}
+
+/// Emit a TypeScript object method for a single contract method.
+fn emit_interface_method(
     out: &mut String,
     iface_name: &str,
     method: &ContractSpecMethod,
@@ -683,11 +696,11 @@ fn emit_method_function(
     let method_name = spec_string_text(&method.name)?;
     let has_args = !method.args.is_empty();
 
-    // Function signature
+    // Method signature
     if has_args {
-        let _ = writeln!(out, "export function {public_method_name}(");
-        let _ = writeln!(out, "  contract: ContractAddress,");
-        let _ = writeln!(out, "  gasLimit: GasAmount,");
+        let _ = writeln!(out, "  {public_method_name}(");
+        let _ = writeln!(out, "    contract: ContractAddress,");
+        let _ = writeln!(out, "    gasLimit: GasAmount,");
         let mut args_fields = String::new();
         for (i, arg) in method.args.iter().enumerate() {
             let arg_name = spec_string_text(&arg.name)?;
@@ -698,20 +711,23 @@ fn emit_method_function(
             }
             let _ = write!(args_fields, "{public_arg_name}: {ts_ty}");
         }
-        let _ = writeln!(out, "  args: {{ {args_fields} }},");
-        let _ = writeln!(out, "): Invocation {{");
+        let _ = writeln!(out, "    args: {{ {args_fields} }},");
+        let _ = writeln!(out, "  ): Invocation {{");
     } else {
-        let _ = writeln!(out, "export function {public_method_name}(");
-        let _ = writeln!(out, "  contract: ContractAddress,");
-        let _ = writeln!(out, "  gasLimit: GasAmount,");
-        let _ = writeln!(out, "): Invocation {{");
+        let _ = writeln!(out, "  {public_method_name}(");
+        let _ = writeln!(out, "    contract: ContractAddress,");
+        let _ = writeln!(out, "    gasLimit: GasAmount,");
+        let _ = writeln!(out, "  ): Invocation {{");
     }
 
     // Body
-    let _ = writeln!(out, "  return createInvocation({{");
-    let _ = writeln!(out, "    invoked_address: contract,");
-    let _ = writeln!(out, "    entrypoint: entrypoints.{public_method_name},");
-    let _ = writeln!(out, "    gas_limit: gasLimit,");
+    let _ = writeln!(out, "    return createInvocation({{");
+    let _ = writeln!(out, "      invoked_address: contract,");
+    let _ = writeln!(
+        out,
+        "      entrypoint: entrypoints.{iface_name}.{public_method_name},"
+    );
+    let _ = writeln!(out, "      gas_limit: gasLimit,");
 
     if has_args {
         let arg_refs: Vec<String> = method
@@ -724,7 +740,7 @@ fn emit_method_function(
             .collect::<Result<_, CliError>>()?;
         let _ = writeln!(
             out,
-            "    calldata: encodeCalldata(\
+            "      calldata: encodeCalldata(\
              spec, \"{iface_name}\", \"{method_name}\", \
              [{}], namedCodecs),",
             arg_refs.join(", "),
@@ -732,14 +748,14 @@ fn emit_method_function(
     } else {
         let _ = writeln!(
             out,
-            "    calldata: encodeCalldata(\
+            "      calldata: encodeCalldata(\
              spec, \"{iface_name}\", \"{method_name}\", \
              [], namedCodecs),",
         );
     }
 
-    let _ = writeln!(out, "  }});");
-    let _ = writeln!(out, "}}");
+    let _ = writeln!(out, "    }});");
+    let _ = writeln!(out, "  }},");
     Ok(())
 }
 
@@ -1040,13 +1056,19 @@ fn validate_public_name_collisions(
 
     for (iface_index, iface) in spec.interfaces.iter().enumerate() {
         let iface_name = spec_string_text(&iface.name)?;
-        for (method_index, method) in iface.methods.iter().enumerate() {
+        validate_ts_identifier(iface_name, &format!("interface \"{iface_name}\""))?;
+        reserve_ts_value_name(
+            &mut top_level_values,
+            iface_name.to_owned(),
+            format!("interface \"{iface_name}\""),
+        )?;
+        validate_interface_method_name_collisions(
+            iface_name,
+            iface,
+            &public_method_names[iface_index],
+        )?;
+        for method in iface.methods.iter() {
             let method_name = spec_string_text(&method.name)?;
-            reserve_ts_value_name(
-                &mut top_level_values,
-                public_method_names[iface_index][method_index].clone(),
-                format!("method \"{iface_name}.{method_name}\""),
-            )?;
             validate_method_arg_name_collisions(method_name, method)?;
         }
     }
@@ -1054,41 +1076,43 @@ fn validate_public_name_collisions(
     Ok(())
 }
 
-fn public_method_names(spec: &ContractSpec) -> Result<Vec<Vec<String>>, CliError> {
-    // Duplicate method names are disambiguated within the current generated
-    // module. Adding a new colliding method can therefore rename a previously
-    // unsuffixed helper (for example, `transfer` -> `transferCounter`). Stable
-    // names across spec evolution would require always suffixing methods or
-    // preserving prior generated API state, both broader API choices.
-    let mut base_name_counts = BTreeMap::new();
-    for iface in spec.interfaces.iter() {
-        for method in iface.methods.iter() {
-            let method_name = spec_string_text(&method.name)?;
-            *base_name_counts
-                .entry(to_camel_case(method_name))
-                .or_insert(0) += 1;
-        }
-    }
+fn public_method_names_by_interface(spec: &ContractSpec) -> Result<Vec<Vec<String>>, CliError> {
     spec.interfaces
         .iter()
         .map(|iface| {
-            let iface_name = spec_string_text(&iface.name)?;
-            let iface_suffix = upper_first(&to_camel_case(iface_name));
             iface
                 .methods
                 .iter()
                 .map(|method| {
                     let method_name = spec_string_text(&method.name)?;
-                    let base_name = to_camel_case(method_name);
-                    if base_name_counts[&base_name] > 1 {
-                        Ok(format!("{base_name}{iface_suffix}"))
-                    } else {
-                        Ok(base_name)
-                    }
+                    Ok(to_camel_case(method_name))
                 })
                 .collect::<Result<Vec<_>, CliError>>()
         })
         .collect()
+}
+
+fn validate_interface_method_name_collisions(
+    iface_name: &str,
+    iface: &ContractSpecInterface,
+    public_method_names: &[String],
+) -> Result<(), CliError> {
+    let mut methods: BTreeMap<&str, &str> = BTreeMap::new();
+    for (method_index, method) in iface.methods.iter().enumerate() {
+        let method_name = spec_string_text(&method.name)?;
+        let public_method_name = public_method_names[method_index].as_str();
+        validate_ts_identifier(
+            public_method_name,
+            &format!("method \"{iface_name}.{method_name}\""),
+        )?;
+        if let Some(existing) = methods.get(public_method_name) {
+            return Err(CliError::SpecFailed(format!(
+                "interface \"{iface_name}\" method names \"{existing}\" and \"{method_name}\" both map to \"{public_method_name}\""
+            )));
+        }
+        methods.insert(public_method_name, method_name);
+    }
+    Ok(())
 }
 
 fn reserve_ts_value_name(
@@ -1105,6 +1129,30 @@ fn reserve_ts_value_name(
     Ok(())
 }
 
+fn validate_ts_identifier(name: &str, source: &str) -> Result<(), CliError> {
+    if !is_ts_identifier(name) || name == "__proto__" {
+        return Err(CliError::SpecFailed(format!(
+            "generated TypeScript identifier \"{name}\" for {source} is invalid"
+        )));
+    }
+    Ok(())
+}
+
+fn is_ts_identifier(name: &str) -> bool {
+    // This intentionally validates identifier shape only. Reserved TypeScript
+    // binding words are left to the TypeScript parser for now; a complete
+    // solution should use a parser/lexer-backed keyword table rather than a
+    // hand-maintained list.
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !(first == '_' || first == '$' || first.is_ascii_alphabetic()) {
+        return false;
+    }
+    chars.all(|ch| ch == '_' || ch == '$' || ch.is_ascii_alphanumeric())
+}
+
 fn validate_method_arg_name_collisions(
     method_name: &str,
     method: &ContractSpecMethod,
@@ -1113,6 +1161,10 @@ fn validate_method_arg_name_collisions(
     for arg in method.args.iter() {
         let arg_name = spec_string_text(&arg.name)?;
         let public_arg_name = to_camel_case(arg_name);
+        validate_ts_identifier(
+            &public_arg_name,
+            &format!("method \"{method_name}\" argument \"{arg_name}\""),
+        )?;
         if let Some(existing) = args.get(&public_arg_name) {
             return Err(CliError::SpecFailed(format!(
                 "method \"{method_name}\" argument names \"{existing}\" and \"{arg_name}\" both map to \"{public_arg_name}\""
@@ -1146,18 +1198,6 @@ fn to_camel_case(name: &str) -> String {
         }
     }
 
-    out
-}
-
-fn upper_first(name: &str) -> String {
-    let mut chars = name.chars();
-    let Some(first) = chars.next() else {
-        return String::new();
-    };
-
-    let mut out = String::new();
-    out.extend(first.to_uppercase());
-    out.extend(chars);
     out
 }
 
@@ -1593,7 +1633,7 @@ export type Result =
     }
 
     #[test]
-    fn duplicate_method_names_across_interfaces_are_disambiguated() {
+    fn duplicate_method_names_across_interfaces_are_scoped() {
         let spec = ContractSpec {
             interfaces: vec![
                 ContractSpecInterface {
@@ -1638,12 +1678,11 @@ export type Result =
         };
 
         let output = generate_ts_bindings(&spec, "token.wasm").unwrap();
-        assert!(output.contains("initializeERC20:"));
-        assert!(output.contains("initializeERC20Metadata:"));
-        assert!(output.contains("export function initializeERC20("));
-        assert!(output.contains("export function initializeERC20Metadata("));
-        assert!(output.contains("entrypoint: entrypoints.initializeERC20,"));
-        assert!(output.contains("entrypoint: entrypoints.initializeERC20Metadata,"));
+        assert!(output.contains("export const ERC20 = {"));
+        assert!(output.contains("export const ERC20Metadata = {"));
+        assert!(output.contains("  initialize("));
+        assert!(output.contains("entrypoint: entrypoints.ERC20.initialize,"));
+        assert!(output.contains("entrypoint: entrypoints.ERC20Metadata.initialize,"));
         assert!(output.contains("spec, \"ERC20\", \"initialize\""));
         assert!(output.contains("spec, \"ERC20Metadata\", \"initialize\""));
     }
@@ -1675,10 +1714,34 @@ export type Result =
     }
 
     #[test]
-    fn method_name_colliding_with_import_errors() {
+    fn interface_name_colliding_with_import_errors() {
+        let spec = counter_spec_with_interface_name("fromHex", vec![], false);
+
+        let err = generate_ts_bindings(&spec, "counter.wasm").unwrap_err();
+        assert!(err.to_string().contains("fromHex"));
+    }
+
+    #[test]
+    fn interface_name_colliding_with_event_decoder_errors() {
+        let spec = counter_spec_with_interface_name("decodeEvent", vec![], true);
+
+        let err = generate_ts_bindings(&spec, "counter.wasm").unwrap_err();
+        assert!(err.to_string().contains("decodeEvent"));
+    }
+
+    #[test]
+    fn invalid_interface_name_errors() {
+        let spec = counter_spec_with_interface_name("erc20.v1", vec![], false);
+
+        let err = generate_ts_bindings(&spec, "counter.wasm").unwrap_err();
+        assert!(err.to_string().contains("erc20.v1"));
+    }
+
+    #[test]
+    fn invalid_method_name_errors() {
         let spec = counter_spec_with_methods(
             vec![ContractSpecMethod {
-                name: spec_string("from_hex"),
+                name: spec_string("transfer-from"),
                 args: vec![].try_into().unwrap(),
                 return_type: ContractType::Void,
             }],
@@ -1686,31 +1749,59 @@ export type Result =
         );
 
         let err = generate_ts_bindings(&spec, "counter.wasm").unwrap_err();
-        assert!(err.to_string().contains("fromHex"));
+        assert!(err.to_string().contains("transfer-from"));
     }
 
     #[test]
-    fn method_name_colliding_with_event_decoder_errors() {
+    fn proto_method_name_errors() {
         let spec = counter_spec_with_methods(
             vec![ContractSpecMethod {
-                name: spec_string("decode_event"),
+                name: spec_string("__proto__"),
                 args: vec![].try_into().unwrap(),
                 return_type: ContractType::Void,
             }],
-            true,
+            false,
         );
 
         let err = generate_ts_bindings(&spec, "counter.wasm").unwrap_err();
-        assert!(err.to_string().contains("decodeEvent"));
+        assert!(err.to_string().contains("__proto__"));
+    }
+
+    #[test]
+    fn invalid_method_arg_name_errors() {
+        let spec = counter_spec_with_methods(
+            vec![ContractSpecMethod {
+                name: spec_string("set_owner"),
+                args: vec![ContractField {
+                    name: spec_string("owner-id"),
+                    ty: ContractType::Address,
+                }]
+                .try_into()
+                .unwrap(),
+                return_type: ContractType::Void,
+            }],
+            false,
+        );
+
+        let err = generate_ts_bindings(&spec, "counter.wasm").unwrap_err();
+        assert!(err.to_string().contains("owner-id"));
     }
 
     fn counter_spec_with_methods(
         methods: Vec<ContractSpecMethod>,
         include_events: bool,
     ) -> ContractSpec {
+        counter_spec_with_interface_name("Counter", methods, include_events)
+    }
+
+    fn counter_spec_with_interface_name(
+        iface_name: &str,
+        methods: Vec<ContractSpecMethod>,
+        include_events: bool,
+    ) -> ContractSpec {
         ContractSpec {
             interfaces: vec![ContractSpecInterface {
-                name: spec_string("Counter"),
+                name: spec_string(iface_name),
                 vers: spec_string("0.1.0"),
                 throws: vec![].try_into().unwrap(),
                 methods: methods.try_into().unwrap(),
@@ -1771,6 +1862,7 @@ export type Result =
 
         // Entrypoints block
         assert!(output.contains("const entrypoints = {"));
+        assert!(output.contains("  Counter: {"));
         assert!(output.contains("} as const;"));
 
         // Spec literal
@@ -1779,22 +1871,23 @@ export type Result =
         // Named codecs
         assert!(output.contains("const namedCodecs = buildNamedCodecs(spec.type_defs);"));
 
-        // Zero-arg function has no args parameter
-        assert!(output.contains("export function get("));
-        let get_fn = output.split("export function get(").nth(1).unwrap();
+        // Zero-arg method has no args parameter
+        assert!(output.contains("export const Counter = {"));
+        assert!(output.contains("  get("));
+        let get_fn = output.split("  get(").nth(1).unwrap();
         let get_sig = &get_fn[..get_fn.find("): Invocation").unwrap()];
         assert!(
             !get_sig.contains("args:"),
-            "zero-arg function should not have args parameter"
+            "zero-arg method should not have args parameter"
         );
 
-        // Function with args
-        assert!(output.contains("export function increment("));
-        let inc_fn = output.split("export function increment(").nth(1).unwrap();
+        // Method with args
+        assert!(output.contains("  increment("));
+        let inc_fn = output.split("  increment(").nth(1).unwrap();
         let inc_sig = &inc_fn[..inc_fn.find("): Invocation").unwrap()];
         assert!(
             inc_sig.contains("args:"),
-            "function with args should have args parameter"
+            "method with args should have args parameter"
         );
         assert!(inc_sig.contains("amount: bigint"));
 
@@ -1923,30 +2016,31 @@ export type Result =
             "Internal variant missing"
         );
 
-        // Function declarations
+        // Interface object methods
         assert!(
-            output.contains("export function transfer("),
-            "transfer function missing"
+            output.contains("export const ERC20 = {"),
+            "ERC20 interface object missing"
+        );
+        assert!(output.contains("  transfer("), "transfer method missing");
+        assert!(
+            output.contains("  getBalance("),
+            "getBalance method missing"
         );
         assert!(
-            output.contains("export function getBalance("),
-            "getBalance function missing"
-        );
-        assert!(
-            output.contains("export function getBalanceOf("),
-            "getBalanceOf function missing"
+            output.contains("  getBalanceOf("),
+            "getBalanceOf method missing"
         );
         assert!(
             !output.contains("export function get_balance("),
-            "get_balance function should be camelCase"
+            "get_balance method should be camelCase"
         );
         assert!(
             !output.contains("export function get_balance_of("),
-            "get_balance_of function should be camelCase"
+            "get_balance_of method should be camelCase"
         );
 
         // Typed arguments
-        let transfer_fn = output.split("export function transfer(").nth(1).unwrap();
+        let transfer_fn = output.split("  transfer(").nth(1).unwrap();
         let transfer_sig = &transfer_fn[..transfer_fn.find("): Invocation").unwrap()];
         assert!(
             transfer_sig.contains("to: ContractAddress"),
@@ -1957,10 +2051,7 @@ export type Result =
             "transfer 'amount' arg type mismatch"
         );
 
-        let get_balance_of_fn = output
-            .split("export function getBalanceOf(")
-            .nth(1)
-            .unwrap();
+        let get_balance_of_fn = output.split("  getBalanceOf(").nth(1).unwrap();
         let get_balance_of_sig =
             &get_balance_of_fn[..get_balance_of_fn.find("): Invocation").unwrap()];
         assert!(
@@ -1968,8 +2059,8 @@ export type Result =
             "getBalanceOf 'accountId' arg type mismatch"
         );
         assert!(
-            output.contains("entrypoint: entrypoints.getBalanceOf"),
-            "getBalanceOf should read the camelCase entrypoint key"
+            output.contains("entrypoint: entrypoints.ERC20.getBalanceOf"),
+            "getBalanceOf should read the nested camelCase entrypoint key"
         );
         assert!(
             output.contains("\"get_balance_of\""),
@@ -2081,8 +2172,8 @@ export type Result =
             "Tree.right field missing"
         );
 
-        // depth function uses Named("Tree") argument
-        let depth_fn = output.split("export function depth(").nth(1).unwrap();
+        // depth method uses Named("Tree") argument
+        let depth_fn = output.split("  depth(").nth(1).unwrap();
         let depth_sig = &depth_fn[..depth_fn.find("): Invocation").unwrap()];
         assert!(
             depth_sig.contains("tree: Tree"),
