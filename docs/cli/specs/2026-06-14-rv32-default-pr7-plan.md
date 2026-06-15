@@ -76,8 +76,8 @@ Run before merging PR7:
 For local live smokes use:
 
 ```bash
-HOG_DEVNODE_BINARY=/Users/markmayo/code/gh/hogd/build/hogd/devnode/hog-devnode
-GROUNDHOG_HOG_DEVNODE_BINARY=/Users/markmayo/code/gh/hogd/build/hogd/devnode/hog-devnode
+HOG_DEVNODE_BINARY=/path/to/hog-devnode
+GROUNDHOG_HOG_DEVNODE_BINARY=/path/to/hog-devnode
 HOGD_PROTOCOL_OVERRIDE=hogp/7874f05decb9
 ```
 
