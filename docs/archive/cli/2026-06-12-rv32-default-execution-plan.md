@@ -1,6 +1,6 @@
 # RV32 Default Execution Plan
 
-Status: active plan
+Status: shipped; release hygiene captured below
 
 Owner: CLI / dev tooling
 
@@ -15,12 +15,13 @@ fallback for differential debugging.
   writes `target/groundhog/<contract>.rv32a`, and finalizes contract-spec
   sidecars from the ELF/artifact pair.
 - Fresh scaffolds include the RV32 bin wrapper required by the RV32 build path.
-- `groundhog build` still defaults to WASM.
+- `groundhog build` defaults to RV32. WASM remains available through
+  `--target wasm`.
 - `groundhog deploy` accepts explicit `.wasm` and `.rv32a` artifacts through
   `--artifact`, auto-resolves by `--target`, and wraps deploy bytes as
   `Contract::kWasmi` or `Contract::kRv32` by artifact kind.
-- `groundhog test --integration` defaults to WASM and accepts `--target rv32`
-  to build/deploy an RV32 artifact against `hog-devnode`.
+- `groundhog test --integration` defaults to RV32 and accepts `--target wasm`
+  for differential debugging against `hog-devnode`.
 - `groundhog test --json` schema v3 reports artifact metadata under
   `artifact.kind` and `artifact.path` instead of a top-level `wasm` field.
 - `hogsim` manifests and result contracts now use artifact-neutral
@@ -61,7 +62,7 @@ Files:
 
 - `docs/README.md`
 - `docs/cli/roadmap.md`
-- `docs/cli/specs/2026-06-12-rv32-default-execution-plan.md`
+- `docs/archive/cli/2026-06-12-rv32-default-execution-plan.md`
 
 Acceptance:
 
@@ -145,7 +146,7 @@ Acceptance:
 
 ## PR 3: Live RV32 Runtime Proof
 
-Status: blocked by current local `hog-devnode` RV32 deploy behavior.
+Status: resolved by hogd #2640.
 
 Goal: prove the current pinned/minimum `hog-devnode` executes `kRv32`.
 
@@ -210,6 +211,8 @@ Acceptance:
 - Explicit WASM integration execution remains available.
 
 ## PR 5: Hogsim Artifact Schema And RV32 Deploy
+
+Status: shipped in the RV32 default branch.
 
 Goal: intentionally break `hogsim` manifest/results from WASM-only fields to an
 artifact-neutral shape.
@@ -286,6 +289,8 @@ tests remain responsible for asserting method status and return data.
 
 ## PR 7: Flip Defaults To RV32
 
+Status: shipped in PR7.
+
 Goal: make RV32 the default execution artifact.
 
 Tasks:
@@ -318,11 +323,20 @@ Run the relevant subset for each PR, and the full matrix before PR 7 lands:
 - `groundhog --json test --integration --target rv32 --hogd-protocol <token>`
 - `hogsim` RV32 scenario smoke
 
-## Open Follow-Ups
+## Follow-Up Resolution
 
-- Record the exact released `hog-devnode` binary/protocol/runtime version that
-  includes hogd #2640 once it is cut.
-- Decide whether the differential gate lives as an automated test, a smoke
-  script, or a documented release checklist command.
-- Update bootstrap/runtime docs that still reference `dev-wallet.wasm` once the
-  runtime artifact naming is settled.
+- Minimum runtime: use a `hog-devnode` built from hogd
+  `7ab700bf2073c8b47becc6bdf476aa2fb4f2aa35` or newer, advertising protocol
+  `hogp/7874f05decb9`, for RV32 gas table v3 / artifact format v4 execution.
+  No release tag is recorded in this repo yet; replace the commit/protocol pair
+  with a released version once hogd cuts one.
+- Differential gate: keep
+  `groundhog test --integration --differential --hogd-protocol hogp/7874f05decb9`
+  as the documented release-checklist command for the current minimum runtime.
+  It already builds both artifact kinds, deploys each to isolated ephemeral local
+  nodes, runs the same integration test target, and compares parsed outcomes.
+  Add a wrapper script only if CI needs a stable shell entrypoint later.
+- Bootstrap/runtime docs: dev-wallet artifact hints are now documented as opaque
+  artifact resolution hints rather than `.wasm`-specific paths. The default user
+  contract artifact is RV32; the bootstrap dev-wallet profile is backend-owned
+  runtime state and can keep its own internal artifact format.
