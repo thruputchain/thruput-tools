@@ -92,9 +92,10 @@ Implementation status:
   (`groundhog-node-supervisor`) around a hogd-owned `hogd-dev`
   subprocess. Historical design context lives in
   [`../archive/cli/2026-04-25-hogd-dev-node-hybrid.md`](../archive/cli/2026-04-25-hogd-dev-node-hybrid.md).
-- The no-key-required call dry-run / inspect split now has a draft design
-  in [`specs/2026-05-07-view-rpc-and-receipt-return-data.md`](specs/2026-05-07-view-rpc-and-receipt-return-data.md);
-  it runs as a parallel cross-team track to PR 5 (see Phase 2 tracker).
+- The no-key-required call dry-run / inspect split shipped through
+  `groundhog_view`, `groundhog view`, and receipt return/abort data. Historical
+  design context lives in
+  [`../archive/cli/2026-05-07-view-rpc-and-receipt-return-data.md`](../archive/cli/2026-05-07-view-rpc-and-receipt-return-data.md).
 - Still intentionally deferred: richer storage-cost reporting and
   `groundhog inspect`.
 
@@ -246,14 +247,13 @@ Maintenance rules:
     as the CLI surface for raw committed storage reads. Transaction detail
     and dev-control are deferred; see
     [`specs/2026-05-07-transaction-detail-options.md`](specs/2026-05-07-transaction-detail-options.md).
-  - [ ] Read DX follow-ups (parallel track to PR 5; cross-team).
-    See [`specs/2026-05-07-view-rpc-and-receipt-return-data.md`](specs/2026-05-07-view-rpc-and-receipt-return-data.md).
+  - [x] Read DX follow-ups (parallel track to PR 5; cross-team).
+    See [`../archive/cli/2026-05-07-view-rpc-and-receipt-return-data.md`](../archive/cli/2026-05-07-view-rpc-and-receipt-return-data.md).
     Closes the "no-key-required call dry-run / inspect split" deferred item
     below and the "Keep call return-data surfacing as a separate follow-up"
     note in the supervisor PR plan.
-    - [ ] Milestone A — receipt return data and abort data on
-      `TransactionReceipt`. Requires hogd `TxEventLog` extension and
-      indexer migration; Rust mapping waits on protocol-rs publish.
+    - [x] Milestone A — receipt return data and abort data on
+      `TransactionReceipt`.
     - [x] Milestone B — `groundhog_view` RPC and `groundhog view` CLI
       command, landed with sandboxed-simulation semantics.
 
@@ -516,12 +516,11 @@ parked until a real hogd-owned dev method needs them.
   protocol-rs bindings, Rust gateway/local-node wiring, CLI, smoke
   coverage, and spec rewrite all landed with sandboxed-simulation
   semantics.  See
-  [`specs/2026-05-07-view-rpc-and-receipt-return-data.md`](specs/2026-05-07-view-rpc-and-receipt-return-data.md).
+  [`../archive/cli/2026-05-07-view-rpc-and-receipt-return-data.md`](../archive/cli/2026-05-07-view-rpc-and-receipt-return-data.md).
 - Milestone A (receipt return-data + abort-data on
-  `TransactionReceipt`): **still open**.  Requires hogd `TxEventLog`
-  extension and indexer migration; Rust mapping follows protocol-rs
-  publish.  The Rust scaffolding for `abort_data` already exists; both
-  backends hardcode `return_data: None` until hogd supplies the bytes.
+  `TransactionReceipt`): **shipped**.  Hogd-dev indexer output is mapped into
+  `TransactionReceipt.return_data` / `abort_data`; deployed-address resolution,
+  CLI details, and simulator deployment records consume the fields.
 
 **RV32 default runtime pivot:**
 

@@ -8,7 +8,7 @@ shape, and on what timeline.
 
 **Companion to:**
 
-- [`2026-05-07-view-rpc-and-receipt-return-data.md`](2026-05-07-view-rpc-and-receipt-return-data.md)
+- [`../../archive/cli/2026-05-07-view-rpc-and-receipt-return-data.md`](../../archive/cli/2026-05-07-view-rpc-and-receipt-return-data.md)
   – the receipt return-data + view RPC spec. Milestone A there
   delivers `return_data` and `abort_data` on the public receipt, which
   reframes the everyday "what happened to my tx" loop.
@@ -123,7 +123,7 @@ Confirmed by reading the current code:
   internal-ordering only and should not affect WASM-visible behavior
   or per-tx trace shape. Worth confirming with hogd team before
   committing to replay-based fidelity.
-- M-A (`docs/cli/specs/2026-05-07-view-rpc-and-receipt-return-data.md`)
+- M-A (`docs/archive/cli/2026-05-07-view-rpc-and-receipt-return-data.md`)
   delivers `return_data` and `abort_data` on the public receipt. With
   M-A, the receipt RPC alone covers status + return value + revert
   reason for the just-submitted loop.

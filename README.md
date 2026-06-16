@@ -211,12 +211,12 @@ point — link will land here once it ships.
 
 ### Public surface design notes
 
-Recent and active design notes for the JSON-RPC surface:
+Current and historical design notes for the JSON-RPC surface:
 
-- [View RPC and receipt return-data](docs/cli/specs/2026-05-07-view-rpc-and-receipt-return-data.md)
-  — read-only contract calls plus structured `return_data` /
+- [View RPC and receipt return-data](docs/archive/cli/2026-05-07-view-rpc-and-receipt-return-data.md)
+  — sandboxed contract views plus structured `return_data` /
   `abort_data` on receipts.
-- [View RPC protocol-rs follow-up](docs/cli/specs/2026-05-13-view-rpc-protocol-rs-follow-up.md)
+- [View RPC protocol-rs follow-up](docs/archive/cli/2026-05-13-view-rpc-protocol-rs-follow-up.md)
   — protocol/protocol-rs service contract used to wire `groundhog_view`
   to hogd.
 - [Transaction detail options](docs/cli/specs/2026-05-07-transaction-detail-options.md)

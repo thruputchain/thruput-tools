@@ -566,16 +566,8 @@ history retains the design context for anything not currently active.
   hogd-dev subprocess contract.
 - `docs/cli/specs/2026-04-14-bundled-wasm-opt-design.md` — deferred
   note for possible future bundled wasm-opt work.
-- `docs/cli/specs/2026-05-03-ts-codegen-design.md` — `groundhog codegen
-  ts` TypeScript binding codegen.
-- `docs/cli/specs/2026-05-07-view-rpc-and-receipt-return-data.md` —
-  view RPC and structured receipt return-data wire design.
 - `docs/cli/specs/2026-05-07-transaction-detail-options.md` —
   transaction detail / receipt response shape.
-- `docs/cli/specs/2026-05-11-openrpc-wire-version-design.md` — OpenRPC
-  wire-version policy and `groundhog_version` exposure.
-- `docs/cli/specs/2026-05-13-view-rpc-protocol-rs-follow-up.md` —
-  protocol/protocol-rs service contract needed to wire view execution.
 - `docs/gateway/roadmap.md` — gateway backlog and sequencing.
 - `docs/gateway/system-design.md` — gateway architecture.
 - `docs/gateway/runtime-manifest.md` — runtime manifest quickstart for
@@ -594,6 +586,14 @@ history retains the design context for anything not currently active.
 - `docs/archive/cli/2026-04-25-hogd-dev-node-hybrid.md` — historical
   durable-local-node design context, retained after the hogd-dev
   supervisor path shipped.
+- `docs/archive/cli/2026-05-03-ts-codegen-design.md` — shipped
+  TypeScript binding codegen design.
+- `docs/archive/cli/2026-05-07-view-rpc-and-receipt-return-data.md` —
+  shipped view RPC and structured receipt return-data wire design.
+- `docs/archive/cli/2026-05-11-openrpc-wire-version-design.md` — shipped
+  OpenRPC wire-version policy and `groundhog_version` design.
+- `docs/archive/cli/2026-05-13-view-rpc-protocol-rs-follow-up.md` —
+  shipped protocol/protocol-rs service contract for view execution.
 - `docs/archive/cli/foundry.md` — Foundry DX analysis kept as design
   reference; not a current task list.
 
