@@ -525,7 +525,8 @@ parked until a real hogd-owned dev method needs them.
 
 **RV32 default runtime pivot:**
 
-Detailed task plan: [RV32 default execution plan](specs/2026-06-12-rv32-default-execution-plan.md).
+Historical task plan:
+[RV32 default execution plan](../archive/cli/2026-06-12-rv32-default-execution-plan.md).
 
 Current shipped pieces are enough to build, inspect, deploy, and integration-test
 RV32 artifacts as the default deploy/test artifact:
@@ -582,6 +583,12 @@ Defaulting to RV32 also means older `hog-devnode` binaries that cannot execute
 prefer pinning/documenting the minimum `hog-devnode` protocol/runtime version
 over adding a compatibility capability probe unless a real multi-version need
 appears.
+
+Current minimum runtime reference: use a `hog-devnode` built from hogd
+`7ab700bf2073c8b47becc6bdf476aa2fb4f2aa35` or newer, advertising protocol
+`hogp/7874f05decb9`, for RV32 gas table v3 / artifact format v4 execution.
+Follow-up: replace this commit/protocol pair with the released `hog-devnode`
+version once hogd cuts one.
 
 **Phase 3 testing DX, after `--integration` v1:**
 

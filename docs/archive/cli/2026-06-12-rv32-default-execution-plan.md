@@ -62,7 +62,7 @@ Files:
 
 - `docs/README.md`
 - `docs/cli/roadmap.md`
-- `docs/cli/specs/2026-06-12-rv32-default-execution-plan.md`
+- `docs/archive/cli/2026-06-12-rv32-default-execution-plan.md`
 
 Acceptance:
 
