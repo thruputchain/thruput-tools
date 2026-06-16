@@ -330,11 +330,12 @@ Run the relevant subset for each PR, and the full matrix before PR 7 lands:
   `hogp/7874f05decb9`, for RV32 gas table v3 / artifact format v4 execution.
   No release tag is recorded in this repo yet; replace the commit/protocol pair
   with a released version once hogd cuts one.
-- Differential gate: keep `groundhog test --integration --differential` as the
-  documented release-checklist command. It already builds both artifact kinds,
-  deploys each to isolated ephemeral local nodes, runs the same integration test
-  target, and compares parsed outcomes. Add a wrapper script only if CI needs a
-  stable shell entrypoint later.
+- Differential gate: keep
+  `groundhog test --integration --differential --hogd-protocol hogp/7874f05decb9`
+  as the documented release-checklist command for the current minimum runtime.
+  It already builds both artifact kinds, deploys each to isolated ephemeral local
+  nodes, runs the same integration test target, and compares parsed outcomes.
+  Add a wrapper script only if CI needs a stable shell entrypoint later.
 - Bootstrap/runtime docs: dev-wallet artifact hints are now documented as opaque
   artifact resolution hints rather than `.wasm`-specific paths. The default user
   contract artifact is RV32; the bootstrap dev-wallet profile is backend-owned
