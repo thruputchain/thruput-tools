@@ -1,14 +1,10 @@
 # Groundhog Developer Tools
 
-Off-chain developer tooling for the Groundhog smart-contract platform:
-the `groundhog` CLI, a JSON-RPC gateway, a reusable JSON-RPC server
-layer, a transaction signing library, and a typed JSON-RPC client. The
-canonical OpenRPC artifact for downstream SDKs is produced from this
-monorepo.
+Off-chain developer tooling for Groundhog smart contracts: the `groundhog` CLI,
+JSON-RPC gateway, reusable server layer, signing library, typed client, simulator,
+benchmark harness, and canonical OpenRPC artifact.
 
-## Quick orientation
-
-Two audiences land here. Skip to whichever fits:
+## Quick Orientation
 
 - **Building on Groundhog?** (writing contracts, building SDKs,
   integrating with the JSON-RPC API) → [Building on Groundhog](#building-on-groundhog).
@@ -18,10 +14,10 @@ Two audiences land here. Skip to whichever fits:
 
 ## Building on Groundhog
 
-### Local dev path
+### Local Dev Path
 
-The `groundhog` CLI runs an isolated Groundhog chain in a `hog-devnode`
-subprocess and gives you a normal dev loop on top:
+The CLI supervises `hog-devnode`, serves the public JSON-RPC surface, and runs
+the contract loop locally:
 
 ```bash
 cargo install --path crates/tools/cli
@@ -30,38 +26,26 @@ groundhog login                  # one-time; early-access registry auth
 groundhog new my-counter && cd my-counter
 groundhog build                   # RV32 artifact by default
 groundhog test                   # executor-backed WASM tests
+
 # in another terminal
 groundhog node --hog-devnode-binary /path/to/hog-devnode
 groundhog deploy
 groundhog call my-counter get
+
 # one-command local-node integration path; add --target wasm for WASM artifacts
 GROUNDHOG_HOG_DEVNODE_BINARY=/path/to/hog-devnode groundhog test --integration
+
 # differential gate: WASM and RV32 must both pass the same tests
 GROUNDHOG_HOG_DEVNODE_BINARY=/path/to/hog-devnode groundhog test --integration --differential
 ```
 
 `groundhog login` is currently required for the Groundhog contract SDK
-to resolve from the private crate registry that `groundhog new` writes
-into the project's `Cargo.toml`. This is an early-access constraint
-and will relax when the SDK ships publicly.
+to resolve from the private crate registry. This early-access constraint will
+relax when the SDK ships publicly.
 
-`hog-devnode` is the single-process Groundhog node implementation used
-for development — scheduler, indexer, and storage in one binary. The
-`groundhog node` supervisor manages its lifecycle and serves the
-public JSON-RPC on top, so every CLI command (`deploy`, `call`,
-receipts, events, storage reads) talks to the same JSON-RPC surface
-an SDK would.
-
-`groundhog node` keeps stdout script-safe. In human mode stdout carries
-status lines; in `--json` mode stdout carries the startup JSON payload.
-Child-process logs are requested from `hog-devnode` as newline-delimited JSON on
-stderr, parsed by `node-supervisor`, and re-emitted through Rust `tracing` with
-`hogd_timestamp_ms`, `hogd_target`, `hogd_file`, `hogd_line`, and
-`hogd_fields` metadata.
-The default `groundhog node` output is the quiet golden path; use
-`groundhog node -v` / `--verbose` for the normal debugging view, including
-with `--json` because logs stay on stderr, and `RUST_LOG` for exact tracing
-filters.
+`groundhog node` is script-safe: human status or startup JSON goes to stdout;
+child logs stay on stderr. Use `-v` / `--verbose` for normal debugging and
+`RUST_LOG` for exact tracing filters.
 
 `groundhog test --integration` uses that same local-node path without a
 separate terminal: it builds the selected artifact (`--target rv32` by default,
@@ -77,10 +61,8 @@ isolated ephemeral nodes, and fails unless both runs pass with matching parsed
 test outcomes.
 
 For gateway and benchmark runs, `hog-devnode` also writes a runtime manifest
-describing the live x23 endpoints, bootstrapped dev wallets, and funding
-state. `groundhog node --json` reports the manifest under
-`data.runtime_manifest.path`; the standalone gateway and benchmark harness can
-consume the same file:
+describing live x23 endpoints, bootstrapped dev wallets, and funding. The
+standalone gateway and benchmark harness consume the same file:
 
 ```bash
 # in one terminal
@@ -94,20 +76,13 @@ groundhog-bench --url http://127.0.0.1:9546 \
   --method sendRawTransaction
 ```
 
-When testing a local `hog-devnode` build whose `hogp/<hash>` is newer than the
-published Rust protocol crates, pass the token explicitly with
-`groundhog node --hogd-protocol hogp/<hash>`. This only overrides the intro
-handshake string; if the XDR wire shape has actually changed, the generated
-client still fails on the affected RPC.
+For local protocol skew, pass `groundhog node --hogd-protocol hogp/<hash>`. This
+only overrides the x23 intro token; XDR shape mismatches still fail in generated
+clients.
 
-CLI commands using local dev keys (`dev-0`, `dev-1`, ...) read the runtime
-manifest for wallet-address discovery. `groundhog node` writes
-`.groundhog/local-node.json` when launched from a project, so commands in
-another terminal can discover the live RPC URL and manifest automatically, and
-removes that state on shutdown. This project-local state only fills missing
-dev-key config or replaces loopback RPC URLs; scripts and non-local profiles
-can also set `GROUNDHOG_RUNTIME_MANIFEST` or
-`profile.<name>.runtime_manifest` explicitly.
+CLI dev keys (`dev-0`, `dev-1`, ...) use the runtime manifest for wallet-address
+discovery. Project-local nodes write `.groundhog/local-node.json`; scripts can
+set `GROUNDHOG_RUNTIME_MANIFEST` or `profile.<name>.runtime_manifest`.
 
 See [Runtime Manifest Quickstart](docs/gateway/runtime-manifest.md) for the
 full CLI/gateway/bench loop,
@@ -118,35 +93,18 @@ for the v1 JSON shape.
 
 ### Releases
 
-There are two release workflows, but only one human entrypoint:
+One normal human entrypoint: run the **Release package** GitHub Actions workflow.
 
 - `.github/workflows/publish.yml` publishes the Rust crates to the private
-  `groundhog` Cargo registry and owns release orchestration.
+  `groundhog` Cargo registry, creates and pushes the matching `vX.Y.Z` tag, then
+  dispatches binary packaging.
 - `.github/workflows/release.yml` is dispatch-only and internal to
-  `publish.yml`. It builds Linux `hog-gateway`, `groundhog`, `rv32-lower`, and
-  `hogsim` binaries, packages each app as a per-target `.tar.gz`, and attaches
-  the archives plus `SHA256SUMS` to a GitHub Release.
+  `publish.yml`. Do not run it directly for normal releases.
 
-For a normal release, bump the workspace version in `Cargo.toml` and keep the
-internal workspace dependency pins in sync. Then run the **Release package**
-workflow manually from GitHub Actions. That workflow dry-runs publishing,
-creates the matching local tag from the Cargo version (for example `v0.3.6`),
-publishes the crates, pushes the tag after publishing succeeds, and explicitly
-dispatches the binary release workflow on that same tag.
+Before release, bump the workspace version in `Cargo.toml` and keep internal
+workspace dependency pins aligned. Do not manually push `v*` tags.
 
-Do not run `.github/workflows/release.yml` directly for normal releases and do
-not manually push `v*` tags. Direct human dispatch of the release workflow
-fails; it must be dispatched by the publish workflow. The release workflow
-verifies that the matching `groundhog-cli` and `groundhog-rv32-lower` crate
-versions already exist in the private registry before it uploads binary assets.
-`hog-gateway` is built from this repository for the GitHub Release, but its binary
-crate is not published to the Cargo registry. `hogsim` is also a binary release
-artifact only. `groundhog-rv32-lower`, by contrast, is published, so it is
-consumable as a library (e.g. from sdk_rs) as well as via its `rv32-lower`
-binary.
-
-The result is one matching version across the Cargo crates, git tag, and
-GitHub Release. Release assets follow this naming pattern:
+Release assets:
 
 ```text
 hog-gateway-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz
@@ -156,12 +114,11 @@ hogsim-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz
 SHA256SUMS
 ```
 
-Each archive contains one app binary plus `README.md` and `LICENSE`. The
-release repo can consume the `hog-gateway` archive by pinning `groundhog-rpc` in
-`release-manifest.toml`; CLI packaging can consume the `groundhog` archive the
-same way, and simulator packaging can consume the `hogsim` archive.
+Each archive contains one app binary plus `README.md` and `LICENSE`. `hog-gateway`
+and `hogsim` are binary release artifacts only; `groundhog-rv32-lower` is also a
+published crate/library.
 
-### The API surface
+### API Surface
 
 The JSON-RPC contract lives in the OpenRPC artifact at
 [`crates/json-rpc/open-rpc-spec/snapshots/groundhog-spec.json`](crates/json-rpc/open-rpc-spec/snapshots/groundhog-spec.json),
@@ -209,7 +166,7 @@ The canonical TS SDK that codegens against the OpenRPC artifact and
 sits on top of those primitives is the right consumer-facing entry
 point — link will land here once it ships.
 
-### Public surface design notes
+### Public Surface Design Notes
 
 Current and historical design notes for the JSON-RPC surface:
 
@@ -230,7 +187,7 @@ version. SDKs should pin on `wireFormat` from `groundhog_version`;
 workspace releases such as `0.3.x` identify builds, not the JSON-RPC
 contract.
 
-### Mini-glossary
+### Mini-Glossary
 
 Terms you'll encounter in the CLI output, the OpenRPC artifact, or
 this repo's docs:
@@ -253,8 +210,7 @@ this repo's docs:
 
 ### Crate Layout
 
-Workspace crates are grouped by boundary instead of kept flat under
-`crates/`:
+Workspace crates are grouped by boundary:
 
 - [`crates/json-rpc/`](crates/json-rpc/) — public JSON-RPC API surface,
   gateway, typed client, shared server implementation, and OpenRPC spec
@@ -284,7 +240,7 @@ Workspace crates are grouped by boundary instead of kept flat under
 | Dev | [`bench`](crates/dev/bench/) | Benchmark harnesses |
 | Dev | [`sim`](crates/dev/sim/) | `hogsim` stateful simulation and soak-test harness |
 
-### Local dev setup
+### Local Dev Setup
 
 ```bash
 cargo build --workspace
@@ -318,10 +274,9 @@ cargo run -p groundhog-sim --bin hogsim -- run examples/sim/local-wallet-soak.js
 See [`docs/sim/README.md`](docs/sim/README.md) for the current simulation
 scope and result-artifact contract.
 
-The `test` subcommand requires `groundhog login` to authenticate
-against the private crate registry that ships the Groundhog contract
-SDK. See [`crates/tools/cli/README.md`](crates/tools/cli/README.md) for the full
-CLI reference.
+`groundhog test` requires `groundhog login` while the SDK lives in the private
+registry. See [`crates/tools/cli/README.md`](crates/tools/cli/README.md) for the
+full CLI reference.
 
 ### Conventions
 
@@ -341,7 +296,7 @@ contributors and LLM assistants. Highlights:
   `data.schemaVersion` from v1 onward, `CommandResult` envelope on a
   single stdout stream.
 
-### Design rationale
+### Design Rationale
 
 Active design notes:
 

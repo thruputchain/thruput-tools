@@ -1,98 +1,57 @@
 # Groundhog Developer Tools
 
-Unified workspace for Groundhog blockchain developer tooling: a JSON-RPC
-gateway, typed client, transaction building, key management, and CLI.
+Agent reference for the Groundhog off-chain tooling workspace. Keep this file
+actionable: architecture boundaries, commands, style rules, and planning-doc
+policy.
 
 ## Architecture
 
-Workspace crates in `crates/` are grouped by boundary:
+Workspace crates are grouped by boundary:
 
-JSON-RPC public surface in `crates/json-rpc/`:
+`crates/json-rpc/` owns the public RPC surface:
 
-- **json-rpc-types** — shared JSON-RPC types (receipt, status, block info,
-  events, errors) plus the runtime manifest JSON contract used by local and
-  benchmark backends. Consumed by gateway, client, CLI, and external tools.
-- **json-rpc-api** — shared jsonrpsee trait definitions used by the gateway,
-  local node, and client crate.
-- **json-rpc-server** — reusable server-side `GroundhogApiServer`
-  implementation. Owns shared request validation, public error mapping, and
-  submit/chain/read backend traits used by gateway and hog-devnode supervisor
-  compositions.
-- **json-rpc-gateway** — jsonrpsee server binary. Its backend adapter
-  implements the `json-rpc-server` planes over hogd indexer and scheduler x23
-  RPCs. For dev/bench runs it can load backend endpoints and protocol metadata
-  from `--runtime-manifest <path>`.
-- **json-rpc-client** — typed JSON-RPC client generated from the same
-  `#[rpc(client)]` trait as the server. Wraps `json-rpc-types`.
-- **open-rpc** — OpenRPC document generator. `Project` owns a single
-  `schemars::SchemaGenerator` shared across modules so named Rust types land
-  once in `components.schemas` and use sites carry `$ref`. `ModuleBuilder` is
-  the threading point. Treated as an internal implementation detail; the
-  external consumer is the generated JSON, not the Rust API.
-- **open-rpc-macros** — `#[open_rpc]` proc macro. Generates a companion struct
-  per jsonrpsee `#[rpc]` trait whose `module_doc(&mut ModuleBuilder)` appends
-  OpenRPC method descriptors. Resolves the `groundhog-open-rpc` crate by
-  package name via `proc_macro_crate` so downstream re-exports work.
-- **open-rpc-spec** — library + binary that assembles the canonical artifact.
-  The binary emits JSON to stdout; the library is the composition point for the
-  workspace's RPC traits and owns the hand-maintained per-method `errors[]`
-  mapping. The published `groundhog-open-rpc-spec` crate is consumed by
-  `client-ts` via its regen script. A byte-equal snapshot at
-  `crates/json-rpc/open-rpc-spec/snapshots/groundhog-spec.json` guards artifact
-  shape; `UPDATE_SNAPSHOTS=1` regenerates after intentional changes.
+- **json-rpc-types** — shared RPC payloads, error catalog, hex wrappers, runtime
+  and bootstrap manifest contracts.
+- **json-rpc-api** — jsonrpsee trait definitions; source of truth for public
+  method names, params, and results.
+- **json-rpc-server** — reusable `GroundhogApiServer`, shared validation, error
+  mapping, and submit/chain/read/view backend traits.
+- **json-rpc-gateway** — production JSON-RPC gateway binary over hogd x23
+  services; can load backend endpoints from `--runtime-manifest` for dev/bench.
+- **json-rpc-client** — typed client generated from the same RPC trait.
+- **open-rpc**, **open-rpc-macros**, **open-rpc-spec** — generated OpenRPC
+  artifact pipeline. Snapshot:
+  `crates/json-rpc/open-rpc-spec/snapshots/groundhog-spec.json`.
 
-Internal x23 support in `crates/x23/`:
+`crates/x23/` owns internal transport helpers:
 
-- **x23-transport** — shared x23 connection-pool helpers (`FixedSerialPool`
-  setup, address parsing, typed `ConnectError`). Consumed by gateway and
-  node-supervisor; backend-agnostic. Named for the x23 wire protocol to keep it
-  distinct from the public JSON-RPC stack.
+- **x23-transport** — connection pools, address parsing, and typed connect
+  errors for gateway and node-supervisor. Internal; not the public JSON-RPC API.
 
-Developer-facing tools in `crates/tools/` and RV32-specific tooling in
-`crates/rv32/`:
+`crates/tools/` and `crates/rv32/` own developer tooling:
 
-- **cli** — `groundhog` binary. Wraps the Rust/WASM build and test workflow
-  plus deploy/call and hog-devnode local-node control. Lib/bin split: all logic in
-  the library crate, `main.rs` is pure dispatch. Subcommand functions take plain
-  Rust types, not clap structs.
+- **cli** — `groundhog` binary. Build/test/deploy/call/local-node workflow.
+  Keep logic in the library crate; `main.rs` should be dispatch only.
 - **signing** — off-chain transaction signing and construction. Signer trait,
   local Ed25519 signer, canonical address derivation, tx builders for deploy
   and call, XDR encoding.
-- **rv32-artifact** — lib `groundhog_rv32_artifact`. The single Rust source of
-  truth for the Groundhog v3 RV32 artifact format: constants, offsets, format
-  fingerprint, writer, and validator. It is grouped with the lowerer under
-  `crates/rv32/` because this artifact is bespoke RV32 tooling, not XDR.
+- **rv32-artifact** — Rust source of truth for the Groundhog RV32 artifact
+  format: constants, offsets, fingerprint, writer, and validator.
 - **rv32-lower** — `rv32-lower` binary (+ lib `groundhog_rv32_lower`). The
-  `wasm-opt` analog for the rv32 build path: lowers a `riscv32im-unknown-none-elf`
-  contract ELF to a Groundhog v3 RV32 artifact (`.rv32a`). Published to the
-  `groundhog` registry; consumed as a binary by scripts/hogd and as a library
-  by `groundhog build` and other Rust callers. See its README and
-  `hogd/docs/rv32/rv32-author-toolchain.md`.
+  RV32 build lowerer from `riscv32im-unknown-none-elf` ELF to `.rv32a`.
 
-Local dev and test harnesses in `crates/dev/`:
+`crates/dev/` owns local dev and test harnesses:
 
-- **node-supervisor** — `groundhog node` facade. Supervises a hogd-owned
-  `hogd-dev` subprocess and embeds `json-rpc-server` to serve the public
-  JSON-RPC. `chainTip` and `sendRawTransaction` are backed by hog-devnode's
-  `SchedulerCoord` endpoint; receipts, transaction status, and contract events
-  are backed by hog-devnode's `IndexerBlockExplorer` endpoint when advertised in
-  readiness (otherwise the read plane stays stubbed `NotImplemented` per the v1
-  reduced contract). End-to-end coverage of the read plane is gated on the
-  hogd-dev v1 binary actually exposing the `IndexerBlockExplorer` endpoint with
-  full event-feed wiring. This is the only CLI local-node backend; the legacy
-  native-exec prototype (`crates/dev-node`) was deleted in PR 5, with the git
-  history retaining the source for any future reference. Startup consumes
-  hogd-dev's readiness pointer, verifies the runtime manifest hash and
-  owner-only file permissions, and exposes the manifest path/hash in
-  `groundhog node --json`.
+- **node-supervisor** — `groundhog node` facade. Supervises `hogd-dev`, embeds
+  `json-rpc-server`, verifies runtime-manifest handoff, and exposes manifest
+  path/hash in `groundhog node --json`. This is the only CLI local-node backend.
 - **e2e-tests** — ignored process-level JSON-RPC lifecycle smoke tests.
 - **bench** — benchmark harnesses. `groundhog-bench --runtime-manifest <path>`
   derives bootstrapped account signers and submits dev-wallet compatible
   `sendRawTransaction` traffic.
 - **sim** — `hogsim` stateful simulation and soak-test harness. Runs
-  deterministic actor schedules against an existing target, writes
-  `result.jsonl` / `result.json`, and currently covers chain-tip, dev-wallet
-  submit smoke, receipt polling, and Phase 1 assertions.
+  deterministic actor schedules, writes `result.jsonl` / `result.json`, and
+  covers local/existing targets, contract workloads, and soak diagnostics.
 
 See `docs/gateway/system-design.md` for full gateway design and
 `docs/gateway/api-sketch.md` for the jsonrpsee trait definition.
@@ -119,9 +78,8 @@ All Groundhog crates come from the private registry (configured in
 Key private deps: `groundhog-xdr` (wire types), `xdrs` (XDR
 serialization), `rpc_driver` (x23 RPC framework).
 
-Key public deps: `jsonrpsee` (JSON-RPC), `axum` (HTTP), `tokio` (async
-runtime), `tower`/`tower-http` (middleware), `clap` (CLI), `prometheus`
-(metrics).
+Key public deps: `jsonrpsee`, `axum`, `tokio`, `tower`/`tower-http`, `clap`,
+`prometheus`.
 
 ## Schema Ownership
 
@@ -184,30 +142,14 @@ cargo test -p groundhog-cli              # CLI tests
 
 ## Release Process
 
-`publish.yml` and `release.yml` intentionally split crate publishing from binary
-asset publishing, but **Release package** is the only normal human entrypoint.
-Run **Release package** manually to publish crates. It reads the Cargo workspace
-version, creates the matching `vX.Y.Z` tag, publishes the crate set, pushes the
-tag only after crate publish succeeds, then explicitly dispatches `release.yml`
-on that tag. Do not manually push `v*` tags and do not run `release.yml`
-directly for normal releases.
+Normal release entrypoint: manually run **Release package**. It reads the Cargo
+workspace version, creates the matching `vX.Y.Z` tag, publishes crates, pushes
+the tag after publish succeeds, then dispatches `release.yml` for binary assets.
+Do not manually push `v*` tags and do not run `release.yml` directly.
 
-`release.yml` is dispatch-only and direct human dispatch fails; it must be
-dispatched by the publish workflow. It verifies that the matching
-`groundhog-cli` and `groundhog-rv32-lower` crate versions already exist in the
-private registry before uploading binary assets. It builds `hog-gateway` and
-`hogsim` from this repository and builds the `groundhog` CLI from the published
-crate; the published binary includes the local `groundhog node` path. The
-GitHub Release assets are per-app,
-per-target archives:
-`hog-gateway-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz` and
-`groundhog-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz`,
-`rv32-lower-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz`, and
-`hogsim-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz`, plus `SHA256SUMS`.
-
-Keep the Cargo workspace version, internal `=X.Y.Z` workspace dependency pins,
-git tag, and GitHub Release tag aligned. The release repo downloads component
-assets from the pinned `groundhog-rpc` tag.
+Keep the workspace version, internal `=X.Y.Z` dependency pins, git tag, and
+GitHub Release tag aligned. Release assets are per-app/per-target archives for
+`hog-gateway`, `groundhog`, `rv32-lower`, and `hogsim`, plus `SHA256SUMS`.
 
 ### Runtime Manifest Smoke
 
