@@ -15,7 +15,7 @@ history captures the pre-pivot language.
 
 **Companion to:**
 
-- [`../roadmap.md`](../roadmap.md) - CLI roadmap; this spec defines the
+- [`../../cli/roadmap.md`](../../cli/roadmap.md) - CLI roadmap; this spec defines the
   Phase-2 follow-up that unblocks `groundhog call <c> get` returning a
   decoded value.
 - [`2026-05-13-view-rpc-protocol-rs-follow-up.md`](2026-05-13-view-rpc-protocol-rs-follow-up.md)

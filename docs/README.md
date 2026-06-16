@@ -30,12 +30,13 @@ This directory has two kinds of documents:
   questions and resolved decisions.
 - [Hog-devnode process contract](cli/specs/2026-04-29-hogd-dev-process-contract.md)
   - current `groundhog node` child-process contract.
-- [CLI specs](cli/specs/) - active or recently shipped CLI/developer-tooling
-  specs.
+- [CLI specs](cli/specs/) - current contracts, deferred decisions, and active
+  options papers. Shipped implementation plans move to the archive unless they
+  remain the current operator/user contract.
 
 ## Archive
 
-- [CLI archive](archive/cli/) - shipped local-node plans and competitive DX
-  analysis.
+- [CLI archive](archive/cli/) - shipped implementation plans, historical design
+  context, and competitive DX analysis.
 - [Superpowers archive](archive/superpowers/) - shipped artifact-layout and
   instrumentation plans.
