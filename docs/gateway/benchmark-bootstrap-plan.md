@@ -94,7 +94,7 @@ Input to a backend launcher. Describes desired genesis/bootstrap state.
   "profile": "local-dev",
   "devWallet": {
     "profile": "hog-devnode-default",
-    "artifactHint": "./dev-wallet.wasm",
+    "artifactHint": "./dev-wallet.artifact",
     "contentHash": "0x...",
     "deployEntrypoint": "0xadac498222148e4f",
     "doActionEntrypoint": "0x..."
@@ -112,9 +112,15 @@ Input to a backend launcher. Describes desired genesis/bootstrap state.
 
 This is intent. It should be small and deterministic. It may refer to artifacts
 by a resolution hint plus a content hash; it should not be required to inline
-large WASM blobs. When provided, the hint helps humans and launchers find the
+large artifact blobs. When provided, the hint helps humans and launchers find the
 artifact, while the hash verifies that the backend bootstrapped the intended
 bytes.
+
+`devWallet.artifactHint` is an opaque operator hint, not a user-contract default
+or a schema-level artifact-kind discriminator. The normal developer contract path
+now defaults to RV32, while the bootstrap dev-wallet profile remains backend-owned
+runtime state and may use whichever artifact format the selected backend profile
+documents.
 
 Producers should treat the bootstrap manifest as a small, trusted operator
 input. Concrete bounds the `hog-devnode` consumer enforces today:
@@ -210,7 +216,7 @@ The runtime manifest file contains the full payload:
     "devWallet": {
       "contentHash": "0x...",
       "deployedCodeHash": "0x...",
-      "artifactHint": "./dev-wallet.wasm",
+      "artifactHint": "./dev-wallet.artifact",
       "deployEntrypoint": "0xadac498222148e4f",
       "doActionEntrypoint": "0x..."
     },
@@ -515,13 +521,10 @@ the full-stack benchnet needs a portable bootstrap input.
 
 ## Open Questions
 
-1. What exact dev-wallet artifact resolution hints should the bootstrap
-   manifest support: bundled artifact name, filesystem path, protocol-owned
-   profile name, or more than one?
-2. Should any manifest-only fields beyond `genesisHash` graduate into public
+1. Should any manifest-only fields beyond `genesisHash` graduate into public
    JSON-RPC, and if so which are true chain facts rather than orchestration
    metadata?
-3. Should the full-stack benchnet prefer discrete hogd component processes or a
+2. Should the full-stack benchnet prefer discrete hogd component processes or a
    stitched binary with role-selecting flags?
 
 ## Review Position

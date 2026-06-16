@@ -24,11 +24,12 @@ Already landed:
   executes RV32 gas table v3 / artifact v4 deployments with protocol
   `hogp/7874f05decb9`.
 
-Known pre-PR7 blocker:
+Historical pre-PR7 blocker:
 
-- `scripts/test-scaffold.sh` currently fails because fresh scaffold host tests
-  still call `contract_exec`, which is no longer exposed by the current upstream
-  SDK. Fix scaffold templates before using scaffold smoke as a PR7 gate.
+- `scripts/test-scaffold.sh` failed because fresh scaffold host tests still
+  called `contract_exec`, which is no longer exposed by the current upstream SDK.
+  The scaffold templates in this repo no longer contain `contract_exec`; keep
+  `scripts/test-scaffold.sh` as the scaffold smoke gate.
 
 ## Non-Goals
 
@@ -57,11 +58,12 @@ Known pre-PR7 blocker:
    from WASM-default language to artifact/RV32-default language.
 6. Fix generated scaffold tests for the current SDK API, then prove new counter
    and stub projects still build and test.
-7. Add a dedicated examples RV32 scenario gate for `~/code/gh/groundhog-examples`.
+7. Deferred: add a dedicated examples RV32 scenario gate for
+   `~/code/gh/groundhog-examples`.
 
-## Required Gates
+## Required Gates For The Shipped PR7 Slice
 
-Run before merging PR7:
+The shipped PR7 slice used this gate set:
 
 - `cargo fmt --check`
 - `cargo clippy -p groundhog-cli --all-targets -- -D warnings`
@@ -75,7 +77,7 @@ Run before merging PR7:
 - `scripts/smoke-runtime-manifest-bench.sh`
 - `groundhog test --integration --differential --hogd-protocol hogp/7874f05decb9`
 - `hogsim` RV32 deploy smoke with schema v2 result/event artifact fields.
-- `groundhog-examples` RV32 scenario gate described below.
+- Deferred: `groundhog-examples` RV32 scenario gate described below.
 
 For local live smokes use:
 
@@ -85,7 +87,7 @@ GROUNDHOG_HOG_DEVNODE_BINARY=/path/to/hog-devnode
 HOGD_PROTOCOL_OVERRIDE=hogp/7874f05decb9
 ```
 
-## Examples RV32 Gate
+## Deferred Examples RV32 Gate
 
 Add a dedicated runner and scenario manifest. The runner should live in this
 repo, consume `GROUNDHOG_EXAMPLES_ROOT` defaulting to
@@ -180,7 +182,8 @@ Observed passing on 2026-06-14 against `groundhog-rpc` main `191725b`:
 - `scripts/smoke-sim-scenarios.sh` passed.
 - `scripts/smoke-runtime-manifest-bench.sh` passed.
 
-Observed blocker:
+Observed historical blocker:
 
 - `scripts/test-scaffold.sh` failed at generated `cargo test` because scaffolded
-  tests still use removed SDK API `contract_exec`.
+  tests still used removed SDK API `contract_exec`. Current scaffold templates in
+  this repo no longer reference that API.
