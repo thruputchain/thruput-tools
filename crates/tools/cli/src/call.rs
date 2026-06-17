@@ -953,7 +953,7 @@ mod tests {
     #[test]
     fn method_entrypoint_id_produces_known_hash() {
         let id = method_entrypoint_id("ERC20", "0.1.0", "transfer");
-        assert_eq!(format_entrypoint_id(id), "0x3799fd1c3d9b098f");
+        assert_eq!(format_entrypoint_id(id), "0x63285b3523f9dc3f");
     }
 
     #[test]

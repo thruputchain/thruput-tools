@@ -1990,15 +1990,15 @@ export type Result =
 
         // Entrypoint hashes
         assert!(
-            output.contains("3799fd1c3d9b098f"),
+            output.contains("63285b3523f9dc3f"),
             "transfer entrypoint hash missing"
         );
         assert!(
-            output.contains("7a44649d55cabda8"),
+            output.contains("b921b642d31d7dac"),
             "get_balance entrypoint hash missing"
         );
         assert!(
-            output.contains("73c9aac12bd15a84"),
+            output.contains("41ac95d6e06e2620"),
             "get_balance_of entrypoint hash missing"
         );
 
