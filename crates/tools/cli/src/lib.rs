@@ -50,6 +50,7 @@ pub fn run_cargo(
     cmd: &mut std::process::Command,
     print: &Print,
 ) -> Result<(String, String), CliError> {
+    print.trace_command(cmd);
     if print.is_json() {
         let output = cmd.output()?;
         if !output.status.success() {
