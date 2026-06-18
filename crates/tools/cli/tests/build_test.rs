@@ -696,3 +696,93 @@ impl Drop for PathGuard {
         }
     }
 }
+
+/// `--show-cargo-commands` traces the cargo build invocation to stderr.
+///
+/// Drives the real binary (rather than `build_project`) so the global-flag
+/// wiring through `run_cargo` is exercised end to end. Env/cwd are set on the
+/// child so no process-global state is mutated.
+#[test]
+fn build_show_cargo_commands_traces_invocation_to_stderr() {
+    let tmp = TempDir::new().unwrap();
+    let project_root =
+        std::fs::canonicalize(tmp.path()).expect("bug: project path should canonicalize");
+    fs::write(
+        project_root.join("Cargo.toml"),
+        "[package]\nname = \"demo-contract\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+    fs::create_dir_all(project_root.join(".cargo")).unwrap();
+    fs::write(project_root.join(".cargo/contract.toml"), "").unwrap();
+    fs::create_dir_all(project_root.join("src")).unwrap();
+    fs::write(project_root.join("src/lib.rs"), "pub fn demo() {}\n").unwrap();
+
+    let target_dir = project_root.join("target");
+    let raw_wasm = target_dir
+        .join("wasm32-unknown-unknown/release")
+        .join("demo_contract.wasm");
+    let metadata_json = format!(
+        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract","manifest_path":"{}"}}]}}"#,
+        project_root.display(),
+        target_dir.display(),
+        project_root.join("Cargo.toml").display()
+    );
+
+    let fake_bin = project_root.join("bin");
+    fs::create_dir_all(&fake_bin).unwrap();
+    let cargo = fake_bin.join("cargo");
+    fs::write(
+        &cargo,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = \"metadata\" ]; then\n  printf '%s' '{metadata_json}'\n  exit 0\nfi\n/bin/mkdir -p '{}'\nprintf '\\000asm\\001\\000\\000\\000' > '{}'\n",
+            raw_wasm
+                .parent()
+                .expect("bug: raw wasm parent should exist")
+                .display(),
+            raw_wasm.display()
+        ),
+    )
+    .unwrap();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&cargo).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&cargo, perms).unwrap();
+    }
+
+    let path = match env::var_os("PATH") {
+        Some(existing) => {
+            let mut entries = vec![fake_bin.clone()];
+            entries.extend(env::split_paths(&existing));
+            env::join_paths(entries).expect("bug: PATH should join")
+        }
+        None => fake_bin.clone().into_os_string(),
+    };
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_groundhog"))
+        .args([
+            "--show-cargo-commands",
+            "build",
+            "--target",
+            "wasm",
+            "-p",
+            "demo-contract",
+        ])
+        .current_dir(&project_root)
+        .env("PATH", path)
+        .output()
+        .expect("bug: groundhog binary should run");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "build failed: {stderr}");
+    assert!(
+        stderr.contains("+ ") && stderr.contains("cargo") && stderr.contains("build --release"),
+        "expected traced cargo command on stderr, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("wasm32-unknown-unknown"),
+        "expected target triple in trace, got: {stderr}"
+    );
+}

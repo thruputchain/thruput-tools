@@ -28,6 +28,9 @@ struct GlobalArgs {
     /// Emit structured JSON output
     #[arg(long, global = true)]
     json: bool,
+    /// Print each cargo command to stderr before running it
+    #[arg(long, global = true)]
+    show_cargo_commands: bool,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -590,7 +593,8 @@ impl WalletCommand {
 #[allow(clippy::too_many_lines)]
 fn main() {
     let cli = Cli::parse();
-    let print = Print::new(cli.global.quiet, cli.global.json);
+    let print = Print::new(cli.global.quiet, cli.global.json)
+        .with_command_trace(cli.global.show_cargo_commands);
     let cmd_name = cli.command.command_name();
 
     let result = match cli.command {
