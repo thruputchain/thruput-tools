@@ -100,6 +100,24 @@ pub(crate) fn apply_local_node_state_for_dev_key(
     Ok(())
 }
 
+/// Apply project-local `groundhog node` state for commands that intentionally
+/// use local bootstrap accounts rather than the user's selected signing key.
+pub(crate) fn apply_local_node_state_for_local_bootstrap(
+    profile: &mut ResolvedProfile,
+) -> Result<(), CliError> {
+    if explicit_runtime_manifest_path_configured(profile)
+        || !profile_rpc_allows_local_node_state(profile.rpc_url.as_deref())
+    {
+        return Ok(());
+    }
+    let Some(state) = read_local_node_state(profile)? else {
+        return Ok(());
+    };
+    profile.rpc_url = Some(state.rpc_url);
+    profile.runtime_manifest = Some(state.runtime_manifest);
+    Ok(())
+}
+
 pub(crate) fn write_local_node_state(
     start: &Path,
     rpc_url: &str,

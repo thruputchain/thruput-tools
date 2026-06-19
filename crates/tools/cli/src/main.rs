@@ -367,6 +367,11 @@ enum Command {
         #[command(subcommand)]
         command: KeysCommand,
     },
+    /// Manage contract wallets
+    Wallet {
+        #[command(subcommand)]
+        command: WalletCommand,
+    },
     /// Configure registry and test executor credentials
     Login,
     /// Remove stored credentials
@@ -409,6 +414,23 @@ enum KeysCommand {
 }
 
 #[derive(Subcommand)]
+enum WalletCommand {
+    /// Create a local-node wallet for a stored signing key
+    Create {
+        /// Existing key name that should own the new wallet
+        #[arg(long)]
+        key: String,
+        /// Config profile to use
+        #[arg(
+            long = "profile",
+            alias = "network",
+            default_value = DEFAULT_PROFILE
+        )]
+        profile: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum CodegenCommand {
     /// Generate TypeScript bindings
     Ts {
@@ -446,6 +468,7 @@ impl Command {
             Self::Storage { .. } => "storage",
             Self::Node { .. } => "node",
             Self::Keys { command } => command.command_name(),
+            Self::Wallet { command } => command.command_name(),
             Self::Codegen { command } => command.command_name(),
             Self::Login => "login",
             Self::Logout => "logout",
@@ -461,6 +484,14 @@ impl KeysCommand {
             Self::Ls => "keys.ls",
             Self::Use { .. } => "keys.use",
             Self::Rm { .. } => "keys.rm",
+        }
+    }
+}
+
+impl WalletCommand {
+    fn command_name(&self) -> &'static str {
+        match self {
+            Self::Create { .. } => "wallet.create",
         }
     }
 }
@@ -680,6 +711,11 @@ fn main() {
             KeysCommand::Use { name } => groundhog_cli::keys::use_key(&name, cmd_name, &print),
             KeysCommand::Rm { name } => groundhog_cli::keys::remove(&name, cmd_name, &print),
         },
+        Command::Wallet { command } => match command {
+            WalletCommand::Create { key, profile } => {
+                groundhog_cli::wallet::create(&key, &profile, cmd_name, &print)
+            }
+        },
         Command::Codegen { command } => match command {
             CodegenCommand::Ts { source, output } => {
                 groundhog_cli::codegen_cmd::run(&source, output.as_deref(), cmd_name, &print)
@@ -762,6 +798,21 @@ mod tests {
                 assert_eq!(rpc_max_connections, Some(512));
             }
             _ => panic!("expected node command"),
+        }
+    }
+
+    #[test]
+    fn wallet_create_key_flag_parses() {
+        let cli = Cli::parse_from(["groundhog", "wallet", "create", "--key", "alice"]);
+
+        match cli.command {
+            Command::Wallet {
+                command: WalletCommand::Create { key, profile },
+            } => {
+                assert_eq!(key, "alice");
+                assert_eq!(profile, DEFAULT_PROFILE);
+            }
+            _ => panic!("expected wallet create command"),
         }
     }
 }

@@ -62,6 +62,14 @@ pub async fn submit_and_poll(
     rpc_url: &str,
     tx_hex: &str,
 ) -> Result<(TxHash, TransactionReceipt), CliError> {
+    submit_and_poll_with_tx_hash(rpc_url, tx_hex, |_| {}).await
+}
+
+pub async fn submit_and_poll_with_tx_hash(
+    rpc_url: &str,
+    tx_hex: &str,
+    on_tx_hash: impl FnOnce(&TxHash),
+) -> Result<(TxHash, TransactionReceipt), CliError> {
     use groundhog_json_rpc_client::{GroundhogApiClient, HttpClientBuilder};
 
     let client = HttpClientBuilder::default()
@@ -75,6 +83,7 @@ pub async fn submit_and_poll(
             method: "sendRawTransaction",
             message: e.to_string(),
         })?;
+    on_tx_hash(&tx_hash);
 
     let max_attempts = 30;
     let poll_interval = std::time::Duration::from_secs(1);
