@@ -1474,6 +1474,149 @@ fn deploy_dry_run_json_outputs_prepared_transaction() {
 }
 
 #[test]
+fn wallet_create_dry_run_json_outputs_prepared_transaction() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let sponsor_wallet = advertised_dev_wallet_address(0);
+    let manifest_path = write_runtime_manifest(&project, 0, &sponsor_wallet, None);
+    let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
+    std::fs::write(project.join("dev-wallet.wasm"), b"dev-wallet").unwrap();
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\nruntime_manifest = \"{}\"\n",
+            manifest_path.file_name().unwrap().to_string_lossy()
+        ),
+    )
+    .unwrap();
+
+    let output = groundhog()
+        .args(["--json", "wallet", "create", "--key", "dev-1", "--dry-run"])
+        .current_dir(&project)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["ok"], true);
+    assert_eq!(stdout["command"], "wallet.create");
+    assert_eq!(stdout["warnings"], serde_json::json!([]));
+    assert_eq!(
+        stdout["data"]["schemaVersion"],
+        groundhog_cli::wallet::WALLET_CREATE_JSON_SCHEMA_VERSION
+    );
+    assert_eq!(stdout["data"]["dry_run"], true);
+    assert_eq!(stdout["data"]["submitted"], false);
+    assert_eq!(stdout["data"]["key"], "dev-1");
+    assert_eq!(stdout["data"]["sponsor"]["key"], "dev-0");
+    assert_eq!(stdout["data"]["sponsor"]["role"], "local_user");
+    assert!(stdout["data"]["wallet"].as_str().unwrap().starts_with("0x"));
+    assert!(
+        stdout["data"]["owner_public_key"]
+            .as_str()
+            .unwrap()
+            .starts_with("0x")
+    );
+    assert_eq!(
+        std::fs::canonicalize(stdout["data"]["artifact_path"].as_str().unwrap()).unwrap(),
+        std::fs::canonicalize(project.join("dev-wallet.wasm")).unwrap()
+    );
+    assert!(
+        stdout["data"]["signed_tx"]
+            .as_str()
+            .unwrap()
+            .starts_with("0x")
+    );
+    assert_eq!(
+        signed_tx_invoked_address(stdout["data"]["signed_tx"].as_str().unwrap()),
+        sponsor_wallet
+    );
+    assert_eq!(
+        signed_tx_deploy_contract_kind(stdout["data"]["signed_tx"].as_str().unwrap()),
+        "wasm"
+    );
+}
+
+#[test]
+fn airdrop_dry_run_json_outputs_prepared_transaction() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let faucet_wallet = advertised_dev_wallet_address(0);
+    let manifest_path = write_runtime_manifest(&project, 0, &faucet_wallet, None);
+    let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
+    let recipient_wallet = format!("0x{}", "ab".repeat(32));
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\nruntime_manifest = \"{}\"\n\n[profile.default.wallets]\nalice = \"{recipient_wallet}\"\n",
+            manifest_path.file_name().unwrap().to_string_lossy()
+        ),
+    )
+    .unwrap();
+
+    let output = groundhog()
+        .args([
+            "--json",
+            "airdrop",
+            "alice",
+            "--amount",
+            "1.25",
+            "--dry-run",
+        ])
+        .current_dir(&project)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["ok"], true);
+    assert_eq!(stdout["command"], "airdrop");
+    assert_eq!(stdout["warnings"], serde_json::json!([]));
+    assert_eq!(
+        stdout["data"]["schemaVersion"],
+        groundhog_cli::airdrop::AIRDROP_JSON_SCHEMA_VERSION
+    );
+    assert_eq!(stdout["data"]["dry_run"], true);
+    assert_eq!(stdout["data"]["submitted"], false);
+    assert_eq!(stdout["data"]["recipient"], "alice");
+    assert_eq!(stdout["data"]["recipient_wallet"], recipient_wallet);
+    assert_eq!(stdout["data"]["amount_hog"], "1.25");
+    assert_eq!(stdout["data"]["raw_amount"], "12500000");
+    assert_eq!(stdout["data"]["faucet"]["key"], "dev-0");
+    assert_eq!(stdout["data"]["faucet"]["role"], "local_user");
+    assert!(
+        stdout["data"]["signed_tx"]
+            .as_str()
+            .unwrap()
+            .starts_with("0x")
+    );
+    assert_eq!(
+        signed_tx_invoked_address(stdout["data"]["signed_tx"].as_str().unwrap()),
+        faucet_wallet
+    );
+}
+
+#[test]
 fn deploy_dry_run_json_accepts_rv32_artifact() {
     let tmp = TempDir::new().unwrap();
     let config_home = tmp.path().join("config-home");

@@ -26,7 +26,7 @@ use crate::tx_utils::{
 };
 use crate::{CliError, Print};
 
-const AIRDROP_JSON_SCHEMA_VERSION: u32 = 1;
+pub const AIRDROP_JSON_SCHEMA_VERSION: u32 = 1;
 const DEFAULT_AIRDROP_HOG: &str = "100";
 const HOG_DECIMALS: u32 = 7;
 const HOG_SCALE: u128 = 10_000_000;

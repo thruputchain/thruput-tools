@@ -469,14 +469,14 @@ mod tests {
             "walletAddress": format!("0x{}", hex::encode(wallet_address.as_ref())),
             "initialStorageTokens": "1000000000"
         });
-        write_test_runtime_manifest_json(manifest_path, vec![account]);
+        write_test_runtime_manifest_json(manifest_path, std::slice::from_ref(&account));
     }
 
     fn write_test_runtime_manifest_with_accounts(
         manifest_path: &std::path::Path,
         accounts: &[(usize, &str, groundhog_xdr::types::ContractAddress)],
     ) {
-        let accounts = accounts
+        let accounts: Vec<serde_json::Value> = accounts
             .iter()
             .map(|(index, role, wallet_address)| {
                 let signer = groundhog_signing::derive_default_dev_account_signer(*index);
@@ -489,12 +489,12 @@ mod tests {
                 })
             })
             .collect();
-        write_test_runtime_manifest_json(manifest_path, accounts);
+        write_test_runtime_manifest_json(manifest_path, &accounts);
     }
 
     fn write_test_runtime_manifest_json(
         manifest_path: &std::path::Path,
-        accounts: Vec<serde_json::Value>,
+        accounts: &[serde_json::Value],
     ) {
         let manifest = serde_json::json!({
             "schemaVersion": 1,
