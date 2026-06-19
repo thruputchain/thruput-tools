@@ -3404,6 +3404,7 @@ fn write_runtime_manifest_with_seed(
                 "deployedCodeHash": format!("0x{}", "52".repeat(32)),
                 "artifactHint": "./dev-wallet.wasm",
                 "deployEntrypoint": "0xadac498222148e4f",
+                "createWalletEntrypoint": "0x6372656174655761",
                 "doActionEntrypoint": "0x646f416374696f6e"
             },
             "storageCostModel": {

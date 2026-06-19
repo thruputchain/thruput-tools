@@ -15,7 +15,9 @@ use sha2::{Digest, Sha256};
 use xdr_common::{BytesM, VecM};
 
 use crate::account_resolution::{LocalBootstrapRole, resolve_local_bootstrap_account};
-use crate::config::{find_project_config, resolve_profile, save_profile_wallet_address};
+use crate::config::{
+    find_project_config, resolve_default_key, resolve_profile, save_profile_wallet_address,
+};
 use crate::keys::load_local_signer;
 use crate::result::CommandResult;
 use crate::runtime_manifest::{
@@ -35,19 +37,25 @@ pub(crate) struct PreparedWalletCreate {
     pub(crate) key_name: String,
     pub(crate) sponsor_key_name: String,
     pub(crate) sponsor_role: String,
+    pub(crate) owner_public_key: String,
     pub(crate) artifact_path: PathBuf,
     pub(crate) wallet_address: String,
     pub(crate) create_tx_hex: String,
 }
 
 pub fn create(
-    key_name: &str,
+    key_name: Option<&str>,
+    dry_run: bool,
     profile: &str,
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
     let cwd = std::env::current_dir()?;
     let prepared = prepare_wallet_create(&cwd, key_name, profile)?;
+
+    if dry_run {
+        return print_dry_run(&prepared, cmd, print);
+    }
 
     print.status(format_args!(
         "Creating wallet for key `{}` on {}...",
@@ -68,7 +76,7 @@ pub fn create(
     let saved_path = save_profile_wallet_address(
         &project_root,
         Some(profile),
-        key_name,
+        &prepared.key_name,
         &prepared.wallet_address,
     )?;
 
@@ -87,6 +95,7 @@ pub fn create(
                 "key": prepared.sponsor_key_name,
                 "role": prepared.sponsor_role,
             },
+            "owner_public_key": prepared.owner_public_key,
             "artifact_path": prepared.artifact_path,
             "create_tx_hash": create_tx_hash,
             "create_height": create_receipt.height,
@@ -96,13 +105,56 @@ pub fn create(
     Ok(())
 }
 
+fn print_dry_run(
+    prepared: &PreparedWalletCreate,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
+    print.status(format_args!(
+        "Prepared dry-run wallet create for key `{}` on {}.",
+        prepared.key_name, prepared.rpc_url
+    ));
+    print.status(format_args!("  wallet: {}", prepared.wallet_address));
+    print.status(format_args!(
+        "  sponsor: {} ({})",
+        prepared.sponsor_key_name, prepared.sponsor_role
+    ));
+    print.status(format_args!("  owner: {}", prepared.owner_public_key));
+    print.status(format_args!("  signed tx: {}", prepared.create_tx_hex));
+    print.status("  submitted: no (--dry-run)");
+
+    print.json(&CommandResult::new(
+        cmd,
+        json!({
+            "schemaVersion": WALLET_CREATE_JSON_SCHEMA_VERSION,
+            "dry_run": true,
+            "submitted": false,
+            "key": prepared.key_name,
+            "wallet": prepared.wallet_address,
+            "sponsor": {
+                "key": prepared.sponsor_key_name,
+                "role": prepared.sponsor_role,
+            },
+            "owner_public_key": prepared.owner_public_key,
+            "artifact_path": prepared.artifact_path,
+            "signed_tx": prepared.create_tx_hex,
+        }),
+    ))?;
+
+    Ok(())
+}
+
 pub(crate) fn prepare_wallet_create(
     cwd: &Path,
-    key_name: &str,
+    key_name: Option<&str>,
     profile_name: &str,
 ) -> Result<PreparedWalletCreate, CliError> {
     let mut profile = resolve_profile(cwd, Some(profile_name))?;
     apply_local_node_state_for_local_bootstrap(&mut profile)?;
+    let key_name = match key_name {
+        Some(key_name) => key_name.to_owned(),
+        None => resolve_default_key(cwd, Some(profile_name))?.ok_or(CliError::MissingSigningKey)?,
+    };
     let rpc_url = profile
         .rpc_url
         .as_deref()
@@ -114,7 +166,8 @@ pub(crate) fn prepare_wallet_create(
         })?;
     let create_wallet_entrypoint = create_wallet_entrypoint(&manifest.bootstrap.dev_wallet)?;
     let sponsor = resolve_local_bootstrap_account(&profile, LocalBootstrapRole::WalletSponsor)?;
-    let owner = load_local_signer(key_name)?;
+    let owner = load_local_signer(&key_name)?;
+    let owner_public_key = format!("0x{}", hex::encode(owner.verifying_key_bytes()));
     let (artifact_path, contract, contract_hash) = load_dev_wallet_contract(
         cwd,
         profile.source.as_deref(),
@@ -147,9 +200,10 @@ pub(crate) fn prepare_wallet_create(
 
     Ok(PreparedWalletCreate {
         rpc_url,
-        key_name: key_name.to_owned(),
+        key_name,
         sponsor_key_name: sponsor.key_name,
         sponsor_role: sponsor.role,
+        owner_public_key,
         artifact_path,
         wallet_address: wallet_address_hex,
         create_tx_hex,
@@ -313,7 +367,38 @@ fn format_contract_address(address: &ContractAddress) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_dev_wallet_artifact_path;
+    use groundhog_json_rpc_types::runtime_manifest::RuntimeManifestDevWallet;
+    use groundhog_xdr::types::{Ed25519PublicKey, SHA256Hash};
+    use serde_json::json;
+
+    use super::{
+        create_wallet_calldata, create_wallet_entrypoint, resolve_dev_wallet_artifact_path,
+    };
+
+    #[test]
+    fn create_wallet_entrypoint_requires_manifest_field() {
+        let err = create_wallet_entrypoint(&dev_wallet_manifest(None))
+            .expect_err("bug: missing createWalletEntrypoint should fail");
+
+        assert!(
+            err.to_string()
+                .contains("bootstrap.devWallet.createWalletEntrypoint")
+        );
+    }
+
+    #[test]
+    fn create_wallet_calldata_round_trips_expected_tuple() {
+        let nonce = SHA256Hash::from([0x11; 32]);
+        let contract_hash = SHA256Hash::from([0x22; 32]);
+        let owner = Ed25519PublicKey::from([0x33; 32]);
+
+        let encoded = create_wallet_calldata(&nonce, &contract_hash, owner)
+            .expect("bug: create_wallet calldata should encode");
+        let decoded: (SHA256Hash, SHA256Hash, Ed25519PublicKey) =
+            xdrs::cxs::decode(&encoded).expect("bug: create_wallet calldata should decode");
+
+        assert_eq!(decoded, (nonce, contract_hash, owner));
+    }
 
     #[test]
     fn artifact_path_uses_profile_root() {
@@ -332,5 +417,19 @@ mod tests {
         )
         .expect("bug: profile-root artifact should resolve");
         assert_eq!(resolved, artifact);
+    }
+
+    fn dev_wallet_manifest(create_wallet_entrypoint: Option<&str>) -> RuntimeManifestDevWallet {
+        let mut value = json!({
+            "contentHash": format!("0x{}", "51".repeat(32)),
+            "deployedCodeHash": format!("0x{}", "52".repeat(32)),
+            "artifactHint": "./dev-wallet.wasm",
+            "deployEntrypoint": "0xadac498222148e4f",
+            "doActionEntrypoint": "0x646f416374696f6e",
+        });
+        if let Some(entrypoint) = create_wallet_entrypoint {
+            value["createWalletEntrypoint"] = json!(entrypoint);
+        }
+        serde_json::from_value(value).expect("bug: test manifest should deserialize")
     }
 }

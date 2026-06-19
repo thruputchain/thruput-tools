@@ -810,6 +810,7 @@ mod tests {
               "deployedCodeHash": "0x5252525252525252525252525252525252525252525252525252525252525252",
               "artifactHint": "./dev-wallet.wasm",
               "deployEntrypoint": "0xadac498222148e4f",
+              "createWalletEntrypoint": "0x6372656174655761",
               "doActionEntrypoint": "0x646f416374696f6e"
             },
             "storageCostModel": {

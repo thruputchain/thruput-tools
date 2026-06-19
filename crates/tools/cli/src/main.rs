@@ -267,6 +267,24 @@ enum Command {
         #[command(flatten)]
         artifacts: ArtifactArgs,
     },
+    /// Transfer local HOG from the dev faucet to a wallet
+    Airdrop {
+        /// Wallet name, dev-N wallet, or direct 0x-prefixed wallet address
+        recipient: String,
+        /// Amount in HOG, with up to 7 decimal places
+        #[arg(long)]
+        amount: Option<String>,
+        /// Build and sign the airdrop transaction without submitting it
+        #[arg(long)]
+        dry_run: bool,
+        /// Config profile to use
+        #[arg(
+            long = "profile",
+            alias = "network",
+            default_value = DEFAULT_PROFILE
+        )]
+        profile: String,
+    },
     /// Execute a sandboxed contract simulation against committed state
     #[command(long_about = "Execute a sandboxed contract simulation via \
                       groundhog_view. Named methods use local or embedded \
@@ -419,7 +437,10 @@ enum WalletCommand {
     Create {
         /// Existing key name that should own the new wallet
         #[arg(long)]
-        key: String,
+        key: Option<String>,
+        /// Build and sign the wallet create transaction without submitting it
+        #[arg(long)]
+        dry_run: bool,
         /// Config profile to use
         #[arg(
             long = "profile",
@@ -464,6 +485,7 @@ impl Command {
             Self::Test { .. } => "test",
             Self::Deploy { .. } => "deploy",
             Self::Call { .. } => "call",
+            Self::Airdrop { .. } => "airdrop",
             Self::View { .. } => "view",
             Self::Storage { .. } => "storage",
             Self::Node { .. } => "node",
@@ -643,6 +665,19 @@ fn main() {
                     &contract, &method, &args, dry_run, &artifacts, &profile, cmd_name, &print,
                 )
             }),
+        Command::Airdrop {
+            recipient,
+            amount,
+            dry_run,
+            profile,
+        } => groundhog_cli::airdrop::run(
+            &recipient,
+            amount.as_deref(),
+            dry_run,
+            &profile,
+            cmd_name,
+            &print,
+        ),
         Command::View {
             contract,
             method,
@@ -712,9 +747,11 @@ fn main() {
             KeysCommand::Rm { name } => groundhog_cli::keys::remove(&name, cmd_name, &print),
         },
         Command::Wallet { command } => match command {
-            WalletCommand::Create { key, profile } => {
-                groundhog_cli::wallet::create(&key, &profile, cmd_name, &print)
-            }
+            WalletCommand::Create {
+                key,
+                dry_run,
+                profile,
+            } => groundhog_cli::wallet::create(key.as_deref(), dry_run, &profile, cmd_name, &print),
         },
         Command::Codegen { command } => match command {
             CodegenCommand::Ts { source, output } => {
@@ -807,12 +844,66 @@ mod tests {
 
         match cli.command {
             Command::Wallet {
-                command: WalletCommand::Create { key, profile },
+                command:
+                    WalletCommand::Create {
+                        key,
+                        dry_run,
+                        profile,
+                    },
             } => {
-                assert_eq!(key, "alice");
+                assert_eq!(key.as_deref(), Some("alice"));
+                assert!(!dry_run);
                 assert_eq!(profile, DEFAULT_PROFILE);
             }
             _ => panic!("expected wallet create command"),
+        }
+    }
+
+    #[test]
+    fn wallet_create_key_flag_is_optional() {
+        let cli = Cli::parse_from(["groundhog", "wallet", "create", "--dry-run"]);
+
+        match cli.command {
+            Command::Wallet {
+                command:
+                    WalletCommand::Create {
+                        key,
+                        dry_run,
+                        profile,
+                    },
+            } => {
+                assert_eq!(key, None);
+                assert!(dry_run);
+                assert_eq!(profile, DEFAULT_PROFILE);
+            }
+            _ => panic!("expected wallet create command"),
+        }
+    }
+
+    #[test]
+    fn airdrop_flags_parse() {
+        let cli = Cli::parse_from([
+            "groundhog",
+            "airdrop",
+            "alice",
+            "--amount",
+            "1.5",
+            "--dry-run",
+        ]);
+
+        match cli.command {
+            Command::Airdrop {
+                recipient,
+                amount,
+                dry_run,
+                profile,
+            } => {
+                assert_eq!(recipient, "alice");
+                assert_eq!(amount.as_deref(), Some("1.5"));
+                assert!(dry_run);
+                assert_eq!(profile, DEFAULT_PROFILE);
+            }
+            _ => panic!("expected airdrop command"),
         }
     }
 }

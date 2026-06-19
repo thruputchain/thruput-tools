@@ -13,14 +13,12 @@ use crate::{
 
 const LOCAL_BOOTSTRAP_FALLBACK_INDEX: usize = 0;
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LocalBootstrapRole {
     WalletSponsor,
     Faucet,
 }
 
-#[allow(dead_code)]
 impl LocalBootstrapRole {
     fn manifest_role(self) -> &'static str {
         match self {
@@ -34,11 +32,9 @@ impl LocalBootstrapRole {
     }
 }
 
-#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) struct ResolvedLocalBootstrapAccount {
     pub(crate) key_name: String,
-    pub(crate) index: usize,
     pub(crate) role: String,
     pub(crate) signer: LocalSigner,
     pub(crate) wallet_address: groundhog_xdr::types::ContractAddress,
@@ -105,7 +101,6 @@ pub(crate) fn lookup_dev_account_address(
 ///
 /// Dedicated manifest roles are preferred when present. Until hog-devnode emits
 /// those roles, local flows fall back to dev-0.
-#[allow(dead_code)]
 pub(crate) fn resolve_local_bootstrap_account(
     profile: &ResolvedProfile,
     role: LocalBootstrapRole,
@@ -157,7 +152,6 @@ pub(crate) fn resolve_local_bootstrap_account(
     let signer = signer_for_manifest_account(&manifest, selected, key_name, index)?;
     Ok(ResolvedLocalBootstrapAccount {
         key_name: format!("dev-{index}"),
-        index,
         role: selected.role.clone(),
         signer,
         wallet_address: selected.wallet_address.0,
@@ -327,6 +321,7 @@ mod tests {
                     "deployedCodeHash": format!("0x{}", "52".repeat(32)),
                     "artifactHint": "./dev-wallet.wasm",
                     "deployEntrypoint": "0xadac498222148e4f",
+                    "createWalletEntrypoint": "0x6372656174655761",
                     "doActionEntrypoint": "0x646f416374696f6e"
                 },
                 "storageCostModel": {
@@ -413,7 +408,6 @@ mod tests {
             .expect("bug: faucet role should resolve");
 
         assert_eq!(resolved.key_name, "dev-3");
-        assert_eq!(resolved.index, 3);
         assert_eq!(resolved.role, "faucet");
         assert_eq!(resolved.wallet_address, faucet_wallet);
         assert_eq!(
@@ -437,7 +431,6 @@ mod tests {
             .expect("bug: wallet sponsor should fall back to dev-0");
 
         assert_eq!(resolved.key_name, "dev-0");
-        assert_eq!(resolved.index, 0);
         assert_eq!(resolved.role, "local_user");
         assert_eq!(resolved.wallet_address, dev0_wallet);
     }
@@ -527,6 +520,7 @@ mod tests {
                     "deployedCodeHash": format!("0x{}", "52".repeat(32)),
                     "artifactHint": "./dev-wallet.wasm",
                     "deployEntrypoint": "0xadac498222148e4f",
+                    "createWalletEntrypoint": "0x6372656174655761",
                     "doActionEntrypoint": "0x646f416374696f6e"
                 },
                 "storageCostModel": {

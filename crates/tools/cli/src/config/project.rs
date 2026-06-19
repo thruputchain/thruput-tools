@@ -38,6 +38,7 @@ pub struct ResolvedProfile {
     pub default_key: Option<String>,
     pub runtime_manifest: Option<PathBuf>,
     pub contracts: BTreeMap<String, String>,
+    #[serde(default)]
     pub wallets: BTreeMap<String, String>,
     pub source: Option<PathBuf>,
 }
