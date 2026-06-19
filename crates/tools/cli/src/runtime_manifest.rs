@@ -406,6 +406,7 @@ mod tests {
             default_key: Some("dev-0".to_string()),
             runtime_manifest: None,
             contracts: BTreeMap::default(),
+            wallets: BTreeMap::default(),
             source: Some(config_path),
         };
 
@@ -442,6 +443,7 @@ mod tests {
             default_key: Some("dev-0".to_string()),
             runtime_manifest: None,
             contracts: BTreeMap::default(),
+            wallets: BTreeMap::default(),
             source: Some(config_path),
         };
 

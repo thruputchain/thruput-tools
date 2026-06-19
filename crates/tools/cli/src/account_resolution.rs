@@ -170,6 +170,7 @@ mod tests {
             default_key: Some("alice".into()),
             runtime_manifest: None,
             contracts: BTreeMap::default(),
+            wallets: BTreeMap::default(),
             source: None,
         };
         let resolved = resolve_wallet_address(&profile, "alice", &signer)
@@ -243,6 +244,7 @@ mod tests {
             default_key: Some("dev-0".into()),
             runtime_manifest: Some(manifest_path),
             contracts: BTreeMap::default(),
+            wallets: BTreeMap::default(),
             source: None,
         };
 
@@ -276,6 +278,7 @@ mod tests {
             default_key: Some("dev-0".into()),
             runtime_manifest: None,
             contracts: BTreeMap::default(),
+            wallets: BTreeMap::default(),
             source: Some(config_path),
         };
 

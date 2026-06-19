@@ -10,4 +10,5 @@ pub use global::{
 pub use project::{
     DEFAULT_PROFILE, ProjectProfile, ResolvedProfile, active_profile_name, find_project_config,
     load_project_profiles, resolve_default_key, resolve_profile, save_profile_contract_alias,
+    save_profile_wallet_address,
 };

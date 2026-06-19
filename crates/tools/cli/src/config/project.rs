@@ -20,6 +20,8 @@ pub struct ProjectProfile {
     pub runtime_manifest: Option<PathBuf>,
     #[serde(default)]
     pub contracts: BTreeMap<String, String>,
+    #[serde(default)]
+    pub wallets: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -36,6 +38,7 @@ pub struct ResolvedProfile {
     pub default_key: Option<String>,
     pub runtime_manifest: Option<PathBuf>,
     pub contracts: BTreeMap<String, String>,
+    pub wallets: BTreeMap<String, String>,
     pub source: Option<PathBuf>,
 }
 
@@ -47,6 +50,14 @@ impl ResolvedProfile {
             .get(name_or_address)
             .cloned()
             .unwrap_or_else(|| name_or_address.to_string())
+    }
+
+    /// Resolve a saved wallet name or direct address.
+    pub fn resolve_wallet(&self, name_or_address: &str) -> Option<String> {
+        if is_valid_address(name_or_address) {
+            return Some(name_or_address.to_string());
+        }
+        self.wallets.get(name_or_address).cloned()
     }
 }
 
@@ -158,6 +169,61 @@ pub fn save_profile_contract_alias(
     Ok(path)
 }
 
+/// Persist a wallet address under the selected project profile.
+///
+/// Creates `groundhog.toml` if it does not already exist.
+/// Uses `toml_edit` for in-place edits that preserve user
+/// comments and formatting.
+pub fn save_profile_wallet_address(
+    project_root: &Path,
+    explicit_profile: Option<&str>,
+    name: &str,
+    address: &str,
+) -> Result<PathBuf, CliError> {
+    if name.trim().is_empty() {
+        return Err(CliError::Other("wallet name cannot be empty".into()));
+    }
+    if address.trim().is_empty() {
+        return Err(CliError::Other("wallet address cannot be empty".into()));
+    }
+    if !is_valid_address(address.trim()) {
+        return Err(CliError::Other(
+            "wallet address must be a 0x-prefixed 64-character hex string".into(),
+        ));
+    }
+
+    let profile_name = active_profile_name(explicit_profile);
+    let path =
+        find_project_config(project_root).unwrap_or_else(|| project_root.join("groundhog.toml"));
+
+    let contents = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e.into()),
+    };
+
+    let mut doc: toml_edit::DocumentMut = contents
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|e| CliError::Other(e.to_string()))?;
+
+    doc.entry("profile")
+        .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
+        .as_table_mut()
+        .ok_or_else(|| CliError::Other("profile must be a table".into()))?
+        .entry(&profile_name)
+        .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
+        .as_table_mut()
+        .ok_or_else(|| CliError::Other("profile entry must be a table".into()))?
+        .entry("wallets")
+        .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
+        .as_table_mut()
+        .ok_or_else(|| CliError::Other("wallets must be a table".into()))?
+        .insert(name.trim(), toml_edit::value(address.trim()));
+
+    atomic_write(&path, doc.to_string().as_bytes())?;
+    Ok(path)
+}
+
 /// Resolve the effective default key for the active profile.
 ///
 /// Prefers `groundhog.toml` when the profile specifies
@@ -204,6 +270,7 @@ pub fn resolve_profile(start: &Path, explicit: Option<&str>) -> Result<ResolvedP
         default_key: profile.default_key,
         runtime_manifest: profile.runtime_manifest,
         contracts: profile.contracts,
+        wallets: profile.wallets,
         source,
     })
 }
