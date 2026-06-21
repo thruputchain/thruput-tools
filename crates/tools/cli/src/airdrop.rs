@@ -66,9 +66,8 @@ pub fn run(
         prepared.amount_hog, prepared.recipient_wallet
     ));
     let (tx_hash, receipt) = submit_prepared_airdrop(&prepared.rpc_url, &prepared.tx_hex, print)?;
-    ensure_success("airdrop", &receipt)?;
-
     let tx_hash = format_tx_hash(&tx_hash);
+    ensure_success("airdrop", &receipt, &tx_hash)?;
     print.status(format_args!("Airdrop sent: {tx_hash}"));
 
     print.json(&CommandResult::new(
@@ -189,13 +188,17 @@ fn submit_prepared_airdrop(
     rt.block_on(async { submit_and_poll_with_tx_hash(rpc_url, tx_hex, |_| {}).await })
 }
 
-fn ensure_success(label: &str, receipt: &TransactionReceipt) -> Result<(), CliError> {
+fn ensure_success(
+    label: &str,
+    receipt: &TransactionReceipt,
+    tx_hash: &str,
+) -> Result<(), CliError> {
     if matches!(receipt.status, ExecStatus::Ok) {
         return Ok(());
     }
     Err(CliError::Other(format!(
-        "{label} {}",
-        summarize_exec_status(&receipt.status)
+        "{label} {}; tx: {tx_hash}",
+        summarize_exec_status(&receipt.status),
     )))
 }
 

@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 
 use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
-use groundhog_json_rpc_types::runtime_manifest::RuntimeManifestDevWallet;
 use groundhog_json_rpc_types::transaction::TxHash;
 use groundhog_signing::{
     BuildDeployTransaction, DEFAULT_TX_GAS_LIMIT, LocalSigner, SignTransactionParams,
@@ -64,7 +63,8 @@ pub fn create(
 
     let (create_tx_hash, create_receipt) =
         submit_prepared_create_tx(&prepared.rpc_url, &prepared.create_tx_hex, print)?;
-    ensure_success("wallet create", &create_receipt)?;
+    let create_tx_hash = format_tx_hash(&create_tx_hash);
+    ensure_success("wallet create", &create_receipt, &create_tx_hash)?;
 
     let project_root = find_project_config(&cwd)
         .and_then(|path| path.parent().map(Path::to_path_buf))
@@ -76,7 +76,6 @@ pub fn create(
         &prepared.wallet_address,
     )?;
 
-    let create_tx_hash = format_tx_hash(&create_tx_hash);
     print.status(format_args!("Wallet created: {}", prepared.wallet_address));
     print.status(format_args!("Txn: {create_tx_hash}"));
 
@@ -159,7 +158,11 @@ pub(crate) fn prepare_wallet_create(
         load_configured_runtime_manifest(&profile, "wallet_sponsor")?.ok_or_else(|| {
             CliError::Other("wallet creation requires a local runtime manifest".into())
         })?;
-    let create_wallet_entrypoint = create_wallet_entrypoint(&manifest.bootstrap.dev_wallet)?;
+    let create_wallet_entrypoint = manifest
+        .bootstrap
+        .dev_wallet
+        .create_wallet_entrypoint_id()
+        .map_err(|error| CliError::Other(error.to_string()))?;
     let sponsor = resolve_local_bootstrap_account(&profile, LocalBootstrapRole::WalletSponsor)?;
     let owner = load_local_signer(&key_name)?;
     let owner_public_key = format!("0x{}", hex::encode(owner.verifying_key_bytes()));
@@ -213,19 +216,6 @@ struct SignCreateWalletTransaction<'a> {
     nonce: u64,
     contract: Contract,
     signer: &'a LocalSigner,
-}
-
-fn create_wallet_entrypoint(
-    dev_wallet: &RuntimeManifestDevWallet,
-) -> Result<ContractEntrypointID, CliError> {
-    dev_wallet
-        .create_wallet_entrypoint_id()
-        .map_err(|error| CliError::Other(error.to_string()))?
-        .ok_or_else(|| {
-            CliError::Other(
-                "wallet creation requires bootstrap.devWallet.createWalletEntrypoint; restart with a newer hog-devnode".into(),
-            )
-        })
 }
 
 fn load_dev_wallet_contract(
@@ -282,13 +272,17 @@ fn submit_prepared_create_tx(
     rt.block_on(async { submit_and_poll_with_tx_hash(rpc_url, tx_hex, |_| {}).await })
 }
 
-fn ensure_success(label: &str, receipt: &TransactionReceipt) -> Result<(), CliError> {
+fn ensure_success(
+    label: &str,
+    receipt: &TransactionReceipt,
+    tx_hash: &str,
+) -> Result<(), CliError> {
     if matches!(receipt.status, ExecStatus::Ok) {
         return Ok(());
     }
     Err(CliError::Other(format!(
-        "{label} {}",
-        summarize_exec_status(&receipt.status)
+        "{label} {}; tx: {tx_hash}",
+        summarize_exec_status(&receipt.status),
     )))
 }
 
@@ -354,24 +348,9 @@ fn format_contract_address(address: &ContractAddress) -> String {
 
 #[cfg(test)]
 mod tests {
-    use groundhog_json_rpc_types::runtime_manifest::RuntimeManifestDevWallet;
     use groundhog_xdr::types::{Ed25519PublicKey, SHA256Hash};
-    use serde_json::json;
 
-    use super::{
-        create_wallet_calldata, create_wallet_entrypoint, resolve_dev_wallet_artifact_path,
-    };
-
-    #[test]
-    fn create_wallet_entrypoint_requires_manifest_field() {
-        let err = create_wallet_entrypoint(&dev_wallet_manifest(None))
-            .expect_err("bug: missing createWalletEntrypoint should fail");
-
-        assert!(
-            err.to_string()
-                .contains("bootstrap.devWallet.createWalletEntrypoint")
-        );
-    }
+    use super::{create_wallet_calldata, resolve_dev_wallet_artifact_path};
 
     #[test]
     fn create_wallet_calldata_round_trips_expected_tuple() {
@@ -404,19 +383,5 @@ mod tests {
         )
         .expect("bug: profile-root artifact should resolve");
         assert_eq!(resolved, artifact);
-    }
-
-    fn dev_wallet_manifest(create_wallet_entrypoint: Option<&str>) -> RuntimeManifestDevWallet {
-        let mut value = json!({
-            "contentHash": format!("0x{}", "51".repeat(32)),
-            "deployedCodeHash": format!("0x{}", "52".repeat(32)),
-            "artifactHint": "./dev-wallet.wasm",
-            "deployEntrypoint": "0xadac498222148e4f",
-            "doActionEntrypoint": "0x646f416374696f6e",
-        });
-        if let Some(entrypoint) = create_wallet_entrypoint {
-            value["createWalletEntrypoint"] = json!(entrypoint);
-        }
-        serde_json::from_value(value).expect("bug: test manifest should deserialize")
     }
 }

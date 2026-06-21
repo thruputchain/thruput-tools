@@ -135,8 +135,7 @@ pub struct RuntimeManifestDevWallet {
     /// Entrypoint used to deploy the wallet.
     pub deploy_entrypoint: String,
     /// Entrypoint used to sponsor creation of a new initialized wallet.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub create_wallet_entrypoint: Option<String>,
+    pub create_wallet_entrypoint: String,
     /// Entrypoint used to submit wallet actions.
     pub do_action_entrypoint: String,
 }
@@ -155,13 +154,11 @@ impl RuntimeManifestDevWallet {
     /// Parse the advertised dev-wallet `createWallet` entrypoint into its XDR ID.
     pub fn create_wallet_entrypoint_id(
         &self,
-    ) -> Result<Option<ContractEntrypointID>, RuntimeManifestEntrypointError> {
-        self.create_wallet_entrypoint
-            .as_deref()
-            .map(|entrypoint| {
-                parse_entrypoint_id("bootstrap.devWallet.createWalletEntrypoint", entrypoint)
-            })
-            .transpose()
+    ) -> Result<ContractEntrypointID, RuntimeManifestEntrypointError> {
+        parse_entrypoint_id(
+            "bootstrap.devWallet.createWalletEntrypoint",
+            &self.create_wallet_entrypoint,
+        )
     }
 }
 
@@ -342,7 +339,7 @@ mod tests {
                     deployed_code_hash: hash(0x52),
                     artifact_hint: "./dev-wallet.wasm".into(),
                     deploy_entrypoint: "0xadac498222148e4f".into(),
-                    create_wallet_entrypoint: Some("0x6372656174655761".into()),
+                    create_wallet_entrypoint: "0x6372656174655761".into(),
                     do_action_entrypoint: "0x646f416374696f6e".into(),
                 },
                 storage_cost_model: RuntimeManifestStorageCostModel {
@@ -424,24 +421,9 @@ mod tests {
             .bootstrap
             .dev_wallet
             .create_wallet_entrypoint_id()
-            .expect("entrypoint should parse")
-            .expect("entrypoint should be present");
+            .expect("entrypoint should parse");
 
         assert_eq!(entrypoint.as_ref(), b"createWa");
-    }
-
-    #[test]
-    fn dev_wallet_create_wallet_entrypoint_is_optional() {
-        let mut manifest = full_manifest();
-        manifest.bootstrap.dev_wallet.create_wallet_entrypoint = None;
-
-        let entrypoint = manifest
-            .bootstrap
-            .dev_wallet
-            .create_wallet_entrypoint_id()
-            .expect("missing optional entrypoint should not fail");
-
-        assert!(entrypoint.is_none());
     }
 
     fn addr(value: &str) -> SocketAddr {
