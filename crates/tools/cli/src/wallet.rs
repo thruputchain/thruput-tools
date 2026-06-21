@@ -23,8 +23,8 @@ use crate::runtime_manifest::{
     apply_local_node_state_for_local_bootstrap, load_configured_runtime_manifest,
 };
 use crate::tx_utils::{
-    format_tx_hash, nonce_from_timestamp, resolve_block_expiry_height,
-    submit_and_poll_with_tx_hash, summarize_exec_status,
+    format_tx_hash, nonce_from_timestamp, resolve_block_expiry_height, submit_and_poll,
+    summarize_exec_status,
 };
 use crate::{CliError, Print};
 
@@ -62,7 +62,7 @@ pub fn create(
     ));
 
     let (create_tx_hash, create_receipt) =
-        submit_prepared_create_tx(&prepared.rpc_url, &prepared.create_tx_hex, print)?;
+        submit_prepared_create_tx(&prepared.rpc_url, &prepared.create_tx_hex)?;
     let create_tx_hash = format_tx_hash(&create_tx_hash);
     ensure_success("wallet create", &create_receipt, &create_tx_hash)?;
 
@@ -265,11 +265,10 @@ fn sign_create_wallet_transaction(
 fn submit_prepared_create_tx(
     rpc_url: &str,
     tx_hex: &str,
-    _print: &Print,
 ) -> Result<(TxHash, TransactionReceipt), CliError> {
     let rt =
         tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
-    rt.block_on(async { submit_and_poll_with_tx_hash(rpc_url, tx_hex, |_| {}).await })
+    rt.block_on(async { submit_and_poll(rpc_url, tx_hex).await })
 }
 
 fn ensure_success(

@@ -21,8 +21,8 @@ use crate::runtime_manifest::{
     apply_local_node_state_for_local_bootstrap, load_configured_runtime_manifest,
 };
 use crate::tx_utils::{
-    format_tx_hash, nonce_from_timestamp, resolve_block_expiry_height,
-    submit_and_poll_with_tx_hash, summarize_exec_status,
+    format_tx_hash, nonce_from_timestamp, resolve_block_expiry_height, submit_and_poll,
+    summarize_exec_status,
 };
 use crate::{CliError, Print};
 
@@ -65,7 +65,7 @@ pub fn run(
         "Airdropping {} HOG to {}...",
         prepared.amount_hog, prepared.recipient_wallet
     ));
-    let (tx_hash, receipt) = submit_prepared_airdrop(&prepared.rpc_url, &prepared.tx_hex, print)?;
+    let (tx_hash, receipt) = submit_prepared_airdrop(&prepared.rpc_url, &prepared.tx_hex)?;
     let tx_hash = format_tx_hash(&tx_hash);
     ensure_success("airdrop", &receipt, &tx_hash)?;
     print.status(format_args!("Airdrop sent: {tx_hash}"));
@@ -181,11 +181,10 @@ fn encode_transfer_calldata(
 fn submit_prepared_airdrop(
     rpc_url: &str,
     tx_hex: &str,
-    _print: &Print,
 ) -> Result<(TxHash, TransactionReceipt), CliError> {
     let rt =
         tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
-    rt.block_on(async { submit_and_poll_with_tx_hash(rpc_url, tx_hex, |_| {}).await })
+    rt.block_on(async { submit_and_poll(rpc_url, tx_hex).await })
 }
 
 fn ensure_success(
