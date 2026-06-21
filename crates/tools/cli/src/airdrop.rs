@@ -27,12 +27,12 @@ use crate::tx_utils::{
 use crate::{CliError, Print};
 
 pub const AIRDROP_JSON_SCHEMA_VERSION: u32 = 1;
-const DEFAULT_AIRDROP_HOG: &str = "100";
+const DEFAULT_AIRDROP_HOG: &str = "10";
 const HOG_DECIMALS: u32 = 7;
 const HOG_SCALE: u128 = 10_000_000;
 const HOG_TOKEN_ADDRESS: &str =
     "0x0000000000000000000000000000000000000000000000000000000000000001";
-const HOG_TRANSFER_ENTRYPOINT: [u8; 8] = 0x3799_fd1c_3d9b_098f_u64.to_be_bytes();
+const HOG_TRANSFER_ENTRYPOINT: [u8; 8] = 0x6328_5b35_23f9_dc3f_u64.to_be_bytes();
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PreparedAirdrop {
@@ -65,17 +65,11 @@ pub fn run(
         "Airdropping {} HOG to {}...",
         prepared.amount_hog, prepared.recipient_wallet
     ));
-    print.status(format_args!(
-        "  faucet: {} ({})",
-        prepared.faucet_key_name, prepared.faucet_role
-    ));
-
     let (tx_hash, receipt) = submit_prepared_airdrop(&prepared.rpc_url, &prepared.tx_hex, print)?;
     ensure_success("airdrop", &receipt)?;
 
     let tx_hash = format_tx_hash(&tx_hash);
     print.status(format_args!("Airdrop sent: {tx_hash}"));
-    print.status(format_args!("  height: {}", *receipt.height));
 
     print.json(&CommandResult::new(
         cmd,
@@ -188,19 +182,11 @@ fn encode_transfer_calldata(
 fn submit_prepared_airdrop(
     rpc_url: &str,
     tx_hex: &str,
-    print: &Print,
+    _print: &Print,
 ) -> Result<(TxHash, TransactionReceipt), CliError> {
     let rt =
         tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
-    rt.block_on(async {
-        submit_and_poll_with_tx_hash(rpc_url, tx_hex, |tx_hash| {
-            print.status(format_args!(
-                "  airdrop tx submitted: {}",
-                format_tx_hash(tx_hash)
-            ));
-        })
-        .await
-    })
+    rt.block_on(async { submit_and_poll_with_tx_hash(rpc_url, tx_hex, |_| {}).await })
 }
 
 fn ensure_success(label: &str, receipt: &TransactionReceipt) -> Result<(), CliError> {
@@ -322,11 +308,17 @@ fn format_contract_address(address: &ContractAddress) -> String {
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::{format_hog_amount, parse_hog_amount, resolve_airdrop_recipient};
+    use groundhog_contract_util::{NormalizedMethodSignature, contract_entrypoint_id};
+
+    use super::{
+        DEFAULT_AIRDROP_HOG, HOG_TRANSFER_ENTRYPOINT, format_hog_amount, parse_hog_amount,
+        resolve_airdrop_recipient,
+    };
     use crate::config::ResolvedProfile;
 
     #[test]
     fn parses_hog_amounts_to_raw_units() {
+        assert_eq!(parse_hog_amount(DEFAULT_AIRDROP_HOG).unwrap(), 100_000_000);
         assert_eq!(parse_hog_amount("1").unwrap(), 10_000_000);
         assert_eq!(parse_hog_amount("1.5").unwrap(), 15_000_000);
         assert_eq!(parse_hog_amount("0.0000001").unwrap(), 1);
@@ -371,6 +363,17 @@ mod tests {
             format!("0x{}", "cd".repeat(32))
         );
         assert!(resolve_airdrop_recipient(&profile, "missing").is_err());
+    }
+
+    #[test]
+    fn hog_transfer_entrypoint_matches_standard_erc20_interface() {
+        let entrypoint = contract_entrypoint_id(
+            Some("ERC20"),
+            "0.1.3",
+            &NormalizedMethodSignature::new("transfer"),
+        );
+
+        assert_eq!(entrypoint.as_ref(), HOG_TRANSFER_ENTRYPOINT);
     }
 
     fn test_profile(wallets: BTreeMap<String, String>) -> ResolvedProfile {

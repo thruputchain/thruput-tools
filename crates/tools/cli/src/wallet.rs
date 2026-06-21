@@ -58,12 +58,8 @@ pub fn create(
     }
 
     print.status(format_args!(
-        "Creating wallet for key `{}` on {}...",
-        prepared.key_name, prepared.rpc_url
-    ));
-    print.status(format_args!(
-        "  sponsor: {} ({})",
-        prepared.sponsor_key_name, prepared.sponsor_role
+        "Creating wallet for key '{}'...",
+        prepared.key_name
     ));
 
     let (create_tx_hash, create_receipt) =
@@ -73,7 +69,7 @@ pub fn create(
     let project_root = find_project_config(&cwd)
         .and_then(|path| path.parent().map(Path::to_path_buf))
         .unwrap_or(cwd);
-    let saved_path = save_profile_wallet_address(
+    save_profile_wallet_address(
         &project_root,
         Some(profile),
         &prepared.key_name,
@@ -82,8 +78,7 @@ pub fn create(
 
     let create_tx_hash = format_tx_hash(&create_tx_hash);
     print.status(format_args!("Wallet created: {}", prepared.wallet_address));
-    print.status(format_args!("  create tx: {create_tx_hash}"));
-    print.status(format_args!("  saved: {}", saved_path.display()));
+    print.status(format_args!("Txn: {create_tx_hash}"));
 
     print.json(&CommandResult::new(
         cmd,
@@ -280,19 +275,11 @@ fn sign_create_wallet_transaction(
 fn submit_prepared_create_tx(
     rpc_url: &str,
     tx_hex: &str,
-    print: &Print,
+    _print: &Print,
 ) -> Result<(TxHash, TransactionReceipt), CliError> {
     let rt =
         tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
-    rt.block_on(async {
-        submit_and_poll_with_tx_hash(rpc_url, tx_hex, |tx_hash| {
-            print.status(format_args!(
-                "  create tx submitted: {}",
-                format_tx_hash(tx_hash)
-            ));
-        })
-        .await
-    })
+    rt.block_on(async { submit_and_poll_with_tx_hash(rpc_url, tx_hex, |_| {}).await })
 }
 
 fn ensure_success(label: &str, receipt: &TransactionReceipt) -> Result<(), CliError> {
