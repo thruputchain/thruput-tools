@@ -1493,7 +1493,16 @@ fn wallet_create_dry_run_json_outputs_prepared_transaction() {
     .unwrap();
 
     let output = groundhog()
-        .args(["--json", "wallet", "create", "--key", "dev-1", "--dry-run"])
+        .args([
+            "--json",
+            "wallet",
+            "create",
+            "--key",
+            "dev-1",
+            "--name",
+            "trading",
+            "--dry-run",
+        ])
         .current_dir(&project)
         .output()
         .unwrap();
@@ -1517,6 +1526,7 @@ fn wallet_create_dry_run_json_outputs_prepared_transaction() {
     );
     assert_eq!(stdout["data"]["dry_run"], true);
     assert_eq!(stdout["data"]["submitted"], false);
+    assert_eq!(stdout["data"]["name"], "trading");
     assert_eq!(stdout["data"]["key"], "dev-1");
     assert_eq!(stdout["data"]["sponsor"]["key"], "dev-0");
     assert_eq!(stdout["data"]["sponsor"]["role"], "local_user");
