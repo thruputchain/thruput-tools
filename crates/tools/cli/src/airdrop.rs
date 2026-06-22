@@ -158,6 +158,11 @@ fn resolve_airdrop_recipient(
     if let Some(wallet) = profile.resolve_wallet(recipient) {
         return Ok(wallet);
     }
+    if recipient.starts_with("0x") {
+        return Err(CliError::Other(
+            "wallet address must be a 0x-prefixed 64-character hex string".into(),
+        ));
+    }
     if let Some(index) = dev_keys::dev_key_index(recipient) {
         let address = lookup_dev_account_address(profile, recipient, index)?;
         return Ok(format_contract_address(&address.0));
@@ -336,6 +341,16 @@ mod tests {
             format!("0x{}", "cd".repeat(32))
         );
         assert!(resolve_airdrop_recipient(&profile, "missing").is_err());
+    }
+
+    #[test]
+    fn malformed_direct_recipient_reports_address_format() {
+        let profile = test_profile(BTreeMap::new());
+
+        let err = resolve_airdrop_recipient(&profile, "0xdeadbeef")
+            .expect_err("bug: malformed direct address should fail");
+
+        assert!(err.to_string().contains("64-character hex string"));
     }
 
     #[test]
