@@ -379,7 +379,11 @@ fn deploy_entrypoint(
             .bootstrap
             .dev_wallet
             .deploy_entrypoint_id()
-            .map_err(|error| CliError::Other(error.to_string()));
+            .map_err(|error| CliError::ManifestEntrypoint {
+                key_name: key_name.to_owned(),
+                field: "bootstrap.devWallet.deployEntrypoint",
+                message: error.to_string(),
+            });
     }
 
     Ok(ContractEntrypointID::from(WALLET_DEPLOY_ENTRYPOINT))

@@ -120,6 +120,15 @@ pub enum CliError {
         /// Specific metadata lookup or validation failure.
         message: String,
     },
+    #[error("runtime manifest entrypoint `{field}` for key `{key_name}` is invalid: {message}")]
+    ManifestEntrypoint {
+        /// Dev key name whose configured runtime manifest was read.
+        key_name: String,
+        /// Runtime manifest field path containing the malformed entrypoint.
+        field: &'static str,
+        /// Specific parse or validation failure.
+        message: String,
+    },
     #[error("failed to derive wallet address for key `{key_name}`: {message}")]
     WalletAddressDerivationFailed {
         /// Key name whose pubkey-derived wallet address could not be derived.
@@ -197,6 +206,7 @@ impl CliError {
             Self::RuntimeInit(_) => "runtime_init_failed",
             Self::RpcMethodFailed { .. } => "rpc_method_failed",
             Self::LocalDevAccountUnavailable { .. } => "local_dev_account_unavailable",
+            Self::ManifestEntrypoint { .. } => "manifest_entrypoint_invalid",
             Self::WalletAddressDerivationFailed { .. } => "wallet_address_derivation_failed",
             Self::ReceiptTimeout { .. } => "receipt_timeout",
             Self::ReceiptPollingExhausted => "receipt_polling_exhausted",
@@ -305,6 +315,9 @@ impl CliError {
             )),
             Self::LocalDevAccountUnavailable { .. } => Some(Cow::Borrowed(
                 "run `groundhog node` backed by hog-devnode, or use a stored key for non-local endpoints",
+            )),
+            Self::ManifestEntrypoint { .. } => Some(Cow::Borrowed(
+                "restart the local node with a compatible hog-devnode, or remove the stale runtime manifest reference from groundhog.toml",
             )),
             Self::WalletAddressDerivationFailed { .. } => Some(Cow::Borrowed(
                 "check the stored public key material, or regenerate the key",
@@ -419,6 +432,15 @@ impl CliError {
                     "message": message,
                 }))
             }
+            Self::ManifestEntrypoint {
+                key_name,
+                field,
+                message,
+            } => Some(json!({
+                "keyName": key_name,
+                "field": field,
+                "message": message,
+            })),
             _ => None,
         }
     }
