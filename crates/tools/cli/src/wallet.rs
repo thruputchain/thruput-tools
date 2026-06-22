@@ -28,7 +28,7 @@ use crate::tx_utils::{
 };
 use crate::{CliError, Print};
 
-pub const WALLET_CREATE_JSON_SCHEMA_VERSION: u32 = 1;
+pub const WALLET_CREATE_JSON_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 struct SavedWallet {
