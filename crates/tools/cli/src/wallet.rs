@@ -216,7 +216,7 @@ pub(crate) fn prepare_wallet_create(
         Some(wallet_name) => {
             let wallet_name = wallet_name.trim();
             if wallet_name.is_empty() {
-                return Err(CliError::Other("wallet name cannot be empty".into()));
+                return Err(CliError::EmptyWalletName);
             }
             wallet_name.to_owned()
         }
