@@ -103,6 +103,11 @@ pub(crate) fn parse_contract_address(hex_str: &str) -> Result<ContractAddress, C
     )?))
 }
 
+/// Format a contract address as 0x-prefixed lowercase hex.
+pub(crate) fn format_contract_address(address: &ContractAddress) -> String {
+    format!("0x{}", hex::encode(address.as_ref()))
+}
+
 /// Decode a spec string as UTF-8 text and validate it as a safe identifier.
 ///
 /// Spec strings originate from Rust type and method names. A string

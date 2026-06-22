@@ -65,6 +65,29 @@ pub async fn submit_and_poll(
     submit_and_poll_with_tx_hash(rpc_url, tx_hex, |_| {}).await
 }
 
+pub fn submit_and_poll_blocking(
+    rpc_url: &str,
+    tx_hex: &str,
+) -> Result<(TxHash, TransactionReceipt), CliError> {
+    let rt =
+        tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
+    rt.block_on(async { submit_and_poll(rpc_url, tx_hex).await })
+}
+
+pub fn ensure_tx_success(
+    label: &str,
+    receipt: &TransactionReceipt,
+    tx_hash: &str,
+) -> Result<(), CliError> {
+    if matches!(receipt.status, ExecStatus::Ok) {
+        return Ok(());
+    }
+    Err(CliError::Other(format!(
+        "{label} {}; tx: {tx_hash}",
+        summarize_exec_status(&receipt.status),
+    )))
+}
+
 pub async fn submit_and_poll_with_tx_hash(
     rpc_url: &str,
     tx_hex: &str,

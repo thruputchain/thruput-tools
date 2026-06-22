@@ -1,7 +1,5 @@
 use std::path::Path;
 
-use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
-use groundhog_json_rpc_types::transaction::TxHash;
 use groundhog_signing::{
     BuildDevWalletDoActionTransaction, DEFAULT_TX_GAS_LIMIT, SignTransactionParams,
     build_dev_wallet_do_action_transaction, sign_and_encode_transaction_hex,
@@ -13,7 +11,7 @@ use serde_json::json;
 use crate::account_resolution::{
     LocalBootstrapRole, lookup_dev_account_address, resolve_local_bootstrap_account,
 };
-use crate::codec::parse_contract_address;
+use crate::codec::{format_contract_address, parse_contract_address};
 use crate::config::{ResolvedProfile, resolve_profile};
 use crate::dev_keys;
 use crate::result::CommandResult;
@@ -21,8 +19,8 @@ use crate::runtime_manifest::{
     apply_local_node_state_for_local_bootstrap, load_configured_runtime_manifest,
 };
 use crate::tx_utils::{
-    format_tx_hash, nonce_from_timestamp, resolve_block_expiry_height, submit_and_poll,
-    summarize_exec_status,
+    ensure_tx_success, format_tx_hash, nonce_from_timestamp, resolve_block_expiry_height,
+    submit_and_poll_blocking,
 };
 use crate::{CliError, Print};
 
@@ -65,9 +63,9 @@ pub fn run(
         "Airdropping {} HOG to {}...",
         prepared.amount_hog, prepared.recipient_wallet
     ));
-    let (tx_hash, receipt) = submit_prepared_airdrop(&prepared.rpc_url, &prepared.tx_hex)?;
+    let (tx_hash, receipt) = submit_and_poll_blocking(&prepared.rpc_url, &prepared.tx_hex)?;
     let tx_hash = format_tx_hash(&tx_hash);
-    ensure_success("airdrop", &receipt, &tx_hash)?;
+    ensure_tx_success("airdrop", &receipt, &tx_hash)?;
     print.status(format_args!("Airdrop sent: {tx_hash}"));
 
     print.json(&CommandResult::new(
@@ -178,29 +176,6 @@ fn encode_transfer_calldata(
     })
 }
 
-fn submit_prepared_airdrop(
-    rpc_url: &str,
-    tx_hex: &str,
-) -> Result<(TxHash, TransactionReceipt), CliError> {
-    let rt =
-        tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
-    rt.block_on(async { submit_and_poll(rpc_url, tx_hex).await })
-}
-
-fn ensure_success(
-    label: &str,
-    receipt: &TransactionReceipt,
-    tx_hash: &str,
-) -> Result<(), CliError> {
-    if matches!(receipt.status, ExecStatus::Ok) {
-        return Ok(());
-    }
-    Err(CliError::Other(format!(
-        "{label} {}; tx: {tx_hash}",
-        summarize_exec_status(&receipt.status),
-    )))
-}
-
 fn print_dry_run(
     prepared: &PreparedAirdrop,
     cmd: &'static str,
@@ -300,10 +275,6 @@ fn format_hog_amount(raw_amount: u128) -> String {
         .trim_end_matches('0')
         .to_owned();
     format!("{whole}.{fractional}")
-}
-
-fn format_contract_address(address: &ContractAddress) -> String {
-    format!("0x{}", hex::encode(address.as_ref()))
 }
 
 #[cfg(test)]

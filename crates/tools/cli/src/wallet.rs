@@ -1,7 +1,5 @@
 use std::path::{Path, PathBuf};
 
-use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
-use groundhog_json_rpc_types::transaction::TxHash;
 use groundhog_signing::{
     BuildDeployTransaction, DEFAULT_TX_GAS_LIMIT, LocalSigner, SignTransactionParams,
     build_deploy_transaction, derive_deploy_address, sign_and_encode_transaction_hex,
@@ -14,6 +12,7 @@ use sha2::{Digest, Sha256};
 use xdr_common::{BytesM, VecM};
 
 use crate::account_resolution::{LocalBootstrapRole, resolve_local_bootstrap_account};
+use crate::codec::format_contract_address;
 use crate::config::{
     find_project_config, remove_profile_wallet_address, resolve_default_key, resolve_profile,
     save_profile_wallet_address,
@@ -24,8 +23,8 @@ use crate::runtime_manifest::{
     apply_local_node_state_for_local_bootstrap, load_configured_runtime_manifest,
 };
 use crate::tx_utils::{
-    format_tx_hash, nonce_from_timestamp, resolve_block_expiry_height, submit_and_poll,
-    summarize_exec_status,
+    ensure_tx_success, format_tx_hash, nonce_from_timestamp, resolve_block_expiry_height,
+    submit_and_poll_blocking,
 };
 use crate::{CliError, Print};
 
@@ -69,9 +68,9 @@ pub fn create(
     ));
 
     let (create_tx_hash, create_receipt) =
-        submit_prepared_create_tx(&prepared.rpc_url, &prepared.create_tx_hex)?;
+        submit_and_poll_blocking(&prepared.rpc_url, &prepared.create_tx_hex)?;
     let create_tx_hash = format_tx_hash(&create_tx_hash);
-    ensure_success("wallet create", &create_receipt, &create_tx_hash)?;
+    ensure_tx_success("wallet create", &create_receipt, &create_tx_hash)?;
 
     let project_root = find_project_config(&cwd)
         .and_then(|path| path.parent().map(Path::to_path_buf))
@@ -314,29 +313,6 @@ fn sign_create_wallet_transaction(
         .map_err(|error| CliError::Other(error.to_string()))
 }
 
-fn submit_prepared_create_tx(
-    rpc_url: &str,
-    tx_hex: &str,
-) -> Result<(TxHash, TransactionReceipt), CliError> {
-    let rt =
-        tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
-    rt.block_on(async { submit_and_poll(rpc_url, tx_hex).await })
-}
-
-fn ensure_success(
-    label: &str,
-    receipt: &TransactionReceipt,
-    tx_hash: &str,
-) -> Result<(), CliError> {
-    if matches!(receipt.status, ExecStatus::Ok) {
-        return Ok(());
-    }
-    Err(CliError::Other(format!(
-        "{label} {}; tx: {tx_hash}",
-        summarize_exec_status(&receipt.status),
-    )))
-}
-
 fn dev_wallet_contract(artifact_path: &Path, artifact_bytes: Vec<u8>) -> Contract {
     let blob = ContractBlob {
         data: BytesM(artifact_bytes),
@@ -391,10 +367,6 @@ fn resolve_dev_wallet_artifact_path(
     Err(CliError::Other(format!(
         "dev-wallet artifact `{hint}` was not found; run from the local-node project directory or set profile.<name>.runtime_manifest with a reachable artifact hint"
     )))
-}
-
-fn format_contract_address(address: &ContractAddress) -> String {
-    format!("0x{}", hex::encode(address.as_ref()))
 }
 
 #[cfg(test)]
