@@ -15,7 +15,8 @@ use xdr_common::{BytesM, VecM};
 
 use crate::account_resolution::{LocalBootstrapRole, resolve_local_bootstrap_account};
 use crate::config::{
-    find_project_config, resolve_default_key, resolve_profile, save_profile_wallet_address,
+    find_project_config, remove_profile_wallet_address, resolve_default_key, resolve_profile,
+    save_profile_wallet_address,
 };
 use crate::keys::load_local_signer;
 use crate::result::CommandResult;
@@ -29,6 +30,12 @@ use crate::tx_utils::{
 use crate::{CliError, Print};
 
 pub const WALLET_CREATE_JSON_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+struct SavedWallet {
+    name: String,
+    address: String,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PreparedWalletCreate {
@@ -95,6 +102,51 @@ pub fn create(
             "create_height": create_receipt.height,
         }),
     ))?;
+
+    Ok(())
+}
+
+pub fn remove(name: &str, profile: &str, cmd: &'static str, print: &Print) -> Result<(), CliError> {
+    let cwd = std::env::current_dir()?;
+    let project_root = find_project_config(&cwd)
+        .and_then(|path| path.parent().map(Path::to_path_buf))
+        .unwrap_or(cwd);
+    remove_profile_wallet_address(&project_root, Some(profile), name)?;
+
+    print.status(format_args!("Removed wallet `{}`.", name.trim()));
+    print.json(&CommandResult::new(
+        cmd,
+        json!({
+            "name": name.trim(),
+            "profile": profile,
+        }),
+    ))?;
+
+    Ok(())
+}
+
+pub fn list(profile: &str, cmd: &'static str, print: &Print) -> Result<(), CliError> {
+    let cwd = std::env::current_dir()?;
+    let profile = resolve_profile(&cwd, Some(profile))?;
+    let wallets: Vec<SavedWallet> = profile
+        .wallets
+        .into_iter()
+        .map(|(name, address)| SavedWallet { name, address })
+        .collect();
+
+    if print.is_json() {
+        print.json(&CommandResult::new(cmd, json!({ "wallets": wallets })))?;
+        return Ok(());
+    }
+
+    if wallets.is_empty() {
+        println!("No wallets saved.");
+        return Ok(());
+    }
+
+    for wallet in wallets {
+        println!("{} {}", wallet.name, wallet.address);
+    }
 
     Ok(())
 }

@@ -472,3 +472,34 @@ fn save_second_wallet_preserves_first() {
         Some(addr_b.as_str())
     );
 }
+
+#[test]
+#[serial]
+fn remove_wallet_deletes_saved_entry() {
+    let tmp = TempDir::new().unwrap();
+    let addr_a = format!("0x{}", "aa".repeat(32));
+    let addr_b = format!("0x{}", "bb".repeat(32));
+
+    groundhog_cli::config::save_profile_wallet_address(tmp.path(), None, "alice", &addr_a).unwrap();
+    groundhog_cli::config::save_profile_wallet_address(tmp.path(), None, "bob", &addr_b).unwrap();
+    groundhog_cli::config::remove_profile_wallet_address(tmp.path(), None, "alice").unwrap();
+
+    let profile = groundhog_cli::config::resolve_profile(tmp.path(), None).unwrap();
+    assert!(!profile.wallets.contains_key("alice"));
+    assert_eq!(
+        profile.wallets.get("bob").map(String::as_str),
+        Some(addr_b.as_str())
+    );
+}
+
+#[test]
+#[serial]
+fn remove_wallet_rejects_missing_entry() {
+    let tmp = TempDir::new().unwrap();
+    let addr = format!("0x{}", "aa".repeat(32));
+
+    groundhog_cli::config::save_profile_wallet_address(tmp.path(), None, "alice", &addr).unwrap();
+    let result = groundhog_cli::config::remove_profile_wallet_address(tmp.path(), None, "bob");
+
+    assert!(result.is_err());
+}

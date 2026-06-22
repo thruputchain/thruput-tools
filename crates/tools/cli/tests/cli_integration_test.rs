@@ -1548,6 +1548,46 @@ fn wallet_create_dry_run_json_outputs_prepared_transaction() {
 }
 
 #[test]
+fn wallet_ls_json_outputs_saved_wallets() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let alice = format!("0x{}", "ab".repeat(32));
+    let bob = format!("0x{}", "cd".repeat(32));
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!(
+            "[profile.default]\nrpc_url = \"http://127.0.0.1:9545\"\n\n[profile.default.wallets]\nalice = \"{alice}\"\nbob = \"{bob}\"\n"
+        ),
+    )
+    .unwrap();
+
+    let output = groundhog()
+        .args(["--json", "wallet", "ls"])
+        .current_dir(&project)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["ok"], true);
+    assert_eq!(stdout["command"], "wallet.ls");
+    assert_eq!(
+        stdout["data"]["wallets"],
+        serde_json::json!([
+            { "name": "alice", "address": alice },
+            { "name": "bob", "address": bob },
+        ])
+    );
+}
+
+#[test]
 fn airdrop_dry_run_json_outputs_prepared_transaction() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");

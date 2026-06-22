@@ -433,6 +433,16 @@ enum KeysCommand {
 
 #[derive(Subcommand)]
 enum WalletCommand {
+    /// List saved project wallets
+    Ls {
+        /// Config profile to use
+        #[arg(
+            long = "profile",
+            alias = "network",
+            default_value = DEFAULT_PROFILE
+        )]
+        profile: String,
+    },
     /// Create a local-node wallet for a stored signing key
     Create {
         /// Existing key name that should own the new wallet
@@ -441,6 +451,18 @@ enum WalletCommand {
         /// Build and sign the wallet create transaction without submitting it
         #[arg(long)]
         dry_run: bool,
+        /// Config profile to use
+        #[arg(
+            long = "profile",
+            alias = "network",
+            default_value = DEFAULT_PROFILE
+        )]
+        profile: String,
+    },
+    /// Remove a saved project wallet entry
+    Rm {
+        /// Saved wallet name to remove from groundhog.toml
+        name: String,
         /// Config profile to use
         #[arg(
             long = "profile",
@@ -513,7 +535,9 @@ impl KeysCommand {
 impl WalletCommand {
     fn command_name(&self) -> &'static str {
         match self {
+            Self::Ls { .. } => "wallet.ls",
             Self::Create { .. } => "wallet.create",
+            Self::Rm { .. } => "wallet.rm",
         }
     }
 }
@@ -747,11 +771,17 @@ fn main() {
             KeysCommand::Rm { name } => groundhog_cli::keys::remove(&name, cmd_name, &print),
         },
         Command::Wallet { command } => match command {
+            WalletCommand::Ls { profile } => {
+                groundhog_cli::wallet::list(&profile, cmd_name, &print)
+            }
             WalletCommand::Create {
                 key,
                 dry_run,
                 profile,
             } => groundhog_cli::wallet::create(key.as_deref(), dry_run, &profile, cmd_name, &print),
+            WalletCommand::Rm { name, profile } => {
+                groundhog_cli::wallet::remove(&name, &profile, cmd_name, &print)
+            }
         },
         Command::Codegen { command } => match command {
             CodegenCommand::Ts { source, output } => {
@@ -860,6 +890,18 @@ mod tests {
     }
 
     #[test]
+    fn wallet_ls_flags_parse() {
+        let cli = Cli::parse_from(["groundhog", "wallet", "ls"]);
+
+        match cli.command {
+            Command::Wallet {
+                command: WalletCommand::Ls { profile },
+            } => assert_eq!(profile, DEFAULT_PROFILE),
+            _ => panic!("expected wallet ls command"),
+        }
+    }
+
+    #[test]
     fn wallet_create_key_flag_is_optional() {
         let cli = Cli::parse_from(["groundhog", "wallet", "create", "--dry-run"]);
 
@@ -877,6 +919,21 @@ mod tests {
                 assert_eq!(profile, DEFAULT_PROFILE);
             }
             _ => panic!("expected wallet create command"),
+        }
+    }
+
+    #[test]
+    fn wallet_rm_flags_parse() {
+        let cli = Cli::parse_from(["groundhog", "wallet", "rm", "alice"]);
+
+        match cli.command {
+            Command::Wallet {
+                command: WalletCommand::Rm { name, profile },
+            } => {
+                assert_eq!(name, "alice");
+                assert_eq!(profile, DEFAULT_PROFILE);
+            }
+            _ => panic!("expected wallet rm command"),
         }
     }
 

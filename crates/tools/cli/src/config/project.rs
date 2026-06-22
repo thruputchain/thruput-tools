@@ -225,6 +225,42 @@ pub fn save_profile_wallet_address(
     Ok(path)
 }
 
+/// Remove a persisted wallet address from the selected project profile.
+pub fn remove_profile_wallet_address(
+    project_root: &Path,
+    explicit_profile: Option<&str>,
+    name: &str,
+) -> Result<PathBuf, CliError> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(CliError::Other("wallet name cannot be empty".into()));
+    }
+
+    let profile_name = active_profile_name(explicit_profile);
+    let path = find_project_config(project_root)
+        .ok_or_else(|| CliError::NoProjectConfig(profile_name.clone()))?;
+    let contents = std::fs::read_to_string(&path)?;
+    let mut doc: toml_edit::DocumentMut = contents
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|e| CliError::Other(e.to_string()))?;
+
+    let wallets = doc
+        .get_mut("profile")
+        .and_then(toml_edit::Item::as_table_mut)
+        .and_then(|profiles| profiles.get_mut(&profile_name))
+        .and_then(toml_edit::Item::as_table_mut)
+        .and_then(|profile| profile.get_mut("wallets"))
+        .and_then(toml_edit::Item::as_table_mut)
+        .ok_or_else(|| CliError::Other(format!("wallet `{name}` is not saved")))?;
+
+    if wallets.remove(name).is_none() {
+        return Err(CliError::Other(format!("wallet `{name}` is not saved")));
+    }
+
+    atomic_write(&path, doc.to_string().as_bytes())?;
+    Ok(path)
+}
+
 /// Resolve the effective default key for the active profile.
 ///
 /// Prefers `groundhog.toml` when the profile specifies
