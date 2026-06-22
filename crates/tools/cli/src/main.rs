@@ -267,6 +267,24 @@ enum Command {
         #[command(flatten)]
         artifacts: ArtifactArgs,
     },
+    /// Transfer local HOG from the dev faucet to a wallet
+    Airdrop {
+        /// Wallet name, dev-N wallet, or direct 0x-prefixed wallet address
+        recipient: String,
+        /// Amount in HOG, with up to 7 decimal places
+        #[arg(long)]
+        amount: Option<String>,
+        /// Build and sign the airdrop transaction without submitting it
+        #[arg(long)]
+        dry_run: bool,
+        /// Config profile to use
+        #[arg(
+            long = "profile",
+            alias = "network",
+            default_value = DEFAULT_PROFILE
+        )]
+        profile: String,
+    },
     /// Execute a sandboxed contract simulation against committed state
     #[command(long_about = "Execute a sandboxed contract simulation via \
                       groundhog_view. Named methods use local or embedded \
@@ -367,6 +385,11 @@ enum Command {
         #[command(subcommand)]
         command: KeysCommand,
     },
+    /// Manage contract wallets
+    Wallet {
+        #[command(subcommand)]
+        command: WalletCommand,
+    },
     /// Configure registry and test executor credentials
     Login,
     /// Remove stored credentials
@@ -409,6 +432,48 @@ enum KeysCommand {
 }
 
 #[derive(Subcommand)]
+enum WalletCommand {
+    /// List saved project wallets
+    Ls {
+        /// Config profile to use
+        #[arg(
+            long = "profile",
+            alias = "network",
+            default_value = DEFAULT_PROFILE
+        )]
+        profile: String,
+    },
+    /// Create a local-node wallet for a stored signing key
+    Create {
+        /// Existing key name that should own the new wallet
+        #[arg(long)]
+        key: Option<String>,
+        /// Build and sign the wallet create transaction without submitting it
+        #[arg(long)]
+        dry_run: bool,
+        /// Config profile to use
+        #[arg(
+            long = "profile",
+            alias = "network",
+            default_value = DEFAULT_PROFILE
+        )]
+        profile: String,
+    },
+    /// Remove a saved project wallet entry
+    Rm {
+        /// Saved wallet name to remove from groundhog.toml
+        name: String,
+        /// Config profile to use
+        #[arg(
+            long = "profile",
+            alias = "network",
+            default_value = DEFAULT_PROFILE
+        )]
+        profile: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum CodegenCommand {
     /// Generate TypeScript bindings
     Ts {
@@ -442,10 +507,12 @@ impl Command {
             Self::Test { .. } => "test",
             Self::Deploy { .. } => "deploy",
             Self::Call { .. } => "call",
+            Self::Airdrop { .. } => "airdrop",
             Self::View { .. } => "view",
             Self::Storage { .. } => "storage",
             Self::Node { .. } => "node",
             Self::Keys { command } => command.command_name(),
+            Self::Wallet { command } => command.command_name(),
             Self::Codegen { command } => command.command_name(),
             Self::Login => "login",
             Self::Logout => "logout",
@@ -461,6 +528,16 @@ impl KeysCommand {
             Self::Ls => "keys.ls",
             Self::Use { .. } => "keys.use",
             Self::Rm { .. } => "keys.rm",
+        }
+    }
+}
+
+impl WalletCommand {
+    fn command_name(&self) -> &'static str {
+        match self {
+            Self::Ls { .. } => "wallet.ls",
+            Self::Create { .. } => "wallet.create",
+            Self::Rm { .. } => "wallet.rm",
         }
     }
 }
@@ -612,6 +689,19 @@ fn main() {
                     &contract, &method, &args, dry_run, &artifacts, &profile, cmd_name, &print,
                 )
             }),
+        Command::Airdrop {
+            recipient,
+            amount,
+            dry_run,
+            profile,
+        } => groundhog_cli::airdrop::run(
+            &recipient,
+            amount.as_deref(),
+            dry_run,
+            &profile,
+            cmd_name,
+            &print,
+        ),
         Command::View {
             contract,
             method,
@@ -679,6 +769,19 @@ fn main() {
             KeysCommand::Ls => groundhog_cli::keys::list(cmd_name, &print),
             KeysCommand::Use { name } => groundhog_cli::keys::use_key(&name, cmd_name, &print),
             KeysCommand::Rm { name } => groundhog_cli::keys::remove(&name, cmd_name, &print),
+        },
+        Command::Wallet { command } => match command {
+            WalletCommand::Ls { profile } => {
+                groundhog_cli::wallet::list(&profile, cmd_name, &print)
+            }
+            WalletCommand::Create {
+                key,
+                dry_run,
+                profile,
+            } => groundhog_cli::wallet::create(key.as_deref(), dry_run, &profile, cmd_name, &print),
+            WalletCommand::Rm { name, profile } => {
+                groundhog_cli::wallet::remove(&name, &profile, cmd_name, &print)
+            }
         },
         Command::Codegen { command } => match command {
             CodegenCommand::Ts { source, output } => {
@@ -762,6 +865,102 @@ mod tests {
                 assert_eq!(rpc_max_connections, Some(512));
             }
             _ => panic!("expected node command"),
+        }
+    }
+
+    #[test]
+    fn wallet_create_key_flag_parses() {
+        let cli = Cli::parse_from(["groundhog", "wallet", "create", "--key", "alice"]);
+
+        match cli.command {
+            Command::Wallet {
+                command:
+                    WalletCommand::Create {
+                        key,
+                        dry_run,
+                        profile,
+                    },
+            } => {
+                assert_eq!(key.as_deref(), Some("alice"));
+                assert!(!dry_run);
+                assert_eq!(profile, DEFAULT_PROFILE);
+            }
+            _ => panic!("expected wallet create command"),
+        }
+    }
+
+    #[test]
+    fn wallet_ls_flags_parse() {
+        let cli = Cli::parse_from(["groundhog", "wallet", "ls"]);
+
+        match cli.command {
+            Command::Wallet {
+                command: WalletCommand::Ls { profile },
+            } => assert_eq!(profile, DEFAULT_PROFILE),
+            _ => panic!("expected wallet ls command"),
+        }
+    }
+
+    #[test]
+    fn wallet_create_key_flag_is_optional() {
+        let cli = Cli::parse_from(["groundhog", "wallet", "create", "--dry-run"]);
+
+        match cli.command {
+            Command::Wallet {
+                command:
+                    WalletCommand::Create {
+                        key,
+                        dry_run,
+                        profile,
+                    },
+            } => {
+                assert_eq!(key, None);
+                assert!(dry_run);
+                assert_eq!(profile, DEFAULT_PROFILE);
+            }
+            _ => panic!("expected wallet create command"),
+        }
+    }
+
+    #[test]
+    fn wallet_rm_flags_parse() {
+        let cli = Cli::parse_from(["groundhog", "wallet", "rm", "alice"]);
+
+        match cli.command {
+            Command::Wallet {
+                command: WalletCommand::Rm { name, profile },
+            } => {
+                assert_eq!(name, "alice");
+                assert_eq!(profile, DEFAULT_PROFILE);
+            }
+            _ => panic!("expected wallet rm command"),
+        }
+    }
+
+    #[test]
+    fn airdrop_flags_parse() {
+        let cli = Cli::parse_from([
+            "groundhog",
+            "airdrop",
+            "alice",
+            "--amount",
+            "1.5",
+            "--dry-run",
+        ]);
+
+        match cli.command {
+            Command::Airdrop {
+                recipient,
+                amount,
+                dry_run,
+                profile,
+            } => {
+                assert_eq!(recipient, "alice");
+                assert_eq!(amount.as_deref(), Some("1.5"));
+                assert!(dry_run);
+                assert_eq!(profile, DEFAULT_PROFILE);
+            }
+            _ => panic!("expected airdrop command"),
         }
     }
 }

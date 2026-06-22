@@ -134,6 +134,8 @@ pub struct RuntimeManifestDevWallet {
     pub artifact_hint: String,
     /// Entrypoint used to deploy the wallet.
     pub deploy_entrypoint: String,
+    /// Entrypoint used to sponsor creation of a new initialized wallet.
+    pub create_wallet_entrypoint: String,
     /// Entrypoint used to submit wallet actions.
     pub do_action_entrypoint: String,
 }
@@ -146,6 +148,16 @@ impl RuntimeManifestDevWallet {
         parse_entrypoint_id(
             "bootstrap.devWallet.doActionEntrypoint",
             &self.do_action_entrypoint,
+        )
+    }
+
+    /// Parse the advertised dev-wallet `createWallet` entrypoint into its XDR ID.
+    pub fn create_wallet_entrypoint_id(
+        &self,
+    ) -> Result<ContractEntrypointID, RuntimeManifestEntrypointError> {
+        parse_entrypoint_id(
+            "bootstrap.devWallet.createWalletEntrypoint",
+            &self.create_wallet_entrypoint,
         )
     }
 }
@@ -273,6 +285,7 @@ mod tests {
                         "deployedCodeHash": prefixed_hex(0x52),
                         "artifactHint": "./dev-wallet.wasm",
                         "deployEntrypoint": "0xadac498222148e4f",
+                        "createWalletEntrypoint": "0x6372656174655761",
                         "doActionEntrypoint": "0x646f416374696f6e",
                     },
                     "storageCostModel": {
@@ -326,6 +339,7 @@ mod tests {
                     deployed_code_hash: hash(0x52),
                     artifact_hint: "./dev-wallet.wasm".into(),
                     deploy_entrypoint: "0xadac498222148e4f".into(),
+                    create_wallet_entrypoint: "0x6372656174655761".into(),
                     do_action_entrypoint: "0x646f416374696f6e".into(),
                 },
                 storage_cost_model: RuntimeManifestStorageCostModel {
@@ -398,6 +412,18 @@ mod tests {
             .expect("entrypoint should parse");
 
         assert_eq!(entrypoint.as_ref(), b"doAction");
+    }
+
+    #[test]
+    fn dev_wallet_create_wallet_entrypoint_parses_from_manifest() {
+        let manifest = full_manifest();
+        let entrypoint = manifest
+            .bootstrap
+            .dev_wallet
+            .create_wallet_entrypoint_id()
+            .expect("entrypoint should parse");
+
+        assert_eq!(entrypoint.as_ref(), b"createWa");
     }
 
     fn addr(value: &str) -> SocketAddr {

@@ -98,6 +98,7 @@ fn roundtrip_default_key() {
 #[serial]
 fn resolve_profile_loads_default_project_profile() {
     let tmp = TempDir::new().unwrap();
+    let direct_addr = format!("0x{}", "bb".repeat(32));
     fs::write(
         tmp.path().join("groundhog.toml"),
         r#"
@@ -108,6 +109,9 @@ runtime_manifest = "runtime-manifest.json"
 
 [profile.default.contracts]
 counter = "0x1234"
+
+[profile.default.wallets]
+alice = "0xabcd"
 "#,
     )
     .unwrap();
@@ -124,8 +128,18 @@ counter = "0x1234"
         profile.contracts.get("counter").map(String::as_str),
         Some("0x1234")
     );
+    assert_eq!(
+        profile.wallets.get("alice").map(String::as_str),
+        Some("0xabcd")
+    );
     assert_eq!(profile.resolve_contract("counter"), "0x1234");
     assert_eq!(profile.resolve_contract("0xabcd"), "0xabcd");
+    assert_eq!(profile.resolve_wallet("alice").as_deref(), Some("0xabcd"));
+    assert_eq!(
+        profile.resolve_wallet(&direct_addr).as_deref(),
+        Some(direct_addr.as_str())
+    );
+    assert!(profile.resolve_wallet("missing").is_none());
     assert_eq!(profile.source, Some(tmp.path().join("groundhog.toml")));
 }
 
@@ -175,6 +189,7 @@ fn resolve_profile_defaults_when_no_project_config_exists() {
     assert!(profile.rpc_url.is_none());
     assert!(profile.default_key.is_none());
     assert!(profile.contracts.is_empty());
+    assert!(profile.wallets.is_empty());
     assert!(profile.source.is_none());
 }
 
@@ -233,6 +248,65 @@ fn save_profile_contract_alias_creates_selected_profile() {
     let testnet = groundhog_cli::config::resolve_profile(tmp.path(), Some("testnet")).unwrap();
     assert_eq!(
         testnet.contracts.get("greeter").map(String::as_str),
+        Some(addr.as_str())
+    );
+}
+
+#[test]
+#[serial]
+fn save_profile_wallet_address_updates_existing_profile() {
+    let tmp = TempDir::new().unwrap();
+    let config_path = tmp.path().join("groundhog.toml");
+    fs::write(
+        &config_path,
+        r#"
+[profile.default]
+rpc_url = "http://localhost:9545"
+default_key = "alice"
+
+[profile.default.wallets]
+alice = "0x1111"
+"#,
+    )
+    .unwrap();
+
+    let addr = format!("0x{}", "22".repeat(32));
+    let written =
+        groundhog_cli::config::save_profile_wallet_address(tmp.path(), None, "alice", &addr)
+            .unwrap();
+    assert_eq!(written, config_path);
+
+    let profile = groundhog_cli::config::resolve_profile(tmp.path(), None).unwrap();
+    assert_eq!(profile.rpc_url.as_deref(), Some("http://localhost:9545"));
+    assert_eq!(profile.default_key.as_deref(), Some("alice"));
+    assert_eq!(
+        profile.wallets.get("alice").map(String::as_str),
+        Some(addr.as_str())
+    );
+}
+
+#[test]
+#[serial]
+fn save_profile_wallet_address_creates_selected_profile() {
+    let tmp = TempDir::new().unwrap();
+
+    let addr = format!("0x{}", "be".repeat(32));
+    let written = groundhog_cli::config::save_profile_wallet_address(
+        tmp.path(),
+        Some("testnet"),
+        "alice",
+        &addr,
+    )
+    .unwrap();
+    assert_eq!(written, tmp.path().join("groundhog.toml"));
+
+    let profiles = groundhog_cli::config::load_project_profiles(tmp.path()).unwrap();
+    let profiles = profiles.unwrap();
+    assert!(!profiles.contains_key("default"));
+
+    let testnet = groundhog_cli::config::resolve_profile(tmp.path(), Some("testnet")).unwrap();
+    assert_eq!(
+        testnet.wallets.get("alice").map(String::as_str),
         Some(addr.as_str())
     );
 }
@@ -321,6 +395,42 @@ fn save_alias_accepts_valid_hex_address() {
 
 #[test]
 #[serial]
+fn save_wallet_rejects_empty_name() {
+    let tmp = TempDir::new().unwrap();
+    let addr = format!("0x{}", "ab".repeat(32));
+    let result = groundhog_cli::config::save_profile_wallet_address(tmp.path(), None, "", &addr);
+    assert!(result.is_err());
+}
+
+#[test]
+#[serial]
+fn save_wallet_rejects_empty_address() {
+    let tmp = TempDir::new().unwrap();
+    let result = groundhog_cli::config::save_profile_wallet_address(tmp.path(), None, "alice", "");
+    assert!(result.is_err());
+}
+
+#[test]
+#[serial]
+fn save_wallet_rejects_malformed_address() {
+    let tmp = TempDir::new().unwrap();
+    let result =
+        groundhog_cli::config::save_profile_wallet_address(tmp.path(), None, "alice", "banana");
+    assert!(result.is_err());
+}
+
+#[test]
+#[serial]
+fn save_wallet_accepts_valid_hex_address() {
+    let tmp = TempDir::new().unwrap();
+    let addr = format!("0x{}", "ab".repeat(32));
+    let result =
+        groundhog_cli::config::save_profile_wallet_address(tmp.path(), None, "alice", &addr);
+    assert!(result.is_ok());
+}
+
+#[test]
+#[serial]
 fn save_second_alias_preserves_first() {
     let tmp = TempDir::new().unwrap();
     let addr_a = format!("0x{}", "aa".repeat(32));
@@ -340,4 +450,56 @@ fn save_second_alias_preserves_first() {
         profile.contracts.get("greeter").map(String::as_str),
         Some(addr_b.as_str())
     );
+}
+
+#[test]
+#[serial]
+fn save_second_wallet_preserves_first() {
+    let tmp = TempDir::new().unwrap();
+    let addr_a = format!("0x{}", "aa".repeat(32));
+    let addr_b = format!("0x{}", "bb".repeat(32));
+
+    groundhog_cli::config::save_profile_wallet_address(tmp.path(), None, "alice", &addr_a).unwrap();
+    groundhog_cli::config::save_profile_wallet_address(tmp.path(), None, "bob", &addr_b).unwrap();
+
+    let profile = groundhog_cli::config::resolve_profile(tmp.path(), None).unwrap();
+    assert_eq!(
+        profile.wallets.get("alice").map(String::as_str),
+        Some(addr_a.as_str())
+    );
+    assert_eq!(
+        profile.wallets.get("bob").map(String::as_str),
+        Some(addr_b.as_str())
+    );
+}
+
+#[test]
+#[serial]
+fn remove_wallet_deletes_saved_entry() {
+    let tmp = TempDir::new().unwrap();
+    let addr_a = format!("0x{}", "aa".repeat(32));
+    let addr_b = format!("0x{}", "bb".repeat(32));
+
+    groundhog_cli::config::save_profile_wallet_address(tmp.path(), None, "alice", &addr_a).unwrap();
+    groundhog_cli::config::save_profile_wallet_address(tmp.path(), None, "bob", &addr_b).unwrap();
+    groundhog_cli::config::remove_profile_wallet_address(tmp.path(), None, "alice").unwrap();
+
+    let profile = groundhog_cli::config::resolve_profile(tmp.path(), None).unwrap();
+    assert!(!profile.wallets.contains_key("alice"));
+    assert_eq!(
+        profile.wallets.get("bob").map(String::as_str),
+        Some(addr_b.as_str())
+    );
+}
+
+#[test]
+#[serial]
+fn remove_wallet_rejects_missing_entry() {
+    let tmp = TempDir::new().unwrap();
+    let addr = format!("0x{}", "aa".repeat(32));
+
+    groundhog_cli::config::save_profile_wallet_address(tmp.path(), None, "alice", &addr).unwrap();
+    let result = groundhog_cli::config::remove_profile_wallet_address(tmp.path(), None, "bob");
+
+    assert!(result.is_err());
 }

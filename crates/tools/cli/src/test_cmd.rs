@@ -1689,6 +1689,7 @@ mod tests {
             default_key: Some("dev-0".into()),
             runtime_manifest: None,
             contracts: BTreeMap::new(),
+            wallets: BTreeMap::new(),
             source: None,
         };
         let outputs = vec![TestRunOutput {
@@ -1861,6 +1862,7 @@ mod tests {
             default_key: None,
             runtime_manifest: None,
             contracts: BTreeMap::new(),
+            wallets: BTreeMap::new(),
             source: None,
         };
         let report = super::build_test_report(

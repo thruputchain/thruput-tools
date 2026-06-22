@@ -276,6 +276,7 @@ pub(crate) fn prepare_deploy_for_rpc_with_manifest(
         default_key: Some(key_name.into()),
         runtime_manifest,
         contracts: std::collections::BTreeMap::default(),
+        wallets: std::collections::BTreeMap::default(),
         source: None,
     };
     prepare_deploy_transaction(

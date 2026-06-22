@@ -1,6 +1,7 @@
 //! Groundhog CLI — smart contract development tools.
 
 pub(crate) mod account_resolution;
+pub mod airdrop;
 pub mod artifacts;
 pub mod auth;
 pub mod build;
@@ -30,6 +31,7 @@ pub mod test_json;
 pub mod tx_utils;
 pub mod view;
 pub mod view_json;
+pub mod wallet;
 pub mod wasm_instrument;
 pub use error::CliError;
 pub use print::Print;
