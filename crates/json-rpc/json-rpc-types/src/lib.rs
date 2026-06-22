@@ -1,3 +1,4 @@
+pub mod balance;
 pub mod block;
 pub mod bootstrap_manifest;
 pub mod dev;

@@ -57,6 +57,29 @@
       }
     },
     "schemas": {
+      "BalanceResponse": {
+        "description": "Native HOG balance read from committed chain state.",
+        "properties": {
+          "address": {
+            "$ref": "#/components/schemas/Hex0x_ContractAddress",
+            "description": "Address whose native HOG balance was read."
+          },
+          "height": {
+            "$ref": "#/components/schemas/BlockHeight",
+            "description": "Committed block height used for the read."
+          },
+          "rawBalance": {
+            "description": "Raw native HOG balance as a decimal string.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "address",
+          "rawBalance",
+          "height"
+        ],
+        "type": "object"
+      },
       "BlockAnchor": {
         "description": "Where to begin iteration on the initial call.",
         "oneOf": [
@@ -880,7 +903,7 @@
   },
   "info": {
     "title": "Groundhog JSON-RPC",
-    "version": "2.0.0"
+    "version": "2.1.0"
   },
   "methods": [
     {
@@ -1221,6 +1244,47 @@
         }
       },
       "summary": "Read the latest committed storage item at an address/key pair. `block_height` in the returned `StorageItemRead` always reflects the snapshot the read was performed against — even when no item is present at the key — so wallets can compare against `chainTip` to gauge freshness.",
+      "tags": [
+        {
+          "name": "Core API"
+        }
+      ]
+    },
+    {
+      "errors": [
+        {
+          "$ref": "#/components/errors/InvalidParams"
+        },
+        {
+          "$ref": "#/components/errors/BackendUnavailable"
+        },
+        {
+          "$ref": "#/components/errors/BackendTimeout"
+        },
+        {
+          "$ref": "#/components/errors/Overloaded"
+        },
+        {
+          "$ref": "#/components/errors/NotImplemented"
+        }
+      ],
+      "name": "groundhog_getBalance",
+      "params": [
+        {
+          "name": "address",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/Hex0x_ContractAddress"
+          }
+        }
+      ],
+      "result": {
+        "name": "BalanceResponse",
+        "schema": {
+          "$ref": "#/components/schemas/BalanceResponse"
+        }
+      },
+      "summary": "Native HOG balance for any address at the latest committed snapshot.",
       "tags": [
         {
           "name": "Core API"

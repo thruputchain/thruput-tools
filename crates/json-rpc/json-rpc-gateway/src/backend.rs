@@ -109,6 +109,18 @@ impl ReadPlane for GatewayBackend {
             .await
             .map_err(Into::into)
     }
+
+    #[tracing::instrument(skip_all, fields(?address))]
+    async fn read_native_hog_balance(
+        &self,
+        address: ContractAddress,
+    ) -> Result<StorageItemRead, RpcServerError> {
+        self.ctx
+            .storage_batcher
+            .read_native_hog_balance(address)
+            .await
+            .map_err(Into::into)
+    }
 }
 
 #[async_trait]

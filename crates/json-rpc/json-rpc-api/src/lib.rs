@@ -11,6 +11,7 @@ use jsonrpsee::proc_macros::rpc;
 
 use groundhog_json_rpc_types::{
     BlockHeight, ContractAddress,
+    balance::BalanceResponse,
     block::{BlockInfo, ChainTip},
     events::{EventPage, EventQuery},
     hex::HexBytes,
@@ -25,7 +26,7 @@ use groundhog_json_rpc_types::{
 ///
 /// See the "`OpenRPC` Wire Version" section in `CLAUDE.md` for bump
 /// rules.
-pub const WIRE_FORMAT_VERSION: &str = "2.0.0";
+pub const WIRE_FORMAT_VERSION: &str = "2.1.0";
 
 /// Phase 1: Core API — submit, query, poll.
 #[open_rpc(namespace = "groundhog", tag = "Core API")]
@@ -76,6 +77,10 @@ pub trait GroundhogApi {
         address: ContractAddress,
         key: HexBytes,
     ) -> RpcResult<StorageItemRead>;
+
+    /// Native HOG balance for any address at the latest committed snapshot.
+    #[method(name = "getBalance")]
+    async fn get_balance(&self, address: ContractAddress) -> RpcResult<BalanceResponse>;
 
     /// Execute a sandboxed contract simulation against committed state.
     #[method(name = "view")]

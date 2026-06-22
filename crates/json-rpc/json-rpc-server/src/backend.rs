@@ -26,8 +26,8 @@
 //!   `Pending`, indexer for `Committed`) — the adapter owns this
 //!   orchestration; the shared server calls the trait method once.
 //! - `ReadPlane::contract_events`             → indexer
-//! - `ReadPlane::get_storage_at`              → `DbGateway1` (TBD; currently
-//!   `NotImplemented` on gateway and supervisor backends, real on dev-node)
+//! - `ReadPlane::get_storage_at`              → `DbGateway1` contract-data reads
+//! - `ReadPlane::read_native_hog_balance`     → `DbGateway1` free native-token balance reads
 //! - `ViewPlane::view`                        → view executor service (TBD)
 //!
 //! `GroundhogRpcServer::new` accepts per-plane adapter types, so a future
@@ -147,6 +147,13 @@ pub trait ReadPlane: Send + Sync + 'static {
         &self,
         address: ContractAddress,
         key: [u8; 32],
+    ) -> Result<StorageItemRead, RpcServerError>;
+
+    /// Return the latest committed native HOG balance item for one address.
+    /// This reads hogd's `FreeNativeTokenBalance` key, not contract storage.
+    async fn read_native_hog_balance(
+        &self,
+        address: ContractAddress,
     ) -> Result<StorageItemRead, RpcServerError>;
 }
 

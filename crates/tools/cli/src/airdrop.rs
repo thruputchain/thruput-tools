@@ -270,7 +270,7 @@ fn parse_fractional_hog(input: &str, fractional: &str) -> Result<u128, CliError>
         .map_err(|error| CliError::Other(format!("invalid HOG amount `{input}`: {error}")))
 }
 
-fn format_hog_amount(raw_amount: u128) -> String {
+pub(crate) fn format_hog_amount(raw_amount: u128) -> String {
     let whole = raw_amount / HOG_SCALE;
     let fractional = raw_amount % HOG_SCALE;
     if fractional == 0 {

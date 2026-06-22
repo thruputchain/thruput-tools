@@ -285,6 +285,18 @@ enum Command {
         )]
         profile: String,
     },
+    /// Read native HOG balance for an address, wallet, contract, or dev account
+    Balance {
+        /// Wallet name, contract alias, dev-N account, or direct 0x-prefixed address
+        target: String,
+        /// Config profile to use
+        #[arg(
+            long = "profile",
+            alias = "network",
+            default_value = DEFAULT_PROFILE
+        )]
+        profile: String,
+    },
     /// Execute a sandboxed contract simulation against committed state
     #[command(long_about = "Execute a sandboxed contract simulation via \
                       groundhog_view. Named methods use local or embedded \
@@ -511,6 +523,7 @@ impl Command {
             Self::Deploy { .. } => "deploy",
             Self::Call { .. } => "call",
             Self::Airdrop { .. } => "airdrop",
+            Self::Balance { .. } => "balance",
             Self::View { .. } => "view",
             Self::Storage { .. } => "storage",
             Self::Node { .. } => "node",
@@ -705,6 +718,9 @@ fn main() {
             cmd_name,
             &print,
         ),
+        Command::Balance { target, profile } => std::env::current_dir()
+            .map_err(groundhog_cli::CliError::Io)
+            .and_then(|cwd| groundhog_cli::balance::run(&target, &cwd, &profile, cmd_name, &print)),
         Command::View {
             contract,
             method,
