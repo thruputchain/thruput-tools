@@ -448,6 +448,9 @@ enum WalletCommand {
         /// Existing key name that should own the new wallet
         #[arg(long)]
         key: Option<String>,
+        /// Saved wallet name; defaults to the resolved key name
+        #[arg(long)]
+        name: Option<String>,
         /// Build and sign the wallet create transaction without submitting it
         #[arg(long)]
         dry_run: bool,
@@ -776,9 +779,17 @@ fn main() {
             }
             WalletCommand::Create {
                 key,
+                name,
                 dry_run,
                 profile,
-            } => groundhog_cli::wallet::create(key.as_deref(), dry_run, &profile, cmd_name, &print),
+            } => groundhog_cli::wallet::create(
+                key.as_deref(),
+                name.as_deref(),
+                dry_run,
+                &profile,
+                cmd_name,
+                &print,
+            ),
             WalletCommand::Rm { name, profile } => {
                 groundhog_cli::wallet::remove(&name, &profile, cmd_name, &print)
             }
@@ -877,11 +888,13 @@ mod tests {
                 command:
                     WalletCommand::Create {
                         key,
+                        name,
                         dry_run,
                         profile,
                     },
             } => {
                 assert_eq!(key.as_deref(), Some("alice"));
+                assert_eq!(name, None);
                 assert!(!dry_run);
                 assert_eq!(profile, DEFAULT_PROFILE);
             }
@@ -910,11 +923,74 @@ mod tests {
                 command:
                     WalletCommand::Create {
                         key,
+                        name,
                         dry_run,
                         profile,
                     },
             } => {
                 assert_eq!(key, None);
+                assert_eq!(name, None);
+                assert!(dry_run);
+                assert_eq!(profile, DEFAULT_PROFILE);
+            }
+            _ => panic!("expected wallet create command"),
+        }
+    }
+
+    #[test]
+    fn wallet_create_name_flag_parses() {
+        let cli = Cli::parse_from([
+            "groundhog",
+            "wallet",
+            "create",
+            "--key",
+            "alice",
+            "--name",
+            "trading",
+        ]);
+
+        match cli.command {
+            Command::Wallet {
+                command:
+                    WalletCommand::Create {
+                        key,
+                        name,
+                        dry_run,
+                        profile,
+                    },
+            } => {
+                assert_eq!(key.as_deref(), Some("alice"));
+                assert_eq!(name.as_deref(), Some("trading"));
+                assert!(!dry_run);
+                assert_eq!(profile, DEFAULT_PROFILE);
+            }
+            _ => panic!("expected wallet create command"),
+        }
+    }
+
+    #[test]
+    fn wallet_create_name_flag_without_key_parses() {
+        let cli = Cli::parse_from([
+            "groundhog",
+            "wallet",
+            "create",
+            "--name",
+            "trading",
+            "--dry-run",
+        ]);
+
+        match cli.command {
+            Command::Wallet {
+                command:
+                    WalletCommand::Create {
+                        key,
+                        name,
+                        dry_run,
+                        profile,
+                    },
+            } => {
+                assert_eq!(key, None);
+                assert_eq!(name.as_deref(), Some("trading"));
                 assert!(dry_run);
                 assert_eq!(profile, DEFAULT_PROFILE);
             }

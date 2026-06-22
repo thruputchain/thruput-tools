@@ -41,6 +41,7 @@ struct SavedWallet {
 pub(crate) struct PreparedWalletCreate {
     pub(crate) rpc_url: String,
     pub(crate) key_name: String,
+    pub(crate) wallet_name: String,
     pub(crate) sponsor_key_name: String,
     pub(crate) sponsor_role: String,
     pub(crate) owner_public_key: String,
@@ -51,22 +52,30 @@ pub(crate) struct PreparedWalletCreate {
 
 pub fn create(
     key_name: Option<&str>,
+    wallet_name: Option<&str>,
     dry_run: bool,
     profile: &str,
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
     let cwd = std::env::current_dir()?;
-    let prepared = prepare_wallet_create(&cwd, key_name, profile)?;
+    let prepared = prepare_wallet_create(&cwd, key_name, wallet_name, profile)?;
 
     if dry_run {
         return print_dry_run(&prepared, cmd, print);
     }
 
-    print.status(format_args!(
-        "Creating wallet for key '{}'...",
-        prepared.key_name
-    ));
+    if prepared.wallet_name == prepared.key_name {
+        print.status(format_args!(
+            "Creating wallet for key '{}'...",
+            prepared.key_name
+        ));
+    } else {
+        print.status(format_args!(
+            "Creating wallet '{}' for key '{}'...",
+            prepared.wallet_name, prepared.key_name
+        ));
+    }
 
     let (create_tx_hash, create_receipt) =
         submit_prepared_create_tx(&prepared.rpc_url, &prepared.create_tx_hex)?;
@@ -79,7 +88,7 @@ pub fn create(
     save_profile_wallet_address(
         &project_root,
         Some(profile),
-        &prepared.key_name,
+        &prepared.wallet_name,
         &prepared.wallet_address,
     )?;
 
@@ -90,6 +99,7 @@ pub fn create(
         cmd,
         json!({
             "schemaVersion": WALLET_CREATE_JSON_SCHEMA_VERSION,
+            "name": prepared.wallet_name,
             "key": prepared.key_name,
             "wallet": prepared.wallet_address,
             "sponsor": {
@@ -157,8 +167,8 @@ fn print_dry_run(
     print: &Print,
 ) -> Result<(), CliError> {
     print.status(format_args!(
-        "Prepared dry-run wallet create for key `{}` on {}.",
-        prepared.key_name, prepared.rpc_url
+        "Prepared dry-run wallet create `{}` for key `{}` on {}.",
+        prepared.wallet_name, prepared.key_name, prepared.rpc_url
     ));
     print.status(format_args!("  wallet: {}", prepared.wallet_address));
     print.status(format_args!(
@@ -175,6 +185,7 @@ fn print_dry_run(
             "schemaVersion": WALLET_CREATE_JSON_SCHEMA_VERSION,
             "dry_run": true,
             "submitted": false,
+            "name": prepared.wallet_name,
             "key": prepared.key_name,
             "wallet": prepared.wallet_address,
             "sponsor": {
@@ -193,6 +204,7 @@ fn print_dry_run(
 pub(crate) fn prepare_wallet_create(
     cwd: &Path,
     key_name: Option<&str>,
+    wallet_name: Option<&str>,
     profile_name: &str,
 ) -> Result<PreparedWalletCreate, CliError> {
     let mut profile = resolve_profile(cwd, Some(profile_name))?;
@@ -200,6 +212,16 @@ pub(crate) fn prepare_wallet_create(
     let key_name = match key_name {
         Some(key_name) => key_name.to_owned(),
         None => resolve_default_key(cwd, Some(profile_name))?.ok_or(CliError::MissingSigningKey)?,
+    };
+    let wallet_name = match wallet_name {
+        Some(wallet_name) => {
+            let wallet_name = wallet_name.trim();
+            if wallet_name.is_empty() {
+                return Err(CliError::Other("wallet name cannot be empty".into()));
+            }
+            wallet_name.to_owned()
+        }
+        None => key_name.clone(),
     };
     let rpc_url = profile
         .rpc_url
@@ -251,6 +273,7 @@ pub(crate) fn prepare_wallet_create(
     Ok(PreparedWalletCreate {
         rpc_url,
         key_name,
+        wallet_name,
         sponsor_key_name: sponsor.key_name,
         sponsor_role: sponsor.role,
         owner_public_key,
