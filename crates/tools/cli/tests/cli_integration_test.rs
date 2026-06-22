@@ -1558,6 +1558,53 @@ fn wallet_create_dry_run_json_outputs_prepared_transaction() {
 }
 
 #[test]
+fn wallet_create_dry_run_defaults_name_to_key() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let sponsor_wallet = advertised_dev_wallet_address(0);
+    let manifest_path = write_runtime_manifest(&project, 0, &sponsor_wallet, None);
+    let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
+    std::fs::write(project.join("dev-wallet.wasm"), b"dev-wallet").unwrap();
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\nruntime_manifest = \"{}\"\n",
+            manifest_path.file_name().unwrap().to_string_lossy()
+        ),
+    )
+    .unwrap();
+
+    let output = groundhog()
+        .args(["--json", "wallet", "create", "--key", "dev-1", "--dry-run"])
+        .current_dir(&project)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["ok"], true);
+    assert_eq!(stdout["command"], "wallet.create");
+    assert_eq!(stdout["data"]["dry_run"], true);
+    assert_eq!(stdout["data"]["submitted"], false);
+    assert_eq!(stdout["data"]["name"], "dev-1");
+    assert_eq!(stdout["data"]["key"], "dev-1");
+    assert_eq!(
+        signed_tx_invoked_address(stdout["data"]["signed_tx"].as_str().unwrap()),
+        sponsor_wallet
+    );
+}
+
+#[test]
 fn wallet_ls_json_outputs_saved_wallets() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");
