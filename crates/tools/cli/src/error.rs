@@ -72,6 +72,8 @@ pub enum CliError {
     KeyNotFound(String),
     #[error("key name cannot be empty")]
     KeyNameEmpty,
+    #[error("wallet name cannot be empty")]
+    EmptyWalletName,
     #[error(
         "key name must contain only letters, digits, \
          hyphens, and underscores"
@@ -189,6 +191,7 @@ impl CliError {
             Self::KeyExists(_) => "key_exists",
             Self::KeyNotFound(_) => "key_not_found",
             Self::KeyNameEmpty => "key_name_empty",
+            Self::EmptyWalletName => "empty_wallet_name",
             Self::KeyNameInvalid => "key_name_invalid",
             Self::JsonUnsupported(_) => "json_unsupported",
             Self::NotImplemented => "not_implemented",
@@ -400,6 +403,7 @@ impl CliError {
                 "key names may only contain letters, digits, \
                  hyphens, and underscores",
             )),
+            Self::EmptyWalletName => Some(Cow::Borrowed("pass a non-empty wallet name")),
             Self::JsonUnsupported(command) => Some(Cow::Owned(format!(
                 "run `groundhog {command}` without `--json`"
             ))),

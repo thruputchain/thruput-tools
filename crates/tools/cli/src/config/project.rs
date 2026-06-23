@@ -182,7 +182,7 @@ pub fn save_profile_wallet_address(
     address: &str,
 ) -> Result<PathBuf, CliError> {
     if name.trim().is_empty() {
-        return Err(CliError::Other("wallet name cannot be empty".into()));
+        return Err(CliError::EmptyWalletName);
     }
     if address.trim().is_empty() {
         return Err(CliError::Other("wallet address cannot be empty".into()));
@@ -233,7 +233,7 @@ pub fn remove_profile_wallet_address(
 ) -> Result<PathBuf, CliError> {
     let name = name.trim();
     if name.is_empty() {
-        return Err(CliError::Other("wallet name cannot be empty".into()));
+        return Err(CliError::EmptyWalletName);
     }
 
     let profile_name = active_profile_name(explicit_profile);
