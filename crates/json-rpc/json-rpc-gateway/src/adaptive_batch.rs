@@ -182,12 +182,17 @@ impl<I: Send + 'static> AdaptiveBatcher<I> {
     }
 }
 
-/// Pick a shard by the first four bytes of `key`.  Stable per key:
-/// repeated requests with the same key prefix hit the same shard.
-pub(crate) fn shard_index_by_prefix(key: &[u8], n_shards: usize) -> usize {
-    if n_shards <= 1 || key.len() < 4 {
+/// Pick a local batcher shard by the first four bytes of `routing_key`.
+/// Stable per routing key: repeated requests with the same prefix hit the same shard.
+pub(crate) fn shard_index_by_routing_key(routing_key: &[u8], n_shards: usize) -> usize {
+    if n_shards <= 1 || routing_key.len() < 4 {
         return 0;
     }
-    let prefix = u32::from_be_bytes([key[0], key[1], key[2], key[3]]);
+    let prefix = u32::from_be_bytes([
+        routing_key[0],
+        routing_key[1],
+        routing_key[2],
+        routing_key[3],
+    ]);
     (prefix as usize) % n_shards
 }

@@ -27,7 +27,7 @@ use groundhog_xdr::types::{AddressAndKey, StorageKey, StorageKeyContractData};
 use tokio::sync::{RwLock, oneshot};
 use xdr_common::VecM;
 
-use crate::adaptive_batch::{AdaptiveBatcher, BatchProcessor, shard_index_by_prefix};
+use crate::adaptive_batch::{AdaptiveBatcher, BatchProcessor, shard_index_by_routing_key};
 use crate::config::AdaptiveBatchConfig;
 use crate::error::GatewayError;
 
@@ -203,13 +203,16 @@ impl StorageReadBatcher {
         .await
     }
 
+    // `routing_key` is only for local AdaptiveBatcher queue routing; it is not
+    // sent to hogd. Use bytes that identify the logical item well enough to keep
+    // repeated reads stable while spreading different reads across queues.
     async fn read_key(
         &self,
         address: ContractAddress,
         storage_key: StorageKey,
-        shard_key: &[u8],
+        routing_key: &[u8],
     ) -> Result<StorageItemRead, GatewayError> {
-        let shard_idx = shard_index_by_prefix(shard_key, self.inner.n_shards());
+        let shard_idx = shard_index_by_routing_key(routing_key, self.inner.n_shards());
         tracing::Span::current().record("shard_idx", shard_idx);
         let request = AddressAndKey {
             address: address.0,
@@ -502,7 +505,7 @@ mod tests {
         let mut hits = vec![0usize; n_shards];
         for i in 0..10_000u32 {
             let key = key_from_u32(i.wrapping_mul(2_654_435_761)); // scatter
-            hits[shard_index_by_prefix(&key, n_shards)] += 1;
+            hits[shard_index_by_routing_key(&key, n_shards)] += 1;
         }
         for (i, c) in hits.iter().enumerate() {
             assert!(*c > 1500 && *c < 3500, "shard {i} got {c} (expected ~2500)");

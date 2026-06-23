@@ -20,7 +20,7 @@ use groundhog_scheduler::sched_coord::SchedulerCoord_SchedulerCoord1_Client;
 use tokio::sync::{RwLock, oneshot};
 use xdr_common::{BytesM, VecM};
 
-use crate::adaptive_batch::{AdaptiveBatcher, BatchProcessor, shard_index_by_prefix};
+use crate::adaptive_batch::{AdaptiveBatcher, BatchProcessor, shard_index_by_routing_key};
 use crate::config::AdaptiveBatchConfig;
 use crate::error::GatewayError;
 
@@ -146,7 +146,7 @@ impl BatchSubmitter {
     #[tracing::instrument(skip_all, fields(shard_idx, tx_bytes_len = tx_bytes.len()))]
     pub async fn submit(&self, tx_bytes: Vec<u8>, hash: TxHash) -> Result<(), GatewayError> {
         let bytes: &[u8] = hash.0.0.as_ref();
-        let shard_idx = shard_index_by_prefix(bytes, self.inner.n_shards());
+        let shard_idx = shard_index_by_routing_key(bytes, self.inner.n_shards());
         tracing::Span::current().record("shard_idx", shard_idx);
         let (reply_tx, reply_rx) = oneshot::channel();
         self.inner.try_send(
@@ -472,7 +472,7 @@ mod tests {
         for i in 0..10_000u32 {
             let h = hash_from_u32(i.wrapping_mul(2_654_435_761)); // scatter
             let bytes: &[u8] = h.0.0.as_ref();
-            hits[shard_index_by_prefix(bytes, n_shards)] += 1;
+            hits[shard_index_by_routing_key(bytes, n_shards)] += 1;
         }
         for (i, c) in hits.iter().enumerate() {
             assert!(*c > 1500 && *c < 3500, "shard {i} got {c} (expected ~2500)");
