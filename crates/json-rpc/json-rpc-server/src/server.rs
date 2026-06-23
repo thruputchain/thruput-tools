@@ -404,9 +404,12 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
         async fn read_native_hog_balance(
             &self,
-            address: ContractAddress,
+            _address: ContractAddress,
         ) -> Result<StorageItemRead, RpcServerError> {
-            self.get_storage_at(address, [0u8; 32]).await
+            Ok(StorageItemRead {
+                block_height: BlockHeight::from(0),
+                item: None,
+            })
         }
     }
 
@@ -447,9 +450,12 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
         async fn read_native_hog_balance(
             &self,
-            address: ContractAddress,
+            _address: ContractAddress,
         ) -> Result<StorageItemRead, RpcServerError> {
-            self.get_storage_at(address, [0u8; 32]).await
+            Ok(StorageItemRead {
+                block_height: BlockHeight::from(0),
+                item: None,
+            })
         }
     }
 

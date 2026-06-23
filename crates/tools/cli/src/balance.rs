@@ -82,6 +82,9 @@ fn resolve_balance_target(profile: &ResolvedProfile, target: &str) -> Result<Str
     if contract != target {
         return Ok(contract);
     }
+    if target.starts_with("0x") || target.starts_with("0X") {
+        return Ok(target.to_owned());
+    }
     if let Some(index) = dev_keys::dev_key_index(target) {
         let address = lookup_dev_account_address(profile, target, index)?;
         return Ok(format_contract_address(&address.0));
@@ -141,6 +144,22 @@ mod tests {
             resolve_balance_target(&profile, "counter").unwrap(),
             format_address(3)
         );
+    }
+
+    #[test]
+    fn resolves_direct_address() {
+        let profile = ResolvedProfile {
+            name: "default".into(),
+            rpc_url: None,
+            default_key: None,
+            runtime_manifest: None,
+            contracts: BTreeMap::new(),
+            wallets: BTreeMap::new(),
+            source: None,
+        };
+        let address = format_address(4);
+
+        assert_eq!(resolve_balance_target(&profile, &address).unwrap(), address);
     }
 
     fn format_address(last: u8) -> String {
