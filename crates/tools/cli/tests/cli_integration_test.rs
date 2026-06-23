@@ -1840,6 +1840,7 @@ fn deploy_dry_run_uses_manifest_dev_wallet_address_without_dev_rpc() {
         .expect("bug: dry-run output includes signed tx");
 
     assert_eq!(signed_tx_invoked_address(signed_tx), advertised_wallet);
+    assert_eq!(signed_tx_entrypoint(signed_tx), "0x6465706c6f794e77");
 }
 
 #[test]
@@ -3586,7 +3587,7 @@ fn write_runtime_manifest_with_seed(
                 "contentHash": format!("0x{}", "51".repeat(32)),
                 "deployedCodeHash": format!("0x{}", "52".repeat(32)),
                 "artifactHint": "./dev-wallet.wasm",
-                "deployEntrypoint": "0xadac498222148e4f",
+                "deployEntrypoint": "0x6465706c6f794e77",
                 "createWalletEntrypoint": "0x6372656174655761",
                 "doActionEntrypoint": "0x646f416374696f6e"
             },
@@ -3633,6 +3634,16 @@ fn signed_tx_invoked_address(tx_hex: &str) -> String {
     format!(
         "0x{}",
         hex::encode(signed_tx.tx.invocation.invoked_address.as_ref())
+    )
+}
+
+fn signed_tx_entrypoint(tx_hex: &str) -> String {
+    let bytes = hex::decode(tx_hex.strip_prefix("0x").unwrap_or(tx_hex)).unwrap();
+    let signed_tx: groundhog_xdr::transaction::SignedTransaction =
+        xdrs::txs::decode(&bytes).unwrap();
+    format!(
+        "0x{}",
+        hex::encode(signed_tx.tx.invocation.entrypoint.as_ref())
     )
 }
 

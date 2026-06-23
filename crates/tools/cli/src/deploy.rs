@@ -8,6 +8,7 @@ use groundhog_signing::{
     build_deploy_transaction, derive_deploy_address, sign_and_encode_transaction_hex,
     source_address_auth_claim,
 };
+use groundhog_xdr::contract::ContractEntrypointID;
 use groundhog_xdr::types::ContractAddress;
 use groundhog_xdr::types::SHA256Hash;
 use serde_json::json;
@@ -20,7 +21,9 @@ use crate::config::{ResolvedProfile, resolve_default_key, resolve_profile};
 use crate::dev_detail::{fetch_transaction_detail_blocking, print_transaction_detail};
 use crate::keys::load_local_signer;
 use crate::result::CommandResult;
-use crate::runtime_manifest::apply_local_node_state_for_dev_key;
+use crate::runtime_manifest::{
+    apply_local_node_state_for_dev_key, load_configured_runtime_manifest,
+};
 use crate::tx_utils::{
     format_tx_hash, nonce_from_timestamp, resolve_block_expiry_height, submit_and_poll,
     summarize_exec_status,
@@ -340,7 +343,7 @@ fn prepare_deploy_transaction(
     // Auth claim: source-address auth data at key slot 0.
     let auth_claim = source_address_auth_claim();
 
-    let entrypoint = groundhog_xdr::contract::ContractEntrypointID::from(WALLET_DEPLOY_ENTRYPOINT);
+    let entrypoint = deploy_entrypoint(profile, key_name)?;
 
     let block_expiry_height = rt.block_on(async { resolve_block_expiry_height(rpc_url).await })?;
 
@@ -365,6 +368,25 @@ fn prepare_deploy_transaction(
         predicted_address: format!("0x{}", hex::encode(predicted_address.as_ref())),
         tx_hex,
     })
+}
+
+fn deploy_entrypoint(
+    profile: &ResolvedProfile,
+    key_name: &str,
+) -> Result<ContractEntrypointID, CliError> {
+    if let Some(manifest) = load_configured_runtime_manifest(profile, key_name)? {
+        return manifest
+            .bootstrap
+            .dev_wallet
+            .deploy_entrypoint_id()
+            .map_err(|error| CliError::ManifestEntrypoint {
+                key_name: key_name.to_owned(),
+                field: "bootstrap.devWallet.deployEntrypoint",
+                message: error.to_string(),
+            });
+    }
+
+    Ok(ContractEntrypointID::from(WALLET_DEPLOY_ENTRYPOINT))
 }
 
 /// Parse a `0x`-prefixed hex string into a 32-byte array.

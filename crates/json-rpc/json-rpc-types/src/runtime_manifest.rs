@@ -141,6 +141,16 @@ pub struct RuntimeManifestDevWallet {
 }
 
 impl RuntimeManifestDevWallet {
+    /// Parse the advertised dev-wallet `deploy` entrypoint into its XDR ID.
+    pub fn deploy_entrypoint_id(
+        &self,
+    ) -> Result<ContractEntrypointID, RuntimeManifestEntrypointError> {
+        parse_entrypoint_id(
+            "bootstrap.devWallet.deployEntrypoint",
+            &self.deploy_entrypoint,
+        )
+    }
+
     /// Parse the advertised dev-wallet `doAction` entrypoint into its XDR ID.
     pub fn do_action_entrypoint_id(
         &self,
@@ -424,6 +434,21 @@ mod tests {
             .expect("entrypoint should parse");
 
         assert_eq!(entrypoint.as_ref(), b"createWa");
+    }
+
+    #[test]
+    fn dev_wallet_deploy_entrypoint_parses_from_manifest() {
+        let manifest = full_manifest();
+        let entrypoint = manifest
+            .bootstrap
+            .dev_wallet
+            .deploy_entrypoint_id()
+            .expect("entrypoint should parse");
+
+        assert_eq!(
+            entrypoint.as_ref(),
+            [0xad, 0xac, 0x49, 0x82, 0x22, 0x14, 0x8e, 0x4f]
+        );
     }
 
     fn addr(value: &str) -> SocketAddr {
