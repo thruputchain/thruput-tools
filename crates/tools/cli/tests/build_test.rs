@@ -534,6 +534,14 @@ fn build_rv32_project_compiles_and_lowers_elf() {
                 throws: vec![].try_into().unwrap(),
             },
         },
+        // Spec shaking keeps only anchored interfaces; a real build emits
+        // this anchor from the contract impl site.
+        groundhog_spec_tool::SpecFragment::InterfaceAnchor {
+            interface_anchor: groundhog_contract_spec::SpecInterfaceAnchor {
+                interface_name: spec_string("Counter"),
+                interface_version: spec_string("0.1.0"),
+            },
+        },
         groundhog_spec_tool::SpecFragment::SpecMethod {
             method_fragment: groundhog_spec_tool::SpecMethodFragment {
                 interface_name: spec_string("Counter"),
