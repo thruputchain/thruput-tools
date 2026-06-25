@@ -188,6 +188,13 @@ impl ReadPlane for HogdDevStorageReadBackend {
     ) -> Result<StorageItemRead, RpcServerError> {
         get_storage_at_from_db_gateway(&self.db_gateway, address, key).await
     }
+
+    async fn read_native_hog_balance(
+        &self,
+        address: ContractAddress,
+    ) -> Result<StorageItemRead, RpcServerError> {
+        get_native_hog_balance_from_db_gateway(&self.db_gateway, address).await
+    }
 }
 
 #[async_trait]
@@ -377,6 +384,17 @@ impl ReadPlane for HogdDevReadBackend {
             .ok_or_else(|| RpcServerError::BackendUnavailable("db_gateway not connected".into()))?;
         get_storage_at_from_db_gateway(db_gateway, address, key).await
     }
+
+    async fn read_native_hog_balance(
+        &self,
+        address: ContractAddress,
+    ) -> Result<StorageItemRead, RpcServerError> {
+        let db_gateway = self
+            .db_gateway
+            .as_ref()
+            .ok_or_else(|| RpcServerError::BackendUnavailable("db_gateway not connected".into()))?;
+        get_native_hog_balance_from_db_gateway(db_gateway, address).await
+    }
 }
 
 async fn connect_db_gateway(
@@ -443,11 +461,31 @@ async fn get_storage_at_from_db_gateway(
     address: ContractAddress,
     key: [u8; 32],
 ) -> Result<StorageItemRead, RpcServerError> {
-    let batch: AddressAndKeyBatch = VecM(vec![AddressAndKey {
-        address: address.0,
-        key: StorageKey::ContractData {
+    get_item_from_db_gateway(
+        db_gateway,
+        address,
+        StorageKey::ContractData {
             contract_data_key: StorageKeyContractData::from(key),
         },
+    )
+    .await
+}
+
+async fn get_native_hog_balance_from_db_gateway(
+    db_gateway: &DbGateway_DbGateway1_Client,
+    address: ContractAddress,
+) -> Result<StorageItemRead, RpcServerError> {
+    get_item_from_db_gateway(db_gateway, address, StorageKey::FreeNativeTokenBalance).await
+}
+
+async fn get_item_from_db_gateway(
+    db_gateway: &DbGateway_DbGateway1_Client,
+    address: ContractAddress,
+    key: StorageKey,
+) -> Result<StorageItemRead, RpcServerError> {
+    let batch: AddressAndKeyBatch = VecM(vec![AddressAndKey {
+        address: address.0,
+        key,
     }]);
     let outer = db_gateway
         .dbgateway_get_items(&batch)

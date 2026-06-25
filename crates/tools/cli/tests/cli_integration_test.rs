@@ -2737,6 +2737,48 @@ fn storage_json_reads_latest_item() {
 }
 
 #[test]
+fn balance_json_reads_native_hog_balance() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let address = format!("0x{}", "11".repeat(32));
+    let (rpc_url, rpc_server) = spawn_balance_rpc(&address, "123456789");
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"{address}\"\n"
+        ),
+    )
+    .unwrap();
+
+    let output = groundhog()
+        .args(["--json", "balance", "alice"])
+        .current_dir(&project)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["ok"], true);
+    assert_eq!(stdout["command"], "balance");
+    assert_eq!(stdout["data"]["rpc_url"], rpc_url);
+    assert_eq!(stdout["data"]["target"], "alice");
+    assert_eq!(stdout["data"]["address"], address);
+    assert_eq!(stdout["data"]["raw_balance"], "123456789");
+    assert_eq!(stdout["data"]["balance_hog"], "12.3456789");
+    assert_eq!(stdout["data"]["height"], 34);
+}
+
+#[test]
 fn storage_json_uses_project_local_node_state_with_global_dev_key() {
     let tmp = TempDir::new().unwrap();
     let config_home = tmp.path().join("config-home");
@@ -3460,6 +3502,34 @@ fn spawn_storage_rpc(address: &str, key: &str) -> (String, thread::JoinHandle<()
                     "kind": "bytestring",
                     "bytes": "0x6c6f63616c2d6e6f64652d73746f72616765",
                 },
+            }),
+        );
+    });
+
+    (format!("http://{addr}"), handle)
+}
+
+fn spawn_balance_rpc(address: &str, raw_balance: &str) -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+
+    let expected_address = address.to_owned();
+    let raw_balance = raw_balance.to_owned();
+
+    let handle = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let (stream, request) = read_jsonrpc_request(&listener, deadline, "getBalance");
+        assert_eq!(request["method"], "groundhog_getBalance");
+        assert_eq!(request["params"][0], expected_address);
+
+        send_jsonrpc_response(
+            stream,
+            &request["id"],
+            serde_json::json!({
+                "address": expected_address,
+                "rawBalance": raw_balance,
+                "height": 34,
             }),
         );
     });

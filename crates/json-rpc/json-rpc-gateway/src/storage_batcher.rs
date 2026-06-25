@@ -27,7 +27,7 @@ use groundhog_xdr::types::{AddressAndKey, StorageKey, StorageKeyContractData};
 use tokio::sync::{RwLock, oneshot};
 use xdr_common::VecM;
 
-use crate::adaptive_batch::{AdaptiveBatcher, BatchProcessor, shard_index_by_prefix};
+use crate::adaptive_batch::{AdaptiveBatcher, BatchProcessor, shard_index_by_routing_key};
 use crate::config::AdaptiveBatchConfig;
 use crate::error::GatewayError;
 
@@ -179,13 +179,44 @@ impl StorageReadBatcher {
         address: ContractAddress,
         key: [u8; 32],
     ) -> Result<StorageItemRead, GatewayError> {
-        let shard_idx = shard_index_by_prefix(&key, self.inner.n_shards());
+        self.read_key(
+            address,
+            StorageKey::ContractData {
+                contract_data_key: StorageKeyContractData::from(key),
+            },
+            &key,
+        )
+        .await
+    }
+
+    /// Read an address's native HOG balance row.
+    #[tracing::instrument(skip_all, fields(?address, shard_idx))]
+    pub async fn read_native_hog_balance(
+        &self,
+        address: ContractAddress,
+    ) -> Result<StorageItemRead, GatewayError> {
+        self.read_key(
+            address,
+            StorageKey::FreeNativeTokenBalance,
+            address.0.as_ref(),
+        )
+        .await
+    }
+
+    // `routing_key` is only for local AdaptiveBatcher queue routing; it is not
+    // sent to hogd. Use bytes that identify the logical item well enough to keep
+    // repeated reads stable while spreading different reads across queues.
+    async fn read_key(
+        &self,
+        address: ContractAddress,
+        storage_key: StorageKey,
+        routing_key: &[u8],
+    ) -> Result<StorageItemRead, GatewayError> {
+        let shard_idx = shard_index_by_routing_key(routing_key, self.inner.n_shards());
         tracing::Span::current().record("shard_idx", shard_idx);
         let request = AddressAndKey {
             address: address.0,
-            key: StorageKey::ContractData {
-                contract_data_key: StorageKeyContractData::from(key),
-            },
+            key: storage_key,
         };
         let (reply_tx, reply_rx) = oneshot::channel();
         self.inner.try_send(
@@ -223,6 +254,7 @@ mod tests {
     #[derive(Default)]
     struct MockSink {
         seen: Mutex<Vec<usize>>,
+        batches: Mutex<Vec<AddressAndKeyBatch>>,
         pending: Mutex<VecDeque<oneshot::Receiver<Result<DbGatewayPayload, GatewayError>>>>,
     }
 
@@ -240,6 +272,10 @@ mod tests {
         fn seen(&self) -> Vec<usize> {
             self.seen.lock().unwrap().clone()
         }
+
+        fn batches(&self) -> Vec<AddressAndKeyBatch> {
+            self.batches.lock().unwrap().clone()
+        }
     }
 
     #[async_trait]
@@ -247,6 +283,7 @@ mod tests {
         async fn fetch(&self, batch: AddressAndKeyBatch) -> Result<DbGatewayPayload, GatewayError> {
             let size = batch.0.len();
             self.seen.lock().unwrap().push(size);
+            self.batches.lock().unwrap().push(batch);
             let gate = self.pending.lock().unwrap().pop_front();
             match gate {
                 None => Err(GatewayError::BackendUnavailable("test gate missing".into())),
@@ -338,6 +375,33 @@ mod tests {
             }
             other => panic!("expected Bytestring, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn native_hog_balance_read_uses_free_native_token_balance_key() {
+        let mock = MockSink::arc();
+        let gate = mock.queue_gate();
+        let batcher = StorageReadBatcher::spawn(
+            &config_for_tests(1, 4, 1000, 100),
+            &(mock.clone() as Arc<dyn StorageReadSink>),
+        );
+
+        let address = address_zero();
+        let read = tokio::spawn({
+            let b = batcher.clone();
+            async move { b.read_native_hog_balance(address).await }
+        });
+        settle().await;
+        let _ = gate.send(Ok(payload_at_height(9, vec![not_found_item()])));
+        let result = read.await.unwrap().unwrap();
+
+        assert_eq!(*result.block_height, 9);
+        assert!(result.item.is_none());
+        let recorded = mock.batches();
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].0.len(), 1);
+        assert_eq!(recorded[0].0[0].address, address.0);
+        assert_eq!(recorded[0].0[0].key, StorageKey::FreeNativeTokenBalance);
     }
 
     #[tokio::test]
@@ -441,7 +505,7 @@ mod tests {
         let mut hits = vec![0usize; n_shards];
         for i in 0..10_000u32 {
             let key = key_from_u32(i.wrapping_mul(2_654_435_761)); // scatter
-            hits[shard_index_by_prefix(&key, n_shards)] += 1;
+            hits[shard_index_by_routing_key(&key, n_shards)] += 1;
         }
         for (i, c) in hits.iter().enumerate() {
             assert!(*c > 1500 && *c < 3500, "shard {i} got {c} (expected ~2500)");

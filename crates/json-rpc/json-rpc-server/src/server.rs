@@ -4,12 +4,13 @@ use jsonrpsee::types::ErrorObjectOwned;
 use groundhog_json_rpc_api::{GroundhogApiServer, WIRE_FORMAT_VERSION};
 use groundhog_json_rpc_types::{
     BlockHeight, ContractAddress,
+    balance::BalanceResponse,
     block::{BlockInfo, ChainTip},
     error::codes,
     events::{EventPage, EventQuery},
     hex::HexBytes,
     receipt::TransactionReceipt,
-    state::StorageItemRead,
+    state::{StorageItemInfo, StorageItemRead},
     transaction::{TransactionStatus, TxHash},
     version::VersionInfo,
     view::{ViewRequest, ViewResponse},
@@ -160,6 +161,26 @@ where
             )
         })?;
         Ok(self.read.get_storage_at(address, key).await?)
+    }
+
+    #[tracing::instrument(skip_all, fields(?address))]
+    async fn get_balance(&self, address: ContractAddress) -> RpcResult<BalanceResponse> {
+        let read = self.read.read_native_hog_balance(address).await?;
+        let raw_balance = match read.item {
+            Some(StorageItemInfo::NonnegativeInt { value }) => value,
+            None => "0".into(),
+            Some(other) => {
+                return Err(RpcServerError::BackendUnavailable(format!(
+                    "native HOG balance storage had unexpected item kind: {other:?}"
+                ))
+                .into());
+            }
+        };
+        Ok(BalanceResponse {
+            address,
+            raw_balance,
+            height: read.block_height,
+        })
     }
 
     #[tracing::instrument(
@@ -380,6 +401,16 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
                 item: None,
             })
         }
+
+        async fn read_native_hog_balance(
+            &self,
+            _address: ContractAddress,
+        ) -> Result<StorageItemRead, RpcServerError> {
+            Ok(StorageItemRead {
+                block_height: BlockHeight::from(0),
+                item: None,
+            })
+        }
     }
 
     #[async_trait::async_trait]
@@ -410,6 +441,16 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             &self,
             _address: ContractAddress,
             _key: [u8; 32],
+        ) -> Result<StorageItemRead, RpcServerError> {
+            Ok(StorageItemRead {
+                block_height: BlockHeight::from(0),
+                item: None,
+            })
+        }
+
+        async fn read_native_hog_balance(
+            &self,
+            _address: ContractAddress,
         ) -> Result<StorageItemRead, RpcServerError> {
             Ok(StorageItemRead {
                 block_height: BlockHeight::from(0),

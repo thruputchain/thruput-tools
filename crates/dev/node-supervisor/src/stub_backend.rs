@@ -94,6 +94,13 @@ impl ReadPlane for StubBackend {
     ) -> Result<StorageItemRead, RpcServerError> {
         Err(RpcServerError::NotImplemented("getStorageAt".into()))
     }
+
+    async fn read_native_hog_balance(
+        &self,
+        _address: ContractAddress,
+    ) -> Result<StorageItemRead, RpcServerError> {
+        Err(RpcServerError::NotImplemented("getBalance".into()))
+    }
 }
 
 #[async_trait]

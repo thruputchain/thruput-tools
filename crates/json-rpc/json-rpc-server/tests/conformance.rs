@@ -28,7 +28,7 @@ use groundhog_json_rpc_types::{
     },
     hex::{Hex0x, HexBytes},
     receipt::TransactionReceipt,
-    state::StorageItemRead,
+    state::{StorageItemInfo, StorageItemRead},
     transaction::{TransactionStatus, TxHash},
     view::{RootInvocationOutput, ViewRequest, ViewResponse},
 };
@@ -51,6 +51,10 @@ const MAX_EVENTS_PER_PAGE: u32 = 50;
 const MAX_CURSOR_BYTES: usize = 64;
 const MAX_VIEW_CALLDATA_BYTES: usize = 32;
 
+type StorageCall = (ContractAddress, [u8; 32]);
+type StorageCalls = Arc<Mutex<Vec<StorageCall>>>;
+type BalanceCalls = Arc<Mutex<Vec<ContractAddress>>>;
+
 /// Mock backend that emulates a chosen production capability profile.
 ///
 /// `Clone` is cheap: the only mutable state is held behind `Arc<Mutex<_>>`
@@ -60,7 +64,9 @@ const MAX_VIEW_CALLDATA_BYTES: usize = 32;
 struct ScriptedBackend {
     submitted: Arc<Mutex<Vec<ValidatedTransaction>>>,
     contract_events_calls: Arc<Mutex<u32>>,
-    get_storage_at_calls: Arc<Mutex<u32>>,
+    get_storage_at_calls: StorageCalls,
+    native_balance_calls: BalanceCalls,
+    storage_read: Arc<Mutex<Option<Result<StorageItemRead, RpcServerError>>>>,
 }
 
 #[derive(Clone)]
@@ -78,6 +84,13 @@ impl ScriptedBackend {
     /// Capability profile of the local hogd-dev supervisor.
     fn hogd_dev_shape() -> Self {
         Self::default()
+    }
+
+    fn with_storage_read(read: StorageItemRead) -> Self {
+        Self {
+            storage_read: Arc::new(Mutex::new(Some(Ok(read)))),
+            ..Self::default()
+        }
     }
 }
 
@@ -146,11 +159,27 @@ impl ReadPlane for ScriptedBackend {
 
     async fn get_storage_at(
         &self,
-        _address: ContractAddress,
-        _key: [u8; 32],
+        address: ContractAddress,
+        key: [u8; 32],
     ) -> Result<StorageItemRead, RpcServerError> {
-        *self.get_storage_at_calls.lock().await += 1;
-        Err(RpcServerError::NotImplemented("getStorageAt".into()))
+        self.get_storage_at_calls.lock().await.push((address, key));
+        self.storage_read
+            .lock()
+            .await
+            .clone()
+            .unwrap_or_else(|| Err(RpcServerError::NotImplemented("getStorageAt".into())))
+    }
+
+    async fn read_native_hog_balance(
+        &self,
+        address: ContractAddress,
+    ) -> Result<StorageItemRead, RpcServerError> {
+        self.native_balance_calls.lock().await.push(address);
+        self.storage_read
+            .lock()
+            .await
+            .clone()
+            .unwrap_or_else(|| Err(RpcServerError::NotImplemented("getBalance".into())))
     }
 }
 
@@ -337,7 +366,7 @@ async fn version_returns_shared_metadata_without_backend_dispatch_for_all_shapes
         assert_eq!(version.commit_hash.as_deref(), Some("test-commit"));
         assert!(submitted.lock().await.is_empty());
         assert_eq!(*event_calls.lock().await, 0);
-        assert_eq!(*storage_calls.lock().await, 0);
+        assert!(storage_calls.lock().await.is_empty());
     }
 }
 
@@ -375,7 +404,7 @@ async fn event_query_validation_runs_before_dispatch_for_all_shapes() {
 async fn get_storage_at_key_length_validated_for_all_shapes() {
     let address: ContractAddress = Hex0x(groundhog_xdr::types::ContractAddress::from([0u8; 32]));
     for backend in all_shapes() {
-        let calls = backend.get_storage_at_calls.clone();
+        let storage_calls = backend.get_storage_at_calls.clone();
         let svc = server(backend);
 
         let short_err = svc
@@ -396,12 +425,75 @@ async fn get_storage_at_key_length_validated_for_all_shapes() {
             .expect_err("bug: empty storage key must be rejected");
         assert_eq!(empty_err.code(), codes::INVALID_PARAMS);
 
-        assert_eq!(
-            *calls.lock().await,
-            0,
+        assert!(
+            storage_calls.lock().await.is_empty(),
             "key-length validation must short-circuit before backend dispatch"
         );
     }
+}
+
+#[tokio::test]
+async fn get_balance_reads_native_hog_balance_storage_for_all_shapes() {
+    for backend in all_shapes() {
+        let address: ContractAddress =
+            Hex0x(groundhog_xdr::types::ContractAddress::from([7u8; 32]));
+        let backend = ScriptedBackend {
+            storage_read: Arc::new(Mutex::new(Some(Ok(StorageItemRead {
+                block_height: BlockHeight::from(123),
+                item: Some(StorageItemInfo::NonnegativeInt {
+                    value: "10000000".into(),
+                }),
+            })))),
+            ..backend
+        };
+        let storage_calls = backend.get_storage_at_calls.clone();
+        let balance_calls = backend.native_balance_calls.clone();
+
+        let balance = server(backend)
+            .get_balance(address)
+            .await
+            .expect("bug: scripted native HOG balance should return successfully");
+
+        assert_eq!(balance.address, address);
+        assert_eq!(balance.raw_balance, "10000000");
+        assert_eq!(*balance.height, 123);
+        assert!(storage_calls.lock().await.is_empty());
+        assert_eq!(*balance_calls.lock().await, vec![address]);
+    }
+}
+
+#[tokio::test]
+async fn get_balance_returns_zero_for_missing_balance_item() {
+    let address: ContractAddress = Hex0x(groundhog_xdr::types::ContractAddress::from([8u8; 32]));
+    let backend = ScriptedBackend::with_storage_read(StorageItemRead {
+        block_height: BlockHeight::from(456),
+        item: None,
+    });
+
+    let balance = server(backend)
+        .get_balance(address)
+        .await
+        .expect("bug: missing native HOG balance should return zero");
+
+    assert_eq!(balance.address, address);
+    assert_eq!(balance.raw_balance, "0");
+    assert_eq!(*balance.height, 456);
+}
+
+#[tokio::test]
+async fn get_balance_errors_for_unexpected_storage_item_kind() {
+    let address: ContractAddress = Hex0x(groundhog_xdr::types::ContractAddress::from([9u8; 32]));
+    let backend = ScriptedBackend::with_storage_read(StorageItemRead {
+        block_height: BlockHeight::from(789),
+        item: Some(StorageItemInfo::AuthData),
+    });
+
+    let err = server(backend)
+        .get_balance(address)
+        .await
+        .expect_err("bug: unexpected native HOG balance item kind should fail");
+
+    assert_eq!(err.code(), codes::BACKEND_UNAVAILABLE);
 }
 
 #[tokio::test]
