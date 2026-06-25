@@ -23,7 +23,7 @@ use groundhog_db_gateway::{
 use groundhog_indexer::{
     EventPage, EventQuery, IndexerBlockExplorer_IndexerBlockExplorer1,
     IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher, IndexerBlockExplorerIntroOutcome,
-    TxInfo, TxInfoResult,
+    TransactionPage, TransactionQuery, TxInfo, TxInfoResult,
 };
 use groundhog_json_rpc_types::hex::Hex0x;
 use groundhog_scheduler::{
@@ -1037,6 +1037,48 @@ impl FakeIndexer {
         }
     }
 
+    /// Build a minimal `ProposedTransaction` to stand in for a `TxInfo.tx`
+    /// body. The transaction is not valid on-chain; it only needs to be
+    /// present so the committed dataset round-trips through the indexer RPC.
+    fn dummy_proposed_transaction() -> groundhog_xdr::transaction::ProposedTransaction {
+        use groundhog_xdr::auth_claim::{AuthClaim, AuthClaim_source_address_claim};
+        use groundhog_xdr::contract::ContractEntrypointID;
+        use groundhog_xdr::transaction::{
+            Invocation, NondeterministicProposalData, ProposedTransaction, SignedTransaction,
+            Transaction, Uniquifier,
+        };
+        use groundhog_xdr::types::{ContractAddress, GasAmount};
+        ProposedTransaction {
+            signed_tx: SignedTransaction {
+                tx: Transaction {
+                    invocation: Invocation {
+                        invoked_address: ContractAddress::from([0u8; 32]),
+                        entrypoint: ContractEntrypointID::from([0u8; 8]),
+                        gas_limit: GasAmount::from(0u64),
+                        calldata: BytesM(vec![]),
+                    },
+                    uniquifier: Uniquifier {
+                        block_expiry_height: BlockHeight::from(0i64),
+                        nonce: 0,
+                    },
+                    contracts_to_deploy: VecM(vec![]),
+                    auth_claim: AuthClaim::kSourceAddressAuthData {
+                        source_address_claim: AuthClaim_source_address_claim {
+                            allowed_keys: 0,
+                            required_weight: 0,
+                        },
+                    },
+                },
+                signatures: VecM(vec![]),
+            },
+            nondeterministic_proposal_data: NondeterministicProposalData {
+                nondeterministic_bits: BytesM(vec![]),
+                nondeterministic_bit_count: 0,
+                observed_queue_entry_sequence: VecM(vec![]),
+            },
+        }
+    }
+
     fn build_committed_set() -> CommittedSet {
         use groundhog_xdr::{
             event::TxEventLog, exec_result::ExecResult, transaction::InvocationFrameOutput,
@@ -1046,6 +1088,7 @@ impl FakeIndexer {
 
         let tx_a = TxInfo {
             height: BlockHeight::from(CANNED_HEIGHT_A),
+            tx: Self::dummy_proposed_transaction(),
             events: TxEventLog {
                 proposed_tx_hash: SHA256Hash::from(CANNED_TX_HASH_A),
                 exec_result: ExecResult::ExecResultOK,
@@ -1059,6 +1102,7 @@ impl FakeIndexer {
 
         let tx_b = TxInfo {
             height: BlockHeight::from(CANNED_HEIGHT_B),
+            tx: Self::dummy_proposed_transaction(),
             events: TxEventLog {
                 proposed_tx_hash: SHA256Hash::from(CANNED_TX_HASH_B),
                 exec_result: ExecResult::ExecResultOK,
@@ -1184,6 +1228,23 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for FakeIndexer {
         Ok(EventPage {
             events: VecM(events.clone()),
             cursor: BytesM(next_cursor.clone()),
+            latest_block: BlockHeight::from(CANNED_HEIGHT_B),
+            oldest_block: BlockHeight::from(0_i64),
+        })
+    }
+
+    #[tracing::instrument(skip_all)]
+    async fn get_transactions(
+        &self,
+        _arg0: TransactionQuery,
+    ) -> Result<TransactionPage, ProgramError> {
+        if self.mode == FakeIndexerMode::RpcFail || self.mode == FakeIndexerMode::RuntimeRpcFail {
+            return Err(ProgramError::msg("fake indexer rpc-fail mode"));
+        }
+        // No canned transaction-list dataset; report an exhausted stream.
+        Ok(TransactionPage {
+            transactions: VecM(vec![]),
+            cursor: BytesM(vec![]),
             latest_block: BlockHeight::from(CANNED_HEIGHT_B),
             oldest_block: BlockHeight::from(0_i64),
         })

@@ -424,7 +424,7 @@ mod tests {
         let mut spec = sample_contract_spec();
         spec.events = vec![groundhog_contract_spec::ContractEventDef {
             name: spec_string_bytes("PingEvent"),
-            signature: groundhog_xdr::event::Topic::from([0xAB; 32]),
+            signature: [0xAB; 32].into(),
             topics: vec![ContractField {
                 name: spec_string_bytes("tag"),
                 ty: ContractType::U64,

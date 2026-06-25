@@ -21,7 +21,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.5.9"
+version = "0.5.10"
 edition = "2024"
 authors = ["Stellar Development Foundation"]
 license = "Apache-2.0"
@@ -37,27 +37,27 @@ categories = ["development-tools"]
 # above.  Cargo requires explicit versions for dependencies when
 # publishing, as path specifications are stripped out.  Remember to
 # keep this in sync.
-groundhog-json-rpc-types = { path = "crates/json-rpc/json-rpc-types", version = "=0.5.9", registry = "groundhog" }
-groundhog-json-rpc-api = { path = "crates/json-rpc/json-rpc-api", version = "=0.5.9", registry = "groundhog" }
-groundhog-json-rpc-server = { path = "crates/json-rpc/json-rpc-server", version = "=0.5.9", registry = "groundhog" }
-groundhog-json-rpc-client = { path = "crates/json-rpc/json-rpc-client", version = "=0.5.9", registry = "groundhog" }
-groundhog-open-rpc = { path = "crates/json-rpc/open-rpc", version = "=0.5.9", registry = "groundhog" }
-groundhog-open-rpc-macros = { path = "crates/json-rpc/open-rpc-macros", version = "=0.5.9", registry = "groundhog" }
-groundhog-x23-transport = { path = "crates/x23/x23-transport", version = "=0.5.9", registry = "groundhog" }
-groundhog-signing = { path = "crates/tools/signing", version = "=0.5.9", registry = "groundhog" }
-groundhog-node-supervisor = { path = "crates/dev/node-supervisor", version = "=0.5.9", registry = "groundhog" }
-groundhog-rv32-artifact = { path = "crates/rv32/artifact", version = "=0.5.9", registry = "groundhog" }
-groundhog-rv32-lower = { path = "crates/rv32/lower", version = "=0.5.9", registry = "groundhog" }
+groundhog-json-rpc-types = { path = "crates/json-rpc/json-rpc-types", version = "=0.5.10", registry = "groundhog" }
+groundhog-json-rpc-api = { path = "crates/json-rpc/json-rpc-api", version = "=0.5.10", registry = "groundhog" }
+groundhog-json-rpc-server = { path = "crates/json-rpc/json-rpc-server", version = "=0.5.10", registry = "groundhog" }
+groundhog-json-rpc-client = { path = "crates/json-rpc/json-rpc-client", version = "=0.5.10", registry = "groundhog" }
+groundhog-open-rpc = { path = "crates/json-rpc/open-rpc", version = "=0.5.10", registry = "groundhog" }
+groundhog-open-rpc-macros = { path = "crates/json-rpc/open-rpc-macros", version = "=0.5.10", registry = "groundhog" }
+groundhog-x23-transport = { path = "crates/x23/x23-transport", version = "=0.5.10", registry = "groundhog" }
+groundhog-signing = { path = "crates/tools/signing", version = "=0.5.10", registry = "groundhog" }
+groundhog-node-supervisor = { path = "crates/dev/node-supervisor", version = "=0.5.10", registry = "groundhog" }
+groundhog-rv32-artifact = { path = "crates/rv32/artifact", version = "=0.5.10", registry = "groundhog" }
+groundhog-rv32-lower = { path = "crates/rv32/lower", version = "=0.5.10", registry = "groundhog" }
 
 # --- Groundhog (private registry) ---
-groundhog-xdr = { version = "=0.17.2", registry = "groundhog", features = ["serde", "xdrs", "schema"] }
-groundhog_indexer = { version = "=0.17.2", registry = "groundhog", features = ["serde"] }
-groundhog_scheduler = { version = "=0.17.2", registry = "groundhog" }
-groundhog_db_gateway = { version = "=0.17.2", registry = "groundhog" }
-groundhog_view = { version = "=0.17.2", registry = "groundhog" }
-groundhog_scp = { version = "=0.17.2", registry = "groundhog" }
-groundhog_coordinator = { version = "=0.17.2", registry = "groundhog" }
-groundhog-trace = { version = "=0.17.2", registry = "groundhog" }
+groundhog-xdr = { version = "=0.18.0", registry = "groundhog", features = ["serde", "xdrs", "schema"] }
+groundhog_indexer = { version = "=0.18.0", registry = "groundhog", features = ["serde"] }
+groundhog_scheduler = { version = "=0.18.0", registry = "groundhog" }
+groundhog_db_gateway = { version = "=0.18.0", registry = "groundhog" }
+groundhog_view = { version = "=0.18.0", registry = "groundhog" }
+groundhog_scp = { version = "=0.18.0", registry = "groundhog" }
+groundhog_coordinator = { version = "=0.18.0", registry = "groundhog" }
+groundhog-trace = { version = "=0.18.0", registry = "groundhog" }
 xdrs = { version = "0.7.1", registry = "groundhog", features = ["alloc"] }
 xdr-common = { version = "0.7.1", registry = "groundhog" }
 rpc_driver = { version = "0.8", registry = "groundhog" }
