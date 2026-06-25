@@ -609,7 +609,7 @@ mod tests {
         EventPage as IdxEventPage, IndexerBlockExplorer_IndexerBlockExplorer1,
         IndexerBlockExplorer_IndexerBlockExplorer1_Client,
         IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher, IndexerBlockExplorerIntroOutcome,
-        TxInfo, TxInfoResult,
+        TransactionPage as IdxTransactionPage, TransactionQuery, TxInfo, TxInfoResult,
     };
     use groundhog_json_rpc_server::{ReadPlane, RpcServerError};
     use groundhog_json_rpc_types::{
@@ -710,6 +710,20 @@ mod tests {
                 },
             },
             signatures: VecM(vec![]),
+        }
+    }
+
+    /// Wrap [`dummy_signed_transaction`] with empty nondeterministic
+    /// proposal data so it can stand in for a `TxInfo.tx` body in tests.
+    fn dummy_proposed_transaction() -> groundhog_xdr::transaction::ProposedTransaction {
+        use groundhog_xdr::transaction::{NondeterministicProposalData, ProposedTransaction};
+        ProposedTransaction {
+            signed_tx: dummy_signed_transaction(),
+            nondeterministic_proposal_data: NondeterministicProposalData {
+                nondeterministic_bits: BytesM(vec![]),
+                nondeterministic_bit_count: 0,
+                observed_queue_entry_sequence: VecM(vec![]),
+            },
         }
     }
 
@@ -853,6 +867,7 @@ mod tests {
 
             let tx_a = TxInfo {
                 height: IdxBlockHeight::from(CANNED_HEIGHT_A),
+                tx: dummy_proposed_transaction(),
                 events: TxEventLog {
                     proposed_tx_hash: SHA256Hash::from(CANNED_TX_HASH_A),
                     exec_result: ExecResult::ExecResultOK,
@@ -866,6 +881,7 @@ mod tests {
 
             let tx_b = TxInfo {
                 height: IdxBlockHeight::from(CANNED_HEIGHT_B),
+                tx: dummy_proposed_transaction(),
                 events: TxEventLog {
                     proposed_tx_hash: SHA256Hash::from(CANNED_TX_HASH_B),
                     exec_result: ExecResult::ExecResultOK,
@@ -980,6 +996,22 @@ mod tests {
             Ok(IdxEventPage {
                 events: VecM(events.clone()),
                 cursor: BytesM(next_cursor.clone()),
+                latest_block: IdxBlockHeight::from(CANNED_HEIGHT_B),
+                oldest_block: IdxBlockHeight::from(0_i64),
+            })
+        }
+
+        async fn get_transactions(
+            &self,
+            _arg0: TransactionQuery,
+        ) -> Result<IdxTransactionPage, ProgramError> {
+            if self.mode == FakeIndexerMode::RpcFail {
+                return Err(ProgramError::msg("fake indexer rpc-fail"));
+            }
+            // No canned transaction-list dataset; report an exhausted stream.
+            Ok(IdxTransactionPage {
+                transactions: VecM(vec![]),
+                cursor: BytesM(vec![]),
                 latest_block: IdxBlockHeight::from(CANNED_HEIGHT_B),
                 oldest_block: IdxBlockHeight::from(0_i64),
             })

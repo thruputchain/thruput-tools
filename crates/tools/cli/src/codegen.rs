@@ -1453,7 +1453,7 @@ export type Result =
     fn ping_event_def() -> ContractEventDef {
         ContractEventDef {
             name: spec_string("PingEvent"),
-            signature: groundhog_xdr::event::Topic::from([0xAB; 32]),
+            signature: [0xAB; 32].into(),
             topics: vec![ContractField {
                 name: spec_string("tag"),
                 ty: ContractType::U64,
