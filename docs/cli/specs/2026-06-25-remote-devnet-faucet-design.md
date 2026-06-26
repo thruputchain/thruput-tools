@@ -3,9 +3,9 @@
 **Date:** 2026-06-25
 **Status:** Design. Decisions below were taken in a cross-repo brainstorm and
 are ready for implementation planning. Spans `groundhog-rpc` (CLI + a new
-faucet service), `hogd` (bootstrap-tool change now; `kPubkeySignature` later),
-`chuckd` (public descriptor / manifest sanitization), and `ops` (genesis faucet
-account, faucet deploy, key custody).
+faucet service), `hogd` (bootstrap-tool and dev-wallet changes now;
+`kPubkeySignature` later), `chuckd` (public descriptor / manifest
+sanitization), and `ops` (genesis faucet account, faucet deploy, key custody).
 
 **Companions:**
 
@@ -27,8 +27,9 @@ account private keys. That model cannot extend to a shared remote network: the
 seed is the secret, and publishing it hands everyone the funded accounts. This
 design replaces the secret-bearing local path, for remote networks, with a
 **public network descriptor** (no secrets) plus a **hosted faucet service** that
-holds one genesis-funded key and performs sponsored wallet creation and funding
-on the developer's behalf.
+holds one genesis-funded key. `groundhog wallet create` uses that service to
+fund the deterministic future wallet address first, then triggers the sponsored
+deploy/init step while pubkey-auth self-bootstrap is unavailable.
 
 ## Verified constraints (why the design looks like this)
 
@@ -39,19 +40,23 @@ These were confirmed by reading the backend, not inferred from names.
    returns `kAuthMalformed`. Transaction auth requires `AddressAuthData` already
    present at the invoked address (`auth/auth_server.cc:~277`), i.e. a deployed
    contract. So a developer cannot self-bootstrap from a merely-funded address.
-2. **Wallet creation must be sponsored, and the address is sponsor-derived.**
+2. **Wallet deployment must be sponsored, and the address is sponsor-derived.**
    `dev_wallet::create_wallet` (`built_contracts/.../dev_wallet/src/implementation.rs:97`)
    requires `kSourceAddressAuthData` (an existing wallet's signature), deploys
    the new wallet at `SHA256(sponsor_address || nonce || contract_hash)`, and
-   bakes the owner key in via `initialize(owner)`. Any existing wallet may
-   sponsor creation for an arbitrary owner pubkey — so a single faucet/sponsor
-   wallet suffices for everyone.
+   bakes the owner key in via `initialize(owner)`. Today it also transfers
+   `DEPLOY_STORAGE_TOKENS` into the future wallet address before deployment;
+   this design moves that funding out of the contract and into the CLI/app
+   wallet-create flow. Any existing wallet may sponsor deployment for an
+   arbitrary owner pubkey — so a single faucet/sponsor wallet suffices for
+   devnet until pubkey auth lands.
 3. **Native HOG has fixed genesis supply and no mint.** A faucet is just a
    genesis-funded account; "topping up" means transferring from another
    genesis-funded account, or re-genesis.
 4. **A balance can sit at an address before any contract is deployed there**
-   (`FreeNativeTokenBalance` is address-keyed). This only becomes useful for
-   self-bootstrap once constraint 1 is lifted.
+   (`FreeNativeTokenBalance` is address-keyed). That is useful immediately for
+   pre-funding a deterministic future wallet address, but it is not enough for a
+   fresh key to self-author the deployment until constraint 1 is lifted.
 5. **Getting a funded account into genesis is already a solved mechanism.**
    `hog-hosted-bootstrap generate` builds the genesis config; chuckd loads it at
    height 0 and SCP externalizes block 1. `GenesisConfiguration.initial_config`
@@ -91,7 +96,7 @@ These were confirmed by reading the backend, not inferred from names.
 | # | Decision | Rationale |
 |---|---|---|
 | D1 | **Faucet key = dedicated custom-key account in genesis.** | Keeps the faucet key private (ops-held, not seed-derived) without abandoning the published seed for local dev. Needs a contained `hog-hosted-bootstrap` change (constraint 6). |
-| D2 | **Sponsor model now; `kPubkeySignature` is a separate later track.** | The pubkey-account path is a real backend project gated on a replay-model decision (see §7), not "fill in the arm." Deferring it costs no rework: the faucet's create step later collapses to a pure airdrop. |
+| D2 | **Prefund-then-sponsor now; `kPubkeySignature` is a separate later track.** | The mainnet-like UX is "fund the future wallet address, then deploy/init it." Devnet uses the faucet for funding and a faucet-held sponsor for deploy/init; mainnet later swaps the faucet funding step for an exchange/bridge/user transfer. The pubkey-account path is a real backend project gated on a replay-model decision (see §7), not "fill in the arm." |
 | D3 | **Faucet exposed as a standalone HTTP service.** | Keeps the secret key out of the public RPC/gateway (which is a stateless read/submit front per gateway conventions), and lets ops deploy / rotate / rate-limit it independently. |
 | D4 | **Networks are first-class; profiles layer on top.** | A network is "which endpoint + descriptor + faucet"; a profile is the user's working context. Conflating them (today's `--profile` alias `network`) blocks zero-config `--network devnet`. |
 | D5 | **Descriptor fetched from the faucet/gateway and cached locally.** | The nightly devnet re-genesis changes genesis/dev-wallet hashes; a fetched descriptor always matches the live deployment, where baked-in values would go stale. |
@@ -142,10 +147,12 @@ Two artifacts must stay separate (see Security §6):
 
 The public descriptor (owned by `json-rpc-types`, since it crosses the RPC/CLI
 boundary) contains only public fields: `descriptorVersion`, `networkId`,
-`genesisHash`, `rpcUrl`, `faucetUrl`, and the `devWallet` entrypoints
-(`deployEntrypoint`, `doActionEntrypoint`) + `contentHash`. That is exactly what
-the CLI needs to build `deploy` / `do_action` transactions and to label/verify
-the network — and nothing private.
+`genesisHash`, `rpcUrl`, `faucetUrl`, `walletCreateSponsorAddress`,
+`walletCreatePrefundRawAmount`, and the `devWallet` entrypoints
+(`deployEntrypoint`, `doActionEntrypoint`, `createWalletEntrypoint`) +
+`contentHash`. That is exactly what the CLI needs to derive and pre-fund a
+future wallet address, build `deploy` / `do_action` transactions, and
+label/verify the network — and nothing private.
 
 - `local`: the existing local-node runtime manifest is used unchanged (the
   descriptor is a remote-network concern).
@@ -173,21 +180,37 @@ A new small Rust service (own crate under `crates/`, reusing
 `groundhog-signing` + `json-rpc-client`) holding the genesis-funded
 faucet/sponsor wallet key (loaded from AWS Secrets Manager, never an argv):
 
-- `POST /v1/createWallet { ownerPubkey, clientNonce, ownerSig }` → sponsored
+- `POST /v1/createWallet { ownerPubkey, deployNonce, walletContractHash,
+  walletAddress, genesisHash, clientNonce, ownerSig }` → sponsored
   `create_wallet` via the faucet's wallet → waits for receipt →
   `{ walletAddress, txHash, height }`.
+  - **Deploy/init only:** `createWallet` does not fund the wallet. The CLI/app
+    must first fund the deterministic `walletAddress` with at least
+    `walletCreatePrefundRawAmount`, using `/v1/airdrop` on devnet or an
+    exchange/bridge/user transfer on mainnet. This is the key contract
+    boundary change: move pre-funding out of `dev_wallet::create_wallet` and
+    into the wallet-create UX.
+  - **Address verification required:** the service rejects requests where
+    `walletAddress != derive_deploy_address(walletCreateSponsorAddress,
+    deployNonce, walletContractHash)` or `walletContractHash` does not match the
+    live descriptor's dev-wallet `contentHash`.
   - **Proof-of-possession required:** `ownerSig` is an ed25519 signature by
-    `ownerPubkey` over the canonical request (pubkey + clientNonce + networkId).
+    `ownerPubkey` over the canonical request (method + ownerPubkey +
+    clientNonce + networkId + genesisHash + walletCreateSponsorAddress +
+    deployNonce + walletContractHash + walletAddress).
     Without it anyone could spend rate limit creating wallets for keys they
     don't hold. The CLI signs this with the owner key it already has.
-  - **Idempotent:** `(ownerPubkey, clientNonce)` keys the request so retries
-    return the same wallet instead of deploying a second one.
-- `POST /v1/airdrop { address, rawAmount, clientNonce }` → `do_action` HOG
+  - **Idempotent:** `(genesisHash, ownerPubkey, clientNonce)` keys the request
+    so retries return the same wallet instead of deploying a second one.
+- `POST /v1/airdrop { address, rawAmount, genesisHash, clientNonce }` →
+  `do_action` HOG
   transfer (`0x63285b3523f9dc3f` on token `0x…01`) → `{ txHash, height }`.
   `rawAmount` is a decimal string in base HOG units; the CLI converts
-  user-facing HOG decimals. Idempotent on `(address, clientNonce)`.
+  user-facing HOG decimals. Idempotent on `(genesisHash, address, clientNonce)`.
 - `GET /v1/network` → the public network descriptor (§2), with `ETag`.
-- Per-IP and per-pubkey rate limiting; bounded amounts; structured-JSON errors.
+- `createWallet`: per-IP and per-pubkey rate limiting keyed on `ownerPubkey`.
+  `airdrop`: per-IP and per-address rate limiting keyed on recipient `address`.
+  Bounded amounts; structured-JSON errors.
 
 The service is the only component holding the faucet key. It submits through the
 same public RPC the CLI uses, so a successful response means the tx reached the
@@ -198,8 +221,11 @@ authoritative mempool path (per the gateway submit semantics in CLAUDE.md).
 There is **no separate faucet smart contract**. The on-chain faucet account is a
 normal genesis-funded `dev_wallet` — the same contract every account uses —
 `initialize`d with the faucet *service's* public key. "Faucet logic" lives
-entirely in the off-chain HTTP service (§3), which signs `create_wallet` and
-`do_action`→`transfer` with the faucet key.
+entirely in the off-chain HTTP service (§3), which signs HOG transfers and the
+temporary sponsored `create_wallet` deploy/init transaction with the faucet key.
+The on-chain `dev_wallet::create_wallet` should stop transferring
+`DEPLOY_STORAGE_TOKENS`; the CLI/app owns the pre-funding step before it asks
+the sponsor to deploy and initialize the wallet contract.
 
 - **`hogd`:** extend `hog-hosted-bootstrap generate` to accept **explicit custom
   wallet allocations from supplied public keys** (faucet, optional reserve),
@@ -207,7 +233,8 @@ entirely in the off-chain HTTP service (§3), which signs `create_wallet` and
   `initialize(pubkey)` calldata (mirroring the seed-derived loop in
   `bootstrap_accounts.cc:74`, but with a supplied pubkey + balance). It must
   carry **no private derivation material** for these accounts — only the public
-  keys.
+  keys. Also update the dev-wallet `create_wallet` implementation so it
+  deploys and initializes only; it must not transfer the create-wallet pre-fund.
 - **`ops`:** generate the faucet keypair out-of-band; store the private key in
   Secrets Manager; pass only the public key to the bootstrap tool; enable hosted
   bootstrap for devnet; deploy the faucet service with read access to the
@@ -221,12 +248,23 @@ Fetch flow: when a command needs the descriptor on a remote network, the CLI
 loads the cache, and on miss fetches `GET <faucetUrl>/v1/network` (or a gateway
 endpoint) and caches it.
 
-- **`wallet create`** → CLI signs proof-of-possession and `POST /v1/createWallet
-  { ownerPubkey, clientNonce, ownerSig }`; save the returned address under the
-  key's wallet name in `[profile].wallets`; mark it the key's **active wallet**.
-  The CLI no longer needs the dev-wallet artifact or a sponsor account on remote
-  networks (the faucet owns both).
-- **`airdrop`** → `POST /v1/airdrop { address, rawAmount, clientNonce }`.
+- **`wallet create`** → CLI revalidates the descriptor, loads the dev-wallet
+  artifact/hash, chooses a deploy nonce, and derives the deterministic
+  `walletAddress` from `walletCreateSponsorAddress`, the deploy nonce, and the
+  dev-wallet `contentHash`. It then funds that future address first:
+  - on devnet, `POST /v1/airdrop { address: walletAddress, rawAmount:
+    walletCreatePrefundRawAmount, genesisHash, clientNonce }`;
+  - on mainnet/testnet without a faucet, surface the same future address and wait
+    for an exchange/bridge/user transfer before continuing.
+
+  After funding, the CLI signs proof-of-possession and `POST /v1/createWallet
+  { ownerPubkey, deployNonce, walletContractHash, walletAddress, genesisHash,
+  clientNonce, ownerSig }` to trigger the sponsored deploy/init transaction; it
+  saves the returned address under the key's wallet name in `[profile].wallets`
+  and marks it the key's **active wallet**. The CLI still does not hold the
+  sponsor key on remote networks, but it owns the wallet-create orchestration.
+- **`airdrop`** → `POST /v1/airdrop { address, rawAmount, genesisHash,
+  clientNonce }`.
   Recipient resolution reuses the existing saved-wallet / `0x…` logic in
   `resolve_airdrop_recipient`; CLI `--amount` remains a HOG decimal and is
   converted to `rawAmount` before submission.
@@ -247,10 +285,10 @@ because the local seed is available; the faucet key is not on the client, so
 remote faucet-backed `wallet create` / `airdrop` cannot produce a signed tx.
 Remote dry-run instead prints the **faucet request plan** it would send (target
 endpoint, resolved owner pubkey / recipient / amount, and idempotency key)
-clearly marked "not submitted; faucet signs server-side." Dry-run must not print
-a reusable live `ownerSig`; either redact it or sign a distinct dry-run domain
-that the faucet rejects for live submission. A faucet preflight/validate endpoint
-can later turn this into a real server-side check. `deploy` / `call` dry-run is
+clearly marked "not submitted; faucet signs server-side." Dry-run must never
+produce a live reusable `ownerSig`; it signs a distinct dry-run domain that the
+faucet rejects for live submission. A faucet preflight/validate endpoint can
+later turn this into a real server-side check. `deploy` / `call` dry-run is
 unaffected — those are signed by the user's key and still produce a signed tx on
 any network.
 
@@ -265,9 +303,10 @@ any network.
 - The faucet key lives only in the faucet service (Secrets Manager); never in
   the descriptor, the CLI, argv, or the gateway.
 - `createWallet` requires owner proof-of-possession, so callers can't burn rate
-  limit on keys they don't hold. Both `createWallet` and `airdrop` use an
-  idempotency nonce (§3), so retries do not double-create wallets or double-send
-  an airdrop.
+  limit on keys they don't hold. Both `createWallet` and `airdrop` bind
+  `genesisHash` into request validation and idempotency (§3), so retries do not
+  double-create wallets or double-send an airdrop, and a nightly re-genesis
+  cannot replay or return stale pre-reset results.
 - Faucet abuse is otherwise bounded by rate limits and per-request caps; devnet
   is disposable, so the blast radius is a re-genesis.
 - Cached descriptors are keyed by `networkId`; a `genesisHash` mismatch between
@@ -277,8 +316,10 @@ any network.
 ### 7. `kPubkeySignature` future track (deferred)
 
 Implementing pubkey accounts would let a funded fresh keypair self-author its
-first transaction, collapsing the faucet's create step to a pure airdrop. Scope
-assessment (~3–4 weeks; deep because of one decision, not volume):
+first transaction, removing the temporary sponsored create step. The
+wallet-create UX remains prefund-then-deploy/init; only the sponsor/relayer
+piece changes. Scope assessment (~3–4 weeks; deep because of one decision, not
+volume):
 
 - **Localized:** the verify arm itself (~40 lines: verify ed25519 sig, derive
   address, compare); fee charging from `FreeNativeTokenBalance` already works
@@ -295,8 +336,9 @@ assessment (~3–4 weeks; deep because of one decision, not volume):
   function; the Rust signing crate (`signing/src/account.rs`) is the only
   implementation. A byte-for-byte C++ match + cross-repo parity test is required.
 
-When it lands, the CLI/faucet plumbing here is unchanged — only the faucet's
-`createWallet` behavior simplifies.
+When it lands, the funding plumbing here is unchanged — the faucet becomes pure
+funding on devnet, while mainnet relies on normal incoming funds to the future
+wallet address.
 
 ## Phasing
 
@@ -309,19 +351,20 @@ When it lands, the CLI/faucet plumbing here is unchanged — only the faucet's
 - **P1 — Usable faucet.** `hog-hosted-bootstrap` custom faucet/reserve wallet
   allocation (supplied pubkeys); chuckd's public-descriptor / sanitization path
   (emit a sanitized descriptor, or leave descriptor serving to the faucet); the
-  faucet HTTP service (with proof-of-possession + idempotency); CLI faucet
+  dev-wallet `create_wallet` no-prefund contract change; the faucet HTTP
+  service (with proof-of-possession + genesis-scoped idempotency); CLI faucet
   client; ops wiring + key custody; and remote `wallet create` / `airdrop` via
   the faucet. This is the milestone that makes devnet self-serve.
 - **P2 — Pubkey accounts (separate hogd track).** `kPubkeySignature`, the replay
-  model, and C++/Rust derivation parity tests per §7; faucet create step
-  collapses to a pure airdrop.
+  model, and C++/Rust derivation parity tests per §7; the sponsored create step
+  collapses away, leaving faucet funding only on devnet.
 
 ## Cross-repo work summary
 
 | Repo | Work |
 |---|---|
-| `groundhog-rpc` | Network model + precedence; distinct public descriptor type + fetch/cache/ETag; general saved-wallet binding fix; faucet HTTP service crate; faucet client in CLI. |
-| `hogd` | `hog-hosted-bootstrap` custom faucet (+ optional reserve) wallet allocation from supplied pubkeys. Later: `kPubkeySignature` (P2). |
+| `groundhog-rpc` | Network model + precedence; distinct public descriptor type + fetch/cache/ETag; general saved-wallet binding fix; faucet HTTP service crate; faucet client and prefund-then-create wallet orchestration in CLI. |
+| `hogd` | `hog-hosted-bootstrap` custom faucet (+ optional reserve) wallet allocation from supplied pubkeys; remove the pre-fund transfer from dev-wallet `create_wallet`. Later: `kPubkeySignature` (P2). |
 | `ops` | Generate/store faucet key (Secrets Manager); enable hosted bootstrap with the faucet pubkey; deploy faucet service; devnet DNS name. |
 | `chuckd` | Emit a sanitized public descriptor (or expose the `genesisHash` / dev-wallet fields a descriptor needs), since it writes the on-node manifest with `bootstrapAccountDerivation` today (`hosted_bootstrap.go:267`). Or leave descriptor serving to the faucet and keep chuckd's manifest ops-only. |
 
