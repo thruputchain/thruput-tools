@@ -48,8 +48,8 @@ account/genesis input, JSON-RPC facade wiring, log forwarding, and shutdown.
 
 The supervisor resolves the child binary, named `hogd-dev`, in this order:
 
-1. explicit `--hogd-dev-binary`;
-2. `GROUNDHOG_HOGD_DEV_BINARY`;
+1. explicit `--hog-devnode-binary`;
+2. `GROUNDHOG_DEVNODE_BINARY`;
 3. sibling path next to the `groundhog` binary, using
    `std::env::current_exe().parent()`;
 4. `PATH`;

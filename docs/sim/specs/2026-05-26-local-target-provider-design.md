@@ -104,7 +104,7 @@ Implements `TargetProvider`.
   1. Resolve the `groundhog` binary (see Data Flow).
   2. Compute `required_accounts` = max `users` across the manifest's load phases.
   3. Spawn `groundhog node --dev-account-count <required_accounts> --json`,
-     plus optional `--hogd-dev-binary <path>` and `--port <p>` when supplied.
+     plus optional `--hog-devnode-binary <path>` and `--port <p>` when supplied.
   4. Read the child's stdout until the startup JSON line appears, bounded by a
      startup timeout.
   5. Parse `data.rpc_url` and `data.runtime_manifest.path`.
@@ -155,9 +155,9 @@ interaction with the node.
 - **`groundhog` binary:** resolved from a new `hogsim run --groundhog-binary
   <path>` override, else looked up as `groundhog` on `PATH` (per the CLAUDE.md
   `which`-first convention). Absent → clear error naming the override.
-- **`hogd-dev` binary:** sim forwards `--hogd-dev-binary` to the node *only if*
+- **`hog-devnode` binary:** sim forwards `--hog-devnode-binary` to the node *only if*
   `manifest.target.hogd_dev_binary` (or a CLI override) is set; otherwise it
-  lets `groundhog node` resolve it from the existing `GROUNDHOG_HOGD_DEV_BINARY`
+  lets `groundhog node` resolve it from `GROUNDHOG_DEVNODE_BINARY`
   env. Sim does not re-own hogd-dev resolution.
 
 ### Account-count consistency
@@ -179,7 +179,7 @@ acquire(manifest, overrides):
   resolve groundhog binary
   required_accounts = max users across load phases
   spawn: groundhog node --dev-account-count <required_accounts> --json
-         [--hogd-dev-binary X] [--port P]
+         [--hog-devnode-binary X] [--port P]
   read child stdout until startup JSON (bounded by startup timeout)
   parse data.rpc_url, data.runtime_manifest.path
   store child handle in provider state
@@ -221,7 +221,7 @@ every run.
   `--groundhog-binary` override.
 - Child exits before emitting startup JSON, or the startup timeout elapses →
   capture the child's stderr, kill it, return an error with that context (so a
-  bad `--hogd-dev-binary` or protocol skew is diagnosable). Startup timeout has
+  bad `--hog-devnode-binary` or protocol skew is diagnosable). Startup timeout has
   a sane default, overridable via `hogsim run --startup-timeout-secs`.
 - Startup JSON present but unparseable / missing `data.rpc_url` → error citing
   the field, kill the child.
@@ -266,7 +266,7 @@ the full launch behind a real-binary smoke test. No process mocking.
   sample payload; plus error cases (missing field, malformed JSON,
   node-exited-before-JSON).
 - **Argv construction** — assert the `groundhog node` command line:
-  `--dev-account-count <N> --json`, optional `--hogd-dev-binary`, `--port`.
+  `--dev-account-count <N> --json`, optional `--hog-devnode-binary`, `--port`.
 - **Local-provider validation** — rejects `--rpc-url` / `--runtime-manifest`
   overrides (those are outputs for a local target, not inputs); clear error when
   the `groundhog` binary can't be resolved.
@@ -278,7 +278,7 @@ the full launch behind a real-binary smoke test. No process mocking.
 
 ### Gated smoke (ignored unless a hogd-dev binary is provided)
 
-Gate on e.g. `GROUNDHOG_SIM_HOGD_DEV_BINARY`. Launch via the local provider →
+Gate on `GROUNDHOG_DEVNODE_BINARY`. Launch via the local provider →
 run `chain-tip-smoke` against the sim-launched node → tear down → assert the
 node exited and the port is released. Sibling to the existing
 `crates/dev/sim/tests/existing_target_smoke.rs`.

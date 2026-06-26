@@ -29,7 +29,7 @@ performs a raw `groundhog storage` read for the counter's `value` slot.
 For a gateway/bench smoke against the runtime manifest path:
 
 ```bash
-HOG_DEVNODE_BINARY=/path/to/hog-devnode scripts/smoke-runtime-manifest-bench.sh
+GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode scripts/smoke-runtime-manifest-bench.sh
 ```
 
 That smoke starts `groundhog node`, extracts `data.runtime_manifest.path`,
@@ -225,7 +225,7 @@ If `hog-devnode` is not next to the `groundhog` binary or on `PATH`, point
 the runner at the binary:
 
 ```bash
-GROUNDHOG_HOG_DEVNODE_BINARY=/path/to/hog-devnode groundhog test --integration
+GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode groundhog test --integration
 ```
 
 > **Note:** Plain `cargo test` also works for unit tests that

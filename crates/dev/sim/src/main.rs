@@ -66,11 +66,7 @@ struct RunArgs {
     #[arg(long)]
     groundhog_binary: Option<PathBuf>,
     /// Override the hog-devnode binary path for local target runs.
-    #[arg(
-        long = "hog-devnode-binary",
-        alias = "hogd-dev-binary",
-        value_name = "HOG_DEVNODE_BINARY"
-    )]
+    #[arg(long = "hog-devnode-binary", value_name = "GROUNDHOG_DEVNODE_BINARY")]
     hogd_dev_binary: Option<PathBuf>,
     /// Override the hog-devnode x23 intro protocol token for local target runs.
     #[arg(long)]

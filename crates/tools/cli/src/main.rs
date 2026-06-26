@@ -383,7 +383,7 @@ enum Command {
                       backed by a supervised hog-devnode process. The \
                       native_exec/test_ffi prototype backend is no longer \
                       wired into this command.",
-        after_help = "Protocol override:\n  --hogd-protocol hogp/<hash> overrides the x23 intro token used for local\n  hog-devnode handshakes. This is useful when a local hog-devnode build is ahead of\n  the published Rust protocol crates; generated XDR clients still fail if the\n  wire shape is actually incompatible.\n\nLogging:\n  By default, groundhog node prints its own lifecycle/status output and keeps forwarded\n  hog-devnode info logs quiet. Use --verbose for the normal debugging view, or RUST_LOG\n  for exact tracing filters. --verbose is also honored with --json; logs stay on stderr.\n\nEnvironment:\n  GROUNDHOG_HOG_DEVNODE_BINARY  Default hog-devnode binary path when --hog-devnode-binary is omitted\n  GROUNDHOG_HOGD_DEV_BINARY     Legacy alias for GROUNDHOG_HOG_DEVNODE_BINARY\n  RUST_LOG                      Overrides --verbose and controls supervisor/forwarded logs\n\nChild log bridge:\n  hog-devnode readiness is read from stdout. hog-devnode logs are requested as JSON on stderr,\n  parsed by node-supervisor, and re-emitted through tracing with hogd_timestamp_ms,\n  hogd_target, hogd_file, hogd_line, and hogd_fields metadata."
+        after_help = "Protocol override:\n  --hogd-protocol hogp/<hash> overrides the x23 intro token used for local\n  hog-devnode handshakes. This is useful when a local hog-devnode build is ahead of\n  the published Rust protocol crates; generated XDR clients still fail if the\n  wire shape is actually incompatible.\n\nLogging:\n  By default, groundhog node prints its own lifecycle/status output and keeps forwarded\n  hog-devnode info logs quiet. Use --verbose for the normal debugging view, or RUST_LOG\n  for exact tracing filters. --verbose is also honored with --json; logs stay on stderr.\n\nEnvironment:\n  GROUNDHOG_DEVNODE_BINARY  Default hog-devnode binary path when --hog-devnode-binary is omitted\n  RUST_LOG                  Overrides --verbose and controls supervisor/forwarded logs\n\nChild log bridge:\n  hog-devnode readiness is read from stdout. hog-devnode logs are requested as JSON on stderr,\n  parsed by node-supervisor, and re-emitted through tracing with hogd_timestamp_ms,\n  hogd_target, hogd_file, hogd_line, and hogd_fields metadata."
     )]
     Node {
         /// Port to listen on
@@ -396,11 +396,7 @@ enum Command {
         #[arg(long)]
         dev_account_count: Option<usize>,
         /// Explicit hog-devnode binary path
-        #[arg(
-            long = "hog-devnode-binary",
-            alias = "hogd-dev-binary",
-            value_name = "HOG_DEVNODE_BINARY"
-        )]
+        #[arg(long = "hog-devnode-binary", value_name = "GROUNDHOG_DEVNODE_BINARY")]
         hogd_dev_binary: Option<std::path::PathBuf>,
         /// Override hog-devnode x23 intro protocol token
         #[arg(long)]

@@ -25,7 +25,7 @@ Use it for local benchmark runs:
 Run the end-to-end local benchmark smoke:
 
 ```bash
-HOG_DEVNODE_BINARY=/path/to/hog-devnode scripts/smoke-runtime-manifest-bench.sh
+GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode scripts/smoke-runtime-manifest-bench.sh
 ```
 
 If the local `hog-devnode` binary advertises a newer `hogp/<hash>` than the Rust
@@ -50,17 +50,17 @@ Useful knobs:
 NODE_STARTUP_TIMEOUT_SECS=90 \
 NODE_VERBOSE=1 \
 BENCH_RATE=100 BENCH_DURATION=30 BENCH_ACCOUNTS=10 \
-  HOG_DEVNODE_BINARY=/path/to/hog-devnode \
+  GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode \
   scripts/smoke-runtime-manifest-bench.sh
 ```
 
 Named benchmark scenarios live in the same runner:
 
 ```bash
-BENCH_SCENARIO=gateway-baseline HOG_DEVNODE_BINARY=/path/to/hog-devnode \
+BENCH_SCENARIO=gateway-baseline GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode \
   scripts/smoke-runtime-manifest-bench.sh
 
-BENCH_SCENARIO=submit-ramp HOG_DEVNODE_BINARY=/path/to/hog-devnode \
+BENCH_SCENARIO=submit-ramp GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode \
   scripts/smoke-runtime-manifest-bench.sh
 ```
 

@@ -6,8 +6,7 @@
 # manifest, then runs a named groundhog-bench scenario.
 #
 # Optional environment:
-#   HOG_DEVNODE_BINARY=/path/to/hog-devnode
-#   HOGD_DEV_BINARY=/path/to/hogd-dev  # legacy
+#   GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode
 #   HOGD_PROTOCOL_OVERRIDE=hogp/<hash>  # intro token only; XDR still validates shape
 #   NODE_STARTUP_TIMEOUT_SECS=60
 #   NODE_VERBOSE=1
@@ -141,12 +140,8 @@ PY
 }
 
 find_hogd_dev_binary() {
-    if [[ -n "${HOG_DEVNODE_BINARY:-}" ]]; then
-        printf '%s\n' "$HOG_DEVNODE_BINARY"
-        return
-    fi
-    if [[ -n "${HOGD_DEV_BINARY:-}" ]]; then
-        printf '%s\n' "$HOGD_DEV_BINARY"
+    if [[ -n "${GROUNDHOG_DEVNODE_BINARY:-}" ]]; then
+        printf '%s\n' "$GROUNDHOG_DEVNODE_BINARY"
         return
     fi
 
@@ -167,7 +162,7 @@ find_hogd_dev_binary() {
         fi
     done
 
-    die "set HOG_DEVNODE_BINARY=/path/to/hog-devnode"
+    die "set GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode"
 }
 
 detect_hogd_protocol() {
@@ -310,9 +305,9 @@ log "Building CLI, gateway, and bench"
 cargo build -p groundhog-cli -p groundhog-json-rpc-gateway -p groundhog-bench \
     --manifest-path "$REPO_ROOT/Cargo.toml"
 
-HOGD_DEV_BINARY="$(find_hogd_dev_binary)"
-[[ -x "$HOGD_DEV_BINARY" ]] || die "hog-devnode binary is not executable: $HOGD_DEV_BINARY"
-HOGD_PROTOCOL="$(detect_hogd_protocol "$HOGD_DEV_BINARY")"
+DEVNODE_BINARY="$(find_hogd_dev_binary)"
+[[ -x "$DEVNODE_BINARY" ]] || die "hog-devnode binary is not executable: $DEVNODE_BINARY"
+HOGD_PROTOCOL="$(detect_hogd_protocol "$DEVNODE_BINARY")"
 
 WORK="$(mktemp -d)"
 NODE_PID=""
@@ -359,7 +354,7 @@ NODE_ARGS=(
     --startup-timeout-secs
     "$NODE_STARTUP_TIMEOUT_SECS"
     --hog-devnode-binary
-    "$HOGD_DEV_BINARY"
+    "$DEVNODE_BINARY"
 )
 if [[ -n "$HOGD_PROTOCOL" ]]; then
     NODE_ARGS+=(--hogd-protocol "$HOGD_PROTOCOL")

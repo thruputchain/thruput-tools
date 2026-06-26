@@ -81,7 +81,7 @@ Initial acquire and restart use the same launch helper:
 ```
 launch_local_node(config, port):
   spawn groundhog node --dev-account-count N --json
-       [--hogd-dev-binary X] --port P
+       [--hog-devnode-binary X] --port P
   read startup JSON with timeout
   parse data.rpc_url and data.runtime_manifest.path
   return child + startup
@@ -239,7 +239,7 @@ Unit tests should cover:
 Process-level smoke:
 
 - Add `examples/sim/local-restart-chain-tip-smoke.json`.
-- Add ignored local smoke coverage gated by `GROUNDHOG_SIM_HOGD_DEV_BINARY`.
+- Add ignored local smoke coverage gated by `GROUNDHOG_DEVNODE_BINARY`.
 - The smoke runs one local restart and verifies:
   - run passes;
   - `result.json` contains completed/recovered restart chaos;

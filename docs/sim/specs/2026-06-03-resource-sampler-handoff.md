@@ -287,7 +287,7 @@ Verify:
 - [ ] Local smoke on a matching `hogd-dev`:
 
 ```bash
-GROUNDHOG_SIM_HOGD_DEV_BINARY=/path/to/hogd-dev \
+GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode \
 GROUNDHOG_SIM_GROUNDHOG_BINARY=/path/to/groundhog \
 GROUNDHOG_SIM_HOGD_PROTOCOL=hogp/<token-if-needed> \
 cargo test -p groundhog-sim --test local_target_smoke -- --ignored --test-threads=1

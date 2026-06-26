@@ -1,6 +1,6 @@
 //! End-to-end tests for the Groundhog JSON-RPC API.
 //!
-//! These tests connect to a running RPC server (hogd-dev local node or gateway).
+//! These tests connect to a running RPC server (hog-devnode local node or gateway).
 //! Set `RPC_URL` env var to override the default (http://127.0.0.1:9545).
 //!
 //! Start a local node first:
@@ -43,7 +43,7 @@ fn zero_address() -> ContractAddress {
 }
 
 #[tokio::test]
-#[ignore = "requires running hogd-dev local node or gateway"]
+#[ignore = "requires running hog-devnode local node or gateway"]
 async fn chain_tip_returns_valid_response() {
     let c = client();
     let tip = c.chain_tip().await.expect("chainTip should succeed");
@@ -58,7 +58,7 @@ async fn chain_tip_returns_valid_response() {
 }
 
 #[tokio::test]
-#[ignore = "requires running hogd-dev local node or gateway"]
+#[ignore = "requires running hog-devnode local node or gateway"]
 async fn unknown_tx_returns_unknown_status() {
     let c = client();
     let status = c
@@ -73,7 +73,7 @@ async fn unknown_tx_returns_unknown_status() {
 }
 
 #[tokio::test]
-#[ignore = "requires running hogd-dev local node or gateway"]
+#[ignore = "requires running hog-devnode local node or gateway"]
 async fn unknown_tx_receipt_is_none() {
     let c = client();
     let receipt = c
@@ -84,7 +84,7 @@ async fn unknown_tx_receipt_is_none() {
 }
 
 #[tokio::test]
-#[ignore = "requires running hogd-dev local node or gateway"]
+#[ignore = "requires running hog-devnode local node or gateway"]
 async fn get_storage_at_zero_probe_returns_well_formed_read() {
     let c = client();
     let read = c
@@ -112,7 +112,7 @@ async fn get_storage_at_zero_probe_returns_well_formed_read() {
 }
 
 #[tokio::test]
-#[ignore = "requires running hogd-dev local node or gateway"]
+#[ignore = "requires running hog-devnode local node or gateway"]
 async fn get_storage_at_short_key_is_rejected() {
     let c = client();
     let err = c
@@ -128,7 +128,7 @@ async fn get_storage_at_short_key_is_rejected() {
 }
 
 #[tokio::test]
-#[ignore = "requires running hogd-dev local node or gateway"]
+#[ignore = "requires running hog-devnode local node or gateway"]
 async fn invalid_hex_is_rejected() {
     let c = client();
     let result = c.send_raw_transaction("not-valid-hex".to_string()).await;
@@ -136,7 +136,7 @@ async fn invalid_hex_is_rejected() {
 }
 
 #[tokio::test]
-#[ignore = "requires running hogd-dev local node or gateway"]
+#[ignore = "requires running hog-devnode local node or gateway"]
 async fn pending_transaction_count_returns_stub_or_value() {
     let c = client();
     // May return NotImplemented (-32052) until a scheduler size RPC exists.

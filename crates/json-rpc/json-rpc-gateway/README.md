@@ -76,7 +76,7 @@ are rejected.
 For repeatable local runs, use the scenario runner:
 
 ```bash
-BENCH_SCENARIO=gateway-baseline HOG_DEVNODE_BINARY=/path/to/hog-devnode \
+BENCH_SCENARIO=gateway-baseline GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode \
   scripts/smoke-runtime-manifest-bench.sh
 ```
 
