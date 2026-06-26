@@ -9,8 +9,10 @@
 #
 # For the broader scenario ladder, run scripts/smoke-sim-scenarios.sh.
 #
-# Optional environment:
+# Required environment:
 #   GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode
+#
+# Optional environment:
 #   GROUNDHOG_BINARY=/path/to/groundhog
 #   HOGD_PROTOCOL_OVERRIDE=hogp/<hash>
 #   KEEP_WORKDIR=1
@@ -162,23 +164,6 @@ find_hogd_dev_binary() {
         expand_user_path "$GROUNDHOG_DEVNODE_BINARY"
         return
     fi
-
-    for sibling in \
-        "$REPO_ROOT/../hogd/build/hogd/hogd_dev/hog-devnode" \
-        "$REPO_ROOT/../hogd/build/hogd/hogd_dev/hogd-dev"
-    do
-        if [[ -x "$sibling" ]]; then
-            printf '%s\n' "$sibling"
-            return
-        fi
-    done
-
-    for binary in hog-devnode hogd-dev; do
-        if command -v "$binary" >/dev/null 2>&1; then
-            command -v "$binary"
-            return
-        fi
-    done
 
     die "set GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode"
 }

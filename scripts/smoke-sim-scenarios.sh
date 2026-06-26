@@ -5,8 +5,10 @@
 # example against a real hog-devnode binary. The longer local soak is opt-in with
 # GROUNDHOG_SIM_RUN_SOAKS=1.
 #
-# Optional environment:
+# Required environment:
 #   GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode
+#
+# Optional environment:
 #   GROUNDHOG_BINARY=/path/to/groundhog
 #   GROUNDHOG_EXAMPLES_ROOT=/path/to/groundhog-examples
 #   HOGD_PROTOCOL_OVERRIDE=hogp/<hash>
@@ -160,23 +162,6 @@ find_hogd_dev_binary() {
         expand_user_path "$GROUNDHOG_DEVNODE_BINARY"
         return
     fi
-
-    for sibling in \
-        "$REPO_ROOT/../hogd/build/hogd/hogd_dev/hog-devnode" \
-        "$REPO_ROOT/../hogd/build/hogd/hogd_dev/hogd-dev"
-    do
-        if [[ -x "$sibling" ]]; then
-            printf '%s\n' "$sibling"
-            return
-        fi
-    done
-
-    for binary in hog-devnode hogd-dev; do
-        if command -v "$binary" >/dev/null 2>&1; then
-            command -v "$binary"
-            return
-        fi
-    done
 
     die "set GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode"
 }
