@@ -5,8 +5,10 @@
 # path from the CLI startup JSON, starts a standalone gateway from the same
 # manifest, then runs a named groundhog-bench scenario.
 #
-# Optional environment:
+# Required environment:
 #   GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode
+#
+# Optional environment:
 #   HOGD_PROTOCOL_OVERRIDE=hogp/<hash>  # intro token only; XDR still validates shape
 #   NODE_STARTUP_TIMEOUT_SECS=60
 #   NODE_VERBOSE=1
@@ -144,23 +146,6 @@ find_hogd_dev_binary() {
         printf '%s\n' "$GROUNDHOG_DEVNODE_BINARY"
         return
     fi
-
-    for sibling in \
-        "$REPO_ROOT/../hogd/build/hogd/hogd_dev/hog-devnode" \
-        "$REPO_ROOT/../hogd/build/hogd/hogd_dev/hogd-dev"
-    do
-        if [[ -x "$sibling" ]]; then
-            printf '%s\n' "$sibling"
-            return
-        fi
-    done
-
-    for binary in hog-devnode hogd-dev; do
-        if command -v "$binary" >/dev/null 2>&1; then
-            command -v "$binary"
-            return
-        fi
-    done
 
     die "set GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode"
 }
@@ -301,13 +286,13 @@ check_process_logs() {
     done
 }
 
-log "Building CLI, gateway, and bench"
-cargo build -p groundhog-cli -p groundhog-json-rpc-gateway -p groundhog-bench \
-    --manifest-path "$REPO_ROOT/Cargo.toml"
-
 DEVNODE_BINARY="$(find_hogd_dev_binary)"
 [[ -x "$DEVNODE_BINARY" ]] || die "hog-devnode binary is not executable: $DEVNODE_BINARY"
 HOGD_PROTOCOL="$(detect_hogd_protocol "$DEVNODE_BINARY")"
+
+log "Building CLI, gateway, and bench"
+cargo build -p groundhog-cli -p groundhog-json-rpc-gateway -p groundhog-bench \
+    --manifest-path "$REPO_ROOT/Cargo.toml"
 
 WORK="$(mktemp -d)"
 NODE_PID=""

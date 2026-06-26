@@ -115,7 +115,7 @@ default = ["dev"]
 dev = ["sdk/dev"]
 
 [dependencies]
-sdk = { version = "0.14.7", registry = "groundhog", features = ["storage"] }
+sdk = { version = "0.15.4", registry = "groundhog" }
 
 [dev-dependencies]
 my-contract = { path = ".", features = ["dev"] }

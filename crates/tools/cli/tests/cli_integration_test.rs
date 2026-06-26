@@ -3164,6 +3164,7 @@ fn call_dry_run_uses_manifest_dev_wallet_address_without_dev_rpc() {
         .expect("bug: dry-run output includes signed tx");
 
     assert_eq!(signed_tx_invoked_address(signed_tx), advertised_wallet);
+    assert_eq!(signed_tx_entrypoint(signed_tx), "0x646f416374696f6e");
 }
 
 #[test]
@@ -3271,6 +3272,130 @@ fn call_live_human_warns_when_transaction_detail_fails() {
     assert!(stderr.contains("Call succeeded"));
     assert!(stderr.contains("warning: transaction detail unavailable"));
     assert!(stderr.contains("detail backend unavailable"));
+}
+
+#[test]
+fn call_live_json_includes_diagnostics_for_failed_local_dev_call() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let advertised_wallet = advertised_dev_wallet_address(0);
+    let manifest_path = write_runtime_manifest(tmp.path(), 0, &advertised_wallet, None);
+    let (rpc_url, rpc_server) = spawn_transaction_rpc(
+        42,
+        sample_deterministic_error_call_receipt(42),
+        DevDetailRpcResponse::MethodNotFound,
+    );
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            manifest_path.display()
+        ),
+    )
+    .unwrap();
+
+    let contract = format!("0x{}", "11".repeat(32));
+    let output = groundhog()
+        .args(["--json", "call", &contract, "0x0123456789abcdef", "0x0102"])
+        .current_dir(&project)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["data"]["status"]["result"], "deterministicError");
+    assert_eq!(
+        stdout["data"]["diagnostics"]["wallet"]["address"],
+        advertised_wallet
+    );
+    assert_eq!(
+        stdout["data"]["diagnostics"]["wallet"]["entrypoint_id"],
+        "0x646f416374696f6e"
+    );
+    assert_eq!(
+        stdout["data"]["diagnostics"]["wallet"]["entrypoint_source"],
+        "runtime_manifest"
+    );
+    assert_eq!(
+        stdout["data"]["diagnostics"]["target"]["entrypoint_id"],
+        "0x0123456789abcdef"
+    );
+    assert_eq!(
+        stdout["data"]["diagnostics"]["transaction_detail"]["rpc_method"],
+        "groundhog_dev_getTransactionDetail"
+    );
+    assert_eq!(
+        stdout["data"]["diagnostics"]["transaction_detail"]["available"],
+        false
+    );
+}
+
+#[test]
+fn call_live_json_marks_legacy_default_wallet_entrypoint_without_manifest() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let (rpc_url, rpc_server) = spawn_transaction_rpc(
+        42,
+        sample_deterministic_error_call_receipt(42),
+        DevDetailRpcResponse::MethodNotFound,
+    );
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
+    )
+    .unwrap();
+
+    let generate = groundhog()
+        .args(["keys", "generate", "alice"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    assert!(
+        generate.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&generate.stderr)
+    );
+
+    let contract = format!("0x{}", "11".repeat(32));
+    let output = groundhog()
+        .args(["--json", "call", &contract, "0x0123456789abcdef", "0x0102"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["data"]["status"]["result"], "deterministicError");
+    assert_eq!(
+        stdout["data"]["diagnostics"]["wallet"]["entrypoint_id"],
+        "0x19846d750fad81d6"
+    );
+    assert_eq!(
+        stdout["data"]["diagnostics"]["wallet"]["entrypoint_source"],
+        "legacy_default"
+    );
 }
 
 #[test]
@@ -4061,6 +4186,18 @@ fn sample_call_receipt(height: i64) -> serde_json::Value {
             "data": "0x1234",
         }],
         "returnData": "0x0102",
+    })
+}
+
+fn sample_deterministic_error_call_receipt(height: i64) -> serde_json::Value {
+    serde_json::json!({
+        "txHash": mock_tx_hash(),
+        "height": height,
+        "status": {
+            "result": "deterministicError",
+            "kind": "unknown",
+        },
+        "events": [],
     })
 }
 

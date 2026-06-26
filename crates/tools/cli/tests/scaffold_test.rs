@@ -23,7 +23,7 @@ fn scaffold_counter_creates_expected_files() {
     assert!(cargo.contains(r#"name = "my-counter""#));
     assert!(cargo.contains("registry = \"groundhog\""));
     assert!(!cargo.contains("sdk/spec"));
-    assert!(cargo.contains(r#"sdk = { version = "0.15.4""#));
+    assert!(cargo.contains(r#"sdk = { version = "0.15.4", registry = "groundhog" }"#));
     assert!(!cargo.contains(r#"features = ["storage"]"#));
     // RV32 bin wrapper target: the bin name must be the snake-case package
     // name because `groundhog build --target rv32` looks for the ELF at
@@ -58,7 +58,7 @@ fn scaffold_counter_creates_expected_files() {
     assert!(imp.contains("pub struct Counter"));
     assert!(imp.contains("#[contract_exception]"));
     assert!(!imp.contains("#[contract_error]"));
-    // Under sdk 0.15.0's declaration-based event inclusion, the event only
+    // Under sdk 0.15.x's declaration-based event inclusion, the event only
     // lands in the contract spec when declared via emits(...).
     assert!(imp.contains("#[contract(throws = CounterError, emits(PingEvent))]"));
 

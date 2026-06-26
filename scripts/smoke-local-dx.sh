@@ -4,8 +4,10 @@
 # Exercises the user-facing CLI path against a real hog-devnode binary:
 #   groundhog new -> build -> node -> deploy -> call -> view -> storage
 #
-# Optional environment:
+# Required environment:
 #   GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode
+#
+# Optional environment:
 #   HOGD_PROTOCOL_OVERRIDE=hogp/<hash>  # intro token only; XDR still validates shape
 #   SMOKE_STANDALONE_GATEWAY=1  # route view/storage checks through hog-gateway
 #   SMOKE_SDK_PATH=/path/to/sdk_rs/crates/sdk  # test scaffold against local SDK
@@ -69,9 +71,29 @@ counter_value_key() {
     python3 - <<'PY'
 import hashlib
 
-# #[sdk::storage] assigns struct fields by sequence index. Counter.value is
-# the first field, and CXS encodes u64 index 0 as the single byte 0x00.
-print("0x" + hashlib.sha256(bytes([0])).hexdigest())
+def cxs_u32(value):
+    if value <= 62:
+        return bytes([value])
+    if value <= 0xFF:
+        return bytes([0x3F, value])
+    if value <= 0xFFFF:
+        return bytes([0x7F]) + value.to_bytes(2, "little")
+    return bytes([0xBF]) + value.to_bytes(4, "little")
+
+def cxs_string(value):
+    raw = value.encode("utf-8")
+    return cxs_u32(len(raw)) + raw
+
+def child(preimage, value_bytes):
+    return preimage + cxs_u32(len(value_bytes)) + value_bytes
+
+# sdk::storage roots contract state under the storage struct's domain, then
+# assigns fields by u32 slot. Counter.value is the first field:
+#   Keypath::root().child("Counter").child(&0u32).generate_key()
+preimage = b""
+preimage = child(preimage, cxs_string("Counter"))
+preimage = child(preimage, cxs_u32(0))
+print("0x" + hashlib.sha256(preimage).hexdigest())
 PY
 }
 
@@ -143,23 +165,6 @@ find_hogd_dev_binary() {
         printf '%s\n' "$GROUNDHOG_DEVNODE_BINARY"
         return
     fi
-
-    for sibling in \
-        "$REPO_ROOT/../hogd/build/hogd/hogd_dev/hog-devnode" \
-        "$REPO_ROOT/../hogd/build/hogd/hogd_dev/hogd-dev"
-    do
-        if [[ -x "$sibling" ]]; then
-            printf '%s\n' "$sibling"
-            return
-        fi
-    done
-
-    for binary in hog-devnode hogd-dev; do
-        if command -v "$binary" >/dev/null 2>&1; then
-            command -v "$binary"
-            return
-        fi
-    done
 
     die "set GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode"
 }
@@ -244,7 +249,7 @@ import sys
 
 manifest = pathlib.Path(sys.argv[1])
 sdk_path = pathlib.Path(sys.argv[2]).resolve()
-replacement = f'sdk = {{ path = {json.dumps(str(sdk_path))}, features = ["storage"] }}'
+replacement = f'sdk = {{ path = {json.dumps(str(sdk_path))} }}'
 lines = []
 replaced = False
 for line in manifest.read_text(encoding="utf-8").splitlines():
@@ -294,7 +299,19 @@ assert_call_succeeded() {
     local payload="$2"
     local status_summary
     status_summary="$(json_field data.status_summary "$payload")"
-    [[ "$status_summary" == "succeeded" ]] || die "$label status was $status_summary"
+    if [[ "$status_summary" == "succeeded" ]]; then
+        return
+    fi
+
+    local tx_hash wallet_entrypoint wallet_entrypoint_source target_entrypoint detail_available
+    tx_hash="$(json_field data.tx_hash "$payload")"
+    wallet_entrypoint="$(json_field data.diagnostics.wallet.entrypoint_id "$payload")"
+    wallet_entrypoint_source="$(json_field data.diagnostics.wallet.entrypoint_source "$payload")"
+    target_entrypoint="$(json_field data.diagnostics.target.entrypoint_id "$payload")"
+    detail_available="$(json_field data.diagnostics.transaction_detail.available "$payload")"
+    die "$label status was $status_summary (tx=$tx_hash wallet_entrypoint=$wallet_entrypoint \
+wallet_entrypoint_source=$wallet_entrypoint_source target_entrypoint=$target_entrypoint \
+transaction_detail_available=$detail_available)"
 }
 
 collect_descendants() {
@@ -306,14 +323,6 @@ collect_descendants() {
     done
 }
 
-if [[ "${SMOKE_STANDALONE_GATEWAY:-0}" == "1" ]]; then
-    log "Building CLI and standalone gateway"
-    cargo build -p groundhog-cli -p groundhog-json-rpc-gateway --manifest-path "$REPO_ROOT/Cargo.toml"
-else
-    log "Building CLI"
-    cargo build -p groundhog-cli --manifest-path "$REPO_ROOT/Cargo.toml"
-fi
-
 DEVNODE_BINARY="$(find_hogd_dev_binary)"
 [[ -x "$DEVNODE_BINARY" ]] || die "hog-devnode binary is not executable: $DEVNODE_BINARY"
 
@@ -322,6 +331,14 @@ NODE_ARGS=(--json node --port 0 --hog-devnode-binary "$DEVNODE_BINARY")
 if [[ -n "$HOGD_PROTOCOL" ]]; then
     NODE_ARGS+=(--hogd-protocol "$HOGD_PROTOCOL")
     log "Using hogd protocol override: $HOGD_PROTOCOL"
+fi
+
+if [[ "${SMOKE_STANDALONE_GATEWAY:-0}" == "1" ]]; then
+    log "Building CLI and standalone gateway"
+    cargo build -p groundhog-cli -p groundhog-json-rpc-gateway --manifest-path "$REPO_ROOT/Cargo.toml"
+else
+    log "Building CLI"
+    cargo build -p groundhog-cli --manifest-path "$REPO_ROOT/Cargo.toml"
 fi
 
 WORK="$(mktemp -d)"
