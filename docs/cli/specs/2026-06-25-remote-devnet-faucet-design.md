@@ -180,8 +180,18 @@ A new small Rust service (own crate under `crates/`, reusing
 `groundhog-signing` + `json-rpc-client`) holding the genesis-funded
 faucet/sponsor wallet key (loaded from AWS Secrets Manager, never an argv):
 
+- `POST /v1/createWallet/prepare { ownerPubkey, deployNonce,
+  walletContractHash, walletAddress, networkId, genesisHash, clientNonce,
+  ownerSig }` → validates and reserves a wallet-create attempt without
+  submitting a transaction. This endpoint verifies the same signed
+  wallet-create intent as `/v1/createWallet`, checks the `createWallet` quotas,
+  address derivation, `networkId`, `genesisHash`, and dev-wallet hash, and
+  returns `{ walletAddress, prefundRawAmount, preparedUntil }`. The CLI calls
+  this before spending the pre-fund airdrop so an exhausted create quota cannot
+  burn faucet funds for undeployable wallet addresses. It is idempotent on
+  `(networkId, genesisHash, ownerPubkey, clientNonce)`.
 - `POST /v1/createWallet { ownerPubkey, deployNonce, walletContractHash,
-  walletAddress, genesisHash, clientNonce, ownerSig }` → sponsored
+  walletAddress, networkId, genesisHash, clientNonce, ownerSig }` → sponsored
   `create_wallet` via the faucet's wallet → waits for receipt →
   `{ walletAddress, txHash, height }`.
   - **Deploy/init only:** `createWallet` does not fund the wallet. The CLI/app
@@ -195,18 +205,22 @@ faucet/sponsor wallet key (loaded from AWS Secrets Manager, never an argv):
     deployNonce, walletContractHash)` or `walletContractHash` does not match the
     live descriptor's dev-wallet `contentHash`.
   - **Proof-of-possession required:** `ownerSig` is an ed25519 signature by
-    `ownerPubkey` over the canonical request (method + ownerPubkey +
+    `ownerPubkey` over the canonical wallet-create intent (ownerPubkey +
     clientNonce + networkId + genesisHash + walletCreateSponsorAddress +
-    deployNonce + walletContractHash + walletAddress).
+    deployNonce + walletContractHash + walletAddress). `networkId` and
+    `genesisHash` are explicit request fields; the faucet rejects mismatches
+    against the descriptor it is serving instead of inferring either value.
     Without it anyone could spend rate limit creating wallets for keys they
     don't hold. The CLI signs this with the owner key it already has.
-  - **Idempotent:** `(genesisHash, ownerPubkey, clientNonce)` keys the request
-    so retries return the same wallet instead of deploying a second one.
-- `POST /v1/airdrop { address, rawAmount, genesisHash, clientNonce }` →
-  `do_action` HOG
+  - **Idempotent:** `(networkId, genesisHash, ownerPubkey, clientNonce)` keys
+    the request so retries return the same wallet instead of deploying a second
+    one.
+- `POST /v1/airdrop { address, rawAmount, networkId, genesisHash,
+  clientNonce }` → `do_action` HOG
   transfer (`0x63285b3523f9dc3f` on token `0x…01`) → `{ txHash, height }`.
   `rawAmount` is a decimal string in base HOG units; the CLI converts
-  user-facing HOG decimals. Idempotent on `(genesisHash, address, clientNonce)`.
+  user-facing HOG decimals. Idempotent on `(networkId, genesisHash, address,
+  clientNonce)`.
 - `GET /v1/network` → the public network descriptor (§2), with `ETag`.
 - `createWallet`: per-IP and per-pubkey rate limiting keyed on `ownerPubkey`.
   `airdrop`: per-IP and per-address rate limiting keyed on recipient `address`.
@@ -251,20 +265,34 @@ endpoint) and caches it.
 - **`wallet create`** → CLI revalidates the descriptor, loads the dev-wallet
   artifact/hash, chooses a deploy nonce, and derives the deterministic
   `walletAddress` from `walletCreateSponsorAddress`, the deploy nonce, and the
-  dev-wallet `contentHash`. It then funds that future address first:
-  - on devnet, `POST /v1/airdrop { address: walletAddress, rawAmount:
-    walletCreatePrefundRawAmount, genesisHash, clientNonce }`;
+  dev-wallet `contentHash`. Before any faucet request, it persists an
+  in-progress wallet-create attempt keyed by `(profile, key, walletName,
+  networkId, genesisHash)` with `deployNonce`, `walletAddress`,
+  `walletContractHash`, `airdropClientNonce`, and `createWalletClientNonce`.
+  Retries must reuse that record so interruption after a successful pre-fund
+  replays the same idempotent requests instead of generating a second airdrop.
+  The record is cleared after the wallet is saved, and ignored if `genesisHash`
+  or `walletContractHash` changes.
+
+  It then prepares and funds that future address:
+  - on devnet, `POST /v1/createWallet/prepare { ownerPubkey, deployNonce,
+    walletContractHash, walletAddress, networkId, genesisHash, clientNonce:
+    createWalletClientNonce, ownerSig }`, followed by
+    `POST /v1/airdrop { address: walletAddress, rawAmount:
+    walletCreatePrefundRawAmount, networkId, genesisHash, clientNonce:
+    airdropClientNonce }`;
   - on mainnet/testnet without a faucet, surface the same future address and wait
     for an exchange/bridge/user transfer before continuing.
 
-  After funding, the CLI signs proof-of-possession and `POST /v1/createWallet
-  { ownerPubkey, deployNonce, walletContractHash, walletAddress, genesisHash,
-  clientNonce, ownerSig }` to trigger the sponsored deploy/init transaction; it
-  saves the returned address under the key's wallet name in `[profile].wallets`
-  and marks it the key's **active wallet**. The CLI still does not hold the
-  sponsor key on remote networks, but it owns the wallet-create orchestration.
-- **`airdrop`** → `POST /v1/airdrop { address, rawAmount, genesisHash,
-  clientNonce }`.
+  After funding, the CLI reuses the same proof-of-possession and
+  `POST /v1/createWallet { ownerPubkey, deployNonce, walletContractHash,
+  walletAddress, networkId, genesisHash, clientNonce: createWalletClientNonce,
+  ownerSig }` to trigger the sponsored deploy/init transaction; it saves the
+  returned address under the key's wallet name in `[profile].wallets` and marks
+  it the key's **active wallet**. The CLI still does not hold the sponsor key on
+  remote networks, but it owns the wallet-create orchestration.
+- **`airdrop`** → `POST /v1/airdrop { address, rawAmount, networkId,
+  genesisHash, clientNonce }`.
   Recipient resolution reuses the existing saved-wallet / `0x…` logic in
   `resolve_airdrop_recipient`; CLI `--amount` remains a HOG decimal and is
   converted to `rawAmount` before submission.
@@ -284,13 +312,13 @@ endpoint) and caches it.
 because the local seed is available; the faucet key is not on the client, so
 remote faucet-backed `wallet create` / `airdrop` cannot produce a signed tx.
 Remote dry-run instead prints the **faucet request plan** it would send (target
-endpoint, resolved owner pubkey / recipient / amount, and idempotency key)
-clearly marked "not submitted; faucet signs server-side." Dry-run must never
-produce a live reusable `ownerSig`; it signs a distinct dry-run domain that the
-faucet rejects for live submission. A faucet preflight/validate endpoint can
-later turn this into a real server-side check. `deploy` / `call` dry-run is
-unaffected — those are signed by the user's key and still produce a signed tx on
-any network.
+endpoints, resolved owner pubkey / recipient / amount, persisted attempt key,
+and idempotency nonces) clearly marked "not submitted; faucet signs
+server-side." Dry-run must never produce a live reusable `ownerSig`; it signs a
+distinct dry-run domain that the faucet rejects for live submission. A future
+non-reserving validate endpoint can turn this into a real server-side check.
+`deploy` / `call` dry-run is unaffected — those are signed by the user's key and
+still produce a signed tx on any network.
 
 ### 6. Security considerations
 
@@ -304,9 +332,13 @@ any network.
   the descriptor, the CLI, argv, or the gateway.
 - `createWallet` requires owner proof-of-possession, so callers can't burn rate
   limit on keys they don't hold. Both `createWallet` and `airdrop` bind
-  `genesisHash` into request validation and idempotency (§3), so retries do not
-  double-create wallets or double-send an airdrop, and a nightly re-genesis
-  cannot replay or return stale pre-reset results.
+  `networkId` and `genesisHash` into request validation and idempotency (§3),
+  so retries do not double-create wallets or double-send an airdrop, and a
+  nightly re-genesis cannot replay or return stale pre-reset results.
+- The wallet-create flow persists its deploy nonce and faucet idempotency
+  nonces before the pre-fund airdrop. A crash or rate-limit response after
+  funding resumes the same attempt instead of deriving a new address or spending
+  a second airdrop.
 - Faucet abuse is otherwise bounded by rate limits and per-request caps; devnet
   is disposable, so the blast radius is a re-genesis.
 - Cached descriptors are keyed by `networkId`; a `genesisHash` mismatch between
@@ -352,7 +384,8 @@ wallet address.
   allocation (supplied pubkeys); chuckd's public-descriptor / sanitization path
   (emit a sanitized descriptor, or leave descriptor serving to the faucet); the
   dev-wallet `create_wallet` no-prefund contract change; the faucet HTTP
-  service (with proof-of-possession + genesis-scoped idempotency); CLI faucet
+  service (with proof-of-possession + network/genesis-scoped idempotency and
+  wallet-create prepare); CLI faucet
   client; ops wiring + key custody; and remote `wallet create` / `airdrop` via
   the faucet. This is the milestone that makes devnet self-serve.
 - **P2 — Pubkey accounts (separate hogd track).** `kPubkeySignature`, the replay
