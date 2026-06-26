@@ -72,8 +72,10 @@ pub struct GatewayContext {
 impl GatewayContext {
     /// Create a new gateway context from configuration.
     ///
-    /// Attempts to connect to scheduler and indexer. If either is
-    /// unreachable, starts in degraded mode (that backend = None).
+    /// Connects to the scheduler and optional read/view backends. Optional
+    /// indexer and `DbGateway` outages degrade to `None`; reachable backends that
+    /// reject or time out during the intro probe fail startup as configuration
+    /// or protocol mismatches.
     ///
     /// TODO: if `config.submission_backend` == `ChuckdCoordinator`,
     /// require `coordinator_address` to be set.
