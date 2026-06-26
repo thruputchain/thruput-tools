@@ -224,6 +224,8 @@ faucet/sponsor wallet key (loaded from AWS Secrets Manager, never an argv):
 - `GET /v1/network` → the public network descriptor (§2), with `ETag`.
 - `createWallet`: per-IP and per-pubkey rate limiting keyed on `ownerPubkey`.
   `airdrop`: per-IP and per-address rate limiting keyed on recipient `address`.
+  Wallet-create pre-fund airdrops are issued only after
+  `/v1/createWallet/prepare` has accepted and reserved the create quota.
   Bounded amounts; structured-JSON errors.
 
 The service is the only component holding the faucet key. It submits through the
