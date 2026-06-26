@@ -281,6 +281,7 @@ pub(crate) fn prepare_deploy_for_rpc_with_manifest(
     let profile = ResolvedProfile {
         name: "integration".into(),
         rpc_url: Some(rpc_url.into()),
+        rpc_url_cli_override: false,
         default_key: Some(key_name.into()),
         runtime_manifest,
         runtime_manifest_cli_override: false,

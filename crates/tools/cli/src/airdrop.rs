@@ -370,6 +370,7 @@ mod tests {
         ResolvedProfile {
             name: "default".into(),
             rpc_url: Some("http://127.0.0.1:9545".into()),
+            rpc_url_cli_override: false,
             default_key: Some("dev-0".into()),
             runtime_manifest: None,
             runtime_manifest_cli_override: false,

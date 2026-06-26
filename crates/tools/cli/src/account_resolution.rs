@@ -270,6 +270,7 @@ mod tests {
         let profile = ResolvedProfile {
             name: "default".into(),
             rpc_url: Some("http://127.0.0.1:1".into()),
+            rpc_url_cli_override: false,
             default_key: Some("alice".into()),
             runtime_manifest: None,
             runtime_manifest_cli_override: false,
@@ -346,6 +347,7 @@ mod tests {
         let profile = ResolvedProfile {
             name: "default".into(),
             rpc_url: None,
+            rpc_url_cli_override: false,
             default_key: Some("dev-0".into()),
             runtime_manifest: Some(manifest_path),
             runtime_manifest_cli_override: false,
@@ -381,6 +383,7 @@ mod tests {
         let profile = ResolvedProfile {
             name: "default".into(),
             rpc_url: None,
+            rpc_url_cli_override: false,
             default_key: Some("dev-0".into()),
             runtime_manifest: None,
             runtime_manifest_cli_override: false,
@@ -452,6 +455,7 @@ mod tests {
         ResolvedProfile {
             name: "default".into(),
             rpc_url: None,
+            rpc_url_cli_override: false,
             default_key: Some("dev-0".into()),
             runtime_manifest: manifest_path,
             runtime_manifest_cli_override: false,

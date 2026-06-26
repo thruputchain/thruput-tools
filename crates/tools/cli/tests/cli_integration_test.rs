@@ -2877,6 +2877,27 @@ fn balance_json_cli_rpc_url_overrides_profile() {
 }
 
 #[test]
+fn balance_json_rejects_invalid_cli_rpc_url_before_rpc() {
+    let address = format!("0x{}", "22".repeat(32));
+    let output = groundhog()
+        .args(["--json", "balance", "--rpc-url", "not-a-url", &address])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(stderr["ok"], false);
+    assert_eq!(stderr["command"], "balance");
+    assert!(
+        stderr["error"]["message"]
+            .as_str()
+            .expect("bug: error message should be string")
+            .contains("--rpc-url must start with http:// or https://")
+    );
+}
+
+#[test]
 fn storage_json_uses_project_local_node_state_with_global_dev_key() {
     let tmp = TempDir::new().unwrap();
     let config_home = tmp.path().join("config-home");
@@ -2901,6 +2922,42 @@ fn storage_json_uses_project_local_node_state_with_global_dev_key() {
         .args(["--json", "storage", &address, &key])
         .current_dir(&project)
         .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["data"]["rpc_url"], rpc_url);
+    assert_eq!(stdout["data"]["block_height"], 12);
+}
+
+#[test]
+fn storage_json_cli_rpc_url_overrides_project_local_node_state() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let address = format!("0x{}", "11".repeat(32));
+    let key = format!("0x{}", "42".repeat(32));
+    let manifest_path =
+        write_runtime_manifest(tmp.path(), 0, &advertised_dev_wallet_address(0), None);
+    let (rpc_url, rpc_server) = spawn_storage_rpc(&address, &key);
+    std::fs::write(
+        project.join("groundhog.toml"),
+        "[profile.default]\ndefault_key = \"dev-0\"\n",
+    )
+    .unwrap();
+    write_local_node_state(&project, "http://127.0.0.1:1", &manifest_path);
+
+    let output = groundhog()
+        .args(["--json", "storage", "--rpc-url", &rpc_url, &address, &key])
+        .current_dir(&project)
         .output()
         .unwrap();
 

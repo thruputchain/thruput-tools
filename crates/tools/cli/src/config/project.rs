@@ -35,6 +35,9 @@ struct ProjectConfigFile {
 pub struct ResolvedProfile {
     pub name: String,
     pub rpc_url: Option<String>,
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub rpc_url_cli_override: bool,
     pub default_key: Option<String>,
     pub runtime_manifest: Option<PathBuf>,
     #[serde(skip)]
@@ -314,6 +317,7 @@ pub fn resolve_profile(start: &Path, explicit: Option<&str>) -> Result<ResolvedP
     Ok(ResolvedProfile {
         name,
         rpc_url: profile.rpc_url,
+        rpc_url_cli_override: false,
         default_key: profile.default_key,
         runtime_manifest: profile.runtime_manifest,
         runtime_manifest_cli_override: false,
@@ -345,7 +349,13 @@ pub fn apply_profile_overrides(
         if rpc_url.is_empty() {
             return Err(CliError::Other("--rpc-url cannot be empty".into()));
         }
+        if !rpc_url.starts_with("http://") && !rpc_url.starts_with("https://") {
+            return Err(CliError::Other(
+                "--rpc-url must start with http:// or https://".into(),
+            ));
+        }
         profile.rpc_url = Some(rpc_url.to_owned());
+        profile.rpc_url_cli_override = true;
     }
 
     if let Some(path) = overrides.runtime_manifest.as_ref() {

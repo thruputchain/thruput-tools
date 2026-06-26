@@ -114,6 +114,7 @@ mod tests {
         let mut profile = ResolvedProfile {
             name: "default".into(),
             rpc_url: None,
+            rpc_url_cli_override: false,
             default_key: None,
             runtime_manifest: None,
             runtime_manifest_cli_override: false,
@@ -135,6 +136,7 @@ mod tests {
         let mut profile = ResolvedProfile {
             name: "default".into(),
             rpc_url: None,
+            rpc_url_cli_override: false,
             default_key: None,
             runtime_manifest: None,
             runtime_manifest_cli_override: false,
@@ -157,6 +159,7 @@ mod tests {
         let profile = ResolvedProfile {
             name: "default".into(),
             rpc_url: None,
+            rpc_url_cli_override: false,
             default_key: None,
             runtime_manifest: None,
             runtime_manifest_cli_override: false,

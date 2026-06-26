@@ -65,6 +65,10 @@ fn configured_runtime_manifest_path(
         return Ok(Some(path));
     }
 
+    if profile.rpc_url_cli_override {
+        return Ok(None);
+    }
+
     if profile_rpc_allows_local_node_state(profile.rpc_url.as_deref()) {
         local_node_state_runtime_manifest_path(profile)
     } else {
@@ -100,6 +104,7 @@ pub(crate) fn apply_local_node_state_for_dev_key(
 ) -> Result<(), CliError> {
     if dev_keys::dev_key_index(key_name).is_none()
         || explicit_runtime_manifest_path_configured(profile)
+        || profile.rpc_url_cli_override
         || !profile_rpc_allows_local_node_state(profile.rpc_url.as_deref())
     {
         return Ok(());
@@ -118,6 +123,7 @@ pub(crate) fn apply_local_node_state_for_local_bootstrap(
     profile: &mut ResolvedProfile,
 ) -> Result<(), CliError> {
     if explicit_runtime_manifest_path_configured(profile)
+        || profile.rpc_url_cli_override
         || !profile_rpc_allows_local_node_state(profile.rpc_url.as_deref())
     {
         return Ok(());
@@ -433,6 +439,7 @@ mod tests {
         let mut profile = ResolvedProfile {
             name: "default".to_string(),
             rpc_url: Some("https://testnet.groundhog.io".to_string()),
+            rpc_url_cli_override: false,
             default_key: Some("dev-0".to_string()),
             runtime_manifest: None,
             runtime_manifest_cli_override: false,
@@ -471,6 +478,7 @@ mod tests {
         let profile = ResolvedProfile {
             name: "default".to_string(),
             rpc_url: None,
+            rpc_url_cli_override: false,
             default_key: Some("dev-0".to_string()),
             runtime_manifest: None,
             runtime_manifest_cli_override: false,
