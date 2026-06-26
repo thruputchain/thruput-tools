@@ -635,10 +635,11 @@ fn groundhog_binary_env() -> String {
 fn first_non_empty_env(keys: &[&str]) -> Option<String> {
     keys.iter().find_map(|key| {
         let value = std::env::var(key).ok()?;
-        if value.trim().is_empty() {
+        let trimmed = value.trim().to_owned();
+        if trimmed.is_empty() {
             None
         } else {
-            Some(value)
+            Some(trimmed)
         }
     })
 }
