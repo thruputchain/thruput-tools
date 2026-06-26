@@ -60,6 +60,7 @@ pub(crate) struct SubmittedDeploy {
 }
 
 /// Deploy a contract to the network.
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     artifact_path: Option<&Path>,
     target: ArtifactKind,
