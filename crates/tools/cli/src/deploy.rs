@@ -17,7 +17,9 @@ use xdr_common::VecM;
 
 use crate::account_resolution::resolve_wallet_address;
 use crate::artifacts::{ArtifactKind, ArtifactOptions, ResolvedArtifact};
-use crate::config::{ResolvedProfile, resolve_default_key, resolve_profile};
+use crate::config::{
+    ProfileOverrides, ResolvedProfile, resolve_default_key, resolve_profile_with_overrides,
+};
 use crate::dev_detail::{fetch_transaction_detail_blocking, print_transaction_detail};
 use crate::keys::load_local_signer;
 use crate::result::CommandResult;
@@ -64,10 +66,11 @@ pub fn run(
     dry_run: bool,
     artifacts: &ArtifactOptions,
     profile: &str,
+    overrides: &ProfileOverrides,
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    let prepared = prepare_deploy(artifact_path, target, artifacts, profile, print)?;
+    let prepared = prepare_deploy(artifact_path, target, artifacts, profile, overrides, print)?;
     if dry_run {
         return print_dry_run(&prepared, cmd, print);
     }
@@ -234,10 +237,11 @@ pub(crate) fn prepare_deploy(
     target: ArtifactKind,
     artifacts: &ArtifactOptions,
     profile: &str,
+    overrides: &ProfileOverrides,
     print: &Print,
 ) -> Result<PreparedDeploy, CliError> {
     let cwd = std::env::current_dir()?;
-    let mut resolved = resolve_profile(&cwd, Some(profile))?;
+    let mut resolved = resolve_profile_with_overrides(&cwd, Some(profile), overrides)?;
 
     // Resolve signing key
     let key_name = resolve_default_key(&cwd, Some(profile))?;
@@ -278,6 +282,7 @@ pub(crate) fn prepare_deploy_for_rpc_with_manifest(
         rpc_url: Some(rpc_url.into()),
         default_key: Some(key_name.into()),
         runtime_manifest,
+        runtime_manifest_cli_override: false,
         contracts: std::collections::BTreeMap::default(),
         wallets: std::collections::BTreeMap::default(),
         source: None,

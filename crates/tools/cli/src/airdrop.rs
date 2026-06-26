@@ -12,7 +12,7 @@ use crate::account_resolution::{
     LocalBootstrapRole, lookup_dev_account_address, resolve_local_bootstrap_account,
 };
 use crate::codec::{format_contract_address, parse_contract_address};
-use crate::config::{ResolvedProfile, resolve_profile};
+use crate::config::{ProfileOverrides, ResolvedProfile, resolve_profile_with_overrides};
 use crate::dev_keys;
 use crate::result::CommandResult;
 use crate::runtime_manifest::{
@@ -49,11 +49,12 @@ pub fn run(
     amount: Option<&str>,
     dry_run: bool,
     profile: &str,
+    overrides: &ProfileOverrides,
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
     let cwd = std::env::current_dir()?;
-    let prepared = prepare_airdrop(&cwd, recipient, amount, profile)?;
+    let prepared = prepare_airdrop(&cwd, recipient, amount, profile, overrides)?;
 
     if dry_run {
         return print_dry_run(&prepared, cmd, print);
@@ -94,8 +95,9 @@ pub(crate) fn prepare_airdrop(
     recipient: &str,
     amount: Option<&str>,
     profile_name: &str,
+    overrides: &ProfileOverrides,
 ) -> Result<PreparedAirdrop, CliError> {
-    let mut profile = resolve_profile(cwd, Some(profile_name))?;
+    let mut profile = resolve_profile_with_overrides(cwd, Some(profile_name), overrides)?;
     apply_local_node_state_for_local_bootstrap(&mut profile)?;
     let rpc_url = profile
         .rpc_url
@@ -370,6 +372,7 @@ mod tests {
             rpc_url: Some("http://127.0.0.1:9545".into()),
             default_key: Some("dev-0".into()),
             runtime_manifest: None,
+            runtime_manifest_cli_override: false,
             contracts: BTreeMap::default(),
             wallets,
             source: None,

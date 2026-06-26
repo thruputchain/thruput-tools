@@ -18,7 +18,9 @@ use crate::codec::{
     CallMetadata, ContractMetadata, MethodMetadata, SpecMethodMetadata, decode_return, encode_args,
     parse_contract_address, spec_string_text,
 };
-use crate::config::{find_project_config, resolve_default_key, resolve_profile};
+use crate::config::{
+    ProfileOverrides, find_project_config, resolve_default_key, resolve_profile_with_overrides,
+};
 use crate::contract_spec::{InterfaceSpec, load_contract_spec, load_registered_interfaces};
 use crate::dev_detail::{fetch_transaction_detail_blocking, print_transaction_detail};
 use crate::keys::load_local_signer;
@@ -60,10 +62,11 @@ pub fn run(
     dry_run: bool,
     artifacts: &ArtifactOptions,
     profile: &str,
+    overrides: &ProfileOverrides,
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    let prepared = prepare_call(contract, method, args, artifacts, profile)?;
+    let prepared = prepare_call(contract, method, args, artifacts, profile, overrides)?;
     if dry_run {
         return print_dry_run(&prepared, cmd, print);
     }
@@ -247,9 +250,10 @@ pub(crate) fn prepare_call(
     args: &[String],
     artifacts: &ArtifactOptions,
     profile: &str,
+    overrides: &ProfileOverrides,
 ) -> Result<PreparedCall, CliError> {
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
-    prepare_call_with_runtime(contract, method, args, artifacts, profile, &rt)
+    prepare_call_with_runtime(contract, method, args, artifacts, profile, overrides, &rt)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -259,10 +263,11 @@ fn prepare_call_with_runtime(
     args: &[String],
     artifacts: &ArtifactOptions,
     profile: &str,
+    overrides: &ProfileOverrides,
     rt: &tokio::runtime::Runtime,
 ) -> Result<PreparedCall, CliError> {
     let cwd = std::env::current_dir()?;
-    let mut resolved_profile = resolve_profile(&cwd, Some(profile))?;
+    let mut resolved_profile = resolve_profile_with_overrides(&cwd, Some(profile), overrides)?;
     let key_name = resolve_default_key(&cwd, Some(profile))?;
     if resolved_profile.rpc_url.is_none() && key_name.is_none() {
         return Err(CliError::MissingRpcUrl);

@@ -37,6 +37,25 @@ struct ArtifactArgs {
     target_dir: Option<PathBuf>,
 }
 
+#[derive(Parser, Debug, Clone, Default)]
+struct RpcTargetArgs {
+    /// Override the active profile's RPC URL
+    #[arg(long)]
+    rpc_url: Option<String>,
+    /// Override local-dev runtime manifest path for dev-N/bootstrap accounts
+    #[arg(long)]
+    runtime_manifest: Option<PathBuf>,
+}
+
+impl From<RpcTargetArgs> for groundhog_cli::config::ProfileOverrides {
+    fn from(value: RpcTargetArgs) -> Self {
+        Self {
+            rpc_url: value.rpc_url,
+            runtime_manifest: value.runtime_manifest,
+        }
+    }
+}
+
 #[derive(ValueEnum, Debug, Clone, Copy)]
 enum BuildTargetArg {
     Wasm,
@@ -239,6 +258,8 @@ enum Command {
         )]
         profile: String,
         #[command(flatten)]
+        target_args: RpcTargetArgs,
+        #[command(flatten)]
         artifacts: ArtifactArgs,
     },
     /// Submit a transaction that calls a deployed contract method
@@ -265,6 +286,8 @@ enum Command {
         )]
         profile: String,
         #[command(flatten)]
+        target_args: RpcTargetArgs,
+        #[command(flatten)]
         artifacts: ArtifactArgs,
     },
     /// Transfer local HOG from the dev faucet to a wallet
@@ -284,6 +307,8 @@ enum Command {
             default_value = DEFAULT_PROFILE
         )]
         profile: String,
+        #[command(flatten)]
+        target_args: RpcTargetArgs,
     },
     /// Read native HOG balance for an address, wallet, contract, or dev account
     Balance {
@@ -296,6 +321,8 @@ enum Command {
             default_value = DEFAULT_PROFILE
         )]
         profile: String,
+        #[command(flatten)]
+        target_args: RpcTargetArgs,
     },
     /// Execute a sandboxed contract simulation against committed state
     #[command(long_about = "Execute a sandboxed contract simulation via \
@@ -324,6 +351,8 @@ enum Command {
         )]
         profile: String,
         #[command(flatten)]
+        target_args: RpcTargetArgs,
+        #[command(flatten)]
         artifacts: ArtifactArgs,
     },
     /// Read latest committed raw contract storage
@@ -345,6 +374,8 @@ enum Command {
             default_value = DEFAULT_PROFILE
         )]
         profile: String,
+        #[command(flatten)]
+        target_args: RpcTargetArgs,
     },
     /// Start a local development node
     #[command(
@@ -473,6 +504,8 @@ enum WalletCommand {
             default_value = DEFAULT_PROFILE
         )]
         profile: String,
+        #[command(flatten)]
+        target_args: RpcTargetArgs,
     },
     /// Remove a saved project wallet entry
     Rm {
@@ -669,6 +702,7 @@ fn main() {
             target,
             dry_run,
             profile,
+            target_args,
             artifacts,
         } => std::env::current_dir()
             .map_err(groundhog_cli::CliError::Io)
@@ -683,6 +717,7 @@ fn main() {
                     dry_run,
                     &artifacts,
                     &profile,
+                    &target_args.into(),
                     cmd_name,
                     &print,
                 )
@@ -693,6 +728,7 @@ fn main() {
             args,
             dry_run,
             profile,
+            target_args,
             artifacts,
         } => std::env::current_dir()
             .map_err(groundhog_cli::CliError::Io)
@@ -702,7 +738,15 @@ fn main() {
                     &cwd,
                 );
                 groundhog_cli::call::run(
-                    &contract, &method, &args, dry_run, &artifacts, &profile, cmd_name, &print,
+                    &contract,
+                    &method,
+                    &args,
+                    dry_run,
+                    &artifacts,
+                    &profile,
+                    &target_args.into(),
+                    cmd_name,
+                    &print,
                 )
             }),
         Command::Airdrop {
@@ -710,17 +754,32 @@ fn main() {
             amount,
             dry_run,
             profile,
+            target_args,
         } => groundhog_cli::airdrop::run(
             &recipient,
             amount.as_deref(),
             dry_run,
             &profile,
+            &target_args.into(),
             cmd_name,
             &print,
         ),
-        Command::Balance { target, profile } => std::env::current_dir()
+        Command::Balance {
+            target,
+            profile,
+            target_args,
+        } => std::env::current_dir()
             .map_err(groundhog_cli::CliError::Io)
-            .and_then(|cwd| groundhog_cli::balance::run(&target, &cwd, &profile, cmd_name, &print)),
+            .and_then(|cwd| {
+                groundhog_cli::balance::run(
+                    &target,
+                    &cwd,
+                    &profile,
+                    &target_args.into(),
+                    cmd_name,
+                    &print,
+                )
+            }),
         Command::View {
             contract,
             method,
@@ -728,6 +787,7 @@ fn main() {
             calldata,
             from,
             profile,
+            target_args,
             artifacts,
         } => std::env::current_dir()
             .map_err(groundhog_cli::CliError::Io)
@@ -745,6 +805,7 @@ fn main() {
                     &artifacts,
                     &cwd,
                     &profile,
+                    &target_args.into(),
                     cmd_name,
                     &print,
                 )
@@ -753,10 +814,19 @@ fn main() {
             address,
             key,
             profile,
+            target_args,
         } => std::env::current_dir()
             .map_err(groundhog_cli::CliError::Io)
             .and_then(|cwd| {
-                groundhog_cli::storage::run(&address, &key, &cwd, &profile, cmd_name, &print)
+                groundhog_cli::storage::run(
+                    &address,
+                    &key,
+                    &cwd,
+                    &profile,
+                    &target_args.into(),
+                    cmd_name,
+                    &print,
+                )
             }),
         Command::Node {
             port,
@@ -798,11 +868,13 @@ fn main() {
                 name,
                 dry_run,
                 profile,
+                target_args,
             } => groundhog_cli::wallet::create(
                 key.as_deref(),
                 name.as_deref(),
                 dry_run,
                 &profile,
+                &target_args.into(),
                 cmd_name,
                 &print,
             ),
@@ -907,6 +979,7 @@ mod tests {
                         name,
                         dry_run,
                         profile,
+                        ..
                     },
             } => {
                 assert_eq!(key.as_deref(), Some("alice"));
@@ -942,6 +1015,7 @@ mod tests {
                         name,
                         dry_run,
                         profile,
+                        ..
                     },
             } => {
                 assert_eq!(key, None);
@@ -973,6 +1047,7 @@ mod tests {
                         name,
                         dry_run,
                         profile,
+                        ..
                     },
             } => {
                 assert_eq!(key.as_deref(), Some("alice"));
@@ -1003,6 +1078,7 @@ mod tests {
                         name,
                         dry_run,
                         profile,
+                        ..
                     },
             } => {
                 assert_eq!(key, None);
@@ -1046,6 +1122,7 @@ mod tests {
                 amount,
                 dry_run,
                 profile,
+                ..
             } => {
                 assert_eq!(recipient, "alice");
                 assert_eq!(amount.as_deref(), Some("1.5"));

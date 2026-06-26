@@ -7,7 +7,7 @@ use groundhog_json_rpc_types::state::StorageItemRead;
 use serde_json::json;
 
 use crate::codec::parse_contract_address;
-use crate::config::{resolve_default_key, resolve_profile};
+use crate::config::{ProfileOverrides, resolve_default_key, resolve_profile_with_overrides};
 use crate::result::CommandResult;
 use crate::runtime_manifest::apply_local_node_state_for_dev_key;
 use crate::{CliError, Print};
@@ -18,10 +18,12 @@ pub fn run(
     key: &str,
     project_start: &Path,
     profile: &str,
+    overrides: &ProfileOverrides,
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    let mut resolved_profile = resolve_profile(project_start, Some(profile))?;
+    let mut resolved_profile =
+        resolve_profile_with_overrides(project_start, Some(profile), overrides)?;
     if let Some(key_name) = resolve_default_key(project_start, Some(profile))? {
         apply_local_node_state_for_dev_key(&mut resolved_profile, &key_name)?;
     }

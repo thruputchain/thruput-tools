@@ -13,7 +13,7 @@ use crate::call::{
     ResolvedCall, format_entrypoint_id, format_hex_bytes, resolve_call, selector_json,
 };
 use crate::codec::{decode_return, encode_args, parse_contract_address};
-use crate::config::{resolve_default_key, resolve_profile};
+use crate::config::{ProfileOverrides, resolve_default_key, resolve_profile_with_overrides};
 use crate::dev_detail::format_event;
 use crate::dev_keys;
 use crate::result::CommandResult;
@@ -32,6 +32,7 @@ pub fn run(
     artifacts: &ArtifactOptions,
     project_start: &Path,
     profile: &str,
+    overrides: &ProfileOverrides,
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
@@ -45,6 +46,7 @@ pub fn run(
         artifacts,
         project_start,
         profile,
+        overrides,
         &rt,
     )?;
 
@@ -103,9 +105,11 @@ fn prepare_view(
     artifacts: &ArtifactOptions,
     project_start: &Path,
     profile: &str,
+    overrides: &ProfileOverrides,
     rt: &tokio::runtime::Runtime,
 ) -> Result<PreparedView, CliError> {
-    let mut resolved_profile = resolve_profile(project_start, Some(profile))?;
+    let mut resolved_profile =
+        resolve_profile_with_overrides(project_start, Some(profile), overrides)?;
     let default_key = resolve_default_key(project_start, Some(profile))?;
     if let Some(key_name) = local_dev_key_for_view(from, default_key.as_deref()) {
         apply_local_node_state_for_dev_key(&mut resolved_profile, &key_name)?;
