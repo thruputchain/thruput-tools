@@ -10,7 +10,7 @@ All scenarios start a real `hog-devnode` through `groundhog node`, read
 selected target.
 
 ```bash
-HOG_DEVNODE_BINARY=/path/to/hog-devnode \
+GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode \
   BENCH_SCENARIO=smoke \
   scripts/smoke-runtime-manifest-bench.sh
 ```
@@ -29,7 +29,7 @@ tokens; generated XDR clients still fail if the wire shape has changed.
 Fast correctness check for CLI, gateway, and bench integration.
 
 ```bash
-HOG_DEVNODE_BINARY=/path/to/hog-devnode \
+GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode \
   scripts/smoke-runtime-manifest-bench.sh
 ```
 
@@ -50,7 +50,7 @@ Use this before and after runtime-manifest or benchmark-account changes.
 Simple standalone-gateway baseline with one read pass and one submit pass.
 
 ```bash
-HOG_DEVNODE_BINARY=/path/to/hog-devnode \
+GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode \
   BENCH_SCENARIO=gateway-baseline \
   scripts/smoke-runtime-manifest-bench.sh
 ```
@@ -67,7 +67,7 @@ GATEWAY_BASELINE_CHAIN_RATE=500 \
 GATEWAY_BASELINE_SUBMIT_RATE=200 \
 GATEWAY_BASELINE_DURATION=60 \
 GATEWAY_BASELINE_ACCOUNTS=20 \
-HOG_DEVNODE_BINARY=/path/to/hog-devnode \
+GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode \
 BENCH_SCENARIO=gateway-baseline \
 scripts/smoke-runtime-manifest-bench.sh
 ```
@@ -78,7 +78,7 @@ Standalone-gateway submit ramp. This is the first pressure scenario for the
 manifest-funded dev-wallet path.
 
 ```bash
-HOG_DEVNODE_BINARY=/path/to/hog-devnode \
+GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode \
   BENCH_SCENARIO=submit-ramp \
   scripts/smoke-runtime-manifest-bench.sh
 ```
@@ -95,7 +95,7 @@ Useful knobs:
 SUBMIT_RAMP_RATES="100 250 500 1000 2000" \
 SUBMIT_RAMP_DURATION=60 \
 SUBMIT_RAMP_ACCOUNTS=25 \
-HOG_DEVNODE_BINARY=/path/to/hog-devnode \
+GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode \
 BENCH_SCENARIO=submit-ramp \
 scripts/smoke-runtime-manifest-bench.sh
 ```

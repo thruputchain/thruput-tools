@@ -39,10 +39,7 @@ pub const DEFAULT_HOGD_DEV_BINARY: &str = "hog-devnode";
 pub const LEGACY_HOGD_DEV_BINARY: &str = "hogd-dev";
 
 /// Environment variable used to override the devnode binary path.
-pub const HOG_DEVNODE_BINARY_ENV: &str = "GROUNDHOG_HOG_DEVNODE_BINARY";
-
-/// Legacy environment variable used to override the devnode binary path.
-pub const HOGD_DEV_BINARY_ENV: &str = "GROUNDHOG_HOGD_DEV_BINARY";
+pub const DEVNODE_BINARY_ENV: &str = "GROUNDHOG_DEVNODE_BINARY";
 
 /// Environment variable used to request structured JSON logs from hogd-dev.
 pub const HOGD_LOG_FORMAT_ENV: &str = "HOGD_LOG_FORMAT";
@@ -449,11 +446,7 @@ pub fn resolve_hogd_dev_binary(config: &HogdDevConfig) -> Result<PathBuf, NodeSu
         return validate_configured_binary(binary_path);
     }
 
-    if let Some(env_path) = env::var_os(HOG_DEVNODE_BINARY_ENV) {
-        return validate_configured_binary(Path::new(&env_path));
-    }
-
-    if let Some(env_path) = env::var_os(HOGD_DEV_BINARY_ENV) {
+    if let Some(env_path) = env::var_os(DEVNODE_BINARY_ENV) {
         return validate_configured_binary(Path::new(&env_path));
     }
 
@@ -1391,10 +1384,9 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        DEFAULT_HOGD_DEV_BINARY, HOG_DEVNODE_BINARY_ENV, HOGD_DEV_BINARY_ENV, HOGD_LOG_FORMAT_ENV,
-        HogdDevProcess, build_hogd_dev_spec, build_hogd_dev_spec_with_bootstrap_manifest,
-        parse_readiness_line, resolve_hogd_dev_binary, validate_dev_accounts,
-        write_bootstrap_manifest,
+        DEFAULT_HOGD_DEV_BINARY, DEVNODE_BINARY_ENV, HOGD_LOG_FORMAT_ENV, HogdDevProcess,
+        build_hogd_dev_spec, build_hogd_dev_spec_with_bootstrap_manifest, parse_readiness_line,
+        resolve_hogd_dev_binary, validate_dev_accounts, write_bootstrap_manifest,
     };
     use crate::{
         HogdDevConfig, NodeSupervisorError,
@@ -2374,8 +2366,7 @@ mod tests {
     fn env_binary_path_resolves() {
         let tmp = TempDir::new().expect("bug: temp dir should be created");
         let path = executable_file(tmp.path(), DEFAULT_HOGD_DEV_BINARY);
-        let _legacy_guard = EnvGuard::remove(HOGD_DEV_BINARY_ENV);
-        let _guard = EnvGuard::set(HOG_DEVNODE_BINARY_ENV, &path);
+        let _guard = EnvGuard::set(DEVNODE_BINARY_ENV, &path);
 
         assert_eq!(
             resolve_hogd_dev_binary(&HogdDevConfig::default())
@@ -2386,26 +2377,10 @@ mod tests {
 
     #[test]
     #[serial]
-    fn legacy_env_binary_path_resolves() {
-        let tmp = TempDir::new().expect("bug: temp dir should be created");
-        let path = executable_file(tmp.path(), DEFAULT_HOGD_DEV_BINARY);
-        let _env_guard = EnvGuard::remove(HOG_DEVNODE_BINARY_ENV);
-        let _guard = EnvGuard::set(HOGD_DEV_BINARY_ENV, &path);
-
-        assert_eq!(
-            resolve_hogd_dev_binary(&HogdDevConfig::default())
-                .expect("bug: legacy env path should resolve"),
-            path
-        );
-    }
-
-    #[test]
-    #[serial]
     fn path_binary_resolves() {
         let tmp = TempDir::new().expect("bug: temp dir should be created");
         let path = executable_file(tmp.path(), DEFAULT_HOGD_DEV_BINARY);
-        let _new_env_guard = EnvGuard::remove(HOG_DEVNODE_BINARY_ENV);
-        let _env_guard = EnvGuard::remove(HOGD_DEV_BINARY_ENV);
+        let _new_env_guard = EnvGuard::remove(DEVNODE_BINARY_ENV);
         let _path_guard = EnvGuard::set("PATH", tmp.path());
 
         assert_eq!(
@@ -2434,8 +2409,7 @@ mod tests {
         let _file_guard = FileGuard {
             path: sibling.clone(),
         };
-        let _new_env_guard = EnvGuard::remove(HOG_DEVNODE_BINARY_ENV);
-        let _env_guard = EnvGuard::remove(HOGD_DEV_BINARY_ENV);
+        let _new_env_guard = EnvGuard::remove(DEVNODE_BINARY_ENV);
         let empty_path = TempDir::new().expect("bug: temp dir should be created");
         let _path_guard = EnvGuard::set("PATH", empty_path.path());
 
@@ -2450,8 +2424,7 @@ mod tests {
     #[serial]
     fn missing_binary_returns_typed_error() {
         let tmp = TempDir::new().expect("bug: temp dir should be created");
-        let _new_env_guard = EnvGuard::remove(HOG_DEVNODE_BINARY_ENV);
-        let _env_guard = EnvGuard::remove(HOGD_DEV_BINARY_ENV);
+        let _new_env_guard = EnvGuard::remove(DEVNODE_BINARY_ENV);
         let _path_guard = EnvGuard::set("PATH", tmp.path());
 
         let err = resolve_hogd_dev_binary(&HogdDevConfig::default())

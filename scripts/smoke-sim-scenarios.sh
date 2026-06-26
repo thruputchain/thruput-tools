@@ -6,10 +6,7 @@
 # GROUNDHOG_SIM_RUN_SOAKS=1.
 #
 # Optional environment:
-#   HOG_DEVNODE_BINARY=/path/to/hog-devnode
-#   GROUNDHOG_HOG_DEVNODE_BINARY=/path/to/hog-devnode
-#   HOGD_DEV_BINARY=/path/to/hogd-dev  # legacy
-#   GROUNDHOG_HOGD_DEV_BINARY=/path/to/hogd-dev  # legacy
+#   GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode
 #   GROUNDHOG_BINARY=/path/to/groundhog
 #   GROUNDHOG_EXAMPLES_ROOT=/path/to/groundhog-examples
 #   HOGD_PROTOCOL_OVERRIDE=hogp/<hash>
@@ -159,20 +156,8 @@ PY
 }
 
 find_hogd_dev_binary() {
-    if [[ -n "${HOG_DEVNODE_BINARY:-}" ]]; then
-        expand_user_path "$HOG_DEVNODE_BINARY"
-        return
-    fi
-    if [[ -n "${GROUNDHOG_HOG_DEVNODE_BINARY:-}" ]]; then
-        expand_user_path "$GROUNDHOG_HOG_DEVNODE_BINARY"
-        return
-    fi
-    if [[ -n "${HOGD_DEV_BINARY:-}" ]]; then
-        expand_user_path "$HOGD_DEV_BINARY"
-        return
-    fi
-    if [[ -n "${GROUNDHOG_HOGD_DEV_BINARY:-}" ]]; then
-        expand_user_path "$GROUNDHOG_HOGD_DEV_BINARY"
+    if [[ -n "${GROUNDHOG_DEVNODE_BINARY:-}" ]]; then
+        expand_user_path "$GROUNDHOG_DEVNODE_BINARY"
         return
     fi
 
@@ -193,7 +178,7 @@ find_hogd_dev_binary() {
         fi
     done
 
-    die "set HOG_DEVNODE_BINARY or GROUNDHOG_HOG_DEVNODE_BINARY to /path/to/hog-devnode"
+    die "set GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode"
 }
 
 find_examples_root() {
@@ -225,9 +210,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-HOGD_DEV_BINARY="$(find_hogd_dev_binary)"
-[[ -x "$HOGD_DEV_BINARY" ]] || die "hog-devnode binary is not executable: $HOGD_DEV_BINARY"
-HOGD_PROTOCOL="$(detect_hogd_protocol "$HOGD_DEV_BINARY")"
+DEVNODE_BINARY="$(find_hogd_dev_binary)"
+[[ -x "$DEVNODE_BINARY" ]] || die "hog-devnode binary is not executable: $DEVNODE_BINARY"
+HOGD_PROTOCOL="$(detect_hogd_protocol "$DEVNODE_BINARY")"
 if [[ -n "$HOGD_PROTOCOL" ]]; then
     export GROUNDHOG_SIM_HOGD_PROTOCOL="$HOGD_PROTOCOL"
     log "using hogd protocol override: $HOGD_PROTOCOL"
@@ -278,7 +263,7 @@ fi
 
 log "running fast local scenario catalog"
 ENV_ARGS=(
-    "GROUNDHOG_SIM_HOG_DEVNODE_BINARY=$HOGD_DEV_BINARY"
+    "GROUNDHOG_DEVNODE_BINARY=$DEVNODE_BINARY"
     "GROUNDHOG_SIM_GROUNDHOG_BINARY=$GROUNDHOG_BINARY"
     "GROUNDHOG_SIM_CATALOG_ROOT=$WORKDIR/local-catalog-fast"
 )
@@ -291,7 +276,7 @@ env "${ENV_ARGS[@]}" \
 if [[ "${GROUNDHOG_SIM_RUN_SOAKS:-0}" == "1" ]]; then
     log "running gated local scenario soak"
     SOAK_ENV_ARGS=(
-        "GROUNDHOG_SIM_HOG_DEVNODE_BINARY=$HOGD_DEV_BINARY"
+        "GROUNDHOG_DEVNODE_BINARY=$DEVNODE_BINARY"
         "GROUNDHOG_SIM_GROUNDHOG_BINARY=$GROUNDHOG_BINARY"
         "GROUNDHOG_SIM_CATALOG_ROOT=$WORKDIR/local-catalog-soak"
         "GROUNDHOG_SIM_RUN_SOAKS=1"
@@ -309,7 +294,7 @@ NODE_STDOUT="$WORKDIR/groundhog-node.json"
 NODE_STDERR="$WORKDIR/groundhog-node.stderr"
 
 log "starting temporary groundhog node for existing-provider baseline scenario"
-NODE_ARGS=(--json node --hog-devnode-binary "$HOGD_DEV_BINARY" --port 0)
+NODE_ARGS=(--json node --hog-devnode-binary "$DEVNODE_BINARY" --port 0)
 if [[ -n "$HOGD_PROTOCOL" ]]; then
     NODE_ARGS+=(--hogd-protocol "$HOGD_PROTOCOL")
 fi

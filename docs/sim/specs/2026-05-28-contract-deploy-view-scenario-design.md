@@ -344,6 +344,6 @@ Each gate uses two reviewers: behavior/lifecycle and test/artifact.
 - `cargo test -p groundhog-sim`
 - `cargo clippy -p groundhog-sim --all-targets -- -D warnings`
 - Gated:
-  - `GROUNDHOG_HOGD_DEV_BINARY=/absolute/path/to/hogd-dev scripts/smoke-sim-scenarios.sh`
+  - `GROUNDHOG_DEVNODE_BINARY=/absolute/path/to/hog-devnode scripts/smoke-sim-scenarios.sh`
   - Optional:
     `GROUNDHOG_EXAMPLES_ROOT=/absolute/path/to/groundhog-examples scripts/smoke-sim-scenarios.sh`

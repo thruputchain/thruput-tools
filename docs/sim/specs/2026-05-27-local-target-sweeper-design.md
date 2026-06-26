@@ -212,7 +212,7 @@ Unit tests:
   (with termination stubbed/avoided for the unit layer).
 - `SweepReport` `--json` shape.
 
-Process-level smoke (ignored, gated by `GROUNDHOG_SIM_HOGD_DEV_BINARY` and a
+Process-level smoke (ignored, gated by `GROUNDHOG_DEVNODE_BINARY` and a
 `groundhog` binary with dev-node support):
 
 - Start a long local run through `hogsim run`, wait for

@@ -5,8 +5,7 @@
 #   groundhog new -> build -> node -> deploy -> call -> view -> storage
 #
 # Optional environment:
-#   HOG_DEVNODE_BINARY=/path/to/hog-devnode
-#   HOGD_DEV_BINARY=/path/to/hogd-dev  # legacy
+#   GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode
 #   HOGD_PROTOCOL_OVERRIDE=hogp/<hash>  # intro token only; XDR still validates shape
 #   SMOKE_STANDALONE_GATEWAY=1  # route view/storage checks through hog-gateway
 #   SMOKE_SDK_PATH=/path/to/sdk_rs/crates/sdk  # test scaffold against local SDK
@@ -140,12 +139,8 @@ PY
 }
 
 find_hogd_dev_binary() {
-    if [[ -n "${HOG_DEVNODE_BINARY:-}" ]]; then
-        printf '%s\n' "$HOG_DEVNODE_BINARY"
-        return
-    fi
-    if [[ -n "${HOGD_DEV_BINARY:-}" ]]; then
-        printf '%s\n' "$HOGD_DEV_BINARY"
+    if [[ -n "${GROUNDHOG_DEVNODE_BINARY:-}" ]]; then
+        printf '%s\n' "$GROUNDHOG_DEVNODE_BINARY"
         return
     fi
 
@@ -166,7 +161,7 @@ find_hogd_dev_binary() {
         fi
     done
 
-    die "set HOG_DEVNODE_BINARY=/path/to/hog-devnode"
+    die "set GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode"
 }
 
 detect_hogd_protocol() {
@@ -319,11 +314,11 @@ else
     cargo build -p groundhog-cli --manifest-path "$REPO_ROOT/Cargo.toml"
 fi
 
-HOGD_DEV_BINARY="$(find_hogd_dev_binary)"
-[[ -x "$HOGD_DEV_BINARY" ]] || die "hog-devnode binary is not executable: $HOGD_DEV_BINARY"
+DEVNODE_BINARY="$(find_hogd_dev_binary)"
+[[ -x "$DEVNODE_BINARY" ]] || die "hog-devnode binary is not executable: $DEVNODE_BINARY"
 
-HOGD_PROTOCOL="$(detect_hogd_protocol "$HOGD_DEV_BINARY")"
-NODE_ARGS=(--json node --port 0 --hog-devnode-binary "$HOGD_DEV_BINARY")
+HOGD_PROTOCOL="$(detect_hogd_protocol "$DEVNODE_BINARY")"
+NODE_ARGS=(--json node --port 0 --hog-devnode-binary "$DEVNODE_BINARY")
 if [[ -n "$HOGD_PROTOCOL" ]]; then
     NODE_ARGS+=(--hogd-protocol "$HOGD_PROTOCOL")
     log "Using hogd protocol override: $HOGD_PROTOCOL"

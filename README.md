@@ -33,10 +33,10 @@ groundhog deploy
 groundhog call my-counter get
 
 # one-command local-node integration path; add --target wasm for WASM artifacts
-GROUNDHOG_HOG_DEVNODE_BINARY=/path/to/hog-devnode groundhog test --integration
+GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode groundhog test --integration
 
 # differential gate: WASM and RV32 must both pass the same tests
-GROUNDHOG_HOG_DEVNODE_BINARY=/path/to/hog-devnode groundhog test --integration --differential
+GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode groundhog test --integration --differential
 ```
 
 `groundhog login` is currently required for the Groundhog contract SDK
@@ -252,7 +252,7 @@ cargo fmt --check
 The standard contributor smoke is `scripts/smoke-local-dx.sh` — runs
 the user-facing CLI loop (`new` → `build` → `node` → `deploy` →
 `call` → view → storage) against a real `hog-devnode` binary. Set
-`HOG_DEVNODE_BINARY=/path/to/hog-devnode` and invoke.
+`GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode` and invoke.
 
 For the runtime-manifest gateway/bench path, run
 `scripts/smoke-runtime-manifest-bench.sh`. It starts `groundhog node`,

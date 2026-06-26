@@ -844,7 +844,7 @@ fn node_help_mentions_hogd_dev_binary_and_log_contract() {
     assert!(stdout.contains("--hog-devnode-binary"));
     assert!(stdout.contains("--dev-account-count"));
     assert!(stdout.contains("--hogd-protocol"));
-    assert!(stdout.contains("GROUNDHOG_HOG_DEVNODE_BINARY"));
+    assert!(stdout.contains("GROUNDHOG_DEVNODE_BINARY"));
     assert!(stdout.contains("RUST_LOG"));
     assert!(stdout.contains("hogd_timestamp_ms"));
     assert!(stdout.contains("hogd_target"));
@@ -1094,7 +1094,7 @@ fn test_integration_reports_local_node_startup_failure() {
         .current_dir(tmp.path())
         .env("PATH", &fake_bin)
         .env("GROUNDHOG_TEST_METADATA_JSON", metadata_json)
-        .env("GROUNDHOG_HOG_DEVNODE_BINARY", &hogd_dev)
+        .env("GROUNDHOG_DEVNODE_BINARY", &hogd_dev)
         .env("GROUNDHOG_FAKE_HOGD_DEV_MODE", "exit-7")
         .output()
         .unwrap();
@@ -1174,7 +1174,7 @@ fn test_integration_default_rv32_build_reaches_local_node_startup() {
         .current_dir(tmp.path())
         .env("PATH", &fake_bin)
         .env("GROUNDHOG_TEST_METADATA_JSON", metadata_json)
-        .env("GROUNDHOG_HOG_DEVNODE_BINARY", &hogd_dev)
+        .env("GROUNDHOG_DEVNODE_BINARY", &hogd_dev)
         .env("GROUNDHOG_FAKE_HOGD_DEV_MODE", "exit-7")
         .output()
         .unwrap();

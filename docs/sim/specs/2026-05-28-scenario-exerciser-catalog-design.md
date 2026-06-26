@@ -93,7 +93,7 @@ flags.
 Add `scripts/smoke-sim-scenarios.sh`.
 
 - Accept the same binary environment conventions as `scripts/smoke-sim-local.sh`:
-  `HOGD_DEV_BINARY` or `GROUNDHOG_HOGD_DEV_BINARY`, optional
+  `GROUNDHOG_DEVNODE_BINARY`, optional
   `GROUNDHOG_BINARY`, optional `HOGD_PROTOCOL_OVERRIDE=hogp/<hash>`, and
   `KEEP_WORKDIR=1`.
 - Build `groundhog`.
@@ -157,7 +157,7 @@ Each gate uses two reviewers: behavior/lifecycle and test/artifact.
 - `cargo test -p groundhog-sim`
 - `cargo clippy -p groundhog-sim --all-targets -- -D warnings`
 - Gated:
-  - `GROUNDHOG_HOGD_DEV_BINARY=/absolute/path/to/hogd-dev scripts/smoke-sim-local.sh`
-  - `GROUNDHOG_HOGD_DEV_BINARY=/absolute/path/to/hogd-dev scripts/smoke-sim-scenarios.sh`
+  - `GROUNDHOG_DEVNODE_BINARY=/absolute/path/to/hog-devnode scripts/smoke-sim-local.sh`
+  - `GROUNDHOG_DEVNODE_BINARY=/absolute/path/to/hog-devnode scripts/smoke-sim-scenarios.sh`
   - Optional longer soak:
-    `GROUNDHOG_SIM_RUN_SOAKS=1 GROUNDHOG_HOGD_DEV_BINARY=/absolute/path/to/hogd-dev scripts/smoke-sim-scenarios.sh`
+    `GROUNDHOG_SIM_RUN_SOAKS=1 GROUNDHOG_DEVNODE_BINARY=/absolute/path/to/hog-devnode scripts/smoke-sim-scenarios.sh`

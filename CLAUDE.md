@@ -157,7 +157,7 @@ Use this for the local gateway/bench path once a real `hog-devnode` binary
 is available:
 
 ```bash
-HOG_DEVNODE_BINARY=/path/to/hog-devnode scripts/smoke-runtime-manifest-bench.sh
+GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode scripts/smoke-runtime-manifest-bench.sh
 ```
 
 The script starts `groundhog node`, reads `data.runtime_manifest.path`
@@ -172,7 +172,7 @@ for the repeatable local benchmark scenarios documented in
 The broader local-DX smoke remains:
 
 ```bash
-HOG_DEVNODE_BINARY=/path/to/hog-devnode scripts/smoke-local-dx.sh
+GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode scripts/smoke-local-dx.sh
 ```
 
 With `SMOKE_STANDALONE_GATEWAY=1`, that script also starts the standalone
@@ -183,7 +183,7 @@ For simulator local-target work, use the script so the local-provider and
 existing-provider process smokes stay in sync:
 
 ```bash
-GROUNDHOG_HOG_DEVNODE_BINARY=/path/to/hog-devnode scripts/smoke-sim-local.sh
+GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode scripts/smoke-sim-local.sh
 ```
 
 These smokes start `groundhog node`, run `hog-devnode`, connect to localhost, and
