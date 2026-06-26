@@ -58,3 +58,46 @@ jobs:
 
       - name: Test
         run: cargo test --workspace --locked
+
+  cli-smoke:
+    name: CLI smoke (new + cargo test + groundhog test)
+    runs-on: namespace-profile-chuckd-rs-linux
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: namespacelabs/nscloud-checkout-action@v8
+
+      - name: Configure Namespace Cache
+        uses: namespacelabs/nscloud-cache-action@v1
+        with:
+          cache: rust
+
+      - name: Install wasm target
+        run: rustup target add wasm32-unknown-unknown
+
+      # `groundhog test` builds and optimizes the wasm artifact, which requires
+      # wasm-opt (binaryen) on PATH; the generated project's nightly toolchain
+      # and rv32 target auto-install from its rust-toolchain.toml.
+      - name: Install wasm-opt
+        run: sudo apt-get update && sudo apt-get install -y binaryen
+
+      - name: Build groundhog CLI
+        run: cargo build --locked -p groundhog-cli
+
+      - name: Put groundhog on PATH
+        run: echo "${GITHUB_WORKSPACE}/target/debug" >> "$GITHUB_PATH"
+
+      # Scaffold outside the repo so the generated project stands on its own
+      # config rather than inheriting the workspace.
+      - name: Scaffold project (groundhog new)
+        working-directory: ${{ runner.temp }}
+        run: groundhog new my-counter
+
+      - name: Host tests (cargo test)
+        working-directory: ${{ runner.temp }}/my-counter
+        run: cargo test
+
+      - name: Contract tests (groundhog test)
+        working-directory: ${{ runner.temp }}/my-counter
+        run: groundhog test

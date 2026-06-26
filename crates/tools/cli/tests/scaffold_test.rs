@@ -23,7 +23,8 @@ fn scaffold_counter_creates_expected_files() {
     assert!(cargo.contains(r#"name = "my-counter""#));
     assert!(cargo.contains("registry = \"groundhog\""));
     assert!(!cargo.contains("sdk/spec"));
-    assert!(cargo.contains(r#"sdk = { version = "0.15.0""#));
+    assert!(cargo.contains(r#"sdk = { version = "0.15.4""#));
+    assert!(!cargo.contains(r#"features = ["storage"]"#));
     // RV32 bin wrapper target: the bin name must be the snake-case package
     // name because `groundhog build --target rv32` looks for the ELF at
     // `release/<snake_name>`.
