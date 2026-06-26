@@ -257,7 +257,7 @@ saves a contract alias into the active profile when running inside a project.
 ```bash
 groundhog deploy
 groundhog deploy --profile testnet
-groundhog deploy --rpc-url http://44.236.180.135:8545
+groundhog deploy --rpc-url http://<your-rpc-host>:8545
 groundhog deploy --artifact target/groundhog/counter.rv32a
 groundhog deploy --target rv32
 groundhog deploy --json
@@ -276,7 +276,7 @@ groundhog call my-counter increment 5
 groundhog call my-counter get
 groundhog call 0xabc123... get
 groundhog call my-counter increment 5 --dry-run
-groundhog call my-counter increment 5 --rpc-url http://44.236.180.135:8545
+groundhog call my-counter increment 5 --rpc-url http://<your-rpc-host>:8545
 groundhog call my-counter increment 5 --json
 ```
 
@@ -309,7 +309,7 @@ contract simulation through `groundhog_view`.
 ```bash
 groundhog storage my-counter 0x0000000000000000000000000000000000000000000000000000000000000000
 groundhog storage 0xabc123... 0x4242424242424242424242424242424242424242424242424242424242424242
-groundhog storage my-counter 0x4242424242424242424242424242424242424242424242424242424242424242 --rpc-url http://44.236.180.135:8545
+groundhog storage my-counter 0x4242424242424242424242424242424242424242424242424242424242424242 --rpc-url http://<your-rpc-host>:8545
 groundhog storage my-counter 0x4242424242424242424242424242424242424242424242424242424242424242 --json
 ```
 
@@ -322,11 +322,11 @@ RPC-facing commands can target a remote endpoint without editing
 `groundhog.toml`:
 
 ```bash
-groundhog deploy --rpc-url http://44.236.180.135:8545
-groundhog call my-counter increment 1 --rpc-url http://44.236.180.135:8545
-groundhog balance alice --rpc-url http://44.236.180.135:8545
-groundhog view my-counter get --rpc-url http://44.236.180.135:8545
-groundhog storage my-counter <32-byte-storage-key> --rpc-url http://44.236.180.135:8545
+groundhog deploy --rpc-url http://<your-rpc-host>:8545
+groundhog call my-counter increment 1 --rpc-url http://<your-rpc-host>:8545
+groundhog balance alice --rpc-url http://<your-rpc-host>:8545
+groundhog view my-counter get --rpc-url http://<your-rpc-host>:8545
+groundhog storage my-counter <32-byte-storage-key> --rpc-url http://<your-rpc-host>:8545
 ```
 
 Use `--runtime-manifest` for localhost development when a command signs as a
