@@ -249,6 +249,7 @@ fn emit_header(out: &mut String, source_name: &str, interfaces: &[(&str, &str)])
 /// Emit the TypeScript import block.
 fn emit_imports(out: &mut String, spec: &ContractSpec) {
     let _ = writeln!(out);
+    let has_events = !spec.events.is_empty();
 
     // Every generated method function takes `ContractAddress`, so always
     // import it alongside the other protocol types.
@@ -257,9 +258,14 @@ fn emit_imports(out: &mut String, spec: &ContractSpec) {
         "import type {{ ContractAddress, GasAmount, Invocation }} \
          from \"@groundhogchain/protocol\";",
     );
+    let protocol_imports = if has_events {
+        "contractEntrypointID, topic"
+    } else {
+        "contractEntrypointID"
+    };
     let _ = writeln!(
         out,
-        "import {{ contractEntrypointID }} from \
+        "import {{ {protocol_imports} }} from \
          \"@groundhogchain/protocol\";"
     );
     let _ = writeln!(
@@ -273,7 +279,6 @@ fn emit_imports(out: &mut String, spec: &ContractSpec) {
         .type_defs
         .iter()
         .any(|d| matches!(d, ContractTypeDef::TypeDefUnion { .. }));
-    let has_events = !spec.events.is_empty();
     let mut cs_imports: Vec<&str> = vec![
         "ContractTypeKind",
         "ContractTypeDefKind",
@@ -281,9 +286,6 @@ fn emit_imports(out: &mut String, spec: &ContractSpec) {
     ];
     if has_unions {
         cs_imports.push("ContractUnionCaseKind");
-    }
-    if has_events {
-        cs_imports.push("topic");
     }
     let _ = writeln!(
         out,
