@@ -189,11 +189,15 @@ async fn connect_optional_indexer(
             addr: address.to_string(),
             reason: indexer_intro_rejection_reason(outcome, protocol_version),
         }),
-        Err(source) => Err(ConnectError::ConnectFailed {
-            service: "indexer_block_explorer_intro",
-            addr: address.to_string(),
-            source,
-        }),
+        Err(source) => {
+            tracing::warn!(
+                addr = address,
+                service = "indexer_block_explorer_intro",
+                error = %source,
+                "optional backend intro failed, starting in degraded mode"
+            );
+            Ok(None)
+        }
     }
 }
 
@@ -235,11 +239,15 @@ async fn connect_optional_db_gateway(
             addr: address.to_string(),
             reason: db_gateway_intro_rejection_reason(outcome, protocol_version),
         }),
-        Err(source) => Err(ConnectError::ConnectFailed {
-            service: "dbgateway_intro",
-            addr: address.to_string(),
-            source,
-        }),
+        Err(source) => {
+            tracing::warn!(
+                addr = address,
+                service = "dbgateway_intro",
+                error = %source,
+                "optional backend intro failed, starting in degraded mode"
+            );
+            Ok(None)
+        }
     }
 }
 
@@ -379,7 +387,7 @@ mod tests {
         AddressAndKeyBatch, DbGateway_DbGateway1, DbGateway_DbGateway1_Dispatcher, DbGatewayResult,
     };
     use groundhog_indexer::{
-        EventPage as IdxEventPage, IndexerBlockExplorer_IndexerBlockExplorer1,
+        EventPage as IdxEventPage, EventQuery, IndexerBlockExplorer_IndexerBlockExplorer1,
         IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher,
         TransactionPage as IdxTransactionPage, TransactionQuery, TxInfoResult,
     };
@@ -394,8 +402,19 @@ mod tests {
     use super::*;
 
     struct IntroRejectedViewGateway;
-    struct IntroRejectedIndexer;
-    struct IntroRejectedDbGateway;
+    #[derive(Clone, Copy)]
+    enum IntroMode {
+        Reject,
+        Expect(&'static str),
+        Slow,
+        RpcFail,
+    }
+    struct TestIndexer {
+        mode: IntroMode,
+    }
+    struct TestDbGateway {
+        mode: IntroMode,
+    }
     struct ProtocolCheckingViewGateway {
         expected: &'static str,
     }
@@ -419,12 +438,25 @@ mod tests {
     }
 
     #[async_trait]
-    impl IndexerBlockExplorer_IndexerBlockExplorer1 for IntroRejectedIndexer {
+    impl IndexerBlockExplorer_IndexerBlockExplorer1 for TestIndexer {
         async fn indexer_block_explorer_intro(
             &self,
-            _arg0: Protocol,
+            arg0: Protocol,
         ) -> Result<IndexerBlockExplorerIntroOutcome, ProgramError> {
-            Ok(IndexerBlockExplorerIntroOutcome::IntroMismatchedProtocol)
+            match self.mode {
+                IntroMode::Reject => Ok(IndexerBlockExplorerIntroOutcome::IntroMismatchedProtocol),
+                IntroMode::Expect(expected) if arg0.0 == expected.as_bytes() => {
+                    Ok(IndexerBlockExplorerIntroOutcome::IntroSuccess)
+                }
+                IntroMode::Expect(_) => {
+                    Ok(IndexerBlockExplorerIntroOutcome::IntroMismatchedProtocol)
+                }
+                IntroMode::Slow => {
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    Ok(IndexerBlockExplorerIntroOutcome::IntroSuccess)
+                }
+                IntroMode::RpcFail => Err(ProgramError::msg("fake indexer intro rpc-fail")),
+            }
         }
 
         async fn get_transaction_info(
@@ -434,10 +466,7 @@ mod tests {
             panic!("bug: intro rejection test should not issue indexer data RPC")
         }
 
-        async fn get_events(
-            &self,
-            _arg0: groundhog_indexer::EventQuery,
-        ) -> Result<IdxEventPage, ProgramError> {
+        async fn get_events(&self, _arg0: EventQuery) -> Result<IdxEventPage, ProgramError> {
             panic!("bug: intro rejection test should not issue indexer data RPC")
         }
 
@@ -450,12 +479,24 @@ mod tests {
     }
 
     #[async_trait]
-    impl DbGateway_DbGateway1 for IntroRejectedDbGateway {
+    impl DbGateway_DbGateway1 for TestDbGateway {
         async fn dbgateway_intro(
             &self,
-            _arg0: Protocol,
+            arg0: Protocol,
         ) -> Result<DbGatewayIntroOutcome, ProgramError> {
-            Ok(DbGatewayIntroOutcome::DbGatewayIntroMismatchedProtocol)
+            match self.mode {
+                IntroMode::Expect(expected) if arg0.0 == expected.as_bytes() => {
+                    Ok(DbGatewayIntroOutcome::DbGatewayIntroSuccess)
+                }
+                IntroMode::Reject | IntroMode::Expect(_) => {
+                    Ok(DbGatewayIntroOutcome::DbGatewayIntroMismatchedProtocol)
+                }
+                IntroMode::Slow => {
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    Ok(DbGatewayIntroOutcome::DbGatewayIntroSuccess)
+                }
+                IntroMode::RpcFail => Err(ProgramError::msg("fake DbGateway intro rpc-fail")),
+            }
         }
 
         async fn dbgateway_get_items(
@@ -524,7 +565,9 @@ mod tests {
         (addr, handle)
     }
 
-    async fn start_intro_rejected_indexer() -> (
+    async fn start_test_indexer(
+        mode: IntroMode,
+    ) -> (
         std::net::SocketAddr,
         tokio::task::JoinHandle<Result<(), std::io::Error>>,
     ) {
@@ -536,16 +579,18 @@ mod tests {
             .expect("bug: test indexer should have local addr");
         let mut services = ServiceMap::new();
         services.add_service(Box::new(
-            IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher::new(Box::new(
-                IntroRejectedIndexer,
-            )),
+            IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher::new(Box::new(TestIndexer {
+                mode,
+            })),
         ));
         let server = RpcServer::new(listener, services);
         let handle = server.start().await;
         (addr, handle)
     }
 
-    async fn start_intro_rejected_db_gateway() -> (
+    async fn start_test_db_gateway(
+        mode: IntroMode,
+    ) -> (
         std::net::SocketAddr,
         tokio::task::JoinHandle<Result<(), std::io::Error>>,
     ) {
@@ -557,7 +602,7 @@ mod tests {
             .expect("bug: test DbGateway should have local addr");
         let mut services = ServiceMap::new();
         services.add_service(Box::new(DbGateway_DbGateway1_Dispatcher::new(Box::new(
-            IntroRejectedDbGateway,
+            TestDbGateway { mode },
         ))));
         let server = RpcServer::new(listener, services);
         let handle = server.start().await;
@@ -614,6 +659,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn optional_indexer_and_db_gateway_without_address_are_absent() {
+        let indexer = connect_optional_indexer(None, None, Duration::from_secs(1))
+            .await
+            .expect("missing optional indexer should not fail startup");
+        let db_gateway = connect_optional_db_gateway(None, 1, None, Duration::from_secs(1))
+            .await
+            .expect("missing optional DbGateway should not fail startup");
+
+        assert!(indexer.is_none());
+        assert!(db_gateway.is_none());
+    }
+
+    #[tokio::test]
     async fn configured_view_gateway_intro_rejection_fails_startup_probe() {
         let (addr, _server) = start_intro_rejected_view_gateway().await;
 
@@ -637,7 +695,7 @@ mod tests {
 
     #[tokio::test]
     async fn configured_indexer_intro_rejection_fails_startup_probe() {
-        let (addr, _server) = start_intro_rejected_indexer().await;
+        let (addr, _server) = start_test_indexer(IntroMode::Reject).await;
 
         let Err(err) =
             connect_optional_indexer(Some(&addr.to_string()), None, Duration::from_secs(1)).await
@@ -658,7 +716,7 @@ mod tests {
 
     #[tokio::test]
     async fn configured_db_gateway_intro_rejection_fails_startup_probe() {
-        let (addr, _server) = start_intro_rejected_db_gateway().await;
+        let (addr, _server) = start_test_db_gateway(IntroMode::Reject).await;
 
         let Err(err) =
             connect_optional_db_gateway(Some(&addr.to_string()), 1, None, Duration::from_secs(1))
@@ -695,6 +753,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn configured_indexer_and_db_gateway_use_protocol_override_for_startup_probe() {
+        let (indexer_addr, _indexer_server) =
+            start_test_indexer(IntroMode::Expect("hogp/test-smoke")).await;
+        let (db_addr, _db_server) =
+            start_test_db_gateway(IntroMode::Expect("hogp/test-smoke")).await;
+
+        let indexer = connect_optional_indexer(
+            Some(&indexer_addr.to_string()),
+            Some("hogp/test-smoke"),
+            Duration::from_secs(1),
+        )
+        .await
+        .expect("matching indexer protocol override should pass startup")
+        .expect("configured indexer should be connected");
+        let db_gateway = connect_optional_db_gateway(
+            Some(&db_addr.to_string()),
+            1,
+            Some("hogp/test-smoke"),
+            Duration::from_secs(1),
+        )
+        .await
+        .expect("matching DbGateway protocol override should pass startup")
+        .expect("configured DbGateway should be connected");
+
+        drop(indexer);
+        drop(db_gateway);
+    }
+
+    #[tokio::test]
     async fn configured_view_gateway_intro_timeout_fails_startup_probe() {
         let (addr, _server) = start_slow_intro_view_gateway().await;
 
@@ -709,5 +796,65 @@ mod tests {
             matches!(err, ConnectError::StartupProbeTimedOut { .. }),
             "expected StartupProbeTimedOut, got {err:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn configured_indexer_and_db_gateway_intro_timeout_fails_startup_probe() {
+        let (indexer_addr, _indexer_server) = start_test_indexer(IntroMode::Slow).await;
+        let (db_addr, _db_server) = start_test_db_gateway(IntroMode::Slow).await;
+
+        let Err(indexer_err) = connect_optional_indexer(
+            Some(&indexer_addr.to_string()),
+            None,
+            Duration::from_millis(10),
+        )
+        .await
+        else {
+            panic!("slow indexer intro should fail startup");
+        };
+        let Err(db_err) = connect_optional_db_gateway(
+            Some(&db_addr.to_string()),
+            1,
+            None,
+            Duration::from_millis(10),
+        )
+        .await
+        else {
+            panic!("slow DbGateway intro should fail startup");
+        };
+
+        assert!(
+            matches!(indexer_err, ConnectError::StartupProbeTimedOut { .. }),
+            "expected StartupProbeTimedOut, got {indexer_err:?}"
+        );
+        assert!(
+            matches!(db_err, ConnectError::StartupProbeTimedOut { .. }),
+            "expected StartupProbeTimedOut, got {db_err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn configured_indexer_and_db_gateway_intro_rpc_errors_degrade_startup() {
+        let (indexer_addr, _indexer_server) = start_test_indexer(IntroMode::RpcFail).await;
+        let (db_addr, _db_server) = start_test_db_gateway(IntroMode::RpcFail).await;
+
+        let indexer = connect_optional_indexer(
+            Some(&indexer_addr.to_string()),
+            None,
+            Duration::from_secs(1),
+        )
+        .await
+        .expect("indexer intro RPC errors should preserve degraded startup");
+        let db_gateway = connect_optional_db_gateway(
+            Some(&db_addr.to_string()),
+            1,
+            None,
+            Duration::from_secs(1),
+        )
+        .await
+        .expect("DbGateway intro RPC errors should preserve degraded startup");
+
+        assert!(indexer.is_none());
+        assert!(db_gateway.is_none());
     }
 }
