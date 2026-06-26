@@ -14,8 +14,8 @@ use xdr_common::{BytesM, VecM};
 use crate::account_resolution::{LocalBootstrapRole, resolve_local_bootstrap_account};
 use crate::codec::format_contract_address;
 use crate::config::{
-    find_project_config, remove_profile_wallet_address, resolve_default_key, resolve_profile,
-    save_profile_wallet_address,
+    ProfileOverrides, find_project_config, remove_profile_wallet_address, resolve_default_key,
+    resolve_profile, resolve_profile_with_overrides, save_profile_wallet_address,
 };
 use crate::keys::load_local_signer;
 use crate::result::CommandResult;
@@ -54,11 +54,12 @@ pub fn create(
     wallet_name: Option<&str>,
     dry_run: bool,
     profile: &str,
+    overrides: &ProfileOverrides,
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
     let cwd = std::env::current_dir()?;
-    let prepared = prepare_wallet_create(&cwd, key_name, wallet_name, profile)?;
+    let prepared = prepare_wallet_create(&cwd, key_name, wallet_name, profile, overrides)?;
 
     if dry_run {
         return print_dry_run(&prepared, cmd, print);
@@ -205,8 +206,9 @@ pub(crate) fn prepare_wallet_create(
     key_name: Option<&str>,
     wallet_name: Option<&str>,
     profile_name: &str,
+    overrides: &ProfileOverrides,
 ) -> Result<PreparedWalletCreate, CliError> {
-    let mut profile = resolve_profile(cwd, Some(profile_name))?;
+    let mut profile = resolve_profile_with_overrides(cwd, Some(profile_name), overrides)?;
     apply_local_node_state_for_local_bootstrap(&mut profile)?;
     let key_name = match key_name {
         Some(key_name) => key_name.to_owned(),

@@ -8,7 +8,8 @@ pub use global::{
     remove_executor_credentials, save_default_key, save_executor_credentials,
 };
 pub use project::{
-    DEFAULT_PROFILE, ProjectProfile, ResolvedProfile, active_profile_name, find_project_config,
-    load_project_profiles, remove_profile_wallet_address, resolve_default_key, resolve_profile,
-    save_profile_contract_alias, save_profile_wallet_address,
+    DEFAULT_PROFILE, ProfileOverrides, ProjectProfile, ResolvedProfile, active_profile_name,
+    find_project_config, load_project_profiles, remove_profile_wallet_address, resolve_default_key,
+    resolve_profile, resolve_profile_with_overrides, save_profile_contract_alias,
+    save_profile_wallet_address,
 };

@@ -1686,8 +1686,10 @@ mod tests {
         let profile = crate::config::ResolvedProfile {
             name: "integration".into(),
             rpc_url: Some("http://127.0.0.1:1234".into()),
+            rpc_url_cli_override: false,
             default_key: Some("dev-0".into()),
             runtime_manifest: None,
+            runtime_manifest_cli_override: false,
             contracts: BTreeMap::new(),
             wallets: BTreeMap::new(),
             source: None,
@@ -1859,8 +1861,10 @@ mod tests {
         let profile = crate::config::ResolvedProfile {
             name: "default".into(),
             rpc_url: None,
+            rpc_url_cli_override: false,
             default_key: None,
             runtime_manifest: None,
+            runtime_manifest_cli_override: false,
             contracts: BTreeMap::new(),
             wallets: BTreeMap::new(),
             source: None,

@@ -7,7 +7,9 @@ use serde_json::json;
 use crate::account_resolution::lookup_dev_account_address;
 use crate::airdrop::format_hog_amount;
 use crate::codec::{format_contract_address, parse_contract_address};
-use crate::config::{ResolvedProfile, resolve_default_key, resolve_profile};
+use crate::config::{
+    ProfileOverrides, ResolvedProfile, resolve_default_key, resolve_profile_with_overrides,
+};
 use crate::dev_keys;
 use crate::result::CommandResult;
 use crate::runtime_manifest::apply_local_node_state_for_dev_key;
@@ -18,10 +20,12 @@ pub fn run(
     target: &str,
     project_start: &Path,
     profile: &str,
+    overrides: &ProfileOverrides,
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    let mut resolved_profile = resolve_profile(project_start, Some(profile))?;
+    let mut resolved_profile =
+        resolve_profile_with_overrides(project_start, Some(profile), overrides)?;
     if let Some(key_name) = resolve_default_key(project_start, Some(profile))? {
         apply_local_node_state_for_dev_key(&mut resolved_profile, &key_name)?;
     }
@@ -110,8 +114,10 @@ mod tests {
         let mut profile = ResolvedProfile {
             name: "default".into(),
             rpc_url: None,
+            rpc_url_cli_override: false,
             default_key: None,
             runtime_manifest: None,
+            runtime_manifest_cli_override: false,
             contracts: BTreeMap::new(),
             wallets: BTreeMap::new(),
             source: None,
@@ -130,8 +136,10 @@ mod tests {
         let mut profile = ResolvedProfile {
             name: "default".into(),
             rpc_url: None,
+            rpc_url_cli_override: false,
             default_key: None,
             runtime_manifest: None,
+            runtime_manifest_cli_override: false,
             contracts: BTreeMap::new(),
             wallets: BTreeMap::new(),
             source: None,
@@ -151,8 +159,10 @@ mod tests {
         let profile = ResolvedProfile {
             name: "default".into(),
             rpc_url: None,
+            rpc_url_cli_override: false,
             default_key: None,
             runtime_manifest: None,
+            runtime_manifest_cli_override: false,
             contracts: BTreeMap::new(),
             wallets: BTreeMap::new(),
             source: None,

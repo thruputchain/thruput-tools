@@ -34,9 +34,10 @@ struct LocalNodeState {
 
 /// Load the runtime manifest configured by environment or profile.
 ///
-/// Environment wins over profile so scripts can target an ephemeral local node
-/// without editing `groundhog.toml`. If neither is set, fall back to the
-/// project-local state written by `groundhog node`.
+/// An explicit CLI override wins over environment. Otherwise environment wins
+/// over profile so scripts can target an ephemeral local node without editing
+/// `groundhog.toml`. If neither is set, fall back to the project-local state
+/// written by `groundhog node`.
 pub(crate) fn load_configured_runtime_manifest(
     profile: &ResolvedProfile,
     key_name: &str,
@@ -50,22 +51,22 @@ pub(crate) fn load_configured_runtime_manifest(
 fn configured_runtime_manifest_path(
     profile: &ResolvedProfile,
 ) -> Result<Option<PathBuf>, CliError> {
+    if profile.runtime_manifest_cli_override {
+        return profile_runtime_manifest_path(profile);
+    }
+
     if let Some(raw) = std::env::var_os(ENV_RUNTIME_MANIFEST)
         && !os_value_is_blank(raw.as_os_str())
     {
         return Ok(Some(resolve_from_cwd(PathBuf::from(raw))?));
     }
 
-    if let Some(path) = profile.runtime_manifest.as_ref() {
-        if path.is_absolute() {
-            return Ok(Some(path.clone()));
-        }
-        let base = profile
-            .source
-            .as_ref()
-            .and_then(|source| source.parent())
-            .map_or_else(std::env::current_dir, |path| Ok(path.to_path_buf()))?;
-        return Ok(Some(base.join(path)));
+    if let Some(path) = profile_runtime_manifest_path(profile)? {
+        return Ok(Some(path));
+    }
+
+    if profile.rpc_url_cli_override {
+        return Ok(None);
     }
 
     if profile_rpc_allows_local_node_state(profile.rpc_url.as_deref()) {
@@ -73,6 +74,21 @@ fn configured_runtime_manifest_path(
     } else {
         Ok(None)
     }
+}
+
+fn profile_runtime_manifest_path(profile: &ResolvedProfile) -> Result<Option<PathBuf>, CliError> {
+    let Some(path) = profile.runtime_manifest.as_ref() else {
+        return Ok(None);
+    };
+    if path.is_absolute() {
+        return Ok(Some(path.clone()));
+    }
+    let base = profile
+        .source
+        .as_ref()
+        .and_then(|source| source.parent())
+        .map_or_else(std::env::current_dir, |path| Ok(path.to_path_buf()))?;
+    Ok(Some(base.join(path)))
 }
 
 /// Apply the project-local `groundhog node` state for dev-key workflows.
@@ -88,6 +104,7 @@ pub(crate) fn apply_local_node_state_for_dev_key(
 ) -> Result<(), CliError> {
     if dev_keys::dev_key_index(key_name).is_none()
         || explicit_runtime_manifest_path_configured(profile)
+        || profile.rpc_url_cli_override
         || !profile_rpc_allows_local_node_state(profile.rpc_url.as_deref())
     {
         return Ok(());
@@ -106,6 +123,7 @@ pub(crate) fn apply_local_node_state_for_local_bootstrap(
     profile: &mut ResolvedProfile,
 ) -> Result<(), CliError> {
     if explicit_runtime_manifest_path_configured(profile)
+        || profile.rpc_url_cli_override
         || !profile_rpc_allows_local_node_state(profile.rpc_url.as_deref())
     {
         return Ok(());
@@ -421,8 +439,10 @@ mod tests {
         let mut profile = ResolvedProfile {
             name: "default".to_string(),
             rpc_url: Some("https://testnet.groundhog.io".to_string()),
+            rpc_url_cli_override: false,
             default_key: Some("dev-0".to_string()),
             runtime_manifest: None,
+            runtime_manifest_cli_override: false,
             contracts: BTreeMap::default(),
             wallets: BTreeMap::default(),
             source: Some(config_path),
@@ -458,8 +478,10 @@ mod tests {
         let profile = ResolvedProfile {
             name: "default".to_string(),
             rpc_url: None,
+            rpc_url_cli_override: false,
             default_key: Some("dev-0".to_string()),
             runtime_manifest: None,
+            runtime_manifest_cli_override: false,
             contracts: BTreeMap::default(),
             wallets: BTreeMap::default(),
             source: Some(config_path),

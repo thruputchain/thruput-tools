@@ -257,6 +257,7 @@ saves a contract alias into the active profile when running inside a project.
 ```bash
 groundhog deploy
 groundhog deploy --profile testnet
+groundhog deploy --rpc-url http://<your-rpc-host>:8545
 groundhog deploy --artifact target/groundhog/counter.rv32a
 groundhog deploy --target rv32
 groundhog deploy --json
@@ -275,6 +276,7 @@ groundhog call my-counter increment 5
 groundhog call my-counter get
 groundhog call 0xabc123... get
 groundhog call my-counter increment 5 --dry-run
+groundhog call my-counter increment 5 --rpc-url http://<your-rpc-host>:8545
 groundhog call my-counter increment 5 --json
 ```
 
@@ -307,11 +309,32 @@ contract simulation through `groundhog_view`.
 ```bash
 groundhog storage my-counter 0x0000000000000000000000000000000000000000000000000000000000000000
 groundhog storage 0xabc123... 0x4242424242424242424242424242424242424242424242424242424242424242
+groundhog storage my-counter 0x4242424242424242424242424242424242424242424242424242424242424242 --rpc-url http://<your-rpc-host>:8545
 groundhog storage my-counter 0x4242424242424242424242424242424242424242424242424242424242424242 --json
 ```
 
 The output includes the snapshot block height even when the item is absent,
 so scripts can compare it with `groundhog_chainTip` freshness.
+
+### Remote RPC overrides
+
+RPC-facing commands can target a remote endpoint without editing
+`groundhog.toml`:
+
+```bash
+groundhog deploy --rpc-url http://<your-rpc-host>:8545
+groundhog call my-counter increment 1 --rpc-url http://<your-rpc-host>:8545
+groundhog balance alice --rpc-url http://<your-rpc-host>:8545
+groundhog view my-counter get --rpc-url http://<your-rpc-host>:8545
+groundhog storage my-counter <32-byte-storage-key> --rpc-url http://<your-rpc-host>:8545
+```
+
+Use `--runtime-manifest` for localhost development when a command signs as a
+`dev-N` account or needs bootstrap wallet metadata from `groundhog node`. It is
+not required for ordinary remote endpoints. A manifest passed on the command
+line is resolved from the invocation directory and wins over
+`GROUNDHOG_RUNTIME_MANIFEST`; the environment override still wins over
+`groundhog.toml` profile settings.
 
 ### `groundhog node`
 
@@ -400,7 +423,7 @@ Contract aliases map names to addresses per profile. `deploy`, `call`, and
 `storage` resolve aliases from the active profile. When `runtime_manifest` is
 set, relative paths resolve from the directory containing `groundhog.toml`;
 `GROUNDHOG_RUNTIME_MANIFEST` overrides the profile field for ephemeral local
-node runs.
+node runs, and a command-line `--runtime-manifest` override wins over both.
 
 ## Global Flags
 
@@ -410,8 +433,10 @@ node runs.
 | `--json` | Emit structured JSON output |
 
 `--profile` is available on commands that interact with project
-config (`build`, `test`, `deploy`, `call`, `storage`, `status`). Keys are
-global — not per-profile.
+config (`build`, `test`, `deploy`, `call`, `storage`, `status`). `--rpc-url`
+and `--runtime-manifest` are available on RPC-facing commands when you need a
+one-off endpoint or local-dev account override. Keys are global — not
+per-profile.
 
 ## Templates
 

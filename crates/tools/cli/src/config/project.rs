@@ -35,12 +35,25 @@ struct ProjectConfigFile {
 pub struct ResolvedProfile {
     pub name: String,
     pub rpc_url: Option<String>,
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub rpc_url_cli_override: bool,
     pub default_key: Option<String>,
     pub runtime_manifest: Option<PathBuf>,
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub runtime_manifest_cli_override: bool,
     pub contracts: BTreeMap<String, String>,
     #[serde(default)]
     pub wallets: BTreeMap<String, String>,
     pub source: Option<PathBuf>,
+}
+
+/// Explicit CLI profile overrides.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProfileOverrides {
+    pub rpc_url: Option<String>,
+    pub runtime_manifest: Option<PathBuf>,
 }
 
 impl ResolvedProfile {
@@ -304,12 +317,57 @@ pub fn resolve_profile(start: &Path, explicit: Option<&str>) -> Result<ResolvedP
     Ok(ResolvedProfile {
         name,
         rpc_url: profile.rpc_url,
+        rpc_url_cli_override: false,
         default_key: profile.default_key,
         runtime_manifest: profile.runtime_manifest,
+        runtime_manifest_cli_override: false,
         contracts: profile.contracts,
         wallets: profile.wallets,
         source,
     })
+}
+
+/// Resolve a profile and apply explicit CLI target overrides.
+pub fn resolve_profile_with_overrides(
+    start: &Path,
+    explicit: Option<&str>,
+    overrides: &ProfileOverrides,
+) -> Result<ResolvedProfile, CliError> {
+    let mut profile = resolve_profile(start, explicit)?;
+    apply_profile_overrides(start, &mut profile, overrides)?;
+    Ok(profile)
+}
+
+/// Apply explicit CLI target overrides to an already resolved profile.
+pub fn apply_profile_overrides(
+    start: &Path,
+    profile: &mut ResolvedProfile,
+    overrides: &ProfileOverrides,
+) -> Result<(), CliError> {
+    if let Some(rpc_url) = overrides.rpc_url.as_ref() {
+        let rpc_url = rpc_url.trim();
+        if rpc_url.is_empty() {
+            return Err(CliError::Other("--rpc-url cannot be empty".into()));
+        }
+        if !rpc_url.starts_with("http://") && !rpc_url.starts_with("https://") {
+            return Err(CliError::Other(
+                "--rpc-url must start with http:// or https://".into(),
+            ));
+        }
+        profile.rpc_url = Some(rpc_url.to_owned());
+        profile.rpc_url_cli_override = true;
+    }
+
+    if let Some(path) = overrides.runtime_manifest.as_ref() {
+        profile.runtime_manifest = Some(if path.is_absolute() {
+            path.clone()
+        } else {
+            start.join(path)
+        });
+        profile.runtime_manifest_cli_override = true;
+    }
+
+    Ok(())
 }
 
 fn is_valid_address(addr: &str) -> bool {
