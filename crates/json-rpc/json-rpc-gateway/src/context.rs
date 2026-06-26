@@ -1,7 +1,9 @@
 use std::{sync::Arc, time::Duration};
 
-use groundhog_db_gateway::DbGateway_DbGateway1_Client;
-use groundhog_indexer::IndexerBlockExplorer_IndexerBlockExplorer1_Client;
+use groundhog_db_gateway::{DbGateway_DbGateway1_Client, DbGatewayIntroOutcome};
+use groundhog_indexer::{
+    IndexerBlockExplorer_IndexerBlockExplorer1_Client, IndexerBlockExplorerIntroOutcome,
+};
 use groundhog_scheduler::sched_coord::SchedulerCoord_SchedulerCoord1_Client;
 use groundhog_scp::network::Protocol;
 use groundhog_view::{ViewGateway_ViewGateway1_Client, ViewGatewayIntroOutcome};
@@ -94,38 +96,34 @@ impl GatewayContext {
             .await?,
         ));
 
-        let indexer = Arc::new(RwLock::new(match &config.indexer_address {
-            Some(addr) => {
-                try_connect(
-                    "indexer",
-                    addr,
-                    4,
-                    IndexerBlockExplorer_IndexerBlockExplorer1_Client::new,
-                )
-                .await?
-            }
-            None => None,
-        }));
+        let protocol_override = config.hogd_protocol_override.as_deref();
+        let startup_timeout = Duration::from_millis(config.view_timeout_ms);
+
+        let indexer = Arc::new(RwLock::new(
+            connect_optional_indexer(
+                config.indexer_address.as_deref(),
+                protocol_override,
+                startup_timeout,
+            )
+            .await?,
+        ));
 
         let db_gateway_pool = db_gateway_pool_size(&config);
-        let db_gateway = Arc::new(RwLock::new(match &config.db_gateway_address {
-            Some(addr) => {
-                try_connect(
-                    "db_gateway",
-                    addr,
-                    db_gateway_pool,
-                    DbGateway_DbGateway1_Client::new,
-                )
-                .await?
-            }
-            None => None,
-        }));
+        let db_gateway = Arc::new(RwLock::new(
+            connect_optional_db_gateway(
+                config.db_gateway_address.as_deref(),
+                db_gateway_pool,
+                protocol_override,
+                startup_timeout,
+            )
+            .await?,
+        ));
 
         let view_gateway = Arc::new(RwLock::new(
             connect_optional_view_gateway(
                 config.view_gateway_address.as_deref(),
-                config.hogd_protocol_override.as_deref(),
-                Duration::from_millis(config.view_timeout_ms),
+                protocol_override,
+                startup_timeout,
             )
             .await?,
         ));
@@ -148,6 +146,100 @@ impl GatewayContext {
             view_gateway,
             config,
         })
+    }
+}
+
+async fn connect_optional_indexer(
+    address: Option<&str>,
+    protocol_override: Option<&str>,
+    startup_timeout: Duration,
+) -> Result<Option<IndexerBlockExplorer_IndexerBlockExplorer1_Client>, ConnectError> {
+    let Some(address) = address else {
+        return Ok(None);
+    };
+
+    let Some(client) = try_connect(
+        "indexer",
+        address,
+        4,
+        IndexerBlockExplorer_IndexerBlockExplorer1_Client::new,
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
+
+    let protocol_version = protocol_override.unwrap_or(PROTOCOL_VERSION);
+    let protocol: Protocol = StringM(protocol_version.as_bytes().to_vec());
+    let intro_outcome = tokio::time::timeout(
+        startup_timeout,
+        client.indexer_block_explorer_intro(&protocol),
+    )
+    .await
+    .map_err(|_| ConnectError::StartupProbeTimedOut {
+        service: "indexer_block_explorer_intro",
+        addr: address.to_string(),
+        timeout: startup_timeout,
+    })?;
+
+    match intro_outcome {
+        Ok(IndexerBlockExplorerIntroOutcome::IntroSuccess) => Ok(Some(client)),
+        Ok(outcome) => Err(ConnectError::StartupRejected {
+            service: "indexer",
+            addr: address.to_string(),
+            reason: indexer_intro_rejection_reason(outcome, protocol_version),
+        }),
+        Err(source) => Err(ConnectError::ConnectFailed {
+            service: "indexer_block_explorer_intro",
+            addr: address.to_string(),
+            source,
+        }),
+    }
+}
+
+async fn connect_optional_db_gateway(
+    address: Option<&str>,
+    pool_size: usize,
+    protocol_override: Option<&str>,
+    startup_timeout: Duration,
+) -> Result<Option<DbGateway_DbGateway1_Client>, ConnectError> {
+    let Some(address) = address else {
+        return Ok(None);
+    };
+
+    let Some(client) = try_connect(
+        "db_gateway",
+        address,
+        pool_size,
+        DbGateway_DbGateway1_Client::new,
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
+
+    let protocol_version = protocol_override.unwrap_or(PROTOCOL_VERSION);
+    let protocol: Protocol = StringM(protocol_version.as_bytes().to_vec());
+    let intro_outcome = tokio::time::timeout(startup_timeout, client.dbgateway_intro(&protocol))
+        .await
+        .map_err(|_| ConnectError::StartupProbeTimedOut {
+            service: "dbgateway_intro",
+            addr: address.to_string(),
+            timeout: startup_timeout,
+        })?;
+
+    match intro_outcome {
+        Ok(DbGatewayIntroOutcome::DbGatewayIntroSuccess) => Ok(Some(client)),
+        Ok(outcome) => Err(ConnectError::StartupRejected {
+            service: "db_gateway",
+            addr: address.to_string(),
+            reason: db_gateway_intro_rejection_reason(outcome, protocol_version),
+        }),
+        Err(source) => Err(ConnectError::ConnectFailed {
+            service: "dbgateway_intro",
+            addr: address.to_string(),
+            source,
+        }),
     }
 }
 
@@ -191,6 +283,44 @@ async fn connect_optional_view_gateway(
             source,
         }),
     }
+}
+
+fn indexer_intro_rejection_reason(
+    outcome: IndexerBlockExplorerIntroOutcome,
+    protocol_version: &str,
+) -> String {
+    if outcome == IndexerBlockExplorerIntroOutcome::IntroMismatchedProtocol {
+        return format!(
+            "IndexerBlockExplorer intro mismatch: gateway speaks protocol {protocol_version}, \
+             but the backend rejected it ({outcome}); pass `--hogd-protocol`/\
+             `hogd_protocol_override` for a matching backend protocol, or rebuild the gateway \
+             against a matching groundhog-xdr"
+        );
+    }
+
+    format!(
+        "IndexerBlockExplorer intro rejected with outcome {outcome}; gateway speaks protocol \
+         {protocol_version}"
+    )
+}
+
+fn db_gateway_intro_rejection_reason(
+    outcome: DbGatewayIntroOutcome,
+    protocol_version: &str,
+) -> String {
+    if outcome == DbGatewayIntroOutcome::DbGatewayIntroMismatchedProtocol {
+        return format!(
+            "DbGateway intro mismatch: gateway speaks protocol {protocol_version}, \
+             but the backend rejected it ({outcome}); pass `--hogd-protocol`/\
+             `hogd_protocol_override` for a matching backend protocol, or rebuild the gateway \
+             against a matching groundhog-xdr"
+        );
+    }
+
+    format!(
+        "DbGateway intro rejected with outcome {outcome}; gateway speaks protocol \
+         {protocol_version}"
+    )
 }
 
 fn view_gateway_intro_rejection_reason(
@@ -245,9 +375,18 @@ fn view_gateway_pool_size() -> usize {
 #[cfg(test)]
 mod tests {
     use async_trait::async_trait;
+    use groundhog_db_gateway::{
+        AddressAndKeyBatch, DbGateway_DbGateway1, DbGateway_DbGateway1_Dispatcher, DbGatewayResult,
+    };
+    use groundhog_indexer::{
+        EventPage as IdxEventPage, IndexerBlockExplorer_IndexerBlockExplorer1,
+        IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher,
+        TransactionPage as IdxTransactionPage, TransactionQuery, TxInfoResult,
+    };
     use groundhog_view::{
         ViewGateway_ViewGateway1, ViewGateway_ViewGateway1_Dispatcher, ViewGatewayResult,
     };
+    use groundhog_xdr::transaction::SignedTransactionHash;
     use groundhog_xdr::view::TransactionViewQuery;
     use rpc_driver::{ProgramError, RpcServer, ServiceMap};
     use tokio::net::TcpListener;
@@ -255,6 +394,8 @@ mod tests {
     use super::*;
 
     struct IntroRejectedViewGateway;
+    struct IntroRejectedIndexer;
+    struct IntroRejectedDbGateway;
     struct ProtocolCheckingViewGateway {
         expected: &'static str,
     }
@@ -274,6 +415,54 @@ mod tests {
             _arg0: TransactionViewQuery,
         ) -> Result<ViewGatewayResult, ProgramError> {
             panic!("bug: intro rejection test should not issue view RPC")
+        }
+    }
+
+    #[async_trait]
+    impl IndexerBlockExplorer_IndexerBlockExplorer1 for IntroRejectedIndexer {
+        async fn indexer_block_explorer_intro(
+            &self,
+            _arg0: Protocol,
+        ) -> Result<IndexerBlockExplorerIntroOutcome, ProgramError> {
+            Ok(IndexerBlockExplorerIntroOutcome::IntroMismatchedProtocol)
+        }
+
+        async fn get_transaction_info(
+            &self,
+            _arg0: SignedTransactionHash,
+        ) -> Result<TxInfoResult, ProgramError> {
+            panic!("bug: intro rejection test should not issue indexer data RPC")
+        }
+
+        async fn get_events(
+            &self,
+            _arg0: groundhog_indexer::EventQuery,
+        ) -> Result<IdxEventPage, ProgramError> {
+            panic!("bug: intro rejection test should not issue indexer data RPC")
+        }
+
+        async fn get_transactions(
+            &self,
+            _arg0: TransactionQuery,
+        ) -> Result<IdxTransactionPage, ProgramError> {
+            panic!("bug: intro rejection test should not issue indexer data RPC")
+        }
+    }
+
+    #[async_trait]
+    impl DbGateway_DbGateway1 for IntroRejectedDbGateway {
+        async fn dbgateway_intro(
+            &self,
+            _arg0: Protocol,
+        ) -> Result<DbGatewayIntroOutcome, ProgramError> {
+            Ok(DbGatewayIntroOutcome::DbGatewayIntroMismatchedProtocol)
+        }
+
+        async fn dbgateway_get_items(
+            &self,
+            _arg0: AddressAndKeyBatch,
+        ) -> Result<DbGatewayResult, ProgramError> {
+            panic!("bug: intro rejection test should not issue db gateway data RPC")
         }
     }
 
@@ -330,6 +519,46 @@ mod tests {
         services.add_service(Box::new(ViewGateway_ViewGateway1_Dispatcher::new(
             Box::new(IntroRejectedViewGateway),
         )));
+        let server = RpcServer::new(listener, services);
+        let handle = server.start().await;
+        (addr, handle)
+    }
+
+    async fn start_intro_rejected_indexer() -> (
+        std::net::SocketAddr,
+        tokio::task::JoinHandle<Result<(), std::io::Error>>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bug: test indexer should bind");
+        let addr = listener
+            .local_addr()
+            .expect("bug: test indexer should have local addr");
+        let mut services = ServiceMap::new();
+        services.add_service(Box::new(
+            IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher::new(Box::new(
+                IntroRejectedIndexer,
+            )),
+        ));
+        let server = RpcServer::new(listener, services);
+        let handle = server.start().await;
+        (addr, handle)
+    }
+
+    async fn start_intro_rejected_db_gateway() -> (
+        std::net::SocketAddr,
+        tokio::task::JoinHandle<Result<(), std::io::Error>>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bug: test DbGateway should bind");
+        let addr = listener
+            .local_addr()
+            .expect("bug: test DbGateway should have local addr");
+        let mut services = ServiceMap::new();
+        services.add_service(Box::new(DbGateway_DbGateway1_Dispatcher::new(Box::new(
+            IntroRejectedDbGateway,
+        ))));
         let server = RpcServer::new(listener, services);
         let handle = server.start().await;
         (addr, handle)
@@ -400,6 +629,49 @@ mod tests {
                 assert!(reason.contains("ViewGateway intro mismatch"));
                 assert!(reason.contains(PROTOCOL_VERSION));
                 assert!(reason.contains("ViewGatewayIntroMismatchedProtocol"));
+                assert!(reason.contains("--hogd-protocol"));
+            }
+            other => panic!("expected StartupRejected, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn configured_indexer_intro_rejection_fails_startup_probe() {
+        let (addr, _server) = start_intro_rejected_indexer().await;
+
+        let Err(err) =
+            connect_optional_indexer(Some(&addr.to_string()), None, Duration::from_secs(1)).await
+        else {
+            panic!("configured indexer intro rejection should fail startup");
+        };
+
+        match err {
+            ConnectError::StartupRejected { reason, .. } => {
+                assert!(reason.contains("IndexerBlockExplorer intro mismatch"));
+                assert!(reason.contains(PROTOCOL_VERSION));
+                assert!(reason.contains("IntroMismatchedProtocol"));
+                assert!(reason.contains("--hogd-protocol"));
+            }
+            other => panic!("expected StartupRejected, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn configured_db_gateway_intro_rejection_fails_startup_probe() {
+        let (addr, _server) = start_intro_rejected_db_gateway().await;
+
+        let Err(err) =
+            connect_optional_db_gateway(Some(&addr.to_string()), 1, None, Duration::from_secs(1))
+                .await
+        else {
+            panic!("configured DbGateway intro rejection should fail startup");
+        };
+
+        match err {
+            ConnectError::StartupRejected { reason, .. } => {
+                assert!(reason.contains("DbGateway intro mismatch"));
+                assert!(reason.contains(PROTOCOL_VERSION));
+                assert!(reason.contains("DbGatewayIntroMismatchedProtocol"));
                 assert!(reason.contains("--hogd-protocol"));
             }
             other => panic!("expected StartupRejected, got {other:?}"),
