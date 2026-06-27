@@ -26,6 +26,7 @@ use tokio::sync::mpsc;
 
 use crate::config::AdaptiveBatchConfig;
 use crate::error::GatewayError;
+use crate::metrics::{GatewayMetrics, REASON_CLOSED, REASON_INGRESS_FULL};
 
 /// Per-batch processing policy supplied by each batcher callsite.
 ///
@@ -55,6 +56,8 @@ struct Shard<P: BatchProcessor> {
     max_inflight: u32,
     max_size: usize,
     processor: Arc<P>,
+    component: &'static str,
+    metrics: GatewayMetrics,
 }
 
 impl<P: BatchProcessor> Shard<P> {
@@ -84,9 +87,12 @@ impl<P: BatchProcessor> Shard<P> {
                         }
                     }
                     self.inflight += 1;
+                    self.metrics.observe_internal_batch_size(self.component, items.len());
+                    let in_flight = self.metrics.internal_batch_in_flight_guard(self.component);
                     let processor = self.processor.clone();
                     let done = self.completion_tx.clone();
                     tokio::spawn(async move {
+                        let _in_flight = in_flight;
                         processor.process(items).await;
                         let _ = done.send(());
                     });
@@ -106,6 +112,8 @@ pub(crate) struct AdaptiveBatcher<I: Send + 'static> {
     /// Component name used in `Overloaded`/`BackendUnavailable` strings —
     /// e.g. "batch submitter" or "storage batcher".
     name: &'static str,
+    component: &'static str,
+    metrics: GatewayMetrics,
 }
 
 impl<I: Send + 'static> Clone for AdaptiveBatcher<I> {
@@ -113,6 +121,8 @@ impl<I: Send + 'static> Clone for AdaptiveBatcher<I> {
         Self {
             shards: self.shards.clone(),
             name: self.name,
+            component: self.component,
+            metrics: self.metrics.clone(),
         }
     }
 }
@@ -123,8 +133,10 @@ impl<I: Send + 'static> AdaptiveBatcher<I> {
     /// component-tagged (`"<name> ingress queue full"`).
     pub(crate) fn spawn<P>(
         name: &'static str,
+        component: &'static str,
         config: &AdaptiveBatchConfig,
         processor: &Arc<P>,
+        metrics: GatewayMetrics,
     ) -> Self
     where
         P: BatchProcessor<Item = I>,
@@ -142,6 +154,8 @@ impl<I: Send + 'static> AdaptiveBatcher<I> {
                 max_inflight: config.max_inflight_batches.max(1),
                 max_size: config.max_size.max(1),
                 processor: processor.clone(),
+                component,
+                metrics: metrics.clone(),
             };
             tokio::spawn(shard.run());
             senders.push(sender);
@@ -149,6 +163,8 @@ impl<I: Send + 'static> AdaptiveBatcher<I> {
         Self {
             shards: senders.into(),
             name,
+            component,
+            metrics,
         }
     }
 
@@ -171,11 +187,17 @@ impl<I: Send + 'static> AdaptiveBatcher<I> {
             )));
         };
         sender.try_send(item).map_err(|e| match e {
-            mpsc::error::TrySendError::Full(_) => GatewayError::Overloaded(format!(
-                "gateway {} ingress queue full (shard {shard_idx})",
-                self.name
-            )),
+            mpsc::error::TrySendError::Full(_) => {
+                self.metrics
+                    .observe_internal_batch_rejected(self.component, REASON_INGRESS_FULL);
+                GatewayError::Overloaded(format!(
+                    "gateway {} ingress queue full (shard {shard_idx})",
+                    self.name
+                ))
+            }
             mpsc::error::TrySendError::Closed(_) => {
+                self.metrics
+                    .observe_internal_batch_rejected(self.component, REASON_CLOSED);
                 GatewayError::BackendUnavailable(format!("{} shut down", self.name))
             }
         })

@@ -3,9 +3,12 @@
 use groundhog_json_rpc_types::events::{EventPage, EventQuery, IdentifiedEvent};
 use groundhog_json_rpc_types::hex::Hex0x;
 use groundhog_json_rpc_types::transaction::TxHash;
+use std::time::Instant;
 
+use crate::config::HealthBackend;
 use crate::context::GatewayContext;
 use crate::error::GatewayError;
+use crate::metrics::{BackendRequestOutcome, REASON_PARSE_FAILED};
 
 use super::parse_event::parse_emitted_event;
 
@@ -29,10 +32,19 @@ pub async fn get_events(
         .ok_or_else(|| GatewayError::BackendUnavailable("indexer not connected".into()))?;
 
     let wire_query: groundhog_indexer::indexer::EventQuery = query.into();
-    let page = client
-        .get_events(&wire_query)
-        .await
-        .map_err(|e| GatewayError::BackendUnavailable(format!("indexer: {e}")))?;
+    let started_at = Instant::now();
+    let rpc_result = client.get_events(&wire_query).await;
+    ctx.metrics.observe_backend_request(
+        HealthBackend::Indexer,
+        "get_events",
+        if rpc_result.is_ok() {
+            BackendRequestOutcome::Ok
+        } else {
+            BackendRequestOutcome::Error
+        },
+        started_at.elapsed(),
+    );
+    let page = rpc_result.map_err(|e| GatewayError::BackendUnavailable(format!("indexer: {e}")))?;
 
     let mut events: Vec<IdentifiedEvent> = Vec::with_capacity(page.events.0.len());
     for identified in &page.events.0 {
@@ -44,6 +56,8 @@ pub async fn get_events(
                 event,
             });
         } else {
+            ctx.metrics
+                .observe_malformed_event_dropped(REASON_PARSE_FAILED);
             tracing::warn!(
                 tx_hash = ?identified.proposed_tx_hash,
                 block_height = ?identified.block_height,

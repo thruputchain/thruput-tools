@@ -4,7 +4,11 @@ mod config;
 mod context;
 mod error;
 mod handlers;
+mod health;
+mod metrics;
 mod middleware;
+mod observability;
+mod rpc_middleware;
 mod storage_batcher;
 mod submitter;
 mod tip_coalescer;
@@ -17,7 +21,7 @@ use tokio::io::AsyncReadExt;
 use tracing_subscriber::EnvFilter;
 
 use crate::backend::GatewayBackend;
-use crate::config::GatewayConfig;
+use crate::config::{GatewayConfig, HealthBackend};
 use crate::context::GatewayContext;
 use groundhog_json_rpc_api::GroundhogApiServer;
 use groundhog_json_rpc_server::{BuildInfo, GroundhogRpcServer, RpcServerConfig};
@@ -39,6 +43,22 @@ struct Cli {
     /// Listen address (overrides config file)
     #[arg(long)]
     listen: Option<String>,
+
+    /// Private health/metrics listen address (overrides config file)
+    #[arg(long)]
+    observability_listen: Option<String>,
+
+    /// Comma-separated backends required for readiness
+    #[arg(long, value_delimiter = ',')]
+    health_required_backends: Option<Vec<HealthBackend>>,
+
+    /// Maximum allowed age of the last successful chain-tip probe
+    #[arg(long)]
+    health_chain_tip_max_age_ms: Option<u64>,
+
+    /// Background readiness probe interval
+    #[arg(long)]
+    health_probe_interval_ms: Option<u64>,
 
     /// Scheduler (mempool) x23 RPC address (overrides config file)
     #[arg(long)]
@@ -79,13 +99,110 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None => GatewayConfig::default(),
     };
 
+    if let Some(path) = &cli.runtime_manifest {
+        let contents = read_runtime_manifest(path).await?;
+        let manifest = serde_json::from_slice::<RuntimeManifest>(&contents)?;
+        config.apply_runtime_manifest(&manifest)?;
+    }
+
+    apply_cli_overrides(&mut config, cli);
+
+    tracing::info!(
+        listen = %config.listen_address,
+        observability_listen = %config.observability_listen,
+        health_required_backends = ?config.health_required_backends,
+        submission_backend = ?config.submission_backend,
+        scheduler = %config.scheduler_address,
+        indexer = ?config.indexer_address,
+        view_gateway = ?config.view_gateway_address,
+        hogd_protocol_override = ?config.hogd_protocol_override,
+        coordinator = ?config.coordinator_address,
+        "loading configuration",
+    );
+
+    // --- Metrics registry ---
+    let metrics =
+        metrics::GatewayMetrics::new(env!("CARGO_PKG_VERSION"), option_env!("GIT_COMMIT"))?;
+    metrics.set_rpc_connections_limit(config.max_connections);
+
+    // --- Context (backend connections) ---
+    let ctx = Arc::new(GatewayContext::new(config, metrics.clone()).await?);
+
+    // --- Observability HTTP server ---
+    let health = health::GatewayHealth::new(
+        &ctx.config,
+        env!("CARGO_PKG_VERSION"),
+        option_env!("GIT_COMMIT"),
+    );
+    let (health_shutdown_tx, health_shutdown_rx) = tokio::sync::oneshot::channel();
+    let health_handle =
+        health::spawn_health_probe_with_shutdown(ctx.clone(), health.clone(), health_shutdown_rx);
+    let (observability_shutdown_tx, observability_shutdown_rx) = tokio::sync::oneshot::channel();
+    let observability_server = observability::spawn_observability_server(
+        &ctx.config.observability_listen,
+        health,
+        metrics.clone(),
+        observability_shutdown_rx,
+    )
+    .await?;
+
+    // --- Server ---
+    let server_cfg = jsonrpsee::server::ServerConfig::builder()
+        .max_connections(ctx.config.max_connections)
+        .set_batch_request_config(jsonrpsee::server::BatchRequestConfig::Limit(1_000))
+        .build();
+    let http_mw = middleware::http_middleware(&ctx.config, metrics.clone());
+    let rpc_metrics = metrics.clone();
+    let rpc_mw = jsonrpsee::core::middleware::RpcServiceBuilder::new()
+        .layer_fn(move |inner| rpc_middleware::RpcMetricsService::new(inner, rpc_metrics.clone()));
+    let server = jsonrpsee::server::Server::builder()
+        .set_config(server_cfg)
+        .set_http_middleware(http_mw)
+        .set_rpc_middleware(rpc_mw)
+        .build(&ctx.config.listen_address)
+        .await?;
+
+    let rpc_config = RpcServerConfig::default()
+        .with_max_events_per_page(ctx.config.max_events_per_page)
+        .with_max_cursor_bytes(ctx.config.max_cursor_bytes)
+        .with_max_view_calldata_bytes(ctx.config.max_view_calldata_bytes)
+        .with_view_gas_limit(ctx.config.view_gas_limit);
+    let api_impl = GroundhogRpcServer::unified(
+        GatewayBackend::new(ctx.clone()),
+        rpc_config,
+        BuildInfo::new(env!("CARGO_PKG_VERSION"), option_env!("GIT_COMMIT")),
+    );
+    let handle = server.start(api_impl.into_rpc());
+
+    tracing::info!("hog-gateway listening");
+
+    // Graceful shutdown on SIGINT/SIGTERM.
+    tokio::signal::ctrl_c().await?;
+    let _ = health_shutdown_tx.send(());
+    let _ = observability_shutdown_tx.send(());
+    handle.stop()?;
+    handle.stopped().await;
+    health_handle.await?;
+    observability_server.handle.await??;
+
+    Ok(())
+}
+
+fn apply_cli_overrides(config: &mut GatewayConfig, cli: Cli) {
     if let Some(listen) = cli.listen {
         config.listen_address = listen;
     }
-    if let Some(path) = cli.runtime_manifest {
-        let contents = read_runtime_manifest(&path).await?;
-        let manifest = serde_json::from_slice::<RuntimeManifest>(&contents)?;
-        config.apply_runtime_manifest(&manifest)?;
+    if let Some(observability_listen) = cli.observability_listen {
+        config.observability_listen = observability_listen;
+    }
+    if let Some(required_backends) = cli.health_required_backends {
+        config.health_required_backends = required_backends;
+    }
+    if let Some(max_age_ms) = cli.health_chain_tip_max_age_ms {
+        config.health_chain_tip_max_age_ms = max_age_ms;
+    }
+    if let Some(interval_ms) = cli.health_probe_interval_ms {
+        config.health_probe_interval_ms = interval_ms;
     }
     if let Some(scheduler) = cli.scheduler {
         config.scheduler_address = scheduler;
@@ -102,52 +219,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(hogd_protocol) = cli.hogd_protocol {
         config.hogd_protocol_override = Some(hogd_protocol);
     }
-
-    tracing::info!(
-        listen = %config.listen_address,
-        submission_backend = ?config.submission_backend,
-        scheduler = %config.scheduler_address,
-        indexer = ?config.indexer_address,
-        view_gateway = ?config.view_gateway_address,
-        hogd_protocol_override = ?config.hogd_protocol_override,
-        coordinator = ?config.coordinator_address,
-        "loading configuration",
-    );
-
-    // --- Context (backend connections) ---
-    let ctx = Arc::new(GatewayContext::new(config).await?);
-
-    // --- Server ---
-    let server_cfg = jsonrpsee::server::ServerConfig::builder()
-        .max_connections(ctx.config.max_connections)
-        .build();
-    let http_mw = middleware::http_middleware(&ctx.config);
-    let server = jsonrpsee::server::Server::builder()
-        .set_config(server_cfg)
-        .set_http_middleware(http_mw)
-        .build(&ctx.config.listen_address)
-        .await?;
-
-    let rpc_config = RpcServerConfig::default()
-        .with_max_events_per_page(ctx.config.max_events_per_page)
-        .with_max_cursor_bytes(ctx.config.max_cursor_bytes)
-        .with_max_view_calldata_bytes(ctx.config.max_view_calldata_bytes)
-        .with_view_gas_limit(ctx.config.view_gas_limit);
-    let api_impl = GroundhogRpcServer::unified(
-        GatewayBackend::new(ctx),
-        rpc_config,
-        BuildInfo::new(env!("CARGO_PKG_VERSION"), option_env!("GIT_COMMIT")),
-    );
-    let handle = server.start(api_impl.into_rpc());
-
-    tracing::info!("hog-gateway listening");
-
-    // Graceful shutdown on SIGINT/SIGTERM.
-    tokio::signal::ctrl_c().await?;
-    handle.stop()?;
-    handle.stopped().await;
-
-    Ok(())
 }
 
 async fn read_runtime_manifest(path: &Path) -> Result<Vec<u8>, Box<dyn std::error::Error>> {

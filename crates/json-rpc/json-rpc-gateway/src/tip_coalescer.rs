@@ -10,7 +10,7 @@
 //! Backpressure mirrors the submitter: a bounded ingress channel
 //! with `try_send` at the handler; full → `Overloaded`.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 use async_trait::async_trait;
 use groundhog_json_rpc_types::block::ChainTip;
@@ -20,8 +20,11 @@ use groundhog_scheduler::sched_coord::{
 };
 use tokio::sync::{RwLock, mpsc, oneshot};
 
-use crate::config::TipConfig;
+use crate::config::{HealthBackend, TipConfig};
 use crate::error::GatewayError;
+use crate::metrics::{BackendRequestOutcome, GatewayMetrics, REASON_CLOSED, REASON_INGRESS_FULL};
+
+const TIP_COALESCER_COMPONENT: &str = "tip_coalescer";
 
 /// Backend for chain-tip lookups.  In production this wraps the
 /// scheduler client; tests substitute a mock.
@@ -34,13 +37,15 @@ pub trait TipSink: Send + Sync + 'static {
 /// outcome to a `ChainTip` (or a gateway error).
 pub struct SchedulerTipSink {
     scheduler: Arc<RwLock<Option<SchedulerCoord_SchedulerCoord1_Client>>>,
+    metrics: GatewayMetrics,
 }
 
 impl SchedulerTipSink {
     pub(crate) fn new(
         scheduler: Arc<RwLock<Option<SchedulerCoord_SchedulerCoord1_Client>>>,
+        metrics: GatewayMetrics,
     ) -> Self {
-        Self { scheduler }
+        Self { scheduler, metrics }
     }
 }
 
@@ -50,10 +55,20 @@ impl TipSink for SchedulerTipSink {
         let client = self.scheduler.read().await.clone();
         let client = client
             .ok_or_else(|| GatewayError::BackendUnavailable("scheduler not connected".into()))?;
-        let result = client
-            .schedcoord_get_tip()
-            .await
-            .map_err(|e| GatewayError::BackendUnavailable(e.to_string()))?;
+        let started_at = Instant::now();
+        let rpc_result = client.schedcoord_get_tip().await;
+        let outcome = match &rpc_result {
+            Ok(SchedulerGetTipResult::SchedulerGetTipOK { .. }) => BackendRequestOutcome::Ok,
+            Ok(_) => BackendRequestOutcome::Rejected,
+            Err(_) => BackendRequestOutcome::Error,
+        };
+        self.metrics.observe_backend_request(
+            HealthBackend::Scheduler,
+            "schedcoord_get_tip",
+            outcome,
+            started_at.elapsed(),
+        );
+        let result = rpc_result.map_err(|e| GatewayError::BackendUnavailable(e.to_string()))?;
         match result {
             SchedulerGetTipResult::SchedulerGetTipOK { db_tip } => Ok(ChainTip {
                 height: db_tip.height,
@@ -76,6 +91,7 @@ struct Coalescer {
     inflight: u32,
     max_inflight: u32,
     sink: Arc<dyn TipSink>,
+    metrics: GatewayMetrics,
 }
 
 impl Coalescer {
@@ -99,9 +115,17 @@ impl Coalescer {
                         waiters.push(w);
                     }
                     self.inflight += 1;
+                    self.metrics
+                        .observe_coalesced_waiters(TIP_COALESCER_COMPONENT, waiters.len());
+                    let in_flight = self
+                        .metrics
+                        .internal_batch_in_flight_guard(TIP_COALESCER_COMPONENT);
                     let sink = self.sink.clone();
                     let done = self.completion_tx.clone();
-                    tokio::spawn(fetch_tip_once(sink, waiters, done));
+                    tokio::spawn(async move {
+                        let _in_flight = in_flight;
+                        fetch_tip_once(sink, waiters, done).await;
+                    });
                 }
             }
         }
@@ -124,10 +148,11 @@ async fn fetch_tip_once(
 #[derive(Clone)]
 pub struct TipCoalescer {
     sender: mpsc::Sender<Waiter>,
+    metrics: GatewayMetrics,
 }
 
 impl TipCoalescer {
-    pub fn spawn(config: &TipConfig, sink: &Arc<dyn TipSink>) -> Self {
+    pub fn spawn(config: &TipConfig, sink: &Arc<dyn TipSink>, metrics: GatewayMetrics) -> Self {
         let (sender, ingress) = mpsc::channel(config.ingress_queue_depth.max(1));
         let (completion_tx, completion_rx) = mpsc::unbounded_channel();
         let coalescer = Coalescer {
@@ -137,9 +162,10 @@ impl TipCoalescer {
             inflight: 0,
             max_inflight: config.max_inflight_tips.max(1),
             sink: sink.clone(),
+            metrics: metrics.clone(),
         };
         tokio::spawn(coalescer.run());
-        Self { sender }
+        Self { sender, metrics }
     }
 
     /// Ask for the current chain tip.  Returns `Overloaded` if the
@@ -150,9 +176,13 @@ impl TipCoalescer {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.sender.try_send(reply_tx).map_err(|e| match e {
             mpsc::error::TrySendError::Full(_) => {
+                self.metrics
+                    .observe_internal_batch_rejected(TIP_COALESCER_COMPONENT, REASON_INGRESS_FULL);
                 GatewayError::Overloaded("chainTip ingress queue full".into())
             }
             mpsc::error::TrySendError::Closed(_) => {
+                self.metrics
+                    .observe_internal_batch_rejected(TIP_COALESCER_COMPONENT, REASON_CLOSED);
                 GatewayError::BackendUnavailable("tip coalescer shut down".into())
             }
         })?;
@@ -251,6 +281,10 @@ mod tests {
         }
     }
 
+    fn metrics_for_tests() -> GatewayMetrics {
+        GatewayMetrics::new("test", None).expect("metrics should register")
+    }
+
     async fn settle() {
         tokio::time::sleep(Duration::from_millis(15)).await;
     }
@@ -261,6 +295,7 @@ mod tests {
         let coalescer = TipCoalescer::spawn(
             &config_for_tests(4, 100),
             &(mock.clone() as Arc<dyn TipSink>),
+            metrics_for_tests(),
         );
 
         let tip = coalescer.chain_tip().await.unwrap();
@@ -276,6 +311,7 @@ mod tests {
         let coalescer = TipCoalescer::spawn(
             &config_for_tests(1, 100), // strict serial
             &(mock.clone() as Arc<dyn TipSink>),
+            metrics_for_tests(),
         );
 
         // First caller opens a gated RPC.
@@ -315,6 +351,7 @@ mod tests {
         let coalescer = TipCoalescer::spawn(
             &config_for_tests(2, 100),
             &(mock.clone() as Arc<dyn TipSink>),
+            metrics_for_tests(),
         );
 
         let w1 = {
@@ -357,6 +394,7 @@ mod tests {
         let coalescer = TipCoalescer::spawn(
             &config_for_tests(1, 100),
             &(mock.clone() as Arc<dyn TipSink>),
+            metrics_for_tests(),
         );
 
         // First caller: its RPC is gated, will get height 10.
@@ -392,6 +430,7 @@ mod tests {
         let coalescer = TipCoalescer::spawn(
             &config_for_tests(1, 1), // 1 in flight, 1 queue slot
             &(mock.clone() as Arc<dyn TipSink>),
+            metrics_for_tests(),
         );
 
         // First pull: taken out of the channel immediately by the coalescer.
@@ -431,6 +470,7 @@ mod tests {
         let coalescer = TipCoalescer::spawn(
             &config_for_tests(1, 100),
             &(mock.clone() as Arc<dyn TipSink>),
+            metrics_for_tests(),
         );
 
         // Spawn four chain_tip calls back-to-back with no intervening

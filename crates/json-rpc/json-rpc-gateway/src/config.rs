@@ -1,3 +1,5 @@
+use std::{fmt, str::FromStr};
+
 use serde::Deserialize;
 
 use groundhog_json_rpc_types::runtime_manifest::RuntimeManifest;
@@ -15,6 +17,63 @@ pub enum SubmissionBackend {
 
     /// Gateway forwards signed transactions to chuckd, which relays them to hogd.
     ChuckdCoordinator,
+}
+
+/// Backend names used by readiness policy.
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum HealthBackend {
+    /// hogd scheduler/mempool backend.
+    Scheduler,
+
+    /// hogd indexer/block explorer backend.
+    Indexer,
+
+    /// hogd `DbGateway` backend.
+    DbGateway,
+
+    /// hogd `ViewGateway` backend.
+    ViewGateway,
+}
+
+impl HealthBackend {
+    pub(crate) const ALL: [Self; 4] = [
+        Self::Scheduler,
+        Self::Indexer,
+        Self::DbGateway,
+        Self::ViewGateway,
+    ];
+
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Scheduler => "scheduler",
+            Self::Indexer => "indexer",
+            Self::DbGateway => "db_gateway",
+            Self::ViewGateway => "view_gateway",
+        }
+    }
+}
+
+impl fmt::Display for HealthBackend {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for HealthBackend {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "scheduler" => Ok(Self::Scheduler),
+            "indexer" => Ok(Self::Indexer),
+            "db_gateway" => Ok(Self::DbGateway),
+            "view_gateway" => Ok(Self::ViewGateway),
+            other => Err(format!(
+                "unknown health backend `{other}`; expected scheduler,indexer,db_gateway,view_gateway"
+            )),
+        }
+    }
 }
 
 /// Adaptive-batching policy.
@@ -117,6 +176,18 @@ pub struct GatewayConfig {
     /// Maximum simultaneous TCP/WebSocket connections.
     pub max_connections: u32,
 
+    /// Private health/metrics HTTP listener.
+    pub observability_listen: String,
+
+    /// Backends required for readiness status `ok`.
+    pub health_required_backends: Vec<HealthBackend>,
+
+    /// Maximum allowed age of the last successful chain-tip probe.
+    pub health_chain_tip_max_age_ms: u64,
+
+    /// Interval for background readiness probes.
+    pub health_probe_interval_ms: u64,
+
     /// Backend used for `groundhog_sendRawTransaction`.
     pub submission_backend: SubmissionBackend,
 
@@ -142,8 +213,10 @@ pub struct GatewayConfig {
     /// x23 RPC address for hogd `ViewGateway1` (sandboxed contract simulation).
     ///
     /// Serves `groundhog_view`. Optional: when absent the gateway returns
-    /// `NotImplemented` for view execution. When configured, connection or
-    /// startup-probe failures are hard startup errors.
+    /// `NotImplemented` for view execution. When configured, transient
+    /// connection or intro timeout/RPC failures degrade startup; intro
+    /// rejections remain hard startup errors because they usually indicate a
+    /// protocol/config mismatch.
     pub view_gateway_address: Option<String>,
 
     /// Maximum time to wait for one `ViewGateway` execution RPC.
@@ -193,6 +266,10 @@ impl Default for GatewayConfig {
             listen_address: "0.0.0.0:8545".into(),
             request_timeout_ms: 60_000,
             max_connections: 2000,
+            observability_listen: "127.0.0.1:9646".into(),
+            health_required_backends: vec![HealthBackend::Scheduler, HealthBackend::Indexer],
+            health_chain_tip_max_age_ms: 30_000,
+            health_probe_interval_ms: 5_000,
             submission_backend: SubmissionBackend::HogdScheduler,
             scheduler_address: "127.0.0.1:9000".into(),
             indexer_address: Some("127.0.0.1:9001".into()),

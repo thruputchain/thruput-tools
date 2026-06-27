@@ -11,7 +11,7 @@
 //! `kRPCNotFound → item: None`, `kRPCNone → Some(StorageItemInfo)`, or
 //! a `BackendUnavailable` for any other per-item code.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 use async_trait::async_trait;
 use groundhog_db_gateway::AddressAndKeyBatch;
@@ -28,8 +28,9 @@ use tokio::sync::{RwLock, oneshot};
 use xdr_common::VecM;
 
 use crate::adaptive_batch::{AdaptiveBatcher, BatchProcessor, shard_index_by_routing_key};
-use crate::config::AdaptiveBatchConfig;
+use crate::config::{AdaptiveBatchConfig, HealthBackend};
 use crate::error::GatewayError;
+use crate::metrics::{BackendRequestOutcome, GatewayMetrics};
 
 /// Backend for batched storage reads.  In production this wraps the
 /// `DbGateway1` client; tests substitute a mock.
@@ -45,11 +46,18 @@ pub trait StorageReadSink: Send + Sync + 'static {
 /// `GatewayContext` become visible on the next call.
 pub struct DbGatewaySink {
     db_gateway: Arc<RwLock<Option<DbGateway_DbGateway1_Client>>>,
+    metrics: GatewayMetrics,
 }
 
 impl DbGatewaySink {
-    pub(crate) fn new(db_gateway: Arc<RwLock<Option<DbGateway_DbGateway1_Client>>>) -> Self {
-        Self { db_gateway }
+    pub(crate) fn new(
+        db_gateway: Arc<RwLock<Option<DbGateway_DbGateway1_Client>>>,
+        metrics: GatewayMetrics,
+    ) -> Self {
+        Self {
+            db_gateway,
+            metrics,
+        }
     }
 }
 
@@ -59,9 +67,19 @@ impl StorageReadSink for DbGatewaySink {
         let client = self.db_gateway.read().await.clone();
         let client = client
             .ok_or_else(|| GatewayError::BackendUnavailable("db_gateway not connected".into()))?;
-        let outer = client
-            .dbgateway_get_items(&batch)
-            .await
+        let started_at = Instant::now();
+        let outer_result = client.dbgateway_get_items(&batch).await;
+        self.metrics.observe_backend_request(
+            HealthBackend::DbGateway,
+            "dbgateway_get_items",
+            match &outer_result {
+                Ok(DbGatewayResult::kRPCNone { .. }) => BackendRequestOutcome::Ok,
+                Ok(_) => BackendRequestOutcome::Rejected,
+                Err(_) => BackendRequestOutcome::Error,
+            },
+            started_at.elapsed(),
+        );
+        let outer = outer_result
             .map_err(|e| GatewayError::BackendUnavailable(format!("db_gateway: {e}")))?;
         match outer {
             DbGatewayResult::kRPCNone { payload } => Ok(payload),
@@ -163,9 +181,19 @@ pub struct StorageReadBatcher {
 impl StorageReadBatcher {
     /// Spawn one batcher task per shard.  Tasks live until the
     /// `StorageReadBatcher` (and thus its shard senders) are dropped.
-    pub fn spawn(config: &AdaptiveBatchConfig, sink: &Arc<dyn StorageReadSink>) -> Self {
+    pub fn spawn(
+        config: &AdaptiveBatchConfig,
+        sink: &Arc<dyn StorageReadSink>,
+        metrics: GatewayMetrics,
+    ) -> Self {
         let processor = Arc::new(StorageReadProcessor { sink: sink.clone() });
-        let inner = AdaptiveBatcher::spawn("storage batcher", config, &processor);
+        let inner = AdaptiveBatcher::spawn(
+            "storage batcher",
+            "storage_batcher",
+            config,
+            &processor,
+            metrics,
+        );
         Self { inner }
     }
 
@@ -318,6 +346,10 @@ mod tests {
         }
     }
 
+    fn metrics_for_tests() -> GatewayMetrics {
+        GatewayMetrics::new("test", None).expect("metrics should register")
+    }
+
     async fn settle() {
         tokio::time::sleep(Duration::from_millis(15)).await;
     }
@@ -354,6 +386,7 @@ mod tests {
         let batcher = StorageReadBatcher::spawn(
             &config_for_tests(1, 4, 1000, 100),
             &(mock.clone() as Arc<dyn StorageReadSink>),
+            metrics_for_tests(),
         );
 
         let read = tokio::spawn({
@@ -384,6 +417,7 @@ mod tests {
         let batcher = StorageReadBatcher::spawn(
             &config_for_tests(1, 4, 1000, 100),
             &(mock.clone() as Arc<dyn StorageReadSink>),
+            metrics_for_tests(),
         );
 
         let address = address_zero();
@@ -412,6 +446,7 @@ mod tests {
         let batcher = StorageReadBatcher::spawn(
             &config_for_tests(1, 1, 1000, 100),
             &(mock.clone() as Arc<dyn StorageReadSink>),
+            metrics_for_tests(),
         );
 
         // Three concurrent reads land in a single batch (no yields between
@@ -473,6 +508,7 @@ mod tests {
         let batcher = StorageReadBatcher::spawn(
             &config_for_tests(1, 1, 1000, 100),
             &(mock.clone() as Arc<dyn StorageReadSink>),
+            metrics_for_tests(),
         );
 
         let mut waiters = vec![];

@@ -10,7 +10,7 @@
 //! BDP-style in-flight bounding, sharded for low contention) and
 //! `adaptive_batch.rs` for the shared shard runner.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 use async_trait::async_trait;
 use groundhog_json_rpc_types::transaction::TxHash;
@@ -23,6 +23,7 @@ use xdr_common::{BytesM, VecM};
 use crate::adaptive_batch::{AdaptiveBatcher, BatchProcessor, shard_index_by_routing_key};
 use crate::config::AdaptiveBatchConfig;
 use crate::error::GatewayError;
+use crate::metrics::{BackendRequestOutcome, GatewayMetrics};
 
 /// Backend for batched submissions.  In production this wraps the
 /// scheduler client; tests substitute a mock.
@@ -38,13 +39,15 @@ pub trait SubmitSink: Send + Sync + 'static {
 /// reconnections in `GatewayContext` become visible on the next call.
 pub struct SchedulerSink {
     scheduler: Arc<RwLock<Option<SchedulerCoord_SchedulerCoord1_Client>>>,
+    metrics: GatewayMetrics,
 }
 
 impl SchedulerSink {
     pub(crate) fn new(
         scheduler: Arc<RwLock<Option<SchedulerCoord_SchedulerCoord1_Client>>>,
+        metrics: GatewayMetrics,
     ) -> Self {
-        Self { scheduler }
+        Self { scheduler, metrics }
     }
 }
 
@@ -56,10 +59,21 @@ impl SubmitSink for SchedulerSink {
             None => Err(GatewayError::BackendUnavailable(
                 "scheduler not connected".into(),
             )),
-            Some(c) => c
-                .schedulercoord_submit_unvetted(&batch)
-                .await
-                .map_err(|e| classify_rpc_error(&e)),
+            Some(c) => {
+                let started_at = Instant::now();
+                let result = c.schedulercoord_submit_unvetted(&batch).await;
+                self.metrics.observe_backend_request(
+                    crate::config::HealthBackend::Scheduler,
+                    "schedcoord_submit_unvetted",
+                    if result.is_ok() {
+                        BackendRequestOutcome::Ok
+                    } else {
+                        BackendRequestOutcome::Error
+                    },
+                    started_at.elapsed(),
+                );
+                result.map_err(|e| classify_rpc_error(&e))
+            }
         }
     }
 }
@@ -83,6 +97,7 @@ struct Item {
 /// to every waiter in the drained batch.
 struct SubmitProcessor {
     sink: Arc<dyn SubmitSink>,
+    metrics: GatewayMetrics,
 }
 
 #[async_trait]
@@ -92,7 +107,9 @@ impl BatchProcessor for SubmitProcessor {
     async fn process(&self, items: Vec<Item>) {
         let packed = pack(&items);
         let result = self.sink.submit(packed).await;
+        let outcome = outcome_for_submit_result(&result);
         for item in items {
+            self.metrics.observe_submitted_transaction(outcome);
             let _ = item.reply.send(result.clone());
         }
     }
@@ -129,15 +146,29 @@ fn pack(items: &[Item]) -> ParallelSignedTransactionBatch {
 #[derive(Clone)]
 pub struct BatchSubmitter {
     inner: AdaptiveBatcher<Item>,
+    metrics: GatewayMetrics,
 }
 
 impl BatchSubmitter {
     /// Spawn one submitter task per shard.  Tasks live until the
     /// `BatchSubmitter` (and thus its shard senders) are dropped.
-    pub fn spawn(config: &AdaptiveBatchConfig, sink: &Arc<dyn SubmitSink>) -> Self {
-        let processor = Arc::new(SubmitProcessor { sink: sink.clone() });
-        let inner = AdaptiveBatcher::spawn("batch submitter", config, &processor);
-        Self { inner }
+    pub fn spawn(
+        config: &AdaptiveBatchConfig,
+        sink: &Arc<dyn SubmitSink>,
+        metrics: GatewayMetrics,
+    ) -> Self {
+        let processor = Arc::new(SubmitProcessor {
+            sink: sink.clone(),
+            metrics: metrics.clone(),
+        });
+        let inner = AdaptiveBatcher::spawn(
+            "batch submitter",
+            "submit_batcher",
+            config,
+            &processor,
+            metrics.clone(),
+        );
+        Self { inner, metrics }
     }
 
     /// Submit one tx.  Routes to a shard by tx hash; returns when the
@@ -149,16 +180,43 @@ impl BatchSubmitter {
         let shard_idx = shard_index_by_routing_key(bytes, self.inner.n_shards());
         tracing::Span::current().record("shard_idx", shard_idx);
         let (reply_tx, reply_rx) = oneshot::channel();
-        self.inner.try_send(
+        if let Err(err) = self.inner.try_send(
             Item {
                 tx_bytes,
                 reply: reply_tx,
             },
             shard_idx,
-        )?;
-        reply_rx
-            .await
-            .map_err(|_| GatewayError::BackendUnavailable("batch submitter dropped reply".into()))?
+        ) {
+            self.metrics
+                .observe_submitted_transaction(outcome_for_submit_error(&err));
+            return Err(err);
+        }
+        reply_rx.await.map_err(|_| {
+            let err = GatewayError::BackendUnavailable("batch submitter dropped reply".into());
+            self.metrics
+                .observe_submitted_transaction(outcome_for_submit_error(&err));
+            err
+        })?
+    }
+}
+
+fn outcome_for_submit_result(result: &Result<(), GatewayError>) -> &'static str {
+    match result {
+        Ok(()) => "ok",
+        Err(err) => outcome_for_submit_error(err),
+    }
+}
+
+fn outcome_for_submit_error(err: &GatewayError) -> &'static str {
+    match err {
+        GatewayError::Overloaded(_) => "overloaded",
+        GatewayError::BackendTimeout => "backend_timeout",
+        GatewayError::BackendUnavailable(_) => "backend_unavailable",
+        GatewayError::TxInvalid(_) => "tx_invalid",
+        GatewayError::TxRejected(_) => "tx_rejected",
+        GatewayError::TxNotFound | GatewayError::BlockNotFound => "not_found",
+        GatewayError::InvalidParam(_) => "invalid_params",
+        GatewayError::NotImplemented(_) => "not_implemented",
     }
 }
 
@@ -169,6 +227,7 @@ impl BatchSubmitter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::health::{GatewayHealthSnapshot, HealthStatus};
     use std::collections::VecDeque;
     use std::sync::Mutex;
     use std::time::Duration;
@@ -235,6 +294,10 @@ mod tests {
         }
     }
 
+    fn metrics_for_tests() -> GatewayMetrics {
+        GatewayMetrics::new("test", None).expect("metrics should register")
+    }
+
     /// A small "settle" delay to let spawned tasks make progress.
     async fn settle() {
         tokio::time::sleep(Duration::from_millis(15)).await;
@@ -246,6 +309,7 @@ mod tests {
         let submitter = BatchSubmitter::spawn(
             &config_for_tests(1, 4, 1000, 100),
             &(mock.clone() as Arc<dyn SubmitSink>),
+            metrics_for_tests(),
         );
 
         submitter
@@ -264,6 +328,7 @@ mod tests {
         let submitter = BatchSubmitter::spawn(
             &config_for_tests(1, 1, 1000, 100), // strict serial batches
             &(mock.clone() as Arc<dyn SubmitSink>),
+            metrics_for_tests(),
         );
 
         // First tx starts a gated batch of 1.
@@ -304,6 +369,7 @@ mod tests {
         let submitter = BatchSubmitter::spawn(
             &config_for_tests(1, 2, 1000, 100),
             &(mock.clone() as Arc<dyn SubmitSink>),
+            metrics_for_tests(),
         );
 
         let w1 = {
@@ -348,6 +414,7 @@ mod tests {
         let submitter = BatchSubmitter::spawn(
             &config_for_tests(1, 1, 4, 100),
             &(mock.clone() as Arc<dyn SubmitSink>),
+            metrics_for_tests(),
         );
 
         let first = {
@@ -383,6 +450,7 @@ mod tests {
         let submitter = BatchSubmitter::spawn(
             &config_for_tests(1, 1, 1, 1), // 1 in flight, max batch 1, 1 queue slot
             &(mock.clone() as Arc<dyn SubmitSink>),
+            metrics_for_tests(),
         );
 
         // First item is pulled from mpsc and starts the gated batch.
@@ -420,6 +488,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn accepted_submission_is_counted_if_caller_cancels() {
+        let mock = MockSink::arc();
+        let gate = mock.queue_gate();
+        let metrics = metrics_for_tests();
+
+        let submitter = BatchSubmitter::spawn(
+            &config_for_tests(1, 1, 1000, 100),
+            &(mock.clone() as Arc<dyn SubmitSink>),
+            metrics.clone(),
+        );
+
+        let waiter = tokio::spawn({
+            let s = submitter.clone();
+            async move { s.submit(vec![0x01], hash_from_u32(0)).await }
+        });
+        settle().await;
+        assert_eq!(mock.seen(), vec![1], "submission reached the backend");
+
+        waiter.abort();
+        let _ = waiter.await;
+        let _ = gate.send(Ok(()));
+        settle().await;
+
+        let snapshot = GatewayHealthSnapshot::for_test(HealthStatus::Starting, None, &[]);
+        let body = metrics.gather(&snapshot).expect("metrics should encode");
+        assert!(body.contains("groundhog_gateway_submitted_transactions_total{outcome=\"ok\"} 1"));
+    }
+
+    #[tokio::test]
     async fn backend_error_fans_out_to_every_waiter() {
         let mock = MockSink::arc();
         let err_gate = mock.queue_gate();
@@ -427,6 +524,7 @@ mod tests {
         let submitter = BatchSubmitter::spawn(
             &config_for_tests(1, 1, 1000, 100),
             &(mock.clone() as Arc<dyn SubmitSink>),
+            metrics_for_tests(),
         );
 
         // Spawn four submissions back-to-back with no intervening yield.
