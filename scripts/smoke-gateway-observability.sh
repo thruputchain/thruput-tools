@@ -390,10 +390,10 @@ assert_file_contains "$WORK/metrics.txt" "groundhog_gateway_rpc_requests_total{m
 assert_file_contains "$WORK/metrics.txt" "groundhog_gateway_http_requests_total{endpoint=\"readyz\",status_class=\"2xx\"}"
 assert_file_contains "$WORK/metrics.txt" "groundhog_gateway_http_requests_total{endpoint=\"metrics\",status_class=\"2xx\"}"
 
-assert_file_contains "$WORK/gateway.err" "gateway readiness status changed"
-assert_file_contains "$WORK/gateway.err" "gateway readiness endpoint completed"
-assert_file_contains "$WORK/gateway.err" "gateway metrics endpoint completed"
-assert_file_contains "$WORK/gateway.err" "gateway JSON-RPC call completed"
+assert_file_contains "$WORK/gateway.out" "gateway readiness status changed"
+assert_file_contains "$WORK/gateway.out" "gateway readiness endpoint completed"
+assert_file_contains "$WORK/gateway.out" "gateway metrics endpoint completed"
+assert_file_contains "$WORK/gateway.out" "gateway JSON-RPC call completed"
 
 check_process_logs
 
