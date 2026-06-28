@@ -9,10 +9,13 @@ use groundhog_json_rpc_types::{
 };
 use groundhog_xdr::exec_result::ExecResult;
 use groundhog_xdr::transaction::{InvocationFrameOutput, SignedTransactionHash};
+use std::time::Instant;
 use xdr_common::VecM;
 
+use crate::config::HealthBackend;
 use crate::context::GatewayContext;
 use crate::error::GatewayError;
+use crate::metrics::{BackendRequestOutcome, REASON_PARSE_FAILED};
 
 use super::parse_event::parse_emitted_event;
 
@@ -58,19 +61,32 @@ pub async fn get_transaction_receipt(
         .ok_or_else(|| GatewayError::BackendUnavailable("indexer not connected".into()))?;
 
     let hash = SignedTransactionHash::from(tx_hash.0.0.into_inner());
-    let result = client
-        .get_transaction_info(&hash)
-        .await
-        .map_err(|e| GatewayError::BackendUnavailable(format!("indexer: {e}")))?;
+    let started_at = Instant::now();
+    let rpc_result = client.get_transaction_info(&hash).await;
+    ctx.metrics.observe_backend_request(
+        HealthBackend::Indexer,
+        "get_transaction_info",
+        if rpc_result.is_ok() {
+            BackendRequestOutcome::Ok
+        } else {
+            BackendRequestOutcome::Error
+        },
+        started_at.elapsed(),
+    );
+    let result =
+        rpc_result.map_err(|e| GatewayError::BackendUnavailable(format!("indexer: {e}")))?;
 
     match result {
         TxInfoResult::TxInfoFound { info } => {
-            let events = info
-                .events
-                .events
-                .iter()
-                .filter_map(parse_emitted_event)
-                .collect();
+            let mut events = Vec::with_capacity(info.events.events.0.len());
+            for raw in &info.events.events.0 {
+                if let Some(event) = parse_emitted_event(raw) {
+                    events.push(event);
+                } else {
+                    ctx.metrics
+                        .observe_malformed_event_dropped(REASON_PARSE_FAILED);
+                }
+            }
             let (return_data, abort_data) = match &info.events.root_output {
                 InvocationFrameOutput::Return { return_buffer } => {
                     (Some(HexBytes(return_buffer.0.clone())), None)
@@ -117,7 +133,19 @@ pub async fn get_transaction_status(
         let hash = SignedTransactionHash::from(tx_hash.0.0.into_inner());
         let batch: VecM<SignedTransactionHash> = VecM(vec![hash]);
 
-        match client.schedcoord_lookup_transactions(&batch).await {
+        let started_at = Instant::now();
+        let rpc_result = client.schedcoord_lookup_transactions(&batch).await;
+        ctx.metrics.observe_backend_request(
+            HealthBackend::Scheduler,
+            "schedcoord_lookup_transactions",
+            if rpc_result.is_ok() {
+                BackendRequestOutcome::Ok
+            } else {
+                BackendRequestOutcome::Error
+            },
+            started_at.elapsed(),
+        );
+        match rpc_result {
             Ok(results) => {
                 if results.iter().next().is_some_and(Option::is_some) {
                     return Ok(TransactionStatus::Pending);
@@ -135,7 +163,19 @@ pub async fn get_transaction_status(
     let maybe_indexer = ctx.indexer.read().await.clone();
     if let Some(client) = maybe_indexer.as_ref() {
         let hash = SignedTransactionHash::from(tx_hash.0.0.into_inner());
-        match client.get_transaction_info(&hash).await {
+        let started_at = Instant::now();
+        let rpc_result = client.get_transaction_info(&hash).await;
+        ctx.metrics.observe_backend_request(
+            HealthBackend::Indexer,
+            "get_transaction_info",
+            if rpc_result.is_ok() {
+                BackendRequestOutcome::Ok
+            } else {
+                BackendRequestOutcome::Error
+            },
+            started_at.elapsed(),
+        );
+        match rpc_result {
             Ok(result) => {
                 if let TxInfoResult::TxInfoFound { info } = result {
                     return Ok(TransactionStatus::Committed {

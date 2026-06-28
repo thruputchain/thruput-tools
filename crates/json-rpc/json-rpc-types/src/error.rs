@@ -154,6 +154,24 @@ pub fn error_info_by_code(code: i32) -> Option<&'static RpcErrorInfo> {
     ERROR_INFOS.iter().find(|info| info.code == code)
 }
 
+/// Bounded Prometheus outcome label for a JSON-RPC error code.
+///
+/// This intentionally accepts any `i32`, because gateway RPC middleware also
+/// observes jsonrpsee protocol errors outside Groundhog's application catalog.
+pub const fn outcome_for_code(code: i32) -> &'static str {
+    match code {
+        codes::INVALID_PARAMS | -32700 | -32600 | -32005 | -32007 => "invalid_params",
+        codes::TX_INVALID => "tx_invalid",
+        codes::TX_REJECTED => "tx_rejected",
+        codes::TX_NOT_FOUND | codes::BLOCK_NOT_FOUND => "not_found",
+        codes::BACKEND_UNAVAILABLE => "backend_unavailable",
+        codes::BACKEND_TIMEOUT => "backend_timeout",
+        codes::NOT_IMPLEMENTED | -32601 => "not_implemented",
+        codes::OVERLOADED | -32006 | -32009 => "overloaded",
+        _ => "internal_error",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -179,5 +197,65 @@ mod tests {
             documented_codes, public_codes,
             "codes::ALL and ERROR_INFOS must stay one-to-one"
         );
+    }
+
+    #[test]
+    fn every_catalog_code_maps_to_bounded_outcome() {
+        const ALLOWED: &[&str] = &[
+            "ok",
+            "invalid_params",
+            "tx_invalid",
+            "tx_rejected",
+            "not_found",
+            "not_implemented",
+            "backend_unavailable",
+            "backend_timeout",
+            "overloaded",
+            "internal_error",
+        ];
+
+        for code in self::codes::ALL {
+            let outcome = outcome_for_code(*code);
+            assert!(
+                ALLOWED.contains(&outcome),
+                "code {code} mapped to unbounded outcome {outcome}"
+            );
+        }
+        assert_eq!(outcome_for_code(-32601), "not_implemented");
+        assert_eq!(outcome_for_code(-32603), "internal_error");
+        assert_eq!(outcome_for_code(12345), "internal_error");
+    }
+
+    #[test]
+    fn outcome_mapping_is_exact() {
+        let cases = [
+            (codes::INVALID_PARAMS, "invalid_params"),
+            (codes::TX_INVALID, "tx_invalid"),
+            (codes::TX_REJECTED, "tx_rejected"),
+            (codes::TX_NOT_FOUND, "not_found"),
+            (codes::BLOCK_NOT_FOUND, "not_found"),
+            (codes::BACKEND_UNAVAILABLE, "backend_unavailable"),
+            (codes::BACKEND_TIMEOUT, "backend_timeout"),
+            (codes::NOT_IMPLEMENTED, "not_implemented"),
+            (codes::OVERLOADED, "overloaded"),
+            (-32700, "invalid_params"),
+            (-32600, "invalid_params"),
+            (-32601, "not_implemented"),
+            (-32603, "internal_error"),
+            (-32005, "invalid_params"),
+            (-32006, "overloaded"),
+            (-32007, "invalid_params"),
+            (-32008, "internal_error"),
+            (-32009, "overloaded"),
+            // jsonrpsee also uses -32010 for too-large batch requests, but that
+            // pre-dispatch error is only visible to HTTP transport metrics. The
+            // Groundhog application catalog owns -32010 as BlockNotFound.
+            (-32010, "not_found"),
+            (-32011, "internal_error"),
+        ];
+
+        for (code, outcome) in cases {
+            assert_eq!(outcome_for_code(code), outcome, "code {code}");
+        }
     }
 }

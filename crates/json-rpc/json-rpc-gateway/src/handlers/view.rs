@@ -1,6 +1,6 @@
 //! `groundhog_view` handler backed by hogd `ViewGateway`.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use groundhog_json_rpc_types::{
     hex::HexBytes,
@@ -16,7 +16,12 @@ use groundhog_xdr::{
 };
 use xdr_common::{BytesM, VecM};
 
-use crate::{context::GatewayContext, error::GatewayError};
+use crate::{
+    config::HealthBackend,
+    context::GatewayContext,
+    error::GatewayError,
+    metrics::{BackendRequestOutcome, GatewayMetrics, REASON_PARSE_FAILED},
+};
 
 use super::parse_event::parse_emitted_event;
 
@@ -48,20 +53,36 @@ pub async fn view(
 
     let query = view_query_from_request(request, gas_limit)?;
     let timeout = Duration::from_millis(ctx.config.view_timeout_ms);
-    view_response_from_client(&client, &query, timeout).await
+    view_response_from_client(&client, &ctx.metrics, &query, timeout).await
 }
 
 async fn view_response_from_client(
     client: &groundhog_view::ViewGateway_ViewGateway1_Client,
+    metrics: &GatewayMetrics,
     query: &TransactionViewQuery,
     timeout: Duration,
 ) -> Result<ViewResponse, GatewayError> {
-    let result = tokio::time::timeout(timeout, client.viewgateway_view(query))
-        .await
+    let started_at = Instant::now();
+    let rpc_result = tokio::time::timeout(timeout, client.viewgateway_view(query)).await;
+    let outcome = match &rpc_result {
+        Err(_) => BackendRequestOutcome::Timeout,
+        Ok(Ok(ViewGatewayResult::ViewGatewayOk { .. })) => BackendRequestOutcome::Ok,
+        Ok(Ok(_) | Err(_)) => BackendRequestOutcome::Error,
+    };
+    metrics.observe_backend_request(
+        HealthBackend::ViewGateway,
+        "viewgateway_view",
+        outcome,
+        started_at.elapsed(),
+    );
+    if rpc_result.is_err() {
+        metrics.observe_view_timeout();
+    }
+    let result = rpc_result
         .map_err(|_| GatewayError::BackendTimeout)?
         .map_err(|source| GatewayError::BackendUnavailable(format!("view_gateway: {source}")))?;
 
-    view_response_from_gateway_result(result)
+    view_response_from_gateway_result(result, metrics)
 }
 
 fn view_query_from_request(
@@ -101,17 +122,25 @@ fn public_view_auth_claim() -> AuthClaim {
 
 fn view_response_from_gateway_result(
     result: ViewGatewayResult,
+    metrics: &GatewayMetrics,
 ) -> Result<ViewResponse, GatewayError> {
     match result {
-        ViewGatewayResult::ViewGatewayOk { payload } => Ok(ViewResponse {
-            output: root_output_from_invocation_output(payload.output)?,
-            events: payload
-                .events
-                .iter()
-                .filter_map(parse_emitted_event)
-                .collect(),
-            height: payload.height,
-        }),
+        ViewGatewayResult::ViewGatewayOk { payload } => {
+            let mut events = Vec::with_capacity(payload.events.0.len());
+            for raw in &payload.events.0 {
+                if let Some(event) = parse_emitted_event(raw) {
+                    events.push(event);
+                } else {
+                    metrics.observe_malformed_event_dropped(REASON_PARSE_FAILED);
+                }
+            }
+
+            Ok(ViewResponse {
+                output: root_output_from_invocation_output(payload.output)?,
+                events,
+                height: payload.height,
+            })
+        }
         ViewGatewayResult::ViewGatewayAbandoned => Err(GatewayError::BackendUnavailable(
             "view_gateway abandoned the view after retrying; retry later".into(),
         )),
@@ -277,6 +306,7 @@ mod tests {
 
     #[test]
     fn gateway_return_maps_to_public_view_response() {
+        let metrics = GatewayMetrics::new("test", None).expect("metrics should register");
         let topic0 = [10; 32];
         let topic1 = [11; 32];
         let data = vec![12, 13, 14];
@@ -298,7 +328,7 @@ mod tests {
             },
         };
 
-        let response = view_response_from_gateway_result(result).expect("ok response");
+        let response = view_response_from_gateway_result(result, &metrics).expect("ok response");
 
         assert_eq!(response.height, 42.into());
         match response.output {
@@ -333,16 +363,20 @@ mod tests {
 
     #[test]
     fn gateway_service_failures_map_to_backend_errors() {
+        let metrics = GatewayMetrics::new("test", None).expect("metrics should register");
         assert!(matches!(
-            view_response_from_gateway_result(ViewGatewayResult::ViewGatewayAbandoned),
+            view_response_from_gateway_result(ViewGatewayResult::ViewGatewayAbandoned, &metrics),
             Err(GatewayError::BackendUnavailable(_))
         ));
         assert!(matches!(
-            view_response_from_gateway_result(ViewGatewayResult::ViewGatewayInternalError),
+            view_response_from_gateway_result(
+                ViewGatewayResult::ViewGatewayInternalError,
+                &metrics
+            ),
             Err(GatewayError::BackendUnavailable(_))
         ));
         assert!(matches!(
-            view_response_from_gateway_result(ViewGatewayResult::Default { outcome: 99 }),
+            view_response_from_gateway_result(ViewGatewayResult::Default { outcome: 99 }, &metrics),
             Err(GatewayError::BackendUnavailable(_))
         ));
     }
@@ -355,8 +389,10 @@ mod tests {
             .expect("bug: fake ViewGateway should connect");
         let client = ViewGateway_ViewGateway1_Client::new(std::sync::Arc::new(socket));
         let query = view_query_from_request(request(None), 123).expect("query maps");
+        let metrics = GatewayMetrics::new("test", None).expect("metrics should register");
 
-        let result = view_response_from_client(&client, &query, Duration::from_millis(10)).await;
+        let result =
+            view_response_from_client(&client, &metrics, &query, Duration::from_millis(10)).await;
 
         assert!(
             matches!(result, Err(GatewayError::BackendTimeout)),
