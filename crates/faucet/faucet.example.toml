@@ -1,0 +1,24 @@
+# Example local faucet config. Copy to crates/faucet/faucet.toml and replace
+# placeholder network identity values with values from your local/devnet setup.
+listen_address = "127.0.0.1:8081"
+
+[network]
+network_id = "local-devnet"
+protocol = "x23"
+genesis_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"
+
+[network.endpoints]
+rpc_url = "http://127.0.0.1:8545"
+faucet_url = "http://127.0.0.1:8081"
+
+[network.native_hog]
+token_address = "0x0000000000000000000000000000000000000000000000000000000000000001"
+decimals = 7
+transfer_entrypoint = "0x63285b3523f9dc3f"
+
+[network.faucet]
+wallet_address = "0x0000000000000000000000000000000000000000000000000000000000000000"
+
+[network.wallet_create]
+prefund_raw_amount = "100000000"
+wallet_contract_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"

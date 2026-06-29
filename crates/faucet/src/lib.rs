@@ -1,3 +1,6 @@
+/// Faucet service configuration types.
+pub mod config;
+
 use axum::{Json, Router, extract::State, routing::get};
 use groundhog_json_rpc_types::network_descriptor::NetworkDescriptor;
 use serde::Serialize;

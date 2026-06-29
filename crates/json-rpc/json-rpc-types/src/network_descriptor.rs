@@ -12,6 +12,8 @@ use crate::{ContractAddress, SHA256Hash};
 
 /// Current public network descriptor schema version.
 pub const NETWORK_DESCRIPTOR_SCHEMA_VERSION: u32 = 1;
+/// Descriptor family for public hosted-network metadata.
+pub const NETWORK_DESCRIPTOR_KIND: &str = "groundhog-network";
 
 /// Public metadata served by hosted Devnet at `GET /v1/network`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -38,6 +40,31 @@ pub struct NetworkDescriptor {
     pub wallet_create: WalletCreateDescriptor,
 }
 
+impl NetworkDescriptor {
+    /// Construct a public network descriptor with the current schema version and kind.
+    pub fn new(
+        network_id: String,
+        protocol: String,
+        genesis_hash: SHA256Hash,
+        endpoints: NetworkDescriptorEndpoints,
+        native_hog: NativeHogDescriptor,
+        faucet: FaucetDescriptor,
+        wallet_create: WalletCreateDescriptor,
+    ) -> Self {
+        Self {
+            schema_version: NETWORK_DESCRIPTOR_SCHEMA_VERSION,
+            kind: NETWORK_DESCRIPTOR_KIND.to_owned(),
+            network_id,
+            protocol,
+            genesis_hash,
+            endpoints,
+            native_hog,
+            faucet,
+            wallet_create,
+        }
+    }
+}
+
 /// Public endpoints for a hosted network.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -47,6 +74,16 @@ pub struct NetworkDescriptorEndpoints {
     pub rpc_url: String,
     /// Faucet service base URL used for airdrop and wallet-create requests.
     pub faucet_url: String,
+}
+
+impl NetworkDescriptorEndpoints {
+    /// Construct public RPC and faucet endpoint metadata.
+    pub fn new(rpc_url: String, faucet_url: String) -> Self {
+        Self {
+            rpc_url,
+            faucet_url,
+        }
+    }
 }
 
 /// Native HOG token metadata.
@@ -62,6 +99,21 @@ pub struct NativeHogDescriptor {
     pub transfer_entrypoint: HexBytes,
 }
 
+impl NativeHogDescriptor {
+    /// Construct native HOG token metadata.
+    pub fn new(
+        token_address: ContractAddress,
+        decimals: u32,
+        transfer_entrypoint: HexBytes,
+    ) -> Self {
+        Self {
+            token_address,
+            decimals,
+            transfer_entrypoint,
+        }
+    }
+}
+
 /// Public faucet account metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -69,6 +121,13 @@ pub struct NativeHogDescriptor {
 pub struct FaucetDescriptor {
     /// Faucet wallet address used as the public sponsor account.
     pub wallet_address: ContractAddress,
+}
+
+impl FaucetDescriptor {
+    /// Construct public faucet account metadata.
+    pub fn new(wallet_address: ContractAddress) -> Self {
+        Self { wallet_address }
+    }
 }
 
 /// Public wallet-create metadata.
@@ -81,4 +140,14 @@ pub struct WalletCreateDescriptor {
     /// Contract hash used with faucet wallet address and deploy nonce to derive
     /// the future wallet address.
     pub wallet_contract_hash: SHA256Hash,
+}
+
+impl WalletCreateDescriptor {
+    /// Construct public wallet-create funding and derivation metadata.
+    pub fn new(prefund_raw_amount: String, wallet_contract_hash: SHA256Hash) -> Self {
+        Self {
+            prefund_raw_amount,
+            wallet_contract_hash,
+        }
+    }
 }
