@@ -15,14 +15,12 @@ const LOCAL_BOOTSTRAP_FALLBACK_INDEX: usize = 0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LocalBootstrapRole {
-    WalletSponsor,
     Faucet,
 }
 
 impl LocalBootstrapRole {
     fn manifest_role(self) -> &'static str {
         match self {
-            Self::WalletSponsor => "wallet_sponsor",
             Self::Faucet => "faucet",
         }
     }
@@ -433,8 +431,8 @@ mod tests {
         );
         let profile = profile_with_manifest(Some(manifest_path));
 
-        let resolved = resolve_local_bootstrap_account(&profile, LocalBootstrapRole::WalletSponsor)
-            .expect("bug: wallet sponsor should fall back to dev-0");
+        let resolved = resolve_local_bootstrap_account(&profile, LocalBootstrapRole::Faucet)
+            .expect("bug: faucet should fall back to dev-0");
 
         assert_eq!(resolved.key_name, "dev-0");
         assert_eq!(resolved.role, "local_user");

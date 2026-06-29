@@ -5,7 +5,6 @@ use groundhog_signing::{
     build_dev_wallet_do_action_transaction, sign_and_encode_transaction_hex,
 };
 use groundhog_xdr::contract::ContractEntrypointID;
-use groundhog_xdr::types::ContractAddress;
 use serde_json::json;
 
 use crate::account_resolution::{
@@ -14,6 +13,7 @@ use crate::account_resolution::{
 use crate::codec::{format_contract_address, parse_contract_address};
 use crate::config::{ProfileOverrides, ResolvedProfile, resolve_profile_with_overrides};
 use crate::dev_keys;
+use crate::hog;
 use crate::result::CommandResult;
 use crate::runtime_manifest::{
     apply_local_node_state_for_local_bootstrap, load_configured_runtime_manifest,
@@ -26,11 +26,6 @@ use crate::{CliError, Print};
 
 pub const AIRDROP_JSON_SCHEMA_VERSION: u32 = 1;
 const DEFAULT_AIRDROP_HOG: &str = "10";
-const HOG_DECIMALS: u32 = 7;
-const HOG_SCALE: u128 = 10_000_000;
-const HOG_TOKEN_ADDRESS: &str =
-    "0x0000000000000000000000000000000000000000000000000000000000000001";
-const HOG_TRANSFER_ENTRYPOINT: [u8; 8] = 0x6328_5b35_23f9_dc3f_u64.to_be_bytes();
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PreparedAirdrop {
@@ -117,9 +112,9 @@ pub(crate) fn prepare_airdrop(
     let amount_hog = format_hog_amount(raw_amount);
     let faucet = resolve_local_bootstrap_account(&profile, LocalBootstrapRole::Faucet)?;
 
-    let hog_address = parse_contract_address(HOG_TOKEN_ADDRESS)?;
-    let transfer_entrypoint = ContractEntrypointID::from(HOG_TRANSFER_ENTRYPOINT);
-    let transfer_calldata = encode_transfer_calldata(&recipient_address, raw_amount)?;
+    let hog_address = parse_contract_address(hog::TOKEN_ADDRESS)?;
+    let transfer_entrypoint = ContractEntrypointID::from(hog::TRANSFER_ENTRYPOINT);
+    let transfer_calldata = hog::encode_transfer_calldata(&recipient_address, raw_amount)?;
 
     let rt =
         tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
@@ -174,15 +169,6 @@ fn resolve_airdrop_recipient(
     )))
 }
 
-fn encode_transfer_calldata(
-    recipient: &ContractAddress,
-    raw_amount: u128,
-) -> Result<Vec<u8>, CliError> {
-    xdrs::cxs::encode(&(recipient, raw_amount)).map_err(|error| {
-        CliError::Other(format!("failed to encode HOG transfer calldata: {error}"))
-    })
-}
-
 fn print_dry_run(
     prepared: &PreparedAirdrop,
     cmd: &'static str,
@@ -197,7 +183,6 @@ fn print_dry_run(
         "  faucet: {} ({})",
         prepared.faucet_key_name, prepared.faucet_role
     ));
-    print.status(format_args!("  signed tx: {}", prepared.tx_hex));
     print.status("  submitted: no (--dry-run)");
 
     print.json(&CommandResult::new(
@@ -214,7 +199,6 @@ fn print_dry_run(
                 "key": prepared.faucet_key_name,
                 "role": prepared.faucet_role,
             },
-            "signed_tx": prepared.tx_hex,
         }),
     ))?;
 
@@ -243,7 +227,7 @@ fn parse_hog_amount(input: &str) -> Result<u128, CliError> {
         None => 0,
     };
     let raw = whole
-        .checked_mul(HOG_SCALE)
+        .checked_mul(hog::SCALE)
         .and_then(|value| value.checked_add(fractional))
         .ok_or_else(|| CliError::Other(format!("HOG amount `{input}` is too large")))?;
     if raw == 0 {
@@ -256,15 +240,16 @@ fn parse_hog_amount(input: &str) -> Result<u128, CliError> {
 
 fn parse_fractional_hog(input: &str, fractional: &str) -> Result<u128, CliError> {
     if fractional.is_empty()
-        || fractional.len() > HOG_DECIMALS as usize
+        || fractional.len() > hog::DECIMALS as usize
         || !fractional.chars().all(|c| c.is_ascii_digit())
     {
         return Err(CliError::Other(format!(
-            "invalid HOG amount `{input}`; at most {HOG_DECIMALS} decimal places are supported"
+            "invalid HOG amount `{input}`; at most {} decimal places are supported",
+            hog::DECIMALS
         )));
     }
     let mut padded = fractional.to_owned();
-    while padded.len() < HOG_DECIMALS as usize {
+    while padded.len() < hog::DECIMALS as usize {
         padded.push('0');
     }
     padded
@@ -273,12 +258,12 @@ fn parse_fractional_hog(input: &str, fractional: &str) -> Result<u128, CliError>
 }
 
 pub(crate) fn format_hog_amount(raw_amount: u128) -> String {
-    let whole = raw_amount / HOG_SCALE;
-    let fractional = raw_amount % HOG_SCALE;
+    let whole = raw_amount / hog::SCALE;
+    let fractional = raw_amount % hog::SCALE;
     if fractional == 0 {
         return whole.to_string();
     }
-    let fractional = format!("{fractional:0width$}", width = HOG_DECIMALS as usize)
+    let fractional = format!("{fractional:0width$}", width = hog::DECIMALS as usize)
         .trim_end_matches('0')
         .to_owned();
     format!("{whole}.{fractional}")
@@ -291,10 +276,10 @@ mod tests {
     use groundhog_contract_util::{NormalizedMethodSignature, contract_entrypoint_id};
 
     use super::{
-        DEFAULT_AIRDROP_HOG, HOG_TRANSFER_ENTRYPOINT, format_hog_amount, parse_hog_amount,
-        resolve_airdrop_recipient,
+        DEFAULT_AIRDROP_HOG, format_hog_amount, parse_hog_amount, resolve_airdrop_recipient,
     };
     use crate::config::ResolvedProfile;
+    use crate::hog;
 
     #[test]
     fn parses_hog_amounts_to_raw_units() {
@@ -363,7 +348,7 @@ mod tests {
             &NormalizedMethodSignature::new("transfer"),
         );
 
-        assert_eq!(entrypoint.as_ref(), HOG_TRANSFER_ENTRYPOINT);
+        assert_eq!(entrypoint.as_ref(), hog::TRANSFER_ENTRYPOINT);
     }
 
     fn test_profile(wallets: BTreeMap<String, String>) -> ResolvedProfile {

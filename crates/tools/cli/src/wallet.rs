@@ -1,9 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use groundhog_signing::{
-    BuildDeployTransaction, DEFAULT_TX_GAS_LIMIT, LocalSigner, SignTransactionParams,
-    build_deploy_transaction, derive_deploy_address, sign_and_encode_transaction_hex,
-    source_address_auth_claim,
+    BuildDeployTransaction, BuildDevWalletDoActionTransaction, DEFAULT_TX_GAS_LIMIT, LocalSigner,
+    SignTransactionParams, build_deploy_transaction, build_dev_wallet_do_action_transaction,
+    derive_deploy_address, sign_and_encode_transaction_hex, source_address_auth_claim,
 };
 use groundhog_xdr::contract::{Contract, ContractBlob, ContractEntrypointID};
 use groundhog_xdr::types::{ContractAddress, Ed25519PublicKey, SHA256Hash};
@@ -12,11 +12,12 @@ use sha2::{Digest, Sha256};
 use xdr_common::{BytesM, VecM};
 
 use crate::account_resolution::{LocalBootstrapRole, resolve_local_bootstrap_account};
-use crate::codec::format_contract_address;
+use crate::codec::{format_contract_address, parse_contract_address};
 use crate::config::{
     ProfileOverrides, find_project_config, remove_profile_wallet_address, resolve_default_key,
     resolve_profile, resolve_profile_with_overrides, save_profile_wallet_address,
 };
+use crate::hog;
 use crate::keys::load_local_signer;
 use crate::result::CommandResult;
 use crate::runtime_manifest::{
@@ -28,7 +29,8 @@ use crate::tx_utils::{
 };
 use crate::{CliError, Print};
 
-pub const WALLET_CREATE_JSON_SCHEMA_VERSION: u32 = 2;
+pub const WALLET_CREATE_JSON_SCHEMA_VERSION: u32 = 3;
+const WALLET_CREATE_PREFUND_RAW_AMOUNT: u128 = 100_000_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 struct SavedWallet {
@@ -41,11 +43,13 @@ pub(crate) struct PreparedWalletCreate {
     pub(crate) rpc_url: String,
     pub(crate) key_name: String,
     pub(crate) wallet_name: String,
-    pub(crate) sponsor_key_name: String,
-    pub(crate) sponsor_role: String,
+    pub(crate) faucet_key_name: String,
+    pub(crate) faucet_role: String,
     pub(crate) owner_public_key: String,
     pub(crate) artifact_path: PathBuf,
     pub(crate) wallet_address: String,
+    pub(crate) prefund_raw_amount: u128,
+    pub(crate) prefund_tx_hex: String,
     pub(crate) create_tx_hex: String,
 }
 
@@ -77,6 +81,11 @@ pub fn create(
         ));
     }
 
+    let (prefund_tx_hash, prefund_receipt) =
+        submit_and_poll_blocking(&prepared.rpc_url, &prepared.prefund_tx_hex)?;
+    let prefund_tx_hash = format_tx_hash(&prefund_tx_hash);
+    ensure_tx_success("wallet create prefund", &prefund_receipt, &prefund_tx_hash)?;
+
     let (create_tx_hash, create_receipt) =
         submit_and_poll_blocking(&prepared.rpc_url, &prepared.create_tx_hex)?;
     let create_tx_hash = format_tx_hash(&create_tx_hash);
@@ -93,6 +102,7 @@ pub fn create(
     )?;
 
     print.status(format_args!("Wallet created: {}", prepared.wallet_address));
+    print.status(format_args!("Prefund txn: {prefund_tx_hash}"));
     print.status(format_args!("Txn: {create_tx_hash}"));
 
     print.json(&CommandResult::new(
@@ -102,12 +112,15 @@ pub fn create(
             "name": prepared.wallet_name,
             "key": prepared.key_name,
             "wallet": prepared.wallet_address,
-            "sponsor": {
-                "key": prepared.sponsor_key_name,
-                "role": prepared.sponsor_role,
+            "faucet": {
+                "key": prepared.faucet_key_name,
+                "role": prepared.faucet_role,
             },
             "owner_public_key": prepared.owner_public_key,
             "artifact_path": prepared.artifact_path,
+            "prefund_raw_amount": prepared.prefund_raw_amount.to_string(),
+            "prefund_tx_hash": prefund_tx_hash,
+            "prefund_height": prefund_receipt.height,
             "create_tx_hash": create_tx_hash,
             "create_height": create_receipt.height,
         }),
@@ -172,11 +185,14 @@ fn print_dry_run(
     ));
     print.status(format_args!("  wallet: {}", prepared.wallet_address));
     print.status(format_args!(
-        "  sponsor: {} ({})",
-        prepared.sponsor_key_name, prepared.sponsor_role
+        "  faucet: {} ({})",
+        prepared.faucet_key_name, prepared.faucet_role
     ));
     print.status(format_args!("  owner: {}", prepared.owner_public_key));
-    print.status(format_args!("  signed tx: {}", prepared.create_tx_hex));
+    print.status(format_args!(
+        "  prefund raw amount: {}",
+        prepared.prefund_raw_amount
+    ));
     print.status("  submitted: no (--dry-run)");
 
     print.json(&CommandResult::new(
@@ -188,13 +204,13 @@ fn print_dry_run(
             "name": prepared.wallet_name,
             "key": prepared.key_name,
             "wallet": prepared.wallet_address,
-            "sponsor": {
-                "key": prepared.sponsor_key_name,
-                "role": prepared.sponsor_role,
+            "faucet": {
+                "key": prepared.faucet_key_name,
+                "role": prepared.faucet_role,
             },
             "owner_public_key": prepared.owner_public_key,
             "artifact_path": prepared.artifact_path,
-            "signed_tx": prepared.create_tx_hex,
+            "prefund_raw_amount": prepared.prefund_raw_amount.to_string(),
         }),
     ))?;
 
@@ -229,16 +245,20 @@ pub(crate) fn prepare_wallet_create(
         .as_deref()
         .ok_or(CliError::MissingRpcUrl)?
         .to_owned();
-    let manifest =
-        load_configured_runtime_manifest(&profile, "wallet_sponsor")?.ok_or_else(|| {
-            CliError::Other("wallet creation requires a local runtime manifest".into())
-        })?;
+    let manifest = load_configured_runtime_manifest(&profile, "faucet")?.ok_or_else(|| {
+        CliError::Other("wallet creation requires a local runtime manifest".into())
+    })?;
     let create_wallet_entrypoint = manifest
         .bootstrap
         .dev_wallet
         .create_wallet_entrypoint_id()
         .map_err(|error| CliError::Other(error.to_string()))?;
-    let sponsor = resolve_local_bootstrap_account(&profile, LocalBootstrapRole::WalletSponsor)?;
+    let wallet_do_action_entrypoint = manifest
+        .bootstrap
+        .dev_wallet
+        .do_action_entrypoint_id()
+        .map_err(|error| CliError::Other(error.to_string()))?;
+    let faucet = resolve_local_bootstrap_account(&profile, LocalBootstrapRole::Faucet)?;
     let owner = load_local_signer(&key_name)?;
     let owner_public_key = format!("0x{}", hex::encode(owner.verifying_key_bytes()));
     let (artifact_path, contract, contract_hash) = load_dev_wallet_contract(
@@ -249,7 +269,7 @@ pub(crate) fn prepare_wallet_create(
     let deploy_nonce_val = nonce_from_timestamp();
     let deploy_nonce = deploy_nonce_from_u64(deploy_nonce_val);
     let wallet_address =
-        derive_deploy_address(&sponsor.wallet_address, &deploy_nonce, &contract_hash)
+        derive_deploy_address(&faucet.wallet_address, &deploy_nonce, &contract_hash)
             .map_err(|error| CliError::Other(error.to_string()))?;
     let wallet_address_hex = format_contract_address(&wallet_address);
     let create_calldata = create_wallet_calldata(
@@ -261,31 +281,52 @@ pub(crate) fn prepare_wallet_create(
     let rt =
         tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
     let block_expiry_height = rt.block_on(async { resolve_block_expiry_height(&rpc_url).await })?;
+    let prefund_tx_hex = sign_wallet_prefund_transaction(&SignWalletPrefundTransaction {
+        faucet_wallet_address: faucet.wallet_address,
+        wallet_entrypoint: wallet_do_action_entrypoint,
+        recipient: wallet_address,
+        raw_amount: WALLET_CREATE_PREFUND_RAW_AMOUNT,
+        block_expiry_height,
+        nonce: deploy_nonce_val,
+        signer: &faucet.signer,
+    })?;
     let create_tx_hex = sign_create_wallet_transaction(SignCreateWalletTransaction {
-        sponsor_wallet_address: sponsor.wallet_address,
+        faucet_wallet_address: faucet.wallet_address,
         create_wallet_entrypoint,
         create_calldata,
         block_expiry_height,
-        nonce: deploy_nonce_val,
+        nonce: deploy_nonce_val.saturating_add(1),
         contract,
-        signer: &sponsor.signer,
+        signer: &faucet.signer,
     })?;
 
     Ok(PreparedWalletCreate {
         rpc_url,
         key_name,
         wallet_name,
-        sponsor_key_name: sponsor.key_name,
-        sponsor_role: sponsor.role,
+        faucet_key_name: faucet.key_name,
+        faucet_role: faucet.role,
         owner_public_key,
         artifact_path,
         wallet_address: wallet_address_hex,
+        prefund_raw_amount: WALLET_CREATE_PREFUND_RAW_AMOUNT,
+        prefund_tx_hex,
         create_tx_hex,
     })
 }
 
+struct SignWalletPrefundTransaction<'a> {
+    faucet_wallet_address: ContractAddress,
+    wallet_entrypoint: ContractEntrypointID,
+    recipient: ContractAddress,
+    raw_amount: u128,
+    block_expiry_height: i64,
+    nonce: u64,
+    signer: &'a LocalSigner,
+}
+
 struct SignCreateWalletTransaction<'a> {
-    sponsor_wallet_address: ContractAddress,
+    faucet_wallet_address: ContractAddress,
     create_wallet_entrypoint: ContractEntrypointID,
     create_calldata: Vec<u8>,
     block_expiry_height: i64,
@@ -325,7 +366,7 @@ fn sign_create_wallet_transaction(
     args: SignCreateWalletTransaction<'_>,
 ) -> Result<String, CliError> {
     let create_tx = build_deploy_transaction(BuildDeployTransaction {
-        invoked_address: args.sponsor_wallet_address,
+        invoked_address: args.faucet_wallet_address,
         entrypoint: args.create_wallet_entrypoint,
         calldata: args.create_calldata,
         gas_limit: DEFAULT_TX_GAS_LIMIT,
@@ -335,6 +376,28 @@ fn sign_create_wallet_transaction(
         auth_claim: source_address_auth_claim(),
     });
     sign_and_encode_transaction_hex(create_tx, args.signer, SignTransactionParams::default())
+        .map_err(|error| CliError::Other(error.to_string()))
+}
+
+fn sign_wallet_prefund_transaction(
+    args: &SignWalletPrefundTransaction<'_>,
+) -> Result<String, CliError> {
+    let hog_address = parse_contract_address(hog::TOKEN_ADDRESS)?;
+    let transfer_entrypoint = ContractEntrypointID::from(hog::TRANSFER_ENTRYPOINT);
+    let transfer_calldata = hog::encode_transfer_calldata(&args.recipient, args.raw_amount)?;
+    let tx = build_dev_wallet_do_action_transaction(BuildDevWalletDoActionTransaction {
+        wallet_address: args.faucet_wallet_address,
+        wallet_entrypoint: args.wallet_entrypoint,
+        target_address: hog_address,
+        target_entrypoint: transfer_entrypoint,
+        target_calldata: transfer_calldata.as_slice(),
+        gas_limit: DEFAULT_TX_GAS_LIMIT,
+        target_gas_limit: DEFAULT_TX_GAS_LIMIT,
+        block_expiry_height: args.block_expiry_height,
+        nonce: args.nonce,
+    })
+    .map_err(|error| CliError::Other(error.to_string()))?;
+    sign_and_encode_transaction_hex(tx, args.signer, SignTransactionParams::default())
         .map_err(|error| CliError::Other(error.to_string()))
 }
 

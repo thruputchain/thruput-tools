@@ -1684,8 +1684,8 @@ fn wallet_create_dry_run_json_outputs_prepared_transaction() {
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
 
-    let sponsor_wallet = advertised_dev_wallet_address(0);
-    let manifest_path = write_runtime_manifest(&project, 0, &sponsor_wallet, None);
+    let faucet_wallet = advertised_dev_wallet_address(0);
+    let manifest_path = write_runtime_manifest(&project, 0, &faucet_wallet, None);
     let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
     std::fs::write(project.join("dev-wallet.wasm"), b"dev-wallet").unwrap();
     std::fs::write(
@@ -1729,13 +1729,14 @@ fn wallet_create_dry_run_json_outputs_prepared_transaction() {
         stdout["data"]["schemaVersion"],
         groundhog_cli::wallet::WALLET_CREATE_JSON_SCHEMA_VERSION
     );
-    assert_eq!(stdout["data"]["schemaVersion"], 2);
+    assert_eq!(stdout["data"]["schemaVersion"], 3);
     assert_eq!(stdout["data"]["dry_run"], true);
     assert_eq!(stdout["data"]["submitted"], false);
     assert_eq!(stdout["data"]["name"], "trading");
     assert_eq!(stdout["data"]["key"], "dev-1");
-    assert_eq!(stdout["data"]["sponsor"]["key"], "dev-0");
-    assert_eq!(stdout["data"]["sponsor"]["role"], "local_user");
+    assert_eq!(stdout["data"]["faucet"]["key"], "dev-0");
+    assert_eq!(stdout["data"]["faucet"]["role"], "local_user");
+    assert_eq!(stdout["data"]["prefund_raw_amount"], "100000000");
     assert!(stdout["data"]["wallet"].as_str().unwrap().starts_with("0x"));
     assert!(
         stdout["data"]["owner_public_key"]
@@ -1747,20 +1748,8 @@ fn wallet_create_dry_run_json_outputs_prepared_transaction() {
         std::fs::canonicalize(stdout["data"]["artifact_path"].as_str().unwrap()).unwrap(),
         std::fs::canonicalize(project.join("dev-wallet.wasm")).unwrap()
     );
-    assert!(
-        stdout["data"]["signed_tx"]
-            .as_str()
-            .unwrap()
-            .starts_with("0x")
-    );
-    assert_eq!(
-        signed_tx_invoked_address(stdout["data"]["signed_tx"].as_str().unwrap()),
-        sponsor_wallet
-    );
-    assert_eq!(
-        signed_tx_deploy_contract_kind(stdout["data"]["signed_tx"].as_str().unwrap()),
-        "wasm"
-    );
+    assert!(stdout["data"].get("signed_prefund_tx").is_none());
+    assert!(stdout["data"].get("signed_tx").is_none());
 }
 
 #[test]
@@ -1769,8 +1758,8 @@ fn wallet_create_dry_run_defaults_name_to_key() {
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
 
-    let sponsor_wallet = advertised_dev_wallet_address(0);
-    let manifest_path = write_runtime_manifest(&project, 0, &sponsor_wallet, None);
+    let faucet_wallet = advertised_dev_wallet_address(0);
+    let manifest_path = write_runtime_manifest(&project, 0, &faucet_wallet, None);
     let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
     std::fs::write(project.join("dev-wallet.wasm"), b"dev-wallet").unwrap();
     std::fs::write(
@@ -1804,15 +1793,14 @@ fn wallet_create_dry_run_defaults_name_to_key() {
         stdout["data"]["schemaVersion"],
         groundhog_cli::wallet::WALLET_CREATE_JSON_SCHEMA_VERSION
     );
-    assert_eq!(stdout["data"]["schemaVersion"], 2);
+    assert_eq!(stdout["data"]["schemaVersion"], 3);
     assert_eq!(stdout["data"]["dry_run"], true);
     assert_eq!(stdout["data"]["submitted"], false);
     assert_eq!(stdout["data"]["name"], "dev-1");
     assert_eq!(stdout["data"]["key"], "dev-1");
-    assert_eq!(
-        signed_tx_invoked_address(stdout["data"]["signed_tx"].as_str().unwrap()),
-        sponsor_wallet
-    );
+    assert_eq!(stdout["data"]["prefund_raw_amount"], "100000000");
+    assert!(stdout["data"].get("signed_prefund_tx").is_none());
+    assert!(stdout["data"].get("signed_tx").is_none());
 }
 
 #[test]
@@ -1912,16 +1900,7 @@ fn airdrop_dry_run_json_outputs_prepared_transaction() {
     assert_eq!(stdout["data"]["raw_amount"], "12500000");
     assert_eq!(stdout["data"]["faucet"]["key"], "dev-0");
     assert_eq!(stdout["data"]["faucet"]["role"], "local_user");
-    assert!(
-        stdout["data"]["signed_tx"]
-            .as_str()
-            .unwrap()
-            .starts_with("0x")
-    );
-    assert_eq!(
-        signed_tx_invoked_address(stdout["data"]["signed_tx"].as_str().unwrap()),
-        faucet_wallet
-    );
+    assert!(stdout["data"].get("signed_tx").is_none());
 }
 
 #[test]
