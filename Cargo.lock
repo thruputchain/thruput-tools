@@ -1015,6 +1015,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "groundhog-faucet"
+version = "0.5.10"
+dependencies = [
+ "axum",
+ "clap",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "groundhog-json-rpc-api"
 version = "0.5.14"
 dependencies = [

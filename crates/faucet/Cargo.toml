@@ -1,0 +1,31 @@
+[package]
+name = "groundhog-faucet"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Hosted Devnet faucet for Groundhog"
+
+[[bin]]
+name = "hog-faucet"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+axum = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+tower = { workspace = true, features = ["util"] }
