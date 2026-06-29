@@ -1020,6 +1020,7 @@ version = "0.5.10"
 dependencies = [
  "axum",
  "clap",
+ "groundhog-json-rpc-types",
  "serde",
  "serde_json",
  "tokio",
