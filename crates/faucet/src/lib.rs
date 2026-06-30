@@ -1,7 +1,12 @@
+mod airdrop;
 /// Faucet service configuration types.
 pub mod config;
 
-use axum::{Json, Router, extract::State, routing::get};
+use axum::{
+    Json, Router,
+    extract::State,
+    routing::{get, post},
+};
 use groundhog_json_rpc_types::network_descriptor::NetworkDescriptor;
 use serde::Serialize;
 use std::sync::Arc;
@@ -41,6 +46,7 @@ pub fn app(config: FaucetConfig) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/v1/network", get(network))
+        .route("/v1/airdrop", post(airdrop::request_airdrop))
         .with_state(state)
 }
 
@@ -136,6 +142,56 @@ mod tests {
         let returned: NetworkDescriptor =
             serde_json::from_slice(&body).expect("bug: network body should deserialize");
         assert_eq!(returned, descriptor);
+    }
+
+    #[tokio::test]
+    async fn airdrop_validates_request_then_reports_not_implemented() {
+        let response = app(FaucetConfig::new(test_network_descriptor()))
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/airdrop")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "recipient": format!("0x{}", "11".repeat(32))
+                        })
+                        .to_string(),
+                    ))
+                    .expect("bug: airdrop request should build"),
+            )
+            .await
+            .expect("bug: airdrop request should complete");
+
+        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .expect("bug: airdrop body should read");
+        let json: serde_json::Value =
+            serde_json::from_slice(&body).expect("bug: airdrop body should be JSON");
+        assert_eq!(json["error"]["code"], "airdrop_not_implemented");
+    }
+
+    #[tokio::test]
+    async fn airdrop_rejects_malformed_recipient() {
+        let response = app(FaucetConfig::new(test_network_descriptor()))
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/airdrop")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "recipient": "0xdeadbeef"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("bug: airdrop request should build"),
+            )
+            .await
+            .expect("bug: airdrop request should complete");
+
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
 
     fn test_network_descriptor() -> NetworkDescriptor {
