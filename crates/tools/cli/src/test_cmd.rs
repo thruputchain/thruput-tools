@@ -54,6 +54,9 @@ pub struct IntegrationTestOptions {
     /// Run the integration target once with WASM and once with RV32 and require
     /// both observable test outcomes to match.
     pub differential: bool,
+    /// Show local-node supervisor and forwarded hog-devnode diagnostics while
+    /// running the ephemeral integration node.
+    pub verbose: bool,
 }
 
 impl Default for IntegrationTestOptions {
@@ -62,6 +65,7 @@ impl Default for IntegrationTestOptions {
             hogd_protocol: None,
             target: crate::build::BuildTarget::Rv32,
             differential: false,
+            verbose: false,
         }
     }
 }
@@ -358,6 +362,7 @@ fn run_integration_target_with_dev_node(
         .clone()
         .or_else(|| std::env::var(HOGD_PROTOCOL_ENV).ok());
 
+    crate::node::init_integration_test_tracing(integration.verbose, print.is_json());
     print.status(format_args!(
         "Starting ephemeral local node for {:?} integration tests...",
         build.artifact.kind

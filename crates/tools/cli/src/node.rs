@@ -67,7 +67,7 @@ pub fn run_with_block_driver(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    init_tracing(default_tracing_filter(verbose, print.is_json()));
+    init_node_tracing(verbose, print.is_json());
 
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
     rt.block_on(async {
@@ -475,6 +475,14 @@ fn map_node_supervisor_error(err: &groundhog_node_supervisor::NodeSupervisorErro
     }
 }
 
+pub(crate) fn init_node_tracing(verbose: bool, json: bool) {
+    init_tracing(default_tracing_filter(verbose, json));
+}
+
+pub(crate) fn init_integration_test_tracing(verbose: bool, json: bool) {
+    init_tracing(integration_test_tracing_filter(verbose, json));
+}
+
 fn default_tracing_filter(verbose: bool, json: bool) -> &'static str {
     if verbose {
         "groundhog_node_supervisor=info,hogd_dev=info"
@@ -482,6 +490,14 @@ fn default_tracing_filter(verbose: bool, json: bool) -> &'static str {
         "groundhog_node_supervisor=warn"
     } else {
         "groundhog_node_supervisor=info"
+    }
+}
+
+fn integration_test_tracing_filter(verbose: bool, _json: bool) -> &'static str {
+    if verbose {
+        "groundhog_node_supervisor=info,hogd_dev=info"
+    } else {
+        "groundhog_node_supervisor=warn,hogd_dev=warn"
     }
 }
 
