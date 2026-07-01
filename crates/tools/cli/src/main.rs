@@ -173,7 +173,8 @@ enum Command {
         cargo_args: Vec<String>,
     },
     /// Build and test the contract under WASM or local-node execution
-    #[command(long_about = "Builds the contract to WASM, then runs \
+    #[command(
+        long_about = "Builds the contract to WASM, then runs \
                        the test_wasm target on the host. With \
                        --integration, starts an ephemeral hog-devnode \
                        local node, deploys the selected artifact \
@@ -183,7 +184,13 @@ enum Command {
                        same integration target against WASM and RV32 artifacts \
                        on isolated local nodes. With --json, emits a structured report \
                        with mode, artifact metadata, summary, per-test cases, \
-                       and integration node metadata when applicable.")]
+                       and integration node metadata when applicable.",
+        after_help = "Logging:\n  With --integration, local-node supervisor info logs \
+                        are written to stderr;\n  add --verbose/-v to also forward \
+                        hog-devnode info logs. RUST_LOG overrides\n  the default filter, \
+                        for example \
+                        RUST_LOG=groundhog_node_supervisor=debug,hogd_dev=debug."
+    )]
     Test {
         /// Package to test (required in workspaces)
         #[arg(short, long)]
@@ -223,6 +230,11 @@ enum Command {
         /// Run integration tests against both WASM and RV32 artifacts
         #[arg(long, requires = "integration", conflicts_with = "target")]
         differential: bool,
+        /// Show local-node supervisor and forwarded hog-devnode diagnostics
+        ///
+        /// Only used with --integration. Logs are written to stderr.
+        #[arg(long, short = 'v', requires = "integration")]
+        verbose: bool,
         /// Override the x23 protocol token for the ephemeral integration node
         ///
         /// (Only used with --integration)
@@ -647,6 +659,7 @@ fn main() {
             integration,
             target,
             differential,
+            verbose,
             hogd_protocol,
             profile,
             artifacts,
@@ -678,6 +691,7 @@ fn main() {
                             hogd_protocol,
                             target: target.unwrap_or(BuildTargetArg::Rv32).into(),
                             differential,
+                            verbose,
                         },
                         &cargo_args,
                         &artifacts,
@@ -1130,6 +1144,23 @@ mod tests {
                 assert_eq!(profile, DEFAULT_PROFILE);
             }
             _ => panic!("expected airdrop command"),
+        }
+    }
+
+    #[test]
+    fn test_integration_verbose_flag_parses() {
+        let cli = Cli::parse_from(["groundhog", "test", "--integration", "-v"]);
+
+        match cli.command {
+            Command::Test {
+                integration,
+                verbose,
+                ..
+            } => {
+                assert!(integration);
+                assert!(verbose);
+            }
+            _ => panic!("expected test command"),
         }
     }
 }

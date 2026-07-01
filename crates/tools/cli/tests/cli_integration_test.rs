@@ -827,6 +827,8 @@ fn test_help_mentions_target_dir() {
     assert!(stdout.contains("--watch"));
     assert!(stdout.contains("--integration"));
     assert!(stdout.contains("--differential"));
+    assert!(stdout.contains("-v, --verbose"));
+    assert!(stdout.contains("RUST_LOG"));
     assert!(stdout.contains("hog-devnode"));
     assert!(stdout.contains("tests/integration.rs"));
     assert!(!stdout.contains("not wired yet"));

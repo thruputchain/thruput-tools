@@ -67,7 +67,7 @@ pub fn run_with_block_driver(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    init_tracing(default_tracing_filter(verbose, print.is_json()));
+    init_node_tracing(verbose, print.is_json());
 
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
     rt.block_on(async {
@@ -473,6 +473,10 @@ fn map_node_supervisor_error(err: &groundhog_node_supervisor::NodeSupervisorErro
         },
         _ => CliError::NodeSupervisor(message),
     }
+}
+
+pub(crate) fn init_node_tracing(verbose: bool, json: bool) {
+    init_tracing(default_tracing_filter(verbose, json));
 }
 
 fn default_tracing_filter(verbose: bool, json: bool) -> &'static str {
