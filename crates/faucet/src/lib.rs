@@ -1,31 +1,47 @@
-mod airdrop;
+pub mod airdrop;
 /// Faucet service configuration types.
 pub mod config;
 
 use axum::{
     Json, Router,
-    extract::State,
+    extract::{FromRef, State},
     routing::{get, post},
 };
 use groundhog_json_rpc_types::network_descriptor::NetworkDescriptor;
 use serde::Serialize;
+use std::fmt;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 
 pub const DEFAULT_LISTEN_ADDRESS: &str = "127.0.0.1:8081";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct FaucetConfig {
     pub listen_address: String,
     pub network_descriptor: NetworkDescriptor,
+    pub airdrop_submitter: Arc<dyn airdrop::AirdropSubmitter>,
 }
 
 impl FaucetConfig {
-    pub fn new(network_descriptor: NetworkDescriptor) -> Self {
+    pub fn new(
+        network_descriptor: NetworkDescriptor,
+        airdrop_submitter: Arc<dyn airdrop::AirdropSubmitter>,
+    ) -> Self {
         Self {
             listen_address: DEFAULT_LISTEN_ADDRESS.to_owned(),
             network_descriptor,
+            airdrop_submitter,
         }
+    }
+}
+
+impl fmt::Debug for FaucetConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FaucetConfig")
+            .field("listen_address", &self.listen_address)
+            .field("network_descriptor", &self.network_descriptor)
+            .field("airdrop_submitter", &"<dyn AirdropSubmitter>")
+            .finish()
     }
 }
 
@@ -34,14 +50,22 @@ struct HealthResponse {
     status: &'static str,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct AppState {
     network_descriptor: Arc<NetworkDescriptor>,
+    airdrop_submitter: Arc<dyn airdrop::AirdropSubmitter>,
+}
+
+impl FromRef<AppState> for Arc<dyn airdrop::AirdropSubmitter> {
+    fn from_ref(state: &AppState) -> Self {
+        state.airdrop_submitter.clone()
+    }
 }
 
 pub fn app(config: FaucetConfig) -> Router {
     let state = AppState {
         network_descriptor: Arc::new(config.network_descriptor),
+        airdrop_submitter: config.airdrop_submitter,
     };
     Router::new()
         .route("/health", get(health))
@@ -70,23 +94,28 @@ async fn network(State(state): State<AppState>) -> Json<NetworkDescriptor> {
 mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
+    use groundhog_json_rpc_types::hex::Hex0x;
     use groundhog_json_rpc_types::network_descriptor::{
         NETWORK_DESCRIPTOR_SCHEMA_VERSION, NetworkDescriptor,
     };
+    use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
+    use groundhog_json_rpc_types::transaction::TxHash;
+    use groundhog_json_rpc_types::{BlockHeight, ContractAddress};
+    use std::sync::Arc;
     use tower::ServiceExt;
 
-    use super::{DEFAULT_LISTEN_ADDRESS, FaucetConfig, app};
+    use super::{DEFAULT_LISTEN_ADDRESS, FaucetConfig, airdrop, app};
 
     #[test]
     fn default_config_uses_local_listen_address() {
-        let config = FaucetConfig::new(test_network_descriptor());
+        let config = test_config();
 
         assert_eq!(config.listen_address, DEFAULT_LISTEN_ADDRESS);
     }
 
     #[tokio::test]
     async fn health_returns_ok() {
-        let response = app(FaucetConfig::new(test_network_descriptor()))
+        let response = app(test_config())
             .oneshot(
                 Request::builder()
                     .uri("/health")
@@ -108,15 +137,18 @@ mod tests {
     #[tokio::test]
     async fn network_returns_public_descriptor() {
         let descriptor = test_network_descriptor();
-        let response = app(FaucetConfig::new(descriptor.clone()))
-            .oneshot(
-                Request::builder()
-                    .uri("/v1/network")
-                    .body(Body::empty())
-                    .expect("bug: network request should build"),
-            )
-            .await
-            .expect("bug: network request should complete");
+        let response = app(FaucetConfig::new(
+            descriptor.clone(),
+            Arc::new(MockAirdropSubmitter::success()),
+        ))
+        .oneshot(
+            Request::builder()
+                .uri("/v1/network")
+                .body(Body::empty())
+                .expect("bug: network request should build"),
+        )
+        .await
+        .expect("bug: network request should complete");
 
         assert_eq!(response.status(), StatusCode::OK);
         let body = axum::body::to_bytes(response.into_body(), 4096)
@@ -145,8 +177,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn airdrop_validates_request_then_reports_not_implemented() {
-        let response = app(FaucetConfig::new(test_network_descriptor()))
+    async fn airdrop_validates_request_then_submits() {
+        let response = app(test_config())
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -163,18 +195,20 @@ mod tests {
             .await
             .expect("bug: airdrop request should complete");
 
-        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(response.status(), StatusCode::OK);
         let body = axum::body::to_bytes(response.into_body(), 4096)
             .await
             .expect("bug: airdrop body should read");
         let json: serde_json::Value =
             serde_json::from_slice(&body).expect("bug: airdrop body should be JSON");
-        assert_eq!(json["error"]["code"], "airdrop_not_implemented");
+        assert_eq!(json["rawAmount"], "100000000");
+        assert_eq!(json["height"], 42);
+        assert_eq!(json["status"]["result"], "ok");
     }
 
     #[tokio::test]
     async fn airdrop_rejects_malformed_recipient() {
-        let response = app(FaucetConfig::new(test_network_descriptor()))
+        let response = app(test_config())
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -192,6 +226,44 @@ mod tests {
             .expect("bug: airdrop request should complete");
 
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[tokio::test]
+    async fn airdrop_submit_failure_returns_bad_gateway() {
+        let response = app(FaucetConfig::new(
+            test_network_descriptor(),
+            Arc::new(MockAirdropSubmitter::failure()),
+        ))
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/airdrop")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "recipient": format!("0x{}", "11".repeat(32))
+                    })
+                    .to_string(),
+                ))
+                .expect("bug: airdrop request should build"),
+        )
+        .await
+        .expect("bug: airdrop request should complete");
+
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .expect("bug: airdrop body should read");
+        let json: serde_json::Value =
+            serde_json::from_slice(&body).expect("bug: airdrop body should be JSON");
+        assert_eq!(json["error"]["code"], "airdrop_submit_failed");
+    }
+
+    fn test_config() -> FaucetConfig {
+        FaucetConfig::new(
+            test_network_descriptor(),
+            Arc::new(MockAirdropSubmitter::success()),
+        )
     }
 
     fn test_network_descriptor() -> NetworkDescriptor {
@@ -219,5 +291,47 @@ mod tests {
             }
         }))
         .expect("bug: test network descriptor should deserialize")
+    }
+
+    struct MockAirdropSubmitter {
+        fail: bool,
+    }
+
+    impl MockAirdropSubmitter {
+        fn success() -> Self {
+            Self { fail: false }
+        }
+
+        fn failure() -> Self {
+            Self { fail: true }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl airdrop::AirdropSubmitter for MockAirdropSubmitter {
+        async fn submit_airdrop(
+            &self,
+            _recipient: ContractAddress,
+        ) -> Result<airdrop::AirdropSubmission, airdrop::AirdropSubmitError> {
+            if self.fail {
+                return Err(airdrop::AirdropSubmitError::BuildTransaction("boom".into()));
+            }
+            Ok(airdrop::AirdropSubmission {
+                raw_amount: "100000000".into(),
+                tx_hash: test_tx_hash(),
+                receipt: TransactionReceipt {
+                    tx_hash: test_tx_hash(),
+                    height: BlockHeight::from(42),
+                    status: ExecStatus::Ok,
+                    events: vec![],
+                    return_data: None,
+                    abort_data: None,
+                },
+            })
+        }
+    }
+
+    fn test_tx_hash() -> TxHash {
+        TxHash(Hex0x(groundhog_xdr::types::SHA256Hash::from([0x22; 32])))
     }
 }

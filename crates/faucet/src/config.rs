@@ -1,3 +1,4 @@
+use crate::airdrop::{AirdropRuntimeConfig, AirdropRuntimeConfigError};
 use groundhog_json_rpc_types::hex::HexBytes;
 use groundhog_json_rpc_types::network_descriptor::{
     FaucetDescriptor, NativeHogDescriptor, NetworkDescriptor, NetworkDescriptorEndpoints,
@@ -6,32 +7,41 @@ use groundhog_json_rpc_types::network_descriptor::{
 use groundhog_json_rpc_types::{ContractAddress, SHA256Hash};
 use serde::Deserialize;
 
+/// Faucet service TOML config.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
-/// Faucet service TOML config.
 pub struct FaucetConfigFile {
     /// HTTP listen address. Defaults to the service default when omitted.
     #[serde(default)]
     pub listen_address: Option<String>,
     /// Public network descriptor source fields.
     pub network: NetworkConfig,
+    /// Private faucet airdrop execution config.
+    pub airdrop: AirdropConfig,
 }
 
 impl FaucetConfigFile {
     /// Convert this config into the public network descriptor served by `/v1/network`.
     pub fn into_network_descriptor(self) -> NetworkDescriptor {
-        self.into_parts().1
+        self.network.into_descriptor()
     }
 
     /// Split this config into the optional listen override and public descriptor.
-    pub fn into_parts(self) -> (Option<String>, NetworkDescriptor) {
-        (self.listen_address, self.network.into_descriptor())
+    pub fn into_parts(
+        self,
+    ) -> Result<(Option<String>, NetworkDescriptor, AirdropRuntimeConfig), AirdropRuntimeConfigError>
+    {
+        Ok((
+            self.listen_address,
+            self.network.into_descriptor(),
+            self.airdrop.into_runtime_config()?,
+        ))
     }
 }
 
+/// Public network metadata fields used to build a descriptor.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
-/// Public network metadata fields used to build a descriptor.
 pub struct NetworkConfig {
     /// Stable network identifier.
     pub network_id: String,
@@ -70,9 +80,9 @@ impl NetworkConfig {
     }
 }
 
+/// Public HTTP endpoint configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
-/// Public HTTP endpoint configuration.
 pub struct EndpointConfig {
     /// JSON-RPC endpoint URL.
     pub rpc_url: String,
@@ -80,9 +90,9 @@ pub struct EndpointConfig {
     pub faucet_url: String,
 }
 
+/// Native HOG token configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
-/// Native HOG token configuration.
 pub struct NativeHogConfig {
     /// Native HOG token contract address.
     pub token_address: ContractAddress,
@@ -92,22 +102,45 @@ pub struct NativeHogConfig {
     pub transfer_entrypoint: HexBytes,
 }
 
+/// Public faucet account configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
-/// Public faucet account configuration.
 pub struct FaucetAccountConfig {
     /// Faucet wallet address used as the public sponsor account.
     pub wallet_address: ContractAddress,
 }
 
+/// Wallet-create metadata configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
-/// Wallet-create metadata configuration.
 pub struct WalletCreateConfig {
     /// Raw HOG units prefunded to the deterministic future wallet address.
     pub prefund_raw_amount: String,
     /// Contract hash used for deterministic wallet address derivation.
     pub wallet_contract_hash: SHA256Hash,
+}
+
+/// Private airdrop execution configuration.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AirdropConfig {
+    /// Raw HOG units transferred for each airdrop request.
+    pub raw_amount: String,
+    /// Faucet wallet `doAction` entrypoint.
+    pub wallet_do_action_entrypoint: HexBytes,
+    /// 32-byte faucet signing secret key.
+    pub faucet_secret_key: HexBytes,
+}
+
+impl AirdropConfig {
+    /// Convert wire config into validated runtime airdrop config.
+    pub fn into_runtime_config(self) -> Result<AirdropRuntimeConfig, AirdropRuntimeConfigError> {
+        AirdropRuntimeConfig::from_wire(
+            &self.raw_amount,
+            self.wallet_do_action_entrypoint,
+            self.faucet_secret_key,
+        )
+    }
 }
 
 #[cfg(test)]
@@ -129,6 +162,18 @@ mod tests {
         assert_eq!(descriptor.endpoints.rpc_url, "https://rpc.devnet.example");
         assert_eq!(descriptor.native_hog.decimals, 7);
         assert_eq!(descriptor.wallet_create.prefund_raw_amount, "100000000");
+    }
+
+    #[test]
+    fn config_builds_airdrop_runtime_config() {
+        let config: FaucetConfigFile =
+            toml::from_str(TEST_CONFIG).expect("bug: fixture config should parse");
+
+        let (_listen, _descriptor, airdrop) = config
+            .into_parts()
+            .expect("bug: airdrop runtime config should validate");
+
+        assert_eq!(airdrop.raw_amount, 100_000_000);
     }
 
     #[test]
@@ -187,5 +232,10 @@ mod tests {
         [network.wallet_create]
         prefund_raw_amount = "100000000"
         wallet_contract_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"
+
+        [airdrop]
+        raw_amount = "100000000"
+        wallet_do_action_entrypoint = "0x646f416374696f6e"
+        faucet_secret_key = "0x1111111111111111111111111111111111111111111111111111111111111111"
     "#;
 }

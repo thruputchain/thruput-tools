@@ -1018,16 +1018,22 @@ dependencies = [
 name = "groundhog-faucet"
 version = "0.5.10"
 dependencies = [
+ "async-trait",
  "axum",
  "clap",
+ "groundhog-json-rpc-client",
  "groundhog-json-rpc-types",
+ "groundhog-signing",
+ "groundhog-xdr",
  "serde",
  "serde_json",
+ "thiserror 2.0.18",
  "tokio",
  "toml",
  "tower",
  "tracing",
  "tracing-subscriber",
+ "xdrs",
 ]
 
 [[package]]
@@ -1052,6 +1058,7 @@ dependencies = [
  "jsonrpsee",
  "serde",
  "serde_json",
+ "thiserror 2.0.18",
  "tokio",
 ]
 

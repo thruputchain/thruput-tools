@@ -1,5 +1,8 @@
 use clap::Parser;
-use groundhog_faucet::{FaucetConfig, config::FaucetConfigFile, serve};
+use groundhog_faucet::{
+    FaucetConfig, airdrop::RpcAirdropSubmitter, config::FaucetConfigFile, serve,
+};
+use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Parser)]
@@ -37,8 +40,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
         })?;
     let file_config = toml::from_str::<FaucetConfigFile>(&config_toml)?;
-    let (listen_address, network_descriptor) = file_config.into_parts();
-    let mut config = FaucetConfig::new(network_descriptor);
+    let (listen_address, network_descriptor, airdrop_config) = file_config.into_parts()?;
+    let airdrop_submitter = RpcAirdropSubmitter::new(&network_descriptor, airdrop_config)?;
+    let mut config = FaucetConfig::new(network_descriptor, Arc::new(airdrop_submitter));
     if let Some(listen) = listen_address {
         config.listen_address = listen;
     }
