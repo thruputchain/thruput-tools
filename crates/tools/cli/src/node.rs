@@ -479,10 +479,6 @@ pub(crate) fn init_node_tracing(verbose: bool, json: bool) {
     init_tracing(default_tracing_filter(verbose, json));
 }
 
-pub(crate) fn init_integration_test_tracing(verbose: bool, json: bool) {
-    init_tracing(integration_test_tracing_filter(verbose, json));
-}
-
 fn default_tracing_filter(verbose: bool, json: bool) -> &'static str {
     if verbose {
         "groundhog_node_supervisor=info,hogd_dev=info"
@@ -490,14 +486,6 @@ fn default_tracing_filter(verbose: bool, json: bool) -> &'static str {
         "groundhog_node_supervisor=warn"
     } else {
         "groundhog_node_supervisor=info"
-    }
-}
-
-fn integration_test_tracing_filter(verbose: bool, _json: bool) -> &'static str {
-    if verbose {
-        "groundhog_node_supervisor=info,hogd_dev=info"
-    } else {
-        "groundhog_node_supervisor=warn,hogd_dev=warn"
     }
 }
 

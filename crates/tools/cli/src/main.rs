@@ -185,9 +185,10 @@ enum Command {
                        on isolated local nodes. With --json, emits a structured report \
                        with mode, artifact metadata, summary, per-test cases, \
                        and integration node metadata when applicable.",
-        after_help = "Logging:\n  With --integration, use --verbose/-v to show local \
-                        node supervisor and\n  forwarded hog-devnode info logs on \
-                        stderr. RUST_LOG overrides the default\n  filter, for example \
+        after_help = "Logging:\n  With --integration, local-node supervisor info logs \
+                        are written to stderr;\n  add --verbose/-v to also forward \
+                        hog-devnode info logs. RUST_LOG overrides\n  the default filter, \
+                        for example \
                         RUST_LOG=groundhog_node_supervisor=debug,hogd_dev=debug."
     )]
     Test {

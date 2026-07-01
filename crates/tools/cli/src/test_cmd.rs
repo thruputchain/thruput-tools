@@ -362,7 +362,7 @@ fn run_integration_target_with_dev_node(
         .clone()
         .or_else(|| std::env::var(HOGD_PROTOCOL_ENV).ok());
 
-    crate::node::init_integration_test_tracing(integration.verbose, print.is_json());
+    crate::node::init_node_tracing(integration.verbose, print.is_json());
     print.status(format_args!(
         "Starting ephemeral local node for {:?} integration tests...",
         build.artifact.kind
