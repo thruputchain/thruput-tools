@@ -2,7 +2,7 @@ use groundhog_json_rpc_types::{
     ContractAddress,
     runtime_manifest::{BootstrapAccount, RuntimeManifest},
 };
-use groundhog_signing::{DEFAULT_PUBKEY_ACCOUNT_NONCE, LocalSigner, PubkeyAccount, Signer};
+use groundhog_signing::LocalSigner;
 
 use crate::{
     CliError,
@@ -40,9 +40,8 @@ pub(crate) struct ResolvedLocalBootstrapAccount {
 
 /// Resolve the wallet address used as a transaction's invoked address.
 ///
-/// Stored keys keep the legacy pubkey-derived account path. Dev keys (`dev-N`)
-/// must use wallet metadata advertised by the local dev backend and must not
-/// fall back to local address derivation when that metadata is unavailable.
+/// Dev keys (`dev-N`) use wallet metadata advertised by the local dev backend.
+/// Stored non-dev keys use saved wallet bindings created by `wallet create`.
 pub(crate) fn resolve_wallet_address(
     profile: &ResolvedProfile,
     key_name: &str,
@@ -51,14 +50,21 @@ pub(crate) fn resolve_wallet_address(
     if let Some(index) = dev_keys::dev_key_index(key_name) {
         resolve_dev_wallet_address(profile, key_name, index, signer)
     } else {
-        let account = PubkeyAccount::new(signer.public_key(), DEFAULT_PUBKEY_ACCOUNT_NONCE);
-        account
-            .address()
-            .map_err(|error| CliError::WalletAddressDerivationFailed {
-                key_name: key_name.to_owned(),
-                message: error.to_string(),
-            })
+        resolve_saved_wallet_address(profile, key_name)
     }
+}
+
+fn resolve_saved_wallet_address(
+    profile: &ResolvedProfile,
+    key_name: &str,
+) -> Result<groundhog_xdr::types::ContractAddress, CliError> {
+    let Some(wallet) = profile.resolve_wallet(key_name) else {
+        return Err(CliError::Other(format!(
+            "no wallet saved for key `{key_name}` in profile `{}`; run `groundhog wallet create --key {key_name} --profile {}`",
+            profile.name, profile.name
+        )));
+    };
+    crate::codec::parse_contract_address(&wallet)
 }
 
 fn resolve_dev_wallet_address(
@@ -263,27 +269,50 @@ mod tests {
     use super::*;
 
     #[test]
-    fn non_dev_key_uses_pubkey_derived_wallet_address() {
+    fn non_dev_key_uses_saved_wallet_address() {
         let signer = groundhog_signing::derive_default_dev_account_signer(0);
-        let profile = ResolvedProfile {
+        let wallet_address = groundhog_xdr::types::ContractAddress::from([0x80; 32]);
+        let mut wallets = BTreeMap::new();
+        wallets.insert(
+            "alice".into(),
+            format!("0x{}", hex::encode(wallet_address.as_ref())),
+        );
+        let profile = test_profile("alice", None, wallets);
+
+        let resolved = resolve_wallet_address(&profile, "alice", &signer)
+            .expect("bug: saved wallet should resolve");
+
+        assert_eq!(resolved, wallet_address);
+    }
+
+    #[test]
+    fn non_dev_key_requires_saved_wallet_address() {
+        let signer = groundhog_signing::derive_default_dev_account_signer(0);
+        let profile = test_profile("alice", None, BTreeMap::default());
+
+        let err = resolve_wallet_address(&profile, "alice", &signer)
+            .expect_err("bug: missing wallet should fail");
+
+        assert!(err.to_string().contains("run `groundhog wallet create"));
+    }
+
+    fn test_profile(
+        key_name: &str,
+        runtime_manifest: Option<std::path::PathBuf>,
+        wallets: BTreeMap<String, String>,
+    ) -> ResolvedProfile {
+        ResolvedProfile {
             name: "default".into(),
             rpc_url: Some("http://127.0.0.1:1".into()),
             rpc_url_cli_override: false,
             faucet_url: None,
-            default_key: Some("alice".into()),
-            runtime_manifest: None,
+            default_key: Some(key_name.into()),
+            runtime_manifest,
             runtime_manifest_cli_override: false,
             contracts: BTreeMap::default(),
-            wallets: BTreeMap::default(),
+            wallets,
             source: None,
-        };
-        let resolved = resolve_wallet_address(&profile, "alice", &signer)
-            .expect("bug: non-dev key should not call RPC");
-        let expected = PubkeyAccount::new(signer.public_key(), DEFAULT_PUBKEY_ACCOUNT_NONCE)
-            .address()
-            .expect("bug: pubkey account address should derive");
-
-        assert_eq!(resolved, expected);
+        }
     }
 
     #[test]

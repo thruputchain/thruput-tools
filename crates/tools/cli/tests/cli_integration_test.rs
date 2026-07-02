@@ -1602,7 +1602,10 @@ fn deploy_dry_run_json_outputs_prepared_transaction() {
     let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
     std::fs::write(
         project.join("groundhog.toml"),
-        format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
+            "aa".repeat(32)
+        ),
     )
     .unwrap();
 
@@ -1913,7 +1916,10 @@ fn deploy_dry_run_json_accepts_rv32_artifact() {
     let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
     std::fs::write(
         project.join("groundhog.toml"),
-        format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
+            "aa".repeat(32)
+        ),
     )
     .unwrap();
 
@@ -1988,7 +1994,10 @@ fn deploy_dry_run_auto_resolves_rv32_artifact_by_default() {
     let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
     std::fs::write(
         project.join("groundhog.toml"),
-        format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
+            "aa".repeat(32)
+        ),
     )
     .unwrap();
 
@@ -2486,7 +2495,10 @@ fn deploy_live_json_submits_and_returns_receipt() {
     let (rpc_url, rpc_server) = spawn_deploy_rpc(42);
     std::fs::write(
         project.join("groundhog.toml"),
-        format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
+            "aa".repeat(32)
+        ),
     )
     .unwrap();
 
@@ -2561,7 +2573,10 @@ fn deploy_live_json_includes_transaction_detail_when_dev_method_exists() {
         spawn_deploy_rpc_with_detail(42, DevDetailRpcResponse::Result(sample_detail_result(42)));
     std::fs::write(
         project.join("groundhog.toml"),
-        format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
+            "aa".repeat(32)
+        ),
     )
     .unwrap();
 
@@ -2667,7 +2682,10 @@ fn view_json_returns_raw_output() {
     let (rpc_url, rpc_server) = spawn_view_rpc(&address, entrypoint, calldata);
     std::fs::write(
         project.join("groundhog.toml"),
-        format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
+            "aa".repeat(32)
+        ),
     )
     .unwrap();
 
@@ -2819,7 +2837,10 @@ fn view_json_surfaces_abort_as_success_body() {
     );
     std::fs::write(
         project.join("groundhog.toml"),
-        format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
+            "aa".repeat(32)
+        ),
     )
     .unwrap();
 
@@ -2862,7 +2883,10 @@ fn view_json_surfaces_fault_as_success_body() {
     );
     std::fs::write(
         project.join("groundhog.toml"),
-        format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
+            "aa".repeat(32)
+        ),
     )
     .unwrap();
 
@@ -2908,7 +2932,10 @@ fn view_human_prints_event_details() {
     );
     std::fs::write(
         project.join("groundhog.toml"),
-        format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
+            "aa".repeat(32)
+        ),
     )
     .unwrap();
 
@@ -2946,7 +2973,10 @@ fn storage_json_reads_latest_item() {
     let (rpc_url, rpc_server) = spawn_storage_rpc(&address, &key);
     std::fs::write(
         project.join("groundhog.toml"),
-        format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
+            "aa".repeat(32)
+        ),
     )
     .unwrap();
 
@@ -3243,7 +3273,10 @@ fn call_dry_run_json_outputs_prepared_transaction() {
     let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
     std::fs::write(
         project.join("groundhog.toml"),
-        format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
+            "aa".repeat(32)
+        ),
     )
     .unwrap();
 
@@ -3365,7 +3398,10 @@ fn call_live_human_appends_transaction_detail_sections() {
     );
     std::fs::write(
         project.join("groundhog.toml"),
-        format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
+            "aa".repeat(32)
+        ),
     )
     .unwrap();
 
@@ -3421,7 +3457,10 @@ fn call_live_human_warns_when_transaction_detail_fails() {
     );
     std::fs::write(
         project.join("groundhog.toml"),
-        format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
+            "aa".repeat(32)
+        ),
     )
     .unwrap();
 
@@ -3538,7 +3577,10 @@ fn call_live_json_marks_legacy_default_wallet_entrypoint_without_manifest() {
     );
     std::fs::write(
         project.join("groundhog.toml"),
-        format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
+            "aa".repeat(32)
+        ),
     )
     .unwrap();
 
