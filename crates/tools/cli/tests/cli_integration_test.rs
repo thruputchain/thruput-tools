@@ -1196,11 +1196,9 @@ fn test_integration_default_rv32_build_reaches_local_node_startup() {
 }
 
 #[cfg(unix)]
-#[test]
-fn test_json_failed_run_emits_report_on_stdout() {
+fn prepare_failed_rv32_test_fixture(tmp: &TempDir) -> std::path::PathBuf {
     use std::os::unix::fs::PermissionsExt;
 
-    let tmp = TempDir::new().unwrap();
     std::fs::write(
         tmp.path().join("Cargo.toml"),
         "[package]\nname = \"demo-contract\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
@@ -1266,6 +1264,14 @@ fn test_json_failed_run_emits_report_on_stdout() {
     let mut perms = std::fs::metadata(&cargo).unwrap().permissions();
     perms.set_mode(0o755);
     std::fs::set_permissions(&cargo, perms).unwrap();
+    fake_bin
+}
+
+#[cfg(unix)]
+#[test]
+fn test_json_failed_run_emits_report_on_stdout() {
+    let tmp = TempDir::new().unwrap();
+    let fake_bin = prepare_failed_rv32_test_fixture(&tmp);
 
     let output = groundhog()
         .arg("--json")
