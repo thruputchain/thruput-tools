@@ -4,3 +4,5 @@ docs/plans/
 docs/superpowers/
 actions/
 crates/faucet/faucet.toml
+crates/faucet/web/dist/
+crates/faucet/web/node_modules/

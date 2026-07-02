@@ -1,6 +1,8 @@
 # Example local faucet config. Copy to crates/faucet/faucet.toml and replace
 # placeholder network identity values with values from your local/devnet setup.
 listen_address = "127.0.0.1:8081"
+# Static UIs hosted on a different origin must be allowed here.
+cors_allowed_origins = ["http://127.0.0.1:5173"]
 
 [network]
 network_id = "local-devnet"

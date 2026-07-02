@@ -1,5 +1,6 @@
 use crate::airdrop::{AirdropRuntimeConfig, AirdropRuntimeConfigError};
 use crate::wallet_create::{WalletCreateRuntimeConfig, WalletCreateRuntimeConfigError};
+use axum::http::HeaderValue;
 use groundhog_json_rpc_types::hex::HexBytes;
 use groundhog_json_rpc_types::network_descriptor::{
     FaucetDescriptor, NativeHogDescriptor, NetworkDescriptor, NetworkDescriptorEndpoints,
@@ -16,12 +17,30 @@ pub struct FaucetConfigFile {
     /// HTTP listen address. Defaults to the service default when omitted.
     #[serde(default)]
     pub listen_address: Option<String>,
+    /// Browser origins allowed to call the API from static UI deployments.
+    #[serde(default)]
+    pub cors_allowed_origins: Vec<String>,
     /// Public network descriptor source fields.
     pub network: NetworkConfig,
     /// Private faucet airdrop execution config.
     pub airdrop: AirdropConfig,
     /// Private wallet-create execution config.
     pub wallet_create: WalletCreateExecutionConfig,
+}
+
+/// Validated faucet service config split into public and private runtime parts.
+#[derive(Debug)]
+pub struct FaucetConfigParts {
+    /// HTTP listen address override from config.
+    pub listen_address: Option<String>,
+    /// Public descriptor served by `/v1/network`.
+    pub network_descriptor: NetworkDescriptor,
+    /// Private airdrop execution config.
+    pub airdrop: AirdropRuntimeConfig,
+    /// Private wallet-create execution config.
+    pub wallet_create: WalletCreateRuntimeConfig,
+    /// Browser origins allowed to call the API.
+    pub cors_allowed_origins: Vec<HeaderValue>,
 }
 
 impl FaucetConfigFile {
@@ -31,25 +50,28 @@ impl FaucetConfigFile {
     }
 
     /// Split this config into the optional listen override and public descriptor.
-    pub fn into_parts(
-        self,
-    ) -> Result<
-        (
-            Option<String>,
-            NetworkDescriptor,
-            AirdropRuntimeConfig,
-            WalletCreateRuntimeConfig,
-        ),
-        FaucetConfigError,
-    > {
+    pub fn into_parts(self) -> Result<FaucetConfigParts, FaucetConfigError> {
         let airdrop = self.airdrop.into_runtime_config()?;
         let wallet_create = self.wallet_create.into_runtime_config()?;
-        Ok((
-            self.listen_address,
-            self.network.into_descriptor(),
+        let cors_allowed_origins = self
+            .cors_allowed_origins
+            .iter()
+            .map(|origin| {
+                HeaderValue::from_str(origin).map_err(|error| {
+                    FaucetConfigError::InvalidCorsOrigin {
+                        origin: origin.clone(),
+                        message: error.to_string(),
+                    }
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(FaucetConfigParts {
+            listen_address: self.listen_address,
+            network_descriptor: self.network.into_descriptor(),
             airdrop,
             wallet_create,
-        ))
+            cors_allowed_origins,
+        })
     }
 }
 
@@ -62,6 +84,9 @@ pub enum FaucetConfigError {
     /// The private wallet-create config was invalid.
     #[error(transparent)]
     WalletCreate(#[from] WalletCreateRuntimeConfigError),
+    /// A configured CORS origin was invalid.
+    #[error("invalid CORS origin `{origin}`: {message}")]
+    InvalidCorsOrigin { origin: String, message: String },
 }
 
 /// Public network metadata fields used to build a descriptor.
@@ -216,11 +241,11 @@ mod tests {
         let config: FaucetConfigFile =
             toml::from_str(TEST_CONFIG).expect("bug: fixture config should parse");
 
-        let (_listen, _descriptor, airdrop, _wallet_create) = config
+        let parts = config
             .into_parts()
             .expect("bug: airdrop runtime config should validate");
 
-        assert_eq!(airdrop.raw_amount, 100_000_000);
+        assert_eq!(parts.airdrop.raw_amount, 100_000_000);
     }
 
     #[test]
@@ -228,12 +253,12 @@ mod tests {
         let config: FaucetConfigFile =
             toml::from_str(TEST_CONFIG).expect("bug: fixture config should parse");
 
-        let (_listen, _descriptor, _airdrop, wallet_create) = config
+        let parts = config
             .into_parts()
             .expect("bug: wallet-create runtime config should validate");
 
         assert_eq!(
-            wallet_create.wallet_artifact_path,
+            parts.wallet_create.wallet_artifact_path,
             std::path::PathBuf::from("contracts/dev_wallet.rv32a")
         );
     }
@@ -271,8 +296,22 @@ mod tests {
         assert!(err.to_string().contains("unknown field"));
     }
 
+    #[test]
+    fn config_builds_cors_origins() {
+        let config: FaucetConfigFile =
+            toml::from_str(TEST_CONFIG).expect("bug: fixture config should parse");
+
+        let parts = config
+            .into_parts()
+            .expect("bug: CORS origins should validate");
+
+        assert_eq!(parts.cors_allowed_origins.len(), 1);
+        assert_eq!(parts.cors_allowed_origins[0], "http://127.0.0.1:5173");
+    }
+
     const TEST_CONFIG: &str = r#"
         listen_address = "127.0.0.1:8081"
+        cors_allowed_origins = ["http://127.0.0.1:5173"]
 
         [network]
         network_id = "devnet-preview"

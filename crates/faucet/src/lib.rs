@@ -6,6 +6,7 @@ pub mod wallet_create;
 use axum::{
     Json, Router,
     extract::{FromRef, State},
+    http::{HeaderValue, Method, header},
     routing::{get, post},
 };
 use groundhog_json_rpc_types::network_descriptor::NetworkDescriptor;
@@ -13,12 +14,14 @@ use serde::Serialize;
 use std::fmt;
 use std::sync::Arc;
 use tokio::net::TcpListener;
+use tower_http::cors::CorsLayer;
 
 pub const DEFAULT_LISTEN_ADDRESS: &str = "127.0.0.1:8081";
 
 #[derive(Clone)]
 pub struct FaucetConfig {
     pub listen_address: String,
+    pub cors_allowed_origins: Vec<HeaderValue>,
     pub network_descriptor: NetworkDescriptor,
     pub airdrop_submitter: Arc<dyn airdrop::AirdropSubmitter>,
     pub wallet_create_submitter: Arc<dyn wallet_create::WalletCreateSubmitter>,
@@ -32,6 +35,7 @@ impl FaucetConfig {
     ) -> Self {
         Self {
             listen_address: DEFAULT_LISTEN_ADDRESS.to_owned(),
+            cors_allowed_origins: Vec::new(),
             network_descriptor,
             airdrop_submitter,
             wallet_create_submitter,
@@ -43,6 +47,7 @@ impl fmt::Debug for FaucetConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FaucetConfig")
             .field("listen_address", &self.listen_address)
+            .field("cors_allowed_origins", &self.cors_allowed_origins)
             .field("network_descriptor", &self.network_descriptor)
             .field("airdrop_submitter", &"<dyn AirdropSubmitter>")
             .field("wallet_create_submitter", &"<dyn WalletCreateSubmitter>")
@@ -75,12 +80,13 @@ impl FromRef<AppState> for Arc<dyn wallet_create::WalletCreateSubmitter> {
 }
 
 pub fn app(config: FaucetConfig) -> Router {
+    let cors_allowed_origins = config.cors_allowed_origins.clone();
     let state = AppState {
         network_descriptor: Arc::new(config.network_descriptor),
         airdrop_submitter: config.airdrop_submitter,
         wallet_create_submitter: config.wallet_create_submitter,
     };
-    Router::new()
+    let router = Router::new()
         .route("/health", get(health))
         .route("/v1/network", get(network))
         .route("/v1/airdrop", post(airdrop::request_airdrop))
@@ -89,7 +95,17 @@ pub fn app(config: FaucetConfig) -> Router {
             post(wallet_create::prepare_wallet_create),
         )
         .route("/v1/create-wallet", post(wallet_create::create_wallet))
-        .with_state(state)
+        .with_state(state);
+    if cors_allowed_origins.is_empty() {
+        router
+    } else {
+        router.layer(
+            CorsLayer::new()
+                .allow_origin(cors_allowed_origins)
+                .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+                .allow_headers([header::CONTENT_TYPE]),
+        )
+    }
 }
 
 pub async fn serve(config: FaucetConfig) -> Result<(), std::io::Error> {

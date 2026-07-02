@@ -41,23 +41,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
         })?;
     let file_config = toml::from_str::<FaucetConfigFile>(&config_toml)?;
-    let (listen_address, network_descriptor, airdrop_config, wallet_create_config) =
-        file_config.into_parts()?;
-    let faucet_secret_key = airdrop_config.faucet_secret_key;
-    let airdrop_submitter = RpcAirdropSubmitter::new(&network_descriptor, airdrop_config)?;
-    let wallet_create_submitter =
-        RpcWalletCreateSubmitter::new(&network_descriptor, wallet_create_config, faucet_secret_key);
+    let parts = file_config.into_parts()?;
+    let faucet_secret_key = parts.airdrop.faucet_secret_key;
+    let airdrop_submitter = RpcAirdropSubmitter::new(&parts.network_descriptor, parts.airdrop)?;
+    let wallet_create_submitter = RpcWalletCreateSubmitter::new(
+        &parts.network_descriptor,
+        parts.wallet_create,
+        faucet_secret_key,
+    );
     let mut config = FaucetConfig::new(
-        network_descriptor,
+        parts.network_descriptor,
         Arc::new(airdrop_submitter),
         Arc::new(wallet_create_submitter),
     );
-    if let Some(listen) = listen_address {
+    if let Some(listen) = parts.listen_address {
         config.listen_address = listen;
     }
     if let Some(listen) = cli.listen {
         config.listen_address = listen;
     }
+    config.cors_allowed_origins = parts.cors_allowed_origins;
 
     serve(config).await?;
     Ok(())
