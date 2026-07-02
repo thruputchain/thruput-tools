@@ -12,11 +12,13 @@ const RV32_MAIN: &str = include_str!("../templates/main.rs.tmpl");
 const COUNTER_LIB: &str = include_str!("../templates/counter/lib.rs.tmpl");
 const COUNTER_IMPL: &str = include_str!("../templates/counter/implementation.rs.tmpl");
 const COUNTER_TEST: &str = include_str!("../templates/counter/test.rs.tmpl");
+const COUNTER_TEST_RV32: &str = include_str!("../templates/counter/test_rv32.rs.tmpl");
 const COUNTER_TEST_WASM: &str = include_str!("../templates/counter/test_wasm.rs.tmpl");
 
 const STUB_LIB: &str = include_str!("../templates/stub/lib.rs.tmpl");
 const STUB_IMPL: &str = include_str!("../templates/stub/implementation.rs.tmpl");
 const STUB_TEST: &str = include_str!("../templates/stub/test.rs.tmpl");
+const STUB_TEST_RV32: &str = include_str!("../templates/stub/test_rv32.rs.tmpl");
 const STUB_TEST_WASM: &str = include_str!("../templates/stub/test_wasm.rs.tmpl");
 
 /// Convert a kebab-case name to `snake_case`.
@@ -71,9 +73,21 @@ fn validate_name(name: &str) -> Result<(), CliError> {
 pub fn generate(dir: &Path, name: &str, template: &str) -> Result<(), CliError> {
     validate_name(name)?;
 
-    let (lib_tmpl, impl_tmpl, test_tmpl, test_wasm_tmpl) = match template {
-        "counter" => (COUNTER_LIB, COUNTER_IMPL, COUNTER_TEST, COUNTER_TEST_WASM),
-        "stub" => (STUB_LIB, STUB_IMPL, STUB_TEST, STUB_TEST_WASM),
+    let (lib_tmpl, impl_tmpl, test_tmpl, test_rv32_tmpl, test_wasm_tmpl) = match template {
+        "counter" => (
+            COUNTER_LIB,
+            COUNTER_IMPL,
+            COUNTER_TEST,
+            COUNTER_TEST_RV32,
+            COUNTER_TEST_WASM,
+        ),
+        "stub" => (
+            STUB_LIB,
+            STUB_IMPL,
+            STUB_TEST,
+            STUB_TEST_RV32,
+            STUB_TEST_WASM,
+        ),
         other => {
             return Err(CliError::UnknownTemplate(other.to_string()));
         }
@@ -92,6 +106,7 @@ pub fn generate(dir: &Path, name: &str, template: &str) -> Result<(), CliError> 
     fs::write(dir.join("src/implementation.rs"), apply(impl_tmpl, name))?;
     fs::write(dir.join("src/main.rs"), apply(RV32_MAIN, name))?;
     fs::write(dir.join("tests/test.rs"), apply(test_tmpl, name))?;
+    fs::write(dir.join("tests/test_rv32.rs"), apply(test_rv32_tmpl, name))?;
     fs::write(dir.join("tests/test_wasm.rs"), apply(test_wasm_tmpl, name))?;
 
     Ok(())

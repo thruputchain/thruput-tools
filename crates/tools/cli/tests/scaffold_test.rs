@@ -17,13 +17,14 @@ fn scaffold_counter_creates_expected_files() {
     assert!(dir.join("src/implementation.rs").exists());
     assert!(dir.join("src/main.rs").exists());
     assert!(dir.join("tests/test.rs").exists());
+    assert!(dir.join("tests/test_rv32.rs").exists());
     assert!(dir.join("tests/test_wasm.rs").exists());
 
     let cargo = fs::read_to_string(dir.join("Cargo.toml")).unwrap();
     assert!(cargo.contains(r#"name = "my-counter""#));
     assert!(cargo.contains("registry = \"groundhog\""));
     assert!(!cargo.contains("sdk/spec"));
-    assert!(cargo.contains(r#"sdk = { version = "0.15.4", registry = "groundhog" }"#));
+    assert!(cargo.contains(r#"sdk = { version = "0.15.6", registry = "groundhog" }"#));
     assert!(!cargo.contains(r#"features = ["storage"]"#));
     // RV32 bin wrapper target: the bin name must be the snake-case package
     // name because `groundhog build --target rv32` looks for the ELF at
@@ -73,7 +74,15 @@ fn scaffold_counter_creates_expected_files() {
 
     let test_wasm = fs::read_to_string(dir.join("tests/test_wasm.rs")).unwrap();
     assert!(test_wasm.contains("load_wasm_contract"));
+    assert!(test_wasm.contains("CARGO_TARGET_DIR"));
+    assert!(test_wasm.contains("cargo_wasm_artifact(\"my_counter.wasm\")"));
     assert!(test_wasm.contains("my_counter"));
+
+    let test_rv32 = fs::read_to_string(dir.join("tests/test_rv32.rs")).unwrap();
+    assert!(test_rv32.contains("load_rv32_contract"));
+    assert!(test_rv32.contains("CARGO_TARGET_DIR"));
+    assert!(test_rv32.contains("groundhog_artifact(\"my_counter.rv32a\")"));
+    assert!(test_rv32.contains("my_counter"));
 }
 
 #[test]
@@ -93,9 +102,17 @@ fn scaffold_stub_has_empty_contract() {
     assert!(!imp.contains("increment"));
     assert!(imp.contains("#[contract_exception]"));
 
+    assert!(dir.join("tests/test_rv32.rs").exists());
     assert!(dir.join("tests/test_wasm.rs").exists());
+    let test_rv32 = fs::read_to_string(dir.join("tests/test_rv32.rs")).unwrap();
+    assert!(test_rv32.contains("load_rv32_contract"));
+    assert!(test_rv32.contains("CARGO_TARGET_DIR"));
+    assert!(test_rv32.contains("groundhog_artifact(\"my_stub.rv32a\")"));
+
     let test_wasm = fs::read_to_string(dir.join("tests/test_wasm.rs")).unwrap();
     assert!(test_wasm.contains("load_wasm_contract"));
+    assert!(test_wasm.contains("CARGO_TARGET_DIR"));
+    assert!(test_wasm.contains("cargo_wasm_artifact(\"my_stub.wasm\")"));
 
     let main = fs::read_to_string(dir.join("src/main.rs")).unwrap();
     assert!(main.contains("extern crate my_stub;"));

@@ -1212,6 +1212,11 @@ fn test_json_failed_run_emits_report_on_stdout() {
     let fake_bin = tmp.path().join("bin");
     std::fs::create_dir_all(&fake_bin).unwrap();
     let cargo = fake_bin.join("cargo");
+    let raw_elf = tmp
+        .path()
+        .join("target/riscv32im-unknown-none-elf/release/demo_contract");
+    let elf_fixture = tmp.path().join("fixture.elf");
+    std::fs::write(&elf_fixture, support::minimal_rv32_elf()).unwrap();
     let metadata_json = serde_json::json!({
         "workspace_root": tmp.path(),
         "target_directory": tmp.path().join("target"),
@@ -1235,7 +1240,7 @@ fn test_json_failed_run_emits_report_on_stdout() {
                 "fi\n",
                 "if [ \"$1\" = \"build\" ]; then\n",
                 "  /bin/mkdir -p '{}'\n",
-                "  printf '\\000asm\\001\\000\\000\\000' > '{}'\n",
+                "  /bin/cp '{}' '{}'\n",
                 "  exit 0\n",
                 "fi\n",
                 "if [ \"$1\" = \"test\" ]; then\n",
@@ -1249,12 +1254,12 @@ fn test_json_failed_run_emits_report_on_stdout() {
                 "exit 0\n",
             ),
             metadata_json,
-            tmp.path()
-                .join("target/wasm32-unknown-unknown/release")
+            raw_elf
+                .parent()
+                .expect("bug: raw elf parent should exist")
                 .display(),
-            tmp.path()
-                .join("target/wasm32-unknown-unknown/release/demo_contract.wasm")
-                .display()
+            elf_fixture.display(),
+            raw_elf.display()
         ),
     )
     .unwrap();
@@ -1285,8 +1290,8 @@ fn test_json_failed_run_emits_report_on_stdout() {
     assert!(stdout["warnings"].as_array().unwrap().is_empty());
     let schema_version = groundhog_cli::test_json::TEST_JSON_SCHEMA_VERSION;
     assert_eq!(stdout["data"]["schemaVersion"], schema_version);
-    assert_eq!(stdout["data"]["mode"], "wasm");
-    assert_wasm_test_artifact(&stdout["data"]);
+    assert_eq!(stdout["data"]["mode"], "rv32");
+    assert_rv32_test_artifact(&stdout["data"]);
     assert!(stdout["data"]["projectRoot"].as_str().is_some());
     assert_eq!(stdout["data"]["success"], false);
     assert_eq!(stdout["data"]["summary"]["source"], "parsed");
@@ -1303,6 +1308,102 @@ fn test_json_failed_run_emits_report_on_stdout() {
         "tests::fails"
     );
     assert_eq!(stdout["data"]["runs"][0]["tests"][1]["status"], "failed");
+}
+
+fn assert_rv32_test_artifact(data: &serde_json::Value) {
+    assert_eq!(data["artifact"]["kind"], "rv32");
+    assert!(
+        data["artifact"]["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("target/groundhog/demo_contract.rv32a")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn test_json_wasm_target_emits_wasm_report() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = TempDir::new().unwrap();
+    std::fs::write(
+        tmp.path().join("Cargo.toml"),
+        "[package]\nname = \"demo-contract\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(tmp.path().join(".cargo")).unwrap();
+    std::fs::write(tmp.path().join(".cargo/contract.toml"), "").unwrap();
+
+    let fake_bin = tmp.path().join("bin");
+    std::fs::create_dir_all(&fake_bin).unwrap();
+    let cargo = fake_bin.join("cargo");
+    let metadata_json = serde_json::json!({
+        "workspace_root": tmp.path(),
+        "target_directory": tmp.path().join("target"),
+        "packages": [{
+            "name": "demo-contract",
+            "manifest_path": tmp.path().join("Cargo.toml"),
+        }],
+    })
+    .to_string();
+    std::fs::write(
+        &cargo,
+        format!(
+            concat!(
+                "#!/bin/sh\n",
+                "if [ \"$1\" = \"metadata\" ]; then\n",
+                "  printf '%s' '{}'\n",
+                "  exit 0\n",
+                "fi\n",
+                "if [ \"$1\" = \"--config\" ]; then\n",
+                "  shift 2\n",
+                "fi\n",
+                "if [ \"$1\" = \"build\" ]; then\n",
+                "  /bin/mkdir -p '{}'\n",
+                "  printf '\\000asm\\001\\000\\000\\000' > '{}'\n",
+                "  exit 0\n",
+                "fi\n",
+                "if [ \"$1\" = \"test\" ]; then\n",
+                "  printf 'running 1 test\\n'\n",
+                "  printf 'test tests::ok ... ok\\n'\n",
+                "  printf 'test result: ok. 1 passed; 0 failed; 0 ignored; ",
+                "0 measured; 0 filtered out; finished in 0.01s\\n'\n",
+                "  exit 0\n",
+                "fi\n",
+                "exit 0\n",
+            ),
+            metadata_json,
+            tmp.path()
+                .join("target/wasm32-unknown-unknown/release")
+                .display(),
+            tmp.path()
+                .join("target/wasm32-unknown-unknown/release/demo_contract.wasm")
+                .display()
+        ),
+    )
+    .unwrap();
+    let mut perms = std::fs::metadata(&cargo).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&cargo, perms).unwrap();
+
+    let output = groundhog()
+        .args(["--json", "test", "--target", "wasm", "-p", "demo-contract"])
+        .current_dir(tmp.path())
+        .env("PATH", &fake_bin)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(
+        output.stderr.is_empty(),
+        "expected empty stderr, got: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["ok"], true);
+    assert_eq!(stdout["data"]["mode"], "wasm");
+    assert_wasm_test_artifact(&stdout["data"]);
 }
 
 fn assert_wasm_test_artifact(data: &serde_json::Value) {

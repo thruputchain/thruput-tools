@@ -11,9 +11,9 @@ description: >
 # Groundhog Contract Development
 
 You are helping a developer write a Groundhog smart contract.
-Groundhog contracts are `no_std` Rust libraries compiled to
-`wasm32-unknown-unknown`. The SDK provides storage primitives with
-specific concurrency semantics. Contract correctness depends heavily on
+Groundhog contracts are `no_std` Rust libraries compiled to RV32 by
+default, with an explicit WASM path available when needed. The SDK provides
+storage primitives with specific concurrency semantics. Contract correctness depends heavily on
 choosing the right storage type and write pattern.
 
 Use the current scaffold shape as the default source of truth. If older
@@ -53,6 +53,7 @@ src/
   main.rs             # rv32 bin wrapper (entrypoints-gated, no_std/no_main)
 tests/
   test.rs             # native integration tests
+  test_rv32.rs        # default executor-backed RV32 tests
   test_wasm.rs        # wasm executor tests
 Cargo.toml
 rust-toolchain.toml
@@ -109,13 +110,21 @@ crate-type = ["cdylib", "rlib"]
 doctest = false
 test = false
 
+[[bin]]
+name = "my_contract"
+path = "src/main.rs"
+required-features = ["rv32-entrypoints"]
+test = false
+bench = false
+
 [features]
 entrypoints = []
+rv32-entrypoints = ["entrypoints"]
 default = ["dev"]
 dev = ["sdk/dev"]
 
 [dependencies]
-sdk = { version = "0.15.4", registry = "groundhog" }
+sdk = { version = "0.15.6", registry = "groundhog" }
 
 [dev-dependencies]
 my-contract = { path = ".", features = ["dev"] }
@@ -277,12 +286,13 @@ fn test_initialize_and_deposit() {
 - Use distinct nonces when deploying multiple contract instances.
 - Keep native tests simple and explicit; they are the fastest feedback loop.
 
-### WASM tests
+### Executor-backed tests
 
-- Keep `tests/test_wasm.rs` for executor-backed testing.
-- Use the scaffolded pattern based on `load_wasm_contract(...)`.
-- Native tests and wasm tests serve different purposes; do not replace one
-  with the other.
+- Keep `tests/test_rv32.rs` as the default executor-backed path.
+- Use the scaffolded pattern based on `load_rv32_contract(...)`.
+- Keep `tests/test_wasm.rs` only when explicit WASM coverage is needed.
+- Native tests and executor-backed tests serve different purposes; do not
+  replace one with the other.
 
 ## Storage Types and Concurrency
 
@@ -424,9 +434,9 @@ groundhog test --integration
 
 Meaning:
 - `cargo test` runs native tests using the `dev` feature.
-- `groundhog build` performs the wasm build with the contract-specific
+- `groundhog build` performs the default RV32 build with the contract-specific
   cargo overlay.
-- `groundhog test` runs executor-backed testing for the wasm path.
+- `groundhog test` runs executor-backed testing for the RV32 path.
 - `groundhog test --integration` starts an ephemeral hog-devnode local node,
   deploys the built contract
   with `dev-0`, and runs `tests/integration.rs` with

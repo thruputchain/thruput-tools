@@ -262,8 +262,12 @@ fn test_failed_wasm_tests_update_rerun_cache() {
     let _cwd = CurrentDirGuard::enter(tmp.path());
     let _path = PathGuard::set(fake_bin.as_os_str());
 
-    let err = groundhog_cli::test_cmd::run(
+    let err = groundhog_cli::test_cmd::run_with_options(
         Some("demo-contract"),
+        &groundhog_cli::test_cmd::TestOptions {
+            target: groundhog_cli::build::BuildTarget::Wasm,
+            ..groundhog_cli::test_cmd::TestOptions::default()
+        },
         &[],
         &groundhog_cli::artifacts::ArtifactOptions::default(),
         None,
@@ -278,7 +282,7 @@ fn test_failed_wasm_tests_update_rerun_cache() {
     );
     let cache_path = tmp
         .path()
-        .join("target/groundhog/test-failures/demo-contract.json");
+        .join("target/groundhog/test-failures/demo-contract-wasm.json");
     let cache = fs::read_to_string(cache_path).unwrap();
     assert!(cache.contains("\"package\": \"demo-contract\""));
     assert!(cache.contains("\"tests::fails\""));
