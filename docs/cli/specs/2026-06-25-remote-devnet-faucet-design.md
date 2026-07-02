@@ -180,17 +180,17 @@ A new small Rust service (own crate under `crates/`, reusing
 `groundhog-signing` + `json-rpc-client`) holding the genesis-funded
 faucet/sponsor wallet key (loaded from AWS Secrets Manager, never an argv):
 
-- `POST /v1/createWallet/prepare { ownerPubkey, deployNonce,
+- `POST /v1/create-wallet/prepare { ownerPubkey, deployNonce,
   walletContractHash, walletAddress, networkId, genesisHash, clientNonce,
   ownerSig }` → validates and reserves a wallet-create attempt without
   submitting a transaction. This endpoint verifies the same signed
-  wallet-create intent as `/v1/createWallet`, checks the `createWallet` quotas,
+  wallet-create intent as `/v1/create-wallet`, checks the `createWallet` quotas,
   address derivation, `networkId`, `genesisHash`, and dev-wallet hash, and
   returns `{ walletAddress, prefundRawAmount, preparedUntil }`. The CLI calls
   this before spending the pre-fund airdrop so an exhausted create quota cannot
   burn faucet funds for undeployable wallet addresses. It is idempotent on
   `(networkId, genesisHash, ownerPubkey, clientNonce)`.
-- `POST /v1/createWallet { ownerPubkey, deployNonce, walletContractHash,
+- `POST /v1/create-wallet { ownerPubkey, deployNonce, walletContractHash,
   walletAddress, networkId, genesisHash, clientNonce, ownerSig }` → sponsored
   `create_wallet` via the faucet's wallet → waits for receipt →
   `{ walletAddress, txHash, height }`.
@@ -225,7 +225,7 @@ faucet/sponsor wallet key (loaded from AWS Secrets Manager, never an argv):
 - `createWallet`: per-IP and per-pubkey rate limiting keyed on `ownerPubkey`.
   `airdrop`: per-IP and per-address rate limiting keyed on recipient `address`.
   Wallet-create pre-fund airdrops are issued only after
-  `/v1/createWallet/prepare` has accepted and reserved the create quota.
+  `/v1/create-wallet/prepare` has accepted and reserved the create quota.
   Bounded amounts; structured-JSON errors.
 
 The service is the only component holding the faucet key. It submits through the
@@ -277,7 +277,7 @@ endpoint) and caches it.
   or `walletContractHash` changes.
 
   It then prepares and funds that future address:
-  - on devnet, `POST /v1/createWallet/prepare { ownerPubkey, deployNonce,
+  - on devnet, `POST /v1/create-wallet/prepare { ownerPubkey, deployNonce,
     walletContractHash, walletAddress, networkId, genesisHash, clientNonce:
     createWalletClientNonce, ownerSig }`, followed by
     `POST /v1/airdrop { address: walletAddress, rawAmount:
@@ -287,7 +287,7 @@ endpoint) and caches it.
     for an exchange/bridge/user transfer before continuing.
 
   After funding, the CLI reuses the same proof-of-possession and
-  `POST /v1/createWallet { ownerPubkey, deployNonce, walletContractHash,
+  `POST /v1/create-wallet { ownerPubkey, deployNonce, walletContractHash,
   walletAddress, networkId, genesisHash, clientNonce: createWalletClientNonce,
   ownerSig }` to trigger the sponsored deploy/init transaction; it saves the
   returned address under the key's wallet name in `[profile].wallets` and marks

@@ -1,4 +1,5 @@
 use crate::airdrop::{AirdropRuntimeConfig, AirdropRuntimeConfigError};
+use crate::wallet_create::{WalletCreateRuntimeConfig, WalletCreateRuntimeConfigError};
 use groundhog_json_rpc_types::hex::HexBytes;
 use groundhog_json_rpc_types::network_descriptor::{
     FaucetDescriptor, NativeHogDescriptor, NetworkDescriptor, NetworkDescriptorEndpoints,
@@ -6,6 +7,7 @@ use groundhog_json_rpc_types::network_descriptor::{
 };
 use groundhog_json_rpc_types::{ContractAddress, SHA256Hash};
 use serde::Deserialize;
+use std::path::PathBuf;
 
 /// Faucet service TOML config.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -18,6 +20,8 @@ pub struct FaucetConfigFile {
     pub network: NetworkConfig,
     /// Private faucet airdrop execution config.
     pub airdrop: AirdropConfig,
+    /// Private wallet-create execution config.
+    pub wallet_create: WalletCreateExecutionConfig,
 }
 
 impl FaucetConfigFile {
@@ -29,14 +33,35 @@ impl FaucetConfigFile {
     /// Split this config into the optional listen override and public descriptor.
     pub fn into_parts(
         self,
-    ) -> Result<(Option<String>, NetworkDescriptor, AirdropRuntimeConfig), AirdropRuntimeConfigError>
-    {
+    ) -> Result<
+        (
+            Option<String>,
+            NetworkDescriptor,
+            AirdropRuntimeConfig,
+            WalletCreateRuntimeConfig,
+        ),
+        FaucetConfigError,
+    > {
+        let airdrop = self.airdrop.into_runtime_config()?;
+        let wallet_create = self.wallet_create.into_runtime_config()?;
         Ok((
             self.listen_address,
             self.network.into_descriptor(),
-            self.airdrop.into_runtime_config()?,
+            airdrop,
+            wallet_create,
         ))
     }
+}
+
+/// Errors returned while validating faucet service config.
+#[derive(Debug, thiserror::Error)]
+pub enum FaucetConfigError {
+    /// The private airdrop config was invalid.
+    #[error(transparent)]
+    Airdrop(#[from] AirdropRuntimeConfigError),
+    /// The private wallet-create config was invalid.
+    #[error(transparent)]
+    WalletCreate(#[from] WalletCreateRuntimeConfigError),
 }
 
 /// Public network metadata fields used to build a descriptor.
@@ -143,6 +168,28 @@ impl AirdropConfig {
     }
 }
 
+/// Private wallet-create execution configuration.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WalletCreateExecutionConfig {
+    /// Faucet wallet `create_wallet` entrypoint.
+    pub create_wallet_entrypoint: HexBytes,
+    /// Dev-wallet artifact path included in wallet-create transactions.
+    pub wallet_artifact_path: PathBuf,
+}
+
+impl WalletCreateExecutionConfig {
+    /// Convert wire config into validated runtime wallet-create config.
+    pub fn into_runtime_config(
+        self,
+    ) -> Result<WalletCreateRuntimeConfig, WalletCreateRuntimeConfigError> {
+        WalletCreateRuntimeConfig::from_wire(
+            self.create_wallet_entrypoint,
+            self.wallet_artifact_path,
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::FaucetConfigFile;
@@ -169,11 +216,26 @@ mod tests {
         let config: FaucetConfigFile =
             toml::from_str(TEST_CONFIG).expect("bug: fixture config should parse");
 
-        let (_listen, _descriptor, airdrop) = config
+        let (_listen, _descriptor, airdrop, _wallet_create) = config
             .into_parts()
             .expect("bug: airdrop runtime config should validate");
 
         assert_eq!(airdrop.raw_amount, 100_000_000);
+    }
+
+    #[test]
+    fn config_builds_wallet_create_runtime_config() {
+        let config: FaucetConfigFile =
+            toml::from_str(TEST_CONFIG).expect("bug: fixture config should parse");
+
+        let (_listen, _descriptor, _airdrop, wallet_create) = config
+            .into_parts()
+            .expect("bug: wallet-create runtime config should validate");
+
+        assert_eq!(
+            wallet_create.wallet_artifact_path,
+            std::path::PathBuf::from("contracts/dev_wallet.rv32a")
+        );
     }
 
     #[test]
@@ -237,5 +299,9 @@ mod tests {
         raw_amount = "100000000"
         wallet_do_action_entrypoint = "0x646f416374696f6e"
         faucet_secret_key = "0x1111111111111111111111111111111111111111111111111111111111111111"
+
+        [wallet_create]
+        create_wallet_entrypoint = "0x6372656174655761"
+        wallet_artifact_path = "contracts/dev_wallet.rv32a"
     "#;
 }

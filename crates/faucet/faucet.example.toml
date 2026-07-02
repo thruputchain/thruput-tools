@@ -28,3 +28,7 @@ raw_amount = "100000000"
 wallet_do_action_entrypoint = "0x646f416374696f6e"
 # Placeholder only. Use a real faucet secret in local/private deployment config.
 faucet_secret_key = "0x1111111111111111111111111111111111111111111111111111111111111111"
+
+[wallet_create]
+create_wallet_entrypoint = "0x6372656174655761"
+wallet_artifact_path = "contracts/dev_wallet.rv32a"

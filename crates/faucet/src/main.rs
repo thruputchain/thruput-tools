@@ -1,6 +1,7 @@
 use clap::Parser;
 use groundhog_faucet::{
     FaucetConfig, airdrop::RpcAirdropSubmitter, config::FaucetConfigFile, serve,
+    wallet_create::RpcWalletCreateSubmitter,
 };
 use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
@@ -40,9 +41,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
         })?;
     let file_config = toml::from_str::<FaucetConfigFile>(&config_toml)?;
-    let (listen_address, network_descriptor, airdrop_config) = file_config.into_parts()?;
+    let (listen_address, network_descriptor, airdrop_config, wallet_create_config) =
+        file_config.into_parts()?;
+    let faucet_secret_key = airdrop_config.faucet_secret_key;
     let airdrop_submitter = RpcAirdropSubmitter::new(&network_descriptor, airdrop_config)?;
-    let mut config = FaucetConfig::new(network_descriptor, Arc::new(airdrop_submitter));
+    let wallet_create_submitter =
+        RpcWalletCreateSubmitter::new(&network_descriptor, wallet_create_config, faucet_secret_key);
+    let mut config = FaucetConfig::new(
+        network_descriptor,
+        Arc::new(airdrop_submitter),
+        Arc::new(wallet_create_submitter),
+    );
     if let Some(listen) = listen_address {
         config.listen_address = listen;
     }
