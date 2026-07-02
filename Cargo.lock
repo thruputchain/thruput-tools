@@ -1017,7 +1017,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-faucet"
-version = "0.5.10"
+version = "0.5.11"
 dependencies = [
  "async-trait",
  "axum",
