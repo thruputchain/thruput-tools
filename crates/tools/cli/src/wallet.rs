@@ -1,12 +1,17 @@
 use std::path::{Path, PathBuf};
 
+use groundhog_json_rpc_types::receipt::ExecStatus;
+use groundhog_json_rpc_types::transaction::TxHash;
+use groundhog_signing::Signer;
 use groundhog_signing::{
     BuildDeployTransaction, BuildDevWalletDoActionTransaction, DEFAULT_TX_GAS_LIMIT, LocalSigner,
     SignTransactionParams, build_deploy_transaction, build_dev_wallet_do_action_transaction,
     derive_deploy_address, sign_and_encode_transaction_hex, source_address_auth_claim,
+    wallet_create_proof_message,
 };
 use groundhog_xdr::contract::{Contract, ContractBlob, ContractEntrypointID};
 use groundhog_xdr::types::{ContractAddress, Ed25519PublicKey, SHA256Hash};
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use xdr_common::{BytesM, VecM};
@@ -19,6 +24,7 @@ use crate::config::{
 };
 use crate::hog;
 use crate::keys::load_local_signer;
+use crate::network::fetch_network_descriptor;
 use crate::result::CommandResult;
 use crate::runtime_manifest::{
     apply_local_node_state_for_local_bootstrap, load_configured_runtime_manifest,
@@ -32,6 +38,12 @@ use crate::{CliError, Print};
 pub const WALLET_CREATE_JSON_SCHEMA_VERSION: u32 = 3;
 const WALLET_CREATE_PREFUND_RAW_AMOUNT: u128 = 100_000_000;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PreparedWalletCreate {
+    Local(PreparedLocalWalletCreate),
+    Remote(PreparedRemoteWalletCreate),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 struct SavedWallet {
     name: String,
@@ -39,7 +51,7 @@ struct SavedWallet {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PreparedWalletCreate {
+pub(crate) struct PreparedLocalWalletCreate {
     pub(crate) rpc_url: String,
     pub(crate) key_name: String,
     pub(crate) wallet_name: String,
@@ -51,6 +63,60 @@ pub(crate) struct PreparedWalletCreate {
     pub(crate) prefund_raw_amount: u128,
     pub(crate) prefund_tx_hex: String,
     pub(crate) create_tx_hex: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PreparedRemoteWalletCreate {
+    faucet_url: String,
+    rpc_url: String,
+    key_name: String,
+    wallet_name: String,
+    owner_public_key: String,
+    deploy_nonce: String,
+    owner_signature: String,
+    wallet_address: String,
+    prefund_raw_amount: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PrepareWalletCreateRequest {
+    owner_public_key: String,
+    deploy_nonce: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PrepareWalletCreateResponse {
+    wallet_address: String,
+    prefund_raw_amount: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateWalletRequest {
+    owner_public_key: String,
+    deploy_nonce: String,
+    owner_signature: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateWalletResponse {
+    tx_hash: TxHash,
+    height: groundhog_json_rpc_types::BlockHeight,
+    status: ExecStatus,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct FaucetErrorBody {
+    error: FaucetErrorDetail,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct FaucetErrorDetail {
+    code: String,
+    message: String,
 }
 
 pub fn create(
@@ -69,6 +135,23 @@ pub fn create(
         return print_dry_run(&prepared, cmd, print);
     }
 
+    match prepared {
+        PreparedWalletCreate::Local(prepared) => {
+            create_local_wallet(&cwd, profile, &prepared, cmd, print)
+        }
+        PreparedWalletCreate::Remote(prepared) => {
+            create_remote_wallet(&cwd, profile, &prepared, cmd, print)
+        }
+    }
+}
+
+fn create_local_wallet(
+    cwd: &Path,
+    profile: &str,
+    prepared: &PreparedLocalWalletCreate,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
     if prepared.wallet_name == prepared.key_name {
         print.status(format_args!(
             "Creating wallet for key '{}'...",
@@ -91,9 +174,9 @@ pub fn create(
     let create_tx_hash = format_tx_hash(&create_tx_hash);
     ensure_tx_success("wallet create", &create_receipt, &create_tx_hash)?;
 
-    let project_root = find_project_config(&cwd)
+    let project_root = find_project_config(cwd)
         .and_then(|path| path.parent().map(Path::to_path_buf))
-        .unwrap_or(cwd);
+        .unwrap_or_else(|| cwd.to_path_buf());
     save_profile_wallet_address(
         &project_root,
         Some(profile),
@@ -123,6 +206,85 @@ pub fn create(
             "prefund_height": prefund_receipt.height,
             "create_tx_hash": create_tx_hash,
             "create_height": create_receipt.height,
+        }),
+    ))?;
+
+    Ok(())
+}
+
+fn create_remote_wallet(
+    cwd: &Path,
+    profile: &str,
+    prepared: &PreparedRemoteWalletCreate,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
+    if prepared.wallet_name == prepared.key_name {
+        print.status(format_args!(
+            "Creating remote wallet for key '{}'...",
+            prepared.key_name
+        ));
+    } else {
+        print.status(format_args!(
+            "Creating remote wallet '{}' for key '{}'...",
+            prepared.wallet_name, prepared.key_name
+        ));
+    }
+
+    let client = reqwest::blocking::Client::new();
+    let airdrop: serde_json::Value = post_json(
+        &client,
+        &format!("{}/v1/airdrop", prepared.faucet_url),
+        &json!({ "recipient": prepared.wallet_address }),
+    )?;
+    let create: CreateWalletResponse = post_json(
+        &client,
+        &format!("{}/v1/create-wallet", prepared.faucet_url),
+        &CreateWalletRequest {
+            owner_public_key: prepared.owner_public_key.clone(),
+            deploy_nonce: prepared.deploy_nonce.clone(),
+            owner_signature: prepared.owner_signature.clone(),
+        },
+    )?;
+    if !matches!(create.status, ExecStatus::Ok) {
+        return Err(CliError::Other(
+            "remote wallet-create transaction did not commit successfully".into(),
+        ));
+    }
+
+    let project_root = find_project_config(cwd)
+        .and_then(|path| path.parent().map(Path::to_path_buf))
+        .unwrap_or_else(|| cwd.to_path_buf());
+    save_profile_wallet_address(
+        &project_root,
+        Some(profile),
+        &prepared.wallet_name,
+        &prepared.wallet_address,
+    )?;
+
+    let create_tx_hash = format_tx_hash(&create.tx_hash);
+    print.status(format_args!("Wallet created: {}", prepared.wallet_address));
+    if let Some(tx_hash) = airdrop.get("txHash").and_then(serde_json::Value::as_str) {
+        print.status(format_args!("Prefund txn: {tx_hash}"));
+    }
+    print.status(format_args!("Txn: {create_tx_hash}"));
+
+    print.json(&CommandResult::new(
+        cmd,
+        json!({
+            "schemaVersion": WALLET_CREATE_JSON_SCHEMA_VERSION,
+            "name": prepared.wallet_name,
+            "key": prepared.key_name,
+            "wallet": prepared.wallet_address,
+            "mode": "remote",
+            "faucet_url": prepared.faucet_url,
+            "rpc_url": prepared.rpc_url,
+            "owner_public_key": prepared.owner_public_key,
+            "deploy_nonce": prepared.deploy_nonce,
+            "prefund_raw_amount": prepared.prefund_raw_amount,
+            "airdrop": airdrop,
+            "create_tx_hash": create_tx_hash,
+            "create_height": create.height,
         }),
     ))?;
 
@@ -179,40 +341,82 @@ fn print_dry_run(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    print.status(format_args!(
-        "Prepared dry-run wallet create `{}` for key `{}` on {}.",
-        prepared.wallet_name, prepared.key_name, prepared.rpc_url
-    ));
-    print.status(format_args!("  wallet: {}", prepared.wallet_address));
-    print.status(format_args!(
-        "  faucet: {} ({})",
-        prepared.faucet_key_name, prepared.faucet_role
-    ));
-    print.status(format_args!("  owner: {}", prepared.owner_public_key));
-    print.status(format_args!(
-        "  prefund raw amount: {}",
-        prepared.prefund_raw_amount
-    ));
-    print.status("  submitted: no (--dry-run)");
+    match prepared {
+        PreparedWalletCreate::Local(prepared) => {
+            print.status(format_args!(
+                "Prepared dry-run wallet create `{}` for key `{}` on {}.",
+                prepared.wallet_name, prepared.key_name, prepared.rpc_url
+            ));
+            print.status(format_args!("  wallet: {}", prepared.wallet_address));
+            print.status(format_args!(
+                "  faucet: {} ({})",
+                prepared.faucet_key_name, prepared.faucet_role
+            ));
+            print.status(format_args!("  owner: {}", prepared.owner_public_key));
+            print.status(format_args!(
+                "  prefund raw amount: {}",
+                prepared.prefund_raw_amount
+            ));
+            print.status("  submitted: no (--dry-run)");
 
-    print.json(&CommandResult::new(
-        cmd,
-        json!({
-            "schemaVersion": WALLET_CREATE_JSON_SCHEMA_VERSION,
-            "dry_run": true,
-            "submitted": false,
-            "name": prepared.wallet_name,
-            "key": prepared.key_name,
-            "wallet": prepared.wallet_address,
-            "faucet": {
-                "key": prepared.faucet_key_name,
-                "role": prepared.faucet_role,
-            },
-            "owner_public_key": prepared.owner_public_key,
-            "artifact_path": prepared.artifact_path,
-            "prefund_raw_amount": prepared.prefund_raw_amount.to_string(),
-        }),
-    ))?;
+            print.json(&CommandResult::new(
+                cmd,
+                json!({
+                    "schemaVersion": WALLET_CREATE_JSON_SCHEMA_VERSION,
+                    "dry_run": true,
+                    "submitted": false,
+                    "mode": "local",
+                    "name": prepared.wallet_name,
+                    "key": prepared.key_name,
+                    "wallet": prepared.wallet_address,
+                    "faucet": {
+                        "key": prepared.faucet_key_name,
+                        "role": prepared.faucet_role,
+                    },
+                    "owner_public_key": prepared.owner_public_key,
+                    "artifact_path": prepared.artifact_path,
+                    "prefund_raw_amount": prepared.prefund_raw_amount.to_string(),
+                }),
+            ))?;
+        }
+        PreparedWalletCreate::Remote(prepared) => {
+            print.status(format_args!(
+                "Prepared dry-run remote wallet create `{}` for key `{}`.",
+                prepared.wallet_name, prepared.key_name
+            ));
+            print.status(format_args!("  faucet: {}", prepared.faucet_url));
+            print.status(format_args!("  wallet: {}", prepared.wallet_address));
+            print.status(format_args!("  owner: {}", prepared.owner_public_key));
+            print.status(format_args!("  deploy nonce: {}", prepared.deploy_nonce));
+            print.status(format_args!(
+                "  prefund raw amount: {}",
+                prepared.prefund_raw_amount
+            ));
+            print.status("  submitted: no (--dry-run)");
+
+            print.json(&CommandResult::new(
+                cmd,
+                json!({
+                    "schemaVersion": WALLET_CREATE_JSON_SCHEMA_VERSION,
+                    "dry_run": true,
+                    "submitted": false,
+                    "mode": "remote",
+                    "name": prepared.wallet_name,
+                    "key": prepared.key_name,
+                    "wallet": prepared.wallet_address,
+                    "faucet_url": prepared.faucet_url,
+                    "rpc_url": prepared.rpc_url,
+                    "owner_public_key": prepared.owner_public_key,
+                    "deploy_nonce": prepared.deploy_nonce,
+                    "prefund_raw_amount": prepared.prefund_raw_amount,
+                    "planned_requests": [
+                        "POST /v1/airdrop",
+                        "POST /v1/create-wallet"
+                    ],
+                }),
+            ))?;
+        }
+    }
 
     Ok(())
 }
@@ -224,8 +428,7 @@ pub(crate) fn prepare_wallet_create(
     profile_name: &str,
     overrides: &ProfileOverrides,
 ) -> Result<PreparedWalletCreate, CliError> {
-    let mut profile = resolve_profile_with_overrides(cwd, Some(profile_name), overrides)?;
-    apply_local_node_state_for_local_bootstrap(&mut profile)?;
+    let profile = resolve_profile_with_overrides(cwd, Some(profile_name), overrides)?;
     let key_name = match key_name {
         Some(key_name) => key_name.to_owned(),
         None => resolve_default_key(cwd, Some(profile_name))?.ok_or(CliError::MissingSigningKey)?,
@@ -240,6 +443,21 @@ pub(crate) fn prepare_wallet_create(
         }
         None => key_name.clone(),
     };
+
+    if profile.faucet_url.is_some() && profile.runtime_manifest.is_none() {
+        return prepare_remote_wallet_create(&profile, key_name, wallet_name);
+    }
+
+    prepare_local_wallet_create(cwd, profile, key_name, wallet_name)
+}
+
+fn prepare_local_wallet_create(
+    cwd: &Path,
+    mut profile: crate::config::ResolvedProfile,
+    key_name: String,
+    wallet_name: String,
+) -> Result<PreparedWalletCreate, CliError> {
+    apply_local_node_state_for_local_bootstrap(&mut profile)?;
     let rpc_url = profile
         .rpc_url
         .as_deref()
@@ -300,7 +518,7 @@ pub(crate) fn prepare_wallet_create(
         signer: &faucet.signer,
     })?;
 
-    Ok(PreparedWalletCreate {
+    Ok(PreparedWalletCreate::Local(PreparedLocalWalletCreate {
         rpc_url,
         key_name,
         wallet_name,
@@ -312,7 +530,106 @@ pub(crate) fn prepare_wallet_create(
         prefund_raw_amount: WALLET_CREATE_PREFUND_RAW_AMOUNT,
         prefund_tx_hex,
         create_tx_hex,
-    })
+    }))
+}
+
+fn prepare_remote_wallet_create(
+    profile: &crate::config::ResolvedProfile,
+    key_name: String,
+    wallet_name: String,
+) -> Result<PreparedWalletCreate, CliError> {
+    let faucet_url = profile
+        .faucet_url
+        .as_deref()
+        .ok_or_else(|| CliError::Other("remote wallet creation requires faucet_url".into()))?
+        .trim_end_matches('/')
+        .to_owned();
+    let owner = load_local_signer(&key_name)?;
+    let owner_public_key_xdr = Ed25519PublicKey::from(owner.verifying_key_bytes());
+    let owner_public_key = format!("0x{}", hex::encode(owner_public_key_xdr.as_ref()));
+    let deploy_nonce_val = nonce_from_timestamp();
+    let deploy_nonce = deploy_nonce_from_u64(deploy_nonce_val);
+    let deploy_nonce_hex = format!("0x{}", hex::encode(deploy_nonce.as_ref()));
+
+    let client = reqwest::blocking::Client::new();
+    let descriptor = fetch_network_descriptor(&faucet_url)?;
+    let prepared: PrepareWalletCreateResponse = post_json(
+        &client,
+        &format!("{faucet_url}/v1/create-wallet/prepare"),
+        &PrepareWalletCreateRequest {
+            owner_public_key: owner_public_key.clone(),
+            deploy_nonce: deploy_nonce_hex.clone(),
+        },
+    )?;
+    let proof_message = wallet_create_proof_message(
+        descriptor.genesis_hash.0,
+        descriptor.faucet.wallet_address.0,
+        descriptor.wallet_create.wallet_contract_hash.0,
+        owner_public_key_xdr,
+        deploy_nonce,
+    )
+    .map_err(|error| CliError::Other(error.to_string()))?;
+    let owner_signature = match owner
+        .sign(&proof_message)
+        .map_err(|error| CliError::Other(error.to_string()))?
+    {
+        groundhog_xdr::types::Signature::Ed25519 { ed25519 } => {
+            format!("0x{}", hex::encode(ed25519.as_ref()))
+        }
+        _ => {
+            return Err(CliError::Other(
+                "local signer produced unsupported signature".into(),
+            ));
+        }
+    };
+
+    Ok(PreparedWalletCreate::Remote(PreparedRemoteWalletCreate {
+        faucet_url,
+        rpc_url: descriptor.endpoints.rpc_url,
+        key_name,
+        wallet_name,
+        owner_public_key,
+        deploy_nonce: deploy_nonce_hex,
+        owner_signature,
+        wallet_address: prepared.wallet_address,
+        prefund_raw_amount: prepared.prefund_raw_amount,
+    }))
+}
+
+fn post_json<T: for<'de> Deserialize<'de>, B: Serialize>(
+    client: &reqwest::blocking::Client,
+    url: &str,
+    body: &B,
+) -> Result<T, CliError> {
+    let response = client
+        .post(url)
+        .json(body)
+        .send()
+        .map_err(|error| CliError::Other(format!("failed to call `{url}`: {error}")))?;
+    parse_faucet_response(response, url)
+}
+
+fn parse_faucet_response<T: for<'de> Deserialize<'de>>(
+    response: reqwest::blocking::Response,
+    url: &str,
+) -> Result<T, CliError> {
+    let status = response.status();
+    let bytes = response
+        .bytes()
+        .map_err(|error| CliError::Other(format!("failed to read `{url}` response: {error}")))?;
+    if status.is_success() {
+        return serde_json::from_slice(&bytes)
+            .map_err(|error| CliError::Other(format!("invalid JSON from `{url}`: {error}")));
+    }
+    if let Ok(body) = serde_json::from_slice::<FaucetErrorBody>(&bytes) {
+        return Err(CliError::Other(format!(
+            "faucet request `{url}` failed with {}: {} ({})",
+            status, body.error.message, body.error.code
+        )));
+    }
+    Err(CliError::Other(format!(
+        "faucet request `{url}` failed with {status}"
+    )))
 }
 
 struct SignWalletPrefundTransaction<'a> {

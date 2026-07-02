@@ -17,7 +17,7 @@ pub use build::{
     DEFAULT_TX_GAS_LIMIT, SignTransactionParams, WALLET_DEPLOY_ENTRYPOINT, build_call_transaction,
     build_deploy_transaction, build_dev_wallet_do_action_transaction, derive_deploy_address,
     dev_wallet_do_action_calldata, sign_and_encode_transaction_hex, sign_transaction,
-    source_address_auth_claim,
+    source_address_auth_claim, wallet_create_proof_message,
 };
 pub use dev_account::{
     DEFAULT_DEV_ACCOUNT_COUNT, DEFAULT_DEV_ACCOUNT_SEED, DEFAULT_DEV_ACCOUNT_STORAGE_TOKENS,

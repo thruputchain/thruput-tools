@@ -200,6 +200,27 @@ pub fn derive_deploy_address(
     Ok(ContractAddress::from(addr))
 }
 
+/// Message signed by a wallet owner to authorize hosted faucet wallet creation.
+pub fn wallet_create_proof_message(
+    genesis_hash: SHA256Hash,
+    faucet_wallet_address: ContractAddress,
+    wallet_contract_hash: SHA256Hash,
+    owner_public_key: groundhog_xdr::types::Ed25519PublicKey,
+    deploy_nonce: SHA256Hash,
+) -> Result<Vec<u8>, SigningError> {
+    const DOMAIN: &str = "groundhog-faucet-create-wallet-v1";
+    xdrs::cxs::encode(&(
+        DOMAIN,
+        genesis_hash,
+        faucet_wallet_address,
+        wallet_contract_hash,
+        owner_public_key,
+        deploy_nonce,
+    ))
+    .map(|bytes| Sha256::digest(bytes).to_vec())
+    .map_err(|error| SigningError::XdrEncode(error.to_string()))
+}
+
 /// Signs a transaction and returns the canonical signed transaction.
 pub fn sign_transaction(
     tx: Transaction,

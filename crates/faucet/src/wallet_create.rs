@@ -20,17 +20,14 @@ use groundhog_json_rpc_types::{
 use groundhog_signing::{
     BuildDeployTransaction, DEFAULT_TX_GAS_LIMIT, LocalSigner, SignTransactionParams,
     build_deploy_transaction, derive_deploy_address, sign_and_encode_transaction_hex,
-    source_address_auth_claim,
+    source_address_auth_claim, wallet_create_proof_message,
 };
 use groundhog_xdr::contract::{Contract, ContractBlob, ContractEntrypointID};
 use groundhog_xdr::types::{Ed25519PublicKey, SHA256Hash};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use xdr_common::{BytesM, VecM};
 
 const DEFAULT_BLOCK_EXPIRY_OFFSET: i64 = 1_000;
-const CREATE_WALLET_PROOF_DOMAIN: &str = "groundhog-faucet-create-wallet-v1";
-
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct PrepareWalletCreateRequest {
@@ -321,6 +318,7 @@ impl RpcWalletCreateSubmitter {
             owner_public_key,
             deploy_nonce,
         )
+        .map_err(|error| WalletCreateError::EncodeCreateCalldata(error.to_string()))
     }
 
     async fn block_expiry_height(&self) -> Result<i64, WalletCreateError> {
@@ -398,26 +396,6 @@ impl WalletCreateSubmitter for RpcWalletCreateSubmitter {
             receipt,
         })
     }
-}
-
-/// Message signed by the wallet owner to authorize hosted wallet creation.
-pub fn wallet_create_proof_message(
-    genesis_hash: groundhog_xdr::types::SHA256Hash,
-    faucet_wallet_address: groundhog_xdr::types::ContractAddress,
-    wallet_contract_hash: groundhog_xdr::types::SHA256Hash,
-    owner_public_key: Ed25519PublicKey,
-    deploy_nonce: groundhog_xdr::types::SHA256Hash,
-) -> Result<Vec<u8>, WalletCreateError> {
-    xdrs::cxs::encode(&(
-        CREATE_WALLET_PROOF_DOMAIN,
-        genesis_hash,
-        faucet_wallet_address,
-        wallet_contract_hash,
-        owner_public_key,
-        deploy_nonce,
-    ))
-    .map(|bytes| Sha256::digest(bytes).to_vec())
-    .map_err(|error| WalletCreateError::EncodeCreateCalldata(error.to_string()))
 }
 
 fn verify_owner_signature(
