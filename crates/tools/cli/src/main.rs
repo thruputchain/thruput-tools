@@ -130,11 +130,7 @@ enum Command {
                       finding exists.")]
     Status {
         /// Config profile to use
-        #[arg(
-            long = "profile",
-            alias = "network",
-            default_value = DEFAULT_PROFILE
-        )]
+        #[arg(long = "profile", default_value = DEFAULT_PROFILE)]
         profile: String,
     },
     /// Build contract artifact
@@ -164,11 +160,7 @@ enum Command {
         #[arg(long, value_parser = groundhog_cli::build::parse_stack_size)]
         stack_size: Option<u32>,
         /// Config profile to use
-        #[arg(
-            long = "profile",
-            alias = "network",
-            default_value = DEFAULT_PROFILE
-        )]
+        #[arg(long = "profile", default_value = DEFAULT_PROFILE)]
         profile: String,
         #[command(flatten)]
         artifacts: ArtifactArgs,
@@ -247,11 +239,7 @@ enum Command {
         #[arg(long = "hogd-protocol", requires = "integration")]
         hogd_protocol: Option<String>,
         /// Config profile to use
-        #[arg(
-            long = "profile",
-            alias = "network",
-            default_value = DEFAULT_PROFILE
-        )]
+        #[arg(long = "profile", default_value = DEFAULT_PROFILE)]
         profile: String,
         #[command(flatten)]
         artifacts: ArtifactArgs,
@@ -271,11 +259,7 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
         /// Config profile to use
-        #[arg(
-            long = "profile",
-            alias = "network",
-            default_value = DEFAULT_PROFILE
-        )]
+        #[arg(long = "profile", default_value = DEFAULT_PROFILE)]
         profile: String,
         #[command(flatten)]
         target_args: RpcTargetArgs,
@@ -299,11 +283,7 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
         /// Config profile to use
-        #[arg(
-            long = "profile",
-            alias = "network",
-            default_value = DEFAULT_PROFILE
-        )]
+        #[arg(long = "profile", default_value = DEFAULT_PROFILE)]
         profile: String,
         #[command(flatten)]
         target_args: RpcTargetArgs,
@@ -321,11 +301,7 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
         /// Config profile to use
-        #[arg(
-            long = "profile",
-            alias = "network",
-            default_value = DEFAULT_PROFILE
-        )]
+        #[arg(long = "profile", default_value = DEFAULT_PROFILE)]
         profile: String,
         #[command(flatten)]
         target_args: RpcTargetArgs,
@@ -335,11 +311,7 @@ enum Command {
         /// Wallet name, contract alias, dev-N account, or direct 0x-prefixed address
         target: String,
         /// Config profile to use
-        #[arg(
-            long = "profile",
-            alias = "network",
-            default_value = DEFAULT_PROFILE
-        )]
+        #[arg(long = "profile", default_value = DEFAULT_PROFILE)]
         profile: String,
         #[command(flatten)]
         target_args: RpcTargetArgs,
@@ -364,11 +336,7 @@ enum Command {
         #[arg(long = "from")]
         from: Option<String>,
         /// Config profile to use
-        #[arg(
-            long = "profile",
-            alias = "network",
-            default_value = DEFAULT_PROFILE
-        )]
+        #[arg(long = "profile", default_value = DEFAULT_PROFILE)]
         profile: String,
         #[command(flatten)]
         target_args: RpcTargetArgs,
@@ -388,11 +356,7 @@ enum Command {
         /// 32-byte storage key as 0x-prefixed hex
         key: String,
         /// Config profile to use
-        #[arg(
-            long = "profile",
-            alias = "network",
-            default_value = DEFAULT_PROFILE
-        )]
+        #[arg(long = "profile", default_value = DEFAULT_PROFILE)]
         profile: String,
         #[command(flatten)]
         target_args: RpcTargetArgs,
@@ -495,11 +459,7 @@ enum WalletCommand {
     /// List saved project wallets
     Ls {
         /// Config profile to use
-        #[arg(
-            long = "profile",
-            alias = "network",
-            default_value = DEFAULT_PROFILE
-        )]
+        #[arg(long = "profile", default_value = DEFAULT_PROFILE)]
         profile: String,
     },
     /// Create a local-node wallet for a stored signing key
@@ -514,11 +474,7 @@ enum WalletCommand {
         #[arg(long)]
         dry_run: bool,
         /// Config profile to use
-        #[arg(
-            long = "profile",
-            alias = "network",
-            default_value = DEFAULT_PROFILE
-        )]
+        #[arg(long = "profile", default_value = DEFAULT_PROFILE)]
         profile: String,
         #[command(flatten)]
         target_args: RpcTargetArgs,
@@ -528,11 +484,7 @@ enum WalletCommand {
         /// Saved wallet name to remove from groundhog.toml
         name: String,
         /// Config profile to use
-        #[arg(
-            long = "profile",
-            alias = "network",
-            default_value = DEFAULT_PROFILE
-        )]
+        #[arg(long = "profile", default_value = DEFAULT_PROFILE)]
         profile: String,
     },
 }

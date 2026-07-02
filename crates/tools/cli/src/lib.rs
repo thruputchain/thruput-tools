@@ -20,7 +20,6 @@ pub mod error;
 pub(crate) mod hog;
 pub mod init;
 pub mod keys;
-pub(crate) mod network;
 pub mod new;
 pub mod node;
 pub mod print;

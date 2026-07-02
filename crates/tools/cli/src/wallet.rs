@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use groundhog_json_rpc_types::network_descriptor::NetworkDescriptor;
 use groundhog_json_rpc_types::receipt::ExecStatus;
 use groundhog_json_rpc_types::transaction::TxHash;
 use groundhog_signing::Signer;
@@ -24,7 +25,6 @@ use crate::config::{
 };
 use crate::hog;
 use crate::keys::load_local_signer;
-use crate::network::fetch_network_descriptor;
 use crate::result::CommandResult;
 use crate::runtime_manifest::{
     apply_local_node_state_for_local_bootstrap, load_configured_runtime_manifest,
@@ -544,6 +544,11 @@ fn prepare_remote_wallet_create(
         .ok_or_else(|| CliError::Other("remote wallet creation requires faucet_url".into()))?
         .trim_end_matches('/')
         .to_owned();
+    let rpc_url = profile
+        .rpc_url
+        .as_deref()
+        .ok_or(CliError::MissingRpcUrl)?
+        .to_owned();
     let owner = load_local_signer(&key_name)?;
     let owner_public_key_xdr = Ed25519PublicKey::from(owner.verifying_key_bytes());
     let owner_public_key = format!("0x{}", hex::encode(owner_public_key_xdr.as_ref()));
@@ -585,7 +590,7 @@ fn prepare_remote_wallet_create(
 
     Ok(PreparedWalletCreate::Remote(PreparedRemoteWalletCreate {
         faucet_url,
-        rpc_url: descriptor.endpoints.rpc_url,
+        rpc_url,
         key_name,
         wallet_name,
         owner_public_key,
@@ -594,6 +599,17 @@ fn prepare_remote_wallet_create(
         wallet_address: prepared.wallet_address,
         prefund_raw_amount: prepared.prefund_raw_amount,
     }))
+}
+
+fn fetch_network_descriptor(faucet_url: &str) -> Result<NetworkDescriptor, CliError> {
+    let faucet_url = faucet_url.trim_end_matches('/');
+    let url = format!("{faucet_url}/v1/network");
+    reqwest::blocking::get(&url)
+        .map_err(|error| CliError::Other(format!("failed to call `{url}`: {error}")))?
+        .error_for_status()
+        .map_err(|error| CliError::Other(format!("faucet request `{url}` failed: {error}")))?
+        .json()
+        .map_err(|error| CliError::Other(format!("invalid JSON from `{url}`: {error}")))
 }
 
 fn post_json<T: for<'de> Deserialize<'de>, B: Serialize>(

@@ -11,7 +11,6 @@ use crate::config::{
     ProfileOverrides, ResolvedProfile, resolve_default_key, resolve_profile_with_overrides,
 };
 use crate::dev_keys;
-use crate::network::resolve_network;
 use crate::result::CommandResult;
 use crate::runtime_manifest::apply_local_node_state_for_dev_key;
 use crate::{CliError, Print};
@@ -33,7 +32,11 @@ pub fn run(
     if dev_keys::dev_key_index(target).is_some() {
         apply_local_node_state_for_dev_key(&mut resolved_profile, target)?;
     }
-    let rpc_url = resolve_network(&resolved_profile)?.rpc_url;
+    let rpc_url = resolved_profile
+        .rpc_url
+        .as_deref()
+        .ok_or(CliError::MissingRpcUrl)?
+        .to_owned();
 
     let address_hex = resolve_balance_target(&resolved_profile, target)?;
     let address = ContractAddress::from(parse_contract_address(&address_hex)?);
