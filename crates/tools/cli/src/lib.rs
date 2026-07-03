@@ -17,6 +17,7 @@ pub mod deploy;
 pub(crate) mod dev_detail;
 pub mod dev_keys;
 pub mod error;
+pub(crate) mod faucet_client;
 pub(crate) mod hog;
 pub mod init;
 pub mod keys;

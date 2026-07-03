@@ -23,6 +23,7 @@ use crate::config::{
     ProfileOverrides, find_project_config, remove_profile_wallet_address, resolve_default_key,
     resolve_profile, resolve_profile_with_overrides, save_profile_wallet_address,
 };
+use crate::faucet_client::post_json;
 use crate::hog;
 use crate::keys::load_local_signer;
 use crate::result::CommandResult;
@@ -114,17 +115,6 @@ struct CreateWalletResponse {
     tx_hash: TxHash,
     height: groundhog_json_rpc_types::BlockHeight,
     status: ExecStatus,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct FaucetErrorBody {
-    error: FaucetErrorDetail,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct FaucetErrorDetail {
-    code: String,
-    message: String,
 }
 
 pub fn create(
@@ -720,42 +710,6 @@ fn fetch_network_descriptor(faucet_url: &str) -> Result<NetworkDescriptor, CliEr
         .map_err(|error| CliError::Other(format!("faucet request `{url}` failed: {error}")))?
         .json()
         .map_err(|error| CliError::Other(format!("invalid JSON from `{url}`: {error}")))
-}
-
-fn post_json<T: for<'de> Deserialize<'de>, B: Serialize>(
-    client: &reqwest::blocking::Client,
-    url: &str,
-    body: &B,
-) -> Result<T, CliError> {
-    let response = client
-        .post(url)
-        .json(body)
-        .send()
-        .map_err(|error| CliError::Other(format!("failed to call `{url}`: {error}")))?;
-    parse_faucet_response(response, url)
-}
-
-fn parse_faucet_response<T: for<'de> Deserialize<'de>>(
-    response: reqwest::blocking::Response,
-    url: &str,
-) -> Result<T, CliError> {
-    let status = response.status();
-    let bytes = response
-        .bytes()
-        .map_err(|error| CliError::Other(format!("failed to read `{url}` response: {error}")))?;
-    if status.is_success() {
-        return serde_json::from_slice(&bytes)
-            .map_err(|error| CliError::Other(format!("invalid JSON from `{url}`: {error}")));
-    }
-    if let Ok(body) = serde_json::from_slice::<FaucetErrorBody>(&bytes) {
-        return Err(CliError::Other(format!(
-            "faucet request `{url}` failed with {}: {} ({})",
-            status, body.error.message, body.error.code
-        )));
-    }
-    Err(CliError::Other(format!(
-        "faucet request `{url}` failed with {status}"
-    )))
 }
 
 struct SignWalletPrefundTransaction<'a> {
