@@ -23,7 +23,7 @@ use crate::config::{
     ProfileOverrides, find_project_config, remove_profile_wallet_address, resolve_default_key,
     resolve_profile, resolve_profile_with_overrides, save_profile_wallet_address,
 };
-use crate::faucet_client::post_json;
+use crate::faucet_client::{client as faucet_client, post_json};
 use crate::hog;
 use crate::keys::load_local_signer;
 use crate::result::CommandResult;
@@ -237,7 +237,7 @@ fn create_remote_wallet(
         ));
     }
 
-    let client = reqwest::blocking::Client::new();
+    let client = faucet_client()?;
     let airdrop: serde_json::Value = post_json(
         &client,
         &format!("{}/v1/airdrop", prepared.faucet_url),
@@ -670,7 +670,7 @@ fn prepare_remote_wallet_create(
     let deploy_nonce = deploy_nonce_from_u64(deploy_nonce_val);
     let deploy_nonce_hex = format!("0x{}", hex::encode(deploy_nonce.as_ref()));
 
-    let client = reqwest::blocking::Client::new();
+    let client = faucet_client()?;
     let descriptor = fetch_network_descriptor(&faucet_url)?;
     let prepared: PrepareWalletCreateResponse = post_json(
         &client,
@@ -718,7 +718,9 @@ fn prepare_remote_wallet_create(
 fn fetch_network_descriptor(faucet_url: &str) -> Result<NetworkDescriptor, CliError> {
     let faucet_url = faucet_url.trim_end_matches('/');
     let url = format!("{faucet_url}/v1/network");
-    reqwest::blocking::get(&url)
+    faucet_client()?
+        .get(&url)
+        .send()
         .map_err(|error| CliError::Other(format!("failed to call `{url}`: {error}")))?
         .error_for_status()
         .map_err(|error| CliError::Other(format!("faucet request `{url}` failed: {error}")))?

@@ -16,7 +16,7 @@ use crate::account_resolution::{
 use crate::codec::{format_contract_address, parse_contract_address};
 use crate::config::{ProfileOverrides, ResolvedProfile, resolve_profile_with_overrides};
 use crate::dev_keys;
-use crate::faucet_client::post_json;
+use crate::faucet_client::{client as faucet_client, post_json};
 use crate::hog;
 use crate::result::CommandResult;
 use crate::runtime_manifest::{
@@ -138,7 +138,7 @@ fn run_remote_airdrop(
         "Requesting remote airdrop to {}...",
         prepared.recipient_wallet
     ));
-    let client = reqwest::blocking::Client::new();
+    let client = faucet_client()?;
     let response: RemoteAirdropResponse = post_json(
         &client,
         &format!("{}/v1/airdrop", prepared.faucet_url),
