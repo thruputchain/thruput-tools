@@ -4,7 +4,6 @@ export type NetworkDescriptor = {
   networkId: string
   endpoints: {
     rpcUrl: string
-    faucetUrl: string
   }
   nativeHog: {
     decimals: number

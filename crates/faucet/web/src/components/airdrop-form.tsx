@@ -13,6 +13,7 @@ import { Spinner } from "@/components/ui/spinner"
 export function AirdropForm(props: {
   address: string
   fieldError: string | null
+  isLoadingMetadata: boolean
   isSubmitting: boolean
   onAddressChange: (address: string) => void
   onSubmit: (event: React.FormEvent<HTMLFormElement>) => void
@@ -40,17 +41,21 @@ export function AirdropForm(props: {
                   autoComplete="off"
                   spellCheck={false}
                   aria-invalid={isInvalid || undefined}
-                  disabled={props.isSubmitting}
+                  disabled={props.isLoadingMetadata || props.isSubmitting}
                 />
                 <Button
                   type="submit"
-                  disabled={props.isSubmitting}
+                  disabled={props.isLoadingMetadata || props.isSubmitting}
                   className="w-full sm:w-auto"
                 >
-                  {props.isSubmitting ? (
+                  {props.isLoadingMetadata || props.isSubmitting ? (
                     <Spinner data-icon="inline-start" />
                   ) : null}
-                  {props.isSubmitting ? "Requesting..." : "Request airdrop"}
+                  {props.isLoadingMetadata
+                    ? "Loading..."
+                    : props.isSubmitting
+                      ? "Requesting..."
+                      : "Request airdrop"}
                 </Button>
               </div>
               {props.fieldError ? (
