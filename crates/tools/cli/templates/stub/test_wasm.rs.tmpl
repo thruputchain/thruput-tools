@@ -1,15 +1,24 @@
 use sdk::*;
+use std::path::PathBuf;
 
 static NONCE: SHA256Hash = sdk::sha256_static!(
     "{{PROJECT_NAME_UPPER_SNAKE}}_WASM_NONCE"
 );
 
+fn cargo_wasm_artifact(file_name: &str) -> PathBuf {
+    std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("target"))
+        .join("wasm32-unknown-unknown")
+        .join("release")
+        .join(file_name)
+}
+
 #[test]
 #[ignore = "requires WASM build — run via `groundhog test`"]
 fn test_deploy_wasm() {
     let contract = load_wasm_contract(
-        "target/wasm32-unknown-unknown/release/\
-         {{PROJECT_NAME_SNAKE}}.wasm",
+        cargo_wasm_artifact("{{PROJECT_NAME_SNAKE}}.wasm"),
     );
     let env = TestEnvironment::no_cost();
     let contract_hash =

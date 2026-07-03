@@ -101,7 +101,7 @@ plain `cargo` builds and tests work for the host target:
 | `cargo test` | Run unit tests on host |
 | `groundhog build` | Cross-compile to RV32 ELF and lower it to `.rv32a` |
 | `groundhog build --target wasm` | Cross-compile to WASM (`--no-default-features --release`) |
-| `groundhog test` | Run executor-backed WASM tests |
+| `groundhog test` | Run executor-backed RV32 tests |
 | `groundhog test --integration` | Start hog-devnode, deploy WASM or RV32, and run `tests/integration.rs` |
 
 The `dev` feature enables `std` for native compilation.
@@ -185,10 +185,10 @@ groundhog test --match-test test_deposit    # filter by test name
 groundhog test --skip slow                  # skip matching tests
 groundhog test --rerun                      # rerun tests that failed last time
 groundhog test --watch                      # rerun when project files change
-groundhog test --fail-fast                  # stop the WASM harness on first failure
+groundhog test --fail-fast                  # stop the selected harness on first failure
 groundhog test --show-output                # show captured stdout for passing tests
 groundhog test --no-capture                 # stream test stdout/stderr
-groundhog test --test-threads 1             # set WASM harness thread count
+groundhog test --test-threads 1             # set selected harness thread count
 groundhog test --integration                # local node + RV32 deploy + tests/integration.rs
 groundhog test --integration --target wasm  # local node + WASM deploy + tests/integration.rs
 groundhog test --integration --differential # gate: WASM and RV32 both pass same tests
@@ -204,7 +204,7 @@ single newline-delimited JSON record; successful runs are written to
 stdout with `ok` set to `true` or `false` as appropriate. The
 machine-readable payload is versioned with `data.schemaVersion` and
 includes structured per-run and per-test results rather than only
-aggregated cargo output text. Schema v3 reports the built artifact under
+aggregated cargo output text. Schema v4 reports the built artifact under
 `data.artifact` with `kind` and `path` fields.
 
 `groundhog test --integration` builds the selected artifact (`--target rv32` by
@@ -230,7 +230,7 @@ GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode groundhog test --integration
 
 > **Note:** Plain `cargo test` also works for unit tests that
 > don't need the executor or local JSON-RPC surface. Use
-> `groundhog test` for executor-backed WASM tests and
+> `groundhog test` for executor-backed RV32 tests and
 > `groundhog test --integration` for RPC-backed local-node tests.
 
 ### `groundhog keys`

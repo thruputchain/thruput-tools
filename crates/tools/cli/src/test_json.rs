@@ -10,7 +10,7 @@ use crate::config::ResolvedProfile;
 ///
 /// Bump this when the shape or semantics of `TestReport` change in a
 /// way that could break existing machine consumers.
-pub const TEST_JSON_SCHEMA_VERSION: u32 = 3;
+pub const TEST_JSON_SCHEMA_VERSION: u32 = 4;
 
 /// Structured machine-readable report for `groundhog test --json`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -58,6 +58,7 @@ impl TestArtifactInfo {
 pub enum TestMode {
     #[default]
     Wasm,
+    Rv32,
     Integration,
 }
 

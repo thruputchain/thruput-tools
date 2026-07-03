@@ -172,10 +172,11 @@ enum Command {
         #[arg(last = true)]
         cargo_args: Vec<String>,
     },
-    /// Build and test the contract under WASM or local-node execution
+    /// Build and test the contract under RV32, WASM, or local-node execution
     #[command(
-        long_about = "Builds the contract to WASM, then runs \
-                       the test_wasm target on the host. With \
+        long_about = "Builds the contract to the selected local test target \
+                       (--target rv32 by default, or --target wasm), then runs \
+                       test_rv32 or test_wasm on the host. With \
                        --integration, starts an ephemeral hog-devnode \
                        local node, deploys the selected artifact \
                        (--target rv32 by default, or --target wasm), and \
@@ -198,7 +199,7 @@ enum Command {
         /// Run only tests whose names contain this substring
         #[arg(long = "match-test")]
         match_test: Option<String>,
-        /// Stop the WASM test harness after the first test failure
+        /// Stop the selected local test harness after the first test failure
         #[arg(long)]
         fail_fast: bool,
         /// Show captured stdout for successful tests
@@ -207,16 +208,16 @@ enum Command {
         /// Do not capture stdout/stderr from tests
         #[arg(long = "no-capture", alias = "nocapture")]
         no_capture: bool,
-        /// Number of WASM test harness threads to use
+        /// Number of local test harness threads to use
         #[arg(long = "test-threads")]
         test_threads: Option<usize>,
         /// Skip tests whose names contain this substring
         #[arg(long)]
         skip: Vec<String>,
-        /// Rerun tests that failed in the previous WASM test run
+        /// Rerun tests that failed in the previous selected-target test run
         #[arg(long)]
         rerun: bool,
-        /// Rerun WASM tests when project files change.
+        /// Rerun selected-target tests when project files change.
         ///
         /// With --json, emits one newline-delimited JSON record per run.
         #[arg(long)]
@@ -224,8 +225,8 @@ enum Command {
         /// Run tests/integration.rs against an ephemeral hog-devnode local node
         #[arg(long)]
         integration: bool,
-        /// Contract artifact target to deploy for integration tests
-        #[arg(long, value_enum, requires = "integration")]
+        /// Contract artifact target to test
+        #[arg(long, value_enum)]
         target: Option<BuildTargetArg>,
         /// Run integration tests against both WASM and RV32 artifacts
         #[arg(long, requires = "integration", conflicts_with = "target")]
@@ -672,6 +673,7 @@ fn main() {
                     &cwd,
                 );
                 let options = groundhog_cli::test_cmd::TestOptions {
+                    target: target.unwrap_or(BuildTargetArg::Rv32).into(),
                     match_test,
                     test_threads,
                     skip,
@@ -689,7 +691,7 @@ fn main() {
                         &options,
                         &groundhog_cli::test_cmd::IntegrationTestOptions {
                             hogd_protocol,
-                            target: target.unwrap_or(BuildTargetArg::Rv32).into(),
+                            target: options.target,
                             differential,
                             verbose,
                         },

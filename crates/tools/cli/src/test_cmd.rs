@@ -8,7 +8,7 @@ use crate::{CliError, Print};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::env;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -20,23 +20,40 @@ const FAILURE_CACHE_VERSION: u8 = 1;
 const WATCH_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const WATCH_DEBOUNCE: Duration = Duration::from_millis(350);
 const WASM_TEST_TARGET: &str = "test_wasm";
+const RV32_TEST_TARGET: &str = "test_rv32";
 const INTEGRATION_TEST_TARGET: &str = "integration";
 
-/// Explicit controls for the `test_wasm` harness invocation.
-#[derive(Debug, Clone, Default)]
+/// Explicit controls for the selected local test harness invocation.
+#[derive(Debug, Clone)]
 pub struct TestOptions {
+    /// Contract artifact target to build and run for local tests.
+    pub target: crate::build::BuildTarget,
     /// Run only tests whose names contain this substring.
     pub match_test: Option<String>,
-    /// Number of WASM test harness threads to use.
+    /// Number of local test harness threads to use.
     pub test_threads: Option<usize>,
     /// Skip tests whose names contain these substrings.
     pub skip: Vec<String>,
-    /// Rerun tests that failed in the previous WASM test run.
+    /// Rerun tests that failed in the previous selected-target test run.
     pub rerun: bool,
-    /// Keep rerunning WASM tests when project files change.
+    /// Keep rerunning selected-target tests when project files change.
     pub watch: bool,
-    /// Boolean controls forwarded to the WASM test harness.
+    /// Boolean controls forwarded to the local test harness.
     pub harness: TestHarnessOptions,
+}
+
+impl Default for TestOptions {
+    fn default() -> Self {
+        Self {
+            target: crate::build::BuildTarget::Rv32,
+            match_test: None,
+            test_threads: None,
+            skip: Vec::new(),
+            rerun: false,
+            watch: false,
+            harness: TestHarnessOptions::default(),
+        }
+    }
 }
 
 /// Options for the `groundhog test --integration` orchestration path.
@@ -112,7 +129,7 @@ struct TestCommandContext<'a> {
     project_name: &'a str,
     host_target: &'a str,
     test_target: &'a str,
-    env: &'a [(String, String)],
+    env: &'a [(OsString, OsString)],
     artifacts: &'a ArtifactOptions,
     cargo_args: &'a [String],
     print: &'a Print,
@@ -189,11 +206,19 @@ struct IntegrationBuild {
     artifact: ResolvedArtifact,
 }
 
-/// Build the contract to WASM, then run WASM tests
+struct LocalTestBuild {
+    project_name: String,
+    project_root: PathBuf,
+    target_directory: PathBuf,
+    profile: crate::config::ResolvedProfile,
+    artifact: ResolvedArtifact,
+}
+
+/// Build the contract to the default local test target, then run tests
 /// against the mock executor with real abort semantics.
 ///
 /// Unlike `cargo test` (which runs natively with unwind),
-/// faults in WASM execution are real aborts — the same
+/// faults in artifact execution are real aborts — the same
 /// as what would happen on-chain.
 pub fn run(
     package: Option<&str>,
@@ -214,7 +239,7 @@ pub fn run(
     )
 }
 
-/// Build the contract to WASM, then run WASM tests with explicit
+/// Build the contract to the selected target, then run tests with explicit
 /// harness controls.
 pub fn run_with_options(
     package: Option<&str>,
@@ -557,7 +582,11 @@ fn run_integration_against_node(
         TestArtifactInfo::new(build.artifact.kind, &build.artifact.path),
         &outputs,
         false,
-        &failure_cache_path(&build.target_directory, &build.project_name),
+        &failure_cache_path(
+            &build.target_directory,
+            &build.project_name,
+            build.artifact.kind,
+        ),
         &[],
         &[],
         &executed_tests(&outputs),
@@ -687,20 +716,36 @@ fn integration_test_environment(
     rpc_url: &str,
     contract_address: &str,
     runtime_manifest: Option<&std::path::Path>,
-) -> Vec<(String, String)> {
+) -> Vec<(OsString, OsString)> {
     let mut env = vec![
-        ("GROUNDHOG_RPC_URL".into(), rpc_url.into()),
-        ("GROUNDHOG_CONTRACT_ADDRESS".into(), contract_address.into()),
-        ("GROUNDHOG_PROFILE".into(), "integration".into()),
-        ("GROUNDHOG_DEFAULT_KEY".into(), "dev-0".into()),
+        (OsString::from("GROUNDHOG_RPC_URL"), OsString::from(rpc_url)),
+        (
+            OsString::from("GROUNDHOG_CONTRACT_ADDRESS"),
+            OsString::from(contract_address),
+        ),
+        (
+            OsString::from("GROUNDHOG_PROFILE"),
+            OsString::from("integration"),
+        ),
+        (
+            OsString::from("GROUNDHOG_DEFAULT_KEY"),
+            OsString::from("dev-0"),
+        ),
     ];
     if let Some(path) = runtime_manifest {
         env.push((
-            "GROUNDHOG_RUNTIME_MANIFEST".into(),
-            path.display().to_string(),
+            OsString::from("GROUNDHOG_RUNTIME_MANIFEST"),
+            path.as_os_str().to_owned(),
         ));
     }
     env
+}
+
+fn local_test_environment(target_directory: &Path) -> Vec<(OsString, OsString)> {
+    vec![(
+        OsString::from("CARGO_TARGET_DIR"),
+        target_directory.as_os_str().to_owned(),
+    )]
 }
 
 fn ensure_integration_test_target_exists(project_root: &Path) -> Result<(), CliError> {
@@ -746,7 +791,10 @@ fn run_watch(
 
         print.status("Waiting for changes...");
         wait_for_watch_change(&watch, &mut snapshot, WATCH_POLL_INTERVAL, WATCH_DEBOUNCE)?;
-        print.status("Change detected; rerunning WASM tests...");
+        print.status(format_args!(
+            "Change detected; rerunning {} tests...",
+            options.target.as_str()
+        ));
     }
 }
 
@@ -759,15 +807,25 @@ fn run_once_with_options(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    // Build the WASM contract (validates project root,
-    // checks for cargo on PATH, etc.)
-    let build =
-        crate::build::build_project(package, false, &[], artifacts, explicit_profile, &[], print)?;
+    let metadata = crate::build::cargo_metadata_with_artifacts(artifacts)?;
+    artifacts::ensure_no_target_dir_passthrough_conflicts(
+        artifacts,
+        &metadata.workspace_root,
+        cargo_args,
+    )?;
 
-    // Run only the WASM test target
+    // Build the selected contract artifact (validates project root,
+    // checks for cargo on PATH, etc.).
+    let build =
+        build_local_test_artifact(package, options.target, artifacts, explicit_profile, print)?;
+
     let root = build.project_root.clone();
     let profile = build.profile.clone();
-    let cache_path = failure_cache_path(&build.target_directory, &build.project_name);
+    let cache_path = failure_cache_path(
+        &build.target_directory,
+        &build.project_name,
+        build.artifact.kind,
+    );
     let cached_tests = read_failure_cache(&cache_path, &build.project_name)?;
     let rerun_filters = filter_rerun_tests(options, &cached_tests);
 
@@ -785,16 +843,15 @@ fn run_once_with_options(
     print_test_status(options, rerun_filters.len(), print);
 
     let host_target = host_target()?;
-
-    artifacts::ensure_no_target_dir_passthrough_conflicts(artifacts, &root, cargo_args)?;
+    let env = local_test_environment(&build.target_directory);
 
     let filters = selected_filters(options, &rerun_filters);
     let context = TestCommandContext {
         root: &root,
         project_name: &build.project_name,
         host_target: &host_target,
-        test_target: WASM_TEST_TARGET,
-        env: &[],
+        test_target: test_target_for(options.target),
+        env: &env,
         artifacts,
         cargo_args,
         print,
@@ -820,7 +877,7 @@ fn run_once_with_options(
     let report = build_test_report(
         &build.project_root,
         &profile,
-        TestArtifactInfo::new(crate::artifacts::ArtifactKind::Wasm, &build.wasm),
+        TestArtifactInfo::new(build.artifact.kind, &build.artifact.path),
         &outputs,
         options.rerun,
         &cache_path,
@@ -829,7 +886,7 @@ fn run_once_with_options(
         &executed_tests,
         &failed_tests,
         options.watch,
-        TestMode::Wasm,
+        test_mode_for(options.target),
         None,
     );
 
@@ -843,6 +900,52 @@ fn run_once_with_options(
 
     print.json(&CommandResult::new(cmd, &report))?;
     Ok(())
+}
+
+fn build_local_test_artifact(
+    package: Option<&str>,
+    target: crate::build::BuildTarget,
+    artifacts: &ArtifactOptions,
+    explicit_profile: Option<&str>,
+    print: &Print,
+) -> Result<LocalTestBuild, CliError> {
+    match target {
+        crate::build::BuildTarget::Wasm => {
+            let build = crate::build::build_project(
+                package,
+                false,
+                &[],
+                artifacts,
+                explicit_profile,
+                &[],
+                print,
+            )?;
+            Ok(LocalTestBuild {
+                project_name: build.project_name,
+                project_root: build.project_root,
+                target_directory: build.target_directory,
+                profile: build.profile,
+                artifact: ResolvedArtifact {
+                    kind: ArtifactKind::Wasm,
+                    path: build.wasm,
+                },
+            })
+        }
+        crate::build::BuildTarget::Rv32 => {
+            let build =
+                crate::build::build_rv32_project(package, &[], artifacts, explicit_profile, print)?;
+            Ok(LocalTestBuild {
+                project_name: build.project_name,
+                project_root: build.project_root,
+                target_directory: build.target_directory,
+                profile: build.profile,
+                artifact: ResolvedArtifact {
+                    kind: ArtifactKind::Rv32,
+                    path: build.rv32,
+                },
+            })
+        }
+    }
 }
 
 fn initial_watch_context(artifacts: &ArtifactOptions) -> Result<WatchContext, CliError> {
@@ -1023,7 +1126,7 @@ fn filter_rerun_tests(options: &TestOptions, cached_tests: &[String]) -> Vec<Str
 
 fn finish_empty_rerun(
     cmd: &'static str,
-    build: &crate::build::BuildResult,
+    build: &LocalTestBuild,
     profile: &crate::config::ResolvedProfile,
     cache_path: &Path,
     cached_tests: &[String],
@@ -1032,14 +1135,20 @@ fn finish_empty_rerun(
 ) -> Result<(), CliError> {
     if cached_tests.is_empty() {
         clear_failure_cache(cache_path)?;
-        print.warn("no cached failed WASM tests to rerun");
+        print.warn(format_args!(
+            "no cached failed {} tests to rerun",
+            build.artifact.kind.as_str()
+        ));
     } else {
-        print.warn("no cached failed WASM tests match --match-test");
+        print.warn(format_args!(
+            "no cached failed {} tests match --match-test",
+            build.artifact.kind.as_str()
+        ));
     }
     let report = build_test_report(
         &build.project_root,
         profile,
-        TestArtifactInfo::new(crate::artifacts::ArtifactKind::Wasm, &build.wasm),
+        TestArtifactInfo::new(build.artifact.kind, &build.artifact.path),
         &[],
         true,
         cache_path,
@@ -1048,7 +1157,7 @@ fn finish_empty_rerun(
         &[],
         &[],
         watch_enabled,
-        TestMode::Wasm,
+        test_mode_for_artifact(build.artifact.kind),
         None,
     );
     print.json(&CommandResult::new(cmd, &report))?;
@@ -1058,10 +1167,35 @@ fn finish_empty_rerun(
 fn print_test_status(options: &TestOptions, rerun_count: usize, print: &Print) {
     if options.rerun {
         print.status(format_args!(
-            "Rerunning {rerun_count} failed WASM test(s) (abort semantics)..."
+            "Rerunning {rerun_count} failed {} test(s) (abort semantics)...",
+            options.target.as_str()
         ));
     } else {
-        print.status("Running WASM tests (abort semantics)...");
+        print.status(format_args!(
+            "Running {} tests (abort semantics)...",
+            options.target.as_str()
+        ));
+    }
+}
+
+fn test_target_for(target: crate::build::BuildTarget) -> &'static str {
+    match target {
+        crate::build::BuildTarget::Wasm => WASM_TEST_TARGET,
+        crate::build::BuildTarget::Rv32 => RV32_TEST_TARGET,
+    }
+}
+
+fn test_mode_for(target: crate::build::BuildTarget) -> TestMode {
+    match target {
+        crate::build::BuildTarget::Wasm => TestMode::Wasm,
+        crate::build::BuildTarget::Rv32 => TestMode::Rv32,
+    }
+}
+
+fn test_mode_for_artifact(kind: ArtifactKind) -> TestMode {
+    match kind {
+        ArtifactKind::Wasm => TestMode::Wasm,
+        ArtifactKind::Rv32 => TestMode::Rv32,
     }
 }
 
@@ -1410,13 +1544,13 @@ fn test_command(root: &Path, project_name: &str, host_target: &str, test_target:
         .arg("--features")
         .arg("dev")
         .arg("--");
-    if test_target == WASM_TEST_TARGET {
+    if test_target == WASM_TEST_TARGET || test_target == RV32_TEST_TARGET {
         cargo_cmd.arg("--include-ignored");
     }
     cargo_cmd
 }
 
-fn apply_test_environment(cargo_cmd: &mut Command, env: &[(String, String)]) {
+fn apply_test_environment(cargo_cmd: &mut Command, env: &[(OsString, OsString)]) {
     for (key, value) in env {
         cargo_cmd.env(key, value);
     }
@@ -1577,11 +1711,11 @@ fn join_capture(handle: thread::JoinHandle<io::Result<Vec<u8>>>) -> Result<Vec<u
         .map_err(CliError::Io)
 }
 
-fn failure_cache_path(target_directory: &Path, package: &str) -> PathBuf {
+fn failure_cache_path(target_directory: &Path, package: &str, kind: ArtifactKind) -> PathBuf {
     target_directory
         .join("groundhog")
         .join("test-failures")
-        .join(format!("{package}.json"))
+        .join(format!("{package}-{}.json", kind.as_str()))
 }
 
 fn read_failure_cache(path: &Path, package: &str) -> Result<Vec<String>, CliError> {
@@ -1657,13 +1791,13 @@ fn dedup_tests(tests: impl IntoIterator<Item = String>) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        FAILURE_CACHE_VERSION, FailureCache, INTEGRATION_TEST_TARGET, IntegrationTestOptions,
-        SelectedFilter, TestHarnessOptions, TestOptions, TestRunOutput, WASM_TEST_TARGET,
-        WatchContext, aggregate_summary, apply_harness_options, apply_test_environment,
-        combined_output, derive_summary_from_cases, extract_failed_tests, failure_cache_path,
-        filter_cached_tests, next_cached_failures, parse_summary_line, parse_test_case_line,
-        read_failure_cache, should_stop_rerun, should_watch_file, test_command,
-        update_failure_cache, watch_snapshot, write_failure_cache,
+        ArtifactKind, FAILURE_CACHE_VERSION, FailureCache, INTEGRATION_TEST_TARGET,
+        IntegrationTestOptions, RV32_TEST_TARGET, SelectedFilter, TestHarnessOptions, TestOptions,
+        TestRunOutput, WASM_TEST_TARGET, WatchContext, aggregate_summary, apply_harness_options,
+        apply_test_environment, combined_output, derive_summary_from_cases, extract_failed_tests,
+        failure_cache_path, filter_cached_tests, next_cached_failures, parse_summary_line,
+        parse_test_case_line, read_failure_cache, should_stop_rerun, should_watch_file,
+        test_command, update_failure_cache, watch_snapshot, write_failure_cache,
     };
     use crate::test_json::{
         IntegrationTestInfo, TEST_JSON_SCHEMA_VERSION, TestArtifactInfo, TestCase, TestCaseStatus,
@@ -1671,6 +1805,7 @@ mod tests {
     };
     use crate::{CliError, Print};
     use std::collections::BTreeMap;
+    use std::ffi::OsString;
     use std::fs;
     use std::path::PathBuf;
     use std::process::Command;
@@ -1992,6 +2127,30 @@ mod tests {
             .get_args()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect();
+        assert!(
+            args.windows(2)
+                .any(|window| window[0] == "--test" && window[1] == WASM_TEST_TARGET)
+        );
+        assert!(args.iter().any(|arg| arg == "--include-ignored"));
+    }
+
+    #[test]
+    fn rv32_command_selects_rv32_target_and_includes_ignored_tests() {
+        let command = test_command(
+            std::path::Path::new("/project"),
+            "demo",
+            "x86_64-unknown-linux-gnu",
+            RV32_TEST_TARGET,
+        );
+
+        let args: Vec<_> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            args.windows(2)
+                .any(|window| window[0] == "--test" && window[1] == RV32_TEST_TARGET)
+        );
         assert!(args.iter().any(|arg| arg == "--include-ignored"));
     }
 
@@ -2003,16 +2162,39 @@ mod tests {
             Some(std::path::Path::new("/tmp/runtime-manifest.json")),
         );
 
-        assert!(env.contains(&("GROUNDHOG_RPC_URL".into(), "http://127.0.0.1:1234".into())));
-        assert!(env.iter().any(|(key, value)| {
-            key == "GROUNDHOG_CONTRACT_ADDRESS" && value == &format!("0x{}", "11".repeat(32))
-        }));
-        assert!(env.contains(&("GROUNDHOG_PROFILE".into(), "integration".into())));
-        assert!(env.contains(&("GROUNDHOG_DEFAULT_KEY".into(), "dev-0".into())));
         assert!(env.contains(&(
-            "GROUNDHOG_RUNTIME_MANIFEST".into(),
-            "/tmp/runtime-manifest.json".into()
+            OsString::from("GROUNDHOG_RPC_URL"),
+            OsString::from("http://127.0.0.1:1234")
         )));
+        assert!(env.iter().any(|(key, value)| {
+            key == "GROUNDHOG_CONTRACT_ADDRESS"
+                && value == &OsString::from(format!("0x{}", "11".repeat(32)))
+        }));
+        assert!(env.contains(&(
+            OsString::from("GROUNDHOG_PROFILE"),
+            OsString::from("integration")
+        )));
+        assert!(env.contains(&(
+            OsString::from("GROUNDHOG_DEFAULT_KEY"),
+            OsString::from("dev-0")
+        )));
+        assert!(env.contains(&(
+            OsString::from("GROUNDHOG_RUNTIME_MANIFEST"),
+            OsString::from("/tmp/runtime-manifest.json")
+        )));
+    }
+
+    #[test]
+    fn local_test_environment_sets_cargo_target_dir() {
+        let env = super::local_test_environment(std::path::Path::new("/tmp/groundhog-target"));
+
+        assert_eq!(
+            env,
+            vec![(
+                OsString::from("CARGO_TARGET_DIR"),
+                OsString::from("/tmp/groundhog-target")
+            )]
+        );
     }
 
     #[test]
@@ -2154,6 +2336,7 @@ mod tests {
                 show_output: true,
                 no_capture: true,
             },
+            ..TestOptions::default()
         };
 
         apply_harness_options(
@@ -2647,12 +2830,16 @@ failures:
     }
 
     #[test]
-    fn failure_cache_path_is_package_scoped() {
-        let path = failure_cache_path(PathBuf::from("/tmp/target").as_path(), "demo-contract");
+    fn failure_cache_path_is_package_and_target_scoped() {
+        let path = failure_cache_path(
+            PathBuf::from("/tmp/target").as_path(),
+            "demo-contract",
+            ArtifactKind::Rv32,
+        );
 
         assert_eq!(
             path,
-            PathBuf::from("/tmp/target/groundhog/test-failures/demo-contract.json")
+            PathBuf::from("/tmp/target/groundhog/test-failures/demo-contract-rv32.json")
         );
     }
 

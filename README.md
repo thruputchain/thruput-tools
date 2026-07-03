@@ -25,7 +25,7 @@ groundhog init                   # one-time environment check
 groundhog login                  # one-time; early-access registry auth
 groundhog new my-counter && cd my-counter
 groundhog build                   # RV32 artifact by default
-groundhog test                   # executor-backed WASM tests
+groundhog test                   # executor-backed RV32 tests
 
 # in another terminal
 groundhog node --hog-devnode-binary /path/to/hog-devnode
