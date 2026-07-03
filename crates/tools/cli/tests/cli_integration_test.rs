@@ -1807,6 +1807,59 @@ fn wallet_create_dry_run_defaults_name_to_key() {
 }
 
 #[test]
+fn wallet_create_remote_dry_run_does_not_call_faucet() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(
+        project.join("groundhog.toml"),
+        "[profile.devnet]\nrpc_url = \"http://127.0.0.1:9545\"\nfaucet_url = \"http://127.0.0.1:9\"\n",
+    )
+    .unwrap();
+
+    let output = groundhog()
+        .args([
+            "--json",
+            "wallet",
+            "create",
+            "--key",
+            "alice",
+            "--profile",
+            "devnet",
+            "--dry-run",
+        ])
+        .current_dir(&project)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["ok"], true);
+    assert_eq!(stdout["command"], "wallet.create");
+    assert_eq!(stdout["data"]["dry_run"], true);
+    assert_eq!(stdout["data"]["submitted"], false);
+    assert_eq!(stdout["data"]["mode"], "remote");
+    assert_eq!(stdout["data"]["key"], "alice");
+    assert_eq!(stdout["data"]["name"], "alice");
+    assert_eq!(stdout["data"]["wallet"], serde_json::Value::Null);
+    assert_eq!(
+        stdout["data"]["planned_requests"],
+        serde_json::json!([
+            "GET /v1/network",
+            "POST /v1/create-wallet/prepare",
+            "POST /v1/airdrop",
+            "POST /v1/create-wallet"
+        ])
+    );
+}
+
+#[test]
 fn wallet_ls_json_outputs_saved_wallets() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");

@@ -78,6 +78,14 @@ pub(crate) struct PreparedRemoteWalletCreate {
     prefund_raw_amount: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PreparedRemoteWalletCreateDryRun {
+    faucet_url: String,
+    rpc_url: String,
+    key_name: String,
+    wallet_name: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PrepareWalletCreateRequest {
@@ -129,6 +137,13 @@ pub fn create(
     print: &Print,
 ) -> Result<(), CliError> {
     let cwd = std::env::current_dir()?;
+    if dry_run
+        && let Some(prepared) =
+            prepare_remote_wallet_create_dry_run(&cwd, key_name, wallet_name, profile, overrides)?
+    {
+        return print_remote_dry_run_plan(&prepared, cmd, print);
+    }
+
     let prepared = prepare_wallet_create(&cwd, key_name, wallet_name, profile, overrides)?;
 
     if dry_run {
@@ -421,6 +436,43 @@ fn print_dry_run(
     Ok(())
 }
 
+fn print_remote_dry_run_plan(
+    prepared: &PreparedRemoteWalletCreateDryRun,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
+    print.status(format_args!(
+        "Prepared dry-run remote wallet create `{}` for key `{}`.",
+        prepared.wallet_name, prepared.key_name
+    ));
+    print.status(format_args!("  faucet: {}", prepared.faucet_url));
+    print.status("  wallet: requires faucet prepare request");
+    print.status("  submitted: no (--dry-run)");
+
+    print.json(&CommandResult::new(
+        cmd,
+        json!({
+            "schemaVersion": WALLET_CREATE_JSON_SCHEMA_VERSION,
+            "dry_run": true,
+            "submitted": false,
+            "mode": "remote",
+            "name": prepared.wallet_name,
+            "key": prepared.key_name,
+            "wallet": null,
+            "faucet_url": prepared.faucet_url,
+            "rpc_url": prepared.rpc_url,
+            "planned_requests": [
+                "GET /v1/network",
+                "POST /v1/create-wallet/prepare",
+                "POST /v1/airdrop",
+                "POST /v1/create-wallet"
+            ],
+        }),
+    ))?;
+
+    Ok(())
+}
+
 pub(crate) fn prepare_wallet_create(
     cwd: &Path,
     key_name: Option<&str>,
@@ -428,6 +480,64 @@ pub(crate) fn prepare_wallet_create(
     profile_name: &str,
     overrides: &ProfileOverrides,
 ) -> Result<PreparedWalletCreate, CliError> {
+    let inputs = resolve_wallet_create_inputs(cwd, key_name, wallet_name, profile_name, overrides)?;
+    let profile = inputs.profile;
+    let key_name = inputs.key_name;
+    let wallet_name = inputs.wallet_name;
+
+    if profile.faucet_url.is_some() && profile.runtime_manifest.is_none() {
+        return prepare_remote_wallet_create(&profile, key_name, wallet_name);
+    }
+
+    prepare_local_wallet_create(cwd, profile, key_name, wallet_name)
+}
+
+fn prepare_remote_wallet_create_dry_run(
+    cwd: &Path,
+    key_name: Option<&str>,
+    wallet_name: Option<&str>,
+    profile_name: &str,
+    overrides: &ProfileOverrides,
+) -> Result<Option<PreparedRemoteWalletCreateDryRun>, CliError> {
+    let inputs = resolve_wallet_create_inputs(cwd, key_name, wallet_name, profile_name, overrides)?;
+    if inputs.profile.faucet_url.is_none() || inputs.profile.runtime_manifest.is_some() {
+        return Ok(None);
+    }
+    let faucet_url = inputs
+        .profile
+        .faucet_url
+        .as_deref()
+        .expect("checked above")
+        .trim_end_matches('/')
+        .to_owned();
+    let rpc_url = inputs
+        .profile
+        .rpc_url
+        .as_deref()
+        .ok_or(CliError::MissingRpcUrl)?
+        .to_owned();
+
+    Ok(Some(PreparedRemoteWalletCreateDryRun {
+        faucet_url,
+        rpc_url,
+        key_name: inputs.key_name,
+        wallet_name: inputs.wallet_name,
+    }))
+}
+
+struct WalletCreateInputs {
+    profile: crate::config::ResolvedProfile,
+    key_name: String,
+    wallet_name: String,
+}
+
+fn resolve_wallet_create_inputs(
+    cwd: &Path,
+    key_name: Option<&str>,
+    wallet_name: Option<&str>,
+    profile_name: &str,
+    overrides: &ProfileOverrides,
+) -> Result<WalletCreateInputs, CliError> {
     let profile = resolve_profile_with_overrides(cwd, Some(profile_name), overrides)?;
     let key_name = match key_name {
         Some(key_name) => key_name.to_owned(),
@@ -444,11 +554,11 @@ pub(crate) fn prepare_wallet_create(
         None => key_name.clone(),
     };
 
-    if profile.faucet_url.is_some() && profile.runtime_manifest.is_none() {
-        return prepare_remote_wallet_create(&profile, key_name, wallet_name);
-    }
-
-    prepare_local_wallet_create(cwd, profile, key_name, wallet_name)
+    Ok(WalletCreateInputs {
+        profile,
+        key_name,
+        wallet_name,
+    })
 }
 
 fn prepare_local_wallet_create(
