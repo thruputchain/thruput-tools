@@ -12,7 +12,7 @@ categories.workspace = true
 description = "Hosted Devnet faucet for Groundhog"
 
 [[bin]]
-name = "hog-faucet"
+name = "groundhog-faucet"
 path = "src/main.rs"
 
 [lints]

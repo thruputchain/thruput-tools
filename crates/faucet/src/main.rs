@@ -8,7 +8,7 @@ use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "hog-faucet",
+    name = "groundhog-faucet",
     version,
     about = "Groundhog Devnet faucet service"
 )]
