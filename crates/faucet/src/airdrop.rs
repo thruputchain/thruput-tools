@@ -18,6 +18,7 @@ use groundhog_signing::{
 };
 use groundhog_xdr::contract::ContractEntrypointID;
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroizing;
 
 use crate::utils::nonce_from_timestamp;
 
@@ -146,14 +147,14 @@ fn error_response(status: StatusCode, code: &'static str, message: &'static str)
 }
 
 /// Runtime-only airdrop execution config.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AirdropRuntimeConfig {
     /// Raw HOG units transferred for each airdrop request.
     pub raw_amount: u128,
     /// Faucet wallet `doAction` entrypoint.
     pub wallet_do_action_entrypoint: ContractEntrypointID,
     /// 32-byte faucet signing secret key.
-    pub faucet_secret_key: [u8; 32],
+    pub faucet_secret_key: Zeroizing<[u8; 32]>,
 }
 
 /// Errors returned while validating runtime airdrop config.
@@ -195,7 +196,7 @@ impl AirdropRuntimeConfig {
         Ok(Self {
             raw_amount,
             wallet_do_action_entrypoint: ContractEntrypointID::from(wallet_do_action_entrypoint),
-            faucet_secret_key,
+            faucet_secret_key: Zeroizing::new(faucet_secret_key),
         })
     }
 }
@@ -214,13 +215,13 @@ impl RpcAirdropSubmitter {
     /// Construct an RPC-backed airdrop submitter from public descriptor and private config.
     pub fn new(
         descriptor: &NetworkDescriptor,
-        config: AirdropRuntimeConfig,
+        config: &AirdropRuntimeConfig,
     ) -> Result<Self, AirdropRuntimeConfigError> {
         Ok(Self {
             rpc_url: descriptor.endpoints.rpc_url.clone(),
             raw_amount: config.raw_amount,
             faucet_wallet_address: descriptor.faucet.wallet_address.0,
-            faucet_signer: LocalSigner::from_secret_key(config.faucet_secret_key),
+            faucet_signer: LocalSigner::from_secret_key(*config.faucet_secret_key),
             wallet_do_action_entrypoint: config.wallet_do_action_entrypoint,
             hog_token_address: descriptor.native_hog.token_address.0,
             hog_transfer_entrypoint: ContractEntrypointID::from(entrypoint_bytes(

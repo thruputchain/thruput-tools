@@ -294,12 +294,12 @@ impl RpcWalletCreateSubmitter {
     pub fn new(
         descriptor: &NetworkDescriptor,
         config: WalletCreateRuntimeConfig,
-        faucet_secret_key: [u8; 32],
+        faucet_secret_key: &[u8; 32],
     ) -> Self {
         Self {
             rpc_url: descriptor.endpoints.rpc_url.clone(),
             faucet_wallet_address: descriptor.faucet.wallet_address.0,
-            faucet_signer: LocalSigner::from_secret_key(faucet_secret_key),
+            faucet_signer: LocalSigner::from_secret_key(*faucet_secret_key),
             create_wallet_entrypoint: config.create_wallet_entrypoint,
             prefund_raw_amount: descriptor.wallet_create.prefund_raw_amount.clone(),
             wallet_contract_hash: descriptor.wallet_create.wallet_contract_hash.0,

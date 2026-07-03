@@ -38,6 +38,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 xdr-common = { workspace = true }
 xdrs = { workspace = true }
+zeroize = { workspace = true }
 
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }

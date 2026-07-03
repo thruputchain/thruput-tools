@@ -42,13 +42,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })?;
     let file_config = toml::from_str::<FaucetConfigFile>(&config_toml)?;
     let parts = file_config.into_parts()?;
-    let faucet_secret_key = parts.airdrop.faucet_secret_key;
-    let airdrop_submitter = RpcAirdropSubmitter::new(&parts.network_descriptor, parts.airdrop)?;
     let wallet_create_submitter = RpcWalletCreateSubmitter::new(
         &parts.network_descriptor,
         parts.wallet_create,
-        faucet_secret_key,
+        &parts.airdrop.faucet_secret_key,
     );
+    let airdrop_submitter = RpcAirdropSubmitter::new(&parts.network_descriptor, &parts.airdrop)?;
     let mut config = FaucetConfig::new(
         parts.network_descriptor,
         Arc::new(airdrop_submitter),
