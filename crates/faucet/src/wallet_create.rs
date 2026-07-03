@@ -27,6 +27,8 @@ use groundhog_xdr::types::{Ed25519PublicKey, SHA256Hash};
 use serde::{Deserialize, Serialize};
 use xdr_common::{BytesM, VecM};
 
+use crate::utils::nonce_from_timestamp;
+
 const DEFAULT_BLOCK_EXPIRY_OFFSET: i64 = 1_000;
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -438,14 +440,6 @@ fn wallet_contract(artifact_path: &std::path::Path, artifact_bytes: Vec<u8>) -> 
             wasmi_contract: blob,
         },
     }
-}
-
-fn nonce_from_timestamp() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()
-        .and_then(|duration| u64::try_from(duration.as_nanos()).ok())
-        .unwrap_or(1)
 }
 
 #[cfg(test)]

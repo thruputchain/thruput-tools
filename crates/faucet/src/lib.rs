@@ -1,6 +1,7 @@
 pub mod airdrop;
 /// Faucet service configuration types.
 pub mod config;
+mod utils;
 pub mod wallet_create;
 
 use axum::{

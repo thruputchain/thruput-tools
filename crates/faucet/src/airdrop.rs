@@ -19,6 +19,8 @@ use groundhog_signing::{
 use groundhog_xdr::contract::ContractEntrypointID;
 use serde::{Deserialize, Serialize};
 
+use crate::utils::nonce_from_timestamp;
+
 const DEFAULT_BLOCK_EXPIRY_OFFSET: i64 = 1_000;
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -292,12 +294,4 @@ fn encode_transfer_calldata(
 ) -> Result<Vec<u8>, AirdropSubmitError> {
     xdrs::cxs::encode(&(recipient, raw_amount))
         .map_err(|error| AirdropSubmitError::EncodeTransferCalldata(error.to_string()))
-}
-
-fn nonce_from_timestamp() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()
-        .and_then(|duration| u64::try_from(duration.as_nanos()).ok())
-        .unwrap_or(1)
 }
