@@ -72,17 +72,12 @@ impl NetworkDescriptor {
 pub struct NetworkDescriptorEndpoints {
     /// JSON-RPC endpoint used for reads and user-submitted transactions.
     pub rpc_url: String,
-    /// Faucet service base URL used for airdrop and wallet-create requests.
-    pub faucet_url: String,
 }
 
 impl NetworkDescriptorEndpoints {
-    /// Construct public RPC and faucet endpoint metadata.
-    pub fn new(rpc_url: String, faucet_url: String) -> Self {
-        Self {
-            rpc_url,
-            faucet_url,
-        }
+    /// Construct public RPC endpoint metadata.
+    pub fn new(rpc_url: String) -> Self {
+        Self { rpc_url }
     }
 }
 

@@ -115,7 +115,7 @@ impl NetworkConfig {
             self.network_id,
             self.protocol,
             self.genesis_hash,
-            NetworkDescriptorEndpoints::new(self.endpoints.rpc_url, self.endpoints.faucet_url),
+            NetworkDescriptorEndpoints::new(self.endpoints.rpc_url),
             NativeHogDescriptor::new(
                 self.native_hog.token_address,
                 self.native_hog.decimals,
@@ -134,10 +134,8 @@ impl NetworkConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EndpointConfig {
-    /// JSON-RPC endpoint URL.
+    /// Backend JSON-RPC endpoint URL used by the faucet service.
     pub rpc_url: String,
-    /// Faucet service base URL.
-    pub faucet_url: String,
 }
 
 /// Native HOG token configuration.
@@ -276,7 +274,6 @@ mod tests {
 
             [network.endpoints]
             rpc_url = "https://rpc.devnet.example"
-            faucet_url = "https://faucet.devnet.example"
 
             [network.native_hog]
             token_address = "0x0000000000000000000000000000000000000000000000000000000000000001"
@@ -320,7 +317,6 @@ mod tests {
 
         [network.endpoints]
         rpc_url = "https://rpc.devnet.example"
-        faucet_url = "https://faucet.devnet.example"
 
         [network.native_hog]
         token_address = "0x0000000000000000000000000000000000000000000000000000000000000001"

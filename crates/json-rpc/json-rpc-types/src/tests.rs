@@ -104,7 +104,6 @@ mod wire_format {
             genesis_hash: zero_hash(),
             endpoints: NetworkDescriptorEndpoints {
                 rpc_url: "https://rpc.devnet.example".into(),
-                faucet_url: "https://faucet.devnet.example".into(),
             },
             native_hog: NativeHogDescriptor {
                 token_address: zero_address(),
@@ -145,10 +144,7 @@ mod wire_format {
         assert_eq!(value["kind"], "groundhog-network");
         assert_eq!(value["networkId"], "devnet-preview");
         assert_eq!(value["endpoints"]["rpcUrl"], "https://rpc.devnet.example");
-        assert_eq!(
-            value["endpoints"]["faucetUrl"],
-            "https://faucet.devnet.example"
-        );
+        assert!(value["endpoints"].get("faucetUrl").is_none());
         assert_eq!(value["nativeHog"]["decimals"], 7);
         assert_eq!(
             value["nativeHog"]["transferEntrypoint"],

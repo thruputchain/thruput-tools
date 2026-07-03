@@ -194,10 +194,7 @@ mod tests {
             serde_json::from_slice(&body).expect("bug: network body should be JSON");
         assert_eq!(json["schemaVersion"], NETWORK_DESCRIPTOR_SCHEMA_VERSION);
         assert_eq!(json["networkId"], "devnet-preview");
-        assert_eq!(
-            json["endpoints"]["faucetUrl"],
-            "https://faucet.devnet.example"
-        );
+        assert!(json["endpoints"].get("faucetUrl").is_none());
         assert_eq!(
             json["nativeHog"]["transferEntrypoint"],
             "0x63285b3523f9dc3f"
@@ -431,8 +428,7 @@ mod tests {
             "protocol": "x23",
             "genesisHash": format!("0x{}", "00".repeat(32)),
             "endpoints": {
-                "rpcUrl": "https://rpc.devnet.example",
-                "faucetUrl": "https://faucet.devnet.example"
+                "rpcUrl": "https://rpc.devnet.example"
             },
             "nativeHog": {
                 "tokenAddress": format!("0x{}", "00".repeat(32)),
