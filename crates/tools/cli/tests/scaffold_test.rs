@@ -82,6 +82,7 @@ fn scaffold_counter_creates_expected_files() {
     assert!(test_rv32.contains("load_rv32_contract"));
     assert!(test_rv32.contains("CARGO_TARGET_DIR"));
     assert!(test_rv32.contains("groundhog_artifact(\"my_counter.rv32a\")"));
+    assert!(test_rv32.contains("requires RV32 build — run via `groundhog test`"));
     assert!(test_rv32.contains("my_counter"));
 }
 
@@ -108,6 +109,7 @@ fn scaffold_stub_has_empty_contract() {
     assert!(test_rv32.contains("load_rv32_contract"));
     assert!(test_rv32.contains("CARGO_TARGET_DIR"));
     assert!(test_rv32.contains("groundhog_artifact(\"my_stub.rv32a\")"));
+    assert!(test_rv32.contains("requires RV32 build — run via `groundhog test`"));
 
     let test_wasm = fs::read_to_string(dir.join("tests/test_wasm.rs")).unwrap();
     assert!(test_wasm.contains("load_wasm_contract"));

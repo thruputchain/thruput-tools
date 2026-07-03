@@ -8,7 +8,7 @@ use crate::{CliError, Print};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::env;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -30,15 +30,15 @@ pub struct TestOptions {
     pub target: crate::build::BuildTarget,
     /// Run only tests whose names contain this substring.
     pub match_test: Option<String>,
-    /// Number of WASM test harness threads to use.
+    /// Number of local test harness threads to use.
     pub test_threads: Option<usize>,
     /// Skip tests whose names contain these substrings.
     pub skip: Vec<String>,
-    /// Rerun tests that failed in the previous WASM test run.
+    /// Rerun tests that failed in the previous selected-target test run.
     pub rerun: bool,
-    /// Keep rerunning WASM tests when project files change.
+    /// Keep rerunning selected-target tests when project files change.
     pub watch: bool,
-    /// Boolean controls forwarded to the WASM test harness.
+    /// Boolean controls forwarded to the local test harness.
     pub harness: TestHarnessOptions,
 }
 
@@ -129,7 +129,7 @@ struct TestCommandContext<'a> {
     project_name: &'a str,
     host_target: &'a str,
     test_target: &'a str,
-    env: &'a [(String, String)],
+    env: &'a [(OsString, OsString)],
     artifacts: &'a ArtifactOptions,
     cargo_args: &'a [String],
     print: &'a Print,
@@ -716,20 +716,36 @@ fn integration_test_environment(
     rpc_url: &str,
     contract_address: &str,
     runtime_manifest: Option<&std::path::Path>,
-) -> Vec<(String, String)> {
+) -> Vec<(OsString, OsString)> {
     let mut env = vec![
-        ("GROUNDHOG_RPC_URL".into(), rpc_url.into()),
-        ("GROUNDHOG_CONTRACT_ADDRESS".into(), contract_address.into()),
-        ("GROUNDHOG_PROFILE".into(), "integration".into()),
-        ("GROUNDHOG_DEFAULT_KEY".into(), "dev-0".into()),
+        (OsString::from("GROUNDHOG_RPC_URL"), OsString::from(rpc_url)),
+        (
+            OsString::from("GROUNDHOG_CONTRACT_ADDRESS"),
+            OsString::from(contract_address),
+        ),
+        (
+            OsString::from("GROUNDHOG_PROFILE"),
+            OsString::from("integration"),
+        ),
+        (
+            OsString::from("GROUNDHOG_DEFAULT_KEY"),
+            OsString::from("dev-0"),
+        ),
     ];
     if let Some(path) = runtime_manifest {
         env.push((
-            "GROUNDHOG_RUNTIME_MANIFEST".into(),
-            path.display().to_string(),
+            OsString::from("GROUNDHOG_RUNTIME_MANIFEST"),
+            path.as_os_str().to_owned(),
         ));
     }
     env
+}
+
+fn local_test_environment(target_directory: &Path) -> Vec<(OsString, OsString)> {
+    vec![(
+        OsString::from("CARGO_TARGET_DIR"),
+        target_directory.as_os_str().to_owned(),
+    )]
 }
 
 fn ensure_integration_test_target_exists(project_root: &Path) -> Result<(), CliError> {
@@ -827,6 +843,7 @@ fn run_once_with_options(
     print_test_status(options, rerun_filters.len(), print);
 
     let host_target = host_target()?;
+    let env = local_test_environment(&build.target_directory);
 
     let filters = selected_filters(options, &rerun_filters);
     let context = TestCommandContext {
@@ -834,7 +851,7 @@ fn run_once_with_options(
         project_name: &build.project_name,
         host_target: &host_target,
         test_target: test_target_for(options.target),
-        env: &[],
+        env: &env,
         artifacts,
         cargo_args,
         print,
@@ -1533,7 +1550,7 @@ fn test_command(root: &Path, project_name: &str, host_target: &str, test_target:
     cargo_cmd
 }
 
-fn apply_test_environment(cargo_cmd: &mut Command, env: &[(String, String)]) {
+fn apply_test_environment(cargo_cmd: &mut Command, env: &[(OsString, OsString)]) {
     for (key, value) in env {
         cargo_cmd.env(key, value);
     }
@@ -1788,6 +1805,7 @@ mod tests {
     };
     use crate::{CliError, Print};
     use std::collections::BTreeMap;
+    use std::ffi::OsString;
     use std::fs;
     use std::path::PathBuf;
     use std::process::Command;
@@ -2144,16 +2162,39 @@ mod tests {
             Some(std::path::Path::new("/tmp/runtime-manifest.json")),
         );
 
-        assert!(env.contains(&("GROUNDHOG_RPC_URL".into(), "http://127.0.0.1:1234".into())));
-        assert!(env.iter().any(|(key, value)| {
-            key == "GROUNDHOG_CONTRACT_ADDRESS" && value == &format!("0x{}", "11".repeat(32))
-        }));
-        assert!(env.contains(&("GROUNDHOG_PROFILE".into(), "integration".into())));
-        assert!(env.contains(&("GROUNDHOG_DEFAULT_KEY".into(), "dev-0".into())));
         assert!(env.contains(&(
-            "GROUNDHOG_RUNTIME_MANIFEST".into(),
-            "/tmp/runtime-manifest.json".into()
+            OsString::from("GROUNDHOG_RPC_URL"),
+            OsString::from("http://127.0.0.1:1234")
         )));
+        assert!(env.iter().any(|(key, value)| {
+            key == "GROUNDHOG_CONTRACT_ADDRESS"
+                && value == &OsString::from(format!("0x{}", "11".repeat(32)))
+        }));
+        assert!(env.contains(&(
+            OsString::from("GROUNDHOG_PROFILE"),
+            OsString::from("integration")
+        )));
+        assert!(env.contains(&(
+            OsString::from("GROUNDHOG_DEFAULT_KEY"),
+            OsString::from("dev-0")
+        )));
+        assert!(env.contains(&(
+            OsString::from("GROUNDHOG_RUNTIME_MANIFEST"),
+            OsString::from("/tmp/runtime-manifest.json")
+        )));
+    }
+
+    #[test]
+    fn local_test_environment_sets_cargo_target_dir() {
+        let env = super::local_test_environment(std::path::Path::new("/tmp/groundhog-target"));
+
+        assert_eq!(
+            env,
+            vec![(
+                OsString::from("CARGO_TARGET_DIR"),
+                OsString::from("/tmp/groundhog-target")
+            )]
+        );
     }
 
     #[test]

@@ -1316,6 +1316,102 @@ fn test_json_failed_run_emits_report_on_stdout() {
     assert_eq!(stdout["data"]["runs"][0]["tests"][1]["status"], "failed");
 }
 
+#[cfg(unix)]
+#[test]
+fn test_rv32_harness_receives_resolved_cargo_target_dir() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = TempDir::new().unwrap();
+    std::fs::write(
+        tmp.path().join("Cargo.toml"),
+        "[package]\nname = \"demo-contract\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+
+    let fake_bin = tmp.path().join("bin");
+    std::fs::create_dir_all(&fake_bin).unwrap();
+    let cargo = fake_bin.join("cargo");
+    let target_dir = tmp.path().join("configured-target");
+    let raw_elf = target_dir
+        .join("riscv32im-unknown-none-elf/release")
+        .join("demo_contract");
+    let elf_fixture = tmp.path().join("fixture.elf");
+    std::fs::write(&elf_fixture, support::minimal_rv32_elf()).unwrap();
+    let metadata_json = serde_json::json!({
+        "workspace_root": tmp.path(),
+        "target_directory": target_dir,
+        "packages": [{
+            "name": "demo-contract",
+            "manifest_path": tmp.path().join("Cargo.toml"),
+        }],
+    })
+    .to_string();
+    std::fs::write(
+        &cargo,
+        format!(
+            concat!(
+                "#!/bin/sh\n",
+                "if [ \"$1\" = \"metadata\" ]; then\n",
+                "  printf '%s' '{}'\n",
+                "  exit 0\n",
+                "fi\n",
+                "if [ \"$1\" = \"build\" ]; then\n",
+                "  /bin/mkdir -p '{}'\n",
+                "  /bin/cp '{}' '{}'\n",
+                "  exit 0\n",
+                "fi\n",
+                "if [ \"$1\" = \"test\" ]; then\n",
+                "  if [ \"$CARGO_TARGET_DIR\" != '{}' ]; then\n",
+                "    printf 'unexpected CARGO_TARGET_DIR: %s\\n' \"$CARGO_TARGET_DIR\" >&2\n",
+                "    exit 42\n",
+                "  fi\n",
+                "  printf 'running 1 test\\n'\n",
+                "  printf 'test tests::ok ... ok\\n'\n",
+                "  printf 'test result: ok. 1 passed; 0 failed; 0 ignored; ",
+                "0 measured; 0 filtered out; finished in 0.01s\\n'\n",
+                "  exit 0\n",
+                "fi\n",
+                "exit 1\n",
+            ),
+            metadata_json,
+            raw_elf
+                .parent()
+                .expect("bug: raw elf parent should exist")
+                .display(),
+            elf_fixture.display(),
+            raw_elf.display(),
+            target_dir.display(),
+        ),
+    )
+    .unwrap();
+    let mut perms = std::fs::metadata(&cargo).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&cargo, perms).unwrap();
+
+    let output = groundhog()
+        .args(["--json", "test", "-p", "demo-contract"])
+        .current_dir(tmp.path())
+        .env("PATH", &fake_bin)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["ok"], true);
+    assert_eq!(stdout["data"]["mode"], "rv32");
+    assert_eq!(
+        stdout["data"]["artifact"]["path"].as_str().unwrap(),
+        target_dir
+            .join("groundhog/demo_contract.rv32a")
+            .display()
+            .to_string()
+    );
+}
+
 fn assert_rv32_test_artifact(data: &serde_json::Value) {
     assert_eq!(data["artifact"]["kind"], "rv32");
     assert!(

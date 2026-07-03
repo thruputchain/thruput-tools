@@ -14,7 +14,7 @@ fn groundhog_artifact(file_name: &str) -> PathBuf {
 }
 
 #[test]
-#[ignore = "requires RV32 build - run via `groundhog test`"]
+#[ignore = "requires RV32 build — run via `groundhog test`"]
 fn test_deploy_rv32() {
     let contract = load_rv32_contract(
         groundhog_artifact("{{PROJECT_NAME_SNAKE}}.rv32a"),
