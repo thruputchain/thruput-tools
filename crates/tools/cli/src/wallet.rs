@@ -112,6 +112,7 @@ struct CreateWalletRequest {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CreateWalletResponse {
+    wallet_address: String,
     tx_hash: TxHash,
     height: groundhog_json_rpc_types::BlockHeight,
     status: ExecStatus,
@@ -256,6 +257,7 @@ fn create_remote_wallet(
             "remote wallet-create transaction did not commit successfully".into(),
         ));
     }
+    validate_remote_create_wallet_address(&prepared.wallet_address, &create.wallet_address)?;
 
     let project_root = find_project_config(cwd)
         .and_then(|path| path.parent().map(Path::to_path_buf))
@@ -292,6 +294,18 @@ fn create_remote_wallet(
             "create_height": create.height,
         }),
     ))?;
+
+    Ok(())
+}
+
+fn validate_remote_create_wallet_address(prepared: &str, created: &str) -> Result<(), CliError> {
+    let prepared_wallet_address = parse_contract_address(prepared)?;
+    let created_wallet_address = parse_contract_address(created)?;
+    if created_wallet_address != prepared_wallet_address {
+        return Err(CliError::Other(format!(
+            "remote wallet-create returned wallet `{created}` but prepared `{prepared}`"
+        )));
+    }
 
     Ok(())
 }
@@ -858,7 +872,10 @@ fn resolve_dev_wallet_artifact_path(
 mod tests {
     use groundhog_xdr::types::{Ed25519PublicKey, SHA256Hash};
 
-    use super::{create_wallet_calldata, resolve_dev_wallet_artifact_path};
+    use super::{
+        create_wallet_calldata, resolve_dev_wallet_artifact_path,
+        validate_remote_create_wallet_address,
+    };
 
     #[test]
     fn create_wallet_calldata_round_trips_expected_tuple() {
@@ -872,6 +889,26 @@ mod tests {
             xdrs::cxs::decode(&encoded).expect("bug: create_wallet calldata should decode");
 
         assert_eq!(decoded, (nonce, contract_hash, owner));
+    }
+
+    #[test]
+    fn remote_create_wallet_address_validation_accepts_same_address() {
+        let prepared = format!("0x{}", "aa".repeat(32));
+        let created = format!("0x{}", "AA".repeat(32));
+
+        validate_remote_create_wallet_address(&prepared, &created)
+            .expect("bug: same address should validate regardless of hex casing");
+    }
+
+    #[test]
+    fn remote_create_wallet_address_validation_rejects_mismatch() {
+        let prepared = format!("0x{}", "aa".repeat(32));
+        let created = format!("0x{}", "bb".repeat(32));
+
+        let err = validate_remote_create_wallet_address(&prepared, &created)
+            .expect_err("bug: mismatched address should fail");
+
+        assert!(err.to_string().contains("returned wallet"));
     }
 
     #[test]

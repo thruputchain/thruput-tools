@@ -53,6 +53,12 @@ impl FaucetConfigFile {
     pub fn into_parts(self) -> Result<FaucetConfigParts, FaucetConfigError> {
         let airdrop = self.airdrop.into_runtime_config()?;
         let wallet_create = self.wallet_create.into_runtime_config()?;
+        if self.network.wallet_create.prefund_raw_amount != airdrop.raw_amount.to_string() {
+            return Err(FaucetConfigError::WalletCreatePrefundMismatch {
+                wallet_create_prefund_raw_amount: self.network.wallet_create.prefund_raw_amount,
+                airdrop_raw_amount: airdrop.raw_amount.to_string(),
+            });
+        }
         let cors_allowed_origins = self
             .cors_allowed_origins
             .iter()
@@ -87,6 +93,14 @@ pub enum FaucetConfigError {
     /// A configured CORS origin was invalid.
     #[error("invalid CORS origin `{origin}`: {message}")]
     InvalidCorsOrigin { origin: String, message: String },
+    /// Wallet-create prefunding currently uses the generic airdrop endpoint.
+    #[error(
+        "wallet-create prefund_raw_amount `{wallet_create_prefund_raw_amount}` must match airdrop raw_amount `{airdrop_raw_amount}`"
+    )]
+    WalletCreatePrefundMismatch {
+        wallet_create_prefund_raw_amount: String,
+        airdrop_raw_amount: String,
+    },
 }
 
 /// Public network metadata fields used to build a descriptor.
@@ -304,6 +318,21 @@ mod tests {
 
         assert_eq!(parts.cors_allowed_origins.len(), 1);
         assert_eq!(parts.cors_allowed_origins[0], "http://127.0.0.1:5173");
+    }
+
+    #[test]
+    fn config_rejects_wallet_create_prefund_airdrop_mismatch() {
+        let config: FaucetConfigFile = toml::from_str(&TEST_CONFIG.replace(
+            "prefund_raw_amount = \"100000000\"",
+            "prefund_raw_amount = \"1\"",
+        ))
+        .expect("bug: fixture config should parse");
+
+        let err = config
+            .into_parts()
+            .expect_err("bug: mismatched prefund and airdrop amounts should fail");
+
+        assert!(err.to_string().contains("must match airdrop raw_amount"));
     }
 
     const TEST_CONFIG: &str = r#"
