@@ -21,6 +21,8 @@ pub fn run(project_start: &Path, cmd: &'static str, print: &Print) -> Result<(),
     let usable_default_key = usable_default_key_for_init(&report);
     let has_credentials = report.credentials.executor_credentials;
 
+    crate::config::initialize_global_profiles()?;
+
     if report.environment.cargo
         && report.environment.registry_configured
         && usable_default_key.is_some()

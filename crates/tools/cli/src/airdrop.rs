@@ -1,13 +1,11 @@
 use std::path::Path;
 
-use groundhog_json_rpc_types::receipt::ExecStatus;
-use groundhog_json_rpc_types::transaction::TxHash;
 use groundhog_signing::{
     BuildDevWalletDoActionTransaction, DEFAULT_TX_GAS_LIMIT, SignTransactionParams,
     build_dev_wallet_do_action_transaction, sign_and_encode_transaction_hex,
 };
 use groundhog_xdr::contract::ContractEntrypointID;
-use serde::{Deserialize, Serialize};
+use groundhog_xdr::types::ContractAddress;
 use serde_json::json;
 
 use crate::account_resolution::{
@@ -16,9 +14,6 @@ use crate::account_resolution::{
 use crate::codec::{format_contract_address, parse_contract_address};
 use crate::config::{ProfileOverrides, ResolvedProfile, resolve_profile_with_overrides};
 use crate::dev_keys;
-use crate::faucet_client::{client as faucet_client, post_json};
-use crate::hog;
-use crate::profile_backend::{ProfileBackend, resolve_profile_backend};
 use crate::result::CommandResult;
 use crate::runtime_manifest::{
     apply_local_node_state_for_local_bootstrap, load_configured_runtime_manifest,
@@ -31,15 +26,14 @@ use crate::{CliError, Print};
 
 pub const AIRDROP_JSON_SCHEMA_VERSION: u32 = 1;
 const DEFAULT_AIRDROP_HOG: &str = "10";
+const HOG_DECIMALS: u32 = 7;
+const HOG_SCALE: u128 = 10_000_000;
+const HOG_TOKEN_ADDRESS: &str =
+    "0x0000000000000000000000000000000000000000000000000000000000000001";
+const HOG_TRANSFER_ENTRYPOINT: [u8; 8] = 0x6328_5b35_23f9_dc3f_u64.to_be_bytes();
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum PreparedAirdrop {
-    Local(PreparedLocalAirdrop),
-    Remote(PreparedRemoteAirdrop),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PreparedLocalAirdrop {
+pub(crate) struct PreparedAirdrop {
     pub(crate) rpc_url: String,
     pub(crate) recipient_input: String,
     pub(crate) recipient_wallet: String,
@@ -50,33 +44,11 @@ pub(crate) struct PreparedLocalAirdrop {
     pub(crate) tx_hex: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PreparedRemoteAirdrop {
-    pub(crate) faucet_url: String,
-    pub(crate) rpc_url: String,
-    pub(crate) recipient_input: String,
-    pub(crate) recipient_wallet: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct RemoteAirdropRequest {
-    recipient: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RemoteAirdropResponse {
-    raw_amount: String,
-    tx_hash: TxHash,
-    height: groundhog_json_rpc_types::BlockHeight,
-    status: ExecStatus,
-}
-
 pub fn run(
     recipient: &str,
     amount: Option<&str>,
     dry_run: bool,
-    profile: &str,
+    profile: Option<&str>,
     overrides: &ProfileOverrides,
     cmd: &'static str,
     print: &Print,
@@ -88,33 +60,21 @@ pub fn run(
         return print_dry_run(&prepared, cmd, print);
     }
 
-    match prepared {
-        PreparedAirdrop::Local(prepared) => run_local_airdrop(&prepared, cmd, print)?,
-        PreparedAirdrop::Remote(prepared) => run_remote_airdrop(&prepared, cmd, print)?,
-    }
-
-    Ok(())
-}
-
-fn run_local_airdrop(
-    prepared: &PreparedLocalAirdrop,
-    cmd: &'static str,
-    print: &Print,
-) -> Result<(), CliError> {
-    print.status(format_args!(
-        "Airdropping {} HOG to {}...",
-        prepared.amount_hog, prepared.recipient_wallet
+    let recipient = display_recipient(&prepared.recipient_input, &prepared.recipient_wallet);
+    let task = print.start_task(format_args!(
+        "Sending {} HOG to {recipient}",
+        prepared.amount_hog
     ));
     let (tx_hash, receipt) = submit_and_poll_blocking(&prepared.rpc_url, &prepared.tx_hex)?;
     let tx_hash = format_tx_hash(&tx_hash);
     ensure_tx_success("airdrop", &receipt, &tx_hash)?;
-    print.status(format_args!("Airdrop sent: {tx_hash}"));
+    task.success("Airdrop sent");
+    print.detail("tx", &tx_hash);
 
     print.json(&CommandResult::new(
         cmd,
         json!({
             "schemaVersion": AIRDROP_JSON_SCHEMA_VERSION,
-            "mode": "local",
             "recipient": prepared.recipient_input,
             "recipient_wallet": prepared.recipient_wallet,
             "amount_hog": prepared.amount_hog,
@@ -127,81 +87,35 @@ fn run_local_airdrop(
             "height": receipt.height,
             "status": receipt.status,
         }),
-    ))
+    ))?;
+
+    Ok(())
 }
 
-fn run_remote_airdrop(
-    prepared: &PreparedRemoteAirdrop,
-    cmd: &'static str,
-    print: &Print,
-) -> Result<(), CliError> {
-    print.status(format_args!(
-        "Requesting remote airdrop to {}...",
-        prepared.recipient_wallet
-    ));
-    let client = faucet_client()?;
-    let response: RemoteAirdropResponse = post_json(
-        &client,
-        &format!("{}/v1/airdrop", prepared.faucet_url),
-        &RemoteAirdropRequest {
-            recipient: prepared.recipient_wallet.clone(),
-        },
-    )?;
-    if !matches!(response.status, ExecStatus::Ok) {
-        return Err(CliError::Other(
-            "remote airdrop transaction did not commit successfully".into(),
-        ));
+fn display_recipient(input: &str, wallet: &str) -> String {
+    if input == wallet {
+        shorten_address(wallet)
+    } else {
+        input.to_owned()
     }
-    let tx_hash = format_tx_hash(&response.tx_hash);
-    print.status(format_args!("Airdrop sent: {tx_hash}"));
+}
 
-    print.json(&CommandResult::new(
-        cmd,
-        json!({
-            "schemaVersion": AIRDROP_JSON_SCHEMA_VERSION,
-            "mode": "remote",
-            "recipient": prepared.recipient_input,
-            "recipient_wallet": prepared.recipient_wallet,
-            "faucet_url": prepared.faucet_url,
-            "rpc_url": prepared.rpc_url,
-            "raw_amount": response.raw_amount,
-            "tx_hash": tx_hash,
-            "height": response.height,
-            "status": response.status,
-        }),
-    ))
+fn shorten_address(address: &str) -> String {
+    if address.len() <= 18 {
+        return address.to_owned();
+    }
+    format!("{}...{}", &address[..10], &address[address.len() - 6..])
 }
 
 pub(crate) fn prepare_airdrop(
     cwd: &Path,
     recipient: &str,
     amount: Option<&str>,
-    profile_name: &str,
+    profile_name: Option<&str>,
     overrides: &ProfileOverrides,
 ) -> Result<PreparedAirdrop, CliError> {
-    let profile = resolve_profile_with_overrides(cwd, Some(profile_name), overrides)?;
-    match resolve_profile_backend(&profile)? {
-        ProfileBackend::RemoteFaucet => {
-            if amount.is_some() {
-                return Err(CliError::Other(
-                    "remote airdrop amount is set by the faucet service".into(),
-                ));
-            }
-            prepare_remote_airdrop(&profile, recipient)
-        }
-        ProfileBackend::LocalManifest | ProfileBackend::RpcOnly => {
-            prepare_local_airdrop(cwd, profile, recipient, amount)
-        }
-    }
-}
-
-fn prepare_local_airdrop(
-    _cwd: &Path,
-    mut profile: ResolvedProfile,
-    recipient: &str,
-    amount: Option<&str>,
-) -> Result<PreparedAirdrop, CliError> {
-    apply_local_node_state_for_local_bootstrap(&mut profile)?;
+    let mut profile = resolve_profile_with_overrides(cwd, profile_name, overrides)?;
+    apply_local_node_state_for_local_bootstrap(&mut profile);
     let rpc_url = profile
         .rpc_url
         .as_deref()
@@ -220,9 +134,9 @@ fn prepare_local_airdrop(
     let amount_hog = format_hog_amount(raw_amount);
     let faucet = resolve_local_bootstrap_account(&profile, LocalBootstrapRole::Faucet)?;
 
-    let hog_address = parse_contract_address(hog::TOKEN_ADDRESS)?;
-    let transfer_entrypoint = ContractEntrypointID::from(hog::TRANSFER_ENTRYPOINT);
-    let transfer_calldata = hog::encode_transfer_calldata(&recipient_address, raw_amount)?;
+    let hog_address = parse_contract_address(HOG_TOKEN_ADDRESS)?;
+    let transfer_entrypoint = ContractEntrypointID::from(HOG_TRANSFER_ENTRYPOINT);
+    let transfer_calldata = encode_transfer_calldata(&recipient_address, raw_amount)?;
 
     let rt =
         tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
@@ -244,7 +158,7 @@ fn prepare_local_airdrop(
         sign_and_encode_transaction_hex(tx, &faucet.signer, SignTransactionParams::default())
             .map_err(|error| CliError::Other(error.to_string()))?;
 
-    Ok(PreparedAirdrop::Local(PreparedLocalAirdrop {
+    Ok(PreparedAirdrop {
         rpc_url,
         recipient_input: recipient.to_owned(),
         recipient_wallet,
@@ -253,32 +167,7 @@ fn prepare_local_airdrop(
         faucet_key_name: faucet.key_name,
         faucet_role: faucet.role,
         tx_hex,
-    }))
-}
-
-fn prepare_remote_airdrop(
-    profile: &ResolvedProfile,
-    recipient: &str,
-) -> Result<PreparedAirdrop, CliError> {
-    let rpc_url = profile
-        .rpc_url
-        .as_deref()
-        .ok_or(CliError::MissingRpcUrl)?
-        .to_owned();
-    let faucet_url = profile
-        .faucet_url
-        .as_deref()
-        .ok_or_else(|| CliError::Other("remote airdrop requires faucet_url".into()))?;
-    let faucet_url = faucet_url.trim_end_matches('/').to_owned();
-    let recipient_wallet = resolve_airdrop_recipient(profile, recipient)?;
-    parse_contract_address(&recipient_wallet)?;
-
-    Ok(PreparedAirdrop::Remote(PreparedRemoteAirdrop {
-        faucet_url,
-        rpc_url,
-        recipient_input: recipient.to_owned(),
-        recipient_wallet,
-    }))
+    })
 }
 
 fn resolve_airdrop_recipient(
@@ -289,10 +178,9 @@ fn resolve_airdrop_recipient(
         return Ok(wallet);
     }
     if recipient.starts_with("0x") {
-        parse_contract_address(recipient).map_err(|_| {
-            CliError::Other("wallet address must be a 0x-prefixed 64-character hex string".into())
-        })?;
-        return Ok(recipient.to_owned());
+        return Err(CliError::Other(
+            "wallet address must be a 0x-prefixed 64-character hex string".into(),
+        ));
     }
     if let Some(index) = dev_keys::dev_key_index(recipient) {
         let address = lookup_dev_account_address(profile, recipient, index)?;
@@ -303,68 +191,49 @@ fn resolve_airdrop_recipient(
     )))
 }
 
+fn encode_transfer_calldata(
+    recipient: &ContractAddress,
+    raw_amount: u128,
+) -> Result<Vec<u8>, CliError> {
+    xdrs::cxs::encode(&(recipient, raw_amount)).map_err(|error| {
+        CliError::Other(format!("failed to encode HOG transfer calldata: {error}"))
+    })
+}
+
 fn print_dry_run(
     prepared: &PreparedAirdrop,
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    match prepared {
-        PreparedAirdrop::Local(prepared) => {
-            print.status(format_args!(
-                "Prepared dry-run airdrop of {} HOG to {}.",
-                prepared.amount_hog, prepared.recipient_wallet
-            ));
-            print.status(format_args!("  raw amount: {}", prepared.raw_amount));
-            print.status(format_args!(
-                "  faucet: {} ({})",
-                prepared.faucet_key_name, prepared.faucet_role
-            ));
-            print.status("  submitted: no (--dry-run)");
+    print.status(format_args!(
+        "Prepared dry-run airdrop of {} HOG to {}.",
+        prepared.amount_hog, prepared.recipient_wallet
+    ));
+    print.status(format_args!("  raw amount: {}", prepared.raw_amount));
+    print.status(format_args!(
+        "  faucet: {} ({})",
+        prepared.faucet_key_name, prepared.faucet_role
+    ));
+    print.status(format_args!("  signed tx: {}", prepared.tx_hex));
+    print.status("  submitted: no (--dry-run)");
 
-            print.json(&CommandResult::new(
-                cmd,
-                json!({
-                    "schemaVersion": AIRDROP_JSON_SCHEMA_VERSION,
-                    "dry_run": true,
-                    "submitted": false,
-                    "mode": "local",
-                    "recipient": prepared.recipient_input,
-                    "recipient_wallet": prepared.recipient_wallet,
-                    "amount_hog": prepared.amount_hog,
-                    "raw_amount": prepared.raw_amount.to_string(),
-                    "faucet": {
-                        "key": prepared.faucet_key_name,
-                        "role": prepared.faucet_role,
-                    },
-                }),
-            ))?;
-        }
-        PreparedAirdrop::Remote(prepared) => {
-            print.status(format_args!(
-                "Prepared dry-run remote airdrop to {}.",
-                prepared.recipient_wallet
-            ));
-            print.status(format_args!("  faucet: {}", prepared.faucet_url));
-            print.status("  submitted: no (--dry-run)");
-
-            print.json(&CommandResult::new(
-                cmd,
-                json!({
-                    "schemaVersion": AIRDROP_JSON_SCHEMA_VERSION,
-                    "dry_run": true,
-                    "submitted": false,
-                    "mode": "remote",
-                    "recipient": prepared.recipient_input,
-                    "recipient_wallet": prepared.recipient_wallet,
-                    "faucet_url": prepared.faucet_url,
-                    "rpc_url": prepared.rpc_url,
-                    "planned_requests": [
-                        "POST /v1/airdrop"
-                    ],
-                }),
-            ))?;
-        }
-    }
+    print.json(&CommandResult::new(
+        cmd,
+        json!({
+            "schemaVersion": AIRDROP_JSON_SCHEMA_VERSION,
+            "dry_run": true,
+            "submitted": false,
+            "recipient": prepared.recipient_input,
+            "recipient_wallet": prepared.recipient_wallet,
+            "amount_hog": prepared.amount_hog,
+            "raw_amount": prepared.raw_amount.to_string(),
+            "faucet": {
+                "key": prepared.faucet_key_name,
+                "role": prepared.faucet_role,
+            },
+            "signed_tx": prepared.tx_hex,
+        }),
+    ))?;
 
     Ok(())
 }
@@ -391,7 +260,7 @@ fn parse_hog_amount(input: &str) -> Result<u128, CliError> {
         None => 0,
     };
     let raw = whole
-        .checked_mul(hog::SCALE)
+        .checked_mul(HOG_SCALE)
         .and_then(|value| value.checked_add(fractional))
         .ok_or_else(|| CliError::Other(format!("HOG amount `{input}` is too large")))?;
     if raw == 0 {
@@ -404,16 +273,15 @@ fn parse_hog_amount(input: &str) -> Result<u128, CliError> {
 
 fn parse_fractional_hog(input: &str, fractional: &str) -> Result<u128, CliError> {
     if fractional.is_empty()
-        || fractional.len() > hog::DECIMALS as usize
+        || fractional.len() > HOG_DECIMALS as usize
         || !fractional.chars().all(|c| c.is_ascii_digit())
     {
         return Err(CliError::Other(format!(
-            "invalid HOG amount `{input}`; at most {} decimal places are supported",
-            hog::DECIMALS
+            "invalid HOG amount `{input}`; at most {HOG_DECIMALS} decimal places are supported"
         )));
     }
     let mut padded = fractional.to_owned();
-    while padded.len() < hog::DECIMALS as usize {
+    while padded.len() < HOG_DECIMALS as usize {
         padded.push('0');
     }
     padded
@@ -422,12 +290,12 @@ fn parse_fractional_hog(input: &str, fractional: &str) -> Result<u128, CliError>
 }
 
 pub(crate) fn format_hog_amount(raw_amount: u128) -> String {
-    let whole = raw_amount / hog::SCALE;
-    let fractional = raw_amount % hog::SCALE;
+    let whole = raw_amount / HOG_SCALE;
+    let fractional = raw_amount % HOG_SCALE;
     if fractional == 0 {
         return whole.to_string();
     }
-    let fractional = format!("{fractional:0width$}", width = hog::DECIMALS as usize)
+    let fractional = format!("{fractional:0width$}", width = HOG_DECIMALS as usize)
         .trim_end_matches('0')
         .to_owned();
     format!("{whole}.{fractional}")
@@ -440,11 +308,10 @@ mod tests {
     use groundhog_contract_util::{NormalizedMethodSignature, contract_entrypoint_id};
 
     use super::{
-        DEFAULT_AIRDROP_HOG, PreparedAirdrop, format_hog_amount, parse_hog_amount,
-        prepare_remote_airdrop, resolve_airdrop_recipient,
+        DEFAULT_AIRDROP_HOG, HOG_TRANSFER_ENTRYPOINT, display_recipient, format_hog_amount,
+        parse_hog_amount, resolve_airdrop_recipient,
     };
-    use crate::config::ResolvedProfile;
-    use crate::hog;
+    use crate::config::{ResolvedProfile, SavedWalletBinding};
 
     #[test]
     fn parses_hog_amounts_to_raw_units() {
@@ -481,7 +348,13 @@ mod tests {
     #[test]
     fn resolves_saved_or_direct_recipient() {
         let mut wallets = BTreeMap::new();
-        wallets.insert("alice".into(), format!("0x{}", "ab".repeat(32)));
+        wallets.insert(
+            "alice".into(),
+            SavedWalletBinding {
+                address: format!("0x{}", "ab".repeat(32)),
+                owner_public_key: format!("0x{}", "ef".repeat(32)),
+            },
+        );
         let profile = test_profile(wallets);
 
         assert_eq!(
@@ -496,6 +369,14 @@ mod tests {
     }
 
     #[test]
+    fn displays_saved_name_or_short_address() {
+        let address = format!("0x{}", "ab".repeat(32));
+
+        assert_eq!(display_recipient("alice", &address), "alice");
+        assert_eq!(display_recipient(&address, &address), "0xabababab...ababab");
+    }
+
+    #[test]
     fn malformed_direct_recipient_reports_address_format() {
         let profile = test_profile(BTreeMap::new());
 
@@ -506,24 +387,6 @@ mod tests {
     }
 
     #[test]
-    fn prepares_remote_airdrop_from_profile_faucet() {
-        let mut wallets = BTreeMap::new();
-        wallets.insert("alice".into(), format!("0x{}", "ab".repeat(32)));
-        let mut profile = test_profile(wallets);
-        profile.faucet_url = Some("http://127.0.0.1:8081/".into());
-
-        let prepared = prepare_remote_airdrop(&profile, "alice").unwrap();
-
-        let PreparedAirdrop::Remote(prepared) = prepared else {
-            panic!("bug: expected remote airdrop");
-        };
-        assert_eq!(prepared.faucet_url, "http://127.0.0.1:8081");
-        assert_eq!(prepared.rpc_url, "http://127.0.0.1:9545");
-        assert_eq!(prepared.recipient_input, "alice");
-        assert_eq!(prepared.recipient_wallet, format!("0x{}", "ab".repeat(32)));
-    }
-
-    #[test]
     fn hog_transfer_entrypoint_matches_standard_erc20_interface() {
         let entrypoint = contract_entrypoint_id(
             Some("ERC20"),
@@ -531,18 +394,18 @@ mod tests {
             &NormalizedMethodSignature::new("transfer"),
         );
 
-        assert_eq!(entrypoint.as_ref(), hog::TRANSFER_ENTRYPOINT);
+        assert_eq!(entrypoint.as_ref(), HOG_TRANSFER_ENTRYPOINT);
     }
 
-    fn test_profile(wallets: BTreeMap<String, String>) -> ResolvedProfile {
+    fn test_profile(wallets: BTreeMap<String, SavedWalletBinding>) -> ResolvedProfile {
         ResolvedProfile {
             name: "default".into(),
             rpc_url: Some("http://127.0.0.1:9545".into()),
             rpc_url_cli_override: false,
-            faucet_url: None,
             default_key: Some("dev-0".into()),
             runtime_manifest: None,
             runtime_manifest_cli_override: false,
+            runtime_artifacts_dir: None,
             contracts: BTreeMap::default(),
             wallets,
             source: None,

@@ -1,7 +1,6 @@
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
 use groundhog_cli::Print;
-use groundhog_cli::config::DEFAULT_PROFILE;
 use groundhog_cli::result::CommandResult;
 use serde_json::json;
 use std::path::PathBuf;
@@ -130,8 +129,8 @@ enum Command {
                       finding exists.")]
     Status {
         /// Config profile to use
-        #[arg(long = "profile", default_value = DEFAULT_PROFILE)]
-        profile: String,
+        #[arg(long = "profile")]
+        profile: Option<String>,
     },
     /// Build contract artifact
     #[command(long_about = "Cross-compile the contract to \
@@ -160,8 +159,8 @@ enum Command {
         #[arg(long, value_parser = groundhog_cli::build::parse_stack_size)]
         stack_size: Option<u32>,
         /// Config profile to use
-        #[arg(long = "profile", default_value = DEFAULT_PROFILE)]
-        profile: String,
+        #[arg(long = "profile")]
+        profile: Option<String>,
         #[command(flatten)]
         artifacts: ArtifactArgs,
         /// Extra arguments passed to cargo
@@ -239,8 +238,8 @@ enum Command {
         #[arg(long = "hogd-protocol", requires = "integration")]
         hogd_protocol: Option<String>,
         /// Config profile to use
-        #[arg(long = "profile", default_value = DEFAULT_PROFILE)]
-        profile: String,
+        #[arg(long = "profile")]
+        profile: Option<String>,
         #[command(flatten)]
         artifacts: ArtifactArgs,
         /// Extra arguments forwarded to the test harness (after --)
@@ -259,8 +258,8 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
         /// Config profile to use
-        #[arg(long = "profile", default_value = DEFAULT_PROFILE)]
-        profile: String,
+        #[arg(long = "profile")]
+        profile: Option<String>,
         #[command(flatten)]
         target_args: RpcTargetArgs,
         #[command(flatten)]
@@ -283,8 +282,8 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
         /// Config profile to use
-        #[arg(long = "profile", default_value = DEFAULT_PROFILE)]
-        profile: String,
+        #[arg(long = "profile")]
+        profile: Option<String>,
         #[command(flatten)]
         target_args: RpcTargetArgs,
         #[command(flatten)]
@@ -301,8 +300,8 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
         /// Config profile to use
-        #[arg(long = "profile", default_value = DEFAULT_PROFILE)]
-        profile: String,
+        #[arg(long = "profile")]
+        profile: Option<String>,
         #[command(flatten)]
         target_args: RpcTargetArgs,
     },
@@ -311,8 +310,8 @@ enum Command {
         /// Wallet name, contract alias, dev-N account, or direct 0x-prefixed address
         target: String,
         /// Config profile to use
-        #[arg(long = "profile", default_value = DEFAULT_PROFILE)]
-        profile: String,
+        #[arg(long = "profile")]
+        profile: Option<String>,
         #[command(flatten)]
         target_args: RpcTargetArgs,
     },
@@ -336,8 +335,8 @@ enum Command {
         #[arg(long = "from")]
         from: Option<String>,
         /// Config profile to use
-        #[arg(long = "profile", default_value = DEFAULT_PROFILE)]
-        profile: String,
+        #[arg(long = "profile")]
+        profile: Option<String>,
         #[command(flatten)]
         target_args: RpcTargetArgs,
         #[command(flatten)]
@@ -356,8 +355,8 @@ enum Command {
         /// 32-byte storage key as 0x-prefixed hex
         key: String,
         /// Config profile to use
-        #[arg(long = "profile", default_value = DEFAULT_PROFILE)]
-        profile: String,
+        #[arg(long = "profile")]
+        profile: Option<String>,
         #[command(flatten)]
         target_args: RpcTargetArgs,
     },
@@ -397,13 +396,16 @@ enum Command {
         /// Maximum simultaneous public JSON-RPC connections
         #[arg(long)]
         rpc_max_connections: Option<u32>,
+        /// Config profile to update with the local node RPC URL and runtime manifest
+        #[arg(long = "profile")]
+        profile: Option<String>,
     },
     /// Manage signing keys
     #[command(long_about = "Ed25519 signing keys stored in \
-                      ~/.config/groundhog/keys/. Keys are \
-                      global (not per-profile). Profiles can \
-                      override the default key via default_key \
-                      in groundhog.toml.")]
+                       ~/.config/groundhog/keys/. Keys are \
+                       global (not per-profile). Profiles can \
+                       override the default key via default_key \
+                       in project or global config.")]
     Keys {
         #[command(subcommand)]
         command: KeysCommand,
@@ -413,7 +415,7 @@ enum Command {
         #[command(subcommand)]
         command: WalletCommand,
     },
-    /// Configure registry and test executor credentials
+    /// Configure registry token and test executor credentials
     Login,
     /// Remove stored credentials
     Logout,
@@ -459,8 +461,8 @@ enum WalletCommand {
     /// List saved project wallets
     Ls {
         /// Config profile to use
-        #[arg(long = "profile", default_value = DEFAULT_PROFILE)]
-        profile: String,
+        #[arg(long = "profile")]
+        profile: Option<String>,
     },
     /// Create a local-node wallet for a stored signing key
     Create {
@@ -474,18 +476,18 @@ enum WalletCommand {
         #[arg(long)]
         dry_run: bool,
         /// Config profile to use
-        #[arg(long = "profile", default_value = DEFAULT_PROFILE)]
-        profile: String,
+        #[arg(long = "profile")]
+        profile: Option<String>,
         #[command(flatten)]
         target_args: RpcTargetArgs,
     },
     /// Remove a saved project wallet entry
     Rm {
-        /// Saved wallet name to remove from groundhog.toml
+        /// Saved wallet name to remove from project or global config
         name: String,
         /// Config profile to use
-        #[arg(long = "profile", default_value = DEFAULT_PROFILE)]
-        profile: String,
+        #[arg(long = "profile")]
+        profile: Option<String>,
     },
 }
 
@@ -575,7 +577,7 @@ fn main() {
             .and_then(|cwd| groundhog_cli::init::run(&cwd, cmd_name, &print)),
         Command::Status { profile } => std::env::current_dir()
             .map_err(groundhog_cli::CliError::Io)
-            .and_then(|cwd| groundhog_cli::status::run(&cwd, Some(&profile), cmd_name, &print)),
+            .and_then(|cwd| groundhog_cli::status::run(&cwd, profile.as_deref(), cmd_name, &print)),
         Command::Build {
             package,
             target,
@@ -600,7 +602,7 @@ fn main() {
                     stack_size,
                     &cargo_args,
                     &artifacts,
-                    Some(&profile),
+                    profile.as_deref(),
                     cmd_name,
                     &print,
                 )
@@ -655,7 +657,7 @@ fn main() {
                         },
                         &cargo_args,
                         &artifacts,
-                        Some(&profile),
+                        profile.as_deref(),
                         cmd_name,
                         &print,
                     )
@@ -665,7 +667,7 @@ fn main() {
                         &options,
                         &cargo_args,
                         &artifacts,
-                        Some(&profile),
+                        profile.as_deref(),
                         cmd_name,
                         &print,
                     )
@@ -690,7 +692,7 @@ fn main() {
                     target.unwrap_or(BuildTargetArg::Rv32).into(),
                     dry_run,
                     &artifacts,
-                    &profile,
+                    profile.as_deref(),
                     &target_args.into(),
                     cmd_name,
                     &print,
@@ -717,7 +719,7 @@ fn main() {
                     &args,
                     dry_run,
                     &artifacts,
-                    &profile,
+                    profile.as_deref(),
                     &target_args.into(),
                     cmd_name,
                     &print,
@@ -733,7 +735,7 @@ fn main() {
             &recipient,
             amount.as_deref(),
             dry_run,
-            &profile,
+            profile.as_deref(),
             &target_args.into(),
             cmd_name,
             &print,
@@ -748,7 +750,7 @@ fn main() {
                 groundhog_cli::balance::run(
                     &target,
                     &cwd,
-                    &profile,
+                    profile.as_deref(),
                     &target_args.into(),
                     cmd_name,
                     &print,
@@ -778,7 +780,7 @@ fn main() {
                     from.as_deref(),
                     &artifacts,
                     &cwd,
-                    &profile,
+                    profile.as_deref(),
                     &target_args.into(),
                     cmd_name,
                     &print,
@@ -796,7 +798,7 @@ fn main() {
                     &address,
                     &key,
                     &cwd,
-                    &profile,
+                    profile.as_deref(),
                     &target_args.into(),
                     cmd_name,
                     &print,
@@ -812,6 +814,7 @@ fn main() {
             block_driver,
             block_interval_ms,
             rpc_max_connections,
+            profile,
         } => groundhog_cli::node::run_with_block_driver(
             port,
             verbose,
@@ -822,6 +825,7 @@ fn main() {
             block_driver.map(Into::into),
             block_interval_ms,
             rpc_max_connections,
+            profile.as_deref(),
             cmd_name,
             &print,
         ),
@@ -835,7 +839,7 @@ fn main() {
         },
         Command::Wallet { command } => match command {
             WalletCommand::Ls { profile } => {
-                groundhog_cli::wallet::list(&profile, cmd_name, &print)
+                groundhog_cli::wallet::list(profile.as_deref(), cmd_name, &print)
             }
             WalletCommand::Create {
                 key,
@@ -847,13 +851,13 @@ fn main() {
                 key.as_deref(),
                 name.as_deref(),
                 dry_run,
-                &profile,
+                profile.as_deref(),
                 &target_args.into(),
                 cmd_name,
                 &print,
             ),
             WalletCommand::Rm { name, profile } => {
-                groundhog_cli::wallet::remove(&name, &profile, cmd_name, &print)
+                groundhog_cli::wallet::remove(&name, profile.as_deref(), cmd_name, &print)
             }
         },
         Command::Codegen { command } => match command {
@@ -942,6 +946,16 @@ mod tests {
     }
 
     #[test]
+    fn node_profile_flag_parses() {
+        let cli = Cli::parse_from(["groundhog", "node", "--profile", "myfaveprofile"]);
+
+        match cli.command {
+            Command::Node { profile, .. } => assert_eq!(profile.as_deref(), Some("myfaveprofile")),
+            _ => panic!("expected node command"),
+        }
+    }
+
+    #[test]
     fn wallet_create_key_flag_parses() {
         let cli = Cli::parse_from(["groundhog", "wallet", "create", "--key", "alice"]);
 
@@ -959,7 +973,7 @@ mod tests {
                 assert_eq!(key.as_deref(), Some("alice"));
                 assert_eq!(name, None);
                 assert!(!dry_run);
-                assert_eq!(profile, DEFAULT_PROFILE);
+                assert_eq!(profile, None);
             }
             _ => panic!("expected wallet create command"),
         }
@@ -972,7 +986,7 @@ mod tests {
         match cli.command {
             Command::Wallet {
                 command: WalletCommand::Ls { profile },
-            } => assert_eq!(profile, DEFAULT_PROFILE),
+            } => assert_eq!(profile, None),
             _ => panic!("expected wallet ls command"),
         }
     }
@@ -995,7 +1009,7 @@ mod tests {
                 assert_eq!(key, None);
                 assert_eq!(name, None);
                 assert!(dry_run);
-                assert_eq!(profile, DEFAULT_PROFILE);
+                assert_eq!(profile, None);
             }
             _ => panic!("expected wallet create command"),
         }
@@ -1027,7 +1041,7 @@ mod tests {
                 assert_eq!(key.as_deref(), Some("alice"));
                 assert_eq!(name.as_deref(), Some("trading"));
                 assert!(!dry_run);
-                assert_eq!(profile, DEFAULT_PROFILE);
+                assert_eq!(profile, None);
             }
             _ => panic!("expected wallet create command"),
         }
@@ -1058,7 +1072,7 @@ mod tests {
                 assert_eq!(key, None);
                 assert_eq!(name.as_deref(), Some("trading"));
                 assert!(dry_run);
-                assert_eq!(profile, DEFAULT_PROFILE);
+                assert_eq!(profile, None);
             }
             _ => panic!("expected wallet create command"),
         }
@@ -1073,7 +1087,7 @@ mod tests {
                 command: WalletCommand::Rm { name, profile },
             } => {
                 assert_eq!(name, "alice");
-                assert_eq!(profile, DEFAULT_PROFILE);
+                assert_eq!(profile, None);
             }
             _ => panic!("expected wallet rm command"),
         }
@@ -1101,7 +1115,7 @@ mod tests {
                 assert_eq!(recipient, "alice");
                 assert_eq!(amount.as_deref(), Some("1.5"));
                 assert!(dry_run);
-                assert_eq!(profile, DEFAULT_PROFILE);
+                assert_eq!(profile, None);
             }
             _ => panic!("expected airdrop command"),
         }

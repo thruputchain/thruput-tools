@@ -66,7 +66,7 @@ pub fn run(
     target: ArtifactKind,
     dry_run: bool,
     artifacts: &ArtifactOptions,
-    profile: &str,
+    profile: Option<&str>,
     overrides: &ProfileOverrides,
     cmd: &'static str,
     print: &Print,
@@ -125,12 +125,8 @@ pub fn run(
             && let Some(name) = root.file_name().and_then(|n| n.to_str())
             && let Some(contract_addr_hex) = contract_addr_hex.as_deref()
         {
-            let _ = crate::config::save_profile_contract_alias(
-                &root,
-                Some(profile),
-                name,
-                contract_addr_hex,
-            );
+            let _ =
+                crate::config::save_profile_contract_alias(&root, profile, name, contract_addr_hex);
             print.status(format_args!(
                 "  alias: {name} -> {contract_addr_hex} (saved to groundhog.toml)"
             ));
@@ -237,15 +233,15 @@ pub(crate) fn prepare_deploy(
     artifact_path: Option<&Path>,
     target: ArtifactKind,
     artifacts: &ArtifactOptions,
-    profile: &str,
+    profile: Option<&str>,
     overrides: &ProfileOverrides,
     print: &Print,
 ) -> Result<PreparedDeploy, CliError> {
     let cwd = std::env::current_dir()?;
-    let mut resolved = resolve_profile_with_overrides(&cwd, Some(profile), overrides)?;
+    let mut resolved = resolve_profile_with_overrides(&cwd, profile, overrides)?;
 
     // Resolve signing key
-    let key_name = resolve_default_key(&cwd, Some(profile))?;
+    let key_name = resolve_default_key(&cwd, profile)?;
     if resolved.rpc_url.is_none() && key_name.is_none() {
         return Err(CliError::MissingRpcUrl);
     }

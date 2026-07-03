@@ -261,6 +261,7 @@ fn test_failed_wasm_tests_update_rerun_cache() {
 
     let _cwd = CurrentDirGuard::enter(tmp.path());
     let _path = PathGuard::set(fake_bin.as_os_str());
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path().join("config-home")) };
 
     let err = groundhog_cli::test_cmd::run_with_options(
         Some("demo-contract"),
@@ -286,6 +287,8 @@ fn test_failed_wasm_tests_update_rerun_cache() {
     let cache = fs::read_to_string(cache_path).unwrap();
     assert!(cache.contains("\"package\": \"demo-contract\""));
     assert!(cache.contains("\"tests::fails\""));
+
+    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 struct CurrentDirGuard {

@@ -113,9 +113,8 @@ pub(crate) fn resolve_local_bootstrap_account(
     let Some(manifest) = load_configured_runtime_manifest(profile, key_name)? else {
         return Err(dev_account_error(
             key_name,
-            "local bootstrap account resolution requires GROUNDHOG_RUNTIME_MANIFEST, \
-             profile.<name>.runtime_manifest, or project-local .groundhog/local-node.json from \
-             `groundhog node`",
+            "local bootstrap account resolution requires GROUNDHOG_RUNTIME_MANIFEST \
+             or profile.<name>.runtime_manifest from `groundhog node`",
         ));
     };
     if manifest.bootstrap_account_derivation.scheme != SUPPORTED_DERIVATION_SCHEME {
@@ -172,8 +171,8 @@ fn resolve_dev_account(
     }
     Err(dev_account_error(
         key_name,
-        "dev-N keys require GROUNDHOG_RUNTIME_MANIFEST, profile.<name>.runtime_manifest, \
-         or project-local .groundhog/local-node.json from `groundhog node`",
+        "dev-N keys require GROUNDHOG_RUNTIME_MANIFEST or \
+         profile.<name>.runtime_manifest from `groundhog node`",
     ))
 }
 
@@ -392,7 +391,7 @@ mod tests {
     }
 
     #[test]
-    fn dev_key_manifest_resolution_uses_project_local_node_state() {
+    fn dev_key_manifest_resolution_uses_profile_runtime_manifest() {
         let temp = tempfile::TempDir::new().expect("bug: tempdir should be created");
         let project = temp.path().join("counter");
         std::fs::create_dir(&project).expect("bug: project dir should be created");
@@ -403,19 +402,13 @@ mod tests {
         let signer = groundhog_signing::derive_default_dev_account_signer(0);
         let wallet_address = groundhog_xdr::types::ContractAddress::from([0x72; 32]);
         write_test_runtime_manifest(&manifest_path, &signer, wallet_address);
-        crate::runtime_manifest::write_local_node_state(
-            &project,
-            "http://127.0.0.1:9545",
-            &manifest_path,
-        )
-        .expect("bug: local-node state should write");
         let profile = ResolvedProfile {
             name: "default".into(),
             rpc_url: None,
             rpc_url_cli_override: false,
             faucet_url: None,
             default_key: Some("dev-0".into()),
-            runtime_manifest: None,
+            runtime_manifest: Some(manifest_path),
             runtime_manifest_cli_override: false,
             contracts: BTreeMap::default(),
             wallets: BTreeMap::default(),

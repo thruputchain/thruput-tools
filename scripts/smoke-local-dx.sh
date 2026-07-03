@@ -67,6 +67,35 @@ print(len(value) if value is not None else 0)
 PY
 }
 
+toml_field() {
+    python3 - "$1" "$2" <<'PY'
+import sys
+import tomllib
+
+path, dotted = sys.argv[1:]
+with open(path, "rb") as handle:
+    value = tomllib.load(handle)
+for part in dotted.split("."):
+    value = value.get(part) if isinstance(value, dict) else None
+    if value is None:
+        break
+print("null" if value is None else value)
+PY
+}
+
+toml_profile_field() {
+    python3 - "$1" "$2" "$3" <<'PY'
+import sys
+import tomllib
+
+path, profile_name, field = sys.argv[1:]
+with open(path, "rb") as handle:
+    payload = tomllib.load(handle)
+value = payload.get("profile", {}).get(profile_name, {}).get(field)
+print("null" if value is None else value)
+PY
+}
+
 counter_value_key() {
     python3 - <<'PY'
 import hashlib
@@ -407,14 +436,14 @@ log "Node RPC: $RPC_URL (read plane: $READ_PLANE, view plane: $VIEW_PLANE)"
 [[ "$RUNTIME_MANIFEST" != "null" && -n "$RUNTIME_MANIFEST" ]] \
     || die "groundhog node did not report a runtime manifest path"
 [[ -r "$RUNTIME_MANIFEST" ]] || die "runtime manifest is not readable: $RUNTIME_MANIFEST"
-LOCAL_NODE_STATE=".groundhog/local-node.json"
-[[ -r "$LOCAL_NODE_STATE" ]] || die "local node state was not written: $LOCAL_NODE_STATE"
-STATE_RPC_URL="$(json_field rpcUrl "$(cat "$LOCAL_NODE_STATE")")"
-STATE_RUNTIME_MANIFEST="$(json_field runtimeManifest "$(cat "$LOCAL_NODE_STATE")")"
-[[ "$STATE_RPC_URL" == "$RPC_URL" ]] \
-    || die "local node state rpcUrl was $STATE_RPC_URL, expected $RPC_URL"
-[[ "$STATE_RUNTIME_MANIFEST" == "$RUNTIME_MANIFEST" ]] \
-    || die "local node state runtimeManifest was $STATE_RUNTIME_MANIFEST, expected $RUNTIME_MANIFEST"
+NODE_PROFILE="$(toml_field groundhog.toml default_profile)"
+[[ "$NODE_PROFILE" != "null" ]] || NODE_PROFILE="default"
+PROFILE_RPC_URL="$(toml_profile_field groundhog.toml "$NODE_PROFILE" rpc_url)"
+PROFILE_RUNTIME_MANIFEST="$(toml_profile_field groundhog.toml "$NODE_PROFILE" runtime_manifest)"
+[[ "$PROFILE_RPC_URL" == "$RPC_URL" ]] \
+    || die "profile.$NODE_PROFILE.rpc_url was $PROFILE_RPC_URL, expected $RPC_URL"
+[[ "$PROFILE_RUNTIME_MANIFEST" == "$RUNTIME_MANIFEST" ]] \
+    || die "profile.$NODE_PROFILE.runtime_manifest was $PROFILE_RUNTIME_MANIFEST, expected $RUNTIME_MANIFEST"
 unset GROUNDHOG_RUNTIME_MANIFEST
 
 GATEWAY_RPC_URL=""

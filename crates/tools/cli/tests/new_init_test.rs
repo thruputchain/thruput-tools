@@ -16,10 +16,17 @@ fn new_creates_subdirectory_and_scaffolds() {
     groundhog_cli::new::run_in(&dir, "my-project", "counter", "new", &quiet()).unwrap();
 
     assert!(dir.join("Cargo.toml").exists());
+    assert!(dir.join(".gitignore").exists());
     assert!(dir.join("groundhog.toml").exists());
     assert!(dir.join("src/lib.rs").exists());
     let config = fs::read_to_string(dir.join("groundhog.toml")).unwrap();
-    assert!(config.contains("[profile.default.contracts]"));
+    assert!(config.contains("[profile.local.contracts]"));
+    assert!(config.contains("[profile.local.wallets]"));
+    assert!(config.contains("[profile.devnet.contracts]"));
+    assert!(config.contains("[profile.devnet.wallets]"));
+    assert!(!config.contains("default_profile"));
+    assert!(!config.contains("rpc_url"));
+    assert!(!config.contains("default_key"));
 }
 
 #[test]
@@ -55,15 +62,74 @@ fn init_configures_registry_and_succeeds() {
 
     let result = groundhog_cli::init::run(tmp.path(), "status", &quiet());
 
-    unsafe {
-        env::remove_var("CARGO_HOME");
-        env::remove_var("XDG_CONFIG_HOME");
-    }
-
     result.unwrap();
     let cargo_config = cargo_home.join("config.toml");
     let contents = fs::read_to_string(cargo_config).unwrap();
     assert!(contents.contains("[registries.groundhog]"));
+    let global_config = fs::read_to_string(tmp.path().join("groundhog/config.toml")).unwrap();
+    assert!(global_config.contains("default_profile = \"local\""));
+    assert!(global_config.contains("[profile.local]"));
+    assert!(global_config.contains("rpc_url = \"http://127.0.0.1:9545\""));
+    assert!(global_config.contains("devnet"));
+    let devnet = groundhog_cli::config::resolve_profile(tmp.path(), Some("devnet")).unwrap();
+    assert_eq!(devnet.name, "devnet");
+
+    unsafe {
+        env::remove_var("CARGO_HOME");
+        env::remove_var("XDG_CONFIG_HOME");
+    }
+}
+
+#[test]
+#[serial]
+fn init_preserves_existing_global_profile_fields() {
+    let tmp = TempDir::new().unwrap();
+    let cargo_home = tmp.path().join("cargo-home");
+
+    unsafe {
+        env::set_var("CARGO_HOME", &cargo_home);
+        env::set_var("XDG_CONFIG_HOME", tmp.path());
+    }
+
+    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    fs::write(
+        tmp.path().join("groundhog/config.toml"),
+        r#"
+default_profile = "devnet"
+default_key = "alice"
+
+[executor]
+username = "test"
+password = "pass"
+
+[profile.local]
+rpc_url = "http://127.0.0.1:9999"
+
+[profile.local.wallets]
+alice = "0x1111111111111111111111111111111111111111111111111111111111111111"
+"#,
+    )
+    .unwrap();
+    groundhog_cli::auth::ensure_cargo_registry(&cargo_home.join("config.toml")).unwrap();
+    groundhog_cli::keys::generate(&Some("alice".into()), false, "keys.generate", &quiet()).unwrap();
+
+    groundhog_cli::init::run(tmp.path(), "status", &quiet()).unwrap();
+
+    let global_config = fs::read_to_string(tmp.path().join("groundhog/config.toml")).unwrap();
+    assert!(global_config.contains("default_profile = \"devnet\""));
+    assert!(global_config.contains("default_key = \"alice\""));
+    assert!(global_config.contains("rpc_url = \"http://127.0.0.1:9999\""));
+    assert!(global_config.contains(
+        "alice = \"0x1111111111111111111111111111111111111111111111111111111111111111\""
+    ));
+    assert!(global_config.contains("devnet"));
+    let devnet = groundhog_cli::config::resolve_profile(tmp.path(), Some("devnet")).unwrap();
+    assert_eq!(devnet.name, "devnet");
+
+    unsafe {
+        env::remove_var("CARGO_HOME");
+        env::remove_var("XDG_CONFIG_HOME");
+    }
 }
 
 #[test]

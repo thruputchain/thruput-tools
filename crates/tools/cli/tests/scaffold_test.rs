@@ -10,6 +10,8 @@ fn scaffold_counter_creates_expected_files() {
     groundhog_cli::scaffold::generate(&dir, "my-counter", "counter").unwrap();
 
     assert!(dir.join("Cargo.toml").exists());
+    assert!(dir.join(".gitignore").exists());
+    assert!(dir.join("groundhog.toml").exists());
     assert!(dir.join("rust-toolchain.toml").exists());
     assert!(dir.join(".cargo/config.toml").exists());
     assert!(dir.join(".cargo/contract.toml").exists());
@@ -37,6 +39,22 @@ fn scaffold_counter_creates_expected_files() {
     // entrypoints feature is enabled.
     assert!(cargo.contains("test = false"));
     assert!(cargo.contains("bench = false"));
+
+    let gitignore = fs::read_to_string(dir.join(".gitignore")).unwrap();
+    assert!(gitignore.contains("/target/"));
+    assert!(gitignore.contains("/.groundhog/"));
+
+    let groundhog = fs::read_to_string(dir.join("groundhog.toml")).unwrap();
+    assert!(groundhog.contains("[profile.local.contracts]"));
+    assert!(groundhog.contains("[profile.local.wallets]"));
+    assert!(groundhog.contains("[profile.devnet.contracts]"));
+    assert!(groundhog.contains("[profile.devnet.wallets]"));
+    assert!(groundhog.contains("# my_counter ="));
+    assert!(!groundhog.contains("default_profile"));
+    assert!(!groundhog.contains("rpc_url"));
+    assert!(!groundhog.contains("faucet_url"));
+    assert!(!groundhog.contains("runtime_manifest"));
+    assert!(!groundhog.contains("default_key"));
 
     let main = fs::read_to_string(dir.join("src/main.rs")).unwrap();
     assert!(main.contains("#![no_std]"));

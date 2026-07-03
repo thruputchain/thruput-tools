@@ -74,7 +74,7 @@ pub fn run(
     args: &[String],
     dry_run: bool,
     artifacts: &ArtifactOptions,
-    profile: &str,
+    profile: Option<&str>,
     overrides: &ProfileOverrides,
     cmd: &'static str,
     print: &Print,
@@ -309,7 +309,7 @@ pub(crate) fn prepare_call(
     method: &str,
     args: &[String],
     artifacts: &ArtifactOptions,
-    profile: &str,
+    profile: Option<&str>,
     overrides: &ProfileOverrides,
 ) -> Result<PreparedCall, CliError> {
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
@@ -322,13 +322,13 @@ fn prepare_call_with_runtime(
     method: &str,
     args: &[String],
     artifacts: &ArtifactOptions,
-    profile: &str,
+    profile: Option<&str>,
     overrides: &ProfileOverrides,
     rt: &tokio::runtime::Runtime,
 ) -> Result<PreparedCall, CliError> {
     let cwd = std::env::current_dir()?;
-    let mut resolved_profile = resolve_profile_with_overrides(&cwd, Some(profile), overrides)?;
-    let key_name = resolve_default_key(&cwd, Some(profile))?;
+    let mut resolved_profile = resolve_profile_with_overrides(&cwd, profile, overrides)?;
+    let key_name = resolve_default_key(&cwd, profile)?;
     if resolved_profile.rpc_url.is_none() && key_name.is_none() {
         return Err(CliError::MissingRpcUrl);
     }

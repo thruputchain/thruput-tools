@@ -209,9 +209,9 @@ pub fn check_project(
             findings.push(Finding {
                 level: FindingLevel::Warn,
                 code: "profile_not_found",
-                message: format!("profile `{name}` not found in groundhog.toml"),
+                message: format!("profile `{name}` not found in project or global config"),
                 hint: Some(Cow::Borrowed(
-                    "add the profile to groundhog.toml or \
+                    "add the profile to project or global config, or \
                      use `--profile` to select an existing \
                      one",
                 )),
@@ -228,12 +228,12 @@ pub fn check_project(
                 level: FindingLevel::Warn,
                 code: "no_project_config",
                 message: format!(
-                    "profile `{name}` requested but no groundhog.toml \
-                     was found"
+                    "profile `{name}` requested but no project or global \
+                     config was found"
                 ),
                 hint: Some(Cow::Borrowed(
-                    "create groundhog.toml or use a profile \
-                     that does not require project config",
+                    "run `groundhog init`, create groundhog.toml, or use \
+                     a profile that does not require config",
                 )),
             });
             Ok(ProjectContext {

@@ -12,6 +12,11 @@ use std::time::Duration;
 const HOG_DEVNODE_PID_FILE: &str = "hog-devnode.pid";
 const LEGACY_HOGD_DEV_PID_FILE: &str = "hogd-dev.pid";
 
+#[cfg(test)]
+fn test_profile_state_result() -> Result<PathBuf, CliError> {
+    Ok(PathBuf::from("/tmp/groundhog-config.toml"))
+}
+
 /// Block production mode for the supervised local node.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[non_exhaustive]
@@ -46,6 +51,7 @@ pub fn run(
         None,
         None,
         None,
+        None,
         cmd,
         print,
     )
@@ -64,6 +70,7 @@ pub fn run_with_block_driver(
     block_driver: Option<LocalNodeBlockDriverMode>,
     block_interval_ms: Option<u64>,
     rpc_max_connections: Option<u32>,
+    explicit_profile: Option<&str>,
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
@@ -83,6 +90,7 @@ pub fn run_with_block_driver(
                 rpc_max_connections,
                 ..LocalNodeOptions::default()
             },
+            explicit_profile,
             cmd,
             print,
         )
@@ -213,20 +221,14 @@ pub async fn start_local_node(options: LocalNodeOptions) -> Result<StartedLocalN
 
 async fn run_hogd_dev(
     options: LocalNodeOptions,
+    explicit_profile: Option<&str>,
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
     use groundhog_node_supervisor::{NodeSupervisorError, SupervisorStop};
 
     let started = start_local_node(options).await?;
-    let local_state_result = write_started_local_node_state(&started);
-    let started_rpc_url = started.rpc_url();
-    let started_manifest_path = started.readiness().manifest_path.clone();
-    let local_state_path = local_state_result
-        .as_ref()
-        .ok()
-        .and_then(|path| path.as_ref())
-        .cloned();
+    let profile_state_result = write_started_local_node_profile_state(&started, explicit_profile);
 
     if print.is_json() {
         print.json(&CommandResult::new(
@@ -235,10 +237,11 @@ async fn run_hogd_dev(
                 started.rpc_addr(),
                 started.readiness(),
                 started.backend_planes(),
+                &profile_state_result,
             ),
         ))?;
     } else {
-        print_started_local_node(&started, &local_state_result, print);
+        print_started_local_node(&started, &profile_state_result, print);
     }
 
     let stop_signal = async {
@@ -253,17 +256,6 @@ async fn run_hogd_dev(
     };
 
     let outcome = started.run_until(stop_signal).await;
-    if let (Some(local_state_path), Some(started_manifest_path)) = (
-        local_state_path.as_deref(),
-        started_manifest_path.as_deref(),
-    ) && let Err(error) = crate::runtime_manifest::remove_local_node_state_if_matches(
-        local_state_path,
-        &started_rpc_url,
-        started_manifest_path,
-    ) && !print.is_json()
-    {
-        print.warn(format!("local node state was not removed: {error}"));
-    }
     let outcome = outcome?;
     match outcome {
         SupervisorStop::HogdExited(status) => {
@@ -303,7 +295,7 @@ async fn wait_for_stop_signal() -> Result<(), std::io::Error> {
 
 fn print_started_local_node(
     started: &StartedLocalNode,
-    local_state_result: &Result<Option<PathBuf>, CliError>,
+    profile_state_result: &Result<PathBuf, CliError>,
     print: &Print,
 ) {
     print.status("Groundhog Local Node");
@@ -334,15 +326,9 @@ fn print_started_local_node(
     }
     if let Some(path) = &started.readiness().manifest_path {
         print.status(format_args!("runtime manifest: {}", path.display()));
-        match local_state_result {
-            Ok(Some(local_state_path)) => print.status(format_args!(
-                "local node state: {}",
-                local_state_path.display()
-            )),
-            Ok(None) => {}
-            Err(error) => {
-                print.warn(format!("local node state was not written: {error}"));
-            }
+        match profile_state_result {
+            Ok(path) => print.status(format_args!("profile updated: {}", path.display())),
+            Err(error) => print.warn(format!("profile was not updated: {error}")),
         }
         print.status(format_args!(
             "dev-key manifest: export GROUNDHOG_RUNTIME_MANIFEST={}",
@@ -351,7 +337,10 @@ fn print_started_local_node(
     }
 }
 
-fn write_started_local_node_state(started: &StartedLocalNode) -> Result<Option<PathBuf>, CliError> {
+fn write_started_local_node_profile_state(
+    started: &StartedLocalNode,
+    explicit_profile: Option<&str>,
+) -> Result<PathBuf, CliError> {
     let manifest_path = started
         .readiness()
         .manifest_path
@@ -362,7 +351,12 @@ fn write_started_local_node_state(started: &StartedLocalNode) -> Result<Option<P
             )
         })?;
     let cwd = std::env::current_dir()?;
-    crate::runtime_manifest::write_local_node_state(&cwd, &started.rpc_url(), manifest_path)
+    crate::config::save_profile_local_node_state(
+        &cwd,
+        explicit_profile,
+        &started.rpc_url(),
+        manifest_path,
+    )
 }
 
 fn local_node_config(
@@ -506,6 +500,7 @@ fn hogd_dev_startup_payload(
     addr: std::net::SocketAddr,
     readiness: &groundhog_node_supervisor::HogdDevReadiness,
     backend_planes: groundhog_node_supervisor::BackendPlanes,
+    profile_state_result: &Result<PathBuf, CliError>,
 ) -> serde_json::Value {
     json!({
         "schemaVersion": 1,
@@ -519,8 +514,22 @@ fn hogd_dev_startup_payload(
             "endpoints": hogd_dev_endpoints_payload(readiness),
         },
         "runtime_manifest": runtime_manifest_payload(readiness),
+        "profile_state": profile_state_payload(profile_state_result),
         "rpc_url": format!("http://{addr}"),
     })
+}
+
+fn profile_state_payload(profile_state_result: &Result<PathBuf, CliError>) -> serde_json::Value {
+    match profile_state_result {
+        Ok(path) => json!({
+            "ok": true,
+            "path": path,
+        }),
+        Err(error) => json!({
+            "ok": false,
+            "error": error.to_string(),
+        }),
+    }
 }
 
 fn runtime_manifest_payload(
@@ -576,7 +585,7 @@ mod tests {
     use super::{
         LocalNodeBlockDriverMode, LocalNodeOptions, LocalNodePidFile, default_tracing_filter,
         global_local_node_pid_file, hogd_dev_startup_payload, local_node_config,
-        map_node_supervisor_error,
+        map_node_supervisor_error, profile_state_payload, test_profile_state_result,
     };
     use crate::CliError;
     use groundhog_node_supervisor::{
@@ -752,8 +761,13 @@ mod tests {
         )
         .expect("bug: readiness should parse");
 
-        let payload =
-            hogd_dev_startup_payload(addr, &readiness, BackendPlanes::hogd_dev_scheduler_only());
+        let profile_state = test_profile_state_result();
+        let payload = hogd_dev_startup_payload(
+            addr,
+            &readiness,
+            BackendPlanes::hogd_dev_scheduler_only(),
+            &profile_state,
+        );
         assert_eq!(payload["rpc_url"], "http://127.0.0.1:9545");
         assert_eq!(payload["chain"], "groundhog-local");
         assert_eq!(payload["backend"]["kind"], "hogd_dev");
@@ -782,7 +796,21 @@ mod tests {
             "127.0.0.1:12349"
         );
         assert!(payload["runtime_manifest"].is_null());
+        assert_eq!(payload["profile_state"]["ok"], true);
+        assert_eq!(
+            payload["profile_state"]["path"],
+            "/tmp/groundhog-config.toml"
+        );
         assert!(payload.get("accounts").is_none());
+    }
+
+    #[test]
+    fn profile_state_payload_reports_write_failure() {
+        let payload = profile_state_payload(&Err(CliError::Other("config is read-only".into())));
+
+        assert_eq!(payload["ok"], false);
+        assert_eq!(payload["error"], "config is read-only");
+        assert!(payload.get("path").is_none());
     }
 
     #[test]
@@ -846,10 +874,12 @@ mod tests {
         });
         let readiness = parse_readiness_line("hogd-dev", &pointer.to_string())
             .expect("bug: readiness pointer should parse");
+        let profile_state = test_profile_state_result();
         let payload = hogd_dev_startup_payload(
             "127.0.0.1:9545".parse().expect("bug: valid socket addr"),
             &readiness,
             BackendPlanes::hogd_dev_scheduler_only(),
+            &profile_state,
         );
 
         assert_eq!(payload["runtime_manifest"]["schemaVersion"], 1);
@@ -869,8 +899,13 @@ mod tests {
         )
         .expect("bug: v1 readiness should parse");
 
-        let payload =
-            hogd_dev_startup_payload(addr, &readiness, BackendPlanes::hogd_dev_scheduler_only());
+        let profile_state = test_profile_state_result();
+        let payload = hogd_dev_startup_payload(
+            addr,
+            &readiness,
+            BackendPlanes::hogd_dev_scheduler_only(),
+            &profile_state,
+        );
         assert_eq!(
             payload["backend"]["endpoints"]["scheduler_coord"],
             "127.0.0.1:12345"
@@ -898,10 +933,12 @@ mod tests {
         )
         .expect("bug: readiness should parse");
 
+        let profile_state = test_profile_state_result();
         let payload = hogd_dev_startup_payload(
             addr,
             &readiness,
             BackendPlanes::hogd_dev_full(PlaneStatus::Stub),
+            &profile_state,
         );
         let expected_planes = serde_json::to_value(BackendPlanes::hogd_dev_full(PlaneStatus::Stub))
             .expect("bug: planes serialize");

@@ -1,11 +1,17 @@
 use std::io::Write;
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 
 use super::dirs::config_file_path;
+use super::project::ProjectProfile;
 use crate::CliError;
+
+const INITIAL_DEFAULT_PROFILE: &str = "local";
+const LOCAL_RPC_URL: &str = "http://127.0.0.1:9545";
 
 /// Executor credentials for the Groundhog test executor.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -16,12 +22,16 @@ pub struct ExecutorCredentials {
 
 /// Internal representation of `config.toml`.
 #[derive(Debug, Default, Serialize, Deserialize)]
-struct GlobalConfigFile {
+pub(crate) struct GlobalConfigFile {
     executor: Option<ExecutorCredentials>,
     default_key: Option<String>,
+    #[serde(default)]
+    pub(crate) default_profile: Option<String>,
+    #[serde(default)]
+    pub(crate) profile: BTreeMap<String, ProjectProfile>,
 }
 
-fn read_config_file() -> Result<GlobalConfigFile, CliError> {
+pub(crate) fn read_config_file() -> Result<GlobalConfigFile, CliError> {
     let path = config_file_path()?;
     match std::fs::read_to_string(&path) {
         Ok(contents) => {
@@ -92,5 +102,26 @@ pub fn load_default_key() -> Result<Option<String>, CliError> {
 pub fn clear_default_key() -> Result<(), CliError> {
     let mut config = read_config_file()?;
     config.default_key = None;
+    write_config_file(&config)
+}
+
+/// Initialize global profile defaults without overwriting existing user config.
+pub fn initialize_global_profiles() -> Result<(), CliError> {
+    let mut config = read_config_file()?;
+    if config
+        .default_profile
+        .as_deref()
+        .map(str::trim)
+        .is_none_or(str::is_empty)
+    {
+        config.default_profile = Some(INITIAL_DEFAULT_PROFILE.to_string());
+    }
+
+    let local = config.profile.entry("local".to_string()).or_default();
+    if local.rpc_url.is_none() {
+        local.rpc_url = Some(LOCAL_RPC_URL.to_string());
+    }
+    config.profile.entry("devnet".to_string()).or_default();
+
     write_config_file(&config)
 }

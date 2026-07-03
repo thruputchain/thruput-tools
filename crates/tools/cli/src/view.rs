@@ -31,7 +31,7 @@ pub fn run(
     from: Option<&str>,
     artifacts: &ArtifactOptions,
     project_start: &Path,
-    profile: &str,
+    profile: Option<&str>,
     overrides: &ProfileOverrides,
     cmd: &'static str,
     print: &Print,
@@ -104,13 +104,12 @@ fn prepare_view(
     from: Option<&str>,
     artifacts: &ArtifactOptions,
     project_start: &Path,
-    profile: &str,
+    profile: Option<&str>,
     overrides: &ProfileOverrides,
     rt: &tokio::runtime::Runtime,
 ) -> Result<PreparedView, CliError> {
-    let mut resolved_profile =
-        resolve_profile_with_overrides(project_start, Some(profile), overrides)?;
-    let default_key = resolve_default_key(project_start, Some(profile))?;
+    let mut resolved_profile = resolve_profile_with_overrides(project_start, profile, overrides)?;
+    let default_key = resolve_default_key(project_start, profile)?;
     if let Some(key_name) = local_dev_key_for_view(from, default_key.as_deref()) {
         apply_local_node_state_for_dev_key(&mut resolved_profile, &key_name)?;
     }

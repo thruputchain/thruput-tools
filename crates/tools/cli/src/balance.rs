@@ -19,14 +19,13 @@ use crate::{CliError, Print};
 pub fn run(
     target: &str,
     project_start: &Path,
-    profile: &str,
+    profile: Option<&str>,
     overrides: &ProfileOverrides,
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    let mut resolved_profile =
-        resolve_profile_with_overrides(project_start, Some(profile), overrides)?;
-    if let Some(key_name) = resolve_default_key(project_start, Some(profile))? {
+    let mut resolved_profile = resolve_profile_with_overrides(project_start, profile, overrides)?;
+    if let Some(key_name) = resolve_default_key(project_start, profile)? {
         apply_local_node_state_for_dev_key(&mut resolved_profile, &key_name)?;
     }
     if dev_keys::dev_key_index(target).is_some() {

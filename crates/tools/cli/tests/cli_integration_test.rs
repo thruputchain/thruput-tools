@@ -209,6 +209,7 @@ fn version_flag_works() {
 fn node_hogd_dev_binary_json_starts_supervisor() {
     let fake = fake_hogd_dev_binary();
     let pid_dir = TempDir::new().unwrap();
+    let config_home = TempDir::new().unwrap();
     let pid_path = pid_dir.path().join("hogd.pid");
     let child = groundhog()
         .arg("--json")
@@ -219,6 +220,7 @@ fn node_hogd_dev_binary_json_starts_supervisor() {
         .arg(fake)
         .env("GROUNDHOG_FAKE_HOGD_DEV_MODE", "ready-with-indexer")
         .env("GROUNDHOG_FAKE_HOGD_DEV_PID_FILE", &pid_path)
+        .env("XDG_CONFIG_HOME", config_home.path())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -246,6 +248,13 @@ fn node_hogd_dev_binary_json_starts_supervisor() {
     assert_eq!(payload["data"]["backend"]["planes"]["chain"], "scheduler");
     assert_eq!(payload["data"]["backend"]["planes"]["read"], "indexer");
     assert_eq!(payload["data"]["backend"]["planes"]["view"], "stub");
+    assert_eq!(payload["data"]["profile_state"]["ok"], true);
+    assert!(
+        payload["data"]["profile_state"]["path"]
+            .as_str()
+            .expect("bug: profile_state path should be a string")
+            .ends_with("groundhog/config.toml")
+    );
     let scheduler = payload["data"]["backend"]["endpoints"]["scheduler_coord"]
         .as_str()
         .expect("bug: SchedulerCoord endpoint should be a string");
@@ -276,6 +285,10 @@ fn node_hogd_dev_binary_json_starts_supervisor() {
     send_sigint(child.child());
     let status = wait_child(child.into_inner(), Duration::from_secs(10));
     assert!(status.success(), "groundhog node should stop cleanly");
+    let global_config = std::fs::read_to_string(config_home.path().join("groundhog/config.toml"))
+        .expect("groundhog node should persist profile state");
+    assert!(global_config.contains("rpc_url"));
+    assert!(global_config.contains("runtime_manifest"));
     assert!(
         wait_pid_gone(pid, Duration::from_secs(2)),
         "fake hogd-dev pid {pid} still alive after CLI exit",
@@ -1566,9 +1579,11 @@ fn new_json_failure_is_structured() {
 #[test]
 fn deploy_fails_without_config() {
     let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
     let output = groundhog()
         .arg("deploy")
         .current_dir(tmp.path())
+        .env("XDG_CONFIG_HOME", &config_home)
         .output()
         .unwrap();
     assert!(!output.status.success());
@@ -1579,10 +1594,12 @@ fn deploy_fails_without_config() {
 #[test]
 fn deploy_json_fails_without_config() {
     let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
     let output = groundhog()
         .arg("--json")
         .arg("deploy")
         .current_dir(tmp.path())
+        .env("XDG_CONFIG_HOME", &config_home)
         .output()
         .unwrap();
     assert!(!output.status.success());
@@ -2153,8 +2170,9 @@ fn deploy_dry_run_uses_manifest_dev_wallet_address_without_dev_rpc() {
 }
 
 #[test]
-fn deploy_dry_run_uses_project_local_node_state_rpc_and_manifest() {
+fn deploy_dry_run_uses_profile_rpc_and_manifest() {
     let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
 
@@ -2163,10 +2181,12 @@ fn deploy_dry_run_uses_project_local_node_state_rpc_and_manifest() {
     let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
     std::fs::write(
         project.join("groundhog.toml"),
-        "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"dev-0\"\n",
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            manifest_path.display()
+        ),
     )
     .unwrap();
-    write_local_node_state(&project, &rpc_url, &manifest_path);
 
     let wasm_path = tmp.path().join("test.wasm");
     std::fs::write(&wasm_path, b"\0asm\x01\0\0\0").unwrap();
@@ -2180,6 +2200,7 @@ fn deploy_dry_run_uses_project_local_node_state_rpc_and_manifest() {
             wasm_path.to_str().unwrap(),
         ])
         .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
         .output()
         .unwrap();
 
@@ -2500,6 +2521,7 @@ fn deploy_dry_run_rejects_manifest_seed_that_does_not_match_signer() {
 #[test]
 fn deploy_dev_key_requires_runtime_manifest() {
     let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
 
@@ -2521,6 +2543,7 @@ fn deploy_dev_key_requires_runtime_manifest() {
             wasm_path.to_str().unwrap(),
         ])
         .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
         .output()
         .unwrap();
 
@@ -2681,8 +2704,10 @@ fn deploy_live_json_includes_transaction_detail_when_dev_method_exists() {
 
 #[test]
 fn call_json_fails_without_config() {
+    let tmp = TempDir::new().unwrap();
     let output = groundhog()
         .args(["--json", "call", "0x1234", "transfer"])
+        .env("XDG_CONFIG_HOME", tmp.path())
         .output()
         .unwrap();
     assert!(!output.status.success());
@@ -2694,10 +2719,12 @@ fn call_json_fails_without_config() {
 
 #[test]
 fn storage_json_fails_without_config() {
+    let tmp = TempDir::new().unwrap();
     let address = format!("0x{}", "11".repeat(32));
     let key = format!("0x{}", "42".repeat(32));
     let output = groundhog()
         .args(["--json", "storage", &address, &key])
+        .env("XDG_CONFIG_HOME", tmp.path())
         .output()
         .unwrap();
 
@@ -2710,9 +2737,11 @@ fn storage_json_fails_without_config() {
 
 #[test]
 fn view_json_fails_without_config() {
+    let tmp = TempDir::new().unwrap();
     let address = format!("0x{}", "11".repeat(32));
     let output = groundhog()
         .args(["--json", "view", &address, "0x0102030405060708"])
+        .env("XDG_CONFIG_HOME", tmp.path())
         .output()
         .unwrap();
 
@@ -3106,6 +3135,41 @@ fn balance_json_reads_native_hog_balance() {
 }
 
 #[test]
+fn balance_json_uses_global_default_profile_when_profile_omitted() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    std::fs::create_dir_all(config_home.join("groundhog")).unwrap();
+
+    let address = format!("0x{}", "77".repeat(32));
+    let (rpc_url, rpc_server) = spawn_balance_rpc(&address, "70000000");
+    std::fs::write(
+        config_home.join("groundhog/config.toml"),
+        format!(
+            "default_profile = \"devnet\"\n\n[profile.devnet]\nrpc_url = \"{rpc_url}\"\n\n[profile.devnet.wallets]\nalice = \"{address}\"\n"
+        ),
+    )
+    .unwrap();
+
+    let output = groundhog()
+        .args(["--json", "balance", "alice"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["data"]["rpc_url"], rpc_url);
+    assert_eq!(stdout["data"]["address"], address);
+    assert_eq!(stdout["data"]["balance_hog"], "7");
+}
+
+#[test]
 fn balance_json_cli_rpc_url_overrides_profile() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");
@@ -3165,7 +3229,7 @@ fn balance_json_rejects_invalid_cli_rpc_url_before_rpc() {
 }
 
 #[test]
-fn storage_json_uses_project_local_node_state_with_global_dev_key() {
+fn storage_json_uses_profile_runtime_manifest_with_global_dev_key() {
     let tmp = TempDir::new().unwrap();
     let config_home = tmp.path().join("config-home");
     let project = tmp.path().join("project");
@@ -3182,8 +3246,14 @@ fn storage_json_uses_project_local_node_state_with_global_dev_key() {
     let manifest_path =
         write_runtime_manifest(tmp.path(), 0, &advertised_dev_wallet_address(0), None);
     let (rpc_url, rpc_server) = spawn_storage_rpc(&address, &key);
-    std::fs::write(project.join("groundhog.toml"), "[profile.default]\n").unwrap();
-    write_local_node_state(&project, &rpc_url, &manifest_path);
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\nruntime_manifest = \"{}\"\n",
+            manifest_path.display()
+        ),
+    )
+    .unwrap();
 
     let output = groundhog()
         .args(["--json", "storage", &address, &key])
@@ -3205,7 +3275,7 @@ fn storage_json_uses_project_local_node_state_with_global_dev_key() {
 }
 
 #[test]
-fn storage_json_cli_rpc_url_overrides_project_local_node_state() {
+fn storage_json_cli_rpc_url_overrides_profile_rpc_url() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
@@ -3217,10 +3287,12 @@ fn storage_json_cli_rpc_url_overrides_project_local_node_state() {
     let (rpc_url, rpc_server) = spawn_storage_rpc(&address, &key);
     std::fs::write(
         project.join("groundhog.toml"),
-        "[profile.default]\ndefault_key = \"dev-0\"\n",
+        format!(
+            "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            manifest_path.display()
+        ),
     )
     .unwrap();
-    write_local_node_state(&project, "http://127.0.0.1:1", &manifest_path);
 
     let output = groundhog()
         .args(["--json", "storage", "--rpc-url", &rpc_url, &address, &key])
@@ -3679,10 +3751,12 @@ fn call_live_json_marks_legacy_default_wallet_entrypoint_without_manifest() {
 
 #[test]
 fn call_fails_without_config() {
+    let tmp = TempDir::new().unwrap();
     let output = groundhog()
         .arg("call")
         .arg("0x1234")
         .arg("transfer")
+        .env("XDG_CONFIG_HOME", tmp.path())
         .output()
         .unwrap();
     assert!(!output.status.success());
@@ -4298,25 +4372,6 @@ fn write_runtime_manifest_with_seed(
     });
     std::fs::write(&path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
     path
-}
-
-fn write_local_node_state(
-    project: &std::path::Path,
-    rpc_url: &str,
-    manifest_path: &std::path::Path,
-) {
-    let state_dir = project.join(".groundhog");
-    std::fs::create_dir_all(&state_dir).unwrap();
-    std::fs::write(
-        state_dir.join("local-node.json"),
-        serde_json::to_vec_pretty(&serde_json::json!({
-            "schemaVersion": 1,
-            "rpcUrl": rpc_url,
-            "runtimeManifest": manifest_path,
-        }))
-        .unwrap(),
-    )
-    .unwrap();
 }
 
 fn signed_tx_invoked_address(tx_hex: &str) -> String {

@@ -43,9 +43,9 @@ pub enum CliError {
     UnknownTemplate(String),
     #[error(transparent)]
     Io(#[from] std::io::Error),
-    #[error("profile `{0}` not found in groundhog.toml")]
+    #[error("profile `{0}` not found in project or global config")]
     ProfileNotFound(String),
-    #[error("profile `{0}` requested but no groundhog.toml found")]
+    #[error("profile `{0}` requested but no project or global config found")]
     NoProjectConfig(String),
     #[error("credentials cannot be empty")]
     CredentialsEmpty,
@@ -308,10 +308,10 @@ impl CliError {
                  the RPC endpoint at {url} is running"
             ))),
             Self::MissingRpcUrl => Some(Cow::Borrowed(
-                "set `rpc_url` in the selected profile in `groundhog.toml`",
+                "set `rpc_url` in the selected profile in project or global config",
             )),
             Self::MissingSigningKey => Some(Cow::Borrowed(
-                "set `default_key` in `groundhog.toml`, or run `groundhog keys generate`",
+                "set `default_key` in project or global config, or run `groundhog keys generate`",
             )),
             Self::RpcMethodFailed { .. } => Some(Cow::Borrowed(
                 "check the RPC endpoint and node logs for details",
@@ -320,7 +320,7 @@ impl CliError {
                 "run `groundhog node` backed by hog-devnode, or use a stored key for non-local endpoints",
             )),
             Self::ManifestEntrypoint { .. } => Some(Cow::Borrowed(
-                "restart the local node with a compatible hog-devnode, or remove the stale runtime manifest reference from groundhog.toml",
+                "restart the local node with a compatible hog-devnode, or remove the stale runtime manifest reference from project or global config",
             )),
             Self::WalletAddressDerivationFailed { .. } => Some(Cow::Borrowed(
                 "check the stored public key material, or regenerate the key",
@@ -353,13 +353,13 @@ impl CliError {
             | Self::StatusHasWarnings
             | Self::CommandReportedFailure => None,
             Self::ProfileNotFound(_) => Some(Cow::Borrowed(
-                "add the profile to `groundhog.toml`, or switch to \
+                "add the profile to project or global config, or switch to \
                  an existing one with `--profile` or \
                  `GROUNDHOG_PROFILE`",
             )),
             Self::NoProjectConfig(_) => Some(Cow::Borrowed(
-                "create `groundhog.toml`, unset `GROUNDHOG_PROFILE`, \
-                 or use the default profile",
+                "run `groundhog init`, create `groundhog.toml`, unset \
+                 `GROUNDHOG_PROFILE`, or use the default profile",
             )),
             Self::CredentialsEmpty => Some(Cow::Borrowed(
                 "rerun `groundhog login` and provide both username \

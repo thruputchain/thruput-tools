@@ -1,10 +1,15 @@
 use std::collections::BTreeMap;
+use std::fs::OpenOptions;
+use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::global::load_default_key;
+use super::dirs::config_file_path;
+use super::global::{load_default_key, read_config_file};
 use crate::CliError;
 
 pub const DEFAULT_PROFILE: &str = "default";
@@ -27,9 +32,11 @@ pub struct ProjectProfile {
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
-struct ProjectConfigFile {
+pub(crate) struct ProjectConfigFile {
     #[serde(default)]
-    profile: BTreeMap<String, ProjectProfile>,
+    pub(crate) default_profile: Option<String>,
+    #[serde(default)]
+    pub(crate) profile: BTreeMap<String, ProjectProfile>,
 }
 
 /// Active project profile resolved from `groundhog.toml`.
@@ -78,20 +85,34 @@ impl ResolvedProfile {
     }
 }
 
-/// Returns the active profile name from an explicit selection
-/// or `GROUNDHOG_PROFILE`.
-pub fn active_profile_name(explicit: Option<&str>) -> String {
-    explicit
-        .map(str::trim)
+/// Returns the active profile name from an explicit selection,
+/// `GROUNDHOG_PROFILE`, project default, global default, or the
+/// built-in fallback.
+pub fn active_profile_name(start: &Path, explicit: Option<&str>) -> Result<String, CliError> {
+    if let Some(name) = explicit.map(str::trim).filter(|name| !name.is_empty()) {
+        return Ok(name.to_owned());
+    }
+
+    if let Some(name) = std::env::var("GROUNDHOG_PROFILE")
+        .ok()
+        .map(|name| name.trim().to_string())
         .filter(|name| !name.is_empty())
-        .map(ToOwned::to_owned)
-        .or_else(|| {
-            std::env::var("GROUNDHOG_PROFILE")
-                .ok()
-                .map(|name| name.trim().to_string())
-                .filter(|name| !name.is_empty())
-        })
-        .unwrap_or_else(|| DEFAULT_PROFILE.to_string())
+    {
+        return Ok(name);
+    }
+
+    if let Some(config) = load_project_config(start)?
+        && let Some(name) = non_empty(config.default_profile)
+    {
+        return Ok(name);
+    }
+
+    let global = read_config_file()?;
+    if let Some(name) = non_empty(global.default_profile) {
+        return Ok(name);
+    }
+
+    Ok(DEFAULT_PROFILE.to_string())
 }
 
 /// Find `groundhog.toml` by walking up from `start`.
@@ -119,6 +140,10 @@ pub fn find_project_config(start: &Path) -> Option<PathBuf> {
 pub fn load_project_profiles(
     start: &Path,
 ) -> Result<Option<BTreeMap<String, ProjectProfile>>, CliError> {
+    Ok(load_project_config(start)?.map(|config| config.profile))
+}
+
+fn load_project_config(start: &Path) -> Result<Option<ProjectConfigFile>, CliError> {
     let Some(path) = find_project_config(start) else {
         return Ok(None);
     };
@@ -126,7 +151,7 @@ pub fn load_project_profiles(
     let contents = std::fs::read_to_string(path)?;
     let config: ProjectConfigFile =
         toml::from_str(&contents).map_err(|e| CliError::Other(e.to_string()))?;
-    Ok(Some(config.profile))
+    Ok(Some(config))
 }
 
 /// Persist a contract alias under the selected project profile.
@@ -154,9 +179,8 @@ pub fn save_profile_contract_alias(
         ));
     }
 
-    let profile_name = active_profile_name(explicit_profile);
-    let path =
-        find_project_config(project_root).unwrap_or_else(|| project_root.join("groundhog.toml"));
+    let profile_name = active_profile_name(project_root, explicit_profile)?;
+    let path = profile_write_path(project_root)?;
 
     let contents = match std::fs::read_to_string(&path) {
         Ok(s) => s,
@@ -182,7 +206,7 @@ pub fn save_profile_contract_alias(
         .ok_or_else(|| CliError::Other("contracts must be a table".into()))?
         .insert(alias.trim(), toml_edit::value(address.trim()));
 
-    atomic_write(&path, doc.to_string().as_bytes())?;
+    write_profile_config(&path, doc.to_string().as_bytes())?;
     Ok(path)
 }
 
@@ -209,9 +233,8 @@ pub fn save_profile_wallet_address(
         ));
     }
 
-    let profile_name = active_profile_name(explicit_profile);
-    let path =
-        find_project_config(project_root).unwrap_or_else(|| project_root.join("groundhog.toml"));
+    let profile_name = active_profile_name(project_root, explicit_profile)?;
+    let path = profile_write_path(project_root)?;
 
     let contents = match std::fs::read_to_string(&path) {
         Ok(s) => s,
@@ -237,7 +260,7 @@ pub fn save_profile_wallet_address(
         .ok_or_else(|| CliError::Other("wallets must be a table".into()))?
         .insert(name.trim(), toml_edit::value(address.trim()));
 
-    atomic_write(&path, doc.to_string().as_bytes())?;
+    write_profile_config(&path, doc.to_string().as_bytes())?;
     Ok(path)
 }
 
@@ -252,10 +275,13 @@ pub fn remove_profile_wallet_address(
         return Err(CliError::EmptyWalletName);
     }
 
-    let profile_name = active_profile_name(explicit_profile);
-    let path = find_project_config(project_root)
-        .ok_or_else(|| CliError::NoProjectConfig(profile_name.clone()))?;
-    let contents = std::fs::read_to_string(&path)?;
+    let profile_name = active_profile_name(project_root, explicit_profile)?;
+    let path = profile_write_path(project_root)?;
+    let contents = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e.into()),
+    };
     let mut doc: toml_edit::DocumentMut = contents
         .parse::<toml_edit::DocumentMut>()
         .map_err(|e| CliError::Other(e.to_string()))?;
@@ -273,7 +299,61 @@ pub fn remove_profile_wallet_address(
         return Err(CliError::Other(format!("wallet `{name}` is not saved")));
     }
 
-    atomic_write(&path, doc.to_string().as_bytes())?;
+    write_profile_config(&path, doc.to_string().as_bytes())?;
+    Ok(path)
+}
+
+/// Persist local-node runtime state under the selected effective profile.
+pub fn save_profile_local_node_state(
+    start: &Path,
+    explicit_profile: Option<&str>,
+    rpc_url: &str,
+    runtime_manifest: &Path,
+) -> Result<PathBuf, CliError> {
+    let rpc_url = rpc_url.trim();
+    if rpc_url.is_empty() {
+        return Err(CliError::Other("rpc_url cannot be empty".into()));
+    }
+    if !rpc_url.starts_with("http://") && !rpc_url.starts_with("https://") {
+        return Err(CliError::Other(
+            "rpc_url must start with http:// or https://".into(),
+        ));
+    }
+    if !runtime_manifest.is_absolute() {
+        return Err(CliError::Other(
+            "runtime_manifest written by groundhog node must be absolute".into(),
+        ));
+    }
+
+    let profile_name = active_profile_name(start, explicit_profile)?;
+    let path = profile_write_path(start)?;
+    let contents = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e.into()),
+    };
+
+    let mut doc: toml_edit::DocumentMut = contents
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|e| CliError::Other(e.to_string()))?;
+
+    let profile = doc
+        .entry("profile")
+        .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
+        .as_table_mut()
+        .ok_or_else(|| CliError::Other("profile must be a table".into()))?
+        .entry(&profile_name)
+        .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
+        .as_table_mut()
+        .ok_or_else(|| CliError::Other("profile entry must be a table".into()))?;
+
+    profile.insert("rpc_url", toml_edit::value(rpc_url));
+    profile.insert(
+        "runtime_manifest",
+        toml_edit::value(runtime_manifest.to_string_lossy().as_ref()),
+    );
+
+    write_profile_config(&path, doc.to_string().as_bytes())?;
     Ok(path)
 }
 
@@ -297,24 +377,38 @@ pub fn resolve_default_key(
 /// Resolve the active project profile, defaulting to `default`
 /// when no `groundhog.toml` exists.
 pub fn resolve_profile(start: &Path, explicit: Option<&str>) -> Result<ResolvedProfile, CliError> {
-    let name = active_profile_name(explicit);
-    let source = find_project_config(start);
+    let name = active_profile_name(start, explicit)?;
+    let project_source = find_project_config(start);
+    let global_source = config_file_path()?;
+    let project_config = load_project_config(start)?;
+    let global_config = read_config_file()?;
 
-    let profile = match &source {
-        Some(path) => {
-            let contents = std::fs::read_to_string(path)?;
-            let config: ProjectConfigFile =
-                toml::from_str(&contents).map_err(|e| CliError::Other(e.to_string()))?;
-            config
-                .profile
-                .get(&name)
-                .cloned()
-                .ok_or_else(|| CliError::ProfileNotFound(name.clone()))?
-        }
-        None if name == DEFAULT_PROFILE => ProjectProfile::default(),
-        None => {
-            return Err(CliError::NoProjectConfig(name));
-        }
+    let global_profile = global_config
+        .profile
+        .get(&name)
+        .cloned()
+        .map(|mut profile| {
+            normalize_runtime_manifest(&mut profile, &global_source);
+            profile
+        });
+    let project_profile = match (&project_config, &project_source) {
+        (Some(config), Some(_path)) => config.profile.get(&name).cloned(),
+        _ => None,
+    };
+
+    let source = match (&project_profile, &global_profile, &project_source) {
+        (Some(_), _, Some(path)) => Some(path.clone()),
+        (None, Some(_), _) => Some(global_source),
+        _ => None,
+    };
+
+    let profile = match (global_profile, project_profile, project_source.is_some()) {
+        (Some(global), Some(project), _) => merge_profiles(global, project),
+        (Some(global), None, _) => global,
+        (None, Some(project), _) => project,
+        (None, None, false) if name == DEFAULT_PROFILE => ProjectProfile::default(),
+        (None, None, false) => return Err(CliError::NoProjectConfig(name)),
+        (None, None, true) => return Err(CliError::ProfileNotFound(name)),
     };
 
     Ok(ResolvedProfile {
@@ -329,6 +423,51 @@ pub fn resolve_profile(start: &Path, explicit: Option<&str>) -> Result<ResolvedP
         wallets: profile.wallets,
         source,
     })
+}
+
+fn merge_profiles(mut global: ProjectProfile, project: ProjectProfile) -> ProjectProfile {
+    if project.rpc_url.is_some() {
+        global.rpc_url = project.rpc_url;
+    }
+    if project.default_key.is_some() {
+        global.default_key = project.default_key;
+    }
+    if project.runtime_manifest.is_some() {
+        global.runtime_manifest = project.runtime_manifest;
+    }
+    global.contracts.extend(project.contracts);
+    global.wallets.extend(project.wallets);
+    global
+}
+
+fn normalize_runtime_manifest(profile: &mut ProjectProfile, config_path: &Path) {
+    let Some(path) = profile.runtime_manifest.as_ref() else {
+        return;
+    };
+    if path.is_absolute() {
+        return;
+    }
+    if let Some(parent) = config_path.parent() {
+        profile.runtime_manifest = Some(parent.join(path));
+    }
+}
+
+fn non_empty(value: Option<String>) -> Option<String> {
+    value
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+}
+
+fn profile_write_path(start: &Path) -> Result<PathBuf, CliError> {
+    Ok(find_project_config(start).unwrap_or(config_file_path()?))
+}
+
+fn write_profile_config(path: &Path, data: &[u8]) -> Result<(), CliError> {
+    if path == config_file_path()? {
+        atomic_write_private(path, data)
+    } else {
+        atomic_write(path, data)
+    }
 }
 
 /// Resolve a profile and apply explicit CLI target overrides.
@@ -384,6 +523,9 @@ fn is_valid_address(addr: &str) -> bool {
 /// Write `data` to `path` atomically by writing to a
 /// temporary file in the same directory, then renaming.
 fn atomic_write(path: &Path, data: &[u8]) -> Result<(), CliError> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     let tmp = path.with_extension("toml.tmp");
     std::fs::write(&tmp, data)?;
     if let Err(e) = std::fs::rename(&tmp, path) {
@@ -391,4 +533,28 @@ fn atomic_write(path: &Path, data: &[u8]) -> Result<(), CliError> {
         return Err(e.into());
     }
     Ok(())
+}
+
+fn atomic_write_private(path: &Path, data: &[u8]) -> Result<(), CliError> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let tmp = path.with_extension("toml.tmp");
+    let result = (|| -> Result<(), CliError> {
+        let mut options = OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+
+        let mut file = options.open(&tmp)?;
+        file.write_all(data)?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&tmp, path)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
 }
