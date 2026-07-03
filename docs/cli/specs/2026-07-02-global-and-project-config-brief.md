@@ -28,10 +28,10 @@ from any working directory.
 
 ## Proposed Config Model
 
-Add a global config file under `~/.config/groundhog`, for example:
+Add profile support to the existing global config file:
 
 ```text
-~/.config/groundhog/groundhog.toml
+~/.config/groundhog/config.toml
 ```
 
 Project-local `groundhog.toml` remains supported and overrides global config
@@ -40,12 +40,27 @@ when present. Resolution order should be:
 1. CLI flags.
 2. Environment variables.
 3. Project-local `groundhog.toml`, if discovered by walking up from cwd.
-4. Global `~/.config/groundhog/groundhog.toml`.
+4. Global `~/.config/groundhog/config.toml`.
 5. Built-in defaults.
+
+When `--profile` is omitted, the active profile name should resolve in this
+order:
+
+1. `GROUNDHOG_PROFILE`.
+2. Project-local `default_profile`, if present.
+3. Global `default_profile`, if present.
+4. Built-in `default` fallback.
+
+Project and global profiles merge field-by-field. Project values override global
+values for the same profile name, while omitted project fields inherit from the
+global profile. Map-like fields such as `contracts` and `wallets` also merge,
+with project aliases overriding global aliases of the same name.
 
 Profiles keep the same shape in both locations:
 
 ```toml
+default_profile = "local"
+
 [profile.devnet]
 rpc_url = "https://rpc.devnet.example"
 faucet_url = "https://faucet.devnet.example"
@@ -62,11 +77,21 @@ not create a smart contract project; that remains `groundhog new`'s job.
 
 Required behavior:
 
-- create `~/.config/groundhog/groundhog.toml` when requested;
+- create or update `~/.config/groundhog/config.toml`;
+- set `default_profile = "local"` on first setup;
 - add standard `devnet` and `local` profiles;
 - preserve existing keys, contracts, wallets, and profile fields;
-- optionally write project-local config when run in project mode;
 - make project config override global config instead of replacing it.
+
+`groundhog init` should not write project-local config. Project-local config is
+created by `groundhog new` and updated by commands that record project-owned
+state.
+
+`groundhog new` should still create a project-local `groundhog.toml`, but it
+should be a minimal project overlay rather than a duplicate of global setup. It
+should show project-specific contract and wallet alias sections for standard
+profiles, but should not write `default_profile`, RPC URLs, faucet URLs,
+runtime manifests, or default keys.
 
 The command also needs a way to locate the local devnode binary at init time.
 Possible inputs:
@@ -100,9 +125,15 @@ Future behavior should be:
 This means users should not need to start `groundhog node` from a specific
 project directory just so later CLI commands can find the runtime manifest.
 
+Profile names are not special. If a user runs `groundhog node --profile devnet`,
+the CLI should update `profile.devnet` with the local-node RPC URL and absolute
+runtime manifest path, even though that profile name may usually refer to a
+hosted Devnet profile.
+
+When no project `groundhog.toml` is discovered, commands that persist profile
+state should write to global config.
+
 ## Open Questions
 
-- What flag or subcommand should `groundhog init` use when a user explicitly
-  wants to write project-local config?
-- Should project config inherit global saved wallets by default, or should wallet
-  bindings be profile-local and fully overridden by project config?
+- None currently. This brief intentionally keeps profile names semantic-free and
+  uses merge semantics instead of separate network abstractions.
