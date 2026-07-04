@@ -14,7 +14,7 @@ pub enum LowerError {
     #[error(
         ".text is {size} bytes; the current artifact format caps code at {max} bytes \
          ({over} bytes over)",
-        over = .size - .max
+        over = .size.saturating_sub(*.max)
     )]
     CodeTooLarge {
         /// Actual `.text` size in bytes.
@@ -29,7 +29,7 @@ pub enum LowerError {
     #[error(
         "section {section} ends at {end}, exceeding the {max}-byte VM data memory \
          by {over} bytes",
-        over = .end - .max
+        over = .end.saturating_sub(*.max)
     )]
     DataTooLarge {
         /// Name of the offending section.
