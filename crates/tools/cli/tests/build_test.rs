@@ -600,6 +600,7 @@ fn build_rv32_project_compiles_and_lowers_elf() {
         &["--locked".into()],
         &groundhog_cli::artifacts::ArtifactOptions::default(),
         None,
+        None,
         &groundhog_cli::Print::quiet(),
     )
     .expect("bug: rv32 build should succeed");
@@ -646,6 +647,112 @@ fn build_rv32_project_compiles_and_lowers_elf() {
         metadata["build_flags"],
         "cargo build --release --no-default-features --features rv32-entrypoints --target riscv32im-unknown-none-elf -p demo-contract-rv32 --bin demo_contract_rv32 --locked"
     );
+}
+
+#[test]
+#[serial]
+fn build_rv32_project_with_stack_size_uses_cargo_rustc_defsym() {
+    let tmp = TempDir::new().unwrap();
+    let project_root =
+        std::fs::canonicalize(tmp.path()).expect("bug: project path should canonicalize");
+    fs::write(
+        project_root.join("Cargo.toml"),
+        "[package]\nname = \"demo-contract-rv32\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\nentrypoints = []\nrv32-entrypoints = [\"entrypoints\"]\n",
+    )
+    .unwrap();
+    fs::create_dir_all(project_root.join("src")).unwrap();
+    fs::write(project_root.join("src/main.rs"), "fn main() {}\n").unwrap();
+
+    let target_dir = project_root.join("target");
+    let raw_elf = target_dir
+        .join("riscv32im-unknown-none-elf/release")
+        .join("demo_contract_rv32");
+    let processed_metadata = target_dir
+        .join("groundhog")
+        .join("demo_contract_rv32.rv32.json");
+    let cargo_args_log = project_root.join("cargo-args.log");
+    let elf_fixture = project_root.join("fixture.elf");
+    fs::write(&elf_fixture, support::minimal_rv32_elf()).unwrap();
+    let metadata_json = format!(
+        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract-rv32","manifest_path":"{}","features":{{"entrypoints":[],"rv32-entrypoints":["entrypoints"]}}}}]}}"#,
+        project_root.display(),
+        target_dir.display(),
+        project_root.join("Cargo.toml").display()
+    );
+
+    let fake_bin = project_root.join("bin");
+    fs::create_dir_all(&fake_bin).unwrap();
+    let cargo = fake_bin.join("cargo");
+    fs::write(
+        &cargo,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = \"metadata\" ]; then\n  printf '%s' '{metadata_json}'\n  exit 0\nfi\nprintf '%s\\n' \"$*\" > '{}'\n/bin/mkdir -p '{}'\n/bin/cp '{}' '{}'\n",
+            cargo_args_log.display(),
+            raw_elf
+                .parent()
+                .expect("bug: raw elf parent should exist")
+                .display(),
+            elf_fixture.display(),
+            raw_elf.display()
+        ),
+    )
+    .unwrap();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&cargo).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&cargo, perms).unwrap();
+    }
+
+    let _cwd = CurrentDirGuard::enter(&project_root);
+    let _path = PathGuard::set(fake_bin.as_os_str());
+
+    groundhog_cli::build::build_rv32_project(
+        Some("demo-contract-rv32"),
+        &["--locked".into()],
+        &groundhog_cli::artifacts::ArtifactOptions::default(),
+        None,
+        Some(0x6000),
+        &groundhog_cli::Print::quiet(),
+    )
+    .expect("bug: rv32 build with --stack-size should succeed");
+
+    // The defsym rides on `cargo rustc` trailing flags so it composes with
+    // the project's own .cargo/config.toml rustflags instead of replacing
+    // them; user cargo args stay ahead of the `--` separator.
+    let cargo_args = fs::read_to_string(&cargo_args_log).unwrap();
+    assert!(cargo_args.starts_with("rustc "), "cargo args: {cargo_args}");
+    assert!(cargo_args.contains("--locked -- -C link-arg=--defsym=__stack_size=24576"));
+
+    let metadata: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&processed_metadata).unwrap()).unwrap();
+    assert_eq!(
+        metadata["build_flags"],
+        "cargo rustc --release --no-default-features --features rv32-entrypoints --target riscv32im-unknown-none-elf -p demo-contract-rv32 --bin demo_contract_rv32 --locked -- -C link-arg=--defsym=__stack_size=24576"
+    );
+}
+
+#[test]
+fn build_run_rejects_stack_size_for_wasm_target() {
+    let err = groundhog_cli::build::run(
+        None,
+        groundhog_cli::build::BuildTarget::Wasm,
+        false,
+        &[],
+        Some(4096),
+        &[],
+        &groundhog_cli::artifacts::ArtifactOptions::default(),
+        None,
+        "build",
+        &groundhog_cli::Print::quiet(),
+    )
+    .expect_err("wasm target should reject --stack-size");
+    assert!(matches!(
+        err,
+        groundhog_cli::CliError::InvalidBuildOptions(_)
+    ));
 }
 
 fn spec_string(value: &str) -> groundhog_spec_tool::ContractSpecString {

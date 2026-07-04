@@ -642,8 +642,14 @@ fn build_integration_artifact(
             })
         }
         crate::build::BuildTarget::Rv32 => {
-            let build =
-                crate::build::build_rv32_project(package, &[], artifacts, explicit_profile, print)?;
+            let build = crate::build::build_rv32_project(
+                package,
+                &[],
+                artifacts,
+                explicit_profile,
+                None,
+                print,
+            )?;
             Ok(IntegrationBuild {
                 project_name: build.project_name,
                 project_root: build.project_root,
@@ -932,8 +938,14 @@ fn build_local_test_artifact(
             })
         }
         crate::build::BuildTarget::Rv32 => {
-            let build =
-                crate::build::build_rv32_project(package, &[], artifacts, explicit_profile, print)?;
+            let build = crate::build::build_rv32_project(
+                package,
+                &[],
+                artifacts,
+                explicit_profile,
+                None,
+                print,
+            )?;
             Ok(LocalTestBuild {
                 project_name: build.project_name,
                 project_root: build.project_root,

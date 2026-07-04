@@ -84,6 +84,7 @@ pub fn run(
     target: BuildTarget,
     optimize: bool,
     bindings: &[String],
+    stack_size: Option<u32>,
     cargo_args: &[String],
     artifacts: &ArtifactOptions,
     explicit_profile: Option<&str>,
@@ -101,7 +102,14 @@ pub fn run(
                 "`--bindings` is only supported for the WASM build target".into(),
             ));
         }
-        let result = build_rv32_project(package, cargo_args, artifacts, explicit_profile, print)?;
+        let result = build_rv32_project(
+            package,
+            cargo_args,
+            artifacts,
+            explicit_profile,
+            stack_size,
+            print,
+        )?;
         print.json(&crate::result::CommandResult::new(
             cmd,
             json!({
@@ -122,6 +130,11 @@ pub fn run(
         return Ok(());
     }
 
+    if stack_size.is_some() {
+        return Err(CliError::InvalidBuildOptions(
+            "`--stack-size` is only supported for the RV32 build target".into(),
+        ));
+    }
     let result = build_project(
         package,
         optimize,
@@ -318,13 +331,56 @@ fn wasm_build_command(
     cmd
 }
 
+/// Parse and validate a `--stack-size` value: bytes as decimal or `0x` hex.
+///
+/// The value becomes the guest's `__stack_size` linker symbol, so it carries
+/// the SDK linker-script contract: a positive multiple of 16 below the 64 KiB
+/// data address space.
+pub fn parse_stack_size(value: &str) -> Result<u32, String> {
+    let parsed = match value.strip_prefix("0x") {
+        Some(hex) => u32::from_str_radix(hex, 16),
+        None => value.parse::<u32>(),
+    }
+    .map_err(|_| format!("expected bytes as decimal or 0x hex, got {value:?}"))?;
+    if parsed == 0 || !parsed.is_multiple_of(16) {
+        return Err(format!(
+            "stack size {parsed} must be a positive multiple of 16"
+        ));
+    }
+    if parsed as usize >= groundhog_rv32_artifact::MAX_MEMORY_BYTES {
+        return Err(format!(
+            "stack size {parsed} must be below the {} data address space",
+            groundhog_rv32_artifact::MAX_MEMORY_BYTES
+        ));
+    }
+    Ok(parsed)
+}
+
+/// True when a requested stack reserve visibly did not happen: the lowered
+/// image stages data below the requested stack top, which the stack-first
+/// linker script never produces. Old SDK linker scripts ignore the
+/// `__stack_size` defsym silently, so this is the only build-time signal.
+fn stack_size_defsym_ignored(
+    initial_memory_start: usize,
+    initial_memory_len: usize,
+    stack_size: u32,
+) -> bool {
+    initial_memory_len > 0 && initial_memory_start < stack_size as usize
+}
+
 /// Build the current project to an RV32 artifact by compiling an ELF and
 /// lowering it through the in-process RV32 lowerer library.
+///
+/// `stack_size` overrides the guest's `__stack_size` linker symbol via a
+/// `--defsym` on the final link (requires an SDK with the stack-first linker
+/// script; older scripts ignore the symbol, which is reported as a warning).
+#[allow(clippy::too_many_lines)]
 pub fn build_rv32_project(
     package: Option<&str>,
     cargo_args: &[String],
     artifacts: &ArtifactOptions,
     explicit_profile: Option<&str>,
+    stack_size: Option<u32>,
     print: &Print,
 ) -> Result<Rv32BuildResult, CliError> {
     crate::require_cargo()?;
@@ -348,9 +404,17 @@ pub fn build_rv32_project(
 
     print.status(format_args!("Compiling {pkg_name} to RV32 ELF..."));
 
+    // `--stack-size` switches to `cargo rustc`: its trailing flags append to
+    // the final rustc invocation, composing with the project's own
+    // .cargo/config.toml rustflags (RUSTFLAGS or --config would replace the
+    // whole target rustflags list, losing the linker script).
     let mut cmd = Command::new("cargo");
     cmd.current_dir(&metadata.workspace_root)
-        .arg("build")
+        .arg(if stack_size.is_some() {
+            "rustc"
+        } else {
+            "build"
+        })
         .arg("--release")
         .arg("--no-default-features")
         .arg("--features")
@@ -366,6 +430,11 @@ pub fn build_rv32_project(
 
     for arg in cargo_args {
         cmd.arg(arg);
+    }
+    if let Some(size) = stack_size {
+        cmd.arg("--")
+            .arg("-C")
+            .arg(format!("link-arg=--defsym=__stack_size={size}"));
     }
 
     let (cargo_stdout, cargo_stderr) = crate::run_cargo(&mut cmd, print)?;
@@ -386,6 +455,20 @@ pub fn build_rv32_project(
     let elf_bytes = fs::read(&elf)?;
     let lowered = groundhog_rv32_lower::lower(&elf_bytes)
         .map_err(|error| CliError::Rv32LowerFailed(error.to_string()))?;
+    if let Some(size) = stack_size
+        && stack_size_defsym_ignored(
+            lowered.initial_memory_start,
+            lowered.initial_memory.len(),
+            size,
+        )
+    {
+        print.warn(format_args!(
+            "--stack-size {size} appears to have had no effect: data is staged at \
+             {:#x}, below the requested stack top. The project's SDK linker script \
+             likely predates the stack-first layout (`__stack_size` support).",
+            lowered.initial_memory_start
+        ));
+    }
     let lower_metadata_doc =
         groundhog_rv32_lower::render_metadata(&groundhog_rv32_lower::MetadataInput {
             elf: &elf_bytes,
@@ -396,7 +479,12 @@ pub fn build_rv32_project(
             memory_bytes: lowered.memory_bytes,
             rustc_version: rustc_version(),
             target_triple: Some(RV32_TARGET_TRIPLE.to_string()),
-            build_flags: Some(rv32_build_flags(pkg_name, rv32_feature, cargo_args)),
+            build_flags: Some(rv32_build_flags(
+                pkg_name,
+                rv32_feature,
+                cargo_args,
+                stack_size,
+            )),
         });
     fs::write(&rv32, &lowered.artifact)?;
     if let Err(error) = fs::write(&lower_metadata, lower_metadata_doc) {
@@ -449,10 +537,20 @@ fn manifest_has_feature(manifest_path: &Path, feature: &str) -> Option<&'static 
         .map(|_| "rv32-entrypoints")
 }
 
-fn rv32_build_flags(pkg_name: &str, rv32_feature: &str, cargo_args: &[String]) -> String {
+fn rv32_build_flags(
+    pkg_name: &str,
+    rv32_feature: &str,
+    cargo_args: &[String],
+    stack_size: Option<u32>,
+) -> String {
     let mut flags = vec![
         "cargo".to_string(),
-        "build".to_string(),
+        if stack_size.is_some() {
+            "rustc"
+        } else {
+            "build"
+        }
+        .to_string(),
         "--release".to_string(),
         "--no-default-features".to_string(),
         "--features".to_string(),
@@ -465,6 +563,11 @@ fn rv32_build_flags(pkg_name: &str, rv32_feature: &str, cargo_args: &[String]) -
         crate::scaffold::to_snake(pkg_name),
     ];
     flags.extend(cargo_args.iter().cloned());
+    if let Some(size) = stack_size {
+        flags.push("--".to_string());
+        flags.push("-C".to_string());
+        flags.push(format!("link-arg=--defsym=__stack_size={size}"));
+    }
     flags.join(" ")
 }
 
@@ -560,9 +663,45 @@ fn require_contract_toml(workspace_root: &Path) -> Result<PathBuf, CliError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CargoMetadata, MetadataPackage, rv32_entrypoints_feature};
+    use super::{
+        CargoMetadata, MetadataPackage, parse_stack_size, rv32_entrypoints_feature,
+        stack_size_defsym_ignored,
+    };
     use std::path::PathBuf;
     use tempfile::TempDir;
+
+    #[test]
+    fn parse_stack_size_accepts_decimal_and_hex() {
+        assert_eq!(parse_stack_size("32768"), Ok(32768));
+        assert_eq!(parse_stack_size("0x8000"), Ok(32768));
+        assert_eq!(parse_stack_size("0x6000"), Ok(24576));
+        assert_eq!(parse_stack_size("16"), Ok(16));
+        assert_eq!(parse_stack_size("65520"), Ok(65520)); // last multiple of 16 below 64K
+    }
+
+    #[test]
+    fn parse_stack_size_rejects_invalid_values() {
+        for bad in [
+            "0", "0x0", "24", "0x6008", "65536", "0x10000", "", "abc", "0x", "-16",
+        ] {
+            assert!(
+                parse_stack_size(bad).is_err(),
+                "expected {bad:?} to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn stack_size_defsym_ignored_detects_pre_stack_first_layouts() {
+        // Data staged below the requested stack top: the linker script did not
+        // honor __stack_size, so the reserve is not actually there.
+        assert!(stack_size_defsym_ignored(0x8, 4, 0x6000));
+        // Data staged at (or above) the stack top: layout honored the reserve.
+        assert!(!stack_size_defsym_ignored(0x6000, 4, 0x6000));
+        assert!(!stack_size_defsym_ignored(0x7000, 4, 0x6000));
+        // No stored data at all: nothing to infer, stay quiet.
+        assert!(!stack_size_defsym_ignored(0, 0, 0x6000));
+    }
 
     #[test]
     fn rv32_feature_prefers_new_wrapper_feature_when_present() {

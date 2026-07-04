@@ -159,6 +159,10 @@ enum Command {
         /// Generate typed bindings after build (e.g. `ts`)
         #[arg(long)]
         bindings: Vec<String>,
+        /// Guest stack size in bytes (decimal or 0x hex; multiple of 16,
+        /// below 64K). RV32 only; sets the SDK linker script's `__stack_size`.
+        #[arg(long, value_parser = groundhog_cli::build::parse_stack_size)]
+        stack_size: Option<u32>,
         /// Config profile to use
         #[arg(
             long = "profile",
@@ -625,6 +629,7 @@ fn main() {
             target,
             optimize,
             bindings,
+            stack_size,
             profile,
             artifacts,
             cargo_args,
@@ -640,6 +645,7 @@ fn main() {
                     target.into(),
                     optimize,
                     &bindings,
+                    stack_size,
                     &cargo_args,
                     &artifacts,
                     Some(&profile),
