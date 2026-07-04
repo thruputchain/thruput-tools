@@ -1,6 +1,6 @@
-//! Error type for the v4 artifact format.
+//! Error type for the RV32 artifact format.
 
-/// Errors produced while building or validating a v4 RV32 artifact.
+/// Errors produced while building or validating an RV32 artifact.
 #[derive(Debug, thiserror::Error)]
 pub enum ArtifactError {
     /// A build input violated a format/layout rule.

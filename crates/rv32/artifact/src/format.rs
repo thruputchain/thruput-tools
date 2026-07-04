@@ -1,4 +1,4 @@
-//! The Groundhog RV32 **v4 artifact format**: constants, writer, and
+//! The Groundhog RV32 **v5 artifact format**: constants, writer, and
 //! self-verifier.
 //!
 //! This is the single Rust source of truth for the on-disk format the hogd
@@ -6,35 +6,46 @@
 //! values below are the load-bearing contract and must stay in lockstep with
 //! that header.
 //!
-//! v4 moves method dispatch into the guest: the runtime always enters at
+//! v4 moved method dispatch into the guest: the runtime always enters at
 //! `_start` (PC 0) and seeds the invoked method id in registers, so the
-//! artifact no longer carries a method → PC dispatch table. The image is also
-//! no longer padded to the full data-memory size — only the initialized
-//! prefix is stored and the runtime zero-fills the rest.
+//! artifact carries no method → PC dispatch table, and only the initialized
+//! prefix of data memory is stored.
 //!
-//! Header layout (little-endian, no padding, 132 bytes total):
+//! v5 adds `initial_memory_start`: the guest data address (a VA, unrelated to
+//! file layout) where the runtime stages the stored image. The runtime
+//! zero-fills `[0, start)` and `[start + initial_memory_size, memory_bytes)`.
+//! This lets the stored image be the minimal nonzero span of the data image
+//! instead of the full `[0, high_water)` prefix, so a stack-first guest
+//! layout (stack below the data sections) carries no stack-sized leading-zero
+//! shadow. v5 also bumps the entry ABI to 3: `sp` is seeded to 0 and the
+//! guest owns stack placement (v2 seeded `sp` to the top of data memory).
+//!
+//! Header layout (little-endian, no padding, 128 bytes total):
 //!
 //! ```text
 //!   off  size  field
 //!     0     8  magic "GHRV32A1"
-//!     8     4  format_version          (4)
-//!    12     4  header_bytes            (132)
+//!     8     4  format_version          (5)
+//!    12     4  header_bytes            (128)
 //!    16     8  vm_profile_digest
 //!    24     4  flags                   (0)
-//!    28     4  entry_abi_version       (2)
+//!    28     4  entry_abi_version       (3)
 //!    32     4  syscall_abi_version     (1)
 //!    36     4  gas_table_version       (3)
 //!    40     8  gas_schedule_digest
 //!    48     4  memory_bytes            (65536)
 //!    52     4  code_size
 //!    56     4  initial_memory_size
-//!    60     4  code_offset
-//!    64     4  initial_memory_offset
-//!    68    32  sha256(code)
-//!   100    32  sha256(initial_memory)
+//!    60     4  initial_memory_start
+//!    64    32  sha256(code)
+//!    96    32  sha256(initial_memory)
 //! ```
 //!
-//! Body: `header || code || initial_memory`.
+//! Body: `header || code || initial_memory`. Section positions are implicit:
+//! code starts at `header_bytes`, `initial_memory` directly after code, and
+//! the file ends exactly at `header_bytes + code_size + initial_memory_size`
+//! — there are no stored file offsets (v5 dropped v4's redundant
+//! `code_offset` / `initial_memory_offset` fields).
 
 use sha2::{Digest, Sha256};
 
@@ -42,9 +53,9 @@ use crate::error::{Result, invalid, verify};
 
 /// Maximum size of the contract code (`.text`) section.
 pub const MAX_CODE_BYTES: usize = 64 * 1024;
-/// Total guest data address space (the `sp` top). The stored initial-memory
-/// image is the initialized prefix of this space; the runtime zero-fills the
-/// rest. The lowerer stamps this exact value; the verifier accepts any nonzero
+/// Total guest data address space. The stored initial-memory image is the
+/// span staged at `initial_memory_start`; the runtime zero-fills the rest.
+/// The lowerer stamps this exact value; the verifier accepts any nonzero
 /// `memory_bytes` up to this cap so the format is per-contract capable.
 pub const MAX_MEMORY_BYTES: usize = 64 * 1024;
 /// RV32 instruction width in bytes.
@@ -52,13 +63,15 @@ pub const INSTRUCTION_BYTES: usize = 4;
 /// Artifact magic: `GHRV32A1`.
 pub const MAGIC: [u8; 8] = *b"GHRV32A1";
 /// Artifact format version.
-pub const FORMAT_VERSION: u32 = 4;
+pub const FORMAT_VERSION: u32 = 5;
 /// Fixed header size in bytes.
-pub const HEADER_BYTES: usize = 132;
+pub const HEADER_BYTES: usize = 128;
 /// VM-profile digest the runtime validates the artifact against.
 pub const VM_PROFILE_DIGEST: u64 = 0x55c5_3a68_5f0e_b33d;
-/// Entry ABI version (2 = enter at PC 0 with the method id seeded in a0/a1).
-pub const ENTRY_ABI_VERSION: u32 = 2;
+/// Entry ABI version (3 = enter at PC 0 with the method id seeded in a0/a1
+/// and `sp` seeded to 0 — the guest owns stack placement and must set `sp`
+/// before touching the stack; v2 seeded `sp` to the top of data memory).
+pub const ENTRY_ABI_VERSION: u32 = 3;
 /// Syscall ABI version (1 = register-native: args in a0..a7, no frame).
 pub const SYSCALL_ABI_VERSION: u32 = 1;
 /// Gas-schedule table version.
@@ -70,7 +83,7 @@ pub const GAS_SCHEDULE_DIGEST: u64 = 0x9183_17c2_1c46_bb60;
 /// Digest size of each section hash stamped into the artifact header.
 pub const DIGEST_BYTES: usize = 32;
 
-/// Fixed v4 header offsets.
+/// Fixed v5 header offsets.
 pub const FORMAT_VERSION_OFFSET: usize = 8;
 pub const HEADER_SIZE_OFFSET: usize = 12;
 pub const VM_PROFILE_OFFSET: usize = 16;
@@ -82,9 +95,8 @@ pub const GAS_DIGEST_OFFSET: usize = 40;
 pub const MEMORY_BYTES_OFFSET: usize = 48;
 pub const CODE_SIZE_OFFSET: usize = 52;
 pub const INITIAL_MEMORY_SIZE_OFFSET: usize = 56;
-pub const CODE_OFFSET_OFFSET: usize = 60;
-pub const INITIAL_MEMORY_OFFSET_OFFSET: usize = 64;
-pub const CODE_DIGEST_OFFSET: usize = 68;
+pub const INITIAL_MEMORY_START_OFFSET: usize = 60;
+pub const CODE_DIGEST_OFFSET: usize = 64;
 pub const INITIAL_MEMORY_DIGEST_OFFSET: usize = CODE_DIGEST_OFFSET + DIGEST_BYTES;
 
 const _: () = assert!(INITIAL_MEMORY_DIGEST_OFFSET + DIGEST_BYTES == HEADER_BYTES);
@@ -98,13 +110,13 @@ const _: () = assert!(INITIAL_MEMORY_DIGEST_OFFSET + DIGEST_BYTES == HEADER_BYTE
 // cross-repo fingerprint check enforces. Do not "fix" to the canonical value.
 const FNV_OFFSET_BASIS: u64 = 1_469_598_103_934_665_603;
 const FNV_PRIME: u64 = 1_099_511_628_211;
-const FORMAT_FINGERPRINT_DOMAIN: &[u8] = b"groundhog.rv32.artifact.format.v4";
+const FORMAT_FINGERPRINT_DOMAIN: &[u8] = b"groundhog.rv32.artifact.format.v5";
 const SECTION_DIGEST_ALGORITHM: &[u8] = b"sha256";
 const CANONICAL_SECTION_ORDER: &[u8] = b"header|code|initial_memory";
 const FLAGS_REQUIRED_VALUE: u32 = 0;
 
-/// Pinned v4 artifact-format contract fingerprint.
-pub const FORMAT_FINGERPRINT: u64 = 0x3aed_0191_5d1a_5e1d;
+/// Pinned v5 artifact-format contract fingerprint.
+pub const FORMAT_FINGERPRINT: u64 = 0x8e5c_af3e_9cd2_3b22;
 const _: () = assert!(compute_format_fingerprint() == FORMAT_FINGERPRINT);
 
 const fn fnv_digest_byte(digest: u64, value: u8) -> u64 {
@@ -158,7 +170,7 @@ const fn fold_layout_field(
     format_fingerprint_u64(digest, size_name, size as u64)
 }
 
-/// Compute the v4 artifact-format contract fingerprint.
+/// Compute the v5 artifact-format contract fingerprint.
 #[must_use]
 pub const fn compute_format_fingerprint() -> u64 {
     compute_format_fingerprint_with_inputs(
@@ -213,7 +225,7 @@ pub const fn compute_format_fingerprint_with_domain(domain: &[u8]) -> u64 {
     )
 }
 
-// Intentionally a long, flat enumeration: it folds every runtime-validated v4
+// Intentionally a long, flat enumeration: it folds every runtime-validated v5
 // format fact in a fixed order. Splitting it would obscure the field list that
 // is the whole point of the fingerprint.
 #[allow(clippy::too_many_lines)]
@@ -323,16 +335,9 @@ const fn compute_format_fingerprint_with_inputs(
     );
     digest = fold_layout_field(
         digest,
-        b"header.code_offset.offset",
-        b"header.code_offset.size",
-        CODE_OFFSET_OFFSET,
-        4,
-    );
-    digest = fold_layout_field(
-        digest,
-        b"header.initial_memory_offset.offset",
-        b"header.initial_memory_offset.size",
-        INITIAL_MEMORY_OFFSET_OFFSET,
+        b"header.initial_memory_start.offset",
+        b"header.initial_memory_start.size",
+        INITIAL_MEMORY_START_OFFSET,
         4,
     );
     digest = fold_layout_field(
@@ -363,10 +368,9 @@ const fn compute_format_fingerprint_with_inputs(
     digest = format_fingerprint_u64(digest, b"memory_bytes_nonzero", 1);
     digest = format_fingerprint_u64(digest, b"memory_bytes_le_max", 1);
     digest = format_fingerprint_u64(digest, b"code_size_nonzero", 1);
-    digest = format_fingerprint_u64(digest, b"initial_memory_size_le_memory_bytes", 1);
+    digest = format_fingerprint_u64(digest, b"initial_memory_start_plus_size_le_memory_bytes", 1);
+    digest = format_fingerprint_u64(digest, b"initial_memory_start_zero_when_empty", 1);
     digest = format_fingerprint_bytes(digest, b"canonical_section_order", canonical_section_order);
-    digest = format_fingerprint_u64(digest, b"sections_must_be_in_bounds", 1);
-    digest = format_fingerprint_u64(digest, b"sections_must_not_overlap", 1);
     digest = format_fingerprint_u64(digest, b"no_section_gaps_or_trailing_bytes", 1);
     digest
 }
@@ -391,14 +395,20 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     out
 }
 
-/// Assemble a complete v4 artifact from the code section and the initialized
-/// prefix of the data-memory image.
+/// Assemble a complete v5 artifact from the code section and the stored span
+/// of the data-memory image.
 ///
-/// `initial_memory` is the stored prefix `[0, high_water)` — the runtime
-/// zero-fills `[initial_memory.len(), memory_bytes)`. It must not exceed
-/// `MAX_MEMORY_BYTES`. `memory_bytes` is stamped as `MAX_MEMORY_BYTES` (the
-/// full data address space).
-pub fn build_artifact(code: &[u8], initial_memory: &[u8]) -> Result<Vec<u8>> {
+/// `initial_memory` is staged at data address `initial_memory_start` — the
+/// runtime zero-fills `[0, base)` and `[base + initial_memory.len(),
+/// memory_bytes)`. The span must fit the data address space
+/// (`base + len <= MAX_MEMORY_BYTES`), and an empty image must use base 0.
+/// `memory_bytes` is stamped as `MAX_MEMORY_BYTES` (the full data address
+/// space).
+pub fn build_artifact(
+    code: &[u8],
+    initial_memory: &[u8],
+    initial_memory_start: usize,
+) -> Result<Vec<u8>> {
     // The loader rejects code_size == 0 || > MAX_CODE_BYTES; refuse to emit
     // such an artifact even when called directly (not via `lower`).
     if code.is_empty() || code.len() > MAX_CODE_BYTES {
@@ -407,24 +417,28 @@ pub fn build_artifact(code: &[u8], initial_memory: &[u8]) -> Result<Vec<u8>> {
             code.len()
         )));
     }
-    // The stored prefix is at most the full data address space.
-    if initial_memory.len() > MAX_MEMORY_BYTES {
+    // The stored span must fit the data address space.
+    let span_end = initial_memory_start
+        .checked_add(initial_memory.len())
+        .ok_or_else(|| invalid("initial memory span overflows"))?;
+    if span_end > MAX_MEMORY_BYTES {
         return Err(invalid(format!(
-            "initial memory size {} exceeds {MAX_MEMORY_BYTES}",
-            initial_memory.len()
+            "initial memory span end {span_end} exceeds {MAX_MEMORY_BYTES}"
         )));
     }
-
-    let code_offset = HEADER_BYTES;
-    let memory_offset = code_offset + code.len();
+    // Keep the format canonical: an empty image has exactly one encoding.
+    if initial_memory.is_empty() && initial_memory_start != 0 {
+        return Err(invalid(
+            "initial_memory_start must be zero for an empty image",
+        ));
+    }
 
     let to_u32 = |value: usize, what: &str| -> Result<u32> {
         u32::try_from(value).map_err(|_| invalid(format!("{what} does not fit in u32")))
     };
     let code_size = to_u32(code.len(), "code size")?;
     let memory_size = to_u32(initial_memory.len(), "initial memory size")?;
-    let code_off = to_u32(code_offset, "code offset")?;
-    let memory_off = to_u32(memory_offset, "initial memory offset")?;
+    let memory_base = to_u32(initial_memory_start, "initial memory base")?;
 
     let mut header = Vec::with_capacity(HEADER_BYTES);
     header.extend_from_slice(&MAGIC);
@@ -439,8 +453,7 @@ pub fn build_artifact(code: &[u8], initial_memory: &[u8]) -> Result<Vec<u8>> {
     header.extend_from_slice(&to_u32(MAX_MEMORY_BYTES, "memory bytes")?.to_le_bytes());
     header.extend_from_slice(&code_size.to_le_bytes());
     header.extend_from_slice(&memory_size.to_le_bytes());
-    header.extend_from_slice(&code_off.to_le_bytes());
-    header.extend_from_slice(&memory_off.to_le_bytes());
+    header.extend_from_slice(&memory_base.to_le_bytes());
     header.extend_from_slice(&sha256(code));
     header.extend_from_slice(&sha256(initial_memory));
     if header.len() != HEADER_BYTES {
@@ -515,8 +528,7 @@ pub fn verify_artifact(artifact: &[u8]) -> Result<()> {
     let memory_bytes = read_u32(MEMORY_BYTES_OFFSET) as usize;
     let code_size = read_u32(CODE_SIZE_OFFSET) as usize;
     let init_mem_size = read_u32(INITIAL_MEMORY_SIZE_OFFSET) as usize;
-    let code_off = read_u32(CODE_OFFSET_OFFSET) as usize;
-    let mem_off = read_u32(INITIAL_MEMORY_OFFSET_OFFSET) as usize;
+    let init_mem_start = read_u32(INITIAL_MEMORY_START_OFFSET) as usize;
 
     // Canonical layout: the body is exactly header || code || initial_memory
     // with no gaps or trailing bytes, code fits the declared limit, and the
@@ -529,13 +541,24 @@ pub fn verify_artifact(artifact: &[u8]) -> Result<()> {
     if code_size == 0 || code_size > MAX_CODE_BYTES {
         return Err(verify("code size out of range"));
     }
-    if init_mem_size > memory_bytes {
-        return Err(verify("initial_memory_size exceeds memory_bytes"));
+    // The staged span must fit the data address space (u32 reads widened to
+    // usize, so the addition cannot overflow on 64-bit hosts). Subsumes the
+    // v4 `initial_memory_size <= memory_bytes` check.
+    if init_mem_start + init_mem_size > memory_bytes {
+        return Err(verify(
+            "initial_memory_start plus initial_memory_size exceeds memory_bytes",
+        ));
     }
-    if code_off != HEADER_BYTES
-        || mem_off != code_off + code_size
-        || mem_off + init_mem_size != artifact.len()
-    {
+    if init_mem_size == 0 && init_mem_start != 0 {
+        return Err(verify(
+            "initial_memory_start must be zero for an empty image",
+        ));
+    }
+    // Section positions are implicit: code at HEADER_BYTES, initial_memory
+    // directly after, and the file ends exactly there — no gaps, no trailing
+    // bytes. (Sizes are u32 reads widened to usize, so the sums cannot
+    // overflow on 64-bit hosts.)
+    if HEADER_BYTES + code_size + init_mem_size != artifact.len() {
         return Err(verify("non-canonical section layout"));
     }
 
@@ -543,13 +566,8 @@ pub fn verify_artifact(artifact: &[u8]) -> Result<()> {
     let mem_dig =
         &artifact[INITIAL_MEMORY_DIGEST_OFFSET..INITIAL_MEMORY_DIGEST_OFFSET + DIGEST_BYTES];
 
-    let section = |off: usize, size: usize, what: &str| -> Result<&[u8]> {
-        artifact
-            .get(off..off + size)
-            .ok_or_else(|| verify(format!("{what} section out of range")))
-    };
-    let code = section(code_off, code_size, "code")?;
-    let memory = section(mem_off, init_mem_size, "initial_memory")?;
+    let code = &artifact[HEADER_BYTES..HEADER_BYTES + code_size];
+    let memory = &artifact[HEADER_BYTES + code_size..];
 
     if sha256(code).as_slice() != code_dig {
         return Err(verify("code digest mismatch"));

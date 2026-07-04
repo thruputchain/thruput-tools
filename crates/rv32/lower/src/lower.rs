@@ -16,10 +16,10 @@ pub const ALLOC_ALLOWLIST: [&str; 7] = [
     ".text", ".rodata", ".srodata", ".data", ".sdata", ".bss", ".sbss",
 ];
 
-/// Low data addresses reserved as a null guard. The VM stages the data image
-/// at data address 0, so a static landing at address 0 would make a Rust
-/// `&'static` to it a readable null pointer. The SDK linker keeps data above
-/// this guard; the lowerer rejects any data section that reaches into it.
+/// Low data addresses reserved as a null guard. A static landing at address 0
+/// would make a Rust `&'static` to it a readable null pointer. The SDK linker
+/// keeps data above this guard; the lowerer rejects any data section that
+/// reaches into it.
 pub const NULL_GUARD_BYTES: u32 = 8;
 
 /// Contract spec metadata sections are compile-time sidecars, not VM memory.
@@ -31,27 +31,31 @@ pub const SPEC_METADATA_SECTIONS: [&str; 2] = ["groundhogspecrawv0", "groundhogs
 /// into it (handy for metadata and tests).
 #[derive(Debug, Clone)]
 pub struct Lowered {
-    /// The complete v4 artifact bytes (`.rv32a`).
+    /// The complete v5 artifact bytes (`.rv32a`).
     pub artifact: Vec<u8>,
     /// The contract code (`.text`) section.
     pub code: Vec<u8>,
-    /// The stored initial-memory prefix `[0, high_water)`. The runtime
-    /// zero-fills the rest of `memory_bytes`.
+    /// The stored initial-memory image: the minimal nonzero span of the data
+    /// image, staged at `initial_memory_start`. The runtime zero-fills the rest
+    /// of `memory_bytes`.
     pub initial_memory: Vec<u8>,
-    /// Total guest data address space (the `sp` top), in bytes.
+    /// Guest data address where `initial_memory` is staged (0 when empty).
+    pub initial_memory_start: usize,
+    /// Total guest data address space, in bytes.
     pub memory_bytes: usize,
 }
 
-/// Parse, validate, and lower an rv32im contract ELF into a v4 artifact.
+/// Parse, validate, and lower an rv32im contract ELF into a v5 artifact.
 pub fn lower(elf_bytes: &[u8]) -> Result<Lowered> {
     let sections = elf::parse_elf(elf_bytes)?;
-    let (code, initial_memory) = validate_sections(elf_bytes, &sections)?;
-    let artifact = build_artifact(&code, &initial_memory)?;
+    let (code, initial_memory, initial_memory_start) = validate_sections(elf_bytes, &sections)?;
+    let artifact = build_artifact(&code, &initial_memory, initial_memory_start)?;
     verify_artifact(&artifact)?;
     Ok(Lowered {
         artifact,
         code,
         initial_memory,
+        initial_memory_start,
         memory_bytes: MAX_MEMORY_BYTES,
     })
 }
@@ -73,11 +77,12 @@ fn unique_text(sections: &[Section]) -> Result<&Section> {
     }
 }
 
-/// Validate the section layout and return `(code, initial_memory)`, where
-/// `initial_memory` is the high-water prefix of the data image (the runtime
-/// zero-fills the rest of the address space).
+/// Validate the section layout and return `(code, initial_memory, start)`,
+/// where `initial_memory` is the minimal nonzero span of the data image and
+/// `start` is the data address it is staged at (the runtime zero-fills the
+/// rest of the address space).
 #[allow(clippy::too_many_lines)]
-fn validate_sections(data: &[u8], sections: &[Section]) -> Result<(Vec<u8>, Vec<u8>)> {
+fn validate_sections(data: &[u8], sections: &[Section]) -> Result<(Vec<u8>, Vec<u8>, usize)> {
     let text = unique_text(sections)?;
     if !text.is_exec() || !text.is_alloc() {
         return Err(invalid(".text must be alloc+exec"));
@@ -104,10 +109,6 @@ fn validate_sections(data: &[u8], sections: &[Section]) -> Result<(Vec<u8>, Vec<
     }
 
     let mut memory = vec![0u8; MAX_MEMORY_BYTES];
-    // End address of the highest-addressed PROGBITS data section written into
-    // the image. The stored prefix is `memory[0..high_water]`; everything above
-    // is zero-filled by the runtime (bss, heap, stack).
-    let mut high_water: usize = 0;
     let mut data_ranges: Vec<(String, u32, u32)> = Vec::new();
     for section in sections {
         if (section.sh_type == elf::SHT_REL || section.sh_type == elf::SHT_RELA)
@@ -181,11 +182,17 @@ fn validate_sections(data: &[u8], sections: &[Section]) -> Result<(Vec<u8>, Vec<
         }
         let addr = section.addr as usize;
         memory[addr..addr + size].copy_from_slice(&data[off..off + size]);
-        high_water = high_water.max(addr + size);
     }
 
     let code = data[text_off..text_off + text_size].to_vec();
-    // Store only the initialized prefix; the runtime zero-fills the tail.
-    memory.truncate(high_water);
-    Ok((code, memory))
+    // Store the minimal nonzero span; the runtime zero-fills everything
+    // outside `[start, start + len)`, so edge zeros carry no information.
+    let (initial_memory, start) = match (
+        memory.iter().position(|&b| b != 0),
+        memory.iter().rposition(|&b| b != 0),
+    ) {
+        (Some(low), Some(high)) => (memory[low..=high].to_vec(), low),
+        _ => (Vec::new(), 0),
+    };
+    Ok((code, initial_memory, start))
 }

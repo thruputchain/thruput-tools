@@ -347,10 +347,11 @@ fn lowers_a_minimal_contract() {
 
     assert_eq!(lowered.code.len(), 32);
     assert_eq!(lowered.memory_bytes, 64 * 1024);
-    // No data sections, so the stored initial-memory prefix is empty.
+    // No data sections, so the stored initial-memory span is empty.
     assert_eq!(lowered.initial_memory.len(), 0);
-    // header (132) + code (32) + empty initial memory.
-    assert_eq!(lowered.artifact.len(), 132 + 32);
+    assert_eq!(lowered.initial_memory_start, 0);
+    // header (128) + code (32) + empty initial memory.
+    assert_eq!(lowered.artifact.len(), 128 + 32);
     assert_eq!(&lowered.artifact[..8], b"GHRV32A1");
     verify_artifact(&lowered.artifact).expect("artifact self-verifies");
 }
@@ -377,16 +378,12 @@ fn copies_data_sections_into_the_memory_image() {
         vec![0xDE, 0xAD, 0xBE, 0xEF],
     ));
     let lowered = lower(&assemble(spec)).expect("lowers with rodata");
-    // The stored prefix runs from 0 to the section's high-water end (0x104),
-    // not the full 64 KiB address space.
-    assert_eq!(lowered.initial_memory.len(), 0x104);
-    assert!(lowered.initial_memory.len() < lowered.memory_bytes);
-    assert_eq!(
-        &lowered.initial_memory[0x100..0x104],
-        &[0xDE, 0xAD, 0xBE, 0xEF]
-    );
-    // The high-water prefix is materially smaller than the old full image.
-    assert!(lowered.artifact.len() < 132 + 32 + 64 * 1024);
+    // The stored image is the minimal nonzero span, staged at its start VA — not
+    // a prefix from address 0.
+    assert_eq!(lowered.initial_memory_start, 0x100);
+    assert_eq!(lowered.initial_memory, [0xDE, 0xAD, 0xBE, 0xEF]);
+    // header + code + the 4-byte span: no leading-zero shadow.
+    assert_eq!(lowered.artifact.len(), 128 + 32 + 4);
 }
 
 #[test]
@@ -398,6 +395,7 @@ fn metadata_has_sorted_keys_and_expected_shape() {
         artifact: &lowered.artifact,
         code: &lowered.code,
         initial_memory: &lowered.initial_memory,
+        initial_memory_start: lowered.initial_memory_start,
         memory_bytes: lowered.memory_bytes,
         rustc_version: None,
         target_triple: Some("riscv32im-unknown-none-elf".to_string()),
@@ -420,6 +418,7 @@ fn metadata_has_sorted_keys_and_expected_shape() {
     assert_eq!(parsed["code_bytes"], 32);
     assert_eq!(parsed["memory_bytes"], 64 * 1024);
     assert_eq!(parsed["initial_memory_bytes"], 0);
+    assert_eq!(parsed["initial_memory_start"], 0);
     assert!(parsed.get("dispatch_entries").is_none());
     assert_eq!(
         parsed["artifact_format_fingerprint"],
@@ -539,19 +538,65 @@ fn accepts_data_section_inside_the_code_pc_range() {
         vec![0xAA, 0xBB, 0xCC, 0xDD],
     ));
     let lowered = lower(&assemble(spec)).expect("lowers with low-vaddr rodata");
-    // The stored image is the compact [0, high_water) prefix: the 8-byte null
-    // guard plus the 4 rodata bytes, not a code-sized image.
-    assert_eq!(lowered.initial_memory.len(), 0xC);
-    assert_eq!(&lowered.initial_memory[0x8..0xC], &[0xAA, 0xBB, 0xCC, 0xDD]);
-    // [0, 8) stays zero — the reserved null guard.
-    assert_eq!(&lowered.initial_memory[0..0x8], &[0u8; 8]);
+    // The stored image is the minimal nonzero span: the null guard below it is
+    // never stored, just implied by the start VA.
+    assert_eq!(lowered.initial_memory_start, 0x8);
+    assert_eq!(lowered.initial_memory, [0xAA, 0xBB, 0xCC, 0xDD]);
+}
+
+#[test]
+fn stack_first_layout_stores_no_leading_zero_shadow() {
+    // A stack-first guest layout parks the stack below the data sections, so
+    // the first data section starts past the stack region (here 0x1008). The
+    // stored image must be just the data span, not 4 KiB of stack zeros.
+    let mut spec = happy_spec();
+    spec.extras.push(ExtraSection::progbits(
+        ".rodata",
+        SHF_ALLOC,
+        0x1008,
+        vec![0x11, 0x22, 0x33, 0x44],
+    ));
+    let lowered = lower(&assemble(spec)).expect("lowers with stack-first layout");
+    assert_eq!(lowered.initial_memory_start, 0x1008);
+    assert_eq!(lowered.initial_memory, [0x11, 0x22, 0x33, 0x44]);
+    assert_eq!(lowered.artifact.len(), 128 + 32 + 4);
+}
+
+#[test]
+fn zero_bytes_are_trimmed_from_both_ends_of_the_span() {
+    // Zero bytes at the edges of section content carry no information — the
+    // runtime zero-fills everything outside the stored span anyway.
+    let mut spec = happy_spec();
+    spec.extras.push(ExtraSection::progbits(
+        ".data",
+        SHF_ALLOC,
+        0x100,
+        vec![0, 0, 0x5A, 0x5B, 0, 0],
+    ));
+    let lowered = lower(&assemble(spec)).expect("lowers");
+    assert_eq!(lowered.initial_memory_start, 0x102);
+    assert_eq!(lowered.initial_memory, [0x5A, 0x5B]);
+}
+
+#[test]
+fn all_zero_data_section_stores_an_empty_image() {
+    let mut spec = happy_spec();
+    spec.extras.push(ExtraSection::progbits(
+        ".data",
+        SHF_ALLOC,
+        0x100,
+        vec![0u8; 16],
+    ));
+    let lowered = lower(&assemble(spec)).expect("lowers");
+    assert_eq!(lowered.initial_memory_start, 0);
+    assert_eq!(lowered.initial_memory.len(), 0);
 }
 
 #[test]
 fn rejects_data_section_in_the_null_guard() {
-    // Address 0 is reserved so a Rust &'static is never a readable null pointer
-    // (hogd stages the image at data address 0). Any data section reaching into
-    // [0, 8) is rejected — both vaddr 0 and a vaddr inside the guard.
+    // Address 0 is reserved so a Rust &'static is never a readable null
+    // pointer. Any data section reaching into [0, 8) is rejected — both
+    // vaddr 0 and a vaddr inside the guard.
     for addr in [0, 4] {
         let mut spec = happy_spec();
         spec.extras.push(ExtraSection::progbits(
@@ -672,15 +717,18 @@ fn malformed_inputs_error_without_panicking() {
 fn verify_artifact_rejects_corrupted_code_digest() {
     let lowered = lower(&assemble(happy_spec())).expect("lowers");
     let mut bytes = lowered.artifact.clone();
-    bytes[68] ^= 0xFF; // first byte of the code digest (v4 offset 68)
+    bytes[64] ^= 0xFF; // first byte of the code digest (v5 offset 64)
     assert!(verify_artifact(&bytes).is_err());
 }
 
 #[test]
 fn verify_artifact_rejects_non_canonical_layout() {
+    // Section positions are implicit, so the only layout degree of freedom is
+    // total length: header + code_size + initial_memory_size must equal the
+    // file size exactly.
     let lowered = lower(&assemble(happy_spec())).expect("lowers");
     let mut bytes = lowered.artifact.clone();
-    bytes[60] = bytes[60].wrapping_add(4); // perturb code_offset (u32 @ 60)
+    bytes.push(0); // trailing byte
     let err = verify_artifact(&bytes).expect_err("should reject");
     assert!(err.to_string().contains("non-canonical"));
 }
@@ -698,20 +746,20 @@ fn verify_artifact_rejects_nonzero_flags() {
 fn build_artifact_rejects_code_outside_limits() {
     use groundhog_rv32_artifact::{MAX_CODE_BYTES, build_artifact};
     let memory: Vec<u8> = Vec::new();
-    assert!(build_artifact(&[], &memory).is_err()); // empty code
+    assert!(build_artifact(&[], &memory, 0).is_err()); // empty code
     let oversized = vec![0u8; MAX_CODE_BYTES + 4];
-    assert!(build_artifact(&oversized, &memory).is_err()); // > 64 KiB
+    assert!(build_artifact(&oversized, &memory, 0).is_err()); // > 64 KiB
 }
 
 #[test]
-fn build_artifact_accepts_prefix_up_to_max_memory() {
+fn build_artifact_accepts_span_up_to_max_memory() {
     use groundhog_rv32_artifact::{MAX_MEMORY_BYTES, build_artifact};
     let code = vec![0u8; 4];
-    // A short prefix and a full-size prefix are both valid; only > MAX is not.
-    assert!(build_artifact(&code, &[]).is_ok());
-    assert!(build_artifact(&code, &vec![0u8; MAX_MEMORY_BYTES - 4]).is_ok());
-    assert!(build_artifact(&code, &vec![0u8; MAX_MEMORY_BYTES]).is_ok());
-    assert!(build_artifact(&code, &vec![0u8; MAX_MEMORY_BYTES + 4]).is_err());
+    // A short span and a full-size span are both valid; only past-the-end is not.
+    assert!(build_artifact(&code, &[], 0).is_ok());
+    assert!(build_artifact(&code, &vec![0u8; MAX_MEMORY_BYTES - 4], 4).is_ok());
+    assert!(build_artifact(&code, &vec![0u8; MAX_MEMORY_BYTES], 0).is_ok());
+    assert!(build_artifact(&code, &vec![0u8; MAX_MEMORY_BYTES + 4], 0).is_err());
 }
 
 #[test]
@@ -733,6 +781,7 @@ fn metadata_renders_null_build_info() {
         artifact: &lowered.artifact,
         code: &lowered.code,
         initial_memory: &lowered.initial_memory,
+        initial_memory_start: lowered.initial_memory_start,
         memory_bytes: lowered.memory_bytes,
         rustc_version: None,
         target_triple: None,
@@ -766,6 +815,7 @@ fn summary_json_has_the_expected_shape() {
     );
     assert!(doc["artifact_sha256"].as_str().is_some());
     assert_eq!(doc["initial_memory_bytes"], 0);
+    assert_eq!(doc["initial_memory_start"], 0);
     assert!(doc.get("dispatch_entries").is_none());
 }
 
