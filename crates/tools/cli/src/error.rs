@@ -59,7 +59,7 @@ pub enum CliError {
     #[error("wasm-opt optimization failed{}", if .0.is_empty() { String::new() } else { format!(": {}", .0) })]
     WasmOptFailed(String),
     #[error("RV32 lowering failed: {0}")]
-    Rv32LowerFailed(String),
+    Rv32LowerFailed(groundhog_rv32_lower::LowerError),
     #[error("WASM instrumentation failed: {0}")]
     WasmInstrumentFailed(#[from] groundhog_wasm_meter::Error),
     #[error("WASM verification failed after instrumentation: {0}")]
@@ -270,10 +270,34 @@ impl CliError {
                 "remove `--target-dir` from passthrough args or \
                  config when using the CLI target directory option",
             )),
-            Self::CargoFailed(_) | Self::CargoFailedWithOutput { .. } => Some(Cow::Borrowed(
+            Self::CargoFailed(_) => Some(Cow::Borrowed(
                 "see the cargo output above for the underlying build \
                  or test failure",
             )),
+            Self::CargoFailedWithOutput { stderr, .. } => {
+                // Older SDK linker scripts enforce the RV32 size caps at link
+                // time; recognize rust-lld's region-overflow error and explain
+                // it instead of pointing at raw linker output.
+                Some(Cow::Borrowed(
+                    if stderr.contains("will not fit in region 'CODE'") {
+                        "the contract's code does not fit the SDK linker \
+                         script's CODE region; reduce code size — common \
+                         causes are 256-bit integer math, formatted panics \
+                         pulling in `core::fmt`, and large generic \
+                         instantiations. Any `groundhogspecrawv0` linker error \
+                         above is a knock-on of the `.text` overflow, not a \
+                         separate problem"
+                    } else if stderr.contains("will not fit in region 'DATA'") {
+                        "static data plus the reserved stack exceed the VM's \
+                         data memory; reduce static data, or pass a smaller \
+                         `groundhog build --stack-size` to shrink the stack \
+                         reserve below the data sections"
+                    } else {
+                        "see the cargo output above for the underlying build \
+                         or test failure"
+                    },
+                ))
+            }
             Self::DirExists(path) => Some(Cow::Owned(format!(
                 "remove `{path}`, or choose a different project name"
             ))),
@@ -377,10 +401,24 @@ impl CliError {
                 "see the wasm-opt error above; the WASM binary \
                  may be invalid or malformed",
             )),
-            Self::Rv32LowerFailed(_) => Some(Cow::Borrowed(
-                "the RV32 ELF may have a malformed `.text`/data layout or a \
-                 nonzero entry point; see the lower error above",
-            )),
+            Self::Rv32LowerFailed(error) => Some(Cow::Borrowed(match error {
+                groundhog_rv32_lower::LowerError::CodeTooLarge { .. } => {
+                    "the contract's code section exceeds the current artifact \
+                     format's code-size cap; reduce code size — common causes \
+                     are 256-bit integer math, formatted panics pulling in \
+                     `core::fmt`, and large generic instantiations"
+                }
+                groundhog_rv32_lower::LowerError::DataTooLarge { .. } => {
+                    "static data plus the reserved stack exceed the VM's data \
+                     memory; reduce static data, or pass a smaller \
+                     `groundhog build --stack-size` to shrink the stack \
+                     reserve below the data sections"
+                }
+                _ => {
+                    "the RV32 ELF may have a malformed `.text`/data layout or a \
+                     nonzero entry point; see the lower error above"
+                }
+            })),
             Self::WasmInstrumentFailed(_) => {
                 Some(Cow::Borrowed("the WASM binary may be invalid or too large"))
             }
@@ -429,7 +467,7 @@ impl CliError {
                 "stdout": stdout,
                 "stderr": stderr,
             })),
-            Self::Rv32LowerFailed(message) => Some(json!({ "message": message })),
+            Self::Rv32LowerFailed(error) => Some(json!({ "message": error.to_string() })),
             Self::CallEncode { path, message } | Self::CallDecode { path, message } => {
                 Some(json!({
                     "path": path,
@@ -446,6 +484,95 @@ impl CliError {
                 "message": message,
             })),
             _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use groundhog_rv32_lower::LowerError;
+
+    fn hint(error: &CliError) -> String {
+        error.hint().expect("hint expected").into_owned()
+    }
+
+    #[test]
+    fn rv32_lower_code_too_large_hints_at_code_size_reduction() {
+        let error = CliError::Rv32LowerFailed(LowerError::CodeTooLarge {
+            size: 82472,
+            max: 65536,
+        });
+        assert!(hint(&error).contains("reduce code size"));
+    }
+
+    #[test]
+    fn rv32_lower_data_too_large_hints_at_stack_size() {
+        let error = CliError::Rv32LowerFailed(LowerError::DataTooLarge {
+            section: ".bss".to_string(),
+            end: 70168,
+            max: 65536,
+        });
+        assert!(hint(&error).contains("--stack-size"));
+    }
+
+    #[test]
+    fn rv32_lower_invalid_keeps_the_malformed_elf_hint() {
+        let error = CliError::Rv32LowerFailed(LowerError::Invalid(
+            ".text must start at vaddr 0, got 4".to_string(),
+        ));
+        assert!(hint(&error).contains("malformed"));
+    }
+
+    #[test]
+    fn rv32_lower_failed_details_json_keeps_the_message_field() {
+        let error = CliError::Rv32LowerFailed(LowerError::CodeTooLarge {
+            size: 65540,
+            max: 65536,
+        });
+        let details = error.details_json().expect("details expected");
+        assert_eq!(
+            details["message"],
+            ".text is 65540 bytes; the current artifact format caps code at \
+             65536 bytes (4 bytes over)"
+        );
+    }
+
+    fn cargo_failed_with_stderr(stderr: &str) -> CliError {
+        CliError::CargoFailedWithOutput {
+            code: 1,
+            stdout: String::new(),
+            stderr: stderr.to_string(),
+        }
+    }
+
+    #[test]
+    fn cargo_code_region_overflow_hints_at_code_size_and_spec_knock_on() {
+        let error = cargo_failed_with_stderr(
+            "rust-lld: error: section '.text' will not fit in region 'CODE': \
+             overflowed by 16936 bytes",
+        );
+        let hint = hint(&error);
+        assert!(hint.contains("reduce code size"));
+        assert!(hint.contains("groundhogspecrawv0"));
+    }
+
+    #[test]
+    fn cargo_data_region_overflow_hints_at_stack_size() {
+        let error = cargo_failed_with_stderr(
+            "rust-lld: error: section '.bss' will not fit in region 'DATA': \
+             overflowed by 4632 bytes",
+        );
+        assert!(hint(&error).contains("--stack-size"));
+    }
+
+    #[test]
+    fn other_cargo_failures_keep_the_generic_hint() {
+        for error in [
+            cargo_failed_with_stderr("error[E0308]: mismatched types"),
+            CliError::CargoFailed(101),
+        ] {
+            assert!(hint(&error).contains("see the cargo output above"));
         }
     }
 }
