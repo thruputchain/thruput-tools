@@ -541,10 +541,13 @@ pub fn verify_artifact(artifact: &[u8]) -> Result<()> {
     if code_size == 0 || code_size > MAX_CODE_BYTES {
         return Err(verify("code size out of range"));
     }
-    // The staged span must fit the data address space (u32 reads widened to
-    // usize, so the addition cannot overflow on 64-bit hosts). Subsumes the
-    // v4 `initial_memory_size <= memory_bytes` check.
-    if init_mem_start + init_mem_size > memory_bytes {
+    // The staged span must fit the data address space; checked math so a
+    // crafted header cannot wrap the sum on 32-bit hosts. Subsumes the v4
+    // `initial_memory_size <= memory_bytes` check.
+    let init_mem_end = init_mem_start
+        .checked_add(init_mem_size)
+        .ok_or_else(|| verify("initial memory span overflows"))?;
+    if init_mem_end > memory_bytes {
         return Err(verify(
             "initial_memory_start plus initial_memory_size exceeds memory_bytes",
         ));
@@ -556,9 +559,12 @@ pub fn verify_artifact(artifact: &[u8]) -> Result<()> {
     }
     // Section positions are implicit: code at HEADER_BYTES, initial_memory
     // directly after, and the file ends exactly there — no gaps, no trailing
-    // bytes. (Sizes are u32 reads widened to usize, so the sums cannot
-    // overflow on 64-bit hosts.)
-    if HEADER_BYTES + code_size + init_mem_size != artifact.len() {
+    // bytes. Checked math for the same 32-bit wrap reason as above.
+    let expected_len = HEADER_BYTES
+        .checked_add(code_size)
+        .and_then(|len| len.checked_add(init_mem_size))
+        .ok_or_else(|| verify("non-canonical section layout"))?;
+    if expected_len != artifact.len() {
         return Err(verify("non-canonical section layout"));
     }
 
