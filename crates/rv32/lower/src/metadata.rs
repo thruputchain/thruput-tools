@@ -19,9 +19,11 @@ pub struct MetadataInput<'a> {
     pub artifact: &'a [u8],
     /// The code section.
     pub code: &'a [u8],
-    /// The stored initial-memory prefix.
+    /// The stored initial-memory span.
     pub initial_memory: &'a [u8],
-    /// Total guest data address space (the `sp` top), in bytes.
+    /// Guest data address where the stored span is staged.
+    pub initial_memory_start: usize,
+    /// Total guest data address space, in bytes.
     pub memory_bytes: usize,
     /// Recorded `rustc` version (emitted as `null` when absent).
     pub rustc_version: Option<String>,
@@ -58,6 +60,10 @@ pub fn render_metadata(input: &MetadataInput) -> String {
         "initial_memory_bytes",
         Value::from(input.initial_memory.len()),
     );
+    doc.insert(
+        "initial_memory_start",
+        Value::from(input.initial_memory_start),
+    );
     doc.insert("artifact_bytes", Value::from(input.artifact.len()));
     doc.insert("rustc_version", optional(input.rustc_version.as_ref()));
     doc.insert("target_triple", optional(input.target_triple.as_ref()));
@@ -84,6 +90,7 @@ pub fn summary_json(out: &str, lowered: &Lowered) -> String {
         "code_sha256": sha256_hex(&lowered.code),
         "memory_bytes": lowered.memory_bytes,
         "initial_memory_bytes": lowered.initial_memory.len(),
+        "initial_memory_start": lowered.initial_memory_start,
     });
     doc.to_string()
 }

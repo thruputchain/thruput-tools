@@ -392,6 +392,7 @@ pub fn build_rv32_project(
             artifact: &lowered.artifact,
             code: &lowered.code,
             initial_memory: &lowered.initial_memory,
+            initial_memory_start: lowered.initial_memory_start,
             memory_bytes: lowered.memory_bytes,
             rustc_version: rustc_version(),
             target_triple: Some(RV32_TARGET_TRIPLE.to_string()),
