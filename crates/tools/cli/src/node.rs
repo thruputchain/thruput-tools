@@ -5,7 +5,7 @@ use crate::{CliError, Print};
 use crate::result::CommandResult;
 use serde_json::json;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 use std::time::Duration;
 
@@ -13,8 +13,8 @@ const HOG_DEVNODE_PID_FILE: &str = "hog-devnode.pid";
 const LEGACY_HOGD_DEV_PID_FILE: &str = "hogd-dev.pid";
 
 #[cfg(test)]
-fn test_profile_state_result() -> Result<PathBuf, CliError> {
-    Ok(PathBuf::from("/tmp/groundhog-config.toml"))
+fn test_profile_state_result() -> PathBuf {
+    PathBuf::from("/tmp/groundhog-config.toml")
 }
 
 /// Block production mode for the supervised local node.
@@ -227,8 +227,13 @@ async fn run_hogd_dev(
 ) -> Result<(), CliError> {
     use groundhog_node_supervisor::{NodeSupervisorError, SupervisorStop};
 
+    let runtime_artifacts_dir = local_node_runtime_artifacts_dir(&options);
     let started = start_local_node(options).await?;
-    let profile_state_result = write_started_local_node_profile_state(&started, explicit_profile);
+    let profile_state_result = write_started_local_node_profile_state(
+        &started,
+        explicit_profile,
+        runtime_artifacts_dir.as_deref(),
+    );
 
     if print.is_json() {
         print.json(&CommandResult::new(
@@ -340,6 +345,7 @@ fn print_started_local_node(
 fn write_started_local_node_profile_state(
     started: &StartedLocalNode,
     explicit_profile: Option<&str>,
+    runtime_artifacts_dir: Option<&Path>,
 ) -> Result<PathBuf, CliError> {
     let manifest_path = started
         .readiness()
@@ -356,7 +362,23 @@ fn write_started_local_node_profile_state(
         explicit_profile,
         &started.rpc_url(),
         manifest_path,
+        runtime_artifacts_dir,
     )
+}
+
+fn local_node_runtime_artifacts_dir(options: &LocalNodeOptions) -> Option<PathBuf> {
+    use groundhog_node_supervisor::{HogdDevConfig, resolve_hogd_dev_binary};
+
+    let hogd = options
+        .hogd_dev_binary
+        .clone()
+        .map_or_else(HogdDevConfig::default, |binary| {
+            HogdDevConfig::default().with_binary_path(binary)
+        });
+    resolve_hogd_dev_binary(&hogd)
+        .ok()
+        .and_then(|binary| std::fs::canonicalize(&binary).ok().or(Some(binary)))
+        .and_then(|binary| binary.parent().map(Path::to_path_buf))
 }
 
 fn local_node_config(
@@ -761,7 +783,7 @@ mod tests {
         )
         .expect("bug: readiness should parse");
 
-        let profile_state = test_profile_state_result();
+        let profile_state = Ok(test_profile_state_result());
         let payload = hogd_dev_startup_payload(
             addr,
             &readiness,
@@ -874,7 +896,7 @@ mod tests {
         });
         let readiness = parse_readiness_line("hogd-dev", &pointer.to_string())
             .expect("bug: readiness pointer should parse");
-        let profile_state = test_profile_state_result();
+        let profile_state = Ok(test_profile_state_result());
         let payload = hogd_dev_startup_payload(
             "127.0.0.1:9545".parse().expect("bug: valid socket addr"),
             &readiness,
@@ -899,7 +921,7 @@ mod tests {
         )
         .expect("bug: v1 readiness should parse");
 
-        let profile_state = test_profile_state_result();
+        let profile_state = Ok(test_profile_state_result());
         let payload = hogd_dev_startup_payload(
             addr,
             &readiness,
@@ -933,7 +955,7 @@ mod tests {
         )
         .expect("bug: readiness should parse");
 
-        let profile_state = test_profile_state_result();
+        let profile_state = Ok(test_profile_state_result());
         let payload = hogd_dev_startup_payload(
             addr,
             &readiness,

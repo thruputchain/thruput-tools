@@ -12,6 +12,8 @@ use crate::CliError;
 
 const INITIAL_DEFAULT_PROFILE: &str = "local";
 const LOCAL_RPC_URL: &str = "http://127.0.0.1:9545";
+const HOG_CONTRACT_ADDRESS: &str =
+    "0x0000000000000000000000000000000000000000000000000000000000000001";
 
 /// Executor credentials for the Groundhog test executor.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -121,7 +123,19 @@ pub fn initialize_global_profiles() -> Result<(), CliError> {
     if local.rpc_url.is_none() {
         local.rpc_url = Some(LOCAL_RPC_URL.to_string());
     }
-    config.profile.entry("devnet".to_string()).or_default();
+    local
+        .contracts
+        .entry("HOG".to_string())
+        .or_insert_with(|| HOG_CONTRACT_ADDRESS.to_string());
+
+    let devnet = config.profile.entry("devnet".to_string()).or_default();
+    if devnet.rpc_url.is_none() {
+        devnet.rpc_url = Some(LOCAL_RPC_URL.to_string());
+    }
+    devnet
+        .contracts
+        .entry("HOG".to_string())
+        .or_insert_with(|| HOG_CONTRACT_ADDRESS.to_string());
 
     write_config_file(&config)
 }

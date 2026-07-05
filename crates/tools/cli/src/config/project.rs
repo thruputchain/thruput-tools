@@ -26,6 +26,8 @@ pub struct ProjectProfile {
     #[serde(default)]
     pub runtime_manifest: Option<PathBuf>,
     #[serde(default)]
+    pub runtime_artifacts_dir: Option<PathBuf>,
+    #[serde(default)]
     pub contracts: BTreeMap<String, String>,
     #[serde(default)]
     pub wallets: BTreeMap<String, String>,
@@ -53,6 +55,7 @@ pub struct ResolvedProfile {
     #[serde(skip)]
     #[schemars(skip)]
     pub runtime_manifest_cli_override: bool,
+    pub runtime_artifacts_dir: Option<PathBuf>,
     pub contracts: BTreeMap<String, String>,
     #[serde(default)]
     pub wallets: BTreeMap<String, String>,
@@ -309,6 +312,7 @@ pub fn save_profile_local_node_state(
     explicit_profile: Option<&str>,
     rpc_url: &str,
     runtime_manifest: &Path,
+    runtime_artifacts_dir: Option<&Path>,
 ) -> Result<PathBuf, CliError> {
     let rpc_url = rpc_url.trim();
     if rpc_url.is_empty() {
@@ -322,6 +326,11 @@ pub fn save_profile_local_node_state(
     if !runtime_manifest.is_absolute() {
         return Err(CliError::Other(
             "runtime_manifest written by groundhog node must be absolute".into(),
+        ));
+    }
+    if runtime_artifacts_dir.is_some_and(|path| !path.is_absolute()) {
+        return Err(CliError::Other(
+            "runtime_artifacts_dir written by groundhog node must be absolute".into(),
         ));
     }
 
@@ -352,6 +361,12 @@ pub fn save_profile_local_node_state(
         "runtime_manifest",
         toml_edit::value(runtime_manifest.to_string_lossy().as_ref()),
     );
+    if let Some(path) = runtime_artifacts_dir {
+        profile.insert(
+            "runtime_artifacts_dir",
+            toml_edit::value(path.to_string_lossy().as_ref()),
+        );
+    }
 
     write_profile_config(&path, doc.to_string().as_bytes())?;
     Ok(path)
@@ -389,10 +404,14 @@ pub fn resolve_profile(start: &Path, explicit: Option<&str>) -> Result<ResolvedP
         .cloned()
         .map(|mut profile| {
             normalize_runtime_manifest(&mut profile, &global_source);
+            normalize_runtime_artifacts_dir(&mut profile, &global_source);
             profile
         });
     let project_profile = match (&project_config, &project_source) {
-        (Some(config), Some(_path)) => config.profile.get(&name).cloned(),
+        (Some(config), Some(path)) => config.profile.get(&name).cloned().map(|mut profile| {
+            normalize_runtime_artifacts_dir(&mut profile, path);
+            profile
+        }),
         _ => None,
     };
 
@@ -419,6 +438,7 @@ pub fn resolve_profile(start: &Path, explicit: Option<&str>) -> Result<ResolvedP
         default_key: profile.default_key,
         runtime_manifest: profile.runtime_manifest,
         runtime_manifest_cli_override: false,
+        runtime_artifacts_dir: profile.runtime_artifacts_dir,
         contracts: profile.contracts,
         wallets: profile.wallets,
         source,
@@ -435,6 +455,9 @@ fn merge_profiles(mut global: ProjectProfile, project: ProjectProfile) -> Projec
     if project.runtime_manifest.is_some() {
         global.runtime_manifest = project.runtime_manifest;
     }
+    if project.runtime_artifacts_dir.is_some() {
+        global.runtime_artifacts_dir = project.runtime_artifacts_dir;
+    }
     global.contracts.extend(project.contracts);
     global.wallets.extend(project.wallets);
     global
@@ -449,6 +472,18 @@ fn normalize_runtime_manifest(profile: &mut ProjectProfile, config_path: &Path) 
     }
     if let Some(parent) = config_path.parent() {
         profile.runtime_manifest = Some(parent.join(path));
+    }
+}
+
+fn normalize_runtime_artifacts_dir(profile: &mut ProjectProfile, config_path: &Path) {
+    let Some(path) = profile.runtime_artifacts_dir.as_ref() else {
+        return;
+    };
+    if path.is_absolute() {
+        return;
+    }
+    if let Some(parent) = config_path.parent() {
+        profile.runtime_artifacts_dir = Some(parent.join(path));
     }
 }
 

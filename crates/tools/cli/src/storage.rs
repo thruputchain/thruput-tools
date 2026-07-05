@@ -24,7 +24,7 @@ pub fn run(
 ) -> Result<(), CliError> {
     let mut resolved_profile = resolve_profile_with_overrides(project_start, profile, overrides)?;
     if let Some(key_name) = resolve_default_key(project_start, profile)? {
-        apply_local_node_state_for_dev_key(&mut resolved_profile, &key_name)?;
+        apply_local_node_state_for_dev_key(&mut resolved_profile, &key_name);
     }
     let rpc_url = resolved_profile
         .rpc_url

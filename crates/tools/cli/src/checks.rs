@@ -525,8 +525,12 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn check_project_finds_config() {
         let tmp = tempfile::TempDir::new().unwrap();
+        unsafe {
+            std::env::set_var("XDG_CONFIG_HOME", tmp.path().join("config-home"));
+        }
         let config = tmp.path().join("groundhog.toml");
         std::fs::write(
             &config,
@@ -539,6 +543,10 @@ mod tests {
         assert_eq!(context.profile_name.as_deref(), Some("default"));
         assert_eq!(context.rpc_url.as_deref(), Some("http://localhost"));
         assert!(context.findings.is_empty());
+
+        unsafe {
+            std::env::remove_var("XDG_CONFIG_HOME");
+        }
     }
 
     #[test]

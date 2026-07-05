@@ -71,8 +71,24 @@ fn init_configures_registry_and_succeeds() {
     assert!(global_config.contains("[profile.local]"));
     assert!(global_config.contains("rpc_url = \"http://127.0.0.1:9545\""));
     assert!(global_config.contains("devnet"));
+    assert!(
+        global_config.contains(
+            "HOG = \"0x0000000000000000000000000000000000000000000000000000000000000001\""
+        )
+    );
+    let local = groundhog_cli::config::resolve_profile(tmp.path(), Some("local")).unwrap();
+    assert_eq!(local.rpc_url.as_deref(), Some("http://127.0.0.1:9545"));
+    assert_eq!(
+        local.contracts.get("HOG").map(String::as_str),
+        Some("0x0000000000000000000000000000000000000000000000000000000000000001")
+    );
     let devnet = groundhog_cli::config::resolve_profile(tmp.path(), Some("devnet")).unwrap();
     assert_eq!(devnet.name, "devnet");
+    assert_eq!(devnet.rpc_url.as_deref(), Some("http://127.0.0.1:9545"));
+    assert_eq!(
+        devnet.contracts.get("HOG").map(String::as_str),
+        Some("0x0000000000000000000000000000000000000000000000000000000000000001")
+    );
 
     unsafe {
         env::remove_var("CARGO_HOME");
@@ -125,6 +141,11 @@ alice = "0x1111111111111111111111111111111111111111111111111111111111111111"
     assert!(global_config.contains("devnet"));
     let devnet = groundhog_cli::config::resolve_profile(tmp.path(), Some("devnet")).unwrap();
     assert_eq!(devnet.name, "devnet");
+    assert_eq!(devnet.rpc_url.as_deref(), Some("http://127.0.0.1:9545"));
+    assert_eq!(
+        devnet.contracts.get("HOG").map(String::as_str),
+        Some("0x0000000000000000000000000000000000000000000000000000000000000001")
+    );
 
     unsafe {
         env::remove_var("CARGO_HOME");

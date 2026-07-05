@@ -246,7 +246,7 @@ pub(crate) fn prepare_deploy(
         return Err(CliError::MissingRpcUrl);
     }
     let key_name = key_name.ok_or(CliError::MissingSigningKey)?;
-    apply_local_node_state_for_dev_key(&mut resolved, &key_name)?;
+    apply_local_node_state_for_dev_key(&mut resolved, &key_name);
     resolved.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
 
     let artifact = if let Some(path) = artifact_path {
@@ -282,6 +282,7 @@ pub(crate) fn prepare_deploy_for_rpc_with_manifest(
         default_key: Some(key_name.into()),
         runtime_manifest,
         runtime_manifest_cli_override: false,
+        runtime_artifacts_dir: None,
         contracts: std::collections::BTreeMap::default(),
         wallets: std::collections::BTreeMap::default(),
         source: None,

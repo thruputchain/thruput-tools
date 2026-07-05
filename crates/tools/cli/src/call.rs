@@ -333,7 +333,7 @@ fn prepare_call_with_runtime(
         return Err(CliError::MissingRpcUrl);
     }
     let key_name = key_name.ok_or(CliError::MissingSigningKey)?;
-    apply_local_node_state_for_dev_key(&mut resolved_profile, &key_name)?;
+    apply_local_node_state_for_dev_key(&mut resolved_profile, &key_name);
     let rpc_url = resolved_profile
         .rpc_url
         .as_deref()

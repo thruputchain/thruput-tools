@@ -26,10 +26,10 @@ pub fn run(
 ) -> Result<(), CliError> {
     let mut resolved_profile = resolve_profile_with_overrides(project_start, profile, overrides)?;
     if let Some(key_name) = resolve_default_key(project_start, profile)? {
-        apply_local_node_state_for_dev_key(&mut resolved_profile, &key_name)?;
+        apply_local_node_state_for_dev_key(&mut resolved_profile, &key_name);
     }
     if dev_keys::dev_key_index(target).is_some() {
-        apply_local_node_state_for_dev_key(&mut resolved_profile, target)?;
+        apply_local_node_state_for_dev_key(&mut resolved_profile, target);
     }
     let rpc_url = resolved_profile
         .rpc_url
@@ -119,6 +119,7 @@ mod tests {
             default_key: None,
             runtime_manifest: None,
             runtime_manifest_cli_override: false,
+            runtime_artifacts_dir: None,
             contracts: BTreeMap::new(),
             wallets: BTreeMap::new(),
             source: None,
@@ -142,6 +143,7 @@ mod tests {
             default_key: None,
             runtime_manifest: None,
             runtime_manifest_cli_override: false,
+            runtime_artifacts_dir: None,
             contracts: BTreeMap::new(),
             wallets: BTreeMap::new(),
             source: None,
@@ -166,6 +168,7 @@ mod tests {
             default_key: None,
             runtime_manifest: None,
             runtime_manifest_cli_override: false,
+            runtime_artifacts_dir: None,
             contracts: BTreeMap::new(),
             wallets: BTreeMap::new(),
             source: None,

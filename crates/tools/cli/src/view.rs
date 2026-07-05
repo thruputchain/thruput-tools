@@ -111,7 +111,7 @@ fn prepare_view(
     let mut resolved_profile = resolve_profile_with_overrides(project_start, profile, overrides)?;
     let default_key = resolve_default_key(project_start, profile)?;
     if let Some(key_name) = local_dev_key_for_view(from, default_key.as_deref()) {
-        apply_local_node_state_for_dev_key(&mut resolved_profile, &key_name)?;
+        apply_local_node_state_for_dev_key(&mut resolved_profile, &key_name);
     }
     let rpc_url = resolved_profile
         .rpc_url

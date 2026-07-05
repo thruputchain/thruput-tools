@@ -3,6 +3,7 @@ use std::net::TcpListener;
 use std::process::Command;
 #[cfg(unix)]
 use std::process::{ExitStatus, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(unix)]
 use std::sync::mpsc;
 use std::thread;
@@ -14,9 +15,24 @@ use tempfile::TempDir;
 
 mod support;
 
+static CONFIG_HOME_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
 fn groundhog() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_groundhog"));
+    let config_home = std::env::temp_dir().join(format!(
+        "groundhog-cli-test-config-{}-{}",
+        std::process::id(),
+        CONFIG_HOME_COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    let cache_home = config_home.with_file_name(format!(
+        "groundhog-cli-test-cache-{}-{}",
+        std::process::id(),
+        CONFIG_HOME_COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
     command.env_remove("GROUNDHOG_RUNTIME_MANIFEST");
+    command.env_remove("GROUNDHOG_PROFILE");
+    command.env("XDG_CONFIG_HOME", config_home);
+    command.env("XDG_CACHE_HOME", cache_home);
     command
 }
 

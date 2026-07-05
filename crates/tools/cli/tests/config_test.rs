@@ -109,6 +109,8 @@ fn resolve_profile_loads_default_project_profile() {
     fs::write(
         tmp.path().join("groundhog.toml"),
         r#"
+default_profile = "default"
+
 [profile.default]
 rpc_url = "http://localhost:9545"
 default_key = "alice"
@@ -358,6 +360,8 @@ fn save_profile_contract_alias_updates_existing_profile() {
     fs::write(
         &config_path,
         r#"
+default_profile = "default"
+
 [profile.default]
 rpc_url = "http://localhost:9545"
 default_key = "alice"
@@ -419,6 +423,8 @@ fn save_profile_wallet_address_updates_existing_profile() {
     fs::write(
         &config_path,
         r#"
+default_profile = "default"
+
 [profile.default]
 rpc_url = "http://localhost:9545"
 default_key = "alice"
@@ -479,13 +485,16 @@ fn save_profile_local_node_state_writes_global_when_no_project_config_exists() {
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
     fs::create_dir_all(tmp.path().join("manifests")).unwrap();
     let manifest = tmp.path().join("manifests/runtime-manifest.json");
+    let artifacts_dir = tmp.path().join("hog-devnode");
     fs::write(&manifest, "{}").unwrap();
+    fs::create_dir(&artifacts_dir).unwrap();
 
     let written = groundhog_cli::config::save_profile_local_node_state(
         tmp.path(),
         Some("myfaveprofile"),
         "http://127.0.0.1:9545",
         &manifest,
+        Some(&artifacts_dir),
     )
     .unwrap();
     assert_eq!(written, global_config_path(&tmp));
@@ -496,6 +505,10 @@ fn save_profile_local_node_state_writes_global_when_no_project_config_exists() {
     assert_eq!(
         profile.runtime_manifest.as_deref(),
         Some(manifest.as_path())
+    );
+    assert_eq!(
+        profile.runtime_artifacts_dir.as_deref(),
+        Some(artifacts_dir.as_path())
     );
 
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
@@ -521,6 +534,7 @@ fn save_profile_local_node_state_keeps_global_config_private() {
         Some("local"),
         "http://127.0.0.1:9545",
         &manifest,
+        None,
     )
     .unwrap();
 
@@ -557,6 +571,7 @@ default_key = "dev-0"
         Some("local"),
         "http://127.0.0.1:9546",
         &manifest,
+        None,
     )
     .unwrap();
     assert_eq!(written, project.join("groundhog.toml"));
