@@ -59,7 +59,7 @@ pub enum CliError {
     #[error("wasm-opt optimization failed{}", if .0.is_empty() { String::new() } else { format!(": {}", .0) })]
     WasmOptFailed(String),
     #[error("RV32 lowering failed: {0}")]
-    Rv32LowerFailed(groundhog_rv32_lower::LowerError),
+    Rv32LowerFailed(#[from] groundhog_rv32_lower::LowerError),
     #[error("WASM instrumentation failed: {0}")]
     WasmInstrumentFailed(#[from] groundhog_wasm_meter::Error),
     #[error("WASM verification failed after instrumentation: {0}")]
@@ -390,6 +390,10 @@ impl CliError {
                      `groundhog build --stack-size` to shrink the stack \
                      reserve below the data sections"
                 }
+                groundhog_rv32_lower::LowerError::Verify(_) => {
+                    "this is a bug — please report this lower→verify \
+                     failure to the Groundhog team"
+                }
                 _ => {
                     "the RV32 ELF may have a malformed `.text`/data layout or a \
                      nonzero entry point; see the lower error above"
@@ -501,16 +505,22 @@ mod tests {
     }
 
     #[test]
+    fn rv32_lower_verify_hints_at_reporting_a_bug() {
+        let error =
+            CliError::Rv32LowerFailed(LowerError::Verify("code digest mismatch".to_string()));
+        assert!(hint(&error).contains("bug"));
+    }
+
+    #[test]
     fn rv32_lower_failed_details_json_keeps_the_message_field() {
-        let error = CliError::Rv32LowerFailed(LowerError::CodeTooLarge {
+        let inner = LowerError::CodeTooLarge {
             size: 65540,
             max: 65536,
-        });
-        let details = error.details_json().expect("details expected");
-        assert_eq!(
-            details["message"],
-            ".text is 65540 bytes; the current artifact format caps code at \
-             65536 bytes (4 bytes over)"
-        );
+        };
+        let message = inner.to_string();
+        let details = CliError::Rv32LowerFailed(inner)
+            .details_json()
+            .expect("details expected");
+        assert_eq!(details["message"], message);
     }
 }
