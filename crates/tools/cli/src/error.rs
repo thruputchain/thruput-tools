@@ -381,8 +381,8 @@ impl CliError {
                 groundhog_rv32_lower::LowerError::CodeTooLarge { .. } => {
                     "the contract's code section exceeds the current artifact \
                      format's code-size cap; reduce code size — common causes \
-                     are 256-bit integer math, formatted panics pulling in \
-                     `core::fmt`, and large generic instantiations"
+                     are formatted panics pulling in `core::fmt` and large \
+                     generic instantiations"
                 }
                 groundhog_rv32_lower::LowerError::DataTooLarge { .. } => {
                     "static data plus the reserved stack exceed the VM's data \
