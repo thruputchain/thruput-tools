@@ -3,12 +3,16 @@ use crate::config::{self, ExecutorCredentials};
 use crate::result::CommandResult;
 use crate::{CliError, Print};
 use serde_json::json;
-use std::io::{self, BufRead};
+use std::io::{self, BufRead, IsTerminal};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::{env, fs};
 
 const REGISTRY_INDEX: &str = "sparse+https://groundhog.dev/crates/api/v1/crates/";
+const RESET: &str = "\x1b[0m";
+const BOLD: &str = "\x1b[1m";
+const GREEN: &str = "\x1b[32m";
+const CYAN: &str = "\x1b[36m";
 
 /// Resolve the user's cargo config path.
 pub fn cargo_config_path() -> Result<PathBuf, CliError> {
@@ -21,6 +25,21 @@ pub fn cargo_config_path() -> Result<PathBuf, CliError> {
 /// Configure the Groundhog cargo registry and store
 /// test executor credentials.
 pub fn login(cmd: &'static str, print: &Print) -> Result<(), CliError> {
+    login_inner(cmd, print, LoginMode::Standalone)
+}
+
+/// Run login as part of `groundhog init` without nested wizard headings.
+pub(crate) fn login_from_init(print: &Print) -> Result<(), CliError> {
+    login_inner("login", print, LoginMode::Init)
+}
+
+#[derive(Clone, Copy)]
+enum LoginMode {
+    Standalone,
+    Init,
+}
+
+fn login_inner(cmd: &'static str, print: &Print, mode: LoginMode) -> Result<(), CliError> {
     if print.is_json() {
         return Err(CliError::JsonUnsupported(cmd));
     }
@@ -30,23 +49,49 @@ pub fn login(cmd: &'static str, print: &Print) -> Result<(), CliError> {
     let cargo_config = cargo_config_path()?;
 
     ensure_cargo_registry(&cargo_config)?;
-    print.status("Configured cargo registry.");
+    match mode {
+        LoginMode::Standalone => print.status("Configured cargo registry."),
+        LoginMode::Init => print.status("Cargo registry configured."),
+    }
 
-    print.status("\nStep 1: Registry token");
-    print.status(
-        "Paste your registry token from \
-         https://groundhog.dev/crates/me",
-    );
-    let status = Command::new("cargo")
-        .arg("login")
-        .arg("--registry")
-        .arg("groundhog")
-        .status()?;
+    match mode {
+        LoginMode::Standalone => {
+            print.status("\nRegistry token");
+            print.status(
+                "Paste your registry token from \
+                 https://groundhog.dev/crates/me",
+            );
+        }
+        LoginMode::Init => {
+            print.status("");
+            init_subheading(print, "Registry token");
+            print.status("Open this page and create or copy a token:");
+            print.status("https://groundhog.dev/crates/me");
+            print.status("");
+            print.prompt("Paste registry token: ")?;
+        }
+    }
+    let mut command = Command::new("cargo");
+    command.arg("login").arg("--registry").arg("groundhog");
+    if matches!(mode, LoginMode::Init) {
+        command.arg("--quiet");
+    }
+    let status = command.status()?;
     if !status.success() {
         return Err(CliError::RegistryLoginFailed);
     }
+    if matches!(mode, LoginMode::Init) {
+        init_success(print, "Login token for `groundhog` saved");
+    }
 
-    print.status("\nStep 2: Test executor credentials");
+    match mode {
+        LoginMode::Standalone => print.status("\nTest executor credentials"),
+        LoginMode::Init => {
+            print.status("");
+            init_subheading(print, "Executor credentials");
+            print.status("These are used by `groundhog test`.");
+        }
+    }
     let stdin = io::stdin();
 
     print.prompt("Executor username: ")?;
@@ -63,8 +108,27 @@ pub fn login(cmd: &'static str, print: &Print) -> Result<(), CliError> {
 
     config::save_executor_credentials(&ExecutorCredentials { username, password })?;
 
-    print.status("\nCredentials saved. You're ready to go.");
+    match mode {
+        LoginMode::Standalone => print.status("\nCredentials saved. You're ready to go."),
+        LoginMode::Init => print.status("\nCredentials saved."),
+    }
     Ok(())
+}
+
+fn init_subheading(print: &Print, title: &str) {
+    if std::io::stderr().is_terminal() && !print.is_quiet() && !print.is_json() {
+        eprintln!("{CYAN}{BOLD}{title}{RESET}");
+    } else {
+        print.status(title);
+    }
+}
+
+fn init_success(print: &Print, msg: &str) {
+    if std::io::stderr().is_terminal() && !print.is_quiet() && !print.is_json() {
+        eprintln!("{GREEN}✓{RESET} {msg}");
+    } else {
+        print.status(format_args!("[ok] {msg}"));
+    }
 }
 
 /// Remove stored registry token and executor credentials.

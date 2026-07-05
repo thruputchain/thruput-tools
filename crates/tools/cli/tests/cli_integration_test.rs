@@ -437,6 +437,44 @@ fn init_json_delegates_to_status() {
 }
 
 #[test]
+fn init_human_output_shows_setup_sections() {
+    let tmp = TempDir::new().unwrap();
+    let mut child = groundhog()
+        .arg("init")
+        .env("CARGO_HOME", tmp.path().join("cargo-home"))
+        .env("XDG_CONFIG_HOME", tmp.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(b"n\nn\nn\n")
+        .unwrap();
+
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Groundhog Setup"));
+    assert!(stderr.contains("Set up your local development environment."));
+    assert!(stderr.contains("[1/5] Environment"));
+    assert!(stderr.contains("[2/5] Profiles"));
+    assert!(stderr.contains("[3/5] Signing key"));
+    assert!(stderr.contains("[4/5] Registry access"));
+    assert!(stderr.contains("[5/5] Project"));
+    assert!(stderr.contains("Setup Complete"));
+    assert!(stderr.contains("Config:"));
+    assert!(stderr.contains("Profile:"));
+    assert!(stderr.contains("Local RPC:"));
+    assert!(stderr.contains("Next:"));
+}
+
+#[test]
 fn status_json_outputs_structured_payload() {
     let tmp = TempDir::new().unwrap();
     let output = groundhog()
