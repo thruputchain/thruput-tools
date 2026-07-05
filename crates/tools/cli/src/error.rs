@@ -270,49 +270,10 @@ impl CliError {
                 "remove `--target-dir` from passthrough args or \
                  config when using the CLI target directory option",
             )),
-            Self::CargoFailed(_) => Some(Cow::Borrowed(
+            Self::CargoFailed(_) | Self::CargoFailedWithOutput { .. } => Some(Cow::Borrowed(
                 "see the cargo output above for the underlying build \
                  or test failure",
             )),
-            Self::CargoFailedWithOutput { stderr, .. } => {
-                // Older SDK linker scripts enforce the RV32 size caps at link
-                // time; recognize rust-lld's region-overflow errors and explain
-                // them instead of pointing at raw linker output.
-                let code_overflow = stderr.contains("will not fit in region 'CODE'");
-                let data_overflow = stderr.contains("will not fit in region 'DATA'");
-                Some(Cow::Borrowed(match (code_overflow, data_overflow) {
-                    (true, true) => {
-                        "the contract overflows both the SDK linker script's \
-                         CODE region (reduce code size — common causes are \
-                         256-bit integer math, formatted panics pulling in \
-                         `core::fmt`, and large generic instantiations) and \
-                         its DATA region (reduce static data, or pass a \
-                         smaller `groundhog build --stack-size`). Any \
-                         `groundhogspecrawv0` linker error above is a \
-                         knock-on of the `.text` overflow, not a separate \
-                         problem"
-                    }
-                    (true, false) => {
-                        "the contract's code does not fit the SDK linker \
-                         script's CODE region; reduce code size — common \
-                         causes are 256-bit integer math, formatted panics \
-                         pulling in `core::fmt`, and large generic \
-                         instantiations. Any `groundhogspecrawv0` linker error \
-                         above is a knock-on of the `.text` overflow, not a \
-                         separate problem"
-                    }
-                    (false, true) => {
-                        "static data plus the reserved stack exceed the VM's \
-                         data memory; reduce static data, or pass a smaller \
-                         `groundhog build --stack-size` to shrink the stack \
-                         reserve below the data sections"
-                    }
-                    (false, false) => {
-                        "see the cargo output above for the underlying build \
-                         or test failure"
-                    }
-                }))
-            }
             Self::DirExists(path) => Some(Cow::Owned(format!(
                 "remove `{path}`, or choose a different project name"
             ))),
@@ -551,56 +512,5 @@ mod tests {
             ".text is 65540 bytes; the current artifact format caps code at \
              65536 bytes (4 bytes over)"
         );
-    }
-
-    fn cargo_failed_with_stderr(stderr: &str) -> CliError {
-        CliError::CargoFailedWithOutput {
-            code: 1,
-            stdout: String::new(),
-            stderr: stderr.to_string(),
-        }
-    }
-
-    #[test]
-    fn cargo_code_region_overflow_hints_at_code_size_and_spec_knock_on() {
-        let error = cargo_failed_with_stderr(
-            "rust-lld: error: section '.text' will not fit in region 'CODE': \
-             overflowed by 16936 bytes",
-        );
-        let hint = hint(&error);
-        assert!(hint.contains("reduce code size"));
-        assert!(hint.contains("groundhogspecrawv0"));
-    }
-
-    #[test]
-    fn cargo_data_region_overflow_hints_at_stack_size() {
-        let error = cargo_failed_with_stderr(
-            "rust-lld: error: section '.bss' will not fit in region 'DATA': \
-             overflowed by 4632 bytes",
-        );
-        assert!(hint(&error).contains("--stack-size"));
-    }
-
-    #[test]
-    fn cargo_dual_region_overflow_hints_at_both_fixes() {
-        let error = cargo_failed_with_stderr(
-            "rust-lld: error: section '.text' will not fit in region 'CODE': \
-             overflowed by 16936 bytes\n\
-             rust-lld: error: section '.bss' will not fit in region 'DATA': \
-             overflowed by 4632 bytes",
-        );
-        let hint = hint(&error);
-        assert!(hint.contains("reduce code size"));
-        assert!(hint.contains("--stack-size"));
-    }
-
-    #[test]
-    fn other_cargo_failures_keep_the_generic_hint() {
-        for error in [
-            cargo_failed_with_stderr("error[E0308]: mismatched types"),
-            CliError::CargoFailed(101),
-        ] {
-            assert!(hint(&error).contains("see the cargo output above"));
-        }
     }
 }
