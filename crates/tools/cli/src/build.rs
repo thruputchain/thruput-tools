@@ -453,8 +453,7 @@ pub fn build_rv32_project(
 
     print.status("Lowering RV32 ELF...");
     let elf_bytes = fs::read(&elf)?;
-    let lowered = groundhog_rv32_lower::lower(&elf_bytes)
-        .map_err(|error| CliError::Rv32LowerFailed(error.to_string()))?;
+    let lowered = groundhog_rv32_lower::lower(&elf_bytes)?;
     if let Some(size) = stack_size
         && stack_size_defsym_ignored(
             lowered.initial_memory_start,

@@ -59,7 +59,7 @@ pub enum CliError {
     #[error("wasm-opt optimization failed{}", if .0.is_empty() { String::new() } else { format!(": {}", .0) })]
     WasmOptFailed(String),
     #[error("RV32 lowering failed: {0}")]
-    Rv32LowerFailed(String),
+    Rv32LowerFailed(#[from] groundhog_rv32_lower::LowerError),
     #[error("WASM instrumentation failed: {0}")]
     WasmInstrumentFailed(#[from] groundhog_wasm_meter::Error),
     #[error("WASM verification failed after instrumentation: {0}")]
@@ -377,10 +377,28 @@ impl CliError {
                 "see the wasm-opt error above; the WASM binary \
                  may be invalid or malformed",
             )),
-            Self::Rv32LowerFailed(_) => Some(Cow::Borrowed(
-                "the RV32 ELF may have a malformed `.text`/data layout or a \
-                 nonzero entry point; see the lower error above",
-            )),
+            Self::Rv32LowerFailed(error) => Some(Cow::Borrowed(match error {
+                groundhog_rv32_lower::LowerError::CodeTooLarge { .. } => {
+                    "the contract's code section exceeds the current artifact \
+                     format's code-size cap; reduce code size — common causes \
+                     are formatted panics pulling in `core::fmt` and large \
+                     generic instantiations"
+                }
+                groundhog_rv32_lower::LowerError::DataTooLarge { .. } => {
+                    "static data plus the reserved stack exceed the VM's data \
+                     memory; reduce static data, or pass a smaller \
+                     `groundhog build --stack-size` to shrink the stack \
+                     reserve below the data sections"
+                }
+                groundhog_rv32_lower::LowerError::Verify(_) => {
+                    "this is a bug — please report this lower→verify \
+                     failure to the Groundhog team"
+                }
+                _ => {
+                    "the RV32 ELF may have a malformed `.text`/data layout or a \
+                     nonzero entry point; see the lower error above"
+                }
+            })),
             Self::WasmInstrumentFailed(_) => {
                 Some(Cow::Borrowed("the WASM binary may be invalid or too large"))
             }
@@ -429,7 +447,7 @@ impl CliError {
                 "stdout": stdout,
                 "stderr": stderr,
             })),
-            Self::Rv32LowerFailed(message) => Some(json!({ "message": message })),
+            Self::Rv32LowerFailed(error) => Some(json!({ "message": error.to_string() })),
             Self::CallEncode { path, message } | Self::CallDecode { path, message } => {
                 Some(json!({
                     "path": path,
@@ -447,5 +465,62 @@ impl CliError {
             })),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use groundhog_rv32_lower::LowerError;
+
+    fn hint(error: &CliError) -> String {
+        error.hint().expect("hint expected").into_owned()
+    }
+
+    #[test]
+    fn rv32_lower_code_too_large_hints_at_code_size_reduction() {
+        let error = CliError::Rv32LowerFailed(LowerError::CodeTooLarge {
+            size: 82472,
+            max: 65536,
+        });
+        assert!(hint(&error).contains("reduce code size"));
+    }
+
+    #[test]
+    fn rv32_lower_data_too_large_hints_at_stack_size() {
+        let error = CliError::Rv32LowerFailed(LowerError::DataTooLarge {
+            section: ".bss".to_string(),
+            end: 70168,
+            max: 65536,
+        });
+        assert!(hint(&error).contains("--stack-size"));
+    }
+
+    #[test]
+    fn rv32_lower_invalid_keeps_the_malformed_elf_hint() {
+        let error = CliError::Rv32LowerFailed(LowerError::Invalid(
+            ".text must start at vaddr 0, got 4".to_string(),
+        ));
+        assert!(hint(&error).contains("malformed"));
+    }
+
+    #[test]
+    fn rv32_lower_verify_hints_at_reporting_a_bug() {
+        let error =
+            CliError::Rv32LowerFailed(LowerError::Verify("code digest mismatch".to_string()));
+        assert!(hint(&error).contains("bug"));
+    }
+
+    #[test]
+    fn rv32_lower_failed_details_json_keeps_the_message_field() {
+        let inner = LowerError::CodeTooLarge {
+            size: 65540,
+            max: 65536,
+        };
+        let message = inner.to_string();
+        let details = CliError::Rv32LowerFailed(inner)
+            .details_json()
+            .expect("details expected");
+        assert_eq!(details["message"], message);
     }
 }

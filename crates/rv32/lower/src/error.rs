@@ -7,6 +7,38 @@ pub enum LowerError {
     /// These are user-facing: the contract or its build is malformed.
     #[error("{0}")]
     Invalid(String),
+    /// `.text` exceeds the artifact format's code-size cap. The contract is
+    /// well-formed, just too big — a distinct case from [`Self::Invalid`] so
+    /// consumers can give size-reduction guidance instead of treating the ELF
+    /// as malformed.
+    #[error(
+        ".text is {size} bytes; the current artifact format caps code at {max} bytes \
+         ({over} bytes over)",
+        over = .size.saturating_sub(*.max)
+    )]
+    CodeTooLarge {
+        /// Actual `.text` size in bytes.
+        size: usize,
+        /// The artifact format's code-size cap in bytes.
+        max: usize,
+    },
+    /// A data section ends past the VM's data address space. Under the
+    /// stack-first layout, data sections sit above the reserved stack, so
+    /// shrinking the stack reserve is a legitimate fix alongside reducing
+    /// static data.
+    #[error(
+        "section {section} ends at {end}, exceeding the {max}-byte VM data memory \
+         by {over} bytes",
+        over = .end.saturating_sub(*.max)
+    )]
+    DataTooLarge {
+        /// Name of the offending section.
+        section: String,
+        /// End address of the section in guest data space.
+        end: usize,
+        /// The VM's data address space size in bytes.
+        max: usize,
+    },
     /// The freshly-built artifact failed its self-check. This indicates a bug
     /// in the writer (or the format constants), not bad input.
     #[error("verify: {0}")]

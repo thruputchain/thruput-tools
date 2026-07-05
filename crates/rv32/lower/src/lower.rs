@@ -7,7 +7,7 @@
 //! `.text` layout rules below. Stripped release builds are valid inputs.
 
 use crate::elf::{self, Section};
-use crate::error::{Result, invalid};
+use crate::error::{LowerError, Result, invalid};
 use groundhog_rv32_artifact::{MAX_CODE_BYTES, MAX_MEMORY_BYTES, build_artifact, verify_artifact};
 
 /// Allocatable sections an rv32 contract image may contain. Anything else with
@@ -100,7 +100,10 @@ fn validate_sections(data: &[u8], sections: &[Section]) -> Result<(Vec<u8>, Vec<
         return Err(invalid(".text size must be four-byte aligned"));
     }
     if text.size as usize > MAX_CODE_BYTES {
-        return Err(invalid(format!(".text exceeds {MAX_CODE_BYTES} bytes")));
+        return Err(LowerError::CodeTooLarge {
+            size: text.size as usize,
+            max: MAX_CODE_BYTES,
+        });
     }
     let text_off = text.offset as usize;
     let text_size = text.size as usize;
@@ -164,10 +167,11 @@ fn validate_sections(data: &[u8], sections: &[Section]) -> Result<(Vec<u8>, Vec<
         }
         data_ranges.push((section.name.clone(), sec_start, sec_end));
         if sec_end as usize > MAX_MEMORY_BYTES {
-            return Err(invalid(format!(
-                "section {} exceeds memory limit",
-                section.name
-            )));
+            return Err(LowerError::DataTooLarge {
+                section: section.name.clone(),
+                end: sec_end as usize,
+                max: MAX_MEMORY_BYTES,
+            });
         }
         if section.is_nobits() {
             continue;

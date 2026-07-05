@@ -615,10 +615,32 @@ fn rejects_data_section_in_the_null_guard() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn accepts_code_exactly_at_max() {
+    let mut spec = happy_spec();
+    spec.text = vec![0u8; 64 * 1024]; // exactly at the cap
+    let lowered = lower(&assemble(spec)).expect("at-limit .text lowers");
+    assert_eq!(lowered.code.len(), 64 * 1024);
+    verify_artifact(&lowered.artifact).expect("artifact self-verifies");
+}
+
+#[test]
 fn rejects_code_larger_than_max() {
     let mut spec = happy_spec();
-    spec.text = vec![0u8; 64 * 1024 + 4]; // 4-byte aligned, over the limit
-    expect_err(spec, ".text exceeds");
+    spec.text = vec![0u8; 64 * 1024 + 4]; // one instruction over the cap
+    let elf = assemble(spec);
+    let err = lower(&elf).expect_err("expected lowering to fail");
+    assert!(matches!(
+        err,
+        groundhog_rv32_lower::LowerError::CodeTooLarge {
+            size: 65540,
+            max: 65536,
+        }
+    ));
+    // The message reports the actual size, the cap, and the overage.
+    let message = err.to_string();
+    assert!(message.contains(".text is 65540 bytes"), "{message:?}");
+    assert!(message.contains("65536 bytes"), "{message:?}");
+    assert!(message.contains("(4 bytes over)"), "{message:?}");
 }
 
 #[test]
@@ -652,16 +674,67 @@ fn rejects_data_sections_overlapping_each_other() {
 }
 
 #[test]
+fn accepts_data_section_ending_exactly_at_memory_limit() {
+    let mut spec = happy_spec();
+    // Ends at exactly 0x10000, the top of the 64 KiB data address space.
+    spec.extras.push(ExtraSection::progbits(
+        ".data",
+        SHF_ALLOC,
+        0xFF00,
+        vec![0xA5; 0x100],
+    ));
+    let lowered = lower(&assemble(spec)).expect("at-limit data section lowers");
+    assert_eq!(lowered.initial_memory_start, 0xFF00);
+    assert_eq!(lowered.initial_memory.len(), 0x100);
+}
+
+#[test]
 fn rejects_section_exceeding_memory_limit() {
     let mut spec = happy_spec();
-    // Ends at 0x10100, past the 64 KiB image.
+    // Ends at 0x10100 (65792), past the 64 KiB image.
     spec.extras.push(ExtraSection::progbits(
         ".data",
         SHF_ALLOC,
         0xFF00,
         vec![0u8; 0x200],
     ));
-    expect_err(spec, "exceeds memory limit");
+    let elf = assemble(spec);
+    let err = lower(&elf).expect_err("expected lowering to fail");
+    assert!(matches!(
+        &err,
+        groundhog_rv32_lower::LowerError::DataTooLarge {
+            section,
+            end: 65792,
+            max: 65536,
+        } if section == ".data"
+    ));
+    // The message names the section and reports end address and overage.
+    let message = err.to_string();
+    assert!(
+        message.contains("section .data ends at 65792"),
+        "{message:?}"
+    );
+    assert!(message.contains("65536-byte"), "{message:?}");
+    assert!(message.contains("by 256 bytes"), "{message:?}");
+}
+
+#[test]
+fn rejects_bss_exceeding_memory_limit() {
+    // NOBITS sections occupy address space even without file content, so an
+    // oversized .bss (the common overflow under the stack-first layout, where
+    // data sits above the stack reserve) is rejected by name too.
+    let mut spec = happy_spec();
+    // Ends at 0x11218 (70168), 4632 bytes past the 64 KiB image.
+    spec.extras
+        .push(ExtraSection::nobits(".bss", 0x1000, 0x10218));
+    let elf = assemble(spec);
+    let err = lower(&elf).expect_err("expected lowering to fail");
+    let message = err.to_string();
+    assert!(
+        message.contains("section .bss ends at 70168"),
+        "{message:?}"
+    );
+    assert!(message.contains("by 4632 bytes"), "{message:?}");
 }
 
 #[test]
