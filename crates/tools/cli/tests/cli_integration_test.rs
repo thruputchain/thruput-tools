@@ -302,9 +302,9 @@ fn node_hogd_dev_binary_json_starts_supervisor() {
     let status = wait_child(child.into_inner(), Duration::from_secs(10));
     assert!(status.success(), "groundhog node should stop cleanly");
     let global_config = std::fs::read_to_string(config_home.path().join("groundhog/config.toml"))
-        .expect("groundhog node should persist profile state");
-    assert!(global_config.contains("rpc_url"));
-    assert!(global_config.contains("runtime_manifest"));
+        .expect("groundhog node should leave config readable");
+    assert!(!global_config.contains("rpc_url"));
+    assert!(!global_config.contains("runtime_manifest"));
     assert!(
         wait_pid_gone(pid, Duration::from_secs(2)),
         "fake hogd-dev pid {pid} still alive after CLI exit",

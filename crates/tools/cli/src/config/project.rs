@@ -372,6 +372,61 @@ pub fn save_profile_local_node_state(
     Ok(path)
 }
 
+/// Clear local-node runtime state if it still matches the node that wrote it.
+pub fn clear_profile_local_node_state_if_matches(
+    start: &Path,
+    explicit_profile: Option<&str>,
+    rpc_url: &str,
+    runtime_manifest: &Path,
+    runtime_artifacts_dir: Option<&Path>,
+) -> Result<PathBuf, CliError> {
+    let profile_name = active_profile_name(start, explicit_profile)?;
+    let path = profile_write_path(start)?;
+    let contents = std::fs::read_to_string(&path)?;
+
+    let mut doc: toml_edit::DocumentMut = contents
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|e| CliError::Other(e.to_string()))?;
+
+    let Some(profile) = doc
+        .get_mut("profile")
+        .and_then(toml_edit::Item::as_table_mut)
+        .and_then(|profiles| profiles.get_mut(&profile_name))
+        .and_then(toml_edit::Item::as_table_mut)
+    else {
+        return Ok(path);
+    };
+
+    let rpc_matches = profile
+        .get("rpc_url")
+        .and_then(toml_edit::Item::as_str)
+        .is_some_and(|value| value == rpc_url.trim());
+    let manifest_matches = profile
+        .get("runtime_manifest")
+        .and_then(toml_edit::Item::as_str)
+        .is_some_and(|value| value == runtime_manifest.to_string_lossy());
+
+    if !rpc_matches || !manifest_matches {
+        return Ok(path);
+    }
+
+    profile.remove("rpc_url");
+    profile.remove("runtime_manifest");
+
+    if let Some(path) = runtime_artifacts_dir {
+        let artifacts_match = profile
+            .get("runtime_artifacts_dir")
+            .and_then(toml_edit::Item::as_str)
+            .is_some_and(|value| value == path.to_string_lossy());
+        if artifacts_match {
+            profile.remove("runtime_artifacts_dir");
+        }
+    }
+
+    write_profile_config(&path, doc.to_string().as_bytes())?;
+    Ok(path)
+}
+
 /// Resolve the effective default key for the active profile.
 ///
 /// Prefers `groundhog.toml` when the profile specifies

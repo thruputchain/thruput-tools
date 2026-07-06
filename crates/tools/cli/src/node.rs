@@ -238,6 +238,10 @@ async fn run_hogd_dev(
         explicit_profile,
         runtime_artifacts_dir.as_deref(),
     );
+    let cleanup_profile_state = profile_state_result
+        .as_ref()
+        .ok()
+        .and_then(|_| profile_state_cleanup(&started, runtime_artifacts_dir.as_deref()));
 
     if print.is_json() {
         print.json(&CommandResult::new(
@@ -265,6 +269,7 @@ async fn run_hogd_dev(
     };
 
     let outcome = started.run_until(stop_signal).await;
+    cleanup_written_profile_state(cleanup_profile_state, explicit_profile, print);
     let outcome = outcome?;
     match outcome {
         SupervisorStop::HogdExited(status) => {
@@ -283,6 +288,52 @@ async fn run_hogd_dev(
         other => Err(CliError::NodeSupervisor(format!(
             "unexpected supervisor stop state: {other:?}"
         ))),
+    }
+}
+
+struct ProfileStateCleanup {
+    rpc_url: String,
+    runtime_manifest: PathBuf,
+    runtime_artifacts_dir: Option<PathBuf>,
+}
+
+fn profile_state_cleanup(
+    started: &StartedLocalNode,
+    runtime_artifacts_dir: Option<&Path>,
+) -> Option<ProfileStateCleanup> {
+    Some(ProfileStateCleanup {
+        rpc_url: started.rpc_url(),
+        runtime_manifest: started.readiness().manifest_path.clone()?,
+        runtime_artifacts_dir: runtime_artifacts_dir.map(Path::to_path_buf),
+    })
+}
+
+fn cleanup_written_profile_state(
+    cleanup: Option<ProfileStateCleanup>,
+    explicit_profile: Option<&str>,
+    print: &Print,
+) {
+    let Some(cleanup) = cleanup else {
+        return;
+    };
+    let result = std::env::current_dir()
+        .map_err(CliError::from)
+        .and_then(|cwd| {
+            crate::config::clear_profile_local_node_state_if_matches(
+                &cwd,
+                explicit_profile,
+                &cleanup.rpc_url,
+                &cleanup.runtime_manifest,
+                cleanup.runtime_artifacts_dir.as_deref(),
+            )
+        });
+
+    if let Err(error) = result
+        && !print.is_json()
+    {
+        print.warn(format_args!(
+            "profile runtime state was not cleared: {error}"
+        ));
     }
 }
 

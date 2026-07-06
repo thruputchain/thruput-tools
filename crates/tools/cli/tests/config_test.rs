@@ -598,6 +598,117 @@ default_key = "dev-0"
 
 #[test]
 #[serial]
+fn clear_profile_local_node_state_removes_matching_runtime_fields() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    fs::create_dir(&project).unwrap();
+    fs::write(
+        project.join("groundhog.toml"),
+        r#"
+[profile.local]
+default_key = "dev-0"
+
+[profile.local.contracts]
+HOG = "0x1111"
+"#,
+    )
+    .unwrap();
+    let manifest = tmp.path().join("runtime-manifest.json");
+    let artifacts_dir = tmp.path().join("hog-devnode");
+    fs::write(&manifest, "{}").unwrap();
+    fs::create_dir(&artifacts_dir).unwrap();
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+
+    groundhog_cli::config::save_profile_local_node_state(
+        &project,
+        Some("local"),
+        "http://127.0.0.1:9545",
+        &manifest,
+        Some(&artifacts_dir),
+    )
+    .unwrap();
+    let written = groundhog_cli::config::clear_profile_local_node_state_if_matches(
+        &project,
+        Some("local"),
+        "http://127.0.0.1:9545",
+        &manifest,
+        Some(&artifacts_dir),
+    )
+    .unwrap();
+    assert_eq!(written, project.join("groundhog.toml"));
+
+    let profile = groundhog_cli::config::resolve_profile(&project, Some("local")).unwrap();
+    assert_eq!(profile.default_key.as_deref(), Some("dev-0"));
+    assert!(profile.rpc_url.is_none());
+    assert!(profile.runtime_manifest.is_none());
+    assert!(profile.runtime_artifacts_dir.is_none());
+    assert_eq!(
+        profile.contracts.get("HOG").map(String::as_str),
+        Some("0x1111")
+    );
+
+    unsafe { env::remove_var("XDG_CONFIG_HOME") };
+}
+
+#[test]
+#[serial]
+fn clear_profile_local_node_state_preserves_changed_runtime_fields() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    fs::create_dir(&project).unwrap();
+    fs::write(project.join("groundhog.toml"), "[profile.local]\n").unwrap();
+    let first_manifest = tmp.path().join("runtime-manifest-first.json");
+    let second_manifest = tmp.path().join("runtime-manifest-second.json");
+    let first_artifacts = tmp.path().join("hog-devnode-first");
+    let second_artifacts = tmp.path().join("hog-devnode-second");
+    fs::write(&first_manifest, "{}").unwrap();
+    fs::write(&second_manifest, "{}").unwrap();
+    fs::create_dir(&first_artifacts).unwrap();
+    fs::create_dir(&second_artifacts).unwrap();
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+
+    groundhog_cli::config::save_profile_local_node_state(
+        &project,
+        Some("local"),
+        "http://127.0.0.1:9545",
+        &first_manifest,
+        Some(&first_artifacts),
+    )
+    .unwrap();
+    groundhog_cli::config::save_profile_local_node_state(
+        &project,
+        Some("local"),
+        "http://127.0.0.1:9546",
+        &second_manifest,
+        Some(&second_artifacts),
+    )
+    .unwrap();
+
+    groundhog_cli::config::clear_profile_local_node_state_if_matches(
+        &project,
+        Some("local"),
+        "http://127.0.0.1:9545",
+        &first_manifest,
+        Some(&first_artifacts),
+    )
+    .unwrap();
+
+    let profile = groundhog_cli::config::resolve_profile(&project, Some("local")).unwrap();
+    assert_eq!(profile.rpc_url.as_deref(), Some("http://127.0.0.1:9546"));
+    assert_eq!(
+        profile.runtime_manifest.as_deref(),
+        Some(second_manifest.as_path())
+    );
+    assert_eq!(
+        profile.runtime_artifacts_dir.as_deref(),
+        Some(second_artifacts.as_path())
+    );
+
+    unsafe { env::remove_var("XDG_CONFIG_HOME") };
+}
+
+#[test]
+#[serial]
 fn resolve_default_key_falls_back_to_global_selection() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };

@@ -10,7 +10,8 @@ pub use global::{
 };
 pub use project::{
     DEFAULT_PROFILE, ProfileOverrides, ProjectProfile, ResolvedProfile, active_profile_name,
-    find_project_config, load_project_profiles, remove_profile_wallet_address, resolve_default_key,
-    resolve_profile, resolve_profile_with_overrides, save_profile_contract_alias,
-    save_profile_local_node_state, save_profile_wallet_address,
+    clear_profile_local_node_state_if_matches, find_project_config, load_project_profiles,
+    remove_profile_wallet_address, resolve_default_key, resolve_profile,
+    resolve_profile_with_overrides, save_profile_contract_alias, save_profile_local_node_state,
+    save_profile_wallet_address,
 };
