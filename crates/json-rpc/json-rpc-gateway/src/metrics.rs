@@ -332,6 +332,7 @@ impl GatewayMetrics {
             "groundhog_getBlockByNumber" => "groundhog_getBlockByNumber",
             "groundhog_pendingTransactionCount" => "groundhog_pendingTransactionCount",
             "groundhog_getEvents" => "groundhog_getEvents",
+            "groundhog_getTransactionsByAddress" => "groundhog_getTransactionsByAddress",
             "groundhog_getStorageAt" => "groundhog_getStorageAt",
             "groundhog_getBalance" => "groundhog_getBalance",
             "groundhog_view" => "groundhog_view",
@@ -542,7 +543,7 @@ mod tests {
         assert!(body.contains(
             "groundhog_gateway_build_info{commit_hash=\"test-commit\",version=\"test-version\""
         ));
-        assert!(body.contains("wire_format_version=\"2.1.0\""));
+        assert!(body.contains(&format!("wire_format_version=\"{WIRE_FORMAT_VERSION}\"")));
     }
 
     #[test]
@@ -637,6 +638,7 @@ mod tests {
             "groundhog_getBlockByNumber",
             "groundhog_pendingTransactionCount",
             "groundhog_getEvents",
+            "groundhog_getTransactionsByAddress",
             "groundhog_getStorageAt",
             "groundhog_getBalance",
             "groundhog_view",

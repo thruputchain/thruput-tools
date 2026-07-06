@@ -10,8 +10,12 @@ pub struct RpcServerConfig {
     /// above this are rejected as `InvalidParam`.
     pub max_events_per_page: u32,
 
-    /// Maximum length of the opaque `getEvents` pagination cursor;
-    /// longer cursors are rejected as `InvalidParam`.
+    /// Per-page cap on `getTransactionsByAddress` responses; requests
+    /// with `limit` above this are rejected as `InvalidParam`.
+    pub max_transactions_per_page: u32,
+
+    /// Maximum length of the opaque pagination cursor on paginated
+    /// methods; longer cursors are rejected as `InvalidParam`.
     pub max_cursor_bytes: usize,
 
     /// Maximum `groundhog_view` calldata byte length; larger
@@ -31,6 +35,7 @@ impl Default for RpcServerConfig {
     fn default() -> Self {
         Self {
             max_events_per_page: 200,
+            max_transactions_per_page: 200,
             max_cursor_bytes: 256,
             max_view_calldata_bytes: 64 * 1024,
             view_gas_limit: DEFAULT_VIEW_GAS_LIMIT,
@@ -43,6 +48,13 @@ impl RpcServerConfig {
     #[must_use]
     pub fn with_max_events_per_page(mut self, max: u32) -> Self {
         self.max_events_per_page = max;
+        self
+    }
+
+    /// Override the per-page transaction-ref limit.
+    #[must_use]
+    pub fn with_max_transactions_per_page(mut self, max: u32) -> Self {
+        self.max_transactions_per_page = max;
         self
     }
 

@@ -24,7 +24,7 @@ use groundhog_json_rpc_types::{
     events::{EventPage, EventQuery},
     receipt::TransactionReceipt,
     state::StorageItemRead,
-    transaction::{TransactionStatus, TxHash},
+    transaction::{AddressTransactionQuery, TransactionRefPage, TransactionStatus, TxHash},
 };
 
 /// Backend that returns `NotImplemented` for unwired planes.
@@ -85,6 +85,15 @@ impl ReadPlane for StubBackend {
 
     async fn contract_events(&self, _query: EventQuery) -> Result<EventPage, RpcServerError> {
         Err(RpcServerError::NotImplemented("getEvents".into()))
+    }
+
+    async fn transactions_by_address(
+        &self,
+        _query: AddressTransactionQuery,
+    ) -> Result<TransactionRefPage, RpcServerError> {
+        Err(RpcServerError::NotImplemented(
+            "getTransactionsByAddress".into(),
+        ))
     }
 
     async fn get_storage_at(

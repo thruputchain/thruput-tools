@@ -28,7 +28,10 @@ use groundhog_json_rpc_types::{
     hex::{Hex0x, HexBytes, Topic},
     receipt::{ExecStatus, TransactionReceipt},
     state::{StorageItemInfo, StorageItemRead},
-    transaction::{TransactionStatus, TxHash},
+    transaction::{
+        AddressTransactionQuery as RpcAddressTransactionQuery, TransactionRefPage,
+        TransactionStatus, TxHash,
+    },
 };
 use groundhog_scheduler::{RPCError, sched_coord::SchedulerCoord_SchedulerCoord1_Client};
 use groundhog_scp::network::Protocol;
@@ -174,6 +177,15 @@ impl ReadPlane for HogdDevStorageReadBackend {
 
     async fn contract_events(&self, _query: EventQuery) -> Result<EventPage, RpcServerError> {
         Err(RpcServerError::NotImplemented("getEvents".into()))
+    }
+
+    async fn transactions_by_address(
+        &self,
+        _query: RpcAddressTransactionQuery,
+    ) -> Result<TransactionRefPage, RpcServerError> {
+        Err(RpcServerError::NotImplemented(
+            "getTransactionsByAddress".into(),
+        ))
     }
 
     /// Latest-state storage read.
@@ -366,6 +378,24 @@ impl ReadPlane for HogdDevReadBackend {
             latest_block: page.latest_block,
             oldest_block: page.oldest_block,
         })
+    }
+
+    /// Return one page of transaction refs from the history of the
+    /// query's address, forwarded to the indexer.
+    #[tracing::instrument(skip_all, fields(limit = query.limit))]
+    async fn transactions_by_address(
+        &self,
+        query: RpcAddressTransactionQuery,
+    ) -> Result<TransactionRefPage, RpcServerError> {
+        let wire_query: groundhog_indexer::indexer::AddressTransactionQuery = query.into();
+        let page = self
+            .indexer
+            .get_transactions_by_address(&wire_query)
+            .await
+            .map_err(|source| {
+                RpcServerError::BackendUnavailable(format!("hogd-dev indexer: {source}"))
+            })?;
+        Ok(page.into())
     }
 
     /// Latest-state storage read.
@@ -644,10 +674,12 @@ mod tests {
         DbGatewayIntroOutcome, DbGatewayItemResult, DbGatewayPayload, DbGatewayResult,
     };
     use groundhog_indexer::{
-        EventPage as IdxEventPage, IndexerBlockExplorer_IndexerBlockExplorer1,
+        AddressTransactionQuery, EventPage as IdxEventPage,
+        IndexerBlockExplorer_IndexerBlockExplorer1,
         IndexerBlockExplorer_IndexerBlockExplorer1_Client,
         IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher, IndexerBlockExplorerIntroOutcome,
-        TransactionPage as IdxTransactionPage, TransactionQuery, TxInfo, TxInfoResult,
+        TransactionPage as IdxTransactionPage, TransactionQuery, TransactionRefPage, TxInfo,
+        TxInfoResult,
     };
     use groundhog_json_rpc_server::{ReadPlane, RpcServerError};
     use groundhog_json_rpc_types::{
@@ -1049,6 +1081,22 @@ mod tests {
             // No canned transaction-list dataset; report an exhausted stream.
             Ok(IdxTransactionPage {
                 transactions: VecM(vec![]),
+                cursor: BytesM(vec![]),
+                latest_block: IdxBlockHeight::from(CANNED_HEIGHT_B),
+                oldest_block: IdxBlockHeight::from(0_i64),
+            })
+        }
+
+        async fn get_transactions_by_address(
+            &self,
+            _arg0: AddressTransactionQuery,
+        ) -> Result<TransactionRefPage, ProgramError> {
+            if self.mode == FakeIndexerMode::RpcFail {
+                return Err(ProgramError::msg("fake indexer rpc-fail"));
+            }
+            // No canned per-address dataset; report an exhausted stream.
+            Ok(TransactionRefPage {
+                refs: VecM(vec![]),
                 cursor: BytesM(vec![]),
                 latest_block: IdxBlockHeight::from(CANNED_HEIGHT_B),
                 oldest_block: IdxBlockHeight::from(0_i64),

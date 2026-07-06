@@ -164,6 +164,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let rpc_config = RpcServerConfig::default()
         .with_max_events_per_page(ctx.config.max_events_per_page)
+        .with_max_transactions_per_page(ctx.config.max_transactions_per_page)
         .with_max_cursor_bytes(ctx.config.max_cursor_bytes)
         .with_max_view_calldata_bytes(ctx.config.max_view_calldata_bytes)
         .with_view_gas_limit(ctx.config.view_gas_limit);

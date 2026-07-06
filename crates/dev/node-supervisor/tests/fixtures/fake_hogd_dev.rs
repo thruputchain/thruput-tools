@@ -14,16 +14,16 @@ use std::{
 };
 
 use async_trait::async_trait;
-use groundhog_coordinator::{ValidatorID, ValidatorPublicInfo};
+use groundhog_coordinator::ValidatorID;
 use groundhog_db_gateway::AddressAndKeyBatch;
 use groundhog_db_gateway::{
     DbGateway_DbGateway1, DbGateway_DbGateway1_Dispatcher, DbGatewayIntroOutcome,
     DbGatewayItemResult, DbGatewayPayload, DbGatewayResult,
 };
 use groundhog_indexer::{
-    EventPage, EventQuery, IndexerBlockExplorer_IndexerBlockExplorer1,
+    AddressTransactionQuery, EventPage, EventQuery, IndexerBlockExplorer_IndexerBlockExplorer1,
     IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher, IndexerBlockExplorerIntroOutcome,
-    TransactionPage, TransactionQuery, TxInfo, TxInfoResult,
+    TransactionPage, TransactionQuery, TransactionRefPage, TxInfo, TxInfoResult,
 };
 use groundhog_json_rpc_types::hex::Hex0x;
 use groundhog_scheduler::{
@@ -45,7 +45,7 @@ use rpc_driver::{ProgramError, RpcServer, ServiceMap};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tokio::{net::TcpListener, runtime::Runtime};
-use xdr_common::{BytesM, StringM, VecM};
+use xdr_common::{BytesM, VecM};
 
 const MODE_ENV: &str = "GROUNDHOG_FAKE_HOGD_DEV_MODE";
 /// Optional path the fake writes its PID to before printing readiness.
@@ -765,10 +765,6 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
                     xdr: BytesM(vec![0x01]),
                 }),
                 nomination: Nomination {
-                    proposer: ValidatorPublicInfo {
-                        public_key: Ed25519PublicKey::from([0u8; 32]),
-                        address: StringM(b"fake-validator".to_vec()),
-                    },
                     block_height: next_height.into(),
                     block_hash,
                     prev_block_hash: tip.block_hash,
@@ -1244,6 +1240,23 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for FakeIndexer {
         // No canned transaction-list dataset; report an exhausted stream.
         Ok(TransactionPage {
             transactions: VecM(vec![]),
+            cursor: BytesM(vec![]),
+            latest_block: BlockHeight::from(CANNED_HEIGHT_B),
+            oldest_block: BlockHeight::from(0_i64),
+        })
+    }
+
+    #[tracing::instrument(skip_all)]
+    async fn get_transactions_by_address(
+        &self,
+        _arg0: AddressTransactionQuery,
+    ) -> Result<TransactionRefPage, ProgramError> {
+        if self.mode == FakeIndexerMode::RpcFail || self.mode == FakeIndexerMode::RuntimeRpcFail {
+            return Err(ProgramError::msg("fake indexer rpc-fail mode"));
+        }
+        // No canned per-address dataset; report an exhausted stream.
+        Ok(TransactionRefPage {
+            refs: VecM(vec![]),
             cursor: BytesM(vec![]),
             latest_block: BlockHeight::from(CANNED_HEIGHT_B),
             oldest_block: BlockHeight::from(0_i64),

@@ -10,7 +10,7 @@ use groundhog_json_rpc_types::{
     events::{EventPage, EventQuery},
     receipt::TransactionReceipt,
     state::StorageItemRead,
-    transaction::{TransactionStatus, TxHash},
+    transaction::{AddressTransactionQuery, TransactionRefPage, TransactionStatus, TxHash},
     view::{ViewRequest, ViewResponse},
 };
 
@@ -93,6 +93,16 @@ impl ReadPlane for GatewayBackend {
     #[tracing::instrument(skip_all, fields(filters_len = query.filters.0.len(), limit = query.limit))]
     async fn contract_events(&self, query: EventQuery) -> Result<EventPage, RpcServerError> {
         handlers::events::get_events(&self.ctx, query)
+            .await
+            .map_err(Into::into)
+    }
+
+    #[tracing::instrument(skip_all, fields(?query.address, limit = query.limit))]
+    async fn transactions_by_address(
+        &self,
+        query: AddressTransactionQuery,
+    ) -> Result<TransactionRefPage, RpcServerError> {
+        handlers::transactions::get_transactions_by_address(&self.ctx, query)
             .await
             .map_err(Into::into)
     }

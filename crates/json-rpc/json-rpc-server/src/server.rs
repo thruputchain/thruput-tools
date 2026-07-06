@@ -11,7 +11,7 @@ use groundhog_json_rpc_types::{
     hex::HexBytes,
     receipt::TransactionReceipt,
     state::{StorageItemInfo, StorageItemRead},
-    transaction::{TransactionStatus, TxHash},
+    transaction::{AddressTransactionQuery, TransactionRefPage, TransactionStatus, TxHash},
     version::VersionInfo,
     view::{ViewRequest, ViewResponse},
 };
@@ -147,6 +147,15 @@ where
         Ok(self.read.contract_events(query).await?)
     }
 
+    #[tracing::instrument(skip_all, fields(?query.address, limit = query.limit))]
+    async fn get_transactions_by_address(
+        &self,
+        query: AddressTransactionQuery,
+    ) -> RpcResult<TransactionRefPage> {
+        validate_address_transaction_query(&query, &self.config)?;
+        Ok(self.read.transactions_by_address(query).await?)
+    }
+
     #[tracing::instrument(skip_all, fields(?address, key_len = key.0.len()))]
     async fn get_storage_at(
         &self,
@@ -249,6 +258,32 @@ fn validate_event_query(
     Ok(())
 }
 
+/// Bounds-check a `getTransactionsByAddress` query before the JSON-RPC
+/// dispatcher hands it to the read backend.  Rejects requests whose
+/// `limit` or opaque `cursor` exceed the per-server caps in
+/// `RpcServerConfig`.
+///
+/// `limit == 0` passes through unchanged; the indexer owns the default.
+fn validate_address_transaction_query(
+    query: &AddressTransactionQuery,
+    config: &RpcServerConfig,
+) -> Result<(), RpcServerError> {
+    if query.limit > config.max_transactions_per_page {
+        return Err(RpcServerError::InvalidParam(format!(
+            "limit {} exceeds maximum {}",
+            query.limit, config.max_transactions_per_page
+        )));
+    }
+    if query.cursor.0.len() > config.max_cursor_bytes {
+        return Err(RpcServerError::InvalidParam(format!(
+            "cursor length {} exceeds maximum {}",
+            query.cursor.0.len(),
+            config.max_cursor_bytes
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -280,6 +315,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     struct MockBackend {
         submitted: Mutex<Vec<ValidatedTransaction>>,
         event_calls: Mutex<u32>,
+        tx_by_address_calls: Mutex<u32>,
     }
 
     #[derive(Clone)]
@@ -391,6 +427,14 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             Ok(empty_page())
         }
 
+        async fn transactions_by_address(
+            &self,
+            _query: AddressTransactionQuery,
+        ) -> Result<TransactionRefPage, RpcServerError> {
+            *self.tx_by_address_calls.lock().await += 1;
+            Ok(empty_ref_page())
+        }
+
         async fn get_storage_at(
             &self,
             _address: ContractAddress,
@@ -435,6 +479,13 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         async fn contract_events(&self, _query: EventQuery) -> Result<EventPage, RpcServerError> {
             *self.event_calls.lock().await += 1;
             Ok(empty_page())
+        }
+
+        async fn transactions_by_address(
+            &self,
+            _query: AddressTransactionQuery,
+        ) -> Result<TransactionRefPage, RpcServerError> {
+            Ok(empty_ref_page())
         }
 
         async fn get_storage_at(
@@ -644,6 +695,69 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     }
 
     #[tokio::test]
+    async fn tx_by_address_excessive_limit_is_rejected_before_backend_dispatch() {
+        let mock = Arc::new(MockBackend::default());
+        let cap = 5;
+        let server = GroundhogRpcServer::unified(
+            mock.clone(),
+            RpcServerConfig::default().with_max_transactions_per_page(cap),
+            BuildInfo::for_tests(),
+        );
+
+        let mut q = simple_address_query();
+        q.limit = cap + 1;
+
+        let err = server
+            .get_transactions_by_address(q)
+            .await
+            .expect_err("bug: excessive limit should fail");
+
+        assert_eq!(
+            err.code(),
+            groundhog_json_rpc_types::error::codes::INVALID_PARAMS
+        );
+        assert_eq!(*mock.tx_by_address_calls.lock().await, 0);
+    }
+
+    #[tokio::test]
+    async fn tx_by_address_oversized_cursor_is_rejected_before_backend_dispatch() {
+        let mock = Arc::new(MockBackend::default());
+        let cap = 16;
+        let server = GroundhogRpcServer::unified(
+            mock.clone(),
+            RpcServerConfig::default().with_max_cursor_bytes(cap),
+            BuildInfo::for_tests(),
+        );
+
+        let mut q = simple_address_query();
+        q.cursor = PaginationCursor(vec![0u8; cap + 1]);
+
+        let err = server
+            .get_transactions_by_address(q)
+            .await
+            .expect_err("bug: oversized cursor should fail");
+
+        assert_eq!(
+            err.code(),
+            groundhog_json_rpc_types::error::codes::INVALID_PARAMS
+        );
+        assert_eq!(*mock.tx_by_address_calls.lock().await, 0);
+    }
+
+    #[tokio::test]
+    async fn tx_by_address_limit_zero_passes_through_as_server_default_marker() {
+        let mock = Arc::new(MockBackend::default());
+        let server = server(mock.clone());
+
+        server
+            .get_transactions_by_address(simple_address_query())
+            .await
+            .expect("bug: limit=0 should pass through");
+
+        assert_eq!(*mock.tx_by_address_calls.lock().await, 1);
+    }
+
+    #[tokio::test]
     async fn backend_not_implemented_maps_to_public_code() {
         let mock = Arc::new(MockBackend::default());
         let server = server(mock);
@@ -702,6 +816,25 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     fn empty_page() -> EventPage {
         EventPage {
             events: vec![],
+            cursor: PaginationCursor(vec![]),
+            latest_block: BlockHeight::from(0),
+            oldest_block: BlockHeight::from(0),
+        }
+    }
+
+    fn simple_address_query() -> AddressTransactionQuery {
+        AddressTransactionQuery {
+            address: Hex0x(groundhog_xdr::types::ContractAddress::from([0u8; 32])),
+            order: IterationOrder::Ascending,
+            anchor: BlockAnchor::AtBeginning,
+            cursor: PaginationCursor(vec![]),
+            limit: 0,
+        }
+    }
+
+    fn empty_ref_page() -> TransactionRefPage {
+        TransactionRefPage {
+            refs: vec![],
             cursor: PaginationCursor(vec![]),
             latest_block: BlockHeight::from(0),
             oldest_block: BlockHeight::from(0),

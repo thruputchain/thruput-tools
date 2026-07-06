@@ -554,9 +554,10 @@ mod tests {
         AddressAndKeyBatch, DbGateway_DbGateway1, DbGateway_DbGateway1_Dispatcher, DbGatewayResult,
     };
     use groundhog_indexer::{
-        EventPage as IdxEventPage, EventQuery, IndexerBlockExplorer_IndexerBlockExplorer1,
+        AddressTransactionQuery, EventPage as IdxEventPage, EventQuery,
+        IndexerBlockExplorer_IndexerBlockExplorer1,
         IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher,
-        TransactionPage as IdxTransactionPage, TransactionQuery, TxInfoResult,
+        TransactionPage as IdxTransactionPage, TransactionQuery, TransactionRefPage, TxInfoResult,
     };
     use groundhog_view::{
         ViewGateway_ViewGateway1, ViewGateway_ViewGateway1_Dispatcher, ViewGatewayResult,
@@ -641,6 +642,13 @@ mod tests {
             &self,
             _arg0: TransactionQuery,
         ) -> Result<IdxTransactionPage, ProgramError> {
+            panic!("bug: intro rejection test should not issue indexer data RPC")
+        }
+
+        async fn get_transactions_by_address(
+            &self,
+            _arg0: AddressTransactionQuery,
+        ) -> Result<TransactionRefPage, ProgramError> {
             panic!("bug: intro rejection test should not issue indexer data RPC")
         }
     }

@@ -70,7 +70,7 @@ use groundhog_json_rpc_types::{
     events::{EventPage, EventQuery},
     receipt::TransactionReceipt,
     state::StorageItemRead,
-    transaction::{TransactionStatus, TxHash},
+    transaction::{AddressTransactionQuery, TransactionRefPage, TransactionStatus, TxHash},
     view::{ViewRequest, ViewResponse},
 };
 
@@ -136,6 +136,16 @@ pub trait ReadPlane: Send + Sync + 'static {
     /// Walk further pages by sending the same query back with `cursor`
     /// set to the value from the previous page.
     async fn contract_events(&self, query: EventQuery) -> Result<EventPage, RpcServerError>;
+
+    /// Return one page of transaction refs from the history of the
+    /// query's address.
+    ///
+    /// Walk further pages by sending the same query back with `cursor`
+    /// set to the value from the previous page.
+    async fn transactions_by_address(
+        &self,
+        query: AddressTransactionQuery,
+    ) -> Result<TransactionRefPage, RpcServerError>;
 
     /// Return the latest committed storage item at one (address, key).
     /// `key` is the 32-byte raw contract-data key that the wire form
