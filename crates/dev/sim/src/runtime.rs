@@ -87,6 +87,23 @@ pub fn derive_accounts(
         .collect()
 }
 
+pub fn derive_provisioned_account_signer(
+    manifest: &RuntimeManifest,
+    index: u32,
+) -> Result<LocalSigner, RuntimeManifestError> {
+    if manifest.bootstrap_account_derivation.scheme != SUPPORTED_DERIVATION_SCHEME {
+        return Err(RuntimeManifestError::UnsupportedDerivationScheme {
+            scheme: manifest.bootstrap_account_derivation.scheme.clone(),
+        });
+    }
+    let index = usize::try_from(index)
+        .map_err(|_| RuntimeManifestError::BootstrapAccountIndexTooLarge { index })?;
+    Ok(derive_dev_account_signer(
+        &manifest.bootstrap_account_derivation.seed,
+        index,
+    ))
+}
+
 fn derive_account(
     manifest: &RuntimeManifest,
     account: &BootstrapAccount,

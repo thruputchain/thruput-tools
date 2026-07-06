@@ -160,13 +160,15 @@ where
         let block_expiry_height = resolve_block_expiry_height(client.clone()).await?;
         let record = deploy_one_contract(
             client.clone(),
-            artifact,
-            scenario_path,
-            contract_artifact_root,
             actor,
-            deploy_entrypoint,
             event_writer,
-            block_expiry_height,
+            DeployOneContractInput {
+                artifact,
+                scenario_path,
+                contract_artifact_root,
+                deploy_entrypoint,
+                block_expiry_height,
+            },
         )
         .await?;
         if record.status == ContractDeploymentStatus::Completed {
@@ -207,26 +209,22 @@ where
 
 async fn deploy_one_contract<C>(
     client: C,
-    artifact: &ContractArtifactSpec,
-    scenario_path: &Path,
-    contract_artifact_root: Option<&Path>,
     actor: &mut ActorState,
-    deploy_entrypoint: ContractEntrypointID,
     event_writer: &mut EventWriter,
-    block_expiry_height: i64,
+    input: DeployOneContractInput<'_>,
 ) -> Result<ContractDeploymentRecord, SimError>
 where
     C: SimRpcClient + Clone + Send + Sync + 'static,
 {
     let artifact_path = resolve_artifact_path(
-        scenario_path,
-        contract_artifact_root,
-        &artifact.artifact.path,
+        input.scenario_path,
+        input.contract_artifact_root,
+        &input.artifact.artifact.path,
     );
     let mut record = ContractDeploymentRecord {
-        name: artifact.name.clone(),
+        name: input.artifact.name.clone(),
         status: ContractDeploymentStatus::Started,
-        artifact_kind: Some(artifact.artifact.kind),
+        artifact_kind: Some(input.artifact.artifact.kind),
         artifact_path: Some(artifact_path.display().to_string()),
         artifact_sha256: None,
         contract_hash: None,
@@ -240,11 +238,11 @@ where
     };
 
     let prepared = match prepare_deploy(
-        artifact.artifact.kind,
+        input.artifact.artifact.kind,
         &artifact_path,
         actor,
-        deploy_entrypoint,
-        block_expiry_height,
+        input.deploy_entrypoint,
+        input.block_expiry_height,
     ) {
         Ok(prepared) => prepared,
         Err(error) => {
@@ -291,6 +289,14 @@ where
         }
     }
     Ok(record)
+}
+
+struct DeployOneContractInput<'a> {
+    artifact: &'a ContractArtifactSpec,
+    scenario_path: &'a Path,
+    contract_artifact_root: Option<&'a Path>,
+    deploy_entrypoint: ContractEntrypointID,
+    block_expiry_height: i64,
 }
 
 fn apply_deploy_progress(record: &mut ContractDeploymentRecord, progress: &DeployProgress) {

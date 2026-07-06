@@ -20,7 +20,9 @@ use groundhog_json_rpc_types::{
 };
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
-use crate::actor::{ActorState, build_actor_states};
+use crate::actor::{
+    ActorError, ActorState, build_actor_states_from_accounts, required_actor_count,
+};
 use crate::assertions::{
     AssertionEvaluation, determine_outcome, evaluate_assertions, workload_event_rate,
 };
@@ -36,6 +38,7 @@ use crate::executor::{
 use crate::manifest::{ClientSpec, ResolvedRunSpec, SimulationManifest, WorkloadKind};
 use crate::metrics::{RunMetrics, RunMetricsBuilder};
 use crate::nonce::NonceNamespace;
+use crate::provision::{ActorProvisionInputs, provision_missing_actor_accounts};
 use crate::resource::TargetResourceSampler;
 use crate::result::{
     AssertionResult, BaselineDiff, ManifestHashes, MetricAvailability, ProducerIdentity,
@@ -462,7 +465,11 @@ async fn run_resolved_target(
             &run_id,
         ),
     };
-    let mut actor_states = build_actor_states(&loaded_sim.manifest, accounts, nonce_namespace)?;
+    let required_actors = required_actor_count(&loaded_sim.manifest);
+    let mut actor_states = build_actor_states_from_accounts(accounts, nonce_namespace)?;
+    if actor_states.len() > required_actors {
+        actor_states.truncate(required_actors);
+    }
     loaded_sim.manifest.resolved = Some(ResolvedRunSpec {
         rpc_url: target.rpc_url.clone(),
         runtime_manifest: target.runtime_manifest.clone(),
@@ -484,13 +491,34 @@ async fn run_resolved_target(
         &mut event_writer,
         &run_id,
         target,
-        actor_states.len(),
+        required_actors,
         nonce_namespace,
         &loaded_runtime.sha256,
     )
     .await?;
 
     let client = SimHttpClientPool::new(&target.rpc_url, rpc_client_config)?;
+    provision_missing_actor_accounts(
+        client.clone(),
+        ActorProvisionInputs {
+            manifest: &loaded_sim.manifest,
+            runtime_manifest: &loaded_runtime.manifest,
+            runtime_manifest_path: &target.runtime_manifest,
+            scenario_path,
+            contract_artifact_root,
+        },
+        &mut actor_states,
+        &mut event_writer,
+    )
+    .await?;
+    if actor_states.len() < required_actors {
+        return Err(ActorError::TooManyActors {
+            requested: required_actors,
+            available: actor_states.len(),
+        }
+        .into());
+    }
+
     let contract_setup = deploy_manifest_contracts(
         client.clone(),
         &loaded_sim.manifest,

@@ -6,6 +6,7 @@ use crate::manifest::{
     EventQueryAnchorSpec, SIMULATION_KIND, SIMULATION_SCHEMA_VERSION, SimulationManifest,
     WorkloadKind,
 };
+use crate::provision::actor_provisioning_enabled;
 use crate::target::{TargetBlockDriverMode, TargetCapabilities, TargetProviderKind};
 
 const MAX_EVENT_QUERY_CURSOR_BYTES: usize = 256;
@@ -698,7 +699,10 @@ pub fn validate_against_runtime(
         .map(|phase| phase.users)
         .max()
         .unwrap_or(0);
-    if max_users > account_count {
+    if max_users > 0 && account_count == 0 && actor_provisioning_enabled(manifest) {
+        return Err(ValidationError::ActorProvisioningRequiresSponsor);
+    }
+    if max_users > account_count && !actor_provisioning_enabled(manifest) {
         return Err(ValidationError::TooManyActors {
             requested: max_users,
             available: account_count,
@@ -961,6 +965,8 @@ pub enum ValidationError {
         "scenario requests {requested} actors but runtime manifest advertises {available} bootstrap accounts"
     )]
     TooManyActors { requested: u32, available: u32 },
+    #[error("actor provisioning requires at least one runtime bootstrap account as wallet sponsor")]
+    ActorProvisioningRequiresSponsor,
     #[error("workload {workload:?} requires runtime manifest endpoint {endpoint}")]
     MissingReadPlane {
         workload: WorkloadKind,
@@ -978,8 +984,8 @@ mod tests {
 
     use super::*;
     use crate::manifest::{
-        DurationSpec, EventQueryAnchorSpec, EventQueryOrderSpec, EventQuerySpec, LoadPhase,
-        WorkloadSpec,
+        ActorProvisioningSpec, BootstrapSpec, DurationSpec, EventQueryAnchorSpec,
+        EventQueryOrderSpec, EventQuerySpec, LoadPhase, WorkloadSpec,
     };
     use crate::target::TargetProviderSpec;
 
@@ -1737,6 +1743,57 @@ mod tests {
                 requested: 2,
                 available: 1
             }
+        ));
+    }
+
+    #[test]
+    fn allows_actor_count_above_bootstrap_accounts_when_provisioning_enabled() {
+        let mut manifest = basic_manifest();
+        manifest.load_shape[0].users = 2;
+        manifest.bootstrap = Some(BootstrapSpec {
+            accounts: 2,
+            account_seed: "seed".into(),
+            initial_storage_tokens: "1000000000".into(),
+            dev_wallet_profile: "default".into(),
+            storage_cost_profile: "default".into(),
+            actor_provisioning: Some(ActorProvisioningSpec {
+                enabled: true,
+                dev_wallet_artifact: None,
+                dev_wallet_artifact_kind: None,
+                airdrop_hog: None,
+            }),
+        });
+        let runtime = runtime_manifest();
+
+        validate_against_runtime(&manifest, &runtime)
+            .expect("actor provisioning should allow creating missing accounts");
+    }
+
+    #[test]
+    fn rejects_actor_provisioning_without_runtime_sponsor() {
+        let mut manifest = basic_manifest();
+        manifest.bootstrap = Some(BootstrapSpec {
+            accounts: 1,
+            account_seed: "seed".into(),
+            initial_storage_tokens: "1000000000".into(),
+            dev_wallet_profile: "default".into(),
+            storage_cost_profile: "default".into(),
+            actor_provisioning: Some(ActorProvisioningSpec {
+                enabled: true,
+                dev_wallet_artifact: None,
+                dev_wallet_artifact_kind: None,
+                airdrop_hog: None,
+            }),
+        });
+        let mut runtime = runtime_manifest();
+        runtime.bootstrap_accounts.clear();
+
+        let err = validate_against_runtime(&manifest, &runtime)
+            .expect_err("actor provisioning should require a sponsor account");
+
+        assert!(matches!(
+            err,
+            ValidationError::ActorProvisioningRequiresSponsor
         ));
     }
 

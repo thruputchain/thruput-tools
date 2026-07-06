@@ -10,7 +10,7 @@ use crate::result::{
 };
 use crate::target::TargetProviderKind;
 
-pub const RESULT_EVENT_SCHEMA_VERSION: u32 = 2;
+pub const RESULT_EVENT_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug)]
 pub struct EventWriter {
@@ -97,6 +97,18 @@ pub enum ResultEvent {
     ContractDeployFailed {
         #[serde(flatten)]
         event: ContractDeploymentRecord,
+    },
+    ActorProvisionStarted {
+        #[serde(flatten)]
+        event: ActorProvisionEvent,
+    },
+    ActorProvisionCompleted {
+        #[serde(flatten)]
+        event: ActorProvisionEvent,
+    },
+    ActorProvisionFailed {
+        #[serde(flatten)]
+        event: ActorProvisionEvent,
     },
     AssertionChecked {
         #[serde(flatten)]
@@ -222,6 +234,29 @@ pub struct SimulatorOverloadEvent {
     pub reason: String,
     pub pending_receipts: usize,
     pub pending_receipt_limit: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActorProvisionEvent {
+    pub actor_id: u32,
+    pub account_index: u32,
+    pub sponsor_actor_id: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub airdrop_sponsor_actor_id: Option<u32>,
+    pub wallet_address: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub create_tx_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub create_height: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub airdrop_tx_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub airdrop_height: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub airdrop_hog: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -723,7 +758,7 @@ mod tests {
             contents,
             concat!(
                 "{\"kind\":\"existing\"}\n",
-                "{\"schemaVersion\":2,\"kind\":\"run-completed\",\"outcome\":\"passed\",",
+                "{\"schemaVersion\":3,\"kind\":\"run-completed\",\"outcome\":\"passed\",",
                 "\"scheduledWorkloads\":0,\"completedWorkloads\":0,",
                 "\"failedWorkloads\":0,\"skippedWorkloads\":0}\n"
             )
