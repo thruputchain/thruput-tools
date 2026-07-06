@@ -28,7 +28,10 @@ use groundhog_json_rpc_types::{
     hex::{Hex0x, HexBytes, Topic},
     receipt::{ExecStatus, TransactionReceipt},
     state::{StorageItemInfo, StorageItemRead},
-    transaction::{TransactionStatus, TxHash},
+    transaction::{
+        AddressTransactionQuery as RpcAddressTransactionQuery, TransactionRefPage,
+        TransactionStatus, TxHash,
+    },
 };
 use groundhog_scheduler::{RPCError, sched_coord::SchedulerCoord_SchedulerCoord1_Client};
 use groundhog_scp::network::Protocol;
@@ -174,6 +177,15 @@ impl ReadPlane for HogdDevStorageReadBackend {
 
     async fn contract_events(&self, _query: EventQuery) -> Result<EventPage, RpcServerError> {
         Err(RpcServerError::NotImplemented("getEvents".into()))
+    }
+
+    async fn transactions_by_address(
+        &self,
+        _query: RpcAddressTransactionQuery,
+    ) -> Result<TransactionRefPage, RpcServerError> {
+        Err(RpcServerError::NotImplemented(
+            "getTransactionsByAddress".into(),
+        ))
     }
 
     /// Latest-state storage read.
@@ -366,6 +378,24 @@ impl ReadPlane for HogdDevReadBackend {
             latest_block: page.latest_block,
             oldest_block: page.oldest_block,
         })
+    }
+
+    /// Return one page of transaction refs from the history of the
+    /// query's address, forwarded to the indexer.
+    #[tracing::instrument(skip_all, fields(limit = query.limit))]
+    async fn transactions_by_address(
+        &self,
+        query: RpcAddressTransactionQuery,
+    ) -> Result<TransactionRefPage, RpcServerError> {
+        let wire_query: groundhog_indexer::indexer::AddressTransactionQuery = query.into();
+        let page = self
+            .indexer
+            .get_transactions_by_address(&wire_query)
+            .await
+            .map_err(|source| {
+                RpcServerError::BackendUnavailable(format!("hogd-dev indexer: {source}"))
+            })?;
+        Ok(page.into())
     }
 
     /// Latest-state storage read.

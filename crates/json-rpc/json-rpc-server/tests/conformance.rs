@@ -29,7 +29,7 @@ use groundhog_json_rpc_types::{
     hex::{Hex0x, HexBytes},
     receipt::TransactionReceipt,
     state::{StorageItemInfo, StorageItemRead},
-    transaction::{TransactionStatus, TxHash},
+    transaction::{AddressTransactionQuery, TransactionRefPage, TransactionStatus, TxHash},
     view::{RootInvocationOutput, ViewRequest, ViewResponse},
 };
 use tokio::sync::Mutex;
@@ -151,6 +151,18 @@ impl ReadPlane for ScriptedBackend {
         *self.contract_events_calls.lock().await += 1;
         Ok(EventPage {
             events: vec![],
+            cursor: PaginationCursor(vec![]),
+            latest_block: BlockHeight::from(0),
+            oldest_block: BlockHeight::from(0),
+        })
+    }
+
+    async fn transactions_by_address(
+        &self,
+        _query: AddressTransactionQuery,
+    ) -> Result<TransactionRefPage, RpcServerError> {
+        Ok(TransactionRefPage {
+            refs: vec![],
             cursor: PaginationCursor(vec![]),
             latest_block: BlockHeight::from(0),
             oldest_block: BlockHeight::from(0),

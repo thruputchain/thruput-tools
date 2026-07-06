@@ -246,8 +246,12 @@ pub struct GatewayConfig {
     /// above this are rejected as `InvalidParam`.
     pub max_events_per_page: u32,
 
-    /// Maximum length of the opaque `getEvents` pagination cursor;
-    /// longer cursors are rejected as `InvalidParam`.
+    /// Per-page cap on `getTransactionsByAddress` responses; requests
+    /// with `limit` above this are rejected as `InvalidParam`.
+    pub max_transactions_per_page: u32,
+
+    /// Maximum length of the opaque pagination cursor on paginated
+    /// methods; longer cursors are rejected as `InvalidParam`.
     pub max_cursor_bytes: usize,
 
     /// Adaptive batching for `sendRawTransaction`.
@@ -281,6 +285,7 @@ impl Default for GatewayConfig {
             view_gas_limit: groundhog_json_rpc_server::DEFAULT_VIEW_GAS_LIMIT,
             coordinator_address: None,
             max_events_per_page: 200,
+            max_transactions_per_page: 200,
             max_cursor_bytes: 256,
             batch: AdaptiveBatchConfig::default(),
             storage: AdaptiveBatchConfig::default(),

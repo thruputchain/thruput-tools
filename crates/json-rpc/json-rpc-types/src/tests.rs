@@ -13,7 +13,9 @@ mod schema_generation {
     };
     use crate::receipt::{ExecStatus, TransactionReceipt};
     use crate::state::{StorageItemInfo, StorageItemRead};
-    use crate::transaction::{TransactionStatus, TxHash};
+    use crate::transaction::{
+        AddressTransactionQuery, TransactionRef, TransactionRefPage, TransactionStatus, TxHash,
+    };
     use crate::view::{RootInvocationOutput, ViewRequest, ViewResponse};
 
     #[test]
@@ -28,6 +30,11 @@ mod schema_generation {
         let _ = schema_for!(ViewRequest);
         let _ = schema_for!(ViewResponse);
         let _ = schema_for!(RootInvocationOutput);
+
+        // Transaction history types
+        let _ = schema_for!(AddressTransactionQuery);
+        let _ = schema_for!(TransactionRef);
+        let _ = schema_for!(TransactionRefPage);
 
         // Event types
         let _ = schema_for!(EmittedEvent);
@@ -67,7 +74,9 @@ mod wire_format {
     use crate::hex::{Hex0x, HexBytes, Topic};
     use crate::receipt::{ExecStatus, TransactionReceipt};
     use crate::state::StorageItemInfo;
-    use crate::transaction::{TransactionStatus, TxHash};
+    use crate::transaction::{
+        AddressTransactionQuery, TransactionRef, TransactionRefPage, TransactionStatus, TxHash,
+    };
     use crate::view::{RootInvocationOutput, ViewRequest, ViewResponse};
     use crate::{BlockHeader, BlockHeight, SHA256Hash};
     use xdr_common::VecM;
@@ -282,6 +291,47 @@ mod wire_format {
 
         let roundtrip: EventQuery = serde_json::from_value(v).unwrap();
         assert_eq!(roundtrip, query);
+    }
+
+    #[test]
+    fn address_transaction_query_wire_format_uses_rpc_hex_projections() {
+        let query = AddressTransactionQuery {
+            address: zero_address(),
+            order: IterationOrder::Descending,
+            anchor: BlockAnchor::AtEnd,
+            cursor: PaginationCursor(vec![]),
+            limit: 50,
+        };
+        let v: Value = serde_json::to_value(&query).unwrap();
+        assert!(v["address"].as_str().unwrap().starts_with("0x"));
+        assert_eq!(v["order"], "descending");
+        assert_eq!(v["anchor"]["kind"], "atEnd");
+        assert_eq!(v["cursor"], "0x");
+        assert_eq!(v["limit"], 50);
+
+        let roundtrip: AddressTransactionQuery = serde_json::from_value(v).unwrap();
+        assert_eq!(roundtrip, query);
+    }
+
+    #[test]
+    fn transaction_ref_page_wire_format() {
+        let page = TransactionRefPage {
+            refs: vec![TransactionRef {
+                tx_hash: TxHash(Hex0x(groundhog_xdr::types::SHA256Hash::from([0xab; 32]))),
+                height: BlockHeight::from(7),
+            }],
+            cursor: PaginationCursor(vec![0x01, 0x02]),
+            latest_block: BlockHeight::from(9),
+            oldest_block: BlockHeight::from(0),
+        };
+        let v: Value = serde_json::to_value(&page).unwrap();
+        assert!(v["refs"][0]["txHash"].as_str().unwrap().starts_with("0x"));
+        assert!(v["refs"][0].get("tx_hash").is_none());
+        assert_eq!(v["refs"][0]["height"], 7);
+        assert_eq!(v["cursor"], "0x0102");
+        assert_eq!(v["latestBlock"], 9);
+        assert_eq!(v["oldestBlock"], 0);
+        assert!(v.get("latest_block").is_none());
     }
 
     #[test]

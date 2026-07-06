@@ -57,6 +57,38 @@
       }
     },
     "schemas": {
+      "AddressTransactionQuery": {
+        "description": "`getTransactionsByAddress` request: the transaction history of\n`address`, walked in `order` from `anchor`.\n\nA transaction is part of an address's history when its root\ninvocation targets that address; transactions that merely touch the\naddress mid-execution do not match.",
+        "properties": {
+          "address": {
+            "$ref": "#/components/schemas/Hex0x_ContractAddress"
+          },
+          "anchor": {
+            "$ref": "#/components/schemas/BlockAnchor"
+          },
+          "cursor": {
+            "$ref": "#/components/schemas/PaginationCursor",
+            "description": "`0x` on the initial call. Non-empty to continue where a previous\nresponse left off; `order` and `anchor` in the request are\nignored when a cursor is supplied — the cursor carries them."
+          },
+          "limit": {
+            "description": "Clamped server-side to [1, 200]; `0` means server default (50).",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "order": {
+            "$ref": "#/components/schemas/IterationOrder"
+          }
+        },
+        "required": [
+          "address",
+          "order",
+          "anchor",
+          "cursor",
+          "limit"
+        ],
+        "type": "object"
+      },
       "BalanceResponse": {
         "description": "Native HOG balance read from committed chain state.",
         "properties": {
@@ -745,6 +777,53 @@
         ],
         "type": "object"
       },
+      "TransactionRef": {
+        "description": "Lightweight reference to a transaction: its hash plus the block it\nexecuted in.  Hydrate the full body via `getTransactionReceipt`.",
+        "properties": {
+          "height": {
+            "$ref": "#/components/schemas/BlockHeight"
+          },
+          "txHash": {
+            "$ref": "#/components/schemas/TxHash"
+          }
+        },
+        "required": [
+          "txHash",
+          "height"
+        ],
+        "type": "object"
+      },
+      "TransactionRefPage": {
+        "description": "`getTransactionsByAddress` response: transaction refs in the\nrequested order.",
+        "properties": {
+          "cursor": {
+            "$ref": "#/components/schemas/PaginationCursor",
+            "description": "Empty when the stream has been exhausted in the requested\ndirection.  Non-empty: pass back in the next call's `cursor`\nargument."
+          },
+          "latestBlock": {
+            "$ref": "#/components/schemas/BlockHeight",
+            "description": "Highest block height the indexer has processed at response time."
+          },
+          "oldestBlock": {
+            "$ref": "#/components/schemas/BlockHeight",
+            "description": "Oldest block height the indexer still retains data for at\nresponse time."
+          },
+          "refs": {
+            "description": "Matched transaction refs in the requested order.  Empty refs +\nempty cursor = stream exhausted.",
+            "items": {
+              "$ref": "#/components/schemas/TransactionRef"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "refs",
+          "cursor",
+          "latestBlock",
+          "oldestBlock"
+        ],
+        "type": "object"
+      },
       "TransactionStatus": {
         "description": "Lightweight status — the result of checking mempool then indexer.\n\nLookup order: scheduler (Pending) → indexer (Committed) → Unknown.\nSee `docs/gateway/system-design.md` \"Transaction Status Lookup Order\" for\ndegraded-mode behavior when a backend is unavailable.\n\nNew variants may be added in future phases.",
         "oneOf": [
@@ -903,7 +982,7 @@
   },
   "info": {
     "title": "Groundhog JSON-RPC",
-    "version": "2.1.0"
+    "version": "2.2.0"
   },
   "methods": [
     {
@@ -1196,6 +1275,47 @@
         }
       },
       "summary": "Paginated, filterable contract events. See `EventQuery` / `EventPage` for the Soroban-shaped filter / cursor / topic surface, with RPC-native `0x`-prefixed address and topic projections at the JSON boundary.",
+      "tags": [
+        {
+          "name": "Core API"
+        }
+      ]
+    },
+    {
+      "errors": [
+        {
+          "$ref": "#/components/errors/InvalidParams"
+        },
+        {
+          "$ref": "#/components/errors/BackendUnavailable"
+        },
+        {
+          "$ref": "#/components/errors/BackendTimeout"
+        },
+        {
+          "$ref": "#/components/errors/Overloaded"
+        },
+        {
+          "$ref": "#/components/errors/NotImplemented"
+        }
+      ],
+      "name": "groundhog_getTransactionsByAddress",
+      "params": [
+        {
+          "name": "query",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/AddressTransactionQuery"
+          }
+        }
+      ],
+      "result": {
+        "name": "TransactionRefPage",
+        "schema": {
+          "$ref": "#/components/schemas/TransactionRefPage"
+        }
+      },
+      "summary": "Paginated transaction history for a single address: refs to transactions whose root invocation targets the address, walked in the requested order. Hydrate full bodies via `getTransactionReceipt`.",
       "tags": [
         {
           "name": "Core API"

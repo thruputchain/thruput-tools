@@ -17,7 +17,7 @@ use groundhog_json_rpc_types::{
     hex::HexBytes,
     receipt::TransactionReceipt,
     state::StorageItemRead,
-    transaction::{TransactionStatus, TxHash},
+    transaction::{AddressTransactionQuery, TransactionRefPage, TransactionStatus, TxHash},
     version::VersionInfo,
     view::{ViewRequest, ViewResponse},
 };
@@ -26,7 +26,7 @@ use groundhog_json_rpc_types::{
 ///
 /// See the "`OpenRPC` Wire Version" section in `CLAUDE.md` for bump
 /// rules.
-pub const WIRE_FORMAT_VERSION: &str = "2.1.0";
+pub const WIRE_FORMAT_VERSION: &str = "2.2.0";
 
 /// Phase 1: Core API — submit, query, poll.
 #[open_rpc(namespace = "groundhog", tag = "Core API")]
@@ -65,6 +65,16 @@ pub trait GroundhogApi {
     /// projections at the JSON boundary.
     #[method(name = "getEvents")]
     async fn get_events(&self, query: EventQuery) -> RpcResult<EventPage>;
+
+    /// Paginated transaction history for a single address: refs to
+    /// transactions whose root invocation targets the address, walked
+    /// in the requested order. Hydrate full bodies via
+    /// `getTransactionReceipt`.
+    #[method(name = "getTransactionsByAddress")]
+    async fn get_transactions_by_address(
+        &self,
+        query: AddressTransactionQuery,
+    ) -> RpcResult<TransactionRefPage>;
 
     /// Read the latest committed storage item at an address/key pair.
     /// `block_height` in the returned `StorageItemRead` always

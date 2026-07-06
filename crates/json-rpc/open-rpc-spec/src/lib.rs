@@ -106,6 +106,7 @@ fn method_error_codes(method: &str) -> &'static [i32] {
         ],
         "groundhog_getBalance"
         | "groundhog_getEvents"
+        | "groundhog_getTransactionsByAddress"
         | "groundhog_getStorageAt"
         | "groundhog_view" => &[
             codes::INVALID_PARAMS,
