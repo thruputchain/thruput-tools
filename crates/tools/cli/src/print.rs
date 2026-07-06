@@ -252,7 +252,7 @@ fn render_summary_card_tty(title: &str, items: &[(String, String)]) {
         .max()
         .unwrap_or(0)
         .max(18);
-    let inner_width = (label_width + value_width + 5).max(title.chars().count() + 2);
+    let inner_width = (label_width + value_width + 4).max(title.chars().count() + 2);
     let top_fill = inner_width.saturating_sub(title.chars().count() + 2);
 
     eprintln!(

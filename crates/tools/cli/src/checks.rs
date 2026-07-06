@@ -299,18 +299,6 @@ pub fn collect_report(
         });
     }
 
-    if !environment.wasm_opt {
-        findings.push(Finding {
-            level: FindingLevel::Info,
-            code: "no_wasm_opt",
-            message: "wasm-opt not installed (optional)".into(),
-            hint: Some(Cow::Borrowed(
-                "install Binaryen for \
-                 `groundhog build --optimize` support",
-            )),
-        });
-    }
-
     Ok(StatusReport {
         environment,
         keys,
