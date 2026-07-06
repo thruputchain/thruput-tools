@@ -480,7 +480,7 @@ pub fn resolve_profile(start: &Path, explicit: Option<&str>) -> Result<ResolvedP
         (Some(global), Some(project), _) => merge_profiles(global, project),
         (Some(global), None, _) => global,
         (None, Some(project), _) => project,
-        (None, None, false) if name == DEFAULT_PROFILE => ProjectProfile::default(),
+        (None, None, _) if name == DEFAULT_PROFILE => ProjectProfile::default(),
         (None, None, false) => return Err(CliError::NoProjectConfig(name)),
         (None, None, true) => return Err(CliError::ProfileNotFound(name)),
     };

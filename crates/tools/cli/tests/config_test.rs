@@ -212,6 +212,24 @@ fn resolve_profile_defaults_when_no_project_config_exists() {
 
 #[test]
 #[serial]
+fn resolve_profile_defaults_when_project_config_has_no_default_profile() {
+    let tmp = TempDir::new().unwrap();
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    fs::write(tmp.path().join("groundhog.toml"), "[contracts]\n").unwrap();
+
+    let profile = groundhog_cli::config::resolve_profile(tmp.path(), None).unwrap();
+    assert_eq!(profile.name, "default");
+    assert!(profile.rpc_url.is_none());
+    assert!(profile.default_key.is_none());
+    assert!(profile.contracts.is_empty());
+    assert!(profile.wallets.is_empty());
+    assert!(profile.source.is_none());
+
+    unsafe { env::remove_var("XDG_CONFIG_HOME") };
+}
+
+#[test]
+#[serial]
 fn resolve_profile_uses_global_default_profile_when_no_project_config_exists() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
