@@ -64,6 +64,21 @@ pub struct BootstrapSpec {
     pub initial_storage_tokens: String,
     pub dev_wallet_profile: String,
     pub storage_cost_profile: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor_provisioning: Option<ActorProvisioningSpec>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActorProvisioningSpec {
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dev_wallet_artifact: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dev_wallet_artifact_kind: Option<ContractArtifactKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub airdrop_hog: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

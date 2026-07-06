@@ -295,7 +295,7 @@ pub fn build_actor_states(
     accounts: Vec<SimAccount>,
     nonce_namespace: NonceNamespace,
 ) -> Result<Vec<ActorState>, ActorError> {
-    let actor_count = max_actor_count(manifest);
+    let actor_count = required_actor_count(manifest);
     let available = accounts.len();
     if actor_count > available {
         return Err(ActorError::TooManyActors {
@@ -316,7 +316,22 @@ pub fn build_actor_states(
         .collect()
 }
 
-fn max_actor_count(manifest: &SimulationManifest) -> usize {
+pub fn build_actor_states_from_accounts(
+    accounts: Vec<SimAccount>,
+    nonce_namespace: NonceNamespace,
+) -> Result<Vec<ActorState>, ActorError> {
+    accounts
+        .into_iter()
+        .enumerate()
+        .map(|(actor_id, account)| {
+            let actor_id =
+                u32::try_from(actor_id).map_err(|_| ActorError::ActorIdTooLarge { actor_id })?;
+            Ok(ActorState::new(actor_id, account, nonce_namespace))
+        })
+        .collect()
+}
+
+pub fn required_actor_count(manifest: &SimulationManifest) -> usize {
     manifest
         .load_shape
         .iter()
