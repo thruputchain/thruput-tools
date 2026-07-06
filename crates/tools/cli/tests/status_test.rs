@@ -198,3 +198,46 @@ counter = "{project_counter}"
         env::remove_var("XDG_CONFIG_HOME");
     }
 }
+
+#[test]
+#[serial]
+fn collect_report_shows_global_profile_details_outside_project() {
+    let tmp = TempDir::new().unwrap();
+    let global_hog = format!("0x{}", "11".repeat(32));
+
+    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    fs::write(
+        tmp.path().join("groundhog/config.toml"),
+        format!(
+            r#"
+default_profile = "local"
+
+[profile.local]
+rpc_url = "http://127.0.0.1:9545"
+
+[profile.local.contracts]
+HOG = "{global_hog}"
+"#
+        ),
+    )
+    .unwrap();
+
+    unsafe {
+        env::set_var("CARGO_HOME", tmp.path().join("cargo-home"));
+        env::set_var("XDG_CONFIG_HOME", tmp.path());
+    }
+
+    let report = groundhog_cli::checks::collect_report(tmp.path(), None).unwrap();
+    assert!(report.project.config_path.is_none());
+    assert_eq!(report.project.profile_name.as_deref(), Some("local"));
+    assert_eq!(
+        report.project.rpc_url.as_deref(),
+        Some("http://127.0.0.1:9545")
+    );
+    assert_eq!(report.project.contract_count, 1);
+
+    unsafe {
+        env::remove_var("CARGO_HOME");
+        env::remove_var("XDG_CONFIG_HOME");
+    }
+}

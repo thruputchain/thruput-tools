@@ -167,10 +167,6 @@ pub fn check_project(
     explicit_profile: Option<&str>,
 ) -> Result<ProjectContext, CliError> {
     let config_path = crate::config::find_project_config(start);
-    let Some(config_path) = config_path else {
-        return Ok(ProjectContext::default());
-    };
-
     let mut findings = Vec::new();
 
     match crate::config::resolve_profile(start, explicit_profile) {
@@ -197,7 +193,7 @@ pub fn check_project(
             }
 
             Ok(ProjectContext {
-                config_path: Some(config_path),
+                config_path,
                 profile_name: Some(profile.name),
                 profile_key,
                 rpc_url: profile.rpc_url,
@@ -217,7 +213,7 @@ pub fn check_project(
                 )),
             });
             Ok(ProjectContext {
-                config_path: Some(config_path),
+                config_path,
                 profile_name: Some(name),
                 findings,
                 ..ProjectContext::default()
@@ -507,11 +503,23 @@ mod tests {
     }
 
     #[test]
-    fn check_project_returns_empty_when_no_config() {
+    #[serial]
+    fn check_project_reports_default_context_when_no_config() {
         let tmp = tempfile::TempDir::new().unwrap();
+        unsafe {
+            std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        }
+
         let context = check_project(tmp.path(), None).unwrap();
         assert!(context.config_path.is_none());
+        assert_eq!(context.profile_name.as_deref(), Some("default"));
+        assert!(context.rpc_url.is_none());
+        assert_eq!(context.contract_count, 0);
         assert!(context.findings.is_empty());
+
+        unsafe {
+            std::env::remove_var("XDG_CONFIG_HOME");
+        }
     }
 
     #[test]
@@ -677,14 +685,22 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn check_project_no_config_with_explicit_profile() {
         let tmp = tempfile::TempDir::new().unwrap();
+        unsafe {
+            std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        }
+
         // No groundhog.toml, but explicit non-default profile.
         let context = check_project(tmp.path(), Some("staging")).unwrap();
         assert!(context.config_path.is_none());
-        // No groundhog.toml means find_project_config returns
-        // None, so we get an empty ProjectContext (not a
-        // finding) because resolve_profile is never called.
-        assert!(context.findings.is_empty());
+        assert_eq!(context.profile_name.as_deref(), Some("staging"));
+        assert_eq!(context.findings.len(), 1);
+        assert_eq!(context.findings[0].code, "no_project_config");
+
+        unsafe {
+            std::env::remove_var("XDG_CONFIG_HOME");
+        }
     }
 }

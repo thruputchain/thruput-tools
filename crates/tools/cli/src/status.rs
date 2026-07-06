@@ -109,7 +109,7 @@ fn summary_items(report: &checks::StatusReport) -> Vec<(String, String)> {
         ("Project".into(), project_label(report)),
     ];
 
-    if report.project.config_path.is_some() {
+    if report.project.profile_name.is_some() {
         items.push(("Profile".into(), profile_label(report)));
         items.push(("RPC URL".into(), rpc_url_label(report)));
         items.push(("Contracts".into(), contracts_label(report)));
