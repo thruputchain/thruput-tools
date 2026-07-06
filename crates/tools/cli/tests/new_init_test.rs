@@ -41,7 +41,7 @@ fn new_fails_if_dir_exists() {
 
 #[test]
 #[serial]
-fn init_configures_registry_and_succeeds() {
+fn init_configures_profiles_and_succeeds() {
     let tmp = TempDir::new().unwrap();
     let cargo_home = tmp.path().join("cargo-home");
 
@@ -63,9 +63,7 @@ fn init_configures_registry_and_succeeds() {
     let result = groundhog_cli::init::run(tmp.path(), "status", &quiet());
 
     result.unwrap();
-    let cargo_config = cargo_home.join("config.toml");
-    let contents = fs::read_to_string(cargo_config).unwrap();
-    assert!(contents.contains("[registries.groundhog]"));
+    assert!(!cargo_home.join("config.toml").exists());
     let global_config = fs::read_to_string(tmp.path().join("groundhog/config.toml")).unwrap();
     assert!(global_config.contains("default_profile = \"local\""));
     assert!(global_config.contains("[profile.local]"));
@@ -126,7 +124,6 @@ alice = "0x1111111111111111111111111111111111111111111111111111111111111111"
 "#,
     )
     .unwrap();
-    groundhog_cli::auth::ensure_cargo_registry(&cargo_home.join("config.toml")).unwrap();
     groundhog_cli::keys::generate(&Some("alice".into()), false, "keys.generate", &quiet()).unwrap();
 
     groundhog_cli::init::run(tmp.path(), "status", &quiet()).unwrap();
@@ -163,8 +160,6 @@ fn init_with_credentials_skips_login_hint() {
         env::set_var("CARGO_HOME", &cargo_home);
         env::set_var("XDG_CONFIG_HOME", tmp.path());
     }
-
-    groundhog_cli::auth::ensure_cargo_registry(&cargo_home.join("config.toml")).unwrap();
 
     // Pre-populate executor credentials.
     let creds = groundhog_cli::config::ExecutorCredentials {
@@ -205,8 +200,6 @@ fn init_uses_global_default_when_project_key_is_dangling() {
         env::set_var("CARGO_HOME", &cargo_home);
         env::set_var("XDG_CONFIG_HOME", tmp.path());
     }
-
-    groundhog_cli::auth::ensure_cargo_registry(&cargo_home.join("config.toml")).unwrap();
 
     let creds = groundhog_cli::config::ExecutorCredentials {
         username: "test".into(),

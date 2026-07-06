@@ -374,9 +374,14 @@ fn new_creates_project() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("Creating project `my-test-project`"));
     assert!(stderr.contains("[ok] Created project `my-test-project`"));
-    assert!(stderr.contains("  path: "));
-    assert!(stderr.contains("  template: counter"));
-    assert!(stderr.contains("  config: "));
+    assert!(stderr.contains("Project Ready"));
+    assert!(stderr.contains("Project: my-test-project"));
+    assert!(stderr.contains("Template: counter"));
+    assert!(stderr.contains("Config: "));
+    assert!(stderr.contains("Cargo Registry: not checked"));
+    assert!(stderr.contains("Next:"));
+    assert!(stderr.contains("cargo login --registry groundhog"));
+    assert!(stderr.contains("cargo build"));
 }
 
 #[test]
@@ -472,7 +477,7 @@ fn init_human_output_shows_setup_sections() {
     assert!(stderr.contains("[1/5] Environment"));
     assert!(stderr.contains("[2/5] Profiles"));
     assert!(stderr.contains("[3/5] Signing key"));
-    assert!(stderr.contains("[4/5] Registry access"));
+    assert!(stderr.contains("[4/5] Executor credentials"));
     assert!(stderr.contains("[5/5] Project"));
     assert!(stderr.contains("Setup Complete"));
     assert!(stderr.contains("Config:"));
@@ -560,7 +565,6 @@ fn quiet_status_exits_zero_with_no_output_when_fully_configured() {
         std::env::set_var("XDG_CONFIG_HOME", tmp.path());
     }
 
-    groundhog_cli::auth::ensure_cargo_registry(&cargo_home.join("config.toml")).unwrap();
     groundhog_cli::keys::generate(
         &Some("alice".into()),
         false,
@@ -608,7 +612,7 @@ fn status_human_output_shows_sections() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("Groundhog Status"));
     assert!(stderr.contains("Cargo: installed"));
-    assert!(stderr.contains("Registry:"));
+    assert!(stderr.contains("Global Registry:"));
     assert!(stderr.contains("Keys: none"));
     assert!(stderr.contains("Credentials: not stored"));
 }

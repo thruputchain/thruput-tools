@@ -100,7 +100,7 @@ fn summary_items(report: &checks::StatusReport) -> Vec<(String, String)> {
             wasm_target_label(report.environment.wasm_target),
         ),
         (
-            "Registry".into(),
+            "Global Registry".into(),
             if report.environment.registry_configured {
                 format!(
                     "configured ({})",

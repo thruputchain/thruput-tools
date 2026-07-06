@@ -3,16 +3,12 @@ use crate::config::{self, ExecutorCredentials};
 use crate::result::CommandResult;
 use crate::{CliError, Print};
 use serde_json::json;
-use std::io::{self, BufRead, IsTerminal};
+use std::io::{self, BufRead};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::{env, fs};
 
 const REGISTRY_INDEX: &str = "sparse+https://groundhog.dev/crates/api/v1/crates/";
-const RESET: &str = "\x1b[0m";
-const BOLD: &str = "\x1b[1m";
-const GREEN: &str = "\x1b[32m";
-const CYAN: &str = "\x1b[36m";
 
 /// Resolve the user's cargo config path.
 pub fn cargo_config_path() -> Result<PathBuf, CliError> {
@@ -28,15 +24,50 @@ pub fn login(cmd: &'static str, print: &Print) -> Result<(), CliError> {
     login_inner(cmd, print, LoginMode::Standalone)
 }
 
-/// Run login as part of `groundhog init` without nested wizard headings.
-pub(crate) fn login_from_init(print: &Print) -> Result<(), CliError> {
-    login_inner("login", print, LoginMode::Init)
+/// Store executor credentials as part of `groundhog init` without nested wizard headings.
+pub(crate) fn executor_login_from_init(print: &Print) -> Result<(), CliError> {
+    if print.is_json() {
+        return Err(CliError::JsonUnsupported("login"));
+    }
+
+    print.status("These are used by `groundhog test`.");
+    save_executor_credentials_from_prompt(print, LoginMode::Init)
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum CargoLoginStatus {
+    LoggedIn,
+    Skipped,
+    NotInteractive,
+}
+
+/// Offer Cargo registry login after creating a project.
+pub(crate) fn offer_cargo_login_after_new(print: &Print) -> Result<CargoLoginStatus, CliError> {
+    if print.is_json() || print.is_quiet() {
+        return Ok(CargoLoginStatus::NotInteractive);
+    }
+
+    if !print.is_human_tty() {
+        print.note("Before building, run `cargo login --registry groundhog` if Cargo is not already logged in; Cargo stores that token globally in `CARGO_HOME`, not in this project");
+        return Ok(CargoLoginStatus::NotInteractive);
+    }
+
+    print.note("Groundhog projects depend on packages from the private Cargo registry");
+    print.note("Cargo stores this token globally in `CARGO_HOME`, not in this project");
+    if confirm(print, "Log in to Cargo registry now?", true)? {
+        cargo_registry_login(print, LoginMode::New)?;
+        return Ok(CargoLoginStatus::LoggedIn);
+    }
+
+    print.note("Run `cargo login --registry groundhog` before building if needed");
+    Ok(CargoLoginStatus::Skipped)
 }
 
 #[derive(Clone, Copy)]
 enum LoginMode {
     Standalone,
     Init,
+    New,
 }
 
 fn login_inner(cmd: &'static str, print: &Print, mode: LoginMode) -> Result<(), CliError> {
@@ -49,10 +80,21 @@ fn login_inner(cmd: &'static str, print: &Print, mode: LoginMode) -> Result<(), 
     let cargo_config = cargo_config_path()?;
 
     ensure_cargo_registry(&cargo_config)?;
+    print.status("Configured cargo registry.");
+
+    cargo_registry_login(print, mode)?;
+
     match mode {
-        LoginMode::Standalone => print.status("Configured cargo registry."),
-        LoginMode::Init => print.status("Cargo registry configured."),
+        LoginMode::Standalone => print.status("\nTest executor credentials"),
+        LoginMode::Init | LoginMode::New => {}
     }
+    save_executor_credentials_from_prompt(print, mode)?;
+
+    Ok(())
+}
+
+fn cargo_registry_login(print: &Print, mode: LoginMode) -> Result<(), CliError> {
+    crate::require_cargo()?;
 
     match mode {
         LoginMode::Standalone => {
@@ -62,35 +104,29 @@ fn login_inner(cmd: &'static str, print: &Print, mode: LoginMode) -> Result<(), 
                  https://groundhog.dev/crates/me",
             );
         }
-        LoginMode::Init => {
+        LoginMode::Init | LoginMode::New => {
             print.status("");
-            init_subheading(print, "Registry token");
             print.status("Open this page and create or copy a token:");
             print.status("https://groundhog.dev/crates/me");
             print.status("");
-            print.prompt("Paste registry token: ")?;
         }
     }
     let mut command = Command::new("cargo");
     command.arg("login").arg("--registry").arg("groundhog");
-    if matches!(mode, LoginMode::Init) {
+    if matches!(mode, LoginMode::Init | LoginMode::New) {
         command.arg("--quiet");
     }
     let status = command.status()?;
     if !status.success() {
         return Err(CliError::RegistryLoginFailed);
     }
-    if matches!(mode, LoginMode::Init) {
-        init_success(print, "Login token for `groundhog` saved");
-    }
+    Ok(())
+}
 
+fn save_executor_credentials_from_prompt(print: &Print, mode: LoginMode) -> Result<(), CliError> {
     match mode {
-        LoginMode::Standalone => print.status("\nTest executor credentials"),
-        LoginMode::Init => {
-            print.status("");
-            init_subheading(print, "Executor credentials");
-            print.status("These are used by `groundhog test`.");
-        }
+        LoginMode::Standalone | LoginMode::Init => {}
+        LoginMode::New => return Ok(()),
     }
     let stdin = io::stdin();
 
@@ -111,24 +147,23 @@ fn login_inner(cmd: &'static str, print: &Print, mode: LoginMode) -> Result<(), 
     match mode {
         LoginMode::Standalone => print.status("\nCredentials saved. You're ready to go."),
         LoginMode::Init => print.status("\nCredentials saved."),
+        LoginMode::New => {}
     }
     Ok(())
 }
 
-fn init_subheading(print: &Print, title: &str) {
-    if std::io::stderr().is_terminal() && !print.is_quiet() && !print.is_json() {
-        eprintln!("{CYAN}{BOLD}{title}{RESET}");
-    } else {
-        print.status(title);
-    }
-}
+fn confirm(print: &Print, message: &str, default_yes: bool) -> Result<bool, CliError> {
+    let suffix = if default_yes { " [Y/n] " } else { " [y/N] " };
+    print.prompt(format_args!("{message}{suffix}"))?;
 
-fn init_success(print: &Print, msg: &str) {
-    if std::io::stderr().is_terminal() && !print.is_quiet() && !print.is_json() {
-        eprintln!("{GREEN}✓{RESET} {msg}");
-    } else {
-        print.status(format_args!("[ok] {msg}"));
+    let mut answer = String::new();
+    io::stdin().lock().read_line(&mut answer)?;
+    let answer = answer.trim();
+    if answer.is_empty() {
+        return Ok(default_yes);
     }
+
+    Ok(answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes"))
 }
 
 /// Remove stored registry token and executor credentials.

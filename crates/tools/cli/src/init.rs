@@ -35,11 +35,7 @@ pub fn run(project_start: &Path, cmd: &'static str, print: &Print) -> Result<(),
     let mut ui = InitUi::new(print);
     ui.render_intro();
 
-    if report.environment.cargo
-        && report.environment.registry_configured
-        && usable_default_key.is_some()
-        && has_credentials
-    {
+    if report.environment.cargo && usable_default_key.is_some() && has_credentials {
         report_ready(project_start, &report, usable_default_key, &mut ui)?;
         return Ok(());
     }
@@ -49,7 +45,7 @@ pub fn run(project_start: &Path, cmd: &'static str, print: &Print) -> Result<(),
     }
 
     ui.begin_step(InitStep::Environment);
-    handle_environment_step(&report, &mut ui)?;
+    handle_environment_step(&report, &mut ui);
     ui.finish_step(InitStep::Environment, StepState::Done);
 
     ui.begin_step(InitStep::Profiles);
@@ -59,7 +55,7 @@ pub fn run(project_start: &Path, cmd: &'static str, print: &Print) -> Result<(),
     ui.begin_step(InitStep::SigningKey);
     handle_key_step(&report, usable_default_key, &mut ui)?;
 
-    ui.begin_step(InitStep::RegistryAccess);
+    ui.begin_step(InitStep::ExecutorCredentials);
     handle_credentials_step(&report, &mut ui)?;
 
     ui.begin_step(InitStep::Project);
@@ -93,16 +89,8 @@ fn report_ready(
     Ok(())
 }
 
-fn handle_environment_step(
-    report: &crate::checks::StatusReport,
-    ui: &mut InitUi<'_>,
-) -> Result<(), CliError> {
-    if report.environment.registry_configured {
-        ui.success("Cargo registry configured");
-    } else {
-        crate::auth::ensure_cargo_registry(&report.environment.cargo_config_path)?;
-        ui.success("Configured Cargo registry");
-    }
+fn handle_environment_step(report: &crate::checks::StatusReport, ui: &mut InitUi<'_>) {
+    ui.success("Cargo available");
 
     match report.environment.wasm_target {
         crate::checks::WasmTargetStatus::Installed => {
@@ -119,8 +107,6 @@ fn handle_environment_step(
     if !report.environment.wasm_opt {
         ui.note("wasm-opt not installed, optional for `build --optimize`");
     }
-
-    Ok(())
 }
 
 fn handle_profile_step(project_start: &Path, ui: &mut InitUi<'_>) -> Result<(), CliError> {
@@ -189,14 +175,14 @@ fn handle_credentials_step(
 ) -> Result<(), CliError> {
     if report.credentials.executor_credentials {
         ui.success("Executor credentials stored");
-        ui.finish_step(InitStep::RegistryAccess, StepState::Done);
+        ui.finish_step(InitStep::ExecutorCredentials, StepState::Done);
     } else {
-        ui.note("Registry access is not configured");
-        if confirm(ui.print, "Configure registry access now?", true)? {
-            crate::auth::login_from_init(ui.print)?;
-            ui.finish_step(InitStep::RegistryAccess, StepState::Done);
+        ui.note("Executor credentials are not configured");
+        if confirm(ui.print, "Configure executor credentials now?", true)? {
+            crate::auth::executor_login_from_init(ui.print)?;
+            ui.finish_step(InitStep::ExecutorCredentials, StepState::Done);
         } else {
-            ui.finish_step(InitStep::RegistryAccess, StepState::Skipped);
+            ui.finish_step(InitStep::ExecutorCredentials, StepState::Skipped);
         }
     }
 
@@ -246,7 +232,7 @@ enum InitStep {
     Environment,
     Profiles,
     SigningKey,
-    RegistryAccess,
+    ExecutorCredentials,
     Project,
 }
 
@@ -255,7 +241,7 @@ impl InitStep {
         Self::Environment,
         Self::Profiles,
         Self::SigningKey,
-        Self::RegistryAccess,
+        Self::ExecutorCredentials,
         Self::Project,
     ];
 
@@ -264,7 +250,7 @@ impl InitStep {
             Self::Environment => 0,
             Self::Profiles => 1,
             Self::SigningKey => 2,
-            Self::RegistryAccess => 3,
+            Self::ExecutorCredentials => 3,
             Self::Project => 4,
         }
     }
@@ -274,7 +260,7 @@ impl InitStep {
             Self::Environment => "Environment",
             Self::Profiles => "Profiles",
             Self::SigningKey => "Signing key",
-            Self::RegistryAccess => "Registry access",
+            Self::ExecutorCredentials => "Executor credentials",
             Self::Project => "Project",
         }
     }

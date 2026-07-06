@@ -271,10 +271,12 @@ pub fn collect_report(
 
     if !environment.registry_configured {
         findings.push(Finding {
-            level: FindingLevel::Warn,
+            level: FindingLevel::Info,
             code: "no_registry",
-            message: "Groundhog cargo registry not configured".into(),
-            hint: Some(Cow::Borrowed("run `groundhog init` or `groundhog login`")),
+            message: "global Groundhog cargo registry not configured".into(),
+            hint: Some(Cow::Borrowed(
+                "new projects include project-local registry config; run `cargo login --registry groundhog` before building if needed; Cargo stores the token globally in CARGO_HOME",
+            )),
         });
     }
 
@@ -618,7 +620,8 @@ mod tests {
             report
                 .findings
                 .iter()
-                .any(|finding| finding.code == "no_registry")
+                .any(|finding| finding.code == "no_registry"
+                    && finding.level == FindingLevel::Info)
         );
 
         unsafe {
