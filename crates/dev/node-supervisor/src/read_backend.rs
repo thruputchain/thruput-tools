@@ -644,10 +644,12 @@ mod tests {
         DbGatewayIntroOutcome, DbGatewayItemResult, DbGatewayPayload, DbGatewayResult,
     };
     use groundhog_indexer::{
-        EventPage as IdxEventPage, IndexerBlockExplorer_IndexerBlockExplorer1,
+        AddressTransactionQuery, EventPage as IdxEventPage,
+        IndexerBlockExplorer_IndexerBlockExplorer1,
         IndexerBlockExplorer_IndexerBlockExplorer1_Client,
         IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher, IndexerBlockExplorerIntroOutcome,
-        TransactionPage as IdxTransactionPage, TransactionQuery, TxInfo, TxInfoResult,
+        TransactionPage as IdxTransactionPage, TransactionQuery, TransactionRefPage, TxInfo,
+        TxInfoResult,
     };
     use groundhog_json_rpc_server::{ReadPlane, RpcServerError};
     use groundhog_json_rpc_types::{
@@ -1049,6 +1051,22 @@ mod tests {
             // No canned transaction-list dataset; report an exhausted stream.
             Ok(IdxTransactionPage {
                 transactions: VecM(vec![]),
+                cursor: BytesM(vec![]),
+                latest_block: IdxBlockHeight::from(CANNED_HEIGHT_B),
+                oldest_block: IdxBlockHeight::from(0_i64),
+            })
+        }
+
+        async fn get_transactions_by_address(
+            &self,
+            _arg0: AddressTransactionQuery,
+        ) -> Result<TransactionRefPage, ProgramError> {
+            if self.mode == FakeIndexerMode::RpcFail {
+                return Err(ProgramError::msg("fake indexer rpc-fail"));
+            }
+            // No canned per-address dataset; report an exhausted stream.
+            Ok(TransactionRefPage {
+                refs: VecM(vec![]),
                 cursor: BytesM(vec![]),
                 latest_block: IdxBlockHeight::from(CANNED_HEIGHT_B),
                 oldest_block: IdxBlockHeight::from(0_i64),
