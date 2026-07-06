@@ -71,7 +71,7 @@
             "description": "`0x` on the initial call. Non-empty to continue where a previous\nresponse left off; `order` and `anchor` in the request are\nignored when a cursor is supplied — the cursor carries them."
           },
           "limit": {
-            "description": "Clamped server-side to [1, 200]; `0` means server default (50).",
+            "description": "Values above the server's per-page cap (default 200) are\nrejected as invalid params; `0` means server default (50).",
             "format": "uint32",
             "minimum": 0,
             "type": "integer"
@@ -315,7 +315,7 @@
             "$ref": "#/components/schemas/EventFilterList"
           },
           "limit": {
-            "description": "Clamped server-side to [1, 200]; `0` means server default (50).",
+            "description": "Values above the server's per-page cap (default 200) are\nrejected as invalid params; `0` means server default (50).",
             "format": "uint32",
             "minimum": 0,
             "type": "integer"

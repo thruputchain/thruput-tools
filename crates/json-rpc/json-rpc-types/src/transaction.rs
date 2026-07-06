@@ -54,7 +54,8 @@ pub struct AddressTransactionQuery {
     /// response left off; `order` and `anchor` in the request are
     /// ignored when a cursor is supplied — the cursor carries them.
     pub cursor: PaginationCursor,
-    /// Clamped server-side to [1, 200]; `0` means server default (50).
+    /// Values above the server's per-page cap (default 200) are
+    /// rejected as invalid params; `0` means server default (50).
     pub limit: u32,
 }
 
