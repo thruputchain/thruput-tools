@@ -45,7 +45,6 @@ pub fn run(
     let raw_balance = parse_raw_balance(&balance.raw_balance)?;
     let balance_hog = format_hog_amount(raw_balance);
 
-    print.status(format_args!("Address: {address_hex}"));
     print.status(format_args!("Balance: {balance_hog} HOG"));
     print.json(&CommandResult::new(
         cmd,

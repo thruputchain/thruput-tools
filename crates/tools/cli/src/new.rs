@@ -28,11 +28,12 @@ pub fn run_in(
         }
         Err(e) => return Err(e.into()),
     }
+    let task = print.start_task(format_args!("Creating project `{name}`"));
     crate::scaffold::generate(dir, name, template)?;
-    print.status(format_args!(
-        "Created project `{name}` in {}",
-        dir.display()
-    ));
+    task.success(format_args!("Created project `{name}`"));
+    print.detail("path", dir.display());
+    print.detail("template", template);
+    print.detail("config", dir.join("groundhog.toml").display());
     print.json(&crate::result::CommandResult::new(
         cmd,
         json!({

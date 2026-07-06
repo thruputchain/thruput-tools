@@ -370,6 +370,13 @@ fn new_creates_project() {
     assert!(dir.join(".cargo/config.toml").exists());
     assert!(dir.join(".cargo/contract.toml").exists());
     assert!(dir.join("rust-toolchain.toml").exists());
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Creating project `my-test-project`"));
+    assert!(stderr.contains("[ok] Created project `my-test-project`"));
+    assert!(stderr.contains("  path: "));
+    assert!(stderr.contains("  template: counter"));
+    assert!(stderr.contains("  config: "));
 }
 
 #[test]

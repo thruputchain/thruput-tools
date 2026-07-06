@@ -1,7 +1,13 @@
 use crate::CliError;
 use serde::Serialize;
 use serde_json::json;
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
+
+const RESET: &str = "\x1b[0m";
+const DIM: &str = "\x1b[2m";
+const CYAN: &str = "\x1b[36m";
+const GREEN: &str = "\x1b[32m";
+const YELLOW: &str = "\x1b[33m";
 
 /// Controls CLI output. Status messages go to stderr
 /// (stdout is reserved for data / cargo passthrough).
@@ -46,6 +52,11 @@ impl Print {
         self.quiet
     }
 
+    /// Returns whether styled interactive output is appropriate.
+    pub fn is_human_tty(&self) -> bool {
+        !self.quiet && !self.json && io::stderr().is_terminal()
+    }
+
     /// Trace a subprocess invocation to stderr when command tracing is on.
     ///
     /// Opt-in diagnostic (see the global `--show-cargo-commands` flag). Writes
@@ -63,6 +74,50 @@ impl Print {
     pub fn status(&self, msg: impl std::fmt::Display) {
         if !self.quiet && !self.json {
             eprintln!("{msg}");
+        }
+    }
+
+    /// Styled success message for human output.
+    pub fn success(&self, msg: impl std::fmt::Display) {
+        if self.is_human_tty() {
+            eprintln!("{GREEN}✓{RESET} {msg}");
+        } else {
+            self.status(format_args!("[ok] {msg}"));
+        }
+    }
+
+    /// Styled note message for human output.
+    pub fn note(&self, msg: impl std::fmt::Display) {
+        if self.is_human_tty() {
+            eprintln!("{YELLOW}•{RESET} {msg}");
+        } else {
+            self.status(format_args!("- {msg}"));
+        }
+    }
+
+    /// Label/value detail line for human output.
+    pub fn detail(&self, label: &str, value: impl std::fmt::Display) {
+        if self.is_human_tty() {
+            eprintln!("  {DIM}{label}:{RESET} {value}");
+        } else {
+            self.status(format_args!("  {label}: {value}"));
+        }
+    }
+
+    /// Start a short human task line that can be replaced by success in TTY mode.
+    pub fn start_task(&self, msg: impl std::fmt::Display) -> TaskLine<'_> {
+        let tty = self.is_human_tty();
+        if tty {
+            eprint!("{CYAN}…{RESET} {msg}");
+            let _ = io::stderr().flush();
+        } else {
+            self.status(msg);
+        }
+
+        TaskLine {
+            print: self,
+            tty,
+            active: tty,
         }
     }
 
@@ -140,6 +195,33 @@ impl Print {
         serde_json::to_writer(&mut stderr, value).map_err(|e| CliError::Other(e.to_string()))?;
         writeln!(stderr)?;
         Ok(())
+    }
+}
+
+/// A short-lived task line started by [`Print::start_task`].
+pub struct TaskLine<'a> {
+    print: &'a Print,
+    tty: bool,
+    active: bool,
+}
+
+impl TaskLine<'_> {
+    /// Replace the loading line with a styled success message in TTY mode.
+    pub fn success(mut self, msg: impl std::fmt::Display) {
+        if self.tty {
+            eprint!("\r\x1b[2K");
+            let _ = io::stderr().flush();
+        }
+        self.active = false;
+        self.print.success(msg);
+    }
+}
+
+impl Drop for TaskLine<'_> {
+    fn drop(&mut self) {
+        if self.active {
+            eprintln!();
+        }
     }
 }
 
