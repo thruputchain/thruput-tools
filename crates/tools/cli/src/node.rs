@@ -358,10 +358,26 @@ fn write_started_local_node_profile_state(
             )
         })?;
     let cwd = std::env::current_dir()?;
-    crate::config::save_profile_local_node_state(
+    write_local_node_profile_state(
         &cwd,
         explicit_profile,
         &started.rpc_url(),
+        manifest_path,
+        runtime_artifacts_dir,
+    )
+}
+
+fn write_local_node_profile_state(
+    start: &Path,
+    explicit_profile: Option<&str>,
+    rpc_url: &str,
+    manifest_path: &Path,
+    runtime_artifacts_dir: Option<&Path>,
+) -> Result<PathBuf, CliError> {
+    crate::config::save_profile_local_node_state(
+        start,
+        explicit_profile,
+        rpc_url,
         manifest_path,
         runtime_artifacts_dir,
     )
@@ -633,13 +649,15 @@ mod tests {
         LocalNodeBlockDriverMode, LocalNodeOptions, LocalNodePidFile, default_tracing_filter,
         global_local_node_pid_file, hogd_dev_startup_payload, local_node_config,
         map_node_supervisor_error, profile_state_payload, test_profile_state_result,
+        write_local_node_profile_state,
     };
     use crate::CliError;
     use groundhog_node_supervisor::{
         BackendPlanes, NodeSupervisorError, PlaneStatus, parse_readiness_line,
     };
+    use serial_test::serial;
     use sha2::{Digest, Sha256};
-    use std::{fs, path::PathBuf, time::Duration};
+    use std::{env, fs, path::PathBuf, time::Duration};
     use tempfile::TempDir;
 
     #[test]
@@ -710,6 +728,87 @@ mod tests {
 
         fs::write(&legacy_path, "").expect("bug: legacy pid file should write");
         assert_eq!(global_local_node_pid_file(tmp.path()), legacy_path);
+    }
+
+    #[test]
+    #[serial]
+    fn profile_state_write_updates_project_profile() {
+        let tmp = TempDir::new().expect("bug: temp dir should be created");
+        let project = tmp.path().join("project");
+        fs::create_dir(&project).expect("bug: project dir should be created");
+        fs::write(
+            project.join("groundhog.toml"),
+            r#"
+[profile.local]
+default_key = "dev-0"
+"#,
+        )
+        .expect("bug: project config should be written");
+        let manifest = tmp.path().join("runtime-manifest.json");
+        let artifacts_dir = tmp.path().join("hog-devnode");
+        fs::write(&manifest, "{}").expect("bug: manifest should be written");
+        fs::create_dir(&artifacts_dir).expect("bug: artifacts dir should be created");
+        unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+
+        let written = write_local_node_profile_state(
+            &project,
+            Some("local"),
+            "http://127.0.0.1:9545",
+            &manifest,
+            Some(&artifacts_dir),
+        )
+        .expect("bug: profile state should write");
+        assert_eq!(written, project.join("groundhog.toml"));
+
+        let profile = crate::config::resolve_profile(&project, Some("local"))
+            .expect("bug: profile should resolve");
+        assert_eq!(profile.default_key.as_deref(), Some("dev-0"));
+        assert_eq!(profile.rpc_url.as_deref(), Some("http://127.0.0.1:9545"));
+        assert_eq!(
+            profile.runtime_manifest.as_deref(),
+            Some(manifest.as_path())
+        );
+        assert_eq!(
+            profile.runtime_artifacts_dir.as_deref(),
+            Some(artifacts_dir.as_path())
+        );
+
+        unsafe { env::remove_var("XDG_CONFIG_HOME") };
+    }
+
+    #[test]
+    #[serial]
+    fn profile_state_write_updates_global_profile_outside_project() {
+        let tmp = TempDir::new().expect("bug: temp dir should be created");
+        let manifest = tmp.path().join("runtime-manifest.json");
+        let artifacts_dir = tmp.path().join("hog-devnode");
+        fs::write(&manifest, "{}").expect("bug: manifest should be written");
+        fs::create_dir(&artifacts_dir).expect("bug: artifacts dir should be created");
+        unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+
+        let written = write_local_node_profile_state(
+            tmp.path(),
+            Some("local"),
+            "http://127.0.0.1:9546",
+            &manifest,
+            Some(&artifacts_dir),
+        )
+        .expect("bug: profile state should write");
+        assert_eq!(written, tmp.path().join("groundhog/config.toml"));
+
+        let profile = crate::config::resolve_profile(tmp.path(), Some("local"))
+            .expect("bug: profile should resolve");
+        assert_eq!(profile.rpc_url.as_deref(), Some("http://127.0.0.1:9546"));
+        assert_eq!(
+            profile.runtime_manifest.as_deref(),
+            Some(manifest.as_path())
+        );
+        assert_eq!(
+            profile.runtime_artifacts_dir.as_deref(),
+            Some(artifacts_dir.as_path())
+        );
+
+        unsafe { env::remove_var("XDG_CONFIG_HOME") };
     }
 
     #[test]

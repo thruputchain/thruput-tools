@@ -295,7 +295,9 @@ fn resolve_profile_merges_global_and_project_profile_fields() {
     let global_alice = format!("0x{}", "44".repeat(32));
     let project_alice = format!("0x{}", "55".repeat(32));
     let bob = format!("0x{}", "66".repeat(32));
+    let artifacts_dir = tmp.path().join("global-artifacts");
     fs::create_dir(&project).unwrap();
+    fs::create_dir(&artifacts_dir).unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
     fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
     fs::write(
@@ -305,13 +307,15 @@ fn resolve_profile_merges_global_and_project_profile_fields() {
 [profile.devnet]
 rpc_url = "https://rpc.devnet.example"
 runtime_manifest = "global-runtime.json"
+runtime_artifacts_dir = "{}"
 
 [profile.devnet.contracts]
 HOG = "{global_hog}"
 
 [profile.devnet.wallets]
 alice = "{global_alice}"
-"#
+"#,
+            artifacts_dir.display()
         ),
     )
     .unwrap();
@@ -320,6 +324,7 @@ alice = "{global_alice}"
         format!(
             r#"
 [profile.devnet]
+rpc_url = "https://project-rpc.devnet.example"
 default_key = "bob"
 
 [profile.devnet.contracts]
@@ -337,12 +342,16 @@ bob = "{bob}"
     let profile = groundhog_cli::config::resolve_profile(&project, Some("devnet")).unwrap();
     assert_eq!(
         profile.rpc_url.as_deref(),
-        Some("https://rpc.devnet.example")
+        Some("https://project-rpc.devnet.example")
     );
     assert_eq!(profile.default_key.as_deref(), Some("bob"));
     assert_eq!(
         profile.runtime_manifest.as_deref(),
         Some(tmp.path().join("groundhog/global-runtime.json").as_path())
+    );
+    assert_eq!(
+        profile.runtime_artifacts_dir.as_deref(),
+        Some(artifacts_dir.as_path())
     );
     assert_eq!(profile.contracts.get("HOG"), Some(&project_hog));
     assert_eq!(profile.contracts.get("counter"), Some(&counter));

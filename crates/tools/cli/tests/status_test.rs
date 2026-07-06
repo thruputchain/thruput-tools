@@ -127,3 +127,74 @@ fn collect_report_warns_when_global_default_key_is_missing_on_disk() {
         env::remove_var("XDG_CONFIG_HOME");
     }
 }
+
+#[test]
+#[serial]
+fn collect_report_uses_effective_merged_project_profile_details() {
+    let tmp = TempDir::new().unwrap();
+    let cargo_home = tmp.path().join("cargo-home");
+    let project = tmp.path().join("proj");
+    let global_hog = format!("0x{}", "11".repeat(32));
+    let project_counter = format!("0x{}", "22".repeat(32));
+
+    fs::create_dir(&project).unwrap();
+    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    fs::write(
+        tmp.path().join("groundhog/config.toml"),
+        format!(
+            r#"
+default_profile = "local"
+default_key = "alice"
+
+[profile.local]
+rpc_url = "http://global.example"
+
+[profile.local.contracts]
+HOG = "{global_hog}"
+"#
+        ),
+    )
+    .unwrap();
+    fs::write(
+        project.join("groundhog.toml"),
+        format!(
+            r#"
+[profile.local]
+rpc_url = "http://project.example"
+
+[profile.local.contracts]
+counter = "{project_counter}"
+"#
+        ),
+    )
+    .unwrap();
+
+    unsafe {
+        env::set_var("CARGO_HOME", &cargo_home);
+        env::set_var("XDG_CONFIG_HOME", tmp.path());
+    }
+
+    groundhog_cli::auth::ensure_cargo_registry(&cargo_home.join("config.toml")).unwrap();
+    groundhog_cli::keys::generate(&Some("alice".into()), false, "keys.generate", &quiet()).unwrap();
+    let creds = groundhog_cli::config::ExecutorCredentials {
+        username: "test".into(),
+        password: "pass".into(),
+    };
+    groundhog_cli::config::save_executor_credentials(&creds).unwrap();
+
+    let report = groundhog_cli::checks::collect_report(&project, None).unwrap();
+    assert_eq!(report.project.profile_name.as_deref(), Some("local"));
+    assert_eq!(
+        report.project.rpc_url.as_deref(),
+        Some("http://project.example")
+    );
+    assert_eq!(report.project.contract_count, 2);
+    assert_eq!(report.effective_default_key.as_deref(), Some("alice"));
+    assert_eq!(report.effective_default_key_source, Some("global"));
+    assert!(report.effective_default_key_summary().is_some());
+
+    unsafe {
+        env::remove_var("CARGO_HOME");
+        env::remove_var("XDG_CONFIG_HOME");
+    }
+}
