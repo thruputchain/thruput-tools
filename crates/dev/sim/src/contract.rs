@@ -5,12 +5,12 @@ use std::time::Instant;
 use groundhog_json_rpc_types::{
     hex::HexBytes,
     receipt::{ExecStatus, TransactionReceipt},
+    runtime_manifest::RuntimeManifest,
     transaction::TxHash,
 };
 use groundhog_signing::{
-    BuildDeployTransaction, DEFAULT_TX_GAS_LIMIT, SignTransactionParams, WALLET_DEPLOY_ENTRYPOINT,
-    build_deploy_transaction, derive_deploy_address, sign_and_encode_transaction_hex,
-    source_address_auth_claim,
+    BuildDeployTransaction, DEFAULT_TX_GAS_LIMIT, SignTransactionParams, build_deploy_transaction,
+    derive_deploy_address, sign_and_encode_transaction_hex, source_address_auth_claim,
 };
 use groundhog_xdr::{
     contract::{Contract, ContractBlob, ContractEntrypointID},
@@ -120,6 +120,7 @@ pub struct PreparedEventQuery {
 pub async fn deploy_manifest_contracts<C>(
     client: C,
     manifest: &SimulationManifest,
+    runtime_manifest: &RuntimeManifest,
     scenario_path: &Path,
     contract_artifact_root: Option<&Path>,
     actor_states: &mut [ActorState],
@@ -142,6 +143,15 @@ where
     let actor = actor_states.get_mut(0).ok_or(SimError::Executor(
         "contract deploy requires actor 0".into(),
     ))?;
+    let deploy_entrypoint = runtime_manifest
+        .bootstrap
+        .dev_wallet
+        .deploy_entrypoint_id()
+        .map_err(|source| {
+            SimError::Executor(format!(
+                "failed to parse runtime manifest bootstrap.devWallet.deployEntrypoint: {source}"
+            ))
+        })?;
     let mut records = Vec::new();
     let mut deployed = BTreeMap::new();
     let mut failed = false;
@@ -154,6 +164,7 @@ where
             scenario_path,
             contract_artifact_root,
             actor,
+            deploy_entrypoint,
             event_writer,
             block_expiry_height,
         )
@@ -200,6 +211,7 @@ async fn deploy_one_contract<C>(
     scenario_path: &Path,
     contract_artifact_root: Option<&Path>,
     actor: &mut ActorState,
+    deploy_entrypoint: ContractEntrypointID,
     event_writer: &mut EventWriter,
     block_expiry_height: i64,
 ) -> Result<ContractDeploymentRecord, SimError>
@@ -231,6 +243,7 @@ where
         artifact.artifact.kind,
         &artifact_path,
         actor,
+        deploy_entrypoint,
         block_expiry_height,
     ) {
         Ok(prepared) => prepared,
@@ -325,6 +338,7 @@ fn prepare_deploy(
     artifact_kind: ContractArtifactKind,
     artifact_path: &Path,
     actor: &ActorState,
+    deploy_entrypoint: ContractEntrypointID,
     block_expiry_height: i64,
 ) -> Result<PreparedDeploy, SimError> {
     let artifact_bytes = std::fs::read(artifact_path)?;
@@ -356,7 +370,7 @@ fn prepare_deploy(
         })?;
     let tx = build_deploy_transaction(BuildDeployTransaction {
         invoked_address: actor.wallet_address,
-        entrypoint: ContractEntrypointID::from(WALLET_DEPLOY_ENTRYPOINT),
+        entrypoint: deploy_entrypoint,
         calldata,
         gas_limit: DEFAULT_TX_GAS_LIMIT,
         block_expiry_height,
@@ -697,9 +711,12 @@ mod tests {
         BlockHeight,
         block::ChainTip,
         hex::Hex0x,
+        runtime_manifest::RuntimeManifest,
         view::{ViewRequest, ViewResponse},
     };
     use groundhog_signing::derive_dev_account_signer;
+    use groundhog_xdr::transaction::SignedTransaction;
+    use serde_json::json;
     use tempfile::NamedTempFile;
 
     use crate::event::EventWriter;
@@ -808,6 +825,7 @@ mod tests {
                 tip_height: 15_000_000,
             },
             &manifest,
+            &runtime_manifest(),
             Path::new("/repo/examples/sim/demo.json"),
             None,
             &mut actors,
@@ -890,6 +908,7 @@ mod tests {
                 tip_height: 15_000_000,
             },
             &manifest,
+            &runtime_manifest(),
             Path::new("/repo/examples/sim/demo.json"),
             None,
             &mut actors,
@@ -947,6 +966,7 @@ mod tests {
                 tip_height: 10,
             },
             &manifest,
+            &runtime_manifest(),
             Path::new("/repo/examples/sim/demo.json"),
             None,
             &mut actors,
@@ -972,9 +992,21 @@ mod tests {
         let bytes = b"rv32 artifact bytes".to_vec();
         std::fs::write(rv32.path(), &bytes).expect("rv32 fixture should write");
         let actors = actor_states();
+        let deploy_entrypoint =
+            ContractEntrypointID::from([0xf9, 0x69, 0x54, 0x25, 0x72, 0xbd, 0x68, 0x60]);
 
-        let prepared = prepare_deploy(ContractArtifactKind::Rv32, rv32.path(), &actors[0], 42)
-            .expect("rv32 deploy should prepare");
+        let prepared = prepare_deploy(
+            ContractArtifactKind::Rv32,
+            rv32.path(),
+            &actors[0],
+            deploy_entrypoint,
+            42,
+        )
+        .expect("rv32 deploy should prepare");
+        let tx_bytes =
+            hex::decode(prepared.tx_hex.trim_start_matches("0x")).expect("signed tx should be hex");
+        let signed_tx: SignedTransaction =
+            xdrs::txs::decode(&tx_bytes).expect("signed tx should decode");
 
         let contract = Contract::kRv32 {
             rv32_contract: ContractBlob {
@@ -988,6 +1020,54 @@ mod tests {
             prepared.contract_hash,
             format!("0x{}", hex::encode(contract_hash_bytes))
         );
+        assert_eq!(signed_tx.tx.invocation.entrypoint, deploy_entrypoint);
+    }
+
+    fn runtime_manifest() -> RuntimeManifest {
+        serde_json::from_value(json!({
+            "schemaVersion": 1,
+            "kind": "hosted-devnet-runtime",
+            "networkId": "devnet",
+            "protocol": "hogp/test",
+            "genesisHash": prefixed_hex(0x11),
+            "producer": {
+                "binary": "chuckd",
+                "version": "0.1.0"
+            },
+            "endpoints": {
+                "scheduler": "127.0.0.1:1000",
+                "indexer": "127.0.0.1:1001",
+                "dbGateway": "127.0.0.1:1002",
+                "viewGateway": "127.0.0.1:1003"
+            },
+            "bootstrapAccountDerivation": {
+                "scheme": crate::runtime::SUPPORTED_DERIVATION_SCHEME,
+                "seed": "seed"
+            },
+            "bootstrapAccounts": [],
+            "bootstrap": {
+                "devWallet": {
+                    "contentHash": prefixed_hex(0x33),
+                    "deployedCodeHash": prefixed_hex(0x44),
+                    "artifactHint": "dev-wallet.rv32a",
+                    "deployEntrypoint": "0xf969542572bd6860",
+                    "createWalletEntrypoint": "0x78b187d37f222827",
+                    "doActionEntrypoint": "0xa0fff94c64fbaf3c"
+                },
+                "storageCostModel": {
+                    "hash": prefixed_hex(0x55),
+                    "baseDataItemCost": "1",
+                    "bytestringCostPerByte": "1",
+                    "baseContractDeploymentCost": "1",
+                    "contractDeploymentCostPerByte": "1",
+                    "authPerKeyCost": "1",
+                    "rcqCostPerEntry": "1",
+                    "replayCacheCostPerEntry": "1",
+                    "balanceCost": "1"
+                }
+            }
+        }))
+        .expect("runtime manifest fixture should parse")
     }
 
     fn manifest(artifact_path: &Path) -> SimulationManifest {

@@ -494,6 +494,7 @@ async fn run_resolved_target(
     let contract_setup = deploy_manifest_contracts(
         client.clone(),
         &loaded_sim.manifest,
+        &loaded_runtime.manifest,
         scenario_path,
         contract_artifact_root,
         &mut actor_states,
