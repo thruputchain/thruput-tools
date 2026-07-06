@@ -50,17 +50,13 @@ pub fn run(
         &rt,
     )?;
 
-    if !print.is_json() {
-        print.status(format_args!(
-            "Viewing {} on {} via {}...",
-            prepared.method, prepared.contract_address_hex, prepared.rpc_url
-        ));
-    }
+    let task = print.start_task(format_args!("Viewing `{}`", prepared.method));
 
     let response = rt.block_on(fetch_view(&prepared.rpc_url, prepared.request.clone()))?;
     let return_value = decoded_return_value(&prepared, &response);
 
     if !print.is_json() {
+        task.clear();
         print_view_response(&prepared, &response, return_value.as_ref(), print);
     }
     print.json(&CommandResult::new(
@@ -220,58 +216,44 @@ fn print_view_response(
 ) {
     match &response.output {
         RootInvocationOutput::Return { return_data } => {
-            if let Some(value) = decoded_return_value {
-                print.status(format_args!(
-                    "View returned: {} -> {value}",
-                    prepared.method
-                ));
+            print.success("View succeeded");
+            if prepared.resolved.metadata.is_some() {
+                print.detail("method", &prepared.method);
+                if let Some(value) = decoded_return_value {
+                    print.detail("value", value);
+                }
             } else {
-                print.status(format_args!("View returned: {}", prepared.method));
+                print.detail("entrypoint", &prepared.method);
             }
-            print.status(format_args!(
-                "  contract: {}",
-                prepared.contract_address_hex
-            ));
-            print.status(format_args!("  height: {}", *response.height));
+            print.detail("contract", &prepared.contract_address_hex);
+            print.detail("height", *response.height);
             if !return_data.0.is_empty() && decoded_return_value.is_none() {
-                print.status(format_args!(
-                    "  return: {}",
-                    format_hex_bytes(&return_data.0)
-                ));
+                print.detail("return", format_hex_bytes(&return_data.0));
             }
         }
         RootInvocationOutput::Abort { abort_data } => {
             print.warn("View aborted.");
-            print.status(format_args!("  method: {}", prepared.method));
-            print.status(format_args!(
-                "  contract: {}",
-                prepared.contract_address_hex
-            ));
-            print.status(format_args!("  height: {}", *response.height));
-            print.status(format_args!("  abort: {}", format_hex_bytes(&abort_data.0)));
+            print.detail("method", &prepared.method);
+            print.detail("contract", &prepared.contract_address_hex);
+            print.detail("height", *response.height);
+            print.detail("abort", format_hex_bytes(&abort_data.0));
         }
         RootInvocationOutput::Fault => {
             print.warn("View faulted.");
-            print.status(format_args!("  method: {}", prepared.method));
-            print.status(format_args!(
-                "  contract: {}",
-                prepared.contract_address_hex
-            ));
-            print.status(format_args!("  height: {}", *response.height));
+            print.detail("method", &prepared.method);
+            print.detail("contract", &prepared.contract_address_hex);
+            print.detail("height", *response.height);
         }
         _ => {
             print.warn("View returned an unsupported output variant.");
-            print.status(format_args!("  method: {}", prepared.method));
-            print.status(format_args!(
-                "  contract: {}",
-                prepared.contract_address_hex
-            ));
-            print.status(format_args!("  height: {}", *response.height));
+            print.detail("method", &prepared.method);
+            print.detail("contract", &prepared.contract_address_hex);
+            print.detail("height", *response.height);
         }
     }
 
     if !response.events.is_empty() {
-        print.status(format_args!("  events: {}", response.events.len()));
+        print.detail("events", response.events.len());
         for (index, event) in response.events.iter().enumerate() {
             print.status(format_args!("    [{index}] {}", format_event(event)));
         }

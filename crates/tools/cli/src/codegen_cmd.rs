@@ -25,7 +25,8 @@ pub fn run(
 
     if let Some(output_path) = output {
         std::fs::write(output_path, ts.as_bytes())?;
-        print.status(format_args!("Wrote {}", output_path.display()));
+        print.success("Wrote TypeScript bindings");
+        print.detail("output", output_path.display());
         print.json(&CommandResult::new(
             cmd,
             json!({

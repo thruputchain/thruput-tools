@@ -7,6 +7,7 @@ const RESET: &str = "\x1b[0m";
 const DIM: &str = "\x1b[2m";
 const CYAN: &str = "\x1b[36m";
 const GREEN: &str = "\x1b[32m";
+const RED: &str = "\x1b[31m";
 const YELLOW: &str = "\x1b[33m";
 
 /// Controls CLI output. Status messages go to stderr
@@ -181,10 +182,18 @@ impl Print {
         }
 
         let mut stderr = io::stderr();
-        writeln!(stderr, "error: {error}")?;
+        if self.is_human_tty() {
+            writeln!(stderr, "{RED}✗{RESET} {error}")?;
+        } else {
+            writeln!(stderr, "error: {error}")?;
+        }
         if let Some(hint) = error.hint() {
             writeln!(stderr)?;
-            writeln!(stderr, "  hint: {hint}")?;
+            if self.is_human_tty() {
+                writeln!(stderr, "  {DIM}hint:{RESET} {hint}")?;
+            } else {
+                writeln!(stderr, "  hint: {hint}")?;
+            }
         }
         Ok(())
     }
@@ -206,6 +215,15 @@ pub struct TaskLine<'a> {
 }
 
 impl TaskLine<'_> {
+    /// Clear the loading line in TTY mode without printing a replacement.
+    pub fn clear(mut self) {
+        if self.tty {
+            eprint!("\r\x1b[2K");
+            let _ = io::stderr().flush();
+        }
+        self.active = false;
+    }
+
     /// Replace the loading line with a styled success message in TTY mode.
     pub fn success(mut self, msg: impl std::fmt::Display) {
         if self.tty {
@@ -219,8 +237,9 @@ impl TaskLine<'_> {
 
 impl Drop for TaskLine<'_> {
     fn drop(&mut self) {
-        if self.active {
-            eprintln!();
+        if self.active && self.tty {
+            eprint!("\r\x1b[2K");
+            let _ = io::stderr().flush();
         }
     }
 }

@@ -76,14 +76,13 @@ pub fn run(
         return print_dry_run(&prepared, cmd, print);
     }
 
-    print.status(format_args!(
-        "Deploying {} artifact ({} bytes) to {}...",
-        prepared.artifact.kind.as_str(),
-        prepared.artifact_bytes_len,
-        prepared.rpc_url
+    let task = print.start_task(format_args!(
+        "Deploying {} artifact",
+        prepared.artifact.kind.as_str()
     ));
 
     let submitted = submit_prepared_deploy_and_resolve(&prepared)?;
+    task.clear();
     let tx_hash = submitted.tx_hash;
     let receipt = submitted.receipt;
     let transaction_detail = fetch_transaction_detail_blocking(&prepared.rpc_url, tx_hash, print);
@@ -98,19 +97,20 @@ pub fn run(
             let contract_addr_hex = contract_addr_hex
                 .as_deref()
                 .expect("bug: successful deploy must resolve a contract address");
-            print.status(format_args!("Deployed at {contract_addr_hex}"));
+            print.success("Deployed contract");
+            print.detail("address", contract_addr_hex);
             if matches!(address_source, Some(DeployAddressSource::Derived)) {
                 print.warn(
                     "receipt omitted deploy return_data; address was derived locally from \
                      deployer, nonce, and contract hash",
                 );
             }
-            print.status(format_args!("  tx: {tx_hash_formatted}"));
-            print.status(format_args!("  height: {}", *receipt.height));
+            print.detail("tx", &tx_hash_formatted);
+            print.detail("height", *receipt.height);
         }
         other => {
             print.warn(format_args!("Deploy {}", summarize_exec_status(other)));
-            print.status(format_args!("  tx: {tx_hash_formatted}"));
+            print.detail("tx", &tx_hash_formatted);
         }
     }
 
@@ -127,9 +127,7 @@ pub fn run(
         {
             let _ =
                 crate::config::save_profile_contract_alias(&root, profile, name, contract_addr_hex);
-            print.status(format_args!(
-                "  alias: {name} -> {contract_addr_hex} (saved to groundhog.toml)"
-            ));
+            print.detail("alias", format_args!("{name} -> {contract_addr_hex}"));
         }
     }
 

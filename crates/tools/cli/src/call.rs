@@ -84,12 +84,10 @@ pub fn run(
         return print_dry_run(&prepared, cmd, print);
     }
 
-    print.status(format_args!(
-        "Calling {} on {} via {}...",
-        prepared.method, prepared.contract_address_hex, prepared.rpc_url
-    ));
+    let task = print.start_task(format_args!("Calling `{}`", prepared.method));
 
     let (tx_hash, receipt) = submit_prepared_call(&prepared)?;
+    task.clear();
     let transaction_detail = fetch_transaction_detail_blocking(&prepared.rpc_url, tx_hash, print);
     let tx_hash_formatted = format_tx_hash(&tx_hash);
     let status_summary = summarize_exec_status(&receipt.status);
@@ -103,47 +101,39 @@ pub fn run(
     // Print result
     match &receipt.status {
         ExecStatus::Ok => {
-            if let Some(ref value) = decoded_return {
-                print.status(format_args!(
-                    "Call succeeded: {} -> {value}",
-                    prepared.method
-                ));
+            print.success("Call succeeded");
+            if prepared.resolved.metadata.is_some() {
+                print.detail("method", &prepared.method);
+                if let Some(ref value) = decoded_return {
+                    print.detail("value", value);
+                }
             } else {
-                print.status(format_args!("Call succeeded: {}", prepared.method));
+                print.detail("entrypoint", &prepared.method);
             }
-            print.status(format_args!(
-                "  contract: {}",
-                prepared.contract_address_hex
-            ));
-            print.status(format_args!("  tx: {tx_hash_formatted}"));
-            print.status(format_args!("  height: {}", *receipt.height));
+            print.detail("contract", &prepared.contract_address_hex);
+            print.detail("tx", &tx_hash_formatted);
+            print.detail("height", *receipt.height);
             if decoded_return.is_none()
                 && let Some(ref data) = receipt.return_data
                 && !data.0.is_empty()
             {
-                print.status(format_args!("  return: 0x{}", hex::encode(&data.0)));
+                print.detail("return", format_args!("0x{}", hex::encode(&data.0)));
             }
         }
         ExecStatus::Reverted { .. } => {
             print.warn(format_args!("Call {status_summary}"));
-            print.status(format_args!("  method: {}", prepared.method));
-            print.status(format_args!(
-                "  contract: {}",
-                prepared.contract_address_hex
-            ));
-            print.status(format_args!("  tx: {tx_hash_formatted}"));
-            print.status(format_args!("  height: {}", *receipt.height));
+            print.detail("method", &prepared.method);
+            print.detail("contract", &prepared.contract_address_hex);
+            print.detail("tx", &tx_hash_formatted);
+            print.detail("height", *receipt.height);
             print_failed_call_diagnostics(&prepared, transaction_detail.is_some(), print);
         }
         other => {
             print.warn(format_args!("Call {}", summarize_exec_status(other)));
-            print.status(format_args!("  method: {}", prepared.method));
-            print.status(format_args!(
-                "  contract: {}",
-                prepared.contract_address_hex
-            ));
-            print.status(format_args!("  tx: {tx_hash_formatted}"));
-            print.status(format_args!("  height: {}", *receipt.height));
+            print.detail("method", &prepared.method);
+            print.detail("contract", &prepared.contract_address_hex);
+            print.detail("tx", &tx_hash_formatted);
+            print.detail("height", *receipt.height);
             print_failed_call_diagnostics(&prepared, transaction_detail.is_some(), print);
         }
     }
@@ -177,18 +167,24 @@ fn print_failed_call_diagnostics(
     transaction_detail_available: bool,
     print: &Print,
 ) {
-    print.status(format_args!(
-        "  wallet: {} entrypoint={} source={}",
-        prepared.wallet_address_hex,
-        prepared.wallet_entrypoint_id,
-        prepared.wallet_entrypoint_source
-    ));
-    print.status(format_args!(
-        "  target entrypoint: {}",
-        format_entrypoint_id(prepared.resolved.entrypoint)
-    ));
+    print.detail(
+        "wallet",
+        format_args!(
+            "{} entrypoint={} source={}",
+            prepared.wallet_address_hex,
+            prepared.wallet_entrypoint_id,
+            prepared.wallet_entrypoint_source
+        ),
+    );
+    print.detail(
+        "target entrypoint",
+        format_entrypoint_id(prepared.resolved.entrypoint),
+    );
     if !transaction_detail_available {
-        print.status("  transaction detail: unavailable from groundhog_dev_getTransactionDetail");
+        print.detail(
+            "transaction detail",
+            "unavailable from groundhog_dev_getTransactionDetail",
+        );
     }
 }
 

@@ -606,10 +606,11 @@ fn status_human_output_shows_sections() {
     // human-readable section content.
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("cargo: installed"));
-    assert!(stderr.contains("registry:"));
-    assert!(stderr.contains("keys: none"));
-    assert!(stderr.contains("credentials: NOT stored"));
+    assert!(stderr.contains("Groundhog Status"));
+    assert!(stderr.contains("Cargo: installed"));
+    assert!(stderr.contains("Registry:"));
+    assert!(stderr.contains("Keys: none"));
+    assert!(stderr.contains("Credentials: not stored"));
 }
 
 #[test]
@@ -3098,7 +3099,7 @@ fn view_human_prints_event_details() {
     assert!(output.stdout.is_empty());
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("View returned"));
+    assert!(stderr.contains("View succeeded"));
     assert!(stderr.contains("events: 1"));
     assert!(stderr.contains(&format!(
         "    [0] {address} topic0={topic} data={event_data}"

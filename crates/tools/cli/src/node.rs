@@ -4,6 +4,7 @@ use crate::{CliError, Print};
 
 use crate::result::CommandResult;
 use serde_json::json;
+use std::io::{self, IsTerminal, Write};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
@@ -228,6 +229,9 @@ async fn run_hogd_dev(
     use groundhog_node_supervisor::{NodeSupervisorError, SupervisorStop};
 
     let runtime_artifacts_dir = local_node_runtime_artifacts_dir(&options);
+    if !print.is_json() {
+        print.status("Starting Groundhog local node");
+    }
     let started = start_local_node(options).await?;
     let profile_state_result = write_started_local_node_profile_state(
         &started,
@@ -255,7 +259,7 @@ async fn run_hogd_dev(
             .map_err(|source| NodeSupervisorError::StopSignal { source })?;
         if !print.is_json() {
             print.status("");
-            print.status("Shutting down...");
+            print.note("Shutting down");
         }
         Ok(())
     };
@@ -265,7 +269,7 @@ async fn run_hogd_dev(
     match outcome {
         SupervisorStop::HogdExited(status) => {
             if !print.is_json() {
-                print.status(format_args!("hog-devnode exited with status {status}"));
+                print.note(format_args!("hog-devnode exited with status {status}"));
             }
             if status.success() {
                 Ok(())
@@ -303,8 +307,8 @@ fn print_started_local_node(
     profile_state_result: &Result<PathBuf, CliError>,
     print: &Print,
 ) {
-    print.status("Groundhog Local Node");
-    print.status(format_args!("Chain: {}", started.readiness().network_id));
+    print.success("Groundhog local node ready");
+    print.detail("chain", &started.readiness().network_id);
     if started.backend_planes().read.is_indexer_backed() {
         print.warn("backend: hog-devnode (chainTip, submit, and reads live)");
     } else {
@@ -312,33 +316,30 @@ fn print_started_local_node(
             "backend: hog-devnode (chainTip and submit live; read methods return NOT_IMPLEMENTED)",
         );
     }
-    print.status(format_args!("Listening on {}", started.rpc_url()));
-    print.status(format_args!(
-        "hog-devnode SchedulerCoord: {}",
-        started.readiness().endpoints.scheduler_coord
-    ));
+    print.detail("rpc", started.rpc_url());
+    print.detail("scheduler", started.readiness().endpoints.scheduler_coord);
     if let Some(indexer) = started.readiness().endpoints.indexer_block_explorer {
-        print.status(format_args!("hog-devnode IndexerBlockExplorer: {indexer}"));
+        print.detail("indexer", indexer);
     }
     if let Some(db_gateway) = started.readiness().endpoints.db_gateway {
-        print.status(format_args!("hog-devnode DbGateway: {db_gateway}"));
+        print.detail("db gateway", db_gateway);
     }
     if let Some(view_gateway) = started.readiness().endpoints.view_gateway {
-        print.status(format_args!("hog-devnode ViewGateway: {view_gateway}"));
+        print.detail("view gateway", view_gateway);
     }
     if let Some(dev_control) = started.readiness().endpoints.dev_control {
-        print.status(format_args!("hog-devnode dev control: {dev_control}"));
+        print.detail("dev control", dev_control);
     }
     if let Some(path) = &started.readiness().manifest_path {
-        print.status(format_args!("runtime manifest: {}", path.display()));
+        print.detail("runtime manifest", path.display());
         match profile_state_result {
-            Ok(path) => print.status(format_args!("profile updated: {}", path.display())),
+            Ok(path) => print.detail("profile", format_args!("updated {}", path.display())),
             Err(error) => print.warn(format!("profile was not updated: {error}")),
         }
-        print.status(format_args!(
-            "dev-key manifest: export GROUNDHOG_RUNTIME_MANIFEST={}",
-            path.display()
-        ));
+        print.detail(
+            "dev-key manifest",
+            format_args!("export GROUNDHOG_RUNTIME_MANIFEST={}", path.display()),
+        );
     }
 }
 
@@ -492,7 +493,7 @@ fn map_node_supervisor_error(err: &groundhog_node_supervisor::NodeSupervisorErro
 }
 
 pub(crate) fn init_node_tracing(verbose: bool, json: bool) {
-    init_tracing(default_tracing_filter(verbose, json));
+    init_tracing(default_tracing_filter(verbose, json), json);
 }
 
 fn default_tracing_filter(verbose: bool, json: bool) -> &'static str {
@@ -505,17 +506,41 @@ fn default_tracing_filter(verbose: bool, json: bool) -> &'static str {
     }
 }
 
-fn init_tracing(default_filter: &str) {
+fn init_tracing(default_filter: &str, json: bool) {
     use tracing_subscriber::EnvFilter;
+
+    let dim_logs = !json && io::stderr().is_terminal();
 
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_filter)),
         )
-        .with_writer(std::io::stderr)
+        .with_writer(move || ForwardedLogWriter { dim: dim_logs })
         .with_target(false)
         .without_time()
         .try_init();
+}
+
+struct ForwardedLogWriter {
+    dim: bool,
+}
+
+impl Write for ForwardedLogWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let mut stderr = io::stderr().lock();
+        if self.dim {
+            stderr.write_all(b"\x1b[2m")?;
+            stderr.write_all(buf)?;
+            stderr.write_all(b"\x1b[0m")?;
+        } else {
+            stderr.write_all(buf)?;
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        io::stderr().lock().flush()
+    }
 }
 
 fn hogd_dev_startup_payload(
