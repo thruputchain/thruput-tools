@@ -4,6 +4,7 @@ use serde_json::json;
 use std::io::{self, IsTerminal, Write};
 
 const RESET: &str = "\x1b[0m";
+const BOLD: &str = "\x1b[1m";
 const DIM: &str = "\x1b[2m";
 const CYAN: &str = "\x1b[36m";
 const GREEN: &str = "\x1b[32m";
@@ -102,6 +103,36 @@ impl Print {
             eprintln!("  {DIM}{label}:{RESET} {value}");
         } else {
             self.status(format_args!("  {label}: {value}"));
+        }
+    }
+
+    /// Render a compact label/value summary for human output.
+    pub fn summary_card(&self, title: &str, items: &[(String, String)]) {
+        if self.quiet || self.json {
+            return;
+        }
+
+        if self.is_human_tty() {
+            render_summary_card_tty(title, items);
+        } else {
+            self.status(title);
+            self.status("");
+            for (label, value) in items {
+                self.status(format_args!("{label}: {value}"));
+            }
+        }
+    }
+
+    /// Render a conventional `Next:` block for human output.
+    pub fn next_steps(&self, steps: &[String]) {
+        if self.quiet || self.json {
+            return;
+        }
+
+        self.status("");
+        self.status("Next:");
+        for step in steps {
+            self.status(format_args!("  {step}"));
         }
     }
 
@@ -205,6 +236,41 @@ impl Print {
         writeln!(stderr)?;
         Ok(())
     }
+}
+
+fn render_summary_card_tty(title: &str, items: &[(String, String)]) {
+    let label_width = items
+        .iter()
+        .map(|(label, _)| label.chars().count())
+        .max()
+        .unwrap_or(0)
+        .max(10)
+        .max(title.chars().count());
+    let value_width = items
+        .iter()
+        .map(|(_, value)| value.chars().count())
+        .max()
+        .unwrap_or(0)
+        .max(18);
+    let inner_width = (label_width + value_width + 5).max(title.chars().count() + 2);
+    let top_fill = inner_width.saturating_sub(title.chars().count() + 2);
+
+    eprintln!(
+        "{GREEN}╭─ {BOLD}{title}{RESET}{GREEN}{}╮{RESET}",
+        line_fill('─', top_fill)
+    );
+    for (label, value) in items {
+        let label_padding = line_fill(' ', label_width.saturating_sub(label.chars().count()));
+        let value_padding = line_fill(' ', value_width.saturating_sub(value.chars().count()));
+        eprintln!(
+            "{GREEN}│{RESET} {DIM}{label}:{RESET}{label_padding} {value}{value_padding} {GREEN}│{RESET}"
+        );
+    }
+    eprintln!("{GREEN}╰{}╯{RESET}", line_fill('─', inner_width));
+}
+
+fn line_fill(ch: char, count: usize) -> String {
+    std::iter::repeat_n(ch, count).collect()
 }
 
 /// A short-lived task line started by [`Print::start_task`].

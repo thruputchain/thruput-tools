@@ -21,7 +21,23 @@ pub fn cargo_config_path() -> Result<PathBuf, CliError> {
 /// Configure the Groundhog cargo registry and store
 /// test executor credentials.
 pub fn login(cmd: &'static str, print: &Print) -> Result<(), CliError> {
-    login_inner(cmd, print, LoginMode::Standalone)
+    if print.is_json() {
+        return Err(CliError::JsonUnsupported(cmd));
+    }
+
+    crate::require_cargo()?;
+
+    let cargo_config = cargo_config_path()?;
+    ensure_cargo_registry(&cargo_config)?;
+    print.status("Configured cargo registry.");
+
+    cargo_registry_login_standalone(print)?;
+
+    print.status("\nTest executor credentials");
+    save_executor_credentials_from_prompt(print)?;
+    print.status("\nCredentials saved. You're ready to go.");
+
+    Ok(())
 }
 
 /// Store executor credentials as part of `groundhog init` without nested wizard headings.
@@ -31,7 +47,9 @@ pub(crate) fn executor_login_from_init(print: &Print) -> Result<(), CliError> {
     }
 
     print.status("These are used by `groundhog test`.");
-    save_executor_credentials_from_prompt(print, LoginMode::Init)
+    save_executor_credentials_from_prompt(print)?;
+    print.status("\nCredentials saved.");
+    Ok(())
 }
 
 #[derive(Clone, Copy)]
@@ -55,7 +73,7 @@ pub(crate) fn offer_cargo_login_after_new(print: &Print) -> Result<CargoLoginSta
     print.note("Groundhog projects depend on packages from the private Cargo registry");
     print.note("Cargo stores this token globally in `CARGO_HOME`, not in this project");
     if confirm(print, "Log in to Cargo registry now?", true)? {
-        cargo_registry_login(print, LoginMode::New)?;
+        cargo_registry_login_after_new(print)?;
         return Ok(CargoLoginStatus::LoggedIn);
     }
 
@@ -63,59 +81,16 @@ pub(crate) fn offer_cargo_login_after_new(print: &Print) -> Result<CargoLoginSta
     Ok(CargoLoginStatus::Skipped)
 }
 
-#[derive(Clone, Copy)]
-enum LoginMode {
-    Standalone,
-    Init,
-    New,
-}
-
-fn login_inner(cmd: &'static str, print: &Print, mode: LoginMode) -> Result<(), CliError> {
-    if print.is_json() {
-        return Err(CliError::JsonUnsupported(cmd));
-    }
-
+fn cargo_registry_login_standalone(print: &Print) -> Result<(), CliError> {
     crate::require_cargo()?;
 
-    let cargo_config = cargo_config_path()?;
-
-    ensure_cargo_registry(&cargo_config)?;
-    print.status("Configured cargo registry.");
-
-    cargo_registry_login(print, mode)?;
-
-    match mode {
-        LoginMode::Standalone => print.status("\nTest executor credentials"),
-        LoginMode::Init | LoginMode::New => {}
-    }
-    save_executor_credentials_from_prompt(print, mode)?;
-
-    Ok(())
-}
-
-fn cargo_registry_login(print: &Print, mode: LoginMode) -> Result<(), CliError> {
-    crate::require_cargo()?;
-
-    match mode {
-        LoginMode::Standalone => {
-            print.status("\nRegistry token");
-            print.status(
-                "Paste your registry token from \
-                 https://groundhog.dev/crates/me",
-            );
-        }
-        LoginMode::Init | LoginMode::New => {
-            print.status("");
-            print.status("Open this page and create or copy a token:");
-            print.status("https://groundhog.dev/crates/me");
-            print.status("");
-        }
-    }
+    print.status("\nRegistry token");
+    print.status(
+        "Paste your registry token from \
+         https://groundhog.dev/crates/me",
+    );
     let mut command = Command::new("cargo");
     command.arg("login").arg("--registry").arg("groundhog");
-    if matches!(mode, LoginMode::Init | LoginMode::New) {
-        command.arg("--quiet");
-    }
     let status = command.status()?;
     if !status.success() {
         return Err(CliError::RegistryLoginFailed);
@@ -123,11 +98,28 @@ fn cargo_registry_login(print: &Print, mode: LoginMode) -> Result<(), CliError> 
     Ok(())
 }
 
-fn save_executor_credentials_from_prompt(print: &Print, mode: LoginMode) -> Result<(), CliError> {
-    match mode {
-        LoginMode::Standalone | LoginMode::Init => {}
-        LoginMode::New => return Ok(()),
+fn cargo_registry_login_after_new(print: &Print) -> Result<(), CliError> {
+    crate::require_cargo()?;
+
+    print.status("");
+    print.status("Open this page and create or copy a token:");
+    print.status("https://groundhog.dev/crates/me");
+    print.status("");
+
+    let status = Command::new("cargo")
+        .arg("login")
+        .arg("--registry")
+        .arg("groundhog")
+        .arg("--quiet")
+        .status()?;
+    if !status.success() {
+        return Err(CliError::RegistryLoginFailed);
     }
+
+    Ok(())
+}
+
+fn save_executor_credentials_from_prompt(print: &Print) -> Result<(), CliError> {
     let stdin = io::stdin();
 
     print.prompt("Executor username: ")?;
@@ -143,12 +135,6 @@ fn save_executor_credentials_from_prompt(print: &Print, mode: LoginMode) -> Resu
     }
 
     config::save_executor_credentials(&ExecutorCredentials { username, password })?;
-
-    match mode {
-        LoginMode::Standalone => print.status("\nCredentials saved. You're ready to go."),
-        LoginMode::Init => print.status("\nCredentials saved."),
-        LoginMode::New => {}
-    }
     Ok(())
 }
 

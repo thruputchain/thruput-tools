@@ -12,11 +12,6 @@ use serde_json::json;
 use crate::checks::{self, FindingLevel};
 use crate::{CliError, Print};
 
-const RESET: &str = "\x1b[0m";
-const BOLD: &str = "\x1b[1m";
-const DIM: &str = "\x1b[2m";
-const GREEN: &str = "\x1b[32m";
-
 /// Run the `status` diagnostic command.
 pub fn run(
     project_start: &Path,
@@ -83,13 +78,7 @@ pub fn run(
 
 fn render_summary(report: &checks::StatusReport, print: &Print) {
     let items = summary_items(report);
-    if print.is_human_tty() {
-        render_tty_card("Groundhog Status", &items);
-    } else {
-        print.status("Groundhog Status");
-        print.status("");
-        render_plain_items(&items, print);
-    }
+    print.summary_card("Groundhog Status", &items);
 }
 
 fn summary_items(report: &checks::StatusReport) -> Vec<(String, String)> {
@@ -215,44 +204,6 @@ fn profile_resolved(report: &checks::StatusReport) -> bool {
         .findings
         .iter()
         .any(|finding| finding.code == "profile_not_found" || finding.code == "no_project_config")
-}
-
-fn render_plain_items(items: &[(String, String)], print: &Print) {
-    for (label, value) in items {
-        print.status(format_args!("{label}: {value}"));
-    }
-}
-
-fn render_tty_card(title: &str, items: &[(String, String)]) {
-    let label_width = items
-        .iter()
-        .map(|(label, _)| label.chars().count())
-        .max()
-        .unwrap_or(0)
-        .max(10);
-    let value_width = items
-        .iter()
-        .map(|(_, value)| value.chars().count())
-        .max()
-        .unwrap_or(0)
-        .max(18);
-    let inner_width = 1 + label_width + 1 + value_width + 1;
-    let top_fill = inner_width.saturating_sub(title.chars().count() + 2);
-    let fill = line_fill('─', top_fill);
-
-    eprintln!("{GREEN}╭─ {BOLD}{title}{RESET}{GREEN}{fill}╮{RESET}");
-    for (label, value) in items {
-        let label_padding = line_fill(' ', label_width.saturating_sub(label.chars().count()));
-        let value_padding = line_fill(' ', value_width.saturating_sub(value.chars().count()));
-        eprintln!(
-            "{GREEN}│{RESET} {DIM}{label}:{RESET}{label_padding} {value}{value_padding} {GREEN}│{RESET}"
-        );
-    }
-    eprintln!("{GREEN}╰{}╯{RESET}", line_fill('─', inner_width));
-}
-
-fn line_fill(ch: char, len: usize) -> String {
-    std::iter::repeat_n(ch, len).collect()
 }
 
 fn render_findings(report: &checks::StatusReport, print: &Print) {

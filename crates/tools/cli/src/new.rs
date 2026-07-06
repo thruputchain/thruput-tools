@@ -5,11 +5,6 @@ use std::env;
 use std::fs;
 use std::path::Path;
 
-const RESET: &str = "\x1b[0m";
-const BOLD: &str = "\x1b[1m";
-const DIM: &str = "\x1b[2m";
-const GREEN: &str = "\x1b[32m";
-
 /// Create a new contract project in a subdirectory of
 /// the current working directory.
 pub fn run(name: &str, template: &str, cmd: &'static str, print: &Print) -> Result<(), CliError> {
@@ -78,54 +73,13 @@ fn render_project_ready(
         ("Cargo Registry".to_string(), cargo_status.to_string()),
     ];
 
-    if print.is_human_tty() {
-        render_tty_card("Project Ready", &items);
-    } else {
-        print.status("");
-        print.status("Project Ready");
-        print.status("");
-        for (label, value) in &items {
-            print.status(format_args!("{label}: {value}"));
-        }
-    }
-
     print.status("");
-    print.status("Next:");
-    print.status(format_args!("  cd {}", dir.display()));
+    print.summary_card("Project Ready", &items);
+
+    let mut next_steps = vec![format!("cd {}", dir.display())];
     if !matches!(cargo_login, CargoLoginStatus::LoggedIn) {
-        print.status("  cargo login --registry groundhog");
+        next_steps.push("cargo login --registry groundhog".to_string());
     }
-    print.status("  cargo build");
-}
-
-fn render_tty_card(title: &str, items: &[(String, String)]) {
-    let label_width = items
-        .iter()
-        .map(|(label, _)| label.chars().count())
-        .max()
-        .unwrap_or(0)
-        .max(title.chars().count());
-    let value_width = items
-        .iter()
-        .map(|(_, value)| value.chars().count())
-        .max()
-        .unwrap_or(0);
-    let inner_width = (label_width + value_width + 5).max(title.chars().count() + 2);
-    let top_fill = inner_width.saturating_sub(title.chars().count() + 2);
-    eprintln!(
-        "{GREEN}╭─ {BOLD}{title}{RESET}{GREEN}{}╮{RESET}",
-        line_fill('─', top_fill)
-    );
-    for (label, value) in items {
-        let label_padding = line_fill(' ', label_width.saturating_sub(label.chars().count()));
-        let value_padding = line_fill(' ', value_width.saturating_sub(value.chars().count()));
-        eprintln!(
-            "{GREEN}│{RESET} {DIM}{label}:{RESET}{label_padding} {value}{value_padding} {GREEN}│{RESET}"
-        );
-    }
-    eprintln!("{GREEN}╰{}╯{RESET}", line_fill('─', inner_width));
-}
-
-fn line_fill(ch: char, count: usize) -> String {
-    std::iter::repeat_n(ch, count).collect()
+    next_steps.push("cargo build".to_string());
+    print.next_steps(&next_steps);
 }
