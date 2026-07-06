@@ -356,7 +356,7 @@ DEVNODE_BINARY="$(find_hogd_dev_binary)"
 [[ -x "$DEVNODE_BINARY" ]] || die "hog-devnode binary is not executable: $DEVNODE_BINARY"
 
 HOGD_PROTOCOL="$(detect_hogd_protocol "$DEVNODE_BINARY")"
-NODE_ARGS=(--json node --port 0 --hog-devnode-binary "$DEVNODE_BINARY")
+NODE_ARGS=(--json node --profile default --port 0 --hog-devnode-binary "$DEVNODE_BINARY")
 if [[ -n "$HOGD_PROTOCOL" ]]; then
     NODE_ARGS+=(--hogd-protocol "$HOGD_PROTOCOL")
     log "Using hogd protocol override: $HOGD_PROTOCOL"
