@@ -311,6 +311,40 @@ fn node_hogd_dev_binary_json_starts_supervisor() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn node_hogd_dev_profile_write_failure_stops_supervisor() {
+    let fake = fake_hogd_dev_binary();
+    let pid_dir = TempDir::new().unwrap();
+    let config_home = TempDir::new().unwrap();
+    let pid_path = pid_dir.path().join("hogd.pid");
+    let invalid_config_home = config_home.path().join("not-a-directory");
+    std::fs::write(&invalid_config_home, b"not a directory").unwrap();
+
+    let output = groundhog()
+        .arg("--json")
+        .arg("node")
+        .arg("--port")
+        .arg("0")
+        .arg("--hog-devnode-binary")
+        .arg(fake)
+        .env("GROUNDHOG_FAKE_HOGD_DEV_MODE", "ready-with-indexer")
+        .env("GROUNDHOG_FAKE_HOGD_DEV_PID_FILE", &pid_path)
+        .env("XDG_CONFIG_HOME", &invalid_config_home)
+        .output()
+        .expect("bug: groundhog node should run");
+
+    assert!(
+        !output.status.success(),
+        "profile write failure should make groundhog node fail"
+    );
+    let pid = read_pid_file(&pid_path);
+    assert!(
+        wait_pid_gone(pid, Duration::from_secs(2)),
+        "fake hogd-dev pid {pid} still alive after profile write failure"
+    );
+}
+
 #[test]
 fn node_hogd_dev_missing_binary_fails_without_native_fallback() {
     let tmp = TempDir::new().unwrap();

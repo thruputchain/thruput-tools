@@ -233,15 +233,28 @@ async fn run_hogd_dev(
         print.status("Starting Groundhog local node");
     }
     let started = start_local_node(options).await?;
-    let profile_state_result = write_started_local_node_profile_state(
+    let profile_state_path = match write_started_local_node_profile_state(
         &started,
         explicit_profile,
         runtime_artifacts_dir.as_deref(),
-    );
-    let cleanup_profile_state = profile_state_result
-        .as_ref()
-        .ok()
-        .and_then(|_| profile_state_cleanup(&started, runtime_artifacts_dir.as_deref()));
+    ) {
+        Ok(path) => path,
+        Err(error) => {
+            if !print.is_json() {
+                print.warn(format_args!(
+                    "profile was not updated; stopping local node: {error}"
+                ));
+            }
+            if let Err(stop_error) = started.stop().await {
+                return Err(CliError::NodeSupervisor(format!(
+                    "failed to stop local node after profile update failed: {stop_error}; profile update failed: {error}"
+                )));
+            }
+            return Err(error);
+        }
+    };
+    let profile_state_result = Ok(profile_state_path);
+    let cleanup_profile_state = profile_state_cleanup(&started, runtime_artifacts_dir.as_deref());
 
     if print.is_json() {
         print.json(&CommandResult::new(
