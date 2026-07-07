@@ -22,10 +22,16 @@ struct Cli {
     listen: Option<String>,
 }
 
+/// Log filter from `RUST_LOG`, defaulting to `info` so operators get logs
+/// without extra environment setup.
+fn env_filter() -> EnvFilter {
+    EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"))
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
+        .with_env_filter(env_filter())
         .init();
 
     let cli = Cli::parse();
@@ -63,4 +69,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     serve(config).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use serial_test::serial;
+
+    use super::env_filter;
+
+    #[test]
+    #[serial]
+    fn env_filter_defaults_to_info_when_rust_log_unset() {
+        unsafe { std::env::remove_var("RUST_LOG") };
+
+        assert_eq!(env_filter().to_string(), "info");
+    }
+
+    #[test]
+    #[serial]
+    fn env_filter_honors_rust_log_when_set() {
+        unsafe { std::env::set_var("RUST_LOG", "debug") };
+
+        let filter = env_filter().to_string();
+
+        unsafe { std::env::remove_var("RUST_LOG") };
+        assert_eq!(filter, "debug");
+    }
 }

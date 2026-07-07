@@ -146,7 +146,7 @@ fn error_response(status: StatusCode, code: &'static str, message: &'static str)
 }
 
 /// Runtime-only airdrop execution config.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct AirdropRuntimeConfig {
     /// Raw HOG units transferred for each airdrop request.
     pub raw_amount: u128,
@@ -154,6 +154,19 @@ pub struct AirdropRuntimeConfig {
     pub wallet_do_action_entrypoint: ContractEntrypointID,
     /// 32-byte faucet signing secret key.
     pub faucet_secret_key: Zeroizing<[u8; 32]>,
+}
+
+impl std::fmt::Debug for AirdropRuntimeConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AirdropRuntimeConfig")
+            .field("raw_amount", &self.raw_amount)
+            .field(
+                "wallet_do_action_entrypoint",
+                &self.wallet_do_action_entrypoint,
+            )
+            .field("faucet_secret_key", &format_args!("<redacted>"))
+            .finish()
+    }
 }
 
 /// Errors returned while validating runtime airdrop config.
@@ -298,9 +311,25 @@ fn encode_transfer_calldata(
 
 #[cfg(test)]
 mod tests {
+    use groundhog_json_rpc_types::hex::HexBytes;
     use serde_json::json;
 
-    use super::AirdropRequest;
+    use super::{AirdropRequest, AirdropRuntimeConfig};
+
+    #[test]
+    fn airdrop_runtime_config_debug_redacts_faucet_secret_key() {
+        let config = AirdropRuntimeConfig::from_wire(
+            "100000000",
+            HexBytes(vec![0x64; 8]),
+            HexBytes(vec![0xAB; 32]),
+        )
+        .expect("bug: runtime config should validate");
+
+        let debug = format!("{config:?}");
+
+        assert!(debug.contains("faucet_secret_key: <redacted>"), "{debug}");
+        assert!(!debug.contains("171"), "{debug}");
+    }
 
     #[test]
     fn airdrop_request_accepts_future_optional_fields() {
