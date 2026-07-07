@@ -948,6 +948,7 @@ dependencies = [
  "hex",
  "jsonrpsee",
  "libc",
+ "reqwest",
  "rpassword",
  "schemars 1.2.1",
  "serde",
@@ -1015,6 +1016,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "groundhog-faucet"
+version = "0.5.14"
+dependencies = [
+ "async-trait",
+ "axum",
+ "clap",
+ "ed25519-dalek",
+ "groundhog-json-rpc-client",
+ "groundhog-json-rpc-types",
+ "groundhog-signing",
+ "groundhog-xdr 0.19.2-nightly.20260706.g4ab52e3",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "xdr-common",
+ "xdrs",
+ "zeroize",
+]
+
+[[package]]
 name = "groundhog-json-rpc-api"
 version = "0.5.14"
 dependencies = [
@@ -1036,6 +1064,7 @@ dependencies = [
  "jsonrpsee",
  "serde",
  "serde_json",
+ "thiserror 2.0.18",
  "tokio",
 ]
 
@@ -2675,7 +2704,9 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "encoding_rs",
+ "futures-channel",
  "futures-core",
+ "futures-util",
  "h2",
  "http",
  "http-body",

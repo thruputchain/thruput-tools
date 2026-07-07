@@ -38,10 +38,6 @@ pub fn format_tx_hash(tx_hash: &TxHash) -> String {
         .to_string()
 }
 
-pub fn poll_exhausted_error() -> CliError {
-    CliError::ReceiptPollingExhausted
-}
-
 pub async fn resolve_block_expiry_height(rpc_url: &str) -> Result<i64, CliError> {
     use groundhog_json_rpc_client::{GroundhogApiClient, HttpClientBuilder};
 
@@ -62,7 +58,9 @@ pub async fn submit_and_poll(
     rpc_url: &str,
     tx_hex: &str,
 ) -> Result<(TxHash, TransactionReceipt), CliError> {
-    submit_and_poll_with_tx_hash(rpc_url, tx_hex, |_| {}).await
+    groundhog_json_rpc_client::submit_and_poll(rpc_url, tx_hex)
+        .await
+        .map_err(map_submit_and_poll_error)
 }
 
 pub fn submit_and_poll_blocking(
@@ -88,48 +86,28 @@ pub fn ensure_tx_success(
     )))
 }
 
-pub async fn submit_and_poll_with_tx_hash(
-    rpc_url: &str,
-    tx_hex: &str,
-    on_tx_hash: impl FnOnce(&TxHash),
-) -> Result<(TxHash, TransactionReceipt), CliError> {
-    use groundhog_json_rpc_client::{GroundhogApiClient, HttpClientBuilder};
-
-    let client = HttpClientBuilder::default()
-        .build(rpc_url)
-        .map_err(|e| CliError::RpcConnect(format!("{rpc_url}: {e}")))?;
-
-    let tx_hash = client
-        .send_raw_transaction(tx_hex.to_string())
-        .await
-        .map_err(|e| CliError::RpcMethodFailed {
-            method: "sendRawTransaction",
-            message: e.to_string(),
-        })?;
-    on_tx_hash(&tx_hash);
-
-    let max_attempts = 30;
-    let poll_interval = std::time::Duration::from_secs(1);
-    for attempt in 0..max_attempts {
-        match client.get_transaction_receipt(tx_hash).await {
-            Ok(Some(receipt)) => return Ok((tx_hash, receipt)),
-            Ok(None) if attempt < max_attempts - 1 => {
-                tokio::time::sleep(poll_interval).await;
+fn map_submit_and_poll_error(error: groundhog_json_rpc_client::SubmitAndPollError) -> CliError {
+    match error {
+        groundhog_json_rpc_client::SubmitAndPollError::Connect { rpc_url, source } => {
+            CliError::RpcConnect(format!("{rpc_url}: {source}"))
+        }
+        groundhog_json_rpc_client::SubmitAndPollError::SendRawTransaction(error) => {
+            CliError::RpcMethodFailed {
+                method: "sendRawTransaction",
+                message: error.to_string(),
             }
-            Ok(None) => {
-                return Err(CliError::ReceiptTimeout {
-                    tx_hash: format_tx_hash(&tx_hash),
-                    seconds: max_attempts,
-                });
+        }
+        groundhog_json_rpc_client::SubmitAndPollError::GetTransactionReceipt(error) => {
+            CliError::RpcMethodFailed {
+                method: "getTransactionReceipt",
+                message: error.to_string(),
             }
-            Err(e) => {
-                return Err(CliError::RpcMethodFailed {
-                    method: "getTransactionReceipt",
-                    message: e.to_string(),
-                });
+        }
+        groundhog_json_rpc_client::SubmitAndPollError::ReceiptTimeout { tx_hash, attempts } => {
+            CliError::ReceiptTimeout {
+                tx_hash: format_tx_hash(&tx_hash),
+                seconds: u64::try_from(attempts).unwrap_or(u64::MAX),
             }
         }
     }
-
-    Err(poll_exhausted_error())
 }

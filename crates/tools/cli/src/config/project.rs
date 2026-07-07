@@ -15,6 +15,8 @@ pub struct ProjectProfile {
     #[serde(default)]
     pub rpc_url: Option<String>,
     #[serde(default)]
+    pub faucet_url: Option<String>,
+    #[serde(default)]
     pub default_key: Option<String>,
     #[serde(default)]
     pub runtime_manifest: Option<PathBuf>,
@@ -35,6 +37,7 @@ struct ProjectConfigFile {
 pub struct ResolvedProfile {
     pub name: String,
     pub rpc_url: Option<String>,
+    pub faucet_url: Option<String>,
     #[serde(skip)]
     #[schemars(skip)]
     pub rpc_url_cli_override: bool,
@@ -317,6 +320,7 @@ pub fn resolve_profile(start: &Path, explicit: Option<&str>) -> Result<ResolvedP
     Ok(ResolvedProfile {
         name,
         rpc_url: profile.rpc_url,
+        faucet_url: profile.faucet_url,
         rpc_url_cli_override: false,
         default_key: profile.default_key,
         runtime_manifest: profile.runtime_manifest,

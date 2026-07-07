@@ -52,6 +52,11 @@ fn scaffold_counter_creates_expected_files() {
     let toolchain = fs::read_to_string(dir.join("rust-toolchain.toml")).unwrap();
     assert!(toolchain.contains("riscv32im-unknown-none-elf"));
 
+    let groundhog = fs::read_to_string(dir.join("groundhog.toml")).unwrap();
+    assert!(groundhog.contains("[profile.devnet]"));
+    assert!(groundhog.contains(r#"rpc_url = "http://127.0.0.1:9545""#));
+    assert!(groundhog.contains(r#"faucet_url = "http://127.0.0.1:8081""#));
+
     let lib = fs::read_to_string(dir.join("src/lib.rs")).unwrap();
     assert!(lib.contains("mod implementation"));
 

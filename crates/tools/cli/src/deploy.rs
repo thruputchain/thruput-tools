@@ -282,6 +282,7 @@ pub(crate) fn prepare_deploy_for_rpc_with_manifest(
         name: "integration".into(),
         rpc_url: Some(rpc_url.into()),
         rpc_url_cli_override: false,
+        faucet_url: None,
         default_key: Some(key_name.into()),
         runtime_manifest,
         runtime_manifest_cli_override: false,

@@ -11,6 +11,7 @@ mod schema_generation {
     use crate::events::{
         EmittedEvent, EventFilter, EventPage, EventQuery, EventTopicFilter, IdentifiedEvent,
     };
+    use crate::network_descriptor::NetworkDescriptor;
     use crate::receipt::{ExecStatus, TransactionReceipt};
     use crate::state::{StorageItemInfo, StorageItemRead};
     use crate::transaction::{
@@ -59,6 +60,7 @@ mod schema_generation {
 
         // Manifest types
         let _ = schema_for!(BootstrapManifest);
+        let _ = schema_for!(NetworkDescriptor);
     }
 }
 
@@ -72,6 +74,10 @@ mod wire_format {
         EventTopicFilter, IdentifiedEvent, IterationOrder, PaginationCursor, TopicList,
     };
     use crate::hex::{Hex0x, HexBytes, Topic};
+    use crate::network_descriptor::{
+        FaucetDescriptor, NETWORK_DESCRIPTOR_SCHEMA_VERSION, NativeHogDescriptor,
+        NetworkDescriptor, NetworkDescriptorEndpoints, WalletCreateDescriptor,
+    };
     use crate::receipt::{ExecStatus, TransactionReceipt};
     use crate::state::StorageItemInfo;
     use crate::transaction::{
@@ -89,6 +95,31 @@ mod wire_format {
         Hex0x(groundhog_xdr::types::ContractAddress::from([0u8; 32]))
     }
 
+    fn test_network_descriptor() -> NetworkDescriptor {
+        NetworkDescriptor {
+            schema_version: NETWORK_DESCRIPTOR_SCHEMA_VERSION,
+            kind: "groundhog-network".into(),
+            network_id: "devnet-preview".into(),
+            protocol: "x23".into(),
+            genesis_hash: zero_hash(),
+            endpoints: NetworkDescriptorEndpoints {
+                rpc_url: "https://rpc.devnet.example".into(),
+            },
+            native_hog: NativeHogDescriptor {
+                token_address: zero_address(),
+                decimals: 7,
+                transfer_entrypoint: HexBytes(vec![0x63, 0x28, 0x5b, 0x35, 0x23, 0xf9, 0xdc, 0x3f]),
+            },
+            faucet: FaucetDescriptor {
+                wallet_address: zero_address(),
+            },
+            wallet_create: WalletCreateDescriptor {
+                prefund_raw_amount: "100000000".into(),
+                wallet_contract_hash: zero_hash(),
+            },
+        }
+    }
+
     #[test]
     fn chain_tip_wire_format() {
         let tip = ChainTip {
@@ -101,6 +132,44 @@ mod wire_format {
         assert_eq!(v["blockHash"].as_str().unwrap().len(), 66); // 0x + 64
         // Verify camelCase
         assert!(v.get("block_hash").is_none());
+    }
+
+    #[test]
+    fn network_descriptor_wire_format_is_public_and_camel_case() {
+        let descriptor = test_network_descriptor();
+
+        let value: Value = serde_json::to_value(&descriptor).unwrap();
+
+        assert_eq!(value["schemaVersion"], NETWORK_DESCRIPTOR_SCHEMA_VERSION);
+        assert_eq!(value["kind"], "groundhog-network");
+        assert_eq!(value["networkId"], "devnet-preview");
+        assert_eq!(value["endpoints"]["rpcUrl"], "https://rpc.devnet.example");
+        assert!(value["endpoints"].get("faucetUrl").is_none());
+        assert_eq!(value["nativeHog"]["decimals"], 7);
+        assert_eq!(
+            value["nativeHog"]["transferEntrypoint"],
+            "0x63285b3523f9dc3f"
+        );
+        assert_eq!(value["walletCreate"]["prefundRawAmount"], "100000000");
+
+        assert!(value.get("schema_version").is_none());
+        assert!(value.get("bootstrapAccountDerivation").is_none());
+        assert!(value.get("bootstrapAccounts").is_none());
+        assert!(value.get("seed").is_none());
+        assert!(value.get("privateKey").is_none());
+        assert!(value.get("bootstrap").is_none());
+
+        let encoded = serde_json::to_string(&descriptor).unwrap();
+        assert!(!encoded.contains("bootstrapAccountDerivation"));
+        assert!(!encoded.contains("bootstrapAccounts"));
+        assert!(!encoded.contains("privateKey"));
+        assert!(!encoded.contains("seed"));
+        assert!(!encoded.contains("createWalletEntrypoint"));
+        assert!(!encoded.contains("doActionEntrypoint"));
+        assert!(!encoded.contains("deployEntrypoint"));
+
+        let roundtrip: NetworkDescriptor = serde_json::from_value(value).unwrap();
+        assert_eq!(roundtrip, descriptor);
     }
 
     #[test]

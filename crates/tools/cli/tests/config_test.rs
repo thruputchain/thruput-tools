@@ -155,6 +155,7 @@ rpc_url = "http://localhost:9545"
 
 [profile.testnet]
 rpc_url = "https://testnet.groundhog.network"
+faucet_url = "https://faucet.testnet.groundhog.network"
 default_key = "bob"
 
 [profile.testnet.contracts]
@@ -169,6 +170,10 @@ greeter = "0xbeef"
     assert_eq!(
         profile.rpc_url.as_deref(),
         Some("https://testnet.groundhog.network")
+    );
+    assert_eq!(
+        profile.faucet_url.as_deref(),
+        Some("https://faucet.testnet.groundhog.network")
     );
     assert_eq!(profile.default_key.as_deref(), Some("bob"));
     assert_eq!(

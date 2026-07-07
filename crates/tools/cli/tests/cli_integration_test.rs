@@ -1602,7 +1602,10 @@ fn deploy_dry_run_json_outputs_prepared_transaction() {
     let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
     std::fs::write(
         project.join("groundhog.toml"),
-        format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
+            "aa".repeat(32)
+        ),
     )
     .unwrap();
 
@@ -1684,8 +1687,8 @@ fn wallet_create_dry_run_json_outputs_prepared_transaction() {
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
 
-    let sponsor_wallet = advertised_dev_wallet_address(0);
-    let manifest_path = write_runtime_manifest(&project, 0, &sponsor_wallet, None);
+    let faucet_wallet = advertised_dev_wallet_address(0);
+    let manifest_path = write_runtime_manifest(&project, 0, &faucet_wallet, None);
     let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
     std::fs::write(project.join("dev-wallet.wasm"), b"dev-wallet").unwrap();
     std::fs::write(
@@ -1729,13 +1732,14 @@ fn wallet_create_dry_run_json_outputs_prepared_transaction() {
         stdout["data"]["schemaVersion"],
         groundhog_cli::wallet::WALLET_CREATE_JSON_SCHEMA_VERSION
     );
-    assert_eq!(stdout["data"]["schemaVersion"], 2);
+    assert_eq!(stdout["data"]["schemaVersion"], 3);
     assert_eq!(stdout["data"]["dry_run"], true);
     assert_eq!(stdout["data"]["submitted"], false);
     assert_eq!(stdout["data"]["name"], "trading");
     assert_eq!(stdout["data"]["key"], "dev-1");
-    assert_eq!(stdout["data"]["sponsor"]["key"], "dev-0");
-    assert_eq!(stdout["data"]["sponsor"]["role"], "local_user");
+    assert_eq!(stdout["data"]["faucet"]["key"], "dev-0");
+    assert_eq!(stdout["data"]["faucet"]["role"], "local_user");
+    assert_eq!(stdout["data"]["prefund_raw_amount"], "100000000");
     assert!(stdout["data"]["wallet"].as_str().unwrap().starts_with("0x"));
     assert!(
         stdout["data"]["owner_public_key"]
@@ -1747,20 +1751,8 @@ fn wallet_create_dry_run_json_outputs_prepared_transaction() {
         std::fs::canonicalize(stdout["data"]["artifact_path"].as_str().unwrap()).unwrap(),
         std::fs::canonicalize(project.join("dev-wallet.wasm")).unwrap()
     );
-    assert!(
-        stdout["data"]["signed_tx"]
-            .as_str()
-            .unwrap()
-            .starts_with("0x")
-    );
-    assert_eq!(
-        signed_tx_invoked_address(stdout["data"]["signed_tx"].as_str().unwrap()),
-        sponsor_wallet
-    );
-    assert_eq!(
-        signed_tx_deploy_contract_kind(stdout["data"]["signed_tx"].as_str().unwrap()),
-        "wasm"
-    );
+    assert!(stdout["data"].get("signed_prefund_tx").is_none());
+    assert!(stdout["data"].get("signed_tx").is_none());
 }
 
 #[test]
@@ -1769,8 +1761,8 @@ fn wallet_create_dry_run_defaults_name_to_key() {
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
 
-    let sponsor_wallet = advertised_dev_wallet_address(0);
-    let manifest_path = write_runtime_manifest(&project, 0, &sponsor_wallet, None);
+    let faucet_wallet = advertised_dev_wallet_address(0);
+    let manifest_path = write_runtime_manifest(&project, 0, &faucet_wallet, None);
     let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
     std::fs::write(project.join("dev-wallet.wasm"), b"dev-wallet").unwrap();
     std::fs::write(
@@ -1804,14 +1796,66 @@ fn wallet_create_dry_run_defaults_name_to_key() {
         stdout["data"]["schemaVersion"],
         groundhog_cli::wallet::WALLET_CREATE_JSON_SCHEMA_VERSION
     );
-    assert_eq!(stdout["data"]["schemaVersion"], 2);
+    assert_eq!(stdout["data"]["schemaVersion"], 3);
     assert_eq!(stdout["data"]["dry_run"], true);
     assert_eq!(stdout["data"]["submitted"], false);
     assert_eq!(stdout["data"]["name"], "dev-1");
     assert_eq!(stdout["data"]["key"], "dev-1");
+    assert_eq!(stdout["data"]["prefund_raw_amount"], "100000000");
+    assert!(stdout["data"].get("signed_prefund_tx").is_none());
+    assert!(stdout["data"].get("signed_tx").is_none());
+}
+
+#[test]
+fn wallet_create_remote_dry_run_does_not_call_faucet() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(
+        project.join("groundhog.toml"),
+        "[profile.devnet]\nrpc_url = \"http://127.0.0.1:9545\"\nfaucet_url = \"http://127.0.0.1:9\"\n",
+    )
+    .unwrap();
+
+    let output = groundhog()
+        .args([
+            "--json",
+            "wallet",
+            "create",
+            "--key",
+            "alice",
+            "--profile",
+            "devnet",
+            "--dry-run",
+        ])
+        .current_dir(&project)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["ok"], true);
+    assert_eq!(stdout["command"], "wallet.create");
+    assert_eq!(stdout["data"]["dry_run"], true);
+    assert_eq!(stdout["data"]["submitted"], false);
+    assert_eq!(stdout["data"]["mode"], "remote");
+    assert_eq!(stdout["data"]["key"], "alice");
+    assert_eq!(stdout["data"]["name"], "alice");
+    assert_eq!(stdout["data"]["wallet"], serde_json::Value::Null);
     assert_eq!(
-        signed_tx_invoked_address(stdout["data"]["signed_tx"].as_str().unwrap()),
-        sponsor_wallet
+        stdout["data"]["planned_requests"],
+        serde_json::json!([
+            "GET /v1/network",
+            "POST /v1/create-wallet/prepare",
+            "POST /v1/airdrop",
+            "POST /v1/create-wallet"
+        ])
     );
 }
 
@@ -1912,16 +1956,7 @@ fn airdrop_dry_run_json_outputs_prepared_transaction() {
     assert_eq!(stdout["data"]["raw_amount"], "12500000");
     assert_eq!(stdout["data"]["faucet"]["key"], "dev-0");
     assert_eq!(stdout["data"]["faucet"]["role"], "local_user");
-    assert!(
-        stdout["data"]["signed_tx"]
-            .as_str()
-            .unwrap()
-            .starts_with("0x")
-    );
-    assert_eq!(
-        signed_tx_invoked_address(stdout["data"]["signed_tx"].as_str().unwrap()),
-        faucet_wallet
-    );
+    assert!(stdout["data"].get("signed_tx").is_none());
 }
 
 #[test]
@@ -1934,7 +1969,10 @@ fn deploy_dry_run_json_accepts_rv32_artifact() {
     let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
     std::fs::write(
         project.join("groundhog.toml"),
-        format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
+            "aa".repeat(32)
+        ),
     )
     .unwrap();
 
@@ -2009,7 +2047,10 @@ fn deploy_dry_run_auto_resolves_rv32_artifact_by_default() {
     let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
     std::fs::write(
         project.join("groundhog.toml"),
-        format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
+            "aa".repeat(32)
+        ),
     )
     .unwrap();
 
@@ -2507,7 +2548,10 @@ fn deploy_live_json_submits_and_returns_receipt() {
     let (rpc_url, rpc_server) = spawn_deploy_rpc(42);
     std::fs::write(
         project.join("groundhog.toml"),
-        format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
+            "aa".repeat(32)
+        ),
     )
     .unwrap();
 
@@ -2582,7 +2626,10 @@ fn deploy_live_json_includes_transaction_detail_when_dev_method_exists() {
         spawn_deploy_rpc_with_detail(42, DevDetailRpcResponse::Result(sample_detail_result(42)));
     std::fs::write(
         project.join("groundhog.toml"),
-        format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
+            "aa".repeat(32)
+        ),
     )
     .unwrap();
 
@@ -2688,7 +2735,10 @@ fn view_json_returns_raw_output() {
     let (rpc_url, rpc_server) = spawn_view_rpc(&address, entrypoint, calldata);
     std::fs::write(
         project.join("groundhog.toml"),
-        format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
+            "aa".repeat(32)
+        ),
     )
     .unwrap();
 
@@ -2840,7 +2890,10 @@ fn view_json_surfaces_abort_as_success_body() {
     );
     std::fs::write(
         project.join("groundhog.toml"),
-        format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
+            "aa".repeat(32)
+        ),
     )
     .unwrap();
 
@@ -2883,7 +2936,10 @@ fn view_json_surfaces_fault_as_success_body() {
     );
     std::fs::write(
         project.join("groundhog.toml"),
-        format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
+            "aa".repeat(32)
+        ),
     )
     .unwrap();
 
@@ -2929,7 +2985,10 @@ fn view_human_prints_event_details() {
     );
     std::fs::write(
         project.join("groundhog.toml"),
-        format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
+            "aa".repeat(32)
+        ),
     )
     .unwrap();
 
@@ -2967,7 +3026,10 @@ fn storage_json_reads_latest_item() {
     let (rpc_url, rpc_server) = spawn_storage_rpc(&address, &key);
     std::fs::write(
         project.join("groundhog.toml"),
-        format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
+            "aa".repeat(32)
+        ),
     )
     .unwrap();
 
@@ -3264,7 +3326,10 @@ fn call_dry_run_json_outputs_prepared_transaction() {
     let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
     std::fs::write(
         project.join("groundhog.toml"),
-        format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
+            "aa".repeat(32)
+        ),
     )
     .unwrap();
 
@@ -3386,7 +3451,10 @@ fn call_live_human_appends_transaction_detail_sections() {
     );
     std::fs::write(
         project.join("groundhog.toml"),
-        format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
+            "aa".repeat(32)
+        ),
     )
     .unwrap();
 
@@ -3442,7 +3510,10 @@ fn call_live_human_warns_when_transaction_detail_fails() {
     );
     std::fs::write(
         project.join("groundhog.toml"),
-        format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
+            "aa".repeat(32)
+        ),
     )
     .unwrap();
 
@@ -3559,7 +3630,10 @@ fn call_live_json_marks_legacy_default_wallet_entrypoint_without_manifest() {
     );
     std::fs::write(
         project.join("groundhog.toml"),
-        format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
+            "aa".repeat(32)
+        ),
     )
     .unwrap();
 

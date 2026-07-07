@@ -5,6 +5,7 @@ pub mod dev;
 pub mod error;
 pub mod events;
 pub mod hex;
+pub mod network_descriptor;
 pub mod receipt;
 pub mod runtime_manifest;
 pub mod state;

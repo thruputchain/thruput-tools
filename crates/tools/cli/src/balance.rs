@@ -35,13 +35,14 @@ pub fn run(
     let rpc_url = resolved_profile
         .rpc_url
         .as_deref()
-        .ok_or(CliError::MissingRpcUrl)?;
+        .ok_or(CliError::MissingRpcUrl)?
+        .to_owned();
 
     let address_hex = resolve_balance_target(&resolved_profile, target)?;
     let address = ContractAddress::from(parse_contract_address(&address_hex)?);
 
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
-    let balance = rt.block_on(fetch_balance(rpc_url, address))?;
+    let balance = rt.block_on(fetch_balance(&rpc_url, address))?;
     let raw_balance = parse_raw_balance(&balance.raw_balance)?;
     let balance_hog = format_hog_amount(raw_balance);
 
@@ -115,6 +116,7 @@ mod tests {
             name: "default".into(),
             rpc_url: None,
             rpc_url_cli_override: false,
+            faucet_url: None,
             default_key: None,
             runtime_manifest: None,
             runtime_manifest_cli_override: false,
@@ -137,6 +139,7 @@ mod tests {
             name: "default".into(),
             rpc_url: None,
             rpc_url_cli_override: false,
+            faucet_url: None,
             default_key: None,
             runtime_manifest: None,
             runtime_manifest_cli_override: false,
@@ -160,6 +163,7 @@ mod tests {
             name: "default".into(),
             rpc_url: None,
             rpc_url_cli_override: false,
+            faucet_url: None,
             default_key: None,
             runtime_manifest: None,
             runtime_manifest_cli_override: false,

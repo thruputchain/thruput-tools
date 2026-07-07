@@ -7,6 +7,12 @@ faucet service), `hogd` (bootstrap-tool and dev-wallet changes now;
 `kPubkeySignature` later), `chuckd` (public descriptor / manifest
 sanitization), and `ops` (genesis faucet account, faucet deploy, key custody).
 
+**Update:** The CLI direction changed during implementation. Hosted Devnet is a
+normal `[profile.devnet]` profile with explicit `rpc_url` and `faucet_url`, not
+a separate first-class `--network` abstraction. The public descriptor remains
+useful for faucet/wallet-create metadata, but the CLI should not use it to
+discover the profile RPC URL.
+
 **Companions:**
 
 - [`../../gateway/runtime-manifest.md`](../../gateway/runtime-manifest.md) —
@@ -17,8 +23,8 @@ sanitization), and `ops` (genesis faucet account, faucet deploy, key custody).
 
 ## Goal
 
-Make a deployed "devnet" usable from the `groundhog` CLI: pick a network
-(`--network devnet|local|testnet` or `--rpc-url`), get funded, create a wallet,
+Make a deployed "devnet" usable from the `groundhog` CLI: select a profile
+(`--profile devnet`) or override `--rpc-url`, get funded, create a wallet,
 deploy, and call — **without publishing any bootstrap account private keys**.
 
 Today every CLI write path (`wallet create`, `airdrop`, `deploy`, `call`)
@@ -98,39 +104,40 @@ These were confirmed by reading the backend, not inferred from names.
 | D1 | **Faucet key = dedicated custom-key account in genesis.** | Keeps the faucet key private (ops-held, not seed-derived) without abandoning the published seed for local dev. Needs a contained `hog-hosted-bootstrap` change (constraint 6). |
 | D2 | **Prefund-then-sponsor now; `kPubkeySignature` is a separate later track.** | The mainnet-like UX is "fund the future wallet address, then deploy/init it." Devnet uses the faucet for funding and a faucet-held sponsor for deploy/init; mainnet later swaps the faucet funding step for an exchange/bridge/user transfer. The pubkey-account path is a real backend project gated on a replay-model decision (see §7), not "fill in the arm." |
 | D3 | **Faucet exposed as a standalone HTTP service.** | Keeps the secret key out of the public RPC/gateway (which is a stateless read/submit front per gateway conventions), and lets ops deploy / rotate / rate-limit it independently. |
-| D4 | **Networks are first-class; profiles layer on top.** | A network is "which endpoint + descriptor + faucet"; a profile is the user's working context. Conflating them (today's `--profile` alias `network`) blocks zero-config `--network devnet`. |
+| D4 | **Superseded: networks are first-class; profiles layer on top.** | Implementation moved to plain profiles. A profile now carries explicit `rpc_url` and optional `faucet_url`; there is no separate `--network` abstraction. |
 | D5 | **Descriptor fetched from the faucet/gateway and cached locally.** | The nightly devnet re-genesis changes genesis/dev-wallet hashes; a fetched descriptor always matches the live deployment, where baked-in values would go stale. |
 
 ## Architecture
 
-### 1. Network model & flag precedence
+### 1. Profile model & flag precedence
 
-Introduce built-in **networks**, distinct from profiles:
+This section supersedes the earlier first-class network proposal. Hosted Devnet
+is a normal profile, not a separate `--network` selector.
 
-| Network | rpc default | faucet | bootstrap source |
-|---|---|---|---|
-| `local` | `http://127.0.0.1:9545` | none (local sponsor via `groundhog node`) | local runtime manifest (full, with seed — acceptable, it is local) |
-| `devnet` | `http://44.236.180.135:8545` (DNS name later) | `https://faucet.devnet…` | public network descriptor (no secrets) |
-| `testnet` | TBD | TBD | public network descriptor |
+A **profile** (`[profile.<name>]` in `groundhog.toml`) holds `rpc_url`, optional
+`faucet_url`, `default_key`, saved `contracts`, and saved `wallets`.
 
-A **profile** (`[profile.<name>]` in `groundhog.toml`) holds `default_key`,
-saved `contracts`, saved `wallets`, and a target `network = "devnet"`, with
-optional `rpc_url` / `faucet_url` overrides.
+Example:
+
+```toml
+[profile.devnet]
+rpc_url = "https://rpc.devnet.example"
+faucet_url = "https://faucet.devnet.example"
+default_key = "alice"
+```
 
 Resolution precedence (high → low):
 
-1. CLI flags: `--rpc-url`, `--faucet-url`, `--runtime-manifest`, `--network`.
-2. Env: `GROUNDHOG_RPC_URL`, `GROUNDHOG_FAUCET_URL`, `GROUNDHOG_NETWORK`.
+1. CLI flags: `--rpc-url`, `--runtime-manifest`.
+2. Env: `GROUNDHOG_RPC_URL`, `GROUNDHOG_RUNTIME_MANIFEST`, `GROUNDHOG_PROFILE`.
 3. Profile (`groundhog.toml`).
-4. Built-in network defaults.
+4. Built-in defaults.
 
-`--network devnet` works with no `groundhog.toml`. The current
-`--profile` alias `network` is retired (with a deprecation shim for one
-release): `--network` selects a network; `--profile` selects context.
+Profile capabilities select behavior:
 
-The existing loopback gate in `runtime_manifest.rs`
-(`profile_rpc_allows_local_node_state`) generalizes to: **non-`local` networks
-never attempt seed/dev-N derivation** — bootstrap goes to the faucet.
+- profiles with local runtime-manifest/bootstrap state use local sponsor flows;
+- profiles with `faucet_url` use hosted faucet flows;
+- profiles with only `rpc_url` are RPC-only until self-funded wallet creation exists.
 
 ### 2. Public network descriptor
 
@@ -180,17 +187,17 @@ A new small Rust service (own crate under `crates/`, reusing
 `groundhog-signing` + `json-rpc-client`) holding the genesis-funded
 faucet/sponsor wallet key (loaded from AWS Secrets Manager, never an argv):
 
-- `POST /v1/createWallet/prepare { ownerPubkey, deployNonce,
+- `POST /v1/create-wallet/prepare { ownerPubkey, deployNonce,
   walletContractHash, walletAddress, networkId, genesisHash, clientNonce,
   ownerSig }` → validates and reserves a wallet-create attempt without
   submitting a transaction. This endpoint verifies the same signed
-  wallet-create intent as `/v1/createWallet`, checks the `createWallet` quotas,
+  wallet-create intent as `/v1/create-wallet`, checks the `createWallet` quotas,
   address derivation, `networkId`, `genesisHash`, and dev-wallet hash, and
   returns `{ walletAddress, prefundRawAmount, preparedUntil }`. The CLI calls
   this before spending the pre-fund airdrop so an exhausted create quota cannot
   burn faucet funds for undeployable wallet addresses. It is idempotent on
   `(networkId, genesisHash, ownerPubkey, clientNonce)`.
-- `POST /v1/createWallet { ownerPubkey, deployNonce, walletContractHash,
+- `POST /v1/create-wallet { ownerPubkey, deployNonce, walletContractHash,
   walletAddress, networkId, genesisHash, clientNonce, ownerSig }` → sponsored
   `create_wallet` via the faucet's wallet → waits for receipt →
   `{ walletAddress, txHash, height }`.
@@ -225,7 +232,7 @@ faucet/sponsor wallet key (loaded from AWS Secrets Manager, never an argv):
 - `createWallet`: per-IP and per-pubkey rate limiting keyed on `ownerPubkey`.
   `airdrop`: per-IP and per-address rate limiting keyed on recipient `address`.
   Wallet-create pre-fund airdrops are issued only after
-  `/v1/createWallet/prepare` has accepted and reserved the create quota.
+  `/v1/create-wallet/prepare` has accepted and reserved the create quota.
   Bounded amounts; structured-JSON errors.
 
 The service is the only component holding the faucet key. It submits through the
@@ -277,7 +284,7 @@ endpoint) and caches it.
   or `walletContractHash` changes.
 
   It then prepares and funds that future address:
-  - on devnet, `POST /v1/createWallet/prepare { ownerPubkey, deployNonce,
+  - on devnet, `POST /v1/create-wallet/prepare { ownerPubkey, deployNonce,
     walletContractHash, walletAddress, networkId, genesisHash, clientNonce:
     createWalletClientNonce, ownerSig }`, followed by
     `POST /v1/airdrop { address: walletAddress, rawAmount:
@@ -287,7 +294,7 @@ endpoint) and caches it.
     for an exchange/bridge/user transfer before continuing.
 
   After funding, the CLI reuses the same proof-of-possession and
-  `POST /v1/createWallet { ownerPubkey, deployNonce, walletContractHash,
+  `POST /v1/create-wallet { ownerPubkey, deployNonce, walletContractHash,
   walletAddress, networkId, genesisHash, clientNonce: createWalletClientNonce,
   ownerSig }` to trigger the sponsored deploy/init transaction; it saves the
   returned address under the key's wallet name in `[profile].wallets` and marks
@@ -376,12 +383,13 @@ wallet address.
 
 ## Phasing
 
-- **P0 — Network UX foundation (groundhog-rpc only).** First-class networks,
-  precedence chain, `--rpc-url`/`--faucet-url`/`--network`, the distinct public
-  descriptor type + fetch/cache/ETag refresh, the manifest/descriptor type
-  separation, and the **general** saved-wallet binding fix (local + remote) so
-  read + signed-through-wallet flows cohere against any node. Faucet not yet
-  required (can target an operator-funded wallet manually for testing).
+- **P0 — Profile UX foundation (groundhog-rpc only).** Plain profiles with
+  explicit `rpc_url` and optional `faucet_url`, `--profile` selection,
+  `--rpc-url`/`--runtime-manifest` overrides, the distinct public descriptor
+  type for faucet metadata, the manifest/descriptor type separation, and the
+  **general** saved-wallet binding fix (local + remote) so read +
+  signed-through-wallet flows cohere against any node. Faucet not yet required
+  (can target an operator-funded wallet manually for testing).
 - **P1 — Usable faucet.** `hog-hosted-bootstrap` custom faucet/reserve wallet
   allocation (supplied pubkeys); chuckd's public-descriptor / sanitization path
   (emit a sanitized descriptor, or leave descriptor serving to the faucet); the

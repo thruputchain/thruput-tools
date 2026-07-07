@@ -1,0 +1,35 @@
+# Example local faucet config. Copy to crates/faucet/faucet.toml and replace
+# placeholder network identity values with values from your local/devnet setup.
+listen_address = "127.0.0.1:8081"
+# Static UIs hosted on a different origin must be allowed here.
+cors_allowed_origins = ["http://127.0.0.1:5173"]
+
+[network]
+network_id = "local-devnet"
+protocol = "x23"
+genesis_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"
+
+[network.endpoints]
+rpc_url = "http://127.0.0.1:9545"
+
+[network.native_hog]
+token_address = "0x0000000000000000000000000000000000000000000000000000000000000001"
+decimals = 7
+transfer_entrypoint = "0x63285b3523f9dc3f"
+
+[network.faucet]
+wallet_address = "0x0000000000000000000000000000000000000000000000000000000000000000"
+
+[network.wallet_create]
+prefund_raw_amount = "100000000"
+wallet_contract_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"
+
+[airdrop]
+raw_amount = "100000000"
+wallet_do_action_entrypoint = "0x646f416374696f6e"
+# Placeholder only. Use a real faucet secret in local/private deployment config.
+faucet_secret_key = "0x1111111111111111111111111111111111111111111111111111111111111111"
+
+[wallet_create]
+create_wallet_entrypoint = "0x6372656174655761"
+wallet_artifact_path = "contracts/dev_wallet.rv32a"

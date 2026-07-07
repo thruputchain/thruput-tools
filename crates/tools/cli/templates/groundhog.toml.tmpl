@@ -6,9 +6,11 @@ default_key = "dev-0"
 [profile.default.contracts]
 # my-contract = "0x0000000000000000000000000000000000000000000000000000000000000000"
 
-[profile.testnet]
-rpc_url = "https://testnet.groundhog.network"
-default_key = "default"
+[profile.devnet]
+rpc_url = "http://127.0.0.1:9545"
+faucet_url = "http://127.0.0.1:8081"
+# Set after `groundhog keys generate <name>` + `groundhog wallet create --key <name>`.
+# default_key = "alice"
 
-[profile.testnet.contracts]
+[profile.devnet.contracts]
 # my-contract = "0x0000000000000000000000000000000000000000000000000000000000000000"

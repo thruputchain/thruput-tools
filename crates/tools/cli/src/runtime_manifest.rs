@@ -48,7 +48,7 @@ pub(crate) fn load_configured_runtime_manifest(
     load_runtime_manifest(&path, key_name).map(Some)
 }
 
-fn configured_runtime_manifest_path(
+pub(crate) fn configured_runtime_manifest_path(
     profile: &ResolvedProfile,
 ) -> Result<Option<PathBuf>, CliError> {
     if profile.runtime_manifest_cli_override {
@@ -440,6 +440,7 @@ mod tests {
             name: "default".to_string(),
             rpc_url: Some("https://testnet.groundhog.io".to_string()),
             rpc_url_cli_override: false,
+            faucet_url: None,
             default_key: Some("dev-0".to_string()),
             runtime_manifest: None,
             runtime_manifest_cli_override: false,
@@ -479,6 +480,7 @@ mod tests {
             name: "default".to_string(),
             rpc_url: None,
             rpc_url_cli_override: false,
+            faucet_url: None,
             default_key: Some("dev-0".to_string()),
             runtime_manifest: None,
             runtime_manifest_cli_override: false,
