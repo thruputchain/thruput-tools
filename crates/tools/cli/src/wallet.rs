@@ -537,7 +537,7 @@ fn prepare_remote_wallet_create_dry_run(
         .profile
         .faucet_url
         .as_deref()
-        .expect("checked above")
+        .expect("bug: remote faucet backend must have faucet_url")
         .trim_end_matches('/')
         .to_owned();
     let rpc_url = inputs
