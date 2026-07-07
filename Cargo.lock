@@ -1017,7 +1017,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-faucet"
-version = "0.5.11"
+version = "0.5.14"
 dependencies = [
  "async-trait",
  "axum",
@@ -1026,7 +1026,7 @@ dependencies = [
  "groundhog-json-rpc-client",
  "groundhog-json-rpc-types",
  "groundhog-signing",
- "groundhog-xdr",
+ "groundhog-xdr 0.19.2-nightly.20260706.g4ab52e3",
  "serde",
  "serde_json",
  "sha2 0.10.9",
