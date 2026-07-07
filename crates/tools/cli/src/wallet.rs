@@ -103,6 +103,15 @@ struct PrepareWalletCreateResponse {
     prefund_raw_amount: String,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RemotePrefundAirdropResponse {
+    raw_amount: String,
+    tx_hash: TxHash,
+    height: groundhog_json_rpc_types::BlockHeight,
+    status: ExecStatus,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CreateWalletRequest {
@@ -240,11 +249,12 @@ fn create_remote_wallet(
     }
 
     let client = faucet_client()?;
-    let airdrop: serde_json::Value = post_json(
+    let airdrop: RemotePrefundAirdropResponse = post_json(
         &client,
         &format!("{}/v1/airdrop", prepared.faucet_url),
         &json!({ "recipient": prepared.wallet_address }),
     )?;
+    ensure_remote_prefund_success(&airdrop.status)?;
     let create: CreateWalletResponse = post_json(
         &client,
         &format!("{}/v1/create-wallet", prepared.faucet_url),
@@ -272,10 +282,9 @@ fn create_remote_wallet(
     )?;
 
     let create_tx_hash = format_tx_hash(&create.tx_hash);
+    let prefund_tx_hash = format_tx_hash(&airdrop.tx_hash);
     print.status(format_args!("Wallet created: {}", prepared.wallet_address));
-    if let Some(tx_hash) = airdrop.get("txHash").and_then(serde_json::Value::as_str) {
-        print.status(format_args!("Prefund txn: {tx_hash}"));
-    }
+    print.status(format_args!("Prefund txn: {prefund_tx_hash}"));
     print.status(format_args!("Txn: {create_tx_hash}"));
 
     print.json(&CommandResult::new(
@@ -297,6 +306,15 @@ fn create_remote_wallet(
         }),
     ))?;
 
+    Ok(())
+}
+
+fn ensure_remote_prefund_success(status: &ExecStatus) -> Result<(), CliError> {
+    if !matches!(status, ExecStatus::Ok) {
+        return Err(CliError::Other(
+            "remote wallet-create prefund transaction did not commit successfully".into(),
+        ));
+    }
     Ok(())
 }
 
@@ -849,7 +867,26 @@ fn resolve_dev_wallet_artifact_path(
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_dev_wallet_artifact_path, validate_remote_create_wallet_address};
+    use groundhog_json_rpc_types::receipt::ExecStatus;
+
+    use super::{
+        ensure_remote_prefund_success, resolve_dev_wallet_artifact_path,
+        validate_remote_create_wallet_address,
+    };
+
+    #[test]
+    fn remote_prefund_status_validation_accepts_ok() {
+        ensure_remote_prefund_success(&ExecStatus::Ok)
+            .expect("bug: successful prefund status should validate");
+    }
+
+    #[test]
+    fn remote_prefund_status_validation_rejects_failed_status() {
+        let err = ensure_remote_prefund_success(&ExecStatus::Reverted { message: None })
+            .expect_err("bug: failed prefund status should fail");
+
+        assert!(err.to_string().contains("prefund transaction"));
+    }
 
     #[test]
     fn remote_create_wallet_address_validation_accepts_same_address() {
