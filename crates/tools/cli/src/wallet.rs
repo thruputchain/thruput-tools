@@ -7,15 +7,16 @@ use groundhog_signing::Signer;
 use groundhog_signing::{
     BuildDeployTransaction, BuildDevWalletDoActionTransaction, DEFAULT_TX_GAS_LIMIT, LocalSigner,
     SignTransactionParams, build_deploy_transaction, build_dev_wallet_do_action_transaction,
-    derive_deploy_address, sign_and_encode_transaction_hex, source_address_auth_claim,
+    create_wallet_calldata, derive_deploy_address, dev_wallet_contract,
+    sign_and_encode_transaction_hex, source_address_auth_claim, wallet_contract_hash,
     wallet_create_proof_message,
 };
-use groundhog_xdr::contract::{Contract, ContractBlob, ContractEntrypointID};
+use groundhog_xdr::contract::{Contract, ContractEntrypointID};
 use groundhog_xdr::types::{ContractAddress, Ed25519PublicKey, SHA256Hash};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use xdr_common::{BytesM, VecM};
+use xdr_common::VecM;
 
 use crate::account_resolution::{LocalBootstrapRole, resolve_local_bootstrap_account};
 use crate::codec::{format_contract_address, parse_contract_address};
@@ -608,7 +609,10 @@ fn prepare_local_wallet_create(
         &deploy_nonce,
         &contract_hash,
         Ed25519PublicKey::from(owner.verifying_key_bytes()),
-    )?;
+    )
+    .map_err(|error| {
+        CliError::Other(format!("failed to encode wallet create calldata: {error}"))
+    })?;
 
     let rt =
         tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
@@ -756,23 +760,14 @@ fn load_dev_wallet_contract(
     let artifact_path = resolve_dev_wallet_artifact_path(cwd, profile_source, artifact_hint)?;
     let artifact_bytes = std::fs::read(&artifact_path)?;
     let contract = dev_wallet_contract(&artifact_path, artifact_bytes);
-    let contract_hash = contract_hash(&contract)?;
+    let contract_hash = wallet_contract_hash(&contract)
+        .map_err(|error| CliError::Other(format!("failed to hash wallet contract: {error}")))?;
     Ok((artifact_path, contract, contract_hash))
 }
 
 fn deploy_nonce_from_u64(nonce: u64) -> SHA256Hash {
     let bytes: [u8; 32] = Sha256::digest(nonce.to_le_bytes()).into();
     SHA256Hash::from(bytes)
-}
-
-fn create_wallet_calldata(
-    deploy_nonce: &SHA256Hash,
-    contract_hash: &SHA256Hash,
-    owner: Ed25519PublicKey,
-) -> Result<Vec<u8>, CliError> {
-    xdrs::cxs::encode(&(deploy_nonce, contract_hash, &owner)).map_err(|error| {
-        CliError::Other(format!("failed to encode wallet create calldata: {error}"))
-    })
 }
 
 fn sign_create_wallet_transaction(
@@ -814,31 +809,6 @@ fn sign_wallet_prefund_transaction(
         .map_err(|error| CliError::Other(error.to_string()))
 }
 
-fn dev_wallet_contract(artifact_path: &Path, artifact_bytes: Vec<u8>) -> Contract {
-    let blob = ContractBlob {
-        data: BytesM(artifact_bytes),
-    };
-    match artifact_path
-        .extension()
-        .and_then(|extension| extension.to_str())
-    {
-        Some("rv32a") => Contract::kRv32 {
-            rv32_contract: blob,
-        },
-        _ => Contract::kWasmi {
-            wasmi_contract: blob,
-        },
-    }
-}
-
-fn contract_hash(contract: &Contract) -> Result<SHA256Hash, CliError> {
-    let contract_xdr = xdrs::txs::encode(contract).map_err(|error| {
-        CliError::Other(format!("failed to XDR-encode wallet contract: {error}"))
-    })?;
-    let bytes: [u8; 32] = Sha256::digest(contract_xdr).into();
-    Ok(SHA256Hash::from(bytes))
-}
-
 fn resolve_dev_wallet_artifact_path(
     cwd: &Path,
     profile_source: Option<&Path>,
@@ -872,26 +842,7 @@ fn resolve_dev_wallet_artifact_path(
 
 #[cfg(test)]
 mod tests {
-    use groundhog_xdr::types::{Ed25519PublicKey, SHA256Hash};
-
-    use super::{
-        create_wallet_calldata, resolve_dev_wallet_artifact_path,
-        validate_remote_create_wallet_address,
-    };
-
-    #[test]
-    fn create_wallet_calldata_round_trips_expected_tuple() {
-        let nonce = SHA256Hash::from([0x11; 32]);
-        let contract_hash = SHA256Hash::from([0x22; 32]);
-        let owner = Ed25519PublicKey::from([0x33; 32]);
-
-        let encoded = create_wallet_calldata(&nonce, &contract_hash, owner)
-            .expect("bug: create_wallet calldata should encode");
-        let decoded: (SHA256Hash, SHA256Hash, Ed25519PublicKey) =
-            xdrs::cxs::decode(&encoded).expect("bug: create_wallet calldata should decode");
-
-        assert_eq!(decoded, (nonce, contract_hash, owner));
-    }
+    use super::{resolve_dev_wallet_artifact_path, validate_remote_create_wallet_address};
 
     #[test]
     fn remote_create_wallet_address_validation_accepts_same_address() {

@@ -4,6 +4,7 @@
 pub mod account;
 pub mod build;
 pub mod dev_account;
+pub mod dev_wallet;
 pub mod encode;
 pub mod error;
 pub mod hash;
@@ -23,6 +24,7 @@ pub use dev_account::{
     DEFAULT_DEV_ACCOUNT_COUNT, DEFAULT_DEV_ACCOUNT_SEED, DEFAULT_DEV_ACCOUNT_STORAGE_TOKENS,
     derive_default_dev_account_signer, derive_dev_account_signer,
 };
+pub use dev_wallet::{create_wallet_calldata, dev_wallet_contract, wallet_contract_hash};
 pub use encode::{encode_signed_transaction_xdr, encode_transaction_xdr};
 pub use error::SigningError;
 pub use hash::transaction_hash;

@@ -19,13 +19,13 @@ use groundhog_json_rpc_types::{
 };
 use groundhog_signing::{
     BuildDeployTransaction, DEFAULT_TX_GAS_LIMIT, LocalSigner, SignTransactionParams,
-    build_deploy_transaction, derive_deploy_address, sign_and_encode_transaction_hex,
-    source_address_auth_claim, wallet_create_proof_message,
+    build_deploy_transaction, create_wallet_calldata, derive_deploy_address, dev_wallet_contract,
+    sign_and_encode_transaction_hex, source_address_auth_claim, wallet_create_proof_message,
 };
-use groundhog_xdr::contract::{Contract, ContractBlob, ContractEntrypointID};
+use groundhog_xdr::contract::ContractEntrypointID;
 use groundhog_xdr::types::{Ed25519PublicKey, SHA256Hash};
 use serde::{Deserialize, Serialize};
-use xdr_common::{BytesM, VecM};
+use xdr_common::VecM;
 
 use crate::utils::nonce_from_timestamp;
 
@@ -368,10 +368,11 @@ impl WalletCreateSubmitter for RpcWalletCreateSubmitter {
         let artifact_bytes = tokio::fs::read(&self.wallet_artifact_path)
             .await
             .map_err(|error| WalletCreateError::LoadWalletArtifact(error.to_string()))?;
-        let contract = wallet_contract(&self.wallet_artifact_path, artifact_bytes);
+        let contract = dev_wallet_contract(&self.wallet_artifact_path, artifact_bytes);
         let block_expiry_height = self.block_expiry_height().await?;
         let create_calldata =
-            create_wallet_calldata(&deploy_nonce, &self.wallet_contract_hash, owner_public_key)?;
+            create_wallet_calldata(&deploy_nonce, &self.wallet_contract_hash, owner_public_key)
+                .map_err(|error| WalletCreateError::EncodeCreateCalldata(error.to_string()))?;
         let tx = build_deploy_transaction(BuildDeployTransaction {
             invoked_address: self.faucet_wallet_address,
             entrypoint: self.create_wallet_entrypoint,
@@ -414,32 +415,6 @@ fn verify_owner_signature(
     verifying_key
         .verify(message, &Signature::from_bytes(&signature_bytes))
         .map_err(|_| WalletCreateError::OwnerSignatureMismatch)
-}
-
-fn create_wallet_calldata(
-    deploy_nonce: &groundhog_xdr::types::SHA256Hash,
-    contract_hash: &groundhog_xdr::types::SHA256Hash,
-    owner: Ed25519PublicKey,
-) -> Result<Vec<u8>, WalletCreateError> {
-    xdrs::cxs::encode(&(deploy_nonce, contract_hash, &owner))
-        .map_err(|error| WalletCreateError::EncodeCreateCalldata(error.to_string()))
-}
-
-fn wallet_contract(artifact_path: &std::path::Path, artifact_bytes: Vec<u8>) -> Contract {
-    let blob = ContractBlob {
-        data: BytesM(artifact_bytes),
-    };
-    match artifact_path
-        .extension()
-        .and_then(|extension| extension.to_str())
-    {
-        Some("rv32a") => Contract::kRv32 {
-            rv32_contract: blob,
-        },
-        _ => Contract::kWasmi {
-            wasmi_contract: blob,
-        },
-    }
 }
 
 #[cfg(test)]
