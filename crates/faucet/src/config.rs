@@ -8,6 +8,7 @@ use groundhog_json_rpc_types::network_descriptor::{
 };
 use groundhog_json_rpc_types::{ContractAddress, SHA256Hash};
 use serde::Deserialize;
+use std::fmt;
 use std::path::PathBuf;
 
 /// Faucet service TOML config.
@@ -183,7 +184,7 @@ pub struct WalletCreateConfig {
 }
 
 /// Private airdrop execution configuration.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AirdropConfig {
     /// Raw HOG units transferred for each airdrop request.
@@ -192,6 +193,19 @@ pub struct AirdropConfig {
     pub wallet_do_action_entrypoint: HexBytes,
     /// 32-byte faucet signing secret key.
     pub faucet_secret_key: HexBytes,
+}
+
+impl fmt::Debug for AirdropConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AirdropConfig")
+            .field("raw_amount", &self.raw_amount)
+            .field(
+                "wallet_do_action_entrypoint",
+                &self.wallet_do_action_entrypoint,
+            )
+            .field("faucet_secret_key", &format_args!("<redacted>"))
+            .finish()
+    }
 }
 
 impl AirdropConfig {
@@ -229,7 +243,23 @@ impl WalletCreateExecutionConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::FaucetConfigFile;
+    use groundhog_json_rpc_types::hex::HexBytes;
+
+    use super::{AirdropConfig, FaucetConfigFile};
+
+    #[test]
+    fn airdrop_config_debug_redacts_faucet_secret_key() {
+        let config = AirdropConfig {
+            raw_amount: "100000000".into(),
+            wallet_do_action_entrypoint: HexBytes(vec![0x64; 8]),
+            faucet_secret_key: HexBytes(vec![0xAB; 32]),
+        };
+
+        let debug = format!("{config:?}");
+
+        assert!(debug.contains("faucet_secret_key: <redacted>"), "{debug}");
+        assert!(!debug.contains("171"), "{debug}");
+    }
 
     #[test]
     fn config_builds_public_network_descriptor() {

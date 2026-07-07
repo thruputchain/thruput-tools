@@ -22,10 +22,29 @@ struct Cli {
     listen: Option<String>,
 }
 
+/// Log filter from `RUST_LOG`, defaulting to `info` when unset so operators
+/// get logs without extra environment setup. A malformed `RUST_LOG` is a
+/// startup error rather than a silent fallback.
+fn env_filter() -> Result<EnvFilter, std::io::Error> {
+    match std::env::var("RUST_LOG") {
+        Ok(directives) => EnvFilter::try_new(&directives).map_err(|error| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("invalid RUST_LOG `{directives}`: {error}"),
+            )
+        }),
+        Err(std::env::VarError::NotPresent) => Ok(EnvFilter::new("info")),
+        Err(error) => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("invalid RUST_LOG: {error}"),
+        )),
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
+        .with_env_filter(env_filter()?)
         .init();
 
     let cli = Cli::parse();
@@ -63,4 +82,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     serve(config).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use serial_test::serial;
+
+    use super::env_filter;
+
+    #[test]
+    #[serial]
+    fn env_filter_defaults_to_info_when_rust_log_unset() {
+        unsafe { std::env::remove_var("RUST_LOG") };
+
+        let filter = env_filter().expect("bug: unset RUST_LOG should default");
+
+        assert_eq!(filter.to_string(), "info");
+    }
+
+    #[test]
+    #[serial]
+    fn env_filter_honors_rust_log_when_set() {
+        unsafe { std::env::set_var("RUST_LOG", "debug") };
+
+        let filter = env_filter();
+
+        unsafe { std::env::remove_var("RUST_LOG") };
+        assert_eq!(
+            filter
+                .expect("bug: valid RUST_LOG should parse")
+                .to_string(),
+            "debug"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn env_filter_rejects_malformed_rust_log() {
+        unsafe { std::env::set_var("RUST_LOG", "info,foo=notalevel") };
+
+        let result = env_filter();
+
+        unsafe { std::env::remove_var("RUST_LOG") };
+        let error = result.expect_err("bug: malformed RUST_LOG should fail");
+        assert!(error.to_string().contains("RUST_LOG"), "{error}");
+    }
 }

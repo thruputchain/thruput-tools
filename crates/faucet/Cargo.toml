@@ -41,4 +41,5 @@ xdrs = { workspace = true }
 zeroize = { workspace = true }
 
 [dev-dependencies]
+serial_test = "3"
 tower = { workspace = true, features = ["util"] }

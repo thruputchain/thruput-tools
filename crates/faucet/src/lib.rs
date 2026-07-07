@@ -13,6 +13,7 @@ use axum::{
 use groundhog_json_rpc_types::network_descriptor::NetworkDescriptor;
 use serde::Serialize;
 use std::fmt;
+use std::future::Future;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tower_http::cors::CorsLayer;
@@ -109,12 +110,57 @@ pub fn app(config: FaucetConfig) -> Router {
     }
 }
 
+/// Serve the faucet API until SIGTERM or Ctrl-C, draining in-flight requests.
+///
+/// Fails at startup when shutdown signal handlers cannot be registered, so a
+/// deployment never runs without a graceful shutdown path.
 pub async fn serve(config: FaucetConfig) -> Result<(), std::io::Error> {
+    let shutdown = shutdown_signal()?;
+    serve_with_shutdown(config, shutdown).await
+}
+
+/// Serve the faucet API until `shutdown` resolves, draining in-flight requests.
+pub async fn serve_with_shutdown(
+    config: FaucetConfig,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> Result<(), std::io::Error> {
     let listener = TcpListener::bind(&config.listen_address).await?;
     let local_addr = listener.local_addr()?;
     tracing::info!(listen = %local_addr, "faucet service listening");
-    axum::serve(listener, app(config)).await?;
+    axum::serve(listener, app(config))
+        .with_graceful_shutdown(shutdown)
+        .await?;
     Ok(())
+}
+
+/// Future that resolves once SIGTERM or SIGINT (Ctrl-C) is received.
+///
+/// Handlers are registered before the future is returned, so registration
+/// failure is a startup error rather than a service that can never drain.
+#[cfg(unix)]
+fn shutdown_signal() -> Result<impl Future<Output = ()> + Send + 'static, std::io::Error> {
+    use tokio::signal::unix::{SignalKind, signal};
+
+    let mut sigterm = signal(SignalKind::terminate())?;
+    let mut sigint = signal(SignalKind::interrupt())?;
+    Ok(async move {
+        tokio::select! {
+            _ = sigterm.recv() => {},
+            _ = sigint.recv() => {},
+        }
+        tracing::info!("shutdown signal received; draining in-flight requests");
+    })
+}
+
+/// Future that resolves once Ctrl-C is received.
+#[cfg(not(unix))]
+fn shutdown_signal() -> Result<impl Future<Output = ()> + Send + 'static, std::io::Error> {
+    Ok(async {
+        if tokio::signal::ctrl_c().await.is_err() {
+            std::future::pending::<()>().await;
+        }
+        tracing::info!("shutdown signal received; draining in-flight requests");
+    })
 }
 
 async fn health() -> Json<HealthResponse> {
@@ -147,6 +193,51 @@ mod tests {
         let config = test_config();
 
         assert_eq!(config.listen_address, DEFAULT_LISTEN_ADDRESS);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shutdown_signal_resolves_on_sigterm_and_not_before() {
+        let mut shutdown = Box::pin(
+            super::shutdown_signal().expect("bug: signal registration should succeed in tests"),
+        );
+
+        let before_signal =
+            tokio::time::timeout(std::time::Duration::from_millis(50), &mut shutdown).await;
+        assert!(
+            before_signal.is_err(),
+            "shutdown future resolved without a signal"
+        );
+
+        let status = std::process::Command::new("kill")
+            .args(["-TERM", &std::process::id().to_string()])
+            .status()
+            .expect("bug: kill should run");
+        assert!(status.success(), "kill -TERM should succeed");
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), shutdown)
+            .await
+            .expect("bug: shutdown future should resolve after SIGTERM");
+    }
+
+    #[tokio::test]
+    async fn serve_stops_when_shutdown_future_resolves() {
+        let mut config = test_config();
+        config.listen_address = "127.0.0.1:0".into();
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+
+        let server = tokio::spawn(super::serve_with_shutdown(config, async move {
+            let _ = shutdown_rx.await;
+        }));
+
+        shutdown_tx
+            .send(())
+            .expect("bug: shutdown receiver should be alive");
+        tokio::time::timeout(std::time::Duration::from_secs(5), server)
+            .await
+            .expect("bug: server should stop after shutdown future resolves")
+            .expect("bug: server task should join")
+            .expect("bug: server should shut down cleanly");
     }
 
     #[tokio::test]
