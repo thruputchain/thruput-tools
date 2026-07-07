@@ -18,6 +18,7 @@ use crate::config::{ProfileOverrides, ResolvedProfile, resolve_profile_with_over
 use crate::dev_keys;
 use crate::faucet_client::{client as faucet_client, post_json};
 use crate::hog;
+use crate::profile_backend::{ProfileBackend, resolve_profile_backend};
 use crate::result::CommandResult;
 use crate::runtime_manifest::{
     apply_local_node_state_for_local_bootstrap, load_configured_runtime_manifest,
@@ -179,16 +180,19 @@ pub(crate) fn prepare_airdrop(
     overrides: &ProfileOverrides,
 ) -> Result<PreparedAirdrop, CliError> {
     let profile = resolve_profile_with_overrides(cwd, Some(profile_name), overrides)?;
-    if profile.faucet_url.is_some() && profile.runtime_manifest.is_none() {
-        if amount.is_some() {
-            return Err(CliError::Other(
-                "remote airdrop amount is set by the faucet service".into(),
-            ));
+    match resolve_profile_backend(&profile)? {
+        ProfileBackend::RemoteFaucet => {
+            if amount.is_some() {
+                return Err(CliError::Other(
+                    "remote airdrop amount is set by the faucet service".into(),
+                ));
+            }
+            prepare_remote_airdrop(&profile, recipient)
         }
-        return prepare_remote_airdrop(&profile, recipient);
+        ProfileBackend::LocalManifest | ProfileBackend::RpcOnly => {
+            prepare_local_airdrop(cwd, profile, recipient, amount)
+        }
     }
-
-    prepare_local_airdrop(cwd, profile, recipient, amount)
 }
 
 fn prepare_local_airdrop(

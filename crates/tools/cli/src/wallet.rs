@@ -27,6 +27,7 @@ use crate::config::{
 use crate::faucet_client::{client as faucet_client, post_json};
 use crate::hog;
 use crate::keys::load_local_signer;
+use crate::profile_backend::{ProfileBackend, resolve_profile_backend};
 use crate::result::CommandResult;
 use crate::runtime_manifest::{
     apply_local_node_state_for_local_bootstrap, load_configured_runtime_manifest,
@@ -490,11 +491,14 @@ pub(crate) fn prepare_wallet_create(
     let key_name = inputs.key_name;
     let wallet_name = inputs.wallet_name;
 
-    if profile.faucet_url.is_some() && profile.runtime_manifest.is_none() {
-        return prepare_remote_wallet_create(&profile, key_name, wallet_name);
+    match resolve_profile_backend(&profile)? {
+        ProfileBackend::RemoteFaucet => {
+            prepare_remote_wallet_create(&profile, key_name, wallet_name)
+        }
+        ProfileBackend::LocalManifest | ProfileBackend::RpcOnly => {
+            prepare_local_wallet_create(cwd, profile, key_name, wallet_name)
+        }
     }
-
-    prepare_local_wallet_create(cwd, profile, key_name, wallet_name)
 }
 
 fn prepare_remote_wallet_create_dry_run(
@@ -505,7 +509,10 @@ fn prepare_remote_wallet_create_dry_run(
     overrides: &ProfileOverrides,
 ) -> Result<Option<PreparedRemoteWalletCreateDryRun>, CliError> {
     let inputs = resolve_wallet_create_inputs(cwd, key_name, wallet_name, profile_name, overrides)?;
-    if inputs.profile.faucet_url.is_none() || inputs.profile.runtime_manifest.is_some() {
+    if !matches!(
+        resolve_profile_backend(&inputs.profile)?,
+        ProfileBackend::RemoteFaucet
+    ) {
         return Ok(None);
     }
     let faucet_url = inputs

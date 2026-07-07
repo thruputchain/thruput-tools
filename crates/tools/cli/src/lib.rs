@@ -24,6 +24,7 @@ pub mod keys;
 pub mod new;
 pub mod node;
 pub mod print;
+pub(crate) mod profile_backend;
 pub mod result;
 pub(crate) mod runtime_manifest;
 pub mod scaffold;

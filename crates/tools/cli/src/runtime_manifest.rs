@@ -48,7 +48,7 @@ pub(crate) fn load_configured_runtime_manifest(
     load_runtime_manifest(&path, key_name).map(Some)
 }
 
-fn configured_runtime_manifest_path(
+pub(crate) fn configured_runtime_manifest_path(
     profile: &ResolvedProfile,
 ) -> Result<Option<PathBuf>, CliError> {
     if profile.runtime_manifest_cli_override {
