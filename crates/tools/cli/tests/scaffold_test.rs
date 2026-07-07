@@ -46,9 +46,10 @@ fn scaffold_counter_creates_expected_files() {
 
     let groundhog = fs::read_to_string(dir.join("groundhog.toml")).unwrap();
     assert!(groundhog.contains("[profile.local.contracts]"));
-    assert!(groundhog.contains("[profile.local.wallets]"));
+    assert!(groundhog.contains("# [profile.local.wallets.alice]"));
     assert!(groundhog.contains("[profile.devnet.contracts]"));
-    assert!(groundhog.contains("[profile.devnet.wallets]"));
+    assert!(groundhog.contains("# [profile.devnet.wallets.alice]"));
+    assert!(groundhog.contains("# owner_public_key ="));
     assert!(groundhog.contains("# my_counter ="));
     assert!(!groundhog.contains("default_profile"));
     assert!(!groundhog.contains("rpc_url"));

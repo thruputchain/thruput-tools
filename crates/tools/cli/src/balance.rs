@@ -107,6 +107,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
+    use crate::config::SavedWalletBinding;
 
     #[test]
     fn resolves_wallet_before_contract_alias() {
@@ -123,7 +124,13 @@ mod tests {
             wallets: BTreeMap::new(),
             source: None,
         };
-        profile.wallets.insert("alice".into(), format_address(1));
+        profile.wallets.insert(
+            "alice".into(),
+            SavedWalletBinding {
+                address: format_address(1),
+                owner_public_key: format_address(9),
+            },
+        );
         profile.contracts.insert("alice".into(), format_address(2));
 
         assert_eq!(

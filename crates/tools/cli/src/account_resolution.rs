@@ -5,8 +5,8 @@ use groundhog_json_rpc_types::{
 use groundhog_signing::LocalSigner;
 
 use crate::{
-    CliError,
-    config::ResolvedProfile,
+    CliError, codec,
+    config::{ResolvedProfile, SavedWalletBinding},
     dev_keys,
     runtime_manifest::{SUPPORTED_DERIVATION_SCHEME, load_configured_runtime_manifest},
 };
@@ -49,22 +49,54 @@ pub(crate) fn resolve_wallet_address(
 ) -> Result<groundhog_xdr::types::ContractAddress, CliError> {
     if let Some(index) = dev_keys::dev_key_index(key_name) {
         resolve_dev_wallet_address(profile, key_name, index, signer)
+    } else if let Some(wallet) = profile.wallets.get(key_name) {
+        resolve_saved_wallet_address(key_name, wallet, signer)
     } else {
-        resolve_saved_wallet_address(profile, key_name)
+        Err(CliError::Other(format!(
+            "no wallet saved for key `{key_name}` in profile `{}`; run `groundhog wallet create --key {key_name} --profile {}`",
+            profile.name, profile.name
+        )))
     }
 }
 
 fn resolve_saved_wallet_address(
-    profile: &ResolvedProfile,
     key_name: &str,
+    wallet: &SavedWalletBinding,
+    signer: &LocalSigner,
 ) -> Result<groundhog_xdr::types::ContractAddress, CliError> {
-    let Some(wallet) = profile.resolve_wallet(key_name) else {
+    let owner_public_key = parse_owner_public_key(key_name, &wallet.owner_public_key)?;
+    let expected_public_key = signer.verifying_key_bytes();
+    if owner_public_key.as_slice() != expected_public_key.as_slice() {
         return Err(CliError::Other(format!(
-            "no wallet saved for key `{key_name}` in profile `{}`; run `groundhog wallet create --key {key_name} --profile {}`",
-            profile.name, profile.name
+            "saved wallet `{key_name}` owner public key {} does not match local key `{key_name}` public key {}",
+            format_hex(&owner_public_key),
+            format_hex(&expected_public_key),
         )));
-    };
-    crate::codec::parse_contract_address(&wallet)
+    }
+
+    codec::parse_contract_address(&wallet.address)
+}
+
+fn parse_owner_public_key(key_name: &str, value: &str) -> Result<Vec<u8>, CliError> {
+    let hex = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+        .ok_or_else(|| {
+            CliError::Other(format!(
+                "saved wallet `{key_name}` owner_public_key must be a 0x-prefixed 64-character hex string"
+            ))
+        })?;
+    let bytes = hex::decode(hex).map_err(|error| {
+        CliError::Other(format!(
+            "saved wallet `{key_name}` owner_public_key is not valid hex: {error}"
+        ))
+    })?;
+    if bytes.len() != 32 {
+        return Err(CliError::Other(format!(
+            "saved wallet `{key_name}` owner_public_key must be 32 bytes"
+        )));
+    }
+    Ok(bytes)
 }
 
 fn resolve_dev_wallet_address(
@@ -274,7 +306,10 @@ mod tests {
         let mut wallets = BTreeMap::new();
         wallets.insert(
             "alice".into(),
-            format!("0x{}", hex::encode(wallet_address.as_ref())),
+            SavedWalletBinding {
+                address: format_hex(wallet_address.as_ref()),
+                owner_public_key: format_hex(&signer.verifying_key_bytes()),
+            },
         );
         let profile = test_profile("alice", None, wallets);
 
@@ -298,7 +333,7 @@ mod tests {
     fn test_profile(
         key_name: &str,
         runtime_manifest: Option<std::path::PathBuf>,
-        wallets: BTreeMap<String, String>,
+        wallets: BTreeMap<String, SavedWalletBinding>,
     ) -> ResolvedProfile {
         ResolvedProfile {
             name: "default".into(),
@@ -313,6 +348,49 @@ mod tests {
             wallets,
             source: None,
         }
+    }
+
+    #[test]
+    fn non_dev_key_uses_matching_saved_wallet_binding() {
+        let signer = groundhog_signing::derive_default_dev_account_signer(0);
+        let wallet_address = groundhog_xdr::types::ContractAddress::from([0x41; 32]);
+        let mut profile = test_profile_for_key("alice");
+        profile.wallets.insert(
+            "alice".into(),
+            SavedWalletBinding {
+                address: format_hex(wallet_address.as_ref()),
+                owner_public_key: format_hex(&signer.verifying_key_bytes()),
+            },
+        );
+
+        let resolved = resolve_wallet_address(&profile, "alice", &signer)
+            .expect("bug: matching saved wallet should resolve");
+
+        assert_eq!(resolved, wallet_address);
+    }
+
+    #[test]
+    fn non_dev_key_rejects_mismatched_saved_wallet_owner() {
+        let signer = groundhog_signing::derive_default_dev_account_signer(0);
+        let other = groundhog_signing::derive_default_dev_account_signer(1);
+        let wallet_address = groundhog_xdr::types::ContractAddress::from([0x41; 32]);
+        let mut profile = test_profile_for_key("alice");
+        profile.wallets.insert(
+            "alice".into(),
+            SavedWalletBinding {
+                address: format_hex(wallet_address.as_ref()),
+                owner_public_key: format_hex(&other.verifying_key_bytes()),
+            },
+        );
+
+        let error = resolve_wallet_address(&profile, "alice", &signer)
+            .expect_err("bug: mismatched saved wallet owner should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("saved wallet `alice` owner public key")
+        );
     }
 
     #[test]
@@ -485,6 +563,22 @@ mod tests {
             faucet_url: None,
             default_key: Some("dev-0".into()),
             runtime_manifest: manifest_path,
+            runtime_manifest_cli_override: false,
+            runtime_artifacts_dir: None,
+            contracts: BTreeMap::default(),
+            wallets: BTreeMap::default(),
+            source: None,
+        }
+    }
+
+    fn test_profile_for_key(key_name: &str) -> ResolvedProfile {
+        ResolvedProfile {
+            name: "default".into(),
+            rpc_url: Some("http://127.0.0.1:1".into()),
+            rpc_url_cli_override: false,
+            faucet_url: None,
+            default_key: Some(key_name.into()),
+            runtime_manifest: None,
             runtime_manifest_cli_override: false,
             runtime_artifacts_dir: None,
             contracts: BTreeMap::default(),

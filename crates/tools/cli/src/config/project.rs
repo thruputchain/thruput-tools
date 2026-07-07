@@ -30,7 +30,16 @@ pub struct ProjectProfile {
     #[serde(default)]
     pub contracts: BTreeMap<String, String>,
     #[serde(default)]
-    pub wallets: BTreeMap<String, String>,
+    pub wallets: BTreeMap<String, SavedWalletBinding>,
+}
+
+/// Saved wallet binding for a local signing key.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct SavedWalletBinding {
+    /// Wallet contract address invoked by transactions for this key.
+    pub address: String,
+    /// Public key that owns the wallet contract.
+    pub owner_public_key: String,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -58,7 +67,7 @@ pub struct ResolvedProfile {
     pub runtime_artifacts_dir: Option<PathBuf>,
     pub contracts: BTreeMap<String, String>,
     #[serde(default)]
-    pub wallets: BTreeMap<String, String>,
+    pub wallets: BTreeMap<String, SavedWalletBinding>,
     pub source: Option<PathBuf>,
 }
 
@@ -84,7 +93,9 @@ impl ResolvedProfile {
         if is_valid_address(name_or_address) {
             return Some(name_or_address.to_string());
         }
-        self.wallets.get(name_or_address).cloned()
+        self.wallets
+            .get(name_or_address)
+            .map(|wallet| wallet.address.clone())
     }
 }
 
@@ -223,6 +234,7 @@ pub fn save_profile_wallet_address(
     explicit_profile: Option<&str>,
     name: &str,
     address: &str,
+    owner_public_key: &str,
 ) -> Result<PathBuf, CliError> {
     if name.trim().is_empty() {
         return Err(CliError::EmptyWalletName);
@@ -233,6 +245,11 @@ pub fn save_profile_wallet_address(
     if !is_valid_address(address.trim()) {
         return Err(CliError::Other(
             "wallet address must be a 0x-prefixed 64-character hex string".into(),
+        ));
+    }
+    if !is_valid_address(owner_public_key.trim()) {
+        return Err(CliError::Other(
+            "wallet owner public key must be a 0x-prefixed 64-character hex string".into(),
         ));
     }
 
@@ -249,7 +266,8 @@ pub fn save_profile_wallet_address(
         .parse::<toml_edit::DocumentMut>()
         .map_err(|e| CliError::Other(e.to_string()))?;
 
-    doc.entry("profile")
+    let wallet = doc
+        .entry("profile")
         .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
         .as_table_mut()
         .ok_or_else(|| CliError::Other("profile must be a table".into()))?
@@ -261,7 +279,16 @@ pub fn save_profile_wallet_address(
         .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
         .as_table_mut()
         .ok_or_else(|| CliError::Other("wallets must be a table".into()))?
-        .insert(name.trim(), toml_edit::value(address.trim()));
+        .entry(name.trim())
+        .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
+        .as_table_mut()
+        .ok_or_else(|| CliError::Other("wallet entry must be a table".into()))?;
+
+    wallet.insert("address", toml_edit::value(address.trim()));
+    wallet.insert(
+        "owner_public_key",
+        toml_edit::value(owner_public_key.trim()),
+    );
 
     write_profile_config(&path, doc.to_string().as_bytes())?;
     Ok(path)

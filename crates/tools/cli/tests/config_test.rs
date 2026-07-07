@@ -120,7 +120,10 @@ runtime_manifest = "runtime-manifest.json"
 counter = "0x1234"
 
 [profile.default.wallets]
-alice = "0xabcd"
+
+[profile.default.wallets.alice]
+address = "0xabcd"
+owner_public_key = "0x1111"
 "#,
     )
     .unwrap();
@@ -138,7 +141,10 @@ alice = "0xabcd"
         Some("0x1234")
     );
     assert_eq!(
-        profile.wallets.get("alice").map(String::as_str),
+        profile
+            .wallets
+            .get("alice")
+            .map(|wallet| wallet.address.as_str()),
         Some("0xabcd")
     );
     assert_eq!(profile.resolve_contract("counter"), "0x1234");
@@ -331,9 +337,13 @@ runtime_artifacts_dir = "{}"
 HOG = "{global_hog}"
 
 [profile.devnet.wallets]
-alice = "{global_alice}"
+
+[profile.devnet.wallets.alice]
+address = "{global_alice}"
+owner_public_key = "0x{}"
 "#,
-            artifacts_dir.display()
+            artifacts_dir.display(),
+            "77".repeat(32)
         ),
     )
     .unwrap();
@@ -350,9 +360,17 @@ HOG = "{project_hog}"
 counter = "{counter}"
 
 [profile.devnet.wallets]
-alice = "{project_alice}"
-bob = "{bob}"
-"#
+
+[profile.devnet.wallets.alice]
+address = "{project_alice}"
+owner_public_key = "0x{}"
+
+[profile.devnet.wallets.bob]
+address = "{bob}"
+owner_public_key = "0x{}"
+"#,
+            "88".repeat(32),
+            "99".repeat(32)
         ),
     )
     .unwrap();
@@ -373,8 +391,14 @@ bob = "{bob}"
     );
     assert_eq!(profile.contracts.get("HOG"), Some(&project_hog));
     assert_eq!(profile.contracts.get("counter"), Some(&counter));
-    assert_eq!(profile.wallets.get("alice"), Some(&project_alice));
-    assert_eq!(profile.wallets.get("bob"), Some(&bob));
+    assert_eq!(
+        profile.wallets.get("alice").map(|wallet| &wallet.address),
+        Some(&project_alice)
+    );
+    assert_eq!(
+        profile.wallets.get("bob").map(|wallet| &wallet.address),
+        Some(&bob)
+    );
 
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
@@ -457,23 +481,42 @@ rpc_url = "http://localhost:9545"
 default_key = "alice"
 
 [profile.default.wallets]
-alice = "0x1111"
+
+[profile.default.wallets.alice]
+address = "0x1111"
+owner_public_key = "0x2222"
 "#,
     )
     .unwrap();
 
     let addr = format!("0x{}", "22".repeat(32));
-    let written =
-        groundhog_cli::config::save_profile_wallet_address(tmp.path(), None, "alice", &addr)
-            .unwrap();
+    let owner = format!("0x{}", "33".repeat(32));
+    let written = groundhog_cli::config::save_profile_wallet_address(
+        tmp.path(),
+        None,
+        "alice",
+        &addr,
+        &owner,
+    )
+    .unwrap();
     assert_eq!(written, config_path);
 
     let profile = groundhog_cli::config::resolve_profile(tmp.path(), None).unwrap();
     assert_eq!(profile.rpc_url.as_deref(), Some("http://localhost:9545"));
     assert_eq!(profile.default_key.as_deref(), Some("alice"));
     assert_eq!(
-        profile.wallets.get("alice").map(String::as_str),
+        profile
+            .wallets
+            .get("alice")
+            .map(|wallet| wallet.address.as_str()),
         Some(addr.as_str())
+    );
+    assert_eq!(
+        profile
+            .wallets
+            .get("alice")
+            .map(|wallet| wallet.owner_public_key.as_str()),
+        Some(owner.as_str())
     );
 }
 
@@ -484,11 +527,13 @@ fn save_profile_wallet_address_creates_selected_profile() {
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
 
     let addr = format!("0x{}", "be".repeat(32));
+    let owner = format!("0x{}", "cd".repeat(32));
     let written = groundhog_cli::config::save_profile_wallet_address(
         tmp.path(),
         Some("testnet"),
         "alice",
         &addr,
+        &owner,
     )
     .unwrap();
     assert_eq!(written, global_config_path(&tmp));
@@ -498,7 +543,10 @@ fn save_profile_wallet_address_creates_selected_profile() {
 
     let testnet = groundhog_cli::config::resolve_profile(tmp.path(), Some("testnet")).unwrap();
     assert_eq!(
-        testnet.wallets.get("alice").map(String::as_str),
+        testnet
+            .wallets
+            .get("alice")
+            .map(|wallet| wallet.address.as_str()),
         Some(addr.as_str())
     );
 
@@ -816,7 +864,9 @@ fn save_alias_accepts_valid_hex_address() {
 fn save_wallet_rejects_empty_name() {
     let tmp = TempDir::new().unwrap();
     let addr = format!("0x{}", "ab".repeat(32));
-    let result = groundhog_cli::config::save_profile_wallet_address(tmp.path(), None, "", &addr);
+    let owner = format!("0x{}", "cd".repeat(32));
+    let result =
+        groundhog_cli::config::save_profile_wallet_address(tmp.path(), None, "", &addr, &owner);
     assert!(result.is_err());
 }
 
@@ -824,7 +874,9 @@ fn save_wallet_rejects_empty_name() {
 #[serial]
 fn save_wallet_rejects_empty_address() {
     let tmp = TempDir::new().unwrap();
-    let result = groundhog_cli::config::save_profile_wallet_address(tmp.path(), None, "alice", "");
+    let owner = format!("0x{}", "cd".repeat(32));
+    let result =
+        groundhog_cli::config::save_profile_wallet_address(tmp.path(), None, "alice", "", &owner);
     assert!(result.is_err());
 }
 
@@ -832,8 +884,14 @@ fn save_wallet_rejects_empty_address() {
 #[serial]
 fn save_wallet_rejects_malformed_address() {
     let tmp = TempDir::new().unwrap();
-    let result =
-        groundhog_cli::config::save_profile_wallet_address(tmp.path(), None, "alice", "banana");
+    let owner = format!("0x{}", "cd".repeat(32));
+    let result = groundhog_cli::config::save_profile_wallet_address(
+        tmp.path(),
+        None,
+        "alice",
+        "banana",
+        &owner,
+    );
     assert!(result.is_err());
 }
 
@@ -843,12 +901,39 @@ fn save_wallet_accepts_valid_hex_address() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
     let addr = format!("0x{}", "ab".repeat(32));
-    let result =
-        groundhog_cli::config::save_profile_wallet_address(tmp.path(), None, "alice", &addr);
+    let owner = format!("0x{}", "cd".repeat(32));
+    let result = groundhog_cli::config::save_profile_wallet_address(
+        tmp.path(),
+        None,
+        "alice",
+        &addr,
+        &owner,
+    );
     assert!(result.is_ok());
     assert!(global_config_path(&tmp).exists());
 
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
+}
+
+#[test]
+#[serial]
+fn resolve_profile_rejects_legacy_string_wallet_binding() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(
+        tmp.path().join("groundhog.toml"),
+        format!(
+            r#"
+[profile.default.wallets]
+alice = "0x{}"
+"#,
+            "ab".repeat(32)
+        ),
+    )
+    .unwrap();
+
+    let result = groundhog_cli::config::resolve_profile(tmp.path(), None);
+
+    assert!(result.is_err());
 }
 
 #[test]
@@ -884,17 +969,33 @@ fn save_second_wallet_preserves_first() {
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
     let addr_a = format!("0x{}", "aa".repeat(32));
     let addr_b = format!("0x{}", "bb".repeat(32));
+    let owner_a = format!("0x{}", "cc".repeat(32));
+    let owner_b = format!("0x{}", "dd".repeat(32));
 
-    groundhog_cli::config::save_profile_wallet_address(tmp.path(), None, "alice", &addr_a).unwrap();
-    groundhog_cli::config::save_profile_wallet_address(tmp.path(), None, "bob", &addr_b).unwrap();
+    groundhog_cli::config::save_profile_wallet_address(
+        tmp.path(),
+        None,
+        "alice",
+        &addr_a,
+        &owner_a,
+    )
+    .unwrap();
+    groundhog_cli::config::save_profile_wallet_address(tmp.path(), None, "bob", &addr_b, &owner_b)
+        .unwrap();
 
     let profile = groundhog_cli::config::resolve_profile(tmp.path(), None).unwrap();
     assert_eq!(
-        profile.wallets.get("alice").map(String::as_str),
+        profile
+            .wallets
+            .get("alice")
+            .map(|wallet| wallet.address.as_str()),
         Some(addr_a.as_str())
     );
     assert_eq!(
-        profile.wallets.get("bob").map(String::as_str),
+        profile
+            .wallets
+            .get("bob")
+            .map(|wallet| wallet.address.as_str()),
         Some(addr_b.as_str())
     );
 
@@ -908,15 +1009,28 @@ fn remove_wallet_deletes_saved_entry() {
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
     let addr_a = format!("0x{}", "aa".repeat(32));
     let addr_b = format!("0x{}", "bb".repeat(32));
+    let owner_a = format!("0x{}", "cc".repeat(32));
+    let owner_b = format!("0x{}", "dd".repeat(32));
 
-    groundhog_cli::config::save_profile_wallet_address(tmp.path(), None, "alice", &addr_a).unwrap();
-    groundhog_cli::config::save_profile_wallet_address(tmp.path(), None, "bob", &addr_b).unwrap();
+    groundhog_cli::config::save_profile_wallet_address(
+        tmp.path(),
+        None,
+        "alice",
+        &addr_a,
+        &owner_a,
+    )
+    .unwrap();
+    groundhog_cli::config::save_profile_wallet_address(tmp.path(), None, "bob", &addr_b, &owner_b)
+        .unwrap();
     groundhog_cli::config::remove_profile_wallet_address(tmp.path(), None, "alice").unwrap();
 
     let profile = groundhog_cli::config::resolve_profile(tmp.path(), None).unwrap();
     assert!(!profile.wallets.contains_key("alice"));
     assert_eq!(
-        profile.wallets.get("bob").map(String::as_str),
+        profile
+            .wallets
+            .get("bob")
+            .map(|wallet| wallet.address.as_str()),
         Some(addr_b.as_str())
     );
 
@@ -929,8 +1043,10 @@ fn remove_wallet_rejects_missing_entry() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
     let addr = format!("0x{}", "aa".repeat(32));
+    let owner = format!("0x{}", "bb".repeat(32));
 
-    groundhog_cli::config::save_profile_wallet_address(tmp.path(), None, "alice", &addr).unwrap();
+    groundhog_cli::config::save_profile_wallet_address(tmp.path(), None, "alice", &addr, &owner)
+        .unwrap();
     let result = groundhog_cli::config::remove_profile_wallet_address(tmp.path(), None, "bob");
 
     assert!(result.is_err());

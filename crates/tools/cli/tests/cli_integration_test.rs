@@ -1983,10 +1983,12 @@ fn wallet_ls_json_outputs_saved_wallets() {
     std::fs::create_dir_all(&project).unwrap();
     let alice = format!("0x{}", "ab".repeat(32));
     let bob = format!("0x{}", "cd".repeat(32));
+    let alice_owner = format!("0x{}", "11".repeat(32));
+    let bob_owner = format!("0x{}", "22".repeat(32));
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"http://127.0.0.1:9545\"\n\n[profile.default.wallets]\nalice = \"{alice}\"\nbob = \"{bob}\"\n"
+            "[profile.default]\nrpc_url = \"http://127.0.0.1:9545\"\n\n[profile.default.wallets.alice]\naddress = \"{alice}\"\nowner_public_key = \"{alice_owner}\"\n\n[profile.default.wallets.bob]\naddress = \"{bob}\"\nowner_public_key = \"{bob_owner}\"\n"
         ),
     )
     .unwrap();
@@ -2010,8 +2012,8 @@ fn wallet_ls_json_outputs_saved_wallets() {
     assert_eq!(
         stdout["data"]["wallets"],
         serde_json::json!([
-            { "name": "alice", "address": alice },
-            { "name": "bob", "address": bob },
+            { "name": "alice", "address": alice, "owner_public_key": alice_owner },
+            { "name": "bob", "address": bob, "owner_public_key": bob_owner },
         ])
     );
 }
@@ -2026,10 +2028,11 @@ fn airdrop_dry_run_json_outputs_prepared_transaction() {
     let manifest_path = write_runtime_manifest(&project, 0, &faucet_wallet, None);
     let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
     let recipient_wallet = format!("0x{}", "ab".repeat(32));
+    let recipient_owner = format!("0x{}", "cd".repeat(32));
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\nruntime_manifest = \"{}\"\n\n[profile.default.wallets]\nalice = \"{recipient_wallet}\"\n",
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\nruntime_manifest = \"{}\"\n\n[profile.default.wallets.alice]\naddress = \"{recipient_wallet}\"\nowner_public_key = \"{recipient_owner}\"\n",
             manifest_path.file_name().unwrap().to_string_lossy()
         ),
     )
@@ -3199,11 +3202,12 @@ fn balance_json_reads_native_hog_balance() {
     std::fs::create_dir_all(&project).unwrap();
 
     let address = format!("0x{}", "11".repeat(32));
+    let owner = format!("0x{}", "12".repeat(32));
     let (rpc_url, rpc_server) = spawn_balance_rpc(&address, "123456789");
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"{address}\"\n"
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets.alice]\naddress = \"{address}\"\nowner_public_key = \"{owner}\"\n"
         ),
     )
     .unwrap();
@@ -3241,11 +3245,12 @@ fn balance_json_uses_global_default_profile_when_profile_omitted() {
     std::fs::create_dir_all(config_home.join("groundhog")).unwrap();
 
     let address = format!("0x{}", "77".repeat(32));
+    let owner = format!("0x{}", "78".repeat(32));
     let (rpc_url, rpc_server) = spawn_balance_rpc(&address, "70000000");
     std::fs::write(
         config_home.join("groundhog/config.toml"),
         format!(
-            "default_profile = \"devnet\"\n\n[profile.devnet]\nrpc_url = \"{rpc_url}\"\n\n[profile.devnet.wallets]\nalice = \"{address}\"\n"
+            "default_profile = \"devnet\"\n\n[profile.devnet]\nrpc_url = \"{rpc_url}\"\n\n[profile.devnet.wallets.alice]\naddress = \"{address}\"\nowner_public_key = \"{owner}\"\n"
         ),
     )
     .unwrap();

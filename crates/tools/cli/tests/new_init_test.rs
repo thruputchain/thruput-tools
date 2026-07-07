@@ -21,9 +21,10 @@ fn new_creates_subdirectory_and_scaffolds() {
     assert!(dir.join("src/lib.rs").exists());
     let config = fs::read_to_string(dir.join("groundhog.toml")).unwrap();
     assert!(config.contains("[profile.local.contracts]"));
-    assert!(config.contains("[profile.local.wallets]"));
+    assert!(config.contains("# [profile.local.wallets.alice]"));
     assert!(config.contains("[profile.devnet.contracts]"));
-    assert!(config.contains("[profile.devnet.wallets]"));
+    assert!(config.contains("# [profile.devnet.wallets.alice]"));
+    assert!(config.contains("# owner_public_key ="));
     assert!(!config.contains("default_profile"));
     assert!(!config.contains("rpc_url"));
     assert!(!config.contains("default_key"));
@@ -119,8 +120,9 @@ password = "pass"
 [profile.local]
 rpc_url = "http://127.0.0.1:9999"
 
-[profile.local.wallets]
-alice = "0x1111111111111111111111111111111111111111111111111111111111111111"
+[profile.local.wallets.alice]
+address = "0x1111111111111111111111111111111111111111111111111111111111111111"
+owner_public_key = "0x2222222222222222222222222222222222222222222222222222222222222222"
 "#,
     )
     .unwrap();
@@ -132,8 +134,9 @@ alice = "0x1111111111111111111111111111111111111111111111111111111111111111"
     assert!(global_config.contains("default_profile = \"devnet\""));
     assert!(global_config.contains("default_key = \"alice\""));
     assert!(global_config.contains("rpc_url = \"http://127.0.0.1:9999\""));
+    assert!(global_config.contains("[profile.local.wallets.alice]"));
     assert!(global_config.contains(
-        "alice = \"0x1111111111111111111111111111111111111111111111111111111111111111\""
+        "address = \"0x1111111111111111111111111111111111111111111111111111111111111111\""
     ));
     assert!(global_config.contains("devnet"));
     let devnet = groundhog_cli::config::resolve_profile(tmp.path(), Some("devnet")).unwrap();
