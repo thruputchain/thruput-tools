@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use getrandom::getrandom;
 use groundhog_json_rpc_types::network_descriptor::NetworkDescriptor;
 use groundhog_json_rpc_types::receipt::ExecStatus;
 use groundhog_json_rpc_types::transaction::TxHash;
@@ -149,7 +150,12 @@ pub fn create(
     let prepared = prepare_wallet_create(&cwd, key_name, wallet_name, profile, overrides)?;
 
     if dry_run {
-        return print_dry_run(&prepared, cmd, print);
+        return match &prepared {
+            PreparedWalletCreate::Local(prepared) => print_dry_run(prepared, cmd, print),
+            PreparedWalletCreate::Remote(_) => Err(CliError::Other(
+                "remote wallet create dry-run should be handled before prepare".into(),
+            )),
+        };
     }
 
     match prepared {
@@ -376,86 +382,45 @@ pub fn list(profile: &str, cmd: &'static str, print: &Print) -> Result<(), CliEr
 }
 
 fn print_dry_run(
-    prepared: &PreparedWalletCreate,
+    prepared: &PreparedLocalWalletCreate,
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    match prepared {
-        PreparedWalletCreate::Local(prepared) => {
-            print.status(format_args!(
-                "Prepared dry-run wallet create `{}` for key `{}` on {}.",
-                prepared.wallet_name, prepared.key_name, prepared.rpc_url
-            ));
-            print.status(format_args!("  wallet: {}", prepared.wallet_address));
-            print.status(format_args!(
-                "  faucet: {} ({})",
-                prepared.faucet_key_name, prepared.faucet_role
-            ));
-            print.status(format_args!("  owner: {}", prepared.owner_public_key));
-            print.status(format_args!(
-                "  prefund raw amount: {}",
-                prepared.prefund_raw_amount
-            ));
-            print.status("  submitted: no (--dry-run)");
+    print.status(format_args!(
+        "Prepared dry-run wallet create `{}` for key `{}` on {}.",
+        prepared.wallet_name, prepared.key_name, prepared.rpc_url
+    ));
+    print.status(format_args!("  wallet: {}", prepared.wallet_address));
+    print.status(format_args!(
+        "  faucet: {} ({})",
+        prepared.faucet_key_name, prepared.faucet_role
+    ));
+    print.status(format_args!("  owner: {}", prepared.owner_public_key));
+    print.status(format_args!(
+        "  prefund raw amount: {}",
+        prepared.prefund_raw_amount
+    ));
+    print.status("  submitted: no (--dry-run)");
 
-            print.json(&CommandResult::new(
-                cmd,
-                json!({
-                    "schemaVersion": WALLET_CREATE_JSON_SCHEMA_VERSION,
-                    "dry_run": true,
-                    "submitted": false,
-                    "mode": "local",
-                    "name": prepared.wallet_name,
-                    "key": prepared.key_name,
-                    "wallet": prepared.wallet_address,
-                    "faucet": {
-                        "key": prepared.faucet_key_name,
-                        "role": prepared.faucet_role,
-                    },
-                    "owner_public_key": prepared.owner_public_key,
-                    "artifact_path": prepared.artifact_path,
-                    "prefund_raw_amount": prepared.prefund_raw_amount.to_string(),
-                }),
-            ))?;
-        }
-        PreparedWalletCreate::Remote(prepared) => {
-            print.status(format_args!(
-                "Prepared dry-run remote wallet create `{}` for key `{}`.",
-                prepared.wallet_name, prepared.key_name
-            ));
-            print.status(format_args!("  faucet: {}", prepared.faucet_url));
-            print.status(format_args!("  wallet: {}", prepared.wallet_address));
-            print.status(format_args!("  owner: {}", prepared.owner_public_key));
-            print.status(format_args!("  deploy nonce: {}", prepared.deploy_nonce));
-            print.status(format_args!(
-                "  prefund raw amount: {}",
-                prepared.prefund_raw_amount
-            ));
-            print.status("  submitted: no (--dry-run)");
-
-            print.json(&CommandResult::new(
-                cmd,
-                json!({
-                    "schemaVersion": WALLET_CREATE_JSON_SCHEMA_VERSION,
-                    "dry_run": true,
-                    "submitted": false,
-                    "mode": "remote",
-                    "name": prepared.wallet_name,
-                    "key": prepared.key_name,
-                    "wallet": prepared.wallet_address,
-                    "faucet_url": prepared.faucet_url,
-                    "rpc_url": prepared.rpc_url,
-                    "owner_public_key": prepared.owner_public_key,
-                    "deploy_nonce": prepared.deploy_nonce,
-                    "prefund_raw_amount": prepared.prefund_raw_amount,
-                    "planned_requests": [
-                        "POST /v1/airdrop",
-                        "POST /v1/create-wallet"
-                    ],
-                }),
-            ))?;
-        }
-    }
+    print.json(&CommandResult::new(
+        cmd,
+        json!({
+            "schemaVersion": WALLET_CREATE_JSON_SCHEMA_VERSION,
+            "dry_run": true,
+            "submitted": false,
+            "mode": "local",
+            "name": prepared.wallet_name,
+            "key": prepared.key_name,
+            "wallet": prepared.wallet_address,
+            "faucet": {
+                "key": prepared.faucet_key_name,
+                "role": prepared.faucet_role,
+            },
+            "owner_public_key": prepared.owner_public_key,
+            "artifact_path": prepared.artifact_path,
+            "prefund_raw_amount": prepared.prefund_raw_amount.to_string(),
+        }),
+    ))?;
 
     Ok(())
 }
@@ -695,8 +660,9 @@ fn prepare_remote_wallet_create(
     let owner = load_local_signer(&key_name)?;
     let owner_public_key_xdr = Ed25519PublicKey::from(owner.verifying_key_bytes());
     let owner_public_key = format!("0x{}", hex::encode(owner_public_key_xdr.as_ref()));
-    let deploy_nonce_val = nonce_from_timestamp();
-    let deploy_nonce = deploy_nonce_from_u64(deploy_nonce_val);
+    let mut deploy_nonce_bytes = [0u8; 32];
+    getrandom(&mut deploy_nonce_bytes).map_err(|error| CliError::Other(error.to_string()))?;
+    let deploy_nonce = SHA256Hash::from(deploy_nonce_bytes);
     let deploy_nonce_hex = format!("0x{}", hex::encode(deploy_nonce.as_ref()));
 
     let client = faucet_client()?;

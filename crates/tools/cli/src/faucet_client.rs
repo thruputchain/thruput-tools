@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::CliError;
 
-const FAUCET_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const FAUCET_REQUEST_TIMEOUT: Duration = Duration::from_secs(90);
 
 pub(crate) fn client() -> Result<reqwest::blocking::Client, CliError> {
     reqwest::blocking::Client::builder()
