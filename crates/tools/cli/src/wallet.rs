@@ -700,7 +700,7 @@ fn prepare_remote_wallet_create(
     let deploy_nonce_hex = format!("0x{}", hex::encode(deploy_nonce.as_ref()));
 
     let client = faucet_client()?;
-    let descriptor = fetch_network_descriptor(&faucet_url)?;
+    let descriptor = fetch_network_descriptor(&client, &faucet_url)?;
     let prepared: PrepareWalletCreateResponse = post_json(
         &client,
         &format!("{faucet_url}/v1/create-wallet/prepare"),
@@ -767,10 +767,13 @@ fn validate_remote_prepare_wallet_address(
     Ok(())
 }
 
-fn fetch_network_descriptor(faucet_url: &str) -> Result<NetworkDescriptor, CliError> {
+fn fetch_network_descriptor(
+    client: &reqwest::blocking::Client,
+    faucet_url: &str,
+) -> Result<NetworkDescriptor, CliError> {
     let faucet_url = faucet_url.trim_end_matches('/');
     let url = format!("{faucet_url}/v1/network");
-    faucet_client()?
+    client
         .get(&url)
         .send()
         .map_err(|error| CliError::Other(format!("failed to call `{url}`: {error}")))?
