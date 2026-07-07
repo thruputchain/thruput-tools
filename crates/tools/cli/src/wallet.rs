@@ -709,6 +709,7 @@ fn prepare_remote_wallet_create(
             deploy_nonce: deploy_nonce_hex.clone(),
         },
     )?;
+    validate_remote_prepare_wallet_address(&descriptor, &deploy_nonce, &prepared.wallet_address)?;
     let proof_message = wallet_create_proof_message(
         descriptor.genesis_hash.0,
         descriptor.faucet.wallet_address.0,
@@ -742,6 +743,28 @@ fn prepare_remote_wallet_create(
         wallet_address: prepared.wallet_address,
         prefund_raw_amount: prepared.prefund_raw_amount,
     }))
+}
+
+fn validate_remote_prepare_wallet_address(
+    descriptor: &NetworkDescriptor,
+    deploy_nonce: &SHA256Hash,
+    prepared: &str,
+) -> Result<(), CliError> {
+    let expected = derive_deploy_address(
+        &descriptor.faucet.wallet_address.0,
+        deploy_nonce,
+        &descriptor.wallet_create.wallet_contract_hash.0,
+    )
+    .map_err(|error| CliError::Other(error.to_string()))?;
+    let prepared_wallet_address = parse_contract_address(prepared)?;
+    if prepared_wallet_address != expected {
+        return Err(CliError::Other(format!(
+            "remote wallet-create prepare returned wallet `{prepared}` but local derivation expected `{}`",
+            format_contract_address(&expected)
+        )));
+    }
+
+    Ok(())
 }
 
 fn fetch_network_descriptor(faucet_url: &str) -> Result<NetworkDescriptor, CliError> {
@@ -867,12 +890,50 @@ fn resolve_dev_wallet_artifact_path(
 
 #[cfg(test)]
 mod tests {
+    use groundhog_json_rpc_types::hex::HexBytes;
+    use groundhog_json_rpc_types::network_descriptor::{
+        FaucetDescriptor, NativeHogDescriptor, NetworkDescriptor, NetworkDescriptorEndpoints,
+        WalletCreateDescriptor,
+    };
     use groundhog_json_rpc_types::receipt::ExecStatus;
+    use groundhog_signing::derive_deploy_address;
+    use groundhog_xdr::types::{ContractAddress, SHA256Hash};
 
     use super::{
-        ensure_remote_prefund_success, resolve_dev_wallet_artifact_path,
-        validate_remote_create_wallet_address,
+        ensure_remote_prefund_success, format_contract_address, resolve_dev_wallet_artifact_path,
+        validate_remote_create_wallet_address, validate_remote_prepare_wallet_address,
     };
+
+    #[test]
+    fn remote_prepare_wallet_address_validation_accepts_derived_address() {
+        let descriptor = test_network_descriptor();
+        let deploy_nonce = SHA256Hash::from([0x44; 32]);
+        let expected = derive_deploy_address(
+            &descriptor.faucet.wallet_address.0,
+            &deploy_nonce,
+            &descriptor.wallet_create.wallet_contract_hash.0,
+        )
+        .expect("bug: wallet address should derive");
+
+        validate_remote_prepare_wallet_address(
+            &descriptor,
+            &deploy_nonce,
+            &format_contract_address(&expected),
+        )
+        .expect("bug: derived prepare address should validate");
+    }
+
+    #[test]
+    fn remote_prepare_wallet_address_validation_rejects_mismatch() {
+        let descriptor = test_network_descriptor();
+        let deploy_nonce = SHA256Hash::from([0x44; 32]);
+        let wrong = format!("0x{}", "99".repeat(32));
+
+        let err = validate_remote_prepare_wallet_address(&descriptor, &deploy_nonce, &wrong)
+            .expect_err("bug: mismatched prepare address should fail");
+
+        assert!(err.to_string().contains("local derivation expected"));
+    }
 
     #[test]
     fn remote_prefund_status_validation_accepts_ok() {
@@ -925,5 +986,26 @@ mod tests {
         )
         .expect("bug: profile-root artifact should resolve");
         assert_eq!(resolved, artifact);
+    }
+
+    fn test_network_descriptor() -> NetworkDescriptor {
+        NetworkDescriptor::new(
+            "devnet-preview".into(),
+            "hogp/test".into(),
+            groundhog_json_rpc_types::SHA256Hash::from(SHA256Hash::from([0x11; 32])),
+            NetworkDescriptorEndpoints::new("https://rpc.example".into()),
+            NativeHogDescriptor::new(
+                groundhog_json_rpc_types::ContractAddress::from(ContractAddress::from([0x22; 32])),
+                7,
+                HexBytes(vec![0x63, 0x28, 0x5b, 0x35, 0x23, 0xf9, 0xdc, 0x3f]),
+            ),
+            FaucetDescriptor::new(groundhog_json_rpc_types::ContractAddress::from(
+                ContractAddress::from([0x33; 32]),
+            )),
+            WalletCreateDescriptor::new(
+                "100000000".into(),
+                groundhog_json_rpc_types::SHA256Hash::from(SHA256Hash::from([0x55; 32])),
+            ),
+        )
     }
 }
