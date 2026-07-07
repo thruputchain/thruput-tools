@@ -24,7 +24,6 @@ use crate::utils::nonce_from_timestamp;
 
 const DEFAULT_BLOCK_EXPIRY_OFFSET: i64 = 1_000;
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct AirdropRequest {
     recipient: ContractAddress,
 }
@@ -295,4 +294,24 @@ fn encode_transfer_calldata(
 ) -> Result<Vec<u8>, AirdropSubmitError> {
     xdrs::cxs::encode(&(recipient, raw_amount))
         .map_err(|error| AirdropSubmitError::EncodeTransferCalldata(error.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::AirdropRequest;
+
+    #[test]
+    fn airdrop_request_accepts_future_optional_fields() {
+        let request: AirdropRequest = serde_json::from_value(json!({
+            "recipient": format!("0x{}", "11".repeat(32)),
+            "clientNonce": "future-client-nonce",
+            "networkId": "future-network",
+            "genesisHash": format!("0x{}", "22".repeat(32)),
+        }))
+        .expect("bug: public API requests should ignore unknown future fields");
+
+        assert_eq!(request.recipient.0.as_ref(), &[0x11; 32]);
+    }
 }

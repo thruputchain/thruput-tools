@@ -31,14 +31,14 @@ use crate::utils::nonce_from_timestamp;
 
 const DEFAULT_BLOCK_EXPIRY_OFFSET: i64 = 1_000;
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct PrepareWalletCreateRequest {
     owner_public_key: ApiEd25519PublicKey,
     deploy_nonce: ApiSha256Hash,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct CreateWalletRequest {
     owner_public_key: ApiEd25519PublicKey,
     deploy_nonce: ApiSha256Hash,
@@ -445,8 +445,41 @@ fn wallet_contract(artifact_path: &std::path::Path, artifact_bytes: Vec<u8>) -> 
 #[cfg(test)]
 mod tests {
     use groundhog_signing::{LocalSigner, Signer};
+    use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn prepare_wallet_create_request_accepts_future_optional_fields() {
+        let request: PrepareWalletCreateRequest = serde_json::from_value(json!({
+            "ownerPublicKey": format!("0x{}", "11".repeat(32)),
+            "deployNonce": format!("0x{}", "22".repeat(32)),
+            "clientNonce": "future-client-nonce",
+            "networkId": "future-network",
+            "genesisHash": format!("0x{}", "33".repeat(32)),
+        }))
+        .expect("bug: public API requests should ignore unknown future fields");
+
+        assert_eq!(request.owner_public_key.0.as_ref(), &[0x11; 32]);
+        assert_eq!(request.deploy_nonce.0.as_ref(), &[0x22; 32]);
+    }
+
+    #[test]
+    fn create_wallet_request_accepts_future_optional_fields() {
+        let request: CreateWalletRequest = serde_json::from_value(json!({
+            "ownerPublicKey": format!("0x{}", "11".repeat(32)),
+            "deployNonce": format!("0x{}", "22".repeat(32)),
+            "ownerSignature": format!("0x{}", "33".repeat(64)),
+            "clientNonce": "future-client-nonce",
+            "networkId": "future-network",
+            "genesisHash": format!("0x{}", "44".repeat(32)),
+        }))
+        .expect("bug: public API requests should ignore unknown future fields");
+
+        assert_eq!(request.owner_public_key.0.as_ref(), &[0x11; 32]);
+        assert_eq!(request.deploy_nonce.0.as_ref(), &[0x22; 32]);
+        assert_eq!(request.owner_signature.0.as_slice(), &[0x33; 64]);
+    }
 
     #[test]
     fn owner_proof_verifies_for_matching_key_and_message() {
