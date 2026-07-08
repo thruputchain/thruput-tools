@@ -121,6 +121,11 @@ pub trait FaucetPolicyStore: Send + Sync + 'static {
         attempt: WalletCreateAttempt,
     ) -> Result<Option<WalletCreateAttempt>, PolicyStoreError>;
 
+    fn insert_wallet_create_attempt_if_absent(
+        &self,
+        attempt: WalletCreateAttempt,
+    ) -> Result<Option<WalletCreateAttempt>, PolicyStoreError>;
+
     fn claim_wallet_create_transition(
         &self,
         key: &WalletCreateAttemptKey,
@@ -204,6 +209,22 @@ impl FaucetPolicyStore for InMemoryFaucetPolicyStore {
             .lock()?
             .wallet_create_attempts
             .insert(attempt.key.clone(), attempt))
+    }
+
+    fn insert_wallet_create_attempt_if_absent(
+        &self,
+        attempt: WalletCreateAttempt,
+    ) -> Result<Option<WalletCreateAttempt>, PolicyStoreError> {
+        use std::collections::hash_map::Entry;
+
+        let mut state = self.lock()?;
+        match state.wallet_create_attempts.entry(attempt.key.clone()) {
+            Entry::Occupied(existing) => Ok(Some(existing.get().clone())),
+            Entry::Vacant(vacant) => {
+                vacant.insert(attempt);
+                Ok(None)
+            }
+        }
     }
 
     fn claim_wallet_create_transition(
@@ -458,7 +479,7 @@ mod tests {
         let store = InMemoryFaucetPolicyStore::new();
         let key = QuotaKey::AirdropRecipient("0xabc".into());
         let now = SystemTime::UNIX_EPOCH;
-        let window = Duration::from_secs(60);
+        let window = Duration::from_mins(1);
 
         assert!(
             store
@@ -558,11 +579,11 @@ mod tests {
     fn client_identity_ignores_forwarded_headers_unless_trusted() {
         let mut headers = HeaderMap::new();
         headers.insert("x-forwarded-for", "203.0.113.10".parse().unwrap());
-        let peer = SocketAddr::from((Ipv4Addr::new(127, 0, 0, 1), 8081));
+        let peer = SocketAddr::from((Ipv4Addr::LOCALHOST, 8081));
 
         assert_eq!(
             client_identity(&headers, Some(peer), false),
-            ClientIdentity::Ip(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)))
+            ClientIdentity::Ip(IpAddr::V4(Ipv4Addr::LOCALHOST))
         );
         assert_eq!(
             client_identity(&headers, Some(peer), true),

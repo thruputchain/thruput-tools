@@ -111,7 +111,7 @@ impl FaucetConfigFile {
 }
 
 /// Private-preview faucet policy config.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct PolicyConfig {
     /// Trust reverse proxy client IP headers for per-client quota identity.
@@ -120,16 +120,6 @@ pub struct PolicyConfig {
     pub airdrop: AirdropPolicyConfig,
     /// Wallet-create policy controls.
     pub wallet_create: WalletCreatePolicyConfig,
-}
-
-impl Default for PolicyConfig {
-    fn default() -> Self {
-        Self {
-            trust_proxy_client_ip_headers: false,
-            airdrop: AirdropPolicyConfig::default(),
-            wallet_create: WalletCreatePolicyConfig::default(),
-        }
-    }
 }
 
 impl PolicyConfig {
@@ -154,6 +144,12 @@ impl PolicyConfig {
                     .prefunded_attempt_retention_secs,
             },
         }
+    }
+}
+
+impl Default for PolicyRuntimeConfig {
+    fn default() -> Self {
+        PolicyConfig::default().into_runtime_config()
     }
 }
 
@@ -535,7 +531,7 @@ mod tests {
     fn config_overrides_policy_config() {
         let config: FaucetConfigFile = toml::from_str(&format!(
             "{TEST_CONFIG}\n{}",
-            r#"
+            r"
             [policy]
             trust_proxy_client_ip_headers = true
 
@@ -553,7 +549,7 @@ mod tests {
             max_pending_per_owner = 1
             unprefunded_attempt_ttl_secs = 20
             prefunded_attempt_retention_secs = 240
-            "#
+            "
         ))
         .expect("bug: fixture config should parse");
 
@@ -725,5 +721,5 @@ mod tests {
         [wallet_create]
         create_wallet_entrypoint = "0x6372656174655761"
         wallet_artifact_path = "contracts/dev_wallet.rv32a"
-    "#;
+        "#;
 }

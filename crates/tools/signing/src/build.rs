@@ -236,7 +236,7 @@ pub struct WalletCreateProofV2<'a> {
 
 /// Message signed by a wallet owner to authorize hardened hosted faucet wallet creation.
 pub fn wallet_create_proof_message_v2(
-    proof: WalletCreateProofV2<'_>,
+    proof: &WalletCreateProofV2<'_>,
 ) -> Result<Vec<u8>, SigningError> {
     const DOMAIN: &str = "groundhog-faucet-create-wallet-v2";
     xdrs::cxs::encode(&(
@@ -306,7 +306,7 @@ mod tests {
             client_nonce: &[0x77; 16],
         };
 
-        let v2 = wallet_create_proof_message_v2(proof).expect("bug: v2 proof should encode");
+        let v2 = wallet_create_proof_message_v2(&proof).expect("bug: v2 proof should encode");
         let v1 = wallet_create_proof_message(
             SHA256Hash::from([0x11; 32]),
             ContractAddress::from([0x22; 32]),
