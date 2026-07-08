@@ -39,9 +39,14 @@ fn parse_faucet_response<T: for<'de> Deserialize<'de>>(
             .map_err(|error| CliError::Other(format!("invalid JSON from `{url}`: {error}")));
     }
     if let Ok(body) = serde_json::from_slice::<FaucetErrorBody>(&bytes) {
+        let retry_after = body
+            .error
+            .retry_after_seconds
+            .map(|seconds| format!("; retry after {seconds}s"))
+            .unwrap_or_default();
         return Err(CliError::Other(format!(
-            "faucet request `{url}` failed with {}: {} ({})",
-            status, body.error.message, body.error.code
+            "faucet request `{url}` failed with {}: {} ({}){}",
+            status, body.error.message, body.error.code, retry_after
         )));
     }
     Err(CliError::Other(format!(
@@ -58,4 +63,6 @@ struct FaucetErrorBody {
 struct FaucetErrorDetail {
     code: String,
     message: String,
+    #[serde(rename = "retryAfterSeconds")]
+    retry_after_seconds: Option<u64>,
 }
