@@ -1717,25 +1717,7 @@ fn deploy_dry_run_json_outputs_prepared_transaction() {
     std::fs::create_dir_all(&project).unwrap();
 
     let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
-    std::fs::write(
-        project.join("groundhog.toml"),
-        format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
-            "aa".repeat(32)
-        ),
-    )
-    .unwrap();
-
-    let generate = groundhog()
-        .args(["keys", "generate", "alice"])
-        .env("XDG_CONFIG_HOME", &config_home)
-        .output()
-        .unwrap();
-    assert!(
-        generate.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&generate.stderr)
-    );
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
     // Write a minimal WASM file for the deploy to read.
     let wasm_path = tmp.path().join("test.wasm");
@@ -2087,25 +2069,7 @@ fn deploy_dry_run_json_accepts_rv32_artifact() {
     std::fs::create_dir_all(&project).unwrap();
 
     let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
-    std::fs::write(
-        project.join("groundhog.toml"),
-        format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
-            "aa".repeat(32)
-        ),
-    )
-    .unwrap();
-
-    let generate = groundhog()
-        .args(["keys", "generate", "alice"])
-        .env("XDG_CONFIG_HOME", &config_home)
-        .output()
-        .unwrap();
-    assert!(
-        generate.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&generate.stderr)
-    );
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
     let rv32_path = tmp.path().join("test.rv32a");
     std::fs::write(&rv32_path, b"rv32-artifact").unwrap();
@@ -2165,29 +2129,11 @@ fn deploy_dry_run_auto_resolves_rv32_artifact_by_default() {
     .unwrap();
 
     let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
-    std::fs::write(
-        project.join("groundhog.toml"),
-        format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
-            "aa".repeat(32)
-        ),
-    )
-    .unwrap();
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
     let artifact_path = project.join("target/groundhog/demo_contract.rv32a");
     std::fs::create_dir_all(artifact_path.parent().unwrap()).unwrap();
     std::fs::write(&artifact_path, b"rv32-auto").unwrap();
-
-    let generate = groundhog()
-        .args(["keys", "generate", "alice"])
-        .env("XDG_CONFIG_HOME", &config_home)
-        .output()
-        .unwrap();
-    assert!(
-        generate.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&generate.stderr)
-    );
 
     let output = groundhog()
         .args(["--json", "deploy", "--dry-run"])
@@ -2672,25 +2618,7 @@ fn deploy_live_json_submits_and_returns_receipt() {
     std::fs::create_dir_all(&project).unwrap();
 
     let (rpc_url, rpc_server) = spawn_deploy_rpc(42);
-    std::fs::write(
-        project.join("groundhog.toml"),
-        format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
-            "aa".repeat(32)
-        ),
-    )
-    .unwrap();
-
-    let generate = groundhog()
-        .args(["keys", "generate", "alice"])
-        .env("XDG_CONFIG_HOME", &config_home)
-        .output()
-        .unwrap();
-    assert!(
-        generate.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&generate.stderr)
-    );
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
     // Write a minimal WASM file for the deploy to read.
     let wasm_path = tmp.path().join("test.wasm");
@@ -2750,25 +2678,7 @@ fn deploy_live_json_includes_transaction_detail_when_dev_method_exists() {
 
     let (rpc_url, rpc_server) =
         spawn_deploy_rpc_with_detail(42, DevDetailRpcResponse::Result(sample_detail_result(42)));
-    std::fs::write(
-        project.join("groundhog.toml"),
-        format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
-            "aa".repeat(32)
-        ),
-    )
-    .unwrap();
-
-    let generate = groundhog()
-        .args(["keys", "generate", "alice"])
-        .env("XDG_CONFIG_HOME", &config_home)
-        .output()
-        .unwrap();
-    assert!(
-        generate.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&generate.stderr)
-    );
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
     let wasm_path = tmp.path().join("test.wasm");
     std::fs::write(&wasm_path, b"\0asm\x01\0\0\0").unwrap();
@@ -2865,14 +2775,7 @@ fn view_json_returns_raw_output() {
     let entrypoint = "0x0102030405060708";
     let calldata = "0xdeadbeef";
     let (rpc_url, rpc_server) = spawn_view_rpc(&address, entrypoint, calldata);
-    std::fs::write(
-        project.join("groundhog.toml"),
-        format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
-            "aa".repeat(32)
-        ),
-    )
-    .unwrap();
+    write_project_config_with_dummy_alice_wallet(&project, &rpc_url);
 
     let output = groundhog()
         .args([
@@ -3020,14 +2923,7 @@ fn view_json_surfaces_abort_as_success_body() {
             "abortData": "0x0a0b",
         }),
     );
-    std::fs::write(
-        project.join("groundhog.toml"),
-        format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
-            "aa".repeat(32)
-        ),
-    )
-    .unwrap();
+    write_project_config_with_dummy_alice_wallet(&project, &rpc_url);
 
     let output = groundhog()
         .args(["--json", "view", &address, entrypoint])
@@ -3066,14 +2962,7 @@ fn view_json_surfaces_fault_as_success_body() {
             "result": "fault",
         }),
     );
-    std::fs::write(
-        project.join("groundhog.toml"),
-        format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
-            "aa".repeat(32)
-        ),
-    )
-    .unwrap();
+    write_project_config_with_dummy_alice_wallet(&project, &rpc_url);
 
     let output = groundhog()
         .args(["--json", "view", &address, entrypoint])
@@ -3115,14 +3004,7 @@ fn view_human_prints_event_details() {
             "data": event_data,
         }]),
     );
-    std::fs::write(
-        project.join("groundhog.toml"),
-        format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
-            "aa".repeat(32)
-        ),
-    )
-    .unwrap();
+    write_project_config_with_dummy_alice_wallet(&project, &rpc_url);
 
     let output = groundhog()
         .args(["view", &address, entrypoint, "--calldata", "0x"])
@@ -3156,14 +3038,7 @@ fn storage_json_reads_latest_item() {
     let address = format!("0x{}", "11".repeat(32));
     let key = format!("0x{}", "42".repeat(32));
     let (rpc_url, rpc_server) = spawn_storage_rpc(&address, &key);
-    std::fs::write(
-        project.join("groundhog.toml"),
-        format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
-            "aa".repeat(32)
-        ),
-    )
-    .unwrap();
+    write_project_config_with_dummy_alice_wallet(&project, &rpc_url);
 
     let output = groundhog()
         .args(["--json", "storage", &address, &key])
@@ -3501,25 +3376,7 @@ fn call_dry_run_json_outputs_prepared_transaction() {
     std::fs::create_dir_all(&project).unwrap();
 
     let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
-    std::fs::write(
-        project.join("groundhog.toml"),
-        format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
-            "aa".repeat(32)
-        ),
-    )
-    .unwrap();
-
-    let generate = groundhog()
-        .args(["keys", "generate", "alice"])
-        .env("XDG_CONFIG_HOME", &config_home)
-        .output()
-        .unwrap();
-    assert!(
-        generate.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&generate.stderr)
-    );
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
     let contract = format!("0x{}", "11".repeat(32));
     let output = groundhog()
@@ -3626,25 +3483,7 @@ fn call_live_human_appends_transaction_detail_sections() {
         sample_call_receipt(42),
         DevDetailRpcResponse::Result(sample_detail_result(42)),
     );
-    std::fs::write(
-        project.join("groundhog.toml"),
-        format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
-            "aa".repeat(32)
-        ),
-    )
-    .unwrap();
-
-    let generate = groundhog()
-        .args(["keys", "generate", "alice"])
-        .env("XDG_CONFIG_HOME", &config_home)
-        .output()
-        .unwrap();
-    assert!(
-        generate.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&generate.stderr)
-    );
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
     let contract = format!("0x{}", "11".repeat(32));
     let output = groundhog()
@@ -3685,25 +3524,7 @@ fn call_live_human_warns_when_transaction_detail_fails() {
             message: "detail backend unavailable",
         },
     );
-    std::fs::write(
-        project.join("groundhog.toml"),
-        format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
-            "aa".repeat(32)
-        ),
-    )
-    .unwrap();
-
-    let generate = groundhog()
-        .args(["keys", "generate", "alice"])
-        .env("XDG_CONFIG_HOME", &config_home)
-        .output()
-        .unwrap();
-    assert!(
-        generate.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&generate.stderr)
-    );
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
     let contract = format!("0x{}", "11".repeat(32));
     let output = groundhog()
@@ -3805,25 +3626,7 @@ fn call_live_json_marks_legacy_default_wallet_entrypoint_without_manifest() {
         sample_deterministic_error_call_receipt(42),
         DevDetailRpcResponse::MethodNotFound,
     );
-    std::fs::write(
-        project.join("groundhog.toml"),
-        format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
-            "aa".repeat(32)
-        ),
-    )
-    .unwrap();
-
-    let generate = groundhog()
-        .args(["keys", "generate", "alice"])
-        .env("XDG_CONFIG_HOME", &config_home)
-        .output()
-        .unwrap();
-    assert!(
-        generate.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&generate.stderr)
-    );
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
     let contract = format!("0x{}", "11".repeat(32));
     let output = groundhog()
@@ -4477,6 +4280,52 @@ fn write_runtime_manifest_with_seed(
     });
     std::fs::write(&path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
     path
+}
+
+fn write_project_config_with_alice_wallet(
+    project: &std::path::Path,
+    rpc_url: &str,
+    config_home: &std::path::Path,
+) {
+    let owner_public_key = generate_key_public_key(config_home, "alice");
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets.alice]\naddress = \"0x{}\"\nowner_public_key = \"{owner_public_key}\"\n",
+            "aa".repeat(32)
+        ),
+    )
+    .unwrap();
+}
+
+fn write_project_config_with_dummy_alice_wallet(project: &std::path::Path, rpc_url: &str) {
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets.alice]\naddress = \"0x{}\"\nowner_public_key = \"0x{}\"\n",
+            "aa".repeat(32),
+            "bb".repeat(32),
+        ),
+    )
+    .unwrap();
+}
+
+fn generate_key_public_key(config_home: &std::path::Path, name: &str) -> String {
+    let output = groundhog()
+        .args(["--json", "keys", "generate", name])
+        .env("XDG_CONFIG_HOME", config_home)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    stdout["data"]["key"]["public_key"]
+        .as_str()
+        .expect("generated key should include public key")
+        .to_owned()
 }
 
 fn signed_tx_invoked_address(tx_hex: &str) -> String {

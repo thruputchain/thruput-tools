@@ -12,6 +12,7 @@ use crate::CliError;
 
 const INITIAL_DEFAULT_PROFILE: &str = "local";
 const LOCAL_RPC_URL: &str = "http://127.0.0.1:9545";
+const LOCAL_FAUCET_URL: &str = "http://127.0.0.1:8081";
 const HOG_CONTRACT_ADDRESS: &str =
     "0x0000000000000000000000000000000000000000000000000000000000000001";
 
@@ -131,6 +132,9 @@ pub fn initialize_global_profiles() -> Result<(), CliError> {
     let devnet = config.profile.entry("devnet".to_string()).or_default();
     if devnet.rpc_url.is_none() {
         devnet.rpc_url = Some(LOCAL_RPC_URL.to_string());
+    }
+    if devnet.faucet_url.is_none() {
+        devnet.faucet_url = Some(LOCAL_FAUCET_URL.to_string());
     }
     devnet
         .contracts

@@ -27,6 +27,7 @@ fn new_creates_subdirectory_and_scaffolds() {
     assert!(config.contains("# owner_public_key ="));
     assert!(!config.contains("default_profile"));
     assert!(!config.contains("rpc_url"));
+    assert!(!config.contains("faucet_url"));
     assert!(!config.contains("default_key"));
 }
 

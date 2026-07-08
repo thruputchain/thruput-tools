@@ -184,6 +184,7 @@ mod tests {
             name: "default".to_string(),
             rpc_url: Some("http://127.0.0.1:9545".to_string()),
             rpc_url_cli_override: false,
+            faucet_url: None,
             default_key: Some("dev-0".to_string()),
             runtime_manifest: None,
             runtime_manifest_cli_override: false,

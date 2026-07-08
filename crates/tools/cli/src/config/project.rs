@@ -531,6 +531,9 @@ fn merge_profiles(mut global: ProjectProfile, project: ProjectProfile) -> Projec
     if project.rpc_url.is_some() {
         global.rpc_url = project.rpc_url;
     }
+    if project.faucet_url.is_some() {
+        global.faucet_url = project.faucet_url;
+    }
     if project.default_key.is_some() {
         global.default_key = project.default_key;
     }
