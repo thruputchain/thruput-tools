@@ -75,13 +75,13 @@ struct HealthResponse {
 #[derive(Clone)]
 struct AppState {
     network_descriptor: Arc<NetworkDescriptor>,
-    airdrop_submitter: Arc<dyn airdrop::AirdropSubmitter>,
+    airdrop_service: Arc<airdrop::AirdropService>,
     wallet_create_service: Arc<wallet_create::WalletCreateService>,
 }
 
-impl FromRef<AppState> for Arc<dyn airdrop::AirdropSubmitter> {
+impl FromRef<AppState> for Arc<airdrop::AirdropService> {
     fn from_ref(state: &AppState) -> Self {
-        state.airdrop_submitter.clone()
+        state.airdrop_service.clone()
     }
 }
 
@@ -93,6 +93,12 @@ impl FromRef<AppState> for Arc<wallet_create::WalletCreateService> {
 
 pub fn app(config: FaucetConfig) -> Router {
     let cors_allowed_origins = config.cors_allowed_origins.clone();
+    let airdrop_service = Arc::new(airdrop::AirdropService::new(
+        config.network_descriptor.clone(),
+        config.airdrop_submitter.clone(),
+        config.policy_store.clone(),
+        config.policy_config.clone(),
+    ));
     let wallet_create_service = Arc::new(wallet_create::WalletCreateService::new(
         config.network_descriptor.clone(),
         config.airdrop_submitter.clone(),
@@ -102,7 +108,7 @@ pub fn app(config: FaucetConfig) -> Router {
     ));
     let state = AppState {
         network_descriptor: Arc::new(config.network_descriptor),
-        airdrop_submitter: config.airdrop_submitter,
+        airdrop_service,
         wallet_create_service,
     };
     let router = Router::new()
@@ -323,7 +329,7 @@ mod tests {
     #[tokio::test]
     async fn airdrop_validates_request_then_submits() {
         let response = app(test_config())
-            .oneshot(
+            .oneshot(request_with_connect_info(
                 Request::builder()
                     .method("POST")
                     .uri("/v1/airdrop")
@@ -338,7 +344,7 @@ mod tests {
                         .to_string(),
                     ))
                     .expect("bug: airdrop request should build"),
-            )
+            ))
             .await
             .expect("bug: airdrop request should complete");
 
@@ -348,15 +354,107 @@ mod tests {
             .expect("bug: airdrop body should read");
         let json: serde_json::Value =
             serde_json::from_slice(&body).expect("bug: airdrop body should be JSON");
+        assert_eq!(json["attemptStatus"], "succeeded");
         assert_eq!(json["rawAmount"], "100000000");
+        assert_eq!(json["txHash"], format!("0x{}", "22".repeat(32)));
         assert_eq!(json["height"], 42);
         assert_eq!(json["status"]["result"], "ok");
     }
 
     #[tokio::test]
+    async fn airdrop_rejects_mismatched_chain_identity() {
+        let mut body = airdrop_body();
+        body["genesisHash"] = serde_json::json!(format!("0x{}", "99".repeat(32)));
+
+        let response = airdrop_request_with_body(&test_config(), body).await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .expect("bug: airdrop body should read");
+        let json: serde_json::Value =
+            serde_json::from_slice(&body).expect("bug: airdrop body should be JSON");
+        assert_eq!(json["error"]["code"], "airdrop_network_mismatch");
+    }
+
+    #[tokio::test]
+    async fn airdrop_retry_returns_recorded_success() {
+        let airdrop = Arc::new(MockAirdropSubmitter::success());
+        let config = test_config_with_submitters(
+            airdrop.clone(),
+            Arc::new(MockWalletCreateSubmitter::success()),
+        );
+        let response = airdrop_request(&config).await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = airdrop_request(&config).await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(airdrop.calls(), 1);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .expect("bug: airdrop body should read");
+        let json: serde_json::Value =
+            serde_json::from_slice(&body).expect("bug: airdrop body should be JSON");
+        assert_eq!(json["attemptStatus"], "succeeded");
+        assert_eq!(json["txHash"], format!("0x{}", "22".repeat(32)));
+    }
+
+    #[tokio::test]
+    async fn airdrop_duplicate_in_flight_returns_pending_attempt() {
+        let config = test_config();
+        seed_airdrop_attempt(&config, policy::AirdropAttemptStatus::Pending, None);
+
+        let response = airdrop_request(&config).await;
+
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .expect("bug: airdrop body should read");
+        let json: serde_json::Value =
+            serde_json::from_slice(&body).expect("bug: airdrop body should be JSON");
+        assert_eq!(json["attemptStatus"], "pending");
+        assert_eq!(json["retryAfterSeconds"], 5);
+        assert!(json.get("txHash").is_none());
+    }
+
+    #[tokio::test]
+    async fn airdrop_quota_rejects_before_submit() {
+        let airdrop = Arc::new(MockAirdropSubmitter::success());
+        let mut config = test_config_with_submitters(
+            airdrop.clone(),
+            Arc::new(MockWalletCreateSubmitter::success()),
+        );
+        config.policy_config.airdrop.ip_quota_max = 0;
+
+        let response = airdrop_request(&config).await;
+
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(airdrop.calls(), 0);
+    }
+
+    #[tokio::test]
+    async fn airdrop_retries_failed_submit_attempt() {
+        let airdrop = Arc::new(MockAirdropSubmitter::fail_once());
+        let config = test_config_with_submitters(
+            airdrop.clone(),
+            Arc::new(MockWalletCreateSubmitter::success()),
+        );
+        let response = airdrop_request(&config).await;
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+
+        let response = airdrop_request(&config).await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(airdrop.calls(), 2);
+        let attempt = stored_airdrop_attempt(&config).expect("bug: attempt should be stored");
+        assert_eq!(attempt.status, policy::AirdropAttemptStatus::Succeeded);
+    }
+
+    #[tokio::test]
     async fn airdrop_rejects_malformed_recipient() {
         let response = app(test_config())
-            .oneshot(
+            .oneshot(request_with_connect_info(
                 Request::builder()
                     .method("POST")
                     .uri("/v1/airdrop")
@@ -371,7 +469,7 @@ mod tests {
                         .to_string(),
                     ))
                     .expect("bug: airdrop request should build"),
-            )
+            ))
             .await
             .expect("bug: airdrop request should complete");
 
@@ -385,7 +483,7 @@ mod tests {
             Arc::new(MockAirdropSubmitter::failure()),
             Arc::new(MockWalletCreateSubmitter::success()),
         ))
-        .oneshot(
+        .oneshot(request_with_connect_info(
             Request::builder()
                 .method("POST")
                 .uri("/v1/airdrop")
@@ -400,7 +498,7 @@ mod tests {
                     .to_string(),
                 ))
                 .expect("bug: airdrop request should build"),
-        )
+        ))
         .await
         .expect("bug: airdrop request should complete");
 
@@ -727,12 +825,42 @@ mod tests {
             .expect("bug: wallet-create request should complete")
     }
 
+    async fn airdrop_request(config: &FaucetConfig) -> axum::response::Response {
+        airdrop_request_with_body(config, airdrop_body()).await
+    }
+
+    async fn airdrop_request_with_body(
+        config: &FaucetConfig,
+        body: serde_json::Value,
+    ) -> axum::response::Response {
+        app(config.clone())
+            .oneshot(request_with_connect_info(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/airdrop")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .expect("bug: airdrop request should build"),
+            ))
+            .await
+            .expect("bug: airdrop request should complete")
+    }
+
     fn wallet_create_body() -> serde_json::Value {
         serde_json::json!({
             "ownerPublicKey": format!("0x{}", "33".repeat(32)),
             "deployNonce": format!("0x{}", "44".repeat(32)),
             "clientNonce": "0x01",
             "ownerSignature": format!("0x{}", "66".repeat(64)),
+            "networkId": "devnet-preview",
+            "genesisHash": format!("0x{}", "00".repeat(32))
+        })
+    }
+
+    fn airdrop_body() -> serde_json::Value {
+        serde_json::json!({
+            "recipient": format!("0x{}", "11".repeat(32)),
+            "clientNonce": "0x01",
             "networkId": "devnet-preview",
             "genesisHash": format!("0x{}", "00".repeat(32))
         })
@@ -788,6 +916,44 @@ mod tests {
             .policy_store
             .get_wallet_create_attempt(&wallet_create_attempt_key())
             .expect("bug: test attempt fetch should succeed")
+    }
+
+    fn airdrop_attempt_key() -> policy::AirdropAttemptKey {
+        policy::AirdropAttemptKey {
+            network_id: "devnet-preview".into(),
+            genesis_hash: format!("0x{}", "00".repeat(32)),
+            recipient: format!("0x{}", "11".repeat(32)),
+            client_nonce: "01".into(),
+        }
+    }
+
+    fn seed_airdrop_attempt(
+        config: &FaucetConfig,
+        status: policy::AirdropAttemptStatus,
+        tx_hash: Option<String>,
+    ) {
+        let now = SystemTime::UNIX_EPOCH;
+        config
+            .policy_store
+            .put_airdrop_attempt(policy::AirdropAttempt {
+                key: airdrop_attempt_key(),
+                client_identity: policy::ClientIdentity::Unknown,
+                raw_amount: "100000000".into(),
+                status,
+                tx_hash,
+                height: None,
+                error_code: None,
+                created_at: now,
+                updated_at: now,
+            })
+            .expect("bug: test airdrop attempt insert should succeed");
+    }
+
+    fn stored_airdrop_attempt(config: &FaucetConfig) -> Option<policy::AirdropAttempt> {
+        config
+            .policy_store
+            .get_airdrop_attempt(&airdrop_attempt_key())
+            .expect("bug: test airdrop attempt fetch should succeed")
     }
 
     fn test_network_descriptor() -> NetworkDescriptor {

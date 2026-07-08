@@ -72,6 +72,13 @@ pub struct AirdropAttempt {
     pub updated_at: SystemTime,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InsertAirdropAttemptResult {
+    Inserted,
+    Existing(Box<AirdropAttempt>),
+    PendingLimitReached,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum QuotaKey {
     AirdropRecipient(String),
@@ -143,6 +150,12 @@ pub trait FaucetPolicyStore: Send + Sync + 'static {
         &self,
         attempt: AirdropAttempt,
     ) -> Result<Option<AirdropAttempt>, PolicyStoreError>;
+
+    fn insert_airdrop_attempt_if_absent(
+        &self,
+        attempt: AirdropAttempt,
+        max_pending_per_recipient: u32,
+    ) -> Result<InsertAirdropAttemptResult, PolicyStoreError>;
 
     fn claim_airdrop_transition(
         &self,
@@ -265,6 +278,43 @@ impl FaucetPolicyStore for InMemoryFaucetPolicyStore {
             .lock()?
             .airdrop_attempts
             .insert(attempt.key.clone(), attempt))
+    }
+
+    fn insert_airdrop_attempt_if_absent(
+        &self,
+        attempt: AirdropAttempt,
+        max_pending_per_recipient: u32,
+    ) -> Result<InsertAirdropAttemptResult, PolicyStoreError> {
+        use std::collections::hash_map::Entry;
+
+        let mut state = self.lock()?;
+        if let Some(existing) = state.airdrop_attempts.get(&attempt.key) {
+            return Ok(InsertAirdropAttemptResult::Existing(Box::new(
+                existing.clone(),
+            )));
+        }
+        let pending = state
+            .airdrop_attempts
+            .values()
+            .filter(|existing| {
+                existing.key.network_id == attempt.key.network_id
+                    && existing.key.genesis_hash == attempt.key.genesis_hash
+                    && existing.key.recipient == attempt.key.recipient
+                    && existing.status == AirdropAttemptStatus::Pending
+            })
+            .count();
+        if pending >= max_pending_per_recipient as usize {
+            return Ok(InsertAirdropAttemptResult::PendingLimitReached);
+        }
+        match state.airdrop_attempts.entry(attempt.key.clone()) {
+            Entry::Occupied(existing) => Ok(InsertAirdropAttemptResult::Existing(Box::new(
+                existing.get().clone(),
+            ))),
+            Entry::Vacant(vacant) => {
+                vacant.insert(attempt);
+                Ok(InsertAirdropAttemptResult::Inserted)
+            }
+        }
     }
 
     fn claim_airdrop_transition(

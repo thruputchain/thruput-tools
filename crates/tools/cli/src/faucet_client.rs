@@ -26,6 +26,17 @@ pub(crate) fn post_json<T: for<'de> Deserialize<'de>, B: Serialize>(
     parse_faucet_response(response, url)
 }
 
+pub(crate) fn get_json<T: for<'de> Deserialize<'de>>(
+    client: &reqwest::blocking::Client,
+    url: &str,
+) -> Result<T, CliError> {
+    let response = client
+        .get(url)
+        .send()
+        .map_err(|error| CliError::Other(format!("failed to call `{url}`: {error}")))?;
+    parse_faucet_response(response, url)
+}
+
 fn parse_faucet_response<T: for<'de> Deserialize<'de>>(
     response: reqwest::blocking::Response,
     url: &str,

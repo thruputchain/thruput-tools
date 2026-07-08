@@ -89,7 +89,7 @@ export function App() {
     setFieldError(null)
 
     try {
-      const result = await requestAirdrop(normalized)
+      const result = await requestAirdrop(normalized, networkDescriptor)
       const amount = formatHogAmount(
         result.rawAmount,
         networkDescriptor.nativeHog.decimals,

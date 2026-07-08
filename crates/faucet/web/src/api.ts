@@ -2,6 +2,7 @@ const API_BASE = import.meta.env.VITE_GROUNDHOG_FAUCET_API_BASE ?? ""
 
 export type NetworkDescriptor = {
   networkId: string
+  genesisHash: string
   endpoints: {
     rpcUrl: string
   }
@@ -25,6 +26,7 @@ export type FaucetError = {
   error?: {
     code?: string
     message?: string
+    retryAfterSeconds?: number
   }
 }
 
@@ -36,16 +38,27 @@ export async function fetchNetworkDescriptor() {
   return (await response.json()) as NetworkDescriptor
 }
 
-export async function requestAirdrop(recipient: string) {
+export async function requestAirdrop(
+  recipient: string,
+  descriptor: NetworkDescriptor,
+) {
   const response = await fetch(apiUrl("/v1/airdrop"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ recipient }),
+    body: JSON.stringify({
+      recipient,
+      clientNonce: randomClientNonce(),
+      networkId: descriptor.networkId,
+      genesisHash: descriptor.genesisHash,
+    }),
   })
   const payload = (await response.json()) as AirdropSuccess | FaucetError
   if (!response.ok) {
     const error = "error" in payload ? payload.error : null
-    throw new Error(error?.message ?? "Faucet request failed.")
+    const retryAfter = error?.retryAfterSeconds
+      ? ` Try again in ${error.retryAfterSeconds}s.`
+      : ""
+    throw new Error(`${error?.message ?? "Faucet request failed."}${retryAfter}`)
   }
   return payload as AirdropSuccess
 }
@@ -64,4 +77,10 @@ export function formatHogAmount(rawAmount: string, decimals: number) {
 
 function apiUrl(path: string) {
   return `${API_BASE}${path}`
+}
+
+function randomClientNonce() {
+  const bytes = new Uint8Array(16)
+  crypto.getRandomValues(bytes)
+  return `0x${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`
 }
