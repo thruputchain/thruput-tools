@@ -221,6 +221,39 @@ pub fn wallet_create_proof_message(
     .map_err(|error| SigningError::XdrEncode(error.to_string()))
 }
 
+/// Parameters for the hardened hosted faucet wallet-create owner proof.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WalletCreateProofV2<'a> {
+    pub network_id: &'a str,
+    pub genesis_hash: SHA256Hash,
+    pub faucet_wallet_address: ContractAddress,
+    pub wallet_contract_hash: SHA256Hash,
+    pub owner_public_key: groundhog_xdr::types::Ed25519PublicKey,
+    pub deploy_nonce: SHA256Hash,
+    pub wallet_address: ContractAddress,
+    pub client_nonce: &'a [u8],
+}
+
+/// Message signed by a wallet owner to authorize hardened hosted faucet wallet creation.
+pub fn wallet_create_proof_message_v2(
+    proof: WalletCreateProofV2<'_>,
+) -> Result<Vec<u8>, SigningError> {
+    const DOMAIN: &str = "groundhog-faucet-create-wallet-v2";
+    xdrs::cxs::encode(&(
+        DOMAIN,
+        proof.network_id,
+        proof.genesis_hash,
+        proof.faucet_wallet_address,
+        proof.wallet_contract_hash,
+        proof.owner_public_key,
+        proof.deploy_nonce,
+        proof.wallet_address,
+        BytesM::<{ u32::MAX }>(proof.client_nonce.to_vec()),
+    ))
+    .map(|bytes| Sha256::digest(bytes).to_vec())
+    .map_err(|error| SigningError::XdrEncode(error.to_string()))
+}
+
 /// Signs a transaction and returns the canonical signed transaction.
 pub fn sign_transaction(
     tx: Transaction,
@@ -249,4 +282,40 @@ pub fn sign_and_encode_transaction_hex(
     let signed_tx = sign_transaction(tx, signer, params)?;
     let tx_xdr = crate::encode_signed_transaction_xdr(&signed_tx)?;
     Ok(format!("0x{}", hex::encode(tx_xdr)))
+}
+
+#[cfg(test)]
+mod tests {
+    use groundhog_xdr::types::Ed25519PublicKey;
+
+    use super::{
+        ContractAddress, SHA256Hash, WalletCreateProofV2, wallet_create_proof_message,
+        wallet_create_proof_message_v2,
+    };
+
+    #[test]
+    fn wallet_create_proof_v2_binds_client_nonce_and_wallet_address() {
+        let proof = WalletCreateProofV2 {
+            network_id: "devnet-preview",
+            genesis_hash: SHA256Hash::from([0x11; 32]),
+            faucet_wallet_address: ContractAddress::from([0x22; 32]),
+            wallet_contract_hash: SHA256Hash::from([0x33; 32]),
+            owner_public_key: Ed25519PublicKey::from([0x44; 32]),
+            deploy_nonce: SHA256Hash::from([0x55; 32]),
+            wallet_address: ContractAddress::from([0x66; 32]),
+            client_nonce: &[0x77; 16],
+        };
+
+        let v2 = wallet_create_proof_message_v2(proof).expect("bug: v2 proof should encode");
+        let v1 = wallet_create_proof_message(
+            SHA256Hash::from([0x11; 32]),
+            ContractAddress::from([0x22; 32]),
+            SHA256Hash::from([0x33; 32]),
+            Ed25519PublicKey::from([0x44; 32]),
+            SHA256Hash::from([0x55; 32]),
+        )
+        .expect("bug: v1 proof should encode");
+
+        assert_ne!(v2, v1);
+    }
 }

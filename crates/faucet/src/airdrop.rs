@@ -11,7 +11,7 @@ use groundhog_json_rpc_types::hex::HexBytes;
 use groundhog_json_rpc_types::network_descriptor::NetworkDescriptor;
 use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
 use groundhog_json_rpc_types::transaction::TxHash;
-use groundhog_json_rpc_types::{BlockHeight, ContractAddress};
+use groundhog_json_rpc_types::{BlockHeight, ContractAddress, SHA256Hash};
 use groundhog_signing::{
     BuildDevWalletDoActionTransaction, DEFAULT_TX_GAS_LIMIT, LocalSigner, SignTransactionParams,
     build_dev_wallet_do_action_transaction, sign_and_encode_transaction_hex,
@@ -20,12 +20,18 @@ use groundhog_xdr::contract::ContractEntrypointID;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
-use crate::utils::nonce_from_timestamp;
+use crate::{error::error_response, utils::nonce_from_timestamp};
 
 const DEFAULT_BLOCK_EXPIRY_OFFSET: i64 = 1_000;
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct AirdropRequest {
     recipient: ContractAddress,
+    #[serde(rename = "clientNonce")]
+    client_nonce: HexBytes,
+    #[serde(rename = "networkId")]
+    network_id: String,
+    #[serde(rename = "genesisHash")]
+    genesis_hash: SHA256Hash,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -38,21 +44,15 @@ struct AirdropResponse {
     status: ExecStatus,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-struct ErrorBody {
-    error: ErrorDetail,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-struct ErrorDetail {
-    code: &'static str,
-    message: &'static str,
-}
-
 pub(crate) async fn request_airdrop(
     State(submitter): State<Arc<dyn AirdropSubmitter>>,
     Json(request): Json<AirdropRequest>,
 ) -> Response {
+    let _ = (
+        &request.client_nonce,
+        &request.network_id,
+        &request.genesis_hash,
+    );
     match submitter.submit_airdrop(request.recipient).await {
         Ok(submission) => Json(AirdropResponse {
             recipient: request.recipient,
@@ -133,16 +133,6 @@ impl AirdropSubmitError {
             ),
         }
     }
-}
-
-fn error_response(status: StatusCode, code: &'static str, message: &'static str) -> Response {
-    (
-        status,
-        Json(ErrorBody {
-            error: ErrorDetail { code, message },
-        }),
-    )
-        .into_response()
 }
 
 /// Runtime-only airdrop execution config.
@@ -328,7 +318,7 @@ mod tests {
     fn airdrop_request_accepts_future_optional_fields() {
         let request: AirdropRequest = serde_json::from_value(json!({
             "recipient": format!("0x{}", "11".repeat(32)),
-            "clientNonce": "future-client-nonce",
+            "clientNonce": "0x99",
             "networkId": "future-network",
             "genesisHash": format!("0x{}", "22".repeat(32)),
         }))

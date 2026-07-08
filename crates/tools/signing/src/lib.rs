@@ -15,10 +15,11 @@ pub mod signer;
 pub use account::{DEFAULT_PUBKEY_ACCOUNT_NONCE, PUBKEY_ACCOUNT_TAG_STR, PubkeyAccount};
 pub use build::{
     BuildCallTransaction, BuildDeployTransaction, BuildDevWalletDoActionTransaction,
-    DEFAULT_TX_GAS_LIMIT, SignTransactionParams, WALLET_DEPLOY_ENTRYPOINT, build_call_transaction,
-    build_deploy_transaction, build_dev_wallet_do_action_transaction, derive_deploy_address,
-    dev_wallet_do_action_calldata, sign_and_encode_transaction_hex, sign_transaction,
-    source_address_auth_claim, wallet_create_proof_message,
+    DEFAULT_TX_GAS_LIMIT, SignTransactionParams, WALLET_DEPLOY_ENTRYPOINT, WalletCreateProofV2,
+    build_call_transaction, build_deploy_transaction, build_dev_wallet_do_action_transaction,
+    derive_deploy_address, dev_wallet_do_action_calldata, sign_and_encode_transaction_hex,
+    sign_transaction, source_address_auth_claim, wallet_create_proof_message,
+    wallet_create_proof_message_v2,
 };
 pub use dev_account::{
     DEFAULT_DEV_ACCOUNT_COUNT, DEFAULT_DEV_ACCOUNT_SEED, DEFAULT_DEV_ACCOUNT_STORAGE_TOKENS,

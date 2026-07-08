@@ -27,7 +27,7 @@ use groundhog_xdr::types::{Ed25519PublicKey, SHA256Hash};
 use serde::{Deserialize, Serialize};
 use xdr_common::VecM;
 
-use crate::utils::nonce_from_timestamp;
+use crate::{error::error_response, utils::nonce_from_timestamp};
 
 const DEFAULT_BLOCK_EXPIRY_OFFSET: i64 = 1_000;
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -42,7 +42,10 @@ pub(crate) struct PrepareWalletCreateRequest {
 pub(crate) struct CreateWalletRequest {
     owner_public_key: ApiEd25519PublicKey,
     deploy_nonce: ApiSha256Hash,
+    client_nonce: HexBytes,
     owner_signature: HexBytes,
+    network_id: String,
+    genesis_hash: ApiSha256Hash,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -60,21 +63,11 @@ struct PrepareWalletCreateResponse {
 struct CreateWalletResponse {
     owner_public_key: ApiEd25519PublicKey,
     deploy_nonce: ApiSha256Hash,
+    client_nonce: HexBytes,
     wallet_address: ApiContractAddress,
     tx_hash: TxHash,
     height: BlockHeight,
     status: ExecStatus,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-struct ErrorBody {
-    error: ErrorDetail,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-struct ErrorDetail {
-    code: &'static str,
-    message: &'static str,
 }
 
 pub(crate) async fn prepare_wallet_create(
@@ -98,6 +91,11 @@ pub(crate) async fn create_wallet(
     State(submitter): State<Arc<dyn WalletCreateSubmitter>>,
     Json(request): Json<CreateWalletRequest>,
 ) -> Response {
+    let _ = (
+        &request.client_nonce,
+        &request.network_id,
+        &request.genesis_hash,
+    );
     match submitter
         .create_wallet(
             request.owner_public_key.0,
@@ -109,6 +107,7 @@ pub(crate) async fn create_wallet(
         Ok(submission) => Json(CreateWalletResponse {
             owner_public_key: Hex0x(request.owner_public_key.0),
             deploy_nonce: Hex0x(request.deploy_nonce.0),
+            client_nonce: HexBytes(request.client_nonce.0),
             wallet_address: submission.wallet_address,
             tx_hash: submission.tx_hash,
             height: submission.receipt.height,
@@ -225,16 +224,6 @@ impl WalletCreateError {
             ),
         }
     }
-}
-
-fn error_response(status: StatusCode, code: &'static str, message: &'static str) -> Response {
-    (
-        status,
-        Json(ErrorBody {
-            error: ErrorDetail { code, message },
-        }),
-    )
-        .into_response()
 }
 
 /// Runtime-only wallet-create execution config.
@@ -445,7 +434,7 @@ mod tests {
             "ownerPublicKey": format!("0x{}", "11".repeat(32)),
             "deployNonce": format!("0x{}", "22".repeat(32)),
             "ownerSignature": format!("0x{}", "33".repeat(64)),
-            "clientNonce": "future-client-nonce",
+            "clientNonce": "0x99",
             "networkId": "future-network",
             "genesisHash": format!("0x{}", "44".repeat(32)),
         }))

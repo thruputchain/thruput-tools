@@ -3,6 +3,7 @@ pub mod airdrop;
 pub mod config;
 /// Faucet signing-key source configuration and loaders.
 pub mod key_source;
+mod error;
 mod utils;
 pub mod wallet_create;
 
@@ -313,7 +314,10 @@ mod tests {
                     .header("content-type", "application/json")
                     .body(Body::from(
                         serde_json::json!({
-                            "recipient": format!("0x{}", "11".repeat(32))
+                            "recipient": format!("0x{}", "11".repeat(32)),
+                            "clientNonce": "0x01",
+                            "networkId": "devnet-preview",
+                            "genesisHash": format!("0x{}", "00".repeat(32))
                         })
                         .to_string(),
                     ))
@@ -343,7 +347,10 @@ mod tests {
                     .header("content-type", "application/json")
                     .body(Body::from(
                         serde_json::json!({
-                            "recipient": "0xdeadbeef"
+                            "recipient": "0xdeadbeef",
+                            "clientNonce": "0x01",
+                            "networkId": "devnet-preview",
+                            "genesisHash": format!("0x{}", "00".repeat(32))
                         })
                         .to_string(),
                     ))
@@ -369,7 +376,10 @@ mod tests {
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::json!({
-                        "recipient": format!("0x{}", "11".repeat(32))
+                        "recipient": format!("0x{}", "11".repeat(32)),
+                        "clientNonce": "0x01",
+                        "networkId": "devnet-preview",
+                        "genesisHash": format!("0x{}", "00".repeat(32))
                     })
                     .to_string(),
                 ))
@@ -429,7 +439,10 @@ mod tests {
                         serde_json::json!({
                             "ownerPublicKey": format!("0x{}", "33".repeat(32)),
                             "deployNonce": format!("0x{}", "44".repeat(32)),
-                            "ownerSignature": format!("0x{}", "66".repeat(64))
+                            "clientNonce": "0x01",
+                            "ownerSignature": format!("0x{}", "66".repeat(64)),
+                            "networkId": "devnet-preview",
+                            "genesisHash": format!("0x{}", "00".repeat(32))
                         })
                         .to_string(),
                     ))
@@ -488,7 +501,10 @@ mod tests {
                     serde_json::json!({
                         "ownerPublicKey": format!("0x{}", "33".repeat(32)),
                         "deployNonce": format!("0x{}", "44".repeat(32)),
-                        "ownerSignature": format!("0x{}", "66".repeat(64))
+                        "clientNonce": "0x01",
+                        "ownerSignature": format!("0x{}", "66".repeat(64)),
+                        "networkId": "devnet-preview",
+                        "genesisHash": format!("0x{}", "00".repeat(32))
                     })
                     .to_string(),
                 ))
