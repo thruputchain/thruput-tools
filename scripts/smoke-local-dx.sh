@@ -358,11 +358,6 @@ DEVNODE_BINARY="$(find_hogd_dev_binary)"
 [[ -x "$DEVNODE_BINARY" ]] || die "hog-devnode binary is not executable: $DEVNODE_BINARY"
 
 HOGD_PROTOCOL="$(detect_hogd_protocol "$DEVNODE_BINARY")"
-NODE_ARGS=(--json node --profile "$SMOKE_PROFILE" --port 0 --hog-devnode-binary "$DEVNODE_BINARY")
-if [[ -n "$HOGD_PROTOCOL" ]]; then
-    NODE_ARGS+=(--hogd-protocol "$HOGD_PROTOCOL")
-    log "Using hogd protocol override: $HOGD_PROTOCOL"
-fi
 
 if [[ "${SMOKE_STANDALONE_GATEWAY:-0}" == "1" ]]; then
     log "Building CLI and standalone gateway"
@@ -373,6 +368,12 @@ else
 fi
 
 WORK="$(mktemp -d)"
+export XDG_CONFIG_HOME="$WORK/config"
+NODE_ARGS=(--json node --port 0 --hog-devnode-binary "$DEVNODE_BINARY")
+if [[ -n "$HOGD_PROTOCOL" ]]; then
+    NODE_ARGS+=(--hogd-protocol "$HOGD_PROTOCOL")
+    log "Using hogd protocol override: $HOGD_PROTOCOL"
+fi
 NODE_PID=""
 NODE_DESCENDANTS=""
 GATEWAY_PID=""
@@ -440,13 +441,21 @@ log "Node RPC: $RPC_URL (read plane: $READ_PLANE, view plane: $VIEW_PLANE)"
     || die "groundhog node did not report a runtime manifest path"
 [[ -r "$RUNTIME_MANIFEST" ]] || die "runtime manifest is not readable: $RUNTIME_MANIFEST"
 NODE_PROFILE="$(toml_field groundhog.toml default_profile)"
-[[ "$NODE_PROFILE" != "null" ]] || NODE_PROFILE="$SMOKE_PROFILE"
+[[ "$NODE_PROFILE" == "$SMOKE_PROFILE" ]] \
+    || die "default_profile was $NODE_PROFILE, expected $SMOKE_PROFILE"
 PROFILE_RPC_URL="$(toml_profile_field groundhog.toml "$NODE_PROFILE" rpc_url)"
 PROFILE_RUNTIME_MANIFEST="$(toml_profile_field groundhog.toml "$NODE_PROFILE" runtime_manifest)"
-[[ "$PROFILE_RPC_URL" == "$RPC_URL" ]] \
-    || die "profile.$NODE_PROFILE.rpc_url was $PROFILE_RPC_URL, expected $RPC_URL"
-[[ "$PROFILE_RUNTIME_MANIFEST" == "$RUNTIME_MANIFEST" ]] \
-    || die "profile.$NODE_PROFILE.runtime_manifest was $PROFILE_RUNTIME_MANIFEST, expected $RUNTIME_MANIFEST"
+[[ "$PROFILE_RPC_URL" == "null" ]] \
+    || die "project profile.$NODE_PROFILE.rpc_url was dirtied: $PROFILE_RPC_URL"
+[[ "$PROFILE_RUNTIME_MANIFEST" == "null" ]] \
+    || die "project profile.$NODE_PROFILE.runtime_manifest was dirtied: $PROFILE_RUNTIME_MANIFEST"
+GLOBAL_CONFIG="$XDG_CONFIG_HOME/groundhog/config.toml"
+GLOBAL_RPC_URL="$(toml_field "$GLOBAL_CONFIG" local_runtime_state.rpc_url)"
+GLOBAL_RUNTIME_MANIFEST="$(toml_field "$GLOBAL_CONFIG" local_runtime_state.runtime_manifest)"
+[[ "$GLOBAL_RPC_URL" == "$RPC_URL" ]] \
+    || die "local_runtime_state.rpc_url was $GLOBAL_RPC_URL, expected $RPC_URL"
+[[ "$GLOBAL_RUNTIME_MANIFEST" == "$RUNTIME_MANIFEST" ]] \
+    || die "local_runtime_state.runtime_manifest was $GLOBAL_RUNTIME_MANIFEST, expected $RUNTIME_MANIFEST"
 unset GROUNDHOG_RUNTIME_MANIFEST
 
 GATEWAY_RPC_URL=""

@@ -20,6 +20,7 @@ fn new_creates_subdirectory_and_scaffolds() {
     assert!(dir.join("groundhog.toml").exists());
     assert!(dir.join("src/lib.rs").exists());
     let config = fs::read_to_string(dir.join("groundhog.toml")).unwrap();
+    assert!(config.contains("default_profile = \"local\""));
     assert!(config.contains("[profile.local]"));
     assert!(config.contains("network = \"local\""));
     assert!(config.contains("[profile.local.contracts]"));
@@ -29,7 +30,6 @@ fn new_creates_subdirectory_and_scaffolds() {
     assert!(config.contains("[profile.devnet.contracts]"));
     assert!(config.contains("# [profile.devnet.wallets.alice]"));
     assert!(config.contains("# owner_public_key ="));
-    assert!(!config.contains("default_profile"));
     assert!(!config.contains("rpc_url"));
     assert!(!config.contains("faucet_url"));
     assert!(!config.contains("default_key"));

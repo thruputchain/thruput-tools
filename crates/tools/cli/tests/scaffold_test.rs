@@ -55,7 +55,7 @@ fn scaffold_counter_creates_expected_files() {
     assert!(groundhog.contains("# [profile.devnet.wallets.alice]"));
     assert!(groundhog.contains("# owner_public_key ="));
     assert!(groundhog.contains("# my_counter ="));
-    assert!(!groundhog.contains("default_profile"));
+    assert!(groundhog.contains("default_profile = \"local\""));
     assert!(!groundhog.contains("rpc_url"));
     assert!(!groundhog.contains("faucet_url"));
     assert!(!groundhog.contains("runtime_manifest"));

@@ -83,9 +83,9 @@ groundhog-bench --url http://127.0.0.1:9546 \
   --method sendRawTransaction
 ```
 
-For CLI commands that sign or simulate as `dev-N`, set
-`GROUNDHOG_RUNTIME_MANIFEST` or `profile.<name>.runtime_manifest` to use that
-same manifest for wallet-address discovery.
+For CLI commands that sign or simulate as `dev-N`, use a profile with
+`network = "local"` while `groundhog node` is running, or set
+`GROUNDHOG_RUNTIME_MANIFEST` explicitly for scripts outside the project tree.
 
 ## Using cargo directly
 
@@ -397,9 +397,10 @@ Scaffolded projects include a `groundhog.toml` with profile
 support:
 
 ```toml
+default_profile = "local"
+
 [profile.local]
 network = "local"
-default_key = "dev-0"
 # runtime_manifest = "runtime-manifest.json"
 
 [profile.local.contracts]
@@ -410,8 +411,8 @@ network = "devnet"
 rpc_url = "https://devnet.groundhog.network"
 ```
 
-Select a profile via `--profile`, `GROUNDHOG_PROFILE`, or
-the `default` profile is used automatically.
+Select a profile via `--profile`, `GROUNDHOG_PROFILE`, or `default_profile`.
+If none is configured, the fallback profile name is `default`.
 
 Contract aliases map names to addresses per profile. `deploy`, `call`, and
 `storage` resolve aliases from the active profile. When `runtime_manifest` is

@@ -80,8 +80,10 @@ only overrides the x23 intro token; XDR shape mismatches still fail in generated
 clients.
 
 CLI dev keys (`dev-0`, `dev-1`, ...) use the runtime manifest for wallet-address
-discovery. `groundhog node` writes the local runtime manifest path into the
-selected profile; scripts can set `GROUNDHOG_RUNTIME_MANIFEST` directly.
+discovery. `groundhog node` writes the active local endpoint and runtime
+manifest path into global `local_runtime_state`; profiles with
+`network = "local"` consume that state. Scripts can set
+`GROUNDHOG_RUNTIME_MANIFEST` directly.
 
 See [Runtime Manifest Quickstart](docs/gateway/runtime-manifest.md) for the
 full CLI/gateway/bench loop,

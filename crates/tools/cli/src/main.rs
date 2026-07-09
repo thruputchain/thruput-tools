@@ -396,9 +396,6 @@ enum Command {
         /// Maximum simultaneous public JSON-RPC connections
         #[arg(long)]
         rpc_max_connections: Option<u32>,
-        /// Config profile to update with the local node RPC URL and runtime manifest
-        #[arg(long = "profile")]
-        profile: Option<String>,
     },
     /// Manage signing keys
     #[command(long_about = "Ed25519 signing keys stored in \
@@ -811,7 +808,6 @@ fn main() {
             block_driver,
             block_interval_ms,
             rpc_max_connections,
-            profile,
         } => groundhog_cli::node::run_with_block_driver(
             port,
             verbose,
@@ -822,7 +818,6 @@ fn main() {
             block_driver.map(Into::into),
             block_interval_ms,
             rpc_max_connections,
-            profile.as_deref(),
             cmd_name,
             &print,
         ),
@@ -942,13 +937,13 @@ mod tests {
     }
 
     #[test]
-    fn node_profile_flag_parses() {
-        let cli = Cli::parse_from(["groundhog", "node", "--profile", "myfaveprofile"]);
+    fn node_profile_flag_is_not_supported() {
+        let result = Cli::try_parse_from(["groundhog", "node", "--profile", "local"]);
+        let Err(err) = result else {
+            panic!("node --profile should be rejected");
+        };
 
-        match cli.command {
-            Command::Node { profile, .. } => assert_eq!(profile.as_deref(), Some("myfaveprofile")),
-            _ => panic!("expected node command"),
-        }
+        assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
     }
 
     #[test]

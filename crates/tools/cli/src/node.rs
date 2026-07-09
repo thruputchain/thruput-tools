@@ -52,7 +52,6 @@ pub fn run(
         None,
         None,
         None,
-        None,
         cmd,
         print,
     )
@@ -71,7 +70,6 @@ pub fn run_with_block_driver(
     block_driver: Option<LocalNodeBlockDriverMode>,
     block_interval_ms: Option<u64>,
     rpc_max_connections: Option<u32>,
-    explicit_profile: Option<&str>,
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
@@ -91,7 +89,6 @@ pub fn run_with_block_driver(
                 rpc_max_connections,
                 ..LocalNodeOptions::default()
             },
-            explicit_profile,
             cmd,
             print,
         )
@@ -222,7 +219,6 @@ pub async fn start_local_node(options: LocalNodeOptions) -> Result<StartedLocalN
 
 async fn run_hogd_dev(
     options: LocalNodeOptions,
-    explicit_profile: Option<&str>,
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
@@ -235,7 +231,6 @@ async fn run_hogd_dev(
     let started = start_local_node(options).await?;
     let local_runtime_state_path = match write_started_local_runtime_state(
         &started,
-        explicit_profile,
         runtime_artifacts_dir.as_deref(),
     ) {
         Ok(path) => path,
@@ -283,7 +278,7 @@ async fn run_hogd_dev(
     };
 
     let outcome = started.run_until(stop_signal).await;
-    cleanup_written_local_runtime_state(cleanup_local_runtime_state, explicit_profile, print);
+    cleanup_written_local_runtime_state(cleanup_local_runtime_state, print);
     let outcome = outcome?;
     match outcome {
         SupervisorStop::HogdExited(status) => {
@@ -318,11 +313,7 @@ fn local_runtime_state_cleanup(
     })
 }
 
-fn cleanup_written_local_runtime_state(
-    cleanup: Option<LocalRuntimeStateCleanup>,
-    _explicit_profile: Option<&str>,
-    print: &Print,
-) {
+fn cleanup_written_local_runtime_state(cleanup: Option<LocalRuntimeStateCleanup>, print: &Print) {
     let Some(cleanup) = cleanup else {
         return;
     };
@@ -394,7 +385,6 @@ fn print_started_local_node(
 
 fn write_started_local_runtime_state(
     started: &StartedLocalNode,
-    _explicit_profile: Option<&str>,
     runtime_artifacts_dir: Option<&Path>,
 ) -> Result<PathBuf, CliError> {
     let state = local_runtime_state(started, runtime_artifacts_dir).ok_or_else(|| {

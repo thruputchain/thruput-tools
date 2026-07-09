@@ -87,10 +87,9 @@ RPC_URL=$(jq -r '.data.rpc_url' /tmp/groundhog-node.json)
 RUNTIME_MANIFEST=$(jq -r '.data.runtime_manifest.path' /tmp/groundhog-node.json)
 ```
 
-When `groundhog node` is started from a project directory, it writes the local
-RPC URL and runtime manifest path into the selected project profile. Normal CLI
-commands in another terminal can use that profile directly while the node is
-running:
+When `groundhog node` starts, it writes the local RPC URL and runtime manifest
+path into global `local_runtime_state`. Normal CLI commands in another terminal
+can use a profile with `network = "local"` while the node is running:
 
 ```bash
 groundhog deploy
