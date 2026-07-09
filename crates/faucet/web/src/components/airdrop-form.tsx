@@ -66,9 +66,9 @@ export function AirdropForm(props: {
                     ? "Loading..."
                     : props.isMetadataUnavailable
                       ? "Metadata unavailable"
-                    : props.isSubmitting
-                      ? "Requesting..."
-                      : "Request airdrop"}
+                      : props.isSubmitting
+                        ? "Requesting..."
+                        : "Request airdrop"}
                 </Button>
               </div>
               {props.fieldError ? (

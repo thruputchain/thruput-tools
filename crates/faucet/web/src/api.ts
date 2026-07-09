@@ -1,4 +1,6 @@
-const API_BASE = normalizeApiBase(import.meta.env.VITE_GROUNDHOG_FAUCET_API_BASE)
+const API_BASE = normalizeApiBase(
+  import.meta.env.VITE_GROUNDHOG_FAUCET_API_BASE,
+)
 
 export type NetworkDescriptor = {
   networkId: string
@@ -35,7 +37,9 @@ export async function fetchNetworkDescriptor() {
   const response = await fetch(apiUrl("/v1/network"))
   const payload = await readJsonResponse(response, "faucet metadata")
   if (!response.ok) {
-    throw new Error(errorMessageFromPayload(payload, "Unable to load faucet metadata."))
+    throw new Error(
+      errorMessageFromPayload(payload, "Unable to load faucet metadata."),
+    )
   }
   return parseNetworkDescriptor(payload)
 }
@@ -142,7 +146,10 @@ function parseNetworkDescriptor(payload: unknown): NetworkDescriptor {
       rpcUrl: requireString(endpoints.rpcUrl, "endpoints.rpcUrl"),
     },
     nativeHog: {
-      decimals: requireNonNegativeInteger(nativeHog.decimals, "nativeHog.decimals"),
+      decimals: requireNonNegativeInteger(
+        nativeHog.decimals,
+        "nativeHog.decimals",
+      ),
     },
     walletCreate: {
       prefundRawAmount: requireDecimalString(
@@ -186,7 +193,8 @@ function errorMessageFromPayload(payload: unknown, fallback: string) {
   if (!isRecord(payload) || !isRecord(payload.error)) {
     return fallback
   }
-  const message = typeof payload.error.message === "string" ? payload.error.message : fallback
+  const message =
+    typeof payload.error.message === "string" ? payload.error.message : fallback
   const retryAfterSeconds = payload.error.retryAfterSeconds
   const retryAfter =
     typeof retryAfterSeconds === "number" && Number.isFinite(retryAfterSeconds)
