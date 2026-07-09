@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from "react"
+import { type FormEvent, useEffect, useState, useSyncExternalStore } from "react"
 import { toast } from "sonner"
 
 import {
@@ -10,6 +10,7 @@ import {
 import { AirdropForm } from "@/components/airdrop-form"
 import { AppHeader } from "@/components/app-header"
 import { FaucetHero } from "@/components/faucet-hero"
+import { Button } from "@/components/ui/button"
 import { Toaster } from "@/components/ui/sonner"
 import {
   getThemePreference,
@@ -29,31 +30,42 @@ export function App() {
   const [fieldError, setFieldError] = useState<string | null>(null)
   const [networkDescriptor, setNetworkDescriptor] =
     useState<NetworkDescriptor | null>(null)
+  const [metadataError, setMetadataError] = useState<string | null>(null)
+  const [isLoadingMetadata, setIsLoadingMetadata] = useState(true)
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   useEffect(() => {
     let isCurrent = true
-
-    fetchNetworkDescriptor()
-      .then((descriptor) => {
-        if (isCurrent) {
-          setNetworkDescriptor(descriptor)
-        }
-      })
-      .catch((error) => {
-        if (isCurrent) {
-          toast.error(
-            error instanceof Error
-              ? error.message
-              : "Unable to load faucet metadata.",
-          )
-        }
-      })
+    loadMetadata(() => isCurrent)
 
     return () => {
       isCurrent = false
     }
   }, [])
+
+  async function loadMetadata(isCurrent: () => boolean = () => true) {
+    setIsLoadingMetadata(true)
+    setMetadataError(null)
+    try {
+      const descriptor = await fetchNetworkDescriptor()
+      if (isCurrent()) {
+        setNetworkDescriptor(descriptor)
+      }
+    } catch (error) {
+      if (isCurrent()) {
+        setNetworkDescriptor(null)
+        setMetadataError(
+          error instanceof Error
+            ? error.message
+            : "Unable to load faucet metadata.",
+        )
+      }
+    } finally {
+      if (isCurrent()) {
+        setIsLoadingMetadata(false)
+      }
+    }
+  }
 
   function toggleTheme() {
     const resolvedTheme =
@@ -72,7 +84,7 @@ export function App() {
     }
   }
 
-  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
 
     const normalized = address.trim().toLowerCase()
@@ -90,11 +102,10 @@ export function App() {
 
     try {
       const result = await requestAirdrop(normalized, networkDescriptor)
-      const amount = formatHogAmount(
-        result.rawAmount,
-        networkDescriptor.nativeHog.decimals,
+      showSuccessToast(
+        formatAirdropAmount(result.rawAmount, networkDescriptor),
+        result.txHash,
       )
-      showSuccessToast(amount, result.txHash)
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Faucet request failed.",
@@ -111,10 +122,26 @@ export function App() {
 
         <div className="mx-auto flex max-w-2xl flex-col items-center gap-8 py-8">
           <FaucetHero />
+          {metadataError ? (
+            <div className="w-full rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+              <div className="font-medium">Faucet metadata unavailable</div>
+              <p className="mt-1 text-destructive/80">{metadataError}</p>
+              <Button
+                type="button"
+                variant="outline"
+                className="mt-3 h-9 px-3"
+                onClick={() => void loadMetadata()}
+                disabled={isLoadingMetadata}
+              >
+                {isLoadingMetadata ? "Retrying..." : "Retry"}
+              </Button>
+            </div>
+          ) : null}
           <AirdropForm
             address={address}
             fieldError={fieldError}
-            isLoadingMetadata={!networkDescriptor}
+            isLoadingMetadata={isLoadingMetadata}
+            isMetadataUnavailable={!isLoadingMetadata && !networkDescriptor}
             isSubmitting={isSubmitting}
             onAddressChange={handleAddressChange}
             onSubmit={handleSubmit}
@@ -130,8 +157,16 @@ function shortHash(value: string) {
   return `${value.slice(0, 6)}...${value.slice(-4)}`
 }
 
-function showSuccessToast(amountHog: string, txHash: string) {
-  toast.success(`Sent ${amountHog} HOG`, {
+function showSuccessToast(amountHog: string | null, txHash: string) {
+  toast.success(amountHog ? `Sent ${amountHog} HOG` : "Airdrop sent", {
     description: `Transaction ${shortHash(txHash)}`,
   })
+}
+
+function formatAirdropAmount(rawAmount: string, descriptor: NetworkDescriptor) {
+  try {
+    return formatHogAmount(rawAmount, descriptor.nativeHog.decimals)
+  } catch {
+    return null
+  }
 }
