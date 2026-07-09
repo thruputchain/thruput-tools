@@ -51,19 +51,18 @@ groundhog-rv32-artifact = { path = "crates/rv32/artifact", version = "=0.5.14", 
 groundhog-rv32-lower = { path = "crates/rv32/lower", version = "=0.5.14", registry = "groundhog" }
 
 # --- Groundhog (private registry) ---
-# 0.19.2 is not on the stable channel yet. This bounded prerelease
-# requirement matches the 0.19.2 nightly builds now and resolves to the
-# stable 0.19.2 release automatically once it is published (`cargo
-# update` picks it up), while excluding 0.19.3+. Re-pin to `=0.19.2`
-# after the stable release.
-groundhog-xdr = { version = ">=0.19.2-nightly, <0.19.3", registry = "groundhog", features = ["serde", "xdrs", "schema"] }
-groundhog_indexer = { version = ">=0.19.2-nightly, <0.19.3", registry = "groundhog", features = ["serde"] }
-groundhog_scheduler = { version = ">=0.19.2-nightly, <0.19.3", registry = "groundhog" }
-groundhog_db_gateway = { version = ">=0.19.2-nightly, <0.19.3", registry = "groundhog" }
-groundhog_view = { version = ">=0.19.2-nightly, <0.19.3", registry = "groundhog" }
-groundhog_scp = { version = ">=0.19.2-nightly, <0.19.3", registry = "groundhog" }
-groundhog_coordinator = { version = ">=0.19.2-nightly, <0.19.3", registry = "groundhog" }
-groundhog-trace = { version = ">=0.19.2-nightly, <0.19.3", registry = "groundhog" }
+# 0.19.4 is the first stable release with the indexer tx-failure
+# diagnostics (protocol@6d1e8e6). Pinned exact: prerelease ordering
+# makes range bounds like `<0.19.5` admit older `0.19.5-nightly.*`
+# builds, so ranges here silently regress protocol content.
+groundhog-xdr = { version = "=0.19.4", registry = "groundhog", features = ["serde", "xdrs", "schema"] }
+groundhog_indexer = { version = "=0.19.4", registry = "groundhog", features = ["serde"] }
+groundhog_scheduler = { version = "=0.19.4", registry = "groundhog" }
+groundhog_db_gateway = { version = "=0.19.4", registry = "groundhog" }
+groundhog_view = { version = "=0.19.4", registry = "groundhog" }
+groundhog_scp = { version = "=0.19.4", registry = "groundhog" }
+groundhog_coordinator = { version = "=0.19.4", registry = "groundhog" }
+groundhog-trace = { version = "=0.19.4", registry = "groundhog" }
 xdrs = { version = "0.7.1", registry = "groundhog", features = ["alloc"] }
 xdr-common = { version = "0.7.1", registry = "groundhog" }
 rpc_driver = { version = "0.9", registry = "groundhog" }

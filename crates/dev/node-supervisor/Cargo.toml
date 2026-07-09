@@ -43,6 +43,7 @@ tracing = { workspace = true }
 xdr-common = { workspace = true }
 
 [dev-dependencies]
+groundhog-trace = { workspace = true }
 jsonrpsee = { workspace = true, features = ["http-client"] }
 serial_test = { workspace = true }
 

@@ -275,15 +275,24 @@ Validation: `serialized_event.len() >= num_topics * 32`.
 1. Scheduler (mempool)
    ├── found → Pending
    └── not found ──→ 2. Indexer
-                        ├── found → Committed { height, block_hash }
+                        ├── committed → Committed { height, block_hash }
+                        ├── recent nondeterministic failure → RecentFailure { attemptHeight, conflict }
                         └── not found → Unknown
 ```
+
+`RecentFailure` is best-effort and advisory: the indexer caches
+proposal-time two-phase-commit failure diagnostics for a few blocks,
+reports are dropped freely under load, only the proposing node's
+indexers hear them, and a later retry of the same transaction may
+still commit (at which point `Committed` wins). Absence of the status
+proves nothing. Receipts are unaffected: a failed transaction is
+excluded from the block, so `getTransactionReceipt` returns `null`.
 
 **Degraded-mode behavior:**
 
 | Scheduler | Indexer | Behavior |
 |-----------|---------|----------|
-| Up | Up | Full status (Pending / Committed / Unknown) |
+| Up | Up | Full status (Pending / Committed / RecentFailure / Unknown) |
 | Down | Up | Can return Committed or Unknown but cannot detect Pending. Log warning, do not fail the request. |
 | Up | Down | Return `BackendUnavailable` error. Indexer is the authoritative source; partial results are misleading. |
 | Down | Down | Return `BackendUnavailable` error. |
