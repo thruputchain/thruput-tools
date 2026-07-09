@@ -415,8 +415,6 @@ enum Command {
         #[command(subcommand)]
         command: WalletCommand,
     },
-    /// Configure registry token and test executor credentials
-    Login,
     /// Remove stored credentials
     Logout,
     /// Generate typed bindings from a contract spec
@@ -533,7 +531,6 @@ impl Command {
             Self::Keys { command } => command.command_name(),
             Self::Wallet { command } => command.command_name(),
             Self::Codegen { command } => command.command_name(),
-            Self::Login => "login",
             Self::Logout => "logout",
             Self::Completion { .. } => "completion",
         }
@@ -865,7 +862,6 @@ fn main() {
                 groundhog_cli::codegen_cmd::run(&source, output.as_deref(), cmd_name, &print)
             }
         },
-        Command::Login => groundhog_cli::auth::login(cmd_name, &print),
         Command::Logout => groundhog_cli::auth::logout(cmd_name, &print),
         Command::Completion { shell } => {
             let mut output = Vec::new();

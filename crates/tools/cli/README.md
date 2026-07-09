@@ -47,9 +47,6 @@ in generated projects).
 # Check your environment
 groundhog init
 
-# Authenticate with the Groundhog registry during early access
-groundhog login
-
 # Create a new contract project (counter template)
 groundhog new my-counter && cd my-counter
 
@@ -174,10 +171,10 @@ sidecars are still produced by the WASM custom-section finalization path.
 
 ### `groundhog test`
 
-Run contract tests against the test executor. Requires
-`groundhog login` first to fetch the pre-compiled executor
-library. Injects download credentials as environment variables
-and targets the host platform so tests run natively.
+Run contract tests against the test executor. During early access, follow the
+invite instructions to authenticate Cargo with the private Groundhog registry
+before building generated projects. Injects download credentials as environment
+variables and targets the host platform so tests run natively.
 
 ```bash
 groundhog test                              # run all tests
@@ -379,10 +376,6 @@ only when you need exact filters or debug/trace-level output; if set,
 
 See `../../docs/cli/2026-04-25-hogd-dev-node-hybrid.md` for the
 durable backend direction.
-
-### `groundhog login`
-
-Configure registry credentials and test executor access.
 
 ### `groundhog logout`
 

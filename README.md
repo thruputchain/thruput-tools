@@ -22,7 +22,6 @@ the contract loop locally:
 ```bash
 cargo install --path crates/tools/cli
 groundhog init                   # one-time environment check
-groundhog login                  # one-time; early-access registry auth
 groundhog new my-counter && cd my-counter
 groundhog build                   # RV32 artifact by default
 groundhog test                   # executor-backed RV32 tests
@@ -39,9 +38,9 @@ GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode groundhog test --integration
 GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode groundhog test --integration --differential
 ```
 
-`groundhog login` is currently required for the Groundhog contract SDK
-to resolve from the private crate registry. This early-access constraint will
-relax when the SDK ships publicly.
+During early access, follow the invite instructions to authenticate Cargo with
+the private Groundhog registry before building generated projects. This
+constraint will relax when the SDK ships publicly.
 
 `groundhog node` is script-safe: human status or startup JSON goes to stdout;
 child logs stay on stderr. Use `-v` / `--verbose` for normal debugging and
@@ -274,9 +273,9 @@ cargo run -p groundhog-sim --bin hogsim -- run examples/sim/local-wallet-soak.js
 See [`docs/sim/README.md`](docs/sim/README.md) for the current simulation
 scope and result-artifact contract.
 
-`groundhog test` requires `groundhog login` while the SDK lives in the private
-registry. See [`crates/tools/cli/README.md`](crates/tools/cli/README.md) for the
-full CLI reference.
+Generated projects require Cargo registry access while the SDK lives in the
+private registry. See [`crates/tools/cli/README.md`](crates/tools/cli/README.md)
+for the full CLI reference.
 
 ### Conventions
 

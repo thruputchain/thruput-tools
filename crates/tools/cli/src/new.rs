@@ -1,4 +1,3 @@
-use crate::auth::CargoLoginStatus;
 use crate::{CliError, Print};
 use serde_json::json;
 use std::env;
@@ -32,8 +31,7 @@ pub fn run_in(
     let task = print.start_task(format_args!("Creating project `{name}`"));
     crate::scaffold::generate(dir, name, template)?;
     task.success(format_args!("Created project `{name}`"));
-    let cargo_login = crate::auth::offer_cargo_login_after_new(print)?;
-    render_project_ready(dir, name, template, cargo_login, print);
+    render_project_ready(dir, name, template, print);
     print.json(&crate::result::CommandResult::new(
         cmd,
         json!({
@@ -46,22 +44,11 @@ pub fn run_in(
     Ok(())
 }
 
-fn render_project_ready(
-    dir: &Path,
-    name: &str,
-    template: &str,
-    cargo_login: CargoLoginStatus,
-    print: &Print,
-) {
+fn render_project_ready(dir: &Path, name: &str, template: &str, print: &Print) {
     if print.is_quiet() || print.is_json() {
         return;
     }
 
-    let cargo_status = match cargo_login {
-        CargoLoginStatus::LoggedIn => "logged in globally",
-        CargoLoginStatus::Skipped => "login skipped",
-        CargoLoginStatus::NotInteractive => "not checked",
-    };
     let items = vec![
         ("Project".to_string(), name.to_string()),
         ("Path".to_string(), dir.display().to_string()),
@@ -70,16 +57,14 @@ fn render_project_ready(
             "Config".to_string(),
             dir.join("groundhog.toml").display().to_string(),
         ),
-        ("Cargo Registry".to_string(), cargo_status.to_string()),
     ];
 
     print.status("");
     print.summary_card("Project Ready", &items);
 
-    let mut next_steps = vec![format!("cd {}", dir.display())];
-    if !matches!(cargo_login, CargoLoginStatus::LoggedIn) {
-        next_steps.push("cargo login --registry groundhog".to_string());
-    }
-    next_steps.push("cargo build".to_string());
+    let next_steps = vec![
+        format!("cd {}", dir.display()),
+        "groundhog build".to_string(),
+    ];
     print.next_steps(&next_steps);
 }

@@ -49,11 +49,6 @@ pub enum CliError {
     NoProjectConfig(String),
     #[error("credentials cannot be empty")]
     CredentialsEmpty,
-    #[error(
-        "registry login failed — run `groundhog login` to try \
-         again"
-    )]
-    RegistryLoginFailed,
     #[error("unsupported OS: {0}")]
     UnsupportedOs(String),
     #[error("wasm-opt optimization failed{}", if .0.is_empty() { String::new() } else { format!(": {}", .0) })]
@@ -181,7 +176,6 @@ impl CliError {
             Self::ProfileNotFound(_) => "profile_not_found",
             Self::NoProjectConfig(_) => "no_project_config",
             Self::CredentialsEmpty => "credentials_empty",
-            Self::RegistryLoginFailed => "registry_login_failed",
             Self::UnsupportedOs(_) => "unsupported_os",
             Self::WasmOptFailed(_) => "wasm_opt_failed",
             Self::Rv32LowerFailed(_) => "rv32_lower_failed",
@@ -362,12 +356,8 @@ impl CliError {
                  `GROUNDHOG_PROFILE`, or use the default profile",
             )),
             Self::CredentialsEmpty => Some(Cow::Borrowed(
-                "rerun `groundhog login` and provide both username \
+                "rerun `groundhog init` and provide both username \
                  and password",
-            )),
-            Self::RegistryLoginFailed => Some(Cow::Borrowed(
-                "check your registry token and rerun \
-                 `groundhog login`",
             )),
             Self::UnsupportedOs(_) => Some(Cow::Borrowed(
                 "`groundhog test` currently supports macOS and \

@@ -291,7 +291,9 @@ pub fn collect_report(
             level: FindingLevel::Warn,
             code: "no_credentials",
             message: "executor credentials not found".into(),
-            hint: Some(Cow::Borrowed("run `groundhog login` to store credentials")),
+            hint: Some(Cow::Borrowed(
+                "run `groundhog init` to store executor credentials",
+            )),
         });
     }
 

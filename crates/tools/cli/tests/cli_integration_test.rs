@@ -207,8 +207,12 @@ fn help_shows_subcommands() {
     assert!(stdout.contains("view"));
     assert!(stdout.contains("storage"));
     assert!(stdout.contains("keys"));
-    assert!(stdout.contains("login"));
     assert!(stdout.contains("logout"));
+    assert!(
+        !stdout
+            .lines()
+            .any(|line| line.trim_start().starts_with("login"))
+    );
     assert!(stdout.contains("completion"));
 }
 
@@ -412,10 +416,10 @@ fn new_creates_project() {
     assert!(stderr.contains("Project: my-test-project"));
     assert!(stderr.contains("Template: counter"));
     assert!(stderr.contains("Config: "));
-    assert!(stderr.contains("Cargo Registry: not checked"));
     assert!(stderr.contains("Next:"));
-    assert!(stderr.contains("cargo login --registry groundhog"));
-    assert!(stderr.contains("cargo build"));
+    assert!(!stderr.contains("Cargo Registry:"));
+    assert!(!stderr.contains("cargo login --registry groundhog"));
+    assert!(stderr.contains("groundhog build"));
 }
 
 #[test]
@@ -1021,24 +1025,6 @@ fn build_json_prefers_metadata_failure_outside_project() {
     assert_eq!(stderr["ok"], false);
     assert_eq!(stderr["command"], "build");
     assert_eq!(stderr["error"]["code"], "cargo_metadata_failed");
-}
-
-#[test]
-fn login_json_returns_structured_error() {
-    let output = groundhog().arg("--json").arg("login").output().unwrap();
-
-    assert!(!output.status.success());
-    assert!(output.stdout.is_empty());
-    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-    assert_eq!(stderr["ok"], false);
-    assert_eq!(stderr["command"], "login");
-    assert_eq!(stderr["error"]["code"], "json_unsupported");
-    assert!(
-        stderr["error"]["hint"]
-            .as_str()
-            .unwrap()
-            .contains("groundhog login")
-    );
 }
 
 #[test]

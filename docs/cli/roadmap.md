@@ -32,7 +32,7 @@ What exists today:
 - `groundhog init` (interactive first-run wizard)
 - `groundhog status` (non-interactive diagnostic)
 - `groundhog keys`
-- `groundhog login` / `logout`
+- `groundhog logout`
 - shell completions
 - `groundhog.toml` with profiles and per-profile contract aliases
 - shared check layer (`checks.rs`) with findings model
@@ -125,7 +125,7 @@ Maintenance rules:
 - [x] `groundhog init`
 - [x] `groundhog status`
 - [x] `groundhog keys`
-- [x] `groundhog login` / `logout`
+- [x] `groundhog logout`
 - [x] shell completions
 - [x] `--quiet`, `--json`, `--profile`
 - [x] `groundhog.toml` with profiles and contract aliases

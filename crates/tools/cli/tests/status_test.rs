@@ -8,6 +8,15 @@ fn quiet() -> Print {
     Print::quiet()
 }
 
+fn write_groundhog_registry_config(cargo_home: &std::path::Path) {
+    fs::create_dir_all(cargo_home).unwrap();
+    fs::write(
+        cargo_home.join("config.toml"),
+        "[registries.groundhog]\nindex = \"sparse+https://groundhog.dev/crates/api/v1/crates/\"\n",
+    )
+    .unwrap();
+}
+
 #[test]
 #[serial]
 fn status_succeeds_when_fully_configured() {
@@ -19,7 +28,7 @@ fn status_succeeds_when_fully_configured() {
         env::set_var("XDG_CONFIG_HOME", tmp.path());
     }
 
-    groundhog_cli::auth::ensure_cargo_registry(&cargo_home.join("config.toml")).unwrap();
+    write_groundhog_registry_config(&cargo_home);
 
     groundhog_cli::keys::generate(&Some("alice".into()), false, "keys.generate", &quiet()).unwrap();
 
@@ -76,7 +85,7 @@ fn collect_report_prefers_profile_default_key_over_global_default() {
         env::set_var("XDG_CONFIG_HOME", tmp.path());
     }
 
-    groundhog_cli::auth::ensure_cargo_registry(&cargo_home.join("config.toml")).unwrap();
+    write_groundhog_registry_config(&cargo_home);
 
     groundhog_cli::keys::generate(&Some("alice".into()), false, "keys.generate", &quiet()).unwrap();
     groundhog_cli::keys::generate(&Some("bob".into()), false, "keys.generate", &quiet()).unwrap();
@@ -104,7 +113,7 @@ fn collect_report_warns_when_global_default_key_is_missing_on_disk() {
         env::set_var("XDG_CONFIG_HOME", tmp.path());
     }
 
-    groundhog_cli::auth::ensure_cargo_registry(&cargo_home.join("config.toml")).unwrap();
+    write_groundhog_registry_config(&cargo_home);
 
     groundhog_cli::keys::generate(&Some("alice".into()), false, "keys.generate", &quiet()).unwrap();
 
@@ -174,7 +183,7 @@ counter = "{project_counter}"
         env::set_var("XDG_CONFIG_HOME", tmp.path());
     }
 
-    groundhog_cli::auth::ensure_cargo_registry(&cargo_home.join("config.toml")).unwrap();
+    write_groundhog_registry_config(&cargo_home);
     groundhog_cli::keys::generate(&Some("alice".into()), false, "keys.generate", &quiet()).unwrap();
     let creds = groundhog_cli::config::ExecutorCredentials {
         username: "test".into(),
