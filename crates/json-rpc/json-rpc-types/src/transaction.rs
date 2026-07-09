@@ -34,8 +34,121 @@ pub enum TransactionStatus {
     /// Scheduler rejected the transaction.
     Invalid { reason: String },
 
+    /// No committed record, but the transaction failed
+    /// nondeterministically during two-phase commit within the last few
+    /// blocks and the indexer still holds the diagnostic.
+    ///
+    /// Best-effort and advisory: reports are dropped freely under load,
+    /// only the proposing node's indexers hear them, and a later retry
+    /// of the same transaction may still commit (at which point
+    /// `Committed` wins). Absence of this status proves nothing.
+    #[serde(rename_all = "camelCase")]
+    RecentFailure {
+        /// Executing block height of the failed attempt.
+        attempt_height: BlockHeight,
+        /// First conflicting storage op reported for the failed attempt.
+        conflict: ConflictDiagnostic,
+    },
+
     /// Not found in mempool or indexer.
     Unknown,
+}
+
+/// One conflicting storage operation reported by two-phase commit.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ConflictDiagnostic {
+    /// Contract whose storage the conflicting operation targeted.
+    pub address: ContractAddress,
+
+    /// XDR-encoded `StorageKey` bytes.
+    pub key: crate::hex::HexBytes,
+
+    /// Coarse conflict reason.
+    pub code: ConflictCode,
+}
+
+/// Reason a storage delta could not be applied during two-phase commit.
+/// Projects hogd's `DbConflictCode`.
+///
+/// New codes may be added as hogd evolves; unrecognized codes surface
+/// as `Other` on both serialize and deserialize so mixed-version
+/// deployments degrade instead of failing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
+#[serde(rename_all = "camelCase")]
+pub enum ConflictCode {
+    /// The key is exclusively locked by another transaction, an
+    /// exclusive lock could not be acquired, or an exclusive-lock flag
+    /// was used on a key type that does not support it.
+    ExclusiveLock,
+
+    /// Two transactions created different item types at the same key.
+    TypeMismatch,
+
+    /// Two transactions wrote irreconcilable values of the same type at
+    /// the same key.
+    ValueMismatch,
+
+    /// A nonnegative int (or balance) would go below zero given the
+    /// deltas in this block, or a newly created balance item cannot
+    /// cover its own storage cost.
+    BoundsExceeded,
+
+    /// Integer overflow combining deltas on a nonnegative int or balance.
+    Overflow,
+
+    /// Replay-protection conflict: uniquifier expired, already consumed,
+    /// or consumed twice by this transaction.
+    ReplayProtection,
+
+    /// A retrocausal queue already has a consumer in this block.
+    QueueConsumer,
+
+    /// A per-item capacity limit was hit.
+    CapacityExceeded,
+
+    /// Unrecognized conflict code. Check for gateway updates.
+    #[serde(other)]
+    Other,
+}
+
+impl From<groundhog_trace::DbConflictCode> for ConflictCode {
+    fn from(code: groundhog_trace::DbConflictCode) -> Self {
+        use groundhog_trace::DbConflictCode as Xdr;
+        match code {
+            Xdr::kDbConflictExclusiveLock => Self::ExclusiveLock,
+            Xdr::kDbConflictTypeMismatch => Self::TypeMismatch,
+            Xdr::kDbConflictValueMismatch => Self::ValueMismatch,
+            Xdr::kDbConflictBoundsExceeded => Self::BoundsExceeded,
+            Xdr::kDbConflictOverflow => Self::Overflow,
+            Xdr::kDbConflictReplayProtection => Self::ReplayProtection,
+            Xdr::kDbConflictQueueConsumer => Self::QueueConsumer,
+            Xdr::kDbConflictCapacityExceeded => Self::CapacityExceeded,
+            _ => Self::Other,
+        }
+    }
+}
+
+impl From<&groundhog_trace::DbConflictDiagnostic> for ConflictDiagnostic {
+    fn from(diagnostic: &groundhog_trace::DbConflictDiagnostic) -> Self {
+        let key_bytes = xdrs::txs::encode(&diagnostic.addrkey.key)
+            .expect("bug: generated StorageKey should encode");
+        Self {
+            address: crate::hex::Hex0x(diagnostic.addrkey.address),
+            key: crate::hex::HexBytes(key_bytes),
+            code: diagnostic.code.into(),
+        }
+    }
+}
+
+impl From<&groundhog_trace::TxFailureDiagnostic> for TransactionStatus {
+    fn from(diagnostic: &groundhog_trace::TxFailureDiagnostic) -> Self {
+        Self::RecentFailure {
+            attempt_height: diagnostic.attempt_height.clone(),
+            conflict: (&diagnostic.conflict).into(),
+        }
+    }
 }
 
 /// `getTransactionsByAddress` request: the transaction history of
@@ -121,5 +234,90 @@ impl From<groundhog_indexer::indexer::TransactionRefPage> for TransactionRefPage
             latest_block: value.latest_block,
             oldest_block: value.oldest_block,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ConflictCode, TransactionStatus};
+    use crate::BlockHeight;
+    use groundhog_trace::{DbConflictCode, DbConflictDiagnostic, TxFailureDiagnostic};
+    use groundhog_xdr::types::{AddressAndKey, ContractAddress, StorageKey};
+    use serde_json::json;
+
+    fn diagnostic(code: DbConflictCode) -> TxFailureDiagnostic {
+        TxFailureDiagnostic {
+            attempt_height: BlockHeight::from(1234),
+            conflict: DbConflictDiagnostic {
+                addrkey: AddressAndKey {
+                    address: ContractAddress::from([0x11; 32]),
+                    key: StorageKey::FreeNativeTokenBalance,
+                },
+                code,
+            },
+        }
+    }
+
+    #[test]
+    fn recent_failure_serializes_camel_case() {
+        let status = TransactionStatus::from(&diagnostic(DbConflictCode::kDbConflictExclusiveLock));
+
+        let value = serde_json::to_value(&status).expect("recent failure should serialize");
+
+        assert_eq!(value["status"], "recentFailure");
+        assert_eq!(value["attemptHeight"], 1234);
+        assert_eq!(
+            value["conflict"]["address"],
+            format!("0x{}", "11".repeat(32))
+        );
+        let expected_key = format!(
+            "0x{}",
+            hex::encode(
+                xdrs::txs::encode(&StorageKey::FreeNativeTokenBalance)
+                    .expect("storage key should encode")
+            )
+        );
+        assert_eq!(value["conflict"]["key"], expected_key);
+        assert_eq!(value["conflict"]["code"], "exclusiveLock");
+        assert!(value.get("attempt_height").is_none());
+    }
+
+    #[test]
+    fn conflict_code_maps_all_known_codes() {
+        let cases = [
+            (DbConflictCode::kDbConflictExclusiveLock, "exclusiveLock"),
+            (DbConflictCode::kDbConflictTypeMismatch, "typeMismatch"),
+            (DbConflictCode::kDbConflictValueMismatch, "valueMismatch"),
+            (DbConflictCode::kDbConflictBoundsExceeded, "boundsExceeded"),
+            (DbConflictCode::kDbConflictOverflow, "overflow"),
+            (
+                DbConflictCode::kDbConflictReplayProtection,
+                "replayProtection",
+            ),
+            (DbConflictCode::kDbConflictQueueConsumer, "queueConsumer"),
+            (
+                DbConflictCode::kDbConflictCapacityExceeded,
+                "capacityExceeded",
+            ),
+        ];
+        for (code, expected) in cases {
+            let json = serde_json::to_value(ConflictCode::from(code))
+                .expect("conflict code should serialize");
+            assert_eq!(json, *expected, "wrong projection for {code}");
+        }
+    }
+
+    #[test]
+    fn unknown_conflict_code_maps_to_other() {
+        let json = serde_json::to_value(ConflictCode::from(DbConflictCode(99)))
+            .expect("unknown conflict code should serialize");
+        assert_eq!(json, "other");
+    }
+
+    #[test]
+    fn conflict_code_deserializes_unknown_string_as_other() {
+        let code: ConflictCode =
+            serde_json::from_value(json!("someFutureCode")).expect("unknown code should decode");
+        assert_eq!(code, ConflictCode::Other);
     }
 }

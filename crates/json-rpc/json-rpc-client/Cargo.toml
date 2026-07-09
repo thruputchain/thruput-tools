@@ -29,5 +29,6 @@ thiserror = { workspace = true }
 [dev-dependencies]
 async-trait = { workspace = true }
 groundhog-json-rpc-server = { workspace = true }
+groundhog-xdr = { workspace = true }
 jsonrpsee = { workspace = true, features = ["server"] }
 serde_json = { workspace = true }

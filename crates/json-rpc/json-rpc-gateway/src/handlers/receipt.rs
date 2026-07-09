@@ -106,6 +106,9 @@ pub async fn get_transaction_receipt(
                 abort_data,
             }))
         }
+        // A recent nondeterministic failure is not a committed record;
+        // receipts exist only for committed transactions. The diagnostic
+        // surfaces through `getTransactionStatus`.
         _ => Ok(None),
     }
 }
@@ -114,7 +117,9 @@ pub async fn get_transaction_receipt(
 ///
 /// Lookup order:
 /// 1. **Scheduler (mempool)** -> if found, return `Pending`
-/// 2. **Indexer** -> if found, return `Committed { height }`
+/// 2. **Indexer** -> if committed, return `Committed { height }`;
+///    if the indexer holds a recent nondeterministic-failure
+///    diagnostic, return `RecentFailure` (best-effort, advisory)
 /// 3. **Neither** -> return `Unknown`
 ///
 /// Degraded-mode behavior:
@@ -176,13 +181,15 @@ pub async fn get_transaction_status(
             started_at.elapsed(),
         );
         match rpc_result {
-            Ok(result) => {
-                if let TxInfoResult::TxInfoFound { info } = result {
-                    return Ok(TransactionStatus::Committed {
-                        height: info.height,
-                    });
-                }
+            Ok(TxInfoResult::TxInfoFound { info }) => {
+                return Ok(TransactionStatus::Committed {
+                    height: info.height,
+                });
             }
+            Ok(TxInfoResult::TxInfoRecentFailure { recent_failure }) => {
+                return Ok(TransactionStatus::from(&recent_failure));
+            }
+            Ok(_) => {}
             Err(e) => {
                 return Err(GatewayError::BackendUnavailable(format!("indexer: {e}")));
             }

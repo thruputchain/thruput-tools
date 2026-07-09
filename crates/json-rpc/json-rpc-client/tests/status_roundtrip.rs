@@ -1,0 +1,164 @@
+use groundhog_json_rpc_api::GroundhogApiServer;
+use groundhog_json_rpc_client::{GroundhogApiClient, HttpClientBuilder};
+use groundhog_json_rpc_server::{
+    BuildInfo, ChainPlane, GroundhogRpcServer, ReadPlane, RpcServerConfig, RpcServerError,
+    SubmitPlane, ValidatedTransaction, ViewPlane,
+};
+use groundhog_json_rpc_types::{
+    BlockHeight, ContractAddress,
+    block::{BlockInfo, ChainTip},
+    events::{EventPage, EventQuery},
+    hex::{Hex0x, HexBytes},
+    receipt::TransactionReceipt,
+    state::StorageItemRead,
+    transaction::{
+        AddressTransactionQuery, ConflictCode, ConflictDiagnostic, TransactionRefPage,
+        TransactionStatus, TxHash,
+    },
+};
+use jsonrpsee::server::Server;
+
+const ATTEMPT_HEIGHT: i64 = 42;
+const CONFLICT_ADDRESS: [u8; 32] = [0x0D; 32];
+const CONFLICT_KEY: &[u8] = &[0, 0, 0, 1];
+
+#[derive(Clone, Copy)]
+struct RecentFailureBackend;
+
+fn canned_recent_failure() -> TransactionStatus {
+    TransactionStatus::RecentFailure {
+        attempt_height: BlockHeight::from(ATTEMPT_HEIGHT),
+        conflict: ConflictDiagnostic {
+            address: Hex0x(groundhog_xdr::types::ContractAddress::from(
+                CONFLICT_ADDRESS,
+            )),
+            key: HexBytes(CONFLICT_KEY.to_vec()),
+            code: ConflictCode::ExclusiveLock,
+        },
+    }
+}
+
+#[async_trait::async_trait]
+impl SubmitPlane for RecentFailureBackend {
+    async fn submit_raw_transaction(
+        &self,
+        _tx: ValidatedTransaction,
+    ) -> Result<(), RpcServerError> {
+        Err(RpcServerError::NotImplemented("sendRawTransaction".into()))
+    }
+}
+
+#[async_trait::async_trait]
+impl ChainPlane for RecentFailureBackend {
+    async fn chain_tip(&self) -> Result<ChainTip, RpcServerError> {
+        Err(RpcServerError::NotImplemented("chainTip".into()))
+    }
+
+    async fn get_block_by_number(
+        &self,
+        _height: BlockHeight,
+    ) -> Result<Option<BlockInfo>, RpcServerError> {
+        Err(RpcServerError::NotImplemented("getBlockByNumber".into()))
+    }
+
+    async fn pending_transaction_count(&self) -> Result<u64, RpcServerError> {
+        Err(RpcServerError::NotImplemented(
+            "pendingTransactionCount".into(),
+        ))
+    }
+}
+
+#[async_trait::async_trait]
+impl ReadPlane for RecentFailureBackend {
+    async fn transaction_receipt(
+        &self,
+        _tx_hash: TxHash,
+    ) -> Result<Option<TransactionReceipt>, RpcServerError> {
+        Err(RpcServerError::NotImplemented(
+            "getTransactionReceipt".into(),
+        ))
+    }
+
+    async fn transaction_status(
+        &self,
+        _tx_hash: TxHash,
+    ) -> Result<TransactionStatus, RpcServerError> {
+        Ok(canned_recent_failure())
+    }
+
+    async fn contract_events(&self, _query: EventQuery) -> Result<EventPage, RpcServerError> {
+        Err(RpcServerError::NotImplemented("getEvents".into()))
+    }
+
+    async fn transactions_by_address(
+        &self,
+        _query: AddressTransactionQuery,
+    ) -> Result<TransactionRefPage, RpcServerError> {
+        Err(RpcServerError::NotImplemented(
+            "getTransactionsByAddress".into(),
+        ))
+    }
+
+    async fn get_storage_at(
+        &self,
+        _address: ContractAddress,
+        _key: [u8; 32],
+    ) -> Result<StorageItemRead, RpcServerError> {
+        Err(RpcServerError::NotImplemented("getStorageAt".into()))
+    }
+
+    async fn read_native_hog_balance(
+        &self,
+        _address: ContractAddress,
+    ) -> Result<StorageItemRead, RpcServerError> {
+        Err(RpcServerError::NotImplemented("getBalance".into()))
+    }
+}
+
+#[async_trait::async_trait]
+impl ViewPlane for RecentFailureBackend {}
+
+#[tokio::test]
+async fn recent_failure_status_roundtrips_through_client() {
+    let server = Server::builder()
+        .build("127.0.0.1:0")
+        .await
+        .expect("bug: test server should bind");
+    let addr = server
+        .local_addr()
+        .expect("bug: test server local address should be available");
+    let rpc = GroundhogRpcServer::unified(
+        RecentFailureBackend,
+        RpcServerConfig::default(),
+        BuildInfo::new("client-test", None),
+    );
+    let handle = server.start(rpc.into_rpc());
+
+    let client = HttpClientBuilder::default()
+        .build(format!("http://{addr}"))
+        .expect("bug: test client should build");
+    let tx_hash = TxHash(Hex0x(groundhog_xdr::types::SHA256Hash::from([0x22; 32])));
+    let status = client
+        .get_transaction_status(tx_hash)
+        .await
+        .expect("bug: status call should succeed");
+
+    match status {
+        TransactionStatus::RecentFailure {
+            attempt_height,
+            conflict,
+        } => {
+            assert_eq!(*attempt_height, ATTEMPT_HEIGHT);
+            assert_eq!(
+                conflict.address.0,
+                groundhog_xdr::types::ContractAddress::from(CONFLICT_ADDRESS)
+            );
+            assert_eq!(conflict.key.0, CONFLICT_KEY);
+            assert_eq!(conflict.code, ConflictCode::ExclusiveLock);
+        }
+        other => panic!("expected RecentFailure, got {other:?}"),
+    }
+
+    handle.stop().expect("bug: test server should stop");
+    handle.stopped().await;
+}

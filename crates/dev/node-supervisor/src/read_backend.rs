@@ -255,6 +255,10 @@ impl ReadPlane for HogdDevReadBackend {
                     abort_data,
                 }))
             }
+            // A recent nondeterministic failure is not a committed record;
+            // receipts exist only for committed transactions. The diagnostic
+            // surfaces through `transaction_status`.
+            TxInfoResult::TxInfoRecentFailure { .. } => Ok(None),
             TxInfoResult::Default { outcome } if outcome == TxInfoOutcome::TxInfoNotFound.0 => {
                 Ok(None)
             }
@@ -277,7 +281,9 @@ impl ReadPlane for HogdDevReadBackend {
     ///
     /// Probe order:
     /// 1. Scheduler mempool → `Pending` if found.
-    /// 2. Indexer committed set → `Committed { height }` if found.
+    /// 2. Indexer committed set → `Committed { height }` if found;
+    ///    `RecentFailure` if the indexer holds a recent
+    ///    nondeterministic-failure diagnostic (best-effort, advisory).
     /// 3. Neither → `Unknown`.
     ///
     /// Degraded mode: if the scheduler is unreachable, log a warning and skip
@@ -312,6 +318,9 @@ impl ReadPlane for HogdDevReadBackend {
                 return Ok(TransactionStatus::Committed {
                     height: info.height,
                 });
+            }
+            Ok(TxInfoResult::TxInfoRecentFailure { recent_failure }) => {
+                return Ok(TransactionStatus::from(&recent_failure));
             }
             Ok(TxInfoResult::Default { outcome }) if outcome == TxInfoOutcome::TxInfoNotFound.0 => {
             }
@@ -725,9 +734,12 @@ mod tests {
     // unit tests in this file have no dependency on the example binary's types.
     const CANNED_TX_HASH_A: [u8; 32] = [0xAAu8; 32];
     const CANNED_TX_HASH_B: [u8; 32] = [0xBBu8; 32];
+    const CANNED_TX_HASH_FAILED: [u8; 32] = [0xCCu8; 32];
     const CANNED_TX_HASH_UNKNOWN: [u8; 32] = [0xFFu8; 32];
     const CANNED_HEIGHT_A: i64 = 5;
     const CANNED_HEIGHT_B: i64 = 10;
+    const CANNED_FAILURE_HEIGHT: i64 = 11;
+    const CANNED_FAILURE_ADDRESS: [u8; 32] = [0x0Du8; 32];
     const CANNED_EVENT_CURSOR: &[u8] = b"cursor-page-2";
     const CANNED_STORAGE_KEY: [u8; 32] = [0x42u8; 32];
     const CANNED_STORAGE_VALUE: &[u8] = b"local-node-storage";
@@ -1047,6 +1059,11 @@ mod tests {
                 return Err(ProgramError::msg("fake indexer rpc-fail"));
             }
             let key: [u8; 32] = arg0.into_inner();
+            if key == CANNED_TX_HASH_FAILED {
+                return Ok(TxInfoResult::TxInfoRecentFailure {
+                    recent_failure: canned_failure_diagnostic(),
+                });
+            }
             match self.committed.get(&key) {
                 Some(info) => Ok(TxInfoResult::TxInfoFound { info: info.clone() }),
                 None => Ok(TxInfoResult::Default {
@@ -1292,6 +1309,19 @@ mod tests {
 
     fn canned_storage_address() -> groundhog_json_rpc_types::ContractAddress {
         Hex0x(ContractAddress::from([0u8; 32]))
+    }
+
+    fn canned_failure_diagnostic() -> groundhog_trace::TxFailureDiagnostic {
+        groundhog_trace::TxFailureDiagnostic {
+            attempt_height: IdxBlockHeight::from(CANNED_FAILURE_HEIGHT),
+            conflict: groundhog_trace::DbConflictDiagnostic {
+                addrkey: groundhog_xdr::types::AddressAndKey {
+                    address: ContractAddress::from(CANNED_FAILURE_ADDRESS),
+                    key: groundhog_xdr::types::StorageKey::FreeNativeTokenBalance,
+                },
+                code: groundhog_trace::DbConflictCode::kDbConflictExclusiveLock,
+            },
+        }
     }
 
     fn empty_event_query() -> EventQuery {
@@ -1599,6 +1629,60 @@ mod tests {
             matches!(status, TransactionStatus::Unknown),
             "expected Unknown, got {status:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn transaction_status_recent_failure_returns_diagnostic() {
+        // Arrange: scheduler says not pending; indexer holds a recent
+        // nondeterministic-failure diagnostic for the hash.
+        let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
+        let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
+        let backend = make_read_backend(idx_addr, sched_addr).await;
+        let tx_hash = canned_tx_hash(CANNED_TX_HASH_FAILED);
+
+        // Act
+        let status = backend
+            .transaction_status(tx_hash)
+            .await
+            .expect("bug: status check should succeed");
+
+        // Assert
+        match status {
+            TransactionStatus::RecentFailure {
+                attempt_height,
+                conflict,
+            } => {
+                assert_eq!(*attempt_height, CANNED_FAILURE_HEIGHT);
+                assert_eq!(
+                    conflict.address.0,
+                    ContractAddress::from(CANNED_FAILURE_ADDRESS)
+                );
+                assert_eq!(
+                    conflict.code,
+                    groundhog_json_rpc_types::transaction::ConflictCode::ExclusiveLock
+                );
+            }
+            other => panic!("expected RecentFailure, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn transaction_receipt_recent_failure_returns_none() {
+        // Arrange: the indexer reports a recent nondeterministic failure,
+        // which is not a committed record and must not become an error.
+        let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
+        let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
+        let backend = make_read_backend(idx_addr, sched_addr).await;
+        let tx_hash = canned_tx_hash(CANNED_TX_HASH_FAILED);
+
+        // Act
+        let receipt = backend
+            .transaction_receipt(tx_hash)
+            .await
+            .expect("bug: receipt lookup should succeed");
+
+        // Assert
+        assert!(receipt.is_none(), "expected None, got {receipt:?}");
     }
 
     #[tokio::test]

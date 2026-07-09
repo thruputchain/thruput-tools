@@ -212,6 +212,79 @@
         ],
         "type": "object"
       },
+      "ConflictCode": {
+        "description": "Reason a storage delta could not be applied during two-phase commit.\nProjects hogd's `DbConflictCode`.\n\nNew codes may be added as hogd evolves; unrecognized codes surface\nas `Other` on both serialize and deserialize so mixed-version\ndeployments degrade instead of failing.",
+        "oneOf": [
+          {
+            "const": "exclusiveLock",
+            "description": "The key is exclusively locked by another transaction, an\nexclusive lock could not be acquired, or an exclusive-lock flag\nwas used on a key type that does not support it.",
+            "type": "string"
+          },
+          {
+            "const": "typeMismatch",
+            "description": "Two transactions created different item types at the same key.",
+            "type": "string"
+          },
+          {
+            "const": "valueMismatch",
+            "description": "Two transactions wrote irreconcilable values of the same type at\nthe same key.",
+            "type": "string"
+          },
+          {
+            "const": "boundsExceeded",
+            "description": "A nonnegative int (or balance) would go below zero given the\ndeltas in this block, or a newly created balance item cannot\ncover its own storage cost.",
+            "type": "string"
+          },
+          {
+            "const": "overflow",
+            "description": "Integer overflow combining deltas on a nonnegative int or balance.",
+            "type": "string"
+          },
+          {
+            "const": "replayProtection",
+            "description": "Replay-protection conflict: uniquifier expired, already consumed,\nor consumed twice by this transaction.",
+            "type": "string"
+          },
+          {
+            "const": "queueConsumer",
+            "description": "A retrocausal queue already has a consumer in this block.",
+            "type": "string"
+          },
+          {
+            "const": "capacityExceeded",
+            "description": "A per-item capacity limit was hit.",
+            "type": "string"
+          },
+          {
+            "const": "other",
+            "description": "Unrecognized conflict code. Check for gateway updates.",
+            "type": "string"
+          }
+        ]
+      },
+      "ConflictDiagnostic": {
+        "description": "One conflicting storage operation reported by two-phase commit.",
+        "properties": {
+          "address": {
+            "$ref": "#/components/schemas/Hex0x_ContractAddress",
+            "description": "Contract whose storage the conflicting operation targeted."
+          },
+          "code": {
+            "$ref": "#/components/schemas/ConflictCode",
+            "description": "Coarse conflict reason."
+          },
+          "key": {
+            "$ref": "#/components/schemas/HexBytes",
+            "description": "XDR-encoded `StorageKey` bytes."
+          }
+        },
+        "required": [
+          "address",
+          "key",
+          "code"
+        ],
+        "type": "object"
+      },
       "ContractAddressList": {
         "description": "Contract addresses accepted by a single event filter. Mirrors the hogd-indexer per-filter contract-address bound.",
         "items": {
@@ -875,6 +948,29 @@
             "type": "object"
           },
           {
+            "description": "No committed record, but the transaction failed\nnondeterministically during two-phase commit within the last few\nblocks and the indexer still holds the diagnostic.\n\nBest-effort and advisory: reports are dropped freely under load,\nonly the proposing node's indexers hear them, and a later retry\nof the same transaction may still commit (at which point\n`Committed` wins). Absence of this status proves nothing.",
+            "properties": {
+              "attemptHeight": {
+                "$ref": "#/components/schemas/BlockHeight",
+                "description": "Executing block height of the failed attempt."
+              },
+              "conflict": {
+                "$ref": "#/components/schemas/ConflictDiagnostic",
+                "description": "First conflicting storage op reported for the failed attempt."
+              },
+              "status": {
+                "const": "recentFailure",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "attemptHeight",
+              "conflict"
+            ],
+            "type": "object"
+          },
+          {
             "description": "Not found in mempool or indexer.",
             "properties": {
               "status": {
@@ -982,7 +1078,7 @@
   },
   "info": {
     "title": "Groundhog JSON-RPC",
-    "version": "2.2.0"
+    "version": "2.3.0"
   },
   "methods": [
     {
