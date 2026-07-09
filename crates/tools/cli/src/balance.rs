@@ -37,6 +37,7 @@ pub fn run(
     let balance_hog = format_hog_amount(raw_balance);
 
     print.status(format_args!("Balance: {balance_hog} HOG"));
+    print.status(format_args!("Address: {address_hex}"));
     print.json(&CommandResult::new(
         cmd,
         json!({

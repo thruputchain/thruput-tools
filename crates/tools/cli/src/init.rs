@@ -6,7 +6,7 @@
 //! exits. `init --json` delegates to `status --json`.
 
 use std::io::{BufRead, IsTerminal};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::{CliError, Print};
 
@@ -59,9 +59,16 @@ pub fn run(project_start: &Path, cmd: &'static str, print: &Print) -> Result<(),
     handle_credentials_step(&report, &mut ui)?;
 
     ui.begin_step(InitStep::Project);
-    handle_scaffold_step(has_project, project_start, &report, &mut ui)?;
+    let project_context = handle_scaffold_step(has_project, project_start, &report, &mut ui)?;
 
-    print_init_summary(project_start, usable_default_key, &ui)?;
+    let final_report = crate::checks::collect_report(project_start, None)?;
+    let final_default_key = usable_default_key_for_init(&final_report);
+    print_init_summary(
+        project_start,
+        final_default_key,
+        project_context.as_ref(),
+        &ui,
+    )?;
     Ok(())
 }
 
@@ -73,8 +80,8 @@ fn report_ready(
 ) -> Result<(), CliError> {
     ui.completion_review(
         "Groundhog Ready",
-        &summary_items(project_start, usable_default_key)?,
-        true,
+        &summary_items(project_start, usable_default_key, None)?,
+        NextSteps::Status,
     );
 
     if !report.environment.wasm_opt {
@@ -194,16 +201,20 @@ fn handle_scaffold_step(
     project_start: &Path,
     report: &crate::checks::StatusReport,
     ui: &mut InitUi<'_>,
-) -> Result<(), CliError> {
+) -> Result<Option<ProjectContext>, CliError> {
     if has_project {
         if let Some(path) = report.project.config_path.as_ref() {
             ui.success(format_args!("Found project at {}", path.display()));
         }
         ui.finish_step(InitStep::Project, StepState::Done);
-        return Ok(());
+        return Ok(report
+            .project
+            .config_path
+            .as_deref()
+            .and_then(existing_project_context));
     }
 
-    if confirm(ui.print, "Create a starter project?", false)? {
+    let created_project = if confirm(ui.print, "Create a starter project?", false)? {
         ui.print.prompt("Project name: ")?;
         let mut name = String::new();
         std::io::stdin()
@@ -214,17 +225,37 @@ fn handle_scaffold_step(
         if name.is_empty() {
             ui.note("Skipping starter project");
             ui.finish_step(InitStep::Project, StepState::Skipped);
+            None
         } else {
             let dir = project_start.join(name);
             crate::new::run_in(&dir, name, "counter", "new", ui.print)?;
             ui.finish_step(InitStep::Project, StepState::Done);
+            Some(ProjectContext {
+                name: name.to_string(),
+                path: dir,
+                needs_cd: true,
+            })
         }
     } else {
         ui.note("Skipping starter project");
         ui.finish_step(InitStep::Project, StepState::Skipped);
-    }
+        None
+    };
 
-    Ok(())
+    Ok(created_project)
+}
+
+struct ProjectContext {
+    name: String,
+    path: PathBuf,
+    needs_cd: bool,
+}
+
+#[derive(Clone, Copy)]
+enum NextSteps<'a> {
+    Status,
+    NewProject,
+    BuildProject(&'a ProjectContext),
 }
 
 #[derive(Clone, Copy)]
@@ -370,7 +401,7 @@ impl<'a> InitUi<'a> {
         &self,
         title: &str,
         items: &[(String, String)],
-        include_status_hint: bool,
+        next_steps: NextSteps<'_>,
     ) {
         if self.print.is_quiet() {
             return;
@@ -389,14 +420,20 @@ impl<'a> InitUi<'a> {
         }
 
         self.print.status("");
-        if include_status_hint {
-            self.print.status("Next:");
-            self.print.status("  groundhog status");
-        } else {
-            self.print.status("Next:");
-            self.print.status("  groundhog new my-contract");
-            self.print.status("  cd my-contract");
-            self.print.status("  groundhog build");
+        self.print.status("Next:");
+        match next_steps {
+            NextSteps::Status => self.print.status("  groundhog status"),
+            NextSteps::NewProject => {
+                self.print.status("  groundhog new my-contract");
+                self.print.status("  cd my-contract");
+                self.print.status("  groundhog build");
+            }
+            NextSteps::BuildProject(project) => {
+                if project.needs_cd {
+                    self.print.status(format_args!("  cd {}", project.name));
+                }
+                self.print.status("  groundhog build");
+            }
         }
     }
 
@@ -466,12 +503,18 @@ impl<'a> InitUi<'a> {
 fn print_init_summary(
     project_start: &Path,
     usable_default_key: Option<&crate::checks::KeySummary>,
+    project_context: Option<&ProjectContext>,
     ui: &InitUi<'_>,
 ) -> Result<(), CliError> {
+    let next_steps = if let Some(project) = project_context {
+        NextSteps::BuildProject(project)
+    } else {
+        NextSteps::NewProject
+    };
     ui.completion_review(
         "Setup Complete",
-        &summary_items(project_start, usable_default_key)?,
-        false,
+        &summary_items(project_start, usable_default_key, project_context)?,
+        next_steps,
     );
     Ok(())
 }
@@ -479,6 +522,7 @@ fn print_init_summary(
 fn summary_items(
     project_start: &Path,
     usable_default_key: Option<&crate::checks::KeySummary>,
+    project_context: Option<&ProjectContext>,
 ) -> Result<Vec<(String, String)>, CliError> {
     let profile_name = crate::config::active_profile_name(project_start, None)?;
     let mut items = vec![
@@ -493,15 +537,28 @@ fn summary_items(
     ];
 
     if let Some(key) = usable_default_key {
-        items.push(("Key".to_string(), key.name.clone()));
+        items.push(("Key".to_string(), format!("{} ({})", key.name, key.address)));
     } else if let Some(key_name) = crate::config::load_default_key()? {
         items.push(("Key".to_string(), key_name));
     }
 
     let local_rpc = local_rpc_url(project_start).unwrap_or_else(|| DEFAULT_LOCAL_RPC_URL.into());
     items.push(("Local RPC".to_string(), local_rpc));
+    if let Some(project) = project_context {
+        items.push(("Project".to_string(), project.path.display().to_string()));
+    }
 
     Ok(items)
+}
+
+fn existing_project_context(config_path: &Path) -> Option<ProjectContext> {
+    let path = config_path.parent()?.to_path_buf();
+    let name = path.file_name()?.to_string_lossy().into_owned();
+    Some(ProjectContext {
+        name,
+        path,
+        needs_cd: false,
+    })
 }
 
 fn local_rpc_url(project_start: &Path) -> Option<String> {

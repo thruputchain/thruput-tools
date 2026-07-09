@@ -470,6 +470,7 @@ fn init_json_delegates_to_status() {
     let output = groundhog()
         .arg("--json")
         .arg("init")
+        .current_dir(tmp.path())
         .env("CARGO_HOME", tmp.path().join("cargo-home"))
         .env("XDG_CONFIG_HOME", tmp.path())
         .output()
@@ -490,6 +491,7 @@ fn init_human_output_shows_setup_sections() {
     let tmp = TempDir::new().unwrap();
     let mut child = groundhog()
         .arg("init")
+        .current_dir(tmp.path())
         .env("CARGO_HOME", tmp.path().join("cargo-home"))
         .env("XDG_CONFIG_HOME", tmp.path())
         .stdin(std::process::Stdio::piped())
@@ -521,6 +523,87 @@ fn init_human_output_shows_setup_sections() {
     assert!(stderr.contains("Profile:"));
     assert!(stderr.contains("Local RPC:"));
     assert!(stderr.contains("Next:"));
+    assert!(stderr.contains("groundhog new my-contract"));
+}
+
+#[test]
+fn init_human_output_points_to_created_project() {
+    let tmp = TempDir::new().unwrap();
+    let mut child = groundhog()
+        .arg("init")
+        .current_dir(tmp.path())
+        .env("CARGO_HOME", tmp.path().join("cargo-home"))
+        .env("XDG_CONFIG_HOME", tmp.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(b"y\nn\ny\ndemo-contract\n")
+        .unwrap();
+
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Setup Complete"));
+    assert!(stderr.contains("Key: default (0x"));
+    assert!(stderr.contains("Project:"));
+    assert!(stderr.contains("demo-contract"));
+    assert!(stderr.contains("Next:"));
+    assert!(stderr.contains("cd demo-contract"));
+    assert!(stderr.contains("groundhog build"));
+    assert!(!stderr.contains("groundhog new my-contract"));
+    assert!(tmp.path().join("demo-contract/groundhog.toml").exists());
+}
+
+#[test]
+fn init_human_output_builds_existing_project() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("existing-contract");
+    std::fs::create_dir(&project).unwrap();
+    std::fs::write(
+        project.join("groundhog.toml"),
+        "[profile.local]\nnetwork = \"local\"\n",
+    )
+    .unwrap();
+    let mut child = groundhog()
+        .arg("init")
+        .current_dir(&project)
+        .env("CARGO_HOME", tmp.path().join("cargo-home"))
+        .env("XDG_CONFIG_HOME", tmp.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    child.stdin.as_mut().unwrap().write_all(b"y\nn\n").unwrap();
+
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Setup Complete"));
+    assert!(stderr.contains("Project:"));
+    assert!(stderr.contains("existing-contract"));
+    assert!(stderr.contains("Next:"));
+    assert!(stderr.contains("groundhog build"));
+    assert!(!stderr.contains("groundhog new my-contract"));
+    assert!(!stderr.contains("cd existing-contract"));
 }
 
 #[test]

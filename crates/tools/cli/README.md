@@ -123,8 +123,8 @@ groundhog init --json   # delegates to `groundhog status --json`
 ### `groundhog status`
 
 Non-interactive diagnostic. Reports environment, keys,
-credentials, and project config. Exits 0 when clean, 1 when
-findings exist.
+credentials, and project config. Exits 0 when there are no
+warning-level findings, 1 when warnings exist.
 
 ```bash
 groundhog status              # human-readable report
