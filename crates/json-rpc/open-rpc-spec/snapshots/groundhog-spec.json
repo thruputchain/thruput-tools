@@ -982,6 +982,19 @@
               "status"
             ],
             "type": "object"
+          },
+          {
+            "description": "Unrecognized status from a newer server. Returned when the\nclient encounters a `status` tag it doesn't know about. Check\nfor client updates.",
+            "properties": {
+              "status": {
+                "const": "other",
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
           }
         ]
       },

@@ -52,6 +52,12 @@ pub enum TransactionStatus {
 
     /// Not found in mempool or indexer.
     Unknown,
+
+    /// Unrecognized status from a newer server. Returned when the
+    /// client encounters a `status` tag it doesn't know about. Check
+    /// for client updates.
+    #[serde(other)]
+    Other,
 }
 
 /// One conflicting storage operation reported by two-phase commit.
@@ -319,5 +325,16 @@ mod tests {
         let code: ConflictCode =
             serde_json::from_value(json!("someFutureCode")).expect("unknown code should decode");
         assert_eq!(code, ConflictCode::Other);
+    }
+
+    #[test]
+    fn transaction_status_deserializes_unknown_tag_as_other() {
+        let status: TransactionStatus =
+            serde_json::from_value(json!({"status": "someFutureStatus"}))
+                .expect("unknown status tag should decode");
+        assert!(
+            matches!(status, TransactionStatus::Other),
+            "expected Other, got {status:?}"
+        );
     }
 }
