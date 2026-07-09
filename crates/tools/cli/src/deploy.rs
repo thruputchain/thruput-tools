@@ -23,9 +23,7 @@ use crate::config::{
 use crate::dev_detail::{fetch_transaction_detail_blocking, print_transaction_detail};
 use crate::keys::load_local_signer;
 use crate::result::CommandResult;
-use crate::runtime_manifest::{
-    apply_local_node_state_for_dev_key, load_configured_runtime_manifest,
-};
+use crate::runtime_manifest::load_configured_runtime_manifest;
 use crate::tx_utils::{
     format_tx_hash, nonce_from_timestamp, resolve_block_expiry_height, submit_and_poll,
     summarize_exec_status,
@@ -236,7 +234,7 @@ pub(crate) fn prepare_deploy(
     print: &Print,
 ) -> Result<PreparedDeploy, CliError> {
     let cwd = std::env::current_dir()?;
-    let mut resolved = resolve_profile_with_overrides(&cwd, profile, overrides)?;
+    let resolved = resolve_profile_with_overrides(&cwd, profile, overrides)?;
 
     // Resolve signing key
     let key_name = resolve_default_key(&cwd, profile)?;
@@ -244,7 +242,6 @@ pub(crate) fn prepare_deploy(
         return Err(CliError::MissingRpcUrl);
     }
     let key_name = key_name.ok_or(CliError::MissingSigningKey)?;
-    apply_local_node_state_for_dev_key(&mut resolved, &key_name);
     resolved.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
 
     let artifact = if let Some(path) = artifact_path {
@@ -274,6 +271,7 @@ pub(crate) fn prepare_deploy_for_rpc_with_manifest(
     let artifact_bytes = std::fs::read(artifact_path)?;
     let profile = ResolvedProfile {
         name: "integration".into(),
+        network: None,
         rpc_url: Some(rpc_url.into()),
         rpc_url_cli_override: false,
         faucet_url: None,

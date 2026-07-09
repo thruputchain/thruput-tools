@@ -7,12 +7,9 @@ use serde_json::json;
 use crate::account_resolution::lookup_dev_account_address;
 use crate::airdrop::format_hog_amount;
 use crate::codec::{format_contract_address, parse_contract_address};
-use crate::config::{
-    ProfileOverrides, ResolvedProfile, resolve_default_key, resolve_profile_with_overrides,
-};
+use crate::config::{ProfileOverrides, ResolvedProfile, resolve_profile_with_overrides};
 use crate::dev_keys;
 use crate::result::CommandResult;
-use crate::runtime_manifest::apply_local_node_state_for_dev_key;
 use crate::{CliError, Print};
 
 /// Read native HOG balance for a wallet, contract, dev account, or address.
@@ -24,13 +21,7 @@ pub fn run(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    let mut resolved_profile = resolve_profile_with_overrides(project_start, profile, overrides)?;
-    if let Some(key_name) = resolve_default_key(project_start, profile)? {
-        apply_local_node_state_for_dev_key(&mut resolved_profile, &key_name);
-    }
-    if dev_keys::dev_key_index(target).is_some() {
-        apply_local_node_state_for_dev_key(&mut resolved_profile, target);
-    }
+    let resolved_profile = resolve_profile_with_overrides(project_start, profile, overrides)?;
     let rpc_url = resolved_profile
         .rpc_url
         .as_deref()
@@ -113,6 +104,7 @@ mod tests {
     fn resolves_wallet_before_contract_alias() {
         let mut profile = ResolvedProfile {
             name: "default".into(),
+            network: None,
             rpc_url: None,
             rpc_url_cli_override: false,
             faucet_url: None,
@@ -143,6 +135,7 @@ mod tests {
     fn resolves_contract_alias() {
         let mut profile = ResolvedProfile {
             name: "default".into(),
+            network: None,
             rpc_url: None,
             rpc_url_cli_override: false,
             faucet_url: None,
@@ -168,6 +161,7 @@ mod tests {
     fn resolves_direct_address() {
         let profile = ResolvedProfile {
             name: "default".into(),
+            network: None,
             rpc_url: None,
             rpc_url_cli_override: false,
             faucet_url: None,

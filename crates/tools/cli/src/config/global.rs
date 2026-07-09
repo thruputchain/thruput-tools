@@ -7,11 +7,12 @@ use serde::{Deserialize, Serialize};
 use std::os::unix::fs::OpenOptionsExt;
 
 use super::dirs::config_file_path;
-use super::project::ProjectProfile;
+use std::path::PathBuf;
+
+use super::project::{Network, ProjectProfile};
 use crate::CliError;
 
 const INITIAL_DEFAULT_PROFILE: &str = "local";
-const LOCAL_RPC_URL: &str = "http://127.0.0.1:9545";
 const LOCAL_FAUCET_URL: &str = "http://127.0.0.1:8081";
 const HOG_CONTRACT_ADDRESS: &str =
     "0x0000000000000000000000000000000000000000000000000000000000000001";
@@ -23,6 +24,15 @@ pub struct ExecutorCredentials {
     pub password: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LocalRuntimeState {
+    pub node_id: String,
+    pub rpc_url: String,
+    pub runtime_manifest: PathBuf,
+    #[serde(default)]
+    pub runtime_artifacts_dir: Option<PathBuf>,
+}
+
 /// Internal representation of `config.toml`.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub(crate) struct GlobalConfigFile {
@@ -32,6 +42,8 @@ pub(crate) struct GlobalConfigFile {
     pub(crate) default_profile: Option<String>,
     #[serde(default)]
     pub(crate) profile: BTreeMap<String, ProjectProfile>,
+    #[serde(default)]
+    pub(crate) local_runtime_state: Option<LocalRuntimeState>,
 }
 
 pub(crate) fn read_config_file() -> Result<GlobalConfigFile, CliError> {
@@ -121,8 +133,8 @@ pub fn initialize_global_profiles() -> Result<(), CliError> {
     }
 
     let local = config.profile.entry("local".to_string()).or_default();
-    if local.rpc_url.is_none() {
-        local.rpc_url = Some(LOCAL_RPC_URL.to_string());
+    if local.network.is_none() {
+        local.network = Some(Network::Local);
     }
     local
         .contracts
@@ -130,8 +142,8 @@ pub fn initialize_global_profiles() -> Result<(), CliError> {
         .or_insert_with(|| HOG_CONTRACT_ADDRESS.to_string());
 
     let devnet = config.profile.entry("devnet".to_string()).or_default();
-    if devnet.rpc_url.is_none() {
-        devnet.rpc_url = Some(LOCAL_RPC_URL.to_string());
+    if devnet.network.is_none() {
+        devnet.network = Some(Network::Devnet);
     }
     if devnet.faucet_url.is_none() {
         devnet.faucet_url = Some(LOCAL_FAUCET_URL.to_string());
@@ -142,4 +154,61 @@ pub fn initialize_global_profiles() -> Result<(), CliError> {
         .or_insert_with(|| HOG_CONTRACT_ADDRESS.to_string());
 
     write_config_file(&config)
+}
+
+pub fn save_local_runtime_state(state: &LocalRuntimeState) -> Result<PathBuf, CliError> {
+    validate_local_runtime_state(state)?;
+    let mut config = read_config_file()?;
+    config.local_runtime_state = Some(state.clone());
+    write_config_file(&config)?;
+    config_file_path()
+}
+
+pub fn clear_local_runtime_state_if_matches(
+    state: &LocalRuntimeState,
+) -> Result<PathBuf, CliError> {
+    let path = config_file_path()?;
+    let mut config = match std::fs::read_to_string(&path) {
+        Ok(contents) => toml::from_str::<GlobalConfigFile>(&contents)
+            .map_err(|e| CliError::Other(e.to_string()))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(path),
+        Err(e) => return Err(e.into()),
+    };
+
+    if config.local_runtime_state.as_ref() == Some(state) {
+        config.local_runtime_state = None;
+        write_config_file(&config)?;
+    }
+
+    Ok(path)
+}
+
+fn validate_local_runtime_state(state: &LocalRuntimeState) -> Result<(), CliError> {
+    let rpc_url = state.rpc_url.trim();
+    if rpc_url.is_empty() {
+        return Err(CliError::Other("rpc_url cannot be empty".into()));
+    }
+    if !rpc_url.starts_with("http://") && !rpc_url.starts_with("https://") {
+        return Err(CliError::Other(
+            "rpc_url must start with http:// or https://".into(),
+        ));
+    }
+    if state.node_id.trim().is_empty() {
+        return Err(CliError::Other("node_id cannot be empty".into()));
+    }
+    if !state.runtime_manifest.is_absolute() {
+        return Err(CliError::Other(
+            "runtime_manifest written by groundhog node must be absolute".into(),
+        ));
+    }
+    if state
+        .runtime_artifacts_dir
+        .as_deref()
+        .is_some_and(|path| !path.is_absolute())
+    {
+        return Err(CliError::Other(
+            "runtime_artifacts_dir written by groundhog node must be absolute".into(),
+        ));
+    }
+    Ok(())
 }

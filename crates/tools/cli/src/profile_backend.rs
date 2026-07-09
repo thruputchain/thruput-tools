@@ -73,6 +73,7 @@ mod tests {
     fn test_profile() -> ResolvedProfile {
         ResolvedProfile {
             name: "default".into(),
+            network: None,
             rpc_url: Some("https://rpc.example".into()),
             faucet_url: None,
             rpc_url_cli_override: false,

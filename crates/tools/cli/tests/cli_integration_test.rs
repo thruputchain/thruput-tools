@@ -268,11 +268,11 @@ fn node_hogd_dev_binary_json_starts_supervisor() {
     assert_eq!(payload["data"]["backend"]["planes"]["chain"], "scheduler");
     assert_eq!(payload["data"]["backend"]["planes"]["read"], "indexer");
     assert_eq!(payload["data"]["backend"]["planes"]["view"], "stub");
-    assert_eq!(payload["data"]["profile_state"]["ok"], true);
+    assert_eq!(payload["data"]["local_runtime_state"]["ok"], true);
     assert!(
-        payload["data"]["profile_state"]["path"]
+        payload["data"]["local_runtime_state"]["path"]
             .as_str()
-            .expect("bug: profile_state path should be a string")
+            .expect("bug: local_runtime_state path should be a string")
             .ends_with("groundhog/config.toml")
     );
     let scheduler = payload["data"]["backend"]["endpoints"]["scheduler_coord"]
@@ -307,8 +307,7 @@ fn node_hogd_dev_binary_json_starts_supervisor() {
     assert!(status.success(), "groundhog node should stop cleanly");
     let global_config = std::fs::read_to_string(config_home.path().join("groundhog/config.toml"))
         .expect("groundhog node should leave config readable");
-    assert!(!global_config.contains("rpc_url"));
-    assert!(!global_config.contains("runtime_manifest"));
+    assert!(!global_config.contains("local_runtime_state"));
     assert!(
         wait_pid_gone(pid, Duration::from_secs(2)),
         "fake hogd-dev pid {pid} still alive after CLI exit",

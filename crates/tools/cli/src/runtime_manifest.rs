@@ -64,15 +64,6 @@ fn profile_runtime_manifest_path(profile: &ResolvedProfile) -> Result<Option<Pat
     Ok(Some(base.join(path)))
 }
 
-/// Preserve the call-site hook for dev-key runtime resolution.
-///
-/// `groundhog node` now writes RPC URL and runtime manifest into the selected
-/// profile directly, so there is no separate local-node state to apply.
-pub(crate) fn apply_local_node_state_for_dev_key(_profile: &mut ResolvedProfile, _key_name: &str) {}
-
-/// Preserve the call-site hook for local bootstrap runtime resolution.
-pub(crate) fn apply_local_node_state_for_local_bootstrap(_profile: &mut ResolvedProfile) {}
-
 fn os_value_is_blank(value: &OsStr) -> bool {
     value.to_string_lossy().trim().is_empty()
 }
@@ -182,6 +173,7 @@ mod tests {
     fn no_runtime_manifest_is_inferred_without_env_or_profile_config() {
         let profile = ResolvedProfile {
             name: "default".to_string(),
+            network: None,
             rpc_url: Some("http://127.0.0.1:9545".to_string()),
             rpc_url_cli_override: false,
             faucet_url: None,

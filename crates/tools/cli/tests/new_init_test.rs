@@ -20,8 +20,12 @@ fn new_creates_subdirectory_and_scaffolds() {
     assert!(dir.join("groundhog.toml").exists());
     assert!(dir.join("src/lib.rs").exists());
     let config = fs::read_to_string(dir.join("groundhog.toml")).unwrap();
+    assert!(config.contains("[profile.local]"));
+    assert!(config.contains("network = \"local\""));
     assert!(config.contains("[profile.local.contracts]"));
     assert!(config.contains("# [profile.local.wallets.alice]"));
+    assert!(config.contains("[profile.devnet]"));
+    assert!(config.contains("network = \"devnet\""));
     assert!(config.contains("[profile.devnet.contracts]"));
     assert!(config.contains("# [profile.devnet.wallets.alice]"));
     assert!(config.contains("# owner_public_key ="));
@@ -69,7 +73,7 @@ fn init_configures_profiles_and_succeeds() {
     let global_config = fs::read_to_string(tmp.path().join("groundhog/config.toml")).unwrap();
     assert!(global_config.contains("default_profile = \"local\""));
     assert!(global_config.contains("[profile.local]"));
-    assert!(global_config.contains("rpc_url = \"http://127.0.0.1:9545\""));
+    assert!(global_config.contains("network = \"local\""));
     assert!(global_config.contains("devnet"));
     assert!(
         global_config.contains(
@@ -77,14 +81,16 @@ fn init_configures_profiles_and_succeeds() {
         )
     );
     let local = groundhog_cli::config::resolve_profile(tmp.path(), Some("local")).unwrap();
-    assert_eq!(local.rpc_url.as_deref(), Some("http://127.0.0.1:9545"));
+    assert_eq!(local.network, Some(groundhog_cli::config::Network::Local));
+    assert!(local.rpc_url.is_none());
     assert_eq!(
         local.contracts.get("HOG").map(String::as_str),
         Some("0x0000000000000000000000000000000000000000000000000000000000000001")
     );
     let devnet = groundhog_cli::config::resolve_profile(tmp.path(), Some("devnet")).unwrap();
     assert_eq!(devnet.name, "devnet");
-    assert_eq!(devnet.rpc_url.as_deref(), Some("http://127.0.0.1:9545"));
+    assert_eq!(devnet.network, Some(groundhog_cli::config::Network::Devnet));
+    assert!(devnet.rpc_url.is_none());
     assert_eq!(
         devnet.contracts.get("HOG").map(String::as_str),
         Some("0x0000000000000000000000000000000000000000000000000000000000000001")
@@ -142,7 +148,8 @@ owner_public_key = "0x2222222222222222222222222222222222222222222222222222222222
     assert!(global_config.contains("devnet"));
     let devnet = groundhog_cli::config::resolve_profile(tmp.path(), Some("devnet")).unwrap();
     assert_eq!(devnet.name, "devnet");
-    assert_eq!(devnet.rpc_url.as_deref(), Some("http://127.0.0.1:9545"));
+    assert_eq!(devnet.network, Some(groundhog_cli::config::Network::Devnet));
+    assert!(devnet.rpc_url.is_none());
     assert_eq!(
         devnet.contracts.get("HOG").map(String::as_str),
         Some("0x0000000000000000000000000000000000000000000000000000000000000001")

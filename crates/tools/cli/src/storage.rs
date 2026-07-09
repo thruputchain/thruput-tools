@@ -7,9 +7,8 @@ use groundhog_json_rpc_types::state::StorageItemRead;
 use serde_json::json;
 
 use crate::codec::parse_contract_address;
-use crate::config::{ProfileOverrides, resolve_default_key, resolve_profile_with_overrides};
+use crate::config::{ProfileOverrides, resolve_profile_with_overrides};
 use crate::result::CommandResult;
-use crate::runtime_manifest::apply_local_node_state_for_dev_key;
 use crate::{CliError, Print};
 
 /// Read the latest committed storage item at a contract address/key pair.
@@ -22,10 +21,7 @@ pub fn run(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    let mut resolved_profile = resolve_profile_with_overrides(project_start, profile, overrides)?;
-    if let Some(key_name) = resolve_default_key(project_start, profile)? {
-        apply_local_node_state_for_dev_key(&mut resolved_profile, &key_name);
-    }
+    let resolved_profile = resolve_profile_with_overrides(project_start, profile, overrides)?;
     let rpc_url = resolved_profile
         .rpc_url
         .as_deref()

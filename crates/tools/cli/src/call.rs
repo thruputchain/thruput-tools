@@ -25,9 +25,7 @@ use crate::contract_spec::{InterfaceSpec, load_contract_spec, load_registered_in
 use crate::dev_detail::{fetch_transaction_detail_blocking, print_transaction_detail};
 use crate::keys::load_local_signer;
 use crate::result::CommandResult;
-use crate::runtime_manifest::{
-    apply_local_node_state_for_dev_key, load_configured_runtime_manifest,
-};
+use crate::runtime_manifest::load_configured_runtime_manifest;
 use crate::tx_utils::{
     format_tx_hash, nonce_from_timestamp, resolve_block_expiry_height, submit_and_poll,
     summarize_exec_status,
@@ -323,13 +321,12 @@ fn prepare_call_with_runtime(
     rt: &tokio::runtime::Runtime,
 ) -> Result<PreparedCall, CliError> {
     let cwd = std::env::current_dir()?;
-    let mut resolved_profile = resolve_profile_with_overrides(&cwd, profile, overrides)?;
+    let resolved_profile = resolve_profile_with_overrides(&cwd, profile, overrides)?;
     let key_name = resolve_default_key(&cwd, profile)?;
     if resolved_profile.rpc_url.is_none() && key_name.is_none() {
         return Err(CliError::MissingRpcUrl);
     }
     let key_name = key_name.ok_or(CliError::MissingSigningKey)?;
-    apply_local_node_state_for_dev_key(&mut resolved_profile, &key_name);
     let rpc_url = resolved_profile
         .rpc_url
         .as_deref()

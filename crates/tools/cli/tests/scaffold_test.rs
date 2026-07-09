@@ -45,8 +45,12 @@ fn scaffold_counter_creates_expected_files() {
     assert!(gitignore.contains("/.groundhog/"));
 
     let groundhog = fs::read_to_string(dir.join("groundhog.toml")).unwrap();
+    assert!(groundhog.contains("[profile.local]"));
+    assert!(groundhog.contains("network = \"local\""));
     assert!(groundhog.contains("[profile.local.contracts]"));
     assert!(groundhog.contains("# [profile.local.wallets.alice]"));
+    assert!(groundhog.contains("[profile.devnet]"));
+    assert!(groundhog.contains("network = \"devnet\""));
     assert!(groundhog.contains("[profile.devnet.contracts]"));
     assert!(groundhog.contains("# [profile.devnet.wallets.alice]"));
     assert!(groundhog.contains("# owner_public_key ="));

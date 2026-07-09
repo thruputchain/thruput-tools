@@ -397,16 +397,17 @@ Scaffolded projects include a `groundhog.toml` with profile
 support:
 
 ```toml
-[profile.default]
-rpc_url = "http://localhost:9545"
+[profile.local]
+network = "local"
 default_key = "dev-0"
 # runtime_manifest = "runtime-manifest.json"
 
-[profile.default.contracts]
+[profile.local.contracts]
 # counter = "0x..."
 
-[profile.testnet]
-rpc_url = "https://testnet.groundhog.network"
+[profile.devnet]
+network = "devnet"
+rpc_url = "https://devnet.groundhog.network"
 ```
 
 Select a profile via `--profile`, `GROUNDHOG_PROFILE`, or
@@ -417,6 +418,8 @@ Contract aliases map names to addresses per profile. `deploy`, `call`, and
 set, relative paths resolve from the directory containing `groundhog.toml`;
 `GROUNDHOG_RUNTIME_MANIFEST` overrides the profile field for ephemeral local
 node runs, and a command-line `--runtime-manifest` override wins over both.
+Profiles with `network = "local"` can also use the active local node endpoint
+and runtime artifacts written by `groundhog node` to global config.
 
 ## Global Flags
 

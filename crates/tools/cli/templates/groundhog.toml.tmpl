@@ -4,12 +4,18 @@
 # Profiles here merge with global profiles of the same name, and project
 # aliases override global aliases.
 
+[profile.local]
+network = "local"
+
 [profile.local.contracts]
 # {{PROJECT_NAME_SNAKE}} = "0x0000000000000000000000000000000000000000000000000000000000000000"
 
 # [profile.local.wallets.alice]
 # address = "0x0000000000000000000000000000000000000000000000000000000000000000"
 # owner_public_key = "0x0000000000000000000000000000000000000000000000000000000000000000"
+
+[profile.devnet]
+network = "devnet"
 
 [profile.devnet.contracts]
 # {{PROJECT_NAME_SNAKE}} = "0x0000000000000000000000000000000000000000000000000000000000000000"

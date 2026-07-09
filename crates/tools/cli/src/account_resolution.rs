@@ -337,6 +337,7 @@ mod tests {
     ) -> ResolvedProfile {
         ResolvedProfile {
             name: "default".into(),
+            network: None,
             rpc_url: Some("http://127.0.0.1:1".into()),
             rpc_url_cli_override: false,
             faucet_url: None,
@@ -452,6 +453,7 @@ mod tests {
         .expect("bug: manifest should write");
         let profile = ResolvedProfile {
             name: "default".into(),
+            network: None,
             rpc_url: None,
             rpc_url_cli_override: false,
             faucet_url: None,
@@ -484,6 +486,7 @@ mod tests {
         write_test_runtime_manifest(&manifest_path, &signer, wallet_address);
         let profile = ResolvedProfile {
             name: "default".into(),
+            network: None,
             rpc_url: None,
             rpc_url_cli_override: false,
             faucet_url: None,
@@ -558,6 +561,7 @@ mod tests {
     fn profile_with_manifest(manifest_path: Option<std::path::PathBuf>) -> ResolvedProfile {
         ResolvedProfile {
             name: "default".into(),
+            network: None,
             rpc_url: None,
             rpc_url_cli_override: false,
             faucet_url: None,
@@ -574,6 +578,7 @@ mod tests {
     fn test_profile_for_key(key_name: &str) -> ResolvedProfile {
         ResolvedProfile {
             name: "default".into(),
+            network: None,
             rpc_url: Some("http://127.0.0.1:1".into()),
             rpc_url_cli_override: false,
             faucet_url: None,

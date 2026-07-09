@@ -9,7 +9,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::dirs::config_file_path;
-use super::global::{load_default_key, read_config_file};
+use super::global::{LocalRuntimeState, load_default_key, read_config_file};
 use crate::CliError;
 
 pub const DEFAULT_PROFILE: &str = "default";
@@ -17,6 +17,8 @@ pub const DEFAULT_PROFILE: &str = "default";
 /// Project profile loaded from `groundhog.toml`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProjectProfile {
+    #[serde(default)]
+    pub network: Option<Network>,
     #[serde(default)]
     pub rpc_url: Option<String>,
     #[serde(default)]
@@ -31,6 +33,14 @@ pub struct ProjectProfile {
     pub contracts: BTreeMap<String, String>,
     #[serde(default)]
     pub wallets: BTreeMap<String, SavedWalletBinding>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Network {
+    Local,
+    Devnet,
+    Mainnet,
 }
 
 /// Saved wallet binding for a local signing key.
@@ -54,6 +64,7 @@ pub(crate) struct ProjectConfigFile {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct ResolvedProfile {
     pub name: String,
+    pub network: Option<Network>,
     pub rpc_url: Option<String>,
     pub faucet_url: Option<String>,
     #[serde(skip)]
@@ -333,127 +344,6 @@ pub fn remove_profile_wallet_address(
     Ok(path)
 }
 
-/// Persist local-node runtime state under the selected effective profile.
-pub fn save_profile_local_node_state(
-    start: &Path,
-    explicit_profile: Option<&str>,
-    rpc_url: &str,
-    runtime_manifest: &Path,
-    runtime_artifacts_dir: Option<&Path>,
-) -> Result<PathBuf, CliError> {
-    let rpc_url = rpc_url.trim();
-    if rpc_url.is_empty() {
-        return Err(CliError::Other("rpc_url cannot be empty".into()));
-    }
-    if !rpc_url.starts_with("http://") && !rpc_url.starts_with("https://") {
-        return Err(CliError::Other(
-            "rpc_url must start with http:// or https://".into(),
-        ));
-    }
-    if !runtime_manifest.is_absolute() {
-        return Err(CliError::Other(
-            "runtime_manifest written by groundhog node must be absolute".into(),
-        ));
-    }
-    if runtime_artifacts_dir.is_some_and(|path| !path.is_absolute()) {
-        return Err(CliError::Other(
-            "runtime_artifacts_dir written by groundhog node must be absolute".into(),
-        ));
-    }
-
-    let profile_name = active_profile_name(start, explicit_profile)?;
-    let path = profile_write_path(start)?;
-    let contents = match std::fs::read_to_string(&path) {
-        Ok(s) => s,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => return Err(e.into()),
-    };
-
-    let mut doc: toml_edit::DocumentMut = contents
-        .parse::<toml_edit::DocumentMut>()
-        .map_err(|e| CliError::Other(e.to_string()))?;
-
-    let profile = doc
-        .entry("profile")
-        .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
-        .as_table_mut()
-        .ok_or_else(|| CliError::Other("profile must be a table".into()))?
-        .entry(&profile_name)
-        .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
-        .as_table_mut()
-        .ok_or_else(|| CliError::Other("profile entry must be a table".into()))?;
-
-    profile.insert("rpc_url", toml_edit::value(rpc_url));
-    profile.insert(
-        "runtime_manifest",
-        toml_edit::value(runtime_manifest.to_string_lossy().as_ref()),
-    );
-    if let Some(path) = runtime_artifacts_dir {
-        profile.insert(
-            "runtime_artifacts_dir",
-            toml_edit::value(path.to_string_lossy().as_ref()),
-        );
-    }
-
-    write_profile_config(&path, doc.to_string().as_bytes())?;
-    Ok(path)
-}
-
-/// Clear local-node runtime state if it still matches the node that wrote it.
-pub fn clear_profile_local_node_state_if_matches(
-    start: &Path,
-    explicit_profile: Option<&str>,
-    rpc_url: &str,
-    runtime_manifest: &Path,
-    runtime_artifacts_dir: Option<&Path>,
-) -> Result<PathBuf, CliError> {
-    let profile_name = active_profile_name(start, explicit_profile)?;
-    let path = profile_write_path(start)?;
-    let contents = std::fs::read_to_string(&path)?;
-
-    let mut doc: toml_edit::DocumentMut = contents
-        .parse::<toml_edit::DocumentMut>()
-        .map_err(|e| CliError::Other(e.to_string()))?;
-
-    let Some(profile) = doc
-        .get_mut("profile")
-        .and_then(toml_edit::Item::as_table_mut)
-        .and_then(|profiles| profiles.get_mut(&profile_name))
-        .and_then(toml_edit::Item::as_table_mut)
-    else {
-        return Ok(path);
-    };
-
-    let rpc_matches = profile
-        .get("rpc_url")
-        .and_then(toml_edit::Item::as_str)
-        .is_some_and(|value| value == rpc_url.trim());
-    let manifest_matches = profile
-        .get("runtime_manifest")
-        .and_then(toml_edit::Item::as_str)
-        .is_some_and(|value| value == runtime_manifest.to_string_lossy());
-
-    if !rpc_matches || !manifest_matches {
-        return Ok(path);
-    }
-
-    profile.remove("rpc_url");
-    profile.remove("runtime_manifest");
-
-    if let Some(path) = runtime_artifacts_dir {
-        let artifacts_match = profile
-            .get("runtime_artifacts_dir")
-            .and_then(toml_edit::Item::as_str)
-            .is_some_and(|value| value == path.to_string_lossy());
-        if artifacts_match {
-            profile.remove("runtime_artifacts_dir");
-        }
-    }
-
-    write_profile_config(&path, doc.to_string().as_bytes())?;
-    Ok(path)
-}
-
 /// Resolve the effective default key for the active profile.
 ///
 /// Prefers `groundhog.toml` when the profile specifies
@@ -479,6 +369,7 @@ pub fn resolve_profile(start: &Path, explicit: Option<&str>) -> Result<ResolvedP
     let global_source = config_file_path()?;
     let project_config = load_project_config(start)?;
     let global_config = read_config_file()?;
+    let local_runtime_state = global_config.local_runtime_state.clone();
 
     let global_profile = global_config
         .profile
@@ -503,7 +394,7 @@ pub fn resolve_profile(start: &Path, explicit: Option<&str>) -> Result<ResolvedP
         _ => None,
     };
 
-    let profile = match (global_profile, project_profile, project_source.is_some()) {
+    let mut profile = match (global_profile, project_profile, project_source.is_some()) {
         (Some(global), Some(project), _) => merge_profiles(global, project),
         (Some(global), None, _) => global,
         (None, Some(project), _) => project,
@@ -512,8 +403,11 @@ pub fn resolve_profile(start: &Path, explicit: Option<&str>) -> Result<ResolvedP
         (None, None, true) => return Err(CliError::ProfileNotFound(name)),
     };
 
+    apply_local_runtime_state(&mut profile, local_runtime_state.as_ref());
+
     Ok(ResolvedProfile {
         name,
+        network: profile.network,
         rpc_url: profile.rpc_url,
         faucet_url: profile.faucet_url,
         rpc_url_cli_override: false,
@@ -528,6 +422,9 @@ pub fn resolve_profile(start: &Path, explicit: Option<&str>) -> Result<ResolvedP
 }
 
 fn merge_profiles(mut global: ProjectProfile, project: ProjectProfile) -> ProjectProfile {
+    if project.network.is_some() {
+        global.network = project.network;
+    }
     if project.rpc_url.is_some() {
         global.rpc_url = project.rpc_url;
     }
@@ -546,6 +443,26 @@ fn merge_profiles(mut global: ProjectProfile, project: ProjectProfile) -> Projec
     global.contracts.extend(project.contracts);
     global.wallets.extend(project.wallets);
     global
+}
+
+fn apply_local_runtime_state(profile: &mut ProjectProfile, state: Option<&LocalRuntimeState>) {
+    if profile.network != Some(Network::Local) {
+        return;
+    }
+    let Some(state) = state else {
+        return;
+    };
+    if profile.rpc_url.is_none() {
+        profile.rpc_url = Some(state.rpc_url.clone());
+    }
+    if profile.runtime_manifest.is_none() {
+        profile.runtime_manifest = Some(state.runtime_manifest.clone());
+    }
+    if profile.runtime_artifacts_dir.is_none() {
+        profile
+            .runtime_artifacts_dir
+            .clone_from(&state.runtime_artifacts_dir);
+    }
 }
 
 fn normalize_runtime_manifest(profile: &mut ProjectProfile, config_path: &Path) {

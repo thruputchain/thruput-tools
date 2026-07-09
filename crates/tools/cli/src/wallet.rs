@@ -30,10 +30,7 @@ use crate::hog;
 use crate::keys::load_local_signer;
 use crate::profile_backend::{ProfileBackend, resolve_profile_backend};
 use crate::result::CommandResult;
-use crate::runtime_manifest::{
-    apply_local_node_state_for_local_bootstrap, configured_runtime_manifest_path,
-    load_configured_runtime_manifest,
-};
+use crate::runtime_manifest::{configured_runtime_manifest_path, load_configured_runtime_manifest};
 use crate::tx_utils::{
     ensure_tx_success, format_tx_hash, nonce_from_timestamp, resolve_block_expiry_height,
     submit_and_poll_blocking,
@@ -571,11 +568,10 @@ fn resolve_wallet_create_inputs(
 
 fn prepare_local_wallet_create(
     cwd: &Path,
-    mut profile: crate::config::ResolvedProfile,
+    profile: crate::config::ResolvedProfile,
     key_name: String,
     wallet_name: String,
 ) -> Result<PreparedWalletCreate, CliError> {
-    apply_local_node_state_for_local_bootstrap(&mut profile);
     let rpc_url = profile
         .rpc_url
         .as_deref()
