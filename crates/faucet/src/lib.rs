@@ -378,6 +378,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn airdrop_rejects_empty_client_nonce() {
+        let mut body = airdrop_body();
+        body["clientNonce"] = serde_json::json!("0x");
+
+        let response = airdrop_request_with_body(&test_config(), body).await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .expect("bug: airdrop body should read");
+        let json: serde_json::Value =
+            serde_json::from_slice(&body).expect("bug: airdrop body should be JSON");
+        assert_eq!(json["error"]["code"], "airdrop_invalid_client_nonce");
+    }
+
+    #[tokio::test]
     async fn airdrop_retry_returns_recorded_success() {
         let airdrop = Arc::new(MockAirdropSubmitter::success());
         let config = test_config_with_submitters(
@@ -622,6 +638,64 @@ mod tests {
         config.policy_config.wallet_create.owner_quota_max = 0;
 
         let response = wallet_create_request(&config).await;
+
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(airdrop.calls(), 0);
+    }
+
+    #[tokio::test]
+    async fn wallet_create_rejects_empty_client_nonce() {
+        let mut body = wallet_create_body();
+        body["clientNonce"] = serde_json::json!("0x");
+
+        let response = app(test_config())
+            .oneshot(request_with_connect_info(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/create-wallet")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .expect("bug: wallet-create request should build"),
+            ))
+            .await
+            .expect("bug: wallet-create request should complete");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .expect("bug: wallet-create body should read");
+        let json: serde_json::Value =
+            serde_json::from_slice(&body).expect("bug: wallet-create body should be JSON");
+        assert_eq!(json["error"]["code"], "wallet_create_invalid_client_nonce");
+    }
+
+    #[tokio::test]
+    async fn wallet_create_pending_owner_limit_rejects_second_nonce_before_prefund() {
+        let airdrop = Arc::new(MockAirdropSubmitter::success());
+        let config = test_config_with_submitters(
+            airdrop.clone(),
+            Arc::new(MockWalletCreateSubmitter::success()),
+        );
+        seed_wallet_create_attempt(
+            &config,
+            policy::WalletCreateAttemptStatus::Prepared,
+            None,
+            None,
+        );
+        let mut body = wallet_create_body();
+        body["clientNonce"] = serde_json::json!("0x02");
+
+        let response = app(config.clone())
+            .oneshot(request_with_connect_info(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/create-wallet")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .expect("bug: wallet-create request should build"),
+            ))
+            .await
+            .expect("bug: wallet-create request should complete");
 
         assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(airdrop.calls(), 0);

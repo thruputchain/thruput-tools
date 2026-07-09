@@ -36,8 +36,8 @@ use crate::{
     config::PolicyRuntimeConfig,
     error::{error_response, error_response_with_retry_after},
     policy::{
-        FaucetPolicyStore, PolicyStoreError, QuotaKey, WalletCreateAttempt, WalletCreateAttemptKey,
-        WalletCreateAttemptStatus, client_identity,
+        FaucetPolicyStore, InsertWalletCreateAttemptResult, PolicyStoreError, QuotaCheck, QuotaKey,
+        WalletCreateAttempt, WalletCreateAttemptKey, WalletCreateAttemptStatus, client_identity,
     },
     utils::nonce_from_timestamp,
 };
@@ -140,6 +140,13 @@ impl WalletCreateService {
                 "wallet-create request does not match this faucet network",
             );
         }
+        if request.client_nonce.0.is_empty() {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "wallet_create_invalid_client_nonce",
+                "clientNonce must not be empty",
+            );
+        }
 
         let prepared = match self.wallet_create_submitter.verify_wallet_create_request(
             request.owner_public_key.0,
@@ -211,12 +218,24 @@ impl WalletCreateService {
                 .wallet_create
                 .unprefunded_attempt_ttl_secs,
         );
-        match self
-            .policy_store
-            .insert_wallet_create_attempt_if_absent(attempt.clone())
-        {
-            Ok(Some(attempt)) => existing_wallet_create_attempt(input.request, attempt),
-            Ok(None) => WalletCreateFlow::Continue(Box::new(attempt)),
+        match self.policy_store.insert_wallet_create_attempt_if_absent(
+            attempt.clone(),
+            self.policy_config.wallet_create.max_pending_per_owner,
+        ) {
+            Ok(InsertWalletCreateAttemptResult::Existing(attempt)) => {
+                existing_wallet_create_attempt(input.request, *attempt)
+            }
+            Ok(InsertWalletCreateAttemptResult::Inserted) => {
+                WalletCreateFlow::Continue(Box::new(attempt))
+            }
+            Ok(InsertWalletCreateAttemptResult::PendingLimitReached) => {
+                WalletCreateFlow::Respond(error_response_with_retry_after(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "wallet_create_owner_pending_limit_exceeded",
+                    "owner already has a wallet-create attempt in progress",
+                    Some(5),
+                ))
+            }
             Err(error) => WalletCreateFlow::Respond(policy_store_error_response(&error)),
         }
     }
@@ -233,34 +252,34 @@ impl WalletCreateService {
             peer,
             self.policy_config.trust_proxy_client_ip_headers,
         );
-        for decision in [
-            self.policy_store.check_and_record_quota(
-                QuotaKey::WalletCreateOwner(hex_string(owner_public_key)),
-                self.policy_config.wallet_create.owner_quota_max,
-                Duration::from_secs(self.policy_config.wallet_create.owner_quota_window_secs),
-                now,
-            ),
-            self.policy_store.check_and_record_quota(
-                QuotaKey::WalletCreateClient(identity),
-                self.policy_config.wallet_create.ip_quota_max,
-                Duration::from_secs(self.policy_config.wallet_create.ip_quota_window_secs),
-                now,
-            ),
-        ] {
-            match decision {
-                Ok(decision) if decision.allowed => {}
-                Ok(decision) => {
-                    return Some(error_response_with_retry_after(
-                        StatusCode::TOO_MANY_REQUESTS,
-                        WALLET_CREATE_QUOTA_EXCEEDED,
-                        "wallet-create quota exceeded",
-                        decision.retry_after.map(|duration| duration.as_secs()),
-                    ));
-                }
-                Err(error) => return Some(policy_store_error_response(&error)),
-            }
+        match self.policy_store.check_and_record_quotas(
+            &[
+                QuotaCheck {
+                    key: QuotaKey::WalletCreateOwner(hex_string(owner_public_key)),
+                    max: self.policy_config.wallet_create.owner_quota_max,
+                    window: Duration::from_secs(
+                        self.policy_config.wallet_create.owner_quota_window_secs,
+                    ),
+                },
+                QuotaCheck {
+                    key: QuotaKey::WalletCreateClient(identity),
+                    max: self.policy_config.wallet_create.ip_quota_max,
+                    window: Duration::from_secs(
+                        self.policy_config.wallet_create.ip_quota_window_secs,
+                    ),
+                },
+            ],
+            now,
+        ) {
+            Ok(decision) if decision.allowed => None,
+            Ok(decision) => Some(error_response_with_retry_after(
+                StatusCode::TOO_MANY_REQUESTS,
+                WALLET_CREATE_QUOTA_EXCEEDED,
+                "wallet-create quota exceeded",
+                decision.retry_after.map(|duration| duration.as_secs()),
+            )),
+            Err(error) => Some(policy_store_error_response(&error)),
         }
-        None
     }
 
     async fn prefund_wallet_create_attempt(

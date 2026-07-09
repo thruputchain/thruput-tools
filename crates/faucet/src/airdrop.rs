@@ -27,7 +27,7 @@ use crate::{
     error::{error_response, error_response_with_retry_after},
     policy::{
         AirdropAttempt, AirdropAttemptKey, AirdropAttemptStatus, FaucetPolicyStore,
-        InsertAirdropAttemptResult, PolicyStoreError, QuotaKey, client_identity,
+        InsertAirdropAttemptResult, PolicyStoreError, QuotaCheck, QuotaKey, client_identity,
     },
     utils::nonce_from_timestamp,
 };
@@ -95,6 +95,13 @@ impl AirdropService {
                 StatusCode::BAD_REQUEST,
                 "airdrop_network_mismatch",
                 "airdrop request does not match this faucet network",
+            );
+        }
+        if request.client_nonce.0.is_empty() {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "airdrop_invalid_client_nonce",
+                "clientNonce must not be empty",
             );
         }
 
@@ -175,6 +182,15 @@ impl AirdropService {
                 response_from_attempt(StatusCode::ACCEPTED, request, attempt)
             }
             AirdropAttemptStatus::FailedRetryable => {
+                attempt = match self.policy_store.claim_airdrop_transition(
+                    &attempt.key,
+                    &[AirdropAttemptStatus::FailedRetryable],
+                    AirdropAttemptStatus::Pending,
+                    SystemTime::now(),
+                ) {
+                    Ok(attempt) => attempt,
+                    Err(error) => return policy_store_error_response(&error),
+                };
                 attempt.error_code = None;
                 self.submit_airdrop_attempt(request.clone(), attempt).await
             }
@@ -198,34 +214,30 @@ impl AirdropService {
             peer,
             self.policy_config.trust_proxy_client_ip_headers,
         );
-        for decision in [
-            self.policy_store.check_and_record_quota(
-                QuotaKey::AirdropRecipient(hex_string(request.recipient.0)),
-                1,
-                Duration::from_secs(self.policy_config.airdrop.recipient_cooldown_secs),
-                now,
-            ),
-            self.policy_store.check_and_record_quota(
-                QuotaKey::AirdropClient(identity),
-                self.policy_config.airdrop.ip_quota_max,
-                Duration::from_secs(self.policy_config.airdrop.ip_quota_window_secs),
-                now,
-            ),
-        ] {
-            match decision {
-                Ok(decision) if decision.allowed => {}
-                Ok(decision) => {
-                    return Some(error_response_with_retry_after(
-                        StatusCode::TOO_MANY_REQUESTS,
-                        "airdrop_quota_exceeded",
-                        "airdrop quota exceeded",
-                        decision.retry_after.map(|duration| duration.as_secs()),
-                    ));
-                }
-                Err(error) => return Some(policy_store_error_response(&error)),
-            }
+        match self.policy_store.check_and_record_quotas(
+            &[
+                QuotaCheck {
+                    key: QuotaKey::AirdropRecipient(hex_string(request.recipient.0)),
+                    max: 1,
+                    window: Duration::from_secs(self.policy_config.airdrop.recipient_cooldown_secs),
+                },
+                QuotaCheck {
+                    key: QuotaKey::AirdropClient(identity),
+                    max: self.policy_config.airdrop.ip_quota_max,
+                    window: Duration::from_secs(self.policy_config.airdrop.ip_quota_window_secs),
+                },
+            ],
+            now,
+        ) {
+            Ok(decision) if decision.allowed => None,
+            Ok(decision) => Some(error_response_with_retry_after(
+                StatusCode::TOO_MANY_REQUESTS,
+                "airdrop_quota_exceeded",
+                "airdrop quota exceeded",
+                decision.retry_after.map(|duration| duration.as_secs()),
+            )),
+            Err(error) => Some(policy_store_error_response(&error)),
         }
-        None
     }
 
     async fn submit_airdrop_attempt(

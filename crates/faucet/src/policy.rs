@@ -79,6 +79,20 @@ pub enum InsertAirdropAttemptResult {
     PendingLimitReached,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InsertWalletCreateAttemptResult {
+    Inserted,
+    Existing(Box<WalletCreateAttempt>),
+    PendingLimitReached,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuotaCheck {
+    pub key: QuotaKey,
+    pub max: u32,
+    pub window: Duration,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum QuotaKey {
     AirdropRecipient(String),
@@ -131,7 +145,8 @@ pub trait FaucetPolicyStore: Send + Sync + 'static {
     fn insert_wallet_create_attempt_if_absent(
         &self,
         attempt: WalletCreateAttempt,
-    ) -> Result<Option<WalletCreateAttempt>, PolicyStoreError>;
+        max_pending_per_owner: u32,
+    ) -> Result<InsertWalletCreateAttemptResult, PolicyStoreError>;
 
     fn claim_wallet_create_transition(
         &self,
@@ -170,6 +185,12 @@ pub trait FaucetPolicyStore: Send + Sync + 'static {
         key: QuotaKey,
         max: u32,
         window: Duration,
+        now: SystemTime,
+    ) -> Result<QuotaDecision, PolicyStoreError>;
+
+    fn check_and_record_quotas(
+        &self,
+        checks: &[QuotaCheck],
         now: SystemTime,
     ) -> Result<QuotaDecision, PolicyStoreError>;
 
@@ -227,15 +248,42 @@ impl FaucetPolicyStore for InMemoryFaucetPolicyStore {
     fn insert_wallet_create_attempt_if_absent(
         &self,
         attempt: WalletCreateAttempt,
-    ) -> Result<Option<WalletCreateAttempt>, PolicyStoreError> {
+        max_pending_per_owner: u32,
+    ) -> Result<InsertWalletCreateAttemptResult, PolicyStoreError> {
         use std::collections::hash_map::Entry;
 
         let mut state = self.lock()?;
+        if let Some(existing) = state.wallet_create_attempts.get(&attempt.key) {
+            return Ok(InsertWalletCreateAttemptResult::Existing(Box::new(
+                existing.clone(),
+            )));
+        }
+        let pending = state
+            .wallet_create_attempts
+            .values()
+            .filter(|existing| {
+                existing.key.network_id == attempt.key.network_id
+                    && existing.key.genesis_hash == attempt.key.genesis_hash
+                    && existing.key.owner_public_key == attempt.key.owner_public_key
+                    && matches!(
+                        existing.status,
+                        WalletCreateAttemptStatus::Prepared
+                            | WalletCreateAttemptStatus::PrefundPending
+                            | WalletCreateAttemptStatus::PrefundConfirmed
+                            | WalletCreateAttemptStatus::CreatePending
+                    )
+            })
+            .count();
+        if pending >= max_pending_per_owner as usize {
+            return Ok(InsertWalletCreateAttemptResult::PendingLimitReached);
+        }
         match state.wallet_create_attempts.entry(attempt.key.clone()) {
-            Entry::Occupied(existing) => Ok(Some(existing.get().clone())),
+            Entry::Occupied(existing) => Ok(InsertWalletCreateAttemptResult::Existing(Box::new(
+                existing.get().clone(),
+            ))),
             Entry::Vacant(vacant) => {
                 vacant.insert(attempt);
-                Ok(None)
+                Ok(InsertWalletCreateAttemptResult::Inserted)
             }
         }
     }
@@ -363,6 +411,41 @@ impl FaucetPolicyStore for InMemoryFaucetPolicyStore {
             occurred_at: now,
             expires_at: now.checked_add(window).unwrap_or(now),
         });
+        Ok(QuotaDecision {
+            allowed: true,
+            retry_after: None,
+        })
+    }
+
+    fn check_and_record_quotas(
+        &self,
+        checks: &[QuotaCheck],
+        now: SystemTime,
+    ) -> Result<QuotaDecision, PolicyStoreError> {
+        let mut state = self.lock()?;
+        for check in checks {
+            let events = state.quota_events.entry(check.key.clone()).or_default();
+            events.retain(|event| event.expires_at > now);
+            if events.len() >= check.max as usize {
+                let retry_after = events
+                    .first()
+                    .and_then(|event| event.expires_at.duration_since(now).ok());
+                return Ok(QuotaDecision {
+                    allowed: false,
+                    retry_after,
+                });
+            }
+        }
+        for check in checks {
+            state
+                .quota_events
+                .entry(check.key.clone())
+                .or_default()
+                .push(QuotaEvent {
+                    occurred_at: now,
+                    expires_at: now.checked_add(check.window).unwrap_or(now),
+                });
+        }
         Ok(QuotaDecision {
             allowed: true,
             retry_after: None,
@@ -545,6 +628,41 @@ mod tests {
         assert!(
             store
                 .check_and_record_quota(key, 1, window, now + Duration::from_secs(61))
+                .expect("bug: quota check should succeed")
+                .allowed
+        );
+    }
+
+    #[test]
+    fn quota_batch_does_not_record_when_any_check_fails() {
+        let store = InMemoryFaucetPolicyStore::new();
+        let first = QuotaKey::AirdropRecipient("0xabc".into());
+        let second = QuotaKey::AirdropClient(ClientIdentity::Unknown);
+        let now = SystemTime::UNIX_EPOCH;
+        let window = Duration::from_mins(1);
+
+        let blocked = store
+            .check_and_record_quotas(
+                &[
+                    QuotaCheck {
+                        key: first.clone(),
+                        max: 1,
+                        window,
+                    },
+                    QuotaCheck {
+                        key: second,
+                        max: 0,
+                        window,
+                    },
+                ],
+                now,
+            )
+            .expect("bug: quota check should succeed");
+
+        assert!(!blocked.allowed);
+        assert!(
+            store
+                .check_and_record_quota(first, 1, window, now)
                 .expect("bug: quota check should succeed")
                 .allowed
         );
