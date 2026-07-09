@@ -1,11 +1,8 @@
-use std::io::Write;
-
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
 
+use super::atomic::atomic_write_private;
 use super::dirs::config_file_path;
 use std::path::PathBuf;
 
@@ -65,16 +62,7 @@ fn write_config_file(config: &GlobalConfigFile) -> Result<(), CliError> {
         std::fs::create_dir_all(parent)?;
     }
     let contents = toml::to_string(config).map_err(|e| CliError::Other(e.to_string()))?;
-
-    // Restrict permissions — file contains credentials.
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    opts.mode(0o600);
-
-    let mut file = opts.open(&path)?;
-    file.write_all(contents.as_bytes())?;
-    Ok(())
+    atomic_write_private(&path, contents.as_bytes())
 }
 
 /// Save executor credentials to `config.toml`.

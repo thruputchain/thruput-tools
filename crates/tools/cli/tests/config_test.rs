@@ -102,6 +102,31 @@ fn roundtrip_default_key() {
 }
 
 #[test]
+#[cfg(unix)]
+#[serial]
+fn global_config_rewrite_replaces_permissive_file_with_private_permissions() {
+    let tmp = TempDir::new().unwrap();
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let path = global_config_path(&tmp);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, "default_key = \"old\"\n").unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+
+    groundhog_cli::config::save_default_key("alice").unwrap();
+
+    assert!(
+        fs::read_to_string(&path)
+            .unwrap()
+            .contains("default_key = \"alice\"")
+    );
+    let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
+    assert!(!path.with_extension("toml.tmp").exists());
+
+    unsafe { env::remove_var("XDG_CONFIG_HOME") };
+}
+
+#[test]
 #[serial]
 fn resolve_profile_loads_default_project_profile() {
     let tmp = TempDir::new().unwrap();
