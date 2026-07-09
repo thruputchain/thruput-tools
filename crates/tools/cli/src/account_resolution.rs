@@ -52,10 +52,10 @@ pub(crate) fn resolve_wallet_address(
     } else if let Some(wallet) = profile.wallets.get(key_name) {
         resolve_saved_wallet_address(key_name, wallet, signer)
     } else {
-        Err(CliError::Other(format!(
-            "no wallet saved for key `{key_name}` in profile `{}`; run `groundhog wallet create --key {key_name} --profile {}`",
-            profile.name, profile.name
-        )))
+        Err(CliError::SavedWalletMissing {
+            key_name: key_name.to_string(),
+            profile: profile.name.clone(),
+        })
     }
 }
 
@@ -67,11 +67,11 @@ fn resolve_saved_wallet_address(
     let owner_public_key = parse_owner_public_key(key_name, &wallet.owner_public_key)?;
     let expected_public_key = signer.verifying_key_bytes();
     if owner_public_key.as_slice() != expected_public_key.as_slice() {
-        return Err(CliError::Other(format!(
-            "saved wallet `{key_name}` owner public key {} does not match local key `{key_name}` public key {}",
-            format_hex(&owner_public_key),
-            format_hex(&expected_public_key),
-        )));
+        return Err(CliError::SavedWalletOwnerMismatch {
+            key_name: key_name.to_string(),
+            configured: format_hex(&owner_public_key),
+            local: format_hex(&expected_public_key),
+        });
     }
 
     codec::parse_contract_address(&wallet.address)
@@ -82,21 +82,28 @@ fn parse_owner_public_key(key_name: &str, value: &str) -> Result<Vec<u8>, CliErr
         .strip_prefix("0x")
         .or_else(|| value.strip_prefix("0X"))
         .ok_or_else(|| {
-            CliError::Other(format!(
-                "saved wallet `{key_name}` owner_public_key must be a 0x-prefixed 64-character hex string"
-            ))
+            saved_wallet_owner_public_key_invalid(
+                key_name,
+                "must be a 0x-prefixed 64-character hex string",
+            )
         })?;
     let bytes = hex::decode(hex).map_err(|error| {
-        CliError::Other(format!(
-            "saved wallet `{key_name}` owner_public_key is not valid hex: {error}"
-        ))
+        saved_wallet_owner_public_key_invalid(key_name, format!("not valid hex: {error}"))
     })?;
     if bytes.len() != 32 {
-        return Err(CliError::Other(format!(
-            "saved wallet `{key_name}` owner_public_key must be 32 bytes"
-        )));
+        return Err(saved_wallet_owner_public_key_invalid(
+            key_name,
+            "must be 32 bytes",
+        ));
     }
     Ok(bytes)
+}
+
+fn saved_wallet_owner_public_key_invalid(key_name: &str, message: impl Into<String>) -> CliError {
+    CliError::SavedWalletOwnerPublicKeyInvalid {
+        key_name: key_name.to_string(),
+        message: message.into(),
+    }
 }
 
 fn resolve_dev_wallet_address(
@@ -327,7 +334,17 @@ mod tests {
         let err = resolve_wallet_address(&profile, "alice", &signer)
             .expect_err("bug: missing wallet should fail");
 
+        assert_eq!(err.code(), "saved_wallet_missing");
         assert!(err.to_string().contains("run `groundhog wallet create"));
+        assert_eq!(
+            err.details_json().expect("details expected")["profile"],
+            "default"
+        );
+        assert!(
+            err.hint()
+                .expect("hint expected")
+                .contains("groundhog wallet create")
+        );
     }
 
     fn test_profile(
@@ -387,10 +404,41 @@ mod tests {
         let error = resolve_wallet_address(&profile, "alice", &signer)
             .expect_err("bug: mismatched saved wallet owner should fail");
 
+        assert_eq!(error.code(), "saved_wallet_owner_mismatch");
         assert!(
             error
                 .to_string()
                 .contains("saved wallet `alice` owner public key")
+        );
+        assert_eq!(
+            error.details_json().expect("details expected")["keyName"],
+            "alice"
+        );
+    }
+
+    #[test]
+    fn non_dev_key_rejects_invalid_saved_wallet_owner_public_key() {
+        let signer = groundhog_signing::derive_default_dev_account_signer(0);
+        let wallet_address = groundhog_xdr::types::ContractAddress::from([0x41; 32]);
+        let mut profile = test_profile_for_key("alice");
+        profile.wallets.insert(
+            "alice".into(),
+            SavedWalletBinding {
+                address: format_hex(wallet_address.as_ref()),
+                owner_public_key: "not-hex".into(),
+            },
+        );
+
+        let error = resolve_wallet_address(&profile, "alice", &signer)
+            .expect_err("bug: invalid saved wallet owner should fail");
+
+        assert_eq!(error.code(), "saved_wallet_owner_public_key_invalid");
+        assert!(error.to_string().contains("owner_public_key is invalid"));
+        assert!(
+            error
+                .hint()
+                .expect("hint expected")
+                .contains("owner_public_key")
         );
     }
 
