@@ -185,7 +185,13 @@ hash (constraint 9), the descriptor needs an explicit refresh path:
 
 A new small Rust service (own crate under `crates/`, reusing
 `groundhog-signing` + `json-rpc-client`) holding the genesis-funded
-faucet/sponsor wallet key (loaded from AWS Secrets Manager, never an argv):
+faucet/sponsor wallet key (loaded from an environment variable for local
+development or AWS Secrets Manager for hosted Devnet, never from TOML or an
+argv). The AWS source names a secret ID/ARN and region; the secret is a
+`SecretString` containing only the hex-encoded 32-byte key. The hosted service
+uses the SDK environment, shared-config, and EC2 credential providers, with an
+instance/task role restricted to `secretsmanager:GetSecretValue` for that
+secret:
 
 - `POST /v1/create-wallet/prepare { ownerPubkey, deployNonce,
   walletContractHash, walletAddress, networkId, genesisHash, clientNonce,

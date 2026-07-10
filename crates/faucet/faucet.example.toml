@@ -19,6 +19,7 @@ transfer_entrypoint = "0x63285b3523f9dc3f"
 
 [network.faucet]
 wallet_address = "0x0000000000000000000000000000000000000000000000000000000000000000"
+public_key = "0x0000000000000000000000000000000000000000000000000000000000000000"
 
 [network.wallet_create]
 prefund_raw_amount = "100000000"
@@ -27,8 +28,10 @@ wallet_contract_hash = "0x000000000000000000000000000000000000000000000000000000
 [airdrop]
 raw_amount = "100000000"
 wallet_do_action_entrypoint = "0x646f416374696f6e"
-# Placeholder only. Use a real faucet secret in local/private deployment config.
-faucet_secret_key = "0x1111111111111111111111111111111111111111111111111111111111111111"
+
+[airdrop.secret_key_source]
+type = "environment"
+variable = "GROUNDHOG_FAUCET_SECRET_KEY"
 
 [wallet_create]
 create_wallet_entrypoint = "0x6372656174655761"
