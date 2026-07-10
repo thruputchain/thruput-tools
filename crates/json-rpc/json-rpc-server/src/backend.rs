@@ -87,6 +87,9 @@ pub struct ValidatedTransaction {
     pub bytes: Vec<u8>,
     /// Canonical transaction hash over the inner `Transaction`.
     pub hash: TxHash,
+    /// Last block height at which the transaction may be included,
+    /// decoded from the transaction's uniquifier.
+    pub block_expiry_height: BlockHeight,
 }
 
 /// Backend plane for accepted raw transaction submission.

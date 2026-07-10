@@ -1091,7 +1091,7 @@
   },
   "info": {
     "title": "Groundhog JSON-RPC",
-    "version": "2.3.0"
+    "version": "2.3.1"
   },
   "methods": [
     {
@@ -1134,7 +1134,7 @@
           "$ref": "#/components/schemas/TxHash"
         }
       },
-      "summary": "Submit a signed transaction (0x-prefixed hex XDR). Returns the canonical tx hash.",
+      "summary": "Submit a signed transaction (0x-prefixed hex XDR). Returns the canonical tx hash. Transactions whose `blockExpiryHeight` is at or below the current chain tip can never commit and are rejected with `TxRejected` when the tip is available.",
       "tags": [
         {
           "name": "Core API"
@@ -1229,7 +1229,7 @@
           "$ref": "#/components/schemas/TransactionStatus"
         }
       },
-      "summary": "Lightweight status check (mempool -> indexer -> unknown).",
+      "summary": "Lightweight status check (mempool -> indexer -> unknown). `unknown` is only returned after both the mempool and the indexer answered without a match; if the mempool could not be consulted and the indexer has no record, the call fails with `BackendUnavailable` because the transaction may still be pending.",
       "tags": [
         {
           "name": "Core API"

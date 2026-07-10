@@ -138,6 +138,26 @@ impl GatewayContext {
             .await?,
         ));
 
+        Ok(Self::assemble(
+            scheduler,
+            indexer,
+            view_gateway,
+            db_gateway,
+            config,
+            metrics,
+        ))
+    }
+
+    /// Assemble a context from already-connected (or absent) backend
+    /// clients, spawning the batching and coalescing tasks.
+    pub(crate) fn assemble(
+        scheduler: Arc<RwLock<Option<SchedulerCoord_SchedulerCoord1_Client>>>,
+        indexer: Arc<RwLock<Option<IndexerBlockExplorer_IndexerBlockExplorer1_Client>>>,
+        view_gateway: Arc<RwLock<Option<ViewGateway_ViewGateway1_Client>>>,
+        db_gateway: Arc<RwLock<Option<DbGateway_DbGateway1_Client>>>,
+        config: Arc<GatewayConfig>,
+        metrics: GatewayMetrics,
+    ) -> Self {
         let submit_sink: Arc<dyn SubmitSink> =
             Arc::new(SchedulerSink::new(scheduler.clone(), metrics.clone()));
         let batch_submitter = BatchSubmitter::spawn(&config.batch, &submit_sink, metrics.clone());
@@ -151,7 +171,7 @@ impl GatewayContext {
             Arc::new(SchedulerTipSink::new(scheduler.clone(), metrics.clone()));
         let tip_coalescer = TipCoalescer::spawn(&config.tip, &tip_sink, metrics.clone());
 
-        Ok(Self {
+        Self {
             scheduler,
             indexer,
             batch_submitter,
@@ -161,7 +181,7 @@ impl GatewayContext {
             db_gateway,
             config,
             metrics,
-        })
+        }
     }
 }
 

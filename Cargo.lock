@@ -1083,6 +1083,7 @@ dependencies = [
  "groundhog-json-rpc-types",
  "groundhog-x23-transport",
  "groundhog-xdr 0.19.4",
+ "groundhog_coordinator",
  "groundhog_db_gateway",
  "groundhog_indexer",
  "groundhog_scheduler",

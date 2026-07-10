@@ -108,6 +108,24 @@ where
     #[tracing::instrument(skip_all, fields(tx_hex_len = tx_hex.len()))]
     async fn send_raw_transaction(&self, tx_hex: String) -> RpcResult<TxHash> {
         let tx = validate_raw_transaction(&tx_hex)?;
+        // A transaction can only be included at heights strictly above the
+        // current tip, so `expiry <= tip` can never commit. The tip read is
+        // best-effort: an unavailable tip must not block submission, since
+        // the scheduler enforces expiry authoritatively.
+        match self.chain.chain_tip().await {
+            Ok(tip) if *tx.block_expiry_height <= *tip.height => {
+                return Err(RpcServerError::TxRejected(format!(
+                    "transaction expired: blockExpiryHeight {} is not past chain tip {}; \
+                     re-sign with a later expiry height",
+                    *tx.block_expiry_height, *tip.height
+                ))
+                .into());
+            }
+            Ok(_) => {}
+            Err(error) => {
+                tracing::warn!(%error, "chain tip unavailable, skipping expiry pre-check");
+            }
+        }
         let tx_hash = tx.hash;
         self.submit.submit_raw_transaction(tx).await?;
         Ok(tx_hash)
@@ -542,6 +560,82 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             hex::encode(tx_hash.0.0.as_ref()),
             CANONICAL_HASH_VECTOR_TX_HASH_HEX
         );
+        assert_eq!(mock.submitted.lock().await.len(), 1);
+    }
+
+    /// Chain plane whose tip is at or past the canonical vector's
+    /// `block_expiry_height` of 1,000,000.
+    #[derive(Clone, Copy)]
+    struct ExpiredTipChain;
+
+    #[async_trait::async_trait]
+    impl ChainPlane for ExpiredTipChain {
+        async fn chain_tip(&self) -> Result<ChainTip, RpcServerError> {
+            Ok(ChainTip {
+                height: BlockHeight::from(1_000_000),
+                block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0u8; 32])),
+            })
+        }
+
+        async fn get_block_by_number(
+            &self,
+            _height: BlockHeight,
+        ) -> Result<Option<BlockInfo>, RpcServerError> {
+            Ok(None)
+        }
+
+        async fn pending_transaction_count(&self) -> Result<u64, RpcServerError> {
+            Ok(0)
+        }
+    }
+
+    #[tokio::test]
+    async fn expired_transaction_is_rejected_before_submit() {
+        let submitted = Arc::new(Mutex::new(Vec::new()));
+        let server = GroundhogRpcServer::new(
+            SubmitOnly {
+                submitted: submitted.clone(),
+            },
+            ExpiredTipChain,
+            ReadOnly {
+                event_calls: Arc::new(Mutex::new(0)),
+            },
+            ViewOnly {
+                view_gas_limits: Arc::new(Mutex::new(Vec::new())),
+            },
+            RpcServerConfig::default(),
+            BuildInfo::for_tests(),
+        );
+
+        let err = server
+            .send_raw_transaction(format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}"))
+            .await
+            .expect_err("bug: expired transaction should be rejected");
+
+        assert_eq!(
+            err.code(),
+            groundhog_json_rpc_types::error::codes::TX_REJECTED
+        );
+        assert!(
+            err.message().contains("expir"),
+            "message: {}",
+            err.message()
+        );
+        assert!(submitted.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn chain_tip_failure_fails_open_and_submits() {
+        // `MockBackend`'s chain plane errors on `chain_tip`; the expiry
+        // check must not turn tip unavailability into a submit failure.
+        let mock = Arc::new(MockBackend::default());
+        let server = server(mock.clone());
+
+        server
+            .send_raw_transaction(format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}"))
+            .await
+            .expect("bug: tip unavailability should not block submission");
+
         assert_eq!(mock.submitted.lock().await.len(), 1);
     }
 

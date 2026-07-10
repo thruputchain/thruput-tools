@@ -34,6 +34,7 @@ pub fn validate_raw_transaction_bytes(
     Ok(ValidatedTransaction {
         bytes: tx_bytes,
         hash,
+        block_expiry_height: signed_tx.tx.uniquifier.block_expiry_height,
     })
 }
 
@@ -64,6 +65,14 @@ bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7\
         let err = validate_raw_transaction("0x00").expect_err("bug: invalid XDR should fail");
 
         assert!(matches!(err, RpcServerError::TxInvalid(_)));
+    }
+
+    #[test]
+    fn exposes_block_expiry_height_from_decoded_transaction() {
+        let tx = validate_raw_transaction(CANONICAL_HASH_VECTOR_SIGNED_TX_XDR)
+            .expect("bug: canonical hash vector should validate as XDR");
+
+        assert_eq!(*tx.block_expiry_height, 1_000_000);
     }
 
     #[test]
