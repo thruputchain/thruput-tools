@@ -157,12 +157,15 @@ pub async fn get_transaction_status(
             started_at.elapsed(),
         );
         match rpc_result {
-            Ok(results) => {
-                mempool_checked = true;
-                if results.iter().next().is_some_and(Option::is_some) {
-                    return Ok(TransactionStatus::Pending);
+            // Only a per-hash slot counts as a mempool answer; an empty
+            // batch left the queried transaction unaccounted for.
+            Ok(results) => match results.iter().next() {
+                Some(Some(_)) => return Ok(TransactionStatus::Pending),
+                Some(None) => mempool_checked = true,
+                None => {
+                    tracing::warn!("scheduler lookup returned no slot for the queried tx hash");
                 }
-            }
+            },
             Err(e) => {
                 tracing::warn!(error = %e, "scheduler unreachable, cannot detect pending txs");
             }
@@ -296,6 +299,8 @@ mod tests {
     enum FakeSchedulerMode {
         /// Mempool lookup succeeds and reports the transaction absent.
         MempoolMiss,
+        /// Mempool lookup succeeds but returns no slot for the queried hash.
+        EmptyBatch,
         /// Mempool lookup fails at the RPC layer.
         RpcFail,
     }
@@ -371,6 +376,7 @@ mod tests {
         ) -> Result<OptSignedTransactionBatch, ProgramError> {
             match self.mode {
                 FakeSchedulerMode::MempoolMiss => Ok(VecM(vec![None])),
+                FakeSchedulerMode::EmptyBatch => Ok(VecM(vec![])),
                 FakeSchedulerMode::RpcFail => {
                     Err(ProgramError::msg("fake scheduler lookup failure"))
                 }
@@ -479,6 +485,20 @@ mod tests {
         let err = get_transaction_status(&ctx, test_hash())
             .await
             .expect_err("bug: failed mempool lookup must not produce a definite status");
+
+        assert!(matches!(err, GatewayError::BackendUnavailable(_)));
+    }
+
+    #[tokio::test]
+    async fn status_errors_when_lookup_has_no_slot_and_indexer_misses() {
+        let (scheduler_addr, _scheduler) =
+            start_fake_scheduler(FakeSchedulerMode::EmptyBatch).await;
+        let (indexer_addr, _indexer) = start_not_found_indexer().await;
+        let ctx = test_context(Some(scheduler_addr), indexer_addr).await;
+
+        let err = get_transaction_status(&ctx, test_hash())
+            .await
+            .expect_err("bug: a lookup with no per-tx answer must not produce a definite status");
 
         assert!(matches!(err, GatewayError::BackendUnavailable(_)));
     }

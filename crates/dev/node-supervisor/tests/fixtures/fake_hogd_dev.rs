@@ -855,9 +855,11 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
 
     async fn schedcoord_lookup_transactions(
         &self,
-        _hashes: SignedTransactionHashBatch,
+        hashes: SignedTransactionHashBatch,
     ) -> Result<OptSignedTransactionBatch, ProgramError> {
-        Ok(VecM(vec![]))
+        // One slot per queried hash: nothing is ever pending in the fake,
+        // but each hash still gets an explicit per-transaction answer.
+        Ok(VecM(hashes.0.into_iter().map(|_| None).collect()))
     }
 }
 
