@@ -1,4 +1,8 @@
 use crate::airdrop::{AirdropRuntimeConfig, AirdropRuntimeConfigError};
+use crate::key_source::{
+    DefaultFaucetSecretKeyLoader, FaucetSecretKeyLoadError, FaucetSecretKeyLoader,
+    FaucetSecretKeySource,
+};
 use crate::wallet_create::{WalletCreateRuntimeConfig, WalletCreateRuntimeConfigError};
 use axum::http::HeaderValue;
 use groundhog_json_rpc_types::hex::HexBytes;
@@ -7,8 +11,8 @@ use groundhog_json_rpc_types::network_descriptor::{
     WalletCreateDescriptor,
 };
 use groundhog_json_rpc_types::{ContractAddress, SHA256Hash};
+use groundhog_signing::LocalSigner;
 use serde::Deserialize;
-use std::fmt;
 use std::path::PathBuf;
 
 /// Faucet service TOML config.
@@ -51,8 +55,26 @@ impl FaucetConfigFile {
     }
 
     /// Split this config into the optional listen override and public descriptor.
-    pub fn into_parts(self) -> Result<FaucetConfigParts, FaucetConfigError> {
-        let airdrop = self.airdrop.into_runtime_config()?;
+    pub async fn into_parts(self) -> Result<FaucetConfigParts, FaucetConfigError> {
+        self.into_parts_with_key_loader(&DefaultFaucetSecretKeyLoader)
+            .await
+    }
+
+    /// Validate config using the supplied signing-key loader.
+    pub async fn into_parts_with_key_loader(
+        self,
+        key_loader: &dyn FaucetSecretKeyLoader,
+    ) -> Result<FaucetConfigParts, FaucetConfigError> {
+        if self.network.wallet_create.prefund_raw_amount != self.airdrop.raw_amount {
+            return Err(FaucetConfigError::WalletCreatePrefundMismatch {
+                wallet_create_prefund_raw_amount: self.network.wallet_create.prefund_raw_amount,
+                airdrop_raw_amount: self.airdrop.raw_amount,
+            });
+        }
+        validate_faucet_public_key_shape(&self.network.faucet.public_key)?;
+        let faucet_secret_key = key_loader.load(&self.airdrop.secret_key_source).await?;
+        validate_faucet_public_key_match(&self.network.faucet.public_key, &faucet_secret_key)?;
+        let airdrop = self.airdrop.into_runtime_config(faucet_secret_key)?;
         let wallet_create = self.wallet_create.into_runtime_config()?;
         if self.network.wallet_create.prefund_raw_amount != airdrop.raw_amount.to_string() {
             return Err(FaucetConfigError::WalletCreatePrefundMismatch {
@@ -85,6 +107,9 @@ impl FaucetConfigFile {
 /// Errors returned while validating faucet service config.
 #[derive(Debug, thiserror::Error)]
 pub enum FaucetConfigError {
+    /// The configured faucet signing key could not be loaded safely.
+    #[error(transparent)]
+    SecretKey(#[from] FaucetSecretKeyLoadError),
     /// The private airdrop config was invalid.
     #[error(transparent)]
     Airdrop(#[from] AirdropRuntimeConfigError),
@@ -102,6 +127,12 @@ pub enum FaucetConfigError {
         wallet_create_prefund_raw_amount: String,
         airdrop_raw_amount: String,
     },
+    /// The expected faucet public key was not 32 bytes.
+    #[error("network faucet public key must be 32 bytes, got {0}")]
+    InvalidFaucetPublicKey(usize),
+    /// The loaded secret key did not control the configured faucet account.
+    #[error("loaded faucet signing key does not match network.faucet.public_key")]
+    FaucetPublicKeyMismatch,
 }
 
 /// Public network metadata fields used to build a descriptor.
@@ -171,6 +202,30 @@ pub struct NativeHogConfig {
 pub struct FaucetAccountConfig {
     /// Faucet wallet address used as the public sponsor account.
     pub wallet_address: ContractAddress,
+    /// Ed25519 public key expected for the loaded faucet signing secret.
+    pub public_key: HexBytes,
+}
+
+fn validate_faucet_public_key_shape(
+    expected_public_key: &HexBytes,
+) -> Result<(), FaucetConfigError> {
+    if expected_public_key.0.len() == 32 {
+        return Ok(());
+    }
+    Err(FaucetConfigError::InvalidFaucetPublicKey(
+        expected_public_key.0.len(),
+    ))
+}
+
+fn validate_faucet_public_key_match(
+    expected_public_key: &HexBytes,
+    faucet_secret_key: &[u8; 32],
+) -> Result<(), FaucetConfigError> {
+    let actual_public_key = LocalSigner::from_secret_key(*faucet_secret_key).verifying_key_bytes();
+    if expected_public_key.0.as_slice() != actual_public_key {
+        return Err(FaucetConfigError::FaucetPublicKeyMismatch);
+    }
+    Ok(())
 }
 
 /// Wallet-create metadata configuration.
@@ -184,37 +239,27 @@ pub struct WalletCreateConfig {
 }
 
 /// Private airdrop execution configuration.
-#[derive(Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AirdropConfig {
     /// Raw HOG units transferred for each airdrop request.
     pub raw_amount: String,
     /// Faucet wallet `doAction` entrypoint.
     pub wallet_do_action_entrypoint: HexBytes,
-    /// 32-byte faucet signing secret key.
-    pub faucet_secret_key: HexBytes,
-}
-
-impl fmt::Debug for AirdropConfig {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("AirdropConfig")
-            .field("raw_amount", &self.raw_amount)
-            .field(
-                "wallet_do_action_entrypoint",
-                &self.wallet_do_action_entrypoint,
-            )
-            .field("faucet_secret_key", &format_args!("<redacted>"))
-            .finish()
-    }
+    /// Source used to load the faucet signing key at startup.
+    pub secret_key_source: FaucetSecretKeySource,
 }
 
 impl AirdropConfig {
     /// Convert wire config into validated runtime airdrop config.
-    pub fn into_runtime_config(self) -> Result<AirdropRuntimeConfig, AirdropRuntimeConfigError> {
+    pub fn into_runtime_config(
+        self,
+        faucet_secret_key: zeroize::Zeroizing<[u8; 32]>,
+    ) -> Result<AirdropRuntimeConfig, AirdropRuntimeConfigError> {
         AirdropRuntimeConfig::from_wire(
             &self.raw_amount,
             self.wallet_do_action_entrypoint,
-            self.faucet_secret_key,
+            faucet_secret_key,
         )
     }
 }
@@ -243,28 +288,61 @@ impl WalletCreateExecutionConfig {
 
 #[cfg(test)]
 mod tests {
+    use async_trait::async_trait;
     use groundhog_json_rpc_types::hex::HexBytes;
+    use groundhog_signing::LocalSigner;
+    use zeroize::Zeroizing;
+
+    use crate::key_source::{
+        FaucetSecretKeyLoadError, FaucetSecretKeyLoader, FaucetSecretKeySource,
+    };
 
     use super::{AirdropConfig, FaucetConfigFile};
 
+    struct TestKeyLoader;
+
+    struct FailIfCalledKeyLoader;
+
+    #[async_trait]
+    impl FaucetSecretKeyLoader for TestKeyLoader {
+        async fn load(
+            &self,
+            _source: &FaucetSecretKeySource,
+        ) -> Result<Zeroizing<[u8; 32]>, FaucetSecretKeyLoadError> {
+            Ok(Zeroizing::new([0x11; 32]))
+        }
+    }
+
+    #[async_trait]
+    impl FaucetSecretKeyLoader for FailIfCalledKeyLoader {
+        async fn load(
+            &self,
+            _source: &FaucetSecretKeySource,
+        ) -> Result<Zeroizing<[u8; 32]>, FaucetSecretKeyLoadError> {
+            panic!("bug: key loader must not run for invalid non-secret config")
+        }
+    }
+
     #[test]
-    fn airdrop_config_debug_redacts_faucet_secret_key() {
+    fn airdrop_config_contains_only_key_source() {
         let config = AirdropConfig {
             raw_amount: "100000000".into(),
             wallet_do_action_entrypoint: HexBytes(vec![0x64; 8]),
-            faucet_secret_key: HexBytes(vec![0xAB; 32]),
+            secret_key_source: FaucetSecretKeySource::Environment {
+                variable: "GROUNDHOG_FAUCET_SECRET_KEY".into(),
+            },
         };
 
         let debug = format!("{config:?}");
 
-        assert!(debug.contains("faucet_secret_key: <redacted>"), "{debug}");
-        assert!(!debug.contains("171"), "{debug}");
+        assert!(debug.contains("GROUNDHOG_FAUCET_SECRET_KEY"), "{debug}");
+        assert!(!debug.contains(&"ab".repeat(32)), "{debug}");
     }
 
     #[test]
     fn config_builds_public_network_descriptor() {
         let config: FaucetConfigFile =
-            toml::from_str(TEST_CONFIG).expect("bug: fixture config should parse");
+            toml::from_str(&test_config()).expect("bug: fixture config should parse");
 
         assert_eq!(config.listen_address.as_deref(), Some("127.0.0.1:8081"));
 
@@ -278,25 +356,27 @@ mod tests {
         assert_eq!(descriptor.wallet_create.prefund_raw_amount, "100000000");
     }
 
-    #[test]
-    fn config_builds_airdrop_runtime_config() {
+    #[tokio::test]
+    async fn config_builds_airdrop_runtime_config() {
         let config: FaucetConfigFile =
-            toml::from_str(TEST_CONFIG).expect("bug: fixture config should parse");
+            toml::from_str(&test_config()).expect("bug: fixture config should parse");
 
         let parts = config
-            .into_parts()
+            .into_parts_with_key_loader(&TestKeyLoader)
+            .await
             .expect("bug: airdrop runtime config should validate");
 
         assert_eq!(parts.airdrop.raw_amount, 100_000_000);
     }
 
-    #[test]
-    fn config_builds_wallet_create_runtime_config() {
+    #[tokio::test]
+    async fn config_builds_wallet_create_runtime_config() {
         let config: FaucetConfigFile =
-            toml::from_str(TEST_CONFIG).expect("bug: fixture config should parse");
+            toml::from_str(&test_config()).expect("bug: fixture config should parse");
 
         let parts = config
-            .into_parts()
+            .into_parts_with_key_loader(&TestKeyLoader)
+            .await
             .expect("bug: wallet-create runtime config should validate");
 
         assert_eq!(
@@ -337,32 +417,92 @@ mod tests {
         assert!(err.to_string().contains("unknown field"));
     }
 
-    #[test]
-    fn config_builds_cors_origins() {
+    #[tokio::test]
+    async fn config_builds_cors_origins() {
         let config: FaucetConfigFile =
-            toml::from_str(TEST_CONFIG).expect("bug: fixture config should parse");
+            toml::from_str(&test_config()).expect("bug: fixture config should parse");
 
         let parts = config
-            .into_parts()
+            .into_parts_with_key_loader(&TestKeyLoader)
+            .await
             .expect("bug: CORS origins should validate");
 
         assert_eq!(parts.cors_allowed_origins.len(), 1);
         assert_eq!(parts.cors_allowed_origins[0], "http://127.0.0.1:5173");
     }
 
-    #[test]
-    fn config_rejects_wallet_create_prefund_airdrop_mismatch() {
-        let config: FaucetConfigFile = toml::from_str(&TEST_CONFIG.replace(
+    #[tokio::test]
+    async fn config_rejects_wallet_create_prefund_airdrop_mismatch() {
+        let config: FaucetConfigFile = toml::from_str(&test_config().replace(
             "prefund_raw_amount = \"100000000\"",
             "prefund_raw_amount = \"1\"",
         ))
         .expect("bug: fixture config should parse");
 
         let err = config
-            .into_parts()
+            .into_parts_with_key_loader(&TestKeyLoader)
+            .await
             .expect_err("bug: mismatched prefund and airdrop amounts should fail");
 
         assert!(err.to_string().contains("must match airdrop raw_amount"));
+    }
+
+    #[tokio::test]
+    async fn config_rejects_secret_that_does_not_match_faucet_public_key() {
+        let expected_public_key =
+            hex::encode(LocalSigner::from_secret_key([0x11; 32]).verifying_key_bytes());
+        let config: FaucetConfigFile = toml::from_str(&test_config().replace(
+            &format!("public_key = \"0x{expected_public_key}\""),
+            &format!("public_key = \"0x{}\"", "aa".repeat(32)),
+        ))
+        .expect("bug: fixture config should parse");
+
+        let error = config
+            .into_parts_with_key_loader(&TestKeyLoader)
+            .await
+            .expect_err("bug: mismatched faucet key should fail");
+
+        assert!(error.to_string().contains("does not match"), "{error}");
+        assert!(!error.to_string().contains(&expected_public_key));
+    }
+
+    #[tokio::test]
+    async fn config_rejects_malformed_public_key_before_loading_secret() {
+        let expected_public_key =
+            hex::encode(LocalSigner::from_secret_key([0x11; 32]).verifying_key_bytes());
+        let config: FaucetConfigFile = toml::from_str(&test_config().replace(
+            &format!("public_key = \"0x{expected_public_key}\""),
+            "public_key = \"0xaa\"",
+        ))
+        .expect("bug: fixture config should parse");
+
+        let error = config
+            .into_parts_with_key_loader(&FailIfCalledKeyLoader)
+            .await
+            .expect_err("bug: malformed public key should fail");
+
+        assert!(error.to_string().contains("32 bytes"), "{error}");
+    }
+
+    #[test]
+    fn config_parses_aws_secrets_manager_key_source() {
+        let config: FaucetConfigFile = toml::from_str(&test_config().replace(
+            "type = \"environment\"\n        variable = \"GROUNDHOG_FAUCET_SECRET_KEY\"",
+            "type = \"aws_secrets_manager\"\n        secret_id = \"groundhog/devnet/faucet\"\n        region = \"us-west-2\"",
+        ))
+        .expect("bug: AWS key-source fixture should parse");
+
+        assert!(matches!(
+            config.airdrop.secret_key_source,
+            FaucetSecretKeySource::AwsSecretsManager { ref secret_id, ref region }
+                if secret_id == "groundhog/devnet/faucet" && region == "us-west-2"
+        ));
+    }
+
+    fn test_config() -> String {
+        let public_key =
+            hex::encode(LocalSigner::from_secret_key([0x11; 32]).verifying_key_bytes());
+        TEST_CONFIG.replace("__FAUCET_PUBLIC_KEY__", &public_key)
     }
 
     const TEST_CONFIG: &str = r#"
@@ -384,6 +524,7 @@ mod tests {
 
         [network.faucet]
         wallet_address = "0x0000000000000000000000000000000000000000000000000000000000000000"
+        public_key = "0x__FAUCET_PUBLIC_KEY__"
 
         [network.wallet_create]
         prefund_raw_amount = "100000000"
@@ -392,7 +533,10 @@ mod tests {
         [airdrop]
         raw_amount = "100000000"
         wallet_do_action_entrypoint = "0x646f416374696f6e"
-        faucet_secret_key = "0x1111111111111111111111111111111111111111111111111111111111111111"
+
+        [airdrop.secret_key_source]
+        type = "environment"
+        variable = "GROUNDHOG_FAUCET_SECRET_KEY"
 
         [wallet_create]
         create_wallet_entrypoint = "0x6372656174655761"

@@ -74,6 +74,8 @@ groundhog-contract-spec = { version = "=0.15.4", registry = "groundhog" }
 
 # --- Async ---
 async-trait = "0.1"
+aws-config = { version = "1.9.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-secretsmanager = "1.109.0"
 
 # --- JSON-RPC ---
 jsonrpsee = { version = "0.25", features = ["server", "client", "macros"] }

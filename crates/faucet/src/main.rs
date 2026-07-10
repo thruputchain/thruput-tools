@@ -60,7 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
         })?;
     let file_config = toml::from_str::<FaucetConfigFile>(&config_toml)?;
-    let parts = file_config.into_parts()?;
+    let parts = file_config.into_parts().await?;
     let wallet_create_submitter = RpcWalletCreateSubmitter::new(
         &parts.network_descriptor,
         parts.wallet_create,

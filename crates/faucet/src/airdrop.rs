@@ -178,9 +178,6 @@ pub enum AirdropRuntimeConfigError {
     /// The configured wallet `doAction` entrypoint was not 8 bytes.
     #[error("airdrop wallet doAction entrypoint must be 8 bytes, got {0}")]
     InvalidDoActionEntrypoint(usize),
-    /// The configured faucet secret key was not 32 bytes.
-    #[error("airdrop faucet secret key must be 32 bytes, got {0}")]
-    InvalidSecretKey(usize),
 }
 
 impl AirdropRuntimeConfig {
@@ -188,7 +185,7 @@ impl AirdropRuntimeConfig {
     pub fn from_wire(
         raw_amount: &str,
         wallet_do_action_entrypoint: HexBytes,
-        faucet_secret_key: HexBytes,
+        faucet_secret_key: Zeroizing<[u8; 32]>,
     ) -> Result<Self, AirdropRuntimeConfigError> {
         let raw_amount = raw_amount
             .parse::<u128>()
@@ -200,15 +197,10 @@ impl AirdropRuntimeConfig {
             .0
             .try_into()
             .map_err(|_| AirdropRuntimeConfigError::InvalidDoActionEntrypoint(entrypoint_len))?;
-        let secret_key_len = faucet_secret_key.0.len();
-        let faucet_secret_key: [u8; 32] = faucet_secret_key
-            .0
-            .try_into()
-            .map_err(|_| AirdropRuntimeConfigError::InvalidSecretKey(secret_key_len))?;
         Ok(Self {
             raw_amount,
             wallet_do_action_entrypoint: ContractEntrypointID::from(wallet_do_action_entrypoint),
-            faucet_secret_key: Zeroizing::new(faucet_secret_key),
+            faucet_secret_key,
         })
     }
 }
@@ -313,6 +305,7 @@ fn encode_transfer_calldata(
 mod tests {
     use groundhog_json_rpc_types::hex::HexBytes;
     use serde_json::json;
+    use zeroize::Zeroizing;
 
     use super::{AirdropRequest, AirdropRuntimeConfig};
 
@@ -321,7 +314,7 @@ mod tests {
         let config = AirdropRuntimeConfig::from_wire(
             "100000000",
             HexBytes(vec![0x64; 8]),
-            HexBytes(vec![0xAB; 32]),
+            Zeroizing::new([0xAB; 32]),
         )
         .expect("bug: runtime config should validate");
 
