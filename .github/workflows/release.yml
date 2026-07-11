@@ -64,6 +64,9 @@ jobs:
       - name: Build hogsim
         run: cargo build --locked --release -p groundhog-sim --bin hogsim
 
+      - name: Build groundhog-faucet
+        run: cargo build --locked --release -p groundhog-faucet --bin groundhog-faucet
+
       - name: Verify hog-gateway
         run: target/release/hog-gateway --help
 
@@ -76,13 +79,16 @@ jobs:
       - name: Verify hogsim
         run: target/release/hogsim --help
 
+      - name: Verify groundhog-faucet
+        run: target/release/groundhog-faucet --help
+
       - name: Prepare artifacts
         run: |
           set -euo pipefail
 
           mkdir -p artifacts package
 
-          for app in hog-gateway groundhog rv32-lower hogsim; do
+          for app in hog-gateway groundhog rv32-lower hogsim groundhog-faucet; do
             archive_base="${app}-${GITHUB_REF_NAME}-${RELEASE_TARGET}"
             package_dir="package/${archive_base}"
             mkdir -p "$package_dir"
