@@ -1,9 +1,9 @@
 pub mod airdrop;
 /// Faucet service configuration types.
 pub mod config;
+mod error;
 /// Faucet signing-key source configuration and loaders.
 pub mod key_source;
-mod error;
 pub mod policy;
 mod utils;
 pub mod wallet_create;

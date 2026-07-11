@@ -511,13 +511,14 @@ mod tests {
         );
     }
 
-    #[test]
-    fn config_builds_default_policy_config() {
+    #[tokio::test]
+    async fn config_builds_default_policy_config() {
         let config: FaucetConfigFile =
-            toml::from_str(TEST_CONFIG).expect("bug: fixture config should parse");
+            toml::from_str(&test_config()).expect("bug: fixture config should parse");
 
         let parts = config
-            .into_parts()
+            .into_parts_with_key_loader(&TestKeyLoader)
+            .await
             .expect("bug: policy runtime config should validate");
 
         assert!(!parts.policy.trust_proxy_client_ip_headers);
@@ -527,10 +528,11 @@ mod tests {
         assert_eq!(parts.policy.wallet_create.ip_quota_max, 20);
     }
 
-    #[test]
-    fn config_overrides_policy_config() {
+    #[tokio::test]
+    async fn config_overrides_policy_config() {
         let config: FaucetConfigFile = toml::from_str(&format!(
-            "{TEST_CONFIG}\n{}",
+            "{}\n{}",
+            test_config(),
             r"
             [policy]
             trust_proxy_client_ip_headers = true
@@ -554,7 +556,8 @@ mod tests {
         .expect("bug: fixture config should parse");
 
         let parts = config
-            .into_parts()
+            .into_parts_with_key_loader(&TestKeyLoader)
+            .await
             .expect("bug: policy runtime config should validate");
 
         assert!(parts.policy.trust_proxy_client_ip_headers);
