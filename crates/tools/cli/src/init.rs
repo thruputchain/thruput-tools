@@ -5,7 +5,7 @@
 //! everything is already configured, prints a short summary and
 //! exits. `init --json` delegates to `status --json`.
 
-use std::io::{BufRead, IsTerminal};
+use std::io::BufRead;
 use std::path::{Path, PathBuf};
 
 use crate::{CliError, Print};
@@ -185,7 +185,7 @@ fn handle_credentials_step(
         ui.finish_step(InitStep::ExecutorCredentials, StepState::Done);
     } else {
         ui.note("Executor credentials are not configured");
-        if confirm(ui.print, "Configure executor credentials now?", true)? {
+        if !ui.print.is_quiet() && confirm(ui.print, "Configure executor credentials now?", true)? {
             crate::auth::executor_login_from_init(ui.print)?;
             ui.finish_step(InitStep::ExecutorCredentials, StepState::Done);
         } else {
@@ -326,7 +326,7 @@ impl<'a> InitUi<'a> {
     fn new(print: &'a Print) -> Self {
         Self {
             print,
-            tty: std::io::stderr().is_terminal() && !print.is_quiet() && !print.is_json(),
+            tty: print.is_human_tty(),
             steps: [StepState::Pending; INIT_STEPS],
         }
     }

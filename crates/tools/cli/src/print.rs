@@ -56,7 +56,7 @@ impl Print {
 
     /// Returns whether styled interactive output is appropriate.
     pub fn is_human_tty(&self) -> bool {
-        !self.quiet && !self.json && io::stderr().is_terminal()
+        !self.quiet && !self.json && supports_ansi_stderr()
     }
 
     /// Trace a subprocess invocation to stderr when command tracing is on.
@@ -238,6 +238,24 @@ impl Print {
     }
 }
 
+pub(crate) fn supports_ansi_stderr() -> bool {
+    io::stderr().is_terminal()
+        && terminal_allows_ansi(
+            std::env::var_os("TERM").as_deref(),
+            std::env::var_os("NO_COLOR").as_deref(),
+        )
+}
+
+fn terminal_allows_ansi(
+    term: Option<&std::ffi::OsStr>,
+    no_color: Option<&std::ffi::OsStr>,
+) -> bool {
+    if no_color.is_some() {
+        return false;
+    }
+    !matches!(term.and_then(std::ffi::OsStr::to_str), Some("dumb"))
+}
+
 fn render_summary_card_tty(title: &str, items: &[(String, String)]) {
     let label_width = items
         .iter()
@@ -336,7 +354,8 @@ fn render_command(command: &std::process::Command) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::render_command;
+    use super::{render_command, terminal_allows_ansi};
+    use std::ffi::OsStr;
     use std::process::Command;
 
     #[test]
@@ -351,5 +370,18 @@ mod tests {
         let mut cmd = Command::new("cargo");
         cmd.current_dir("/ws").arg("metadata");
         assert_eq!(render_command(&cmd), "(cd /ws && cargo metadata)");
+    }
+
+    #[test]
+    fn terminal_allows_ansi_respects_no_color_and_dumb_term() {
+        assert!(terminal_allows_ansi(
+            Some(OsStr::new("xterm-256color")),
+            None
+        ));
+        assert!(!terminal_allows_ansi(
+            Some(OsStr::new("xterm-256color")),
+            Some(OsStr::new("1"))
+        ));
+        assert!(!terminal_allows_ansi(Some(OsStr::new("dumb")), None));
     }
 }

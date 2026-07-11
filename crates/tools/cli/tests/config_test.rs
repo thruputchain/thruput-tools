@@ -972,6 +972,33 @@ alice = "0x{}"
 
 #[test]
 #[serial]
+fn resolve_profile_accepts_wallet_table_missing_owner_for_stable_validation() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(
+        tmp.path().join("groundhog.toml"),
+        format!(
+            r#"
+[profile.default.wallets.alice]
+address = "0x{}"
+"#,
+            "ab".repeat(32)
+        ),
+    )
+    .unwrap();
+
+    let profile = groundhog_cli::config::resolve_profile(tmp.path(), None).unwrap();
+
+    assert_eq!(
+        profile
+            .wallets
+            .get("alice")
+            .map(|wallet| wallet.owner_public_key.as_str()),
+        Some("")
+    );
+}
+
+#[test]
+#[serial]
 fn save_second_alias_preserves_first() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };

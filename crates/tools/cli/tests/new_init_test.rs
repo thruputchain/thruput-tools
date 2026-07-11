@@ -195,6 +195,31 @@ fn init_with_credentials_skips_login_hint() {
 
 #[test]
 #[serial]
+fn quiet_init_without_credentials_does_not_prompt_for_login() {
+    let tmp = TempDir::new().unwrap();
+    let cargo_home = tmp.path().join("cargo-home");
+
+    unsafe {
+        env::set_var("CARGO_HOME", &cargo_home);
+        env::set_var("XDG_CONFIG_HOME", tmp.path());
+    }
+
+    groundhog_cli::init::run(tmp.path(), "status", &quiet()).unwrap();
+
+    assert!(
+        groundhog_cli::config::load_executor_credentials()
+            .unwrap()
+            .is_none()
+    );
+
+    unsafe {
+        env::remove_var("CARGO_HOME");
+        env::remove_var("XDG_CONFIG_HOME");
+    }
+}
+
+#[test]
+#[serial]
 fn init_uses_global_default_when_project_key_is_dangling() {
     let tmp = TempDir::new().unwrap();
     let cargo_home = tmp.path().join("cargo-home");

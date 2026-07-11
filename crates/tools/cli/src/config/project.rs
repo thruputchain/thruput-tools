@@ -46,6 +46,7 @@ pub struct SavedWalletBinding {
     /// Wallet contract address invoked by transactions for this key.
     pub address: String,
     /// Public key that owns the wallet contract.
+    #[serde(default)]
     pub owner_public_key: String,
 }
 

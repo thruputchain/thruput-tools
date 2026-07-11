@@ -443,6 +443,26 @@ mod tests {
     }
 
     #[test]
+    fn non_dev_key_rejects_missing_saved_wallet_owner_public_key() {
+        let signer = groundhog_signing::derive_default_dev_account_signer(0);
+        let wallet_address = groundhog_xdr::types::ContractAddress::from([0x41; 32]);
+        let mut profile = test_profile_for_key("alice");
+        profile.wallets.insert(
+            "alice".into(),
+            SavedWalletBinding {
+                address: format_hex(wallet_address.as_ref()),
+                owner_public_key: String::new(),
+            },
+        );
+
+        let error = resolve_wallet_address(&profile, "alice", &signer)
+            .expect_err("bug: missing saved wallet owner should fail");
+
+        assert_eq!(error.code(), "saved_wallet_owner_public_key_invalid");
+        assert!(error.to_string().contains("owner_public_key is invalid"));
+    }
+
+    #[test]
     fn dev_key_manifest_resolution_does_not_require_rpc_url() {
         let temp = tempfile::TempDir::new().expect("bug: tempdir should be created");
         let manifest_path = temp.path().join("runtime-manifest.json");

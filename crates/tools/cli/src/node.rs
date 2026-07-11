@@ -4,7 +4,7 @@ use crate::{CliError, Print};
 
 use crate::result::CommandResult;
 use serde_json::json;
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, Write};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
@@ -549,7 +549,7 @@ fn default_tracing_filter(verbose: bool, json: bool) -> &'static str {
 fn init_tracing(default_filter: &str, json: bool) {
     use tracing_subscriber::EnvFilter;
 
-    let dim_logs = !json && io::stderr().is_terminal();
+    let dim_logs = !json && crate::print::supports_ansi_stderr();
 
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
