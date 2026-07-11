@@ -51,26 +51,27 @@ groundhog-rv32-artifact = { path = "crates/rv32/artifact", version = "=0.5.14", 
 groundhog-rv32-lower = { path = "crates/rv32/lower", version = "=0.5.14", registry = "groundhog" }
 
 # --- Groundhog (private registry) ---
-# 0.19.4 is the first stable release with the indexer tx-failure
-# diagnostics (protocol@6d1e8e6). Pinned exact: prerelease ordering
-# makes range bounds like `<0.19.5` admit older `0.19.5-nightly.*`
-# builds, so ranges here silently regress protocol content.
-groundhog-xdr = { version = "=0.19.4", registry = "groundhog", features = ["serde", "xdrs", "schema"] }
-groundhog_indexer = { version = "=0.19.4", registry = "groundhog", features = ["serde"] }
-groundhog_scheduler = { version = "=0.19.4", registry = "groundhog" }
-groundhog_db_gateway = { version = "=0.19.4", registry = "groundhog" }
-groundhog_view = { version = "=0.19.4", registry = "groundhog" }
-groundhog_scp = { version = "=0.19.4", registry = "groundhog" }
-groundhog_coordinator = { version = "=0.19.4", registry = "groundhog" }
-groundhog-trace = { version = "=0.19.4", registry = "groundhog" }
-xdrs = { version = "0.7.1", registry = "groundhog", features = ["alloc"] }
-xdr-common = { version = "0.7.1", registry = "groundhog" }
+# 0.19.6 pairs with xdrs 0.7.4 (0.7.2 added a required `WriteXDR`
+# method; 0.7.4 restored range proc-macro deps) and the sdk 0.17.1
+# family. Pinned exact: prerelease ordering makes range bounds like
+# `<0.19.7` admit older `0.19.7-nightly.*` builds, so ranges here
+# silently regress protocol content.
+groundhog-xdr = { version = "=0.19.6", registry = "groundhog", features = ["serde", "xdrs", "schema"] }
+groundhog_indexer = { version = "=0.19.6", registry = "groundhog", features = ["serde"] }
+groundhog_scheduler = { version = "=0.19.6", registry = "groundhog" }
+groundhog_db_gateway = { version = "=0.19.6", registry = "groundhog" }
+groundhog_view = { version = "=0.19.6", registry = "groundhog" }
+groundhog_scp = { version = "=0.19.6", registry = "groundhog" }
+groundhog_coordinator = { version = "=0.19.6", registry = "groundhog" }
+groundhog-trace = { version = "=0.19.6", registry = "groundhog" }
+xdrs = { version = "0.7.4", registry = "groundhog", features = ["alloc"] }
+xdr-common = { version = "0.7.4", registry = "groundhog" }
 rpc_driver = { version = "0.9", registry = "groundhog" }
 groundhog-wasm-meter = { version = "0.8.0", registry = "groundhog" }
 # from the sdk crate
-groundhog-spec-tool = { version = "=0.15.4", registry = "groundhog" }
-groundhog-contract-util = { version = "=0.15.4", registry = "groundhog" }
-groundhog-contract-spec = { version = "=0.15.4", registry = "groundhog" }
+groundhog-spec-tool = { version = "=0.17.1", registry = "groundhog" }
+groundhog-contract-util = { version = "=0.17.1", registry = "groundhog" }
+groundhog-contract-spec = { version = "=0.17.1", registry = "groundhog" }
 
 # --- Async ---
 async-trait = "0.1"

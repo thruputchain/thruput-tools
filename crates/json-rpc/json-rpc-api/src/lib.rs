@@ -26,13 +26,15 @@ use groundhog_json_rpc_types::{
 ///
 /// See the "`OpenRPC` Wire Version" section in `CLAUDE.md` for bump
 /// rules.
-pub const WIRE_FORMAT_VERSION: &str = "2.3.0";
+pub const WIRE_FORMAT_VERSION: &str = "2.3.1";
 
 /// Phase 1: Core API — submit, query, poll.
 #[open_rpc(namespace = "groundhog", tag = "Core API")]
 #[rpc(client, server, namespace = "groundhog")]
 pub trait GroundhogApi {
     /// Submit a signed transaction (0x-prefixed hex XDR). Returns the canonical tx hash.
+    /// Transactions whose `blockExpiryHeight` is at or below the current chain tip can
+    /// never commit and are rejected with `TxRejected` when the tip is available.
     #[method(name = "sendRawTransaction")]
     async fn send_raw_transaction(&self, tx_hex: String) -> RpcResult<TxHash>;
 
@@ -43,7 +45,10 @@ pub trait GroundhogApi {
         tx_hash: TxHash,
     ) -> RpcResult<Option<TransactionReceipt>>;
 
-    /// Lightweight status check (mempool -> indexer -> unknown).
+    /// Lightweight status check (mempool -> indexer -> unknown). `unknown` is only
+    /// returned after both the mempool and the indexer answered without a match; if
+    /// the mempool could not be consulted and the indexer has no record, the call
+    /// fails with `BackendUnavailable` because the transaction may still be pending.
     #[method(name = "getTransactionStatus")]
     async fn get_transaction_status(&self, tx_hash: TxHash) -> RpcResult<TransactionStatus>;
 

@@ -287,8 +287,11 @@ impl ReadPlane for HogdDevReadBackend {
     /// 3. Neither → `Unknown`.
     ///
     /// Degraded mode: if the scheduler is unreachable, log a warning and skip
-    /// the pending check. Indexer failure is a hard error — without it we
-    /// cannot report committed state.
+    /// the pending check; terminal indexer answers still return, but an
+    /// indexer miss becomes `BackendUnavailable` instead of `Unknown`
+    /// because the transaction may still be pending in the unreachable
+    /// mempool. Indexer failure is a hard error — without it we cannot
+    /// report committed state.
     #[tracing::instrument(skip_all, fields(?tx_hash))]
     async fn transaction_status(
         &self,
@@ -296,14 +299,24 @@ impl ReadPlane for HogdDevReadBackend {
     ) -> Result<TransactionStatus, RpcServerError> {
         let hash = tx_hash_to_signed(tx_hash);
 
-        // 1. Check scheduler (best-effort — failure degrades to indexer-only).
+        // 1. Check scheduler mempool. Best-effort in that a failure does not
+        // abort the indexer lookup, but tracked: `Unknown` asserts the
+        // transaction is in neither place, which requires both to have
+        // answered.
+        let mut mempool_checked = false;
         let batch: VecM<SignedTransactionHash> = VecM(vec![hash]);
         match self.scheduler.schedcoord_lookup_transactions(&batch).await {
-            Ok(results) => {
-                if results.iter().next().is_some_and(Option::is_some) {
-                    return Ok(TransactionStatus::Pending);
+            // Only a per-hash slot counts as a mempool answer; an empty
+            // batch left the queried transaction unaccounted for.
+            Ok(results) => match results.iter().next() {
+                Some(Some(_)) => return Ok(TransactionStatus::Pending),
+                Some(None) => mempool_checked = true,
+                None => {
+                    tracing::warn!(
+                        "hogd-dev scheduler lookup returned no slot for the queried tx hash"
+                    );
                 }
-            }
+            },
             Err(e) => {
                 tracing::warn!(
                     error = %e,
@@ -343,7 +356,18 @@ impl ReadPlane for HogdDevReadBackend {
             }
         }
 
-        Ok(TransactionStatus::Unknown)
+        if mempool_checked {
+            Ok(TransactionStatus::Unknown)
+        } else {
+            // `Unknown` tells the client "not in mempool or indexer"; without
+            // a mempool answer that claim is unverified and a still-pending
+            // transaction would read as gone (inviting an unsafe re-sign).
+            Err(RpcServerError::BackendUnavailable(
+                "hogd-dev scheduler unreachable: transaction is not committed but may still be \
+                 pending"
+                    .into(),
+            ))
+        }
     }
 
     /// Return one page of contract events matching `query`.
@@ -752,10 +776,12 @@ mod tests {
     /// Controls what `schedcoord_lookup_transactions` returns.
     #[derive(Debug, Clone, Copy)]
     enum FakeSchedulerMode {
-        /// Returns empty batch — nothing pending.
+        /// Returns one `None` per queried hash — nothing pending.
         NoPending,
         /// Returns one `Some(dummy_tx)` per queried hash — all pending.
         AllPending,
+        /// Returns an empty batch — no per-hash answer at all.
+        EmptyBatch,
         /// RPC call itself fails.
         RpcFail,
     }
@@ -875,7 +901,9 @@ mod tests {
             hashes: SignedTransactionHashBatch,
         ) -> Result<OptSignedTransactionBatch, ProgramError> {
             match self.mode {
-                FakeSchedulerMode::NoPending => Ok(VecM(vec![])),
+                FakeSchedulerMode::NoPending => {
+                    Ok(VecM(hashes.0.into_iter().map(|_| None).collect()))
+                }
                 FakeSchedulerMode::AllPending => {
                     // Return one Some(dummy_tx) per queried hash to signal pending.
                     let results = hashes
@@ -885,6 +913,7 @@ mod tests {
                         .collect();
                     Ok(VecM(results))
                 }
+                FakeSchedulerMode::EmptyBatch => Ok(VecM(vec![])),
                 FakeSchedulerMode::RpcFail => {
                     Err(ProgramError::msg("fake scheduler lookup rpc-fail"))
                 }
@@ -1703,6 +1732,51 @@ mod tests {
         assert!(
             matches!(status, TransactionStatus::Committed { ref height } if **height == CANNED_HEIGHT_B),
             "expected Committed({CANNED_HEIGHT_B}) despite scheduler failure, got {status:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn transaction_status_scheduler_rpc_fail_and_indexer_miss_surfaces_backend_unavailable() {
+        // Arrange: scheduler RPC fails, and the indexer has no record. The
+        // transaction may still be pending in the unreachable mempool, so a
+        // definite `Unknown` would be a false "not anywhere" claim.
+        let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
+        let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::RpcFail).await;
+        let backend = make_read_backend(idx_addr, sched_addr).await;
+        let tx_hash = canned_tx_hash(CANNED_TX_HASH_UNKNOWN);
+
+        // Act
+        let result = backend.transaction_status(tx_hash).await;
+
+        // Assert
+        assert!(
+            matches!(
+                result,
+                Err(groundhog_json_rpc_server::RpcServerError::BackendUnavailable(_))
+            ),
+            "unconsulted mempool with indexer miss should surface BackendUnavailable, got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn transaction_status_empty_lookup_batch_and_indexer_miss_surfaces_backend_unavailable() {
+        // Arrange: the scheduler lookup succeeds but returns no slot for the
+        // queried hash, so there is no per-transaction mempool answer.
+        let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
+        let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::EmptyBatch).await;
+        let backend = make_read_backend(idx_addr, sched_addr).await;
+        let tx_hash = canned_tx_hash(CANNED_TX_HASH_UNKNOWN);
+
+        // Act
+        let result = backend.transaction_status(tx_hash).await;
+
+        // Assert
+        assert!(
+            matches!(
+                result,
+                Err(groundhog_json_rpc_server::RpcServerError::BackendUnavailable(_))
+            ),
+            "lookup with no per-tx answer should surface BackendUnavailable, got {result:?}"
         );
     }
 

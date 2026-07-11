@@ -142,6 +142,11 @@ contract in both modes:
 - success means the transaction was accepted by the authoritative
   downstream mempool path
 - failure means the transaction was rejected by that path
+- transactions that can never commit because `blockExpiryHeight` is at
+  or below the current chain tip are rejected with `TxRejected` before
+  submission. The pre-check is best-effort: if the tip is unavailable
+  the transaction is submitted anyway and the scheduler enforces expiry
+  authoritatively.
 
 If the gateway routes through chuckd, it should not silently degrade to
 "accepted by a relay queue." Otherwise the topology choice leaks into
@@ -293,9 +298,12 @@ excluded from the block, so `getTransactionReceipt` returns `null`.
 | Scheduler | Indexer | Behavior |
 |-----------|---------|----------|
 | Up | Up | Full status (Pending / Committed / RecentFailure / Unknown) |
-| Down | Up | Can return Committed or Unknown but cannot detect Pending. Log warning, do not fail the request. |
+| Down | Up | Terminal indexer answers (Committed / RecentFailure) still return. On an indexer miss, return `BackendUnavailable` instead of Unknown: without a mempool answer the gateway cannot claim the transaction is nowhere, and a still-pending transaction must not read as gone. |
 | Up | Down | Return `BackendUnavailable` error. Indexer is the authoritative source; partial results are misleading. |
 | Down | Down | Return `BackendUnavailable` error. |
+
+`Unknown` is therefore a positive claim — "not in the mempool and not
+in the indexer" — only produced when both backends answered.
 
 The indexer is treated as the critical backend. If it's unreachable, the
 request fails rather than returning potentially misleading results.

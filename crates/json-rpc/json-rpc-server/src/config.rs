@@ -29,6 +29,18 @@ pub struct RpcServerConfig {
     /// wired. Keep the default bounded so a view-capable backend cannot
     /// accidentally expose an unbounded root invocation.
     pub view_gas_limit: u64,
+
+    /// How long a chain-tip reading is reused by the `sendRawTransaction`
+    /// expiry pre-check before the backend is asked again. Bounds the
+    /// extra backend load to one tip probe per window regardless of
+    /// submission rate. Stale readings are safe: the tip only grows, so
+    /// staleness can only under-detect expiry, never falsely reject.
+    pub tip_cache_ttl_ms: u64,
+
+    /// Upper bound on a single chain-tip probe issued by the expiry
+    /// pre-check. The pre-check is advisory, so a slow or stalled tip
+    /// backend must not delay submission past this bound.
+    pub tip_probe_timeout_ms: u64,
 }
 
 impl Default for RpcServerConfig {
@@ -39,6 +51,8 @@ impl Default for RpcServerConfig {
             max_cursor_bytes: 256,
             max_view_calldata_bytes: 64 * 1024,
             view_gas_limit: DEFAULT_VIEW_GAS_LIMIT,
+            tip_cache_ttl_ms: 3_000,
+            tip_probe_timeout_ms: 2_000,
         }
     }
 }
@@ -76,6 +90,20 @@ impl RpcServerConfig {
     #[must_use]
     pub fn with_view_gas_limit(mut self, gas_limit: u64) -> Self {
         self.view_gas_limit = gas_limit;
+        self
+    }
+
+    /// Override how long the expiry pre-check reuses a chain-tip reading.
+    #[must_use]
+    pub fn with_tip_cache_ttl_ms(mut self, ttl_ms: u64) -> Self {
+        self.tip_cache_ttl_ms = ttl_ms;
+        self
+    }
+
+    /// Override the expiry pre-check's per-probe timeout.
+    #[must_use]
+    pub fn with_tip_probe_timeout_ms(mut self, timeout_ms: u64) -> Self {
+        self.tip_probe_timeout_ms = timeout_ms;
         self
     }
 }
