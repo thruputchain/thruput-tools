@@ -29,8 +29,8 @@ use crate::runtime_manifest::{
     apply_local_node_state_for_dev_key, load_configured_runtime_manifest,
 };
 use crate::tx_utils::{
-    format_tx_hash, nonce_from_timestamp, resolve_block_expiry_height, submit_and_poll,
-    summarize_exec_status,
+    command_error_for_exec_status, format_tx_hash, nonce_from_timestamp, print_failed_receipt_data,
+    resolve_block_expiry_height, submit_and_poll, summarize_exec_status,
 };
 use crate::{CliError, Print};
 
@@ -133,6 +133,7 @@ pub fn run(
             ));
             print.status(format_args!("  tx: {tx_hash_formatted}"));
             print.status(format_args!("  height: {}", *receipt.height));
+            print_failed_receipt_data(&receipt, print);
             print_failed_call_diagnostics(&prepared, transaction_detail.is_some(), print);
         }
         other => {
@@ -144,6 +145,7 @@ pub fn run(
             ));
             print.status(format_args!("  tx: {tx_hash_formatted}"));
             print.status(format_args!("  height: {}", *receipt.height));
+            print_failed_receipt_data(&receipt, print);
             print_failed_call_diagnostics(&prepared, transaction_detail.is_some(), print);
         }
     }
@@ -152,22 +154,24 @@ pub fn run(
         print_transaction_detail(detail, print);
     }
 
-    print.json(&CommandResult::new(
-        cmd,
-        json!({
-            "tx_hash": tx_hash_formatted,
-            "contract": prepared.contract_address_hex,
-            "method": prepared.method,
-            "height": receipt.height,
-            "status": receipt.status,
-            "status_summary": status_summary,
-            "return_data": receipt.return_data,
-            "abort_data": receipt.abort_data,
-            "return_value": decoded_return,
-            "transaction_detail": transaction_detail,
-            "diagnostics": diagnostics,
-        }),
-    ))?;
+    let data = json!({
+        "tx_hash": tx_hash_formatted,
+        "contract": prepared.contract_address_hex,
+        "method": prepared.method,
+        "height": receipt.height,
+        "status": receipt.status,
+        "status_summary": status_summary,
+        "return_data": receipt.return_data,
+        "abort_data": receipt.abort_data,
+        "return_value": decoded_return,
+        "transaction_detail": transaction_detail,
+        "diagnostics": diagnostics,
+    });
+    if let Some(error) = command_error_for_exec_status(&receipt.status) {
+        print.json(&CommandResult::failure_with_error(cmd, data, error))?;
+        return Err(CliError::CommandReportedFailure);
+    }
+    print.json(&CommandResult::new(cmd, data))?;
 
     Ok(())
 }

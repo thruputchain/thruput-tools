@@ -2,9 +2,11 @@
 //!
 //! Every command wraps its payload in [`CommandResult`] so
 //! that consumers see a uniform top-level shape:
-//! `{ ok, command, warnings, data }`.
+//! `{ ok, command, warnings, data }`. Commands with stable machine-readable
+//! failures may also include an `error` object.
 
 use serde::Serialize;
+use serde_json::Value;
 
 use crate::checks::{Finding, FindingLevel};
 
@@ -19,6 +21,28 @@ pub struct CommandResult<T: Serialize> {
     command: &'static str,
     warnings: Vec<Finding>,
     data: T,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<CommandError>,
+}
+
+/// Stable machine-readable error attached to a command-owned failure result.
+#[derive(Debug, Serialize)]
+pub struct CommandError {
+    code: &'static str,
+    message: String,
+    hint: Option<&'static str>,
+    details: Value,
+}
+
+impl CommandError {
+    pub fn new(code: &'static str, message: impl Into<String>, details: Value) -> Self {
+        Self {
+            code,
+            message: message.into(),
+            hint: None,
+            details,
+        }
+    }
 }
 
 impl<T: Serialize> CommandResult<T> {
@@ -30,6 +54,7 @@ impl<T: Serialize> CommandResult<T> {
             command,
             warnings: Vec::new(),
             data,
+            error: None,
         }
     }
 
@@ -40,6 +65,7 @@ impl<T: Serialize> CommandResult<T> {
             command,
             warnings,
             data,
+            error: None,
         }
     }
 
@@ -50,6 +76,7 @@ impl<T: Serialize> CommandResult<T> {
             command,
             warnings: Vec::new(),
             data,
+            error: None,
         }
     }
 
@@ -61,6 +88,19 @@ impl<T: Serialize> CommandResult<T> {
             command,
             warnings,
             data,
+            error: None,
+        }
+    }
+
+    /// Wrap a command's data and stable machine-readable error in a structured
+    /// failure envelope.
+    pub fn failure_with_error(command: &'static str, data: T, error: CommandError) -> Self {
+        Self {
+            ok: false,
+            command,
+            warnings: Vec::new(),
+            data,
+            error: Some(error),
         }
     }
 
@@ -125,6 +165,25 @@ mod tests {
         let json = serde_json::to_value(&result).unwrap();
         assert_eq!(json["ok"], false);
         assert_eq!(json["warnings"][0]["code"], "test_warn");
+    }
+
+    #[test]
+    fn failure_with_error_includes_stable_error() {
+        let result = CommandResult::failure_with_error(
+            "deploy",
+            serde_json::json!({"status": "failed"}),
+            CommandError::new(
+                "transaction_reverted",
+                "transaction reverted",
+                serde_json::json!({"result": "reverted"}),
+            ),
+        );
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(json["ok"], false);
+        assert_eq!(json["error"]["code"], "transaction_reverted");
+        assert_eq!(json["error"]["message"], "transaction reverted");
+        assert!(json["error"]["hint"].is_null());
+        assert_eq!(json["error"]["details"]["result"], "reverted");
     }
 
     #[test]
