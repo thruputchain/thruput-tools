@@ -34,7 +34,10 @@ What exists today:
 - `groundhog keys`
 - `groundhog logout`
 - shell completions
-- `groundhog.toml` with profiles and per-profile contract aliases
+- global config with profiles, keys, credentials, wallet bindings, and local
+  runtime state
+- `groundhog.toml` as a project overlay for profiles, contract aliases, and
+  wallet bindings
 - shared check layer (`checks.rs`) with findings model
 - clean lib/bin split, central `Print`, XDG config, test coverage for
   current commands
@@ -128,7 +131,7 @@ Maintenance rules:
 - [x] `groundhog logout`
 - [x] shell completions
 - [x] `--quiet`, `--json`, `--profile`
-- [x] `groundhog.toml` with profiles and contract aliases
+- [x] global and project profiles with contract aliases and wallet bindings
 
 ### Phase 0
 
@@ -143,9 +146,11 @@ Maintenance rules:
 - [x] `run_cargo` helper, `toml_edit` writes, address validation
 - [x] Expand `groundhog init` into first-run wizard
 - [x] `init`: key generation / default key selection
-- [x] `init`: inline login handoff when credentials are missing
+- [x] `init`: executor credential setup and external Cargo registry guidance
 - [x] `init`: optional scaffold offer for new users
 - [x] `groundhog status` command with project/profile validation
+- [x] Global/project config merge with local runtime state and saved wallet
+  bindings
 - [x] Planning docs cleanup complete
 
 ### Phase 1
@@ -297,14 +302,14 @@ Goal: make the current CLI trustworthy and easier to adopt.
    - missing `cargo`
    - missing `wasm-opt`
    - not in a Groundhog project
-   - missing or expired login credentials
+   - missing executor credentials
 
 2. **`groundhog init` as first-run setup**
    - Check required tools.
-   - Ensure cargo registry config exists.
-   - Explain whether login is needed.
+   - Ensure project-local cargo registry config exists in new scaffolds.
+   - Explain when external `cargo login --registry groundhog` setup is needed.
    - Guide the user through key generation / default key selection.
-   - Support inline login handoff.
+   - Avoid interactive Cargo login flows inside `groundhog init` / `new`.
    - Optionally guide the user into `new` and a scaffold/build/test
      smoke path.
 
