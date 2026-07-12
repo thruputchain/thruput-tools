@@ -91,6 +91,7 @@ fn init_configures_profiles_and_succeeds() {
     assert_eq!(devnet.name, "devnet");
     assert_eq!(devnet.network, Some(groundhog_cli::config::Network::Devnet));
     assert!(devnet.rpc_url.is_none());
+    assert!(devnet.faucet_url.is_none());
     assert_eq!(
         devnet.contracts.get("HOG").map(String::as_str),
         Some("0x0000000000000000000000000000000000000000000000000000000000000001")
@@ -150,6 +151,7 @@ owner_public_key = "0x2222222222222222222222222222222222222222222222222222222222
     assert_eq!(devnet.name, "devnet");
     assert_eq!(devnet.network, Some(groundhog_cli::config::Network::Devnet));
     assert!(devnet.rpc_url.is_none());
+    assert!(devnet.faucet_url.is_none());
     assert_eq!(
         devnet.contracts.get("HOG").map(String::as_str),
         Some("0x0000000000000000000000000000000000000000000000000000000000000001")

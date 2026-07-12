@@ -10,7 +10,6 @@ use super::project::{Network, ProjectProfile};
 use crate::CliError;
 
 const INITIAL_DEFAULT_PROFILE: &str = "local";
-const LOCAL_FAUCET_URL: &str = "http://127.0.0.1:8081";
 const HOG_CONTRACT_ADDRESS: &str =
     "0x0000000000000000000000000000000000000000000000000000000000000001";
 
@@ -132,9 +131,6 @@ pub fn initialize_global_profiles() -> Result<(), CliError> {
     let devnet = config.profile.entry("devnet".to_string()).or_default();
     if devnet.network.is_none() {
         devnet.network = Some(Network::Devnet);
-    }
-    if devnet.faucet_url.is_none() {
-        devnet.faucet_url = Some(LOCAL_FAUCET_URL.to_string());
     }
     devnet
         .contracts

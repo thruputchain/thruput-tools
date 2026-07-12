@@ -25,8 +25,8 @@ use crate::keys::load_local_signer;
 use crate::result::CommandResult;
 use crate::runtime_manifest::load_configured_runtime_manifest;
 use crate::tx_utils::{
-    format_tx_hash, nonce_from_timestamp, resolve_block_expiry_height, submit_and_poll,
-    summarize_exec_status,
+    command_error_for_exec_status, format_tx_hash, nonce_from_timestamp, print_failed_receipt_data,
+    resolve_block_expiry_height, submit_and_poll, summarize_exec_status,
 };
 use crate::{CliError, Print};
 
@@ -109,6 +109,8 @@ pub fn run(
         other => {
             print.warn(format_args!("Deploy {}", summarize_exec_status(other)));
             print.detail("tx", &tx_hash_formatted);
+            print.detail("height", *receipt.height);
+            print_failed_receipt_data(&receipt, print);
         }
     }
 
@@ -133,25 +135,32 @@ pub fn run(
         print_transaction_detail(detail, print);
     }
 
-    print.json(&CommandResult::new(
-        cmd,
-        json!({
-            "schemaVersion": DEPLOY_JSON_SCHEMA_VERSION,
-            "tx_hash": tx_hash_formatted,
-            "artifact_kind": prepared.artifact.kind.as_str(),
-            "artifact_path": &prepared.artifact.path,
-            "artifact_bytes": prepared.artifact_bytes_len,
-            "address": contract_addr_hex,
-            "address_source": match address_source {
-                Some(DeployAddressSource::Receipt) => Some("receipt"),
-                Some(DeployAddressSource::Derived) => Some("derived"),
-                None => None,
-            },
-            "height": receipt.height,
-            "status": receipt.status,
-            "transaction_detail": transaction_detail,
-        }),
-    ))?;
+    let command_error = command_error_for_exec_status(&receipt.status);
+    let mut data = json!({
+        "schemaVersion": DEPLOY_JSON_SCHEMA_VERSION,
+        "tx_hash": tx_hash_formatted,
+        "artifact_kind": prepared.artifact.kind.as_str(),
+        "artifact_path": &prepared.artifact.path,
+        "artifact_bytes": prepared.artifact_bytes_len,
+        "address": contract_addr_hex,
+        "address_source": match address_source {
+            Some(DeployAddressSource::Receipt) => Some("receipt"),
+            Some(DeployAddressSource::Derived) => Some("derived"),
+            None => None,
+        },
+        "height": receipt.height,
+        "status": receipt.status,
+        "transaction_detail": transaction_detail,
+    });
+    if command_error.is_some() {
+        data["return_data"] = json!(receipt.return_data);
+        data["abort_data"] = json!(receipt.abort_data);
+    }
+    if let Some(error) = command_error {
+        print.json(&CommandResult::failure_with_error(cmd, data, error))?;
+        return Err(CliError::CommandReportedFailure);
+    }
+    print.json(&CommandResult::new(cmd, data))?;
 
     Ok(())
 }
