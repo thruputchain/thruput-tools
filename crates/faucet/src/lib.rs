@@ -435,6 +435,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn airdrop_expires_stale_pending_attempt_before_retry() {
+        let airdrop = Arc::new(MockAirdropSubmitter::success());
+        let config = test_config_with_submitters(
+            airdrop.clone(),
+            Arc::new(MockWalletCreateSubmitter::success()),
+        );
+        seed_airdrop_attempt_with_expiry(
+            &config,
+            policy::AirdropAttemptStatus::Pending,
+            None,
+            Some(SystemTime::UNIX_EPOCH),
+        );
+
+        let response = airdrop_request(&config).await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(airdrop.calls(), 1);
+        let attempt = stored_airdrop_attempt(&config).expect("bug: attempt should be stored");
+        assert_eq!(attempt.status, policy::AirdropAttemptStatus::Succeeded);
+    }
+
+    #[tokio::test]
     async fn airdrop_quota_rejects_before_submit() {
         let airdrop = Arc::new(MockAirdropSubmitter::success());
         let mut config = test_config_with_submitters(
@@ -625,6 +647,24 @@ mod tests {
             serde_json::from_slice(&body).expect("bug: wallet-create body should be JSON");
         assert_eq!(json["attemptStatus"], "prefundPending");
         assert!(json.get("txHash").is_none());
+    }
+
+    #[tokio::test]
+    async fn wallet_create_expires_stale_pending_attempt_before_retry() {
+        let config = test_config_with_store();
+        seed_wallet_create_attempt_with_expiry(
+            &config,
+            policy::WalletCreateAttemptStatus::PrefundPending,
+            None,
+            None,
+            Some(SystemTime::UNIX_EPOCH),
+        );
+
+        let response = wallet_create_request(&config).await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let attempt = stored_wallet_create_attempt(&config).expect("bug: attempt should be stored");
+        assert_eq!(attempt.status, policy::WalletCreateAttemptStatus::Created);
     }
 
     #[tokio::test]
@@ -963,6 +1003,22 @@ mod tests {
         prefund_tx_hash: Option<String>,
         create_tx_hash: Option<String>,
     ) {
+        seed_wallet_create_attempt_with_expiry(
+            config,
+            status,
+            prefund_tx_hash,
+            create_tx_hash,
+            None,
+        );
+    }
+
+    fn seed_wallet_create_attempt_with_expiry(
+        config: &FaucetConfig,
+        status: policy::WalletCreateAttemptStatus,
+        prefund_tx_hash: Option<String>,
+        create_tx_hash: Option<String>,
+        expires_at: Option<SystemTime>,
+    ) {
         let now = SystemTime::UNIX_EPOCH;
         config
             .policy_store
@@ -980,7 +1036,7 @@ mod tests {
                 error_code: None,
                 created_at: now,
                 updated_at: now,
-                expires_at: None,
+                expires_at,
             })
             .expect("bug: test attempt insert should succeed");
     }
@@ -1006,6 +1062,15 @@ mod tests {
         status: policy::AirdropAttemptStatus,
         tx_hash: Option<String>,
     ) {
+        seed_airdrop_attempt_with_expiry(config, status, tx_hash, None);
+    }
+
+    fn seed_airdrop_attempt_with_expiry(
+        config: &FaucetConfig,
+        status: policy::AirdropAttemptStatus,
+        tx_hash: Option<String>,
+        expires_at: Option<SystemTime>,
+    ) {
         let now = SystemTime::UNIX_EPOCH;
         config
             .policy_store
@@ -1019,6 +1084,7 @@ mod tests {
                 error_code: None,
                 created_at: now,
                 updated_at: now,
+                expires_at,
             })
             .expect("bug: test airdrop attempt insert should succeed");
     }

@@ -70,6 +70,7 @@ pub struct AirdropAttempt {
     pub error_code: Option<String>,
     pub created_at: SystemTime,
     pub updated_at: SystemTime,
+    pub expires_at: Option<SystemTime>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -457,9 +458,10 @@ impl FaucetPolicyStore for InMemoryFaucetPolicyStore {
         state
             .wallet_create_attempts
             .retain(|_, attempt| attempt.expires_at.is_none_or(|expires_at| expires_at > now));
-        state
-            .airdrop_attempts
-            .retain(|_, attempt| !matches!(attempt.status, AirdropAttemptStatus::FailedTerminal));
+        state.airdrop_attempts.retain(|_, attempt| {
+            !matches!(attempt.status, AirdropAttemptStatus::FailedTerminal)
+                && attempt.expires_at.is_none_or(|expires_at| expires_at > now)
+        });
         for events in state.quota_events.values_mut() {
             events.retain(|event| event.expires_at > now);
         }
@@ -592,6 +594,7 @@ mod tests {
                 error_code: None,
                 created_at: now,
                 updated_at: now,
+                expires_at: None,
             })
             .expect("bug: insert should succeed");
 
@@ -669,11 +672,15 @@ mod tests {
     }
 
     #[test]
-    fn expire_removes_expired_wallet_attempts_terminal_airdrops_and_quota_events() {
+    fn expire_removes_expired_attempts_terminal_airdrops_and_quota_events() {
         let store = InMemoryFaucetPolicyStore::new();
         let now = SystemTime::UNIX_EPOCH;
         let wallet_key = wallet_create_key();
         let airdrop_key = airdrop_key();
+        let stale_airdrop_key = AirdropAttemptKey {
+            client_nonce: "0xstale".into(),
+            ..airdrop_key.clone()
+        };
         store
             .put_wallet_create_attempt(WalletCreateAttempt {
                 key: wallet_key.clone(),
@@ -703,6 +710,21 @@ mod tests {
                 error_code: Some("boom".into()),
                 created_at: now,
                 updated_at: now,
+                expires_at: None,
+            })
+            .expect("bug: insert should succeed");
+        store
+            .put_airdrop_attempt(AirdropAttempt {
+                key: stale_airdrop_key.clone(),
+                client_identity: ClientIdentity::Unknown,
+                raw_amount: "100000000".into(),
+                status: AirdropAttemptStatus::Pending,
+                tx_hash: None,
+                height: None,
+                error_code: None,
+                created_at: now,
+                updated_at: now,
+                expires_at: Some(now + Duration::from_secs(5)),
             })
             .expect("bug: insert should succeed");
         store
@@ -727,6 +749,12 @@ mod tests {
         assert!(
             store
                 .get_airdrop_attempt(&airdrop_key)
+                .expect("bug: lookup should succeed")
+                .is_none()
+        );
+        assert!(
+            store
+                .get_airdrop_attempt(&stale_airdrop_key)
                 .expect("bug: lookup should succeed")
                 .is_none()
         );

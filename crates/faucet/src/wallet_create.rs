@@ -166,6 +166,9 @@ impl WalletCreateService {
             client_nonce: hex_encode(&request.client_nonce.0),
         };
         let now = SystemTime::now();
+        if let Err(error) = self.policy_store.expire(now) {
+            return policy_store_error_response(&error);
+        }
         let existing = match self.policy_store.get_wallet_create_attempt(&key) {
             Ok(existing) => existing,
             Err(error) => return policy_store_error_response(&error),
