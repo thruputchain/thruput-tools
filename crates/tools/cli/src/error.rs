@@ -43,17 +43,12 @@ pub enum CliError {
     UnknownTemplate(String),
     #[error(transparent)]
     Io(#[from] std::io::Error),
-    #[error("profile `{0}` not found in groundhog.toml")]
+    #[error("profile `{0}` not found in project or global config")]
     ProfileNotFound(String),
-    #[error("profile `{0}` requested but no groundhog.toml found")]
+    #[error("profile `{0}` requested but no project or global config found")]
     NoProjectConfig(String),
     #[error("credentials cannot be empty")]
     CredentialsEmpty,
-    #[error(
-        "registry login failed — run `groundhog login` to try \
-         again"
-    )]
-    RegistryLoginFailed,
     #[error("unsupported OS: {0}")]
     UnsupportedOs(String),
     #[error("wasm-opt optimization failed{}", if .0.is_empty() { String::new() } else { format!(": {}", .0) })]
@@ -138,6 +133,20 @@ pub enum CliError {
         /// Specific derivation failure.
         message: String,
     },
+    #[error(
+        "no wallet saved for key `{key_name}` in profile `{profile}`; run `groundhog wallet create --key {key_name} --profile {profile}`"
+    )]
+    SavedWalletMissing { key_name: String, profile: String },
+    #[error("saved wallet `{key_name}` owner_public_key is invalid: {message}")]
+    SavedWalletOwnerPublicKeyInvalid { key_name: String, message: String },
+    #[error(
+        "saved wallet `{key_name}` owner public key {configured} does not match local key `{key_name}` public key {local}"
+    )]
+    SavedWalletOwnerMismatch {
+        key_name: String,
+        configured: String,
+        local: String,
+    },
     #[error("transaction {tx_hash} submitted but no receipt after {seconds}s")]
     ReceiptTimeout { tx_hash: String, seconds: u64 },
     #[error("internal error: receipt polling exhausted unexpectedly")]
@@ -181,7 +190,6 @@ impl CliError {
             Self::ProfileNotFound(_) => "profile_not_found",
             Self::NoProjectConfig(_) => "no_project_config",
             Self::CredentialsEmpty => "credentials_empty",
-            Self::RegistryLoginFailed => "registry_login_failed",
             Self::UnsupportedOs(_) => "unsupported_os",
             Self::WasmOptFailed(_) => "wasm_opt_failed",
             Self::Rv32LowerFailed(_) => "rv32_lower_failed",
@@ -211,6 +219,11 @@ impl CliError {
             Self::LocalDevAccountUnavailable { .. } => "local_dev_account_unavailable",
             Self::ManifestEntrypoint { .. } => "manifest_entrypoint_invalid",
             Self::WalletAddressDerivationFailed { .. } => "wallet_address_derivation_failed",
+            Self::SavedWalletMissing { .. } => "saved_wallet_missing",
+            Self::SavedWalletOwnerPublicKeyInvalid { .. } => {
+                "saved_wallet_owner_public_key_invalid"
+            }
+            Self::SavedWalletOwnerMismatch { .. } => "saved_wallet_owner_mismatch",
             Self::ReceiptTimeout { .. } => "receipt_timeout",
             Self::ReceiptPollingExhausted => "receipt_polling_exhausted",
             Self::CallEncode { .. } => "call_encode",
@@ -308,10 +321,10 @@ impl CliError {
                  the RPC endpoint at {url} is running"
             ))),
             Self::MissingRpcUrl => Some(Cow::Borrowed(
-                "set `rpc_url` in the selected profile in `groundhog.toml`",
+                "set `rpc_url` in the selected profile in project or global config",
             )),
             Self::MissingSigningKey => Some(Cow::Borrowed(
-                "set `default_key` in `groundhog.toml`, or run `groundhog keys generate`",
+                "set `default_key` in project or global config, or run `groundhog keys generate`",
             )),
             Self::RpcMethodFailed { .. } => Some(Cow::Borrowed(
                 "check the RPC endpoint and node logs for details",
@@ -320,11 +333,20 @@ impl CliError {
                 "run `groundhog node` backed by hog-devnode, or use a stored key for non-local endpoints",
             )),
             Self::ManifestEntrypoint { .. } => Some(Cow::Borrowed(
-                "restart the local node with a compatible hog-devnode, or remove the stale runtime manifest reference from groundhog.toml",
+                "restart the local node with a compatible hog-devnode, or remove the stale runtime manifest reference from project or global config",
             )),
             Self::WalletAddressDerivationFailed { .. } => Some(Cow::Borrowed(
                 "check the stored public key material, or regenerate the key",
             )),
+            Self::SavedWalletMissing { key_name, profile } => Some(Cow::Owned(format!(
+                "run `groundhog wallet create --key {key_name} --profile {profile}` before using this stored key"
+            ))),
+            Self::SavedWalletOwnerPublicKeyInvalid { .. } => Some(Cow::Borrowed(
+                "recreate the wallet binding with `groundhog wallet create`, or fix owner_public_key in the selected profile",
+            )),
+            Self::SavedWalletOwnerMismatch { key_name, .. } => Some(Cow::Owned(format!(
+                "use the local key that created wallet `{key_name}`, or recreate the wallet binding for this key"
+            ))),
             Self::ReceiptTimeout { .. } => Some(Cow::Borrowed(
                 "check the node logs, then rerun the command once the transaction is committed or rejected",
             )),
@@ -353,21 +375,17 @@ impl CliError {
             | Self::StatusHasWarnings
             | Self::CommandReportedFailure => None,
             Self::ProfileNotFound(_) => Some(Cow::Borrowed(
-                "add the profile to `groundhog.toml`, or switch to \
+                "add the profile to project or global config, or switch to \
                  an existing one with `--profile` or \
                  `GROUNDHOG_PROFILE`",
             )),
             Self::NoProjectConfig(_) => Some(Cow::Borrowed(
-                "create `groundhog.toml`, unset `GROUNDHOG_PROFILE`, \
-                 or use the default profile",
+                "run `groundhog init`, create `groundhog.toml`, unset \
+                 `GROUNDHOG_PROFILE`, or use the default profile",
             )),
             Self::CredentialsEmpty => Some(Cow::Borrowed(
-                "rerun `groundhog login` and provide both username \
+                "rerun `groundhog init` and provide both username \
                  and password",
-            )),
-            Self::RegistryLoginFailed => Some(Cow::Borrowed(
-                "check your registry token and rerun \
-                 `groundhog login`",
             )),
             Self::UnsupportedOs(_) => Some(Cow::Borrowed(
                 "`groundhog test` currently supports macOS and \
@@ -462,6 +480,23 @@ impl CliError {
                 "keyName": key_name,
                 "field": field,
                 "message": message,
+            })),
+            Self::SavedWalletMissing { key_name, profile } => Some(json!({
+                "keyName": key_name,
+                "profile": profile,
+            })),
+            Self::SavedWalletOwnerPublicKeyInvalid { key_name, message } => Some(json!({
+                "keyName": key_name,
+                "message": message,
+            })),
+            Self::SavedWalletOwnerMismatch {
+                key_name,
+                configured,
+                local,
+            } => Some(json!({
+                "keyName": key_name,
+                "configured": configured,
+                "local": local,
             })),
             _ => None,
         }

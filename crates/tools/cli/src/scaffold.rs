@@ -5,6 +5,7 @@ use std::path::Path;
 const CARGO_TOML: &str = include_str!("../templates/Cargo.toml.tmpl");
 const CARGO_CONFIG: &str = include_str!("../templates/config.toml.tmpl");
 const CONTRACT_TOML: &str = include_str!("../templates/contract.toml.tmpl");
+const GITIGNORE: &str = include_str!("../templates/gitignore.tmpl");
 const GROUNDHOG_TOML: &str = include_str!("../templates/groundhog.toml.tmpl");
 const RUST_TOOLCHAIN: &str = include_str!("../templates/rust-toolchain.toml.tmpl");
 const RV32_MAIN: &str = include_str!("../templates/main.rs.tmpl");
@@ -98,7 +99,8 @@ pub fn generate(dir: &Path, name: &str, template: &str) -> Result<(), CliError> 
     fs::create_dir_all(dir.join(".cargo"))?;
 
     fs::write(dir.join("Cargo.toml"), apply(CARGO_TOML, name))?;
-    fs::write(dir.join("groundhog.toml"), GROUNDHOG_TOML)?;
+    fs::write(dir.join(".gitignore"), GITIGNORE)?;
+    fs::write(dir.join("groundhog.toml"), apply(GROUNDHOG_TOML, name))?;
     fs::write(dir.join("rust-toolchain.toml"), apply(RUST_TOOLCHAIN, name))?;
     fs::write(dir.join(".cargo/config.toml"), apply(CARGO_CONFIG, name))?;
     fs::write(dir.join(".cargo/contract.toml"), apply(CONTRACT_TOML, name))?;

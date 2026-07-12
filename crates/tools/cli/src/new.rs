@@ -28,11 +28,10 @@ pub fn run_in(
         }
         Err(e) => return Err(e.into()),
     }
+    let task = print.start_task(format_args!("Creating project `{name}`"));
     crate::scaffold::generate(dir, name, template)?;
-    print.status(format_args!(
-        "Created project `{name}` in {}",
-        dir.display()
-    ));
+    task.success(format_args!("Created project `{name}`"));
+    render_project_ready(dir, name, template, print);
     print.json(&crate::result::CommandResult::new(
         cmd,
         json!({
@@ -43,4 +42,29 @@ pub fn run_in(
         }),
     ))?;
     Ok(())
+}
+
+fn render_project_ready(dir: &Path, name: &str, template: &str, print: &Print) {
+    if print.is_quiet() || print.is_json() {
+        return;
+    }
+
+    let items = vec![
+        ("Project".to_string(), name.to_string()),
+        ("Path".to_string(), dir.display().to_string()),
+        ("Template".to_string(), template.to_string()),
+        (
+            "Config".to_string(),
+            dir.join("groundhog.toml").display().to_string(),
+        ),
+    ];
+
+    print.status("");
+    print.summary_card("Project Ready", &items);
+
+    let next_steps = vec![
+        format!("cd {}", dir.display()),
+        "groundhog build".to_string(),
+    ];
+    print.next_steps(&next_steps);
 }

@@ -65,13 +65,7 @@ pub fn run(
         };
     }
 
-    render_environment(&report, print);
-    print.status("");
-    render_keys(&report, print);
-    print.status("");
-    render_credentials(&report, print);
-    print.status("");
-    render_project(&report, print);
+    render_summary(&report, print);
     print.status("");
     render_findings(&report, print);
 
@@ -82,94 +76,134 @@ pub fn run(
     }
 }
 
-fn render_environment(report: &checks::StatusReport, print: &Print) {
-    if report.environment.cargo {
-        print.status("cargo: installed");
-    } else {
-        print.status("cargo: NOT FOUND");
+fn render_summary(report: &checks::StatusReport, print: &Print) {
+    let items = summary_items(report);
+    print.summary_card("Groundhog Status", &items);
+}
+
+fn summary_items(report: &checks::StatusReport) -> Vec<(String, String)> {
+    let mut items = vec![
+        ("Cargo".into(), installed_label(report.environment.cargo)),
+        (
+            "Wasm Target".into(),
+            wasm_target_label(report.environment.wasm_target),
+        ),
+        (
+            "Global Registry".into(),
+            if report.environment.registry_configured {
+                format!(
+                    "configured ({})",
+                    report.environment.cargo_config_path.display()
+                )
+            } else {
+                "not configured".into()
+            },
+        ),
+        (
+            "wasm-opt".into(),
+            optional_installed_label(report.environment.wasm_opt),
+        ),
+        ("Keys".into(), keys_label(report)),
+        ("Default Key".into(), default_key_label(report)),
+        ("Credentials".into(), credentials_label(report)),
+        ("Project".into(), project_label(report)),
+    ];
+
+    if report.project.profile_name.is_some() {
+        items.push(("Profile".into(), profile_label(report)));
+        items.push(("RPC URL".into(), rpc_url_label(report)));
+        items.push(("Contracts".into(), contracts_label(report)));
     }
 
-    match report.environment.wasm_target {
-        checks::WasmTargetStatus::Installed => {
-            print.status("wasm target: installed");
-        }
+    items
+}
+
+fn installed_label(installed: bool) -> String {
+    if installed {
+        "installed".into()
+    } else {
+        "not found".into()
+    }
+}
+
+fn optional_installed_label(installed: bool) -> String {
+    if installed {
+        "installed".into()
+    } else {
+        "not installed (optional)".into()
+    }
+}
+
+fn wasm_target_label(status: checks::WasmTargetStatus) -> String {
+    match status {
+        checks::WasmTargetStatus::Installed => "installed".into(),
         checks::WasmTargetStatus::Missing => {
-            print.status(
-                "wasm target: not found (installed automatically on \
-                 first build)",
-            );
+            "not found (installed automatically on first build)".into()
         }
-        checks::WasmTargetStatus::Unknown => {
-            print.status("wasm target: unknown (rustup unavailable)");
-        }
-    }
-
-    if report.environment.registry_configured {
-        print.status(format_args!(
-            "registry: configured ({})",
-            report.environment.cargo_config_path.display()
-        ));
-    } else {
-        print.status("registry: NOT configured");
-    }
-
-    if report.environment.wasm_opt {
-        print.status("wasm-opt: installed");
-    } else {
-        print.status("wasm-opt: not installed (optional)");
+        checks::WasmTargetStatus::Unknown => "unknown (rustup unavailable)".into(),
     }
 }
 
-fn render_keys(report: &checks::StatusReport, print: &Print) {
-    if report.keys.keys.is_empty() {
-        print.status("keys: none");
-    } else {
-        for key in &report.keys.keys {
-            let marker = if key.is_default { "*" } else { " " };
-            print.status(format_args!("key:{marker} {} {}", key.name, key.address));
-        }
+fn keys_label(report: &checks::StatusReport) -> String {
+    match report.keys.keys.len() {
+        0 => "none".into(),
+        1 => "1 key".into(),
+        count => format!("{count} keys"),
     }
+}
 
-    // Only show effective default key when keys exist —
-    // "keys: none" already tells the story.
-    if !report.keys.keys.is_empty() {
-        if let Some(name) = report.effective_default_key.as_deref() {
+fn default_key_label(report: &checks::StatusReport) -> String {
+    match report.effective_default_key.as_deref() {
+        Some(name) => {
             let source = report.effective_default_key_source.unwrap_or("global");
-            print.status(format_args!("default key ({source}): {name}"));
-        } else {
-            print.status("default key: none selected");
+            format!("{name} ({source})")
         }
+        None => "none selected".into(),
     }
 }
 
-fn render_credentials(report: &checks::StatusReport, print: &Print) {
+fn credentials_label(report: &checks::StatusReport) -> String {
     if report.credentials.executor_credentials {
-        print.status("credentials: stored");
+        "stored".into()
     } else {
-        print.status("credentials: NOT stored");
+        "not stored".into()
     }
 }
 
-fn render_project(report: &checks::StatusReport, print: &Print) {
-    if let Some(path) = report.project.config_path.as_ref() {
-        print.status(format_args!("project: {}", path.display()));
-        if let Some(name) = report.project.profile_name.as_deref() {
-            print.status(format_args!("profile: {name}"));
-        }
-        if let Some(url) = report.project.rpc_url.as_deref() {
-            print.status(format_args!("rpc_url: {url}"));
-        }
-        let profile_resolved = !report
-            .project
-            .findings
-            .iter()
-            .any(|f| f.code == "profile_not_found" || f.code == "no_project_config");
-        if profile_resolved {
-            print.status(format_args!("contracts: {}", report.project.contract_count));
-        }
+fn project_label(report: &checks::StatusReport) -> String {
+    report.project.config_path.as_ref().map_or_else(
+        || "none (not in a project directory)".into(),
+        |path| path.display().to_string(),
+    )
+}
+
+fn profile_label(report: &checks::StatusReport) -> String {
+    report
+        .project
+        .profile_name
+        .as_deref()
+        .unwrap_or("none")
+        .into()
+}
+
+fn rpc_url_label(report: &checks::StatusReport) -> String {
+    report.project.rpc_url.as_deref().unwrap_or("none").into()
+}
+
+fn contracts_label(report: &checks::StatusReport) -> String {
+    if profile_resolved(report) {
+        report.project.contract_count.to_string()
     } else {
-        print.status("project: none (not in a project directory)");
+        "unknown".into()
     }
+}
+
+fn profile_resolved(report: &checks::StatusReport) -> bool {
+    !report
+        .project
+        .findings
+        .iter()
+        .any(|finding| finding.code == "profile_not_found" || finding.code == "no_project_config")
 }
 
 fn render_findings(report: &checks::StatusReport, print: &Print) {

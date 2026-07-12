@@ -7,9 +7,8 @@ use groundhog_json_rpc_types::state::StorageItemRead;
 use serde_json::json;
 
 use crate::codec::parse_contract_address;
-use crate::config::{ProfileOverrides, resolve_default_key, resolve_profile_with_overrides};
+use crate::config::{ProfileOverrides, resolve_profile_with_overrides};
 use crate::result::CommandResult;
-use crate::runtime_manifest::apply_local_node_state_for_dev_key;
 use crate::{CliError, Print};
 
 /// Read the latest committed storage item at a contract address/key pair.
@@ -17,16 +16,12 @@ pub fn run(
     address: &str,
     key: &str,
     project_start: &Path,
-    profile: &str,
+    profile: Option<&str>,
     overrides: &ProfileOverrides,
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    let mut resolved_profile =
-        resolve_profile_with_overrides(project_start, Some(profile), overrides)?;
-    if let Some(key_name) = resolve_default_key(project_start, Some(profile))? {
-        apply_local_node_state_for_dev_key(&mut resolved_profile, &key_name)?;
-    }
+    let resolved_profile = resolve_profile_with_overrides(project_start, profile, overrides)?;
     let rpc_url = resolved_profile
         .rpc_url
         .as_deref()
@@ -38,13 +33,12 @@ pub fn run(
     let key_hex = format_storage_key(&key);
     let address_hex = format_contract_address(&address);
 
-    print.status(format_args!(
-        "Reading storage at {address_hex} / {key_hex} via {rpc_url}..."
-    ));
+    let task = print.start_task("Reading storage");
 
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
     let read = rt.block_on(fetch_storage_at(rpc_url, address, key))?;
 
+    task.success("Storage read complete");
     print_storage_read(&address_hex, &key_hex, &read, print)?;
     print.json(&CommandResult::new(
         cmd,
@@ -83,18 +77,17 @@ fn print_storage_read(
     read: &StorageItemRead,
     print: &Print,
 ) -> Result<(), CliError> {
-    print.status("Storage read complete.");
-    print.status(format_args!("  address: {address}"));
-    print.status(format_args!("  key: {key}"));
-    print.status(format_args!("  height: {}", *read.block_height));
+    print.detail("address", address);
+    print.detail("key", key);
+    print.detail("height", *read.block_height);
     match &read.item {
         Some(item) => {
             let value = serde_json::to_string(item)
                 .map_err(|e| CliError::Other(format!("failed to render storage item: {e}")))?;
-            print.status(format_args!("  item: {value}"));
+            print.detail("item", value);
         }
         None => {
-            print.status("  item: <absent>");
+            print.detail("item", "<absent>");
         }
     }
     Ok(())

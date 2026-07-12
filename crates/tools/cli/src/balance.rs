@@ -7,31 +7,21 @@ use serde_json::json;
 use crate::account_resolution::lookup_dev_account_address;
 use crate::airdrop::format_hog_amount;
 use crate::codec::{format_contract_address, parse_contract_address};
-use crate::config::{
-    ProfileOverrides, ResolvedProfile, resolve_default_key, resolve_profile_with_overrides,
-};
+use crate::config::{ProfileOverrides, ResolvedProfile, resolve_profile_with_overrides};
 use crate::dev_keys;
 use crate::result::CommandResult;
-use crate::runtime_manifest::apply_local_node_state_for_dev_key;
 use crate::{CliError, Print};
 
 /// Read native HOG balance for a wallet, contract, dev account, or address.
 pub fn run(
     target: &str,
     project_start: &Path,
-    profile: &str,
+    profile: Option<&str>,
     overrides: &ProfileOverrides,
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    let mut resolved_profile =
-        resolve_profile_with_overrides(project_start, Some(profile), overrides)?;
-    if let Some(key_name) = resolve_default_key(project_start, Some(profile))? {
-        apply_local_node_state_for_dev_key(&mut resolved_profile, &key_name)?;
-    }
-    if dev_keys::dev_key_index(target).is_some() {
-        apply_local_node_state_for_dev_key(&mut resolved_profile, target)?;
-    }
+    let resolved_profile = resolve_profile_with_overrides(project_start, profile, overrides)?;
     let rpc_url = resolved_profile
         .rpc_url
         .as_deref()
@@ -46,8 +36,8 @@ pub fn run(
     let raw_balance = parse_raw_balance(&balance.raw_balance)?;
     let balance_hog = format_hog_amount(raw_balance);
 
-    print.status(format_args!("Address: {address_hex}"));
     print.status(format_args!("Balance: {balance_hog} HOG"));
+    print.status(format_args!("Address: {address_hex}"));
     print.json(&CommandResult::new(
         cmd,
         json!({
@@ -109,22 +99,31 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
+    use crate::config::SavedWalletBinding;
 
     #[test]
     fn resolves_wallet_before_contract_alias() {
         let mut profile = ResolvedProfile {
             name: "default".into(),
+            network: None,
             rpc_url: None,
             rpc_url_cli_override: false,
             faucet_url: None,
             default_key: None,
             runtime_manifest: None,
             runtime_manifest_cli_override: false,
+            runtime_artifacts_dir: None,
             contracts: BTreeMap::new(),
             wallets: BTreeMap::new(),
             source: None,
         };
-        profile.wallets.insert("alice".into(), format_address(1));
+        profile.wallets.insert(
+            "alice".into(),
+            SavedWalletBinding {
+                address: format_address(1),
+                owner_public_key: format_address(9),
+            },
+        );
         profile.contracts.insert("alice".into(), format_address(2));
 
         assert_eq!(
@@ -137,12 +136,14 @@ mod tests {
     fn resolves_contract_alias() {
         let mut profile = ResolvedProfile {
             name: "default".into(),
+            network: None,
             rpc_url: None,
             rpc_url_cli_override: false,
             faucet_url: None,
             default_key: None,
             runtime_manifest: None,
             runtime_manifest_cli_override: false,
+            runtime_artifacts_dir: None,
             contracts: BTreeMap::new(),
             wallets: BTreeMap::new(),
             source: None,
@@ -161,12 +162,14 @@ mod tests {
     fn resolves_direct_address() {
         let profile = ResolvedProfile {
             name: "default".into(),
+            network: None,
             rpc_url: None,
             rpc_url_cli_override: false,
             faucet_url: None,
             default_key: None,
             runtime_manifest: None,
             runtime_manifest_cli_override: false,
+            runtime_artifacts_dir: None,
             contracts: BTreeMap::new(),
             wallets: BTreeMap::new(),
             source: None,

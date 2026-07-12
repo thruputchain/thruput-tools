@@ -4,13 +4,19 @@ use crate::{CliError, Print};
 
 use crate::result::CommandResult;
 use serde_json::json;
+use std::io::{self, Write};
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 use std::time::Duration;
 
 const HOG_DEVNODE_PID_FILE: &str = "hog-devnode.pid";
 const LEGACY_HOGD_DEV_PID_FILE: &str = "hogd-dev.pid";
+
+#[cfg(test)]
+fn test_local_runtime_state_result() -> PathBuf {
+    PathBuf::from("/tmp/groundhog-config.toml")
+}
 
 /// Block production mode for the supervised local node.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -218,15 +224,33 @@ async fn run_hogd_dev(
 ) -> Result<(), CliError> {
     use groundhog_node_supervisor::{NodeSupervisorError, SupervisorStop};
 
+    let runtime_artifacts_dir = local_node_runtime_artifacts_dir(&options);
+    if !print.is_json() {
+        print.status("Starting Groundhog local node");
+    }
     let started = start_local_node(options).await?;
-    let local_state_result = write_started_local_node_state(&started);
-    let started_rpc_url = started.rpc_url();
-    let started_manifest_path = started.readiness().manifest_path.clone();
-    let local_state_path = local_state_result
-        .as_ref()
-        .ok()
-        .and_then(|path| path.as_ref())
-        .cloned();
+    let local_runtime_state_path = match write_started_local_runtime_state(
+        &started,
+        runtime_artifacts_dir.as_deref(),
+    ) {
+        Ok(path) => path,
+        Err(error) => {
+            if !print.is_json() {
+                print.warn(format_args!(
+                    "local runtime state was not updated; stopping local node: {error}"
+                ));
+            }
+            if let Err(stop_error) = started.stop().await {
+                return Err(CliError::NodeSupervisor(format!(
+                    "failed to stop local node after local runtime state update failed: {stop_error}; local runtime state update failed: {error}"
+                )));
+            }
+            return Err(error);
+        }
+    };
+    let local_runtime_state_result = Ok(local_runtime_state_path);
+    let cleanup_local_runtime_state =
+        local_runtime_state_cleanup(&started, runtime_artifacts_dir.as_deref());
 
     if print.is_json() {
         print.json(&CommandResult::new(
@@ -235,10 +259,11 @@ async fn run_hogd_dev(
                 started.rpc_addr(),
                 started.readiness(),
                 started.backend_planes(),
+                &local_runtime_state_result,
             ),
         ))?;
     } else {
-        print_started_local_node(&started, &local_state_result, print);
+        print_started_local_node(&started, &local_runtime_state_result, print);
     }
 
     let stop_signal = async {
@@ -247,28 +272,18 @@ async fn run_hogd_dev(
             .map_err(|source| NodeSupervisorError::StopSignal { source })?;
         if !print.is_json() {
             print.status("");
-            print.status("Shutting down...");
+            print.note("Shutting down");
         }
         Ok(())
     };
 
     let outcome = started.run_until(stop_signal).await;
-    if let (Some(local_state_path), Some(started_manifest_path)) = (
-        local_state_path.as_deref(),
-        started_manifest_path.as_deref(),
-    ) && let Err(error) = crate::runtime_manifest::remove_local_node_state_if_matches(
-        local_state_path,
-        &started_rpc_url,
-        started_manifest_path,
-    ) && !print.is_json()
-    {
-        print.warn(format!("local node state was not removed: {error}"));
-    }
+    cleanup_written_local_runtime_state(cleanup_local_runtime_state, print);
     let outcome = outcome?;
     match outcome {
         SupervisorStop::HogdExited(status) => {
             if !print.is_json() {
-                print.status(format_args!("hog-devnode exited with status {status}"));
+                print.note(format_args!("hog-devnode exited with status {status}"));
             }
             if status.success() {
                 Ok(())
@@ -282,6 +297,32 @@ async fn run_hogd_dev(
         other => Err(CliError::NodeSupervisor(format!(
             "unexpected supervisor stop state: {other:?}"
         ))),
+    }
+}
+
+struct LocalRuntimeStateCleanup {
+    state: crate::config::LocalRuntimeState,
+}
+
+fn local_runtime_state_cleanup(
+    started: &StartedLocalNode,
+    runtime_artifacts_dir: Option<&Path>,
+) -> Option<LocalRuntimeStateCleanup> {
+    Some(LocalRuntimeStateCleanup {
+        state: local_runtime_state(started, runtime_artifacts_dir)?,
+    })
+}
+
+fn cleanup_written_local_runtime_state(cleanup: Option<LocalRuntimeStateCleanup>, print: &Print) {
+    let Some(cleanup) = cleanup else {
+        return;
+    };
+    let result = crate::config::clear_local_runtime_state_if_matches(&cleanup.state);
+
+    if let Err(error) = result
+        && !print.is_json()
+    {
+        print.warn(format_args!("local runtime state was not cleared: {error}"));
     }
 }
 
@@ -303,11 +344,11 @@ async fn wait_for_stop_signal() -> Result<(), std::io::Error> {
 
 fn print_started_local_node(
     started: &StartedLocalNode,
-    local_state_result: &Result<Option<PathBuf>, CliError>,
+    local_runtime_state_result: &Result<PathBuf, CliError>,
     print: &Print,
 ) {
-    print.status("Groundhog Local Node");
-    print.status(format_args!("Chain: {}", started.readiness().network_id));
+    print.success("Groundhog local node ready");
+    print.detail("chain", &started.readiness().network_id);
     if started.backend_planes().read.is_indexer_backed() {
         print.warn("backend: hog-devnode (chainTip, submit, and reads live)");
     } else {
@@ -315,54 +356,70 @@ fn print_started_local_node(
             "backend: hog-devnode (chainTip and submit live; read methods return NOT_IMPLEMENTED)",
         );
     }
-    print.status(format_args!("Listening on {}", started.rpc_url()));
-    print.status(format_args!(
-        "hog-devnode SchedulerCoord: {}",
-        started.readiness().endpoints.scheduler_coord
-    ));
+    print.detail("rpc", started.rpc_url());
+    print.detail("scheduler", started.readiness().endpoints.scheduler_coord);
     if let Some(indexer) = started.readiness().endpoints.indexer_block_explorer {
-        print.status(format_args!("hog-devnode IndexerBlockExplorer: {indexer}"));
+        print.detail("indexer", indexer);
     }
     if let Some(db_gateway) = started.readiness().endpoints.db_gateway {
-        print.status(format_args!("hog-devnode DbGateway: {db_gateway}"));
+        print.detail("db gateway", db_gateway);
     }
     if let Some(view_gateway) = started.readiness().endpoints.view_gateway {
-        print.status(format_args!("hog-devnode ViewGateway: {view_gateway}"));
+        print.detail("view gateway", view_gateway);
     }
     if let Some(dev_control) = started.readiness().endpoints.dev_control {
-        print.status(format_args!("hog-devnode dev control: {dev_control}"));
+        print.detail("dev control", dev_control);
     }
     if let Some(path) = &started.readiness().manifest_path {
-        print.status(format_args!("runtime manifest: {}", path.display()));
-        match local_state_result {
-            Ok(Some(local_state_path)) => print.status(format_args!(
-                "local node state: {}",
-                local_state_path.display()
-            )),
-            Ok(None) => {}
-            Err(error) => {
-                print.warn(format!("local node state was not written: {error}"));
-            }
+        print.detail("runtime manifest", path.display());
+        match local_runtime_state_result {
+            Ok(path) => print.detail("config", format_args!("updated {}", path.display())),
+            Err(error) => print.warn(format!("local runtime state was not updated: {error}")),
         }
-        print.status(format_args!(
-            "dev-key manifest: export GROUNDHOG_RUNTIME_MANIFEST={}",
-            path.display()
-        ));
+        print.detail(
+            "dev-key manifest",
+            format_args!("export GROUNDHOG_RUNTIME_MANIFEST={}", path.display()),
+        );
     }
 }
 
-fn write_started_local_node_state(started: &StartedLocalNode) -> Result<Option<PathBuf>, CliError> {
-    let manifest_path = started
-        .readiness()
-        .manifest_path
-        .as_deref()
-        .ok_or_else(|| {
-            CliError::NodeSupervisor(
-                "hog-devnode readiness did not include runtime manifest path".into(),
-            )
-        })?;
-    let cwd = std::env::current_dir()?;
-    crate::runtime_manifest::write_local_node_state(&cwd, &started.rpc_url(), manifest_path)
+fn write_started_local_runtime_state(
+    started: &StartedLocalNode,
+    runtime_artifacts_dir: Option<&Path>,
+) -> Result<PathBuf, CliError> {
+    let state = local_runtime_state(started, runtime_artifacts_dir).ok_or_else(|| {
+        CliError::NodeSupervisor(
+            "hog-devnode readiness did not include runtime manifest path".into(),
+        )
+    })?;
+    crate::config::save_local_runtime_state(&state)
+}
+
+fn local_runtime_state(
+    started: &StartedLocalNode,
+    runtime_artifacts_dir: Option<&Path>,
+) -> Option<crate::config::LocalRuntimeState> {
+    Some(crate::config::LocalRuntimeState {
+        node_id: started.rpc_url(),
+        rpc_url: started.rpc_url(),
+        runtime_manifest: started.readiness().manifest_path.clone()?,
+        runtime_artifacts_dir: runtime_artifacts_dir.map(Path::to_path_buf),
+    })
+}
+
+fn local_node_runtime_artifacts_dir(options: &LocalNodeOptions) -> Option<PathBuf> {
+    use groundhog_node_supervisor::{HogdDevConfig, resolve_hogd_dev_binary};
+
+    let hogd = options
+        .hogd_dev_binary
+        .clone()
+        .map_or_else(HogdDevConfig::default, |binary| {
+            HogdDevConfig::default().with_binary_path(binary)
+        });
+    resolve_hogd_dev_binary(&hogd)
+        .ok()
+        .and_then(|binary| std::fs::canonicalize(&binary).ok().or(Some(binary)))
+        .and_then(|binary| binary.parent().map(Path::to_path_buf))
 }
 
 fn local_node_config(
@@ -476,7 +533,7 @@ fn map_node_supervisor_error(err: &groundhog_node_supervisor::NodeSupervisorErro
 }
 
 pub(crate) fn init_node_tracing(verbose: bool, json: bool) {
-    init_tracing(default_tracing_filter(verbose, json));
+    init_tracing(default_tracing_filter(verbose, json), json);
 }
 
 fn default_tracing_filter(verbose: bool, json: bool) -> &'static str {
@@ -489,23 +546,48 @@ fn default_tracing_filter(verbose: bool, json: bool) -> &'static str {
     }
 }
 
-fn init_tracing(default_filter: &str) {
+fn init_tracing(default_filter: &str, json: bool) {
     use tracing_subscriber::EnvFilter;
+
+    let dim_logs = !json && crate::print::supports_ansi_stderr();
 
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_filter)),
         )
-        .with_writer(std::io::stderr)
+        .with_writer(move || ForwardedLogWriter { dim: dim_logs })
         .with_target(false)
         .without_time()
         .try_init();
+}
+
+struct ForwardedLogWriter {
+    dim: bool,
+}
+
+impl Write for ForwardedLogWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let mut stderr = io::stderr().lock();
+        if self.dim {
+            stderr.write_all(b"\x1b[2m")?;
+            stderr.write_all(buf)?;
+            stderr.write_all(b"\x1b[0m")?;
+        } else {
+            stderr.write_all(buf)?;
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        io::stderr().lock().flush()
+    }
 }
 
 fn hogd_dev_startup_payload(
     addr: std::net::SocketAddr,
     readiness: &groundhog_node_supervisor::HogdDevReadiness,
     backend_planes: groundhog_node_supervisor::BackendPlanes,
+    local_runtime_state_result: &Result<PathBuf, CliError>,
 ) -> serde_json::Value {
     json!({
         "schemaVersion": 1,
@@ -519,8 +601,24 @@ fn hogd_dev_startup_payload(
             "endpoints": hogd_dev_endpoints_payload(readiness),
         },
         "runtime_manifest": runtime_manifest_payload(readiness),
+        "local_runtime_state": local_runtime_state_payload(local_runtime_state_result),
         "rpc_url": format!("http://{addr}"),
     })
+}
+
+fn local_runtime_state_payload(
+    local_runtime_state_result: &Result<PathBuf, CliError>,
+) -> serde_json::Value {
+    match local_runtime_state_result {
+        Ok(path) => json!({
+            "ok": true,
+            "path": path,
+        }),
+        Err(error) => json!({
+            "ok": false,
+            "error": error.to_string(),
+        }),
+    }
 }
 
 fn runtime_manifest_payload(
@@ -576,7 +674,7 @@ mod tests {
     use super::{
         LocalNodeBlockDriverMode, LocalNodeOptions, LocalNodePidFile, default_tracing_filter,
         global_local_node_pid_file, hogd_dev_startup_payload, local_node_config,
-        map_node_supervisor_error,
+        local_runtime_state_payload, map_node_supervisor_error, test_local_runtime_state_result,
     };
     use crate::CliError;
     use groundhog_node_supervisor::{
@@ -752,8 +850,13 @@ mod tests {
         )
         .expect("bug: readiness should parse");
 
-        let payload =
-            hogd_dev_startup_payload(addr, &readiness, BackendPlanes::hogd_dev_scheduler_only());
+        let local_runtime_state = Ok(test_local_runtime_state_result());
+        let payload = hogd_dev_startup_payload(
+            addr,
+            &readiness,
+            BackendPlanes::hogd_dev_scheduler_only(),
+            &local_runtime_state,
+        );
         assert_eq!(payload["rpc_url"], "http://127.0.0.1:9545");
         assert_eq!(payload["chain"], "groundhog-local");
         assert_eq!(payload["backend"]["kind"], "hogd_dev");
@@ -782,7 +885,22 @@ mod tests {
             "127.0.0.1:12349"
         );
         assert!(payload["runtime_manifest"].is_null());
+        assert_eq!(payload["local_runtime_state"]["ok"], true);
+        assert_eq!(
+            payload["local_runtime_state"]["path"],
+            "/tmp/groundhog-config.toml"
+        );
         assert!(payload.get("accounts").is_none());
+    }
+
+    #[test]
+    fn local_runtime_state_payload_reports_write_failure() {
+        let payload =
+            local_runtime_state_payload(&Err(CliError::Other("config is read-only".into())));
+
+        assert_eq!(payload["ok"], false);
+        assert_eq!(payload["error"], "config is read-only");
+        assert!(payload.get("path").is_none());
     }
 
     #[test]
@@ -846,10 +964,12 @@ mod tests {
         });
         let readiness = parse_readiness_line("hogd-dev", &pointer.to_string())
             .expect("bug: readiness pointer should parse");
+        let local_runtime_state = Ok(test_local_runtime_state_result());
         let payload = hogd_dev_startup_payload(
             "127.0.0.1:9545".parse().expect("bug: valid socket addr"),
             &readiness,
             BackendPlanes::hogd_dev_scheduler_only(),
+            &local_runtime_state,
         );
 
         assert_eq!(payload["runtime_manifest"]["schemaVersion"], 1);
@@ -869,8 +989,13 @@ mod tests {
         )
         .expect("bug: v1 readiness should parse");
 
-        let payload =
-            hogd_dev_startup_payload(addr, &readiness, BackendPlanes::hogd_dev_scheduler_only());
+        let local_runtime_state = Ok(test_local_runtime_state_result());
+        let payload = hogd_dev_startup_payload(
+            addr,
+            &readiness,
+            BackendPlanes::hogd_dev_scheduler_only(),
+            &local_runtime_state,
+        );
         assert_eq!(
             payload["backend"]["endpoints"]["scheduler_coord"],
             "127.0.0.1:12345"
@@ -898,10 +1023,12 @@ mod tests {
         )
         .expect("bug: readiness should parse");
 
+        let local_runtime_state = Ok(test_local_runtime_state_result());
         let payload = hogd_dev_startup_payload(
             addr,
             &readiness,
             BackendPlanes::hogd_dev_full(PlaneStatus::Stub),
+            &local_runtime_state,
         );
         let expected_planes = serde_json::to_value(BackendPlanes::hogd_dev_full(PlaneStatus::Stub))
             .expect("bug: planes serialize");

@@ -20,9 +20,7 @@ use crate::faucet_client::{client as faucet_client, post_json};
 use crate::hog;
 use crate::profile_backend::{ProfileBackend, resolve_profile_backend};
 use crate::result::CommandResult;
-use crate::runtime_manifest::{
-    apply_local_node_state_for_local_bootstrap, load_configured_runtime_manifest,
-};
+use crate::runtime_manifest::load_configured_runtime_manifest;
 use crate::tx_utils::{
     ensure_tx_success, format_tx_hash, nonce_from_timestamp, resolve_block_expiry_height,
     submit_and_poll_blocking,
@@ -76,7 +74,7 @@ pub fn run(
     recipient: &str,
     amount: Option<&str>,
     dry_run: bool,
-    profile: &str,
+    profile: Option<&str>,
     overrides: &ProfileOverrides,
     cmd: &'static str,
     print: &Print,
@@ -176,10 +174,10 @@ pub(crate) fn prepare_airdrop(
     cwd: &Path,
     recipient: &str,
     amount: Option<&str>,
-    profile_name: &str,
+    profile_name: Option<&str>,
     overrides: &ProfileOverrides,
 ) -> Result<PreparedAirdrop, CliError> {
-    let profile = resolve_profile_with_overrides(cwd, Some(profile_name), overrides)?;
+    let profile = resolve_profile_with_overrides(cwd, profile_name, overrides)?;
     match resolve_profile_backend(&profile)? {
         ProfileBackend::RemoteFaucet => {
             if amount.is_some() {
@@ -190,35 +188,33 @@ pub(crate) fn prepare_airdrop(
             prepare_remote_airdrop(&profile, recipient)
         }
         ProfileBackend::LocalManifest | ProfileBackend::RpcOnly => {
-            prepare_local_airdrop(cwd, profile, recipient, amount)
+            prepare_local_airdrop(&profile, recipient, amount)
         }
     }
 }
 
 fn prepare_local_airdrop(
-    _cwd: &Path,
-    mut profile: ResolvedProfile,
+    profile: &ResolvedProfile,
     recipient: &str,
     amount: Option<&str>,
 ) -> Result<PreparedAirdrop, CliError> {
-    apply_local_node_state_for_local_bootstrap(&mut profile)?;
     let rpc_url = profile
         .rpc_url
         .as_deref()
         .ok_or(CliError::MissingRpcUrl)?
         .to_owned();
-    let manifest = load_configured_runtime_manifest(&profile, "faucet")?
+    let manifest = load_configured_runtime_manifest(profile, "faucet")?
         .ok_or_else(|| CliError::Other("airdrop requires a local runtime manifest".into()))?;
     let wallet_entrypoint = manifest
         .bootstrap
         .dev_wallet
         .do_action_entrypoint_id()
         .map_err(|error| CliError::Other(error.to_string()))?;
-    let recipient_wallet = resolve_airdrop_recipient(&profile, recipient)?;
+    let recipient_wallet = resolve_airdrop_recipient(profile, recipient)?;
     let recipient_address = parse_contract_address(&recipient_wallet)?;
     let raw_amount = parse_hog_amount(amount.unwrap_or(DEFAULT_AIRDROP_HOG))?;
     let amount_hog = format_hog_amount(raw_amount);
-    let faucet = resolve_local_bootstrap_account(&profile, LocalBootstrapRole::Faucet)?;
+    let faucet = resolve_local_bootstrap_account(profile, LocalBootstrapRole::Faucet)?;
 
     let hog_address = parse_contract_address(hog::TOKEN_ADDRESS)?;
     let transfer_entrypoint = ContractEntrypointID::from(hog::TRANSFER_ENTRYPOINT);
@@ -443,7 +439,7 @@ mod tests {
         DEFAULT_AIRDROP_HOG, PreparedAirdrop, format_hog_amount, parse_hog_amount,
         prepare_remote_airdrop, resolve_airdrop_recipient,
     };
-    use crate::config::ResolvedProfile;
+    use crate::config::{ResolvedProfile, SavedWalletBinding};
     use crate::hog;
 
     #[test]
@@ -481,7 +477,13 @@ mod tests {
     #[test]
     fn resolves_saved_or_direct_recipient() {
         let mut wallets = BTreeMap::new();
-        wallets.insert("alice".into(), format!("0x{}", "ab".repeat(32)));
+        wallets.insert(
+            "alice".into(),
+            SavedWalletBinding {
+                address: format!("0x{}", "ab".repeat(32)),
+                owner_public_key: format!("0x{}", "ef".repeat(32)),
+            },
+        );
         let profile = test_profile(wallets);
 
         assert_eq!(
@@ -508,7 +510,13 @@ mod tests {
     #[test]
     fn prepares_remote_airdrop_from_profile_faucet() {
         let mut wallets = BTreeMap::new();
-        wallets.insert("alice".into(), format!("0x{}", "ab".repeat(32)));
+        wallets.insert(
+            "alice".into(),
+            SavedWalletBinding {
+                address: format!("0x{}", "ab".repeat(32)),
+                owner_public_key: format!("0x{}", "ef".repeat(32)),
+            },
+        );
         let mut profile = test_profile(wallets);
         profile.faucet_url = Some("http://127.0.0.1:8081/".into());
 
@@ -534,15 +542,17 @@ mod tests {
         assert_eq!(entrypoint.as_ref(), hog::TRANSFER_ENTRYPOINT);
     }
 
-    fn test_profile(wallets: BTreeMap<String, String>) -> ResolvedProfile {
+    fn test_profile(wallets: BTreeMap<String, SavedWalletBinding>) -> ResolvedProfile {
         ResolvedProfile {
             name: "default".into(),
+            network: None,
             rpc_url: Some("http://127.0.0.1:9545".into()),
             rpc_url_cli_override: false,
             faucet_url: None,
             default_key: Some("dev-0".into()),
             runtime_manifest: None,
             runtime_manifest_cli_override: false,
+            runtime_artifacts_dir: None,
             contracts: BTreeMap::default(),
             wallets,
             source: None,

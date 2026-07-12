@@ -8,6 +8,15 @@ fn quiet() -> Print {
     Print::quiet()
 }
 
+fn write_groundhog_registry_config(cargo_home: &std::path::Path) {
+    fs::create_dir_all(cargo_home).unwrap();
+    fs::write(
+        cargo_home.join("config.toml"),
+        "[registries.groundhog]\nindex = \"sparse+https://groundhog.dev/crates/api/v1/crates/\"\n",
+    )
+    .unwrap();
+}
+
 #[test]
 #[serial]
 fn status_succeeds_when_fully_configured() {
@@ -19,7 +28,7 @@ fn status_succeeds_when_fully_configured() {
         env::set_var("XDG_CONFIG_HOME", tmp.path());
     }
 
-    groundhog_cli::auth::ensure_cargo_registry(&cargo_home.join("config.toml")).unwrap();
+    write_groundhog_registry_config(&cargo_home);
 
     groundhog_cli::keys::generate(&Some("alice".into()), false, "keys.generate", &quiet()).unwrap();
 
@@ -76,7 +85,7 @@ fn collect_report_prefers_profile_default_key_over_global_default() {
         env::set_var("XDG_CONFIG_HOME", tmp.path());
     }
 
-    groundhog_cli::auth::ensure_cargo_registry(&cargo_home.join("config.toml")).unwrap();
+    write_groundhog_registry_config(&cargo_home);
 
     groundhog_cli::keys::generate(&Some("alice".into()), false, "keys.generate", &quiet()).unwrap();
     groundhog_cli::keys::generate(&Some("bob".into()), false, "keys.generate", &quiet()).unwrap();
@@ -104,7 +113,7 @@ fn collect_report_warns_when_global_default_key_is_missing_on_disk() {
         env::set_var("XDG_CONFIG_HOME", tmp.path());
     }
 
-    groundhog_cli::auth::ensure_cargo_registry(&cargo_home.join("config.toml")).unwrap();
+    write_groundhog_registry_config(&cargo_home);
 
     groundhog_cli::keys::generate(&Some("alice".into()), false, "keys.generate", &quiet()).unwrap();
 
@@ -121,6 +130,120 @@ fn collect_report_warns_when_global_default_key_is_missing_on_disk() {
             .all_findings()
             .any(|finding| finding.code == "default_key_not_on_disk")
     );
+
+    unsafe {
+        env::remove_var("CARGO_HOME");
+        env::remove_var("XDG_CONFIG_HOME");
+    }
+}
+
+#[test]
+#[serial]
+fn collect_report_uses_effective_merged_project_profile_details() {
+    let tmp = TempDir::new().unwrap();
+    let cargo_home = tmp.path().join("cargo-home");
+    let project = tmp.path().join("proj");
+    let global_hog = format!("0x{}", "11".repeat(32));
+    let project_counter = format!("0x{}", "22".repeat(32));
+
+    fs::create_dir(&project).unwrap();
+    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    fs::write(
+        tmp.path().join("groundhog/config.toml"),
+        format!(
+            r#"
+default_profile = "local"
+default_key = "alice"
+
+[profile.local]
+rpc_url = "http://global.example"
+
+[profile.local.contracts]
+HOG = "{global_hog}"
+"#
+        ),
+    )
+    .unwrap();
+    fs::write(
+        project.join("groundhog.toml"),
+        format!(
+            r#"
+[profile.local]
+rpc_url = "http://project.example"
+
+[profile.local.contracts]
+counter = "{project_counter}"
+"#
+        ),
+    )
+    .unwrap();
+
+    unsafe {
+        env::set_var("CARGO_HOME", &cargo_home);
+        env::set_var("XDG_CONFIG_HOME", tmp.path());
+    }
+
+    write_groundhog_registry_config(&cargo_home);
+    groundhog_cli::keys::generate(&Some("alice".into()), false, "keys.generate", &quiet()).unwrap();
+    let creds = groundhog_cli::config::ExecutorCredentials {
+        username: "test".into(),
+        password: "pass".into(),
+    };
+    groundhog_cli::config::save_executor_credentials(&creds).unwrap();
+
+    let report = groundhog_cli::checks::collect_report(&project, None).unwrap();
+    assert_eq!(report.project.profile_name.as_deref(), Some("local"));
+    assert_eq!(
+        report.project.rpc_url.as_deref(),
+        Some("http://project.example")
+    );
+    assert_eq!(report.project.contract_count, 2);
+    assert_eq!(report.effective_default_key.as_deref(), Some("alice"));
+    assert_eq!(report.effective_default_key_source, Some("global"));
+    assert!(report.effective_default_key_summary().is_some());
+
+    unsafe {
+        env::remove_var("CARGO_HOME");
+        env::remove_var("XDG_CONFIG_HOME");
+    }
+}
+
+#[test]
+#[serial]
+fn collect_report_shows_global_profile_details_outside_project() {
+    let tmp = TempDir::new().unwrap();
+    let global_hog = format!("0x{}", "11".repeat(32));
+
+    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    fs::write(
+        tmp.path().join("groundhog/config.toml"),
+        format!(
+            r#"
+default_profile = "local"
+
+[profile.local]
+rpc_url = "http://127.0.0.1:9545"
+
+[profile.local.contracts]
+HOG = "{global_hog}"
+"#
+        ),
+    )
+    .unwrap();
+
+    unsafe {
+        env::set_var("CARGO_HOME", tmp.path().join("cargo-home"));
+        env::set_var("XDG_CONFIG_HOME", tmp.path());
+    }
+
+    let report = groundhog_cli::checks::collect_report(tmp.path(), None).unwrap();
+    assert!(report.project.config_path.is_none());
+    assert_eq!(report.project.profile_name.as_deref(), Some("local"));
+    assert_eq!(
+        report.project.rpc_url.as_deref(),
+        Some("http://127.0.0.1:9545")
+    );
+    assert_eq!(report.project.contract_count, 1);
 
     unsafe {
         env::remove_var("CARGO_HOME");

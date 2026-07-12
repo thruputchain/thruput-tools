@@ -54,6 +54,7 @@ pub fn generate(
         return Err(CliError::KeyExists(name.to_string()));
     }
 
+    let task = print.start_task(format_args!("Generating key `{name}`"));
     let mut secret = [0u8; 32];
     getrandom(&mut secret).map_err(|e| CliError::Other(e.to_string()))?;
     let signing_key = LocalSigner::from_secret_key(secret);
@@ -69,16 +70,13 @@ pub fn generate(
     };
     info.is_default = became_default;
 
+    task.success(format_args!("Generated key `{name}`"));
+    print.detail("address", &info.address);
     if fund {
-        print.status("Faucet funding is not implemented yet; generated key only.");
+        print.note("Faucet funding is not implemented yet; generated key only");
     }
-
-    print.status(format_args!(
-        "Generated key `{name}` with address {}",
-        info.address
-    ));
     if became_default {
-        print.status(format_args!("Default key is now `{name}`."));
+        print.note(format_args!("Default key is now `{name}`"));
     }
     print.json(&CommandResult::new(
         cmd,
@@ -132,7 +130,7 @@ pub fn use_key(name: &str, cmd: &'static str, print: &Print) -> Result<(), CliEr
         ..info
     };
 
-    print.status(format_args!("Default key set to `{name}`."));
+    print.success(format_args!("Default key set to `{name}`"));
     print.json(&CommandResult::new(cmd, json!({ "key": info })))?;
     Ok(())
 }
@@ -155,7 +153,7 @@ pub fn remove(name: &str, cmd: &'static str, print: &Print) -> Result<(), CliErr
             .read_line(&mut answer)
             .map_err(CliError::Io)?;
         if !answer.trim().eq_ignore_ascii_case("y") {
-            print.status("Cancelled.");
+            print.note("Cancelled");
             return Ok(());
         }
     }
@@ -167,9 +165,9 @@ pub fn remove(name: &str, cmd: &'static str, print: &Print) -> Result<(), CliErr
         crate::config::clear_default_key()?;
     }
 
-    print.status(format_args!("Removed key `{name}`."));
+    print.success(format_args!("Removed key `{name}`"));
     if cleared_default {
-        print.status("Default key selection cleared.");
+        print.note("Default key selection cleared");
     }
     print.json(&CommandResult::new(
         cmd,

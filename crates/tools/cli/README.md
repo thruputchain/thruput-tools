@@ -47,9 +47,6 @@ in generated projects).
 # Check your environment
 groundhog init
 
-# Authenticate with the Groundhog registry during early access
-groundhog login
-
 # Create a new contract project (counter template)
 groundhog new my-counter && cd my-counter
 
@@ -86,9 +83,9 @@ groundhog-bench --url http://127.0.0.1:9546 \
   --method sendRawTransaction
 ```
 
-For CLI commands that sign or simulate as `dev-N`, set
-`GROUNDHOG_RUNTIME_MANIFEST` or `profile.<name>.runtime_manifest` to use that
-same manifest for wallet-address discovery.
+For CLI commands that sign or simulate as `dev-N`, use a profile with
+`network = "local"` while `groundhog node` is running, or set
+`GROUNDHOG_RUNTIME_MANIFEST` explicitly for scripts outside the project tree.
 
 ## Using cargo directly
 
@@ -126,8 +123,8 @@ groundhog init --json   # delegates to `groundhog status --json`
 ### `groundhog status`
 
 Non-interactive diagnostic. Reports environment, keys,
-credentials, and project config. Exits 0 when clean, 1 when
-findings exist.
+credentials, and project config. Exits 0 when there are no
+warning-level findings, 1 when warnings exist.
 
 ```bash
 groundhog status              # human-readable report
@@ -174,10 +171,10 @@ sidecars are still produced by the WASM custom-section finalization path.
 
 ### `groundhog test`
 
-Run contract tests against the test executor. Requires
-`groundhog login` first to fetch the pre-compiled executor
-library. Injects download credentials as environment variables
-and targets the host platform so tests run natively.
+Run contract tests against the test executor. During early access, follow the
+invite instructions to authenticate Cargo with the private Groundhog registry
+before building generated projects. Injects download credentials as environment
+variables and targets the host platform so tests run natively.
 
 ```bash
 groundhog test                              # run all tests
@@ -380,10 +377,6 @@ only when you need exact filters or debug/trace-level output; if set,
 See `../../docs/cli/2026-04-25-hogd-dev-node-hybrid.md` for the
 durable backend direction.
 
-### `groundhog login`
-
-Configure registry credentials and test executor access.
-
 ### `groundhog logout`
 
 Remove stored credentials.
@@ -404,26 +397,30 @@ Scaffolded projects include a `groundhog.toml` with profile
 support:
 
 ```toml
-[profile.default]
-rpc_url = "http://localhost:9545"
-default_key = "dev-0"
+default_profile = "local"
+
+[profile.local]
+network = "local"
 # runtime_manifest = "runtime-manifest.json"
 
-[profile.default.contracts]
+[profile.local.contracts]
 # counter = "0x..."
 
-[profile.testnet]
-rpc_url = "https://testnet.groundhog.network"
+[profile.devnet]
+network = "devnet"
+rpc_url = "https://devnet.groundhog.network"
 ```
 
-Select a profile via `--profile`, `GROUNDHOG_PROFILE`, or
-the `default` profile is used automatically.
+Select a profile via `--profile`, `GROUNDHOG_PROFILE`, or `default_profile`.
+If none is configured, the fallback profile name is `default`.
 
 Contract aliases map names to addresses per profile. `deploy`, `call`, and
 `storage` resolve aliases from the active profile. When `runtime_manifest` is
 set, relative paths resolve from the directory containing `groundhog.toml`;
 `GROUNDHOG_RUNTIME_MANIFEST` overrides the profile field for ephemeral local
 node runs, and a command-line `--runtime-manifest` override wins over both.
+Profiles with `network = "local"` can also use the active local node endpoint
+and runtime artifacts written by `groundhog node` to global config.
 
 ## Global Flags
 

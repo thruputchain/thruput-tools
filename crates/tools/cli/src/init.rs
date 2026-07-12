@@ -6,9 +6,19 @@
 //! exits. `init --json` delegates to `status --json`.
 
 use std::io::BufRead;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::{CliError, Print};
+
+const INIT_STEPS: usize = 5;
+const DEFAULT_LOCAL_RPC_URL: &str = "http://127.0.0.1:9545";
+
+const RESET: &str = "\x1b[0m";
+const BOLD: &str = "\x1b[1m";
+const DIM: &str = "\x1b[2m";
+const CYAN: &str = "\x1b[36m";
+const GREEN: &str = "\x1b[32m";
+const YELLOW: &str = "\x1b[33m";
 
 /// Run the interactive first-run wizard.
 pub fn run(project_start: &Path, cmd: &'static str, print: &Print) -> Result<(), CliError> {
@@ -21,12 +31,12 @@ pub fn run(project_start: &Path, cmd: &'static str, print: &Print) -> Result<(),
     let usable_default_key = usable_default_key_for_init(&report);
     let has_credentials = report.credentials.executor_credentials;
 
-    if report.environment.cargo
-        && report.environment.registry_configured
-        && usable_default_key.is_some()
-        && has_credentials
-    {
-        report_ready(&report, usable_default_key, print);
+    crate::config::initialize_global_profiles()?;
+    let mut ui = InitUi::new(print);
+    ui.render_intro();
+
+    if report.environment.cargo && usable_default_key.is_some() && has_credentials {
+        report_ready(project_start, &report, usable_default_key, &mut ui)?;
         return Ok(());
     }
 
@@ -34,71 +44,88 @@ pub fn run(project_start: &Path, cmd: &'static str, print: &Print) -> Result<(),
         return Err(CliError::CargoNotFound);
     }
 
-    handle_environment_step(&report, print)?;
-    handle_key_step(&report, usable_default_key, print)?;
-    handle_credentials_step(&report, print)?;
-    handle_scaffold_step(has_project, project_start, &report, print)?;
+    ui.begin_step(InitStep::Environment);
+    handle_environment_step(&report, &mut ui);
+    ui.finish_step(InitStep::Environment, StepState::Done);
 
-    print.status("Setup complete.");
+    ui.begin_step(InitStep::Profiles);
+    handle_profile_step(project_start, &mut ui)?;
+    ui.finish_step(InitStep::Profiles, StepState::Done);
+
+    ui.begin_step(InitStep::SigningKey);
+    handle_key_step(&report, usable_default_key, &mut ui)?;
+
+    ui.begin_step(InitStep::ExecutorCredentials);
+    handle_credentials_step(&report, &mut ui)?;
+
+    ui.begin_step(InitStep::Project);
+    let project_context = handle_scaffold_step(has_project, project_start, &report, &mut ui)?;
+
+    let final_report = crate::checks::collect_report(project_start, None)?;
+    let final_default_key = usable_default_key_for_init(&final_report);
+    print_init_summary(
+        project_start,
+        final_default_key,
+        project_context.as_ref(),
+        &ui,
+    )?;
     Ok(())
 }
 
 fn report_ready(
+    project_start: &Path,
     report: &crate::checks::StatusReport,
     usable_default_key: Option<&crate::checks::KeySummary>,
-    print: &Print,
-) {
-    print.status("Groundhog is ready to go.");
-    if let Some(key) = usable_default_key {
-        print.status(format_args!(
-            "Default key: `{}` ({})",
-            key.name, key.address,
-        ));
-    }
+    ui: &mut InitUi<'_>,
+) -> Result<(), CliError> {
+    ui.completion_review(
+        "Groundhog Ready",
+        &summary_items(project_start, usable_default_key, None)?,
+        NextSteps::Status,
+    );
+
     if !report.environment.wasm_opt {
-        print.status(
-            "wasm-opt not installed (optional, needed \
-             for `build --optimize`).",
-        );
+        ui.note("wasm-opt not installed, optional for `build --optimize`");
     }
     if matches!(
         report.environment.wasm_target,
         crate::checks::WasmTargetStatus::Missing
     ) {
-        print.status(
-            "WASM target will be installed automatically \
-             on first build.",
-        );
+        ui.note("WASM target will install automatically on first build");
     }
-    print.status("Run `groundhog status` for full details.");
+    Ok(())
 }
 
-fn handle_environment_step(
-    report: &crate::checks::StatusReport,
-    print: &Print,
-) -> Result<(), CliError> {
-    if report.environment.registry_configured {
-        print.status("Cargo registry already configured.");
-    } else {
-        crate::auth::ensure_cargo_registry(&report.environment.cargo_config_path)?;
-        print.status("Configured cargo registry.");
-    }
+fn handle_environment_step(report: &crate::checks::StatusReport, ui: &mut InitUi<'_>) {
+    ui.success("Cargo available");
 
     match report.environment.wasm_target {
         crate::checks::WasmTargetStatus::Installed => {
-            print.status("WASM target installed.");
+            ui.success("WASM target installed");
         }
         crate::checks::WasmTargetStatus::Missing => {
-            print.status("WASM target will be installed automatically on first build.");
+            ui.note("WASM target will install automatically on first build");
         }
         crate::checks::WasmTargetStatus::Unknown => {
-            print.status("Could not verify the WASM target (rustup unavailable).");
+            ui.note("Could not verify the WASM target (rustup unavailable)");
         }
     }
 
     if !report.environment.wasm_opt {
-        print.status("wasm-opt not installed (optional, needed for `build --optimize`).");
+        ui.note("wasm-opt not installed, optional for `build --optimize`");
     }
+}
+
+fn handle_profile_step(project_start: &Path, ui: &mut InitUi<'_>) -> Result<(), CliError> {
+    let global_config_path = crate::config::config_dir()?.join("config.toml");
+    ui.success(format_args!("Config: {}", global_config_path.display()));
+
+    let profile_name = crate::config::active_profile_name(project_start, None)?;
+    ui.success(format_args!("Default profile: {profile_name}"));
+
+    let local_rpc = local_rpc_url(project_start).unwrap_or_else(|| DEFAULT_LOCAL_RPC_URL.into());
+    ui.success(format_args!("Local RPC: {local_rpc}"));
+    ui.success("HOG alias configured");
 
     Ok(())
 }
@@ -106,22 +133,29 @@ fn handle_environment_step(
 fn handle_key_step(
     report: &crate::checks::StatusReport,
     usable_default_key: Option<&crate::checks::KeySummary>,
-    print: &Print,
+    ui: &mut InitUi<'_>,
 ) -> Result<(), CliError> {
     if report.keys.keys.is_empty() {
-        if confirm(print, "No signing key found. Generate one now?", true)? {
-            crate::keys::generate(&None, false, "keys.generate", print)?;
+        ui.note("No signing key found");
+        if confirm(ui.print, "Generate a local signing key now?", true)? {
+            crate::keys::generate(&None, false, "keys.generate", ui.print)?;
+            ui.success("Generated local signing key");
+            ui.finish_step(InitStep::SigningKey, StepState::Done);
+        } else {
+            ui.finish_step(InitStep::SigningKey, StepState::Skipped);
         }
     } else if let Some(key) = usable_default_key {
-        print.status(format_args!(
+        ui.success(format_args!(
             "Default key: `{}` ({})",
-            key.name, key.address,
+            key.name, key.address
         ));
+        ui.finish_step(InitStep::SigningKey, StepState::Done);
     } else {
-        print.status(
+        ui.note(
             "You have keys but no usable default is selected. Set one \
              with `groundhog keys use <name>`.",
         );
+        ui.finish_step(InitStep::SigningKey, StepState::Skipped);
     }
 
     Ok(())
@@ -144,16 +178,19 @@ fn usable_default_key_for_init(
 
 fn handle_credentials_step(
     report: &crate::checks::StatusReport,
-    print: &Print,
+    ui: &mut InitUi<'_>,
 ) -> Result<(), CliError> {
     if report.credentials.executor_credentials {
-        print.status("Executor credentials stored.");
-    } else if confirm(
-        print,
-        "No test executor credentials found. Run login now?",
-        true,
-    )? {
-        crate::auth::login("login", print)?;
+        ui.success("Executor credentials stored");
+        ui.finish_step(InitStep::ExecutorCredentials, StepState::Done);
+    } else {
+        ui.note("Executor credentials are not configured");
+        if !ui.print.is_quiet() && confirm(ui.print, "Configure executor credentials now?", true)? {
+            crate::auth::executor_login_from_init(ui.print)?;
+            ui.finish_step(InitStep::ExecutorCredentials, StepState::Done);
+        } else {
+            ui.finish_step(InitStep::ExecutorCredentials, StepState::Skipped);
+        }
     }
 
     Ok(())
@@ -163,35 +200,371 @@ fn handle_scaffold_step(
     has_project: bool,
     project_start: &Path,
     report: &crate::checks::StatusReport,
-    print: &Print,
-) -> Result<(), CliError> {
+    ui: &mut InitUi<'_>,
+) -> Result<Option<ProjectContext>, CliError> {
     if has_project {
         if let Some(path) = report.project.config_path.as_ref() {
-            print.status(format_args!("Found project at {}", path.display()));
+            ui.success(format_args!("Found project at {}", path.display()));
         }
-        return Ok(());
+        ui.finish_step(InitStep::Project, StepState::Done);
+        return Ok(report
+            .project
+            .config_path
+            .as_deref()
+            .and_then(existing_project_context));
     }
 
-    if confirm(
-        print,
-        "Create a starter project? You can always do this later \
-         with `groundhog new`.",
-        false,
-    )? {
-        print.prompt("Project name: ")?;
+    let created_project = if confirm(ui.print, "Create a starter project?", false)? {
+        ui.print.prompt("Project name: ")?;
         let mut name = String::new();
         std::io::stdin()
             .lock()
             .read_line(&mut name)
             .map_err(CliError::Io)?;
         let name = name.trim();
-        if !name.is_empty() {
+        if name.is_empty() {
+            ui.note("Skipping starter project");
+            ui.finish_step(InitStep::Project, StepState::Skipped);
+            None
+        } else {
             let dir = project_start.join(name);
-            crate::new::run_in(&dir, name, "counter", "new", print)?;
+            crate::new::run_in(&dir, name, "counter", "new", ui.print)?;
+            ui.finish_step(InitStep::Project, StepState::Done);
+            Some(ProjectContext {
+                name: name.to_string(),
+                path: dir,
+                needs_cd: true,
+            })
+        }
+    } else {
+        ui.note("Skipping starter project");
+        ui.finish_step(InitStep::Project, StepState::Skipped);
+        None
+    };
+
+    Ok(created_project)
+}
+
+struct ProjectContext {
+    name: String,
+    path: PathBuf,
+    needs_cd: bool,
+}
+
+#[derive(Clone, Copy)]
+enum NextSteps<'a> {
+    Status,
+    NewProject,
+    BuildProject(&'a ProjectContext),
+}
+
+#[derive(Clone, Copy)]
+enum InitStep {
+    Environment,
+    Profiles,
+    SigningKey,
+    ExecutorCredentials,
+    Project,
+}
+
+impl InitStep {
+    const ALL: [Self; INIT_STEPS] = [
+        Self::Environment,
+        Self::Profiles,
+        Self::SigningKey,
+        Self::ExecutorCredentials,
+        Self::Project,
+    ];
+
+    const fn index(self) -> usize {
+        match self {
+            Self::Environment => 0,
+            Self::Profiles => 1,
+            Self::SigningKey => 2,
+            Self::ExecutorCredentials => 3,
+            Self::Project => 4,
         }
     }
 
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Environment => "Environment",
+            Self::Profiles => "Profiles",
+            Self::SigningKey => "Signing key",
+            Self::ExecutorCredentials => "Executor credentials",
+            Self::Project => "Project",
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StepState {
+    Pending,
+    Current,
+    Done,
+    Skipped,
+}
+
+impl StepState {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Current => "current",
+            Self::Done => "done",
+            Self::Skipped => "skipped",
+        }
+    }
+}
+
+struct InitUi<'a> {
+    print: &'a Print,
+    tty: bool,
+    steps: [StepState; INIT_STEPS],
+}
+
+impl<'a> InitUi<'a> {
+    fn new(print: &'a Print) -> Self {
+        Self {
+            print,
+            tty: print.is_human_tty(),
+            steps: [StepState::Pending; INIT_STEPS],
+        }
+    }
+
+    fn render_intro(&mut self) {
+        if self.print.is_quiet() {
+            return;
+        }
+
+        if self.tty {
+            self.clear_screen();
+            Self::render_tty_header(
+                "Groundhog Setup",
+                "Set up your local development environment.",
+            );
+            self.render_tty_progress();
+            eprintln!();
+        } else {
+            self.print.status("Groundhog Setup");
+            self.print
+                .status("Set up your local development environment.");
+            self.print.status("");
+        }
+    }
+
+    fn begin_step(&mut self, step: InitStep) {
+        self.steps[step.index()] = StepState::Current;
+
+        if self.print.is_quiet() {
+            return;
+        }
+
+        if self.tty {
+            self.clear_screen();
+            Self::render_tty_header(
+                "Groundhog Setup",
+                "Set up your local development environment.",
+            );
+            self.render_tty_progress();
+            eprintln!();
+        } else {
+            self.print.status(format_args!(
+                "[{}/{}] {}",
+                step.index() + 1,
+                INIT_STEPS,
+                step.label()
+            ));
+        }
+    }
+
+    fn finish_step(&mut self, step: InitStep, state: StepState) {
+        self.steps[step.index()] = state;
+    }
+
+    fn success(&self, msg: impl std::fmt::Display) {
+        if self.tty {
+            eprintln!("{GREEN}✓{RESET} {msg}");
+        } else {
+            self.print.status(format_args!("[ok] {msg}"));
+        }
+    }
+
+    fn note(&self, msg: impl std::fmt::Display) {
+        if self.tty {
+            eprintln!("{YELLOW}•{RESET} {msg}");
+        } else {
+            self.print.status(format_args!("- {msg}"));
+        }
+    }
+
+    fn completion_review(
+        &self,
+        title: &str,
+        items: &[(String, String)],
+        next_steps: NextSteps<'_>,
+    ) {
+        if self.print.is_quiet() {
+            return;
+        }
+
+        if self.tty {
+            self.clear_screen();
+            Self::render_tty_completion(title, items);
+        } else {
+            self.print.status("");
+            self.print.status(title);
+            self.print.status("");
+            for (label, value) in items {
+                self.print.status(format_args!("{label}: {value}"));
+            }
+        }
+
+        self.print.status("");
+        self.print.status("Next:");
+        match next_steps {
+            NextSteps::Status => self.print.status("  groundhog status"),
+            NextSteps::NewProject => {
+                self.print.status("  groundhog new my-contract");
+                self.print.status("  cd my-contract");
+                self.print.status("  groundhog build");
+            }
+            NextSteps::BuildProject(project) => {
+                if project.needs_cd {
+                    self.print.status(format_args!("  cd {}", project.name));
+                }
+                self.print.status("  groundhog build");
+            }
+        }
+    }
+
+    fn clear_screen(&self) {
+        if self.tty {
+            eprint!("\x1b[2J\x1b[H");
+        }
+    }
+
+    fn render_tty_header(title: &str, subtitle: &str) {
+        let inner_width: usize = 56;
+        let top_fill = inner_width.saturating_sub(title.chars().count() + 2);
+        let fill = Self::line_fill('─', top_fill);
+        eprintln!("{CYAN}╭─ {BOLD}{title}{RESET}{CYAN}{fill}╮{RESET}");
+        eprintln!("{CYAN}│{RESET} {subtitle:<54} {CYAN}│{RESET}");
+        eprintln!("{CYAN}╰{}╯{RESET}", Self::line_fill('─', inner_width));
+        eprintln!();
+    }
+
+    fn render_tty_progress(&self) {
+        eprintln!("{BOLD}Progress{RESET}");
+        for step in InitStep::ALL {
+            let state = self.steps[step.index()];
+            let marker = match state {
+                StepState::Pending => format!("{DIM}○{RESET}"),
+                StepState::Current => format!("{CYAN}●{RESET}"),
+                StepState::Done => format!("{GREEN}✓{RESET}"),
+                StepState::Skipped => format!("{YELLOW}–{RESET}"),
+            };
+            let raw_label = step.label();
+            let label = match state {
+                StepState::Pending => format!("{DIM}{raw_label}{RESET}"),
+                StepState::Current => format!("{CYAN}{raw_label}{RESET}"),
+                StepState::Done => format!("{GREEN}{raw_label}{RESET}"),
+                StepState::Skipped => format!("{YELLOW}{raw_label}{RESET}"),
+            };
+            let padding = Self::line_fill(' ', 16usize.saturating_sub(raw_label.chars().count()));
+            let state_label = state.label();
+            eprintln!("  {marker} {label}{padding} {DIM}{state_label}{RESET}");
+        }
+    }
+
+    fn render_tty_completion(title: &str, items: &[(String, String)]) {
+        let value_width = items
+            .iter()
+            .map(|(_, value)| value.chars().count())
+            .max()
+            .unwrap_or(0)
+            .max(18);
+        let inner_width = 1 + 10 + 1 + value_width + 1;
+        let top_fill = inner_width.saturating_sub(title.chars().count() + 2);
+        let fill = Self::line_fill('─', top_fill);
+        eprintln!("{GREEN}╭─ {BOLD}{title}{RESET}{GREEN}{fill}╮{RESET}");
+        for (label, value) in items {
+            let value_padding =
+                Self::line_fill(' ', value_width.saturating_sub(value.chars().count()));
+            eprintln!("{GREEN}│{RESET} {label:<10} {value}{value_padding} {GREEN}│{RESET}");
+        }
+        eprintln!("{GREEN}╰{}╯{RESET}", Self::line_fill('─', inner_width));
+    }
+
+    fn line_fill(ch: char, len: usize) -> String {
+        std::iter::repeat_n(ch, len).collect()
+    }
+}
+
+fn print_init_summary(
+    project_start: &Path,
+    usable_default_key: Option<&crate::checks::KeySummary>,
+    project_context: Option<&ProjectContext>,
+    ui: &InitUi<'_>,
+) -> Result<(), CliError> {
+    let next_steps = if let Some(project) = project_context {
+        NextSteps::BuildProject(project)
+    } else {
+        NextSteps::NewProject
+    };
+    ui.completion_review(
+        "Setup Complete",
+        &summary_items(project_start, usable_default_key, project_context)?,
+        next_steps,
+    );
     Ok(())
+}
+
+fn summary_items(
+    project_start: &Path,
+    usable_default_key: Option<&crate::checks::KeySummary>,
+    project_context: Option<&ProjectContext>,
+) -> Result<Vec<(String, String)>, CliError> {
+    let profile_name = crate::config::active_profile_name(project_start, None)?;
+    let mut items = vec![
+        (
+            "Config".to_string(),
+            crate::config::config_dir()?
+                .join("config.toml")
+                .display()
+                .to_string(),
+        ),
+        ("Profile".to_string(), profile_name),
+    ];
+
+    if let Some(key) = usable_default_key {
+        items.push(("Key".to_string(), format!("{} ({})", key.name, key.address)));
+    } else if let Some(key_name) = crate::config::load_default_key()? {
+        items.push(("Key".to_string(), key_name));
+    }
+
+    let local_rpc = local_rpc_url(project_start).unwrap_or_else(|| DEFAULT_LOCAL_RPC_URL.into());
+    items.push(("Local RPC".to_string(), local_rpc));
+    if let Some(project) = project_context {
+        items.push(("Project".to_string(), project.path.display().to_string()));
+    }
+
+    Ok(items)
+}
+
+fn existing_project_context(config_path: &Path) -> Option<ProjectContext> {
+    let path = config_path.parent()?.to_path_buf();
+    let name = path.file_name()?.to_string_lossy().into_owned();
+    Some(ProjectContext {
+        name,
+        path,
+        needs_cd: false,
+    })
+}
+
+fn local_rpc_url(project_start: &Path) -> Option<String> {
+    crate::config::resolve_profile(project_start, Some("local"))
+        .ok()
+        .and_then(|profile| profile.rpc_url)
 }
 
 fn confirm(print: &Print, message: &str, default_yes: bool) -> Result<bool, CliError> {

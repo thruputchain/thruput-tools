@@ -6,15 +6,11 @@ dev-wallet installation, account funding, and endpoint binding are complete.
 
 Use it for local benchmark runs:
 
-- `groundhog node` consumes the manifest internally and reports its path in
-  `--json` startup output. When launched from a project, it also writes
-  `.groundhog/local-node.json` with the matching RPC URL and manifest path for
-  other terminals, then removes that state on shutdown.
+- `groundhog node` consumes the manifest internally, reports its path in
+  `--json` startup output, and writes the matching RPC URL and absolute manifest
+  path into the selected profile.
 - CLI commands that use `dev-N` keys resolve manifest paths in this order:
-  `GROUNDHOG_RUNTIME_MANIFEST`, `profile.<name>.runtime_manifest`, then
-  `.groundhog/local-node.json`. The local-node fallback applies only when the
-  profile RPC URL is unset or already loopback, and in that case the state file
-  also supplies the matching RPC URL.
+  `GROUNDHOG_RUNTIME_MANIFEST`, then `profile.<name>.runtime_manifest`.
 - `hog-gateway --runtime-manifest <path>` starts the standalone gateway from
   the same backend endpoints.
 - `groundhog-bench --runtime-manifest <path>` derives the bootstrapped account
@@ -91,9 +87,9 @@ RPC_URL=$(jq -r '.data.rpc_url' /tmp/groundhog-node.json)
 RUNTIME_MANIFEST=$(jq -r '.data.runtime_manifest.path' /tmp/groundhog-node.json)
 ```
 
-When `groundhog node` is started from a project directory, normal CLI commands
-in another terminal can use the project-local state file directly while the
-node is running:
+When `groundhog node` starts, it writes the local RPC URL and runtime manifest
+path into global `local_runtime_state`. Normal CLI commands in another terminal
+can use a profile with `network = "local"` while the node is running:
 
 ```bash
 groundhog deploy
@@ -198,14 +194,6 @@ symlink/non-file manifest paths before reading a bounded JSON file and
 validating the schema. Gateway and bench direct paths perform bounded JSON
 schema validation and treat the configured path as trusted local developer
 configuration.
-
-The project-local `.groundhog/local-node.json` file is also trusted local
-developer state. It is not hash-verified readiness data; it points the CLI at
-the RPC URL and regular runtime-manifest file produced by the current local
-node workflow. `groundhog node` writes it atomically and removes it on clean
-shutdown if the file still describes the same node. It never overrides
-`GROUNDHOG_RUNTIME_MANIFEST`, `profile.<name>.runtime_manifest`, or an explicit
-non-local profile RPC URL.
 
 Optional endpoints are absent when unavailable. They are never emitted as
 `null`.

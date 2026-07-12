@@ -1837,12 +1837,14 @@ mod tests {
     ) -> super::IntegrationRun {
         let profile = crate::config::ResolvedProfile {
             name: "integration".into(),
+            network: None,
             rpc_url: Some("http://127.0.0.1:1234".into()),
             rpc_url_cli_override: false,
             faucet_url: None,
             default_key: Some("dev-0".into()),
             runtime_manifest: None,
             runtime_manifest_cli_override: false,
+            runtime_artifacts_dir: None,
             contracts: BTreeMap::new(),
             wallets: BTreeMap::new(),
             source: None,
@@ -2013,12 +2015,14 @@ mod tests {
     fn wasm_report_serializes_mode_without_integration_metadata() {
         let profile = crate::config::ResolvedProfile {
             name: "default".into(),
+            network: None,
             rpc_url: None,
             rpc_url_cli_override: false,
             faucet_url: None,
             default_key: None,
             runtime_manifest: None,
             runtime_manifest_cli_override: false,
+            runtime_artifacts_dir: None,
             contracts: BTreeMap::new(),
             wallets: BTreeMap::new(),
             source: None,
