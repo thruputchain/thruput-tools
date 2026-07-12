@@ -2606,6 +2606,8 @@ fn deploy_live_json_submits_and_returns_receipt() {
     assert_eq!(stdout["data"]["address_source"], "receipt");
     assert_eq!(stdout["data"]["height"], 42);
     assert_eq!(stdout["data"]["status"]["result"], "ok");
+    assert!(stdout["data"].get("return_data").is_none());
+    assert!(stdout["data"].get("abort_data").is_none());
     assert!(stdout["data"]["transaction_detail"].is_null());
     assert!(
         stdout["data"]["tx_hash"]
@@ -2613,6 +2615,119 @@ fn deploy_live_json_submits_and_returns_receipt() {
             .unwrap()
             .starts_with("0x")
     );
+}
+
+#[test]
+fn deploy_live_json_fails_with_receipt_context() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let (rpc_url, rpc_server) = spawn_transaction_rpc(
+        42,
+        sample_failed_deploy_receipt(42),
+        DevDetailRpcResponse::MethodNotFound,
+    );
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
+            "aa".repeat(32)
+        ),
+    )
+    .unwrap();
+
+    let generate = groundhog()
+        .args(["keys", "generate", "alice"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    assert!(generate.status.success());
+
+    let wasm_path = tmp.path().join("test.wasm");
+    std::fs::write(&wasm_path, b"\0asm\x01\0\0\0").unwrap();
+    let output = groundhog()
+        .args([
+            "--json",
+            "deploy",
+            "--artifact",
+            wasm_path.to_str().unwrap(),
+        ])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stderr.is_empty());
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["ok"], false);
+    assert_eq!(stdout["command"], "deploy");
+    assert_eq!(stdout["error"]["code"], "transaction_deterministic_error");
+    assert_eq!(stdout["data"]["height"], 42);
+    assert_eq!(stdout["data"]["status"]["result"], "deterministicError");
+    assert_eq!(stdout["data"]["return_data"], "0x0102");
+    assert_eq!(stdout["data"]["abort_data"], "0x0304");
+    assert!(
+        stdout["data"]["tx_hash"]
+            .as_str()
+            .unwrap()
+            .starts_with("0x")
+    );
+}
+
+#[test]
+fn deploy_live_human_fails_after_printing_receipt_context() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let (rpc_url, rpc_server) = spawn_transaction_rpc(
+        42,
+        sample_failed_deploy_receipt(42),
+        DevDetailRpcResponse::MethodNotFound,
+    );
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
+            "aa".repeat(32)
+        ),
+    )
+    .unwrap();
+    assert!(
+        groundhog()
+            .args(["keys", "generate", "alice"])
+            .env("XDG_CONFIG_HOME", &config_home)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+
+    let wasm_path = tmp.path().join("test.wasm");
+    std::fs::write(&wasm_path, b"\0asm\x01\0\0\0").unwrap();
+    let output = groundhog()
+        .args(["deploy", "--artifact", wasm_path.to_str().unwrap()])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("warning: Deploy failed with deterministic execution error"));
+    assert!(stderr.contains("tx: 0x"));
+    assert!(stderr.contains("height: 42"));
+    assert!(stderr.contains("return data: 0x0102"), "stderr: {stderr}");
+    assert!(stderr.contains("abort data: 0x0304"), "stderr: {stderr}");
 }
 
 #[test]
@@ -3581,14 +3696,12 @@ fn call_live_json_includes_diagnostics_for_failed_local_dev_call() {
 
     rpc_server.join().unwrap();
 
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    assert!(!output.status.success());
     assert!(output.stderr.is_empty());
 
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["ok"], false);
+    assert_eq!(stdout["error"]["code"], "transaction_deterministic_error");
     assert_eq!(stdout["data"]["status"]["result"], "deterministicError");
     assert_eq!(
         stdout["data"]["diagnostics"]["wallet"]["address"],
@@ -3658,11 +3771,7 @@ fn call_live_json_marks_legacy_default_wallet_entrypoint_without_manifest() {
 
     rpc_server.join().unwrap();
 
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    assert!(!output.status.success());
     assert!(output.stderr.is_empty());
 
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -3675,6 +3784,56 @@ fn call_live_json_marks_legacy_default_wallet_entrypoint_without_manifest() {
         stdout["data"]["diagnostics"]["wallet"]["entrypoint_source"],
         "legacy_default"
     );
+}
+
+#[test]
+fn call_live_human_fails_after_printing_receipt_context() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let (rpc_url, rpc_server) = spawn_transaction_rpc(
+        42,
+        sample_deterministic_error_call_receipt(42),
+        DevDetailRpcResponse::MethodNotFound,
+    );
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
+            "aa".repeat(32)
+        ),
+    )
+    .unwrap();
+    assert!(
+        groundhog()
+            .args(["keys", "generate", "alice"])
+            .env("XDG_CONFIG_HOME", &config_home)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+
+    let contract = format!("0x{}", "11".repeat(32));
+    let output = groundhog()
+        .args(["call", &contract, "0x0123456789abcdef", "0x0102"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("warning: Call failed with deterministic execution error"));
+    assert!(stderr.contains("contract: 0x"));
+    assert!(stderr.contains("tx: 0x"));
+    assert!(stderr.contains("height: 42"));
+    assert!(stderr.contains("wallet: 0x"));
 }
 
 #[test]
@@ -4450,6 +4609,20 @@ fn sample_deploy_receipt(height: i64) -> serde_json::Value {
         "status": { "result": "ok" },
         "events": [],
         "returnData": format!("0x{}", "bb".repeat(32)),
+    })
+}
+
+fn sample_failed_deploy_receipt(height: i64) -> serde_json::Value {
+    serde_json::json!({
+        "txHash": mock_tx_hash(),
+        "height": height,
+        "status": {
+            "result": "deterministicError",
+            "kind": "outOfGas",
+        },
+        "events": [],
+        "returnData": "0x0102",
+        "abortData": "0x0304",
     })
 }
 

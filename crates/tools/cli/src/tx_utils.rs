@@ -1,7 +1,8 @@
 use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
 use groundhog_json_rpc_types::transaction::TxHash;
 
-use crate::CliError;
+use crate::result::CommandError;
+use crate::{CliError, Print};
 
 const DEFAULT_BLOCK_EXPIRY_OFFSET: i64 = 1_000;
 
@@ -20,6 +21,34 @@ pub fn summarize_exec_status(status: &ExecStatus) -> String {
         ExecStatus::FailedGasSponsorship => "failed gas sponsorship".into(),
         ExecStatus::Other => "failed with unknown execution result".into(),
         _ => "failed with unsupported execution result".into(),
+    }
+}
+
+/// Stable machine-readable error for an unsuccessful transaction receipt.
+pub fn command_error_for_exec_status(status: &ExecStatus) -> Option<CommandError> {
+    let code = match status {
+        ExecStatus::Ok => return None,
+        ExecStatus::Reverted { .. } => "transaction_reverted",
+        ExecStatus::DeterministicError { .. } => "transaction_deterministic_error",
+        ExecStatus::NonDeterministicError => "transaction_nondeterministic_error",
+        ExecStatus::FailedGasSponsorship => "transaction_failed_gas_sponsorship",
+        ExecStatus::Other => "transaction_unknown_error",
+        _ => "transaction_unsupported_error",
+    };
+    Some(CommandError::new(
+        code,
+        format!("transaction {}", summarize_exec_status(status)),
+        serde_json::to_value(status).unwrap_or(serde_json::Value::Null),
+    ))
+}
+
+/// Print raw return or abort buffers retained on an unsuccessful receipt.
+pub fn print_failed_receipt_data(receipt: &TransactionReceipt, print: &Print) {
+    if let Some(data) = receipt.return_data.as_ref() {
+        print.status(format_args!("  return data: 0x{}", hex::encode(&data.0)));
+    }
+    if let Some(data) = receipt.abort_data.as_ref() {
+        print.status(format_args!("  abort data: 0x{}", hex::encode(&data.0)));
     }
 }
 
@@ -109,5 +138,46 @@ fn map_submit_and_poll_error(error: groundhog_json_rpc_client::SubmitAndPollErro
                 seconds: u64::try_from(attempts).unwrap_or(u64::MAX),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unsuccessful_exec_statuses_have_stable_error_codes() {
+        let statuses = [
+            (
+                ExecStatus::Reverted {
+                    message: Some("nope".into()),
+                },
+                "transaction_reverted",
+            ),
+            (
+                ExecStatus::DeterministicError {
+                    kind: "outOfGas".into(),
+                },
+                "transaction_deterministic_error",
+            ),
+            (
+                ExecStatus::NonDeterministicError,
+                "transaction_nondeterministic_error",
+            ),
+            (
+                ExecStatus::FailedGasSponsorship,
+                "transaction_failed_gas_sponsorship",
+            ),
+            (ExecStatus::Other, "transaction_unknown_error"),
+        ];
+
+        for (status, expected_code) in statuses {
+            let error = command_error_for_exec_status(&status)
+                .expect("bug: unsuccessful receipt status must produce an error");
+            let value = serde_json::to_value(error).unwrap();
+            assert_eq!(value["code"], expected_code);
+            assert_eq!(value["details"], serde_json::to_value(status).unwrap());
+        }
+        assert!(command_error_for_exec_status(&ExecStatus::Ok).is_none());
     }
 }
