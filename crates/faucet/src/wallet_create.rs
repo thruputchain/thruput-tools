@@ -366,7 +366,7 @@ impl WalletCreateService {
                 attempt.create_height = Some(*submission.receipt.height);
                 attempt.updated_at = SystemTime::now();
                 if let Err(error) = self.policy_store.put_wallet_create_attempt(attempt.clone()) {
-                    return policy_store_error_response(&error);
+                    tracing::warn!(%error, "failed to persist created wallet-create attempt");
                 }
                 response_from_attempt(StatusCode::OK, request, attempt)
             }

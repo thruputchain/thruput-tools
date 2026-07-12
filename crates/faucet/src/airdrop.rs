@@ -173,13 +173,6 @@ impl AirdropService {
         request: &AirdropRequest,
         mut attempt: AirdropAttempt,
     ) -> Response {
-        if attempt.raw_amount != self.network_descriptor.wallet_create.prefund_raw_amount {
-            return error_response(
-                StatusCode::CONFLICT,
-                "airdrop_idempotency_conflict",
-                "airdrop idempotency key was reused with conflicting request data",
-            );
-        }
         match attempt.status {
             AirdropAttemptStatus::Succeeded => {
                 response_from_attempt(StatusCode::OK, request, attempt)
@@ -254,11 +247,12 @@ impl AirdropService {
         match self.submitter.submit_airdrop(request.recipient).await {
             Ok(submission) => {
                 attempt.status = AirdropAttemptStatus::Succeeded;
+                attempt.raw_amount = submission.raw_amount;
                 attempt.tx_hash = Some(hex_string(submission.tx_hash.0.0));
                 attempt.height = Some(*submission.receipt.height);
                 attempt.updated_at = SystemTime::now();
                 if let Err(error) = self.policy_store.put_airdrop_attempt(attempt.clone()) {
-                    return policy_store_error_response(&error);
+                    tracing::warn!(%error, "failed to persist succeeded airdrop attempt");
                 }
                 response_from_attempt(StatusCode::OK, &request, attempt)
             }

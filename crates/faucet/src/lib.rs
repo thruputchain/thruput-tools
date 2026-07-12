@@ -208,7 +208,7 @@ mod tests {
     use groundhog_xdr::types::{Ed25519PublicKey, SHA256Hash};
     use std::net::SocketAddr;
     use std::sync::{Arc, Mutex};
-    use std::time::SystemTime;
+    use std::time::{Duration, SystemTime};
     use tower::ServiceExt;
 
     use super::{DEFAULT_LISTEN_ADDRESS, FaucetConfig, airdrop, app, policy, wallet_create};
@@ -407,6 +407,55 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(airdrop.calls(), 1);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .expect("bug: airdrop body should read");
+        let json: serde_json::Value =
+            serde_json::from_slice(&body).expect("bug: airdrop body should be JSON");
+        assert_eq!(json["attemptStatus"], "succeeded");
+        assert_eq!(json["txHash"], format!("0x{}", "22".repeat(32)));
+    }
+
+    #[tokio::test]
+    async fn airdrop_uses_submitted_raw_amount_for_response_and_retry() {
+        let airdrop = Arc::new(MockAirdropSubmitter::success_with_raw_amount("200000000"));
+        let config = test_config_with_submitters(
+            airdrop.clone(),
+            Arc::new(MockWalletCreateSubmitter::success()),
+        );
+        let response = airdrop_request(&config).await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .expect("bug: airdrop body should read");
+        let json: serde_json::Value =
+            serde_json::from_slice(&body).expect("bug: airdrop body should be JSON");
+        assert_eq!(json["rawAmount"], "200000000");
+
+        let response = airdrop_request(&config).await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(airdrop.calls(), 1);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .expect("bug: airdrop retry body should read");
+        let json: serde_json::Value =
+            serde_json::from_slice(&body).expect("bug: airdrop retry body should be JSON");
+        assert_eq!(json["rawAmount"], "200000000");
+    }
+
+    #[tokio::test]
+    async fn airdrop_success_response_survives_final_policy_store_write_failure() {
+        let mut config = test_config_with_submitters(
+            Arc::new(MockAirdropSubmitter::success()),
+            Arc::new(MockWalletCreateSubmitter::success()),
+        );
+        config.policy_store = Arc::new(FailFinalPutPolicyStore::fail_succeeded_airdrop());
+
+        let response = airdrop_request(&config).await;
+
+        assert_eq!(response.status(), StatusCode::OK);
         let body = axum::body::to_bytes(response.into_body(), 4096)
             .await
             .expect("bug: airdrop body should read");
@@ -617,6 +666,26 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
 
         let response = wallet_create_request(&config).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .expect("bug: wallet-create body should read");
+        let json: serde_json::Value =
+            serde_json::from_slice(&body).expect("bug: wallet-create body should be JSON");
+        assert_eq!(json["attemptStatus"], "created");
+        assert_eq!(json["txHash"], format!("0x{}", "22".repeat(32)));
+    }
+
+    #[tokio::test]
+    async fn wallet_create_success_response_survives_final_policy_store_write_failure() {
+        let mut config = test_config_with_submitters(
+            Arc::new(MockAirdropSubmitter::success()),
+            Arc::new(MockWalletCreateSubmitter::success()),
+        );
+        config.policy_store = Arc::new(FailFinalPutPolicyStore::fail_created_wallet());
+
+        let response = wallet_create_request(&config).await;
+
         assert_eq!(response.status(), StatusCode::OK);
         let body = axum::body::to_bytes(response.into_body(), 4096)
             .await
@@ -1096,6 +1165,132 @@ mod tests {
             .expect("bug: test airdrop attempt fetch should succeed")
     }
 
+    struct FailFinalPutPolicyStore {
+        inner: policy::InMemoryFaucetPolicyStore,
+        fail_created_wallet: bool,
+        fail_succeeded_airdrop: bool,
+    }
+
+    impl FailFinalPutPolicyStore {
+        fn fail_created_wallet() -> Self {
+            Self {
+                inner: policy::InMemoryFaucetPolicyStore::new(),
+                fail_created_wallet: true,
+                fail_succeeded_airdrop: false,
+            }
+        }
+
+        fn fail_succeeded_airdrop() -> Self {
+            Self {
+                inner: policy::InMemoryFaucetPolicyStore::new(),
+                fail_created_wallet: false,
+                fail_succeeded_airdrop: true,
+            }
+        }
+    }
+
+    impl policy::FaucetPolicyStore for FailFinalPutPolicyStore {
+        fn get_wallet_create_attempt(
+            &self,
+            key: &policy::WalletCreateAttemptKey,
+        ) -> Result<Option<policy::WalletCreateAttempt>, policy::PolicyStoreError> {
+            self.inner.get_wallet_create_attempt(key)
+        }
+
+        fn put_wallet_create_attempt(
+            &self,
+            attempt: policy::WalletCreateAttempt,
+        ) -> Result<Option<policy::WalletCreateAttempt>, policy::PolicyStoreError> {
+            if self.fail_created_wallet
+                && attempt.status == policy::WalletCreateAttemptStatus::Created
+            {
+                return Err(policy::PolicyStoreError::LockPoisoned);
+            }
+            self.inner.put_wallet_create_attempt(attempt)
+        }
+
+        fn insert_wallet_create_attempt_if_absent(
+            &self,
+            attempt: policy::WalletCreateAttempt,
+            max_pending_per_owner: u32,
+        ) -> Result<policy::InsertWalletCreateAttemptResult, policy::PolicyStoreError> {
+            self.inner
+                .insert_wallet_create_attempt_if_absent(attempt, max_pending_per_owner)
+        }
+
+        fn claim_wallet_create_transition(
+            &self,
+            key: &policy::WalletCreateAttemptKey,
+            expected: &[policy::WalletCreateAttemptStatus],
+            next: policy::WalletCreateAttemptStatus,
+            now: SystemTime,
+        ) -> Result<policy::WalletCreateAttempt, policy::PolicyStoreError> {
+            self.inner
+                .claim_wallet_create_transition(key, expected, next, now)
+        }
+
+        fn get_airdrop_attempt(
+            &self,
+            key: &policy::AirdropAttemptKey,
+        ) -> Result<Option<policy::AirdropAttempt>, policy::PolicyStoreError> {
+            self.inner.get_airdrop_attempt(key)
+        }
+
+        fn put_airdrop_attempt(
+            &self,
+            attempt: policy::AirdropAttempt,
+        ) -> Result<Option<policy::AirdropAttempt>, policy::PolicyStoreError> {
+            if self.fail_succeeded_airdrop
+                && attempt.status == policy::AirdropAttemptStatus::Succeeded
+            {
+                return Err(policy::PolicyStoreError::LockPoisoned);
+            }
+            self.inner.put_airdrop_attempt(attempt)
+        }
+
+        fn insert_airdrop_attempt_if_absent(
+            &self,
+            attempt: policy::AirdropAttempt,
+            max_pending_per_recipient: u32,
+        ) -> Result<policy::InsertAirdropAttemptResult, policy::PolicyStoreError> {
+            self.inner
+                .insert_airdrop_attempt_if_absent(attempt, max_pending_per_recipient)
+        }
+
+        fn claim_airdrop_transition(
+            &self,
+            key: &policy::AirdropAttemptKey,
+            expected: &[policy::AirdropAttemptStatus],
+            next: policy::AirdropAttemptStatus,
+            now: SystemTime,
+        ) -> Result<policy::AirdropAttempt, policy::PolicyStoreError> {
+            self.inner
+                .claim_airdrop_transition(key, expected, next, now)
+        }
+
+        fn check_and_record_quota(
+            &self,
+            key: policy::QuotaKey,
+            max: u32,
+            window: Duration,
+            now: SystemTime,
+        ) -> Result<policy::QuotaDecision, policy::PolicyStoreError> {
+            self.inner.check_and_record_quota(key, max, window, now)
+        }
+
+        fn check_and_record_quotas(
+            &self,
+            checks: &[policy::QuotaCheck],
+            now: SystemTime,
+        ) -> Result<policy::QuotaDecision, policy::PolicyStoreError> {
+            self.inner.check_and_record_quotas(checks, now)
+        }
+
+        fn expire(&self, now: SystemTime) -> Result<(), policy::PolicyStoreError> {
+            self.inner.expire(now)
+        }
+    }
+
     fn test_network_descriptor() -> NetworkDescriptor {
         serde_json::from_value(serde_json::json!({
             "schemaVersion": NETWORK_DESCRIPTOR_SCHEMA_VERSION,
@@ -1125,13 +1320,19 @@ mod tests {
     struct MockAirdropSubmitter {
         failures_remaining: Mutex<usize>,
         calls: Mutex<usize>,
+        raw_amount: String,
     }
 
     impl MockAirdropSubmitter {
         fn success() -> Self {
+            Self::success_with_raw_amount("100000000")
+        }
+
+        fn success_with_raw_amount(raw_amount: &str) -> Self {
             Self {
                 failures_remaining: Mutex::new(0),
                 calls: Mutex::new(0),
+                raw_amount: raw_amount.into(),
             }
         }
 
@@ -1139,6 +1340,7 @@ mod tests {
             Self {
                 failures_remaining: Mutex::new(usize::MAX),
                 calls: Mutex::new(0),
+                raw_amount: "100000000".into(),
             }
         }
 
@@ -1146,6 +1348,7 @@ mod tests {
             Self {
                 failures_remaining: Mutex::new(1),
                 calls: Mutex::new(0),
+                raw_amount: "100000000".into(),
             }
         }
 
@@ -1172,7 +1375,7 @@ mod tests {
                 return Err(airdrop::AirdropSubmitError::BuildTransaction("boom".into()));
             }
             Ok(airdrop::AirdropSubmission {
-                raw_amount: "100000000".into(),
+                raw_amount: self.raw_amount.clone(),
                 tx_hash: test_tx_hash(),
                 receipt: TransactionReceipt {
                     tx_hash: test_tx_hash(),
