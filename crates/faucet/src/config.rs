@@ -469,6 +469,15 @@ mod tests {
 
     struct FailIfCalledKeyLoader;
 
+    #[test]
+    fn example_config_parses() {
+        let config: FaucetConfigFile = toml::from_str(include_str!("../faucet.example.toml"))
+            .expect("bug: example faucet config should parse");
+
+        assert_eq!(config.network.dev_wallet.deploy_entrypoint.0.len(), 8);
+        assert_eq!(config.network.dev_wallet.do_action_entrypoint.0.len(), 8);
+    }
+
     #[async_trait]
     impl FaucetSecretKeyLoader for TestKeyLoader {
         async fn load(

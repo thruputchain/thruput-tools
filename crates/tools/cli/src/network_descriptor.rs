@@ -133,8 +133,8 @@ fn validate_descriptor(
     matches_expected("kind", NETWORK_DESCRIPTOR_KIND, &descriptor.kind)?;
     matches_expected(
         "endpoints.rpcUrl",
-        normalize_url(rpc_url),
-        normalize_url(&descriptor.endpoints.rpc_url),
+        &canonical_rpc_url("profile.rpcUrl", rpc_url)?,
+        &canonical_rpc_url("endpoints.rpcUrl", &descriptor.endpoints.rpc_url)?,
     )?;
     if descriptor.network_id.trim().is_empty() {
         return Err(descriptor_invalid("networkId", "must not be empty".into()));
@@ -189,8 +189,10 @@ fn validate_descriptor(
     Ok(())
 }
 
-fn normalize_url(url: &str) -> &str {
-    url.trim_end_matches('/')
+fn canonical_rpc_url(field: &'static str, url: &str) -> Result<String, CliError> {
+    reqwest::Url::parse(url)
+        .map(|url| url.to_string())
+        .map_err(|error| descriptor_invalid(field, format!("invalid URL: {error}")))
 }
 
 fn format_hex(bytes: &[u8]) -> String {
@@ -255,6 +257,27 @@ mod tests {
         let error =
             descriptor_entrypoints("alice", "https://other.devnet.example", &descriptor(), None)
                 .expect_err("bug: mismatched RPC URL should fail");
+
+        assert_mismatch_field(error, "endpoints.rpcUrl");
+    }
+
+    #[test]
+    fn hosted_descriptor_accepts_equivalent_rpc_urls() {
+        let mut descriptor = descriptor();
+        descriptor.endpoints.rpc_url = "https://RPC.DEVNET.EXAMPLE:443".into();
+
+        descriptor_entrypoints("alice", "https://rpc.devnet.example/", &descriptor, None)
+            .expect("bug: equivalent RPC URLs should match");
+    }
+
+    #[test]
+    fn hosted_descriptor_rejects_distinct_rpc_paths() {
+        let mut descriptor = descriptor();
+        descriptor.endpoints.rpc_url = "https://rpc.devnet.example/rpc".into();
+
+        let error =
+            descriptor_entrypoints("alice", "https://rpc.devnet.example/", &descriptor, None)
+                .expect_err("bug: distinct RPC paths should not match");
 
         assert_mismatch_field(error, "endpoints.rpcUrl");
     }

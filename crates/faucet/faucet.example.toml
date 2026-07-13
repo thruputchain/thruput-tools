@@ -25,6 +25,10 @@ public_key = "0x0000000000000000000000000000000000000000000000000000000000000000
 prefund_raw_amount = "100000000"
 wallet_contract_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"
 
+[network.dev_wallet]
+deploy_entrypoint = "0xf969542572bd6860"
+do_action_entrypoint = "0xa0fff94c64fbaf3c"
+
 [airdrop]
 raw_amount = "100000000"
 wallet_do_action_entrypoint = "0x646f416374696f6e"
