@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use groundhog_json_rpc_types::receipt::TransactionReceipt;
 use groundhog_xdr::types::{ContractAddress, SHA256Hash};
+use groundhog_xdr::contract::ContractEntrypointID;
 
 use crate::account::{Account, Deployed};
 use crate::artifact::{ArtifactKind, Registry};
@@ -209,7 +210,7 @@ impl AgentContext {
     pub async fn call(
         &mut self,
         target: ContractAddress,
-        entrypoint: [u8; 8],
+        entrypoint: ContractEntrypointID,
         calldata: &[u8],
     ) -> Result<TransactionReceipt> {
         self.account

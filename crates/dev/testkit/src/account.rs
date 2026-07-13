@@ -159,7 +159,7 @@ impl Account {
         &mut self,
         network: &Network,
         target: ContractAddress,
-        entrypoint: [u8; 8],
+        entrypoint: ContractEntrypointID,
         calldata: &[u8],
     ) -> Result<TransactionReceipt> {
         let wallet_entrypoint = network.do_action_entrypoint()?;
@@ -169,7 +169,7 @@ impl Account {
             wallet_address: self.dev.wallet_address,
             wallet_entrypoint,
             target_address: target,
-            target_entrypoint: ContractEntrypointID::from(entrypoint),
+            target_entrypoint: entrypoint,
             target_calldata: calldata,
             gas_limit: DEFAULT_TX_GAS_LIMIT,
             target_gas_limit: DEFAULT_TX_GAS_LIMIT,

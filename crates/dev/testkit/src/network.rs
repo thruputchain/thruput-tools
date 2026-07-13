@@ -157,13 +157,13 @@ impl Network {
     pub async fn view_call(
         &self,
         contract: ContractAddress,
-        entrypoint: [u8; 8],
+        entrypoint: ContractEntrypointID,
         calldata: &[u8],
         caller: Option<ContractAddress>,
     ) -> Result<ViewResponse> {
         let request = ViewRequest {
             contract: Hex0x(contract),
-            entrypoint: HexBytes(entrypoint.to_vec()),
+            entrypoint: HexBytes(entrypoint.into_inner().to_vec()),
             calldata: HexBytes(calldata.to_vec()),
             caller: caller.map(Hex0x),
         };
