@@ -104,6 +104,43 @@ fn collect_report_prefers_profile_default_key_over_global_default() {
 
 #[test]
 #[serial]
+fn collect_report_uses_builtin_dev_key_for_local_profile() {
+    let tmp = TempDir::new().unwrap();
+    let cargo_home = tmp.path().join("cargo-home");
+    let project = tmp.path().join("proj");
+
+    fs::create_dir(&project).unwrap();
+    fs::write(
+        project.join("groundhog.toml"),
+        "default_profile = \"local\"\n\n[profile.local]\nnetwork = \"local\"\n",
+    )
+    .unwrap();
+
+    unsafe {
+        env::set_var("CARGO_HOME", &cargo_home);
+        env::set_var("XDG_CONFIG_HOME", tmp.path());
+    }
+
+    write_groundhog_registry_config(&cargo_home);
+
+    let report = groundhog_cli::checks::collect_report(&project, None).unwrap();
+    assert_eq!(report.effective_default_key.as_deref(), Some("dev-0"));
+    assert_eq!(report.effective_default_key_source, Some("local built-in"));
+    assert!(!report.findings.iter().any(|finding| {
+        matches!(
+            finding.code,
+            "no_keys" | "no_default_key" | "default_key_not_on_disk"
+        )
+    }));
+
+    unsafe {
+        env::remove_var("CARGO_HOME");
+        env::remove_var("XDG_CONFIG_HOME");
+    }
+}
+
+#[test]
+#[serial]
 fn collect_report_warns_when_global_default_key_is_missing_on_disk() {
     let tmp = TempDir::new().unwrap();
     let cargo_home = tmp.path().join("cargo-home");

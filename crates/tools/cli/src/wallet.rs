@@ -997,6 +997,9 @@ fn resolve_dev_wallet_artifact_path(
         }
         if let Some(root) = runtime_artifacts_dir {
             candidates.push(root.join(hint_path));
+            if let Some(filename) = hint_path.file_name() {
+                candidates.push(root.join(filename));
+            }
         }
     }
     candidates.sort();
@@ -1133,6 +1136,25 @@ mod tests {
             "contracts/dev_wallet.rv32a",
         )
         .expect("bug: runtime artifact-dir artifact should resolve");
+        assert_eq!(resolved, artifact);
+    }
+
+    #[test]
+    fn artifact_path_uses_direct_contract_artifact_dir() {
+        let tmp = tempfile::tempdir().expect("bug: tempdir should be created");
+        let contracts = tmp.path().join("built_contracts");
+        std::fs::create_dir(&contracts).expect("bug: contracts dir should be created");
+        let artifact = contracts.join("dev_wallet.rv32a");
+        std::fs::write(&artifact, []).expect("bug: artifact should be written");
+
+        let resolved = resolve_dev_wallet_artifact_path(
+            std::path::Path::new("/"),
+            std::path::Path::new("/tmp/runtime-manifest.json"),
+            Some(&contracts),
+            None,
+            "contracts/dev_wallet.rv32a",
+        )
+        .expect("bug: direct runtime artifact-dir artifact should resolve");
         assert_eq!(resolved, artifact);
     }
 

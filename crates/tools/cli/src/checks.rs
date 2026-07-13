@@ -76,6 +76,8 @@ pub struct ProjectContext {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub profile_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub network: Option<crate::config::Network>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub rpc_url: Option<String>,
     #[serde(skip_serializing_if = "is_zero")]
     pub contract_count: usize,
@@ -196,6 +198,7 @@ pub fn check_project(
                 config_path,
                 profile_name: Some(profile.name),
                 profile_key,
+                network: profile.network,
                 rpc_url: profile.rpc_url,
                 contract_count: profile.contracts.len(),
                 findings,
@@ -283,6 +286,7 @@ pub fn collect_report(
         &keys,
         &project,
         effective_default_key.as_deref(),
+        effective_default_key_source,
         &mut findings,
     );
 
@@ -335,6 +339,8 @@ fn resolve_effective_key(
         (Some(profile_key), Some("profile"))
     } else if let Some(global_key) = keys.global_default_key.clone() {
         (Some(global_key), Some("global"))
+    } else if project.network == Some(crate::config::Network::Local) {
+        (Some("dev-0".into()), Some("local built-in"))
     } else {
         (None, None)
     }
@@ -344,13 +350,15 @@ fn add_key_findings(
     keys: &KeyStatus,
     project: &ProjectContext,
     effective_default_key: Option<&str>,
+    effective_default_key_source: Option<&str>,
     findings: &mut Vec<Finding>,
 ) {
+    let uses_builtin_local_key = effective_default_key_source == Some("local built-in");
     let has_profile_key_warning = project.findings.iter().any(|f| f.code == "key_not_on_disk");
     let effective_default_exists =
         effective_default_key_summary(&keys.keys, effective_default_key).is_some();
 
-    if keys.keys.is_empty() {
+    if keys.keys.is_empty() && !uses_builtin_local_key {
         add_missing_keys_finding(findings);
         if let Some(selected) = effective_default_key
             && !effective_default_exists
@@ -376,6 +384,7 @@ fn add_key_findings(
             )),
         });
     } else if let Some(selected) = effective_default_key
+        && !uses_builtin_local_key
         && !effective_default_exists
         && !has_profile_key_warning
     {

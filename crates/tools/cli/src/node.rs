@@ -12,6 +12,7 @@ use std::time::Duration;
 
 const HOG_DEVNODE_PID_FILE: &str = "hog-devnode.pid";
 const LEGACY_HOGD_DEV_PID_FILE: &str = "hogd-dev.pid";
+const DEV_WALLET_ARTIFACT_FILENAME: &str = "dev_wallet.rv32a";
 
 #[cfg(test)]
 fn test_local_runtime_state_result() -> PathBuf {
@@ -418,8 +419,30 @@ fn local_node_runtime_artifacts_dir(options: &LocalNodeOptions) -> Option<PathBu
         });
     resolve_hogd_dev_binary(&hogd)
         .ok()
-        .and_then(|binary| std::fs::canonicalize(&binary).ok().or(Some(binary)))
-        .and_then(|binary| binary.parent().map(Path::to_path_buf))
+        .and_then(|binary| runtime_artifacts_dir_for_binary(&binary))
+}
+
+fn runtime_artifacts_dir_for_binary(binary: &Path) -> Option<PathBuf> {
+    let binary = std::fs::canonicalize(binary).unwrap_or_else(|_| binary.to_path_buf());
+    let binary_dir = binary.parent()?;
+    let mut candidates = vec![binary_dir.to_path_buf()];
+
+    if let Some(prefix) = binary_dir.parent() {
+        candidates.push(prefix.join("share/groundhog"));
+    }
+    candidates.extend(
+        binary_dir
+            .ancestors()
+            .take(4)
+            .map(|ancestor| ancestor.join("built_contracts")),
+    );
+
+    candidates.into_iter().find(|root| {
+        root.join("contracts")
+            .join(DEV_WALLET_ARTIFACT_FILENAME)
+            .is_file()
+            || root.join(DEV_WALLET_ARTIFACT_FILENAME).is_file()
+    })
 }
 
 fn local_node_config(
@@ -674,7 +697,8 @@ mod tests {
     use super::{
         LocalNodeBlockDriverMode, LocalNodeOptions, LocalNodePidFile, default_tracing_filter,
         global_local_node_pid_file, hogd_dev_startup_payload, local_node_config,
-        local_runtime_state_payload, map_node_supervisor_error, test_local_runtime_state_result,
+        local_runtime_state_payload, map_node_supervisor_error, runtime_artifacts_dir_for_binary,
+        test_local_runtime_state_result,
     };
     use crate::CliError;
     use groundhog_node_supervisor::{
@@ -718,6 +742,59 @@ mod tests {
         );
         assert_eq!(config.block_driver.interval, Duration::from_millis(250));
         assert_eq!(config.rpc_max_connections, 512);
+    }
+
+    #[test]
+    fn runtime_artifacts_dir_resolves_release_bundle_layout() {
+        let tmp = TempDir::new().expect("bug: tempdir should be created");
+        let binary = tmp.path().join("hog-devnode");
+        fs::write(&binary, []).expect("bug: binary fixture should be written");
+        let contracts = tmp.path().join("contracts");
+        fs::create_dir(&contracts).expect("bug: contracts fixture should be created");
+        fs::write(contracts.join("dev_wallet.rv32a"), [])
+            .expect("bug: artifact fixture should be written");
+
+        assert_eq!(
+            runtime_artifacts_dir_for_binary(&binary),
+            Some(fs::canonicalize(tmp.path()).expect("bug: fixture root should resolve"))
+        );
+    }
+
+    #[test]
+    fn runtime_artifacts_dir_resolves_cmake_build_layout() {
+        let tmp = TempDir::new().expect("bug: tempdir should be created");
+        let binary_dir = tmp.path().join("build/hogd/devnode");
+        fs::create_dir_all(&binary_dir).expect("bug: binary dir should be created");
+        let binary = binary_dir.join("hog-devnode");
+        fs::write(&binary, []).expect("bug: binary fixture should be written");
+        let contracts = tmp.path().join("build/built_contracts");
+        fs::create_dir_all(&contracts).expect("bug: contracts fixture should be created");
+        fs::write(contracts.join("dev_wallet.rv32a"), [])
+            .expect("bug: artifact fixture should be written");
+
+        assert_eq!(
+            runtime_artifacts_dir_for_binary(&binary),
+            Some(fs::canonicalize(contracts).expect("bug: fixture root should resolve"))
+        );
+    }
+
+    #[test]
+    fn runtime_artifacts_dir_resolves_installed_package_layout() {
+        let tmp = TempDir::new().expect("bug: tempdir should be created");
+        let binary_dir = tmp.path().join("usr/bin");
+        fs::create_dir_all(&binary_dir).expect("bug: binary dir should be created");
+        let binary = binary_dir.join("hog-devnode");
+        fs::write(&binary, []).expect("bug: binary fixture should be written");
+        let artifacts_root = tmp.path().join("usr/share/groundhog");
+        let contracts = artifacts_root.join("contracts");
+        fs::create_dir_all(&contracts).expect("bug: contracts fixture should be created");
+        fs::write(contracts.join("dev_wallet.rv32a"), [])
+            .expect("bug: artifact fixture should be written");
+
+        assert_eq!(
+            runtime_artifacts_dir_for_binary(&binary),
+            Some(fs::canonicalize(artifacts_root).expect("bug: fixture root should resolve"))
+        );
     }
 
     #[test]

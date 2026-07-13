@@ -854,6 +854,50 @@ default_key = "project-key"
 
 #[test]
 #[serial]
+fn resolve_default_key_uses_builtin_dev_key_for_local_profile() {
+    let tmp = TempDir::new().unwrap();
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    fs::write(
+        tmp.path().join("groundhog.toml"),
+        r#"
+default_profile = "local"
+
+[profile.local]
+network = "local"
+"#,
+    )
+    .unwrap();
+
+    let resolved = groundhog_cli::config::resolve_default_key(tmp.path(), None).unwrap();
+    assert_eq!(resolved.as_deref(), Some("dev-0"));
+
+    unsafe { env::remove_var("XDG_CONFIG_HOME") };
+}
+
+#[test]
+#[serial]
+fn resolve_default_key_does_not_use_builtin_dev_key_for_devnet_profile() {
+    let tmp = TempDir::new().unwrap();
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    fs::write(
+        tmp.path().join("groundhog.toml"),
+        r#"
+default_profile = "devnet"
+
+[profile.devnet]
+network = "devnet"
+"#,
+    )
+    .unwrap();
+
+    let resolved = groundhog_cli::config::resolve_default_key(tmp.path(), None).unwrap();
+    assert!(resolved.is_none());
+
+    unsafe { env::remove_var("XDG_CONFIG_HOME") };
+}
+
+#[test]
+#[serial]
 fn save_alias_rejects_empty_alias() {
     let tmp = TempDir::new().unwrap();
     let addr = format!("0x{}", "ab".repeat(32));

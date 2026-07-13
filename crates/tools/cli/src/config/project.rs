@@ -346,17 +346,22 @@ pub fn remove_profile_wallet_address(
 ///
 /// Prefers `groundhog.toml` when the profile specifies
 /// `default_key`, otherwise falls back to the global default
-/// selected via `keys use`.
+/// selected via `keys use`. Local profiles use the built-in
+/// `dev-0` signer when neither selection is present.
 pub fn resolve_default_key(
     start: &Path,
     explicit_profile: Option<&str>,
 ) -> Result<Option<String>, CliError> {
     let profile = resolve_profile(start, explicit_profile)?;
-    if profile.default_key.is_some() {
-        Ok(profile.default_key)
-    } else {
-        load_default_key()
+    if let Some(key) = profile.default_key {
+        return Ok(Some(key));
     }
+
+    if let Some(key) = load_default_key()? {
+        return Ok(Some(key));
+    }
+
+    Ok((profile.network == Some(Network::Local)).then(|| "dev-0".to_string()))
 }
 
 /// Resolve the active project profile, defaulting to `default`
