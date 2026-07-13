@@ -419,7 +419,7 @@ pub(crate) fn build_hogd_dev_spec_with_bootstrap_manifest(
     config: &HogdDevConfig,
     bootstrap_manifest_path: impl AsRef<Path>,
 ) -> ChildProcessSpec {
-    let spec = ChildProcessSpec::new(binary.as_ref().as_os_str().to_owned())
+    let mut spec = ChildProcessSpec::new(binary.as_ref().as_os_str().to_owned())
         .args([
             OsString::from("--listen-host"),
             OsString::from(config.listen_host.as_str()),
@@ -433,6 +433,13 @@ pub(crate) fn build_hogd_dev_spec_with_bootstrap_manifest(
         .env(HOGD_LOG_FORMAT_ENV, "json")
         .stdout_piped()
         .stderr_piped();
+
+    if let Some(log_level) = config.log_level {
+        spec = spec.args([
+            OsString::from("--log-level"),
+            OsString::from(log_level.as_str()),
+        ]);
+    }
 
     #[cfg(unix)]
     let spec = spec.process_group(0);

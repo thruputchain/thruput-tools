@@ -1,0 +1,367 @@
+//! Scenario builder, runner, and result types.
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use groundhog_node_supervisor::{HogdDevConfig, NodeSupervisorConfig, NodeSupervisorHandle};
+use tokio::sync::mpsc;
+use tokio::task::JoinSet;
+
+use crate::account::Account;
+use crate::agent::{Agent, AgentContext, AgentId};
+use crate::artifact::{ArtifactKind, ArtifactSpec, Registry};
+use crate::clock::Clock;
+use crate::error::{Result, TestkitError};
+use crate::mailbox::{Envelope, Mailbox};
+use crate::manifest::{AccountSource, load_runtime_manifest};
+use crate::network::Network;
+use crate::nonce::NonceNamespace;
+use crate::rng::AgentRng;
+use crate::target::{LocalTargetConfig, TargetConfig};
+
+/// Builder for a [`Scenario`]. Every setting is explicit.
+#[derive(Debug)]
+pub struct ScenarioBuilder {
+    seed: String,
+    target: Option<TargetConfig>,
+    artifacts: Vec<ArtifactSpec>,
+}
+
+impl ScenarioBuilder {
+    /// Set the target the scenario runs against. Required.
+    #[must_use]
+    pub fn target(mut self, target: TargetConfig) -> Self {
+        self.target = Some(target);
+        self
+    }
+
+    /// Register a contract artifact loaded from a file, inferring its kind from
+    /// the extension (`.wasm` or `.rv32a`). The file is read and validated at
+    /// [`ScenarioBuilder::build`]. Agents deploy it by name.
+    #[must_use]
+    pub fn artifact(mut self, name: impl Into<String>, path: impl Into<PathBuf>) -> Self {
+        self.artifacts.push(ArtifactSpec::Path {
+            name: name.into(),
+            path: path.into(),
+            kind: None,
+        });
+        self
+    }
+
+    /// Register a contract artifact from a file with an explicit kind.
+    #[must_use]
+    pub fn artifact_with_kind(
+        mut self,
+        name: impl Into<String>,
+        path: impl Into<PathBuf>,
+        kind: ArtifactKind,
+    ) -> Self {
+        self.artifacts.push(ArtifactSpec::Path {
+            name: name.into(),
+            path: path.into(),
+            kind: Some(kind),
+        });
+        self
+    }
+
+    /// Register a contract artifact from in-memory bytes (for example via
+    /// `include_bytes!`) with an explicit kind.
+    #[must_use]
+    pub fn artifact_bytes(
+        mut self,
+        name: impl Into<String>,
+        bytes: impl Into<Vec<u8>>,
+        kind: ArtifactKind,
+    ) -> Self {
+        self.artifacts.push(ArtifactSpec::Bytes {
+            name: name.into(),
+            bytes: bytes.into(),
+            kind,
+        });
+        self
+    }
+
+    /// Acquire the target, load artifacts, and produce a ready [`Scenario`].
+    pub async fn build(self) -> Result<Scenario> {
+        let target = self.target.ok_or(TestkitError::NoTarget)?;
+        let artifacts = Arc::new(Registry::from_specs(self.artifacts)?);
+        let (network, accounts, guard) = acquire_target(target).await?;
+        Ok(Scenario {
+            namespace: NonceNamespace::from_seed(&self.seed),
+            seed: self.seed,
+            network,
+            clock: Clock::new(),
+            accounts,
+            artifacts,
+            target: guard,
+        })
+    }
+}
+
+/// A ready scenario: an explicit fixture the test holds.
+///
+/// Dropping the scenario tears down anything the harness created for the
+/// target (a managed local node is force-killed (`SIGKILL`) as a backstop);
+/// [`Scenario::stop`] does the same gracefully and reports teardown errors.
+#[derive(Debug)]
+pub struct Scenario {
+    seed: String,
+    network: Network,
+    clock: Clock,
+    accounts: AccountSource,
+    artifacts: Arc<Registry>,
+    namespace: NonceNamespace,
+    target: TargetGuard,
+}
+
+impl Scenario {
+    /// Start building a scenario with the given deterministic `seed`.
+    #[must_use]
+    pub fn builder(seed: impl Into<String>) -> ScenarioBuilder {
+        ScenarioBuilder {
+            seed: seed.into(),
+            target: None,
+            artifacts: Vec::new(),
+        }
+    }
+
+    /// Handle onto the network the scenario runs against.
+    pub fn network(&self) -> &Network {
+        &self.network
+    }
+
+    /// The scenario's virtual clock.
+    pub fn clock(&self) -> &Clock {
+        &self.clock
+    }
+
+    /// Run a set of agents concurrently, returning once all have finished.
+    ///
+    /// Each agent is assigned a distinct funded account (by position), its own
+    /// deterministic random stream, and a mailbox. A returned error is recorded
+    /// per agent; an agent panic (for example a failed assertion) propagates so
+    /// the test fails.
+    pub async fn run_agents<I>(&self, agents: I) -> Result<ScenarioReport>
+    where
+        I: IntoIterator<Item = Agent>,
+    {
+        let agents: Vec<Agent> = agents.into_iter().collect();
+        let count = agents.len();
+
+        let mut dev_accounts = self.accounts.accounts()?;
+        if count > dev_accounts.len() {
+            return Err(TestkitError::NotEnoughAccounts {
+                needed: count,
+                available: dev_accounts.len(),
+            });
+        }
+        dev_accounts.truncate(count);
+
+        let names: Vec<Arc<str>> = agents.iter().map(Agent::name_arc).collect();
+        let mut senders = Vec::with_capacity(count);
+        let mut receivers = Vec::with_capacity(count);
+        for _ in 0..count {
+            let (tx, rx) = mpsc::unbounded_channel::<Envelope>();
+            senders.push(tx);
+            receivers.push(rx);
+        }
+
+        let mut set: JoinSet<AgentOutcome> = JoinSet::new();
+        for (index, ((agent, inbox), dev)) in agents
+            .into_iter()
+            .zip(receivers)
+            .zip(dev_accounts)
+            .enumerate()
+        {
+            let mut peers = HashMap::with_capacity(count.saturating_sub(1));
+            for (peer_index, peer_name) in names.iter().enumerate() {
+                if peer_index != index {
+                    peers.insert(peer_name.to_string(), senders[peer_index].clone());
+                }
+            }
+            let name = Arc::clone(&names[index]);
+            let mailbox = Mailbox::new(Arc::clone(&name), inbox, peers);
+            let ctx = AgentContext::new(
+                AgentId::new(index, Arc::clone(&name)),
+                self.network.clone(),
+                self.clock.clone(),
+                AgentRng::derive(&self.seed, index, &name),
+                mailbox,
+                Account::new(dev, self.namespace),
+                Arc::clone(&self.artifacts),
+            );
+            let body = agent.into_body();
+            set.spawn(async move {
+                let result = body(ctx).await;
+                AgentOutcome {
+                    name,
+                    index,
+                    result,
+                }
+            });
+        }
+        // Drop the harness's own senders so an agent's inbox closes once every
+        // peer has finished.
+        drop(senders);
+
+        let mut outcomes: Vec<Option<AgentOutcome>> = (0..count).map(|_| None).collect();
+        while let Some(joined) = set.join_next().await {
+            match joined {
+                Ok(outcome) => {
+                    let index = outcome.index;
+                    outcomes[index] = Some(outcome);
+                }
+                Err(join_error) if join_error.is_panic() => {
+                    std::panic::resume_unwind(join_error.into_panic());
+                }
+                Err(join_error) => {
+                    return Err(TestkitError::AgentJoin {
+                        detail: join_error.to_string(),
+                    });
+                }
+            }
+        }
+
+        let outcomes = outcomes
+            .into_iter()
+            .map(|outcome| outcome.expect("bug: every agent produced an outcome"))
+            .collect();
+        Ok(ScenarioReport { outcomes })
+    }
+
+    /// Tear the target down gracefully, reporting any teardown error.
+    pub async fn stop(self) -> Result<()> {
+        let Scenario { target, .. } = self;
+        match target {
+            TargetGuard::Local(handle) => {
+                handle
+                    .stop()
+                    .await
+                    .map_err(|e| TestkitError::NodeSupervisor {
+                        detail: e.to_string(),
+                    })?;
+            }
+            TargetGuard::Existing => {}
+        }
+        Ok(())
+    }
+}
+
+async fn acquire_target(target: TargetConfig) -> Result<(Network, AccountSource, TargetGuard)> {
+    match target {
+        TargetConfig::Existing {
+            rpc_url,
+            runtime_manifest,
+        } => {
+            let manifest = load_runtime_manifest(&runtime_manifest)?;
+            let network = Network::connect(&rpc_url, &manifest)?;
+            Ok((
+                network,
+                AccountSource::Manifest(Box::new(manifest)),
+                TargetGuard::Existing,
+            ))
+        }
+        TargetConfig::Local(config) => {
+            let handle = start_local(config).await?;
+            let rpc_url = format!("http://{}", handle.rpc_addr());
+            let manifest = handle
+                .hogd_readiness()
+                .runtime_manifest
+                .clone()
+                .ok_or(TestkitError::MissingRuntimeManifest)?;
+            let network = Network::connect(&rpc_url, &manifest)?;
+            Ok((
+                network,
+                AccountSource::Manifest(Box::new(manifest)),
+                TargetGuard::Local(Box::new(handle)),
+            ))
+        }
+        TargetConfig::Offline { accounts } => Ok((
+            Network::offline(),
+            AccountSource::Offline { count: accounts },
+            TargetGuard::Existing,
+        )),
+    }
+}
+
+async fn start_local(config: LocalTargetConfig) -> Result<NodeSupervisorHandle> {
+    let mut hogd = HogdDevConfig::default()
+        .with_dev_account_count(config.dev_account_count)
+        .with_dev_account_seed(config.dev_account_seed)
+        .with_dev_account_tokens(config.dev_account_tokens)
+        .with_startup_timeout(config.startup_timeout);
+    if let Some(binary) = config.hog_devnode_binary {
+        hogd = hogd.with_binary_path(binary);
+    }
+    if let Some(log_level) = config.log_level {
+        // Print forwarded devnode logs to stderr at the requested verbosity.
+        crate::logging::install_for_level(log_level);
+        hogd = hogd.with_log_level(log_level);
+    }
+    let mut supervisor = NodeSupervisorConfig::default()
+        .with_rpc_listen_address(format!("127.0.0.1:{}", config.rpc_port))
+        .with_hogd_dev(hogd);
+    if let Some(protocol) = config.hogd_protocol {
+        supervisor = supervisor.with_hogd_protocol_override(protocol);
+    }
+    NodeSupervisorHandle::start(supervisor)
+        .await
+        .map_err(|e| TestkitError::NodeSupervisor {
+            detail: e.to_string(),
+        })
+}
+
+/// Owns resources the harness created for the target and releases them on drop.
+///
+/// The `existing` and `offline` providers own nothing. The `local` provider
+/// owns the node handle; dropping it force-kills the child (`SIGKILL`) as a
+/// backstop, while [`Scenario::stop`] shuts it down gracefully.
+#[derive(Debug)]
+enum TargetGuard {
+    Existing,
+    Local(Box<NodeSupervisorHandle>),
+}
+
+/// Outcome of a single agent.
+#[derive(Debug)]
+pub struct AgentOutcome {
+    name: Arc<str>,
+    index: usize,
+    result: Result<()>,
+}
+
+impl AgentOutcome {
+    /// Agent name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Agent index within the run.
+    pub fn index(&self) -> usize {
+        self.index
+    }
+
+    /// The agent's returned result.
+    pub fn result(&self) -> &Result<()> {
+        &self.result
+    }
+}
+
+/// Aggregate result of a [`Scenario::run_agents`] call.
+#[derive(Debug)]
+pub struct ScenarioReport {
+    outcomes: Vec<AgentOutcome>,
+}
+
+impl ScenarioReport {
+    /// Per-agent outcomes, indexed by agent position.
+    pub fn outcomes(&self) -> &[AgentOutcome] {
+        &self.outcomes
+    }
+
+    /// Whether every agent returned `Ok`.
+    pub fn all_ok(&self) -> bool {
+        self.outcomes.iter().all(|outcome| outcome.result.is_ok())
+    }
+}

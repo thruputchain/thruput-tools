@@ -1762,6 +1762,25 @@ source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
 checksum = "1e29e0449afadc18249afa48787502d159fe14836225eb0a7c5694e4cf9ae2a9"
 
 [[package]]
+name = "groundhog-testkit"
+version = "0.5.16"
+dependencies = [
+ "groundhog-contract-util",
+ "groundhog-json-rpc-client",
+ "groundhog-json-rpc-types",
+ "groundhog-node-supervisor",
+ "groundhog-signing",
+ "groundhog-xdr",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing-subscriber",
+ "xdr-common",
+ "xdrs",
+]
+
+[[package]]
 name = "groundhog-trace"
 version = "0.19.8"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
