@@ -5,7 +5,7 @@ pub use groundhog_json_rpc_types as types;
 
 pub use groundhog_json_rpc_api::GroundhogApiClient;
 use groundhog_json_rpc_types::receipt::TransactionReceipt;
-use groundhog_json_rpc_types::transaction::TxHash;
+use groundhog_json_rpc_types::transaction::{TransactionStatus, TxHash};
 pub use jsonrpsee::http_client::{HttpClient, HttpClientBuilder};
 use std::time::Duration;
 
@@ -38,6 +38,11 @@ pub enum PollTransactionReceiptError {
         #[source]
         source: jsonrpsee::core::client::Error,
     },
+    #[error("transaction {tx_hash:?} reported failure status {status:?}")]
+    TransactionStatus {
+        tx_hash: TxHash,
+        status: TransactionStatus,
+    },
     #[error("timed out waiting for receipt for {tx_hash:?} after {attempts} attempts")]
     ReceiptTimeout { tx_hash: TxHash, attempts: usize },
 }
@@ -54,6 +59,11 @@ pub enum SubmitAndPollError {
     SendRawTransaction(jsonrpsee::core::client::Error),
     #[error("groundhog_getTransactionReceipt failed: {0}")]
     GetTransactionReceipt(jsonrpsee::core::client::Error),
+    #[error("transaction {tx_hash:?} reported failure status {status:?}")]
+    TransactionStatus {
+        tx_hash: TxHash,
+        status: TransactionStatus,
+    },
     #[error("timed out waiting for receipt for {tx_hash:?} after {attempts} attempts")]
     ReceiptTimeout { tx_hash: TxHash, attempts: usize },
 }
@@ -97,6 +107,9 @@ pub async fn submit_and_poll_with_config(
                 PollTransactionReceiptError::GetTransactionReceipt { source, .. } => {
                     SubmitAndPollError::GetTransactionReceipt(source)
                 }
+                PollTransactionReceiptError::TransactionStatus { tx_hash, status } => {
+                    SubmitAndPollError::TransactionStatus { tx_hash, status }
+                }
                 PollTransactionReceiptError::ReceiptTimeout { tx_hash, attempts } => {
                     SubmitAndPollError::ReceiptTimeout { tx_hash, attempts }
                 }
@@ -121,7 +134,8 @@ pub async fn submit_transaction(
         .map_err(SubmitTransactionError::SendRawTransaction)
 }
 
-/// Poll an accepted transaction until its receipt is available.
+/// Poll an accepted transaction until its receipt is available or its status
+/// reports a rejection or recent commit failure.
 pub async fn poll_transaction_receipt(
     rpc_url: &str,
     tx_hash: TxHash,
@@ -136,6 +150,10 @@ pub async fn poll_transaction_receipt(
 }
 
 /// Poll an accepted transaction with explicit retry settings.
+///
+/// Receipts are authoritative. When a receipt is not yet available, an
+/// `Invalid` or best-effort `RecentFailure` status ends polling early so callers
+/// can report the diagnostic before it expires.
 pub async fn poll_transaction_receipt_with_config(
     rpc_url: &str,
     tx_hash: TxHash,
@@ -152,15 +170,26 @@ pub async fn poll_transaction_receipt_with_config(
     for attempt in 0..max_attempts {
         match client.get_transaction_receipt(tx_hash).await {
             Ok(Some(receipt)) => return Ok(receipt),
-            Ok(None) if attempt < max_attempts.saturating_sub(1) => {
-                tokio::time::sleep(poll_interval).await;
-            }
-            Ok(None) => {
-                return Err(PollTransactionReceiptError::ReceiptTimeout {
-                    tx_hash,
-                    attempts: max_attempts,
-                });
-            }
+            Ok(None) => match client.get_transaction_status(tx_hash).await {
+                Ok(
+                    status @ (TransactionStatus::Invalid { .. }
+                    | TransactionStatus::RecentFailure { .. }),
+                ) => {
+                    return Err(PollTransactionReceiptError::TransactionStatus { tx_hash, status });
+                }
+                // Receipt polling remains compatible with endpoints that do not
+                // implement status, and receipts remain authoritative when status
+                // is unknown, pending, or briefly ahead of receipt indexing.
+                Ok(_) | Err(_) if attempt < max_attempts.saturating_sub(1) => {
+                    tokio::time::sleep(poll_interval).await;
+                }
+                Ok(_) | Err(_) => {
+                    return Err(PollTransactionReceiptError::ReceiptTimeout {
+                        tx_hash,
+                        attempts: max_attempts,
+                    });
+                }
+            },
             Err(source) => {
                 return Err(PollTransactionReceiptError::GetTransactionReceipt { tx_hash, source });
             }

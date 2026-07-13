@@ -1,5 +1,8 @@
 use groundhog_json_rpc_api::GroundhogApiServer;
-use groundhog_json_rpc_client::{GroundhogApiClient, HttpClientBuilder};
+use groundhog_json_rpc_client::{
+    GroundhogApiClient, HttpClientBuilder, PollTransactionReceiptError,
+    poll_transaction_receipt_with_config,
+};
 use groundhog_json_rpc_server::{
     BuildInfo, ChainPlane, GroundhogRpcServer, ReadPlane, RpcServerConfig, RpcServerError,
     SubmitPlane, ValidatedTransaction, ViewPlane,
@@ -74,9 +77,7 @@ impl ReadPlane for RecentFailureBackend {
         &self,
         _tx_hash: TxHash,
     ) -> Result<Option<TransactionReceipt>, RpcServerError> {
-        Err(RpcServerError::NotImplemented(
-            "getTransactionReceipt".into(),
-        ))
+        Ok(None)
     }
 
     async fn transaction_status(
@@ -113,6 +114,52 @@ impl ReadPlane for RecentFailureBackend {
     ) -> Result<StorageItemRead, RpcServerError> {
         Err(RpcServerError::NotImplemented("getBalance".into()))
     }
+}
+
+#[tokio::test]
+async fn receipt_polling_surfaces_recent_failure_status() {
+    let server = Server::builder()
+        .build("127.0.0.1:0")
+        .await
+        .expect("bug: test server should bind");
+    let addr = server
+        .local_addr()
+        .expect("bug: test server local address should be available");
+    let rpc = GroundhogRpcServer::unified(
+        RecentFailureBackend,
+        RpcServerConfig::default(),
+        BuildInfo::new("client-test", None),
+    );
+    let handle = server.start(rpc.into_rpc());
+    let tx_hash = TxHash(Hex0x(groundhog_xdr::types::SHA256Hash::from([0x33; 32])));
+
+    let error = poll_transaction_receipt_with_config(
+        &format!("http://{addr}"),
+        tx_hash,
+        30,
+        std::time::Duration::from_secs(1),
+    )
+    .await
+    .expect_err("recent failure must stop receipt polling");
+
+    match error {
+        PollTransactionReceiptError::TransactionStatus {
+            tx_hash: actual_hash,
+            status:
+                TransactionStatus::RecentFailure {
+                    attempt_height,
+                    conflict,
+                },
+        } => {
+            assert_eq!(actual_hash, tx_hash);
+            assert_eq!(*attempt_height, ATTEMPT_HEIGHT);
+            assert_eq!(conflict.code, ConflictCode::ExclusiveLock);
+        }
+        other => panic!("expected recent failure polling error, got {other:?}"),
+    }
+
+    handle.stop().expect("bug: test server should stop");
+    handle.stopped().await;
 }
 
 #[async_trait::async_trait]

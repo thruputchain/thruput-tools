@@ -1,5 +1,5 @@
 use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
-use groundhog_json_rpc_types::transaction::TxHash;
+use groundhog_json_rpc_types::transaction::{TransactionStatus, TxHash};
 
 use crate::result::CommandError;
 use crate::{CliError, Print};
@@ -132,6 +132,31 @@ fn map_submit_and_poll_error(error: groundhog_json_rpc_client::SubmitAndPollErro
                 message: error.to_string(),
             }
         }
+        groundhog_json_rpc_client::SubmitAndPollError::TransactionStatus { tx_hash, status } => {
+            match status {
+                TransactionStatus::Invalid { reason } => CliError::TransactionInvalid {
+                    tx_hash: format_tx_hash(&tx_hash),
+                    reason,
+                },
+                TransactionStatus::RecentFailure {
+                    attempt_height,
+                    conflict,
+                } => CliError::TransactionRecentFailure {
+                    tx_hash: format_tx_hash(&tx_hash),
+                    attempt_height: *attempt_height,
+                    conflict_address: serde_json::to_value(conflict.address)
+                        .ok()
+                        .and_then(|value| value.as_str().map(str::to_owned))
+                        .unwrap_or_else(|| format!("{:?}", conflict.address)),
+                    conflict_key: format!("0x{}", hex::encode(conflict.key.0)),
+                    conflict_code: serde_json::to_value(conflict.code)
+                        .ok()
+                        .and_then(|value| value.as_str().map(str::to_owned))
+                        .unwrap_or_else(|| format!("{:?}", conflict.code)),
+                },
+                _ => CliError::ReceiptPollingExhausted,
+            }
+        }
         groundhog_json_rpc_client::SubmitAndPollError::ReceiptTimeout { tx_hash, attempts } => {
             CliError::ReceiptTimeout {
                 tx_hash: format_tx_hash(&tx_hash),
@@ -179,5 +204,37 @@ mod tests {
             assert_eq!(value["details"], serde_json::to_value(status).unwrap());
         }
         assert!(command_error_for_exec_status(&ExecStatus::Ok).is_none());
+    }
+
+    #[test]
+    fn recent_bounds_failure_maps_to_actionable_cli_error() {
+        use groundhog_json_rpc_types::{
+            BlockHeight,
+            hex::{Hex0x, HexBytes},
+            transaction::{ConflictCode, ConflictDiagnostic},
+        };
+
+        let tx_hash = TxHash(Hex0x(groundhog_xdr::types::SHA256Hash::from([0x44; 32])));
+        let error = map_submit_and_poll_error(
+            groundhog_json_rpc_client::SubmitAndPollError::TransactionStatus {
+                tx_hash,
+                status: TransactionStatus::RecentFailure {
+                    attempt_height: BlockHeight::from(17),
+                    conflict: ConflictDiagnostic {
+                        address: Hex0x(groundhog_xdr::types::ContractAddress::from([0x55; 32])),
+                        key: HexBytes(vec![0, 0, 0, 1]),
+                        code: ConflictCode::BoundsExceeded,
+                    },
+                },
+            },
+        );
+
+        assert_eq!(error.code(), "transaction_recent_failure");
+        assert!(error.to_string().contains("boundsExceeded"));
+        assert!(error.hint().expect("hint expected").contains("airdrop"));
+        let details = error.details_json().expect("details expected");
+        assert_eq!(details["attemptHeight"], 17);
+        assert_eq!(details["conflict"]["key"], "0x00000001");
+        assert_eq!(details["conflict"]["code"], "boundsExceeded");
     }
 }

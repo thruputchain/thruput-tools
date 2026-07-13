@@ -167,6 +167,18 @@ pub enum CliError {
     },
     #[error("transaction {tx_hash} submitted but no receipt after {seconds}s")]
     ReceiptTimeout { tx_hash: String, seconds: u64 },
+    #[error("transaction {tx_hash} was rejected: {reason}")]
+    TransactionInvalid { tx_hash: String, reason: String },
+    #[error(
+        "transaction {tx_hash} failed at height {attempt_height}: {conflict_code} conflict at {conflict_address}"
+    )]
+    TransactionRecentFailure {
+        tx_hash: String,
+        attempt_height: i64,
+        conflict_address: String,
+        conflict_key: String,
+        conflict_code: String,
+    },
     #[error("internal error: receipt polling exhausted unexpectedly")]
     ReceiptPollingExhausted,
     #[error("{path}: {message}")]
@@ -245,6 +257,8 @@ impl CliError {
             }
             Self::SavedWalletOwnerMismatch { .. } => "saved_wallet_owner_mismatch",
             Self::ReceiptTimeout { .. } => "receipt_timeout",
+            Self::TransactionInvalid { .. } => "transaction_invalid",
+            Self::TransactionRecentFailure { .. } => "transaction_recent_failure",
             Self::ReceiptPollingExhausted => "receipt_polling_exhausted",
             Self::CallEncode { .. } => "call_encode",
             Self::CallDecode { .. } => "call_decode",
@@ -374,6 +388,19 @@ impl CliError {
             ))),
             Self::ReceiptTimeout { .. } => Some(Cow::Borrowed(
                 "check the node logs, then rerun the command once the transaction is committed or rejected",
+            )),
+            Self::TransactionInvalid { .. } => Some(Cow::Borrowed(
+                "check the transaction arguments and signing wallet, then submit a new transaction",
+            )),
+            Self::TransactionRecentFailure { conflict_code, .. }
+                if conflict_code == "boundsExceeded" =>
+            {
+                Some(Cow::Borrowed(
+                    "check the signing wallet balance and run `groundhog airdrop` before retrying; the submitted transaction has not committed",
+                ))
+            }
+            Self::TransactionRecentFailure { .. } => Some(Cow::Borrowed(
+                "the failure is advisory and the transaction may be retried; check its status before submitting a replacement",
             )),
             Self::CallEncode { .. } => Some(Cow::Borrowed(
                 "check the reported argument path and use structured JSON for composite contract values",
@@ -535,6 +562,25 @@ impl CliError {
                 "keyName": key_name,
                 "configured": configured,
                 "local": local,
+            })),
+            Self::TransactionInvalid { tx_hash, reason } => Some(json!({
+                "txHash": tx_hash,
+                "reason": reason,
+            })),
+            Self::TransactionRecentFailure {
+                tx_hash,
+                attempt_height,
+                conflict_address,
+                conflict_key,
+                conflict_code,
+            } => Some(json!({
+                "txHash": tx_hash,
+                "attemptHeight": attempt_height,
+                "conflict": {
+                    "address": conflict_address,
+                    "key": conflict_key,
+                    "code": conflict_code,
+                },
             })),
             _ => None,
         }
