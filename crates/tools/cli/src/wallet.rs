@@ -22,7 +22,7 @@ use crate::account_resolution::{LocalBootstrapRole, resolve_local_bootstrap_acco
 use crate::codec::{format_contract_address, parse_contract_address};
 use crate::config::{
     ProfileOverrides, cache_dir, find_project_config, remove_profile_wallet_address,
-    resolve_default_key, resolve_profile, resolve_profile_with_overrides,
+    resolve_default_key_for_profile, resolve_profile, resolve_profile_with_overrides,
     save_profile_wallet_address,
 };
 use crate::faucet_client::{client as faucet_client, post_json};
@@ -35,10 +35,10 @@ use crate::tx_utils::{
     ensure_tx_success, format_tx_hash, nonce_from_timestamp, resolve_block_expiry_height,
     submit_and_poll_blocking,
 };
-use crate::{CliError, Print};
+use crate::{CliError, Print, dev_keys};
 
 pub const WALLET_CREATE_JSON_SCHEMA_VERSION: u32 = 3;
-const WALLET_CREATE_PREFUND_RAW_AMOUNT: u128 = 100_000_000;
+const WALLET_CREATE_PREFUND_RAW_AMOUNT: u128 = 200_000_000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PreparedWalletCreate {
@@ -560,8 +560,15 @@ fn resolve_wallet_create_inputs(
     let profile = resolve_profile_with_overrides(cwd, profile_name, overrides)?;
     let key_name = match key_name {
         Some(key_name) => key_name.to_owned(),
-        None => resolve_default_key(cwd, profile_name)?.ok_or(CliError::MissingSigningKey)?,
+        None => resolve_default_key_for_profile(&profile)?.ok_or(CliError::MissingSigningKey)?,
     };
+    if dev_keys::is_dev_key(&key_name) {
+        return Err(CliError::Other(
+            "wallet creation requires a non-dev key; run `groundhog keys generate <name>` \
+             and retry with `--key <name>`"
+                .into(),
+        ));
+    }
     let wallet_name = match wallet_name {
         Some(wallet_name) => {
             let wallet_name = wallet_name.trim();
@@ -997,6 +1004,9 @@ fn resolve_dev_wallet_artifact_path(
         }
         if let Some(root) = runtime_artifacts_dir {
             candidates.push(root.join(hint_path));
+            if let Some(filename) = hint_path.file_name() {
+                candidates.push(root.join(filename));
+            }
         }
     }
     candidates.sort();
@@ -1025,10 +1035,10 @@ mod tests {
         PreparedRemoteWalletCreate, RemoteWalletCreateAttempt,
         load_or_create_remote_wallet_create_attempt, read_remote_wallet_create_attempt,
         remote_wallet_create_attempt_path, remove_remote_wallet_create_attempt,
-        resolve_dev_wallet_artifact_path, validate_remote_create_wallet_address,
-        write_remote_wallet_create_attempt,
+        resolve_dev_wallet_artifact_path, resolve_wallet_create_inputs,
+        validate_remote_create_wallet_address, write_remote_wallet_create_attempt,
     };
-    use crate::config::ResolvedProfile;
+    use crate::config::{LocalRuntimeState, ProfileOverrides, ResolvedProfile};
 
     struct EnvGuard {
         key: &'static str,
@@ -1051,6 +1061,63 @@ mod tests {
                 unsafe { std::env::remove_var(self.key) };
             }
         }
+    }
+
+    #[test]
+    #[serial]
+    fn wallet_create_rejects_implicit_local_dev_key() {
+        let tmp = tempfile::tempdir().expect("bug: tempdir should be created");
+        let _config_home = EnvGuard::set_path("XDG_CONFIG_HOME", tmp.path());
+        let runtime_manifest = tmp.path().join("runtime-manifest.json");
+        std::fs::write(&runtime_manifest, "{}").expect("bug: manifest should be written");
+        std::fs::write(
+            tmp.path().join("groundhog.toml"),
+            "default_profile = \"local\"\n[profile.local]\nnetwork = \"local\"\n",
+        )
+        .expect("bug: project config should be written");
+        crate::config::save_local_runtime_state(&LocalRuntimeState {
+            node_id: "local-node".into(),
+            rpc_url: "http://127.0.0.1:9545".into(),
+            runtime_manifest,
+            runtime_artifacts_dir: None,
+        })
+        .expect("bug: local runtime state should be written");
+
+        let error = resolve_wallet_create_inputs(
+            tmp.path(),
+            None,
+            None,
+            Some("local"),
+            &ProfileOverrides::default(),
+        )
+        .err()
+        .expect("bug: wallet create should reject implicit dev-0");
+
+        assert!(error.to_string().contains("requires a non-dev key"));
+    }
+
+    #[test]
+    #[serial]
+    fn wallet_create_rejects_explicit_dev_key() {
+        let tmp = tempfile::tempdir().expect("bug: tempdir should be created");
+        let _config_home = EnvGuard::set_path("XDG_CONFIG_HOME", tmp.path());
+        std::fs::write(
+            tmp.path().join("groundhog.toml"),
+            "[profile.local]\nnetwork = \"local\"\n",
+        )
+        .expect("bug: project config should be written");
+
+        let error = resolve_wallet_create_inputs(
+            tmp.path(),
+            Some("dev-1"),
+            None,
+            Some("local"),
+            &ProfileOverrides::default(),
+        )
+        .err()
+        .expect("bug: wallet create should reject explicit dev keys");
+
+        assert!(error.to_string().contains("requires a non-dev key"));
     }
 
     #[test]
@@ -1133,6 +1200,25 @@ mod tests {
             "contracts/dev_wallet.rv32a",
         )
         .expect("bug: runtime artifact-dir artifact should resolve");
+        assert_eq!(resolved, artifact);
+    }
+
+    #[test]
+    fn artifact_path_uses_direct_contract_artifact_dir() {
+        let tmp = tempfile::tempdir().expect("bug: tempdir should be created");
+        let contracts = tmp.path().join("built_contracts");
+        std::fs::create_dir(&contracts).expect("bug: contracts dir should be created");
+        let artifact = contracts.join("dev_wallet.rv32a");
+        std::fs::write(&artifact, []).expect("bug: artifact should be written");
+
+        let resolved = resolve_dev_wallet_artifact_path(
+            std::path::Path::new("/"),
+            std::path::Path::new("/tmp/runtime-manifest.json"),
+            Some(&contracts),
+            None,
+            "contracts/dev_wallet.rv32a",
+        )
+        .expect("bug: direct runtime artifact-dir artifact should resolve");
         assert_eq!(resolved, artifact);
     }
 

@@ -289,7 +289,7 @@ enum Command {
         #[command(flatten)]
         artifacts: ArtifactArgs,
     },
-    /// Transfer local HOG from the dev faucet to a wallet
+    /// Request HOG funding for a wallet
     Airdrop {
         /// Wallet name, dev-N wallet, or direct 0x-prefixed wallet address
         recipient: String,
@@ -459,7 +459,7 @@ enum WalletCommand {
         #[arg(long = "profile")]
         profile: Option<String>,
     },
-    /// Create a local-node wallet for a stored signing key
+    /// Prefund and create a wallet for a stored signing key
     Create {
         /// Existing key name that should own the new wallet
         #[arg(long)]

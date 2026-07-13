@@ -2,7 +2,8 @@
 # Real local-DX smoke test.
 #
 # Exercises the user-facing CLI path against a real hog-devnode binary:
-#   groundhog new -> build -> node -> deploy -> call -> view -> storage
+#   groundhog new -> build -> node -> dev-0 deploy/call/view/storage
+#   -> key generate -> wallet create -> saved-wallet deploy/call
 #
 # Required environment:
 #   GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode
@@ -574,5 +575,40 @@ STORAGE_VALUE="$(json_field data.item.value "$STORAGE_JSON")"
 [[ "$STORAGE_VALUE" == "$EXPECTED_VALUE" ]] || die "counter storage value was $STORAGE_VALUE, expected $EXPECTED_VALUE"
 log "storage args: address=$CONTRACT_ADDRESS key=$COUNTER_VALUE_KEY"
 log "storage result: height=$(json_field data.block_height "$STORAGE_JSON") kind=$STORAGE_KIND value=$STORAGE_VALUE"
+
+if [[ -n "$GATEWAY_RPC_URL" ]]; then
+    log "Switching project RPC back to groundhog node for wallet-create write checks"
+    update_rpc_url groundhog.toml "$SMOKE_PROFILE" "$RPC_URL"
+fi
+
+USER_KEY="smoke-user"
+log "Generating non-dev signing key: $USER_KEY"
+"$CLI" keys generate "$USER_KEY"
+
+WALLET_JSON="$(run_json "wallet create" "$CLI" --json wallet create --key "$USER_KEY")"
+WALLET_ADDRESS="$(json_field data.wallet "$WALLET_JSON")"
+[[ "$WALLET_ADDRESS" != "null" && -n "$WALLET_ADDRESS" ]] \
+    || die "wallet create did not return a wallet address"
+WALLET_PREFUND="$(json_field data.prefund_raw_amount "$WALLET_JSON")"
+[[ "$WALLET_PREFUND" == "200000000" ]] \
+    || die "wallet create prefund was $WALLET_PREFUND, expected 200000000"
+[[ "$(json_field data.prefund_tx_hash "$WALLET_JSON")" != "null" ]] \
+    || die "wallet create did not return a prefund transaction hash"
+[[ "$(json_field data.create_tx_hash "$WALLET_JSON")" != "null" ]] \
+    || die "wallet create did not return a create transaction hash"
+log "wallet create result: address=$WALLET_ADDRESS prefund=$WALLET_PREFUND"
+
+"$CLI" keys use "$USER_KEY"
+USER_DEPLOY_JSON="$(run_json "saved-wallet deploy" "$CLI" --json deploy)"
+USER_CONTRACT_ADDRESS="$(json_field data.address "$USER_DEPLOY_JSON")"
+[[ "$USER_CONTRACT_ADDRESS" != "null" && -n "$USER_CONTRACT_ADDRESS" ]] \
+    || die "saved-wallet deploy did not return a contract address"
+log "saved-wallet deploy result: address=$USER_CONTRACT_ADDRESS height=$(json_field data.height "$USER_DEPLOY_JSON") tx=$(json_field data.tx_hash "$USER_DEPLOY_JSON")"
+
+USER_INITIALIZE_JSON="$(run_json "saved-wallet initialize" "$CLI" --json call "$PROJECT_NAME" initialize 11)"
+assert_call_succeeded "saved-wallet initialize" "$USER_INITIALIZE_JSON"
+USER_INCREMENT_JSON="$(run_json "saved-wallet increment" "$CLI" --json call "$PROJECT_NAME" increment 2)"
+assert_call_succeeded "saved-wallet increment" "$USER_INCREMENT_JSON"
+log "saved-wallet call result: status=$(json_field data.status_summary "$USER_INCREMENT_JSON") height=$(json_field data.height "$USER_INCREMENT_JSON") tx=$(json_field data.tx_hash "$USER_INCREMENT_JSON")"
 
 log "Local DX smoke passed"

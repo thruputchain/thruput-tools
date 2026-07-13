@@ -273,7 +273,7 @@ Response for success or already-created retry:
   "deployNonce": "0x...",
   "clientNonce": "0x...",
   "walletAddress": "0x...",
-  "prefundRawAmount": "100000000",
+  "prefundRawAmount": "200000000",
   "prefundTxHash": "0x...",
   "prefundHeight": 123,
   "createTxHash": "0x...",
@@ -296,6 +296,8 @@ Response for an in-progress retry can be either `202 Accepted` or `200 OK` with 
 ```
 
 The request does not include `walletAddress` or `walletContractHash`. The faucet derives both from the live descriptor and `deployNonce`, then binds the derived values into the owner proof. This keeps the single endpoint compact while preserving the original design's proof-of-intent boundary.
+
+Wallet-create prefunding and ordinary airdrops are separate policy values. Wallet creation currently transfers `200000000` raw units so the new wallet can pay its own creation costs and still fund a first contract deploy. A normal airdrop remains `100000000` raw units.
 
 The signing helper will need a new proof-message shape or version because the current shipped proof does not include `clientNonce`, `networkId`, or wallet address.
 

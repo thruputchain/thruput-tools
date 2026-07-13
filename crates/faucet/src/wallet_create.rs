@@ -104,7 +104,7 @@ pub(crate) async fn create_wallet(
 
 pub struct WalletCreateService {
     network_descriptor: NetworkDescriptor,
-    airdrop_submitter: Arc<dyn AirdropSubmitter>,
+    prefund_submitter: Arc<dyn AirdropSubmitter>,
     wallet_create_submitter: Arc<dyn WalletCreateSubmitter>,
     policy_store: Arc<dyn FaucetPolicyStore>,
     policy_config: PolicyRuntimeConfig,
@@ -113,14 +113,14 @@ pub struct WalletCreateService {
 impl WalletCreateService {
     pub fn new(
         network_descriptor: NetworkDescriptor,
-        airdrop_submitter: Arc<dyn AirdropSubmitter>,
+        prefund_submitter: Arc<dyn AirdropSubmitter>,
         wallet_create_submitter: Arc<dyn WalletCreateSubmitter>,
         policy_store: Arc<dyn FaucetPolicyStore>,
         policy_config: PolicyRuntimeConfig,
     ) -> Self {
         Self {
             network_descriptor,
-            airdrop_submitter,
+            prefund_submitter,
             wallet_create_submitter,
             policy_store,
             policy_config,
@@ -313,7 +313,7 @@ impl WalletCreateService {
         }
 
         let prefund = match self
-            .airdrop_submitter
+            .prefund_submitter
             .submit_airdrop(prepared.wallet_address)
             .await
         {
@@ -348,7 +348,7 @@ impl WalletCreateService {
                 "wallet-create attempt has an invalid prefund transaction hash",
             ));
         };
-        match self.airdrop_submitter.poll_airdrop(tx_hash).await {
+        match self.prefund_submitter.poll_airdrop(tx_hash).await {
             Ok(receipt) if matches!(receipt.status, ExecStatus::Ok) => {
                 attempt.prefund_height = Some(*receipt.height);
                 attempt.expires_at = SystemTime::now().checked_add(Duration::from_secs(

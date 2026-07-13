@@ -45,6 +45,8 @@ pub struct FaucetConfigParts {
     pub network_descriptor: NetworkDescriptor,
     /// Private airdrop execution config.
     pub airdrop: AirdropRuntimeConfig,
+    /// Raw HOG units transferred before wallet creation.
+    pub wallet_create_prefund_raw_amount: u128,
     /// Private wallet-create execution config.
     pub wallet_create: WalletCreateRuntimeConfig,
     /// Browser origins allowed to call the API.
@@ -70,12 +72,16 @@ impl FaucetConfigFile {
         self,
         key_loader: &dyn FaucetSecretKeyLoader,
     ) -> Result<FaucetConfigParts, FaucetConfigError> {
-        if self.network.wallet_create.prefund_raw_amount != self.airdrop.raw_amount {
-            return Err(FaucetConfigError::WalletCreatePrefundMismatch {
-                wallet_create_prefund_raw_amount: self.network.wallet_create.prefund_raw_amount,
-                airdrop_raw_amount: self.airdrop.raw_amount,
-            });
-        }
+        let wallet_create_prefund_raw_amount = self
+            .network
+            .wallet_create
+            .prefund_raw_amount
+            .parse::<u128>()
+            .ok()
+            .filter(|amount| *amount > 0)
+            .ok_or_else(|| FaucetConfigError::InvalidWalletCreatePrefundRawAmount {
+                value: self.network.wallet_create.prefund_raw_amount.clone(),
+            })?;
         validate_dev_wallet_entrypoint_shape(
             "network.dev_wallet.deploy_entrypoint",
             &self.network.dev_wallet.deploy_entrypoint,
@@ -89,12 +95,6 @@ impl FaucetConfigFile {
         validate_faucet_public_key_match(&self.network.faucet.public_key, &faucet_secret_key)?;
         let airdrop = self.airdrop.into_runtime_config(faucet_secret_key)?;
         let wallet_create = self.wallet_create.into_runtime_config()?;
-        if self.network.wallet_create.prefund_raw_amount != airdrop.raw_amount.to_string() {
-            return Err(FaucetConfigError::WalletCreatePrefundMismatch {
-                wallet_create_prefund_raw_amount: self.network.wallet_create.prefund_raw_amount,
-                airdrop_raw_amount: airdrop.raw_amount.to_string(),
-            });
-        }
         let cors_allowed_origins = self
             .cors_allowed_origins
             .iter()
@@ -111,6 +111,7 @@ impl FaucetConfigFile {
             listen_address: self.listen_address,
             network_descriptor: self.network.into_descriptor(),
             airdrop,
+            wallet_create_prefund_raw_amount,
             wallet_create,
             policy: self.policy.into_runtime_config(),
             cors_allowed_origins,
@@ -253,14 +254,9 @@ pub enum FaucetConfigError {
     /// A configured CORS origin was invalid.
     #[error("invalid CORS origin `{origin}`: {message}")]
     InvalidCorsOrigin { origin: String, message: String },
-    /// Wallet-create prefunding currently uses the generic airdrop endpoint.
-    #[error(
-        "wallet-create prefund_raw_amount `{wallet_create_prefund_raw_amount}` must match airdrop raw_amount `{airdrop_raw_amount}`"
-    )]
-    WalletCreatePrefundMismatch {
-        wallet_create_prefund_raw_amount: String,
-        airdrop_raw_amount: String,
-    },
+    /// The wallet-create prefund amount was missing, invalid, or zero.
+    #[error("wallet-create prefund raw amount must be greater than zero, got `{value}`")]
+    InvalidWalletCreatePrefundRawAmount { value: String },
     /// The expected faucet public key was not 32 bytes.
     #[error("network faucet public key must be 32 bytes, got {0}")]
     InvalidFaucetPublicKey(usize),
@@ -673,19 +669,36 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn config_rejects_wallet_create_prefund_airdrop_mismatch() {
+    async fn config_allows_distinct_wallet_create_prefund_and_airdrop_amounts() {
         let config: FaucetConfigFile = toml::from_str(&test_config().replace(
             "prefund_raw_amount = \"100000000\"",
-            "prefund_raw_amount = \"1\"",
+            "prefund_raw_amount = \"200000000\"",
+        ))
+        .expect("bug: fixture config should parse");
+
+        let parts = config
+            .into_parts_with_key_loader(&TestKeyLoader)
+            .await
+            .expect("bug: wallet prefund and airdrop amounts should be independent");
+
+        assert_eq!(parts.wallet_create_prefund_raw_amount, 200_000_000);
+        assert_eq!(parts.airdrop.raw_amount, 100_000_000);
+    }
+
+    #[tokio::test]
+    async fn config_rejects_zero_wallet_create_prefund_before_loading_secret() {
+        let config: FaucetConfigFile = toml::from_str(&test_config().replace(
+            "prefund_raw_amount = \"100000000\"",
+            "prefund_raw_amount = \"0\"",
         ))
         .expect("bug: fixture config should parse");
 
         let err = config
-            .into_parts_with_key_loader(&TestKeyLoader)
+            .into_parts_with_key_loader(&FailIfCalledKeyLoader)
             .await
-            .expect_err("bug: mismatched prefund and airdrop amounts should fail");
+            .expect_err("bug: zero wallet prefund should fail");
 
-        assert!(err.to_string().contains("must match airdrop raw_amount"));
+        assert!(err.to_string().contains("must be greater than zero"));
     }
 
     #[tokio::test]
