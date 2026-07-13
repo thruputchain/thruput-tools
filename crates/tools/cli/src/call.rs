@@ -24,18 +24,13 @@ use crate::config::{
 use crate::contract_spec::{InterfaceSpec, load_contract_spec, load_registered_interfaces};
 use crate::dev_detail::{fetch_transaction_detail_blocking, print_transaction_detail};
 use crate::keys::load_local_signer;
+use crate::network_descriptor::resolve_wallet_entrypoints;
 use crate::result::CommandResult;
-use crate::runtime_manifest::load_configured_runtime_manifest;
 use crate::tx_utils::{
     command_error_for_exec_status, format_tx_hash, nonce_from_timestamp, print_failed_receipt_data,
     resolve_block_expiry_height, submit_and_poll, summarize_exec_status,
 };
 use crate::{CliError, Print};
-
-/// Wallet `do_action` entrypoint ID (from dev-wallet WASM exports).
-const WALLET_DO_ACTION_ENTRYPOINT: [u8; 8] = 0x1984_6D75_0FAD_81D6_u64.to_be_bytes();
-const WALLET_ENTRYPOINT_SOURCE_RUNTIME_MANIFEST: &str = "runtime_manifest";
-const WALLET_ENTRYPOINT_SOURCE_LEGACY_DEFAULT: &str = "legacy_default";
 
 /// Resolved contract entrypoint plus any metadata used for codec work.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,12 +51,6 @@ pub(crate) struct PreparedCall {
     pub(crate) resolved: ResolvedCall,
     pub(crate) calldata: Vec<u8>,
     pub(crate) tx_hex: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct WalletEntrypoint {
-    id: ContractEntrypointID,
-    source: &'static str,
 }
 
 /// Call a method on a deployed contract.
@@ -154,6 +143,8 @@ pub fn run(
         "return_value": decoded_return,
         "transaction_detail": transaction_detail,
         "diagnostics": diagnostics,
+        "wallet_entrypoint_id": prepared.wallet_entrypoint_id,
+        "wallet_entrypoint_source": prepared.wallet_entrypoint_source,
     });
     if let Some(error) = command_error_for_exec_status(&receipt.status) {
         print.json(&CommandResult::failure_with_error(cmd, data, error))?;
@@ -242,6 +233,8 @@ fn print_dry_run(
             "contract": prepared.contract_address_hex,
             "method": prepared.method,
             "entrypoint_id": entrypoint_id,
+            "wallet_entrypoint_id": prepared.wallet_entrypoint_id,
+            "wallet_entrypoint_source": prepared.wallet_entrypoint_source,
             "calldata": calldata_hex,
             "signed_tx": prepared.tx_hex,
             "selector": selector_json(&prepared.resolved),
@@ -347,13 +340,13 @@ fn prepare_call_with_runtime(
     let wallet_address = resolve_wallet_address(&resolved_profile, &key_name, &signer)?;
     let wallet_address_hex = format_contract_address(&wallet_address);
 
-    let wallet_entrypoint = call_wallet_entrypoint(&resolved_profile, &key_name)?;
-    let wallet_entrypoint_id = format_entrypoint_id(wallet_entrypoint.id);
+    let wallet_entrypoints = resolve_wallet_entrypoints(&resolved_profile, &key_name)?;
+    let wallet_entrypoint_id = format_entrypoint_id(wallet_entrypoints.do_action);
     let block_expiry_height = rt.block_on(async { resolve_block_expiry_height(rpc_url).await })?;
 
     let tx = build_dev_wallet_do_action_transaction(BuildDevWalletDoActionTransaction {
         wallet_address,
-        wallet_entrypoint: wallet_entrypoint.id,
+        wallet_entrypoint: wallet_entrypoints.do_action,
         target_address: contract_address,
         target_entrypoint: resolved.entrypoint,
         target_calldata: calldata.as_slice(),
@@ -372,37 +365,11 @@ fn prepare_call_with_runtime(
         contract_address_hex,
         wallet_address_hex,
         wallet_entrypoint_id,
-        wallet_entrypoint_source: wallet_entrypoint.source,
+        wallet_entrypoint_source: wallet_entrypoints.source,
         method: method.to_owned(),
         resolved,
         calldata,
         tx_hex,
-    })
-}
-
-fn call_wallet_entrypoint(
-    profile: &crate::config::ResolvedProfile,
-    key_name: &str,
-) -> Result<WalletEntrypoint, CliError> {
-    if let Some(manifest) = load_configured_runtime_manifest(profile, key_name)? {
-        let id = manifest
-            .bootstrap
-            .dev_wallet
-            .do_action_entrypoint_id()
-            .map_err(|error| CliError::ManifestEntrypoint {
-                key_name: key_name.to_owned(),
-                field: "bootstrap.devWallet.doActionEntrypoint",
-                message: error.to_string(),
-            })?;
-        return Ok(WalletEntrypoint {
-            id,
-            source: WALLET_ENTRYPOINT_SOURCE_RUNTIME_MANIFEST,
-        });
-    }
-
-    Ok(WalletEntrypoint {
-        id: ContractEntrypointID::from(WALLET_DO_ACTION_ENTRYPOINT),
-        source: WALLET_ENTRYPOINT_SOURCE_LEGACY_DEFAULT,
     })
 }
 

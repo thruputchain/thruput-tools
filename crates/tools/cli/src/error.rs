@@ -126,6 +126,24 @@ pub enum CliError {
         /// Specific parse or validation failure.
         message: String,
     },
+    #[error("hosted network descriptor field `{field}` is invalid: {message}")]
+    NetworkDescriptorInvalid {
+        /// Public descriptor field containing invalid data.
+        field: &'static str,
+        /// Specific validation failure.
+        message: String,
+    },
+    #[error(
+        "hosted network descriptor field `{field}` does not match the selected profile: expected `{expected}`, got `{actual}`"
+    )]
+    NetworkDescriptorMismatch {
+        /// Public descriptor field that did not match local expectations.
+        field: &'static str,
+        /// Value expected from the profile or runtime manifest.
+        expected: String,
+        /// Value advertised by the public descriptor.
+        actual: String,
+    },
     #[error("failed to derive wallet address for key `{key_name}`: {message}")]
     WalletAddressDerivationFailed {
         /// Key name whose pubkey-derived wallet address could not be derived.
@@ -218,6 +236,8 @@ impl CliError {
             Self::RpcMethodFailed { .. } => "rpc_method_failed",
             Self::LocalDevAccountUnavailable { .. } => "local_dev_account_unavailable",
             Self::ManifestEntrypoint { .. } => "manifest_entrypoint_invalid",
+            Self::NetworkDescriptorInvalid { .. } => "network_descriptor_invalid",
+            Self::NetworkDescriptorMismatch { .. } => "network_descriptor_mismatch",
             Self::WalletAddressDerivationFailed { .. } => "wallet_address_derivation_failed",
             Self::SavedWalletMissing { .. } => "saved_wallet_missing",
             Self::SavedWalletOwnerPublicKeyInvalid { .. } => {
@@ -335,6 +355,11 @@ impl CliError {
             Self::ManifestEntrypoint { .. } => Some(Cow::Borrowed(
                 "restart the local node with a compatible hog-devnode, or remove the stale runtime manifest reference from project or global config",
             )),
+            Self::NetworkDescriptorInvalid { .. } | Self::NetworkDescriptorMismatch { .. } => {
+                Some(Cow::Borrowed(
+                    "check that the selected profile's RPC and faucet URLs refer to the same hosted network, then retry",
+                ))
+            }
             Self::WalletAddressDerivationFailed { .. } => Some(Cow::Borrowed(
                 "check the stored public key material, or regenerate the key",
             )),
@@ -480,6 +505,19 @@ impl CliError {
                 "keyName": key_name,
                 "field": field,
                 "message": message,
+            })),
+            Self::NetworkDescriptorInvalid { field, message } => Some(json!({
+                "field": field,
+                "message": message,
+            })),
+            Self::NetworkDescriptorMismatch {
+                field,
+                expected,
+                actual,
+            } => Some(json!({
+                "field": field,
+                "expected": expected,
+                "actual": actual,
             })),
             Self::SavedWalletMissing { key_name, profile } => Some(json!({
                 "keyName": key_name,

@@ -4,11 +4,9 @@ use groundhog_json_rpc_types::hex::HexBytes;
 use groundhog_json_rpc_types::receipt::TransactionReceipt;
 use groundhog_json_rpc_types::transaction::TxHash;
 use groundhog_signing::{
-    BuildDeployTransaction, DEFAULT_TX_GAS_LIMIT, SignTransactionParams, WALLET_DEPLOY_ENTRYPOINT,
-    build_deploy_transaction, derive_deploy_address, sign_and_encode_transaction_hex,
-    source_address_auth_claim,
+    BuildDeployTransaction, DEFAULT_TX_GAS_LIMIT, SignTransactionParams, build_deploy_transaction,
+    derive_deploy_address, sign_and_encode_transaction_hex, source_address_auth_claim,
 };
-use groundhog_xdr::contract::ContractEntrypointID;
 use groundhog_xdr::types::ContractAddress;
 use groundhog_xdr::types::SHA256Hash;
 use serde_json::json;
@@ -22,15 +20,15 @@ use crate::config::{
 };
 use crate::dev_detail::{fetch_transaction_detail_blocking, print_transaction_detail};
 use crate::keys::load_local_signer;
+use crate::network_descriptor::resolve_wallet_entrypoints;
 use crate::result::CommandResult;
-use crate::runtime_manifest::load_configured_runtime_manifest;
 use crate::tx_utils::{
     command_error_for_exec_status, format_tx_hash, nonce_from_timestamp, print_failed_receipt_data,
     resolve_block_expiry_height, submit_and_poll, summarize_exec_status,
 };
 use crate::{CliError, Print};
 
-pub const DEPLOY_JSON_SCHEMA_VERSION: u32 = 2;
+pub const DEPLOY_JSON_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DeployAddressSource {
@@ -45,6 +43,8 @@ pub(crate) struct PreparedDeploy {
     pub(crate) artifact: ResolvedArtifact,
     pub(crate) artifact_bytes_len: usize,
     pub(crate) predicted_address: String,
+    pub(crate) wallet_entrypoint_id: String,
+    pub(crate) wallet_entrypoint_source: &'static str,
     pub(crate) tx_hex: String,
 }
 
@@ -151,6 +151,8 @@ pub fn run(
         "height": receipt.height,
         "status": receipt.status,
         "transaction_detail": transaction_detail,
+        "wallet_entrypoint_id": prepared.wallet_entrypoint_id,
+        "wallet_entrypoint_source": prepared.wallet_entrypoint_source,
     });
     if command_error.is_some() {
         data["return_data"] = json!(receipt.return_data);
@@ -194,6 +196,8 @@ fn print_dry_run(
             "artifact_path": &prepared.artifact.path,
             "artifact_bytes": prepared.artifact_bytes_len,
             "predicted_address": prepared.predicted_address,
+            "wallet_entrypoint_id": prepared.wallet_entrypoint_id,
+            "wallet_entrypoint_source": prepared.wallet_entrypoint_source,
             "signed_tx": prepared.tx_hex,
         }),
     ))?;
@@ -353,13 +357,13 @@ fn prepare_deploy_transaction(
     // Auth claim: source-address auth data at key slot 0.
     let auth_claim = source_address_auth_claim();
 
-    let entrypoint = deploy_entrypoint(profile, key_name)?;
+    let wallet_entrypoints = resolve_wallet_entrypoints(profile, key_name)?;
 
     let block_expiry_height = rt.block_on(async { resolve_block_expiry_height(rpc_url).await })?;
 
     let tx = build_deploy_transaction(BuildDeployTransaction {
         invoked_address: wallet_address,
-        entrypoint,
+        entrypoint: wallet_entrypoints.deploy,
         calldata,
         gas_limit: DEFAULT_TX_GAS_LIMIT,
         block_expiry_height,
@@ -376,27 +380,10 @@ fn prepare_deploy_transaction(
         artifact,
         artifact_bytes_len,
         predicted_address: format!("0x{}", hex::encode(predicted_address.as_ref())),
+        wallet_entrypoint_id: format!("0x{}", hex::encode(wallet_entrypoints.deploy.into_inner())),
+        wallet_entrypoint_source: wallet_entrypoints.source,
         tx_hex,
     })
-}
-
-fn deploy_entrypoint(
-    profile: &ResolvedProfile,
-    key_name: &str,
-) -> Result<ContractEntrypointID, CliError> {
-    if let Some(manifest) = load_configured_runtime_manifest(profile, key_name)? {
-        return manifest
-            .bootstrap
-            .dev_wallet
-            .deploy_entrypoint_id()
-            .map_err(|error| CliError::ManifestEntrypoint {
-                key_name: key_name.to_owned(),
-                field: "bootstrap.devWallet.deployEntrypoint",
-                message: error.to_string(),
-            });
-    }
-
-    Ok(ContractEntrypointID::from(WALLET_DEPLOY_ENTRYPOINT))
 }
 
 /// Parse a `0x`-prefixed hex string into a 32-byte array.

@@ -1322,7 +1322,7 @@ mod tests {
     fn test_network_descriptor() -> groundhog_json_rpc_types::network_descriptor::NetworkDescriptor
     {
         serde_json::from_value(serde_json::json!({
-            "schemaVersion": 1,
+            "schemaVersion": groundhog_json_rpc_types::network_descriptor::NETWORK_DESCRIPTOR_SCHEMA_VERSION,
             "kind": "groundhog-network",
             "networkId": "devnet-preview",
             "protocol": "x23",
@@ -1341,6 +1341,10 @@ mod tests {
             "walletCreate": {
                 "prefundRawAmount": "100000000",
                 "walletContractHash": format!("0x{}", "03".repeat(32))
+            },
+            "devWallet": {
+                "deployEntrypoint": "0xf969542572bd6860",
+                "doActionEntrypoint": "0xa0fff94c64fbaf3c"
             }
         }))
         .expect("bug: test network descriptor should deserialize")
