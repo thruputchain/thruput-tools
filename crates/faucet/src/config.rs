@@ -7,8 +7,8 @@ use crate::wallet_create::{WalletCreateRuntimeConfig, WalletCreateRuntimeConfigE
 use axum::http::HeaderValue;
 use groundhog_json_rpc_types::hex::HexBytes;
 use groundhog_json_rpc_types::network_descriptor::{
-    FaucetDescriptor, NativeHogDescriptor, NetworkDescriptor, NetworkDescriptorEndpoints,
-    WalletCreateDescriptor,
+    DevWalletDescriptor, FaucetDescriptor, NativeHogDescriptor, NetworkDescriptor,
+    NetworkDescriptorEndpoints, WalletCreateDescriptor,
 };
 use groundhog_json_rpc_types::{ContractAddress, SHA256Hash};
 use groundhog_signing::LocalSigner;
@@ -76,6 +76,14 @@ impl FaucetConfigFile {
                 airdrop_raw_amount: self.airdrop.raw_amount,
             });
         }
+        validate_dev_wallet_entrypoint_shape(
+            "network.dev_wallet.deploy_entrypoint",
+            &self.network.dev_wallet.deploy_entrypoint,
+        )?;
+        validate_dev_wallet_entrypoint_shape(
+            "network.dev_wallet.do_action_entrypoint",
+            &self.network.dev_wallet.do_action_entrypoint,
+        )?;
         validate_faucet_public_key_shape(&self.network.faucet.public_key)?;
         let faucet_secret_key = key_loader.load(&self.airdrop.secret_key_source).await?;
         validate_faucet_public_key_match(&self.network.faucet.public_key, &faucet_secret_key)?;
@@ -256,6 +264,9 @@ pub enum FaucetConfigError {
     /// The expected faucet public key was not 32 bytes.
     #[error("network faucet public key must be 32 bytes, got {0}")]
     InvalidFaucetPublicKey(usize),
+    /// A public dev-wallet entrypoint was not 8 bytes.
+    #[error("{field} must be 8 bytes, got {len}")]
+    InvalidDevWalletEntrypoint { field: &'static str, len: usize },
     /// The loaded secret key did not control the configured faucet account.
     #[error("loaded faucet signing key does not match network.faucet.public_key")]
     FaucetPublicKeyMismatch,
@@ -279,6 +290,8 @@ pub struct NetworkConfig {
     pub faucet: FaucetAccountConfig,
     /// Wallet-create metadata configuration.
     pub wallet_create: WalletCreateConfig,
+    /// Public dev-wallet entrypoint configuration.
+    pub dev_wallet: DevWalletConfig,
 }
 
 impl NetworkConfig {
@@ -297,6 +310,10 @@ impl NetworkConfig {
             WalletCreateDescriptor::new(
                 self.wallet_create.prefund_raw_amount,
                 self.wallet_create.wallet_contract_hash,
+            ),
+            DevWalletDescriptor::new(
+                self.dev_wallet.deploy_entrypoint,
+                self.dev_wallet.do_action_entrypoint,
             ),
         )
     }
@@ -364,6 +381,29 @@ pub struct WalletCreateConfig {
     pub wallet_contract_hash: SHA256Hash,
 }
 
+/// Public dev-wallet entrypoint configuration.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DevWalletConfig {
+    /// Entrypoint used to deploy a contract through the wallet.
+    pub deploy_entrypoint: HexBytes,
+    /// Entrypoint used to invoke contract actions through the wallet.
+    pub do_action_entrypoint: HexBytes,
+}
+
+fn validate_dev_wallet_entrypoint_shape(
+    field: &'static str,
+    entrypoint: &HexBytes,
+) -> Result<(), FaucetConfigError> {
+    if entrypoint.0.len() == 8 {
+        return Ok(());
+    }
+    Err(FaucetConfigError::InvalidDevWalletEntrypoint {
+        field,
+        len: entrypoint.0.len(),
+    })
+}
+
 /// Private airdrop execution configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -429,6 +469,15 @@ mod tests {
 
     struct FailIfCalledKeyLoader;
 
+    #[test]
+    fn example_config_parses() {
+        let config: FaucetConfigFile = toml::from_str(include_str!("../faucet.example.toml"))
+            .expect("bug: example faucet config should parse");
+
+        assert_eq!(config.network.dev_wallet.deploy_entrypoint.0.len(), 8);
+        assert_eq!(config.network.dev_wallet.do_action_entrypoint.0.len(), 8);
+    }
+
     #[async_trait]
     impl FaucetSecretKeyLoader for TestKeyLoader {
         async fn load(
@@ -474,12 +523,17 @@ mod tests {
 
         let descriptor = config.into_network_descriptor();
 
-        assert_eq!(descriptor.schema_version, 1);
+        assert_eq!(
+            descriptor.schema_version,
+            groundhog_json_rpc_types::network_descriptor::NETWORK_DESCRIPTOR_SCHEMA_VERSION
+        );
         assert_eq!(descriptor.kind, "groundhog-network");
         assert_eq!(descriptor.network_id, "devnet-preview");
         assert_eq!(descriptor.endpoints.rpc_url, "https://rpc.devnet.example");
         assert_eq!(descriptor.native_hog.decimals, 7);
         assert_eq!(descriptor.wallet_create.prefund_raw_amount, "100000000");
+        assert_eq!(descriptor.dev_wallet.deploy_entrypoint.0.len(), 8);
+        assert_eq!(descriptor.dev_wallet.do_action_entrypoint.0.len(), 8);
     }
 
     #[tokio::test]
@@ -593,6 +647,10 @@ mod tests {
             [network.wallet_create]
             prefund_raw_amount = "100000000"
             wallet_contract_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"
+
+            [network.dev_wallet]
+            deploy_entrypoint = "0xf969542572bd6860"
+            do_action_entrypoint = "0xa0fff94c64fbaf3c"
             "#,
         )
         .expect_err("bug: unknown fields should fail");
@@ -667,6 +725,27 @@ mod tests {
         assert!(error.to_string().contains("32 bytes"), "{error}");
     }
 
+    #[tokio::test]
+    async fn config_rejects_malformed_public_entrypoint_before_loading_secret() {
+        let config: FaucetConfigFile = toml::from_str(&test_config().replace(
+            "deploy_entrypoint = \"0xf969542572bd6860\"",
+            "deploy_entrypoint = \"0xf96954\"",
+        ))
+        .expect("bug: fixture config should parse");
+
+        let error = config
+            .into_parts_with_key_loader(&FailIfCalledKeyLoader)
+            .await
+            .expect_err("bug: malformed public entrypoint should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("network.dev_wallet.deploy_entrypoint must be 8 bytes"),
+            "{error}"
+        );
+    }
+
     #[test]
     fn config_parses_aws_secrets_manager_key_source() {
         let config: FaucetConfigFile = toml::from_str(&test_config().replace(
@@ -712,6 +791,10 @@ mod tests {
         [network.wallet_create]
         prefund_raw_amount = "100000000"
         wallet_contract_hash = "0x0000000000000000000000000000000000000000000000000000000000000000"
+
+        [network.dev_wallet]
+        deploy_entrypoint = "0xf969542572bd6860"
+        do_action_entrypoint = "0xa0fff94c64fbaf3c"
 
         [airdrop]
         raw_amount = "100000000"

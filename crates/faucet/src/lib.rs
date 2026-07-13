@@ -1449,6 +1449,10 @@ mod tests {
             "walletCreate": {
                 "prefundRawAmount": "100000000",
                 "walletContractHash": format!("0x{}", "00".repeat(32))
+            },
+            "devWallet": {
+                "deployEntrypoint": "0xf969542572bd6860",
+                "doActionEntrypoint": "0xa0fff94c64fbaf3c"
             }
         }))
         .expect("bug: test network descriptor should deserialize")

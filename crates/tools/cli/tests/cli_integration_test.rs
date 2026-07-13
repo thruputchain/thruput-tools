@@ -1849,6 +1849,52 @@ fn deploy_dry_run_json_outputs_prepared_transaction() {
 }
 
 #[test]
+fn deploy_dry_run_uses_hosted_descriptor_entrypoint() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
+    let (faucet_url, descriptor_server) = spawn_network_descriptor(&rpc_url);
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
+    add_faucet_to_default_profile(&project, &faucet_url);
+    let wasm_path = tmp.path().join("test.wasm");
+    std::fs::write(&wasm_path, b"\0asm\x01\0\0\0").unwrap();
+
+    let output = groundhog()
+        .args([
+            "--json",
+            "deploy",
+            "--dry-run",
+            "--artifact",
+            wasm_path.to_str().unwrap(),
+        ])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    descriptor_server.join().unwrap();
+    rpc_server.join().unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["data"]["wallet_entrypoint_id"], "0xf969542572bd6860");
+    assert_eq!(
+        stdout["data"]["wallet_entrypoint_source"],
+        "network_descriptor"
+    );
+    assert_eq!(
+        signed_tx_entrypoint(stdout["data"]["signed_tx"].as_str().unwrap()),
+        "0xf969542572bd6860"
+    );
+}
+
+#[test]
 fn wallet_create_dry_run_json_outputs_prepared_transaction() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");
@@ -3572,6 +3618,52 @@ fn call_dry_run_json_outputs_prepared_transaction() {
 }
 
 #[test]
+fn call_dry_run_uses_hosted_descriptor_entrypoint() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
+    let (faucet_url, descriptor_server) = spawn_network_descriptor(&rpc_url);
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
+    add_faucet_to_default_profile(&project, &faucet_url);
+    let contract = format!("0x{}", "11".repeat(32));
+
+    let output = groundhog()
+        .args([
+            "--json",
+            "call",
+            "--dry-run",
+            &contract,
+            "0x0123456789abcdef",
+            "0x0102",
+        ])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    descriptor_server.join().unwrap();
+    rpc_server.join().unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["data"]["wallet_entrypoint_id"], "0xa0fff94c64fbaf3c");
+    assert_eq!(
+        stdout["data"]["wallet_entrypoint_source"],
+        "network_descriptor"
+    );
+    assert_eq!(
+        signed_tx_entrypoint(stdout["data"]["signed_tx"].as_str().unwrap()),
+        "0xa0fff94c64fbaf3c"
+    );
+}
+
+#[test]
 fn call_dry_run_uses_manifest_dev_wallet_address_without_dev_rpc() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");
@@ -4103,6 +4195,61 @@ fn read_jsonrpc_request(
     (stream, request)
 }
 
+fn spawn_network_descriptor(rpc_url: &str) -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let rpc_url = rpc_url.to_owned();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut request_line = String::new();
+        reader.read_line(&mut request_line).unwrap();
+        assert!(
+            request_line.starts_with("GET /v1/network "),
+            "unexpected descriptor request: {request_line}"
+        );
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            if line == "\r\n" || line.is_empty() {
+                break;
+            }
+        }
+        let body = serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": groundhog_json_rpc_types::network_descriptor::NETWORK_DESCRIPTOR_SCHEMA_VERSION,
+            "kind": "groundhog-network",
+            "networkId": "devnet",
+            "protocol": "hogp/test",
+            "genesisHash": format!("0x{}", "42".repeat(32)),
+            "endpoints": { "rpcUrl": rpc_url },
+            "nativeHog": {
+                "tokenAddress": format!("0x{}", "61".repeat(32)),
+                "decimals": 7,
+                "transferEntrypoint": "0x63285b3523f9dc3f"
+            },
+            "faucet": { "walletAddress": format!("0x{}", "71".repeat(32)) },
+            "walletCreate": {
+                "prefundRawAmount": "100000000",
+                "walletContractHash": format!("0x{}", "51".repeat(32))
+            },
+            "devWallet": {
+                "deployEntrypoint": "0xf969542572bd6860",
+                "doActionEntrypoint": "0xa0fff94c64fbaf3c"
+            }
+        }))
+        .unwrap();
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+            body.len()
+        )
+        .unwrap();
+        stream.write_all(&body).unwrap();
+        stream.flush().unwrap();
+    });
+    (format!("http://{addr}"), handle)
+}
+
 /// Send a JSON-RPC response and close the connection.
 #[allow(clippy::needless_pass_by_value)]
 fn send_jsonrpc_response(
@@ -4469,6 +4616,20 @@ fn write_project_config_with_alice_wallet(
         format!(
             "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets.alice]\naddress = \"0x{}\"\nowner_public_key = \"{owner_public_key}\"\n",
             "aa".repeat(32)
+        ),
+    )
+    .unwrap();
+}
+
+fn add_faucet_to_default_profile(project: &std::path::Path, faucet_url: &str) {
+    let path = project.join("groundhog.toml");
+    let config = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(
+        path,
+        config.replacen(
+            "[profile.default]\n",
+            &format!("[profile.default]\nfaucet_url = \"{faucet_url}\"\n"),
+            1,
         ),
     )
     .unwrap();

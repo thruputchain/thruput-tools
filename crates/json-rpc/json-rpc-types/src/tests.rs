@@ -75,8 +75,8 @@ mod wire_format {
     };
     use crate::hex::{Hex0x, HexBytes, Topic};
     use crate::network_descriptor::{
-        FaucetDescriptor, NETWORK_DESCRIPTOR_SCHEMA_VERSION, NativeHogDescriptor,
-        NetworkDescriptor, NetworkDescriptorEndpoints, WalletCreateDescriptor,
+        DevWalletDescriptor, FaucetDescriptor, NETWORK_DESCRIPTOR_SCHEMA_VERSION,
+        NativeHogDescriptor, NetworkDescriptor, NetworkDescriptorEndpoints, WalletCreateDescriptor,
     };
     use crate::receipt::{ExecStatus, TransactionReceipt};
     use crate::state::StorageItemInfo;
@@ -117,6 +117,12 @@ mod wire_format {
                 prefund_raw_amount: "100000000".into(),
                 wallet_contract_hash: zero_hash(),
             },
+            dev_wallet: DevWalletDescriptor {
+                deploy_entrypoint: HexBytes(vec![0xf9, 0x69, 0x54, 0x25, 0x72, 0xbd, 0x68, 0x60]),
+                do_action_entrypoint: HexBytes(vec![
+                    0xa0, 0xff, 0xf9, 0x4c, 0x64, 0xfb, 0xaf, 0x3c,
+                ]),
+            },
         }
     }
 
@@ -151,6 +157,11 @@ mod wire_format {
             "0x63285b3523f9dc3f"
         );
         assert_eq!(value["walletCreate"]["prefundRawAmount"], "100000000");
+        assert_eq!(value["devWallet"]["deployEntrypoint"], "0xf969542572bd6860");
+        assert_eq!(
+            value["devWallet"]["doActionEntrypoint"],
+            "0xa0fff94c64fbaf3c"
+        );
 
         assert!(value.get("schema_version").is_none());
         assert!(value.get("bootstrapAccountDerivation").is_none());
@@ -165,8 +176,8 @@ mod wire_format {
         assert!(!encoded.contains("privateKey"));
         assert!(!encoded.contains("seed"));
         assert!(!encoded.contains("createWalletEntrypoint"));
-        assert!(!encoded.contains("doActionEntrypoint"));
-        assert!(!encoded.contains("deployEntrypoint"));
+        assert!(encoded.contains("doActionEntrypoint"));
+        assert!(encoded.contains("deployEntrypoint"));
 
         let roundtrip: NetworkDescriptor = serde_json::from_value(value).unwrap();
         assert_eq!(roundtrip, descriptor);
