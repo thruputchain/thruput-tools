@@ -30,9 +30,7 @@ use crate::hog;
 use crate::keys::load_local_signer;
 use crate::profile_backend::{ProfileBackend, resolve_profile_backend};
 use crate::result::CommandResult;
-use crate::runtime_manifest::{
-    apply_local_node_state_for_local_bootstrap, load_configured_runtime_manifest,
-};
+use crate::runtime_manifest::{configured_runtime_manifest_path, load_configured_runtime_manifest};
 use crate::tx_utils::{
     ensure_tx_success, format_tx_hash, nonce_from_timestamp, resolve_block_expiry_height,
     submit_and_poll_blocking,
@@ -52,11 +50,13 @@ pub(crate) enum PreparedWalletCreate {
 struct SavedWallet {
     name: String,
     address: String,
+    owner_public_key: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PreparedLocalWalletCreate {
     pub(crate) rpc_url: String,
+    pub(crate) profile_name: String,
     pub(crate) key_name: String,
     pub(crate) wallet_name: String,
     pub(crate) faucet_key_name: String,
@@ -73,6 +73,7 @@ pub(crate) struct PreparedLocalWalletCreate {
 pub(crate) struct PreparedRemoteWalletCreate {
     faucet_url: String,
     rpc_url: String,
+    profile_name: String,
     key_name: String,
     wallet_name: String,
     owner_public_key: String,
@@ -142,7 +143,7 @@ pub fn create(
     key_name: Option<&str>,
     wallet_name: Option<&str>,
     dry_run: bool,
-    profile: &str,
+    profile: Option<&str>,
     overrides: &ProfileOverrides,
     cmd: &'static str,
     print: &Print,
@@ -167,18 +168,13 @@ pub fn create(
     }
 
     match prepared {
-        PreparedWalletCreate::Local(prepared) => {
-            create_local_wallet(&cwd, profile, &prepared, cmd, print)
-        }
-        PreparedWalletCreate::Remote(prepared) => {
-            create_remote_wallet(&cwd, profile, &prepared, cmd, print)
-        }
+        PreparedWalletCreate::Local(prepared) => create_local_wallet(&cwd, &prepared, cmd, print),
+        PreparedWalletCreate::Remote(prepared) => create_remote_wallet(&cwd, &prepared, cmd, print),
     }
 }
 
 fn create_local_wallet(
     cwd: &Path,
-    profile: &str,
     prepared: &PreparedLocalWalletCreate,
     cmd: &'static str,
     print: &Print,
@@ -210,9 +206,10 @@ fn create_local_wallet(
         .unwrap_or_else(|| cwd.to_path_buf());
     save_profile_wallet_address(
         &project_root,
-        Some(profile),
+        Some(&prepared.profile_name),
         &prepared.wallet_name,
         &prepared.wallet_address,
+        &prepared.owner_public_key,
     )?;
 
     print.status(format_args!("Wallet created: {}", prepared.wallet_address));
@@ -245,7 +242,6 @@ fn create_local_wallet(
 
 fn create_remote_wallet(
     cwd: &Path,
-    profile: &str,
     prepared: &PreparedRemoteWalletCreate,
     cmd: &'static str,
     print: &Print,
@@ -296,9 +292,10 @@ fn create_remote_wallet(
         .unwrap_or_else(|| cwd.to_path_buf());
     save_profile_wallet_address(
         &project_root,
-        Some(profile),
+        Some(&prepared.profile_name),
         &prepared.wallet_name,
         &prepared.wallet_address,
+        &prepared.owner_public_key,
     )?;
     remove_remote_wallet_create_attempt(prepared)?;
 
@@ -351,32 +348,42 @@ fn validate_remote_create_wallet_address(prepared: &str, created: &str) -> Resul
     Ok(())
 }
 
-pub fn remove(name: &str, profile: &str, cmd: &'static str, print: &Print) -> Result<(), CliError> {
+pub fn remove(
+    name: &str,
+    profile: Option<&str>,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
     let cwd = std::env::current_dir()?;
     let project_root = find_project_config(&cwd)
         .and_then(|path| path.parent().map(Path::to_path_buf))
         .unwrap_or(cwd);
-    remove_profile_wallet_address(&project_root, Some(profile), name)?;
+    let resolved_profile = resolve_profile(&project_root, profile)?;
+    remove_profile_wallet_address(&project_root, Some(&resolved_profile.name), name)?;
 
     print.status(format_args!("Removed wallet `{}`.", name.trim()));
     print.json(&CommandResult::new(
         cmd,
         json!({
             "name": name.trim(),
-            "profile": profile,
+            "profile": resolved_profile.name,
         }),
     ))?;
 
     Ok(())
 }
 
-pub fn list(profile: &str, cmd: &'static str, print: &Print) -> Result<(), CliError> {
+pub fn list(profile: Option<&str>, cmd: &'static str, print: &Print) -> Result<(), CliError> {
     let cwd = std::env::current_dir()?;
-    let profile = resolve_profile(&cwd, Some(profile))?;
+    let profile = resolve_profile(&cwd, profile)?;
     let wallets: Vec<SavedWallet> = profile
         .wallets
         .into_iter()
-        .map(|(name, address)| SavedWallet { name, address })
+        .map(|(name, wallet)| SavedWallet {
+            name,
+            address: wallet.address,
+            owner_public_key: wallet.owner_public_key,
+        })
         .collect();
 
     if print.is_json() {
@@ -390,7 +397,10 @@ pub fn list(profile: &str, cmd: &'static str, print: &Print) -> Result<(), CliEr
     }
 
     for wallet in wallets {
-        println!("{} {}", wallet.name, wallet.address);
+        println!(
+            "{} {} owner {}",
+            wallet.name, wallet.address, wallet.owner_public_key
+        );
     }
 
     Ok(())
@@ -480,7 +490,7 @@ pub(crate) fn prepare_wallet_create(
     cwd: &Path,
     key_name: Option<&str>,
     wallet_name: Option<&str>,
-    profile_name: &str,
+    profile_name: Option<&str>,
     overrides: &ProfileOverrides,
 ) -> Result<PreparedWalletCreate, CliError> {
     let inputs = resolve_wallet_create_inputs(cwd, key_name, wallet_name, profile_name, overrides)?;
@@ -502,7 +512,7 @@ fn prepare_remote_wallet_create_dry_run(
     cwd: &Path,
     key_name: Option<&str>,
     wallet_name: Option<&str>,
-    profile_name: &str,
+    profile_name: Option<&str>,
     overrides: &ProfileOverrides,
 ) -> Result<Option<PreparedRemoteWalletCreateDryRun>, CliError> {
     let inputs = resolve_wallet_create_inputs(cwd, key_name, wallet_name, profile_name, overrides)?;
@@ -544,13 +554,13 @@ fn resolve_wallet_create_inputs(
     cwd: &Path,
     key_name: Option<&str>,
     wallet_name: Option<&str>,
-    profile_name: &str,
+    profile_name: Option<&str>,
     overrides: &ProfileOverrides,
 ) -> Result<WalletCreateInputs, CliError> {
-    let profile = resolve_profile_with_overrides(cwd, Some(profile_name), overrides)?;
+    let profile = resolve_profile_with_overrides(cwd, profile_name, overrides)?;
     let key_name = match key_name {
         Some(key_name) => key_name.to_owned(),
-        None => resolve_default_key(cwd, Some(profile_name))?.ok_or(CliError::MissingSigningKey)?,
+        None => resolve_default_key(cwd, profile_name)?.ok_or(CliError::MissingSigningKey)?,
     };
     let wallet_name = match wallet_name {
         Some(wallet_name) => {
@@ -572,16 +582,18 @@ fn resolve_wallet_create_inputs(
 
 fn prepare_local_wallet_create(
     cwd: &Path,
-    mut profile: crate::config::ResolvedProfile,
+    profile: crate::config::ResolvedProfile,
     key_name: String,
     wallet_name: String,
 ) -> Result<PreparedWalletCreate, CliError> {
-    apply_local_node_state_for_local_bootstrap(&mut profile)?;
     let rpc_url = profile
         .rpc_url
         .as_deref()
         .ok_or(CliError::MissingRpcUrl)?
         .to_owned();
+    let manifest_path = configured_runtime_manifest_path(&profile)?.ok_or_else(|| {
+        CliError::Other("wallet creation requires a local runtime manifest".into())
+    })?;
     let manifest = load_configured_runtime_manifest(&profile, "faucet")?.ok_or_else(|| {
         CliError::Other("wallet creation requires a local runtime manifest".into())
     })?;
@@ -600,6 +612,8 @@ fn prepare_local_wallet_create(
     let owner_public_key = format!("0x{}", hex::encode(owner.verifying_key_bytes()));
     let (artifact_path, contract, contract_hash) = load_dev_wallet_contract(
         cwd,
+        &manifest_path,
+        profile.runtime_artifacts_dir.as_deref(),
         profile.source.as_deref(),
         &manifest.bootstrap.dev_wallet.artifact_hint,
     )?;
@@ -642,6 +656,7 @@ fn prepare_local_wallet_create(
 
     Ok(PreparedWalletCreate::Local(PreparedLocalWalletCreate {
         rpc_url,
+        profile_name: profile.name,
         key_name,
         wallet_name,
         faucet_key_name: faucet.key_name,
@@ -716,6 +731,7 @@ fn prepare_remote_wallet_create(
     Ok(PreparedWalletCreate::Remote(PreparedRemoteWalletCreate {
         faucet_url,
         rpc_url,
+        profile_name: profile.name.clone(),
         key_name,
         wallet_name,
         owner_public_key,
@@ -895,10 +911,18 @@ struct SignCreateWalletTransaction<'a> {
 
 fn load_dev_wallet_contract(
     cwd: &Path,
+    manifest_path: &Path,
+    runtime_artifacts_dir: Option<&Path>,
     profile_source: Option<&Path>,
     artifact_hint: &str,
 ) -> Result<(PathBuf, Contract, SHA256Hash), CliError> {
-    let artifact_path = resolve_dev_wallet_artifact_path(cwd, profile_source, artifact_hint)?;
+    let artifact_path = resolve_dev_wallet_artifact_path(
+        cwd,
+        manifest_path,
+        runtime_artifacts_dir,
+        profile_source,
+        artifact_hint,
+    )?;
     let artifact_bytes = std::fs::read(&artifact_path)?;
     let contract = dev_wallet_contract(&artifact_path, artifact_bytes);
     let contract_hash = wallet_contract_hash(&contract)
@@ -952,6 +976,8 @@ fn sign_wallet_prefund_transaction(
 
 fn resolve_dev_wallet_artifact_path(
     cwd: &Path,
+    manifest_path: &Path,
+    runtime_artifacts_dir: Option<&Path>,
     profile_source: Option<&Path>,
     hint: &str,
 ) -> Result<PathBuf, CliError> {
@@ -962,8 +988,14 @@ fn resolve_dev_wallet_artifact_path(
 
     let mut candidates = Vec::new();
     if !hint_path.is_absolute() {
+        if let Some(root) = manifest_path.parent() {
+            candidates.push(root.join(hint_path));
+        }
         candidates.push(cwd.join(hint_path));
         if let Some(root) = profile_source.and_then(Path::parent) {
+            candidates.push(root.join(hint_path));
+        }
+        if let Some(root) = runtime_artifacts_dir {
             candidates.push(root.join(hint_path));
         }
     }
@@ -977,7 +1009,7 @@ fn resolve_dev_wallet_artifact_path(
     }
 
     Err(CliError::Other(format!(
-        "dev-wallet artifact `{hint}` was not found; run from the local-node project directory or set profile.<name>.runtime_manifest with a reachable artifact hint"
+        "dev-wallet artifact `{hint}` was not found relative to the runtime manifest, current directory, profile config, or configured runtime_artifacts_dir"
     )))
 }
 
@@ -1053,10 +1085,54 @@ mod tests {
 
         let resolved = resolve_dev_wallet_artifact_path(
             std::path::Path::new("/"),
+            std::path::Path::new("/tmp/runtime-manifest.json"),
+            None,
             Some(&config),
             "contracts/dev_wallet.wasm",
         )
         .expect("bug: profile-root artifact should resolve");
+        assert_eq!(resolved, artifact);
+    }
+
+    #[test]
+    fn artifact_path_prefers_manifest_root() {
+        let tmp = tempfile::tempdir().expect("bug: tempdir should be created");
+        let manifest_dir = tmp.path().join("node-state");
+        std::fs::create_dir(&manifest_dir).expect("bug: manifest dir should be created");
+        let manifest = manifest_dir.join("runtime-manifest.json");
+        let contracts = manifest_dir.join("contracts");
+        std::fs::create_dir(&contracts).expect("bug: contracts dir should be created");
+        let artifact = contracts.join("dev_wallet.rv32a");
+        std::fs::write(&artifact, []).expect("bug: artifact should be written");
+
+        let resolved = resolve_dev_wallet_artifact_path(
+            std::path::Path::new("/"),
+            &manifest,
+            None,
+            None,
+            "contracts/dev_wallet.rv32a",
+        )
+        .expect("bug: manifest-root artifact should resolve");
+        assert_eq!(resolved, artifact);
+    }
+
+    #[test]
+    fn artifact_path_uses_runtime_artifacts_dir() {
+        let tmp = tempfile::tempdir().expect("bug: tempdir should be created");
+        let artifacts_root = tmp.path().join("hog-devnode");
+        let contracts = artifacts_root.join("contracts");
+        std::fs::create_dir_all(&contracts).expect("bug: contracts dir should be created");
+        let artifact = contracts.join("dev_wallet.rv32a");
+        std::fs::write(&artifact, []).expect("bug: artifact should be written");
+
+        let resolved = resolve_dev_wallet_artifact_path(
+            std::path::Path::new("/"),
+            std::path::Path::new("/tmp/runtime-manifest.json"),
+            Some(&artifacts_root),
+            None,
+            "contracts/dev_wallet.rv32a",
+        )
+        .expect("bug: runtime artifact-dir artifact should resolve");
         assert_eq!(resolved, artifact);
     }
 
@@ -1229,12 +1305,14 @@ mod tests {
     fn test_profile() -> ResolvedProfile {
         ResolvedProfile {
             name: "preview".into(),
+            network: Some(crate::config::Network::Devnet),
             rpc_url: Some("https://rpc.devnet.example".into()),
             faucet_url: Some("https://faucet.devnet.example".into()),
             rpc_url_cli_override: false,
             default_key: Some("alice".into()),
             runtime_manifest: None,
             runtime_manifest_cli_override: false,
+            runtime_artifacts_dir: None,
             contracts: BTreeMap::new(),
             wallets: BTreeMap::new(),
             source: None,
@@ -1272,6 +1350,7 @@ mod tests {
         PreparedRemoteWalletCreate {
             faucet_url: "https://faucet.devnet.example".into(),
             rpc_url: "https://rpc.devnet.example".into(),
+            profile_name: "preview".into(),
             key_name: "alice".into(),
             wallet_name: "main".into(),
             owner_public_key: format!("0x{}", "11".repeat(32)),

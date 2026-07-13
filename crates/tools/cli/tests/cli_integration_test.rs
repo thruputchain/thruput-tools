@@ -3,6 +3,7 @@ use std::net::TcpListener;
 use std::process::Command;
 #[cfg(unix)]
 use std::process::{ExitStatus, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(unix)]
 use std::sync::mpsc;
 use std::thread;
@@ -14,9 +15,24 @@ use tempfile::TempDir;
 
 mod support;
 
+static CONFIG_HOME_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
 fn groundhog() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_groundhog"));
+    let config_home = std::env::temp_dir().join(format!(
+        "groundhog-cli-test-config-{}-{}",
+        std::process::id(),
+        CONFIG_HOME_COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    let cache_home = config_home.with_file_name(format!(
+        "groundhog-cli-test-cache-{}-{}",
+        std::process::id(),
+        CONFIG_HOME_COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
     command.env_remove("GROUNDHOG_RUNTIME_MANIFEST");
+    command.env_remove("GROUNDHOG_PROFILE");
+    command.env("XDG_CONFIG_HOME", config_home);
+    command.env("XDG_CACHE_HOME", cache_home);
     command
 }
 
@@ -191,8 +207,12 @@ fn help_shows_subcommands() {
     assert!(stdout.contains("view"));
     assert!(stdout.contains("storage"));
     assert!(stdout.contains("keys"));
-    assert!(stdout.contains("login"));
     assert!(stdout.contains("logout"));
+    assert!(
+        !stdout
+            .lines()
+            .any(|line| line.trim_start().starts_with("login"))
+    );
     assert!(stdout.contains("completion"));
 }
 
@@ -209,6 +229,7 @@ fn version_flag_works() {
 fn node_hogd_dev_binary_json_starts_supervisor() {
     let fake = fake_hogd_dev_binary();
     let pid_dir = TempDir::new().unwrap();
+    let config_home = TempDir::new().unwrap();
     let pid_path = pid_dir.path().join("hogd.pid");
     let child = groundhog()
         .arg("--json")
@@ -219,6 +240,7 @@ fn node_hogd_dev_binary_json_starts_supervisor() {
         .arg(fake)
         .env("GROUNDHOG_FAKE_HOGD_DEV_MODE", "ready-with-indexer")
         .env("GROUNDHOG_FAKE_HOGD_DEV_PID_FILE", &pid_path)
+        .env("XDG_CONFIG_HOME", config_home.path())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -246,6 +268,13 @@ fn node_hogd_dev_binary_json_starts_supervisor() {
     assert_eq!(payload["data"]["backend"]["planes"]["chain"], "scheduler");
     assert_eq!(payload["data"]["backend"]["planes"]["read"], "indexer");
     assert_eq!(payload["data"]["backend"]["planes"]["view"], "stub");
+    assert_eq!(payload["data"]["local_runtime_state"]["ok"], true);
+    assert!(
+        payload["data"]["local_runtime_state"]["path"]
+            .as_str()
+            .expect("bug: local_runtime_state path should be a string")
+            .ends_with("groundhog/config.toml")
+    );
     let scheduler = payload["data"]["backend"]["endpoints"]["scheduler_coord"]
         .as_str()
         .expect("bug: SchedulerCoord endpoint should be a string");
@@ -276,9 +305,46 @@ fn node_hogd_dev_binary_json_starts_supervisor() {
     send_sigint(child.child());
     let status = wait_child(child.into_inner(), Duration::from_secs(10));
     assert!(status.success(), "groundhog node should stop cleanly");
+    let global_config = std::fs::read_to_string(config_home.path().join("groundhog/config.toml"))
+        .expect("groundhog node should leave config readable");
+    assert!(!global_config.contains("local_runtime_state"));
     assert!(
         wait_pid_gone(pid, Duration::from_secs(2)),
         "fake hogd-dev pid {pid} still alive after CLI exit",
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn node_hogd_dev_profile_write_failure_stops_supervisor() {
+    let fake = fake_hogd_dev_binary();
+    let pid_dir = TempDir::new().unwrap();
+    let config_home = TempDir::new().unwrap();
+    let pid_path = pid_dir.path().join("hogd.pid");
+    let invalid_config_home = config_home.path().join("not-a-directory");
+    std::fs::write(&invalid_config_home, b"not a directory").unwrap();
+
+    let output = groundhog()
+        .arg("--json")
+        .arg("node")
+        .arg("--port")
+        .arg("0")
+        .arg("--hog-devnode-binary")
+        .arg(fake)
+        .env("GROUNDHOG_FAKE_HOGD_DEV_MODE", "ready-with-indexer")
+        .env("GROUNDHOG_FAKE_HOGD_DEV_PID_FILE", &pid_path)
+        .env("XDG_CONFIG_HOME", &invalid_config_home)
+        .output()
+        .expect("bug: groundhog node should run");
+
+    assert!(
+        !output.status.success(),
+        "profile write failure should make groundhog node fail"
+    );
+    let pid = read_pid_file(&pid_path);
+    assert!(
+        wait_pid_gone(pid, Duration::from_secs(2)),
+        "fake hogd-dev pid {pid} still alive after profile write failure"
     );
 }
 
@@ -341,6 +407,18 @@ fn new_creates_project() {
     assert!(dir.join(".cargo/config.toml").exists());
     assert!(dir.join(".cargo/contract.toml").exists());
     assert!(dir.join("rust-toolchain.toml").exists());
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Creating project `my-test-project`"));
+    assert!(stderr.contains("[ok] Created project `my-test-project`"));
+    assert!(stderr.contains("Project Ready"));
+    assert!(stderr.contains("Project: my-test-project"));
+    assert!(stderr.contains("Template: counter"));
+    assert!(stderr.contains("Config: "));
+    assert!(stderr.contains("Next:"));
+    assert!(!stderr.contains("Cargo Registry:"));
+    assert!(!stderr.contains("cargo login --registry groundhog"));
+    assert!(stderr.contains("groundhog build"));
 }
 
 #[test]
@@ -392,6 +470,7 @@ fn init_json_delegates_to_status() {
     let output = groundhog()
         .arg("--json")
         .arg("init")
+        .current_dir(tmp.path())
         .env("CARGO_HOME", tmp.path().join("cargo-home"))
         .env("XDG_CONFIG_HOME", tmp.path())
         .output()
@@ -405,6 +484,126 @@ fn init_json_delegates_to_status() {
     assert_eq!(stdout["data"]["environment"]["cargo"], true);
     assert_eq!(stdout["data"]["credentials"]["executor_credentials"], false);
     assert!(!stdout["warnings"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn init_human_output_shows_setup_sections() {
+    let tmp = TempDir::new().unwrap();
+    let mut child = groundhog()
+        .arg("init")
+        .current_dir(tmp.path())
+        .env("CARGO_HOME", tmp.path().join("cargo-home"))
+        .env("XDG_CONFIG_HOME", tmp.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(b"n\nn\nn\n")
+        .unwrap();
+
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Groundhog Setup"));
+    assert!(stderr.contains("Set up your local development environment."));
+    assert!(stderr.contains("[1/5] Environment"));
+    assert!(stderr.contains("[2/5] Profiles"));
+    assert!(stderr.contains("[3/5] Signing key"));
+    assert!(stderr.contains("[4/5] Executor credentials"));
+    assert!(stderr.contains("[5/5] Project"));
+    assert!(stderr.contains("Setup Complete"));
+    assert!(stderr.contains("Config:"));
+    assert!(stderr.contains("Profile:"));
+    assert!(stderr.contains("Local RPC:"));
+    assert!(stderr.contains("Next:"));
+    assert!(stderr.contains("groundhog new my-contract"));
+}
+
+#[test]
+fn init_human_output_points_to_created_project() {
+    let tmp = TempDir::new().unwrap();
+    let mut child = groundhog()
+        .arg("init")
+        .current_dir(tmp.path())
+        .env("CARGO_HOME", tmp.path().join("cargo-home"))
+        .env("XDG_CONFIG_HOME", tmp.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(b"y\nn\ny\ndemo-contract\n")
+        .unwrap();
+
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Setup Complete"));
+    assert!(stderr.contains("Key: default (0x"));
+    assert!(stderr.contains("Project:"));
+    assert!(stderr.contains("demo-contract"));
+    assert!(stderr.contains("Next:"));
+    assert!(stderr.contains("cd demo-contract"));
+    assert!(stderr.contains("groundhog build"));
+    assert!(!stderr.contains("groundhog new my-contract"));
+    assert!(tmp.path().join("demo-contract/groundhog.toml").exists());
+}
+
+#[test]
+fn init_human_output_builds_existing_project() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("existing-contract");
+    std::fs::create_dir(&project).unwrap();
+    std::fs::write(
+        project.join("groundhog.toml"),
+        "[profile.local]\nnetwork = \"local\"\n",
+    )
+    .unwrap();
+    let mut child = groundhog()
+        .arg("init")
+        .current_dir(&project)
+        .env("CARGO_HOME", tmp.path().join("cargo-home"))
+        .env("XDG_CONFIG_HOME", tmp.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    child.stdin.as_mut().unwrap().write_all(b"y\nn\n").unwrap();
+
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Setup Complete"));
+    assert!(stderr.contains("Project:"));
+    assert!(stderr.contains("existing-contract"));
+    assert!(stderr.contains("Next:"));
+    assert!(stderr.contains("groundhog build"));
+    assert!(!stderr.contains("groundhog new my-contract"));
+    assert!(!stderr.contains("cd existing-contract"));
 }
 
 #[test]
@@ -486,7 +685,6 @@ fn quiet_status_exits_zero_with_no_output_when_fully_configured() {
         std::env::set_var("XDG_CONFIG_HOME", tmp.path());
     }
 
-    groundhog_cli::auth::ensure_cargo_registry(&cargo_home.join("config.toml")).unwrap();
     groundhog_cli::keys::generate(
         &Some("alice".into()),
         false,
@@ -532,10 +730,11 @@ fn status_human_output_shows_sections() {
     // human-readable section content.
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("cargo: installed"));
-    assert!(stderr.contains("registry:"));
-    assert!(stderr.contains("keys: none"));
-    assert!(stderr.contains("credentials: NOT stored"));
+    assert!(stderr.contains("Groundhog Status"));
+    assert!(stderr.contains("Cargo: installed"));
+    assert!(stderr.contains("Global Registry:"));
+    assert!(stderr.contains("Keys: none"));
+    assert!(stderr.contains("Credentials: not stored"));
 }
 
 #[test]
@@ -908,24 +1107,6 @@ fn build_json_prefers_metadata_failure_outside_project() {
     assert_eq!(stderr["ok"], false);
     assert_eq!(stderr["command"], "build");
     assert_eq!(stderr["error"]["code"], "cargo_metadata_failed");
-}
-
-#[test]
-fn login_json_returns_structured_error() {
-    let output = groundhog().arg("--json").arg("login").output().unwrap();
-
-    assert!(!output.status.success());
-    assert!(output.stdout.is_empty());
-    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-    assert_eq!(stderr["ok"], false);
-    assert_eq!(stderr["command"], "login");
-    assert_eq!(stderr["error"]["code"], "json_unsupported");
-    assert!(
-        stderr["error"]["hint"]
-            .as_str()
-            .unwrap()
-            .contains("groundhog login")
-    );
 }
 
 #[test]
@@ -1566,9 +1747,11 @@ fn new_json_failure_is_structured() {
 #[test]
 fn deploy_fails_without_config() {
     let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
     let output = groundhog()
         .arg("deploy")
         .current_dir(tmp.path())
+        .env("XDG_CONFIG_HOME", &config_home)
         .output()
         .unwrap();
     assert!(!output.status.success());
@@ -1579,10 +1762,12 @@ fn deploy_fails_without_config() {
 #[test]
 fn deploy_json_fails_without_config() {
     let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
     let output = groundhog()
         .arg("--json")
         .arg("deploy")
         .current_dir(tmp.path())
+        .env("XDG_CONFIG_HOME", &config_home)
         .output()
         .unwrap();
     assert!(!output.status.success());
@@ -1600,25 +1785,7 @@ fn deploy_dry_run_json_outputs_prepared_transaction() {
     std::fs::create_dir_all(&project).unwrap();
 
     let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
-    std::fs::write(
-        project.join("groundhog.toml"),
-        format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
-            "aa".repeat(32)
-        ),
-    )
-    .unwrap();
-
-    let generate = groundhog()
-        .args(["keys", "generate", "alice"])
-        .env("XDG_CONFIG_HOME", &config_home)
-        .output()
-        .unwrap();
-    assert!(
-        generate.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&generate.stderr)
-    );
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
     // Write a minimal WASM file for the deploy to read.
     let wasm_path = tmp.path().join("test.wasm");
@@ -1861,10 +2028,12 @@ fn wallet_ls_json_outputs_saved_wallets() {
     std::fs::create_dir_all(&project).unwrap();
     let alice = format!("0x{}", "ab".repeat(32));
     let bob = format!("0x{}", "cd".repeat(32));
+    let alice_owner = format!("0x{}", "11".repeat(32));
+    let bob_owner = format!("0x{}", "22".repeat(32));
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"http://127.0.0.1:9545\"\n\n[profile.default.wallets]\nalice = \"{alice}\"\nbob = \"{bob}\"\n"
+            "[profile.default]\nrpc_url = \"http://127.0.0.1:9545\"\n\n[profile.default.wallets.alice]\naddress = \"{alice}\"\nowner_public_key = \"{alice_owner}\"\n\n[profile.default.wallets.bob]\naddress = \"{bob}\"\nowner_public_key = \"{bob_owner}\"\n"
         ),
     )
     .unwrap();
@@ -1888,8 +2057,8 @@ fn wallet_ls_json_outputs_saved_wallets() {
     assert_eq!(
         stdout["data"]["wallets"],
         serde_json::json!([
-            { "name": "alice", "address": alice },
-            { "name": "bob", "address": bob },
+            { "name": "alice", "address": alice, "owner_public_key": alice_owner },
+            { "name": "bob", "address": bob, "owner_public_key": bob_owner },
         ])
     );
 }
@@ -1904,10 +2073,11 @@ fn airdrop_dry_run_json_outputs_prepared_transaction() {
     let manifest_path = write_runtime_manifest(&project, 0, &faucet_wallet, None);
     let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
     let recipient_wallet = format!("0x{}", "ab".repeat(32));
+    let recipient_owner = format!("0x{}", "cd".repeat(32));
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\nruntime_manifest = \"{}\"\n\n[profile.default.wallets]\nalice = \"{recipient_wallet}\"\n",
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\nruntime_manifest = \"{}\"\n\n[profile.default.wallets.alice]\naddress = \"{recipient_wallet}\"\nowner_public_key = \"{recipient_owner}\"\n",
             manifest_path.file_name().unwrap().to_string_lossy()
         ),
     )
@@ -1962,25 +2132,7 @@ fn deploy_dry_run_json_accepts_rv32_artifact() {
     std::fs::create_dir_all(&project).unwrap();
 
     let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
-    std::fs::write(
-        project.join("groundhog.toml"),
-        format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
-            "aa".repeat(32)
-        ),
-    )
-    .unwrap();
-
-    let generate = groundhog()
-        .args(["keys", "generate", "alice"])
-        .env("XDG_CONFIG_HOME", &config_home)
-        .output()
-        .unwrap();
-    assert!(
-        generate.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&generate.stderr)
-    );
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
     let rv32_path = tmp.path().join("test.rv32a");
     std::fs::write(&rv32_path, b"rv32-artifact").unwrap();
@@ -2040,29 +2192,11 @@ fn deploy_dry_run_auto_resolves_rv32_artifact_by_default() {
     .unwrap();
 
     let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
-    std::fs::write(
-        project.join("groundhog.toml"),
-        format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
-            "aa".repeat(32)
-        ),
-    )
-    .unwrap();
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
     let artifact_path = project.join("target/groundhog/demo_contract.rv32a");
     std::fs::create_dir_all(artifact_path.parent().unwrap()).unwrap();
     std::fs::write(&artifact_path, b"rv32-auto").unwrap();
-
-    let generate = groundhog()
-        .args(["keys", "generate", "alice"])
-        .env("XDG_CONFIG_HOME", &config_home)
-        .output()
-        .unwrap();
-    assert!(
-        generate.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&generate.stderr)
-    );
 
     let output = groundhog()
         .args(["--json", "deploy", "--dry-run"])
@@ -2148,8 +2282,9 @@ fn deploy_dry_run_uses_manifest_dev_wallet_address_without_dev_rpc() {
 }
 
 #[test]
-fn deploy_dry_run_uses_project_local_node_state_rpc_and_manifest() {
+fn deploy_dry_run_uses_profile_rpc_and_manifest() {
     let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
 
@@ -2158,10 +2293,12 @@ fn deploy_dry_run_uses_project_local_node_state_rpc_and_manifest() {
     let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
     std::fs::write(
         project.join("groundhog.toml"),
-        "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"dev-0\"\n",
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            manifest_path.display()
+        ),
     )
     .unwrap();
-    write_local_node_state(&project, &rpc_url, &manifest_path);
 
     let wasm_path = tmp.path().join("test.wasm");
     std::fs::write(&wasm_path, b"\0asm\x01\0\0\0").unwrap();
@@ -2175,6 +2312,7 @@ fn deploy_dry_run_uses_project_local_node_state_rpc_and_manifest() {
             wasm_path.to_str().unwrap(),
         ])
         .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
         .output()
         .unwrap();
 
@@ -2495,6 +2633,7 @@ fn deploy_dry_run_rejects_manifest_seed_that_does_not_match_signer() {
 #[test]
 fn deploy_dev_key_requires_runtime_manifest() {
     let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
 
@@ -2516,6 +2655,7 @@ fn deploy_dev_key_requires_runtime_manifest() {
             wasm_path.to_str().unwrap(),
         ])
         .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
         .output()
         .unwrap();
 
@@ -2541,25 +2681,7 @@ fn deploy_live_json_submits_and_returns_receipt() {
     std::fs::create_dir_all(&project).unwrap();
 
     let (rpc_url, rpc_server) = spawn_deploy_rpc(42);
-    std::fs::write(
-        project.join("groundhog.toml"),
-        format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
-            "aa".repeat(32)
-        ),
-    )
-    .unwrap();
-
-    let generate = groundhog()
-        .args(["keys", "generate", "alice"])
-        .env("XDG_CONFIG_HOME", &config_home)
-        .output()
-        .unwrap();
-    assert!(
-        generate.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&generate.stderr)
-    );
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
     // Write a minimal WASM file for the deploy to read.
     let wasm_path = tmp.path().join("test.wasm");
@@ -2601,6 +2723,8 @@ fn deploy_live_json_submits_and_returns_receipt() {
     assert_eq!(stdout["data"]["address_source"], "receipt");
     assert_eq!(stdout["data"]["height"], 42);
     assert_eq!(stdout["data"]["status"]["result"], "ok");
+    assert!(stdout["data"].get("return_data").is_none());
+    assert!(stdout["data"].get("abort_data").is_none());
     assert!(stdout["data"]["transaction_detail"].is_null());
     assert!(
         stdout["data"]["tx_hash"]
@@ -2608,6 +2732,89 @@ fn deploy_live_json_submits_and_returns_receipt() {
             .unwrap()
             .starts_with("0x")
     );
+}
+
+#[test]
+fn deploy_live_json_fails_with_receipt_context() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let (rpc_url, rpc_server) = spawn_transaction_rpc(
+        42,
+        sample_failed_deploy_receipt(42),
+        DevDetailRpcResponse::MethodNotFound,
+    );
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
+
+    let wasm_path = tmp.path().join("test.wasm");
+    std::fs::write(&wasm_path, b"\0asm\x01\0\0\0").unwrap();
+    let output = groundhog()
+        .args([
+            "--json",
+            "deploy",
+            "--artifact",
+            wasm_path.to_str().unwrap(),
+        ])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stderr.is_empty());
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["ok"], false);
+    assert_eq!(stdout["command"], "deploy");
+    assert_eq!(stdout["error"]["code"], "transaction_deterministic_error");
+    assert_eq!(stdout["data"]["height"], 42);
+    assert_eq!(stdout["data"]["status"]["result"], "deterministicError");
+    assert_eq!(stdout["data"]["return_data"], "0x0102");
+    assert_eq!(stdout["data"]["abort_data"], "0x0304");
+    assert!(
+        stdout["data"]["tx_hash"]
+            .as_str()
+            .unwrap()
+            .starts_with("0x")
+    );
+}
+
+#[test]
+fn deploy_live_human_fails_after_printing_receipt_context() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let (rpc_url, rpc_server) = spawn_transaction_rpc(
+        42,
+        sample_failed_deploy_receipt(42),
+        DevDetailRpcResponse::MethodNotFound,
+    );
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
+
+    let wasm_path = tmp.path().join("test.wasm");
+    std::fs::write(&wasm_path, b"\0asm\x01\0\0\0").unwrap();
+    let output = groundhog()
+        .args(["deploy", "--artifact", wasm_path.to_str().unwrap()])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("warning: Deploy failed with deterministic execution error"));
+    assert!(stderr.contains("tx: 0x"));
+    assert!(stderr.contains("height: 42"));
+    assert!(stderr.contains("return data: 0x0102"), "stderr: {stderr}");
+    assert!(stderr.contains("abort data: 0x0304"), "stderr: {stderr}");
 }
 
 #[test]
@@ -2619,25 +2826,7 @@ fn deploy_live_json_includes_transaction_detail_when_dev_method_exists() {
 
     let (rpc_url, rpc_server) =
         spawn_deploy_rpc_with_detail(42, DevDetailRpcResponse::Result(sample_detail_result(42)));
-    std::fs::write(
-        project.join("groundhog.toml"),
-        format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
-            "aa".repeat(32)
-        ),
-    )
-    .unwrap();
-
-    let generate = groundhog()
-        .args(["keys", "generate", "alice"])
-        .env("XDG_CONFIG_HOME", &config_home)
-        .output()
-        .unwrap();
-    assert!(
-        generate.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&generate.stderr)
-    );
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
     let wasm_path = tmp.path().join("test.wasm");
     std::fs::write(&wasm_path, b"\0asm\x01\0\0\0").unwrap();
@@ -2676,8 +2865,10 @@ fn deploy_live_json_includes_transaction_detail_when_dev_method_exists() {
 
 #[test]
 fn call_json_fails_without_config() {
+    let tmp = TempDir::new().unwrap();
     let output = groundhog()
         .args(["--json", "call", "0x1234", "transfer"])
+        .env("XDG_CONFIG_HOME", tmp.path())
         .output()
         .unwrap();
     assert!(!output.status.success());
@@ -2689,10 +2880,12 @@ fn call_json_fails_without_config() {
 
 #[test]
 fn storage_json_fails_without_config() {
+    let tmp = TempDir::new().unwrap();
     let address = format!("0x{}", "11".repeat(32));
     let key = format!("0x{}", "42".repeat(32));
     let output = groundhog()
         .args(["--json", "storage", &address, &key])
+        .env("XDG_CONFIG_HOME", tmp.path())
         .output()
         .unwrap();
 
@@ -2705,9 +2898,11 @@ fn storage_json_fails_without_config() {
 
 #[test]
 fn view_json_fails_without_config() {
+    let tmp = TempDir::new().unwrap();
     let address = format!("0x{}", "11".repeat(32));
     let output = groundhog()
         .args(["--json", "view", &address, "0x0102030405060708"])
+        .env("XDG_CONFIG_HOME", tmp.path())
         .output()
         .unwrap();
 
@@ -2728,14 +2923,7 @@ fn view_json_returns_raw_output() {
     let entrypoint = "0x0102030405060708";
     let calldata = "0xdeadbeef";
     let (rpc_url, rpc_server) = spawn_view_rpc(&address, entrypoint, calldata);
-    std::fs::write(
-        project.join("groundhog.toml"),
-        format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
-            "aa".repeat(32)
-        ),
-    )
-    .unwrap();
+    write_project_config_with_dummy_alice_wallet(&project, &rpc_url);
 
     let output = groundhog()
         .args([
@@ -2883,14 +3071,7 @@ fn view_json_surfaces_abort_as_success_body() {
             "abortData": "0x0a0b",
         }),
     );
-    std::fs::write(
-        project.join("groundhog.toml"),
-        format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
-            "aa".repeat(32)
-        ),
-    )
-    .unwrap();
+    write_project_config_with_dummy_alice_wallet(&project, &rpc_url);
 
     let output = groundhog()
         .args(["--json", "view", &address, entrypoint])
@@ -2929,14 +3110,7 @@ fn view_json_surfaces_fault_as_success_body() {
             "result": "fault",
         }),
     );
-    std::fs::write(
-        project.join("groundhog.toml"),
-        format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
-            "aa".repeat(32)
-        ),
-    )
-    .unwrap();
+    write_project_config_with_dummy_alice_wallet(&project, &rpc_url);
 
     let output = groundhog()
         .args(["--json", "view", &address, entrypoint])
@@ -2978,14 +3152,7 @@ fn view_human_prints_event_details() {
             "data": event_data,
         }]),
     );
-    std::fs::write(
-        project.join("groundhog.toml"),
-        format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
-            "aa".repeat(32)
-        ),
-    )
-    .unwrap();
+    write_project_config_with_dummy_alice_wallet(&project, &rpc_url);
 
     let output = groundhog()
         .args(["view", &address, entrypoint, "--calldata", "0x"])
@@ -3003,7 +3170,7 @@ fn view_human_prints_event_details() {
     assert!(output.stdout.is_empty());
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("View returned"));
+    assert!(stderr.contains("View succeeded"));
     assert!(stderr.contains("events: 1"));
     assert!(stderr.contains(&format!(
         "    [0] {address} topic0={topic} data={event_data}"
@@ -3019,14 +3186,7 @@ fn storage_json_reads_latest_item() {
     let address = format!("0x{}", "11".repeat(32));
     let key = format!("0x{}", "42".repeat(32));
     let (rpc_url, rpc_server) = spawn_storage_rpc(&address, &key);
-    std::fs::write(
-        project.join("groundhog.toml"),
-        format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
-            "aa".repeat(32)
-        ),
-    )
-    .unwrap();
+    write_project_config_with_dummy_alice_wallet(&project, &rpc_url);
 
     let output = groundhog()
         .args(["--json", "storage", &address, &key])
@@ -3065,11 +3225,12 @@ fn balance_json_reads_native_hog_balance() {
     std::fs::create_dir_all(&project).unwrap();
 
     let address = format!("0x{}", "11".repeat(32));
+    let owner = format!("0x{}", "12".repeat(32));
     let (rpc_url, rpc_server) = spawn_balance_rpc(&address, "123456789");
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"{address}\"\n"
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets.alice]\naddress = \"{address}\"\nowner_public_key = \"{owner}\"\n"
         ),
     )
     .unwrap();
@@ -3098,6 +3259,42 @@ fn balance_json_reads_native_hog_balance() {
     assert_eq!(stdout["data"]["raw_balance"], "123456789");
     assert_eq!(stdout["data"]["balance_hog"], "12.3456789");
     assert_eq!(stdout["data"]["height"], 34);
+}
+
+#[test]
+fn balance_json_uses_global_default_profile_when_profile_omitted() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    std::fs::create_dir_all(config_home.join("groundhog")).unwrap();
+
+    let address = format!("0x{}", "77".repeat(32));
+    let owner = format!("0x{}", "78".repeat(32));
+    let (rpc_url, rpc_server) = spawn_balance_rpc(&address, "70000000");
+    std::fs::write(
+        config_home.join("groundhog/config.toml"),
+        format!(
+            "default_profile = \"devnet\"\n\n[profile.devnet]\nrpc_url = \"{rpc_url}\"\n\n[profile.devnet.wallets.alice]\naddress = \"{address}\"\nowner_public_key = \"{owner}\"\n"
+        ),
+    )
+    .unwrap();
+
+    let output = groundhog()
+        .args(["--json", "balance", "alice"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["data"]["rpc_url"], rpc_url);
+    assert_eq!(stdout["data"]["address"], address);
+    assert_eq!(stdout["data"]["balance_hog"], "7");
 }
 
 #[test]
@@ -3160,7 +3357,7 @@ fn balance_json_rejects_invalid_cli_rpc_url_before_rpc() {
 }
 
 #[test]
-fn storage_json_uses_project_local_node_state_with_global_dev_key() {
+fn storage_json_uses_profile_runtime_manifest_with_global_dev_key() {
     let tmp = TempDir::new().unwrap();
     let config_home = tmp.path().join("config-home");
     let project = tmp.path().join("project");
@@ -3177,8 +3374,14 @@ fn storage_json_uses_project_local_node_state_with_global_dev_key() {
     let manifest_path =
         write_runtime_manifest(tmp.path(), 0, &advertised_dev_wallet_address(0), None);
     let (rpc_url, rpc_server) = spawn_storage_rpc(&address, &key);
-    std::fs::write(project.join("groundhog.toml"), "[profile.default]\n").unwrap();
-    write_local_node_state(&project, &rpc_url, &manifest_path);
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\nruntime_manifest = \"{}\"\n",
+            manifest_path.display()
+        ),
+    )
+    .unwrap();
 
     let output = groundhog()
         .args(["--json", "storage", &address, &key])
@@ -3200,7 +3403,7 @@ fn storage_json_uses_project_local_node_state_with_global_dev_key() {
 }
 
 #[test]
-fn storage_json_cli_rpc_url_overrides_project_local_node_state() {
+fn storage_json_cli_rpc_url_overrides_profile_rpc_url() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
@@ -3212,10 +3415,12 @@ fn storage_json_cli_rpc_url_overrides_project_local_node_state() {
     let (rpc_url, rpc_server) = spawn_storage_rpc(&address, &key);
     std::fs::write(
         project.join("groundhog.toml"),
-        "[profile.default]\ndefault_key = \"dev-0\"\n",
+        format!(
+            "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            manifest_path.display()
+        ),
     )
     .unwrap();
-    write_local_node_state(&project, "http://127.0.0.1:1", &manifest_path);
 
     let output = groundhog()
         .args(["--json", "storage", "--rpc-url", &rpc_url, &address, &key])
@@ -3319,25 +3524,7 @@ fn call_dry_run_json_outputs_prepared_transaction() {
     std::fs::create_dir_all(&project).unwrap();
 
     let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
-    std::fs::write(
-        project.join("groundhog.toml"),
-        format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
-            "aa".repeat(32)
-        ),
-    )
-    .unwrap();
-
-    let generate = groundhog()
-        .args(["keys", "generate", "alice"])
-        .env("XDG_CONFIG_HOME", &config_home)
-        .output()
-        .unwrap();
-    assert!(
-        generate.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&generate.stderr)
-    );
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
     let contract = format!("0x{}", "11".repeat(32));
     let output = groundhog()
@@ -3444,25 +3631,7 @@ fn call_live_human_appends_transaction_detail_sections() {
         sample_call_receipt(42),
         DevDetailRpcResponse::Result(sample_detail_result(42)),
     );
-    std::fs::write(
-        project.join("groundhog.toml"),
-        format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
-            "aa".repeat(32)
-        ),
-    )
-    .unwrap();
-
-    let generate = groundhog()
-        .args(["keys", "generate", "alice"])
-        .env("XDG_CONFIG_HOME", &config_home)
-        .output()
-        .unwrap();
-    assert!(
-        generate.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&generate.stderr)
-    );
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
     let contract = format!("0x{}", "11".repeat(32));
     let output = groundhog()
@@ -3503,25 +3672,7 @@ fn call_live_human_warns_when_transaction_detail_fails() {
             message: "detail backend unavailable",
         },
     );
-    std::fs::write(
-        project.join("groundhog.toml"),
-        format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
-            "aa".repeat(32)
-        ),
-    )
-    .unwrap();
-
-    let generate = groundhog()
-        .args(["keys", "generate", "alice"])
-        .env("XDG_CONFIG_HOME", &config_home)
-        .output()
-        .unwrap();
-    assert!(
-        generate.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&generate.stderr)
-    );
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
     let contract = format!("0x{}", "11".repeat(32));
     let output = groundhog()
@@ -3576,14 +3727,12 @@ fn call_live_json_includes_diagnostics_for_failed_local_dev_call() {
 
     rpc_server.join().unwrap();
 
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    assert!(!output.status.success());
     assert!(output.stderr.is_empty());
 
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["ok"], false);
+    assert_eq!(stdout["error"]["code"], "transaction_deterministic_error");
     assert_eq!(stdout["data"]["status"]["result"], "deterministicError");
     assert_eq!(
         stdout["data"]["diagnostics"]["wallet"]["address"],
@@ -3623,25 +3772,7 @@ fn call_live_json_marks_legacy_default_wallet_entrypoint_without_manifest() {
         sample_deterministic_error_call_receipt(42),
         DevDetailRpcResponse::MethodNotFound,
     );
-    std::fs::write(
-        project.join("groundhog.toml"),
-        format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets]\nalice = \"0x{}\"\n",
-            "aa".repeat(32)
-        ),
-    )
-    .unwrap();
-
-    let generate = groundhog()
-        .args(["keys", "generate", "alice"])
-        .env("XDG_CONFIG_HOME", &config_home)
-        .output()
-        .unwrap();
-    assert!(
-        generate.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&generate.stderr)
-    );
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
 
     let contract = format!("0x{}", "11".repeat(32));
     let output = groundhog()
@@ -3653,11 +3784,7 @@ fn call_live_json_marks_legacy_default_wallet_entrypoint_without_manifest() {
 
     rpc_server.join().unwrap();
 
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    assert!(!output.status.success());
     assert!(output.stderr.is_empty());
 
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -3673,11 +3800,47 @@ fn call_live_json_marks_legacy_default_wallet_entrypoint_without_manifest() {
 }
 
 #[test]
+fn call_live_human_fails_after_printing_receipt_context() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let (rpc_url, rpc_server) = spawn_transaction_rpc(
+        42,
+        sample_deterministic_error_call_receipt(42),
+        DevDetailRpcResponse::MethodNotFound,
+    );
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
+
+    let contract = format!("0x{}", "11".repeat(32));
+    let output = groundhog()
+        .args(["call", &contract, "0x0123456789abcdef", "0x0102"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("warning: Call failed with deterministic execution error"));
+    assert!(stderr.contains("contract: 0x"));
+    assert!(stderr.contains("tx: 0x"));
+    assert!(stderr.contains("height: 42"));
+    assert!(stderr.contains("wallet: 0x"));
+}
+
+#[test]
 fn call_fails_without_config() {
+    let tmp = TempDir::new().unwrap();
     let output = groundhog()
         .arg("call")
         .arg("0x1234")
         .arg("transfer")
+        .env("XDG_CONFIG_HOME", tmp.path())
         .output()
         .unwrap();
     assert!(!output.status.success());
@@ -4295,23 +4458,50 @@ fn write_runtime_manifest_with_seed(
     path
 }
 
-fn write_local_node_state(
+fn write_project_config_with_alice_wallet(
     project: &std::path::Path,
     rpc_url: &str,
-    manifest_path: &std::path::Path,
+    config_home: &std::path::Path,
 ) {
-    let state_dir = project.join(".groundhog");
-    std::fs::create_dir_all(&state_dir).unwrap();
+    let owner_public_key = generate_key_public_key(config_home, "alice");
     std::fs::write(
-        state_dir.join("local-node.json"),
-        serde_json::to_vec_pretty(&serde_json::json!({
-            "schemaVersion": 1,
-            "rpcUrl": rpc_url,
-            "runtimeManifest": manifest_path,
-        }))
-        .unwrap(),
+        project.join("groundhog.toml"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets.alice]\naddress = \"0x{}\"\nowner_public_key = \"{owner_public_key}\"\n",
+            "aa".repeat(32)
+        ),
     )
     .unwrap();
+}
+
+fn write_project_config_with_dummy_alice_wallet(project: &std::path::Path, rpc_url: &str) {
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets.alice]\naddress = \"0x{}\"\nowner_public_key = \"0x{}\"\n",
+            "aa".repeat(32),
+            "bb".repeat(32),
+        ),
+    )
+    .unwrap();
+}
+
+fn generate_key_public_key(config_home: &std::path::Path, name: &str) -> String {
+    let output = groundhog()
+        .args(["--json", "keys", "generate", name])
+        .env("XDG_CONFIG_HOME", config_home)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    stdout["data"]["key"]["public_key"]
+        .as_str()
+        .expect("generated key should include public key")
+        .to_owned()
 }
 
 fn signed_tx_invoked_address(tx_hex: &str) -> String {
@@ -4445,6 +4635,20 @@ fn sample_deploy_receipt(height: i64) -> serde_json::Value {
         "status": { "result": "ok" },
         "events": [],
         "returnData": format!("0x{}", "bb".repeat(32)),
+    })
+}
+
+fn sample_failed_deploy_receipt(height: i64) -> serde_json::Value {
+    serde_json::json!({
+        "txHash": mock_tx_hash(),
+        "height": height,
+        "status": {
+            "result": "deterministicError",
+            "kind": "outOfGas",
+        },
+        "events": [],
+        "returnData": "0x0102",
+        "abortData": "0x0304",
     })
 }
 

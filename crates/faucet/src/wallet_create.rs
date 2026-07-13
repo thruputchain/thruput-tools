@@ -10,7 +10,9 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
-use groundhog_json_rpc_client::{GroundhogApiClient, HttpClientBuilder, submit_and_poll};
+use groundhog_json_rpc_client::{
+    GroundhogApiClient, HttpClientBuilder, poll_transaction_receipt, submit_transaction,
+};
 use groundhog_json_rpc_types::hex::{Hex0x, HexBytes};
 use groundhog_json_rpc_types::network_descriptor::NetworkDescriptor;
 use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
@@ -187,9 +189,13 @@ impl WalletCreateService {
             WalletCreateFlow::Respond(response) => return response,
         };
 
-        if let Some(response) = self
-            .prefund_wallet_create_attempt(&key, &prepared, &mut attempt)
-            .await
+        if attempt.create_tx_hash.is_some() {
+            return self.poll_wallet_create_attempt(request, attempt).await;
+        }
+        if attempt.prefund_height.is_none()
+            && let Some(response) = self
+                .prefund_wallet_create_attempt(&key, &prepared, &mut attempt)
+                .await
         {
             return response;
         }
@@ -292,9 +298,7 @@ impl WalletCreateService {
         attempt: &mut WalletCreateAttempt,
     ) -> Option<Response> {
         if attempt.prefund_tx_hash.is_some() {
-            attempt.status = WalletCreateAttemptStatus::PrefundConfirmed;
-            attempt.updated_at = SystemTime::now();
-            return self.put_wallet_create_attempt(attempt);
+            return self.poll_prefund_wallet_create_attempt(attempt).await;
         }
         if let Some(response) = self.claim_wallet_create_transition(
             key,
@@ -323,15 +327,67 @@ impl WalletCreateService {
             }
         };
         attempt.prefund_tx_hash = Some(tx_hash_string(&prefund.tx_hash));
-        attempt.prefund_height = Some(*prefund.receipt.height);
-        attempt.expires_at = SystemTime::now().checked_add(Duration::from_secs(
-            self.policy_config
-                .wallet_create
-                .prefunded_attempt_retention_secs,
-        ));
-        attempt.status = WalletCreateAttemptStatus::PrefundConfirmed;
+        // Keep accepted transactions until a receipt makes the transition terminal.
+        // Expiring this state could cause the prefund to be submitted twice.
+        attempt.expires_at = None;
         attempt.updated_at = SystemTime::now();
-        self.put_wallet_create_attempt(attempt)
+        if let Some(response) = self.put_wallet_create_attempt(attempt) {
+            return Some(response);
+        }
+        self.poll_prefund_wallet_create_attempt(attempt).await
+    }
+
+    async fn poll_prefund_wallet_create_attempt(
+        &self,
+        attempt: &mut WalletCreateAttempt,
+    ) -> Option<Response> {
+        let Some(tx_hash) = attempt.prefund_tx_hash.as_deref().and_then(parse_tx_hash) else {
+            return Some(error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "wallet_create_attempt_state_invalid",
+                "wallet-create attempt has an invalid prefund transaction hash",
+            ));
+        };
+        match self.airdrop_submitter.poll_airdrop(tx_hash).await {
+            Ok(receipt) if matches!(receipt.status, ExecStatus::Ok) => {
+                attempt.prefund_height = Some(*receipt.height);
+                attempt.expires_at = SystemTime::now().checked_add(Duration::from_secs(
+                    self.policy_config
+                        .wallet_create
+                        .prefunded_attempt_retention_secs,
+                ));
+                attempt.status = WalletCreateAttemptStatus::PrefundConfirmed;
+                attempt.error_code = None;
+                attempt.updated_at = SystemTime::now();
+                self.put_wallet_create_attempt(attempt)
+            }
+            Ok(receipt) => {
+                attempt.prefund_height = Some(*receipt.height);
+                attempt.status = WalletCreateAttemptStatus::FailedTerminal;
+                attempt.error_code = Some("wallet_create_prefund_transaction_failed".into());
+                let now = SystemTime::now();
+                attempt.updated_at = now;
+                attempt.expires_at = now.checked_add(Duration::from_secs(
+                    self.policy_config
+                        .wallet_create
+                        .prefunded_attempt_retention_secs,
+                ));
+                if let Some(response) = self.put_wallet_create_attempt(attempt) {
+                    return Some(response);
+                }
+                Some(prefund_error_response(
+                    &AirdropSubmitError::TransactionFailed { tx_hash },
+                ))
+            }
+            Err(error) => {
+                attempt.error_code = Some(airdrop_error_code(&error).into());
+                attempt.updated_at = SystemTime::now();
+                if let Some(response) = self.put_wallet_create_attempt(attempt) {
+                    return Some(response);
+                }
+                Some(prefund_error_response(&error))
+            }
+        }
     }
 
     async fn submit_wallet_create_attempt(
@@ -340,9 +396,15 @@ impl WalletCreateService {
         key: WalletCreateAttemptKey,
         mut attempt: WalletCreateAttempt,
     ) -> Response {
+        if attempt.create_tx_hash.is_some() {
+            return self.poll_wallet_create_attempt(request, attempt).await;
+        }
         if let Some(response) = self.claim_wallet_create_transition(
             &key,
-            &[WalletCreateAttemptStatus::PrefundConfirmed],
+            &[
+                WalletCreateAttemptStatus::PrefundConfirmed,
+                WalletCreateAttemptStatus::FailedRetryable,
+            ],
             WalletCreateAttemptStatus::CreatePending,
             &mut attempt,
         ) {
@@ -360,21 +422,82 @@ impl WalletCreateService {
             )
             .await
         {
-            Ok(submission) => {
-                attempt.status = WalletCreateAttemptStatus::Created;
-                attempt.create_tx_hash = Some(tx_hash_string(&submission.tx_hash));
-                attempt.create_height = Some(*submission.receipt.height);
+            Ok(accepted) => {
+                attempt.create_tx_hash = Some(tx_hash_string(&accepted.tx_hash));
+                // Keep the accepted hash until its receipt is resolved so retries poll
+                // instead of submitting a second wallet-create transaction.
+                attempt.expires_at = None;
                 attempt.updated_at = SystemTime::now();
-                if let Err(error) = self.policy_store.put_wallet_create_attempt(attempt.clone()) {
-                    tracing::warn!(%error, "failed to persist created wallet-create attempt");
+                if let Some(response) = self.put_wallet_create_attempt(&attempt) {
+                    return response;
                 }
-                response_from_attempt(StatusCode::OK, request, attempt)
+                self.poll_wallet_create_attempt(request, attempt).await
             }
             Err(error) => {
                 attempt.status = WalletCreateAttemptStatus::FailedRetryable;
                 attempt.error_code = Some(wallet_create_error_code(&error).into());
                 attempt.updated_at = SystemTime::now();
                 let _ = self.policy_store.put_wallet_create_attempt(attempt);
+                error.into_response()
+            }
+        }
+    }
+
+    async fn poll_wallet_create_attempt(
+        &self,
+        request: CreateWalletRequest,
+        mut attempt: WalletCreateAttempt,
+    ) -> Response {
+        let Some(tx_hash) = attempt.create_tx_hash.as_deref().and_then(parse_tx_hash) else {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "wallet_create_attempt_state_invalid",
+                "wallet-create attempt has an invalid accepted transaction hash",
+            );
+        };
+        match self
+            .wallet_create_submitter
+            .poll_wallet_create(tx_hash)
+            .await
+        {
+            Ok(receipt) if matches!(receipt.status, ExecStatus::Ok) => {
+                attempt.status = WalletCreateAttemptStatus::Created;
+                attempt.create_height = Some(*receipt.height);
+                attempt.error_code = None;
+                let now = SystemTime::now();
+                attempt.updated_at = now;
+                attempt.expires_at = now.checked_add(Duration::from_secs(
+                    self.policy_config
+                        .wallet_create
+                        .prefunded_attempt_retention_secs,
+                ));
+                if let Some(response) = self.put_wallet_create_attempt(&attempt) {
+                    return response;
+                }
+                response_from_attempt(StatusCode::OK, request, attempt)
+            }
+            Ok(receipt) => {
+                attempt.status = WalletCreateAttemptStatus::FailedTerminal;
+                attempt.create_height = Some(*receipt.height);
+                attempt.error_code = Some("wallet_create_transaction_failed".into());
+                let now = SystemTime::now();
+                attempt.updated_at = now;
+                attempt.expires_at = now.checked_add(Duration::from_secs(
+                    self.policy_config
+                        .wallet_create
+                        .prefunded_attempt_retention_secs,
+                ));
+                if let Some(response) = self.put_wallet_create_attempt(&attempt) {
+                    return response;
+                }
+                WalletCreateError::TransactionFailed { tx_hash }.into_response()
+            }
+            Err(error) => {
+                attempt.error_code = Some(wallet_create_error_code(&error).into());
+                attempt.updated_at = SystemTime::now();
+                if let Some(response) = self.put_wallet_create_attempt(&attempt) {
+                    return response;
+                }
                 error.into_response()
             }
         }
@@ -427,7 +550,7 @@ pub trait WalletCreateSubmitter: Send + Sync + 'static {
         owner_signature: &[u8],
     ) -> Result<PreparedWalletCreate, WalletCreateError>;
 
-    /// Submit a sponsored `create_wallet` transaction.
+    /// Submit a sponsored `create_wallet` transaction and return once it is accepted.
     async fn create_wallet(
         &self,
         owner_public_key: Ed25519PublicKey,
@@ -436,7 +559,13 @@ pub trait WalletCreateSubmitter: Send + Sync + 'static {
         network_id: String,
         genesis_hash: SHA256Hash,
         owner_signature: Vec<u8>,
-    ) -> Result<WalletCreateSubmission, WalletCreateError>;
+    ) -> Result<AcceptedWalletCreate, WalletCreateError>;
+
+    /// Poll a previously accepted wallet-create transaction.
+    async fn poll_wallet_create(
+        &self,
+        tx_hash: TxHash,
+    ) -> Result<TransactionReceipt, WalletCreateError>;
 }
 
 /// Prepared wallet-create metadata returned before any transaction is submitted.
@@ -450,15 +579,13 @@ pub struct PreparedWalletCreate {
     pub wallet_contract_hash: ApiSha256Hash,
 }
 
-/// Successful faucet wallet-create submission.
+/// Faucet wallet-create transaction accepted by the submission endpoint.
 #[derive(Debug, Clone)]
-pub struct WalletCreateSubmission {
+pub struct AcceptedWalletCreate {
     /// Created wallet address.
     pub wallet_address: ApiContractAddress,
     /// Submitted transaction hash.
     pub tx_hash: TxHash,
-    /// Committed transaction receipt.
-    pub receipt: TransactionReceipt,
 }
 
 /// Errors produced while preparing or submitting hosted wallet creation.
@@ -497,9 +624,12 @@ pub enum WalletCreateError {
     /// The wallet-create transaction could not be signed.
     #[error("failed to sign wallet-create transaction: {0}")]
     SignTransaction(String),
-    /// The signed wallet-create transaction could not be submitted or confirmed.
-    #[error("failed to submit or confirm wallet-create transaction: {0}")]
-    SubmitAndPoll(#[from] groundhog_json_rpc_client::SubmitAndPollError),
+    /// The signed wallet-create transaction was not accepted.
+    #[error("failed to submit wallet-create transaction: {0}")]
+    Submit(#[from] groundhog_json_rpc_client::SubmitTransactionError),
+    /// The accepted wallet-create transaction could not be confirmed.
+    #[error("failed to confirm wallet-create transaction: {0}")]
+    Poll(#[from] groundhog_json_rpc_client::PollTransactionReceiptError),
 }
 
 impl WalletCreateError {
@@ -527,7 +657,8 @@ impl WalletCreateError {
             | Self::LoadWalletArtifact(_)
             | Self::BuildTransaction(_)
             | Self::SignTransaction(_)
-            | Self::SubmitAndPoll(_) => error_response(
+            | Self::Submit(_)
+            | Self::Poll(_) => error_response(
                 StatusCode::BAD_GATEWAY,
                 "wallet_create_submit_failed",
                 "failed to submit wallet-create transaction",
@@ -694,7 +825,7 @@ impl WalletCreateSubmitter for RpcWalletCreateSubmitter {
         network_id: String,
         genesis_hash: SHA256Hash,
         owner_signature: Vec<u8>,
-    ) -> Result<WalletCreateSubmission, WalletCreateError> {
+    ) -> Result<AcceptedWalletCreate, WalletCreateError> {
         let prepared = self.verify_wallet_create_request(
             owner_public_key,
             deploy_nonce,
@@ -728,15 +859,20 @@ impl WalletCreateSubmitter for RpcWalletCreateSubmitter {
             SignTransactionParams::default(),
         )
         .map_err(|error| WalletCreateError::SignTransaction(error.to_string()))?;
-        let (tx_hash, receipt) = submit_and_poll(&self.rpc_url, &tx_hex).await?;
-        if !matches!(receipt.status, ExecStatus::Ok) {
-            return Err(WalletCreateError::TransactionFailed { tx_hash });
-        }
-        Ok(WalletCreateSubmission {
+        let tx_hash = submit_transaction(&self.rpc_url, &tx_hex).await?;
+        Ok(AcceptedWalletCreate {
             wallet_address: prepared.wallet_address,
             tx_hash,
-            receipt,
         })
+    }
+
+    async fn poll_wallet_create(
+        &self,
+        tx_hash: TxHash,
+    ) -> Result<TransactionReceipt, WalletCreateError> {
+        poll_transaction_receipt(&self.rpc_url, tx_hash)
+            .await
+            .map_err(Into::into)
     }
 }
 
@@ -782,12 +918,27 @@ fn existing_wallet_create_attempt(
             request.clone(),
             attempt,
         )),
-        WalletCreateAttemptStatus::Prepared
-        | WalletCreateAttemptStatus::PrefundPending
-        | WalletCreateAttemptStatus::PrefundConfirmed
-        | WalletCreateAttemptStatus::CreatePending => WalletCreateFlow::Respond(
-            response_from_attempt(StatusCode::ACCEPTED, request.clone(), attempt),
-        ),
+        WalletCreateAttemptStatus::Prepared => WalletCreateFlow::Respond(response_from_attempt(
+            StatusCode::ACCEPTED,
+            request.clone(),
+            attempt,
+        )),
+        WalletCreateAttemptStatus::PrefundPending if attempt.prefund_tx_hash.is_some() => {
+            WalletCreateFlow::Continue(Box::new(attempt))
+        }
+        WalletCreateAttemptStatus::PrefundConfirmed => {
+            WalletCreateFlow::Continue(Box::new(attempt))
+        }
+        WalletCreateAttemptStatus::CreatePending if attempt.create_tx_hash.is_some() => {
+            WalletCreateFlow::Continue(Box::new(attempt))
+        }
+        WalletCreateAttemptStatus::PrefundPending | WalletCreateAttemptStatus::CreatePending => {
+            WalletCreateFlow::Respond(response_from_attempt(
+                StatusCode::ACCEPTED,
+                request.clone(),
+                attempt,
+            ))
+        }
         WalletCreateAttemptStatus::FailedTerminal | WalletCreateAttemptStatus::Expired => {
             WalletCreateFlow::Respond(error_response(
                 StatusCode::CONFLICT,
@@ -874,7 +1025,8 @@ fn prefund_error_response(error: &AirdropSubmitError) -> Response {
         | AirdropSubmitError::EncodeTransferCalldata(_)
         | AirdropSubmitError::BuildTransaction(_)
         | AirdropSubmitError::SignTransaction(_)
-        | AirdropSubmitError::SubmitAndPoll(_) => error_response(
+        | AirdropSubmitError::Submit(_)
+        | AirdropSubmitError::Poll(_) => error_response(
             StatusCode::BAD_GATEWAY,
             "wallet_create_prefund_failed",
             "failed to prefund wallet-create address",
@@ -890,7 +1042,8 @@ fn airdrop_error_code(error: &AirdropSubmitError) -> &'static str {
         | AirdropSubmitError::EncodeTransferCalldata(_)
         | AirdropSubmitError::BuildTransaction(_)
         | AirdropSubmitError::SignTransaction(_)
-        | AirdropSubmitError::SubmitAndPoll(_) => "wallet_create_prefund_failed",
+        | AirdropSubmitError::Submit(_)
+        | AirdropSubmitError::Poll(_) => "wallet_create_prefund_failed",
     }
 }
 
@@ -908,7 +1061,8 @@ fn wallet_create_error_code(error: &WalletCreateError) -> &'static str {
         | WalletCreateError::LoadWalletArtifact(_)
         | WalletCreateError::BuildTransaction(_)
         | WalletCreateError::SignTransaction(_)
-        | WalletCreateError::SubmitAndPoll(_) => "wallet_create_submit_failed",
+        | WalletCreateError::Submit(_)
+        | WalletCreateError::Poll(_) => "wallet_create_submit_failed",
     }
 }
 
@@ -918,6 +1072,12 @@ fn hex_string(bytes: impl AsRef<[u8]>) -> String {
 
 fn tx_hash_string(tx_hash: &TxHash) -> String {
     hex_string(tx_hash.0.0)
+}
+
+fn parse_tx_hash(value: &str) -> Option<TxHash> {
+    let value = value.strip_prefix("0x").unwrap_or(value);
+    let bytes: [u8; 32] = hex_decode(value).ok()?.try_into().ok()?;
+    Some(TxHash(ApiSha256Hash::from(SHA256Hash::from(bytes))))
 }
 
 fn parse_32_hex<T>(value: &str) -> T

@@ -1,7 +1,15 @@
 use crate::CliError;
 use serde::Serialize;
 use serde_json::json;
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
+
+const RESET: &str = "\x1b[0m";
+const BOLD: &str = "\x1b[1m";
+const DIM: &str = "\x1b[2m";
+const CYAN: &str = "\x1b[36m";
+const GREEN: &str = "\x1b[32m";
+const RED: &str = "\x1b[31m";
+const YELLOW: &str = "\x1b[33m";
 
 /// Controls CLI output. Status messages go to stderr
 /// (stdout is reserved for data / cargo passthrough).
@@ -46,6 +54,11 @@ impl Print {
         self.quiet
     }
 
+    /// Returns whether styled interactive output is appropriate.
+    pub fn is_human_tty(&self) -> bool {
+        !self.quiet && !self.json && supports_ansi_stderr()
+    }
+
     /// Trace a subprocess invocation to stderr when command tracing is on.
     ///
     /// Opt-in diagnostic (see the global `--show-cargo-commands` flag). Writes
@@ -63,6 +76,80 @@ impl Print {
     pub fn status(&self, msg: impl std::fmt::Display) {
         if !self.quiet && !self.json {
             eprintln!("{msg}");
+        }
+    }
+
+    /// Styled success message for human output.
+    pub fn success(&self, msg: impl std::fmt::Display) {
+        if self.is_human_tty() {
+            eprintln!("{GREEN}✓{RESET} {msg}");
+        } else {
+            self.status(format_args!("[ok] {msg}"));
+        }
+    }
+
+    /// Styled note message for human output.
+    pub fn note(&self, msg: impl std::fmt::Display) {
+        if self.is_human_tty() {
+            eprintln!("{YELLOW}•{RESET} {msg}");
+        } else {
+            self.status(format_args!("- {msg}"));
+        }
+    }
+
+    /// Label/value detail line for human output.
+    pub fn detail(&self, label: &str, value: impl std::fmt::Display) {
+        if self.is_human_tty() {
+            eprintln!("  {DIM}{label}:{RESET} {value}");
+        } else {
+            self.status(format_args!("  {label}: {value}"));
+        }
+    }
+
+    /// Render a compact label/value summary for human output.
+    pub fn summary_card(&self, title: &str, items: &[(String, String)]) {
+        if self.quiet || self.json {
+            return;
+        }
+
+        if self.is_human_tty() {
+            render_summary_card_tty(title, items);
+        } else {
+            self.status(title);
+            self.status("");
+            for (label, value) in items {
+                self.status(format_args!("{label}: {value}"));
+            }
+        }
+    }
+
+    /// Render a conventional `Next:` block for human output.
+    pub fn next_steps(&self, steps: &[String]) {
+        if self.quiet || self.json {
+            return;
+        }
+
+        self.status("");
+        self.status("Next:");
+        for step in steps {
+            self.status(format_args!("  {step}"));
+        }
+    }
+
+    /// Start a short human task line that can be replaced by success in TTY mode.
+    pub fn start_task(&self, msg: impl std::fmt::Display) -> TaskLine<'_> {
+        let tty = self.is_human_tty();
+        if tty {
+            eprint!("{CYAN}…{RESET} {msg}");
+            let _ = io::stderr().flush();
+        } else {
+            self.status(msg);
+        }
+
+        TaskLine {
+            print: self,
+            tty,
+            active: tty,
         }
     }
 
@@ -126,10 +213,18 @@ impl Print {
         }
 
         let mut stderr = io::stderr();
-        writeln!(stderr, "error: {error}")?;
+        if self.is_human_tty() {
+            writeln!(stderr, "{RED}✗{RESET} {error}")?;
+        } else {
+            writeln!(stderr, "error: {error}")?;
+        }
         if let Some(hint) = error.hint() {
             writeln!(stderr)?;
-            writeln!(stderr, "  hint: {hint}")?;
+            if self.is_human_tty() {
+                writeln!(stderr, "  {DIM}hint:{RESET} {hint}")?;
+            } else {
+                writeln!(stderr, "  hint: {hint}")?;
+            }
         }
         Ok(())
     }
@@ -140,6 +235,96 @@ impl Print {
         serde_json::to_writer(&mut stderr, value).map_err(|e| CliError::Other(e.to_string()))?;
         writeln!(stderr)?;
         Ok(())
+    }
+}
+
+pub(crate) fn supports_ansi_stderr() -> bool {
+    io::stderr().is_terminal()
+        && terminal_allows_ansi(
+            std::env::var_os("TERM").as_deref(),
+            std::env::var_os("NO_COLOR").as_deref(),
+        )
+}
+
+fn terminal_allows_ansi(
+    term: Option<&std::ffi::OsStr>,
+    no_color: Option<&std::ffi::OsStr>,
+) -> bool {
+    if no_color.is_some() {
+        return false;
+    }
+    !matches!(term.and_then(std::ffi::OsStr::to_str), Some("dumb"))
+}
+
+fn render_summary_card_tty(title: &str, items: &[(String, String)]) {
+    let label_width = items
+        .iter()
+        .map(|(label, _)| label.chars().count())
+        .max()
+        .unwrap_or(0)
+        .max(10)
+        .max(title.chars().count());
+    let value_width = items
+        .iter()
+        .map(|(_, value)| value.chars().count())
+        .max()
+        .unwrap_or(0)
+        .max(18);
+    let inner_width = (label_width + value_width + 4).max(title.chars().count() + 2);
+    let top_fill = inner_width.saturating_sub(title.chars().count() + 2);
+
+    eprintln!(
+        "{GREEN}╭─ {BOLD}{title}{RESET}{GREEN}{}╮{RESET}",
+        line_fill('─', top_fill)
+    );
+    for (label, value) in items {
+        let label_padding = line_fill(' ', label_width.saturating_sub(label.chars().count()));
+        let value_padding = line_fill(' ', value_width.saturating_sub(value.chars().count()));
+        eprintln!(
+            "{GREEN}│{RESET} {DIM}{label}:{RESET}{label_padding} {value}{value_padding} {GREEN}│{RESET}"
+        );
+    }
+    eprintln!("{GREEN}╰{}╯{RESET}", line_fill('─', inner_width));
+}
+
+fn line_fill(ch: char, count: usize) -> String {
+    std::iter::repeat_n(ch, count).collect()
+}
+
+/// A short-lived task line started by [`Print::start_task`].
+pub struct TaskLine<'a> {
+    print: &'a Print,
+    tty: bool,
+    active: bool,
+}
+
+impl TaskLine<'_> {
+    /// Clear the loading line in TTY mode without printing a replacement.
+    pub fn clear(mut self) {
+        if self.tty {
+            eprint!("\r\x1b[2K");
+            let _ = io::stderr().flush();
+        }
+        self.active = false;
+    }
+
+    /// Replace the loading line with a styled success message in TTY mode.
+    pub fn success(mut self, msg: impl std::fmt::Display) {
+        if self.tty {
+            eprint!("\r\x1b[2K");
+            let _ = io::stderr().flush();
+        }
+        self.active = false;
+        self.print.success(msg);
+    }
+}
+
+impl Drop for TaskLine<'_> {
+    fn drop(&mut self) {
+        if self.active && self.tty {
+            eprint!("\r\x1b[2K");
+            let _ = io::stderr().flush();
+        }
     }
 }
 
@@ -169,7 +354,8 @@ fn render_command(command: &std::process::Command) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::render_command;
+    use super::{render_command, terminal_allows_ansi};
+    use std::ffi::OsStr;
     use std::process::Command;
 
     #[test]
@@ -184,5 +370,18 @@ mod tests {
         let mut cmd = Command::new("cargo");
         cmd.current_dir("/ws").arg("metadata");
         assert_eq!(render_command(&cmd), "(cd /ws && cargo metadata)");
+    }
+
+    #[test]
+    fn terminal_allows_ansi_respects_no_color_and_dumb_term() {
+        assert!(terminal_allows_ansi(
+            Some(OsStr::new("xterm-256color")),
+            None
+        ));
+        assert!(!terminal_allows_ansi(
+            Some(OsStr::new("xterm-256color")),
+            Some(OsStr::new("1"))
+        ));
+        assert!(!terminal_allows_ansi(Some(OsStr::new("dumb")), None));
     }
 }

@@ -23,12 +23,10 @@ use crate::config::{
 use crate::dev_detail::{fetch_transaction_detail_blocking, print_transaction_detail};
 use crate::keys::load_local_signer;
 use crate::result::CommandResult;
-use crate::runtime_manifest::{
-    apply_local_node_state_for_dev_key, load_configured_runtime_manifest,
-};
+use crate::runtime_manifest::load_configured_runtime_manifest;
 use crate::tx_utils::{
-    format_tx_hash, nonce_from_timestamp, resolve_block_expiry_height, submit_and_poll,
-    summarize_exec_status,
+    command_error_for_exec_status, format_tx_hash, nonce_from_timestamp, print_failed_receipt_data,
+    resolve_block_expiry_height, submit_and_poll, summarize_exec_status,
 };
 use crate::{CliError, Print};
 
@@ -66,7 +64,7 @@ pub fn run(
     target: ArtifactKind,
     dry_run: bool,
     artifacts: &ArtifactOptions,
-    profile: &str,
+    profile: Option<&str>,
     overrides: &ProfileOverrides,
     cmd: &'static str,
     print: &Print,
@@ -76,14 +74,13 @@ pub fn run(
         return print_dry_run(&prepared, cmd, print);
     }
 
-    print.status(format_args!(
-        "Deploying {} artifact ({} bytes) to {}...",
-        prepared.artifact.kind.as_str(),
-        prepared.artifact_bytes_len,
-        prepared.rpc_url
+    let task = print.start_task(format_args!(
+        "Deploying {} artifact",
+        prepared.artifact.kind.as_str()
     ));
 
     let submitted = submit_prepared_deploy_and_resolve(&prepared)?;
+    task.clear();
     let tx_hash = submitted.tx_hash;
     let receipt = submitted.receipt;
     let transaction_detail = fetch_transaction_detail_blocking(&prepared.rpc_url, tx_hash, print);
@@ -98,19 +95,22 @@ pub fn run(
             let contract_addr_hex = contract_addr_hex
                 .as_deref()
                 .expect("bug: successful deploy must resolve a contract address");
-            print.status(format_args!("Deployed at {contract_addr_hex}"));
+            print.success("Deployed contract");
+            print.detail("address", contract_addr_hex);
             if matches!(address_source, Some(DeployAddressSource::Derived)) {
                 print.warn(
                     "receipt omitted deploy return_data; address was derived locally from \
                      deployer, nonce, and contract hash",
                 );
             }
-            print.status(format_args!("  tx: {tx_hash_formatted}"));
-            print.status(format_args!("  height: {}", *receipt.height));
+            print.detail("tx", &tx_hash_formatted);
+            print.detail("height", *receipt.height);
         }
         other => {
             print.warn(format_args!("Deploy {}", summarize_exec_status(other)));
-            print.status(format_args!("  tx: {tx_hash_formatted}"));
+            print.detail("tx", &tx_hash_formatted);
+            print.detail("height", *receipt.height);
+            print_failed_receipt_data(&receipt, print);
         }
     }
 
@@ -125,15 +125,9 @@ pub fn run(
             && let Some(name) = root.file_name().and_then(|n| n.to_str())
             && let Some(contract_addr_hex) = contract_addr_hex.as_deref()
         {
-            let _ = crate::config::save_profile_contract_alias(
-                &root,
-                Some(profile),
-                name,
-                contract_addr_hex,
-            );
-            print.status(format_args!(
-                "  alias: {name} -> {contract_addr_hex} (saved to groundhog.toml)"
-            ));
+            let _ =
+                crate::config::save_profile_contract_alias(&root, profile, name, contract_addr_hex);
+            print.detail("alias", format_args!("{name} -> {contract_addr_hex}"));
         }
     }
 
@@ -141,25 +135,32 @@ pub fn run(
         print_transaction_detail(detail, print);
     }
 
-    print.json(&CommandResult::new(
-        cmd,
-        json!({
-            "schemaVersion": DEPLOY_JSON_SCHEMA_VERSION,
-            "tx_hash": tx_hash_formatted,
-            "artifact_kind": prepared.artifact.kind.as_str(),
-            "artifact_path": &prepared.artifact.path,
-            "artifact_bytes": prepared.artifact_bytes_len,
-            "address": contract_addr_hex,
-            "address_source": match address_source {
-                Some(DeployAddressSource::Receipt) => Some("receipt"),
-                Some(DeployAddressSource::Derived) => Some("derived"),
-                None => None,
-            },
-            "height": receipt.height,
-            "status": receipt.status,
-            "transaction_detail": transaction_detail,
-        }),
-    ))?;
+    let command_error = command_error_for_exec_status(&receipt.status);
+    let mut data = json!({
+        "schemaVersion": DEPLOY_JSON_SCHEMA_VERSION,
+        "tx_hash": tx_hash_formatted,
+        "artifact_kind": prepared.artifact.kind.as_str(),
+        "artifact_path": &prepared.artifact.path,
+        "artifact_bytes": prepared.artifact_bytes_len,
+        "address": contract_addr_hex,
+        "address_source": match address_source {
+            Some(DeployAddressSource::Receipt) => Some("receipt"),
+            Some(DeployAddressSource::Derived) => Some("derived"),
+            None => None,
+        },
+        "height": receipt.height,
+        "status": receipt.status,
+        "transaction_detail": transaction_detail,
+    });
+    if command_error.is_some() {
+        data["return_data"] = json!(receipt.return_data);
+        data["abort_data"] = json!(receipt.abort_data);
+    }
+    if let Some(error) = command_error {
+        print.json(&CommandResult::failure_with_error(cmd, data, error))?;
+        return Err(CliError::CommandReportedFailure);
+    }
+    print.json(&CommandResult::new(cmd, data))?;
 
     Ok(())
 }
@@ -237,20 +238,19 @@ pub(crate) fn prepare_deploy(
     artifact_path: Option<&Path>,
     target: ArtifactKind,
     artifacts: &ArtifactOptions,
-    profile: &str,
+    profile: Option<&str>,
     overrides: &ProfileOverrides,
     print: &Print,
 ) -> Result<PreparedDeploy, CliError> {
     let cwd = std::env::current_dir()?;
-    let mut resolved = resolve_profile_with_overrides(&cwd, Some(profile), overrides)?;
+    let resolved = resolve_profile_with_overrides(&cwd, profile, overrides)?;
 
     // Resolve signing key
-    let key_name = resolve_default_key(&cwd, Some(profile))?;
+    let key_name = resolve_default_key(&cwd, profile)?;
     if resolved.rpc_url.is_none() && key_name.is_none() {
         return Err(CliError::MissingRpcUrl);
     }
     let key_name = key_name.ok_or(CliError::MissingSigningKey)?;
-    apply_local_node_state_for_dev_key(&mut resolved, &key_name)?;
     resolved.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
 
     let artifact = if let Some(path) = artifact_path {
@@ -280,12 +280,14 @@ pub(crate) fn prepare_deploy_for_rpc_with_manifest(
     let artifact_bytes = std::fs::read(artifact_path)?;
     let profile = ResolvedProfile {
         name: "integration".into(),
+        network: None,
         rpc_url: Some(rpc_url.into()),
         rpc_url_cli_override: false,
         faucet_url: None,
         default_key: Some(key_name.into()),
         runtime_manifest,
         runtime_manifest_cli_override: false,
+        runtime_artifacts_dir: None,
         contracts: std::collections::BTreeMap::default(),
         wallets: std::collections::BTreeMap::default(),
         source: None,

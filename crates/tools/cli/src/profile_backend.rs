@@ -40,22 +40,11 @@ mod tests {
     }
 
     #[test]
-    fn backend_prefers_project_local_node_state_over_faucet() {
-        let tmp = tempfile::tempdir().expect("bug: tempdir should be created");
-        let project = tmp.path();
-        let config_path = project.join("groundhog.toml");
-        std::fs::write(&config_path, "").expect("bug: config should be written");
-        let manifest_path = project.join("runtime-manifest.json");
-        crate::runtime_manifest::write_local_node_state(
-            project,
-            "http://127.0.0.1:9545",
-            &manifest_path,
-        )
-        .expect("bug: local node state should be written");
-
+    fn backend_prefers_profile_runtime_manifest_over_faucet() {
+        let manifest_path = PathBuf::from("runtime-manifest.json");
         let mut profile = test_profile();
-        profile.source = Some(config_path);
         profile.rpc_url = Some("http://127.0.0.1:9545".into());
+        profile.runtime_manifest = Some(manifest_path);
         profile.faucet_url = Some("https://faucet.example".into());
 
         let backend = resolve_profile_backend(&profile).expect("bug: backend should resolve");
@@ -84,12 +73,14 @@ mod tests {
     fn test_profile() -> ResolvedProfile {
         ResolvedProfile {
             name: "default".into(),
+            network: None,
             rpc_url: Some("https://rpc.example".into()),
             faucet_url: None,
             rpc_url_cli_override: false,
             default_key: None,
             runtime_manifest: None,
             runtime_manifest_cli_override: false,
+            runtime_artifacts_dir: None,
             contracts: BTreeMap::new(),
             wallets: BTreeMap::new(),
             source: None,

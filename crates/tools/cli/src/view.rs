@@ -13,11 +13,10 @@ use crate::call::{
     ResolvedCall, format_entrypoint_id, format_hex_bytes, resolve_call, selector_json,
 };
 use crate::codec::{decode_return, encode_args, parse_contract_address};
-use crate::config::{ProfileOverrides, resolve_default_key, resolve_profile_with_overrides};
+use crate::config::{ProfileOverrides, resolve_profile_with_overrides};
 use crate::dev_detail::format_event;
 use crate::dev_keys;
 use crate::result::CommandResult;
-use crate::runtime_manifest::apply_local_node_state_for_dev_key;
 use crate::view_json::{VIEW_JSON_SCHEMA_VERSION, ViewJsonPayload};
 use crate::{CliError, Print};
 
@@ -31,7 +30,7 @@ pub fn run(
     from: Option<&str>,
     artifacts: &ArtifactOptions,
     project_start: &Path,
-    profile: &str,
+    profile: Option<&str>,
     overrides: &ProfileOverrides,
     cmd: &'static str,
     print: &Print,
@@ -50,17 +49,13 @@ pub fn run(
         &rt,
     )?;
 
-    if !print.is_json() {
-        print.status(format_args!(
-            "Viewing {} on {} via {}...",
-            prepared.method, prepared.contract_address_hex, prepared.rpc_url
-        ));
-    }
+    let task = print.start_task(format_args!("Viewing `{}`", prepared.method));
 
     let response = rt.block_on(fetch_view(&prepared.rpc_url, prepared.request.clone()))?;
     let return_value = decoded_return_value(&prepared, &response);
 
     if !print.is_json() {
+        task.clear();
         print_view_response(&prepared, &response, return_value.as_ref(), print);
     }
     print.json(&CommandResult::new(
@@ -104,16 +99,11 @@ fn prepare_view(
     from: Option<&str>,
     artifacts: &ArtifactOptions,
     project_start: &Path,
-    profile: &str,
+    profile: Option<&str>,
     overrides: &ProfileOverrides,
     rt: &tokio::runtime::Runtime,
 ) -> Result<PreparedView, CliError> {
-    let mut resolved_profile =
-        resolve_profile_with_overrides(project_start, Some(profile), overrides)?;
-    let default_key = resolve_default_key(project_start, Some(profile))?;
-    if let Some(key_name) = local_dev_key_for_view(from, default_key.as_deref()) {
-        apply_local_node_state_for_dev_key(&mut resolved_profile, &key_name)?;
-    }
+    let resolved_profile = resolve_profile_with_overrides(project_start, profile, overrides)?;
     let rpc_url = resolved_profile
         .rpc_url
         .as_deref()
@@ -142,16 +132,6 @@ fn prepare_view(
             caller,
         },
     })
-}
-
-fn local_dev_key_for_view(from: Option<&str>, default_key: Option<&str>) -> Option<String> {
-    match from {
-        Some(from) if dev_keys::dev_key_index(from).is_some() => Some(from.to_owned()),
-        Some(_) => None,
-        None => default_key
-            .filter(|key| dev_keys::dev_key_index(key).is_some())
-            .map(str::to_owned),
-    }
 }
 
 fn resolve_calldata(
@@ -221,58 +201,44 @@ fn print_view_response(
 ) {
     match &response.output {
         RootInvocationOutput::Return { return_data } => {
-            if let Some(value) = decoded_return_value {
-                print.status(format_args!(
-                    "View returned: {} -> {value}",
-                    prepared.method
-                ));
+            print.success("View succeeded");
+            if prepared.resolved.metadata.is_some() {
+                print.detail("method", &prepared.method);
+                if let Some(value) = decoded_return_value {
+                    print.detail("value", value);
+                }
             } else {
-                print.status(format_args!("View returned: {}", prepared.method));
+                print.detail("entrypoint", &prepared.method);
             }
-            print.status(format_args!(
-                "  contract: {}",
-                prepared.contract_address_hex
-            ));
-            print.status(format_args!("  height: {}", *response.height));
+            print.detail("contract", &prepared.contract_address_hex);
+            print.detail("height", *response.height);
             if !return_data.0.is_empty() && decoded_return_value.is_none() {
-                print.status(format_args!(
-                    "  return: {}",
-                    format_hex_bytes(&return_data.0)
-                ));
+                print.detail("return", format_hex_bytes(&return_data.0));
             }
         }
         RootInvocationOutput::Abort { abort_data } => {
             print.warn("View aborted.");
-            print.status(format_args!("  method: {}", prepared.method));
-            print.status(format_args!(
-                "  contract: {}",
-                prepared.contract_address_hex
-            ));
-            print.status(format_args!("  height: {}", *response.height));
-            print.status(format_args!("  abort: {}", format_hex_bytes(&abort_data.0)));
+            print.detail("method", &prepared.method);
+            print.detail("contract", &prepared.contract_address_hex);
+            print.detail("height", *response.height);
+            print.detail("abort", format_hex_bytes(&abort_data.0));
         }
         RootInvocationOutput::Fault => {
             print.warn("View faulted.");
-            print.status(format_args!("  method: {}", prepared.method));
-            print.status(format_args!(
-                "  contract: {}",
-                prepared.contract_address_hex
-            ));
-            print.status(format_args!("  height: {}", *response.height));
+            print.detail("method", &prepared.method);
+            print.detail("contract", &prepared.contract_address_hex);
+            print.detail("height", *response.height);
         }
         _ => {
             print.warn("View returned an unsupported output variant.");
-            print.status(format_args!("  method: {}", prepared.method));
-            print.status(format_args!(
-                "  contract: {}",
-                prepared.contract_address_hex
-            ));
-            print.status(format_args!("  height: {}", *response.height));
+            print.detail("method", &prepared.method);
+            print.detail("contract", &prepared.contract_address_hex);
+            print.detail("height", *response.height);
         }
     }
 
     if !response.events.is_empty() {
-        print.status(format_args!("  events: {}", response.events.len()));
+        print.detail("events", response.events.len());
         for (index, event) in response.events.iter().enumerate() {
             print.status(format_args!("    [{index}] {}", format_event(event)));
         }

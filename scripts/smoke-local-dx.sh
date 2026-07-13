@@ -18,6 +18,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CLI="$REPO_ROOT/target/debug/groundhog"
 GATEWAY="$REPO_ROOT/target/debug/hog-gateway"
 PROJECT_NAME="smoke-counter"
+SMOKE_PROFILE="local"
 INITIAL_VALUE=7
 INCREMENT_AMOUNT=5
 
@@ -64,6 +65,35 @@ for part in path:
         break
     value = value.get(part) if isinstance(value, dict) else value[int(part)]
 print(len(value) if value is not None else 0)
+PY
+}
+
+toml_field() {
+    python3 - "$1" "$2" <<'PY'
+import sys
+import tomllib
+
+path, dotted = sys.argv[1:]
+with open(path, "rb") as handle:
+    value = tomllib.load(handle)
+for part in dotted.split("."):
+    value = value.get(part) if isinstance(value, dict) else None
+    if value is None:
+        break
+print("null" if value is None else value)
+PY
+}
+
+toml_profile_field() {
+    python3 - "$1" "$2" "$3" <<'PY'
+import sys
+import tomllib
+
+path, profile_name, field = sys.argv[1:]
+with open(path, "rb") as handle:
+    payload = tomllib.load(handle)
+value = payload.get("profile", {}).get(profile_name, {}).get(field)
+print("null" if value is None else value)
 PY
 }
 
@@ -211,27 +241,28 @@ if matches:
 
 update_rpc_url() {
     local config="$1"
-    local rpc_url="$2"
-    python3 - "$config" "$rpc_url" <<'PY'
+    local profile="$2"
+    local rpc_url="$3"
+    python3 - "$config" "$profile" "$rpc_url" <<'PY'
 import sys
 
-path, rpc_url = sys.argv[1], sys.argv[2]
+path, profile, rpc_url = sys.argv[1:]
 with open(path, "r", encoding="utf-8") as handle:
     text = handle.read()
 lines = []
 replaced = False
-in_default = False
+in_profile = False
 for line in text.splitlines():
     stripped = line.strip()
     if stripped.startswith("[profile."):
-        in_default = stripped == "[profile.default]"
-    if in_default and stripped.startswith("rpc_url"):
+        in_profile = stripped == f"[profile.{profile}]"
+    if in_profile and stripped.startswith("rpc_url"):
         lines.append(f'rpc_url = "{rpc_url}"')
         replaced = True
     else:
         lines.append(line)
 if not replaced:
-    raise SystemExit("profile.default rpc_url not found")
+    raise SystemExit(f"profile.{profile} rpc_url not found")
 with open(path, "w", encoding="utf-8") as handle:
     handle.write("\n".join(lines) + "\n")
 PY
@@ -327,11 +358,6 @@ DEVNODE_BINARY="$(find_hogd_dev_binary)"
 [[ -x "$DEVNODE_BINARY" ]] || die "hog-devnode binary is not executable: $DEVNODE_BINARY"
 
 HOGD_PROTOCOL="$(detect_hogd_protocol "$DEVNODE_BINARY")"
-NODE_ARGS=(--json node --port 0 --hog-devnode-binary "$DEVNODE_BINARY")
-if [[ -n "$HOGD_PROTOCOL" ]]; then
-    NODE_ARGS+=(--hogd-protocol "$HOGD_PROTOCOL")
-    log "Using hogd protocol override: $HOGD_PROTOCOL"
-fi
 
 if [[ "${SMOKE_STANDALONE_GATEWAY:-0}" == "1" ]]; then
     log "Building CLI and standalone gateway"
@@ -342,6 +368,12 @@ else
 fi
 
 WORK="$(mktemp -d)"
+export XDG_CONFIG_HOME="$WORK/config"
+NODE_ARGS=(--json node --port 0 --hog-devnode-binary "$DEVNODE_BINARY")
+if [[ -n "$HOGD_PROTOCOL" ]]; then
+    NODE_ARGS+=(--hogd-protocol "$HOGD_PROTOCOL")
+    log "Using hogd protocol override: $HOGD_PROTOCOL"
+fi
 NODE_PID=""
 NODE_DESCENDANTS=""
 GATEWAY_PID=""
@@ -380,6 +412,7 @@ cd "$WORK"
 log "Scaffolding counter contract"
 "$CLI" new "$PROJECT_NAME" --template counter
 cd "$PROJECT_NAME"
+export GROUNDHOG_PROFILE="$SMOKE_PROFILE"
 
 if [[ -n "${SMOKE_SDK_PATH:-}" ]]; then
     log "Using local SDK path: $SMOKE_SDK_PATH"
@@ -407,14 +440,22 @@ log "Node RPC: $RPC_URL (read plane: $READ_PLANE, view plane: $VIEW_PLANE)"
 [[ "$RUNTIME_MANIFEST" != "null" && -n "$RUNTIME_MANIFEST" ]] \
     || die "groundhog node did not report a runtime manifest path"
 [[ -r "$RUNTIME_MANIFEST" ]] || die "runtime manifest is not readable: $RUNTIME_MANIFEST"
-LOCAL_NODE_STATE=".groundhog/local-node.json"
-[[ -r "$LOCAL_NODE_STATE" ]] || die "local node state was not written: $LOCAL_NODE_STATE"
-STATE_RPC_URL="$(json_field rpcUrl "$(cat "$LOCAL_NODE_STATE")")"
-STATE_RUNTIME_MANIFEST="$(json_field runtimeManifest "$(cat "$LOCAL_NODE_STATE")")"
-[[ "$STATE_RPC_URL" == "$RPC_URL" ]] \
-    || die "local node state rpcUrl was $STATE_RPC_URL, expected $RPC_URL"
-[[ "$STATE_RUNTIME_MANIFEST" == "$RUNTIME_MANIFEST" ]] \
-    || die "local node state runtimeManifest was $STATE_RUNTIME_MANIFEST, expected $RUNTIME_MANIFEST"
+NODE_PROFILE="$(toml_field groundhog.toml default_profile)"
+[[ "$NODE_PROFILE" == "$SMOKE_PROFILE" ]] \
+    || die "default_profile was $NODE_PROFILE, expected $SMOKE_PROFILE"
+PROFILE_RPC_URL="$(toml_profile_field groundhog.toml "$NODE_PROFILE" rpc_url)"
+PROFILE_RUNTIME_MANIFEST="$(toml_profile_field groundhog.toml "$NODE_PROFILE" runtime_manifest)"
+[[ "$PROFILE_RPC_URL" == "null" ]] \
+    || die "project profile.$NODE_PROFILE.rpc_url was dirtied: $PROFILE_RPC_URL"
+[[ "$PROFILE_RUNTIME_MANIFEST" == "null" ]] \
+    || die "project profile.$NODE_PROFILE.runtime_manifest was dirtied: $PROFILE_RUNTIME_MANIFEST"
+GLOBAL_CONFIG="$XDG_CONFIG_HOME/groundhog/config.toml"
+GLOBAL_RPC_URL="$(toml_field "$GLOBAL_CONFIG" local_runtime_state.rpc_url)"
+GLOBAL_RUNTIME_MANIFEST="$(toml_field "$GLOBAL_CONFIG" local_runtime_state.runtime_manifest)"
+[[ "$GLOBAL_RPC_URL" == "$RPC_URL" ]] \
+    || die "local_runtime_state.rpc_url was $GLOBAL_RPC_URL, expected $RPC_URL"
+[[ "$GLOBAL_RUNTIME_MANIFEST" == "$RUNTIME_MANIFEST" ]] \
+    || die "local_runtime_state.runtime_manifest was $GLOBAL_RUNTIME_MANIFEST, expected $RUNTIME_MANIFEST"
 unset GROUNDHOG_RUNTIME_MANIFEST
 
 GATEWAY_RPC_URL=""
@@ -450,7 +491,7 @@ VIEW_FROM="dev-0"
 if [[ -n "$GATEWAY_RPC_URL" ]]; then
     log "Switching project RPC to standalone gateway for view/storage checks"
     export GROUNDHOG_RUNTIME_MANIFEST="$RUNTIME_MANIFEST"
-    update_rpc_url groundhog.toml "$GATEWAY_RPC_URL"
+    update_rpc_url groundhog.toml "$SMOKE_PROFILE" "$GATEWAY_RPC_URL"
 fi
 
 EXPECTED_VALUE=$(( INITIAL_VALUE + INCREMENT_AMOUNT ))

@@ -446,7 +446,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn airdrop_success_response_survives_final_policy_store_write_failure() {
+    async fn airdrop_final_store_failure_retains_accepted_transaction_for_retry() {
         let mut config = test_config_with_submitters(
             Arc::new(MockAirdropSubmitter::success()),
             Arc::new(MockWalletCreateSubmitter::success()),
@@ -455,14 +455,14 @@ mod tests {
 
         let response = airdrop_request(&config).await;
 
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), 4096)
-            .await
-            .expect("bug: airdrop body should read");
-        let json: serde_json::Value =
-            serde_json::from_slice(&body).expect("bug: airdrop body should be JSON");
-        assert_eq!(json["attemptStatus"], "succeeded");
-        assert_eq!(json["txHash"], format!("0x{}", "22".repeat(32)));
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let attempt = stored_airdrop_attempt(&config).expect("bug: attempt should be stored");
+        assert_eq!(attempt.status, policy::AirdropAttemptStatus::Pending);
+        assert_eq!(
+            attempt.tx_hash.as_deref(),
+            Some(format!("0x{}", "22".repeat(32)).as_str())
+        );
+        assert!(attempt.expires_at.is_none());
     }
 
     #[tokio::test]
@@ -481,6 +481,50 @@ mod tests {
         assert_eq!(json["attemptStatus"], "pending");
         assert_eq!(json["retryAfterSeconds"], 5);
         assert!(json.get("txHash").is_none());
+    }
+
+    #[tokio::test]
+    async fn airdrop_accepted_transaction_is_polled_without_resubmission() {
+        let airdrop = Arc::new(MockAirdropSubmitter::success());
+        let config = test_config_with_submitters(
+            airdrop.clone(),
+            Arc::new(MockWalletCreateSubmitter::success()),
+        );
+        seed_airdrop_attempt(
+            &config,
+            policy::AirdropAttemptStatus::Pending,
+            Some(format!("0x{}", "22".repeat(32))),
+        );
+
+        let response = airdrop_request(&config).await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(airdrop.calls(), 0);
+        assert_eq!(airdrop.poll_calls(), 1);
+        let attempt = stored_airdrop_attempt(&config).expect("bug: attempt should be stored");
+        assert_eq!(attempt.status, policy::AirdropAttemptStatus::Succeeded);
+    }
+
+    #[tokio::test]
+    async fn airdrop_poll_retry_reuses_accepted_transaction() {
+        let airdrop = Arc::new(MockAirdropSubmitter::poll_fail_once());
+        let config = test_config_with_submitters(
+            airdrop.clone(),
+            Arc::new(MockWalletCreateSubmitter::success()),
+        );
+
+        let response = airdrop_request(&config).await;
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        let attempt = stored_airdrop_attempt(&config).expect("bug: attempt should be stored");
+        assert_eq!(attempt.status, policy::AirdropAttemptStatus::Pending);
+        assert!(attempt.tx_hash.is_some());
+        assert!(attempt.expires_at.is_none());
+
+        let response = airdrop_request(&config).await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(airdrop.calls(), 1);
+        assert_eq!(airdrop.poll_calls(), 2);
     }
 
     #[tokio::test]
@@ -677,7 +721,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn wallet_create_success_response_survives_final_policy_store_write_failure() {
+    async fn wallet_create_final_store_failure_retains_accepted_transaction_for_retry() {
         let mut config = test_config_with_submitters(
             Arc::new(MockAirdropSubmitter::success()),
             Arc::new(MockWalletCreateSubmitter::success()),
@@ -686,14 +730,17 @@ mod tests {
 
         let response = wallet_create_request(&config).await;
 
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), 4096)
-            .await
-            .expect("bug: wallet-create body should read");
-        let json: serde_json::Value =
-            serde_json::from_slice(&body).expect("bug: wallet-create body should be JSON");
-        assert_eq!(json["attemptStatus"], "created");
-        assert_eq!(json["txHash"], format!("0x{}", "22".repeat(32)));
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let attempt = stored_wallet_create_attempt(&config).expect("bug: attempt should be stored");
+        assert_eq!(
+            attempt.status,
+            policy::WalletCreateAttemptStatus::CreatePending
+        );
+        assert_eq!(
+            attempt.create_tx_hash.as_deref(),
+            Some(format!("0x{}", "22".repeat(32)).as_str())
+        );
+        assert!(attempt.expires_at.is_none());
     }
 
     #[tokio::test]
@@ -716,6 +763,96 @@ mod tests {
             serde_json::from_slice(&body).expect("bug: wallet-create body should be JSON");
         assert_eq!(json["attemptStatus"], "prefundPending");
         assert!(json.get("txHash").is_none());
+    }
+
+    #[tokio::test]
+    async fn wallet_create_accepted_prefund_is_polled_without_resubmission() {
+        let airdrop = Arc::new(MockAirdropSubmitter::success());
+        let wallet_create = Arc::new(MockWalletCreateSubmitter::success());
+        let config = test_config_with_submitters(airdrop.clone(), wallet_create.clone());
+        seed_wallet_create_attempt(
+            &config,
+            policy::WalletCreateAttemptStatus::PrefundPending,
+            Some(format!("0x{}", "22".repeat(32))),
+            None,
+        );
+
+        let response = wallet_create_request(&config).await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(airdrop.calls(), 0);
+        assert_eq!(airdrop.poll_calls(), 1);
+        assert_eq!(wallet_create.calls(), 1);
+        assert_eq!(wallet_create.poll_calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn wallet_create_accepted_create_is_polled_without_resubmission() {
+        let airdrop = Arc::new(MockAirdropSubmitter::success());
+        let wallet_create = Arc::new(MockWalletCreateSubmitter::success());
+        let config = test_config_with_submitters(airdrop.clone(), wallet_create.clone());
+        seed_wallet_create_attempt(
+            &config,
+            policy::WalletCreateAttemptStatus::CreatePending,
+            Some(format!("0x{}", "22".repeat(32))),
+            Some(format!("0x{}", "22".repeat(32))),
+        );
+
+        let response = wallet_create_request(&config).await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(airdrop.calls(), 0);
+        assert_eq!(airdrop.poll_calls(), 0);
+        assert_eq!(wallet_create.calls(), 0);
+        assert_eq!(wallet_create.poll_calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn wallet_create_prefund_poll_retry_reuses_accepted_transaction() {
+        let airdrop = Arc::new(MockAirdropSubmitter::poll_fail_once());
+        let wallet_create = Arc::new(MockWalletCreateSubmitter::success());
+        let config = test_config_with_submitters(airdrop.clone(), wallet_create.clone());
+
+        let response = wallet_create_request(&config).await;
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        let attempt = stored_wallet_create_attempt(&config).expect("bug: attempt should be stored");
+        assert_eq!(
+            attempt.status,
+            policy::WalletCreateAttemptStatus::PrefundPending
+        );
+        assert!(attempt.prefund_tx_hash.is_some());
+        assert!(attempt.expires_at.is_none());
+
+        let response = wallet_create_request(&config).await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(airdrop.calls(), 1);
+        assert_eq!(airdrop.poll_calls(), 2);
+        assert_eq!(wallet_create.calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn wallet_create_poll_retry_reuses_accepted_transaction() {
+        let airdrop = Arc::new(MockAirdropSubmitter::success());
+        let wallet_create = Arc::new(MockWalletCreateSubmitter::poll_fail_once());
+        let config = test_config_with_submitters(airdrop.clone(), wallet_create.clone());
+
+        let response = wallet_create_request(&config).await;
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        let attempt = stored_wallet_create_attempt(&config).expect("bug: attempt should be stored");
+        assert_eq!(
+            attempt.status,
+            policy::WalletCreateAttemptStatus::CreatePending
+        );
+        assert!(attempt.create_tx_hash.is_some());
+        assert!(attempt.expires_at.is_none());
+
+        let response = wallet_create_request(&config).await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(airdrop.calls(), 1);
+        assert_eq!(wallet_create.calls(), 1);
+        assert_eq!(wallet_create.poll_calls(), 2);
     }
 
     #[tokio::test]
@@ -1319,7 +1456,9 @@ mod tests {
 
     struct MockAirdropSubmitter {
         failures_remaining: Mutex<usize>,
+        poll_failures_remaining: Mutex<usize>,
         calls: Mutex<usize>,
+        poll_calls: Mutex<usize>,
         raw_amount: String,
     }
 
@@ -1331,7 +1470,9 @@ mod tests {
         fn success_with_raw_amount(raw_amount: &str) -> Self {
             Self {
                 failures_remaining: Mutex::new(0),
+                poll_failures_remaining: Mutex::new(0),
                 calls: Mutex::new(0),
+                poll_calls: Mutex::new(0),
                 raw_amount: raw_amount.into(),
             }
         }
@@ -1339,7 +1480,9 @@ mod tests {
         fn failure() -> Self {
             Self {
                 failures_remaining: Mutex::new(usize::MAX),
+                poll_failures_remaining: Mutex::new(0),
                 calls: Mutex::new(0),
+                poll_calls: Mutex::new(0),
                 raw_amount: "100000000".into(),
             }
         }
@@ -1347,13 +1490,32 @@ mod tests {
         fn fail_once() -> Self {
             Self {
                 failures_remaining: Mutex::new(1),
+                poll_failures_remaining: Mutex::new(0),
                 calls: Mutex::new(0),
+                poll_calls: Mutex::new(0),
                 raw_amount: "100000000".into(),
             }
         }
 
         fn calls(&self) -> usize {
             *self.calls.lock().expect("bug: calls lock should succeed")
+        }
+
+        fn poll_fail_once() -> Self {
+            Self {
+                failures_remaining: Mutex::new(0),
+                poll_failures_remaining: Mutex::new(1),
+                calls: Mutex::new(0),
+                poll_calls: Mutex::new(0),
+                raw_amount: "100000000".into(),
+            }
+        }
+
+        fn poll_calls(&self) -> usize {
+            *self
+                .poll_calls
+                .lock()
+                .expect("bug: poll calls lock should succeed")
         }
     }
 
@@ -1362,7 +1524,7 @@ mod tests {
         async fn submit_airdrop(
             &self,
             _recipient: ContractAddress,
-        ) -> Result<airdrop::AirdropSubmission, airdrop::AirdropSubmitError> {
+        ) -> Result<airdrop::AcceptedAirdrop, airdrop::AirdropSubmitError> {
             *self.calls.lock().expect("bug: calls lock should succeed") += 1;
             let mut failures = self
                 .failures_remaining
@@ -1374,18 +1536,29 @@ mod tests {
                 }
                 return Err(airdrop::AirdropSubmitError::BuildTransaction("boom".into()));
             }
-            Ok(airdrop::AirdropSubmission {
+            Ok(airdrop::AcceptedAirdrop {
                 raw_amount: self.raw_amount.clone(),
                 tx_hash: test_tx_hash(),
-                receipt: TransactionReceipt {
-                    tx_hash: test_tx_hash(),
-                    height: BlockHeight::from(42),
-                    status: ExecStatus::Ok,
-                    events: vec![],
-                    return_data: None,
-                    abort_data: None,
-                },
             })
+        }
+
+        async fn poll_airdrop(
+            &self,
+            tx_hash: TxHash,
+        ) -> Result<TransactionReceipt, airdrop::AirdropSubmitError> {
+            *self
+                .poll_calls
+                .lock()
+                .expect("bug: poll calls lock should succeed") += 1;
+            let mut failures = self
+                .poll_failures_remaining
+                .lock()
+                .expect("bug: poll failures lock should succeed");
+            if *failures > 0 {
+                *failures -= 1;
+                return Err(airdrop::AirdropSubmitError::RpcConnect("boom".into()));
+            }
+            Ok(successful_receipt(tx_hash))
         }
     }
 
@@ -1395,6 +1568,9 @@ mod tests {
 
     struct MockWalletCreateSubmitter {
         failures_remaining: Mutex<usize>,
+        poll_failures_remaining: Mutex<usize>,
+        calls: Mutex<usize>,
+        poll_calls: Mutex<usize>,
         verify_fails: bool,
     }
 
@@ -1402,6 +1578,9 @@ mod tests {
         fn success() -> Self {
             Self {
                 failures_remaining: Mutex::new(0),
+                poll_failures_remaining: Mutex::new(0),
+                calls: Mutex::new(0),
+                poll_calls: Mutex::new(0),
                 verify_fails: false,
             }
         }
@@ -1409,6 +1588,9 @@ mod tests {
         fn failure() -> Self {
             Self {
                 failures_remaining: Mutex::new(usize::MAX),
+                poll_failures_remaining: Mutex::new(0),
+                calls: Mutex::new(0),
+                poll_calls: Mutex::new(0),
                 verify_fails: false,
             }
         }
@@ -1416,6 +1598,9 @@ mod tests {
         fn fail_once() -> Self {
             Self {
                 failures_remaining: Mutex::new(1),
+                poll_failures_remaining: Mutex::new(0),
+                calls: Mutex::new(0),
+                poll_calls: Mutex::new(0),
                 verify_fails: false,
             }
         }
@@ -1423,8 +1608,32 @@ mod tests {
         fn verify_failure() -> Self {
             Self {
                 failures_remaining: Mutex::new(0),
+                poll_failures_remaining: Mutex::new(0),
+                calls: Mutex::new(0),
+                poll_calls: Mutex::new(0),
                 verify_fails: true,
             }
+        }
+
+        fn calls(&self) -> usize {
+            *self.calls.lock().expect("bug: calls lock should succeed")
+        }
+
+        fn poll_fail_once() -> Self {
+            Self {
+                failures_remaining: Mutex::new(0),
+                poll_failures_remaining: Mutex::new(1),
+                calls: Mutex::new(0),
+                poll_calls: Mutex::new(0),
+                verify_fails: false,
+            }
+        }
+
+        fn poll_calls(&self) -> usize {
+            *self
+                .poll_calls
+                .lock()
+                .expect("bug: poll calls lock should succeed")
         }
     }
 
@@ -1465,8 +1674,8 @@ mod tests {
             _network_id: String,
             _genesis_hash: SHA256Hash,
             _owner_signature: Vec<u8>,
-        ) -> Result<wallet_create::WalletCreateSubmission, wallet_create::WalletCreateError>
-        {
+        ) -> Result<wallet_create::AcceptedWalletCreate, wallet_create::WalletCreateError> {
+            *self.calls.lock().expect("bug: calls lock should succeed") += 1;
             let mut failures = self
                 .failures_remaining
                 .lock()
@@ -1479,18 +1688,40 @@ mod tests {
                     "boom".into(),
                 ));
             }
-            Ok(wallet_create::WalletCreateSubmission {
+            Ok(wallet_create::AcceptedWalletCreate {
                 wallet_address: Hex0x(groundhog_xdr::types::ContractAddress::from([0x55; 32])),
                 tx_hash: test_tx_hash(),
-                receipt: TransactionReceipt {
-                    tx_hash: test_tx_hash(),
-                    height: BlockHeight::from(42),
-                    status: ExecStatus::Ok,
-                    events: vec![],
-                    return_data: None,
-                    abort_data: None,
-                },
             })
+        }
+
+        async fn poll_wallet_create(
+            &self,
+            tx_hash: TxHash,
+        ) -> Result<TransactionReceipt, wallet_create::WalletCreateError> {
+            *self
+                .poll_calls
+                .lock()
+                .expect("bug: poll calls lock should succeed") += 1;
+            let mut failures = self
+                .poll_failures_remaining
+                .lock()
+                .expect("bug: poll failures lock should succeed");
+            if *failures > 0 {
+                *failures -= 1;
+                return Err(wallet_create::WalletCreateError::RpcConnect("boom".into()));
+            }
+            Ok(successful_receipt(tx_hash))
+        }
+    }
+
+    fn successful_receipt(tx_hash: TxHash) -> TransactionReceipt {
+        TransactionReceipt {
+            tx_hash,
+            height: BlockHeight::from(42),
+            status: ExecStatus::Ok,
+            events: vec![],
+            return_data: None,
+            abort_data: None,
         }
     }
 }

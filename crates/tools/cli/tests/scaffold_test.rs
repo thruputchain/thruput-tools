@@ -10,6 +10,8 @@ fn scaffold_counter_creates_expected_files() {
     groundhog_cli::scaffold::generate(&dir, "my-counter", "counter").unwrap();
 
     assert!(dir.join("Cargo.toml").exists());
+    assert!(dir.join(".gitignore").exists());
+    assert!(dir.join("groundhog.toml").exists());
     assert!(dir.join("rust-toolchain.toml").exists());
     assert!(dir.join(".cargo/config.toml").exists());
     assert!(dir.join(".cargo/contract.toml").exists());
@@ -38,6 +40,27 @@ fn scaffold_counter_creates_expected_files() {
     assert!(cargo.contains("test = false"));
     assert!(cargo.contains("bench = false"));
 
+    let gitignore = fs::read_to_string(dir.join(".gitignore")).unwrap();
+    assert!(gitignore.contains("/target/"));
+    assert!(gitignore.contains("/.groundhog/"));
+
+    let groundhog = fs::read_to_string(dir.join("groundhog.toml")).unwrap();
+    assert!(groundhog.contains("[profile.local]"));
+    assert!(groundhog.contains("network = \"local\""));
+    assert!(groundhog.contains("[profile.local.contracts]"));
+    assert!(groundhog.contains("# [profile.local.wallets.alice]"));
+    assert!(groundhog.contains("[profile.devnet]"));
+    assert!(groundhog.contains("network = \"devnet\""));
+    assert!(groundhog.contains("[profile.devnet.contracts]"));
+    assert!(groundhog.contains("# [profile.devnet.wallets.alice]"));
+    assert!(groundhog.contains("# owner_public_key ="));
+    assert!(groundhog.contains("# my_counter ="));
+    assert!(groundhog.contains("default_profile = \"local\""));
+    assert!(!groundhog.contains("rpc_url"));
+    assert!(!groundhog.contains("faucet_url"));
+    assert!(!groundhog.contains("runtime_manifest"));
+    assert!(!groundhog.contains("default_key"));
+
     let main = fs::read_to_string(dir.join("src/main.rs")).unwrap();
     assert!(main.contains("#![no_std]"));
     assert!(main.contains("#![no_main]"));
@@ -51,11 +74,6 @@ fn scaffold_counter_creates_expected_files() {
 
     let toolchain = fs::read_to_string(dir.join("rust-toolchain.toml")).unwrap();
     assert!(toolchain.contains("riscv32im-unknown-none-elf"));
-
-    let groundhog = fs::read_to_string(dir.join("groundhog.toml")).unwrap();
-    assert!(groundhog.contains("[profile.devnet]"));
-    assert!(groundhog.contains(r#"rpc_url = "http://127.0.0.1:9545""#));
-    assert!(groundhog.contains(r#"faucet_url = "http://127.0.0.1:8081""#));
 
     let lib = fs::read_to_string(dir.join("src/lib.rs")).unwrap();
     assert!(lib.contains("mod implementation"));

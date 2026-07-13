@@ -13,6 +13,36 @@ pub const DEFAULT_RECEIPT_POLL_ATTEMPTS: usize = 30;
 pub const DEFAULT_RECEIPT_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Debug, thiserror::Error)]
+pub enum SubmitTransactionError {
+    #[error("failed to connect to JSON-RPC endpoint {rpc_url}: {source}")]
+    Connect {
+        rpc_url: String,
+        #[source]
+        source: jsonrpsee::core::client::Error,
+    },
+    #[error("groundhog_sendRawTransaction failed: {0}")]
+    SendRawTransaction(jsonrpsee::core::client::Error),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum PollTransactionReceiptError {
+    #[error("failed to connect to JSON-RPC endpoint {rpc_url}: {source}")]
+    Connect {
+        rpc_url: String,
+        #[source]
+        source: jsonrpsee::core::client::Error,
+    },
+    #[error("groundhog_getTransactionReceipt failed for {tx_hash:?}: {source}")]
+    GetTransactionReceipt {
+        tx_hash: TxHash,
+        #[source]
+        source: jsonrpsee::core::client::Error,
+    },
+    #[error("timed out waiting for receipt for {tx_hash:?} after {attempts} attempts")]
+    ReceiptTimeout { tx_hash: TxHash, attempts: usize },
+}
+
+#[derive(Debug, thiserror::Error)]
 pub enum SubmitAndPollError {
     #[error("failed to connect to JSON-RPC endpoint {rpc_url}: {source}")]
     Connect {
@@ -47,35 +77,97 @@ pub async fn submit_and_poll_with_config(
     max_attempts: usize,
     poll_interval: Duration,
 ) -> Result<(TxHash, TransactionReceipt), SubmitAndPollError> {
+    let tx_hash = submit_transaction(rpc_url, tx_hex)
+        .await
+        .map_err(|error| match error {
+            SubmitTransactionError::Connect { rpc_url, source } => {
+                SubmitAndPollError::Connect { rpc_url, source }
+            }
+            SubmitTransactionError::SendRawTransaction(source) => {
+                SubmitAndPollError::SendRawTransaction(source)
+            }
+        })?;
+    let receipt =
+        poll_transaction_receipt_with_config(rpc_url, tx_hash, max_attempts, poll_interval)
+            .await
+            .map_err(|error| match error {
+                PollTransactionReceiptError::Connect { rpc_url, source } => {
+                    SubmitAndPollError::Connect { rpc_url, source }
+                }
+                PollTransactionReceiptError::GetTransactionReceipt { source, .. } => {
+                    SubmitAndPollError::GetTransactionReceipt(source)
+                }
+                PollTransactionReceiptError::ReceiptTimeout { tx_hash, attempts } => {
+                    SubmitAndPollError::ReceiptTimeout { tx_hash, attempts }
+                }
+            })?;
+    Ok((tx_hash, receipt))
+}
+
+/// Submit a signed transaction and return once the RPC endpoint accepts it.
+pub async fn submit_transaction(
+    rpc_url: &str,
+    tx_hex: &str,
+) -> Result<TxHash, SubmitTransactionError> {
     let client = HttpClientBuilder::default()
         .build(rpc_url)
-        .map_err(|source| SubmitAndPollError::Connect {
+        .map_err(|source| SubmitTransactionError::Connect {
+            rpc_url: rpc_url.to_owned(),
+            source,
+        })?;
+    client
+        .send_raw_transaction(tx_hex.to_owned())
+        .await
+        .map_err(SubmitTransactionError::SendRawTransaction)
+}
+
+/// Poll an accepted transaction until its receipt is available.
+pub async fn poll_transaction_receipt(
+    rpc_url: &str,
+    tx_hash: TxHash,
+) -> Result<TransactionReceipt, PollTransactionReceiptError> {
+    poll_transaction_receipt_with_config(
+        rpc_url,
+        tx_hash,
+        DEFAULT_RECEIPT_POLL_ATTEMPTS,
+        DEFAULT_RECEIPT_POLL_INTERVAL,
+    )
+    .await
+}
+
+/// Poll an accepted transaction with explicit retry settings.
+pub async fn poll_transaction_receipt_with_config(
+    rpc_url: &str,
+    tx_hash: TxHash,
+    max_attempts: usize,
+    poll_interval: Duration,
+) -> Result<TransactionReceipt, PollTransactionReceiptError> {
+    let client = HttpClientBuilder::default()
+        .build(rpc_url)
+        .map_err(|source| PollTransactionReceiptError::Connect {
             rpc_url: rpc_url.to_owned(),
             source,
         })?;
 
-    let tx_hash = client
-        .send_raw_transaction(tx_hex.to_owned())
-        .await
-        .map_err(SubmitAndPollError::SendRawTransaction)?;
-
     for attempt in 0..max_attempts {
         match client.get_transaction_receipt(tx_hash).await {
-            Ok(Some(receipt)) => return Ok((tx_hash, receipt)),
+            Ok(Some(receipt)) => return Ok(receipt),
             Ok(None) if attempt < max_attempts.saturating_sub(1) => {
                 tokio::time::sleep(poll_interval).await;
             }
             Ok(None) => {
-                return Err(SubmitAndPollError::ReceiptTimeout {
+                return Err(PollTransactionReceiptError::ReceiptTimeout {
                     tx_hash,
                     attempts: max_attempts,
                 });
             }
-            Err(error) => return Err(SubmitAndPollError::GetTransactionReceipt(error)),
+            Err(source) => {
+                return Err(PollTransactionReceiptError::GetTransactionReceipt { tx_hash, source });
+            }
         }
     }
 
-    Err(SubmitAndPollError::ReceiptTimeout {
+    Err(PollTransactionReceiptError::ReceiptTimeout {
         tx_hash,
         attempts: max_attempts,
     })

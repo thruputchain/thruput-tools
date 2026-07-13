@@ -8,7 +8,9 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
-use groundhog_json_rpc_client::{GroundhogApiClient, HttpClientBuilder, submit_and_poll};
+use groundhog_json_rpc_client::{
+    GroundhogApiClient, HttpClientBuilder, poll_transaction_receipt, submit_transaction,
+};
 use groundhog_json_rpc_types::hex::HexBytes;
 use groundhog_json_rpc_types::network_descriptor::NetworkDescriptor;
 use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
@@ -178,7 +180,11 @@ impl AirdropService {
                 response_from_attempt(StatusCode::OK, request, attempt)
             }
             AirdropAttemptStatus::Pending => {
-                response_from_attempt(StatusCode::ACCEPTED, request, attempt)
+                if attempt.tx_hash.is_some() {
+                    self.poll_airdrop_attempt(request, attempt).await
+                } else {
+                    response_from_attempt(StatusCode::ACCEPTED, request, attempt)
+                }
             }
             AirdropAttemptStatus::FailedRetryable => {
                 attempt = match self.policy_store.claim_airdrop_transition(
@@ -245,22 +251,75 @@ impl AirdropService {
         mut attempt: AirdropAttempt,
     ) -> Response {
         match self.submitter.submit_airdrop(request.recipient).await {
-            Ok(submission) => {
-                attempt.status = AirdropAttemptStatus::Succeeded;
-                attempt.raw_amount = submission.raw_amount;
-                attempt.tx_hash = Some(hex_string(submission.tx_hash.0.0));
-                attempt.height = Some(*submission.receipt.height);
+            Ok(accepted) => {
+                attempt.raw_amount = accepted.raw_amount;
+                attempt.tx_hash = Some(hex_string(accepted.tx_hash.0.0));
+                // An accepted transaction must not age out while its receipt is unresolved;
+                // otherwise the same idempotency key could submit a second transaction.
+                attempt.expires_at = None;
                 attempt.updated_at = SystemTime::now();
                 if let Err(error) = self.policy_store.put_airdrop_attempt(attempt.clone()) {
-                    tracing::warn!(%error, "failed to persist succeeded airdrop attempt");
+                    return policy_store_error_response(&error);
                 }
-                response_from_attempt(StatusCode::OK, &request, attempt)
+                self.poll_airdrop_attempt(&request, attempt).await
             }
             Err(error) => {
                 attempt.status = AirdropAttemptStatus::FailedRetryable;
                 attempt.error_code = Some(airdrop_error_code(&error).into());
                 attempt.updated_at = SystemTime::now();
                 let _ = self.policy_store.put_airdrop_attempt(attempt);
+                error.into_response()
+            }
+        }
+    }
+
+    async fn poll_airdrop_attempt(
+        &self,
+        request: &AirdropRequest,
+        mut attempt: AirdropAttempt,
+    ) -> Response {
+        let Some(tx_hash) = attempt.tx_hash.as_deref().and_then(parse_tx_hash) else {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "airdrop_attempt_state_invalid",
+                "airdrop attempt has an invalid accepted transaction hash",
+            );
+        };
+        match self.submitter.poll_airdrop(tx_hash).await {
+            Ok(receipt) if matches!(receipt.status, ExecStatus::Ok) => {
+                attempt.status = AirdropAttemptStatus::Succeeded;
+                attempt.height = Some(*receipt.height);
+                attempt.error_code = None;
+                let now = SystemTime::now();
+                attempt.updated_at = now;
+                attempt.expires_at = now.checked_add(Duration::from_secs(
+                    self.policy_config.airdrop.recipient_cooldown_secs,
+                ));
+                if let Err(error) = self.policy_store.put_airdrop_attempt(attempt.clone()) {
+                    return policy_store_error_response(&error);
+                }
+                response_from_attempt(StatusCode::OK, request, attempt)
+            }
+            Ok(receipt) => {
+                attempt.status = AirdropAttemptStatus::FailedTerminal;
+                attempt.height = Some(*receipt.height);
+                attempt.error_code = Some("airdrop_transaction_failed".into());
+                let now = SystemTime::now();
+                attempt.updated_at = now;
+                attempt.expires_at = now.checked_add(Duration::from_secs(
+                    self.policy_config.airdrop.recipient_cooldown_secs,
+                ));
+                if let Err(error) = self.policy_store.put_airdrop_attempt(attempt) {
+                    return policy_store_error_response(&error);
+                }
+                AirdropSubmitError::TransactionFailed { tx_hash }.into_response()
+            }
+            Err(error) => {
+                attempt.error_code = Some(airdrop_error_code(&error).into());
+                attempt.updated_at = SystemTime::now();
+                if let Err(store_error) = self.policy_store.put_airdrop_attempt(attempt) {
+                    return policy_store_error_response(&store_error);
+                }
                 error.into_response()
             }
         }
@@ -325,7 +384,8 @@ fn airdrop_error_code(error: &AirdropSubmitError) -> &'static str {
         | AirdropSubmitError::EncodeTransferCalldata(_)
         | AirdropSubmitError::BuildTransaction(_)
         | AirdropSubmitError::SignTransaction(_)
-        | AirdropSubmitError::SubmitAndPoll(_) => "airdrop_submit_failed",
+        | AirdropSubmitError::Submit(_)
+        | AirdropSubmitError::Poll(_) => "airdrop_submit_failed",
     }
 }
 
@@ -343,6 +403,14 @@ fn hex_encode(bytes: &[u8]) -> String {
     encoded
 }
 
+fn parse_tx_hash(value: &str) -> Option<TxHash> {
+    let value = value.strip_prefix("0x").unwrap_or(value);
+    let bytes: [u8; 32] = hex::decode(value).ok()?.try_into().ok()?;
+    Some(TxHash(SHA256Hash::from(
+        groundhog_xdr::types::SHA256Hash::from(bytes),
+    )))
+}
+
 pub(crate) async fn request_airdrop(
     State(service): State<Arc<AirdropService>>,
     headers: HeaderMap,
@@ -355,22 +423,24 @@ pub(crate) async fn request_airdrop(
 /// Submits faucet airdrops for validated recipient wallet addresses.
 #[async_trait::async_trait]
 pub trait AirdropSubmitter: Send + Sync + 'static {
-    /// Submit an airdrop to `recipient` and return the committed transaction receipt.
+    /// Submit an airdrop to `recipient` and return once the transaction is accepted.
     async fn submit_airdrop(
         &self,
         recipient: ContractAddress,
-    ) -> Result<AirdropSubmission, AirdropSubmitError>;
+    ) -> Result<AcceptedAirdrop, AirdropSubmitError>;
+
+    /// Poll a previously accepted airdrop transaction.
+    async fn poll_airdrop(&self, tx_hash: TxHash)
+    -> Result<TransactionReceipt, AirdropSubmitError>;
 }
 
-/// Successful faucet airdrop submission.
+/// Faucet airdrop accepted by the transaction submission endpoint.
 #[derive(Debug, Clone)]
-pub struct AirdropSubmission {
+pub struct AcceptedAirdrop {
     /// Raw HOG units transferred to the recipient.
     pub raw_amount: String,
     /// Submitted transaction hash.
     pub tx_hash: TxHash,
-    /// Committed transaction receipt.
-    pub receipt: TransactionReceipt,
 }
 
 /// Errors produced while submitting a faucet airdrop.
@@ -394,9 +464,12 @@ pub enum AirdropSubmitError {
     /// The faucet transaction could not be signed.
     #[error("failed to sign airdrop transaction: {0}")]
     SignTransaction(String),
-    /// The signed faucet transaction could not be submitted or confirmed.
-    #[error("failed to submit or confirm airdrop transaction: {0}")]
-    SubmitAndPoll(#[from] groundhog_json_rpc_client::SubmitAndPollError),
+    /// The signed faucet transaction was not accepted.
+    #[error("failed to submit airdrop transaction: {0}")]
+    Submit(#[from] groundhog_json_rpc_client::SubmitTransactionError),
+    /// The accepted faucet transaction could not be confirmed.
+    #[error("failed to confirm airdrop transaction: {0}")]
+    Poll(#[from] groundhog_json_rpc_client::PollTransactionReceiptError),
 }
 
 impl AirdropSubmitError {
@@ -412,7 +485,8 @@ impl AirdropSubmitError {
             | Self::EncodeTransferCalldata(_)
             | Self::BuildTransaction(_)
             | Self::SignTransaction(_)
-            | Self::SubmitAndPoll(_) => error_response(
+            | Self::Submit(_)
+            | Self::Poll(_) => error_response(
                 StatusCode::BAD_GATEWAY,
                 "airdrop_submit_failed",
                 "failed to submit airdrop transaction",
@@ -527,7 +601,7 @@ impl AirdropSubmitter for RpcAirdropSubmitter {
     async fn submit_airdrop(
         &self,
         recipient: ContractAddress,
-    ) -> Result<AirdropSubmission, AirdropSubmitError> {
+    ) -> Result<AcceptedAirdrop, AirdropSubmitError> {
         let block_expiry_height = self.block_expiry_height().await?;
         let transfer_calldata = encode_transfer_calldata(&recipient.0, self.raw_amount)?;
         let tx = build_dev_wallet_do_action_transaction(BuildDevWalletDoActionTransaction {
@@ -548,15 +622,20 @@ impl AirdropSubmitter for RpcAirdropSubmitter {
             SignTransactionParams::default(),
         )
         .map_err(|error| AirdropSubmitError::SignTransaction(error.to_string()))?;
-        let (tx_hash, receipt) = submit_and_poll(&self.rpc_url, &tx_hex).await?;
-        if !matches!(receipt.status, ExecStatus::Ok) {
-            return Err(AirdropSubmitError::TransactionFailed { tx_hash });
-        }
-        Ok(AirdropSubmission {
+        let tx_hash = submit_transaction(&self.rpc_url, &tx_hex).await?;
+        Ok(AcceptedAirdrop {
             raw_amount: self.raw_amount.to_string(),
             tx_hash,
-            receipt,
         })
+    }
+
+    async fn poll_airdrop(
+        &self,
+        tx_hash: TxHash,
+    ) -> Result<TransactionReceipt, AirdropSubmitError> {
+        poll_transaction_receipt(&self.rpc_url, tx_hash)
+            .await
+            .map_err(Into::into)
     }
 }
 
