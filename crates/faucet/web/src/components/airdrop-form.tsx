@@ -1,3 +1,5 @@
+import type { FormEvent } from "react"
+
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -14,9 +16,10 @@ export function AirdropForm(props: {
   address: string
   fieldError: string | null
   isLoadingMetadata: boolean
+  isMetadataUnavailable: boolean
   isSubmitting: boolean
   onAddressChange: (address: string) => void
-  onSubmit: (event: React.FormEvent<HTMLFormElement>) => void
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void
 }) {
   const isInvalid = Boolean(props.fieldError)
 
@@ -41,11 +44,19 @@ export function AirdropForm(props: {
                   autoComplete="off"
                   spellCheck={false}
                   aria-invalid={isInvalid || undefined}
-                  disabled={props.isLoadingMetadata || props.isSubmitting}
+                  disabled={
+                    props.isLoadingMetadata ||
+                    props.isMetadataUnavailable ||
+                    props.isSubmitting
+                  }
                 />
                 <Button
                   type="submit"
-                  disabled={props.isLoadingMetadata || props.isSubmitting}
+                  disabled={
+                    props.isLoadingMetadata ||
+                    props.isMetadataUnavailable ||
+                    props.isSubmitting
+                  }
                   className="w-full sm:w-auto"
                 >
                   {props.isLoadingMetadata || props.isSubmitting ? (
@@ -53,9 +64,11 @@ export function AirdropForm(props: {
                   ) : null}
                   {props.isLoadingMetadata
                     ? "Loading..."
-                    : props.isSubmitting
-                      ? "Requesting..."
-                      : "Request airdrop"}
+                    : props.isMetadataUnavailable
+                      ? "Metadata unavailable"
+                      : props.isSubmitting
+                        ? "Requesting..."
+                        : "Request airdrop"}
                 </Button>
               </div>
               {props.fieldError ? (

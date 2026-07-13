@@ -2,9 +2,44 @@
 
 `groundhog-faucet` serves the hosted Devnet network descriptor, airdrops, and
 sponsored wallet creation. The signing key is loaded once at startup and never
-belongs in the TOML config, process arguments, or logs.
+belongs in TOML config, process arguments, or logs.
 
-## Local key source
+## Run Locally
+
+Copy the example config and replace the placeholder network, contract, and key
+source values with values from your local or hosted Devnet setup:
+
+```sh
+cp crates/faucet/faucet.example.toml crates/faucet/faucet.toml
+cargo run -p groundhog-faucet -- --config crates/faucet/faucet.toml
+```
+
+Override the listen address when needed:
+
+```sh
+cargo run -p groundhog-faucet -- --config crates/faucet/faucet.toml --listen 127.0.0.1:8081
+```
+
+Logs use `RUST_LOG` and default to `info`:
+
+```sh
+RUST_LOG=debug cargo run -p groundhog-faucet -- --config crates/faucet/faucet.toml
+```
+
+## Config
+
+Start from `faucet.example.toml`. The config includes:
+
+- `listen_address` and `cors_allowed_origins` for HTTP serving.
+- `[network]` metadata served by `GET /v1/network`.
+- `[network.faucet]` public faucet wallet metadata.
+- `[airdrop]` transfer settings and `[airdrop.secret_key_source]`.
+- `[wallet_create]` sponsored wallet-create settings.
+- `[policy]` optional private-preview quota overrides. Defaults are used when omitted.
+
+Do not commit real faucet private keys.
+
+## Local Key Source
 
 Use an environment variable for local `hog-devnode` development:
 
@@ -21,7 +56,7 @@ key must control the configured `network.faucet.wallet_address`. Local flows may
 use the seed-derived `dev-0` wallet that `groundhog` already treats as the
 fallback local faucet sponsor.
 
-## Hosted AWS key source
+## Hosted AWS Key Source
 
 Hosted Devnet loads the same hex string from AWS Secrets Manager:
 
@@ -47,3 +82,25 @@ Manager.
 Startup fails before serving requests when the source is incomplete,
 inaccessible, binary, or malformed. Errors identify the source and operation
 but never include the secret payload.
+
+## API
+
+- `GET /health` reports service health.
+- `GET /v1/network` returns the public network descriptor.
+- `POST /v1/airdrop` funds an existing address using the configured airdrop amount.
+- `POST /v1/create-wallet` prefunds and sponsors Devnet wallet creation.
+
+`POST /v1/airdrop` and `POST /v1/create-wallet` require `clientNonce`,
+`networkId`, and `genesisHash` so retries are scoped to the chain instance the
+client used.
+
+## Policy State
+
+Private-preview policy state is in memory. Restarting the faucet clears quota
+counters and idempotency records. The current deployment model assumes one
+faucet instance.
+
+## Web UI
+
+The static faucet web UI lives in `web/`. See `web/README.md` for local
+development and production build instructions.

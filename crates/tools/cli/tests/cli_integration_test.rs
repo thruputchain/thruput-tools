@@ -2017,12 +2017,7 @@ fn wallet_create_remote_dry_run_does_not_call_faucet() {
     assert_eq!(stdout["data"]["wallet"], serde_json::Value::Null);
     assert_eq!(
         stdout["data"]["planned_requests"],
-        serde_json::json!([
-            "GET /v1/network",
-            "POST /v1/create-wallet/prepare",
-            "POST /v1/airdrop",
-            "POST /v1/create-wallet"
-        ])
+        serde_json::json!(["GET /v1/network", "POST /v1/create-wallet"])
     );
 }
 

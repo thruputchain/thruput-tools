@@ -31,6 +31,9 @@ pub struct FaucetConfigFile {
     pub airdrop: AirdropConfig,
     /// Private wallet-create execution config.
     pub wallet_create: WalletCreateExecutionConfig,
+    /// Private-preview policy controls.
+    #[serde(default)]
+    pub policy: PolicyConfig,
 }
 
 /// Validated faucet service config split into public and private runtime parts.
@@ -46,6 +49,8 @@ pub struct FaucetConfigParts {
     pub wallet_create: WalletCreateRuntimeConfig,
     /// Browser origins allowed to call the API.
     pub cors_allowed_origins: Vec<HeaderValue>,
+    /// Private-preview policy controls.
+    pub policy: PolicyRuntimeConfig,
 }
 
 impl FaucetConfigFile {
@@ -99,9 +104,130 @@ impl FaucetConfigFile {
             network_descriptor: self.network.into_descriptor(),
             airdrop,
             wallet_create,
+            policy: self.policy.into_runtime_config(),
             cors_allowed_origins,
         })
     }
+}
+
+/// Private-preview faucet policy config.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PolicyConfig {
+    /// Trust reverse proxy client IP headers for per-client quota identity.
+    pub trust_proxy_client_ip_headers: bool,
+    /// Airdrop policy controls.
+    pub airdrop: AirdropPolicyConfig,
+    /// Wallet-create policy controls.
+    pub wallet_create: WalletCreatePolicyConfig,
+}
+
+impl PolicyConfig {
+    fn into_runtime_config(self) -> PolicyRuntimeConfig {
+        PolicyRuntimeConfig {
+            trust_proxy_client_ip_headers: self.trust_proxy_client_ip_headers,
+            airdrop: AirdropPolicyRuntimeConfig {
+                recipient_cooldown_secs: self.airdrop.recipient_cooldown_secs,
+                ip_quota_window_secs: self.airdrop.ip_quota_window_secs,
+                ip_quota_max: self.airdrop.ip_quota_max,
+                max_pending_per_recipient: self.airdrop.max_pending_per_recipient,
+            },
+            wallet_create: WalletCreatePolicyRuntimeConfig {
+                owner_quota_window_secs: self.wallet_create.owner_quota_window_secs,
+                owner_quota_max: self.wallet_create.owner_quota_max,
+                ip_quota_window_secs: self.wallet_create.ip_quota_window_secs,
+                ip_quota_max: self.wallet_create.ip_quota_max,
+                max_pending_per_owner: self.wallet_create.max_pending_per_owner,
+                unprefunded_attempt_ttl_secs: self.wallet_create.unprefunded_attempt_ttl_secs,
+                prefunded_attempt_retention_secs: self
+                    .wallet_create
+                    .prefunded_attempt_retention_secs,
+            },
+        }
+    }
+}
+
+impl Default for PolicyRuntimeConfig {
+    fn default() -> Self {
+        PolicyConfig::default().into_runtime_config()
+    }
+}
+
+/// Airdrop policy config.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AirdropPolicyConfig {
+    pub recipient_cooldown_secs: u64,
+    pub ip_quota_window_secs: u64,
+    pub ip_quota_max: u32,
+    pub max_pending_per_recipient: u32,
+}
+
+impl Default for AirdropPolicyConfig {
+    fn default() -> Self {
+        Self {
+            recipient_cooldown_secs: 12 * 60 * 60,
+            ip_quota_window_secs: 60 * 60,
+            ip_quota_max: 10,
+            max_pending_per_recipient: 1,
+        }
+    }
+}
+
+/// Wallet-create policy config.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct WalletCreatePolicyConfig {
+    pub owner_quota_window_secs: u64,
+    pub owner_quota_max: u32,
+    pub ip_quota_window_secs: u64,
+    pub ip_quota_max: u32,
+    pub max_pending_per_owner: u32,
+    pub unprefunded_attempt_ttl_secs: u64,
+    pub prefunded_attempt_retention_secs: u64,
+}
+
+impl Default for WalletCreatePolicyConfig {
+    fn default() -> Self {
+        Self {
+            owner_quota_window_secs: 24 * 60 * 60,
+            owner_quota_max: 3,
+            ip_quota_window_secs: 24 * 60 * 60,
+            ip_quota_max: 20,
+            max_pending_per_owner: 1,
+            unprefunded_attempt_ttl_secs: 15 * 60,
+            prefunded_attempt_retention_secs: 24 * 60 * 60,
+        }
+    }
+}
+
+/// Runtime policy controls.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PolicyRuntimeConfig {
+    pub trust_proxy_client_ip_headers: bool,
+    pub airdrop: AirdropPolicyRuntimeConfig,
+    pub wallet_create: WalletCreatePolicyRuntimeConfig,
+}
+
+/// Runtime airdrop policy controls.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AirdropPolicyRuntimeConfig {
+    pub recipient_cooldown_secs: u64,
+    pub ip_quota_window_secs: u64,
+    pub ip_quota_max: u32,
+    pub max_pending_per_recipient: u32,
+}
+
+/// Runtime wallet-create policy controls.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WalletCreatePolicyRuntimeConfig {
+    pub owner_quota_window_secs: u64,
+    pub owner_quota_max: u32,
+    pub ip_quota_window_secs: u64,
+    pub ip_quota_max: u32,
+    pub max_pending_per_owner: u32,
+    pub unprefunded_attempt_ttl_secs: u64,
+    pub prefunded_attempt_retention_secs: u64,
 }
 
 /// Errors returned while validating faucet service config.
@@ -385,6 +511,63 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn config_builds_default_policy_config() {
+        let config: FaucetConfigFile =
+            toml::from_str(&test_config()).expect("bug: fixture config should parse");
+
+        let parts = config
+            .into_parts_with_key_loader(&TestKeyLoader)
+            .await
+            .expect("bug: policy runtime config should validate");
+
+        assert!(!parts.policy.trust_proxy_client_ip_headers);
+        assert_eq!(parts.policy.airdrop.recipient_cooldown_secs, 12 * 60 * 60);
+        assert_eq!(parts.policy.airdrop.ip_quota_max, 10);
+        assert_eq!(parts.policy.wallet_create.owner_quota_max, 3);
+        assert_eq!(parts.policy.wallet_create.ip_quota_max, 20);
+    }
+
+    #[tokio::test]
+    async fn config_overrides_policy_config() {
+        let config: FaucetConfigFile = toml::from_str(&format!(
+            "{}\n{}",
+            test_config(),
+            r"
+            [policy]
+            trust_proxy_client_ip_headers = true
+
+            [policy.airdrop]
+            recipient_cooldown_secs = 60
+            ip_quota_window_secs = 30
+            ip_quota_max = 2
+            max_pending_per_recipient = 1
+
+            [policy.wallet_create]
+            owner_quota_window_secs = 120
+            owner_quota_max = 4
+            ip_quota_window_secs = 180
+            ip_quota_max = 5
+            max_pending_per_owner = 1
+            unprefunded_attempt_ttl_secs = 20
+            prefunded_attempt_retention_secs = 240
+            "
+        ))
+        .expect("bug: fixture config should parse");
+
+        let parts = config
+            .into_parts_with_key_loader(&TestKeyLoader)
+            .await
+            .expect("bug: policy runtime config should validate");
+
+        assert!(parts.policy.trust_proxy_client_ip_headers);
+        assert_eq!(parts.policy.airdrop.recipient_cooldown_secs, 60);
+        assert_eq!(
+            parts.policy.wallet_create.prefunded_attempt_retention_secs,
+            240
+        );
+    }
+
     #[test]
     fn config_rejects_unknown_fields() {
         let err = toml::from_str::<FaucetConfigFile>(
@@ -541,5 +724,5 @@ mod tests {
         [wallet_create]
         create_wallet_entrypoint = "0x6372656174655761"
         wallet_artifact_path = "contracts/dev_wallet.rv32a"
-    "#;
+        "#;
 }

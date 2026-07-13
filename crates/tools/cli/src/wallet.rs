@@ -3,14 +3,13 @@ use std::path::{Path, PathBuf};
 use getrandom::getrandom;
 use groundhog_json_rpc_types::network_descriptor::NetworkDescriptor;
 use groundhog_json_rpc_types::receipt::ExecStatus;
-use groundhog_json_rpc_types::transaction::TxHash;
 use groundhog_signing::Signer;
 use groundhog_signing::{
     BuildDeployTransaction, BuildDevWalletDoActionTransaction, DEFAULT_TX_GAS_LIMIT, LocalSigner,
-    SignTransactionParams, build_deploy_transaction, build_dev_wallet_do_action_transaction,
-    create_wallet_calldata, derive_deploy_address, dev_wallet_contract,
-    sign_and_encode_transaction_hex, source_address_auth_claim, wallet_contract_hash,
-    wallet_create_proof_message,
+    SignTransactionParams, WalletCreateProofV2, build_deploy_transaction,
+    build_dev_wallet_do_action_transaction, create_wallet_calldata, derive_deploy_address,
+    dev_wallet_contract, sign_and_encode_transaction_hex, source_address_auth_claim,
+    wallet_contract_hash, wallet_create_proof_message_v2,
 };
 use groundhog_xdr::contract::{Contract, ContractEntrypointID};
 use groundhog_xdr::types::{ContractAddress, Ed25519PublicKey, SHA256Hash};
@@ -22,8 +21,9 @@ use xdr_common::VecM;
 use crate::account_resolution::{LocalBootstrapRole, resolve_local_bootstrap_account};
 use crate::codec::{format_contract_address, parse_contract_address};
 use crate::config::{
-    ProfileOverrides, find_project_config, remove_profile_wallet_address, resolve_default_key,
-    resolve_profile, resolve_profile_with_overrides, save_profile_wallet_address,
+    ProfileOverrides, cache_dir, find_project_config, remove_profile_wallet_address,
+    resolve_default_key, resolve_profile, resolve_profile_with_overrides,
+    save_profile_wallet_address,
 };
 use crate::faucet_client::{client as faucet_client, post_json};
 use crate::hog;
@@ -78,9 +78,14 @@ pub(crate) struct PreparedRemoteWalletCreate {
     wallet_name: String,
     owner_public_key: String,
     deploy_nonce: String,
+    client_nonce: String,
     owner_signature: String,
+    network_id: String,
+    genesis_hash: String,
+    wallet_contract_hash: String,
     wallet_address: String,
     prefund_raw_amount: String,
+    attempt_path: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -93,42 +98,45 @@ struct PreparedRemoteWalletCreateDryRun {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct PrepareWalletCreateRequest {
-    owner_public_key: String,
-    deploy_nonce: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PrepareWalletCreateResponse {
-    wallet_address: String,
-    prefund_raw_amount: String,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct RemotePrefundAirdropResponse {
-    raw_amount: String,
-    tx_hash: TxHash,
-    height: groundhog_json_rpc_types::BlockHeight,
-    status: ExecStatus,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
 struct CreateWalletRequest {
     owner_public_key: String,
     deploy_nonce: String,
+    client_nonce: String,
     owner_signature: String,
+    network_id: String,
+    genesis_hash: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CreateWalletResponse {
+    attempt_status: String,
     wallet_address: String,
-    tx_hash: TxHash,
-    height: groundhog_json_rpc_types::BlockHeight,
-    status: ExecStatus,
+    prefund_tx_hash: Option<String>,
+    tx_hash: Option<String>,
+    height: Option<groundhog_json_rpc_types::BlockHeight>,
+    status: Option<ExecStatus>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RemoteWalletCreateAttempt {
+    profile: String,
+    key_name: String,
+    wallet_name: String,
+    network_id: String,
+    genesis_hash: String,
+    owner_public_key: String,
+    deploy_nonce: String,
+    client_nonce: String,
+    wallet_contract_hash: String,
+    wallet_address: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LoadedRemoteWalletCreateAttempt {
+    attempt: RemoteWalletCreateAttempt,
+    path: PathBuf,
 }
 
 pub fn create(
@@ -251,22 +259,28 @@ fn create_remote_wallet(
     }
 
     let client = faucet_client()?;
-    let airdrop: RemotePrefundAirdropResponse = post_json(
-        &client,
-        &format!("{}/v1/airdrop", prepared.faucet_url),
-        &json!({ "recipient": prepared.wallet_address }),
-    )?;
-    ensure_remote_prefund_success(&airdrop.status)?;
     let create: CreateWalletResponse = post_json(
         &client,
         &format!("{}/v1/create-wallet", prepared.faucet_url),
         &CreateWalletRequest {
             owner_public_key: prepared.owner_public_key.clone(),
             deploy_nonce: prepared.deploy_nonce.clone(),
+            client_nonce: prepared.client_nonce.clone(),
             owner_signature: prepared.owner_signature.clone(),
+            network_id: prepared.network_id.clone(),
+            genesis_hash: prepared.genesis_hash.clone(),
         },
     )?;
-    if !matches!(create.status, ExecStatus::Ok) {
+    if create.attempt_status != "created" {
+        return Err(CliError::Other(format!(
+            "remote wallet-create is pending ({}) - retry the same command to continue",
+            create.attempt_status
+        )));
+    }
+    let create_status = create.status.as_ref().ok_or_else(|| {
+        CliError::Other("remote wallet-create response omitted final transaction status".into())
+    })?;
+    if !matches!(create_status, ExecStatus::Ok) {
         return Err(CliError::Other(
             "remote wallet-create transaction did not commit successfully".into(),
         ));
@@ -283,9 +297,18 @@ fn create_remote_wallet(
         &prepared.wallet_address,
         &prepared.owner_public_key,
     )?;
+    remove_remote_wallet_create_attempt(prepared)?;
 
-    let create_tx_hash = format_tx_hash(&create.tx_hash);
-    let prefund_tx_hash = format_tx_hash(&airdrop.tx_hash);
+    let create_tx_hash = create
+        .tx_hash
+        .clone()
+        .ok_or_else(|| CliError::Other("remote wallet-create response omitted txHash".into()))?;
+    let prefund_tx_hash = create.prefund_tx_hash.clone().ok_or_else(|| {
+        CliError::Other("remote wallet-create response omitted prefundTxHash".into())
+    })?;
+    let create_height = create.height.ok_or_else(|| {
+        CliError::Other("remote wallet-create response omitted create height".into())
+    })?;
     print.status(format_args!("Wallet created: {}", prepared.wallet_address));
     print.status(format_args!("Prefund txn: {prefund_tx_hash}"));
     print.status(format_args!("Txn: {create_tx_hash}"));
@@ -302,22 +325,14 @@ fn create_remote_wallet(
             "rpc_url": prepared.rpc_url,
             "owner_public_key": prepared.owner_public_key,
             "deploy_nonce": prepared.deploy_nonce,
+            "client_nonce": prepared.client_nonce,
             "prefund_raw_amount": prepared.prefund_raw_amount,
-            "airdrop": airdrop,
+            "prefund_tx_hash": prefund_tx_hash,
             "create_tx_hash": create_tx_hash,
-            "create_height": create.height,
+            "create_height": create_height,
         }),
     ))?;
 
-    Ok(())
-}
-
-fn ensure_remote_prefund_success(status: &ExecStatus) -> Result<(), CliError> {
-    if !matches!(status, ExecStatus::Ok) {
-        return Err(CliError::Other(
-            "remote wallet-create prefund transaction did not commit successfully".into(),
-        ));
-    }
     Ok(())
 }
 
@@ -445,7 +460,7 @@ fn print_remote_dry_run_plan(
         prepared.wallet_name, prepared.key_name
     ));
     print.status(format_args!("  faucet: {}", prepared.faucet_url));
-    print.status("  wallet: requires faucet prepare request");
+    print.status("  wallet: derived locally after GET /v1/network");
     print.status("  submitted: no (--dry-run)");
 
     print.json(&CommandResult::new(
@@ -462,10 +477,9 @@ fn print_remote_dry_run_plan(
             "rpc_url": prepared.rpc_url,
             "planned_requests": [
                 "GET /v1/network",
-                "POST /v1/create-wallet/prepare",
-                "POST /v1/airdrop",
                 "POST /v1/create-wallet"
             ],
+            "idempotency_key": "profile + key + wallet + networkId + genesisHash + clientNonce",
         }),
     ))?;
 
@@ -675,29 +689,30 @@ fn prepare_remote_wallet_create(
     let owner = load_local_signer(&key_name)?;
     let owner_public_key_xdr = Ed25519PublicKey::from(owner.verifying_key_bytes());
     let owner_public_key = format!("0x{}", hex::encode(owner_public_key_xdr.as_ref()));
-    let mut deploy_nonce_bytes = [0u8; 32];
-    getrandom(&mut deploy_nonce_bytes).map_err(|error| CliError::Other(error.to_string()))?;
-    let deploy_nonce = SHA256Hash::from(deploy_nonce_bytes);
-    let deploy_nonce_hex = format!("0x{}", hex::encode(deploy_nonce.as_ref()));
 
     let client = faucet_client()?;
     let descriptor = fetch_network_descriptor(&client, &faucet_url)?;
-    let prepared: PrepareWalletCreateResponse = post_json(
-        &client,
-        &format!("{faucet_url}/v1/create-wallet/prepare"),
-        &PrepareWalletCreateRequest {
-            owner_public_key: owner_public_key.clone(),
-            deploy_nonce: deploy_nonce_hex.clone(),
-        },
+    let loaded_attempt = load_or_create_remote_wallet_create_attempt(
+        profile,
+        &key_name,
+        &wallet_name,
+        &owner_public_key,
+        &descriptor,
     )?;
-    validate_remote_prepare_wallet_address(&descriptor, &deploy_nonce, &prepared.wallet_address)?;
-    let proof_message = wallet_create_proof_message(
-        descriptor.genesis_hash.0,
-        descriptor.faucet.wallet_address.0,
-        descriptor.wallet_create.wallet_contract_hash.0,
-        owner_public_key_xdr,
+    let attempt = loaded_attempt.attempt;
+    let deploy_nonce = parse_sha256_hash(&attempt.deploy_nonce)?;
+    let client_nonce = parse_hex_bytes(&attempt.client_nonce)?;
+    let wallet_address = parse_contract_address(&attempt.wallet_address)?;
+    let proof_message = wallet_create_proof_message_v2(&WalletCreateProofV2 {
+        network_id: &attempt.network_id,
+        genesis_hash: descriptor.genesis_hash.0,
+        faucet_wallet_address: descriptor.faucet.wallet_address.0,
+        wallet_contract_hash: descriptor.wallet_create.wallet_contract_hash.0,
+        owner_public_key: owner_public_key_xdr,
         deploy_nonce,
-    )
+        wallet_address,
+        client_nonce: &client_nonce,
+    })
     .map_err(|error| CliError::Other(error.to_string()))?;
     let owner_signature = match owner
         .sign(&proof_message)
@@ -720,33 +735,142 @@ fn prepare_remote_wallet_create(
         key_name,
         wallet_name,
         owner_public_key,
-        deploy_nonce: deploy_nonce_hex,
+        deploy_nonce: attempt.deploy_nonce,
+        client_nonce: attempt.client_nonce,
         owner_signature,
-        wallet_address: prepared.wallet_address,
-        prefund_raw_amount: prepared.prefund_raw_amount,
+        network_id: attempt.network_id,
+        genesis_hash: attempt.genesis_hash,
+        wallet_contract_hash: attempt.wallet_contract_hash,
+        wallet_address: attempt.wallet_address,
+        prefund_raw_amount: descriptor.wallet_create.prefund_raw_amount,
+        attempt_path: loaded_attempt.path,
     }))
 }
 
-fn validate_remote_prepare_wallet_address(
+fn load_or_create_remote_wallet_create_attempt(
+    profile: &crate::config::ResolvedProfile,
+    key_name: &str,
+    wallet_name: &str,
+    owner_public_key: &str,
     descriptor: &NetworkDescriptor,
-    deploy_nonce: &SHA256Hash,
-    prepared: &str,
-) -> Result<(), CliError> {
-    let expected = derive_deploy_address(
+) -> Result<LoadedRemoteWalletCreateAttempt, CliError> {
+    let network_id = descriptor.network_id.clone();
+    let genesis_hash = format_sha256_hash(&descriptor.genesis_hash.0);
+    let wallet_contract_hash = format_sha256_hash(&descriptor.wallet_create.wallet_contract_hash.0);
+    let path = remote_wallet_create_attempt_path(
+        &profile.name,
+        key_name,
+        wallet_name,
+        &network_id,
+        &genesis_hash,
+    )?;
+    if let Some(attempt) = read_remote_wallet_create_attempt(&path)?
+        && attempt.profile == profile.name
+        && attempt.key_name == key_name
+        && attempt.wallet_name == wallet_name
+        && attempt.network_id == network_id
+        && attempt.genesis_hash == genesis_hash
+        && attempt.owner_public_key == owner_public_key
+        && attempt.wallet_contract_hash == wallet_contract_hash
+    {
+        return Ok(LoadedRemoteWalletCreateAttempt { attempt, path });
+    }
+
+    let mut deploy_nonce_bytes = [0u8; 32];
+    getrandom(&mut deploy_nonce_bytes).map_err(|error| CliError::Other(error.to_string()))?;
+    let deploy_nonce = SHA256Hash::from(deploy_nonce_bytes);
+    let mut client_nonce = [0u8; 16];
+    getrandom(&mut client_nonce).map_err(|error| CliError::Other(error.to_string()))?;
+    let wallet_address = derive_deploy_address(
         &descriptor.faucet.wallet_address.0,
-        deploy_nonce,
+        &deploy_nonce,
         &descriptor.wallet_create.wallet_contract_hash.0,
     )
     .map_err(|error| CliError::Other(error.to_string()))?;
-    let prepared_wallet_address = parse_contract_address(prepared)?;
-    if prepared_wallet_address != expected {
-        return Err(CliError::Other(format!(
-            "remote wallet-create prepare returned wallet `{prepared}` but local derivation expected `{}`",
-            format_contract_address(&expected)
-        )));
-    }
+    let attempt = RemoteWalletCreateAttempt {
+        profile: profile.name.clone(),
+        key_name: key_name.to_owned(),
+        wallet_name: wallet_name.to_owned(),
+        network_id,
+        genesis_hash,
+        owner_public_key: owner_public_key.to_owned(),
+        deploy_nonce: format_sha256_hash(&deploy_nonce),
+        client_nonce: format!("0x{}", hex::encode(client_nonce)),
+        wallet_contract_hash,
+        wallet_address: format_contract_address(&wallet_address),
+    };
+    write_remote_wallet_create_attempt(&path, &attempt)?;
+    Ok(LoadedRemoteWalletCreateAttempt { attempt, path })
+}
 
+fn read_remote_wallet_create_attempt(
+    path: &Path,
+) -> Result<Option<RemoteWalletCreateAttempt>, CliError> {
+    let contents = match std::fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    serde_json::from_str(&contents)
+        .map(Some)
+        .map_err(|error| CliError::Other(format!("failed to parse `{}`: {error}", path.display())))
+}
+
+fn write_remote_wallet_create_attempt(
+    path: &Path,
+    attempt: &RemoteWalletCreateAttempt,
+) -> Result<(), CliError> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let contents =
+        serde_json::to_vec_pretty(attempt).map_err(|error| CliError::Other(error.to_string()))?;
+    std::fs::write(path, contents)?;
     Ok(())
+}
+
+fn remove_remote_wallet_create_attempt(
+    prepared: &PreparedRemoteWalletCreate,
+) -> Result<(), CliError> {
+    match std::fs::remove_file(&prepared.attempt_path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn remote_wallet_create_attempt_path(
+    profile: &str,
+    key_name: &str,
+    wallet_name: &str,
+    network_id: &str,
+    genesis_hash: &str,
+) -> Result<PathBuf, CliError> {
+    let hash: [u8; 32] = Sha256::digest(format!(
+        "{profile}\0{key_name}\0{wallet_name}\0{network_id}\0{genesis_hash}"
+    ))
+    .into();
+    Ok(cache_dir()?
+        .join("wallet-create-attempts")
+        .join(format!("{}.json", hex::encode(hash))))
+}
+
+fn format_sha256_hash(hash: &SHA256Hash) -> String {
+    format!("0x{}", hex::encode(hash.as_ref()))
+}
+
+fn parse_sha256_hash(value: &str) -> Result<SHA256Hash, CliError> {
+    let value = value.strip_prefix("0x").unwrap_or(value);
+    let bytes = hex::decode(value).map_err(|error| CliError::Other(error.to_string()))?;
+    let bytes: [u8; 32] = bytes
+        .try_into()
+        .map_err(|_| CliError::Other("expected 32-byte SHA256 hash".into()))?;
+    Ok(SHA256Hash::from(bytes))
+}
+
+fn parse_hex_bytes(value: &str) -> Result<Vec<u8>, CliError> {
+    let value = value.strip_prefix("0x").unwrap_or(value);
+    hex::decode(value).map_err(|error| CliError::Other(error.to_string()))
 }
 
 fn fetch_network_descriptor(
@@ -891,63 +1015,42 @@ fn resolve_dev_wallet_artifact_path(
 
 #[cfg(test)]
 mod tests {
-    use groundhog_json_rpc_types::hex::HexBytes;
-    use groundhog_json_rpc_types::network_descriptor::{
-        FaucetDescriptor, NativeHogDescriptor, NetworkDescriptor, NetworkDescriptorEndpoints,
-        WalletCreateDescriptor,
-    };
-    use groundhog_json_rpc_types::receipt::ExecStatus;
-    use groundhog_signing::derive_deploy_address;
-    use groundhog_xdr::types::{ContractAddress, SHA256Hash};
+    use std::collections::BTreeMap;
+    use std::ffi::OsString;
+    use std::path::{Path, PathBuf};
+
+    use serial_test::serial;
 
     use super::{
-        ensure_remote_prefund_success, format_contract_address, resolve_dev_wallet_artifact_path,
-        validate_remote_create_wallet_address, validate_remote_prepare_wallet_address,
+        PreparedRemoteWalletCreate, RemoteWalletCreateAttempt,
+        load_or_create_remote_wallet_create_attempt, read_remote_wallet_create_attempt,
+        remote_wallet_create_attempt_path, remove_remote_wallet_create_attempt,
+        resolve_dev_wallet_artifact_path, validate_remote_create_wallet_address,
+        write_remote_wallet_create_attempt,
     };
+    use crate::config::ResolvedProfile;
 
-    #[test]
-    fn remote_prepare_wallet_address_validation_accepts_derived_address() {
-        let descriptor = test_network_descriptor();
-        let deploy_nonce = SHA256Hash::from([0x44; 32]);
-        let expected = derive_deploy_address(
-            &descriptor.faucet.wallet_address.0,
-            &deploy_nonce,
-            &descriptor.wallet_create.wallet_contract_hash.0,
-        )
-        .expect("bug: wallet address should derive");
-
-        validate_remote_prepare_wallet_address(
-            &descriptor,
-            &deploy_nonce,
-            &format_contract_address(&expected),
-        )
-        .expect("bug: derived prepare address should validate");
+    struct EnvGuard {
+        key: &'static str,
+        previous: Option<OsString>,
     }
 
-    #[test]
-    fn remote_prepare_wallet_address_validation_rejects_mismatch() {
-        let descriptor = test_network_descriptor();
-        let deploy_nonce = SHA256Hash::from([0x44; 32]);
-        let wrong = format!("0x{}", "99".repeat(32));
-
-        let err = validate_remote_prepare_wallet_address(&descriptor, &deploy_nonce, &wrong)
-            .expect_err("bug: mismatched prepare address should fail");
-
-        assert!(err.to_string().contains("local derivation expected"));
+    impl EnvGuard {
+        fn set_path(key: &'static str, value: &Path) -> Self {
+            let previous = std::env::var_os(key);
+            unsafe { std::env::set_var(key, value) };
+            Self { key, previous }
+        }
     }
 
-    #[test]
-    fn remote_prefund_status_validation_accepts_ok() {
-        ensure_remote_prefund_success(&ExecStatus::Ok)
-            .expect("bug: successful prefund status should validate");
-    }
-
-    #[test]
-    fn remote_prefund_status_validation_rejects_failed_status() {
-        let err = ensure_remote_prefund_success(&ExecStatus::Reverted { message: None })
-            .expect_err("bug: failed prefund status should fail");
-
-        assert!(err.to_string().contains("prefund transaction"));
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            if let Some(previous) = &self.previous {
+                unsafe { std::env::set_var(self.key, previous) };
+            } else {
+                unsafe { std::env::remove_var(self.key) };
+            }
+        }
     }
 
     #[test]
@@ -1033,24 +1136,233 @@ mod tests {
         assert_eq!(resolved, artifact);
     }
 
-    fn test_network_descriptor() -> NetworkDescriptor {
-        NetworkDescriptor::new(
-            "devnet-preview".into(),
-            "hogp/test".into(),
-            groundhog_json_rpc_types::SHA256Hash::from(SHA256Hash::from([0x11; 32])),
-            NetworkDescriptorEndpoints::new("https://rpc.example".into()),
-            NativeHogDescriptor::new(
-                groundhog_json_rpc_types::ContractAddress::from(ContractAddress::from([0x22; 32])),
-                7,
-                HexBytes(vec![0x63, 0x28, 0x5b, 0x35, 0x23, 0xf9, 0xdc, 0x3f]),
-            ),
-            FaucetDescriptor::new(groundhog_json_rpc_types::ContractAddress::from(
-                ContractAddress::from([0x33; 32]),
-            )),
-            WalletCreateDescriptor::new(
-                "100000000".into(),
-                groundhog_json_rpc_types::SHA256Hash::from(SHA256Hash::from([0x55; 32])),
-            ),
+    #[test]
+    #[serial]
+    fn remote_wallet_create_attempt_is_created_and_written() {
+        let tmp = tempfile::tempdir().expect("bug: tempdir should be created");
+        let _cache = EnvGuard::set_path("XDG_CACHE_HOME", tmp.path());
+        let profile = test_profile();
+        let descriptor = test_network_descriptor();
+        let owner_public_key = format!("0x{}", "11".repeat(32));
+
+        let loaded = load_or_create_remote_wallet_create_attempt(
+            &profile,
+            "alice",
+            "main",
+            &owner_public_key,
+            &descriptor,
         )
+        .expect("bug: attempt should be created");
+
+        assert!(loaded.path.is_file());
+        assert_eq!(loaded.attempt.profile, "preview");
+        assert_eq!(loaded.attempt.key_name, "alice");
+        assert_eq!(loaded.attempt.wallet_name, "main");
+        assert_eq!(loaded.attempt.owner_public_key, owner_public_key);
+        assert_eq!(loaded.attempt.network_id, "devnet-preview");
+        assert_eq!(
+            loaded.attempt.genesis_hash,
+            format!("0x{}", "01".repeat(32))
+        );
+        assert_eq!(
+            loaded.attempt.wallet_contract_hash,
+            format!("0x{}", "03".repeat(32))
+        );
+        assert_eq!(loaded.attempt.deploy_nonce.len(), 66);
+        assert_eq!(loaded.attempt.client_nonce.len(), 34);
+
+        let stored = read_remote_wallet_create_attempt(&loaded.path)
+            .expect("bug: attempt should read")
+            .expect("bug: attempt file should exist");
+        assert_eq!(stored, loaded.attempt);
+    }
+
+    #[test]
+    #[serial]
+    fn remote_wallet_create_attempt_reuses_matching_record() {
+        let tmp = tempfile::tempdir().expect("bug: tempdir should be created");
+        let _cache = EnvGuard::set_path("XDG_CACHE_HOME", tmp.path());
+        let profile = test_profile();
+        let descriptor = test_network_descriptor();
+        let owner_public_key = format!("0x{}", "11".repeat(32));
+
+        let first = load_or_create_remote_wallet_create_attempt(
+            &profile,
+            "alice",
+            "main",
+            &owner_public_key,
+            &descriptor,
+        )
+        .expect("bug: attempt should be created");
+        let second = load_or_create_remote_wallet_create_attempt(
+            &profile,
+            "alice",
+            "main",
+            &owner_public_key,
+            &descriptor,
+        )
+        .expect("bug: attempt should be reused");
+
+        assert_eq!(second.path, first.path);
+        assert_eq!(second.attempt, first.attempt);
+    }
+
+    #[test]
+    #[serial]
+    fn remote_wallet_create_attempt_overwrites_stale_record() {
+        let tmp = tempfile::tempdir().expect("bug: tempdir should be created");
+        let _cache = EnvGuard::set_path("XDG_CACHE_HOME", tmp.path());
+        let profile = test_profile();
+        let descriptor = test_network_descriptor();
+        let owner_public_key = format!("0x{}", "11".repeat(32));
+        let path = remote_wallet_create_attempt_path(
+            &profile.name,
+            "alice",
+            "main",
+            "devnet-preview",
+            &format!("0x{}", "01".repeat(32)),
+        )
+        .expect("bug: attempt path should resolve");
+        let stale = RemoteWalletCreateAttempt {
+            profile: profile.name.clone(),
+            key_name: "alice".into(),
+            wallet_name: "main".into(),
+            network_id: "devnet-preview".into(),
+            genesis_hash: format!("0x{}", "01".repeat(32)),
+            owner_public_key: format!("0x{}", "22".repeat(32)),
+            deploy_nonce: format!("0x{}", "44".repeat(32)),
+            client_nonce: format!("0x{}", "55".repeat(16)),
+            wallet_contract_hash: format!("0x{}", "03".repeat(32)),
+            wallet_address: format!("0x{}", "66".repeat(32)),
+        };
+        write_remote_wallet_create_attempt(&path, &stale)
+            .expect("bug: stale attempt should be written");
+
+        let loaded = load_or_create_remote_wallet_create_attempt(
+            &profile,
+            "alice",
+            "main",
+            &owner_public_key,
+            &descriptor,
+        )
+        .expect("bug: stale attempt should be replaced");
+
+        assert_eq!(loaded.path, path);
+        assert_ne!(loaded.attempt, stale);
+        assert_eq!(loaded.attempt.owner_public_key, owner_public_key);
+        let stored = read_remote_wallet_create_attempt(&loaded.path)
+            .expect("bug: replacement should read")
+            .expect("bug: replacement file should exist");
+        assert_eq!(stored, loaded.attempt);
+    }
+
+    #[test]
+    #[serial]
+    fn remote_wallet_create_attempt_remove_ignores_missing_file() {
+        let tmp = tempfile::tempdir().expect("bug: tempdir should be created");
+        let _cache = EnvGuard::set_path("XDG_CACHE_HOME", tmp.path());
+        let path = tmp.path().join("missing.json");
+        let prepared = test_prepared_remote_wallet_create(path);
+
+        remove_remote_wallet_create_attempt(&prepared)
+            .expect("bug: missing attempt removal should be idempotent");
+    }
+
+    #[test]
+    #[serial]
+    fn remote_wallet_create_attempt_remove_deletes_file() {
+        let tmp = tempfile::tempdir().expect("bug: tempdir should be created");
+        let _cache = EnvGuard::set_path("XDG_CACHE_HOME", tmp.path());
+        let path = tmp.path().join("attempt.json");
+        std::fs::write(&path, b"{}").expect("bug: attempt file should be written");
+        let prepared = test_prepared_remote_wallet_create(path.clone());
+
+        remove_remote_wallet_create_attempt(&prepared)
+            .expect("bug: attempt removal should succeed");
+
+        assert!(!path.exists());
+    }
+
+    #[test]
+    #[serial]
+    fn remote_wallet_create_attempt_path_uses_cache_dir() {
+        let tmp = tempfile::tempdir().expect("bug: tempdir should be created");
+        let _cache = EnvGuard::set_path("XDG_CACHE_HOME", tmp.path());
+
+        let path = remote_wallet_create_attempt_path(
+            "preview",
+            "alice",
+            "main",
+            "devnet-preview",
+            &format!("0x{}", "01".repeat(32)),
+        )
+        .expect("bug: attempt path should resolve");
+
+        assert!(path.starts_with(tmp.path().join("groundhog/wallet-create-attempts")));
+        assert_eq!(path.extension().and_then(|ext| ext.to_str()), Some("json"));
+    }
+
+    fn test_profile() -> ResolvedProfile {
+        ResolvedProfile {
+            name: "preview".into(),
+            network: Some(crate::config::Network::Devnet),
+            rpc_url: Some("https://rpc.devnet.example".into()),
+            faucet_url: Some("https://faucet.devnet.example".into()),
+            rpc_url_cli_override: false,
+            default_key: Some("alice".into()),
+            runtime_manifest: None,
+            runtime_manifest_cli_override: false,
+            runtime_artifacts_dir: None,
+            contracts: BTreeMap::new(),
+            wallets: BTreeMap::new(),
+            source: None,
+        }
+    }
+
+    fn test_network_descriptor() -> groundhog_json_rpc_types::network_descriptor::NetworkDescriptor
+    {
+        serde_json::from_value(serde_json::json!({
+            "schemaVersion": 1,
+            "kind": "groundhog-network",
+            "networkId": "devnet-preview",
+            "protocol": "x23",
+            "genesisHash": format!("0x{}", "01".repeat(32)),
+            "endpoints": {
+                "rpcUrl": "https://rpc.devnet.example"
+            },
+            "nativeHog": {
+                "tokenAddress": format!("0x{}", "02".repeat(32)),
+                "decimals": 7,
+                "transferEntrypoint": "0x63285b3523f9dc3f"
+            },
+            "faucet": {
+                "walletAddress": format!("0x{}", "04".repeat(32))
+            },
+            "walletCreate": {
+                "prefundRawAmount": "100000000",
+                "walletContractHash": format!("0x{}", "03".repeat(32))
+            }
+        }))
+        .expect("bug: test network descriptor should deserialize")
+    }
+
+    fn test_prepared_remote_wallet_create(attempt_path: PathBuf) -> PreparedRemoteWalletCreate {
+        PreparedRemoteWalletCreate {
+            faucet_url: "https://faucet.devnet.example".into(),
+            rpc_url: "https://rpc.devnet.example".into(),
+            profile_name: "preview".into(),
+            key_name: "alice".into(),
+            wallet_name: "main".into(),
+            owner_public_key: format!("0x{}", "11".repeat(32)),
+            deploy_nonce: format!("0x{}", "22".repeat(32)),
+            client_nonce: format!("0x{}", "33".repeat(16)),
+            owner_signature: format!("0x{}", "44".repeat(64)),
+            network_id: "devnet-preview".into(),
+            genesis_hash: format!("0x{}", "01".repeat(32)),
+            wallet_contract_hash: format!("0x{}", "03".repeat(32)),
+            wallet_address: format!("0x{}", "55".repeat(32)),
+            prefund_raw_amount: "100000000".into(),
+            attempt_path,
+        }
     }
 }

@@ -26,6 +26,17 @@ pub(crate) fn post_json<T: for<'de> Deserialize<'de>, B: Serialize>(
     parse_faucet_response(response, url)
 }
 
+pub(crate) fn get_json<T: for<'de> Deserialize<'de>>(
+    client: &reqwest::blocking::Client,
+    url: &str,
+) -> Result<T, CliError> {
+    let response = client
+        .get(url)
+        .send()
+        .map_err(|error| CliError::Other(format!("failed to call `{url}`: {error}")))?;
+    parse_faucet_response(response, url)
+}
+
 fn parse_faucet_response<T: for<'de> Deserialize<'de>>(
     response: reqwest::blocking::Response,
     url: &str,
@@ -39,9 +50,14 @@ fn parse_faucet_response<T: for<'de> Deserialize<'de>>(
             .map_err(|error| CliError::Other(format!("invalid JSON from `{url}`: {error}")));
     }
     if let Ok(body) = serde_json::from_slice::<FaucetErrorBody>(&bytes) {
+        let retry_after = body
+            .error
+            .retry_after_seconds
+            .map(|seconds| format!("; retry after {seconds}s"))
+            .unwrap_or_default();
         return Err(CliError::Other(format!(
-            "faucet request `{url}` failed with {}: {} ({})",
-            status, body.error.message, body.error.code
+            "faucet request `{url}` failed with {}: {} ({}){}",
+            status, body.error.message, body.error.code, retry_after
         )));
     }
     Err(CliError::Other(format!(
@@ -58,4 +74,6 @@ struct FaucetErrorBody {
 struct FaucetErrorDetail {
     code: String,
     message: String,
+    #[serde(rename = "retryAfterSeconds")]
+    retry_after_seconds: Option<u64>,
 }

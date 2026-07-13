@@ -79,6 +79,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.listen_address = listen;
     }
     config.cors_allowed_origins = parts.cors_allowed_origins;
+    config.policy_config = parts.policy;
 
     serve(config).await?;
     Ok(())
