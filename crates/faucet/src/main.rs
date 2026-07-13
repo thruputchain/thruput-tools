@@ -74,9 +74,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut config = FaucetConfig::new(
         parts.network_descriptor,
         Arc::new(airdrop_submitter),
+        Arc::new(wallet_prefund_submitter),
         Arc::new(wallet_create_submitter),
     );
-    config.wallet_prefund_submitter = Arc::new(wallet_prefund_submitter);
     if let Some(listen) = parts.listen_address {
         config.listen_address = listen;
     }
