@@ -625,7 +625,7 @@ SECOND_DEPLOY_ERROR="$(run_failure_json "same-wallet deploy before airdrop" "$CL
     || die "same-wallet deploy conflict was $(json_field error.details.conflict.code "$SECOND_DEPLOY_ERROR"), expected boundsExceeded"
 [[ "$(json_field error.hint "$SECOND_DEPLOY_ERROR")" == *"groundhog airdrop"* ]] \
     || die "same-wallet deploy error did not recommend groundhog airdrop"
-log "same-wallet deploy failed promptly with actionable funding guidance"
+log "same-wallet deploy failed with actionable funding guidance"
 
 AIRDROP_JSON="$(run_json "saved-wallet airdrop" "$CLI" --json airdrop "$USER_KEY")"
 [[ "$(json_field data.status.result "$AIRDROP_JSON")" == "ok" ]] \

@@ -29,6 +29,7 @@ pub enum SubmitTransactionError {
 }
 
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum PollTransactionReceiptError {
     #[error("failed to connect to JSON-RPC endpoint {rpc_url}: {source}")]
     Connect {
@@ -52,6 +53,7 @@ pub enum PollTransactionReceiptError {
 }
 
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum SubmitAndPollError {
     #[error("failed to connect to JSON-RPC endpoint {rpc_url}: {source}")]
     Connect {
@@ -156,8 +158,10 @@ pub async fn poll_transaction_receipt(
 /// Poll an accepted transaction with explicit retry settings.
 ///
 /// Receipts are authoritative. When a receipt is not yet available, an
-/// `Invalid` or best-effort `RecentFailure` status ends polling early so callers
-/// can report the diagnostic before it expires.
+/// An `Invalid` status ends polling early. A best-effort `RecentFailure`
+/// diagnostic is retained while polling continues because the same transaction
+/// may still commit; if no receipt appears, the diagnostic is returned after
+/// polling is exhausted.
 pub async fn poll_transaction_receipt_with_config(
     rpc_url: &str,
     tx_hash: TxHash,
@@ -170,16 +174,20 @@ pub async fn poll_transaction_receipt_with_config(
             rpc_url: rpc_url.to_owned(),
             source,
         })?;
+    let mut recent_failure = None;
 
     for attempt in 0..max_attempts {
         match client.get_transaction_receipt(tx_hash).await {
             Ok(Some(receipt)) => return Ok(receipt),
             Ok(None) => match client.get_transaction_status(tx_hash).await {
-                Ok(
-                    status @ (TransactionStatus::Invalid { .. }
-                    | TransactionStatus::RecentFailure { .. }),
-                ) => {
+                Ok(status @ TransactionStatus::Invalid { .. }) => {
                     return Err(PollTransactionReceiptError::TransactionStatus { tx_hash, status });
+                }
+                Ok(status @ TransactionStatus::RecentFailure { .. }) => {
+                    recent_failure = Some(status);
+                    if attempt < max_attempts.saturating_sub(1) {
+                        tokio::time::sleep(poll_interval).await;
+                    }
                 }
                 // Receipt polling remains compatible with endpoints that do not
                 // implement status, and receipts remain authoritative when status
@@ -187,12 +195,7 @@ pub async fn poll_transaction_receipt_with_config(
                 Ok(_) | Err(_) if attempt < max_attempts.saturating_sub(1) => {
                     tokio::time::sleep(poll_interval).await;
                 }
-                Ok(_) | Err(_) => {
-                    return Err(PollTransactionReceiptError::ReceiptTimeout {
-                        tx_hash,
-                        attempts: max_attempts,
-                    });
-                }
+                Ok(_) | Err(_) => {}
             },
             Err(source) => {
                 return Err(PollTransactionReceiptError::GetTransactionReceipt { tx_hash, source });
@@ -200,8 +203,12 @@ pub async fn poll_transaction_receipt_with_config(
         }
     }
 
-    Err(PollTransactionReceiptError::ReceiptTimeout {
-        tx_hash,
-        attempts: max_attempts,
-    })
+    if let Some(status) = recent_failure {
+        Err(PollTransactionReceiptError::TransactionStatus { tx_hash, status })
+    } else {
+        Err(PollTransactionReceiptError::ReceiptTimeout {
+            tx_hash,
+            attempts: max_attempts,
+        })
+    }
 }

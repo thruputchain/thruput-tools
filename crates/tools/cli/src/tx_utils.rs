@@ -163,6 +163,7 @@ fn map_submit_and_poll_error(error: groundhog_json_rpc_client::SubmitAndPollErro
                 seconds: receipt_poll_duration_seconds(attempts),
             }
         }
+        _ => CliError::ReceiptPollingExhausted,
     }
 }
 

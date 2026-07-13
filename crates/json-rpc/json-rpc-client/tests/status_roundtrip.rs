@@ -20,13 +20,36 @@ use groundhog_json_rpc_types::{
     },
 };
 use jsonrpsee::server::Server;
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
 
 const ATTEMPT_HEIGHT: i64 = 42;
 const CONFLICT_ADDRESS: [u8; 32] = [0x0D; 32];
 const CONFLICT_KEY: &[u8] = &[0, 0, 0, 1];
 
-#[derive(Clone, Copy)]
-struct RecentFailureBackend;
+#[derive(Clone)]
+struct RecentFailureBackend {
+    receipt_calls: Arc<AtomicUsize>,
+    commit_on_second_receipt: bool,
+}
+
+impl RecentFailureBackend {
+    fn always_failing() -> Self {
+        Self {
+            receipt_calls: Arc::new(AtomicUsize::new(0)),
+            commit_on_second_receipt: false,
+        }
+    }
+
+    fn eventually_committed() -> Self {
+        Self {
+            receipt_calls: Arc::new(AtomicUsize::new(0)),
+            commit_on_second_receipt: true,
+        }
+    }
+}
 
 fn canned_recent_failure() -> TransactionStatus {
     TransactionStatus::RecentFailure {
@@ -75,8 +98,19 @@ impl ChainPlane for RecentFailureBackend {
 impl ReadPlane for RecentFailureBackend {
     async fn transaction_receipt(
         &self,
-        _tx_hash: TxHash,
+        tx_hash: TxHash,
     ) -> Result<Option<TransactionReceipt>, RpcServerError> {
+        let receipt_call = self.receipt_calls.fetch_add(1, Ordering::Relaxed);
+        if self.commit_on_second_receipt && receipt_call > 0 {
+            return Ok(Some(TransactionReceipt {
+                tx_hash,
+                height: BlockHeight::from(ATTEMPT_HEIGHT + 1),
+                status: groundhog_json_rpc_types::receipt::ExecStatus::Ok,
+                events: Vec::new(),
+                return_data: None,
+                abort_data: None,
+            }));
+        }
         Ok(None)
     }
 
@@ -126,7 +160,7 @@ async fn receipt_polling_surfaces_recent_failure_status() {
         .local_addr()
         .expect("bug: test server local address should be available");
     let rpc = GroundhogRpcServer::unified(
-        RecentFailureBackend,
+        RecentFailureBackend::always_failing(),
         RpcServerConfig::default(),
         BuildInfo::new("client-test", None),
     );
@@ -136,11 +170,11 @@ async fn receipt_polling_surfaces_recent_failure_status() {
     let error = poll_transaction_receipt_with_config(
         &format!("http://{addr}"),
         tx_hash,
-        30,
-        std::time::Duration::from_secs(1),
+        3,
+        std::time::Duration::from_millis(1),
     )
     .await
-    .expect_err("recent failure must stop receipt polling");
+    .expect_err("recent failure must be returned after receipt polling is exhausted");
 
     match error {
         PollTransactionReceiptError::TransactionStatus {
@@ -162,6 +196,39 @@ async fn receipt_polling_surfaces_recent_failure_status() {
     handle.stopped().await;
 }
 
+#[tokio::test]
+async fn receipt_polling_prefers_a_later_receipt_to_recent_failure() {
+    let server = Server::builder()
+        .build("127.0.0.1:0")
+        .await
+        .expect("bug: test server should bind");
+    let addr = server
+        .local_addr()
+        .expect("bug: test server local address should be available");
+    let rpc = GroundhogRpcServer::unified(
+        RecentFailureBackend::eventually_committed(),
+        RpcServerConfig::default(),
+        BuildInfo::new("client-test", None),
+    );
+    let handle = server.start(rpc.into_rpc());
+    let tx_hash = TxHash(Hex0x(groundhog_xdr::types::SHA256Hash::from([0x44; 32])));
+
+    let receipt = poll_transaction_receipt_with_config(
+        &format!("http://{addr}"),
+        tx_hash,
+        3,
+        std::time::Duration::from_millis(1),
+    )
+    .await
+    .expect("a receipt that appears after an advisory failure must win");
+
+    assert_eq!(receipt.tx_hash, tx_hash);
+    assert_eq!(*receipt.height, ATTEMPT_HEIGHT + 1);
+
+    handle.stop().expect("bug: test server should stop");
+    handle.stopped().await;
+}
+
 #[async_trait::async_trait]
 impl ViewPlane for RecentFailureBackend {}
 
@@ -175,7 +242,7 @@ async fn recent_failure_status_roundtrips_through_client() {
         .local_addr()
         .expect("bug: test server local address should be available");
     let rpc = GroundhogRpcServer::unified(
-        RecentFailureBackend,
+        RecentFailureBackend::always_failing(),
         RpcServerConfig::default(),
         BuildInfo::new("client-test", None),
     );
