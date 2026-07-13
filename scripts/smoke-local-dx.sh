@@ -3,7 +3,8 @@
 #
 # Exercises the user-facing CLI path against a real hog-devnode binary:
 #   groundhog new -> build -> node -> dev-0 deploy/call/view/storage
-#   -> key generate -> wallet create -> saved-wallet deploy/call
+#   -> key generate -> wallet create -> saved-wallet deploy
+#   -> same-wallet deploy rejection -> airdrop -> deploy retry/call
 #
 # Required environment:
 #   GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode
@@ -308,6 +309,18 @@ run_json() {
     printf '%s\n' "$output"
 }
 
+run_failure_json() {
+    local label="$1"
+    shift
+    log "$label: $(display_command "$@")"
+    local output
+    if output="$("$@" 2>&1)"; then
+        printf '%s\n' "$output" >&2
+        die "$label unexpectedly succeeded"
+    fi
+    printf '%s\n' "$output"
+}
+
 run_view_json() {
     local label="$1"
     shift
@@ -604,6 +617,26 @@ USER_CONTRACT_ADDRESS="$(json_field data.address "$USER_DEPLOY_JSON")"
 [[ "$USER_CONTRACT_ADDRESS" != "null" && -n "$USER_CONTRACT_ADDRESS" ]] \
     || die "saved-wallet deploy did not return a contract address"
 log "saved-wallet deploy result: address=$USER_CONTRACT_ADDRESS height=$(json_field data.height "$USER_DEPLOY_JSON") tx=$(json_field data.tx_hash "$USER_DEPLOY_JSON")"
+
+SECOND_DEPLOY_ERROR="$(run_failure_json "same-wallet deploy before airdrop" "$CLI" --json deploy)"
+[[ "$(json_field error.code "$SECOND_DEPLOY_ERROR")" == "transaction_recent_failure" ]] \
+    || die "same-wallet deploy error code was $(json_field error.code "$SECOND_DEPLOY_ERROR"), expected transaction_recent_failure"
+[[ "$(json_field error.details.conflict.code "$SECOND_DEPLOY_ERROR")" == "boundsExceeded" ]] \
+    || die "same-wallet deploy conflict was $(json_field error.details.conflict.code "$SECOND_DEPLOY_ERROR"), expected boundsExceeded"
+[[ "$(json_field error.hint "$SECOND_DEPLOY_ERROR")" == *"groundhog airdrop"* ]] \
+    || die "same-wallet deploy error did not recommend groundhog airdrop"
+log "same-wallet deploy failed promptly with actionable funding guidance"
+
+AIRDROP_JSON="$(run_json "saved-wallet airdrop" "$CLI" --json airdrop "$USER_KEY")"
+[[ "$(json_field data.status.result "$AIRDROP_JSON")" == "ok" ]] \
+    || die "saved-wallet airdrop did not commit successfully"
+SECOND_DEPLOY_JSON="$(run_json "same-wallet deploy after airdrop" "$CLI" --json deploy)"
+SECOND_CONTRACT_ADDRESS="$(json_field data.address "$SECOND_DEPLOY_JSON")"
+[[ "$SECOND_CONTRACT_ADDRESS" != "null" && -n "$SECOND_CONTRACT_ADDRESS" ]] \
+    || die "same-wallet deploy retry did not return a contract address"
+[[ "$SECOND_CONTRACT_ADDRESS" != "$USER_CONTRACT_ADDRESS" ]] \
+    || die "same-wallet deploy retry returned the first contract address"
+log "same-wallet deploy retry result: address=$SECOND_CONTRACT_ADDRESS height=$(json_field data.height "$SECOND_DEPLOY_JSON") tx=$(json_field data.tx_hash "$SECOND_DEPLOY_JSON")"
 
 USER_INITIALIZE_JSON="$(run_json "saved-wallet initialize" "$CLI" --json call "$PROJECT_NAME" initialize 11)"
 assert_call_succeeded "saved-wallet initialize" "$USER_INITIALIZE_JSON"
