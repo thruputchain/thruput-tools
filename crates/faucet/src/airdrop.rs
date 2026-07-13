@@ -135,11 +135,7 @@ impl AirdropService {
                 peer,
                 self.policy_config.trust_proxy_client_ip_headers,
             ),
-            raw_amount: self
-                .network_descriptor
-                .wallet_create
-                .prefund_raw_amount
-                .clone(),
+            raw_amount: self.submitter.raw_amount().to_string(),
             status: AirdropAttemptStatus::Pending,
             tx_hash: None,
             height: None,
@@ -423,6 +419,9 @@ pub(crate) async fn request_airdrop(
 /// Submits faucet airdrops for validated recipient wallet addresses.
 #[async_trait::async_trait]
 pub trait AirdropSubmitter: Send + Sync + 'static {
+    /// Raw HOG units transferred by this submitter.
+    fn raw_amount(&self) -> u128;
+
     /// Submit an airdrop to `recipient` and return once the transaction is accepted.
     async fn submit_airdrop(
         &self,
@@ -598,6 +597,10 @@ impl RpcAirdropSubmitter {
 
 #[async_trait::async_trait]
 impl AirdropSubmitter for RpcAirdropSubmitter {
+    fn raw_amount(&self) -> u128 {
+        self.raw_amount
+    }
+
     async fn submit_airdrop(
         &self,
         recipient: ContractAddress,

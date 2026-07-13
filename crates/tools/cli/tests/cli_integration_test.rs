@@ -1952,7 +1952,7 @@ fn wallet_create_dry_run_json_outputs_prepared_transaction() {
     assert_eq!(stdout["data"]["key"], "dev-1");
     assert_eq!(stdout["data"]["faucet"]["key"], "dev-0");
     assert_eq!(stdout["data"]["faucet"]["role"], "local_user");
-    assert_eq!(stdout["data"]["prefund_raw_amount"], "100000000");
+    assert_eq!(stdout["data"]["prefund_raw_amount"], "200000000");
     assert!(stdout["data"]["wallet"].as_str().unwrap().starts_with("0x"));
     assert!(
         stdout["data"]["owner_public_key"]
@@ -2014,7 +2014,7 @@ fn wallet_create_dry_run_defaults_name_to_key() {
     assert_eq!(stdout["data"]["submitted"], false);
     assert_eq!(stdout["data"]["name"], "dev-1");
     assert_eq!(stdout["data"]["key"], "dev-1");
-    assert_eq!(stdout["data"]["prefund_raw_amount"], "100000000");
+    assert_eq!(stdout["data"]["prefund_raw_amount"], "200000000");
     assert!(stdout["data"].get("signed_prefund_tx").is_none());
     assert!(stdout["data"].get("signed_tx").is_none());
 }

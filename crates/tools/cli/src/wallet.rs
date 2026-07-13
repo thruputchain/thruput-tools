@@ -38,7 +38,7 @@ use crate::tx_utils::{
 use crate::{CliError, Print};
 
 pub const WALLET_CREATE_JSON_SCHEMA_VERSION: u32 = 3;
-const WALLET_CREATE_PREFUND_RAW_AMOUNT: u128 = 100_000_000;
+const WALLET_CREATE_PREFUND_RAW_AMOUNT: u128 = 200_000_000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PreparedWalletCreate {
