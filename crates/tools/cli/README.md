@@ -277,7 +277,9 @@ the local bootstrap faucet role advertised by `groundhog node` (currently
 `dev-0` as the fallback). The default wallet-create prefund is 200,000,000 raw
 HOG units, enough to pay wallet creation storage and leave capacity for a first
 contract deploy. The built-in `dev-N` wallets are deployed and funded directly
-at genesis, so they do not use this flow.
+at genesis, so they do not use this flow and cannot be passed to `wallet
+create`. Generate or select a non-dev signing key before creating another
+wallet.
 
 For a remote faucet-backed profile such as Devnet, the CLI sends one
 idempotent `POST /v1/create-wallet` request. The faucet performs the same

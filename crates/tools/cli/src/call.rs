@@ -19,7 +19,8 @@ use crate::codec::{
     format_contract_address, parse_contract_address, spec_string_text,
 };
 use crate::config::{
-    ProfileOverrides, find_project_config, resolve_default_key, resolve_profile_with_overrides,
+    ProfileOverrides, find_project_config, resolve_default_key_for_profile,
+    resolve_profile_with_overrides,
 };
 use crate::contract_spec::{InterfaceSpec, load_contract_spec, load_registered_interfaces};
 use crate::dev_detail::{fetch_transaction_detail_blocking, print_transaction_detail};
@@ -319,7 +320,7 @@ fn prepare_call_with_runtime(
 ) -> Result<PreparedCall, CliError> {
     let cwd = std::env::current_dir()?;
     let resolved_profile = resolve_profile_with_overrides(&cwd, profile, overrides)?;
-    let key_name = resolve_default_key(&cwd, profile)?;
+    let key_name = resolve_default_key_for_profile(&resolved_profile)?;
     if resolved_profile.rpc_url.is_none() && key_name.is_none() {
         return Err(CliError::MissingRpcUrl);
     }

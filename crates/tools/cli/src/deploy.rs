@@ -16,7 +16,8 @@ use xdr_common::VecM;
 use crate::account_resolution::resolve_wallet_address;
 use crate::artifacts::{ArtifactKind, ArtifactOptions, ResolvedArtifact};
 use crate::config::{
-    ProfileOverrides, ResolvedProfile, resolve_default_key, resolve_profile_with_overrides,
+    ProfileOverrides, ResolvedProfile, resolve_default_key_for_profile,
+    resolve_profile_with_overrides,
 };
 use crate::dev_detail::{fetch_transaction_detail_blocking, print_transaction_detail};
 use crate::keys::load_local_signer;
@@ -250,7 +251,7 @@ pub(crate) fn prepare_deploy(
     let resolved = resolve_profile_with_overrides(&cwd, profile, overrides)?;
 
     // Resolve signing key
-    let key_name = resolve_default_key(&cwd, profile)?;
+    let key_name = resolve_default_key_for_profile(&resolved)?;
     if resolved.rpc_url.is_none() && key_name.is_none() {
         return Err(CliError::MissingRpcUrl);
     }

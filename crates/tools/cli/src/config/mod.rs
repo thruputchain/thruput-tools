@@ -13,6 +13,7 @@ pub use global::{
 pub use project::{
     DEFAULT_PROFILE, Network, ProfileOverrides, ProjectProfile, ResolvedProfile,
     SavedWalletBinding, active_profile_name, find_project_config, load_project_profiles,
-    remove_profile_wallet_address, resolve_default_key, resolve_profile,
-    resolve_profile_with_overrides, save_profile_contract_alias, save_profile_wallet_address,
+    remove_profile_wallet_address, resolve_default_key, resolve_default_key_for_profile,
+    resolve_profile, resolve_profile_with_overrides, save_profile_contract_alias,
+    save_profile_wallet_address,
 };

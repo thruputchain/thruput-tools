@@ -346,22 +346,41 @@ pub fn remove_profile_wallet_address(
 ///
 /// Prefers `groundhog.toml` when the profile specifies
 /// `default_key`, otherwise falls back to the global default
-/// selected via `keys use`. Local profiles use the built-in
-/// `dev-0` signer when neither selection is present.
+/// selected via `keys use`. Profiles targeting the active runtime
+/// started by `groundhog node` use its built-in `dev-0` signer when
+/// neither selection is present.
 pub fn resolve_default_key(
     start: &Path,
     explicit_profile: Option<&str>,
 ) -> Result<Option<String>, CliError> {
     let profile = resolve_profile(start, explicit_profile)?;
-    if let Some(key) = profile.default_key {
-        return Ok(Some(key));
+    resolve_default_key_for_profile(&profile)
+}
+
+/// Resolve the effective default key from an already resolved profile.
+///
+/// The implicit `dev-0` signer is available only when the profile still
+/// targets the active local runtime recorded by `groundhog node`. Explicit
+/// project or CLI target overrides must select a key themselves.
+pub fn resolve_default_key_for_profile(
+    profile: &ResolvedProfile,
+) -> Result<Option<String>, CliError> {
+    if let Some(key) = &profile.default_key {
+        return Ok(Some(key.clone()));
     }
 
     if let Some(key) = load_default_key()? {
         return Ok(Some(key));
     }
 
-    Ok((profile.network == Some(Network::Local)).then(|| "dev-0".to_string()))
+    let local_runtime_state = read_config_file()?.local_runtime_state;
+    let uses_active_local_runtime = local_runtime_state.is_some_and(|state| {
+        profile.network == Some(Network::Local)
+            && profile.rpc_url.as_deref() == Some(state.rpc_url.as_str())
+            && profile.runtime_manifest.as_deref() == Some(state.runtime_manifest.as_path())
+    });
+
+    Ok(uses_active_local_runtime.then(|| "dev-0".to_string()))
 }
 
 /// Resolve the active project profile, defaulting to `default`
