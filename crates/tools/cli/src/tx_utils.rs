@@ -160,10 +160,19 @@ fn map_submit_and_poll_error(error: groundhog_json_rpc_client::SubmitAndPollErro
         groundhog_json_rpc_client::SubmitAndPollError::ReceiptTimeout { tx_hash, attempts } => {
             CliError::ReceiptTimeout {
                 tx_hash: format_tx_hash(&tx_hash),
-                seconds: u64::try_from(attempts).unwrap_or(u64::MAX),
+                seconds: receipt_poll_duration_seconds(attempts),
             }
         }
     }
+}
+
+fn receipt_poll_duration_seconds(attempts: usize) -> u64 {
+    let attempts = u32::try_from(attempts).unwrap_or(u32::MAX);
+    let duration =
+        groundhog_json_rpc_client::DEFAULT_RECEIPT_POLL_INTERVAL.saturating_mul(attempts);
+    duration
+        .as_secs()
+        .saturating_add(u64::from(duration.subsec_nanos() != 0))
 }
 
 #[cfg(test)]
@@ -236,5 +245,13 @@ mod tests {
         assert_eq!(details["attemptHeight"], 17);
         assert_eq!(details["conflict"]["key"], "0x00000001");
         assert_eq!(details["conflict"]["code"], "boundsExceeded");
+    }
+
+    #[test]
+    fn default_receipt_timeout_stays_thirty_seconds() {
+        assert_eq!(
+            receipt_poll_duration_seconds(groundhog_json_rpc_client::DEFAULT_RECEIPT_POLL_ATTEMPTS,),
+            30
+        );
     }
 }

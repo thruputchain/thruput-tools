@@ -9,8 +9,12 @@ use groundhog_json_rpc_types::transaction::{TransactionStatus, TxHash};
 pub use jsonrpsee::http_client::{HttpClient, HttpClientBuilder};
 use std::time::Duration;
 
-pub const DEFAULT_RECEIPT_POLL_ATTEMPTS: usize = 30;
-pub const DEFAULT_RECEIPT_POLL_INTERVAL: Duration = Duration::from_secs(1);
+// Keep the default wait window at roughly 30 seconds, but poll frequently
+// enough to observe indexer failure diagnostics that intentionally expire
+// after only a few blocks. Fast local and single-validator networks can
+// advance several blocks during a one-second polling interval.
+pub const DEFAULT_RECEIPT_POLL_ATTEMPTS: usize = 300;
+pub const DEFAULT_RECEIPT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Debug, thiserror::Error)]
 pub enum SubmitTransactionError {
