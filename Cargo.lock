@@ -1763,7 +1763,7 @@ checksum = "1e29e0449afadc18249afa48787502d159fe14836225eb0a7c5694e4cf9ae2a9"
 
 [[package]]
 name = "groundhog-testkit"
-version = "0.5.16"
+version = "0.5.18"
 dependencies = [
  "groundhog-contract-util",
  "groundhog-json-rpc-client",
