@@ -60,10 +60,12 @@ pub struct KeyStatus {
     pub global_default_key: Option<String>,
 }
 
-/// Executor credential presence.
+/// Mock-executor FFI download credential availability.
 #[derive(Debug, Serialize)]
 pub struct CredentialStatus {
     pub executor_credentials: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<crate::auth::ExecutorCredentialSource>,
 }
 
 /// Project-level context for the current working directory.
@@ -156,10 +158,12 @@ pub fn check_keys() -> Result<KeyStatus, CliError> {
     })
 }
 
-/// Check whether executor credentials are stored.
+/// Check whether mock-executor FFI download credentials are available.
 pub fn check_credentials() -> Result<CredentialStatus, CliError> {
+    let source = crate::auth::executor_credential_source()?;
     Ok(CredentialStatus {
-        executor_credentials: crate::config::load_executor_credentials()?.is_some(),
+        executor_credentials: source.is_some(),
+        source,
     })
 }
 
@@ -294,9 +298,10 @@ pub fn collect_report(
         findings.push(Finding {
             level: FindingLevel::Warn,
             code: "no_credentials",
-            message: "executor credentials not found".into(),
+            message: "mock-executor FFI download credentials not found".into(),
             hint: Some(Cow::Borrowed(
-                "run `groundhog init` to store executor credentials",
+                "set HOGD_FFI_PASSWORD with HOGD_FFI_USER unset or \
+                 nonempty, or run `groundhog init` to store download credentials",
             )),
         });
     }
@@ -447,6 +452,7 @@ mod tests {
             },
             credentials: CredentialStatus {
                 executor_credentials: true,
+                source: Some(crate::auth::ExecutorCredentialSource::Config),
             },
             project: ProjectContext::default(),
             findings: Vec::new(),
@@ -503,10 +509,12 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         unsafe {
             std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+            std::env::remove_var("HOGD_FFI_PASSWORD");
         }
 
         let status = check_credentials().unwrap();
         assert!(!status.executor_credentials);
+        assert!(status.source.is_none());
 
         unsafe {
             std::env::remove_var("XDG_CONFIG_HOME");
@@ -606,6 +614,7 @@ mod tests {
         unsafe {
             std::env::set_var("CARGO_HOME", tmp.path().join("cargo-home"));
             std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+            std::env::remove_var("HOGD_FFI_PASSWORD");
         }
 
         let report = collect_report(tmp.path(), None).unwrap();
@@ -653,6 +662,7 @@ mod tests {
             },
             credentials: CredentialStatus {
                 executor_credentials: true,
+                source: Some(crate::auth::ExecutorCredentialSource::Config),
             },
             project: ProjectContext::default(),
             findings: vec![Finding {

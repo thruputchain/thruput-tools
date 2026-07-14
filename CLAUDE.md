@@ -214,7 +214,7 @@ cargo run -p groundhog-cli -- init
 cargo run -p groundhog-cli -- new my-counter
 cargo run -p groundhog-cli -- new my-stub --template stub
 cargo run -p groundhog-cli -- build        # from inside a project
-cargo run -p groundhog-cli -- test         # requires login first
+cargo run -p groundhog-cli -- test
 cargo run -p groundhog-cli -- test --json  # structured TestReport on stdout
 cargo run -p groundhog-cli -- deploy       # from inside a project
 cargo run -p groundhog-cli -- call my-counter get

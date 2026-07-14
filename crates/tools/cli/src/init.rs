@@ -1,7 +1,7 @@
 //! `groundhog init` — interactive first-run wizard.
 //!
 //! Walks a new user through environment setup, key generation,
-//! credential storage, and optional project scaffolding. When
+//! mock-executor download credential storage, and optional project scaffolding. When
 //! everything is already configured, prints a short summary and
 //! exits. `init --json` delegates to `status --json`.
 
@@ -181,12 +181,18 @@ fn handle_credentials_step(
     ui: &mut InitUi<'_>,
 ) -> Result<(), CliError> {
     if report.credentials.executor_credentials {
-        ui.success("Executor credentials stored");
+        ui.success("Mock-executor download credentials available");
         ui.finish_step(InitStep::ExecutorCredentials, StepState::Done);
     } else {
-        ui.note("Executor credentials are not configured");
-        if !ui.print.is_quiet() && confirm(ui.print, "Configure executor credentials now?", true)? {
-            crate::auth::executor_login_from_init(ui.print)?;
+        ui.note("Mock-executor download credentials are not configured");
+        if !ui.print.is_quiet()
+            && confirm(
+                ui.print,
+                "Configure mock-executor download credentials now?",
+                true,
+            )?
+        {
+            crate::auth::configure_executor_credentials_from_init(ui.print)?;
             ui.finish_step(InitStep::ExecutorCredentials, StepState::Done);
         } else {
             ui.finish_step(InitStep::ExecutorCredentials, StepState::Skipped);
@@ -291,7 +297,7 @@ impl InitStep {
             Self::Environment => "Environment",
             Self::Profiles => "Profiles",
             Self::SigningKey => "Signing key",
-            Self::ExecutorCredentials => "Executor credentials",
+            Self::ExecutorCredentials => "Mock-executor download credentials",
             Self::Project => "Project",
         }
     }

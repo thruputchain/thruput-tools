@@ -113,7 +113,7 @@ enum Command {
     },
     /// Interactive first-run setup wizard
     #[command(long_about = "Guided setup for new users: checks tools, \
-                      generates a signing key, stores credentials, \
+                      generates a signing key, stores mock-executor download credentials, \
                       and optionally scaffolds a starter project.\n\n\
                       With --json, delegates to `groundhog status \
                       --json`.\n\n\
@@ -122,7 +122,7 @@ enum Command {
     Init,
     /// Show environment, keys, and project status
     #[command(long_about = "Non-interactive diagnostic. Reports \
-                      toolchain, keys, credentials, and project \
+                      toolchain, keys, mock-executor download authentication, and project \
                       config. Use --json for scripting.\n\n\
                       Exit code 0 means everything looks good; \
                       exit code 1 means at least one warning-level \
@@ -412,8 +412,6 @@ enum Command {
         #[command(subcommand)]
         command: WalletCommand,
     },
-    /// Remove stored credentials
-    Logout,
     /// Generate typed bindings from a contract spec
     Codegen {
         #[command(subcommand)]
@@ -528,7 +526,6 @@ impl Command {
             Self::Keys { command } => command.command_name(),
             Self::Wallet { command } => command.command_name(),
             Self::Codegen { command } => command.command_name(),
-            Self::Logout => "logout",
             Self::Completion { .. } => "completion",
         }
     }
@@ -857,7 +854,6 @@ fn main() {
                 groundhog_cli::codegen_cmd::run(&source, output.as_deref(), cmd_name, &print)
             }
         },
-        Command::Logout => groundhog_cli::auth::logout(cmd_name, &print),
         Command::Completion { shell } => {
             let mut output = Vec::new();
             let shell_name = shell.to_string();

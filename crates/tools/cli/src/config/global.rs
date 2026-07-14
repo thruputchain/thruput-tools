@@ -13,9 +13,10 @@ const INITIAL_DEFAULT_PROFILE: &str = "local";
 const HOG_CONTRACT_ADDRESS: &str =
     "0x0000000000000000000000000000000000000000000000000000000000000001";
 
-/// Executor credentials for the Groundhog test executor.
+/// Credentials used to download the mock-executor FFI.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ExecutorCredentials {
+    #[serde(default)]
     pub username: String,
     pub password: String,
 }
@@ -64,27 +65,20 @@ fn write_config_file(config: &GlobalConfigFile) -> Result<(), CliError> {
     atomic_write_private(&path, contents.as_bytes())
 }
 
-/// Save executor credentials to `config.toml`.
+/// Save mock-executor FFI download credentials to `config.toml`.
 pub fn save_executor_credentials(creds: &ExecutorCredentials) -> Result<(), CliError> {
     let mut config = read_config_file()?;
     config.executor = Some(creds.clone());
     write_config_file(&config)
 }
 
-/// Load executor credentials from `config.toml`.
+/// Load mock-executor FFI download credentials from `config.toml`.
 ///
 /// Returns `Ok(None)` if no credentials are stored
 /// or the file does not exist.
 pub fn load_executor_credentials() -> Result<Option<ExecutorCredentials>, CliError> {
     let config = read_config_file()?;
     Ok(config.executor)
-}
-
-/// Remove executor credentials from `config.toml`.
-pub fn remove_executor_credentials() -> Result<(), CliError> {
-    let mut config = read_config_file()?;
-    config.executor = None;
-    write_config_file(&config)
 }
 
 /// Save the default key name to `config.toml`.
