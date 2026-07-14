@@ -55,6 +55,27 @@ fn roundtrip_executor_credentials() {
 
 #[test]
 #[serial]
+fn executor_credentials_default_to_sdk_username() {
+    let tmp = TempDir::new().unwrap();
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    fs::write(
+        global_config_path(&tmp),
+        "[executor]\npassword = \"secret\"\n",
+    )
+    .unwrap();
+
+    let loaded = groundhog_cli::config::load_executor_credentials()
+        .unwrap()
+        .unwrap();
+    assert!(loaded.username.is_empty());
+    assert_eq!(loaded.password, "secret");
+
+    unsafe { env::remove_var("XDG_CONFIG_HOME") };
+}
+
+#[test]
+#[serial]
 fn load_returns_none_when_no_config() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path().join("nonexistent")) };

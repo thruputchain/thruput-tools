@@ -47,7 +47,7 @@ pub enum CliError {
     ProfileNotFound(String),
     #[error("profile `{0}` requested but no project or global config found")]
     NoProjectConfig(String),
-    #[error("credentials cannot be empty")]
+    #[error("credential password cannot be empty")]
     CredentialsEmpty,
     #[error("unsupported OS: {0}")]
     UnsupportedOs(String),
@@ -436,8 +436,8 @@ impl CliError {
                  `GROUNDHOG_PROFILE`, or use the default profile",
             )),
             Self::CredentialsEmpty => Some(Cow::Borrowed(
-                "rerun `groundhog init` and provide both username \
-                 and password",
+                "rerun `groundhog init` and provide a password; the username \
+                 is optional",
             )),
             Self::UnsupportedOs(_) => Some(Cow::Borrowed(
                 "`groundhog test` currently supports macOS and \

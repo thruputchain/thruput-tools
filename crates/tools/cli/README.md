@@ -155,6 +155,8 @@ username = "marmot"
 password = "..."
 ```
 
+The username is optional. Omit it to use the SDK default.
+
 To rotate these credentials, edit the values in
 `~/.config/groundhog/config.toml` (or the corresponding
 `$XDG_CONFIG_HOME` path). To remove them, delete the `[executor]`

@@ -16,6 +16,7 @@ const HOG_CONTRACT_ADDRESS: &str =
 /// Credentials used to download the mock-executor FFI.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ExecutorCredentials {
+    #[serde(default)]
     pub username: String,
     pub password: String,
 }

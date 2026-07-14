@@ -17,6 +17,13 @@ pub enum ExecutorCredentialSource {
     Config,
 }
 
+/// Environment changes needed to apply config-backed credentials to a child.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct ExecutorCredentialEnvironment {
+    pub(crate) set: Vec<(OsString, OsString)>,
+    pub(crate) remove: Vec<OsString>,
+}
+
 /// Resolve the user's cargo config path.
 pub fn cargo_config_path() -> Result<PathBuf, CliError> {
     let cargo_home = env::var("CARGO_HOME")
@@ -56,23 +63,31 @@ pub fn executor_credential_source() -> Result<Option<ExecutorCredentialSource>, 
 
 /// Return config-backed FFI credentials for a child process when the
 /// environment does not already provide them.
-pub(crate) fn executor_credential_environment() -> Result<Vec<(OsString, OsString)>, CliError> {
+pub(crate) fn executor_credential_environment() -> Result<ExecutorCredentialEnvironment, CliError> {
     if environment_credentials_available() {
-        return Ok(Vec::new());
+        return Ok(ExecutorCredentialEnvironment::default());
     }
 
     let Some(credentials) =
         config::load_executor_credentials()?.filter(|credentials| !credentials.password.is_empty())
     else {
-        return Ok(Vec::new());
+        return Ok(ExecutorCredentialEnvironment::default());
     };
 
-    let mut environment = vec![(
-        OsString::from(FFI_PASSWORD_ENV),
-        OsString::from(credentials.password),
-    )];
-    if !credentials.username.is_empty() {
-        environment.push((
+    let mut environment = ExecutorCredentialEnvironment {
+        set: vec![(
+            OsString::from(FFI_PASSWORD_ENV),
+            OsString::from(credentials.password),
+        )],
+        remove: Vec::new(),
+    };
+    if credentials.username.is_empty() {
+        // Config fallback is a single credential source. Clear an inherited
+        // username so the SDK applies its default instead of pairing a stale
+        // environment username with the config password.
+        environment.remove.push(OsString::from(FFI_USER_ENV));
+    } else {
+        environment.set.push((
             OsString::from(FFI_USER_ENV),
             OsString::from(credentials.username),
         ));
@@ -95,7 +110,7 @@ fn environment_credentials_available() -> bool {
 fn save_executor_credentials_from_prompt(print: &Print) -> Result<(), CliError> {
     let stdin = io::stdin();
 
-    print.prompt("FFI download username: ")?;
+    print.prompt("FFI download username (optional): ")?;
     let mut username = String::new();
     stdin.lock().read_line(&mut username)?;
     let username = username.trim().to_string();
@@ -103,7 +118,11 @@ fn save_executor_credentials_from_prompt(print: &Print) -> Result<(), CliError> 
     let password = rpassword::prompt_password("FFI download password: ")
         .map_err(|e| CliError::Other(e.to_string()))?;
 
-    if username.is_empty() || password.is_empty() {
+    save_executor_credentials(username, password)
+}
+
+fn save_executor_credentials(username: String, password: String) -> Result<(), CliError> {
+    if password.is_empty() {
         return Err(CliError::CredentialsEmpty);
     }
 
@@ -138,10 +157,13 @@ mod tests {
         );
         assert_eq!(
             executor_credential_environment().unwrap(),
-            vec![
-                (OsString::from(FFI_PASSWORD_ENV), OsString::from("secret")),
-                (OsString::from(FFI_USER_ENV), OsString::from("marmot")),
-            ]
+            ExecutorCredentialEnvironment {
+                set: vec![
+                    (OsString::from(FFI_PASSWORD_ENV), OsString::from("secret")),
+                    (OsString::from(FFI_USER_ENV), OsString::from("marmot")),
+                ],
+                remove: Vec::new(),
+            }
         );
 
         unsafe {
@@ -168,7 +190,10 @@ mod tests {
             executor_credential_source().unwrap(),
             Some(ExecutorCredentialSource::Environment)
         );
-        assert!(executor_credential_environment().unwrap().is_empty());
+        assert_eq!(
+            executor_credential_environment().unwrap(),
+            ExecutorCredentialEnvironment::default()
+        );
 
         unsafe {
             env::remove_var(FFI_PASSWORD_ENV);
@@ -197,13 +222,16 @@ mod tests {
         );
         assert_eq!(
             executor_credential_environment().unwrap(),
-            vec![
-                (
-                    OsString::from(FFI_PASSWORD_ENV),
-                    OsString::from("config-secret")
-                ),
-                (OsString::from(FFI_USER_ENV), OsString::from("config-user")),
-            ]
+            ExecutorCredentialEnvironment {
+                set: vec![
+                    (
+                        OsString::from(FFI_PASSWORD_ENV),
+                        OsString::from("config-secret")
+                    ),
+                    (OsString::from(FFI_USER_ENV), OsString::from("config-user")),
+                ],
+                remove: Vec::new(),
+            }
         );
 
         unsafe {
@@ -211,5 +239,68 @@ mod tests {
             env::remove_var(FFI_PASSWORD_ENV);
             env::remove_var("XDG_CONFIG_HOME");
         }
+    }
+
+    #[test]
+    #[serial]
+    fn password_only_config_clears_inherited_environment_user() {
+        let tmp = TempDir::new().unwrap();
+        unsafe {
+            env::set_var("XDG_CONFIG_HOME", tmp.path());
+            env::set_var(FFI_USER_ENV, "stale-user");
+            env::remove_var(FFI_PASSWORD_ENV);
+        }
+        config::save_executor_credentials(&ExecutorCredentials {
+            username: String::new(),
+            password: "config-secret".into(),
+        })
+        .unwrap();
+
+        assert_eq!(
+            executor_credential_environment().unwrap(),
+            ExecutorCredentialEnvironment {
+                set: vec![(
+                    OsString::from(FFI_PASSWORD_ENV),
+                    OsString::from("config-secret")
+                )],
+                remove: vec![OsString::from(FFI_USER_ENV)],
+            }
+        );
+
+        unsafe {
+            env::remove_var(FFI_USER_ENV);
+            env::remove_var("XDG_CONFIG_HOME");
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn password_only_credentials_can_be_saved() {
+        let tmp = TempDir::new().unwrap();
+        unsafe {
+            env::set_var("XDG_CONFIG_HOME", tmp.path());
+        }
+
+        save_executor_credentials(String::new(), "secret".into()).unwrap();
+
+        assert_eq!(
+            config::load_executor_credentials().unwrap(),
+            Some(ExecutorCredentials {
+                username: String::new(),
+                password: "secret".into(),
+            })
+        );
+
+        unsafe {
+            env::remove_var("XDG_CONFIG_HOME");
+        }
+    }
+
+    #[test]
+    fn empty_password_is_rejected() {
+        assert!(matches!(
+            save_executor_credentials(String::new(), String::new()),
+            Err(CliError::CredentialsEmpty)
+        ));
     }
 }
