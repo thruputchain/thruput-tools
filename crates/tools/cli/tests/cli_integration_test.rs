@@ -3119,6 +3119,11 @@ fn view_json_returns_raw_output() {
     assert_eq!(stdout["data"]["output"]["result"], "return");
     assert_eq!(stdout["data"]["output"]["returnData"], "0x0102");
     assert_eq!(stdout["data"]["events"], serde_json::json!([]));
+    // Abort fields stay absent (not null) on non-abort payloads so the
+    // v1 schema shape is unchanged for existing consumers.
+    assert!(stdout["data"].get("abortException").is_none());
+    assert!(stdout["data"].get("abortValue").is_none());
+    assert!(stdout["data"].get("abortDecodeError").is_none());
 }
 
 #[test]
@@ -3250,6 +3255,8 @@ fn view_json_surfaces_abort_as_success_body() {
     assert_eq!(stdout["data"]["output"]["result"], "abort");
     assert_eq!(stdout["data"]["output"]["abortData"], "0x0a0b");
     assert_eq!(stdout["data"]["returnValue"], serde_json::Value::Null);
+    let decode_error = stdout["data"]["abortDecodeError"].as_str().unwrap();
+    assert!(decode_error.contains("does not match"), "{decode_error}");
 }
 
 #[test]
@@ -4120,6 +4127,43 @@ fn call_live_human_prints_decoded_abort() {
         stderr.contains("abort value: {\"case\":\"NonNegativeIntUnderflow\"}"),
         "stderr: {stderr}"
     );
+}
+
+#[test]
+fn call_live_json_omits_abort_fields_on_success() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let (rpc_url, rpc_server) = spawn_transaction_rpc(
+        42,
+        sample_call_receipt(42),
+        DevDetailRpcResponse::MethodNotFound,
+    );
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
+
+    let contract = format!("0x{}", "11".repeat(32));
+    let output = groundhog()
+        .args(["--json", "call", &contract, "0x0123456789abcdef", "0x0102"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["ok"], true);
+    assert_eq!(stdout["data"]["status"]["result"], "ok");
+    assert!(stdout["data"].get("abort_exception").is_none());
+    assert!(stdout["data"].get("abort_value").is_none());
+    assert!(stdout["data"].get("abort_decode_error").is_none());
 }
 
 #[test]

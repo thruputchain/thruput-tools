@@ -133,7 +133,7 @@ pub fn run(
         print_transaction_detail(detail, print);
     }
 
-    let data = json!({
+    let mut data = json!({
         "tx_hash": tx_hash_formatted,
         "contract": prepared.contract_address_hex,
         "method": prepared.method,
@@ -143,23 +143,21 @@ pub fn run(
         "return_data": receipt.return_data,
         "abort_data": receipt.abort_data,
         "return_value": decoded_return,
-        "abort_exception": decoded_abort
-            .as_ref()
-            .and_then(|result| result.as_ref().ok())
-            .and_then(|abort| abort.exception.as_deref()),
-        "abort_value": decoded_abort
-            .as_ref()
-            .and_then(|result| result.as_ref().ok())
-            .map(|abort| &abort.value),
-        "abort_decode_error": decoded_abort
-            .as_ref()
-            .and_then(|result| result.as_ref().err())
-            .map(ToString::to_string),
         "transaction_detail": transaction_detail,
         "diagnostics": diagnostics,
         "wallet_entrypoint_id": prepared.wallet_entrypoint_id,
         "wallet_entrypoint_source": prepared.wallet_entrypoint_source,
     });
+    match decoded_abort.as_ref() {
+        Some(Ok(abort)) => {
+            data["abort_exception"] = json!(abort.exception);
+            data["abort_value"] = json!(abort.value);
+        }
+        Some(Err(error)) => {
+            data["abort_decode_error"] = json!(error.to_string());
+        }
+        None => {}
+    }
     if let Some(error) = command_error_for_exec_status(&receipt.status) {
         print.json(&CommandResult::failure_with_error(cmd, data, error))?;
         return Err(CliError::CommandReportedFailure);
