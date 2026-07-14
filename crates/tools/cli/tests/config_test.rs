@@ -55,25 +55,6 @@ fn roundtrip_executor_credentials() {
 
 #[test]
 #[serial]
-fn remove_executor_credentials_clears_them() {
-    let tmp = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
-
-    let creds = groundhog_cli::config::ExecutorCredentials {
-        username: "alice".into(),
-        password: "secret".into(),
-    };
-    groundhog_cli::config::save_executor_credentials(&creds).unwrap();
-    groundhog_cli::config::remove_executor_credentials().unwrap();
-
-    let loaded = groundhog_cli::config::load_executor_credentials().unwrap();
-    assert!(loaded.is_none());
-
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
-}
-
-#[test]
-#[serial]
 fn load_returns_none_when_no_config() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path().join("nonexistent")) };

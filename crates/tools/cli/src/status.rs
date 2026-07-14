@@ -105,7 +105,7 @@ fn summary_items(report: &checks::StatusReport) -> Vec<(String, String)> {
         ),
         ("Keys".into(), keys_label(report)),
         ("Default Key".into(), default_key_label(report)),
-        ("Credentials".into(), credentials_label(report)),
+        ("Mock Executor Auth".into(), credentials_label(report)),
         ("Project".into(), project_label(report)),
     ];
 
@@ -163,10 +163,12 @@ fn default_key_label(report: &checks::StatusReport) -> String {
 }
 
 fn credentials_label(report: &checks::StatusReport) -> String {
-    if report.credentials.executor_credentials {
-        "stored".into()
-    } else {
-        "not stored".into()
+    match report.credentials.source {
+        Some(crate::auth::ExecutorCredentialSource::Environment) => {
+            "available (environment)".into()
+        }
+        Some(crate::auth::ExecutorCredentialSource::Config) => "available (config)".into(),
+        None => "not configured".into(),
     }
 }
 

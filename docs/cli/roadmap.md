@@ -32,10 +32,9 @@ What exists today:
 - `groundhog init` (interactive first-run wizard)
 - `groundhog status` (non-interactive diagnostic)
 - `groundhog keys`
-- `groundhog logout`
 - shell completions
-- global config with profiles, keys, credentials, wallet bindings, and local
-  runtime state
+- global config with profiles, keys, mock-executor download credentials,
+  wallet bindings, and local runtime state
 - `groundhog.toml` as a project overlay for profiles, contract aliases, and
   wallet bindings
 - shared check layer (`checks.rs`) with findings model
@@ -128,7 +127,6 @@ Maintenance rules:
 - [x] `groundhog init`
 - [x] `groundhog status`
 - [x] `groundhog keys`
-- [x] `groundhog logout`
 - [x] shell completions
 - [x] `--quiet`, `--json`, `--profile`
 - [x] global and project profiles with contract aliases and wallet bindings
@@ -146,7 +144,7 @@ Maintenance rules:
 - [x] `run_cargo` helper, `toml_edit` writes, address validation
 - [x] Expand `groundhog init` into first-run wizard
 - [x] `init`: key generation / default key selection
-- [x] `init`: executor credential setup and external Cargo registry guidance
+- [x] `init`: mock-executor FFI download credential setup and external Cargo registry guidance
 - [x] `init`: optional scaffold offer for new users
 - [x] `groundhog status` command with project/profile validation
 - [x] Global/project config merge with local runtime state and saved wallet
@@ -302,7 +300,7 @@ Goal: make the current CLI trustworthy and easier to adopt.
    - missing `cargo`
    - missing `wasm-opt`
    - not in a Groundhog project
-   - missing executor credentials
+   - missing mock-executor FFI download credentials
 
 2. **`groundhog init` as first-run setup**
    - Check required tools.

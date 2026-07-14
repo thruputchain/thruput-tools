@@ -31,6 +31,8 @@ fn groundhog() -> Command {
     ));
     command.env_remove("GROUNDHOG_RUNTIME_MANIFEST");
     command.env_remove("GROUNDHOG_PROFILE");
+    command.env_remove("HOGD_FFI_USER");
+    command.env_remove("HOGD_FFI_PASSWORD");
     command.env("XDG_CONFIG_HOME", config_home);
     command.env("XDG_CACHE_HOME", cache_home);
     command
@@ -207,13 +209,23 @@ fn help_shows_subcommands() {
     assert!(stdout.contains("view"));
     assert!(stdout.contains("storage"));
     assert!(stdout.contains("keys"));
-    assert!(stdout.contains("logout"));
-    assert!(
-        !stdout
-            .lines()
-            .any(|line| line.trim_start().starts_with("login"))
-    );
+    for removed_command in ["login", "logout"] {
+        assert!(
+            !stdout
+                .lines()
+                .any(|line| line.trim_start().starts_with(removed_command))
+        );
+    }
     assert!(stdout.contains("completion"));
+}
+
+#[test]
+fn removed_auth_subcommands_are_rejected() {
+    for removed_command in ["login", "logout"] {
+        let output = groundhog().arg(removed_command).output().unwrap();
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("unrecognized subcommand"));
+    }
 }
 
 #[test]
@@ -473,6 +485,7 @@ fn init_json_delegates_to_status() {
         .current_dir(tmp.path())
         .env("CARGO_HOME", tmp.path().join("cargo-home"))
         .env("XDG_CONFIG_HOME", tmp.path())
+        .env_remove("HOGD_FFI_PASSWORD")
         .output()
         .unwrap();
 
@@ -494,6 +507,7 @@ fn init_human_output_shows_setup_sections() {
         .current_dir(tmp.path())
         .env("CARGO_HOME", tmp.path().join("cargo-home"))
         .env("XDG_CONFIG_HOME", tmp.path())
+        .env_remove("HOGD_FFI_PASSWORD")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -516,7 +530,7 @@ fn init_human_output_shows_setup_sections() {
     assert!(stderr.contains("[1/5] Environment"));
     assert!(stderr.contains("[2/5] Profiles"));
     assert!(stderr.contains("[3/5] Signing key"));
-    assert!(stderr.contains("[4/5] Executor credentials"));
+    assert!(stderr.contains("[4/5] Mock-executor download credentials"));
     assert!(stderr.contains("[5/5] Project"));
     assert!(stderr.contains("Setup Complete"));
     assert!(stderr.contains("Config:"));
@@ -534,6 +548,7 @@ fn init_human_output_points_to_created_project() {
         .current_dir(tmp.path())
         .env("CARGO_HOME", tmp.path().join("cargo-home"))
         .env("XDG_CONFIG_HOME", tmp.path())
+        .env_remove("HOGD_FFI_PASSWORD")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -581,6 +596,7 @@ fn init_human_output_builds_existing_project() {
         .current_dir(&project)
         .env("CARGO_HOME", tmp.path().join("cargo-home"))
         .env("XDG_CONFIG_HOME", tmp.path())
+        .env_remove("HOGD_FFI_PASSWORD")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -614,6 +630,7 @@ fn status_json_outputs_structured_payload() {
         .arg("status")
         .env("CARGO_HOME", tmp.path().join("cargo-home"))
         .env("XDG_CONFIG_HOME", tmp.path())
+        .env_remove("HOGD_FFI_PASSWORD")
         .output()
         .unwrap();
 
@@ -644,6 +661,7 @@ fn status_json_flattens_project_findings_into_warnings() {
         .current_dir(tmp.path())
         .env("CARGO_HOME", tmp.path().join("cargo-home"))
         .env("XDG_CONFIG_HOME", tmp.path())
+        .env_remove("HOGD_FFI_PASSWORD")
         .output()
         .unwrap();
 
@@ -666,6 +684,7 @@ fn quiet_status_exits_one_with_no_output_when_missing_state() {
         .arg("status")
         .env("CARGO_HOME", tmp.path().join("cargo-home"))
         .env("XDG_CONFIG_HOME", tmp.path())
+        .env_remove("HOGD_FFI_PASSWORD")
         .output()
         .unwrap();
 
@@ -723,6 +742,7 @@ fn status_human_output_shows_sections() {
         .arg("status")
         .env("CARGO_HOME", tmp.path().join("cargo-home"))
         .env("XDG_CONFIG_HOME", tmp.path())
+        .env_remove("HOGD_FFI_PASSWORD")
         .output()
         .unwrap();
 
@@ -734,7 +754,81 @@ fn status_human_output_shows_sections() {
     assert!(stderr.contains("Cargo: installed"));
     assert!(stderr.contains("Global Registry:"));
     assert!(stderr.contains("Keys: none"));
-    assert!(stderr.contains("Credentials: not stored"));
+    assert!(stderr.contains("Mock Executor Auth: not configured"));
+}
+
+#[test]
+fn status_json_detects_mock_executor_auth_from_environment() {
+    let tmp = TempDir::new().unwrap();
+    let output = groundhog()
+        .arg("--json")
+        .arg("status")
+        .env("CARGO_HOME", tmp.path().join("cargo-home"))
+        .env("XDG_CONFIG_HOME", tmp.path())
+        .env("HOGD_FFI_PASSWORD", "secret")
+        .output()
+        .unwrap();
+
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["data"]["credentials"]["executor_credentials"], true);
+    assert_eq!(stdout["data"]["credentials"]["source"], "environment");
+    assert!(
+        stdout["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|warning| warning["code"] != "no_credentials")
+    );
+}
+
+#[test]
+fn status_json_detects_mock_executor_auth_from_config() {
+    let tmp = TempDir::new().unwrap();
+    let config_dir = tmp.path().join("groundhog");
+    std::fs::create_dir(&config_dir).unwrap();
+    std::fs::write(
+        config_dir.join("config.toml"),
+        "[executor]\nusername = \"marmot\"\npassword = \"secret\"\n",
+    )
+    .unwrap();
+
+    let output = groundhog()
+        .arg("--json")
+        .arg("status")
+        .env("CARGO_HOME", tmp.path().join("cargo-home"))
+        .env("XDG_CONFIG_HOME", tmp.path())
+        .env_remove("HOGD_FFI_PASSWORD")
+        .output()
+        .unwrap();
+
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["data"]["credentials"]["executor_credentials"], true);
+    assert_eq!(stdout["data"]["credentials"]["source"], "config");
+}
+
+#[test]
+fn status_json_rejects_empty_mock_executor_user() {
+    let tmp = TempDir::new().unwrap();
+    let output = groundhog()
+        .arg("--json")
+        .arg("status")
+        .env("CARGO_HOME", tmp.path().join("cargo-home"))
+        .env("XDG_CONFIG_HOME", tmp.path())
+        .env("HOGD_FFI_USER", "")
+        .env("HOGD_FFI_PASSWORD", "secret")
+        .output()
+        .unwrap();
+
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["data"]["credentials"]["executor_credentials"], false);
+    assert!(stdout["data"]["credentials"].get("source").is_none());
+    assert!(
+        stdout["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning["code"] == "no_credentials")
+    );
 }
 
 #[test]
@@ -4062,33 +4156,6 @@ fn keys_json_flow_works() {
     let removed_json: serde_json::Value = serde_json::from_slice(&removed.stdout).unwrap();
     assert_eq!(removed_json["command"], "keys.rm");
     assert_eq!(removed_json["data"]["cleared_default"], true);
-}
-
-#[test]
-fn logout_json_has_envelope_structure() {
-    let tmp = TempDir::new().unwrap();
-    let output = groundhog()
-        .arg("--json")
-        .arg("logout")
-        .env("CARGO_HOME", tmp.path().join("cargo-home"))
-        .env("XDG_CONFIG_HOME", tmp.path())
-        .output()
-        .unwrap();
-
-    assert!(output.status.success());
-    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["ok"], true);
-    assert_eq!(stdout["command"], "logout");
-    assert!(stdout["data"]["config_dir"].is_string());
-    // cargo logout may warn (no token stored) — if so,
-    // the warning is collected into the envelope.
-    let warnings = stdout["warnings"].as_array().unwrap();
-    if !warnings.is_empty() {
-        assert_eq!(warnings[0]["code"], "cargo_logout_failed");
-    }
-    // In JSON mode, cargo output is captured and
-    // print.warn() is a no-op, so stderr is empty.
-    assert!(output.stderr.is_empty());
 }
 
 #[test]

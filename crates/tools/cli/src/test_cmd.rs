@@ -539,7 +539,9 @@ fn run_integration_against_node(
         "Running RPC integration tests against {contract_address}..."
     ));
 
-    let env = integration_test_environment(rpc_url, &contract_address, runtime_manifest.as_deref());
+    let mut env =
+        integration_test_environment(rpc_url, &contract_address, runtime_manifest.as_deref());
+    env.extend(crate::auth::executor_credential_environment()?);
     let filter = SelectedFilter {
         name: options.match_test.as_deref(),
         exact: false,
@@ -849,7 +851,8 @@ fn run_once_with_options(
     print_test_status(options, rerun_filters.len(), print);
 
     let host_target = host_target()?;
-    let env = local_test_environment(&build.target_directory);
+    let mut env = local_test_environment(&build.target_directory);
+    env.extend(crate::auth::executor_credential_environment()?);
 
     let filters = selected_filters(options, &rerun_filters);
     let context = TestCommandContext {

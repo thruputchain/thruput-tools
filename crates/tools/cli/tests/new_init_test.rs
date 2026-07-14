@@ -57,7 +57,7 @@ fn init_configures_profiles_and_succeeds() {
     }
 
     // Pre-store credentials and a key so the wizard does not
-    // try to run interactive login or key generation.
+    // prompt for credential setup or key generation.
     let creds = groundhog_cli::config::ExecutorCredentials {
         username: "test".into(),
         password: "pass".into(),
@@ -165,7 +165,7 @@ owner_public_key = "0x2222222222222222222222222222222222222222222222222222222222
 
 #[test]
 #[serial]
-fn init_with_credentials_skips_login_hint() {
+fn init_accepts_credentials_from_global_config() {
     let tmp = TempDir::new().unwrap();
     let cargo_home = tmp.path().join("cargo-home");
 
@@ -197,7 +197,7 @@ fn init_with_credentials_skips_login_hint() {
 
 #[test]
 #[serial]
-fn quiet_init_without_credentials_does_not_prompt_for_login() {
+fn quiet_init_without_credentials_does_not_prompt_for_setup() {
     let tmp = TempDir::new().unwrap();
     let cargo_home = tmp.path().join("cargo-home");
 
