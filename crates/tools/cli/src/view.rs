@@ -12,7 +12,10 @@ use crate::artifacts::ArtifactOptions;
 use crate::call::{
     ResolvedCall, format_entrypoint_id, format_hex_bytes, resolve_call, selector_json,
 };
-use crate::codec::{decode_return, encode_args, parse_contract_address};
+use crate::codec::{
+    AbortDecodeError, DecodedAbort, decode_abort, decode_return, encode_args,
+    parse_contract_address,
+};
 use crate::config::{ProfileOverrides, resolve_profile_with_overrides};
 use crate::dev_detail::format_event;
 use crate::dev_keys;
@@ -53,10 +56,17 @@ pub fn run(
 
     let response = rt.block_on(fetch_view(&prepared.rpc_url, prepared.request.clone()))?;
     let return_value = decoded_return_value(&prepared, &response);
+    let decoded_abort = decoded_abort_value(&prepared, &response);
 
     if !print.is_json() {
         task.clear();
-        print_view_response(&prepared, &response, return_value.as_ref(), print);
+        print_view_response(
+            &prepared,
+            &response,
+            return_value.as_ref(),
+            decoded_abort.as_ref(),
+            print,
+        );
     }
     print.json(&CommandResult::new(
         cmd,
@@ -73,6 +83,18 @@ pub fn run(
             output: &response.output,
             events: &response.events,
             return_value: return_value.as_ref(),
+            abort_exception: decoded_abort
+                .as_ref()
+                .and_then(|result| result.as_ref().ok())
+                .and_then(|abort| abort.exception.as_deref()),
+            abort_value: decoded_abort
+                .as_ref()
+                .and_then(|result| result.as_ref().ok())
+                .map(|abort| &abort.value),
+            abort_decode_error: decoded_abort
+                .as_ref()
+                .and_then(|result| result.as_ref().err())
+                .map(ToString::to_string),
         },
     ))?;
 
@@ -197,6 +219,7 @@ fn print_view_response(
     prepared: &PreparedView,
     response: &ViewResponse,
     decoded_return_value: Option<&serde_json::Value>,
+    decoded_abort: Option<&Result<DecodedAbort, AbortDecodeError>>,
     print: &Print,
 ) {
     match &response.output {
@@ -222,6 +245,16 @@ fn print_view_response(
             print.detail("contract", &prepared.contract_address_hex);
             print.detail("height", *response.height);
             print.detail("abort", format_hex_bytes(&abort_data.0));
+            match decoded_abort {
+                Some(Ok(abort)) => {
+                    if let Some(exception) = abort.exception.as_deref() {
+                        print.detail("abort type", exception);
+                    }
+                    print.detail("abort value", &abort.value);
+                }
+                Some(Err(error)) => print.detail("abort decode error", error),
+                None => {}
+            }
         }
         RootInvocationOutput::Fault => {
             print.warn("View faulted.");
@@ -256,6 +289,19 @@ fn decoded_return_value(
         return_data.0.as_slice(),
         prepared.resolved.metadata.as_ref(),
     )
+}
+
+fn decoded_abort_value(
+    prepared: &PreparedView,
+    response: &ViewResponse,
+) -> Option<Result<DecodedAbort, AbortDecodeError>> {
+    let RootInvocationOutput::Abort { abort_data } = &response.output else {
+        return None;
+    };
+    Some(decode_abort(
+        abort_data.0.as_slice(),
+        prepared.resolved.metadata.as_ref(),
+    ))
 }
 
 #[cfg(test)]

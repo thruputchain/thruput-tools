@@ -4,9 +4,9 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use groundhog_contract_spec::{
-    ContractArrayType, ContractEnumDef, ContractField, ContractSpecMethod, ContractSpecString,
-    ContractStructDef, ContractType, ContractTypeDef, ContractUnionCase, ContractUnionCaseType,
-    ContractUnionDef, ContractVectorType,
+    ContractArrayType, ContractEnumDef, ContractExceptionType, ContractField, ContractSpecMethod,
+    ContractSpecString, ContractStructDef, ContractType, ContractTypeDef, ContractUnionCase,
+    ContractUnionCaseType, ContractUnionDef, ContractVectorType,
 };
 use groundhog_xdr::contract::ContractEntrypointID;
 use groundhog_xdr::types::{ContractAddress, Ed25519PublicKey, SHA256Hash};
@@ -45,6 +45,7 @@ pub(crate) struct SpecMethodMetadata {
     pub(crate) version: String,
     pub(crate) method: ContractSpecMethod,
     pub(crate) type_defs: Vec<ContractTypeDef>,
+    pub(crate) throws: Vec<ContractExceptionType>,
 }
 
 /// Named embedded type definitions keyed by contract type name.
@@ -93,6 +94,119 @@ pub(crate) fn decode_return(bytes: &[u8], metadata: Option<&CallMetadata>) -> Op
             decode_single_value(ty, bytes)
         }
     }
+}
+
+/// A contract abort payload decoded through exception metadata.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DecodedAbort {
+    /// Exception type name, when the thrown type is a named spec type.
+    pub(crate) exception: Option<String>,
+    /// Decoded exception payload.
+    pub(crate) value: Value,
+}
+
+/// Why an abort buffer could not be decoded into an exception value.
+///
+/// The cases mirror the SDK's generated client error enum: `Unknown` and
+/// `BadDecode` retain the parsed selector and payload (the abort prefix was
+/// readable), while `UnparseableAbort` means even the selector could not be
+/// read and only the raw buffer is meaningful.
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+pub(crate) enum AbortDecodeError {
+    #[error("failed to read the exception selector: {detail}")]
+    UnparseableAbort { detail: String },
+    #[error(
+        "abort selector 0x{selector:016x} does not match a declared exception or the SDK \
+         LibraryExn; payload: 0x{}", hex::encode(.payload)
+    )]
+    Unknown { selector: u64, payload: Vec<u8> },
+    #[error(
+        "abort payload for {exception} (selector 0x{selector:016x}) failed to decode: {detail}; \
+         payload: 0x{}", hex::encode(.payload)
+    )]
+    BadDecode {
+        selector: u64,
+        exception: String,
+        payload: Vec<u8>,
+        detail: String,
+    },
+}
+
+/// Decode an abort buffer (`[selector][payload]`) into the exception it
+/// carries.
+///
+/// The selector is matched against the resolved method's declared spec
+/// exceptions first, then against the SDK's implicit library exception.
+/// An unknown selector or a payload that does not decode cleanly against
+/// the matched type is an error carrying the parsed selector and payload;
+/// callers report it alongside the raw hex.
+pub(crate) fn decode_abort(
+    bytes: &[u8],
+    metadata: Option<&CallMetadata>,
+) -> Result<DecodedAbort, AbortDecodeError> {
+    let mut reader = xdrs::cxs::buf_reader::BufReader::new(bytes);
+    let selector: u64 = read_xdr_value(&mut reader, "abort selector").map_err(|e| {
+        AbortDecodeError::UnparseableAbort {
+            detail: e.to_string(),
+        }
+    })?;
+    let payload = &bytes[bytes.len() - reader.remaining()..];
+
+    if let Some(CallMetadata::Spec(spec)) = metadata
+        && let Some(exception) = spec.throws.iter().find(|e| e.selector == selector)
+    {
+        return decode_abort_payload(&exception.ty, &spec.type_defs, selector, payload);
+    }
+
+    let library = groundhog_spec_tool::describe::lookup("LibraryExn");
+    if let Some(library) = library
+        && library.selector == selector
+    {
+        let described = groundhog_spec_tool::describe::build_describe(library);
+        return decode_abort_payload(
+            &described.exception.ty,
+            &described.type_defs,
+            selector,
+            payload,
+        );
+    }
+
+    Err(AbortDecodeError::Unknown {
+        selector,
+        payload: payload.to_vec(),
+    })
+}
+
+fn decode_abort_payload(
+    ty: &ContractType,
+    type_defs: &[ContractTypeDef],
+    selector: u64,
+    payload: &[u8],
+) -> Result<DecodedAbort, AbortDecodeError> {
+    let exception = match ty {
+        ContractType::Named { named } => spec_string_text(named).ok().map(str::to_owned),
+        _ => None,
+    };
+    let bad_decode = |detail: String| AbortDecodeError::BadDecode {
+        selector,
+        exception: exception
+            .clone()
+            .unwrap_or_else(|| "the declared exception".to_owned()),
+        payload: payload.to_vec(),
+        detail,
+    };
+    let index = build_type_def_index(type_defs).map_err(|e| bad_decode(e.to_string()))?;
+    let mut reader = xdrs::cxs::buf_reader::BufReader::new(payload);
+    let value = decode_spec_value_from_reader(ty, &mut reader, &index, "abort value")
+        .map_err(|e| bad_decode(e.to_string()))?;
+    if reader.remaining() != 0 {
+        return Err(bad_decode(format!(
+            "{} unread byte(s) remain after decoding",
+            reader.remaining()
+        )));
+    }
+    Ok(DecodedAbort { exception, value })
 }
 
 /// Parse a hex-encoded contract address.
@@ -1531,5 +1645,193 @@ mod tests {
         let s = spec_string("bad\tname");
         let err = spec_string_text(&s).unwrap_err();
         assert!(err.to_string().contains("invalid character"), "{err}");
+    }
+
+    const COUNTER_ERROR_SELECTOR: u64 = 0xb199_47ac_b2fa_14ff;
+
+    fn counter_error_type_defs() -> Vec<ContractTypeDef> {
+        vec![ContractTypeDef::TypeDefUnion {
+            union_def: ContractUnionDef {
+                name: spec_string("CounterError"),
+                cases: vec![
+                    ContractUnionCase {
+                        name: spec_string("Underflow"),
+                        discriminant: 0,
+                        case_type: ContractUnionCaseType::UnionCaseVoid,
+                    },
+                    ContractUnionCase {
+                        name: spec_string("Bounds"),
+                        discriminant: 1,
+                        case_type: ContractUnionCaseType::UnionCaseTuple {
+                            tuple: vec![ContractType::U64].try_into().unwrap(),
+                        },
+                    },
+                ]
+                .try_into()
+                .unwrap(),
+            },
+        }]
+    }
+
+    fn throwing_spec_metadata() -> SpecMethodMetadata {
+        SpecMethodMetadata {
+            interface_name: "Counter".into(),
+            version: "0.1.0".into(),
+            method: ContractSpecMethod {
+                name: spec_string("decrement"),
+                args: vec![].try_into().unwrap(),
+                return_type: ContractType::Void,
+            },
+            type_defs: counter_error_type_defs(),
+            throws: vec![groundhog_contract_spec::ContractExceptionType {
+                selector: COUNTER_ERROR_SELECTOR,
+                ty: ContractType::Named {
+                    named: spec_string("CounterError"),
+                },
+            }],
+        }
+    }
+
+    /// Encode an abort buffer: cxs varint selector followed by a payload
+    /// value encoded through the spec arg encoder for `payload_ty`.
+    fn encode_abort_bytes(
+        selector: u64,
+        payload_ty: ContractType,
+        type_defs: Vec<ContractTypeDef>,
+        payload_json: &str,
+    ) -> Vec<u8> {
+        let payload_metadata = SpecMethodMetadata {
+            interface_name: "Counter".into(),
+            version: "0.1.0".into(),
+            method: ContractSpecMethod {
+                name: spec_string("throwing"),
+                args: vec![ContractField {
+                    name: spec_string("exn"),
+                    ty: payload_ty,
+                }]
+                .try_into()
+                .unwrap(),
+                return_type: ContractType::Void,
+            },
+            type_defs,
+            throws: vec![],
+        };
+        let payload = encode_args(
+            &[payload_json.to_owned()],
+            Some(&CallMetadata::Spec(payload_metadata)),
+        )
+        .expect("bug: abort payload should encode");
+        let mut bytes = xdrs::cxs::encode(&selector).expect("bug: selector should encode");
+        bytes.extend_from_slice(&payload);
+        bytes
+    }
+
+    #[test]
+    fn decode_abort_decodes_declared_spec_exception() {
+        let metadata = CallMetadata::Spec(throwing_spec_metadata());
+        let expected = serde_json::json!({"case": "Bounds", "value": [7]});
+        let bytes = encode_abort_bytes(
+            COUNTER_ERROR_SELECTOR,
+            ContractType::Named {
+                named: spec_string("CounterError"),
+            },
+            counter_error_type_defs(),
+            &expected.to_string(),
+        );
+
+        let decoded = decode_abort(&bytes, Some(&metadata))
+            .expect("bug: declared spec exception should decode");
+
+        assert_eq!(decoded.exception.as_deref(), Some("CounterError"));
+        assert_eq!(decoded.value, expected);
+    }
+
+    #[test]
+    fn decode_abort_decodes_library_exception_without_metadata() {
+        let library = groundhog_spec_tool::describe::lookup("LibraryExn")
+            .expect("bug: LibraryExn should be registered");
+        let described = groundhog_spec_tool::describe::build_describe(library);
+        let bytes = encode_abort_bytes(
+            described.exception.selector,
+            described.exception.ty.clone(),
+            described.type_defs.clone(),
+            "NonNegativeIntUnderflow",
+        );
+
+        let decoded = decode_abort(&bytes, None).expect("bug: library exception should decode");
+
+        assert_eq!(decoded.exception.as_deref(), Some("LibraryExn"));
+        assert_eq!(
+            decoded.value,
+            serde_json::json!({"case": "NonNegativeIntUnderflow"})
+        );
+    }
+
+    #[test]
+    fn decode_abort_reports_unknown_selector() {
+        let metadata = CallMetadata::Spec(throwing_spec_metadata());
+        let bytes = encode_abort_bytes(
+            0x1234_5678_9abc_def0,
+            ContractType::Named {
+                named: spec_string("CounterError"),
+            },
+            counter_error_type_defs(),
+            "Underflow",
+        );
+
+        let err = decode_abort(&bytes, Some(&metadata))
+            .expect_err("bug: unknown selector must be reported");
+
+        let message = err.to_string();
+        assert!(message.contains("0x123456789abcdef0"), "{message}");
+        assert!(message.contains("does not match"), "{message}");
+        // The parsed-off payload is reported separately from the selector.
+        let payload_hex = hex::encode(&bytes[9..]);
+        assert!(message.contains(&payload_hex), "{message}");
+    }
+
+    #[test]
+    fn decode_abort_reports_trailing_bytes() {
+        let metadata = CallMetadata::Spec(throwing_spec_metadata());
+        let mut bytes = encode_abort_bytes(
+            COUNTER_ERROR_SELECTOR,
+            ContractType::Named {
+                named: spec_string("CounterError"),
+            },
+            counter_error_type_defs(),
+            "Underflow",
+        );
+        bytes.push(0x00);
+
+        let err = decode_abort(&bytes, Some(&metadata))
+            .expect_err("bug: trailing bytes must be reported");
+
+        let message = err.to_string();
+        assert!(message.contains("CounterError"), "{message}");
+        assert!(message.contains("unread byte"), "{message}");
+        assert!(message.contains("0xb19947acb2fa14ff"), "{message}");
+    }
+
+    #[test]
+    fn decode_abort_reports_undecodable_declared_payload() {
+        let metadata = CallMetadata::Spec(throwing_spec_metadata());
+        let mut bytes =
+            xdrs::cxs::encode(&COUNTER_ERROR_SELECTOR).expect("bug: selector should encode");
+        bytes.extend_from_slice(
+            &xdrs::cxs::encode(&99i32).expect("bug: discriminant should encode"),
+        );
+
+        let err = decode_abort(&bytes, Some(&metadata))
+            .expect_err("bug: undecodable payload must be reported");
+
+        let message = err.to_string();
+        assert!(message.contains("CounterError"), "{message}");
+        assert!(message.contains("unknown union discriminant"), "{message}");
+    }
+
+    #[test]
+    fn decode_abort_reports_unreadable_selector() {
+        let err = decode_abort(&[], None).expect_err("bug: empty abort buffer must be reported");
+        assert!(err.to_string().contains("selector"), "{err}");
     }
 }

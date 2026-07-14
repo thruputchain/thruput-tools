@@ -25,4 +25,10 @@ pub struct ViewJsonPayload<'a> {
     pub output: &'a RootInvocationOutput,
     pub events: &'a [EmittedEvent],
     pub return_value: Option<&'a serde_json::Value>,
+    /// Exception type name decoded from an abort output, when known.
+    pub abort_exception: Option<&'a str>,
+    /// Exception payload decoded from an abort output, when decodable.
+    pub abort_value: Option<&'a serde_json::Value>,
+    /// Why an abort output could not be decoded, when decoding failed.
+    pub abort_decode_error: Option<String>,
 }
