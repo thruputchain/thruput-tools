@@ -54,8 +54,11 @@ pub(crate) fn decode_receipt_abort(
         .map(|data| decode_abort(data.0.as_slice(), metadata))
 }
 
-/// Print raw return or abort buffers retained on an unsuccessful receipt,
-/// plus the decoded exception (or the reason decoding failed).
+/// Print return and abort context retained on an unsuccessful receipt.
+///
+/// A decoded abort prints as its exception type and value; the raw abort
+/// buffer prints only when decoding failed (with the reason) or was not
+/// attempted, mirroring how decoded return data elides the raw bytes.
 pub(crate) fn print_failed_receipt_data(
     receipt: &TransactionReceipt,
     decoded_abort: Option<&Result<DecodedAbort, AbortDecodeError>>,
@@ -64,18 +67,18 @@ pub(crate) fn print_failed_receipt_data(
     if let Some(data) = receipt.return_data.as_ref() {
         print.status(format_args!("  return data: 0x{}", hex::encode(&data.0)));
     }
+    if let Some(Ok(abort)) = decoded_abort {
+        if let Some(exception) = abort.exception.as_deref() {
+            print.detail("abort type", exception);
+        }
+        print.detail("abort value", &abort.value);
+        return;
+    }
     if let Some(data) = receipt.abort_data.as_ref() {
         print.status(format_args!("  abort data: 0x{}", hex::encode(&data.0)));
     }
-    match decoded_abort {
-        Some(Ok(abort)) => {
-            if let Some(exception) = abort.exception.as_deref() {
-                print.detail("abort type", exception);
-            }
-            print.detail("abort value", &abort.value);
-        }
-        Some(Err(error)) => print.detail("abort decode error", error),
-        None => {}
+    if let Some(Err(error)) = decoded_abort {
+        print.detail("abort decode error", error);
     }
 }
 

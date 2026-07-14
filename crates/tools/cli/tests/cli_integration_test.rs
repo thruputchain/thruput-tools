@@ -4109,10 +4109,9 @@ fn call_live_human_prints_decoded_abort() {
         stderr.contains("warning: Call reverted\n"),
         "stderr: {stderr}"
     );
-    assert!(
-        stderr.contains(&format!("abort data: {abort_hex}")),
-        "stderr: {stderr}"
-    );
+    // The raw buffer is elided when it decodes, like the success path's
+    // return data.
+    assert!(!stderr.contains("abort data:"), "stderr: {stderr}");
     assert!(
         stderr.contains("abort type: LibraryExn"),
         "stderr: {stderr}"

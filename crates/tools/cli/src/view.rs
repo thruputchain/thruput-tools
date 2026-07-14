@@ -244,7 +244,6 @@ fn print_view_response(
             print.detail("method", &prepared.method);
             print.detail("contract", &prepared.contract_address_hex);
             print.detail("height", *response.height);
-            print.detail("abort", format_hex_bytes(&abort_data.0));
             match decoded_abort {
                 Some(Ok(abort)) => {
                     if let Some(exception) = abort.exception.as_deref() {
@@ -252,8 +251,11 @@ fn print_view_response(
                     }
                     print.detail("abort value", &abort.value);
                 }
-                Some(Err(error)) => print.detail("abort decode error", error),
-                None => {}
+                Some(Err(error)) => {
+                    print.detail("abort", format_hex_bytes(&abort_data.0));
+                    print.detail("abort decode error", error);
+                }
+                None => print.detail("abort", format_hex_bytes(&abort_data.0)),
             }
         }
         RootInvocationOutput::Fault => {
