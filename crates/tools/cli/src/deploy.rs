@@ -91,6 +91,7 @@ pub fn run(
     // Print result
     let cwd = std::env::current_dir()?;
     let tx_hash_formatted = format_tx_hash(&tx_hash);
+    let decoded_abort = crate::tx_utils::decode_receipt_abort(&receipt, None);
     match &receipt.status {
         groundhog_json_rpc_types::receipt::ExecStatus::Ok => {
             let contract_addr_hex = contract_addr_hex
@@ -111,7 +112,7 @@ pub fn run(
             print.warn(format_args!("Deploy {}", summarize_exec_status(other)));
             print.detail("tx", &tx_hash_formatted);
             print.detail("height", *receipt.height);
-            print_failed_receipt_data(&receipt, print);
+            print_failed_receipt_data(&receipt, decoded_abort.as_ref(), print);
         }
     }
 
@@ -158,6 +159,16 @@ pub fn run(
     if command_error.is_some() {
         data["return_data"] = json!(receipt.return_data);
         data["abort_data"] = json!(receipt.abort_data);
+        match decoded_abort.as_ref() {
+            Some(Ok(abort)) => {
+                data["abort_exception"] = json!(abort.exception);
+                data["abort_value"] = json!(abort.value);
+            }
+            Some(Err(error)) => {
+                data["abort_decode_error"] = json!(error.to_string());
+            }
+            None => {}
+        }
     }
     if let Some(error) = command_error {
         print.json(&CommandResult::failure_with_error(cmd, data, error))?;

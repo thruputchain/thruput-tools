@@ -28,8 +28,8 @@ use crate::keys::load_local_signer;
 use crate::network_descriptor::resolve_wallet_entrypoints;
 use crate::result::CommandResult;
 use crate::tx_utils::{
-    command_error_for_exec_status, format_tx_hash, nonce_from_timestamp, print_failed_receipt_data,
-    resolve_block_expiry_height, submit_and_poll, summarize_exec_status,
+    command_error_for_exec_status, decode_receipt_abort, format_tx_hash, nonce_from_timestamp,
+    print_failed_receipt_data, resolve_block_expiry_height, submit_and_poll, summarize_exec_status,
 };
 use crate::{CliError, Print};
 
@@ -85,6 +85,7 @@ pub fn run(
         .return_data
         .as_ref()
         .and_then(|data| decode_return(data.0.as_slice(), prepared.resolved.metadata.as_ref()));
+    let decoded_abort = decode_receipt_abort(&receipt, prepared.resolved.metadata.as_ref());
 
     // Print result
     match &receipt.status {
@@ -114,7 +115,7 @@ pub fn run(
             print.detail("contract", &prepared.contract_address_hex);
             print.detail("tx", &tx_hash_formatted);
             print.detail("height", *receipt.height);
-            print_failed_receipt_data(&receipt, print);
+            print_failed_receipt_data(&receipt, decoded_abort.as_ref(), print);
             print_failed_call_diagnostics(&prepared, transaction_detail.is_some(), print);
         }
         other => {
@@ -123,7 +124,7 @@ pub fn run(
             print.detail("contract", &prepared.contract_address_hex);
             print.detail("tx", &tx_hash_formatted);
             print.detail("height", *receipt.height);
-            print_failed_receipt_data(&receipt, print);
+            print_failed_receipt_data(&receipt, decoded_abort.as_ref(), print);
             print_failed_call_diagnostics(&prepared, transaction_detail.is_some(), print);
         }
     }
@@ -132,7 +133,7 @@ pub fn run(
         print_transaction_detail(detail, print);
     }
 
-    let data = json!({
+    let mut data = json!({
         "tx_hash": tx_hash_formatted,
         "contract": prepared.contract_address_hex,
         "method": prepared.method,
@@ -147,6 +148,16 @@ pub fn run(
         "wallet_entrypoint_id": prepared.wallet_entrypoint_id,
         "wallet_entrypoint_source": prepared.wallet_entrypoint_source,
     });
+    match decoded_abort.as_ref() {
+        Some(Ok(abort)) => {
+            data["abort_exception"] = json!(abort.exception);
+            data["abort_value"] = json!(abort.value);
+        }
+        Some(Err(error)) => {
+            data["abort_decode_error"] = json!(error.to_string());
+        }
+        None => {}
+    }
     if let Some(error) = command_error_for_exec_status(&receipt.status) {
         print.json(&CommandResult::failure_with_error(cmd, data, error))?;
         return Err(CliError::CommandReportedFailure);
@@ -490,6 +501,7 @@ fn resolve_spec_method(
                 interface_name: spec_string_text(&interface.name)?.to_owned(),
                 interface_version: spec_string_text(&interface.vers)?.to_owned(),
             },
+            interface.throws.iter().cloned().collect::<Vec<_>>(),
             matched_methods,
         ));
     }
@@ -497,11 +509,11 @@ fn resolve_spec_method(
     if interface_matches.is_empty() {
         return Ok(None);
     }
-    interface_matches.sort_by(|(left, _), (right, _)| left.cmp(right));
+    interface_matches.sort_by(|(left, _, _), (right, _, _)| left.cmp(right));
     if interface_matches.len() > 1 {
         let descriptions = interface_matches
             .iter()
-            .map(|(candidate, _)| {
+            .map(|(candidate, _, _)| {
                 format!(
                     "{} v{}",
                     candidate.interface_name, candidate.interface_version
@@ -515,7 +527,7 @@ fn resolve_spec_method(
         )));
     }
 
-    let (matched, mut methods) = interface_matches
+    let (matched, throws, mut methods) = interface_matches
         .into_iter()
         .next()
         .expect("bug: interface match count should be non-zero");
@@ -531,6 +543,7 @@ fn resolve_spec_method(
         version: matched.interface_version,
         method: methods.remove(0),
         type_defs: spec.type_defs.iter().cloned().collect(),
+        throws,
     }))
 }
 
@@ -1619,7 +1632,7 @@ mod tests {
     fn summarizes_revert_without_message() {
         assert_eq!(
             summarize_exec_status(&ExecStatus::Reverted { message: None }),
-            "reverted without abort data"
+            "reverted"
         );
     }
 
@@ -1793,6 +1806,7 @@ mod tests {
                     },
                 },
             ],
+            throws: vec![],
         }
     }
 
@@ -1845,6 +1859,7 @@ mod tests {
                     },
                 },
             ],
+            throws: vec![],
         }
     }
 
@@ -1860,6 +1875,7 @@ mod tests {
                 return_type: arg_type,
             },
             type_defs: vec![],
+            throws: vec![],
         }
     }
 

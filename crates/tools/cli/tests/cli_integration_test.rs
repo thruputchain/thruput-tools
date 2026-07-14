@@ -3119,6 +3119,11 @@ fn view_json_returns_raw_output() {
     assert_eq!(stdout["data"]["output"]["result"], "return");
     assert_eq!(stdout["data"]["output"]["returnData"], "0x0102");
     assert_eq!(stdout["data"]["events"], serde_json::json!([]));
+    // Abort fields stay absent (not null) on non-abort payloads so the
+    // v1 schema shape is unchanged for existing consumers.
+    assert!(stdout["data"].get("abortException").is_none());
+    assert!(stdout["data"].get("abortValue").is_none());
+    assert!(stdout["data"].get("abortDecodeError").is_none());
 }
 
 #[test]
@@ -3250,6 +3255,8 @@ fn view_json_surfaces_abort_as_success_body() {
     assert_eq!(stdout["data"]["output"]["result"], "abort");
     assert_eq!(stdout["data"]["output"]["abortData"], "0x0a0b");
     assert_eq!(stdout["data"]["returnValue"], serde_json::Value::Null);
+    let decode_error = stdout["data"]["abortDecodeError"].as_str().unwrap();
+    assert!(decode_error.contains("does not match"), "{decode_error}");
 }
 
 #[test]
@@ -4035,6 +4042,201 @@ fn call_live_human_fails_after_printing_receipt_context() {
     assert!(stderr.contains("tx: 0x"));
     assert!(stderr.contains("height: 42"));
     assert!(stderr.contains("wallet: 0x"));
+}
+
+#[test]
+fn call_live_json_decodes_library_abort() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let abort_hex = library_abort_hex("NonNegativeIntUnderflow");
+    let (rpc_url, rpc_server) = spawn_transaction_rpc(
+        42,
+        sample_reverted_call_receipt(42, &abort_hex),
+        DevDetailRpcResponse::MethodNotFound,
+    );
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
+
+    let contract = format!("0x{}", "11".repeat(32));
+    let output = groundhog()
+        .args(["--json", "call", &contract, "0x0123456789abcdef", "0x0102"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stderr.is_empty());
+
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["ok"], false);
+    assert_eq!(stdout["error"]["code"], "transaction_reverted");
+    assert_eq!(stdout["data"]["status"]["result"], "reverted");
+    assert_eq!(stdout["data"]["abort_data"], abort_hex);
+    assert_eq!(stdout["data"]["abort_exception"], "LibraryExn");
+    assert_eq!(
+        stdout["data"]["abort_value"],
+        serde_json::json!({"case": "NonNegativeIntUnderflow"})
+    );
+}
+
+#[test]
+fn call_live_human_prints_decoded_abort() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let abort_hex = library_abort_hex("NonNegativeIntUnderflow");
+    let (rpc_url, rpc_server) = spawn_transaction_rpc(
+        42,
+        sample_reverted_call_receipt(42, &abort_hex),
+        DevDetailRpcResponse::MethodNotFound,
+    );
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
+
+    let contract = format!("0x{}", "11".repeat(32));
+    let output = groundhog()
+        .args(["call", &contract, "0x0123456789abcdef", "0x0102"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("warning: Call reverted\n"),
+        "stderr: {stderr}"
+    );
+    // The raw buffer is elided when it decodes, like the success path's
+    // return data.
+    assert!(!stderr.contains("abort data:"), "stderr: {stderr}");
+    assert!(
+        stderr.contains("abort type: LibraryExn"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("abort value: {\"case\":\"NonNegativeIntUnderflow\"}"),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
+fn call_live_json_omits_abort_fields_on_success() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let (rpc_url, rpc_server) = spawn_transaction_rpc(
+        42,
+        sample_call_receipt(42),
+        DevDetailRpcResponse::MethodNotFound,
+    );
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
+
+    let contract = format!("0x{}", "11".repeat(32));
+    let output = groundhog()
+        .args(["--json", "call", &contract, "0x0123456789abcdef", "0x0102"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["ok"], true);
+    assert_eq!(stdout["data"]["status"]["result"], "ok");
+    assert!(stdout["data"].get("abort_exception").is_none());
+    assert!(stdout["data"].get("abort_value").is_none());
+    assert!(stdout["data"].get("abort_decode_error").is_none());
+}
+
+#[test]
+fn call_live_json_reports_abort_decode_error() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    // Selector 0 is reserved and matches no exception; the payload byte
+    // is parsed off after the selector and reported separately.
+    let (rpc_url, rpc_server) = spawn_transaction_rpc(
+        42,
+        sample_reverted_call_receipt(42, "0x00ab"),
+        DevDetailRpcResponse::MethodNotFound,
+    );
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
+
+    let contract = format!("0x{}", "11".repeat(32));
+    let output = groundhog()
+        .args(["--json", "call", &contract, "0x0123456789abcdef", "0x0102"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(!output.status.success());
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["ok"], false);
+    assert_eq!(stdout["data"]["abort_data"], "0x00ab");
+    assert_eq!(stdout["data"]["abort_value"], serde_json::Value::Null);
+    let decode_error = stdout["data"]["abort_decode_error"].as_str().unwrap();
+    assert!(
+        decode_error.contains("0x0000000000000000"),
+        "{decode_error}"
+    );
+    assert!(decode_error.contains("does not match"), "{decode_error}");
+    assert!(decode_error.contains("0xab"), "{decode_error}");
+}
+
+#[test]
+fn call_live_human_reports_abort_decode_error() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let (rpc_url, rpc_server) = spawn_transaction_rpc(
+        42,
+        sample_reverted_call_receipt(42, "0x00ab"),
+        DevDetailRpcResponse::MethodNotFound,
+    );
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
+
+    let contract = format!("0x{}", "11".repeat(32));
+    let output = groundhog()
+        .args(["call", &contract, "0x0123456789abcdef", "0x0102"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("abort data: 0x00ab"), "stderr: {stderr}");
+    assert!(
+        stderr.contains("abort decode error: abort selector 0x0000000000000000"),
+        "stderr: {stderr}"
+    );
 }
 
 #[test]
@@ -4923,6 +5125,43 @@ fn sample_deterministic_error_call_receipt(height: i64) -> serde_json::Value {
         },
         "events": [],
     })
+}
+
+fn sample_reverted_call_receipt(height: i64, abort_hex: &str) -> serde_json::Value {
+    serde_json::json!({
+        "txHash": mock_tx_hash(),
+        "height": height,
+        "status": { "result": "reverted" },
+        "events": [],
+        "abortData": abort_hex,
+    })
+}
+
+/// Wire-encode a no-payload `LibraryExn` abort buffer for `case_name`:
+/// cxs varint selector followed by the union case discriminant.
+fn library_abort_hex(case_name: &str) -> String {
+    let library = groundhog_spec_tool::describe::lookup("LibraryExn")
+        .expect("LibraryExn should be registered in the describe registry");
+    let described = groundhog_spec_tool::describe::build_describe(library);
+    let discriminant = described
+        .type_defs
+        .iter()
+        .find_map(|def| match def {
+            groundhog_contract_spec::ContractTypeDef::TypeDefUnion { union_def }
+                if AsRef::<[u8]>::as_ref(&union_def.name) == b"LibraryExn" =>
+            {
+                union_def
+                    .cases
+                    .iter()
+                    .find(|case| AsRef::<[u8]>::as_ref(&case.name) == case_name.as_bytes())
+                    .map(|case| case.discriminant)
+            }
+            _ => None,
+        })
+        .expect("LibraryExn union case should exist");
+    let mut bytes = xdrs::cxs::encode(&library.selector).expect("selector should encode");
+    bytes.extend_from_slice(&xdrs::cxs::encode(&discriminant).expect("discriminant should encode"));
+    format!("0x{}", hex::encode(bytes))
 }
 
 fn sample_detail_result(height: i64) -> serde_json::Value {

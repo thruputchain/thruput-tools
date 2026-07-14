@@ -1,6 +1,7 @@
 use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
 use groundhog_json_rpc_types::transaction::{TransactionStatus, TxHash};
 
+use crate::codec::{AbortDecodeError, CallMetadata, DecodedAbort, decode_abort};
 use crate::result::CommandError;
 use crate::{CliError, Print};
 
@@ -13,7 +14,7 @@ pub fn summarize_exec_status(status: &ExecStatus) -> String {
         ExecStatus::Reverted {
             message: Some(message),
         } => format!("reverted: {message}"),
-        ExecStatus::Reverted { message: None } => "reverted without abort data".into(),
+        ExecStatus::Reverted { message: None } => "reverted".into(),
         ExecStatus::DeterministicError { kind } => {
             format!("failed with deterministic execution error ({kind})")
         }
@@ -42,13 +43,42 @@ pub fn command_error_for_exec_status(status: &ExecStatus) -> Option<CommandError
     ))
 }
 
-/// Print raw return or abort buffers retained on an unsuccessful receipt.
-pub fn print_failed_receipt_data(receipt: &TransactionReceipt, print: &Print) {
+/// Decode the abort buffer retained on a receipt, when present.
+pub(crate) fn decode_receipt_abort(
+    receipt: &TransactionReceipt,
+    metadata: Option<&CallMetadata>,
+) -> Option<Result<DecodedAbort, AbortDecodeError>> {
+    receipt
+        .abort_data
+        .as_ref()
+        .map(|data| decode_abort(data.0.as_slice(), metadata))
+}
+
+/// Print return and abort context retained on an unsuccessful receipt.
+///
+/// A decoded abort prints as its exception type and value; the raw abort
+/// buffer prints only when decoding failed (with the reason) or was not
+/// attempted, mirroring how decoded return data elides the raw bytes.
+pub(crate) fn print_failed_receipt_data(
+    receipt: &TransactionReceipt,
+    decoded_abort: Option<&Result<DecodedAbort, AbortDecodeError>>,
+    print: &Print,
+) {
     if let Some(data) = receipt.return_data.as_ref() {
         print.status(format_args!("  return data: 0x{}", hex::encode(&data.0)));
     }
+    if let Some(Ok(abort)) = decoded_abort {
+        if let Some(exception) = abort.exception.as_deref() {
+            print.detail("abort type", exception);
+        }
+        print.detail("abort value", &abort.value);
+        return;
+    }
     if let Some(data) = receipt.abort_data.as_ref() {
         print.status(format_args!("  abort data: 0x{}", hex::encode(&data.0)));
+    }
+    if let Some(Err(error)) = decoded_abort {
+        print.detail("abort decode error", error);
     }
 }
 
