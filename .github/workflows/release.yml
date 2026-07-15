@@ -147,7 +147,12 @@ jobs:
       - name: Generate aggregate checksums
         run: |
           cd artifacts
-          sha256sum -- *.tar.gz > SHA256SUMS
+          archives=(*.tar.gz)
+          test "${#archives[@]}" -eq 10
+          for archive in "${archives[@]}"; do
+            test -s "$archive"
+          done
+          sha256sum -- "${archives[@]}" > SHA256SUMS
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
