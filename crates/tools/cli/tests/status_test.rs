@@ -4,6 +4,8 @@ use std::env;
 use std::fs;
 use tempfile::TempDir;
 
+mod support;
+
 fn quiet() -> Print {
     Print::quiet()
 }
@@ -17,15 +19,18 @@ fn write_groundhog_registry_config(cargo_home: &std::path::Path) {
     .unwrap();
 }
 
+#[cfg(unix)]
 #[test]
 #[serial]
 fn status_succeeds_when_fully_configured() {
     let tmp = TempDir::new().unwrap();
     let cargo_home = tmp.path().join("cargo-home");
+    let devnode = support::write_versioned_devnode(tmp.path());
 
     unsafe {
         env::set_var("CARGO_HOME", &cargo_home);
         env::set_var("XDG_CONFIG_HOME", tmp.path());
+        env::set_var("GROUNDHOG_DEVNODE_BINARY", &devnode);
     }
 
     write_groundhog_registry_config(&cargo_home);
@@ -44,6 +49,7 @@ fn status_succeeds_when_fully_configured() {
     unsafe {
         env::remove_var("CARGO_HOME");
         env::remove_var("XDG_CONFIG_HOME");
+        env::remove_var("GROUNDHOG_DEVNODE_BINARY");
     }
 }
 
