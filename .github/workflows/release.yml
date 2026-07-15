@@ -2,6 +2,9 @@ name: Release
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/release.yml'
 
 env:
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
@@ -10,7 +13,6 @@ env:
   CARGO_REGISTRIES_GROUNDHOG_INDEX: sparse+https://groundhog.dev/crates/api/v1/crates/
   CARGO_REGISTRIES_GROUNDHOG_SOURCE: sparse+https://groundhog.dev/crates/api/v1/crates/
   HOGD_FFI_PASSWORD: ${{ secrets.HOGD_FFI_PASSWORD }}
-  RELEASE_TARGET: x86_64-unknown-linux-gnu
   RELEASE_CRATES: >-
     groundhog-cli
     groundhog-rv32-lower
@@ -19,8 +21,22 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    runs-on: namespace-profile-chuckd-rs-linux
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: x86_64
+            machine: x86_64
+            release_target: x86_64-unknown-linux-gnu
+            runner: namespace-profile-chuckd-rs-linux
+          - architecture: arm64
+            machine: aarch64
+            release_target: aarch64-unknown-linux-gnu
+            runner: namespace-profile-hogd-linux-arm64
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
     steps:
       - uses: namespacelabs/nscloud-checkout-action@v8
 
@@ -30,7 +46,11 @@ jobs:
         with:
           cache: rust
 
+      - name: Verify native Linux architecture
+        run: test "$(uname -m)" = "${{ matrix.machine }}"
+
       - name: Verify publish-driven release
+        if: github.event_name != 'pull_request'
         run: |
           set -euo pipefail
 
@@ -87,9 +107,10 @@ jobs:
           set -euo pipefail
 
           mkdir -p artifacts package
+          release_ref=${GITHUB_REF_NAME//\//-}
 
           for app in hog-gateway groundhog rv32-lower hogsim groundhog-faucet; do
-            archive_base="${app}-${GITHUB_REF_NAME}-${RELEASE_TARGET}"
+            archive_base="${app}-${release_ref}-${{ matrix.release_target }}"
             package_dir="package/${archive_base}"
             mkdir -p "$package_dir"
             cp "target/release/${app}" "$package_dir/"
@@ -98,8 +119,41 @@ jobs:
             tar -czf "artifacts/${archive_base}.tar.gz" -C package "$archive_base"
           done
 
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: groundhog-rpc-${{ matrix.architecture }}-release-artifacts
+          path: artifacts/*.tar.gz
+
+  publish:
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: namespace-profile-chuckd-rs-linux
+    permissions:
+      contents: write
+    steps:
+      - name: Download Linux x86_64 artifacts
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          name: groundhog-rpc-x86_64-release-artifacts
+          path: artifacts/
+
+      - name: Download Linux ARM64 artifacts
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          name: groundhog-rpc-arm64-release-artifacts
+          path: artifacts/
+
+      - name: Generate aggregate checksums
+        run: |
+          set -euo pipefail
           cd artifacts
-          sha256sum -- *.tar.gz > SHA256SUMS
+          archives=(*.tar.gz)
+          test "${#archives[@]}" -eq 10
+          for archive in "${archives[@]}"; do
+            test -s "$archive"
+          done
+          sha256sum -- "${archives[@]}" > SHA256SUMS
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
