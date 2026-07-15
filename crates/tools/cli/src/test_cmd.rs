@@ -129,6 +129,7 @@ struct TestCommandContext<'a> {
     project_name: &'a str,
     host_target: &'a str,
     test_target: &'a str,
+    features: &'a str,
     env: &'a [(OsString, OsString)],
     env_remove: &'a [OsString],
     artifacts: &'a ArtifactOptions,
@@ -204,6 +205,7 @@ struct IntegrationBuild {
     package_root: PathBuf,
     target_directory: PathBuf,
     profile: crate::config::ResolvedProfile,
+    test_features: &'static str,
     artifact: ResolvedArtifact,
 }
 
@@ -553,6 +555,7 @@ fn run_integration_against_node(
         project_name: &build.project_name,
         host_target,
         test_target: INTEGRATION_TEST_TARGET,
+        features: build.test_features,
         env: &env,
         env_remove: &credential_environment.remove,
         artifacts,
@@ -634,12 +637,14 @@ fn build_integration_artifact(
                 &[],
                 print,
             )?;
+            let test_features = integration_test_features(&build.package_root);
             Ok(IntegrationBuild {
                 project_name: build.project_name,
                 project_root: build.project_root,
                 package_root: build.package_root,
                 target_directory: build.target_directory,
                 profile: build.profile,
+                test_features,
                 artifact: ResolvedArtifact {
                     kind: ArtifactKind::Wasm,
                     path: build.wasm,
@@ -655,18 +660,39 @@ fn build_integration_artifact(
                 None,
                 print,
             )?;
+            let test_features = integration_test_features(&build.package_root);
             Ok(IntegrationBuild {
                 project_name: build.project_name,
                 project_root: build.project_root,
                 package_root: build.package_root,
                 target_directory: build.target_directory,
                 profile: build.profile,
+                test_features,
                 artifact: ResolvedArtifact {
                     kind: ArtifactKind::Rv32,
                     path: build.rv32,
                 },
             })
         }
+    }
+}
+
+fn integration_test_features(package_root: &Path) -> &'static str {
+    let manifest = package_root.join("Cargo.toml");
+    let Ok(contents) = fs::read_to_string(manifest) else {
+        return "dev";
+    };
+    let Ok(manifest) = toml::from_str::<toml::Value>(&contents) else {
+        return "dev";
+    };
+    if manifest
+        .get("features")
+        .and_then(toml::Value::as_table)
+        .is_some_and(|features| features.contains_key("groundhog-integration-test"))
+    {
+        "dev,groundhog-integration-test"
+    } else {
+        "dev"
     }
 }
 
@@ -729,6 +755,10 @@ fn integration_test_environment(
     runtime_manifest: Option<&std::path::Path>,
 ) -> Vec<(OsString, OsString)> {
     let mut env = vec![
+        (
+            OsString::from("GROUNDHOG_INTEGRATION_TEST"),
+            OsString::from("1"),
+        ),
         (OsString::from("GROUNDHOG_RPC_URL"), OsString::from(rpc_url)),
         (
             OsString::from("GROUNDHOG_CONTRACT_ADDRESS"),
@@ -864,6 +894,7 @@ fn run_once_with_options(
         project_name: &build.project_name,
         host_target: &host_target,
         test_target: test_target_for(options.target),
+        features: "dev",
         env: &env,
         env_remove: &credential_environment.remove,
         artifacts,
@@ -1266,6 +1297,7 @@ fn run_test_commands(
             context.project_name,
             context.host_target,
             context.test_target,
+            context.features,
         );
         context.artifacts.apply_to_command(&mut cargo_cmd);
         apply_test_environment(&mut cargo_cmd, context.env, context.env_remove);
@@ -1550,7 +1582,13 @@ fn executed_tests(outputs: &[TestRunOutput]) -> Vec<String> {
         .collect()
 }
 
-fn test_command(root: &Path, project_name: &str, host_target: &str, test_target: &str) -> Command {
+fn test_command(
+    root: &Path,
+    project_name: &str,
+    host_target: &str,
+    test_target: &str,
+    features: &str,
+) -> Command {
     let mut cargo_cmd = Command::new("cargo");
     cargo_cmd
         .current_dir(root)
@@ -1562,7 +1600,7 @@ fn test_command(root: &Path, project_name: &str, host_target: &str, test_target:
         .arg("--target")
         .arg(host_target)
         .arg("--features")
-        .arg("dev")
+        .arg(features)
         .arg("--");
     if test_target == WASM_TEST_TARGET || test_target == RV32_TEST_TARGET {
         cargo_cmd.arg("--include-ignored");
@@ -1822,9 +1860,9 @@ mod tests {
         IntegrationTestOptions, RV32_TEST_TARGET, SelectedFilter, TestHarnessOptions, TestOptions,
         TestRunOutput, WASM_TEST_TARGET, WatchContext, aggregate_summary, apply_harness_options,
         apply_test_environment, combined_output, derive_summary_from_cases, extract_failed_tests,
-        failure_cache_path, filter_cached_tests, next_cached_failures, parse_summary_line,
-        parse_test_case_line, read_failure_cache, should_stop_rerun, should_watch_file,
-        test_command, update_failure_cache, watch_snapshot, write_failure_cache,
+        failure_cache_path, filter_cached_tests, integration_test_features, next_cached_failures,
+        parse_summary_line, parse_test_case_line, read_failure_cache, should_stop_rerun,
+        should_watch_file, test_command, update_failure_cache, watch_snapshot, write_failure_cache,
     };
     use crate::test_json::{
         IntegrationTestInfo, TEST_JSON_SCHEMA_VERSION, TestArtifactInfo, TestCase, TestCaseStatus,
@@ -2129,6 +2167,7 @@ mod tests {
             "demo",
             "x86_64-unknown-linux-gnu",
             INTEGRATION_TEST_TARGET,
+            "dev,groundhog-integration-test",
         );
 
         let args: Vec<_> = command
@@ -2145,6 +2184,45 @@ mod tests {
                 .any(|window| window[0] == "--test" && window[1] == WASM_TEST_TARGET)
         );
         assert!(!args.iter().any(|arg| arg == "--include-ignored"));
+        assert!(
+            args.iter()
+                .any(|arg| arg == "dev,groundhog-integration-test")
+        );
+    }
+
+    #[test]
+    fn legacy_integration_command_does_not_include_ignored_tests() {
+        let command = test_command(
+            std::path::Path::new("/project"),
+            "demo",
+            "x86_64-unknown-linux-gnu",
+            INTEGRATION_TEST_TARGET,
+            "dev",
+        );
+
+        let args: Vec<_> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert!(!args.iter().any(|arg| arg == "--include-ignored"));
+    }
+
+    #[test]
+    fn integration_feature_is_enabled_only_when_declared() {
+        let tmp = TempDir::new().expect("bug: tempdir should be created");
+        fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[features]\ngroundhog-integration-test = []\n",
+        )
+        .expect("bug: manifest should be written");
+        assert_eq!(
+            integration_test_features(tmp.path()),
+            "dev,groundhog-integration-test"
+        );
+
+        fs::write(tmp.path().join("Cargo.toml"), "[features]\ndev = []\n")
+            .expect("bug: legacy manifest should be written");
+        assert_eq!(integration_test_features(tmp.path()), "dev");
     }
 
     #[test]
@@ -2154,6 +2232,7 @@ mod tests {
             "demo",
             "x86_64-unknown-linux-gnu",
             WASM_TEST_TARGET,
+            "dev",
         );
 
         let args: Vec<_> = command
@@ -2174,6 +2253,7 @@ mod tests {
             "demo",
             "x86_64-unknown-linux-gnu",
             RV32_TEST_TARGET,
+            "dev",
         );
 
         let args: Vec<_> = command
@@ -2195,6 +2275,10 @@ mod tests {
             Some(std::path::Path::new("/tmp/runtime-manifest.json")),
         );
 
+        assert!(env.contains(&(
+            OsString::from("GROUNDHOG_INTEGRATION_TEST"),
+            OsString::from("1")
+        )));
         assert!(env.contains(&(
             OsString::from("GROUNDHOG_RPC_URL"),
             OsString::from("http://127.0.0.1:1234")

@@ -413,8 +413,10 @@ fn new_creates_project() {
     let dir = tmp.path().join("my-test-project");
     assert!(dir.join("Cargo.toml").exists());
     assert!(dir.join("groundhog.toml").exists());
+    assert!(dir.join("build.rs").exists());
     assert!(dir.join("src/lib.rs").exists());
     assert!(dir.join("src/implementation.rs").exists());
+    assert!(dir.join("tests/integration.rs").exists());
     assert!(dir.join("tests/test.rs").exists());
     assert!(dir.join("tests/test_wasm.rs").exists());
     assert!(dir.join(".cargo/config.toml").exists());

@@ -1,6 +1,40 @@
 use std::fs;
 use tempfile::TempDir;
 
+fn assert_contains_all(contents: &str, expected: &[&str]) {
+    for text in expected {
+        assert!(contents.contains(text), "missing `{text}`");
+    }
+}
+
+fn assert_integration_scaffold(dir: &std::path::Path) {
+    let build = fs::read_to_string(dir.join("build.rs")).unwrap();
+    assert_contains_all(
+        &build,
+        &[
+            "cargo:rerun-if-env-changed=GROUNDHOG_INTEGRATION_TEST",
+            "cargo:rustc-cfg=groundhog_integration_runner",
+            "cargo:rustc-check-cfg=cfg(groundhog_integration_runner)",
+        ],
+    );
+
+    let integration = fs::read_to_string(dir.join("tests/integration.rs")).unwrap();
+    assert_contains_all(
+        &integration,
+        &[
+            "groundhog test --integration",
+            "#[ignore =",
+            "GROUNDHOG_RPC_URL",
+            "GROUNDHOG_INTEGRATION_TEST",
+            "not(groundhog_integration_runner)",
+            "GROUNDHOG_CONTRACT_ADDRESS",
+            "GROUNDHOG_RUNTIME_MANIFEST",
+            "HttpClientBuilder",
+            ".chain_tip()",
+        ],
+    );
+}
+
 #[test]
 fn scaffold_counter_creates_expected_files() {
     let tmp = TempDir::new().unwrap();
@@ -10,6 +44,7 @@ fn scaffold_counter_creates_expected_files() {
     groundhog_cli::scaffold::generate(&dir, "my-counter", "counter").unwrap();
 
     assert!(dir.join("Cargo.toml").exists());
+    assert!(dir.join("build.rs").exists());
     assert!(dir.join(".gitignore").exists());
     assert!(dir.join("groundhog.toml").exists());
     assert!(dir.join("rust-toolchain.toml").exists());
@@ -18,6 +53,7 @@ fn scaffold_counter_creates_expected_files() {
     assert!(dir.join("src/lib.rs").exists());
     assert!(dir.join("src/implementation.rs").exists());
     assert!(dir.join("src/main.rs").exists());
+    assert!(dir.join("tests/integration.rs").exists());
     assert!(dir.join("tests/test.rs").exists());
     assert!(dir.join("tests/test_rv32.rs").exists());
     assert!(dir.join("tests/test_wasm.rs").exists());
@@ -27,7 +63,13 @@ fn scaffold_counter_creates_expected_files() {
     assert!(cargo.contains("registry = \"groundhog\""));
     assert!(!cargo.contains("sdk/spec"));
     assert!(cargo.contains(r#"sdk = { version = "0.17.1", registry = "groundhog" }"#));
+    assert!(cargo.contains("groundhog-integration-test = ["));
+    assert!(cargo.contains(r#"groundhog-json-rpc-client = { version = "0.5""#));
+    assert!(cargo.contains("optional = true"));
+    assert!(cargo.contains(r#"tokio = { version = "1", features = ["macros", "rt-multi-thread"]"#));
     assert!(!cargo.contains(r#"features = ["storage"]"#));
+
+    assert_integration_scaffold(&dir);
     // RV32 bin wrapper target: the bin name must be the snake-case package
     // name because `groundhog build --target rv32` looks for the ELF at
     // `release/<snake_name>`.
@@ -128,6 +170,7 @@ fn scaffold_stub_has_empty_contract() {
 
     assert!(dir.join("tests/test_rv32.rs").exists());
     assert!(dir.join("tests/test_wasm.rs").exists());
+    assert!(dir.join("tests/integration.rs").exists());
     let test_rv32 = fs::read_to_string(dir.join("tests/test_rv32.rs")).unwrap();
     assert!(test_rv32.contains("load_rv32_contract"));
     assert!(test_rv32.contains("CARGO_TARGET_DIR"));
