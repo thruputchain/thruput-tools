@@ -120,10 +120,11 @@ enum Command {
                       Re-running when already configured is a \
                       no-op.")]
     Init,
-    /// Show environment, keys, and project status
+    /// Show RV32, devnode, keys, and project status
     #[command(long_about = "Non-interactive diagnostic. Reports \
-                      toolchain, keys, mock-executor download authentication, and project \
-                      config. Use --json for scripting.\n\n\
+                      the RV32 toolchain, hog-devnode availability, keys, mock-executor \
+                      download authentication, and project config. Use --json for \
+                      scripting.\n\n\
                       Exit code 0 means everything looks good; \
                       exit code 1 means at least one warning-level \
                       finding exists.")]

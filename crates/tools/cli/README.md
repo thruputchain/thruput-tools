@@ -134,11 +134,12 @@ groundhog init --json   # delegates to `groundhog status --json`
 
 ### `groundhog status`
 
-Non-interactive diagnostic. Reports environment, keys,
-mock-executor download authentication, and project config. Authentication is
-available when `HOGD_FFI_PASSWORD` is set or credentials are stored in the global
-Groundhog config. Exits 0 when there are no
-warning-level findings, 1 when warnings exist.
+Non-interactive diagnostic. Reports the active project Rust toolchain,
+`rust-src`, and RV32 target; resolves and probes `hog-devnode`; locates and
+validates its `dev_wallet.rv32a`; and checks keys, mock-executor download
+authentication, and project config. Authentication is available when
+`HOGD_FFI_PASSWORD` is set or credentials are stored in the global Groundhog
+config. Exits 0 when there are no warning-level findings, 1 when warnings exist.
 
 ```bash
 groundhog status              # human-readable report

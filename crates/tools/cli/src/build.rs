@@ -6,7 +6,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const RV32_TARGET_TRIPLE: &str = "riscv32im-unknown-none-elf";
+pub(crate) const WASM_TARGET_TRIPLE: &str = "wasm32-unknown-unknown";
+pub(crate) const RV32_TARGET_TRIPLE: &str = "riscv32im-unknown-none-elf";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -322,7 +323,7 @@ fn wasm_build_command(
         .arg("--features")
         .arg("entrypoints")
         .arg("--target")
-        .arg("wasm32-unknown-unknown")
+        .arg(WASM_TARGET_TRIPLE)
         .arg("-p")
         .arg(pkg_name);
     if !cargo_args.iter().any(|arg| arg == "--lib") {

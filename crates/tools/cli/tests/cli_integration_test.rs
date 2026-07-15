@@ -31,11 +31,26 @@ fn groundhog() -> Command {
     ));
     command.env_remove("GROUNDHOG_RUNTIME_MANIFEST");
     command.env_remove("GROUNDHOG_PROFILE");
+    command.env_remove("GROUNDHOG_DEVNODE_BINARY");
     command.env_remove("HOGD_FFI_USER");
     command.env_remove("HOGD_FFI_PASSWORD");
     command.env("XDG_CONFIG_HOME", config_home);
     command.env("XDG_CACHE_HOME", cache_home);
     command
+}
+
+#[cfg(unix)]
+fn write_versioned_devnode(dir: &std::path::Path) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let binary = dir.join("hog-devnode");
+    std::fs::write(&binary, "#!/bin/sh\nprintf 'hog-devnode 0.1.12\\n'\n").unwrap();
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let contracts = dir.join("contracts");
+    std::fs::create_dir(&contracts).unwrap();
+    let artifact = groundhog_rv32_artifact::build_artifact(&[0; 4], &[], 0).unwrap();
+    std::fs::write(contracts.join("dev_wallet.rv32a"), artifact).unwrap();
+    binary
 }
 
 fn workspace_root() -> std::path::PathBuf {
@@ -640,6 +655,13 @@ fn status_json_outputs_structured_payload() {
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "status");
     assert!(stdout["data"]["environment"]["cargo"].as_bool().unwrap());
+    assert!(stdout["data"]["environment"]["rust_toolchain"]["available"].is_boolean());
+    assert!(stdout["data"]["environment"]["rust_toolchain"]["rust_src"].is_string());
+    assert!(stdout["data"]["environment"]["rv32_target"].is_string());
+    assert!(stdout["data"]["environment"]["devnode"]["reachable"].is_boolean());
+    assert!(stdout["data"]["environment"]["dev_wallet_artifact"]["valid"].is_boolean());
+    assert!(stdout["data"]["environment"]["wasm_target"].is_string());
+    assert!(stdout["data"]["environment"]["wasm_opt"].is_boolean());
     assert!(
         !stdout["data"]["credentials"]["executor_credentials"]
             .as_bool()
@@ -676,6 +698,44 @@ fn status_json_flattens_project_findings_into_warnings() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn status_json_reports_reachable_devnode() {
+    let tmp = TempDir::new().unwrap();
+    let devnode = write_versioned_devnode(tmp.path());
+    let output = groundhog()
+        .arg("--json")
+        .arg("status")
+        .env("CARGO_HOME", tmp.path().join("cargo-home"))
+        .env("XDG_CONFIG_HOME", tmp.path())
+        .env("GROUNDHOG_DEVNODE_BINARY", &devnode)
+        .output()
+        .unwrap();
+
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let status = &stdout["data"]["environment"]["devnode"];
+    assert_eq!(status["reachable"], true);
+    assert_eq!(status["path"], devnode.display().to_string());
+    assert_eq!(status["version"], "0.1.12");
+    let artifact = &stdout["data"]["environment"]["dev_wallet_artifact"];
+    assert_eq!(artifact["available"], true);
+    assert_eq!(artifact["valid"], true);
+    assert!(
+        artifact["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("contracts/dev_wallet.rv32a")
+    );
+    assert_eq!(artifact["sha256"].as_str().unwrap().len(), 64);
+    assert!(
+        stdout["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|warning| warning["code"] != "devnode_unavailable")
+    );
+}
+
 #[test]
 fn quiet_status_exits_one_with_no_output_when_missing_state() {
     let tmp = TempDir::new().unwrap();
@@ -695,9 +755,11 @@ fn quiet_status_exits_one_with_no_output_when_missing_state() {
 
 #[test]
 #[serial_test::serial]
+#[cfg(unix)]
 fn quiet_status_exits_zero_with_no_output_when_fully_configured() {
     let tmp = TempDir::new().unwrap();
     let cargo_home = tmp.path().join("cargo-home");
+    let devnode = write_versioned_devnode(tmp.path());
 
     unsafe {
         std::env::set_var("CARGO_HOME", &cargo_home);
@@ -722,6 +784,7 @@ fn quiet_status_exits_zero_with_no_output_when_fully_configured() {
         .arg("status")
         .env("CARGO_HOME", &cargo_home)
         .env("XDG_CONFIG_HOME", tmp.path())
+        .env("GROUNDHOG_DEVNODE_BINARY", devnode)
         .output()
         .unwrap();
 
@@ -752,6 +815,12 @@ fn status_human_output_shows_sections() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("Groundhog Status"));
     assert!(stderr.contains("Cargo: installed"));
+    assert!(stderr.contains("Rust Toolchain:"));
+    assert!(stderr.contains("RV32 Target:"));
+    assert!(stderr.contains("hog-devnode:"));
+    assert!(stderr.contains("Dev Wallet:"));
+    assert!(!stderr.contains("Wasm Target:"));
+    assert!(!stderr.contains("wasm-opt:"));
     assert!(stderr.contains("Global Registry:"));
     assert!(stderr.contains("Keys: none"));
     assert!(stderr.contains("Mock Executor Auth: not configured"));

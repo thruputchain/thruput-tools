@@ -1,6 +1,7 @@
 //! `groundhog status` — non-interactive diagnostic.
 //!
-//! Reports toolchain, keys, credentials, and project context.
+//! Reports the RV32 toolchain, local devnode, keys, credentials,
+//! and project context.
 //! Never modifies state. Exits 0 when clean, 1 when findings
 //! exist. `--json` emits a single structured object; `--quiet`
 //! suppresses output and uses exit code only.
@@ -85,8 +86,20 @@ fn summary_items(report: &checks::StatusReport) -> Vec<(String, String)> {
     let mut items = vec![
         ("Cargo".into(), installed_label(report.environment.cargo)),
         (
-            "Wasm Target".into(),
-            wasm_target_label(report.environment.wasm_target),
+            "Rust Toolchain".into(),
+            rust_toolchain_label(&report.environment.rust_toolchain),
+        ),
+        (
+            "RV32 Target".into(),
+            rust_target_label(report.environment.rv32_target),
+        ),
+        (
+            "hog-devnode".into(),
+            devnode_label(&report.environment.devnode),
+        ),
+        (
+            "Dev Wallet".into(),
+            dev_wallet_artifact_label(&report.environment.dev_wallet_artifact),
         ),
         (
             "Global Registry".into(),
@@ -98,10 +111,6 @@ fn summary_items(report: &checks::StatusReport) -> Vec<(String, String)> {
             } else {
                 "not configured".into()
             },
-        ),
-        (
-            "wasm-opt".into(),
-            optional_installed_label(report.environment.wasm_opt),
         ),
         ("Keys".into(), keys_label(report)),
         ("Default Key".into(), default_key_label(report)),
@@ -126,21 +135,50 @@ fn installed_label(installed: bool) -> String {
     }
 }
 
-fn optional_installed_label(installed: bool) -> String {
-    if installed {
-        "installed".into()
-    } else {
-        "not installed (optional)".into()
+fn rust_target_label(status: checks::RustTargetStatus) -> String {
+    match status {
+        checks::RustTargetStatus::Installed => "installed".into(),
+        checks::RustTargetStatus::Missing => {
+            "not found (installed automatically on first build)".into()
+        }
+        checks::RustTargetStatus::Unknown => "unknown (toolchain unavailable)".into(),
     }
 }
 
-fn wasm_target_label(status: checks::WasmTargetStatus) -> String {
-    match status {
-        checks::WasmTargetStatus::Installed => "installed".into(),
-        checks::WasmTargetStatus::Missing => {
-            "not found (installed automatically on first build)".into()
+fn rust_toolchain_label(status: &checks::RustToolchainStatus) -> String {
+    let Some(name) = status.name.as_deref() else {
+        return "unavailable".into();
+    };
+    if !status.available {
+        return format!("{name} (not installed)");
+    }
+    let rust_src = match status.rust_src {
+        checks::RustTargetStatus::Installed => "rust-src installed",
+        checks::RustTargetStatus::Missing => "rust-src not found",
+        checks::RustTargetStatus::Unknown => "rust-src unknown",
+    };
+    format!("{name} ({rust_src})")
+}
+
+fn devnode_label(status: &checks::DevnodeStatus) -> String {
+    match (&status.path, &status.version) {
+        (Some(path), Some(version)) if status.reachable => {
+            format!("{version} ({})", path.display())
         }
-        checks::WasmTargetStatus::Unknown => "unknown (rustup unavailable)".into(),
+        (Some(path), _) if status.reachable => format!("available ({})", path.display()),
+        (Some(path), _) => format!("unusable ({})", path.display()),
+        (None, _) => "not found".into(),
+    }
+}
+
+fn dev_wallet_artifact_label(status: &checks::DevWalletArtifactStatus) -> String {
+    match (&status.path, &status.sha256) {
+        (Some(path), Some(sha256)) if status.valid => {
+            let short_hash = sha256.get(..12).unwrap_or(sha256);
+            format!("valid ({}, sha256 {short_hash})", path.display())
+        }
+        (Some(path), _) if status.available => format!("invalid ({})", path.display()),
+        _ => "not found".into(),
     }
 }
 

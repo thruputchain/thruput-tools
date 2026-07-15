@@ -12,7 +12,7 @@ use std::time::Duration;
 
 const HOG_DEVNODE_PID_FILE: &str = "hog-devnode.pid";
 const LEGACY_HOGD_DEV_PID_FILE: &str = "hogd-dev.pid";
-const DEV_WALLET_ARTIFACT_FILENAME: &str = "dev_wallet.rv32a";
+pub(crate) const DEV_WALLET_ARTIFACT_FILENAME: &str = "dev_wallet.rv32a";
 
 #[cfg(test)]
 fn test_local_runtime_state_result() -> PathBuf {
@@ -422,7 +422,7 @@ fn local_node_runtime_artifacts_dir(options: &LocalNodeOptions) -> Option<PathBu
         .and_then(|binary| runtime_artifacts_dir_for_binary(&binary))
 }
 
-fn runtime_artifacts_dir_for_binary(binary: &Path) -> Option<PathBuf> {
+pub(crate) fn runtime_artifacts_dir_for_binary(binary: &Path) -> Option<PathBuf> {
     let binary = std::fs::canonicalize(binary).unwrap_or_else(|_| binary.to_path_buf());
     let binary_dir = binary.parent()?;
     let mut candidates = vec![binary_dir.to_path_buf()];
@@ -443,6 +443,16 @@ fn runtime_artifacts_dir_for_binary(binary: &Path) -> Option<PathBuf> {
             .is_file()
             || root.join(DEV_WALLET_ARTIFACT_FILENAME).is_file()
     })
+}
+
+pub(crate) fn dev_wallet_artifact_for_binary(binary: &Path) -> Option<PathBuf> {
+    let root = runtime_artifacts_dir_for_binary(binary)?;
+    [
+        root.join("contracts").join(DEV_WALLET_ARTIFACT_FILENAME),
+        root.join(DEV_WALLET_ARTIFACT_FILENAME),
+    ]
+    .into_iter()
+    .find(|path| path.is_file())
 }
 
 fn local_node_config(
@@ -696,9 +706,9 @@ fn hogd_dev_endpoints_payload(
 mod tests {
     use super::{
         LocalNodeBlockDriverMode, LocalNodeOptions, LocalNodePidFile, default_tracing_filter,
-        global_local_node_pid_file, hogd_dev_startup_payload, local_node_config,
-        local_runtime_state_payload, map_node_supervisor_error, runtime_artifacts_dir_for_binary,
-        test_local_runtime_state_result,
+        dev_wallet_artifact_for_binary, global_local_node_pid_file, hogd_dev_startup_payload,
+        local_node_config, local_runtime_state_payload, map_node_supervisor_error,
+        runtime_artifacts_dir_for_binary, test_local_runtime_state_result,
     };
     use crate::CliError;
     use groundhog_node_supervisor::{
@@ -794,6 +804,13 @@ mod tests {
         assert_eq!(
             runtime_artifacts_dir_for_binary(&binary),
             Some(fs::canonicalize(artifacts_root).expect("bug: fixture root should resolve"))
+        );
+        assert_eq!(
+            dev_wallet_artifact_for_binary(&binary),
+            Some(
+                fs::canonicalize(contracts.join("dev_wallet.rv32a"))
+                    .expect("bug: artifact fixture should resolve")
+            )
         );
     }
 

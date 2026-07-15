@@ -17,15 +17,32 @@ fn write_groundhog_registry_config(cargo_home: &std::path::Path) {
     .unwrap();
 }
 
+#[cfg(unix)]
+fn write_versioned_devnode(dir: &std::path::Path) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let binary = dir.join("hog-devnode");
+    fs::write(&binary, "#!/bin/sh\nprintf 'hog-devnode 0.1.12\\n'\n").unwrap();
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
+    let contracts = dir.join("contracts");
+    fs::create_dir(&contracts).unwrap();
+    let artifact = groundhog_rv32_artifact::build_artifact(&[0; 4], &[], 0).unwrap();
+    fs::write(contracts.join("dev_wallet.rv32a"), artifact).unwrap();
+    binary
+}
+
+#[cfg(unix)]
 #[test]
 #[serial]
 fn status_succeeds_when_fully_configured() {
     let tmp = TempDir::new().unwrap();
     let cargo_home = tmp.path().join("cargo-home");
+    let devnode = write_versioned_devnode(tmp.path());
 
     unsafe {
         env::set_var("CARGO_HOME", &cargo_home);
         env::set_var("XDG_CONFIG_HOME", tmp.path());
+        env::set_var("GROUNDHOG_DEVNODE_BINARY", &devnode);
     }
 
     write_groundhog_registry_config(&cargo_home);
@@ -44,6 +61,7 @@ fn status_succeeds_when_fully_configured() {
     unsafe {
         env::remove_var("CARGO_HOME");
         env::remove_var("XDG_CONFIG_HOME");
+        env::remove_var("GROUNDHOG_DEVNODE_BINARY");
     }
 }
 

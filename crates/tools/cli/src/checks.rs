@@ -31,20 +31,63 @@ pub struct Finding {
     pub hint: Option<Cow<'static, str>>,
 }
 
-/// WASM target installation status.
+/// Rust compilation target installation status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
-pub enum WasmTargetStatus {
+pub enum RustTargetStatus {
     Installed,
     Missing,
     Unknown,
+}
+
+/// Backwards-compatible name for the existing WASM status API.
+pub type WasmTargetStatus = RustTargetStatus;
+
+/// Active Rust toolchain and required component status.
+#[derive(Debug, Serialize)]
+pub struct RustToolchainStatus {
+    pub available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    pub rust_src: RustTargetStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Resolved local devnode binary and version probe result.
+#[derive(Debug, Serialize)]
+pub struct DevnodeStatus {
+    pub reachable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Resolved and validated dev-wallet runtime artifact.
+#[derive(Debug, Serialize)]
+pub struct DevWalletArtifactStatus {
+    pub available: bool,
+    pub valid: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 /// Environment tool checks.
 #[derive(Debug, Serialize)]
 pub struct EnvironmentStatus {
     pub cargo: bool,
-    pub wasm_target: WasmTargetStatus,
+    pub rust_toolchain: RustToolchainStatus,
+    pub rv32_target: RustTargetStatus,
+    pub devnode: DevnodeStatus,
+    pub dev_wallet_artifact: DevWalletArtifactStatus,
+    pub wasm_target: RustTargetStatus,
     pub wasm_opt: bool,
     pub registry_configured: bool,
     pub cargo_config_path: PathBuf,
@@ -129,9 +172,11 @@ fn is_zero(val: &usize) -> bool {
 }
 
 /// Check the local toolchain and registry configuration.
-pub fn check_environment() -> Result<EnvironmentStatus, CliError> {
+pub fn check_environment(project_start: &Path) -> Result<EnvironmentStatus, CliError> {
     let cargo = which::which("cargo").is_ok();
-    let wasm_target = detect_wasm_target();
+    let (rust_toolchain, rv32_target, wasm_target) = detect_rust_environment(project_start);
+    let devnode = check_devnode();
+    let dev_wallet_artifact = check_dev_wallet_artifact(&devnode);
     let wasm_opt = which::which("wasm-opt").is_ok();
     let cargo_config_path = crate::auth::cargo_config_path()?;
 
@@ -143,6 +188,10 @@ pub fn check_environment() -> Result<EnvironmentStatus, CliError> {
 
     Ok(EnvironmentStatus {
         cargo,
+        rust_toolchain,
+        rv32_target,
+        devnode,
+        dev_wallet_artifact,
         wasm_target,
         wasm_opt,
         registry_configured,
@@ -254,34 +303,13 @@ pub fn collect_report(
     project_start: &Path,
     explicit_profile: Option<&str>,
 ) -> Result<StatusReport, CliError> {
-    let environment = check_environment()?;
+    let environment = check_environment(project_start)?;
     let keys = check_keys()?;
     let credentials = check_credentials()?;
     let project = check_project(project_start, explicit_profile)?;
     let mut findings = Vec::new();
 
-    if !environment.cargo {
-        findings.push(Finding {
-            level: FindingLevel::Warn,
-            code: "no_cargo",
-            message: "cargo not found on PATH".into(),
-            hint: Some(Cow::Borrowed(
-                "install Rust and ensure `cargo` is on \
-                 your PATH",
-            )),
-        });
-    }
-
-    if !environment.registry_configured {
-        findings.push(Finding {
-            level: FindingLevel::Info,
-            code: "no_registry",
-            message: "global Groundhog cargo registry not configured".into(),
-            hint: Some(Cow::Borrowed(
-                "new projects include project-local registry config; run `cargo login --registry groundhog` before building if needed; Cargo stores the token globally in CARGO_HOME",
-            )),
-        });
-    }
+    add_environment_findings(&environment, &project, &mut findings);
 
     let (effective_default_key, effective_default_key_source) =
         resolve_effective_key(&project, &keys);
@@ -317,23 +345,663 @@ pub fn collect_report(
     })
 }
 
-fn detect_wasm_target() -> WasmTargetStatus {
-    let Ok(output) = std::process::Command::new("rustup")
-        .args(["target", "list", "--installed"])
-        .output()
-    else {
-        return WasmTargetStatus::Unknown;
+fn add_environment_findings(
+    environment: &EnvironmentStatus,
+    project: &ProjectContext,
+    findings: &mut Vec<Finding>,
+) {
+    if !environment.cargo {
+        findings.push(Finding {
+            level: FindingLevel::Warn,
+            code: "no_cargo",
+            message: "cargo not found on PATH".into(),
+            hint: Some(Cow::Borrowed(
+                "install Rust and ensure `cargo` is on \
+                 your PATH",
+            )),
+        });
+    }
+
+    if !environment.rust_toolchain.available {
+        let hint = environment.rust_toolchain.name.as_deref().map_or_else(
+            || Cow::Borrowed("install rustup and the Rust toolchain declared by the project"),
+            |toolchain| {
+                Cow::Owned(format!(
+                    "run `rustup toolchain install {toolchain} --component rust-src --target {}`",
+                    crate::build::RV32_TARGET_TRIPLE
+                ))
+            },
+        );
+        findings.push(Finding {
+            level: FindingLevel::Warn,
+            code: "rust_toolchain_unavailable",
+            message: environment
+                .rust_toolchain
+                .error
+                .clone()
+                .unwrap_or_else(|| "active Rust toolchain is unavailable".into()),
+            hint: Some(hint),
+        });
+    } else if project.config_path.is_some()
+        && (environment.rust_toolchain.rust_src == RustTargetStatus::Unknown
+            || environment.rv32_target == RustTargetStatus::Unknown)
+    {
+        findings.push(Finding {
+            level: FindingLevel::Warn,
+            code: "rust_toolchain_probe_failed",
+            message: environment
+                .rust_toolchain
+                .error
+                .clone()
+                .unwrap_or_else(|| "could not verify the active project toolchain".into()),
+            hint: Some(Cow::Borrowed(
+                "run `rustup toolchain list` and inspect the project's rust-toolchain.toml",
+            )),
+        });
+    } else if project.config_path.is_some()
+        && environment.rust_toolchain.rust_src == RustTargetStatus::Missing
+    {
+        findings.push(Finding {
+            level: FindingLevel::Warn,
+            code: "rust_src_unavailable",
+            message: "rust-src is not installed for the active project toolchain".into(),
+            hint: Some(Cow::Borrowed(
+                "run `rustup component add rust-src` from the project directory",
+            )),
+        });
+    }
+
+    if !environment.registry_configured {
+        findings.push(Finding {
+            level: FindingLevel::Info,
+            code: "no_registry",
+            message: "global Groundhog cargo registry not configured".into(),
+            hint: Some(Cow::Borrowed(
+                "new projects include project-local registry config; run `cargo login --registry groundhog` before building if needed; Cargo stores the token globally in CARGO_HOME",
+            )),
+        });
+    }
+
+    if !environment.devnode.reachable {
+        findings.push(Finding {
+            level: FindingLevel::Warn,
+            code: "devnode_unavailable",
+            message: environment
+                .devnode
+                .error
+                .clone()
+                .unwrap_or_else(|| "hog-devnode binary is unavailable".into()),
+            hint: Some(Cow::Borrowed(
+                "install groundhog-client or set GROUNDHOG_DEVNODE_BINARY to an executable hog-devnode; fix or unset the variable if it points to an old path",
+            )),
+        });
+    } else if !environment.dev_wallet_artifact.valid {
+        findings.push(Finding {
+            level: FindingLevel::Warn,
+            code: if environment.dev_wallet_artifact.available {
+                "dev_wallet_artifact_invalid"
+            } else {
+                "dev_wallet_artifact_unavailable"
+            },
+            message: environment
+                .dev_wallet_artifact
+                .error
+                .clone()
+                .unwrap_or_else(|| "dev_wallet.rv32a is unavailable".into()),
+            hint: Some(Cow::Borrowed(
+                "install the dev-wallet artifact from the same groundhog-client build as hog-devnode",
+            )),
+        });
+    }
+}
+
+fn detect_rust_environment(
+    project_start: &Path,
+) -> (RustToolchainStatus, RustTargetStatus, RustTargetStatus) {
+    let (installed, default) = match installed_rust_toolchains() {
+        Ok(toolchains) => toolchains,
+        Err(error) => {
+            return unavailable_rust_environment(None, error);
+        }
+    };
+    let requested = match requested_rust_toolchain(project_start, &installed, default.as_deref()) {
+        Ok(Some(toolchain)) => toolchain,
+        Ok(None) => {
+            return unavailable_rust_environment(
+                None,
+                "rustup has no default or project toolchain".into(),
+            );
+        }
+        Err(error) => return unavailable_rust_environment(None, error),
+    };
+    let Some(name) = matching_installed_toolchain(&requested, &installed) else {
+        return (
+            RustToolchainStatus {
+                available: false,
+                name: Some(requested.clone()),
+                rust_src: RustTargetStatus::Unknown,
+                error: Some(format!("Rust toolchain `{requested}` is not installed")),
+            },
+            RustTargetStatus::Unknown,
+            RustTargetStatus::Unknown,
+        );
     };
 
+    let targets = rustup_installed_list(project_start, "target", &name);
+    let components = rustup_installed_list(project_start, "component", &name);
+    let rv32_target = targets
+        .as_deref()
+        .map_or(RustTargetStatus::Unknown, |installed| {
+            rust_target_status(installed, crate::build::RV32_TARGET_TRIPLE)
+        });
+    let wasm_target = targets
+        .as_deref()
+        .map_or(RustTargetStatus::Unknown, |installed| {
+            rust_target_status(installed, crate::build::WASM_TARGET_TRIPLE)
+        });
+    let rust_src = components
+        .as_deref()
+        .map_or(RustTargetStatus::Unknown, |installed| {
+            rust_target_status(installed, "rust-src")
+        });
+    let probe_errors = [targets.err(), components.err()]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+
+    (
+        RustToolchainStatus {
+            available: true,
+            name: Some(name.clone()),
+            rust_src,
+            error: (!probe_errors.is_empty()).then(|| probe_errors.join("; ")),
+        },
+        rv32_target,
+        wasm_target,
+    )
+}
+
+fn unavailable_rust_environment(
+    name: Option<String>,
+    error: String,
+) -> (RustToolchainStatus, RustTargetStatus, RustTargetStatus) {
+    (
+        RustToolchainStatus {
+            available: false,
+            name,
+            rust_src: RustTargetStatus::Unknown,
+            error: Some(error),
+        },
+        RustTargetStatus::Unknown,
+        RustTargetStatus::Unknown,
+    )
+}
+
+fn installed_rust_toolchains() -> Result<(Vec<String>, Option<String>), String> {
+    let output = std::process::Command::new("rustup")
+        .args(["toolchain", "list"])
+        .output()
+        .map_err(|error| format!("could not run rustup: {error}"))?;
     if !output.status.success() {
-        return WasmTargetStatus::Unknown;
+        let detail = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "could not list installed Rust toolchains: {}",
+            detail.trim()
+        ));
     }
 
-    if String::from_utf8_lossy(&output.stdout).contains("wasm32-unknown-unknown") {
-        WasmTargetStatus::Installed
-    } else {
-        WasmTargetStatus::Missing
+    let mut installed = Vec::new();
+    let mut default = None;
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let Some(name) = line.split_whitespace().next() else {
+            continue;
+        };
+        if name == "no" && line.trim() == "no installed toolchains" {
+            continue;
+        }
+        installed.push(name.to_string());
+        if line.contains("(default)") {
+            default = Some(name.to_string());
+        }
     }
+    Ok((installed, default))
+}
+
+fn requested_rust_toolchain(
+    project_start: &Path,
+    installed: &[String],
+    default: Option<&str>,
+) -> Result<Option<String>, String> {
+    if let Some(toolchain) = std::env::var_os("RUSTUP_TOOLCHAIN")
+        && !toolchain.is_empty()
+    {
+        return Ok(Some(toolchain.to_string_lossy().into_owned()));
+    }
+    if let Some(toolchain) = rustup_directory_override(project_start, installed) {
+        return Ok(Some(toolchain));
+    }
+    if let Some(toolchain) = rust_toolchain_file(project_start)? {
+        return Ok(Some(toolchain));
+    }
+    Ok(default.map(str::to_string))
+}
+
+fn rustup_directory_override(project_start: &Path, installed: &[String]) -> Option<String> {
+    let output = std::process::Command::new("rustup")
+        .args(["override", "list"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let project_start =
+        std::fs::canonicalize(project_start).unwrap_or_else(|_| project_start.to_path_buf());
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let toolchain = installed
+                .iter()
+                .find(|toolchain| line.ends_with(toolchain.as_str()))?;
+            let directory = line.strip_suffix(toolchain.as_str())?.trim_end();
+            let directory = std::fs::canonicalize(directory).ok()?;
+            project_start
+                .starts_with(&directory)
+                .then(|| (directory.components().count(), toolchain.clone()))
+        })
+        .max_by_key(|(depth, _)| *depth)
+        .map(|(_, toolchain)| toolchain)
+}
+
+fn rust_toolchain_file(project_start: &Path) -> Result<Option<String>, String> {
+    for directory in project_start.ancestors() {
+        let toml_path = directory.join("rust-toolchain.toml");
+        if toml_path.is_file() {
+            let contents = std::fs::read_to_string(&toml_path)
+                .map_err(|error| format!("could not read {}: {error}", toml_path.display()))?;
+            let document: toml::Value = toml::from_str(&contents)
+                .map_err(|error| format!("could not parse {}: {error}", toml_path.display()))?;
+            let channel = document
+                .get("toolchain")
+                .and_then(|toolchain| toolchain.get("channel"))
+                .and_then(toml::Value::as_str)
+                .filter(|channel| !channel.is_empty())
+                .ok_or_else(|| {
+                    format!("{} does not declare toolchain.channel", toml_path.display())
+                })?;
+            return Ok(Some(channel.to_string()));
+        }
+
+        let legacy_path = directory.join("rust-toolchain");
+        if legacy_path.is_file() {
+            let contents = std::fs::read_to_string(&legacy_path)
+                .map_err(|error| format!("could not read {}: {error}", legacy_path.display()))?;
+            let channel = contents.lines().next().unwrap_or_default().trim();
+            if channel.is_empty() {
+                return Err(format!("{} is empty", legacy_path.display()));
+            }
+            return Ok(Some(channel.to_string()));
+        }
+    }
+    Ok(None)
+}
+
+fn matching_installed_toolchain(requested: &str, installed: &[String]) -> Option<String> {
+    installed
+        .iter()
+        .find(|toolchain| toolchain.as_str() == requested)
+        .or_else(|| {
+            installed.iter().find(|toolchain| {
+                toolchain
+                    .strip_prefix(requested)
+                    .and_then(|suffix| suffix.strip_prefix('-'))
+                    .is_some_and(looks_like_host_triple)
+            })
+        })
+        .cloned()
+}
+
+fn looks_like_host_triple(suffix: &str) -> bool {
+    let architecture = suffix.split('-').next().unwrap_or_default();
+    matches!(
+        architecture,
+        "aarch64"
+            | "arm"
+            | "arm64ec"
+            | "armv7"
+            | "i586"
+            | "i686"
+            | "loongarch64"
+            | "mips"
+            | "mips64"
+            | "mips64el"
+            | "mipsel"
+            | "powerpc"
+            | "powerpc64"
+            | "powerpc64le"
+            | "riscv64gc"
+            | "s390x"
+            | "sparc64"
+            | "x86_64"
+    ) && suffix.split('-').count() >= 3
+}
+
+fn rustup_installed_list(
+    project_start: &Path,
+    kind: &str,
+    toolchain: &str,
+) -> Result<String, String> {
+    let output = std::process::Command::new("rustup")
+        .args([
+            kind,
+            "list",
+            "--toolchain",
+            toolchain,
+            "--installed",
+            "--quiet",
+        ])
+        .current_dir(project_start)
+        .output()
+        .map_err(|error| format!("could not run rustup {kind} list: {error}"))?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    } else {
+        let detail = String::from_utf8_lossy(&output.stderr);
+        Err(format!(
+            "could not list installed {kind}s for `{toolchain}`: {}",
+            detail.trim()
+        ))
+    }
+}
+
+fn rust_target_status(installed: &str, target: &str) -> RustTargetStatus {
+    if installed.lines().any(|line| line.trim() == target) {
+        RustTargetStatus::Installed
+    } else {
+        RustTargetStatus::Missing
+    }
+}
+
+fn check_devnode() -> DevnodeStatus {
+    let config = groundhog_node_supervisor::HogdDevConfig::default();
+    let path = match groundhog_node_supervisor::resolve_hogd_dev_binary(&config) {
+        Ok(path) => path,
+        Err(error) => {
+            return DevnodeStatus {
+                reachable: false,
+                path: None,
+                version: None,
+                error: Some(error.to_string()),
+            };
+        }
+    };
+
+    match probe_devnode_version(&path) {
+        Ok(version) => DevnodeStatus {
+            reachable: true,
+            path: Some(path),
+            version,
+            error: None,
+        },
+        Err(error) => DevnodeStatus {
+            reachable: false,
+            path: Some(path),
+            version: None,
+            error: Some(error),
+        },
+    }
+}
+
+fn check_dev_wallet_artifact(devnode: &DevnodeStatus) -> DevWalletArtifactStatus {
+    let Some(binary) = devnode.path.as_deref() else {
+        return DevWalletArtifactStatus {
+            available: false,
+            valid: false,
+            path: None,
+            sha256: None,
+            error: None,
+        };
+    };
+    let Some(path) = crate::node::dev_wallet_artifact_for_binary(binary) else {
+        return DevWalletArtifactStatus {
+            available: false,
+            valid: false,
+            path: None,
+            sha256: None,
+            error: Some(format!(
+                "could not find {} for {}",
+                crate::node::DEV_WALLET_ARTIFACT_FILENAME,
+                binary.display()
+            )),
+        };
+    };
+
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return DevWalletArtifactStatus {
+                available: true,
+                valid: false,
+                path: Some(path),
+                sha256: None,
+                error: Some(format!("could not read dev-wallet artifact: {error}")),
+            };
+        }
+    };
+    let sha256 = groundhog_rv32_artifact::sha256_hex(&bytes);
+    match groundhog_rv32_artifact::verify_artifact(&bytes) {
+        Ok(()) => DevWalletArtifactStatus {
+            available: true,
+            valid: true,
+            path: Some(path),
+            sha256: Some(sha256),
+            error: None,
+        },
+        Err(error) => DevWalletArtifactStatus {
+            available: true,
+            valid: false,
+            path: Some(path),
+            sha256: Some(sha256),
+            error: Some(format!("dev-wallet artifact is invalid: {error}")),
+        },
+    }
+}
+
+fn probe_devnode_version(path: &Path) -> Result<Option<String>, String> {
+    probe_devnode_version_with_timeout(path, std::time::Duration::from_secs(2))
+}
+
+fn probe_devnode_version_with_timeout(
+    path: &Path,
+    timeout: std::time::Duration,
+) -> Result<Option<String>, String> {
+    const OUTPUT_LIMIT: u64 = 64 * 1024;
+
+    let stdout_file = tempfile::tempfile()
+        .map_err(|error| format!("could not capture {} --version: {error}", path.display()))?;
+    let stderr_file = tempfile::tempfile()
+        .map_err(|error| format!("could not capture {} --version: {error}", path.display()))?;
+    let mut command = std::process::Command::new(path);
+    command.arg("--version").stdout(
+        stdout_file
+            .try_clone()
+            .map_err(|error| format!("could not capture stdout: {error}"))?,
+    );
+    command.stderr(
+        stderr_file
+            .try_clone()
+            .map_err(|error| format!("could not capture stderr: {error}"))?,
+    );
+    configure_probe_process(&mut command, OUTPUT_LIMIT)?;
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("could not run {}: {error}", path.display()))?;
+    let deadline = std::time::Instant::now() + timeout;
+    let status = loop {
+        let captured_bytes = probe_output_size(&stdout_file, &stderr_file)?;
+        if captured_bytes >= OUTPUT_LIMIT {
+            terminate_probe_processes(&mut child);
+            return Err(format!(
+                "{} --version produced at least {OUTPUT_LIMIT} bytes of output",
+                path.display()
+            ));
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                terminate_probe_descendants(child.id());
+                break status;
+            }
+            Ok(None) if std::time::Instant::now() < deadline => {
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                std::thread::sleep(remaining.min(std::time::Duration::from_millis(10)));
+            }
+            Ok(None) => {
+                terminate_probe_processes(&mut child);
+                return Err(format!(
+                    "{} --version timed out after {} ms",
+                    path.display(),
+                    timeout.as_millis()
+                ));
+            }
+            Err(error) => {
+                terminate_probe_processes(&mut child);
+                return Err(format!(
+                    "could not wait for {} --version: {error}",
+                    path.display()
+                ));
+            }
+        }
+    };
+    if probe_output_size(&stdout_file, &stderr_file)? >= OUTPUT_LIMIT
+        || probe_hit_file_size_limit(status)
+    {
+        return Err(format!(
+            "{} --version produced at least {OUTPUT_LIMIT} bytes of output",
+            path.display()
+        ));
+    }
+    let stdout = read_probe_output(stdout_file, "stdout", OUTPUT_LIMIT)?;
+    let stderr = read_probe_output(stderr_file, "stderr", OUTPUT_LIMIT)?;
+
+    if !status.success() {
+        let detail = stderr.trim();
+        return Err(if detail.is_empty() {
+            format!("{} --version exited with {status}", path.display())
+        } else {
+            format!("{} --version failed: {detail}", path.display())
+        });
+    }
+
+    let line = stdout.lines().next().unwrap_or_default().trim();
+    for program in ["hog-devnode", "hogd-dev"] {
+        if line == program {
+            return Ok(None);
+        }
+        if let Some(version) = line
+            .strip_prefix(program)
+            .and_then(|rest| rest.strip_prefix(' '))
+        {
+            let version = version.trim();
+            return Ok((!version.is_empty()).then(|| version.to_string()));
+        }
+    }
+
+    Err(format!(
+        "{} returned unexpected --version output",
+        path.display()
+    ))
+}
+
+#[cfg(unix)]
+fn probe_hit_file_size_limit(status: std::process::ExitStatus) -> bool {
+    use std::os::unix::process::ExitStatusExt;
+
+    status.signal() == Some(libc::SIGXFSZ)
+}
+
+#[cfg(not(unix))]
+fn probe_hit_file_size_limit(_status: std::process::ExitStatus) -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn configure_probe_process(
+    command: &mut std::process::Command,
+    output_limit: u64,
+) -> Result<(), String> {
+    use std::os::unix::process::CommandExt;
+
+    let output_limit = libc::rlim_t::try_from(output_limit)
+        .map_err(|_| "devnode output limit does not fit rlim_t".to_string())?;
+    command.process_group(0);
+    // SAFETY: `setrlimit` is async-signal-safe and the closure only uses its
+    // captured integer before `exec` in the child process.
+    unsafe {
+        command.pre_exec(move || {
+            let limit = libc::rlimit {
+                rlim_cur: output_limit,
+                rlim_max: output_limit,
+            };
+            if libc::setrlimit(libc::RLIMIT_FSIZE, &raw const limit) == 0 {
+                Ok(())
+            } else {
+                Err(std::io::Error::last_os_error())
+            }
+        });
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn configure_probe_process(
+    _command: &mut std::process::Command,
+    _output_limit: u64,
+) -> Result<(), String> {
+    Ok(())
+}
+
+fn terminate_probe_processes(child: &mut std::process::Child) {
+    terminate_probe_descendants(child.id());
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[cfg(unix)]
+fn terminate_probe_descendants(process_group: u32) {
+    if let Ok(process_group) = i32::try_from(process_group) {
+        // SAFETY: a negative PID addresses the process group created for this
+        // probe. Failure is harmless when the group has already exited.
+        unsafe {
+            libc::kill(-process_group, libc::SIGKILL);
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn terminate_probe_descendants(_process_group: u32) {}
+
+fn probe_output_size(stdout: &std::fs::File, stderr: &std::fs::File) -> Result<u64, String> {
+    let stdout = stdout
+        .metadata()
+        .map_err(|error| format!("could not inspect devnode stdout: {error}"))?
+        .len();
+    let stderr = stderr
+        .metadata()
+        .map_err(|error| format!("could not inspect devnode stderr: {error}"))?
+        .len();
+    Ok(stdout.saturating_add(stderr))
+}
+
+fn read_probe_output(mut file: std::fs::File, stream: &str, limit: u64) -> Result<String, String> {
+    use std::io::{Read, Seek};
+
+    file.rewind()
+        .map_err(|error| format!("could not rewind devnode {stream}: {error}"))?;
+    let mut bytes = Vec::new();
+    file.take(limit)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("could not read devnode {stream}: {error}"))?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 fn resolve_effective_key(
@@ -441,6 +1109,26 @@ mod tests {
         let report = StatusReport {
             environment: EnvironmentStatus {
                 cargo: true,
+                rust_toolchain: RustToolchainStatus {
+                    available: true,
+                    name: Some("nightly-test".into()),
+                    rust_src: RustTargetStatus::Installed,
+                    error: None,
+                },
+                rv32_target: RustTargetStatus::Installed,
+                devnode: DevnodeStatus {
+                    reachable: true,
+                    path: Some(PathBuf::from("/usr/bin/hog-devnode")),
+                    version: Some("0.1.0".into()),
+                    error: None,
+                },
+                dev_wallet_artifact: DevWalletArtifactStatus {
+                    available: true,
+                    valid: true,
+                    path: Some(PathBuf::from("/usr/share/groundhog/dev_wallet.rv32a")),
+                    sha256: Some("abc123".into()),
+                    error: None,
+                },
                 wasm_target: WasmTargetStatus::Installed,
                 wasm_opt: true,
                 registry_configured: true,
@@ -464,8 +1152,205 @@ mod tests {
 
     #[test]
     fn check_environment_detects_cargo() {
-        let env = check_environment().unwrap();
+        let env = check_environment(Path::new(".")).unwrap();
         assert!(env.cargo);
+        assert!(env.rust_toolchain.available);
+    }
+
+    #[test]
+    fn rust_target_status_matches_complete_target_names() {
+        let installed = "riscv32im-unknown-none-elf\nx86_64-unknown-linux-gnu\n";
+        assert_eq!(
+            rust_target_status(installed, crate::build::RV32_TARGET_TRIPLE),
+            RustTargetStatus::Installed
+        );
+        assert_eq!(
+            rust_target_status(installed, crate::build::WASM_TARGET_TRIPLE),
+            RustTargetStatus::Missing
+        );
+    }
+
+    #[test]
+    fn rust_toolchain_file_resolves_the_nearest_project_pin() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let project = tmp.path().join("project/src");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            tmp.path().join("project/rust-toolchain.toml"),
+            "[toolchain]\nchannel = \"nightly-2026-01-30\"\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            rust_toolchain_file(&project).unwrap().as_deref(),
+            Some("nightly-2026-01-30")
+        );
+    }
+
+    #[test]
+    fn requested_toolchain_matches_an_installed_host_toolchain() {
+        let installed = vec!["nightly-2026-01-30-aarch64-apple-darwin".into()];
+        assert_eq!(
+            matching_installed_toolchain("nightly-2026-01-30", &installed).as_deref(),
+            Some("nightly-2026-01-30-aarch64-apple-darwin")
+        );
+        assert!(matching_installed_toolchain("nightly-2026-01-31", &installed).is_none());
+        assert!(matching_installed_toolchain("nightly", &installed).is_none());
+
+        let rolling = vec!["nightly-aarch64-apple-darwin".into()];
+        assert_eq!(
+            matching_installed_toolchain("nightly", &rolling).as_deref(),
+            Some("nightly-aarch64-apple-darwin")
+        );
+    }
+
+    #[test]
+    fn project_toolchain_probe_failure_is_a_warning() {
+        let environment = EnvironmentStatus {
+            cargo: true,
+            rust_toolchain: RustToolchainStatus {
+                available: true,
+                name: Some("nightly-test".into()),
+                rust_src: RustTargetStatus::Unknown,
+                error: Some("component probe failed".into()),
+            },
+            rv32_target: RustTargetStatus::Unknown,
+            devnode: DevnodeStatus {
+                reachable: true,
+                path: Some(PathBuf::from("/usr/bin/hog-devnode")),
+                version: Some("test".into()),
+                error: None,
+            },
+            dev_wallet_artifact: DevWalletArtifactStatus {
+                available: true,
+                valid: true,
+                path: Some(PathBuf::from("/usr/share/groundhog/dev_wallet.rv32a")),
+                sha256: Some("abc123".into()),
+                error: None,
+            },
+            wasm_target: RustTargetStatus::Unknown,
+            wasm_opt: false,
+            registry_configured: true,
+            cargo_config_path: PathBuf::from("/tmp/config.toml"),
+        };
+        let project = ProjectContext {
+            config_path: Some(PathBuf::from("/tmp/groundhog.toml")),
+            ..ProjectContext::default()
+        };
+        let mut findings = Vec::new();
+
+        add_environment_findings(&environment, &project, &mut findings);
+
+        assert!(findings.iter().any(|finding| {
+            finding.code == "rust_toolchain_probe_failed"
+                && finding.level == FindingLevel::Warn
+                && finding.message == "component probe failed"
+        }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn devnode_version_probe_accepts_the_current_binary_name() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let binary = tmp.path().join("hog-devnode");
+        std::fs::write(&binary, "#!/bin/sh\nprintf 'hog-devnode 0.1.12\\n'\n").unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert_eq!(
+            probe_devnode_version(&binary).unwrap().as_deref(),
+            Some("0.1.12")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn devnode_version_probe_times_out_and_reaps_the_child() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let binary = tmp.path().join("hog-devnode");
+        std::fs::write(&binary, "#!/bin/sh\nwhile :; do :; done\n").unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let started = std::time::Instant::now();
+
+        let error =
+            probe_devnode_version_with_timeout(&binary, std::time::Duration::from_millis(50))
+                .unwrap_err();
+
+        assert!(error.contains("timed out"));
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn devnode_version_probe_does_not_wait_for_descendant_output_handles() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let binary = tmp.path().join("hog-devnode");
+        std::fs::write(
+            &binary,
+            "#!/bin/sh\nsleep 2 &\nprintf 'hog-devnode 0.1.12\\n'\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let started = std::time::Instant::now();
+
+        let version =
+            probe_devnode_version_with_timeout(&binary, std::time::Duration::from_millis(1_500))
+                .unwrap();
+
+        assert_eq!(version.as_deref(), Some("0.1.12"));
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn devnode_version_probe_rejects_excessive_output() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let binary = tmp.path().join("hog-devnode");
+        std::fs::write(
+            &binary,
+            "#!/bin/sh\nwhile :; do printf '0123456789abcdef0123456789abcdef\\n'; done\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let error =
+            probe_devnode_version_with_timeout(&binary, std::time::Duration::from_millis(500))
+                .unwrap_err();
+
+        assert!(error.contains("produced at least"), "{error}");
+    }
+
+    #[test]
+    fn dev_wallet_artifact_check_rejects_invalid_artifacts() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let binary = tmp.path().join("hog-devnode");
+        std::fs::write(&binary, []).unwrap();
+        let contracts = tmp.path().join("contracts");
+        std::fs::create_dir(&contracts).unwrap();
+        std::fs::write(contracts.join("dev_wallet.rv32a"), b"not an artifact").unwrap();
+        let status = check_dev_wallet_artifact(&DevnodeStatus {
+            reachable: true,
+            path: Some(binary),
+            version: Some("test".into()),
+            error: None,
+        });
+
+        assert!(status.available);
+        assert!(!status.valid);
+        assert_eq!(status.sha256.as_deref().map(str::len), Some(64));
+        assert!(
+            status
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("invalid"))
+        );
     }
 
     #[test]
@@ -478,7 +1363,7 @@ mod tests {
             std::env::set_var("CARGO_HOME", &cargo_home);
         }
 
-        let env = check_environment().unwrap();
+        let env = check_environment(tmp.path()).unwrap();
         assert!(!env.registry_configured);
 
         unsafe {
@@ -651,6 +1536,26 @@ mod tests {
         let report = StatusReport {
             environment: EnvironmentStatus {
                 cargo: true,
+                rust_toolchain: RustToolchainStatus {
+                    available: true,
+                    name: Some("nightly-test".into()),
+                    rust_src: RustTargetStatus::Installed,
+                    error: None,
+                },
+                rv32_target: RustTargetStatus::Installed,
+                devnode: DevnodeStatus {
+                    reachable: true,
+                    path: Some(PathBuf::from("/usr/bin/hog-devnode")),
+                    version: Some("0.1.0".into()),
+                    error: None,
+                },
+                dev_wallet_artifact: DevWalletArtifactStatus {
+                    available: true,
+                    valid: true,
+                    path: Some(PathBuf::from("/usr/share/groundhog/dev_wallet.rv32a")),
+                    sha256: Some("abc123".into()),
+                    error: None,
+                },
                 wasm_target: WasmTargetStatus::Installed,
                 wasm_opt: true,
                 registry_configured: true,

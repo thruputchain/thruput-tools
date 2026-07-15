@@ -1,8 +1,8 @@
 # Groundhog Developer Tools
 
 Off-chain developer tooling for Groundhog smart contracts: the `groundhog` CLI,
-JSON-RPC gateway, reusable server layer, signing library, typed client, simulator,
-benchmark harness, and canonical OpenRPC artifact.
+JSON-RPC gateway, hosted faucet, reusable server layer, signing library, typed
+client, simulator, benchmark harness, and canonical OpenRPC artifact.
 
 ## Quick Orientation
 
@@ -14,33 +14,60 @@ benchmark harness, and canonical OpenRPC artifact.
 
 ## Building on Groundhog
 
+### Install the CLI from this checkout
+
+From the repository root:
+
+```bash
+cargo install --path crates/tools/cli --locked --force
+groundhog --version
+```
+
+Cargo installs the binary under `~/.cargo/bin` by default. `--force` replaces
+an older checkout build if one is already installed.
+
+During early access, installing from this checkout and building generated
+projects both require access to the private Groundhog Cargo registry. Follow
+the invite instructions to authenticate Cargo first. This constraint will
+relax when the SDK ships publicly.
+
 ### Local Dev Path
 
 The CLI supervises `hog-devnode`, serves the public JSON-RPC surface, and runs
 the contract loop locally:
 
 ```bash
-cargo install --path crates/tools/cli
-groundhog init                   # one-time environment check
+export GROUNDHOG_DEVNODE_BINARY=/absolute/path/to/hog-devnode
+
+groundhog init                   # one-time guided setup
 groundhog new my-counter && cd my-counter
-groundhog build                   # RV32 artifact by default
+groundhog status                 # verify the project toolchain and local runtime artifacts
+groundhog build                  # RV32 artifact by default
 groundhog test                   # executor-backed RV32 tests
-
-# in another terminal
-groundhog node --hog-devnode-binary /path/to/hog-devnode
-groundhog deploy
-groundhog call my-counter get
-
-# one-command local-node integration path; add --target wasm for WASM artifacts
-GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode groundhog test --integration
-
-# differential gate: WASM and RV32 must both pass the same tests
-GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode groundhog test --integration --differential
 ```
 
-During early access, follow the invite instructions to authenticate Cargo with
-the private Groundhog registry before building generated projects. This
-constraint will relax when the SDK ships publicly.
+From the generated project directory, start the local node in one terminal:
+
+```bash
+groundhog node
+```
+
+Then deploy and call it from the same project directory in another terminal:
+
+```bash
+groundhog deploy
+groundhog call my-counter get
+```
+
+The integration path manages its own ephemeral local node:
+
+```bash
+# one-command local-node integration path; add --target wasm for WASM artifacts
+groundhog test --integration
+
+# differential gate: WASM and RV32 must both pass the same tests
+groundhog test --integration --differential
+```
 
 `groundhog node` is script-safe: human status or startup JSON goes to stdout;
 child logs stay on stderr. Use `-v` / `--verbose` for normal debugging and
@@ -112,12 +139,13 @@ hog-gateway-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz
 groundhog-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz
 rv32-lower-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz
 hogsim-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz
+groundhog-faucet-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz
 SHA256SUMS
 ```
 
-Each archive contains one app binary plus `README.md` and `LICENSE`. `hog-gateway`
-and `hogsim` are binary release artifacts only; `groundhog-rv32-lower` is also a
-published crate/library.
+Each archive contains one app binary plus `README.md` and `LICENSE`. `hog-gateway`,
+`hogsim`, and `groundhog-faucet` are binary release artifacts only;
+`groundhog-rv32-lower` is also a published crate/library.
 
 ### API Surface
 
@@ -185,8 +213,7 @@ Current and historical design notes for the JSON-RPC surface:
 The OpenRPC artifact uses its own SemVer in `info.version`, sourced from
 `groundhog_json_rpc_api::WIRE_FORMAT_VERSION`, rather than the Rust workspace
 version. SDKs should pin on `wireFormat` from `groundhog_version`;
-workspace releases such as `0.3.x` identify builds, not the JSON-RPC
-contract.
+workspace releases identify builds, not the JSON-RPC contract.
 
 ### Mini-Glossary
 
@@ -197,9 +224,9 @@ this repo's docs:
   local development.
 - `indexer` — receipt / event / transaction-status query plane.
 - `scheduler` — submit-tx + chain-tip plane.
-- `scheduler_coord`, `indexer_block_explorer`, `db_gateway`,
-  `view_gateway` — hog-devnode readiness endpoint keys. These name x23
-  services, not public JSON-RPC methods or JSON-RPC server planes.
+- `scheduler`, `indexer`, `dbGateway`, `viewGateway` — runtime-manifest
+  endpoint keys for internal x23 services. They are not public JSON-RPC
+  methods or JSON-RPC server planes.
 - `dev-N` — deterministic dev accounts (`dev-0` ... `dev-N`) the local
   dev backend funds and signs as.
 - `x23` — wire protocol between the supervisor and the `hog-devnode`
@@ -220,8 +247,11 @@ Workspace crates are grouped by boundary:
   hogd services.
 - [`crates/tools/`](crates/tools/) — developer-facing tools and supporting
   libraries.
+- [`crates/rv32/`](crates/rv32/) — RV32 artifact validation and ELF lowering.
 - [`crates/dev/`](crates/dev/) — local development, simulation, benchmark, and
   process-level test harnesses.
+- [`crates/faucet/`](crates/faucet/) — hosted network descriptor, airdrop, and
+  wallet-creation service.
 
 | Group | Crate | Description |
 |-------|-------|-------------|
@@ -236,6 +266,9 @@ Workspace crates are grouped by boundary:
 | x23 | [`x23-transport`](crates/x23/x23-transport/) | Shared x23 connection-pool helpers used by gateway and node-supervisor |
 | Tools | [`cli`](crates/tools/cli/) | `groundhog` CLI for the contract dev workflow |
 | Tools | [`signing`](crates/tools/signing/) | Off-chain transaction signing and construction |
+| RV32 | [`artifact`](crates/rv32/artifact/) | Canonical RV32 artifact format and validation |
+| RV32 | [`lower`](crates/rv32/lower/) | ELF-to-RV32 artifact lowerer and `rv32-lower` binary |
+| Service | [`faucet`](crates/faucet/) | Hosted network descriptor, airdrop, and wallet-creation service |
 | Dev | [`node-supervisor`](crates/dev/node-supervisor/) | `groundhog node` facade: supervises `hog-devnode` and serves JSON-RPC via `json-rpc-server` |
 | Dev | [`e2e-tests`](crates/dev/e2e-tests/) | Process-level JSON-RPC smoke tests |
 | Dev | [`bench`](crates/dev/bench/) | Benchmark harnesses |
