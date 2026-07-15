@@ -16,10 +16,13 @@ mod live {
     use groundhog_json_rpc_client::{GroundhogApiClient, HttpClientBuilder};
     use std::{env, path::Path};
 
-    // The CLI selects this ignored starter by its exact name. Keep the name;
-    // add contract-specific assertions here or add separate unignored tests.
+    // Ordinary Cargo leaves this ignored. `groundhog test --integration`
+    // activates it through the scaffold's build script.
     #[tokio::test]
-    #[ignore = "requires a local node; run via `groundhog test --integration`"]
+    #[cfg_attr(
+        not(groundhog_integration_runner),
+        ignore = "requires a local node; run via `groundhog test --integration`"
+    )]
     async fn integration_runner_provides_a_live_deployment() {
         if env::var("GROUNDHOG_INTEGRATION_TEST").as_deref() != Ok("1") {
             eprintln!("skipped: run with `groundhog test --integration`");

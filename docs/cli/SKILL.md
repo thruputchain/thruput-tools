@@ -57,6 +57,7 @@ tests/
   test_rv32.rs        # default executor-backed RV32 tests
   test_wasm.rs        # wasm executor tests
 Cargo.toml
+build.rs              # activates the RPC starter only for groundhog integration runs
 rust-toolchain.toml
 .cargo/
   config.toml         # host + wasm + rv32 defaults

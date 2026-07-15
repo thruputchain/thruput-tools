@@ -2,6 +2,7 @@ use crate::CliError;
 use std::fs;
 use std::path::Path;
 
+const BUILD_RS: &str = include_str!("../templates/build.rs.tmpl");
 const CARGO_TOML: &str = include_str!("../templates/Cargo.toml.tmpl");
 const CARGO_CONFIG: &str = include_str!("../templates/config.toml.tmpl");
 const CONTRACT_TOML: &str = include_str!("../templates/contract.toml.tmpl");
@@ -100,6 +101,7 @@ pub fn generate(dir: &Path, name: &str, template: &str) -> Result<(), CliError> 
     fs::create_dir_all(dir.join(".cargo"))?;
 
     fs::write(dir.join("Cargo.toml"), apply(CARGO_TOML, name))?;
+    fs::write(dir.join("build.rs"), BUILD_RS)?;
     fs::write(dir.join(".gitignore"), GITIGNORE)?;
     fs::write(dir.join("groundhog.toml"), apply(GROUNDHOG_TOML, name))?;
     fs::write(dir.join("rust-toolchain.toml"), apply(RUST_TOOLCHAIN, name))?;
