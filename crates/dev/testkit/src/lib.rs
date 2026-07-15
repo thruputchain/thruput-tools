@@ -38,7 +38,7 @@ pub use account::Deployed;
 pub use agent::{Agent, AgentContext, AgentId};
 pub use artifact::ArtifactKind;
 pub use clock::Clock;
-pub use contract::{ContractEntrypointID, entrypoint_id};
+pub use contract::{Contract, ContractEntrypointID, entrypoint_id};
 pub use error::{Result, TestkitError};
 pub use groundhog_node_supervisor::LogLevel;
 pub use logging::init_tracing;

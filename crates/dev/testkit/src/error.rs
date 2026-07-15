@@ -100,6 +100,13 @@ pub enum TestkitError {
         detail: String,
     },
 
+    /// Decoding a contract return value failed.
+    #[error("xdr decoding failed: {detail}")]
+    Decode {
+        /// Underlying error description.
+        detail: String,
+    },
+
     /// A deploy transaction did not execute successfully.
     #[error("deploy did not succeed: {detail}")]
     Deploy {
@@ -107,11 +114,27 @@ pub enum TestkitError {
         detail: String,
     },
 
+    /// A contract call or view did not return successfully.
+    #[error("contract {kind} did not return a value: {detail}")]
+    NoReturn {
+        /// Whether it was a `call` or a `view`.
+        kind: &'static str,
+        /// Description of the non-returning status.
+        detail: String,
+    },
+
     /// A receipt did not appear within the polling budget.
-    #[error("timed out waiting for receipt of `{tx_hash}`")]
+    ///
+    /// `status` reports what `getTransactionStatus` last knew about the
+    /// transaction, which usually explains the missing receipt: a scheduler
+    /// rejection, or a two-phase-commit conflict (for example a balance that
+    /// could not cover its own storage cost) that kept it out of every block.
+    #[error("timed out waiting for receipt of `{tx_hash}` ({status})")]
     ReceiptTimeout {
         /// The transaction hash that never produced a receipt.
         tx_hash: String,
+        /// The last observed transaction status, as a human-readable summary.
+        status: String,
     },
 
     /// A contract artifact could not be read from disk.
@@ -196,6 +219,12 @@ impl TestkitError {
 
     pub(crate) fn encode(error: impl std::fmt::Display) -> Self {
         Self::Encode {
+            detail: error.to_string(),
+        }
+    }
+
+    pub(crate) fn decode(error: impl std::fmt::Display) -> Self {
+        Self::Decode {
             detail: error.to_string(),
         }
     }

@@ -6,8 +6,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use groundhog_json_rpc_types::receipt::TransactionReceipt;
-use groundhog_xdr::types::{ContractAddress, SHA256Hash};
 use groundhog_xdr::contract::ContractEntrypointID;
+use groundhog_xdr::types::{ContractAddress, SHA256Hash};
 
 use crate::account::{Account, Deployed};
 use crate::artifact::{ArtifactKind, Registry};

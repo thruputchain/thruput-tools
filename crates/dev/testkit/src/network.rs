@@ -11,7 +11,7 @@ use groundhog_json_rpc_types::hex::{Hex0x, HexBytes};
 use groundhog_json_rpc_types::receipt::TransactionReceipt;
 use groundhog_json_rpc_types::runtime_manifest::RuntimeManifest;
 use groundhog_json_rpc_types::state::StorageItemRead;
-use groundhog_json_rpc_types::transaction::TxHash;
+use groundhog_json_rpc_types::transaction::{TransactionStatus, TxHash};
 use groundhog_json_rpc_types::view::{ViewRequest, ViewResponse};
 use groundhog_xdr::contract::ContractEntrypointID;
 use groundhog_xdr::types::ContractAddress;
@@ -126,6 +126,11 @@ impl Network {
     }
 
     /// Poll for a receipt until it appears or the polling budget elapses.
+    ///
+    /// On timeout the error carries a `getTransactionStatus` summary, which
+    /// usually explains the missing receipt (a scheduler rejection, or a
+    /// two-phase-commit conflict such as a balance that could not cover its own
+    /// storage cost) rather than leaving the caller with a bare timeout.
     pub async fn await_receipt(&self, tx_hash: TxHash) -> Result<TransactionReceipt> {
         for _ in 0..RECEIPT_POLL_ATTEMPTS {
             if let Some(receipt) = self.receipt(tx_hash).await? {
@@ -135,7 +140,27 @@ impl Network {
         }
         Err(TestkitError::ReceiptTimeout {
             tx_hash: format!("{tx_hash:?}"),
+            status: self.describe_status(tx_hash).await,
         })
+    }
+
+    /// Fetch a transaction's status.
+    pub async fn transaction_status(&self, tx_hash: TxHash) -> Result<TransactionStatus> {
+        self.require_client("getTransactionStatus")?
+            .get_transaction_status(tx_hash)
+            .await
+            .map_err(|e| TestkitError::rpc("getTransactionStatus", e))
+    }
+
+    /// Best-effort human summary of a transaction's status, for diagnostics.
+    ///
+    /// Never fails: a status query that errors is folded into the returned
+    /// string so it can be embedded directly in a timeout error.
+    async fn describe_status(&self, tx_hash: TxHash) -> String {
+        match self.transaction_status(tx_hash).await {
+            Ok(status) => describe_status(&status),
+            Err(e) => format!("status unavailable: {e}"),
+        }
     }
 
     /// Read one latest-committed storage item at `address`/`key`.
@@ -198,5 +223,29 @@ impl Network {
             .client
             .as_ref()
             .ok_or(TestkitError::Offline { operation })
+    }
+}
+
+/// Render a transaction status as a short diagnostic phrase.
+fn describe_status(status: &TransactionStatus) -> String {
+    match status {
+        TransactionStatus::Pending => "still pending; never committed within the polling budget".to_owned(),
+        TransactionStatus::Committed { height } => {
+            format!("committed at height {height:?}, but the receipt was not yet indexed")
+        }
+        TransactionStatus::Invalid { reason } => format!("rejected by the scheduler: {reason}"),
+        TransactionStatus::RecentFailure {
+            attempt_height,
+            conflict,
+        } => format!(
+            "dropped during two-phase commit at height {attempt_height:?}: {:?} conflict on \
+             contract {:?} (a balance that cannot cover its own storage cost reports as \
+             BoundsExceeded)",
+            conflict.code, conflict.address
+        ),
+        TransactionStatus::Unknown => {
+            "unknown; not found in the mempool or the indexer".to_owned()
+        }
+        _ => "unrecognized status from the node".to_owned(),
     }
 }

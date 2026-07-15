@@ -48,16 +48,9 @@ async fn read_counter(
     }
 }
 
-async fn bump_counter(
-    ctx: &mut AgentContext,
-    contract: ContractAddress,
-) -> Result<()> {
+async fn bump_counter(ctx: &mut AgentContext, contract: ContractAddress) -> Result<()> {
     let receipt = ctx
-        .call(
-            contract,
-            entrypoint_id(INTERFACE, VERSION, "bump"),
-            &[],
-        )
+        .call(contract, entrypoint_id(INTERFACE, VERSION, "bump"), &[])
         .await?;
     assert!(
         matches!(receipt.status, ExecStatus::Ok),
