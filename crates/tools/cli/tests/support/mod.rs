@@ -1,3 +1,18 @@
+#[cfg(unix)]
+#[allow(dead_code)]
+pub fn write_versioned_devnode(dir: &std::path::Path) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let binary = dir.join("hog-devnode");
+    std::fs::write(&binary, "#!/bin/sh\nprintf 'hog-devnode 0.1.12\\n'\n").unwrap();
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let contracts = dir.join("contracts");
+    std::fs::create_dir(&contracts).unwrap();
+    let artifact = groundhog_rv32_artifact::build_artifact(&[0; 4], &[], 0).unwrap();
+    std::fs::write(contracts.join("dev_wallet.rv32a"), artifact).unwrap();
+    binary
+}
+
 fn as_u32(value: usize) -> u32 {
     u32::try_from(value).expect("bug: test value fits in u32")
 }

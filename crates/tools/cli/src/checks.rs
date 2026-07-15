@@ -362,54 +362,7 @@ fn add_environment_findings(
         });
     }
 
-    if !environment.rust_toolchain.available {
-        let hint = environment.rust_toolchain.name.as_deref().map_or_else(
-            || Cow::Borrowed("install rustup and the Rust toolchain declared by the project"),
-            |toolchain| {
-                Cow::Owned(format!(
-                    "run `rustup toolchain install {toolchain} --component rust-src --target {}`",
-                    crate::build::RV32_TARGET_TRIPLE
-                ))
-            },
-        );
-        findings.push(Finding {
-            level: FindingLevel::Warn,
-            code: "rust_toolchain_unavailable",
-            message: environment
-                .rust_toolchain
-                .error
-                .clone()
-                .unwrap_or_else(|| "active Rust toolchain is unavailable".into()),
-            hint: Some(hint),
-        });
-    } else if project.config_path.is_some()
-        && (environment.rust_toolchain.rust_src == RustTargetStatus::Unknown
-            || environment.rv32_target == RustTargetStatus::Unknown)
-    {
-        findings.push(Finding {
-            level: FindingLevel::Warn,
-            code: "rust_toolchain_probe_failed",
-            message: environment
-                .rust_toolchain
-                .error
-                .clone()
-                .unwrap_or_else(|| "could not verify the active project toolchain".into()),
-            hint: Some(Cow::Borrowed(
-                "run `rustup toolchain list` and inspect the project's rust-toolchain.toml",
-            )),
-        });
-    } else if project.config_path.is_some()
-        && environment.rust_toolchain.rust_src == RustTargetStatus::Missing
-    {
-        findings.push(Finding {
-            level: FindingLevel::Warn,
-            code: "rust_src_unavailable",
-            message: "rust-src is not installed for the active project toolchain".into(),
-            hint: Some(Cow::Borrowed(
-                "run `rustup component add rust-src` from the project directory",
-            )),
-        });
-    }
+    add_rust_toolchain_findings(environment, project, findings);
 
     if !environment.registry_configured {
         findings.push(Finding {
@@ -450,6 +403,65 @@ fn add_environment_findings(
                 .unwrap_or_else(|| "dev_wallet.rv32a is unavailable".into()),
             hint: Some(Cow::Borrowed(
                 "install the dev-wallet artifact from the same groundhog-client build as hog-devnode",
+            )),
+        });
+    }
+}
+
+fn add_rust_toolchain_findings(
+    environment: &EnvironmentStatus,
+    project: &ProjectContext,
+    findings: &mut Vec<Finding>,
+) {
+    if !environment.rust_toolchain.available {
+        let hint = environment.rust_toolchain.name.as_deref().map_or_else(
+            || Cow::Borrowed("install rustup and the Rust toolchain declared by the project"),
+            |toolchain| {
+                Cow::Owned(format!(
+                    "run `rustup toolchain install {toolchain} --component rust-src --target {}`",
+                    crate::build::RV32_TARGET_TRIPLE
+                ))
+            },
+        );
+        findings.push(Finding {
+            level: FindingLevel::Warn,
+            code: "rust_toolchain_unavailable",
+            message: environment
+                .rust_toolchain
+                .error
+                .clone()
+                .unwrap_or_else(|| "active Rust toolchain is unavailable".into()),
+            hint: Some(hint),
+        });
+    }
+    if environment.rust_toolchain.available
+        && project.config_path.is_some()
+        && (environment.rust_toolchain.rust_src == RustTargetStatus::Unknown
+            || environment.rv32_target == RustTargetStatus::Unknown)
+    {
+        findings.push(Finding {
+            level: FindingLevel::Warn,
+            code: "rust_toolchain_probe_failed",
+            message: environment
+                .rust_toolchain
+                .error
+                .clone()
+                .unwrap_or_else(|| "could not verify the active project toolchain".into()),
+            hint: Some(Cow::Borrowed(
+                "run `rustup toolchain list` and inspect the project's rust-toolchain.toml",
+            )),
+        });
+    }
+    if environment.rust_toolchain.available
+        && project.config_path.is_some()
+        && environment.rust_toolchain.rust_src == RustTargetStatus::Missing
+    {
+        findings.push(Finding {
+            level: FindingLevel::Warn,
+            code: "rust_src_unavailable",
+            message: "rust-src is not installed for the active project toolchain".into(),
+            hint: Some(Cow::Borrowed(
+                "run `rustup component add rust-src` from the project directory",
             )),
         });
     }
@@ -538,8 +550,7 @@ fn unavailable_rust_environment(
 }
 
 fn installed_rust_toolchains() -> Result<(Vec<String>, Option<String>), String> {
-    let output = std::process::Command::new("rustup")
-        .args(["toolchain", "list"])
+    let output = installed_rust_toolchains_command()
         .output()
         .map_err(|error| format!("could not run rustup: {error}"))?;
     if !output.status.success() {
@@ -565,6 +576,20 @@ fn installed_rust_toolchains() -> Result<(Vec<String>, Option<String>), String> 
         }
     }
     Ok((installed, default))
+}
+
+fn installed_rust_toolchains_command() -> std::process::Command {
+    let mut command = std::process::Command::new("rustup");
+    let neutral_directory = rustup_neutral_directory(&std::env::temp_dir());
+    command
+        .args(["toolchain", "list"])
+        .env_remove("RUSTUP_TOOLCHAIN")
+        .current_dir(neutral_directory);
+    command
+}
+
+fn rustup_neutral_directory(path: &Path) -> PathBuf {
+    path.ancestors().last().unwrap_or(path).to_path_buf()
 }
 
 fn requested_rust_toolchain(
@@ -838,7 +863,9 @@ fn probe_devnode_version_with_timeout(
         .map_err(|error| format!("could not run {}: {error}", path.display()))?;
     let deadline = std::time::Instant::now() + timeout;
     let status = loop {
-        let captured_bytes = probe_output_size(&stdout_file, &stderr_file)?;
+        let captured_bytes = probe_output_size_or_terminate(&mut child, || {
+            probe_output_size(&stdout_file, &stderr_file)
+        })?;
         if captured_bytes >= OUTPUT_LIMIT {
             terminate_probe_processes(&mut child);
             return Err(format!(
@@ -990,6 +1017,13 @@ fn probe_output_size(stdout: &std::fs::File, stderr: &std::fs::File) -> Result<u
         .map_err(|error| format!("could not inspect devnode stderr: {error}"))?
         .len();
     Ok(stdout.saturating_add(stderr))
+}
+
+fn probe_output_size_or_terminate(
+    child: &mut std::process::Child,
+    probe: impl FnOnce() -> Result<u64, String>,
+) -> Result<u64, String> {
+    probe().inspect_err(|_| terminate_probe_processes(child))
 }
 
 fn read_probe_output(mut file: std::fs::File, stream: &str, limit: u64) -> Result<String, String> {
@@ -1205,14 +1239,29 @@ mod tests {
     }
 
     #[test]
-    fn project_toolchain_probe_failure_is_a_warning() {
+    fn installed_toolchain_probe_uses_the_filesystem_root() {
+        let command = installed_rust_toolchains_command();
+        let nested_temp_dir = std::env::temp_dir().join("project/target/tmp");
+        let filesystem_root = rustup_neutral_directory(&nested_temp_dir);
+
+        assert_eq!(command.get_current_dir(), Some(filesystem_root.as_path()));
+        assert!(filesystem_root.parent().is_none());
+        assert!(
+            command
+                .get_envs()
+                .any(|(name, value)| { name == "RUSTUP_TOOLCHAIN" && value.is_none() })
+        );
+    }
+
+    #[test]
+    fn project_toolchain_probe_failure_does_not_mask_missing_rust_src() {
         let environment = EnvironmentStatus {
             cargo: true,
             rust_toolchain: RustToolchainStatus {
                 available: true,
                 name: Some("nightly-test".into()),
-                rust_src: RustTargetStatus::Unknown,
-                error: Some("component probe failed".into()),
+                rust_src: RustTargetStatus::Missing,
+                error: Some("target probe failed".into()),
             },
             rv32_target: RustTargetStatus::Unknown,
             devnode: DevnodeStatus {
@@ -1244,7 +1293,10 @@ mod tests {
         assert!(findings.iter().any(|finding| {
             finding.code == "rust_toolchain_probe_failed"
                 && finding.level == FindingLevel::Warn
-                && finding.message == "component probe failed"
+                && finding.message == "target probe failed"
+        }));
+        assert!(findings.iter().any(|finding| {
+            finding.code == "rust_src_unavailable" && finding.level == FindingLevel::Warn
         }));
     }
 
@@ -1281,6 +1333,23 @@ mod tests {
 
         assert!(error.contains("timed out"));
         assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn devnode_output_probe_error_terminates_and_reaps_the_child() {
+        let mut command = std::process::Command::new("sh");
+        command.args(["-c", "while :; do :; done"]);
+        configure_probe_process(&mut command, 64 * 1024).unwrap();
+        let mut child = command.spawn().unwrap();
+
+        let error = probe_output_size_or_terminate(&mut child, || {
+            Err("could not inspect devnode stdout".into())
+        })
+        .unwrap_err();
+
+        assert_eq!(error, "could not inspect devnode stdout");
+        assert!(child.try_wait().unwrap().is_some());
     }
 
     #[cfg(unix)]

@@ -39,20 +39,6 @@ fn groundhog() -> Command {
     command
 }
 
-#[cfg(unix)]
-fn write_versioned_devnode(dir: &std::path::Path) -> std::path::PathBuf {
-    use std::os::unix::fs::PermissionsExt;
-
-    let binary = dir.join("hog-devnode");
-    std::fs::write(&binary, "#!/bin/sh\nprintf 'hog-devnode 0.1.12\\n'\n").unwrap();
-    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let contracts = dir.join("contracts");
-    std::fs::create_dir(&contracts).unwrap();
-    let artifact = groundhog_rv32_artifact::build_artifact(&[0; 4], &[], 0).unwrap();
-    std::fs::write(contracts.join("dev_wallet.rv32a"), artifact).unwrap();
-    binary
-}
-
 fn workspace_root() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -702,7 +688,7 @@ fn status_json_flattens_project_findings_into_warnings() {
 #[test]
 fn status_json_reports_reachable_devnode() {
     let tmp = TempDir::new().unwrap();
-    let devnode = write_versioned_devnode(tmp.path());
+    let devnode = support::write_versioned_devnode(tmp.path());
     let output = groundhog()
         .arg("--json")
         .arg("status")
@@ -759,7 +745,7 @@ fn quiet_status_exits_one_with_no_output_when_missing_state() {
 fn quiet_status_exits_zero_with_no_output_when_fully_configured() {
     let tmp = TempDir::new().unwrap();
     let cargo_home = tmp.path().join("cargo-home");
-    let devnode = write_versioned_devnode(tmp.path());
+    let devnode = support::write_versioned_devnode(tmp.path());
 
     unsafe {
         std::env::set_var("CARGO_HOME", &cargo_home);
