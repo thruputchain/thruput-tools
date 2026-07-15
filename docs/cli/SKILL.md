@@ -53,6 +53,7 @@ src/
   main.rs             # rv32 bin wrapper (entrypoints-gated, no_std/no_main)
 tests/
   test.rs             # native integration tests
+  integration.rs      # RPC tests run by groundhog test --integration
   test_rv32.rs        # default executor-backed RV32 tests
   test_wasm.rs        # wasm executor tests
 Cargo.toml
@@ -441,7 +442,9 @@ Meaning:
   deploys the built contract
   with `dev-0`, and runs `tests/integration.rs` with
   `GROUNDHOG_RPC_URL`, `GROUNDHOG_CONTRACT_ADDRESS`,
-  `GROUNDHOG_PROFILE=integration`, and `GROUNDHOG_DEFAULT_KEY=dev-0`.
+  `GROUNDHOG_PROFILE=integration`, `GROUNDHOG_DEFAULT_KEY=dev-0`, and an
+  optional `GROUNDHOG_RUNTIME_MANIFEST`. The profile and key values describe
+  the deployment context; integration tests connect directly to the RPC URL.
 
 ## Guidance for LLMs
 

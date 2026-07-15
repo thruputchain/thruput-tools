@@ -7,6 +7,7 @@ const CARGO_CONFIG: &str = include_str!("../templates/config.toml.tmpl");
 const CONTRACT_TOML: &str = include_str!("../templates/contract.toml.tmpl");
 const GITIGNORE: &str = include_str!("../templates/gitignore.tmpl");
 const GROUNDHOG_TOML: &str = include_str!("../templates/groundhog.toml.tmpl");
+const INTEGRATION_TEST: &str = include_str!("../templates/integration.rs.tmpl");
 const RUST_TOOLCHAIN: &str = include_str!("../templates/rust-toolchain.toml.tmpl");
 const RV32_MAIN: &str = include_str!("../templates/main.rs.tmpl");
 
@@ -107,6 +108,10 @@ pub fn generate(dir: &Path, name: &str, template: &str) -> Result<(), CliError> 
     fs::write(dir.join("src/lib.rs"), apply(lib_tmpl, name))?;
     fs::write(dir.join("src/implementation.rs"), apply(impl_tmpl, name))?;
     fs::write(dir.join("src/main.rs"), apply(RV32_MAIN, name))?;
+    fs::write(
+        dir.join("tests/integration.rs"),
+        apply(INTEGRATION_TEST, name),
+    )?;
     fs::write(dir.join("tests/test.rs"), apply(test_tmpl, name))?;
     fs::write(dir.join("tests/test_rv32.rs"), apply(test_rv32_tmpl, name))?;
     fs::write(dir.join("tests/test_wasm.rs"), apply(test_wasm_tmpl, name))?;

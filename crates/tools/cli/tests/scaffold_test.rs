@@ -18,6 +18,7 @@ fn scaffold_counter_creates_expected_files() {
     assert!(dir.join("src/lib.rs").exists());
     assert!(dir.join("src/implementation.rs").exists());
     assert!(dir.join("src/main.rs").exists());
+    assert!(dir.join("tests/integration.rs").exists());
     assert!(dir.join("tests/test.rs").exists());
     assert!(dir.join("tests/test_rv32.rs").exists());
     assert!(dir.join("tests/test_wasm.rs").exists());
@@ -27,6 +28,10 @@ fn scaffold_counter_creates_expected_files() {
     assert!(cargo.contains("registry = \"groundhog\""));
     assert!(!cargo.contains("sdk/spec"));
     assert!(cargo.contains(r#"sdk = { version = "0.17.1", registry = "groundhog" }"#));
+    assert!(cargo.contains("groundhog-integration-test = ["));
+    assert!(cargo.contains(r#"groundhog-json-rpc-client = { version = "0.5""#));
+    assert!(cargo.contains("optional = true"));
+    assert!(cargo.contains(r#"tokio = { version = "1", features = ["macros", "rt-multi-thread"]"#));
     assert!(!cargo.contains(r#"features = ["storage"]"#));
     // RV32 bin wrapper target: the bin name must be the snake-case package
     // name because `groundhog build --target rv32` looks for the ELF at
@@ -95,6 +100,17 @@ fn scaffold_counter_creates_expected_files() {
     assert!(test.contains("tx.call(&caller).run(move ||"));
     assert!(test.contains("MY_COUNTER_NONCE"));
 
+    let integration = fs::read_to_string(dir.join("tests/integration.rs")).unwrap();
+    assert!(integration.contains("groundhog test --integration"));
+    assert!(integration.contains("#[ignore ="));
+    assert!(integration.contains("GROUNDHOG_RPC_URL"));
+    assert!(integration.contains("GROUNDHOG_INTEGRATION_TEST"));
+    assert!(integration.contains("GROUNDHOG_CONTRACT_ADDRESS"));
+    assert!(integration.contains("GROUNDHOG_RUNTIME_MANIFEST"));
+    assert!(integration.contains("HttpClientBuilder"));
+    assert!(integration.contains(".chain_tip()"));
+    assert!(integration.contains("fn integration_runner_provides_a_live_deployment()"));
+
     let test_wasm = fs::read_to_string(dir.join("tests/test_wasm.rs")).unwrap();
     assert!(test_wasm.contains("load_wasm_contract"));
     assert!(test_wasm.contains("CARGO_TARGET_DIR"));
@@ -128,6 +144,7 @@ fn scaffold_stub_has_empty_contract() {
 
     assert!(dir.join("tests/test_rv32.rs").exists());
     assert!(dir.join("tests/test_wasm.rs").exists());
+    assert!(dir.join("tests/integration.rs").exists());
     let test_rv32 = fs::read_to_string(dir.join("tests/test_rv32.rs")).unwrap();
     assert!(test_rv32.contains("load_rv32_contract"));
     assert!(test_rv32.contains("CARGO_TARGET_DIR"));

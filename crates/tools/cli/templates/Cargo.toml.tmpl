@@ -24,9 +24,14 @@ entrypoints = []
 rv32-entrypoints = ["entrypoints"]
 default = ["dev"]
 dev = ["sdk/dev"]
+groundhog-integration-test = ["dep:groundhog-json-rpc-client", "dep:tokio"]
 
 [dependencies]
 sdk = { version = "0.17.1", registry = "groundhog" }
+
+[target.'cfg(not(any(target_arch = "wasm32", target_arch = "riscv32")))'.dependencies]
+groundhog-json-rpc-client = { version = "0.5", registry = "groundhog", optional = true }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"], optional = true }
 
 [dev-dependencies]
 {{PROJECT_NAME}} = { path = ".", features = ["dev"] }
