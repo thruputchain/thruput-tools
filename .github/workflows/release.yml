@@ -146,6 +146,7 @@ jobs:
 
       - name: Generate aggregate checksums
         run: |
+          set -euo pipefail
           cd artifacts
           archives=(*.tar.gz)
           test "${#archives[@]}" -eq 10
