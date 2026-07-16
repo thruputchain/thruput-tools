@@ -273,4 +273,48 @@ impl AgentContext {
     {
         self.mailbox.try_recv().map(Envelope::decode)
     }
+
+    /// Wait for the next message from the agent named `from`, decoding its CXS
+    /// payload as `T`.
+    ///
+    /// Messages from other senders that arrive first are held for later
+    /// [`recv`](Self::recv) / `recv_from` calls rather than dropped. Returns
+    /// `None` once all peers finish without a matching message; the inner
+    /// `Result` is `Err` when the payload does not decode as `T`.
+    pub async fn recv_from<T>(&mut self, from: &str) -> Option<Result<Message<T>>>
+    where
+        T: for<'r> ReadXDR<'r>,
+    {
+        self.mailbox.recv_from(from).await.map(Envelope::decode)
+    }
+
+    /// Take a pending message from the agent named `from` without waiting,
+    /// decoding its payload as `T`.
+    pub fn try_recv_from<T>(&mut self, from: &str) -> Option<Result<Message<T>>>
+    where
+        T: for<'r> ReadXDR<'r>,
+    {
+        self.mailbox.try_recv_from(from).map(Envelope::decode)
+    }
+
+    /// Wait for the next message from any of the agents named in `from`,
+    /// decoding its CXS payload as `T`. [`Message::from`] identifies which one.
+    ///
+    /// Like [`recv_from`](Self::recv_from), messages from senders outside the
+    /// set are held for later calls rather than dropped.
+    pub async fn recv_from_any<T>(&mut self, from: &[&str]) -> Option<Result<Message<T>>>
+    where
+        T: for<'r> ReadXDR<'r>,
+    {
+        self.mailbox.recv_from_any(from).await.map(Envelope::decode)
+    }
+
+    /// Take a pending message from any of the agents named in `from` without
+    /// waiting, decoding its payload as `T`.
+    pub fn try_recv_from_any<T>(&mut self, from: &[&str]) -> Option<Result<Message<T>>>
+    where
+        T: for<'r> ReadXDR<'r>,
+    {
+        self.mailbox.try_recv_from_any(from).map(Envelope::decode)
+    }
 }
