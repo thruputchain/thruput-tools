@@ -6,13 +6,13 @@
 //! a real `hog-devnode` and is `#[ignore]`d.
 
 use groundhog_testkit::{
-    Agent, ArtifactKind, LocalTargetConfig, Scenario, TargetConfig, TestkitError,
+    Agent, ArtifactKind, LocalNetworkConfig, NetworkConfig, Scenario, TestkitError,
 };
 
 #[tokio::test]
 async fn offline_two_agents_exchange_a_message() {
     let scenario = Scenario::builder("two-agents-v1")
-        .target(TargetConfig::offline(2))
+        .network(NetworkConfig::offline(2))
         .build()
         .await
         .expect("offline scenario builds");
@@ -44,7 +44,7 @@ async fn offline_two_agents_exchange_a_message() {
 #[tokio::test]
 async fn offline_agents_get_distinct_accounts() {
     let scenario = Scenario::builder("accounts-v1")
-        .target(TargetConfig::offline(3))
+        .network(NetworkConfig::offline(3))
         .build()
         .await
         .expect("offline scenario builds");
@@ -70,7 +70,7 @@ async fn offline_agents_get_distinct_accounts() {
 #[tokio::test]
 async fn offline_chain_verbs_report_offline() {
     let scenario = Scenario::builder("offline-verbs")
-        .target(TargetConfig::offline(1))
+        .network(NetworkConfig::offline(1))
         .build()
         .await
         .expect("offline scenario builds");
@@ -93,7 +93,7 @@ async fn offline_chain_verbs_report_offline() {
 #[tokio::test]
 async fn too_many_agents_for_available_accounts_is_an_error() {
     let scenario = Scenario::builder("too-few")
-        .target(TargetConfig::offline(1))
+        .network(NetworkConfig::offline(1))
         .build()
         .await
         .expect("offline scenario builds");
@@ -123,7 +123,7 @@ async fn too_many_agents_for_available_accounts_is_an_error() {
 #[tokio::test]
 async fn existing_target_missing_manifest_fails_build() {
     let result = Scenario::builder("missing-manifest")
-        .target(TargetConfig::existing(
+        .network(NetworkConfig::existing(
             "http://127.0.0.1:9545",
             "/nonexistent/runtime-manifest.json",
         ))
@@ -136,7 +136,7 @@ async fn existing_target_missing_manifest_fails_build() {
 #[tokio::test]
 async fn registry_exposes_hash_and_registration_state() {
     let scenario = Scenario::builder("registry-v1")
-        .target(TargetConfig::offline(1))
+        .network(NetworkConfig::offline(1))
         .artifact_bytes(
             "counter",
             b"fake-contract-bytes".to_vec(),
@@ -172,7 +172,7 @@ async fn registry_exposes_hash_and_registration_state() {
 #[tokio::test]
 async fn duplicate_artifact_name_fails_build() {
     let result = Scenario::builder("dupe")
-        .target(TargetConfig::offline(1))
+        .network(NetworkConfig::offline(1))
         .artifact_bytes("c", b"a".to_vec(), ArtifactKind::Wasm)
         .artifact_bytes("c", b"b".to_vec(), ArtifactKind::Rv32)
         .build()
@@ -187,7 +187,7 @@ async fn duplicate_artifact_name_fails_build() {
 #[tokio::test]
 async fn unknown_artifact_extension_fails_build() {
     let result = Scenario::builder("ext")
-        .target(TargetConfig::offline(1))
+        .network(NetworkConfig::offline(1))
         .artifact("weird", "contract.txt")
         .build()
         .await;
@@ -201,7 +201,7 @@ async fn unknown_artifact_extension_fails_build() {
 #[tokio::test]
 async fn missing_artifact_file_fails_build() {
     let result = Scenario::builder("missing-file")
-        .target(TargetConfig::offline(1))
+        .network(NetworkConfig::offline(1))
         .artifact("counter", "/nonexistent/counter.rv32a")
         .build()
         .await;
@@ -215,13 +215,13 @@ async fn missing_artifact_file_fails_build() {
 #[tokio::test]
 #[ignore = "requires a hog-devnode binary (set GROUNDHOG_DEVNODE_BINARY)"]
 async fn local_two_agents_live_smoke() {
-    let mut config = LocalTargetConfig::default();
+    let mut config = LocalNetworkConfig::default();
     if let Ok(path) = std::env::var("GROUNDHOG_DEVNODE_BINARY") {
         config.hog_devnode_binary = Some(path.into());
     }
 
     let scenario = Scenario::builder("local-live-smoke")
-        .target(TargetConfig::local(config))
+        .network(NetworkConfig::local(config))
         .build()
         .await
         .expect("local node starts and advertises a runtime manifest");

@@ -15,24 +15,23 @@ use crate::clock::Clock;
 use crate::error::{Result, TestkitError};
 use crate::mailbox::{Envelope, Mailbox};
 use crate::manifest::{AccountSource, load_runtime_manifest};
-use crate::network::Network;
+use crate::network::{LocalNetworkConfig, Network, NetworkConfig};
 use crate::nonce::NonceNamespace;
 use crate::rng::AgentRng;
-use crate::target::{LocalTargetConfig, TargetConfig};
 
 /// Builder for a [`Scenario`]. Every setting is explicit.
 #[derive(Debug)]
 pub struct ScenarioBuilder {
     seed: String,
-    target: Option<TargetConfig>,
+    network: Option<NetworkConfig>,
     artifacts: Vec<ArtifactSpec>,
 }
 
 impl ScenarioBuilder {
-    /// Set the target the scenario runs against. Required.
+    /// Set the network the scenario runs against. Required.
     #[must_use]
-    pub fn target(mut self, target: TargetConfig) -> Self {
-        self.target = Some(target);
+    pub fn network(mut self, network: NetworkConfig) -> Self {
+        self.network = Some(network);
         self
     }
 
@@ -82,11 +81,11 @@ impl ScenarioBuilder {
         self
     }
 
-    /// Acquire the target, load artifacts, and produce a ready [`Scenario`].
+    /// Acquire the network, load artifacts, and produce a ready [`Scenario`].
     pub async fn build(self) -> Result<Scenario> {
-        let target = self.target.ok_or(TestkitError::NoTarget)?;
+        let config = self.network.ok_or(TestkitError::NoNetwork)?;
         let artifacts = Arc::new(Registry::from_specs(self.artifacts)?);
-        let (network, accounts, guard) = acquire_target(target).await?;
+        let (network, accounts, guard) = acquire_network(config).await?;
         Ok(Scenario {
             namespace: NonceNamespace::from_seed(&self.seed),
             seed: self.seed,
@@ -94,7 +93,7 @@ impl ScenarioBuilder {
             clock: Clock::new(),
             accounts,
             artifacts,
-            target: guard,
+            guard,
         })
     }
 }
@@ -102,7 +101,7 @@ impl ScenarioBuilder {
 /// A ready scenario: an explicit fixture the test holds.
 ///
 /// Dropping the scenario tears down anything the harness created for the
-/// target (a managed local node is force-killed (`SIGKILL`) as a backstop);
+/// network (a managed local node is force-killed (`SIGKILL`) as a backstop);
 /// [`Scenario::stop`] does the same gracefully and reports teardown errors.
 #[derive(Debug)]
 pub struct Scenario {
@@ -112,7 +111,7 @@ pub struct Scenario {
     accounts: AccountSource,
     artifacts: Arc<Registry>,
     namespace: NonceNamespace,
-    target: TargetGuard,
+    guard: NetworkGuard,
 }
 
 impl Scenario {
@@ -121,7 +120,7 @@ impl Scenario {
     pub fn builder(seed: impl Into<String>) -> ScenarioBuilder {
         ScenarioBuilder {
             seed: seed.into(),
-            target: None,
+            network: None,
             artifacts: Vec::new(),
         }
     }
@@ -230,11 +229,11 @@ impl Scenario {
         Ok(ScenarioReport { outcomes })
     }
 
-    /// Tear the target down gracefully, reporting any teardown error.
+    /// Tear the network down gracefully, reporting any teardown error.
     pub async fn stop(self) -> Result<()> {
-        let Scenario { target, .. } = self;
-        match target {
-            TargetGuard::Local(handle) => {
+        let Scenario { guard, .. } = self;
+        match guard {
+            NetworkGuard::Local(handle) => {
                 handle
                     .stop()
                     .await
@@ -242,15 +241,15 @@ impl Scenario {
                         detail: e.to_string(),
                     })?;
             }
-            TargetGuard::Existing => {}
+            NetworkGuard::Existing => {}
         }
         Ok(())
     }
 }
 
-async fn acquire_target(target: TargetConfig) -> Result<(Network, AccountSource, TargetGuard)> {
-    match target {
-        TargetConfig::Existing {
+async fn acquire_network(config: NetworkConfig) -> Result<(Network, AccountSource, NetworkGuard)> {
+    match config {
+        NetworkConfig::Existing {
             rpc_url,
             runtime_manifest,
         } => {
@@ -259,10 +258,10 @@ async fn acquire_target(target: TargetConfig) -> Result<(Network, AccountSource,
             Ok((
                 network,
                 AccountSource::Manifest(Box::new(manifest)),
-                TargetGuard::Existing,
+                NetworkGuard::Existing,
             ))
         }
-        TargetConfig::Local(config) => {
+        NetworkConfig::Local(config) => {
             let handle = start_local(config).await?;
             let rpc_url = format!("http://{}", handle.rpc_addr());
             let manifest = handle
@@ -274,18 +273,18 @@ async fn acquire_target(target: TargetConfig) -> Result<(Network, AccountSource,
             Ok((
                 network,
                 AccountSource::Manifest(Box::new(manifest)),
-                TargetGuard::Local(Box::new(handle)),
+                NetworkGuard::Local(Box::new(handle)),
             ))
         }
-        TargetConfig::Offline { accounts } => Ok((
+        NetworkConfig::Offline { accounts } => Ok((
             Network::offline(),
             AccountSource::Offline { count: accounts },
-            TargetGuard::Existing,
+            NetworkGuard::Existing,
         )),
     }
 }
 
-async fn start_local(config: LocalTargetConfig) -> Result<NodeSupervisorHandle> {
+async fn start_local(config: LocalNetworkConfig) -> Result<NodeSupervisorHandle> {
     let mut hogd = HogdDevConfig::default()
         .with_dev_account_count(config.dev_account_count)
         .with_dev_account_seed(config.dev_account_seed)
@@ -312,13 +311,14 @@ async fn start_local(config: LocalTargetConfig) -> Result<NodeSupervisorHandle> 
         })
 }
 
-/// Owns resources the harness created for the target and releases them on drop.
+/// Owns resources the harness created for the network and releases them on
+/// drop.
 ///
-/// The `existing` and `offline` providers own nothing. The `local` provider
-/// owns the node handle; dropping it force-kills the child (`SIGKILL`) as a
+/// The `existing` and `offline` networks own nothing. The `local` network owns
+/// the node handle; dropping it force-kills the child (`SIGKILL`) as a
 /// backstop, while [`Scenario::stop`] shuts it down gracefully.
 #[derive(Debug)]
-enum TargetGuard {
+enum NetworkGuard {
     Existing,
     Local(Box<NodeSupervisorHandle>),
 }

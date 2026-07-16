@@ -7,9 +7,9 @@ pub type Result<T, E = TestkitError> = std::result::Result<T, E>;
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum TestkitError {
-    /// A scenario was built without a target configuration.
-    #[error("no target configured for the scenario")]
-    NoTarget,
+    /// A scenario was built without a network configuration.
+    #[error("no network configured for the scenario")]
+    NoNetwork,
 
     /// A JSON-RPC call to the target failed.
     #[error("rpc `{method}` failed: {detail}")]

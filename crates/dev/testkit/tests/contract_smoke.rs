@@ -13,7 +13,7 @@ use groundhog_testkit::rpc_types::receipt::ExecStatus;
 use groundhog_testkit::rpc_types::view::RootInvocationOutput;
 use groundhog_testkit::xdr::types::ContractAddress;
 use groundhog_testkit::{
-    Agent, AgentContext, LocalTargetConfig, Result, Scenario, TargetConfig, entrypoint_id,
+    Agent, AgentContext, LocalNetworkConfig, NetworkConfig, Result, Scenario, entrypoint_id,
 };
 
 /// `caller-counter`'s interface identity, from which method selectors derive.
@@ -71,7 +71,7 @@ async fn caller_counter_deploy_call_read() {
         return;
     };
 
-    let mut config = LocalTargetConfig::default();
+    let mut config = LocalNetworkConfig::default();
     // config.log_level = Some(groundhog_testkit::LogLevel::Trace);
     if let Ok(path) = std::env::var("GROUNDHOG_DEVNODE_BINARY") {
         config.hog_devnode_binary = Some(path.into());
@@ -81,7 +81,7 @@ async fn caller_counter_deploy_call_read() {
     }
 
     let scenario = Scenario::builder("caller-counter-smoke")
-        .target(TargetConfig::local(config))
+        .network(NetworkConfig::local(config))
         .artifact("caller-counter", artifact)
         .build()
         .await

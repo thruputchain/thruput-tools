@@ -1,7 +1,7 @@
-//! `groundhog-testkit`: a harness for writing multi-agent integration tests as
-//! ordinary application code.
+//! A harness for writing multi-agent integration tests as ordinary application
+//! code.
 //!
-//! A test builds a [`Scenario`] against an explicit [`TargetConfig`], hands it
+//! A test builds a [`Scenario`] against an explicit [`NetworkConfig`], hands it
 //! a set of [`Agent`]s, and asserts on what they observe. Scenarios are plain
 //! `#[tokio::test]` functions; the fixture is an explicit value the test holds
 //! and tears down.
@@ -14,9 +14,9 @@
 //! [`deploy`]: AgentContext::deploy
 //! [`call`]: AgentContext::call
 //!
-//! Targets: [`TargetConfig::existing`] attaches to a running node,
-//! [`TargetConfig::local`] launches and owns an ephemeral `hog-devnode`, and
-//! [`TargetConfig::offline`] runs agents with locally-derived accounts and no
+//! Networks: [`NetworkConfig::existing`] attaches to a running node,
+//! [`NetworkConfig::local`] launches and owns an ephemeral `hog-devnode`, and
+//! [`NetworkConfig::offline`] runs agents with locally-derived accounts and no
 //! chain (for coordination/timing/messaging tests). See `docs/testkit/DESIGN.md`.
 
 mod account;
@@ -32,7 +32,6 @@ pub mod network;
 mod nonce;
 pub mod rng;
 pub mod scenario;
-pub mod target;
 
 pub use account::Deployed;
 pub use agent::{Agent, AgentContext, AgentId};
@@ -43,10 +42,9 @@ pub use error::{Result, TestkitError};
 pub use groundhog_node_supervisor::LogLevel;
 pub use logging::init_tracing;
 pub use mailbox::{Envelope, Mailbox, Message};
-pub use network::Network;
+pub use network::{LocalNetworkConfig, Network, NetworkConfig};
 pub use rng::AgentRng;
 pub use scenario::{AgentOutcome, Scenario, ScenarioBuilder, ScenarioReport};
-pub use target::{LocalTargetConfig, TargetConfig};
 
 // Re-exports so agent code can name RPC/XDR types and encode calldata without
 // taking direct dependencies on these crates.
