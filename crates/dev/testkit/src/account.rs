@@ -19,7 +19,7 @@ use crate::network::Network;
 use crate::nonce::NonceNamespace;
 
 /// Absolute block height at which harness-built transactions expire. Chosen far
-/// enough ahead that a short scenario never reaches it. Mirrors `hogsim`.
+/// enough ahead that a short scenario never reaches it.
 const EXPIRY_HEIGHT: i64 = 10_000_000;
 
 /// Result of a contract deploy.

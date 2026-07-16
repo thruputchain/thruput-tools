@@ -3,8 +3,7 @@
 //! Every scenario derives a run-unique 32-bit namespace from its seed. Each
 //! agent's account uses that namespace as the high 32 bits of its `u64` nonce
 //! and its own per-account sequence as the low 32 bits, so concurrent agents
-//! and reruns against a fresh target never collide. This mirrors the scheme
-//! `hogsim` uses.
+//! and reruns against a fresh target never collide.
 
 use sha2::{Digest, Sha256};
 

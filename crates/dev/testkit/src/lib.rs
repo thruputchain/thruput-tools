@@ -2,9 +2,8 @@
 //! code.
 //!
 //! A test builds a [`Scenario`] against an explicit [`NetworkConfig`], hands it
-//! a set of [`Agent`]s, and asserts on what they observe. Scenarios are plain
-//! `#[tokio::test]` functions; the fixture is an explicit value the test holds
-//! and tears down.
+//! a set of [`Agent`]s, and asserts on what they observe. Test scenarios are
+//! run in `#[tokio::test]` functions.
 //!
 //! Each agent is assigned a funded dev account and can [`deploy`] contracts and
 //! [`call`] them through its dev wallet, await receipts, and read chain state,
