@@ -114,6 +114,18 @@ pub enum TestkitError {
         detail: String,
     },
 
+    /// A contract call executed but its status was not `Ok`.
+    ///
+    /// Carries the method name; add call-site context with `map_err` where
+    /// that alone does not identify which call reverted.
+    #[error("contract call to `{method}` reverted: {status}")]
+    Reverted {
+        /// The method that was called.
+        method: String,
+        /// Description of the failing execution status.
+        status: String,
+    },
+
     /// A contract call or view did not return successfully.
     #[error("contract {kind} did not return a value: {detail}")]
     NoReturn {

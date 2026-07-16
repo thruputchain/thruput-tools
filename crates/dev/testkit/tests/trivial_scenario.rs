@@ -22,13 +22,15 @@ async fn offline_two_agents_exchange_a_message() {
             Agent::new("alice", |mut ctx| async move {
                 // Draw from the deterministic per-agent stream, then greet Bob.
                 let nonce = ctx.rng().next_u64();
-                ctx.send_to("bob", nonce.to_le_bytes().to_vec())?;
+                ctx.send("bob", &nonce)?;
                 Ok(())
             }),
             Agent::new("bob", |mut ctx| async move {
-                let msg = ctx.recv().await.expect("alice sends exactly one message");
+                let msg = ctx
+                    .recv::<u64>()
+                    .await
+                    .expect("alice sends exactly one message")?;
                 assert_eq!(msg.from, "alice");
-                assert_eq!(msg.bytes.len(), 8, "the nonce is a little-endian u64");
                 Ok(())
             }),
         ])
@@ -229,13 +231,14 @@ async fn local_two_agents_live_smoke() {
             Agent::new("alice", |ctx| async move {
                 // Prove the RPC client works end to end.
                 let _tip = ctx.network().chain_tip().await?;
-                ctx.send_to("bob", b"hi".to_vec())?;
+                ctx.send("bob", &"hi".to_string())?;
                 Ok(())
             }),
             Agent::new("bob", |mut ctx| async move {
                 let _tip = ctx.network().chain_tip().await?;
-                let msg = ctx.recv().await.expect("alice greets bob");
+                let msg = ctx.recv::<String>().await.expect("alice greets bob")?;
                 assert_eq!(msg.from, "alice");
+                assert_eq!(msg.body, "hi");
                 Ok(())
             }),
         ])

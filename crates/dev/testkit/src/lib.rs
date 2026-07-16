@@ -42,7 +42,7 @@ pub use contract::{Contract, ContractEntrypointID, entrypoint_id};
 pub use error::{Result, TestkitError};
 pub use groundhog_node_supervisor::LogLevel;
 pub use logging::init_tracing;
-pub use mailbox::{Envelope, Mailbox};
+pub use mailbox::{Envelope, Mailbox, Message};
 pub use network::Network;
 pub use rng::AgentRng;
 pub use scenario::{AgentOutcome, Scenario, ScenarioBuilder, ScenarioReport};

@@ -11,9 +11,11 @@ use groundhog_xdr::types::{ContractAddress, SHA256Hash};
 
 use crate::account::{Account, Deployed};
 use crate::artifact::{ArtifactKind, Registry};
+use xdrs::{ReadXDR, WriteXDR};
+
 use crate::clock::Clock;
-use crate::error::Result;
-use crate::mailbox::{Envelope, Mailbox};
+use crate::error::{Result, TestkitError};
+use crate::mailbox::{Envelope, Mailbox, Message};
 use crate::network::Network;
 use crate::rng::AgentRng;
 
@@ -243,18 +245,32 @@ impl AgentContext {
         &mut self.rng
     }
 
-    /// Send `bytes` to another agent by name.
-    pub fn send_to(&self, to: &str, bytes: impl Into<Vec<u8>>) -> Result<()> {
+    /// CXS-encode `msg` and send it to the agent named `to`.
+    pub fn send<T>(&self, to: &str, msg: &T) -> Result<()>
+    where
+        T: WriteXDR + ?Sized,
+    {
+        let bytes = xdrs::cxs::encode(msg).map_err(TestkitError::encode)?;
         self.mailbox.send_to(to, bytes)
     }
 
-    /// Wait for the next inbound message, or `None` once all peers finish.
-    pub async fn recv(&mut self) -> Option<Envelope> {
-        self.mailbox.recv().await
+    /// Wait for the next inbound message, decoding its CXS payload as `T`.
+    ///
+    /// Returns `None` once all peers finish; the inner `Result` is `Err` when
+    /// the payload does not decode as `T`.
+    pub async fn recv<T>(&mut self) -> Option<Result<Message<T>>>
+    where
+        T: for<'r> ReadXDR<'r>,
+    {
+        self.mailbox.recv().await.map(Envelope::decode)
     }
 
-    /// Take a pending inbound message without waiting.
-    pub fn try_recv(&mut self) -> Option<Envelope> {
-        self.mailbox.try_recv()
+    /// Take a pending inbound message without waiting, decoding its payload
+    /// as `T`.
+    pub fn try_recv<T>(&mut self) -> Option<Result<Message<T>>>
+    where
+        T: for<'r> ReadXDR<'r>,
+    {
+        self.mailbox.try_recv().map(Envelope::decode)
     }
 }
