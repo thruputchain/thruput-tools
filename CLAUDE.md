@@ -193,6 +193,17 @@ or cache-write errors, rerun the same command with escalation rather than
 rewriting the workflow. Use absolute paths for `hog-devnode` because quoted `~`
 does not expand.
 
+For the `groundhog-testkit` live contract smoke, build the `caller-counter`
+fixture from a `groundhog-examples` checkout and run the ignored contract test.
+Its `local` provider launches and owns `hog-devnode` in-process through the
+supervisor (not `groundhog node`) and keeps no PID file:
+
+```bash
+GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode \
+GROUNDHOG_EXAMPLES_ROOT=/path/to/groundhog-examples \
+scripts/smoke-testkit-local.sh
+```
+
 For simulator existing-target work, `hogsim` can still run against an
 already-started target:
 

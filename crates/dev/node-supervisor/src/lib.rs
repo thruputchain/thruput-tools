@@ -21,7 +21,9 @@ mod view_backend;
 #[cfg(test)]
 mod test_support;
 
-pub use config::{BlockDriverConfig, BlockDriverMode, HogdDevConfig, NodeSupervisorConfig};
+pub use config::{
+    BlockDriverConfig, BlockDriverMode, HogdDevConfig, LogLevel, NodeSupervisorConfig,
+};
 pub use error::NodeSupervisorError;
 pub use hogd_dev::{
     DEFAULT_HOGD_DEV_BINARY, DEVNODE_BINARY_ENV, HogdDevEndpoints, HogdDevProcess,

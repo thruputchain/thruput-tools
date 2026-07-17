@@ -19,6 +19,7 @@ members = [
     "crates/dev/e2e-tests",
     "crates/dev/bench",
     "crates/dev/sim",
+    "crates/dev/testkit",
 ]
 
 [workspace.package]

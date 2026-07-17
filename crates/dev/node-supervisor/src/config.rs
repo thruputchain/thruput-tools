@@ -221,6 +221,31 @@ pub enum BlockDriverMode {
     Interval,
 }
 
+/// Log verbosity level for hog-devnode
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum LogLevel {
+    Critical,
+    Error,
+    #[default]
+    Warn,
+    Info,
+    Debug,
+    Trace,
+}
+
+impl LogLevel {
+    pub fn as_str(&self) -> &str {
+        match self {
+            LogLevel::Critical => "critical",
+            LogLevel::Error => "error",
+            LogLevel::Warn => "warn",
+            LogLevel::Info => "info",
+            LogLevel::Debug => "debug",
+            LogLevel::Trace => "trace",
+        }
+    }
+}
+
 /// Configuration for the supervised hogd-dev process.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -230,6 +255,8 @@ pub struct HogdDevConfig {
     /// When unset, the supervisor falls back to the documented hogd-dev binary
     /// lookup order.
     pub binary_path: Option<PathBuf>,
+    /// Log level to request from hogd-dev
+    pub log_level: Option<LogLevel>,
     /// Host address hogd-dev should bind its internal services to.
     pub listen_host: String,
     /// Grace period after SIGTERM before the supervisor escalates to SIGKILL.
@@ -253,6 +280,7 @@ impl Default for HogdDevConfig {
     fn default() -> Self {
         Self {
             binary_path: None,
+            log_level: None,
             listen_host: DEFAULT_HOGD_DEV_LISTEN_HOST.to_string(),
             shutdown_grace: DEFAULT_HOGD_DEV_SHUTDOWN_GRACE,
             startup_timeout: DEFAULT_HOGD_DEV_STARTUP_TIMEOUT,
@@ -269,6 +297,13 @@ impl HogdDevConfig {
     #[must_use]
     pub fn with_binary_path(mut self, binary_path: impl Into<PathBuf>) -> Self {
         self.binary_path = Some(binary_path.into());
+        self
+    }
+
+    /// Return a copy with an explicit hogd-dev log level.
+    #[must_use]
+    pub fn with_log_level(mut self, log_level: LogLevel) -> Self {
+        self.log_level = Some(log_level);
         self
     }
 
