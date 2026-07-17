@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use groundhog_node_supervisor::{HogdDevConfig, NodeSupervisorConfig, NodeSupervisorHandle};
 use tokio::sync::mpsc;
@@ -87,12 +88,12 @@ impl ScenarioBuilder {
         let artifacts = Arc::new(Registry::from_specs(self.artifacts)?);
         let (network, accounts, guard) = acquire_network(config).await?;
         Ok(Scenario {
-            namespace: NonceNamespace::from_seed(&self.seed),
             seed: self.seed,
             network,
             clock: Clock::new(),
             accounts,
             artifacts,
+            runs: AtomicU32::new(0),
             guard,
         })
     }
@@ -110,7 +111,9 @@ pub struct Scenario {
     clock: Clock,
     accounts: AccountSource,
     artifacts: Arc<Registry>,
-    namespace: NonceNamespace,
+    /// Number of [`run_agents`](Scenario::run_agents) calls so far; each run
+    /// takes the next index for a fresh nonce namespace.
+    runs: AtomicU32,
     guard: NetworkGuard,
 }
 
@@ -141,6 +144,10 @@ impl Scenario {
     /// deterministic random stream, and a mailbox. A returned error is recorded
     /// per agent; an agent panic (for example a failed assertion) propagates so
     /// the test fails.
+    ///
+    /// May be called more than once on the same scenario: each call runs in a
+    /// fresh nonce namespace, so a later run against the same dev accounts does
+    /// not collide with an earlier run's transactions.
     pub async fn run_agents<I>(&self, agents: I) -> Result<ScenarioReport>
     where
         I: IntoIterator<Item = Agent>,
@@ -156,6 +163,11 @@ impl Scenario {
             });
         }
         dev_accounts.truncate(count);
+
+        // Each run writes in its own nonce namespace so a rerun against the
+        // same accounts does not replay an earlier run's nonces.
+        let namespace =
+            NonceNamespace::for_run(&self.seed, self.runs.fetch_add(1, Ordering::Relaxed));
 
         let names: Vec<Arc<str>> = agents.iter().map(Agent::name_arc).collect();
         let mut senders = Vec::with_capacity(count);
@@ -187,7 +199,7 @@ impl Scenario {
                 self.clock.clone(),
                 AgentRng::derive(&self.seed, index, &name),
                 mailbox,
-                Account::new(dev, self.namespace),
+                Account::new(dev, namespace),
                 Arc::clone(&self.artifacts),
             );
             let body = agent.into_body();

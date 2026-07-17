@@ -245,8 +245,7 @@ fn describe_status(status: &TransactionStatus) -> String {
             conflict,
         } => format!(
             "dropped during two-phase commit at height {attempt_height:?}: {:?} conflict on \
-             contract {:?} (a balance that cannot cover its own storage cost reports as \
-             BoundsExceeded)",
+             contract {:?}",
             conflict.code, conflict.address
         ),
         TransactionStatus::Unknown => "unknown; not found in the mempool or the indexer".to_owned(),

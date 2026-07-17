@@ -12,11 +12,17 @@ use sha2::{Digest, Sha256};
 pub struct NonceNamespace(u32);
 
 impl NonceNamespace {
-    /// Derive a deterministic namespace from a scenario seed.
-    pub fn from_seed(seed: &str) -> Self {
+    /// Derive a deterministic namespace for the `run`-th agent run of a
+    /// scenario.
+    ///
+    /// Each `run_agents` call takes the next run index, so repeated runs
+    /// against the same dev accounts write in disjoint nonce spaces and never
+    /// trip the chain's replay protection.
+    pub fn for_run(seed: &str, run: u32) -> Self {
         let mut hasher = Sha256::new();
         hasher.update(b"groundhog-testkit nonce namespace v1");
         hasher.update(seed.as_bytes());
+        hasher.update(run.to_be_bytes());
         let digest = hasher.finalize();
         Self(u32::from_be_bytes([
             digest[0], digest[1], digest[2], digest[3],
@@ -35,7 +41,7 @@ mod tests {
 
     #[test]
     fn nonce_packs_namespace_into_high_bits() {
-        let namespace = NonceNamespace::from_seed("seed-v1");
+        let namespace = NonceNamespace::for_run("seed-v1", 0);
         let high = namespace.make_nonce(0);
         assert_eq!(
             high & 0xffff_ffff,
@@ -48,12 +54,25 @@ mod tests {
     #[test]
     fn derivation_is_deterministic_and_seed_specific() {
         assert_eq!(
-            NonceNamespace::from_seed("seed-a"),
-            NonceNamespace::from_seed("seed-a")
+            NonceNamespace::for_run("seed-a", 0),
+            NonceNamespace::for_run("seed-a", 0)
         );
         assert_ne!(
-            NonceNamespace::from_seed("seed-a"),
-            NonceNamespace::from_seed("seed-b")
+            NonceNamespace::for_run("seed-a", 0),
+            NonceNamespace::for_run("seed-b", 0)
+        );
+    }
+
+    #[test]
+    fn each_run_gets_a_distinct_namespace() {
+        // Repeated runs against the same accounts must not reuse nonces.
+        assert_ne!(
+            NonceNamespace::for_run("seed", 0),
+            NonceNamespace::for_run("seed", 1)
+        );
+        assert_ne!(
+            NonceNamespace::for_run("seed", 1),
+            NonceNamespace::for_run("seed", 2)
         );
     }
 }

@@ -44,7 +44,7 @@ impl AgentRng {
         z ^ (z >> 31)
     }
 
-    /// Uniformly pick an index in `0..len`, or `None` when `len` is zero.
+    /// Pick an index in `0..len`, or `None` when `len` is zero.
     pub fn choose_index(&mut self, len: usize) -> Option<usize> {
         if len == 0 {
             return None;

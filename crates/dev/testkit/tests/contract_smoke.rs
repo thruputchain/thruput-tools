@@ -123,6 +123,60 @@ async fn caller_counter_deploy_call_read() {
         .await
         .expect("agent runs to completion");
 
+    assert!(report.all_ok(), "scenario failed: {report:#?}");
+    scenario.stop().await.expect("clean teardown");
+}
+
+#[tokio::test]
+#[ignore = "requires GROUNDHOG_DEVNODE_BINARY and a built caller-counter fixture in GROUNDHOG_TESTKIT_ARTIFACT_ROOT"]
+async fn multiple_runs_are_possible() {
+    let Some(artifact) = caller_counter_artifact() else {
+        eprintln!(
+            "skipping: set GROUNDHOG_TESTKIT_ARTIFACT_ROOT to a directory containing \
+             caller_counter.rv32a (see scripts/smoke-testkit-local.sh)"
+        );
+        return;
+    };
+
+    let mut config = LocalNetworkConfig::default();
+    // config.log_level = Some(groundhog_testkit::LogLevel::Trace);
+    if let Ok(path) = std::env::var("GROUNDHOG_DEVNODE_BINARY") {
+        config.hog_devnode_binary = Some(path.into());
+    }
+    if let Ok(protocol) = std::env::var("HOGD_PROTOCOL_OVERRIDE") {
+        config.hogd_protocol = Some(protocol);
+    }
+
+    let scenario = Scenario::builder("multiple-runs")
+        .network(NetworkConfig::local(config))
+        .artifact("caller-counter", artifact)
+        .build()
+        .await
+        .expect("local node starts and advertises a runtime manifest");
+
+    let make_agents = || {
+        [Agent::new("alice", |mut ctx| async move {
+            // The first deploy carries the binary (registers it) and creates an
+            // instance; the harness reports it registered.
+            let caller_counter = ctx.deploy_artifact("caller-counter").await?;
+
+            bump_counter(&mut ctx, caller_counter.address).await?;
+
+            Ok(())
+        })]
+    };
+
+    let report = scenario
+        .run_agents(make_agents())
+        .await
+        .expect("agent runs to completion");
     assert!(report.all_ok(), "scenario failed: {report:?}");
+
+    let report = scenario
+        .run_agents(make_agents())
+        .await
+        .expect("agent runs to completion (second time against same scenario)");
+    assert!(report.all_ok(), "scenario failed: {report:#?}");
+
     scenario.stop().await.expect("clean teardown");
 }
