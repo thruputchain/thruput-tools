@@ -90,8 +90,14 @@ fn init_configures_profiles_and_succeeds() {
     let devnet = groundhog_cli::config::resolve_profile(tmp.path(), Some("devnet")).unwrap();
     assert_eq!(devnet.name, "devnet");
     assert_eq!(devnet.network, Some(groundhog_cli::config::Network::Devnet));
-    assert!(devnet.rpc_url.is_none());
-    assert!(devnet.faucet_url.is_none());
+    assert_eq!(
+        devnet.rpc_url.as_deref(),
+        Some("http://44.236.180.135:8545")
+    );
+    assert_eq!(
+        devnet.faucet_url.as_deref(),
+        Some("http://44.236.180.135:8085")
+    );
     assert_eq!(
         devnet.contracts.get("HOG").map(String::as_str),
         Some("0x0000000000000000000000000000000000000000000000000000000000000001")
@@ -128,6 +134,10 @@ password = "pass"
 [profile.local]
 rpc_url = "http://127.0.0.1:9999"
 
+[profile.devnet]
+rpc_url = "https://custom-rpc.devnet.example"
+faucet_url = "https://custom-faucet.devnet.example"
+
 [profile.local.wallets.alice]
 address = "0x1111111111111111111111111111111111111111111111111111111111111111"
 owner_public_key = "0x2222222222222222222222222222222222222222222222222222222222222222"
@@ -142,6 +152,8 @@ owner_public_key = "0x2222222222222222222222222222222222222222222222222222222222
     assert!(global_config.contains("default_profile = \"devnet\""));
     assert!(global_config.contains("default_key = \"alice\""));
     assert!(global_config.contains("rpc_url = \"http://127.0.0.1:9999\""));
+    assert!(global_config.contains("rpc_url = \"https://custom-rpc.devnet.example\""));
+    assert!(global_config.contains("faucet_url = \"https://custom-faucet.devnet.example\""));
     assert!(global_config.contains("[profile.local.wallets.alice]"));
     assert!(global_config.contains(
         "address = \"0x1111111111111111111111111111111111111111111111111111111111111111\""
@@ -150,8 +162,14 @@ owner_public_key = "0x2222222222222222222222222222222222222222222222222222222222
     let devnet = groundhog_cli::config::resolve_profile(tmp.path(), Some("devnet")).unwrap();
     assert_eq!(devnet.name, "devnet");
     assert_eq!(devnet.network, Some(groundhog_cli::config::Network::Devnet));
-    assert!(devnet.rpc_url.is_none());
-    assert!(devnet.faucet_url.is_none());
+    assert_eq!(
+        devnet.rpc_url.as_deref(),
+        Some("https://custom-rpc.devnet.example")
+    );
+    assert_eq!(
+        devnet.faucet_url.as_deref(),
+        Some("https://custom-faucet.devnet.example")
+    );
     assert_eq!(
         devnet.contracts.get("HOG").map(String::as_str),
         Some("0x0000000000000000000000000000000000000000000000000000000000000001")

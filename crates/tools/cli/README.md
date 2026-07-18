@@ -488,7 +488,8 @@ network = "local"
 
 [profile.devnet]
 network = "devnet"
-rpc_url = "https://devnet.groundhog.network"
+rpc_url = "http://44.236.180.135:8545"
+faucet_url = "http://44.236.180.135:8085"
 ```
 
 Select a profile via `--profile`, `GROUNDHOG_PROFILE`, or `default_profile`.

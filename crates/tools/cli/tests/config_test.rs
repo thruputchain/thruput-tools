@@ -1065,6 +1065,8 @@ fn resolve_profile_accepts_wallet_table_missing_owner_for_stable_validation() {
         tmp.path().join("groundhog.toml"),
         format!(
             r#"
+default_profile = "default"
+
 [profile.default.wallets.alice]
 address = "0x{}"
 "#,

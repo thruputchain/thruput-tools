@@ -17,13 +17,15 @@ use crate::account_resolution::{
     LocalBootstrapRole, lookup_dev_account_address, resolve_local_bootstrap_account,
 };
 use crate::codec::{format_contract_address, parse_contract_address};
-use crate::config::{ProfileOverrides, ResolvedProfile, cache_dir, resolve_profile_with_overrides};
+use crate::config::{
+    Network, ProfileOverrides, ResolvedProfile, cache_dir, resolve_profile_with_overrides,
+};
 use crate::dev_keys;
 use crate::faucet_client::{client as faucet_client, get_json, post_json};
 use crate::hog;
 use crate::profile_backend::{ProfileBackend, resolve_profile_backend};
 use crate::result::CommandResult;
-use crate::runtime_manifest::load_configured_runtime_manifest;
+use crate::runtime_manifest::{configured_runtime_manifest_path, load_configured_runtime_manifest};
 use crate::tx_utils::{
     ensure_tx_success, format_tx_hash, nonce_from_timestamp, resolve_block_expiry_height,
     submit_and_poll_blocking,
@@ -146,7 +148,7 @@ fn prepare_remote_airdrop_dry_run(
 ) -> Result<Option<PreparedRemoteAirdropDryRun>, CliError> {
     let profile = resolve_profile_with_overrides(cwd, profile_name, overrides)?;
     if !matches!(
-        resolve_profile_backend(&profile)?,
+        resolve_airdrop_backend(&profile)?,
         ProfileBackend::RemoteFaucet
     ) {
         return Ok(None);
@@ -286,7 +288,7 @@ pub(crate) fn prepare_airdrop(
     overrides: &ProfileOverrides,
 ) -> Result<PreparedAirdrop, CliError> {
     let profile = resolve_profile_with_overrides(cwd, profile_name, overrides)?;
-    match resolve_profile_backend(&profile)? {
+    match resolve_airdrop_backend(&profile)? {
         ProfileBackend::RemoteFaucet => {
             if amount.is_some() {
                 return Err(CliError::Other(
@@ -295,9 +297,64 @@ pub(crate) fn prepare_airdrop(
             }
             prepare_remote_airdrop(&profile, recipient)
         }
-        ProfileBackend::LocalManifest | ProfileBackend::RpcOnly => {
-            prepare_local_airdrop(&profile, recipient, amount)
+        ProfileBackend::LocalManifest => prepare_local_airdrop(&profile, recipient, amount),
+        ProfileBackend::RpcOnly => Err(CliError::Other(format!(
+            "profile `{}` is RPC-only; airdrop requires either `runtime_manifest` or `faucet_url`",
+            profile.name
+        ))),
+    }
+}
+
+fn resolve_airdrop_backend(profile: &ResolvedProfile) -> Result<ProfileBackend, CliError> {
+    match profile.network {
+        Some(Network::Local) => {
+            if profile.rpc_url.is_none() {
+                return Err(profile_config_error(
+                    profile,
+                    "targets local, but airdrop requires `rpc_url`; run `groundhog node` or configure `rpc_url`",
+                ));
+            }
+            if configured_runtime_manifest_path(profile)?.is_none() {
+                return Err(profile_config_error(
+                    profile,
+                    "targets local, but airdrop requires a local runtime manifest; run `groundhog node` or configure `runtime_manifest`",
+                ));
+            }
+            Ok(ProfileBackend::LocalManifest)
         }
+        Some(Network::Devnet) => {
+            if configured_runtime_manifest_path(profile)?.is_some() {
+                return Err(profile_config_error(
+                    profile,
+                    "targets devnet, but `--runtime-manifest` requires a local profile",
+                ));
+            }
+            if profile.rpc_url.is_none() {
+                return Err(profile_config_error(
+                    profile,
+                    "targets devnet, but airdrop requires `rpc_url`",
+                ));
+            }
+            if profile.faucet_url.is_none() {
+                return Err(profile_config_error(
+                    profile,
+                    "targets devnet, but airdrop requires `faucet_url`",
+                ));
+            }
+            Ok(ProfileBackend::RemoteFaucet)
+        }
+        Some(Network::Mainnet) => Err(profile_config_error(
+            profile,
+            "targets mainnet, but airdrop is not supported because mainnet does not exist yet",
+        )),
+        None => resolve_profile_backend(profile),
+    }
+}
+
+fn profile_config_error(profile: &ResolvedProfile, message: &'static str) -> CliError {
+    CliError::ProfileConfigInvalid {
+        profile: profile.name.clone(),
+        message: message.to_string(),
     }
 }
 
@@ -683,16 +740,40 @@ pub(crate) fn format_hog_amount(raw_amount: u128) -> String {
 mod tests {
     use std::collections::BTreeMap;
     use std::env;
+    use std::ffi::OsString;
 
     use groundhog_contract_util::{NormalizedMethodSignature, contract_entrypoint_id};
     use serial_test::serial;
 
     use super::{
         DEFAULT_AIRDROP_HOG, PreparedAirdrop, format_hog_amount, parse_hog_amount,
-        prepare_remote_airdrop_with_descriptor, resolve_airdrop_recipient,
+        prepare_remote_airdrop_with_descriptor, resolve_airdrop_backend, resolve_airdrop_recipient,
     };
-    use crate::config::{ResolvedProfile, SavedWalletBinding};
+    use crate::config::{Network, ResolvedProfile, SavedWalletBinding};
     use crate::hog;
+
+    struct EnvGuard {
+        key: &'static str,
+        previous: Option<OsString>,
+    }
+
+    impl EnvGuard {
+        fn set_str(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var_os(key);
+            unsafe { std::env::set_var(key, value) };
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            if let Some(previous) = &self.previous {
+                unsafe { std::env::set_var(self.key, previous) };
+            } else {
+                unsafe { std::env::remove_var(self.key) };
+            }
+        }
+    }
 
     #[test]
     fn parses_hog_amounts_to_raw_units() {
@@ -797,6 +878,77 @@ mod tests {
         assert_eq!(prepared.genesis_hash, format!("0x{}", "01".repeat(32)));
         assert_eq!(prepared.client_nonce.len(), 34);
         unsafe { env::remove_var("XDG_CACHE_HOME") };
+    }
+
+    #[test]
+    #[serial]
+    fn airdrop_devnet_missing_faucet_reports_devnet_error() {
+        let _manifest = EnvGuard::set_str("GROUNDHOG_RUNTIME_MANIFEST", "");
+        let mut profile = test_profile(BTreeMap::new());
+        profile.name = "devnet".into();
+        profile.network = Some(Network::Devnet);
+
+        let error =
+            resolve_airdrop_backend(&profile).expect_err("bug: missing devnet faucet should fail");
+
+        assert_eq!(
+            error.to_string(),
+            "profile `devnet` targets devnet, but airdrop requires `faucet_url`"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn airdrop_devnet_missing_rpc_reports_devnet_error() {
+        let _manifest = EnvGuard::set_str("GROUNDHOG_RUNTIME_MANIFEST", "");
+        let mut profile = test_profile(BTreeMap::new());
+        profile.name = "devnet".into();
+        profile.network = Some(Network::Devnet);
+        profile.rpc_url = None;
+        profile.faucet_url = Some("http://127.0.0.1:8081".into());
+
+        let error =
+            resolve_airdrop_backend(&profile).expect_err("bug: missing devnet rpc should fail");
+
+        assert_eq!(
+            error.to_string(),
+            "profile `devnet` targets devnet, but airdrop requires `rpc_url`"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn airdrop_devnet_with_urls_uses_remote_faucet() {
+        let _manifest = EnvGuard::set_str("GROUNDHOG_RUNTIME_MANIFEST", "");
+        let mut profile = test_profile(BTreeMap::new());
+        profile.name = "devnet".into();
+        profile.network = Some(Network::Devnet);
+        profile.faucet_url = Some("http://127.0.0.1:8081".into());
+
+        let backend = resolve_airdrop_backend(&profile)
+            .expect("bug: configured devnet profile should resolve");
+
+        assert_eq!(
+            backend,
+            crate::profile_backend::ProfileBackend::RemoteFaucet
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn airdrop_local_missing_manifest_reports_local_error() {
+        let _manifest = EnvGuard::set_str("GROUNDHOG_RUNTIME_MANIFEST", "");
+        let mut profile = test_profile(BTreeMap::new());
+        profile.name = "local".into();
+        profile.network = Some(Network::Local);
+
+        let error =
+            resolve_airdrop_backend(&profile).expect_err("bug: missing local manifest should fail");
+
+        assert_eq!(
+            error.to_string(),
+            "profile `local` targets local, but airdrop requires a local runtime manifest; run `groundhog node` or configure `runtime_manifest`"
+        );
     }
 
     #[test]
