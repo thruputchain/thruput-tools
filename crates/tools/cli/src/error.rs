@@ -101,6 +101,8 @@ pub enum CliError {
     RpcConnect(String),
     #[error("no rpc_url configured for the selected profile")]
     MissingRpcUrl,
+    #[error("profile `{profile}` {message}")]
+    ProfileConfigInvalid { profile: String, message: String },
     #[error("no signing key configured")]
     MissingSigningKey,
     #[error("failed to initialize async runtime: {0}")]
@@ -243,6 +245,7 @@ impl CliError {
             Self::LocalNodeAlreadyRunning(_) => "local_node_already_running",
             Self::RpcConnect(_) => "rpc_connect",
             Self::MissingRpcUrl => "missing_rpc_url",
+            Self::ProfileConfigInvalid { .. } => "profile_config_invalid",
             Self::MissingSigningKey => "missing_signing_key",
             Self::RuntimeInit(_) => "runtime_init_failed",
             Self::RpcMethodFailed { .. } => "rpc_method_failed",
@@ -356,6 +359,9 @@ impl CliError {
             ))),
             Self::MissingRpcUrl => Some(Cow::Borrowed(
                 "set `rpc_url` in the selected profile in project or global config",
+            )),
+            Self::ProfileConfigInvalid { .. } => Some(Cow::Borrowed(
+                "update the selected profile in project or global config, or choose a profile that matches the requested command",
             )),
             Self::MissingSigningKey => Some(Cow::Borrowed(
                 "set `default_key` in project or global config, or run `groundhog keys generate`",

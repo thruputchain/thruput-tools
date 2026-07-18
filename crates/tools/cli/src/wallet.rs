@@ -21,9 +21,9 @@ use xdr_common::VecM;
 use crate::account_resolution::{LocalBootstrapRole, resolve_local_bootstrap_account};
 use crate::codec::{format_contract_address, parse_contract_address};
 use crate::config::{
-    Network, ProfileOverrides, cache_dir, find_project_config, remove_profile_wallet_address,
-    resolve_default_key_for_profile, resolve_profile, resolve_profile_with_overrides,
-    save_profile_wallet_address,
+    Network, ProfileOverrides, ResolvedProfile, cache_dir, find_project_config,
+    remove_profile_wallet_address, resolve_default_key_for_profile, resolve_profile,
+    resolve_profile_with_overrides, save_profile_wallet_address,
 };
 use crate::faucet_client::{client as faucet_client, post_json};
 use crate::hog;
@@ -512,51 +512,56 @@ pub(crate) fn prepare_wallet_create(
     }
 }
 
-fn resolve_wallet_create_backend(
-    profile: &crate::config::ResolvedProfile,
-) -> Result<ProfileBackend, CliError> {
+fn resolve_wallet_create_backend(profile: &ResolvedProfile) -> Result<ProfileBackend, CliError> {
     match profile.network {
         Some(Network::Local) => {
             if profile.rpc_url.is_none() {
-                return Err(CliError::Other(format!(
-                    "profile `{}` targets local, but wallet create requires `rpc_url`; run `groundhog node` or configure `rpc_url`",
-                    profile.name
-                )));
+                return Err(profile_config_error(
+                    profile,
+                    "targets local, but wallet create requires `rpc_url`; run `groundhog node` or configure `rpc_url`",
+                ));
             }
             if configured_runtime_manifest_path(profile)?.is_none() {
-                return Err(CliError::Other(format!(
-                    "profile `{}` targets local, but wallet create requires a local runtime manifest; run `groundhog node` or configure `runtime_manifest`",
-                    profile.name
-                )));
+                return Err(profile_config_error(
+                    profile,
+                    "targets local, but wallet create requires a local runtime manifest; run `groundhog node` or configure `runtime_manifest`",
+                ));
             }
             Ok(ProfileBackend::LocalManifest)
         }
         Some(Network::Devnet) => {
             if configured_runtime_manifest_path(profile)?.is_some() {
-                return Err(CliError::Other(format!(
-                    "profile `{}` targets devnet, but `--runtime-manifest` requires a local profile",
-                    profile.name
-                )));
+                return Err(profile_config_error(
+                    profile,
+                    "targets devnet, but `--runtime-manifest` requires a local profile",
+                ));
             }
             if profile.rpc_url.is_none() {
-                return Err(CliError::Other(format!(
-                    "profile `{}` targets devnet, but wallet create requires `rpc_url`",
-                    profile.name
-                )));
+                return Err(profile_config_error(
+                    profile,
+                    "targets devnet, but wallet create requires `rpc_url`",
+                ));
             }
             if profile.faucet_url.is_none() {
-                return Err(CliError::Other(format!(
-                    "profile `{}` targets devnet, but wallet create requires `faucet_url`",
-                    profile.name
-                )));
+                return Err(profile_config_error(
+                    profile,
+                    "targets devnet, but wallet create requires `faucet_url`",
+                ));
             }
             Ok(ProfileBackend::RemoteFaucet)
         }
-        Some(Network::Mainnet) => Err(CliError::Other(format!(
-            "profile `{}` targets mainnet, but wallet create is not supported because mainnet does not exist yet",
-            profile.name
-        ))),
+        Some(Network::Mainnet) => Err(profile_config_error(
+            profile,
+            "targets mainnet, but wallet create is not supported because mainnet does not exist yet",
+        )),
         None => resolve_profile_backend(profile),
+    }
+}
+
+fn profile_config_error(profile: &ResolvedProfile, message: &'static str) -> CliError {
+    CliError::ProfileConfigInvalid {
+        profile: profile.name.clone(),
+        message: message.to_string(),
     }
 }
 

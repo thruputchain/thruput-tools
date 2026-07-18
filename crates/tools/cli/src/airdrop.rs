@@ -309,45 +309,52 @@ fn resolve_airdrop_backend(profile: &ResolvedProfile) -> Result<ProfileBackend, 
     match profile.network {
         Some(Network::Local) => {
             if profile.rpc_url.is_none() {
-                return Err(CliError::Other(format!(
-                    "profile `{}` targets local, but airdrop requires `rpc_url`; run `groundhog node` or configure `rpc_url`",
-                    profile.name
-                )));
+                return Err(profile_config_error(
+                    profile,
+                    "targets local, but airdrop requires `rpc_url`; run `groundhog node` or configure `rpc_url`",
+                ));
             }
             if configured_runtime_manifest_path(profile)?.is_none() {
-                return Err(CliError::Other(format!(
-                    "profile `{}` targets local, but airdrop requires a local runtime manifest; run `groundhog node` or configure `runtime_manifest`",
-                    profile.name
-                )));
+                return Err(profile_config_error(
+                    profile,
+                    "targets local, but airdrop requires a local runtime manifest; run `groundhog node` or configure `runtime_manifest`",
+                ));
             }
             Ok(ProfileBackend::LocalManifest)
         }
         Some(Network::Devnet) => {
             if configured_runtime_manifest_path(profile)?.is_some() {
-                return Err(CliError::Other(format!(
-                    "profile `{}` targets devnet, but `--runtime-manifest` requires a local profile",
-                    profile.name
-                )));
+                return Err(profile_config_error(
+                    profile,
+                    "targets devnet, but `--runtime-manifest` requires a local profile",
+                ));
             }
             if profile.rpc_url.is_none() {
-                return Err(CliError::Other(format!(
-                    "profile `{}` targets devnet, but airdrop requires `rpc_url`",
-                    profile.name
-                )));
+                return Err(profile_config_error(
+                    profile,
+                    "targets devnet, but airdrop requires `rpc_url`",
+                ));
             }
             if profile.faucet_url.is_none() {
-                return Err(CliError::Other(format!(
-                    "profile `{}` targets devnet, but airdrop requires `faucet_url`",
-                    profile.name
-                )));
+                return Err(profile_config_error(
+                    profile,
+                    "targets devnet, but airdrop requires `faucet_url`",
+                ));
             }
             Ok(ProfileBackend::RemoteFaucet)
         }
-        Some(Network::Mainnet) => Err(CliError::Other(format!(
-            "profile `{}` targets mainnet, but airdrop is not supported because mainnet does not exist yet",
-            profile.name
-        ))),
+        Some(Network::Mainnet) => Err(profile_config_error(
+            profile,
+            "targets mainnet, but airdrop is not supported because mainnet does not exist yet",
+        )),
         None => resolve_profile_backend(profile),
+    }
+}
+
+fn profile_config_error(profile: &ResolvedProfile, message: &'static str) -> CliError {
+    CliError::ProfileConfigInvalid {
+        profile: profile.name.clone(),
+        message: message.to_string(),
     }
 }
 
