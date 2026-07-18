@@ -21,7 +21,7 @@ use xdr_common::VecM;
 use crate::account_resolution::{LocalBootstrapRole, resolve_local_bootstrap_account};
 use crate::codec::{format_contract_address, parse_contract_address};
 use crate::config::{
-    ProfileOverrides, cache_dir, find_project_config, remove_profile_wallet_address,
+    Network, ProfileOverrides, cache_dir, find_project_config, remove_profile_wallet_address,
     resolve_default_key_for_profile, resolve_profile, resolve_profile_with_overrides,
     save_profile_wallet_address,
 };
@@ -498,13 +498,65 @@ pub(crate) fn prepare_wallet_create(
     let key_name = inputs.key_name;
     let wallet_name = inputs.wallet_name;
 
-    match resolve_profile_backend(&profile)? {
+    match resolve_wallet_create_backend(&profile)? {
         ProfileBackend::RemoteFaucet => {
             prepare_remote_wallet_create(&profile, key_name, wallet_name)
         }
-        ProfileBackend::LocalManifest | ProfileBackend::RpcOnly => {
+        ProfileBackend::LocalManifest => {
             prepare_local_wallet_create(cwd, profile, key_name, wallet_name)
         }
+        ProfileBackend::RpcOnly => Err(CliError::Other(format!(
+            "profile `{}` is RPC-only; wallet create requires either `runtime_manifest` or `faucet_url`",
+            profile.name
+        ))),
+    }
+}
+
+fn resolve_wallet_create_backend(
+    profile: &crate::config::ResolvedProfile,
+) -> Result<ProfileBackend, CliError> {
+    match profile.network {
+        Some(Network::Local) => {
+            if profile.rpc_url.is_none() {
+                return Err(CliError::Other(format!(
+                    "profile `{}` targets local, but wallet create requires `rpc_url`; run `groundhog node` or configure `rpc_url`",
+                    profile.name
+                )));
+            }
+            if configured_runtime_manifest_path(profile)?.is_none() {
+                return Err(CliError::Other(format!(
+                    "profile `{}` targets local, but wallet create requires a local runtime manifest; run `groundhog node` or configure `runtime_manifest`",
+                    profile.name
+                )));
+            }
+            Ok(ProfileBackend::LocalManifest)
+        }
+        Some(Network::Devnet) => {
+            if configured_runtime_manifest_path(profile)?.is_some() {
+                return Err(CliError::Other(format!(
+                    "profile `{}` targets devnet, but `--runtime-manifest` requires a local profile",
+                    profile.name
+                )));
+            }
+            if profile.rpc_url.is_none() {
+                return Err(CliError::Other(format!(
+                    "profile `{}` targets devnet, but wallet create requires `rpc_url`",
+                    profile.name
+                )));
+            }
+            if profile.faucet_url.is_none() {
+                return Err(CliError::Other(format!(
+                    "profile `{}` targets devnet, but wallet create requires `faucet_url`",
+                    profile.name
+                )));
+            }
+            Ok(ProfileBackend::RemoteFaucet)
+        }
+        Some(Network::Mainnet) => Err(CliError::Other(format!(
+            "profile `{}` targets mainnet, but wallet create is not supported because mainnet does not exist yet",
+            profile.name
+        ))),
+        None => resolve_profile_backend(profile),
     }
 }
 
@@ -517,7 +569,7 @@ fn prepare_remote_wallet_create_dry_run(
 ) -> Result<Option<PreparedRemoteWalletCreateDryRun>, CliError> {
     let inputs = resolve_wallet_create_inputs(cwd, key_name, wallet_name, profile_name, overrides)?;
     if !matches!(
-        resolve_profile_backend(&inputs.profile)?,
+        resolve_wallet_create_backend(&inputs.profile)?,
         ProfileBackend::RemoteFaucet
     ) {
         return Ok(None);
@@ -1035,10 +1087,11 @@ mod tests {
         PreparedRemoteWalletCreate, RemoteWalletCreateAttempt,
         load_or_create_remote_wallet_create_attempt, read_remote_wallet_create_attempt,
         remote_wallet_create_attempt_path, remove_remote_wallet_create_attempt,
-        resolve_dev_wallet_artifact_path, resolve_wallet_create_inputs,
-        validate_remote_create_wallet_address, write_remote_wallet_create_attempt,
+        resolve_dev_wallet_artifact_path, resolve_wallet_create_backend,
+        resolve_wallet_create_inputs, validate_remote_create_wallet_address,
+        write_remote_wallet_create_attempt,
     };
-    use crate::config::{LocalRuntimeState, ProfileOverrides, ResolvedProfile};
+    use crate::config::{LocalRuntimeState, Network, ProfileOverrides, ResolvedProfile};
 
     struct EnvGuard {
         key: &'static str,
@@ -1047,6 +1100,12 @@ mod tests {
 
     impl EnvGuard {
         fn set_path(key: &'static str, value: &Path) -> Self {
+            let previous = std::env::var_os(key);
+            unsafe { std::env::set_var(key, value) };
+            Self { key, previous }
+        }
+
+        fn set_str(key: &'static str, value: &str) -> Self {
             let previous = std::env::var_os(key);
             unsafe { std::env::set_var(key, value) };
             Self { key, previous }
@@ -1118,6 +1177,99 @@ mod tests {
         .expect("bug: wallet create should reject explicit dev keys");
 
         assert!(error.to_string().contains("requires a non-dev key"));
+    }
+
+    #[test]
+    #[serial]
+    fn wallet_create_devnet_missing_faucet_reports_devnet_error() {
+        let _manifest = EnvGuard::set_str("GROUNDHOG_RUNTIME_MANIFEST", "");
+        let mut profile = test_profile();
+        profile.faucet_url = None;
+
+        let error = resolve_wallet_create_backend(&profile)
+            .expect_err("bug: missing devnet faucet should fail");
+
+        assert_eq!(
+            error.to_string(),
+            "profile `preview` targets devnet, but wallet create requires `faucet_url`"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn wallet_create_devnet_missing_rpc_reports_devnet_error() {
+        let _manifest = EnvGuard::set_str("GROUNDHOG_RUNTIME_MANIFEST", "");
+        let mut profile = test_profile();
+        profile.rpc_url = None;
+
+        let error = resolve_wallet_create_backend(&profile)
+            .expect_err("bug: missing devnet rpc should fail");
+
+        assert_eq!(
+            error.to_string(),
+            "profile `preview` targets devnet, but wallet create requires `rpc_url`"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn wallet_create_devnet_with_urls_uses_remote_faucet() {
+        let _manifest = EnvGuard::set_str("GROUNDHOG_RUNTIME_MANIFEST", "");
+        let profile = test_profile();
+
+        let backend = resolve_wallet_create_backend(&profile)
+            .expect("bug: configured devnet profile should resolve");
+
+        assert_eq!(
+            backend,
+            crate::profile_backend::ProfileBackend::RemoteFaucet
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn wallet_create_devnet_runtime_manifest_reports_conflict() {
+        let _manifest = EnvGuard::set_str("GROUNDHOG_RUNTIME_MANIFEST", "/tmp/runtime.json");
+        let profile = test_profile();
+
+        let error = resolve_wallet_create_backend(&profile)
+            .expect_err("bug: devnet runtime manifest should fail");
+
+        assert_eq!(
+            error.to_string(),
+            "profile `preview` targets devnet, but `--runtime-manifest` requires a local profile"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn wallet_create_local_missing_manifest_reports_local_error() {
+        let _manifest = EnvGuard::set_str("GROUNDHOG_RUNTIME_MANIFEST", "");
+        let mut profile = test_profile();
+        profile.network = Some(Network::Local);
+        profile.faucet_url = None;
+
+        let error = resolve_wallet_create_backend(&profile)
+            .expect_err("bug: missing local manifest should fail");
+
+        assert_eq!(
+            error.to_string(),
+            "profile `preview` targets local, but wallet create requires a local runtime manifest; run `groundhog node` or configure `runtime_manifest`"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn wallet_create_rpc_only_profile_stays_rpc_only() {
+        let _manifest = EnvGuard::set_str("GROUNDHOG_RUNTIME_MANIFEST", "");
+        let mut profile = test_profile();
+        profile.network = None;
+        profile.faucet_url = None;
+
+        let backend = resolve_wallet_create_backend(&profile)
+            .expect("bug: legacy rpc-only backend should resolve");
+
+        assert_eq!(backend, crate::profile_backend::ProfileBackend::RpcOnly);
     }
 
     #[test]
