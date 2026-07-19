@@ -1,6 +1,6 @@
 //! Scenario builder, runner, and result types.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -13,7 +13,7 @@ use crate::account::Account;
 use crate::agent::{Agent, AgentContext, AgentId};
 use crate::artifact::{ArtifactKind, ArtifactSpec, Registry};
 use crate::clock::Clock;
-use crate::error::{Result, TestkitError};
+use crate::error::{AgentFailure, AgentFailures, Result, TestkitError};
 use crate::mailbox::{Envelope, Mailbox};
 use crate::manifest::{AccountSource, load_runtime_manifest};
 use crate::network::{LocalNetworkConfig, Network, NetworkConfig};
@@ -141,9 +141,10 @@ impl Scenario {
     /// Run a set of agents concurrently, returning once all have finished.
     ///
     /// Each agent is assigned a distinct funded account (by position), its own
-    /// deterministic random stream, and a mailbox. A returned error is recorded
-    /// per agent; an agent panic (for example a failed assertion) propagates so
-    /// the test fails.
+    /// deterministic random stream, and a mailbox. After every non-panicking
+    /// agent finishes, returned errors are aggregated in
+    /// [`TestkitError::AgentsFailed`]. An agent panic (for example a failed
+    /// assertion) propagates immediately.
     ///
     /// May be called more than once on the same scenario: each call runs in a
     /// fresh nonce namespace, so a later run against the same dev accounts does
@@ -154,6 +155,9 @@ impl Scenario {
     {
         let agents: Vec<Agent> = agents.into_iter().collect();
         let count = agents.len();
+
+        let names: Vec<Arc<str>> = agents.iter().map(Agent::name_arc).collect();
+        validate_unique_agent_names(&names)?;
 
         let mut dev_accounts = self.accounts.accounts()?;
         if count > dev_accounts.len() {
@@ -169,7 +173,6 @@ impl Scenario {
         let namespace =
             NonceNamespace::for_run(&self.seed, self.runs.fetch_add(1, Ordering::Relaxed));
 
-        let names: Vec<Arc<str>> = agents.iter().map(Agent::name_arc).collect();
         let mut senders = Vec::with_capacity(count);
         let mut receivers = Vec::with_capacity(count);
         for _ in 0..count {
@@ -238,7 +241,24 @@ impl Scenario {
             .into_iter()
             .map(|outcome| outcome.expect("bug: every agent produced an outcome"))
             .collect();
-        Ok(ScenarioReport { outcomes })
+        let report = ScenarioReport { outcomes };
+        if report.all_ok() {
+            return Ok(report);
+        }
+
+        let failures = report
+            .outcomes
+            .into_iter()
+            .filter_map(|outcome| {
+                outcome
+                    .result
+                    .err()
+                    .map(|error| AgentFailure::new(outcome.name.to_string(), outcome.index, error))
+            })
+            .collect();
+        Err(TestkitError::AgentsFailed {
+            failures: AgentFailures::new(failures),
+        })
     }
 
     /// Tear the network down gracefully, reporting any teardown error.
@@ -257,6 +277,18 @@ impl Scenario {
         }
         Ok(())
     }
+}
+
+fn validate_unique_agent_names(names: &[Arc<str>]) -> Result<()> {
+    let mut unique_names = HashSet::with_capacity(names.len());
+    for name in names {
+        if !unique_names.insert(name.as_ref()) {
+            return Err(TestkitError::DuplicateAgent {
+                name: name.to_string(),
+            });
+        }
+    }
+    Ok(())
 }
 
 async fn acquire_network(config: NetworkConfig) -> Result<(Network, AccountSource, NetworkGuard)> {
@@ -373,6 +405,9 @@ impl ScenarioReport {
     }
 
     /// Whether every agent returned `Ok`.
+    ///
+    /// Reports returned by [`Scenario::run_agents`] always satisfy this; the
+    /// method remains useful for code that receives a report abstractly.
     pub fn all_ok(&self) -> bool {
         self.outcomes.iter().all(|outcome| outcome.result.is_ok())
     }

@@ -1,7 +1,75 @@
 //! Error type for the test harness.
 
+use std::fmt;
+
 /// Result alias used throughout `groundhog-testkit`.
 pub type Result<T, E = TestkitError> = std::result::Result<T, E>;
+
+/// One agent error retained after every non-panicking agent has finished.
+#[derive(Debug)]
+pub struct AgentFailure {
+    name: String,
+    index: usize,
+    error: TestkitError,
+}
+
+impl AgentFailure {
+    pub(crate) fn new(name: String, index: usize, error: TestkitError) -> Self {
+        Self { name, index, error }
+    }
+
+    /// Name of the failed agent.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Position of the failed agent in the scenario's agent list.
+    pub fn index(&self) -> usize {
+        self.index
+    }
+
+    /// Error returned by the agent body.
+    pub fn error(&self) -> &TestkitError {
+        &self.error
+    }
+}
+
+/// Ordered collection of errors returned by agents in one scenario run.
+#[derive(Debug)]
+pub struct AgentFailures {
+    failures: Vec<AgentFailure>,
+}
+
+impl AgentFailures {
+    pub(crate) fn new(failures: Vec<AgentFailure>) -> Self {
+        debug_assert!(!failures.is_empty());
+        Self { failures }
+    }
+
+    /// Agent failures ordered by their position in the scenario's agent list.
+    pub fn failures(&self) -> &[AgentFailure] {
+        &self.failures
+    }
+}
+
+impl fmt::Display for AgentFailures {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let count = self.failures.len();
+        write!(
+            f,
+            "{count} agent{} failed",
+            if count == 1 { "" } else { "s" }
+        )?;
+        for failure in &self.failures {
+            write!(
+                f,
+                "; {} (index {}): {}",
+                failure.name, failure.index, failure.error
+            )?;
+        }
+        Ok(())
+    }
+}
 
 /// Errors returned by the harness while building or running a scenario.
 #[derive(Debug, thiserror::Error)]
@@ -77,6 +145,20 @@ pub enum TestkitError {
         needed: usize,
         /// Number of accounts available.
         available: usize,
+    },
+
+    /// Two agents in one run were given the same name.
+    #[error("agent name `{name}` appears more than once in the scenario")]
+    DuplicateAgent {
+        /// The duplicated agent name.
+        name: String,
+    },
+
+    /// One or more agent bodies returned errors.
+    #[error("{failures}")]
+    AgentsFailed {
+        /// All returned agent errors, ordered by agent position.
+        failures: AgentFailures,
     },
 
     /// An account exhausted its per-account nonce sequence.
