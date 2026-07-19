@@ -15,7 +15,7 @@ use crate::result::{
 ///
 /// Bump when an existing field changes meaning, is removed, or is renamed.
 /// Purely additive fields (new optional keys) do not require a bump.
-pub const COMPARE_DIFF_SCHEMA_VERSION: u32 = 1;
+pub const COMPARE_DIFF_SCHEMA_VERSION: u32 = 2;
 
 /// Load a `result.json` from either a run directory or direct file path.
 pub async fn load_result(path: &Path) -> Result<SimResult, SimError> {
@@ -43,7 +43,11 @@ pub struct ResultDiff {
     pub schema_version: u32,
     pub same_config: bool,
     pub simulation_manifest_match: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub simulation_config_match: Option<bool>,
     pub runtime_manifest_match: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_config_match: Option<bool>,
     pub runtime_identity_match: bool,
     pub producer_identity_match: bool,
     pub outcome_a: SimRunOutcome,
@@ -69,8 +73,22 @@ impl ResultDiff {
     pub fn from_results(a: &SimResult, b: &SimResult) -> Self {
         let simulation_manifest_match = a.manifest_hashes.simulation_manifest_sha256
             == b.manifest_hashes.simulation_manifest_sha256;
+        let simulation_config_match = match (
+            &a.manifest_hashes.simulation_config_sha256,
+            &b.manifest_hashes.simulation_config_sha256,
+        ) {
+            (Some(a), Some(b)) => a == b,
+            _ => simulation_manifest_match,
+        };
         let runtime_manifest_match =
             a.manifest_hashes.runtime_manifest_sha256 == b.manifest_hashes.runtime_manifest_sha256;
+        let runtime_config_match = match (
+            &a.manifest_hashes.runtime_config_sha256,
+            &b.manifest_hashes.runtime_config_sha256,
+        ) {
+            (Some(a), Some(b)) => a == b,
+            _ => runtime_manifest_match,
+        };
         let runtime_identity_match = a.runtime_identity.network_id == b.runtime_identity.network_id
             && a.runtime_identity.protocol == b.runtime_identity.protocol
             && a.runtime_identity.genesis_hash == b.runtime_identity.genesis_hash;
@@ -79,12 +97,14 @@ impl ResultDiff {
         let metric_diffs = metric_diffs(a, b);
         Self {
             schema_version: COMPARE_DIFF_SCHEMA_VERSION,
-            same_config: simulation_manifest_match
-                && runtime_manifest_match
+            same_config: simulation_config_match
+                && runtime_config_match
                 && runtime_identity_match
                 && producer_identity_match,
             simulation_manifest_match,
+            simulation_config_match: Some(simulation_config_match),
             runtime_manifest_match,
+            runtime_config_match: Some(runtime_config_match),
             runtime_identity_match,
             producer_identity_match,
             outcome_a: a.outcome,
@@ -113,7 +133,9 @@ impl ResultDiff {
             concat!(
                 "same config: {}\n",
                 "  simulation manifest match: {}\n",
+                "  simulation config match: {}\n",
                 "  runtime manifest match: {}\n",
+                "  runtime config match: {}\n",
                 "  runtime identity match: {}\n",
                 "  producer identity match: {}\n",
                 "outcome: {} -> {}\n",
@@ -128,7 +150,11 @@ impl ResultDiff {
             ),
             self.same_config,
             self.simulation_manifest_match,
+            self.simulation_config_match
+                .unwrap_or(self.simulation_manifest_match),
             self.runtime_manifest_match,
+            self.runtime_config_match
+                .unwrap_or(self.runtime_manifest_match),
             self.runtime_identity_match,
             self.producer_identity_match,
             outcome_label(self.outcome_a),
@@ -757,6 +783,15 @@ mod tests {
             "path": "baselines/result.json",
             "diff": ResultDiff::from_results(&baseline, &current)
         });
+        current_json["baselineDiff"]["diff"]["schemaVersion"] = json!(1);
+        current_json["baselineDiff"]["diff"]
+            .as_object_mut()
+            .expect("diff should be an object")
+            .remove("simulationConfigMatch");
+        current_json["baselineDiff"]["diff"]
+            .as_object_mut()
+            .expect("diff should be an object")
+            .remove("runtimeConfigMatch");
         tokio::fs::write(
             dir.path().join("result.json"),
             serde_json::to_vec(&current_json).expect("result should encode"),
@@ -772,17 +807,26 @@ mod tests {
             .as_ref()
             .expect("baseline diff should deserialize");
         assert_eq!(loaded_baseline_diff.path, "baselines/result.json");
-        assert_eq!(
-            loaded_baseline_diff.diff,
-            ResultDiff::from_results(&baseline, &current)
-        );
+        assert_eq!(loaded_baseline_diff.diff.schema_version, 1);
+        assert!(loaded_baseline_diff.diff.simulation_config_match.is_none());
+        assert!(loaded_baseline_diff.diff.runtime_config_match.is_none());
 
         // A loaded augmented result must itself re-serialize without losing the
         // embedded baselineDiff, so it can serve as a baseline for a later run.
-        let reserialized: SimResult = serde_json::from_value(
-            serde_json::to_value(&loaded).expect("loaded result should re-serialize"),
-        )
-        .expect("re-serialized result should deserialize");
+        let reserialized_json =
+            serde_json::to_value(&loaded).expect("loaded result should re-serialize");
+        assert!(
+            reserialized_json["baselineDiff"]["diff"]
+                .get("simulationConfigMatch")
+                .is_none()
+        );
+        assert!(
+            reserialized_json["baselineDiff"]["diff"]
+                .get("runtimeConfigMatch")
+                .is_none()
+        );
+        let reserialized: SimResult = serde_json::from_value(reserialized_json)
+            .expect("re-serialized result should deserialize");
         assert_eq!(reserialized, loaded);
     }
 
@@ -886,13 +930,113 @@ mod tests {
         let a = result_from_json(minimal_result_json(SIM_RESULT_SCHEMA_VERSION));
         let mut b_json = minimal_result_json(SIM_RESULT_SCHEMA_VERSION);
         b_json["manifestHashes"]["simulationManifestSha256"] = json!("different-sim");
+        b_json["manifestHashes"]["simulationConfigSha256"] = json!("different-config");
         let b = result_from_json(b_json);
 
         let diff = ResultDiff::from_results(&a, &b);
 
         assert!(!diff.same_config);
         assert!(!diff.simulation_manifest_match);
+        assert_eq!(diff.simulation_config_match, Some(false));
         assert!(diff.runtime_manifest_match);
+    }
+
+    #[test]
+    fn compare_treats_run_identity_difference_as_same_config() {
+        let a = result_from_json(minimal_result_json(SIM_RESULT_SCHEMA_VERSION));
+        let mut b_json = minimal_result_json(SIM_RESULT_SCHEMA_VERSION);
+        b_json["nonceNamespace"] = json!(2);
+        b_json["manifestHashes"]["simulationManifestSha256"] = json!("different-sim");
+        let b = result_from_json(b_json);
+
+        let diff = ResultDiff::from_results(&a, &b);
+
+        assert!(diff.same_config);
+        assert!(!diff.simulation_manifest_match);
+        assert_eq!(diff.simulation_config_match, Some(true));
+    }
+
+    #[test]
+    fn compare_falls_back_to_exact_manifest_match_for_legacy_results() {
+        let mut a_json = minimal_result_json(SIM_RESULT_SCHEMA_VERSION);
+        let mut b_json = minimal_result_json(SIM_RESULT_SCHEMA_VERSION);
+        a_json["manifestHashes"]
+            .as_object_mut()
+            .expect("manifest hashes should be an object")
+            .remove("simulationConfigSha256");
+        b_json["manifestHashes"]
+            .as_object_mut()
+            .expect("manifest hashes should be an object")
+            .remove("simulationConfigSha256");
+
+        let matching = ResultDiff::from_results(
+            &result_from_json(a_json.clone()),
+            &result_from_json(b_json.clone()),
+        );
+        assert_eq!(matching.simulation_config_match, Some(true));
+        assert!(matching.same_config);
+
+        b_json["manifestHashes"]["simulationManifestSha256"] = json!("different-sim");
+        let different =
+            ResultDiff::from_results(&result_from_json(a_json), &result_from_json(b_json));
+        assert_eq!(different.simulation_config_match, Some(false));
+        assert!(!different.same_config);
+    }
+
+    #[test]
+    fn compare_falls_back_to_exact_runtime_match_for_legacy_results() {
+        let mut a_json = minimal_result_json(SIM_RESULT_SCHEMA_VERSION);
+        let mut b_json = minimal_result_json(SIM_RESULT_SCHEMA_VERSION);
+        a_json["manifestHashes"]
+            .as_object_mut()
+            .expect("manifest hashes should be an object")
+            .remove("runtimeConfigSha256");
+        b_json["manifestHashes"]
+            .as_object_mut()
+            .expect("manifest hashes should be an object")
+            .remove("runtimeConfigSha256");
+
+        let matching = ResultDiff::from_results(
+            &result_from_json(a_json.clone()),
+            &result_from_json(b_json.clone()),
+        );
+        assert_eq!(matching.runtime_config_match, Some(true));
+        assert!(matching.same_config);
+
+        b_json["manifestHashes"]["runtimeManifestSha256"] = json!("different-runtime");
+        let different =
+            ResultDiff::from_results(&result_from_json(a_json), &result_from_json(b_json));
+        assert_eq!(different.runtime_config_match, Some(false));
+        assert!(!different.same_config);
+    }
+
+    #[test]
+    fn compare_treats_runtime_dial_address_difference_as_same_config() {
+        let a = result_from_json(minimal_result_json(SIM_RESULT_SCHEMA_VERSION));
+        let mut b_json = minimal_result_json(SIM_RESULT_SCHEMA_VERSION);
+        b_json["manifestHashes"]["runtimeManifestSha256"] = json!("different-runtime");
+        let b = result_from_json(b_json);
+
+        let diff = ResultDiff::from_results(&a, &b);
+
+        assert!(diff.same_config);
+        assert!(!diff.runtime_manifest_match);
+        assert_eq!(diff.runtime_config_match, Some(true));
+    }
+
+    #[test]
+    fn compare_reports_runtime_config_mismatch() {
+        let a = result_from_json(minimal_result_json(SIM_RESULT_SCHEMA_VERSION));
+        let mut b_json = minimal_result_json(SIM_RESULT_SCHEMA_VERSION);
+        b_json["manifestHashes"]["runtimeManifestSha256"] = json!("different-runtime");
+        b_json["manifestHashes"]["runtimeConfigSha256"] = json!("different-runtime-config");
+        let b = result_from_json(b_json);
+
+        let diff = ResultDiff::from_results(&a, &b);
+
+        assert!(!diff.same_config);
+        assert!(!diff.runtime_manifest_match);
+        assert_eq!(diff.runtime_config_match, Some(false));
     }
 
     #[test]
@@ -1061,7 +1205,9 @@ mod tests {
         let text = ResultDiff::from_results(&result, &result).render_text();
 
         assert!(text.contains("simulation manifest match:"));
+        assert!(text.contains("simulation config match:"));
         assert!(text.contains("runtime manifest match:"));
+        assert!(text.contains("runtime config match:"));
         assert!(text.contains("runtime identity match:"));
         assert!(text.contains("producer identity match:"));
     }
@@ -1237,7 +1383,9 @@ mod tests {
             "nonceNamespace": 1,
             "manifestHashes": {
                 "simulationManifestSha256": "sim",
+                "simulationConfigSha256": "sim-config",
                 "runtimeManifestSha256": "runtime",
+                "runtimeConfigSha256": "runtime-config",
                 "bootstrapManifest": {
                     "status": "unsupported",
                     "reason": "existing target"

@@ -73,8 +73,15 @@ pub enum SimRunOutcome {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ManifestHashes {
+    /// SHA-256 of the exact emitted `simulation.json` bytes.
     pub simulation_manifest_sha256: String,
+    /// SHA-256 of effective configuration after excluding run-resolved identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub simulation_config_sha256: Option<String>,
     pub runtime_manifest_sha256: String,
+    /// SHA-256 of runtime configuration after excluding backend dial addresses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_config_sha256: Option<String>,
     pub bootstrap_manifest: MetricAvailability<String>,
 }
 
@@ -601,5 +608,7 @@ mod tests {
         let result: SimResult = serde_json::from_value(value).expect("old result should parse");
 
         assert!(result.contracts.is_empty());
+        assert!(result.manifest_hashes.simulation_config_sha256.is_none());
+        assert!(result.manifest_hashes.runtime_config_sha256.is_none());
     }
 }

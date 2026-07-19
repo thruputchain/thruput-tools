@@ -392,7 +392,13 @@ generates a run-unique prefix and records it in `simulation.json` and
 target or an empty replay cache for the participating accounts.
 The emitted `simulation.json` is normalized after CLI overrides are applied;
 its hash in `result.json` refers to that emitted artifact, not necessarily the
-source scenario file.
+source scenario file. `result.json` also records a separate simulation
+configuration hash for comparisons. That projection excludes the `resolved`
+run metadata, the diagnostic-only baseline reference, the runtime-manifest
+filesystem path, and the local provider's resolved RPC URL. It retains an
+existing provider's RPC URL because the endpoint is part of the measured path.
+The exact emitted artifact continues to retain the resolved nonce namespace and
+all endpoint/path diagnostics.
 
 V2 workloads should add richer contract scenarios:
 
@@ -516,7 +522,7 @@ logging land; target logs are only expected when a provider supplies them.
 `result.json` should include:
 
 - run id;
-- simulation manifest hash;
+- exact simulation manifest hash and stable simulation configuration hash;
 - bootstrap manifest hash and availability, if a bootstrap manifest is known;
 - runtime manifest hash;
 - protocol, genesis hash, producer binary/version/commit;
@@ -575,15 +581,19 @@ it should never be the only source of truth.
 - chain progress and stall deltas;
 - storage-token and NNInt compute deltas;
 - metric availability transitions, reported separately from numeric deltas;
-- manifest/runtime/producer identity match flags. Runtime manifest bytes are
-  hash-compared. Producer comparison uses the runtime manifest's producer
+- exact and stable configuration match flags for both simulation and runtime
+  manifests, plus runtime/producer identity flags. `sameConfig` uses the stable
+  configuration hashes, while exact manifest equality remains visible as a
+  diagnostic. The stable runtime hash excludes backend dial addresses but
+  preserves endpoint availability and all other runtime metadata. Producer
+  comparison uses the runtime manifest's producer
   identity tuple (`binary`, `version`, and optional `commitHash`). A separate
   managed-provider `executableHash` field is reserved for a future Phase 2+
   managed provider that can record one; Phase 1's `existing` provider never
   supplies a hash, and `ProducerIdentity` currently exposes no such field.
-  When any of these identifiers differ, the comparison is flagged as
-  cross-config; the diff is still emitted but should be read with that
-  context.
+  When either stable configuration hash or any identity differs, the
+  comparison is flagged as cross-config; the diff is still emitted but should
+  be read with that context.
 
 Comparisons skip numeric deltas for any metric where either side is
 `unsupported` or `unavailable`. The availability transition itself remains in

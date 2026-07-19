@@ -6,20 +6,26 @@ use sha2::{Digest, Sha256};
 
 use crate::error::SimError;
 use crate::manifest::{SimulationManifest, WorkloadKind};
+use crate::target::TargetProviderKind;
 
 /// A simulation manifest loaded from disk with its encoded bytes and hash.
 #[derive(Debug, Clone)]
 pub struct LoadedSimulationManifest {
     pub manifest: SimulationManifest,
     pub sha256: String,
+    pub config_sha256: String,
     pub bytes: Vec<u8>,
 }
 
 impl LoadedSimulationManifest {
-    /// Re-encode the manifest after runtime overrides and refresh its hash.
-    pub fn refresh_sha256(&mut self) -> Result<(), SimError> {
-        self.bytes = serde_json::to_vec_pretty(&self.manifest)?;
-        self.sha256 = sha256_hex(&self.bytes);
+    /// Re-encode the manifest after runtime overrides and refresh both hashes.
+    pub fn refresh_hashes(&mut self) -> Result<(), SimError> {
+        let bytes = serde_json::to_vec_pretty(&self.manifest)?;
+        let sha256 = sha256_hex(&bytes);
+        let config_sha256 = simulation_config_sha256(&self.manifest)?;
+        self.bytes = bytes;
+        self.sha256 = sha256;
+        self.config_sha256 = config_sha256;
         Ok(())
     }
 }
@@ -29,11 +35,30 @@ pub async fn load_simulation_manifest(path: &Path) -> Result<LoadedSimulationMan
     let bytes = tokio::fs::read(path).await?;
     let manifest = serde_json::from_slice(&bytes)?;
     let sha256 = sha256_hex(&bytes);
+    let config_sha256 = simulation_config_sha256(&manifest)?;
     Ok(LoadedSimulationManifest {
         manifest,
         sha256,
+        config_sha256,
         bytes,
     })
+}
+
+/// Hash effective simulation configuration without run-resolved identity.
+///
+/// The projection omits `resolved`, the diagnostic-only baseline reference, the
+/// runtime-manifest filesystem path, and the local provider's resolved RPC URL.
+/// An existing provider's RPC URL remains part of configuration because it
+/// identifies the measured endpoint.
+pub fn simulation_config_sha256(manifest: &SimulationManifest) -> Result<String, SimError> {
+    let mut config = manifest.clone();
+    config.resolved = None;
+    config.baseline = None;
+    config.target.runtime_manifest = None;
+    if matches!(config.target.provider, TargetProviderKind::Local) {
+        config.target.rpc_url = None;
+    }
+    Ok(sha256_hex(&serde_json::to_vec(&config)?))
 }
 
 /// Return a 0x-prefixed SHA-256 digest for bytes.
@@ -132,6 +157,86 @@ mod tests {
     }
 
     #[test]
+    fn simulation_config_hash_excludes_run_identity_but_preserves_effective_config() {
+        let manifest = simulation_manifest(
+            "existing",
+            "http://127.0.0.1:9545",
+            "/tmp/runtime-a.json",
+            1,
+        );
+        let mut loaded = LoadedSimulationManifest {
+            config_sha256: String::new(),
+            manifest: manifest.clone(),
+            sha256: String::new(),
+            bytes: Vec::new(),
+        };
+
+        loaded.refresh_hashes().expect("hashes should refresh");
+
+        assert_eq!(loaded.sha256, sha256_hex(&loaded.bytes));
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&loaded.bytes)
+                .expect("normalized manifest should parse")["resolved"]["nonceNamespace"],
+            json!(1)
+        );
+
+        let mut different_nonce = manifest.clone();
+        different_nonce
+            .resolved
+            .as_mut()
+            .expect("resolved metadata should exist")
+            .nonce_namespace = 2;
+        let different_nonce_bytes =
+            serde_json::to_vec_pretty(&different_nonce).expect("manifest should encode");
+        assert_ne!(loaded.sha256, sha256_hex(&different_nonce_bytes));
+        assert_eq!(
+            loaded.config_sha256,
+            simulation_config_sha256(&different_nonce).expect("config should hash")
+        );
+
+        let mut different_manifest_path = manifest.clone();
+        different_manifest_path.target.runtime_manifest = Some("/tmp/runtime-b.json".into());
+        different_manifest_path
+            .resolved
+            .as_mut()
+            .expect("resolved metadata should exist")
+            .runtime_manifest = "/tmp/runtime-b.json".into();
+        assert_eq!(
+            loaded.config_sha256,
+            simulation_config_sha256(&different_manifest_path).expect("config should hash")
+        );
+
+        let mut different_existing_rpc = manifest.clone();
+        different_existing_rpc.target.rpc_url = Some("http://127.0.0.1:9546".into());
+        assert_ne!(
+            loaded.config_sha256,
+            simulation_config_sha256(&different_existing_rpc).expect("config should hash")
+        );
+
+        let local_a =
+            simulation_manifest("local", "http://127.0.0.1:49152", "/tmp/runtime-a.json", 1);
+        let local_b =
+            simulation_manifest("local", "http://127.0.0.1:49153", "/tmp/runtime-b.json", 2);
+        assert_eq!(
+            simulation_config_sha256(&local_a).expect("config should hash"),
+            simulation_config_sha256(&local_b).expect("config should hash")
+        );
+
+        let mut different_seed = manifest;
+        different_seed.baseline = Some("baselines/previous-result.json".into());
+        assert_eq!(
+            loaded.config_sha256,
+            simulation_config_sha256(&different_seed).expect("config should hash")
+        );
+
+        different_seed.seed = "different-seed".into();
+        assert_ne!(
+            loaded.config_sha256,
+            simulation_config_sha256(&different_seed).expect("config should hash")
+        );
+    }
+
+    #[test]
     fn json_string_rejects_non_string_values() {
         let err = json_string(&123_u64, "notAString").expect_err("number should reject");
 
@@ -186,5 +291,30 @@ mod tests {
                 .try_exists()
                 .expect("tmp existence should be knowable")
         );
+    }
+
+    fn simulation_manifest(
+        provider: &str,
+        rpc_url: &str,
+        runtime_manifest: &str,
+        nonce_namespace: u32,
+    ) -> SimulationManifest {
+        serde_json::from_value(json!({
+            "schemaVersion": 2,
+            "kind": "groundhog-simulation",
+            "name": "config-hash-test",
+            "seed": "seed-v1",
+            "target": {
+                "provider": provider,
+                "rpcUrl": rpc_url,
+                "runtimeManifest": runtime_manifest
+            },
+            "resolved": {
+                "rpcUrl": rpc_url,
+                "runtimeManifest": runtime_manifest,
+                "nonceNamespace": nonce_namespace
+            }
+        }))
+        .expect("simulation manifest fixture should parse")
     }
 }
