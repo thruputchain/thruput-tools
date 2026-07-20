@@ -36,6 +36,10 @@ pub struct GatewayContext {
     /// the scheduler directly.
     pub scheduler: Arc<RwLock<Option<SchedulerCoord_SchedulerCoord1_Client>>>,
 
+    /// Rebuilt scheduler pool held away from request handlers until its
+    /// readiness grace period has elapsed.
+    pub(crate) pending_scheduler: Arc<RwLock<Option<PendingSchedulerReconnect>>>,
+
     /// x23 RPC client to hogd indexer.
     /// Used for: `get_transaction_info`, `get_events` (paginated).
     pub indexer: Arc<RwLock<Option<IndexerBlockExplorer_IndexerBlockExplorer1_Client>>>,
@@ -104,7 +108,7 @@ impl GatewayContext {
         ));
 
         let protocol_override = config.hogd_protocol_override.as_deref();
-        let startup_timeout = Duration::from_millis(config.view_timeout_ms);
+        let startup_timeout = Duration::from_millis(config.backend_connect_timeout_ms.max(1));
 
         let indexer = Arc::new(RwLock::new(
             connect_optional_indexer(
@@ -173,6 +177,7 @@ impl GatewayContext {
 
         Self {
             scheduler,
+            pending_scheduler: Arc::new(RwLock::new(None)),
             indexer,
             batch_submitter,
             storage_batcher,
@@ -183,6 +188,12 @@ impl GatewayContext {
             metrics,
         }
     }
+}
+
+#[derive(Clone)]
+pub(crate) struct PendingSchedulerReconnect {
+    pub(crate) client: SchedulerCoord_SchedulerCoord1_Client,
+    pub(crate) probe_not_before: Instant,
 }
 
 pub(crate) async fn connect_optional_scheduler(

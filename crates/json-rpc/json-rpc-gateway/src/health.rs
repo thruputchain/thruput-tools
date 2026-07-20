@@ -20,9 +20,9 @@ use xdr_common::StringM;
 use crate::{
     config::{GatewayConfig, HealthBackend},
     context::{
-        GatewayContext, connect_optional_db_gateway, connect_optional_indexer,
-        connect_optional_scheduler, connect_optional_view_gateway, db_gateway_pool_size,
-        scheduler_pool_size,
+        GatewayContext, PendingSchedulerReconnect, connect_optional_db_gateway,
+        connect_optional_indexer, connect_optional_scheduler, connect_optional_view_gateway,
+        db_gateway_pool_size, scheduler_pool_size,
     },
     metrics::BackendRequestOutcome,
 };
@@ -321,6 +321,23 @@ struct ProbeState {
     last_success: BTreeMap<HealthBackend, String>,
 }
 
+fn backend_probe_timeout(config: &GatewayConfig) -> Duration {
+    Duration::from_millis(
+        config
+            .request_timeout_ms
+            .min(config.health_probe_interval_ms)
+            .max(1),
+    )
+}
+
+fn backend_reconnect_timeout(config: &GatewayConfig) -> Duration {
+    Duration::from_millis(config.backend_connect_timeout_ms.max(1))
+}
+
+fn scheduler_reconnect_grace(config: &GatewayConfig) -> Duration {
+    Duration::from_millis(config.scheduler_reconnect_grace_ms)
+}
+
 async fn probe_once(
     ctx: &GatewayContext,
     started_at: Instant,
@@ -331,14 +348,13 @@ async fn probe_once(
     let config = &ctx.config;
     let now = timestamp_now();
     let mut backends = BTreeMap::new();
-    let probe_timeout = Duration::from_millis(
-        config
-            .request_timeout_ms
-            .min(config.health_probe_interval_ms)
-            .max(1),
-    );
+    let probes = probe_backends(ctx).await;
 
-    let scheduler = probe_scheduler(ctx, probe_timeout).await;
+    let scheduler = probes.scheduler;
+    let indexer = probes.indexer;
+    let db_gateway = probes.db_gateway;
+    let view_gateway = probes.view_gateway;
+
     if let Some(tip) = scheduler.tip.as_ref() {
         state.last_tip = Some((tip.height.clone(), Instant::now()));
     }
@@ -364,13 +380,6 @@ async fn probe_once(
         ),
     );
 
-    let protocol_version = config
-        .hogd_protocol_override
-        .as_deref()
-        .unwrap_or(PROTOCOL_VERSION);
-    let protocol: Protocol = StringM(protocol_version.as_bytes().to_vec());
-
-    let indexer = probe_indexer(ctx, protocol_version, &protocol, probe_timeout).await;
     backends.insert(
         HealthBackend::Indexer.as_str(),
         backend_health(
@@ -383,7 +392,6 @@ async fn probe_once(
         ),
     );
 
-    let db_gateway = probe_db_gateway(ctx, protocol_version, &protocol, probe_timeout).await;
     backends.insert(
         HealthBackend::DbGateway.as_str(),
         backend_health(
@@ -396,7 +404,6 @@ async fn probe_once(
         ),
     );
 
-    let view_gateway = probe_view_gateway(ctx, protocol_version, &protocol, probe_timeout).await;
     backends.insert(
         HealthBackend::ViewGateway.as_str(),
         backend_health(
@@ -427,6 +434,55 @@ async fn probe_once(
     }
 }
 
+struct BackendProbeResults {
+    scheduler: SchedulerProbeResult,
+    indexer: ProbeResult,
+    db_gateway: ProbeResult,
+    view_gateway: ProbeResult,
+}
+
+async fn probe_backends(ctx: &GatewayContext) -> BackendProbeResults {
+    let config = &ctx.config;
+    let probe_timeout = backend_probe_timeout(config);
+    let reconnect_timeout = backend_reconnect_timeout(config);
+    let protocol_version = config
+        .hogd_protocol_override
+        .as_deref()
+        .unwrap_or(PROTOCOL_VERSION);
+    let protocol: Protocol = StringM(protocol_version.as_bytes().to_vec());
+
+    let (scheduler, indexer, db_gateway, view_gateway) = tokio::join!(
+        probe_scheduler(ctx, probe_timeout, reconnect_timeout),
+        probe_indexer(
+            ctx,
+            protocol_version,
+            &protocol,
+            probe_timeout,
+            reconnect_timeout,
+        ),
+        probe_db_gateway(
+            ctx,
+            protocol_version,
+            &protocol,
+            probe_timeout,
+            reconnect_timeout,
+        ),
+        probe_view_gateway(
+            ctx,
+            protocol_version,
+            &protocol,
+            probe_timeout,
+            reconnect_timeout,
+        ),
+    );
+    BackendProbeResults {
+        scheduler,
+        indexer,
+        db_gateway,
+        view_gateway,
+    }
+}
+
 struct ProbeResult {
     up: bool,
     error: Option<String>,
@@ -438,11 +494,21 @@ struct SchedulerProbeResult {
     error: Option<String>,
 }
 
-async fn probe_scheduler(ctx: &GatewayContext, timeout: Duration) -> SchedulerProbeResult {
-    let client = match ctx.scheduler.read().await.clone() {
-        Some(client) => client,
-        None => match tokio::time::timeout(
-            timeout,
+async fn probe_scheduler(
+    ctx: &GatewayContext,
+    probe_timeout: Duration,
+    reconnect_timeout: Duration,
+) -> SchedulerProbeResult {
+    // Bind the clone separately so the read guard is dropped before a
+    // reconnect path tries to acquire the write lock. A `match` scrutinee
+    // temporary lives through the selected arm and would self-deadlock here.
+    let current_client = { ctx.scheduler.read().await.clone() };
+    let Some(client) = current_client else {
+        if let Some(result) = advance_pending_scheduler(ctx, probe_timeout).await {
+            return result;
+        }
+        match tokio::time::timeout(
+            reconnect_timeout,
             connect_optional_scheduler(
                 &ctx.config.scheduler_address,
                 scheduler_pool_size(&ctx.config),
@@ -458,8 +524,16 @@ async fn probe_scheduler(ctx: &GatewayContext, timeout: Duration) -> SchedulerPr
                 };
             }
             Ok(Ok(Some(client))) => {
-                *ctx.scheduler.write().await = Some(client.clone());
-                client
+                let grace = scheduler_reconnect_grace(&ctx.config);
+                *ctx.pending_scheduler.write().await = Some(PendingSchedulerReconnect {
+                    client,
+                    probe_not_before: Instant::now() + grace,
+                });
+                return SchedulerProbeResult {
+                    up: false,
+                    tip: None,
+                    error: Some("scheduler connected; awaiting readiness grace".to_string()),
+                };
             }
             Ok(Ok(None)) => {
                 return SchedulerProbeResult {
@@ -475,11 +549,11 @@ async fn probe_scheduler(ctx: &GatewayContext, timeout: Duration) -> SchedulerPr
                     error: Some(bounded_error(err.to_string())),
                 };
             }
-        },
+        }
     };
 
     let started_at = Instant::now();
-    let rpc_result = tokio::time::timeout(timeout, client.schedcoord_get_tip()).await;
+    let rpc_result = tokio::time::timeout(probe_timeout, client.schedcoord_get_tip()).await;
     let outcome = match &rpc_result {
         Err(_) => BackendRequestOutcome::Timeout,
         Ok(Ok(SchedulerGetTipResult::SchedulerGetTipOK { .. })) => BackendRequestOutcome::Ok,
@@ -526,17 +600,51 @@ async fn probe_scheduler(ctx: &GatewayContext, timeout: Duration) -> SchedulerPr
     }
 }
 
+async fn advance_pending_scheduler(
+    ctx: &GatewayContext,
+    probe_timeout: Duration,
+) -> Option<SchedulerProbeResult> {
+    let pending = { ctx.pending_scheduler.read().await.clone() }?;
+    let null_result =
+        tokio::time::timeout(probe_timeout, pending.client.schedulercoord_null()).await;
+    if !matches!(null_result, Ok(Ok(()))) {
+        *ctx.pending_scheduler.write().await = None;
+        return Some(SchedulerProbeResult {
+            up: false,
+            tip: None,
+            error: Some("pending scheduler connection unavailable".to_string()),
+        });
+    }
+    if Instant::now() < pending.probe_not_before {
+        return Some(SchedulerProbeResult {
+            up: false,
+            tip: None,
+            error: Some("scheduler reconnect readiness grace active".to_string()),
+        });
+    }
+
+    *ctx.pending_scheduler.write().await = None;
+    *ctx.scheduler.write().await = Some(pending.client);
+    Some(SchedulerProbeResult {
+        up: false,
+        tip: None,
+        error: Some("scheduler reconnected; awaiting tip probe".to_string()),
+    })
+}
+
 async fn probe_indexer(
     ctx: &GatewayContext,
     protocol_version: &str,
     protocol: &Protocol,
-    timeout: Duration,
+    probe_timeout: Duration,
+    reconnect_timeout: Duration,
 ) -> ProbeResult {
-    let Some(client) = ctx.indexer.read().await.clone() else {
+    let current_client = { ctx.indexer.read().await.clone() };
+    let Some(client) = current_client else {
         match connect_optional_indexer(
             ctx.config.indexer_address.as_deref(),
             Some(protocol_version),
-            timeout,
+            reconnect_timeout,
             Some(&ctx.metrics),
         )
         .await
@@ -556,7 +664,7 @@ async fn probe_indexer(
     };
     let started_at = Instant::now();
     let rpc_result =
-        tokio::time::timeout(timeout, client.indexer_block_explorer_intro(protocol)).await;
+        tokio::time::timeout(probe_timeout, client.indexer_block_explorer_intro(protocol)).await;
     let outcome = match &rpc_result {
         Err(_) => BackendRequestOutcome::Timeout,
         Ok(Ok(IndexerBlockExplorerIntroOutcome::IntroSuccess)) => BackendRequestOutcome::Ok,
@@ -587,14 +695,16 @@ async fn probe_db_gateway(
     ctx: &GatewayContext,
     protocol_version: &str,
     protocol: &Protocol,
-    timeout: Duration,
+    probe_timeout: Duration,
+    reconnect_timeout: Duration,
 ) -> ProbeResult {
-    let Some(client) = ctx.db_gateway.read().await.clone() else {
+    let current_client = { ctx.db_gateway.read().await.clone() };
+    let Some(client) = current_client else {
         match connect_optional_db_gateway(
             ctx.config.db_gateway_address.as_deref(),
             db_gateway_pool_size(&ctx.config),
             Some(protocol_version),
-            timeout,
+            reconnect_timeout,
             Some(&ctx.metrics),
         )
         .await
@@ -613,7 +723,7 @@ async fn probe_db_gateway(
         }
     };
     let started_at = Instant::now();
-    let rpc_result = tokio::time::timeout(timeout, client.dbgateway_intro(protocol)).await;
+    let rpc_result = tokio::time::timeout(probe_timeout, client.dbgateway_intro(protocol)).await;
     let outcome = match &rpc_result {
         Err(_) => BackendRequestOutcome::Timeout,
         Ok(Ok(DbGatewayIntroOutcome::DbGatewayIntroSuccess)) => BackendRequestOutcome::Ok,
@@ -644,13 +754,15 @@ async fn probe_view_gateway(
     ctx: &GatewayContext,
     protocol_version: &str,
     protocol: &Protocol,
-    timeout: Duration,
+    probe_timeout: Duration,
+    reconnect_timeout: Duration,
 ) -> ProbeResult {
-    let Some(client) = ctx.view_gateway.read().await.clone() else {
+    let current_client = { ctx.view_gateway.read().await.clone() };
+    let Some(client) = current_client else {
         match connect_optional_view_gateway(
             ctx.config.view_gateway_address.as_deref(),
             Some(protocol_version),
-            timeout,
+            reconnect_timeout,
             Some(&ctx.metrics),
         )
         .await
@@ -669,7 +781,7 @@ async fn probe_view_gateway(
         }
     };
     let started_at = Instant::now();
-    let rpc_result = tokio::time::timeout(timeout, client.viewgateway_intro(protocol)).await;
+    let rpc_result = tokio::time::timeout(probe_timeout, client.viewgateway_intro(protocol)).await;
     let outcome = match &rpc_result {
         Err(_) => BackendRequestOutcome::Timeout,
         Ok(Ok(ViewGatewayIntroOutcome::ViewGatewayIntroSuccess)) => BackendRequestOutcome::Ok,
@@ -814,7 +926,176 @@ fn bounded_error(message: String) -> String {
 
 #[cfg(test)]
 mod tests {
+    use async_trait::async_trait;
+    use groundhog_indexer::{
+        AddressTransactionQuery, EventPage as IdxEventPage, EventQuery,
+        IndexerBlockExplorer_IndexerBlockExplorer1,
+        IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher,
+        TransactionPage as IdxTransactionPage, TransactionQuery, TransactionRefPage, TxInfoResult,
+    };
+    use groundhog_scheduler::{
+        CoordinatorRegistrationOutcome, DbSchedResult, DbTip, Nomination,
+        ParallelSignedTransactionBatch, SchedulerCommitOutcome, SchedulerGetTipResult,
+        SchedulerNominationResult, SchedulerValidationResult,
+        sched_coord::{SchedulerCoord_SchedulerCoord1, SchedulerCoord_SchedulerCoord1_Dispatcher},
+    };
+    use groundhog_xdr::genesis::GenesisConfiguration;
+    use groundhog_xdr::transaction::{
+        OptSignedTransactionBatch, SignedTransactionHash, SignedTransactionHashBatch,
+    };
+    use rpc_driver::{ProgramError, RpcServer, ServiceMap};
+    use tokio::net::TcpListener;
+
+    use crate::metrics::GatewayMetrics;
+
     use super::*;
+
+    struct SlowIntroIndexer;
+
+    struct StuckTipScheduler;
+
+    #[async_trait]
+    impl SchedulerCoord_SchedulerCoord1 for StuckTipScheduler {
+        async fn schedulercoord_null(&self) -> Result<(), ProgramError> {
+            Ok(())
+        }
+
+        async fn schedulercoord_intro_coord(
+            &self,
+            _card: groundhog_scheduler::CoordCard,
+        ) -> Result<CoordinatorRegistrationOutcome, ProgramError> {
+            panic!("health probe test should not call intro_coord")
+        }
+
+        async fn schedulercoord_submit_unvetted(
+            &self,
+            _batch: ParallelSignedTransactionBatch,
+        ) -> Result<(), ProgramError> {
+            panic!("health probe test should not submit")
+        }
+
+        async fn schedulercoord_submit_vetted(
+            &self,
+            _validator: groundhog_coordinator::discovery::ValidatorID,
+            _batch: ParallelSignedTransactionBatch,
+        ) -> Result<(), ProgramError> {
+            panic!("health probe test should not submit")
+        }
+
+        async fn schedulercoord_nominate(
+            &self,
+            _tip: DbTip,
+        ) -> Result<SchedulerNominationResult, ProgramError> {
+            panic!("health probe test should not nominate")
+        }
+
+        async fn schedulercoord_validate(
+            &self,
+            _tip: DbTip,
+            _nomination: Nomination,
+        ) -> Result<SchedulerValidationResult, ProgramError> {
+            panic!("health probe test should not validate")
+        }
+
+        async fn schedulercoord_commit_block(
+            &self,
+            _block: groundhog_scheduler::BlockID,
+        ) -> Result<SchedulerCommitOutcome, ProgramError> {
+            panic!("health probe test should not commit")
+        }
+
+        async fn schedcoord_get_tip(&self) -> Result<SchedulerGetTipResult, ProgramError> {
+            std::future::pending().await
+        }
+
+        async fn schedcoord_load_genesis_configuration(
+            &self,
+            _genesis: GenesisConfiguration,
+        ) -> Result<DbSchedResult, ProgramError> {
+            panic!("health probe test should not load genesis")
+        }
+
+        async fn schedcoord_lookup_transactions(
+            &self,
+            _hashes: SignedTransactionHashBatch,
+        ) -> Result<OptSignedTransactionBatch, ProgramError> {
+            panic!("health probe test should not look up transactions")
+        }
+    }
+
+    #[async_trait]
+    impl IndexerBlockExplorer_IndexerBlockExplorer1 for SlowIntroIndexer {
+        async fn indexer_block_explorer_intro(
+            &self,
+            _protocol: Protocol,
+        ) -> Result<IndexerBlockExplorerIntroOutcome, ProgramError> {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            Ok(IndexerBlockExplorerIntroOutcome::IntroSuccess)
+        }
+
+        async fn get_transaction_info(
+            &self,
+            _tx_hash: SignedTransactionHash,
+        ) -> Result<TxInfoResult, ProgramError> {
+            panic!("reconnect test should not issue indexer data RPCs")
+        }
+
+        async fn get_events(&self, _query: EventQuery) -> Result<IdxEventPage, ProgramError> {
+            panic!("reconnect test should not issue indexer data RPCs")
+        }
+
+        async fn get_transactions(
+            &self,
+            _query: TransactionQuery,
+        ) -> Result<IdxTransactionPage, ProgramError> {
+            panic!("reconnect test should not issue indexer data RPCs")
+        }
+
+        async fn get_transactions_by_address(
+            &self,
+            _query: AddressTransactionQuery,
+        ) -> Result<TransactionRefPage, ProgramError> {
+            panic!("reconnect test should not issue indexer data RPCs")
+        }
+    }
+
+    async fn start_slow_intro_indexer() -> (
+        std::net::SocketAddr,
+        tokio::task::JoinHandle<Result<(), std::io::Error>>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test indexer should bind");
+        let addr = listener
+            .local_addr()
+            .expect("test indexer should have a local address");
+        let mut services = ServiceMap::new();
+        services.add_service(Box::new(
+            IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher::new(Box::new(SlowIntroIndexer)),
+        ));
+        let server = RpcServer::new(listener, services);
+        let handle = server.start().await;
+        (addr, handle)
+    }
+
+    async fn start_stuck_tip_scheduler() -> (
+        std::net::SocketAddr,
+        tokio::task::JoinHandle<Result<(), std::io::Error>>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test scheduler should bind");
+        let addr = listener
+            .local_addr()
+            .expect("test scheduler should have a local address");
+        let mut services = ServiceMap::new();
+        services.add_service(Box::new(SchedulerCoord_SchedulerCoord1_Dispatcher::new(
+            Box::new(StuckTipScheduler),
+        )));
+        let server = RpcServer::new(listener, services);
+        let handle = server.start().await;
+        (addr, handle)
+    }
 
     #[test]
     fn required_missing_backend_is_error() {
@@ -870,6 +1151,128 @@ mod tests {
         );
 
         assert_eq!(status, HealthStatus::Degraded);
+    }
+
+    #[test]
+    fn backend_reconnect_timeout_is_independent_of_probe_interval() {
+        let config = GatewayConfig {
+            request_timeout_ms: 60_000,
+            health_probe_interval_ms: 5_000,
+            backend_connect_timeout_ms: 30_000,
+            scheduler_reconnect_grace_ms: 20_000,
+            ..GatewayConfig::default()
+        };
+
+        assert_eq!(backend_probe_timeout(&config), Duration::from_secs(5));
+        assert_eq!(backend_reconnect_timeout(&config), Duration::from_secs(30));
+        assert_eq!(scheduler_reconnect_grace(&config), Duration::from_secs(20));
+    }
+
+    #[tokio::test]
+    async fn indexer_reconnect_can_outlive_one_probe_interval() {
+        let (indexer_addr, _server) = start_slow_intro_indexer().await;
+        let config = Arc::new(GatewayConfig {
+            indexer_address: Some(indexer_addr.to_string()),
+            db_gateway_address: None,
+            view_gateway_address: None,
+            request_timeout_ms: 1_000,
+            health_probe_interval_ms: 10,
+            backend_connect_timeout_ms: 500,
+            ..GatewayConfig::default()
+        });
+        let metrics = GatewayMetrics::new("test", None).expect("test metrics should initialize");
+        let ctx = GatewayContext::assemble(
+            Arc::new(RwLock::new(None)),
+            Arc::new(RwLock::new(None)),
+            Arc::new(RwLock::new(None)),
+            Arc::new(RwLock::new(None)),
+            config,
+            metrics,
+        );
+        let protocol: Protocol = StringM(PROTOCOL_VERSION.as_bytes().to_vec());
+
+        let result = probe_indexer(
+            &ctx,
+            PROTOCOL_VERSION,
+            &protocol,
+            Duration::from_millis(10),
+            Duration::from_millis(500),
+        )
+        .await;
+
+        assert!(result.up, "reconnect should use the longer connect budget");
+        assert!(ctx.indexer.read().await.is_some());
+    }
+
+    #[tokio::test]
+    async fn scheduler_reconnect_grace_prevents_early_tip_probe() {
+        let (scheduler_addr, _server) = start_stuck_tip_scheduler().await;
+        let config = Arc::new(GatewayConfig {
+            scheduler_address: scheduler_addr.to_string(),
+            indexer_address: None,
+            db_gateway_address: None,
+            view_gateway_address: None,
+            scheduler_reconnect_grace_ms: 25,
+            ..GatewayConfig::default()
+        });
+        let metrics = GatewayMetrics::new("test", None).expect("test metrics should initialize");
+        let ctx = GatewayContext::assemble(
+            Arc::new(RwLock::new(None)),
+            Arc::new(RwLock::new(None)),
+            Arc::new(RwLock::new(None)),
+            Arc::new(RwLock::new(None)),
+            config,
+            metrics,
+        );
+
+        let reconnect_result = tokio::time::timeout(
+            Duration::from_secs(1),
+            probe_scheduler(&ctx, Duration::from_millis(25), Duration::from_millis(500)),
+        )
+        .await
+        .expect("scheduler probe should respect its timeout");
+
+        assert!(!reconnect_result.up);
+        assert_eq!(
+            reconnect_result.error.as_deref(),
+            Some("scheduler connected; awaiting readiness grace")
+        );
+        assert!(ctx.scheduler.read().await.is_none());
+        assert!(ctx.pending_scheduler.read().await.is_some());
+
+        let grace_result =
+            probe_scheduler(&ctx, Duration::from_millis(25), Duration::from_millis(500)).await;
+        assert!(!grace_result.up);
+        assert_eq!(
+            grace_result.error.as_deref(),
+            Some("scheduler reconnect readiness grace active")
+        );
+        assert!(ctx.scheduler.read().await.is_none());
+        assert!(ctx.pending_scheduler.read().await.is_some());
+
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        let promote_result =
+            probe_scheduler(&ctx, Duration::from_millis(25), Duration::from_millis(500)).await;
+        assert!(!promote_result.up);
+        assert_eq!(
+            promote_result.error.as_deref(),
+            Some("scheduler reconnected; awaiting tip probe")
+        );
+        assert!(ctx.scheduler.read().await.is_some());
+        assert!(ctx.pending_scheduler.read().await.is_none());
+
+        let probe_result = tokio::time::timeout(
+            Duration::from_secs(1),
+            probe_scheduler(&ctx, Duration::from_millis(25), Duration::from_millis(500)),
+        )
+        .await
+        .expect("post-grace scheduler probe should respect its timeout");
+        assert!(!probe_result.up);
+        assert_eq!(
+            probe_result.error.as_deref(),
+            Some("scheduler probe timed out")
+        );
+        assert!(ctx.scheduler.read().await.is_none());
     }
 
     #[tokio::test]

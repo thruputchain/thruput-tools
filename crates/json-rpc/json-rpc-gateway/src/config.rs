@@ -188,6 +188,18 @@ pub struct GatewayConfig {
     /// Interval for background readiness probes.
     pub health_probe_interval_ms: u64,
 
+    /// Maximum time to rebuild one backend connection pool after disconnect.
+    ///
+    /// This is separate from the health probe interval because reconnecting a
+    /// multi-connection x23 pool can take longer than one readiness cycle.
+    pub backend_connect_timeout_ms: u64,
+
+    /// Delay scheduler tip probes after rebuilding its connection pool.
+    ///
+    /// Older hogd schedulers accept TCP connections before coordinator
+    /// registration makes `schedcoord_get_tip` safe to call.
+    pub scheduler_reconnect_grace_ms: u64,
+
     /// Backend used for `groundhog_sendRawTransaction`.
     pub submission_backend: SubmissionBackend,
 
@@ -274,6 +286,8 @@ impl Default for GatewayConfig {
             health_required_backends: vec![HealthBackend::Scheduler, HealthBackend::Indexer],
             health_chain_tip_max_age_ms: 30_000,
             health_probe_interval_ms: 5_000,
+            backend_connect_timeout_ms: 30_000,
+            scheduler_reconnect_grace_ms: 30_000,
             submission_backend: SubmissionBackend::HogdScheduler,
             scheduler_address: "127.0.0.1:9000".into(),
             indexer_address: Some("127.0.0.1:9001".into()),

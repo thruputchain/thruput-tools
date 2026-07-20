@@ -70,6 +70,8 @@ Add gateway config and CLI options:
 --health-required-backends scheduler,indexer,db_gateway,view_gateway
 --health-chain-tip-max-age-ms <ms>
 --health-probe-interval-ms <ms>
+--backend-connect-timeout-ms <ms>
+--scheduler-reconnect-grace-ms <ms>
 ```
 
 Suggested binary defaults:
@@ -79,6 +81,8 @@ observability_listen = "127.0.0.1:9646"
 health_required_backends = ["scheduler", "indexer"]
 health_chain_tip_max_age_ms = 30000
 health_probe_interval_ms = 5000
+backend_connect_timeout_ms = 30000
+scheduler_reconnect_grace_ms = 30000
 ```
 
 Hosted release/ops override:
@@ -575,9 +579,16 @@ series shape and Grafana queries. Treat changes as dashboard-affecting.
 - Cold-start chain-tip gauges emit `NaN` until the first successful tip probe.
   Alerts should key off `groundhog_gateway_health_status` for readiness and handle
   `NaN`/unknown tip values explicitly rather than treating unknown as fresh zero.
-- The probe loop is non-overlapping. Each backend probe is capped by
-  `min(request_timeout_ms, health_probe_interval_ms)`, and the next loop sleeps
-  for `health_probe_interval_ms` after the current probe pass completes.
+- The probe loop is non-overlapping, but probes the four backends concurrently.
+  An RPC against an existing client is capped by
+  `min(request_timeout_ms, health_probe_interval_ms)`. Rebuilding a missing x23
+  connection pool is capped separately by `backend_connect_timeout_ms`, because
+  a multi-connection pool can take longer than one health interval. A rebuilt
+  scheduler pool is held outside the handler-visible client slot and checked
+  only with the safe null RPC for `scheduler_reconnect_grace_ms`, so older hogd
+  backends can finish coordinator registration after their TCP listener opens.
+  It is promoted for handler and tip-probe use only after that grace. The next
+  loop sleeps for `health_probe_interval_ms` after the current pass completes.
 - `/readyz` and `/health` also enforce a whole-snapshot freshness watchdog: if the
   cached snapshot is older than three probe intervals, readiness flips to
   `error`/HTTP 503 and the JSON exposes `snapshot_age_ms`.

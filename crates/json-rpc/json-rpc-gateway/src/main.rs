@@ -60,6 +60,14 @@ struct Cli {
     #[arg(long)]
     health_probe_interval_ms: Option<u64>,
 
+    /// Maximum time to rebuild one backend x23 connection pool
+    #[arg(long)]
+    backend_connect_timeout_ms: Option<u64>,
+
+    /// Delay scheduler tip probes after rebuilding its x23 connection pool
+    #[arg(long)]
+    scheduler_reconnect_grace_ms: Option<u64>,
+
     /// Scheduler (mempool) x23 RPC address (overrides config file)
     #[arg(long)]
     scheduler: Option<String>,
@@ -111,6 +119,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         listen = %config.listen_address,
         observability_listen = %config.observability_listen,
         health_required_backends = ?config.health_required_backends,
+        backend_connect_timeout_ms = config.backend_connect_timeout_ms,
+        scheduler_reconnect_grace_ms = config.scheduler_reconnect_grace_ms,
         submission_backend = ?config.submission_backend,
         scheduler = %config.scheduler_address,
         indexer = ?config.indexer_address,
@@ -204,6 +214,12 @@ fn apply_cli_overrides(config: &mut GatewayConfig, cli: Cli) {
     }
     if let Some(interval_ms) = cli.health_probe_interval_ms {
         config.health_probe_interval_ms = interval_ms;
+    }
+    if let Some(timeout_ms) = cli.backend_connect_timeout_ms {
+        config.backend_connect_timeout_ms = timeout_ms;
+    }
+    if let Some(grace_ms) = cli.scheduler_reconnect_grace_ms {
+        config.scheduler_reconnect_grace_ms = grace_ms;
     }
     if let Some(scheduler) = cli.scheduler {
         config.scheduler_address = scheduler;
