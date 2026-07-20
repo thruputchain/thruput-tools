@@ -226,6 +226,10 @@ the foundation for the optional deterministic driver later. Agents must not read
 
 All that is required now is standard testing: application-specific code makes
 assertions about observed results, and the test passes or fails accordingly.
+An agent panic propagates immediately. Returned agent errors are collected after
+the non-panicking agents finish and make the scenario run return `Err`, retaining
+each failed agent's name, index, and original error; callers do not need a
+separate report check to avoid false-green tests.
 
 Scenarios are hosted by libtest, so `cargo test` integration, name filtering,
 IDE run buttons, and CI result parsing come for free. The only thing a scenario

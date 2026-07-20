@@ -87,7 +87,7 @@ async fn caller_counter_deploy_call_read() {
         .await
         .expect("local node starts and advertises a runtime manifest");
 
-    let report = scenario
+    scenario
         .run_agents([Agent::new("alice", |mut ctx| async move {
             // The first deploy carries the binary (registers it) and creates an
             // instance; the harness reports it registered.
@@ -123,7 +123,6 @@ async fn caller_counter_deploy_call_read() {
         .await
         .expect("agent runs to completion");
 
-    assert!(report.all_ok(), "scenario failed: {report:#?}");
     scenario.stop().await.expect("clean teardown");
 }
 
@@ -166,17 +165,15 @@ async fn multiple_runs_are_possible() {
         })]
     };
 
-    let report = scenario
+    scenario
         .run_agents(make_agents())
         .await
         .expect("agent runs to completion");
-    assert!(report.all_ok(), "scenario failed: {report:?}");
 
-    let report = scenario
+    scenario
         .run_agents(make_agents())
         .await
         .expect("agent runs to completion (second time against same scenario)");
-    assert!(report.all_ok(), "scenario failed: {report:#?}");
 
     scenario.stop().await.expect("clean teardown");
 }

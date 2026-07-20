@@ -17,6 +17,8 @@
 //! [`NetworkConfig::local`] launches and owns an ephemeral `hog-devnode`, and
 //! [`NetworkConfig::offline`] runs agents with locally-derived accounts and no
 //! chain (for coordination/timing/messaging tests). See `docs/testkit/DESIGN.md`.
+//! [`Scenario::run_agents`] returns an error when any agent returns an error, so
+//! the ordinary `.await?` test path cannot silently ignore agent failures.
 
 mod account;
 pub mod agent;
@@ -37,7 +39,7 @@ pub use agent::{Agent, AgentContext, AgentId};
 pub use artifact::ArtifactKind;
 pub use clock::Clock;
 pub use contract::{Contract, ContractEntrypointID, entrypoint_id};
-pub use error::{Result, TestkitError};
+pub use error::{AgentFailure, AgentFailures, Result, TestkitError};
 pub use groundhog_node_supervisor::LogLevel;
 pub use logging::init_tracing;
 pub use mailbox::{Envelope, Mailbox, Message};
