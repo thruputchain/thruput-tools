@@ -16,7 +16,7 @@ without introducing multi-contract or per-user protocol state yet.
 - Add manifest field `contractCalls`.
   - `name`, unique within `contractCalls`;
   - `contract`, referencing `contractArtifacts[].name`;
-  - `entrypoint`, exactly 8 bytes of hex;
+  - `entrypoint`, exactly 8 bytes of hex or a symbolic method identity;
   - `calldata`, raw CXS calldata hex.
   - exactly one entry for this slice; multi-call selection policy is deferred.
 - Add workload kind `contract-call`.
@@ -48,7 +48,8 @@ without introducing multi-contract or per-user protocol state yet.
    - outer invoked address: actor wallet;
    - outer entrypoint: runtime dev-wallet `doAction`;
    - inner target: deployed contract address;
-   - inner entrypoint/calldata: manifest raw hex.
+   - inner entrypoint: manifest raw hex or canonical symbolic identity;
+   - inner calldata: manifest raw hex.
 4. A successful submit records the actor's submitted transaction and consumes the
    actor nonce.
 5. The workload polls `groundhog_getTransactionReceipt` with the existing bounded
@@ -97,10 +98,10 @@ it, runs a mix of `contract-call` and `events-query`, and keeps
 fail the run. The gated smoke asserts at least one later `events-query` record
 observes `eventCount > 0`.
 
-The scenario uses the same raw Fibonacci entrypoint and calldata as the
+The scenario uses the same Fibonacci entrypoint and calldata as the
 `view-call` smoke:
 
-- `compute`: `0x1450686bab1d6a5f`, calldata `0x0a`.
+- `compute`: symbolic identity `Fibonacci@0.1.0::compute`, calldata `0x0a`.
 
 ## Test Plan
 

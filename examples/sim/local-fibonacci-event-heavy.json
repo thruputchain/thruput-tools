@@ -43,7 +43,11 @@
     {
       "name": "fib-compute-10",
       "contract": "fibonacci",
-      "entrypoint": "0x1450686bab1d6a5f",
+      "entrypoint": {
+        "interface": "Fibonacci",
+        "version": "0.1.0",
+        "method": "compute"
+      },
       "calldata": "0x0a"
     }
   ],
