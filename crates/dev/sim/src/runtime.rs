@@ -85,10 +85,8 @@ pub fn runtime_config_sha256(bytes: &[u8]) -> Result<String, serde_json::Error> 
         .get_mut("endpoints")
         .and_then(serde_json::Value::as_object_mut)
     {
-        for name in ["scheduler", "indexer", "dbGateway", "viewGateway"] {
-            if let Some(endpoint) = endpoints.get_mut(name)
-                && !endpoint.is_null()
-            {
+        for endpoint in endpoints.values_mut() {
+            if !endpoint.is_null() {
                 *endpoint = serde_json::Value::String("0.0.0.0:0".into());
             }
         }
@@ -248,6 +246,33 @@ mod tests {
             expected,
             runtime_config_sha256(
                 &serde_json::to_vec(&different_addresses).expect("runtime manifest should encode")
+            )
+            .expect("runtime config should hash")
+        );
+
+        let mut additive_endpoint_a = manifest_json.clone();
+        additive_endpoint_a["endpoints"]["futureGateway"] = json!("127.0.0.1:3000");
+        let additive_endpoint_hash = runtime_config_sha256(
+            &serde_json::to_vec(&additive_endpoint_a).expect("runtime manifest should encode"),
+        )
+        .expect("runtime config should hash");
+        let mut additive_endpoint_b = additive_endpoint_a.clone();
+        additive_endpoint_b["endpoints"]["futureGateway"] = json!("127.0.0.1:3001");
+        assert_eq!(
+            additive_endpoint_hash,
+            runtime_config_sha256(
+                &serde_json::to_vec(&additive_endpoint_b).expect("runtime manifest should encode")
+            )
+            .expect("runtime config should hash")
+        );
+        additive_endpoint_b["endpoints"]
+            .as_object_mut()
+            .expect("endpoints should be an object")
+            .remove("futureGateway");
+        assert_ne!(
+            additive_endpoint_hash,
+            runtime_config_sha256(
+                &serde_json::to_vec(&additive_endpoint_b).expect("runtime manifest should encode")
             )
             .expect("runtime config should hash")
         );

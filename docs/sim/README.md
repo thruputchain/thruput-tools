@@ -358,7 +358,8 @@ The configuration hash excludes run-resolved identity: the `resolved` object,
 the diagnostic-only baseline reference, the runtime-manifest filesystem path,
 and the local provider's resolved RPC URL. An existing provider's RPC URL
 remains configuration because changing the endpoint can change the measured
-path. It also records exact `runtimeManifestSha256` bytes and a stable
+path. Raw and symbolic entrypoints are normalized to their resolved selectors.
+It also records exact `runtimeManifestSha256` bytes and a stable
 `runtimeConfigSha256` that excludes backend dial addresses while preserving
 endpoint availability and all other runtime metadata. This prevents
 run-assigned local ports from making equivalent local targets cross-config.

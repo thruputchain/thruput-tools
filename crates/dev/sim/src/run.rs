@@ -641,6 +641,11 @@ pub async fn execute_loaded_simulation<C>(
 where
     C: SimRpcClient + Clone + Send + Sync + 'static,
 {
+    if input.loaded_sim.config_sha256.is_none() {
+        return Err(SimError::Executor(
+            "simulation configuration hash was not resolved".into(),
+        ));
+    }
     let mut metrics = RunMetricsBuilder::default();
     metrics.set_resource_sample_interval_ms(input.resource_sample_interval_ms);
     let mut chaos_events = Vec::new();
@@ -894,6 +899,9 @@ struct BuildResultInput<'a> {
 }
 
 fn build_result(input: BuildResultInput<'_>) -> Result<SimResult, SimError> {
+    let simulation_config_sha256 = input.loaded_sim.config_sha256.clone().ok_or_else(|| {
+        SimError::Executor("simulation configuration hash was not resolved".into())
+    })?;
     Ok(SimResult {
         schema_version: SIM_RESULT_SCHEMA_VERSION,
         run_id: input.run_id.into(),
@@ -917,7 +925,7 @@ fn build_result(input: BuildResultInput<'_>) -> Result<SimResult, SimError> {
         nonce_namespace: input.nonce_namespace.get(),
         manifest_hashes: ManifestHashes {
             simulation_manifest_sha256: input.loaded_sim.sha256.clone(),
-            simulation_config_sha256: Some(input.loaded_sim.config_sha256.clone()),
+            simulation_config_sha256: Some(simulation_config_sha256),
             runtime_manifest_sha256: input.runtime_manifest_sha256.into(),
             runtime_config_sha256: Some(input.runtime_config_sha256.into()),
             bootstrap_manifest: MetricAvailability::Unsupported {
@@ -1075,11 +1083,74 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn execute_loaded_simulation_rejects_missing_config_hash_before_events() {
+        let manifest = manifest();
+        let bytes = serde_json::to_vec_pretty(&manifest).expect("manifest should encode");
+        let loaded_sim = LoadedSimulationManifest {
+            config_sha256: None,
+            manifest,
+            sha256: sha256_hex(&bytes),
+            bytes,
+        };
+        let runtime_manifest = runtime_manifest();
+        let schedule = generate_schedule(&loaded_sim.manifest).expect("schedule should generate");
+        let starts = phase_starts(&loaded_sim.manifest).expect("phase starts should generate");
+        let file = NamedTempFile::new().expect("temp file should be created");
+        let mut event_writer = EventWriter::create(file.path())
+            .await
+            .expect("event writer should open");
+        let mut actors = actor_states();
+        let target = resolved_target();
+
+        let error = execute_loaded_simulation(
+            MockClient {
+                tip: ChainTip {
+                    height: BlockHeight::from(42),
+                    block_hash: Hex0x(SHA256Hash::from([0x42; 32])),
+                },
+            },
+            LoadedExecution {
+                run_id: "test-run",
+                loaded_sim: &loaded_sim,
+                runtime_manifest: &runtime_manifest,
+                runtime_manifest_sha256: "runtime-sha",
+                runtime_config_sha256: "runtime-config-sha",
+                target: &target,
+                chaos_controller: None,
+                nonce_namespace: NonceNamespace::new(7).expect("nonce namespace should fit"),
+                actor_states: &mut actors,
+                scheduled_workloads: 1,
+                shutdown_simulation_time_ms: 0,
+                resource_sample_interval_ms: 1_000,
+                resource_sampler: None,
+                schedule: Some(&schedule),
+                phase_starts: &starts,
+                event_writer: &mut event_writer,
+                contract_setup: empty_contract_setup(),
+            },
+        )
+        .await
+        .expect_err("missing stable hash should fail before execution");
+
+        assert!(
+            matches!(error, SimError::Executor(message) if message.contains("hash was not resolved"))
+        );
+        assert_eq!(
+            tokio::fs::read(file.path())
+                .await
+                .expect("event file should read"),
+            Vec::<u8>::new()
+        );
+    }
+
+    #[tokio::test]
     async fn execute_loaded_simulation_records_chain_tip_result() {
         let manifest = manifest();
         let bytes = serde_json::to_vec_pretty(&manifest).expect("manifest should encode");
         let loaded_sim = LoadedSimulationManifest {
-            config_sha256: simulation_config_sha256(&manifest).expect("config hash should encode"),
+            config_sha256: Some(
+                simulation_config_sha256(&manifest).expect("config hash should encode"),
+            ),
             manifest,
             sha256: sha256_hex(&bytes),
             bytes,
@@ -1133,7 +1204,7 @@ mod tests {
         assert_eq!(result.run_id, "test-run");
         assert_eq!(
             result.manifest_hashes.simulation_config_sha256.as_deref(),
-            Some(loaded_sim.config_sha256.as_str())
+            loaded_sim.config_sha256.as_deref()
         );
         assert_eq!(
             result.manifest_hashes.runtime_config_sha256.as_deref(),
@@ -1170,7 +1241,9 @@ mod tests {
         let manifest = chaos_manifest();
         let bytes = serde_json::to_vec_pretty(&manifest).expect("manifest should encode");
         let loaded_sim = LoadedSimulationManifest {
-            config_sha256: simulation_config_sha256(&manifest).expect("config hash should encode"),
+            config_sha256: Some(
+                simulation_config_sha256(&manifest).expect("config hash should encode"),
+            ),
             manifest,
             sha256: sha256_hex(&bytes),
             bytes,

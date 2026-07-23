@@ -397,6 +397,8 @@ configuration hash for comparisons. That projection excludes the `resolved`
 run metadata, the diagnostic-only baseline reference, the runtime-manifest
 filesystem path, and the local provider's resolved RPC URL. It retains an
 existing provider's RPC URL because the endpoint is part of the measured path.
+Raw and symbolic contract entrypoints are normalized to their resolved selector
+bytes before hashing.
 The exact emitted artifact continues to retain the resolved nonce namespace and
 all endpoint/path diagnostics.
 

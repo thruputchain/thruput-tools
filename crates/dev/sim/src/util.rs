@@ -5,7 +5,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::error::SimError;
-use crate::manifest::{SimulationManifest, WorkloadKind};
+use crate::manifest::{EntrypointSpec, SimulationManifest, WorkloadKind};
 use crate::target::TargetProviderKind;
 
 /// A simulation manifest loaded from disk with its encoded bytes and hash.
@@ -13,7 +13,7 @@ use crate::target::TargetProviderKind;
 pub struct LoadedSimulationManifest {
     pub manifest: SimulationManifest,
     pub sha256: String,
-    pub config_sha256: String,
+    pub config_sha256: Option<String>,
     pub bytes: Vec<u8>,
 }
 
@@ -25,7 +25,7 @@ impl LoadedSimulationManifest {
         let config_sha256 = simulation_config_sha256(&self.manifest)?;
         self.bytes = bytes;
         self.sha256 = sha256;
-        self.config_sha256 = config_sha256;
+        self.config_sha256 = Some(config_sha256);
         Ok(())
     }
 }
@@ -35,11 +35,10 @@ pub async fn load_simulation_manifest(path: &Path) -> Result<LoadedSimulationMan
     let bytes = tokio::fs::read(path).await?;
     let manifest = serde_json::from_slice(&bytes)?;
     let sha256 = sha256_hex(&bytes);
-    let config_sha256 = simulation_config_sha256(&manifest)?;
     Ok(LoadedSimulationManifest {
         manifest,
         sha256,
-        config_sha256,
+        config_sha256: None,
         bytes,
     })
 }
@@ -49,7 +48,8 @@ pub async fn load_simulation_manifest(path: &Path) -> Result<LoadedSimulationMan
 /// The projection omits `resolved`, the diagnostic-only baseline reference, the
 /// runtime-manifest filesystem path, and the local provider's resolved RPC URL.
 /// An existing provider's RPC URL remains part of configuration because it
-/// identifies the measured endpoint.
+/// identifies the measured endpoint. Entrypoints are normalized to their
+/// resolved selectors.
 pub fn simulation_config_sha256(manifest: &SimulationManifest) -> Result<String, SimError> {
     let mut config = manifest.clone();
     config.resolved = None;
@@ -58,7 +58,30 @@ pub fn simulation_config_sha256(manifest: &SimulationManifest) -> Result<String,
     if matches!(config.target.provider, TargetProviderKind::Local) {
         config.target.rpc_url = None;
     }
+    canonicalize_entrypoints(&mut config)?;
     Ok(sha256_hex(&serde_json::to_vec(&config)?))
+}
+
+fn canonicalize_entrypoints(manifest: &mut SimulationManifest) -> Result<(), SimError> {
+    for call in &mut manifest.view_calls {
+        canonicalize_entrypoint(&mut call.entrypoint)?;
+    }
+    for call in &mut manifest.contract_calls {
+        canonicalize_entrypoint(&mut call.entrypoint)?;
+    }
+    for round_trip in &mut manifest.read_after_write {
+        canonicalize_entrypoint(&mut round_trip.write.entrypoint)?;
+        canonicalize_entrypoint(&mut round_trip.read.entrypoint)?;
+    }
+    Ok(())
+}
+
+fn canonicalize_entrypoint(entrypoint: &mut EntrypointSpec) -> Result<(), SimError> {
+    let bytes = entrypoint
+        .resolve()
+        .map_err(|error| SimError::Executor(format!("failed to resolve entrypoint: {error}")))?;
+    *entrypoint = EntrypointSpec::Raw(format!("0x{}", hex::encode(bytes)));
+    Ok(())
 }
 
 /// Return a 0x-prefixed SHA-256 digest for bytes.
@@ -146,6 +169,8 @@ mod tests {
     use serde_json::json;
     use tempfile::tempdir;
 
+    use crate::validation::{ValidationError, validate_manifest};
+
     use super::*;
 
     #[test]
@@ -165,7 +190,7 @@ mod tests {
             1,
         );
         let mut loaded = LoadedSimulationManifest {
-            config_sha256: String::new(),
+            config_sha256: None,
             manifest: manifest.clone(),
             sha256: String::new(),
             bytes: Vec::new(),
@@ -174,6 +199,10 @@ mod tests {
         loaded.refresh_hashes().expect("hashes should refresh");
 
         assert_eq!(loaded.sha256, sha256_hex(&loaded.bytes));
+        let loaded_config_sha256 = loaded
+            .config_sha256
+            .as_deref()
+            .expect("refreshed config hash should exist");
         assert_eq!(
             serde_json::from_slice::<serde_json::Value>(&loaded.bytes)
                 .expect("normalized manifest should parse")["resolved"]["nonceNamespace"],
@@ -190,7 +219,7 @@ mod tests {
             serde_json::to_vec_pretty(&different_nonce).expect("manifest should encode");
         assert_ne!(loaded.sha256, sha256_hex(&different_nonce_bytes));
         assert_eq!(
-            loaded.config_sha256,
+            loaded_config_sha256,
             simulation_config_sha256(&different_nonce).expect("config should hash")
         );
 
@@ -202,14 +231,14 @@ mod tests {
             .expect("resolved metadata should exist")
             .runtime_manifest = "/tmp/runtime-b.json".into();
         assert_eq!(
-            loaded.config_sha256,
+            loaded_config_sha256,
             simulation_config_sha256(&different_manifest_path).expect("config should hash")
         );
 
         let mut different_existing_rpc = manifest.clone();
         different_existing_rpc.target.rpc_url = Some("http://127.0.0.1:9546".into());
         assert_ne!(
-            loaded.config_sha256,
+            loaded_config_sha256,
             simulation_config_sha256(&different_existing_rpc).expect("config should hash")
         );
 
@@ -225,14 +254,91 @@ mod tests {
         let mut different_seed = manifest;
         different_seed.baseline = Some("baselines/previous-result.json".into());
         assert_eq!(
-            loaded.config_sha256,
+            loaded_config_sha256,
             simulation_config_sha256(&different_seed).expect("config should hash")
         );
 
         different_seed.seed = "different-seed".into();
         assert_ne!(
-            loaded.config_sha256,
+            loaded_config_sha256,
             simulation_config_sha256(&different_seed).expect("config should hash")
+        );
+    }
+
+    #[test]
+    fn simulation_config_hash_normalizes_entrypoint_representations() {
+        let mut raw =
+            simulation_manifest("existing", "http://127.0.0.1:9545", "/tmp/runtime.json", 1);
+        raw.contract_calls = serde_json::from_value(json!([{
+            "name": "fibonacci",
+            "contract": "fibonacci",
+            "entrypoint": "0x1450686bab1d6a5f",
+            "calldata": "0x0a"
+        }]))
+        .expect("raw contract call should parse");
+        let mut symbolic = raw.clone();
+        symbolic.contract_calls[0].entrypoint = serde_json::from_value(json!({
+            "interface": "Fibonacci",
+            "version": "0.1.0",
+            "method": "compute"
+        }))
+        .expect("symbolic entrypoint should parse");
+
+        assert_eq!(
+            simulation_config_sha256(&raw).expect("raw config should hash"),
+            simulation_config_sha256(&symbolic).expect("symbolic config should hash")
+        );
+    }
+
+    #[tokio::test]
+    async fn loading_defers_entrypoint_resolution_until_contextual_validation() {
+        let mut manifest =
+            simulation_manifest("existing", "http://127.0.0.1:9545", "/tmp/runtime.json", 1);
+        manifest.load_shape = serde_json::from_value(json!([{
+            "duration": "1s",
+            "users": 1,
+            "ratePerUserHz": 1.0
+        }]))
+        .expect("load shape should parse");
+        manifest.workloads = serde_json::from_value(json!([{
+            "name": "contract-call",
+            "weight": 1
+        }]))
+        .expect("workload should parse");
+        manifest.contract_artifacts = serde_json::from_value(json!([{
+            "name": "counter",
+            "artifact": {"kind": "rv32", "path": "counter.rv32a"}
+        }]))
+        .expect("artifact should parse");
+        manifest.contract_calls = serde_json::from_value(json!([{
+            "name": "invalid-call",
+            "contract": "counter",
+            "entrypoint": "not-hex",
+            "calldata": "0x"
+        }]))
+        .expect("contract call should parse");
+        let dir = tempdir().expect("temp dir should create");
+        let path = dir.path().join("scenario.json");
+        tokio::fs::write(
+            &path,
+            serde_json::to_vec(&manifest).expect("scenario should encode"),
+        )
+        .await
+        .expect("scenario should write");
+
+        let loaded = load_simulation_manifest(&path)
+            .await
+            .expect("loading should only parse the scenario");
+        assert!(loaded.config_sha256.is_none());
+        let error = validate_manifest(&loaded.manifest)
+            .expect_err("invalid selector should fail contextual validation");
+        assert!(
+            matches!(
+                &error,
+                ValidationError::InvalidContractCallEntrypoint { call, .. }
+                    if call == "invalid-call"
+            ),
+            "unexpected validation error: {error:?}"
         );
     }
 
