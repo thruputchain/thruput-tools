@@ -41,15 +41,16 @@ struct BlockTransactionQuery {
 TransactionRefPage get_transactions_by_block(BlockTransactionQuery);
 ```
 
-Return lightweight `{ txHash, height }` references. Do not add a transaction index until Groundhog defines a canonical total order within a block. Pagination order must be deterministic.
+Return lightweight `{ txHash, height }` references ordered by signed transaction hash for deterministic pagination.
 
 Extend committed-block ingestion so the indexer receives the canonical `BlockHeader` with the block's transaction set.
 ## Hogd Indexer
-Add two persistent indexes:
+Keep the existing transaction-hash index and add two persistent indexes:
 
 ```text
+existing: transaction hash -> transaction record
 block height -> serialized BlockHeader
-block height || transaction hash -> transaction ref
+block height || transaction hash -> empty
 ```
 
 Requirements:
