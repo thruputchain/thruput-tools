@@ -2,6 +2,9 @@
 
 use std::fmt;
 
+use groundhog_json_rpc_types::transaction::{TransactionStatus, TxHash};
+use groundhog_node_supervisor::BlockProductionError;
+
 /// Result alias used throughout `groundhog-testkit`.
 pub type Result<T, E = TestkitError> = std::result::Result<T, E>;
 
@@ -189,6 +192,13 @@ pub enum TestkitError {
         detail: String,
     },
 
+    /// A contract interface version is not valid `SemVer`.
+    #[error("contract interface version `{version}` is not valid SemVer")]
+    InvalidContractVersion {
+        /// Version string used to derive the method selector.
+        version: String,
+    },
+
     /// A deploy transaction did not execute successfully.
     #[error("deploy did not succeed: {detail}")]
     Deploy {
@@ -231,6 +241,36 @@ pub enum TestkitError {
         status: String,
     },
 
+    /// A submitted transaction did not become pending before the polling budget elapsed.
+    #[error("timed out waiting for `{tx_hash}` to become pending (last status: {last_status:?})")]
+    PendingTimeout {
+        /// Transaction hash that never appeared as pending.
+        tx_hash: String,
+        /// Last status observed before timeout.
+        last_status: TransactionStatus,
+    },
+
+    /// A submitted transaction reached a terminal or unexpected state before becoming pending.
+    #[error("transaction `{tx_hash}` did not become pending: {status:?}")]
+    TransactionNotPending {
+        /// Transaction hash whose status was observed.
+        tx_hash: String,
+        /// Status observed instead of `Pending`.
+        status: TransactionStatus,
+    },
+
+    /// Manual block production is unavailable for this target or driver mode.
+    #[error("manual block production requires a harness-owned local node in manual mode")]
+    ManualBlockProductionUnavailable,
+
+    /// The local supervisor failed to produce a manually-requested block.
+    #[error("manual block production failed: {source}")]
+    BlockProduction {
+        /// Underlying supervisor block-production error.
+        #[source]
+        source: BlockProductionError,
+    },
+
     /// A contract artifact could not be read from disk.
     #[error("failed to load artifact `{name}` from `{path}`: {detail}")]
     ArtifactLoad {
@@ -261,6 +301,24 @@ pub enum TestkitError {
     UnknownArtifact {
         /// The unrecognized artifact name.
         name: String,
+    },
+
+    /// An artifact registration transaction is still awaiting a receipt.
+    #[error("artifact `{name}` registration transaction `{tx_hash:?}` is still pending")]
+    ArtifactRegistrationPending {
+        /// Registry artifact name.
+        name: String,
+        /// Transaction currently registering the artifact.
+        tx_hash: TxHash,
+    },
+
+    /// Submitting signed transaction bytes returned a different canonical hash.
+    #[error("submission hash mismatch: expected `{expected}`, got `{actual}`")]
+    SubmissionHashMismatch {
+        /// Original canonical transaction hash.
+        expected: String,
+        /// Canonical hash returned by re-submission.
+        actual: String,
     },
 
     /// The local node supervisor failed to start or stop the target.

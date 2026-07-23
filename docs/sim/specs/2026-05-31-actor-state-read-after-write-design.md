@@ -228,7 +228,8 @@ errors.
 
 - Reject duplicate `readAfterWrite[].name`.
 - Reject unknown `contract` references.
-- Reject non-`0x` or non-8-byte write/read entrypoints.
+- Reject malformed raw write/read entrypoints and invalid symbolic method
+  identities.
 - Reject `read-after-write` workloads with no contract artifact or no
   `readAfterWrite` entry.
 - Require capabilities: the view-only read needs the view gateway, and the write
@@ -251,16 +252,28 @@ deferred.
     {
       "name": "counter-roundtrip",
       "contract": "caller-counter",
-      "write": { "entrypoint": "0x<bump-selector>" },
-      "read":  { "entrypoint": "0x<get-selector>" }
+      "write": {
+        "entrypoint": {
+          "interface": "CallerCounter",
+          "version": "0.1.0",
+          "method": "bump"
+        }
+      },
+      "read": {
+        "entrypoint": {
+          "interface": "CallerCounter",
+          "version": "0.1.0",
+          "method": "get"
+        }
+      }
     }
   ]
 }
 ```
 
-`RawWriteSpec` carries the 8-byte write entrypoint and optional fixed calldata
-(empty for `bump()`). `RawReadSpec` carries the 8-byte view entrypoint and
-optional fixed calldata. No per-write calldata templating in v1.
+`RawWriteSpec` carries a raw or symbolic write entrypoint and optional fixed
+calldata (empty for `bump()`). `RawReadSpec` carries the equivalent view
+entrypoint and optional fixed calldata. No per-write calldata templating in v1.
 
 ### Deferred: storage read mode
 

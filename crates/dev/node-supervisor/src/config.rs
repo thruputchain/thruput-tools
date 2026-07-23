@@ -22,6 +22,9 @@ pub const DEFAULT_HOGD_DEV_VIEW_TIMEOUT: Duration = Duration::from_secs(30);
 /// Default interval for coordinator-like local block production.
 pub const DEFAULT_BLOCK_DRIVER_INTERVAL: Duration = Duration::from_millis(500);
 
+/// Default deadline for one explicitly requested block-production cycle.
+pub const DEFAULT_MANUAL_BLOCK_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Default listen host passed to hogd-dev for internal services.
 pub const DEFAULT_HOGD_DEV_LISTEN_HOST: &str = "127.0.0.1";
 
@@ -160,6 +163,10 @@ pub struct BlockDriverConfig {
     pub mode: BlockDriverMode,
     /// Timer interval for [`BlockDriverMode::Interval`].
     pub interval: Duration,
+    /// Execution deadline once a request reaches the manual driver.
+    ///
+    /// Time spent waiting behind an earlier request is not included.
+    pub manual_request_timeout: Duration,
 }
 
 impl BlockDriverConfig {
@@ -169,6 +176,7 @@ impl BlockDriverConfig {
         Self {
             mode: BlockDriverMode::Instant,
             interval: DEFAULT_BLOCK_DRIVER_INTERVAL,
+            manual_request_timeout: DEFAULT_MANUAL_BLOCK_REQUEST_TIMEOUT,
         }
     }
 
@@ -178,6 +186,17 @@ impl BlockDriverConfig {
         Self {
             mode: BlockDriverMode::Interval,
             interval,
+            manual_request_timeout: DEFAULT_MANUAL_BLOCK_REQUEST_TIMEOUT,
+        }
+    }
+
+    /// Return an explicitly-triggered block production policy.
+    #[must_use]
+    pub const fn manual() -> Self {
+        Self {
+            mode: BlockDriverMode::Manual,
+            interval: DEFAULT_BLOCK_DRIVER_INTERVAL,
+            manual_request_timeout: DEFAULT_MANUAL_BLOCK_REQUEST_TIMEOUT,
         }
     }
 
@@ -195,11 +214,26 @@ impl BlockDriverConfig {
         self
     }
 
+    /// Return a copy with a different manual request deadline.
+    #[must_use]
+    pub const fn with_manual_request_timeout(mut self, timeout: Duration) -> Self {
+        self.manual_request_timeout = timeout;
+        self
+    }
+
     pub(crate) fn effective_interval(self) -> Duration {
         if self.interval.is_zero() {
             DEFAULT_BLOCK_DRIVER_INTERVAL
         } else {
             self.interval
+        }
+    }
+
+    pub(crate) fn effective_manual_request_timeout(self) -> Duration {
+        if self.manual_request_timeout.is_zero() {
+            DEFAULT_MANUAL_BLOCK_REQUEST_TIMEOUT
+        } else {
+            self.manual_request_timeout
         }
     }
 }
@@ -219,6 +253,8 @@ pub enum BlockDriverMode {
     Instant,
     /// A fixed timer drives nomination/commit attempts.
     Interval,
+    /// Blocks are produced only through the supervisor's in-process control handle.
+    Manual,
 }
 
 /// Log verbosity level for hog-devnode
@@ -391,6 +427,22 @@ mod tests {
 
         assert_eq!(config.mode, BlockDriverMode::Instant);
         assert_eq!(config.interval, std::time::Duration::from_millis(500));
+        assert_eq!(
+            config.manual_request_timeout,
+            std::time::Duration::from_secs(30)
+        );
+    }
+
+    #[test]
+    fn manual_block_driver_keeps_default_interval_inert() {
+        let config = BlockDriverConfig::manual();
+
+        assert_eq!(config.mode, BlockDriverMode::Manual);
+        assert_eq!(config.interval, std::time::Duration::from_millis(500));
+        assert_eq!(
+            config.manual_request_timeout,
+            std::time::Duration::from_secs(30)
+        );
     }
 
     #[test]

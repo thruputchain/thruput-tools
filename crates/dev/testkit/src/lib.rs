@@ -34,16 +34,20 @@ mod nonce;
 pub mod rng;
 pub mod scenario;
 
-pub use account::Deployed;
+pub use account::{Deployed, SubmittedDeploy};
 pub use agent::{Agent, AgentContext, AgentId};
 pub use artifact::ArtifactKind;
 pub use clock::Clock;
-pub use contract::{Contract, ContractEntrypointID, entrypoint_id};
+pub use contract::{
+    Contract, ContractEntrypointID, SubmittedContractCall, entrypoint_id, try_entrypoint_id,
+};
 pub use error::{AgentFailure, AgentFailures, Result, TestkitError};
-pub use groundhog_node_supervisor::LogLevel;
+pub use groundhog_node_supervisor::{
+    BlockDriverConfig, BlockDriverMode, BlockProductionError, LogLevel, ProducedBlock,
+};
 pub use logging::init_tracing;
 pub use mailbox::{Envelope, Mailbox, Message};
-pub use network::{LocalNetworkConfig, Network, NetworkConfig};
+pub use network::{LocalNetworkConfig, Network, NetworkConfig, SubmittedTransaction};
 pub use rng::AgentRng;
 pub use scenario::{AgentOutcome, Scenario, ScenarioBuilder, ScenarioReport};
 

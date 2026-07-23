@@ -72,6 +72,20 @@ per-caller counter advanced. The opt-in soak runs
 
 Contract artifact scenarios declare `contractArtifacts` plus `viewCalls`,
 `contractCalls`, `storageReads`, or `eventQueries` in the manifest.
+Contract entrypoints can use raw eight-byte selector hex for compatibility, but
+bundled scenarios use a symbolic identity that the simulator resolves through
+the canonical selector implementation:
+
+```json
+"entrypoint": {
+  "interface": "Fibonacci",
+  "version": "0.1.0",
+  "method": "compute"
+}
+```
+
+Symbolic entrypoints avoid embedding derived selector bytes in scenario files.
+Calldata remains `0x`-prefixed CXS hex.
 `hogsim run --contract-artifact-root <dir>` resolves relative artifact paths from
 that directory.
 `scripts/smoke-sim-scenarios.sh` detects a sibling `../groundhog-examples`
@@ -158,18 +172,20 @@ view outputs record `viewResult`, `viewReturnData`, `viewAbortData`, and
 workload with `errorClass: "view-return-mismatch"`.
 
 `contract-call` submits a dev-wallet `doAction` transaction to the first
-configured `contractCalls` entry, using raw 8-byte entrypoint and calldata hex
-from the manifest. The workload waits for the transaction receipt before
-completing. Events record `contractCallName`, `contractCallContract`, `txHash`,
-`txNonce`, receipt fields, and submit-to-receipt latency. Non-`ok` receipts fail
-the workload with `errorClass: "contract-call-receipt-status"`.
+configured `contractCalls` entry, using a raw or symbolically derived entrypoint
+and raw calldata hex from the manifest. The workload waits for the transaction
+receipt before completing. Events record `contractCallName`,
+`contractCallContract`, `txHash`, `txNonce`, receipt fields, and
+submit-to-receipt latency. Non-`ok` receipts fail the workload with
+`errorClass: "contract-call-receipt-status"`.
 
 `read-after-write` uses the first configured `readAfterWrite` entry as a coupled
 round-trip. On the first actor tick, or after an invalidation, it reconciles by
 calling the configured read view to establish the actor's baseline. It then
 submits the configured write through dev-wallet `doAction`, waits for an `ok`
 receipt, calls the configured read view again, and requires the observed `u64`
-to match the actor's expected value. The post-receipt read retries stale values
+to match the actor's expected value. Both entrypoints accept raw or symbolic
+forms. The post-receipt read retries stale values
 for up to one second so short receipt/index/view visibility gaps are measured
 as workload latency instead of immediate mismatches. JSONL events record
 `readAfterWriteName`, `readAfterWriteContract`, `readAfterWriteExpected`,

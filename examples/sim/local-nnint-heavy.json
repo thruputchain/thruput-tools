@@ -39,7 +39,11 @@
     {
       "name": "nnint-churn-amount-50-refund-17",
       "contract": "nnint-stress",
-      "entrypoint": "0x5d2031af9e654e09",
+      "entrypoint": {
+        "interface": "NnintStress",
+        "version": "0.1.0",
+        "method": "churn"
+      },
       "calldata": "0x3211"
     }
   ],

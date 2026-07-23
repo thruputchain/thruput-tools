@@ -10,7 +10,10 @@ use groundhog_xdr::types::{BlockHeight, ContractAddress, SHA256Hash};
 use sha2::{Digest, Sha256};
 use xdr_common::{BytesM, VecM};
 
-/// Wallet `deploy` entrypoint ID (from dev-wallet WASM exports).
+/// Frozen legacy wallet `deploy` entrypoint for RPC-only profiles without
+/// runtime manifest or network descriptor metadata.
+///
+/// New integrations should use the selector advertised by their target.
 pub const WALLET_DEPLOY_ENTRYPOINT: [u8; 8] = 0xADAC_4982_2214_8E4F_u64.to_be_bytes();
 
 /// Default gas limit used by the CLI local-node wallet invocation flow.

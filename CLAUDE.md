@@ -196,7 +196,9 @@ does not expand.
 For the `groundhog-testkit` live contract smoke, build the `caller-counter`
 fixture from a `groundhog-examples` checkout and run the ignored contract test.
 Its `local` provider launches and owns `hog-devnode` in-process through the
-supervisor (not `groundhog node`) and keeps no PID file:
+supervisor (not `groundhog node`) and keeps no PID file. The script covers both
+the default submit-and-wait flow and manual block production with staged
+deployments/calls:
 
 ```bash
 GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode \

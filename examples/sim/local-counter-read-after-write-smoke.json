@@ -40,11 +40,19 @@
       "name": "counter-roundtrip",
       "contract": "caller-counter",
       "write": {
-        "entrypoint": "0x4fbf8bcef9232a3a",
+        "entrypoint": {
+          "interface": "CallerCounter",
+          "version": "0.1.0",
+          "method": "bump"
+        },
         "calldata": "0x"
       },
       "read": {
-        "entrypoint": "0xdfc5d5bd6c88f8c4",
+        "entrypoint": {
+          "interface": "CallerCounter",
+          "version": "0.1.0",
+          "method": "get"
+        },
         "calldata": "0x"
       }
     }

@@ -284,9 +284,21 @@ fn validate_read_after_write(
             });
         }
         validate_target_weight("readAfterWrite", name, entry.weight)?;
-        validate_read_after_write_hex(&entry.write.entrypoint, Some(8), "write.entrypoint", name)?;
+        entry.write.entrypoint.resolve().map_err(|source| {
+            ValidationError::InvalidReadAfterWriteEntrypoint {
+                entry: name.to_owned(),
+                field: "write.entrypoint",
+                reason: source.to_string(),
+            }
+        })?;
         validate_read_after_write_hex(&entry.write.calldata, None, "write.calldata", name)?;
-        validate_read_after_write_hex(&entry.read.entrypoint, Some(8), "read.entrypoint", name)?;
+        entry.read.entrypoint.resolve().map_err(|source| {
+            ValidationError::InvalidReadAfterWriteEntrypoint {
+                entry: name.to_owned(),
+                field: "read.entrypoint",
+                reason: source.to_string(),
+            }
+        })?;
         validate_read_after_write_hex(&entry.read.calldata, None, "read.calldata", name)?;
     }
     Ok(())
@@ -368,7 +380,12 @@ fn validate_view_calls(
             });
         }
         validate_target_weight("viewCalls", name, view.weight)?;
-        validate_hex_len(&view.entrypoint, Some(8), "entrypoint", name)?;
+        view.entrypoint
+            .resolve()
+            .map_err(|source| ValidationError::InvalidViewCallEntrypoint {
+                view: name.to_owned(),
+                reason: source.to_string(),
+            })?;
         validate_hex_len(&view.calldata, None, "calldata", name)?;
         if let Some(expected) = &view.expect_return_data {
             validate_hex_len(expected, None, "expectReturnData", name)?;
@@ -450,7 +467,12 @@ fn validate_contract_calls(
             });
         }
         validate_target_weight("contractCalls", name, call.weight)?;
-        validate_contract_call_hex_len(&call.entrypoint, Some(8), "entrypoint", name)?;
+        call.entrypoint.resolve().map_err(|source| {
+            ValidationError::InvalidContractCallEntrypoint {
+                call: name.to_owned(),
+                reason: source.to_string(),
+            }
+        })?;
         validate_contract_call_hex_len(&call.calldata, None, "calldata", name)?;
     }
     Ok(())
@@ -840,6 +862,8 @@ pub enum ValidationError {
         field: &'static str,
         reason: String,
     },
+    #[error("view call `{view}` entrypoint is invalid: {reason}")]
+    InvalidViewCallEntrypoint { view: String, reason: String },
     #[error("view-call workload requires at least one contract artifact")]
     MissingContractArtifactsForViewCall,
     #[error("view-call workload requires at least one viewCalls entry")]
@@ -856,6 +880,8 @@ pub enum ValidationError {
         field: &'static str,
         reason: String,
     },
+    #[error("contract call `{call}` entrypoint is invalid: {reason}")]
+    InvalidContractCallEntrypoint { call: String, reason: String },
     #[error("contract-call workload requires at least one contract artifact")]
     MissingContractArtifactsForContractCall,
     #[error("contract-call workload requires at least one contractCalls entry")]
@@ -904,6 +930,12 @@ pub enum ValidationError {
     UnknownReadAfterWriteContract { entry: String, contract: String },
     #[error("read-after-write `{entry}` field `{field}` is invalid: {reason}")]
     InvalidReadAfterWriteHex {
+        entry: String,
+        field: &'static str,
+        reason: String,
+    },
+    #[error("read-after-write `{entry}` field `{field}` entrypoint is invalid: {reason}")]
+    InvalidReadAfterWriteEntrypoint {
         entry: String,
         field: &'static str,
         reason: String,
@@ -1038,8 +1070,38 @@ mod tests {
     }
 
     #[test]
-    fn checked_in_soak_presets_parse_and_validate() {
+    fn checked_in_contract_presets_parse_and_validate() {
         for (name, manifest_json) in [
+            (
+                "local-fibonacci-view-smoke",
+                include_str!("../../../../examples/sim/local-fibonacci-view-smoke.json"),
+            ),
+            (
+                "local-fibonacci-contract-call-events-smoke",
+                include_str!(
+                    "../../../../examples/sim/local-fibonacci-contract-call-events-smoke.json"
+                ),
+            ),
+            (
+                "local-fibonacci-compute-heavy",
+                include_str!("../../../../examples/sim/local-fibonacci-compute-heavy.json"),
+            ),
+            (
+                "local-fibonacci-event-heavy",
+                include_str!("../../../../examples/sim/local-fibonacci-event-heavy.json"),
+            ),
+            (
+                "local-calldata-heavy",
+                include_str!("../../../../examples/sim/local-calldata-heavy.json"),
+            ),
+            (
+                "local-nnint-heavy",
+                include_str!("../../../../examples/sim/local-nnint-heavy.json"),
+            ),
+            (
+                "local-counter-read-after-write-smoke",
+                include_str!("../../../../examples/sim/local-counter-read-after-write-smoke.json"),
+            ),
             (
                 "local-multi-contract-soak",
                 include_str!("../../../../examples/sim/local-multi-contract-soak.json"),
@@ -1246,10 +1308,7 @@ mod tests {
 
         assert!(matches!(
             err,
-            ValidationError::InvalidContractCallHex {
-                field: "entrypoint",
-                ..
-            }
+            ValidationError::InvalidContractCallEntrypoint { .. }
         ));
     }
 
@@ -1382,7 +1441,10 @@ mod tests {
 
         let err = validate_manifest(&manifest).expect_err("short entrypoint should reject");
 
-        assert!(matches!(err, ValidationError::InvalidViewCallHex { .. }));
+        assert!(matches!(
+            err,
+            ValidationError::InvalidViewCallEntrypoint { .. }
+        ));
     }
 
     #[test]
@@ -1615,11 +1677,11 @@ mod tests {
             contract: "caller-counter".into(),
             weight: 1,
             write: crate::manifest::RawWriteSpec {
-                entrypoint: "0x4fbf8bcef9232a3a".into(),
+                entrypoint: "0x1111111111111111".into(),
                 calldata: "0x".into(),
             },
             read: crate::manifest::RawReadSpec {
-                entrypoint: "0xdfc5d5bd6c88f8c4".into(),
+                entrypoint: "0x2222222222222222".into(),
                 calldata: "0x".into(),
             },
         }
@@ -1665,7 +1727,7 @@ mod tests {
 
         assert!(matches!(
             err,
-            ValidationError::InvalidReadAfterWriteHex {
+            ValidationError::InvalidReadAfterWriteEntrypoint {
                 field: "write.entrypoint",
                 ..
             }

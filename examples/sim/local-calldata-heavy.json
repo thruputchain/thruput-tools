@@ -39,7 +39,11 @@
     {
       "name": "sum16-wide",
       "contract": "calldata",
-      "entrypoint": "0x854da0bb969c7816",
+      "entrypoint": {
+        "interface": "Calldata",
+        "version": "0.1.0",
+        "method": "sum16"
+      },
       "calldata": "0x0102030405060708090a0b0c0d0e0f10"
     }
   ],

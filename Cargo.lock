@@ -1710,6 +1710,7 @@ name = "groundhog-sim"
 version = "0.5.20"
 dependencies = [
  "clap",
+ "groundhog-contract-util",
  "groundhog-json-rpc-client",
  "groundhog-json-rpc-types",
  "groundhog-signing",

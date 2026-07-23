@@ -1305,8 +1305,8 @@ mod tests {
             "readAfterWrite": [{
                 "name": "counter-roundtrip",
                 "contract": "caller-counter",
-                "write": {"entrypoint": "0x4fbf8bcef9232a3a"},
-                "read": {"entrypoint": "0xdfc5d5bd6c88f8c4"}
+                "write": {"entrypoint": "0x1111111111111111"},
+                "read": {"entrypoint": "0x2222222222222222"}
             }]
         }))
         .expect("manifest fixture should parse");
