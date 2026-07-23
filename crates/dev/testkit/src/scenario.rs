@@ -298,7 +298,7 @@ async fn acquire_network(config: NetworkConfig) -> Result<(Network, AccountSourc
             runtime_manifest,
         } => {
             let manifest = load_runtime_manifest(&runtime_manifest)?;
-            let network = Network::connect(&rpc_url, &manifest)?;
+            let network = Network::connect(&rpc_url, &manifest, None)?;
             Ok((
                 network,
                 AccountSource::Manifest(Box::new(manifest)),
@@ -313,7 +313,8 @@ async fn acquire_network(config: NetworkConfig) -> Result<(Network, AccountSourc
                 .runtime_manifest
                 .clone()
                 .ok_or(TestkitError::MissingRuntimeManifest)?;
-            let network = Network::connect(&rpc_url, &manifest)?;
+            let manual_block_producer = handle.manual_block_producer();
+            let network = Network::connect(&rpc_url, &manifest, manual_block_producer)?;
             Ok((
                 network,
                 AccountSource::Manifest(Box::new(manifest)),
@@ -329,6 +330,7 @@ async fn acquire_network(config: NetworkConfig) -> Result<(Network, AccountSourc
 }
 
 async fn start_local(config: LocalNetworkConfig) -> Result<NodeSupervisorHandle> {
+    let block_driver = config.block_driver;
     let mut hogd = HogdDevConfig::default()
         .with_dev_account_count(config.dev_account_count)
         .with_dev_account_seed(config.dev_account_seed)
@@ -344,7 +346,8 @@ async fn start_local(config: LocalNetworkConfig) -> Result<NodeSupervisorHandle>
     }
     let mut supervisor = NodeSupervisorConfig::default()
         .with_rpc_listen_address(format!("127.0.0.1:{}", config.rpc_port))
-        .with_hogd_dev(hogd);
+        .with_hogd_dev(hogd)
+        .with_block_driver(block_driver);
     if let Some(protocol) = config.hogd_protocol {
         supervisor = supervisor.with_hogd_protocol_override(protocol);
     }

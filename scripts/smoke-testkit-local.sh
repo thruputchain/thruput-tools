@@ -113,4 +113,8 @@ log "running testkit live contract smoke"
 env "${ENV_ARGS[@]}" \
     cargo test -p groundhog-testkit --test contract_smoke caller_counter_deploy_call_read -- --ignored --nocapture
 
+log "running testkit manual block-production smoke"
+env "${ENV_ARGS[@]}" \
+    cargo test -p groundhog-testkit --test contract_smoke manual_block_production_stages_deploys_and_calls -- --ignored --nocapture
+
 log "testkit live contract smoke passed"

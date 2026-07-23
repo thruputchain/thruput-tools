@@ -93,20 +93,41 @@ control surfaces beyond ordinary reads:
 > `SchedulerCoord1` service: `schedcoord_get_tip`, `schedulercoord_nominate(tip)`
 > (sweeps the whole vetted mempool into a candidate block, capped at
 > `kMaxBlockSize = 1_000_000` txs), and `schedulercoord_commit_block(block_id)`.
-> The supervisor's `block_driver` owns *when* to nominate+commit, in one of two
-> modes today: `Instant` (each successful submit wakes a single-block drive, so
-> ~1 tx/block) and `Interval` (a timer drives one block per tick, so whatever is
-> vetted at the tick batches together — timing-dependent).
+> The supervisor's `block_driver` owns *when* to nominate+commit. Automatic
+> modes are `Instant` (each successful submit wakes a coalescing single-block
+> drive) and `Interval` (a timer drives one block per tick, so whatever is
+> vetted at the tick batches together — timing-dependent); `Manual` accepts only
+> explicit in-process production requests.
 >
-> Because the policy is Rust we own, **repeatable multi-tx blocks need no C++
-> change.** Add a `Manual` block-driver mode plus a "commit exactly one block
-> now" control on the supervisor, and have the `local` provider **embed
-> `node-supervisor` as a library** (rather than shelling `groundhog node`) so the
-> harness can submit N transactions, confirm acceptance, then trigger one
-> nominate+commit → a block containing exactly those N. This same manual trigger
-> is the on-demand block-advance and the basis for virtual-clock stepping. Block
-> control stays a dev-only supervisor API, off the public JSON-RPC surface, and
-> applies to `local` targets only; `existing`/remote targets are observe-only.
+> Because the policy is Rust we own, **repeatable multi-tx block boundaries need
+> no C++ change.** A `Manual` block-driver mode plus a "run one block-production
+> cycle now" control on the supervisor lets the harness submit transactions,
+> wait until each appears as `Pending`, then trigger one nominate+commit cycle.
+> Receipt heights establish which intended transactions committed in that block.
+> The trigger controls the nomination boundary; it does not promise exact
+> membership or ordering when unrelated submissions race nomination, nor that
+> conflicting transactions all commit. Block control stays a dev-only
+> supervisor API, off public JSON-RPC, and applies to `local` targets only;
+> `existing`/remote targets are observe-only.
+>
+> **GH-204 implementation shape (2026-07-22).** The supervisor exposes a
+> cloneable `ManualBlockProducer` backed by a bounded request/reply queue. Each
+> request is serialized and acknowledged after scheduler commit. Request timeout,
+> shutdown during a cycle, unconfirmed nomination, and unconfirmed commit RPC
+> failure are explicit indeterminate errors; the producer becomes terminal after
+> an indeterminate outcome so queued work cannot overlap scheduler work still
+> running remotely.
+> A failed commit response is reconciled against the scheduler tip before being
+> reported indeterminate. The scheduler protocol does not distinguish an empty
+> mempool from other nomination rejection, so empty production currently returns
+> `SchedulerRejected`.
+>
+> Testkit exposes `produce_block()` only when its owned local supervisor uses
+> manual mode. `SubmittedTransaction` and `SubmittedDeploy` separate submission
+> from `await_pending()` and `await_receipt()`, while existing call/deploy helpers
+> remain submit-and-wait wrappers. Registry-backed deployment retains the signed
+> binary-carrying transaction so an advisory failure or unknown status can safely
+> re-submit the same hash rather than create a second registration attempt.
 >
 > **Optional devnode change:** a configurable per-block cap (plumb `kMaxBlockSize`
 > to a CLI flag or bootstrap field, default unchanged) would let tests exercise
@@ -178,9 +199,10 @@ the result," not raw transaction plumbing.
 A contract binary must be *registered* on the network before it can be deployed
 by hash: the binary is sent in a transaction's `contracts_to_deploy` field,
 where it is visible to a `deploy` syscall in that same transaction and to other
-transactions only once the registering transaction commits. Re-sending the
-binary is wasteful, so the harness registers each contract at most once per run
-and then deploys further *instances* by hash.
+transactions only once the registering transaction commits. The harness retains
+one unique binary-carrying transaction per registration attempt and then deploys
+further *instances* by hash. If submission outcome is unknown, it may re-submit
+the exact retained bytes and hash to recover the attempt idempotently.
 
 A scenario declares contracts by name on the builder; each is read and hashed at
 `build()` (fail-fast on a missing file, unrecognized extension, or duplicate
@@ -194,8 +216,8 @@ name):
 Agents then work by name. `ctx.deploy_artifact(name)` is the common path: the
 first deploy of a contract carries the binary (registering it and creating that
 agent's first instance in one transaction), guarded so concurrent first-deploys
-send the binary only once and wait for its receipt to commit; every later deploy
-— by any agent — is hash-only and fully concurrent. The returned `Deployed`
+share one unique registration transaction and wait for its receipt to commit;
+every later deploy — by any agent — is hash-only and fully concurrent. The returned `Deployed`
 reports whether that transaction performed the registration. The steps are also
 exposed explicitly for tests that assert on them: `register_artifact(name)`
 (force the binary-carrying deploy), `deploy_registered(name)` (hash-only),
@@ -385,10 +407,12 @@ in-crate; the result event stream is not built yet.
 
 ### Phase 2: Clock, block control, and measurement
 
-- Add a `Manual` mode to the supervisor's `BlockDriverMode` plus a `Send`
-  "commit exactly one block now" trigger, and expose it on the `local` fixture.
-  This is a supervisor-only change (no devnode change) and delivers on-demand
-  block advance and repeatable multi-tx blocks.
+- Add a `Manual` mode to the supervisor's `BlockDriverMode` plus an acknowledged
+  "run one block-production cycle now" request, and expose it on the `local`
+  fixture. Split transaction submission from pending/receipt waits so scenarios
+  can stage work before the request. This is a supervisor/testkit change (no
+  devnode change) and delivers on-demand block boundaries and repeatable
+  multi-transaction tests, subject to scheduler conflict and block-size behavior.
 - Virtual clock exposed to agents; block-production queries for all targets.
 - Per-operation block-latency and block-bandwidth attribution.
 - Repetition-with-jitter coverage mode (coverage ladder rung 2).

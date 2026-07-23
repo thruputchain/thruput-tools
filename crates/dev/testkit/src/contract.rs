@@ -9,12 +9,46 @@ pub use groundhog_xdr::contract::ContractEntrypointID;
 
 use groundhog_contract_util::{EntrypointSignature, NormalizedMethodSignature};
 use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
+use groundhog_json_rpc_types::transaction::TxHash;
 use groundhog_json_rpc_types::view::RootInvocationOutput;
 use groundhog_xdr::types::ContractAddress;
 use xdrs::{ReadXDR, WriteXDR};
 
 use crate::agent::AgentContext;
 use crate::error::{Result, TestkitError};
+use crate::network::SubmittedTransaction;
+
+/// A typed contract call submitted without waiting for block production.
+#[derive(Debug, Clone)]
+#[must_use = "submitted contract calls should be awaited or intentionally retained"]
+pub struct SubmittedContractCall {
+    transaction: SubmittedTransaction,
+    method: String,
+}
+
+impl SubmittedContractCall {
+    /// Canonical transaction hash returned by submission.
+    pub fn tx_hash(&self) -> TxHash {
+        self.transaction.tx_hash()
+    }
+
+    /// Wait until the scheduler reports this call as pending.
+    pub async fn await_pending(&self) -> Result<()> {
+        self.transaction.await_pending().await
+    }
+
+    /// Wait for the receipt and require successful execution.
+    pub async fn await_receipt(&self) -> Result<TransactionReceipt> {
+        let receipt = self.transaction.await_receipt().await?;
+        match receipt.status {
+            ExecStatus::Ok => Ok(receipt),
+            ref status => Err(TestkitError::Reverted {
+                method: self.method.clone(),
+                status: format!("{status:?}"),
+            }),
+        }
+    }
+}
 
 /// Compute the entrypoint selector for a contract method.
 ///
@@ -102,6 +136,26 @@ impl Contract {
                 status: format!("{status:?}"),
             }),
         }
+    }
+
+    /// Submit a state-changing call without waiting for its receipt.
+    pub async fn submit_call<A>(
+        &self,
+        ctx: &mut AgentContext,
+        method: &str,
+        args: &A,
+    ) -> Result<SubmittedContractCall>
+    where
+        A: WriteXDR + ?Sized,
+    {
+        let calldata = xdrs::cxs::encode(args).map_err(TestkitError::encode)?;
+        let transaction = ctx
+            .submit_call(self.address, self.selector(method), &calldata)
+            .await?;
+        Ok(SubmittedContractCall {
+            transaction,
+            method: method.to_owned(),
+        })
     }
 
     /// Call `method`, requiring success, and decode the return value to `R`.

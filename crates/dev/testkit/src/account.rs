@@ -1,21 +1,28 @@
 //! Per-agent funded account and the chain-writing operations it performs.
 
+use std::sync::Arc;
+
+use groundhog_json_rpc_types::hex::Hex0x;
 use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
 use groundhog_json_rpc_types::transaction::TxHash;
 use groundhog_signing::{
     BuildDeployTransaction, BuildDevWalletDoActionTransaction, DEFAULT_TX_GAS_LIMIT,
     SignTransactionParams, build_deploy_transaction, build_dev_wallet_do_action_transaction,
     derive_deploy_address, sign_and_encode_transaction_hex, source_address_auth_claim,
+    transaction_hash,
 };
 use groundhog_xdr::contract::{Contract, ContractEntrypointID};
 use groundhog_xdr::types::{ContractAddress, SHA256Hash};
 use sha2::{Digest, Sha256};
 use xdr_common::VecM;
 
-use crate::artifact::{ArtifactEntry, ArtifactKind, contract_from_bytes, contract_hash};
+use crate::artifact::{
+    ArtifactEntry, ArtifactKind, PendingRegistration as ArtifactPendingRegistration,
+    contract_from_bytes, contract_hash,
+};
 use crate::error::{Result, TestkitError};
 use crate::manifest::DevAccount;
-use crate::network::Network;
+use crate::network::{Network, SubmittedTransaction};
 use crate::nonce::NonceNamespace;
 
 /// Absolute block height at which harness-built transactions expire. Chosen far
@@ -33,6 +40,141 @@ pub struct Deployed {
     pub receipt: TransactionReceipt,
     /// Whether this transaction carried the contract binary (registered it).
     pub registered: bool,
+}
+
+/// A submitted deployment whose receipt can be awaited after manual block production.
+#[derive(Debug)]
+#[must_use = "submitted deployments should be awaited or intentionally retained"]
+pub struct SubmittedDeploy {
+    network: Network,
+    address: ContractAddress,
+    tx_hash: TxHash,
+    registered: bool,
+    tx_hex: String,
+    cached_receipt: Option<TransactionReceipt>,
+    registration: Option<PendingRegistration>,
+}
+
+#[derive(Debug)]
+struct PendingRegistration {
+    entry: Arc<ArtifactEntry>,
+}
+
+#[derive(Debug)]
+pub(crate) struct PreparedDeploy {
+    network: Network,
+    owner: ContractAddress,
+    address: ContractAddress,
+    tx_hash: TxHash,
+    registered: bool,
+    tx_hex: String,
+}
+
+impl PreparedDeploy {
+    pub(crate) fn pending_registration(&self) -> ArtifactPendingRegistration {
+        ArtifactPendingRegistration {
+            tx_hash: self.tx_hash,
+            tx_hex: self.tx_hex.clone(),
+            owner: self.owner,
+            address: self.address,
+        }
+    }
+
+    pub(crate) async fn submit(self) -> Result<SubmittedDeploy> {
+        let actual = self.network.submit_raw(self.tx_hex.clone()).await?;
+        if actual != self.tx_hash {
+            return Err(TestkitError::SubmissionHashMismatch {
+                expected: format!("{:?}", self.tx_hash),
+                actual: format!("{actual:?}"),
+            });
+        }
+        Ok(SubmittedDeploy {
+            network: self.network,
+            address: self.address,
+            tx_hash: self.tx_hash,
+            registered: self.registered,
+            tx_hex: self.tx_hex,
+            cached_receipt: None,
+            registration: None,
+        })
+    }
+}
+
+impl SubmittedDeploy {
+    /// Address derived for the contract instance before submission.
+    pub fn address(&self) -> ContractAddress {
+        self.address
+    }
+
+    /// Canonical deployment transaction hash.
+    pub fn tx_hash(&self) -> TxHash {
+        self.tx_hash
+    }
+
+    /// Wait until the scheduler reports this deployment as pending.
+    pub async fn await_pending(&self) -> Result<()> {
+        if self.cached_receipt.is_some() {
+            return Ok(());
+        }
+        self.network
+            .await_pending_with_resubmission(self.tx_hash, &self.tx_hex)
+            .await
+    }
+
+    /// Wait for the deployment receipt and require successful execution.
+    ///
+    /// For a registry artifact carrying its binary, successful completion marks
+    /// the retained registration attempt as committed.
+    pub async fn await_receipt(&self) -> Result<Deployed> {
+        let receipt = match &self.cached_receipt {
+            Some(receipt) => receipt.clone(),
+            None => self.network.await_receipt(self.tx_hash).await?,
+        };
+        if !matches!(receipt.status, ExecStatus::Ok) {
+            self.finish_registration(false).await;
+            return Err(TestkitError::Deploy {
+                detail: format!("{:?}", receipt.status),
+            });
+        }
+        self.finish_registration(true).await;
+        Ok(Deployed {
+            address: self.address,
+            tx_hash: self.tx_hash,
+            receipt,
+            registered: self.registered,
+        })
+    }
+
+    pub(crate) fn with_registration(mut self, entry: Arc<ArtifactEntry>) -> Self {
+        self.registration = Some(PendingRegistration { entry });
+        self
+    }
+
+    pub(crate) fn recovered(
+        network: Network,
+        attempt: &ArtifactPendingRegistration,
+        receipt: TransactionReceipt,
+    ) -> Self {
+        Self {
+            network,
+            address: attempt.address,
+            tx_hash: attempt.tx_hash,
+            registered: true,
+            tx_hex: attempt.tx_hex.clone(),
+            cached_receipt: Some(receipt),
+            registration: None,
+        }
+    }
+
+    async fn finish_registration(&self, succeeded: bool) {
+        let Some(registration) = &self.registration else {
+            return;
+        };
+        registration
+            .entry
+            .finish_registration(self.tx_hash, succeeded)
+            .await;
+    }
 }
 
 /// A funded dev account assigned to one agent, tracking its own nonce sequence.
@@ -74,39 +216,57 @@ impl Account {
         Ok(())
     }
 
-    /// Deploy raw artifact bytes, always carrying the binary (self-registering).
-    pub(crate) async fn deploy(
+    pub(crate) async fn submit_deploy(
         &mut self,
         network: &Network,
         artifact: &[u8],
         kind: ArtifactKind,
-    ) -> Result<Deployed> {
+    ) -> Result<SubmittedDeploy> {
         let contract = contract_from_bytes(kind, artifact.to_vec());
         let hash = contract_hash(&contract)?;
-        self.deploy_with(network, hash, Some(contract)).await
+        let submitted = self
+            .build_deploy(network, hash, Some(contract))?
+            .submit()
+            .await?;
+        self.advance()?;
+        Ok(submitted)
     }
 
-    /// Deploy an instance of a registry artifact. When `include_binary` is set,
-    /// the transaction carries the binary (registering it in the same tx);
-    /// otherwise it references the contract by hash only.
-    pub(crate) async fn deploy_entry(
+    pub(crate) async fn submit_deploy_entry(
         &mut self,
         network: &Network,
         entry: &ArtifactEntry,
         include_binary: bool,
-    ) -> Result<Deployed> {
+    ) -> Result<SubmittedDeploy> {
         let contract = include_binary.then(|| entry.contract());
-        self.deploy_with(network, entry.hash(), contract).await
+        let submitted = self
+            .build_deploy(network, entry.hash(), contract)?
+            .submit()
+            .await?;
+        self.advance()?;
+        Ok(submitted)
     }
 
-    /// Build, sign, submit, and await a deploy transaction. `contract` present
-    /// registers the binary in this transaction; absent deploys by hash only.
-    async fn deploy_with(
+    pub(crate) fn prepare_deploy_entry(
         &mut self,
+        network: &Network,
+        entry: &ArtifactEntry,
+        include_binary: bool,
+    ) -> Result<PreparedDeploy> {
+        let contract = include_binary.then(|| entry.contract());
+        let prepared = self.build_deploy(network, entry.hash(), contract)?;
+        self.advance()?;
+        Ok(prepared)
+    }
+
+    /// Build, sign, and submit a deploy transaction. `contract` present registers
+    /// the binary in this transaction; absent deploys by hash only.
+    fn build_deploy(
+        &self,
         network: &Network,
         hash: SHA256Hash,
         contract: Option<Contract>,
-    ) -> Result<Deployed> {
+    ) -> Result<PreparedDeploy> {
         let entrypoint = network.deploy_entrypoint()?;
         let tx_nonce = self.next_nonce();
         let deploy_nonce =
@@ -131,37 +291,27 @@ impl Account {
             contracts_to_deploy,
             auth_claim: source_address_auth_claim(),
         });
+        let tx_hash = TxHash(Hex0x(transaction_hash(&tx).map_err(TestkitError::signing)?));
         let tx_hex =
             sign_and_encode_transaction_hex(tx, &self.dev.signer, SignTransactionParams::default())
                 .map_err(TestkitError::signing)?;
-
-        let tx_hash = network.submit_raw(tx_hex).await?;
-        self.advance()?;
-        let receipt = network.await_receipt(tx_hash).await?;
-        if !matches!(receipt.status, ExecStatus::Ok) {
-            return Err(TestkitError::Deploy {
-                detail: format!("{:?}", receipt.status),
-            });
-        }
-
-        Ok(Deployed {
+        Ok(PreparedDeploy {
+            network: network.clone(),
+            owner: self.dev.wallet_address,
             address,
             tx_hash,
-            receipt,
             registered,
+            tx_hex,
         })
     }
 
-    /// Call a deployed contract method through this account's dev wallet,
-    /// waiting for the receipt. Non-`Ok` execution is returned in the receipt,
-    /// not raised as an error, so callers can assert on reverts.
-    pub(crate) async fn call(
+    pub(crate) async fn submit_call(
         &mut self,
         network: &Network,
         target: ContractAddress,
         entrypoint: ContractEntrypointID,
         calldata: &[u8],
-    ) -> Result<TransactionReceipt> {
+    ) -> Result<SubmittedTransaction> {
         let wallet_entrypoint = network.do_action_entrypoint()?;
         let nonce = self.next_nonce();
 
@@ -181,8 +331,8 @@ impl Account {
             sign_and_encode_transaction_hex(tx, &self.dev.signer, SignTransactionParams::default())
                 .map_err(TestkitError::signing)?;
 
-        let tx_hash = network.submit_raw(tx_hex).await?;
+        let tx_hash = network.submit_raw(tx_hex.clone()).await?;
         self.advance()?;
-        network.await_receipt(tx_hash).await
+        Ok(SubmittedTransaction::new(network.clone(), tx_hash, tx_hex))
     }
 }

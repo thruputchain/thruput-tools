@@ -5,19 +5,26 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use groundhog_json_rpc_types::receipt::TransactionReceipt;
+use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
+use groundhog_json_rpc_types::transaction::TransactionStatus;
 use groundhog_xdr::contract::ContractEntrypointID;
 use groundhog_xdr::types::{ContractAddress, SHA256Hash};
 
-use crate::account::{Account, Deployed};
-use crate::artifact::{ArtifactKind, Registry};
+use crate::account::{Account, Deployed, SubmittedDeploy};
+use crate::artifact::{ArtifactEntry, ArtifactKind, PendingRegistration, Registry};
 use xdrs::{ReadXDR, WriteXDR};
 
 use crate::clock::Clock;
 use crate::error::{Result, TestkitError};
 use crate::mailbox::{Envelope, Mailbox, Message};
-use crate::network::Network;
+use crate::network::{Network, SubmittedTransaction};
 use crate::rng::AgentRng;
+
+enum RegistrationResolution {
+    NeedsRegistration,
+    Registered,
+    Recovered(Box<SubmittedDeploy>),
+}
 
 /// Stable identity of an agent within a scenario run.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -142,41 +149,112 @@ impl AgentContext {
     /// deploying by hash thereafter. Awaits the receipt; fails if execution is
     /// not successful.
     pub async fn deploy_artifact(&mut self, name: &str) -> Result<Deployed> {
+        loop {
+            match self.submit_deploy_artifact(name).await {
+                Ok(submitted) => return submitted.await_receipt().await,
+                Err(TestkitError::ArtifactRegistrationPending { .. }) => {
+                    let entry = self.artifacts.get(name)?;
+                    if let Some(deployed) =
+                        await_pending_registration(&self.network, &entry, self.address()).await?
+                    {
+                        return Ok(deployed);
+                    }
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    /// Submit an artifact deployment without waiting for its receipt.
+    ///
+    /// Returns [`TestkitError::ArtifactRegistrationPending`] when another agent
+    /// is registering the same artifact. The error carries that transaction's
+    /// hash so a manual scenario can produce its block and await its receipt
+    /// before retrying this deployment.
+    pub async fn submit_deploy_artifact(&mut self, name: &str) -> Result<SubmittedDeploy> {
         let entry = self.artifacts.get(name)?;
-        if entry.registered() {
-            return self
-                .account
-                .deploy_entry(&self.network, &entry, false)
-                .await;
+        let mut pending = entry.registration_guard().await;
+        match reconcile_pending_registration(
+            &self.network,
+            name,
+            &entry,
+            &mut pending,
+            self.address(),
+        )
+        .await?
+        {
+            RegistrationResolution::Registered => {
+                drop(pending);
+                return self
+                    .account
+                    .submit_deploy_entry(&self.network, &entry, false)
+                    .await;
+            }
+            RegistrationResolution::Recovered(submitted) => return Ok(*submitted),
+            RegistrationResolution::NeedsRegistration => {}
         }
-        // Serialize concurrent first-deploys so the binary is sent only once.
-        let _guard = entry.register_guard().await;
-        if entry.registered() {
-            return self
-                .account
-                .deploy_entry(&self.network, &entry, false)
-                .await;
-        }
-        let deployed = self
+        let prepared = self
             .account
-            .deploy_entry(&self.network, &entry, true)
-            .await?;
-        entry.mark_registered();
-        Ok(deployed)
+            .prepare_deploy_entry(&self.network, &entry, true)?;
+        *pending = Some(prepared.pending_registration());
+        drop(pending);
+        let submitted = prepared.submit().await?;
+        Ok(submitted.with_registration(entry))
     }
 
     /// Explicitly register an artifact's binary, deploying its first instance in
     /// the same transaction. Prefer [`AgentContext::deploy_artifact`] unless a
     /// test needs to control when registration happens.
     pub async fn register_artifact(&mut self, name: &str) -> Result<Deployed> {
+        loop {
+            match self.submit_register_artifact(name).await {
+                Ok(submitted) => return submitted.await_receipt().await,
+                Err(TestkitError::ArtifactRegistrationPending { .. }) => {
+                    let entry = self.artifacts.get(name)?;
+                    if let Some(deployed) =
+                        await_pending_registration(&self.network, &entry, self.address()).await?
+                    {
+                        return Ok(deployed);
+                    }
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    /// Submit an explicit artifact registration without waiting for its receipt.
+    ///
+    /// Returns [`TestkitError::ArtifactRegistrationPending`] when a registration
+    /// transaction is already in flight.
+    pub async fn submit_register_artifact(&mut self, name: &str) -> Result<SubmittedDeploy> {
         let entry = self.artifacts.get(name)?;
-        let _guard = entry.register_guard().await;
-        let deployed = self
+        let mut pending = entry.registration_guard().await;
+        match reconcile_pending_registration(
+            &self.network,
+            name,
+            &entry,
+            &mut pending,
+            self.address(),
+        )
+        .await?
+        {
+            RegistrationResolution::Registered => {
+                drop(pending);
+                return self
+                    .account
+                    .submit_deploy_entry(&self.network, &entry, true)
+                    .await;
+            }
+            RegistrationResolution::Recovered(submitted) => return Ok(*submitted),
+            RegistrationResolution::NeedsRegistration => {}
+        }
+        let prepared = self
             .account
-            .deploy_entry(&self.network, &entry, true)
-            .await?;
-        entry.mark_registered();
-        Ok(deployed)
+            .prepare_deploy_entry(&self.network, &entry, true)?;
+        *pending = Some(prepared.pending_registration());
+        drop(pending);
+        let submitted = prepared.submit().await?;
+        Ok(submitted.with_registration(entry))
     }
 
     /// Deploy an instance by hash only, without carrying the binary. The
@@ -184,9 +262,17 @@ impl AgentContext {
     /// fails. Prefer [`AgentContext::deploy_artifact`] unless a test is
     /// asserting on the hash-only path.
     pub async fn deploy_registered(&mut self, name: &str) -> Result<Deployed> {
+        self.submit_deploy_registered(name)
+            .await?
+            .await_receipt()
+            .await
+    }
+
+    /// Submit a hash-only artifact deployment without waiting for its receipt.
+    pub async fn submit_deploy_registered(&mut self, name: &str) -> Result<SubmittedDeploy> {
         let entry = self.artifacts.get(name)?;
         self.account
-            .deploy_entry(&self.network, &entry, false)
+            .submit_deploy_entry(&self.network, &entry, false)
             .await
     }
 
@@ -204,7 +290,21 @@ impl AgentContext {
     /// The binary is carried in every such transaction. Fails if execution is
     /// not successful.
     pub async fn deploy(&mut self, artifact: &[u8], kind: ArtifactKind) -> Result<Deployed> {
-        self.account.deploy(&self.network, artifact, kind).await
+        self.submit_deploy(artifact, kind)
+            .await?
+            .await_receipt()
+            .await
+    }
+
+    /// Submit a raw artifact deployment without waiting for its receipt.
+    pub async fn submit_deploy(
+        &mut self,
+        artifact: &[u8],
+        kind: ArtifactKind,
+    ) -> Result<SubmittedDeploy> {
+        self.account
+            .submit_deploy(&self.network, artifact, kind)
+            .await
     }
 
     /// Call a deployed contract method from this agent's account, awaiting the
@@ -215,8 +315,21 @@ impl AgentContext {
         entrypoint: ContractEntrypointID,
         calldata: &[u8],
     ) -> Result<TransactionReceipt> {
+        self.submit_call(target, entrypoint, calldata)
+            .await?
+            .await_receipt()
+            .await
+    }
+
+    /// Submit a contract call without waiting for its receipt.
+    pub async fn submit_call(
+        &mut self,
+        target: ContractAddress,
+        entrypoint: ContractEntrypointID,
+        calldata: &[u8],
+    ) -> Result<SubmittedTransaction> {
         self.account
-            .call(&self.network, target, entrypoint, calldata)
+            .submit_call(&self.network, target, entrypoint, calldata)
             .await
     }
 
@@ -317,4 +430,128 @@ impl AgentContext {
     {
         self.mailbox.try_recv_from_any(from).map(Envelope::decode)
     }
+}
+
+async fn reconcile_pending_registration(
+    network: &Network,
+    name: &str,
+    entry: &ArtifactEntry,
+    pending: &mut Option<PendingRegistration>,
+    caller: ContractAddress,
+) -> Result<RegistrationResolution> {
+    let Some(attempt) = pending.clone() else {
+        return if entry.registered() {
+            Ok(RegistrationResolution::Registered)
+        } else {
+            Ok(RegistrationResolution::NeedsRegistration)
+        };
+    };
+    if entry.registered() && attempt.owner != caller {
+        return Ok(RegistrationResolution::Registered);
+    }
+    let tx_hash = attempt.tx_hash;
+    let Some(receipt) = network.receipt(tx_hash).await? else {
+        return match network.transaction_status(tx_hash).await? {
+            TransactionStatus::Invalid { .. } => {
+                *pending = None;
+                Ok(RegistrationResolution::NeedsRegistration)
+            }
+            TransactionStatus::Pending
+            | TransactionStatus::Unknown
+            | TransactionStatus::RecentFailure { .. } => {
+                resubmit_registration(network, &attempt).await?;
+                Err(TestkitError::ArtifactRegistrationPending {
+                    name: name.to_owned(),
+                    tx_hash,
+                })
+            }
+            _ => Err(TestkitError::ArtifactRegistrationPending {
+                name: name.to_owned(),
+                tx_hash,
+            }),
+        };
+    };
+    if matches!(receipt.status, ExecStatus::Ok) {
+        entry.mark_registered();
+        if attempt.owner == caller {
+            *pending = None;
+            Ok(RegistrationResolution::Recovered(Box::new(
+                SubmittedDeploy::recovered(network.clone(), &attempt, receipt),
+            )))
+        } else {
+            Ok(RegistrationResolution::Registered)
+        }
+    } else {
+        *pending = None;
+        Ok(RegistrationResolution::NeedsRegistration)
+    }
+}
+
+async fn await_pending_registration(
+    network: &Network,
+    entry: &ArtifactEntry,
+    caller: ContractAddress,
+) -> Result<Option<Deployed>> {
+    let attempt = {
+        let pending = entry.registration_guard().await;
+        pending.clone()
+    };
+    let Some(attempt) = attempt else {
+        return Ok(None);
+    };
+    let tx_hash = attempt.tx_hash;
+    match network.await_receipt(tx_hash).await {
+        Ok(receipt) => Ok(finish_registration_receipt(entry, &attempt, receipt, caller).await),
+        Err(error) => match network.transaction_status(tx_hash).await {
+            Ok(TransactionStatus::Invalid { .. }) => {
+                entry.finish_registration(tx_hash, false).await;
+                Ok(None)
+            }
+            Ok(
+                TransactionStatus::Pending
+                | TransactionStatus::Unknown
+                | TransactionStatus::RecentFailure { .. },
+            ) => {
+                resubmit_registration(network, &attempt).await?;
+                match network.await_receipt(tx_hash).await {
+                    Ok(receipt) => {
+                        Ok(finish_registration_receipt(entry, &attempt, receipt, caller).await)
+                    }
+                    Err(_) => Err(error),
+                }
+            }
+            _ => Err(error),
+        },
+    }
+}
+
+async fn finish_registration_receipt(
+    entry: &ArtifactEntry,
+    attempt: &PendingRegistration,
+    receipt: TransactionReceipt,
+    caller: ContractAddress,
+) -> Option<Deployed> {
+    let succeeded = matches!(receipt.status, ExecStatus::Ok);
+    if !succeeded || attempt.owner == caller {
+        entry.finish_registration(attempt.tx_hash, succeeded).await;
+    } else {
+        entry.mark_registered();
+    }
+    (succeeded && attempt.owner == caller).then_some(Deployed {
+        address: attempt.address,
+        tx_hash: attempt.tx_hash,
+        receipt,
+        registered: true,
+    })
+}
+
+async fn resubmit_registration(network: &Network, attempt: &PendingRegistration) -> Result<()> {
+    let actual = network.submit_raw(attempt.tx_hex.clone()).await?;
+    if actual != attempt.tx_hash {
+        return Err(TestkitError::SubmissionHashMismatch {
+            expected: format!("{:?}", attempt.tx_hash),
+            actual: format!("{actual:?}"),
+        });
+    }
+    Ok(())
 }
