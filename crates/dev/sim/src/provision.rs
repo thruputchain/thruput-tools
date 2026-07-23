@@ -27,7 +27,7 @@ use crate::{
     executor::{DEFAULT_RECEIPT_DRAIN_RETRY_INTERVAL, SimRpcClient},
     manifest::{ActorProvisioningSpec, ContractArtifactKind, SimulationManifest},
     runtime::{SimAccount, derive_provisioned_account_signer},
-    util::json_string,
+    util::{json_string, sha256_hex},
 };
 
 const DEFAULT_BLOCK_EXPIRY_OFFSET: i64 = 1_000;
@@ -101,7 +101,15 @@ fn prepare_provision_plan(
     let wallet_artifact_kind = spec
         .dev_wallet_artifact_kind
         .unwrap_or_else(|| infer_dev_wallet_artifact_kind(&artifact_path));
-    let wallet_contract = load_dev_wallet_contract(&artifact_path, wallet_artifact_kind)?;
+    let expected_artifact_sha256 = json_string(
+        &inputs.runtime_manifest.bootstrap.dev_wallet.content_hash,
+        "bootstrap.devWallet.contentHash",
+    )?;
+    let wallet_contract = load_dev_wallet_contract(
+        &artifact_path,
+        wallet_artifact_kind,
+        &expected_artifact_sha256,
+    )?;
     let wallet_contract_hash = contract_hash(&wallet_contract)?;
     let create_wallet_entrypoint = inputs
         .runtime_manifest
@@ -650,8 +658,16 @@ fn push_candidate(candidates: &mut Vec<PathBuf>, candidate: PathBuf) {
 fn load_dev_wallet_contract(
     path: &Path,
     artifact_kind: ContractArtifactKind,
+    expected_sha256: &str,
 ) -> Result<Contract, SimError> {
     let bytes = std::fs::read(path)?;
+    let actual_sha256 = sha256_hex(&bytes);
+    if !actual_sha256.eq_ignore_ascii_case(expected_sha256) {
+        return Err(SimError::Executor(format!(
+            "dev-wallet artifact `{}` SHA-256 mismatch: expected {expected_sha256}, got {actual_sha256}",
+            path.display()
+        )));
+    }
     let blob = ContractBlob {
         data: BytesM(bytes),
     };
@@ -777,6 +793,7 @@ mod tests {
     use crate::manifest::{ActorProvisioningSpec, ContractArtifactKind};
     use crate::nonce::NonceNamespace;
     use crate::runtime::SimAccount;
+    use crate::util::sha256_hex;
 
     #[test]
     fn parses_airdrop_hog_amounts() {
@@ -853,11 +870,29 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir should create");
         let artifact = temp.path().join("dev-wallet.bin");
         std::fs::write(&artifact, b"rv32 wallet").expect("artifact should write");
+        let expected_sha256 = sha256_hex(b"rv32 wallet");
 
-        let contract = load_dev_wallet_contract(&artifact, ContractArtifactKind::Rv32)
-            .expect("rv32 artifact should load");
+        let contract =
+            load_dev_wallet_contract(&artifact, ContractArtifactKind::Rv32, &expected_sha256)
+                .expect("rv32 artifact should load");
 
         assert!(matches!(contract, Contract::kRv32 { .. }));
+    }
+
+    #[test]
+    fn rejects_dev_wallet_artifact_that_does_not_match_runtime_manifest() {
+        let temp = tempfile::tempdir().expect("tempdir should create");
+        let artifact = temp.path().join("dev-wallet.wasm");
+        std::fs::write(&artifact, b"different wallet").expect("artifact should write");
+
+        let error = load_dev_wallet_contract(
+            &artifact,
+            ContractArtifactKind::Wasm,
+            &sha256_hex(b"advertised wallet"),
+        )
+        .expect_err("mismatched artifact should fail");
+
+        assert!(error.to_string().contains("SHA-256 mismatch"));
     }
 
     #[test]

@@ -22,6 +22,7 @@ pub struct LoadedRuntimeManifest {
     pub manifest: RuntimeManifest,
     pub bytes: Vec<u8>,
     pub sha256: String,
+    pub config_sha256: String,
 }
 
 pub async fn load_runtime_manifest(
@@ -51,7 +52,7 @@ pub async fn load_runtime_manifest(
     }
     let manifest: RuntimeManifest =
         serde_json::from_slice(&bytes).map_err(|source| RuntimeManifestError::Parse {
-            path: path_display,
+            path: path_display.clone(),
             source,
         })?;
     if manifest.schema_version != RUNTIME_MANIFEST_SCHEMA_VERSION {
@@ -61,11 +62,39 @@ pub async fn load_runtime_manifest(
     }
 
     let sha256 = format!("0x{}", hex::encode(Sha256::digest(&bytes)));
+    let config_sha256 =
+        runtime_config_sha256(&bytes).map_err(|source| RuntimeManifestError::Parse {
+            path: path_display,
+            source,
+        })?;
     Ok(LoadedRuntimeManifest {
         manifest,
         bytes,
         sha256,
+        config_sha256,
     })
+}
+
+/// Hash runtime configuration without run-assigned backend dial addresses.
+///
+/// Endpoint presence remains part of the hash because it describes runtime
+/// capabilities, while concrete addresses are execution-local discovery data.
+pub fn runtime_config_sha256(bytes: &[u8]) -> Result<String, serde_json::Error> {
+    let mut config: serde_json::Value = serde_json::from_slice(bytes)?;
+    if let Some(endpoints) = config
+        .get_mut("endpoints")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        for endpoint in endpoints.values_mut() {
+            if !endpoint.is_null() {
+                *endpoint = serde_json::Value::String("0.0.0.0:0".into());
+            }
+        }
+    }
+    Ok(format!(
+        "0x{}",
+        hex::encode(Sha256::digest(serde_json::to_vec(&config)?))
+    ))
 }
 
 pub fn derive_accounts(
@@ -186,6 +215,87 @@ mod tests {
             err,
             RuntimeManifestError::BootstrapPublicKeyMismatch { index: 0 }
         ));
+    }
+
+    #[test]
+    fn runtime_config_hash_excludes_dial_addresses_but_preserves_capabilities() {
+        let manifest = runtime_manifest(false);
+        let manifest_json =
+            serde_json::to_value(&manifest).expect("runtime manifest should encode");
+        let expected = runtime_config_sha256(
+            &serde_json::to_vec(&manifest_json).expect("runtime manifest should encode"),
+        )
+        .expect("runtime config should hash");
+
+        let mut different_addresses = manifest_json.clone();
+        different_addresses["endpoints"]["scheduler"] = json!("127.0.0.1:2000");
+        different_addresses["endpoints"]["indexer"] = json!("127.0.0.1:2001");
+        assert_eq!(
+            expected,
+            runtime_config_sha256(
+                &serde_json::to_vec(&different_addresses).expect("runtime manifest should encode")
+            )
+            .expect("runtime config should hash")
+        );
+
+        different_addresses["endpoints"]
+            .as_object_mut()
+            .expect("endpoints should be an object")
+            .remove("indexer");
+        assert_ne!(
+            expected,
+            runtime_config_sha256(
+                &serde_json::to_vec(&different_addresses).expect("runtime manifest should encode")
+            )
+            .expect("runtime config should hash")
+        );
+
+        let mut additive_endpoint_a = manifest_json.clone();
+        additive_endpoint_a["endpoints"]["futureGateway"] = json!("127.0.0.1:3000");
+        let additive_endpoint_hash = runtime_config_sha256(
+            &serde_json::to_vec(&additive_endpoint_a).expect("runtime manifest should encode"),
+        )
+        .expect("runtime config should hash");
+        let mut additive_endpoint_b = additive_endpoint_a.clone();
+        additive_endpoint_b["endpoints"]["futureGateway"] = json!("127.0.0.1:3001");
+        assert_eq!(
+            additive_endpoint_hash,
+            runtime_config_sha256(
+                &serde_json::to_vec(&additive_endpoint_b).expect("runtime manifest should encode")
+            )
+            .expect("runtime config should hash")
+        );
+        additive_endpoint_b["endpoints"]
+            .as_object_mut()
+            .expect("endpoints should be an object")
+            .remove("futureGateway");
+        assert_ne!(
+            additive_endpoint_hash,
+            runtime_config_sha256(
+                &serde_json::to_vec(&additive_endpoint_b).expect("runtime manifest should encode")
+            )
+            .expect("runtime config should hash")
+        );
+
+        let mut different_genesis = manifest_json.clone();
+        different_genesis["genesisHash"] = json!(prefixed_hex(0x66));
+        assert_ne!(
+            expected,
+            runtime_config_sha256(
+                &serde_json::to_vec(&different_genesis).expect("runtime manifest should encode")
+            )
+            .expect("runtime config should hash")
+        );
+
+        let mut unknown_metadata = manifest_json;
+        unknown_metadata["futureRuntimeMetadata"] = json!({"mode": "different"});
+        assert_ne!(
+            expected,
+            runtime_config_sha256(
+                &serde_json::to_vec(&unknown_metadata).expect("runtime manifest should encode")
+            )
+            .expect("runtime config should hash")
+        );
     }
 
     fn runtime_manifest(mismatch: bool) -> RuntimeManifest {

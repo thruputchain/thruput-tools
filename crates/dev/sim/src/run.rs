@@ -475,7 +475,7 @@ async fn run_resolved_target(
         runtime_manifest: target.runtime_manifest.clone(),
         nonce_namespace: nonce_namespace.get(),
     });
-    loaded_sim.refresh_sha256()?;
+    loaded_sim.refresh_hashes()?;
     let phase_starts = phase_starts(&loaded_sim.manifest)?;
     let schedule_summary = schedule_summary(&loaded_sim.manifest)?;
     let resource_sample_interval_ms = resource_sample_interval_ms(&loaded_sim.manifest)?;
@@ -536,6 +536,7 @@ async fn run_resolved_target(
             loaded_sim: &loaded_sim,
             runtime_manifest: &loaded_runtime.manifest,
             runtime_manifest_sha256: &loaded_runtime.sha256,
+            runtime_config_sha256: &loaded_runtime.config_sha256,
             target,
             chaos_controller,
             nonce_namespace,
@@ -616,6 +617,7 @@ pub struct LoadedExecution<'a> {
     pub loaded_sim: &'a LoadedSimulationManifest,
     pub runtime_manifest: &'a RuntimeManifest,
     pub runtime_manifest_sha256: &'a str,
+    pub runtime_config_sha256: &'a str,
     pub target: &'a ResolvedTarget,
     pub chaos_controller: Option<&'a dyn crate::target::ChaosController>,
     pub nonce_namespace: NonceNamespace,
@@ -639,6 +641,11 @@ pub async fn execute_loaded_simulation<C>(
 where
     C: SimRpcClient + Clone + Send + Sync + 'static,
 {
+    if input.loaded_sim.config_sha256.is_none() {
+        return Err(SimError::Executor(
+            "simulation configuration hash was not resolved".into(),
+        ));
+    }
     let mut metrics = RunMetricsBuilder::default();
     metrics.set_resource_sample_interval_ms(input.resource_sample_interval_ms);
     let mut chaos_events = Vec::new();
@@ -772,6 +779,7 @@ where
         run_id: input.run_id,
         runtime_manifest: input.runtime_manifest,
         runtime_manifest_sha256: input.runtime_manifest_sha256,
+        runtime_config_sha256: input.runtime_config_sha256,
         target: input.target,
         outcome,
         nonce_namespace: input.nonce_namespace,
@@ -876,6 +884,7 @@ struct BuildResultInput<'a> {
     run_id: &'a str,
     runtime_manifest: &'a RuntimeManifest,
     runtime_manifest_sha256: &'a str,
+    runtime_config_sha256: &'a str,
     target: &'a ResolvedTarget,
     outcome: SimRunOutcome,
     nonce_namespace: NonceNamespace,
@@ -890,6 +899,9 @@ struct BuildResultInput<'a> {
 }
 
 fn build_result(input: BuildResultInput<'_>) -> Result<SimResult, SimError> {
+    let simulation_config_sha256 = input.loaded_sim.config_sha256.clone().ok_or_else(|| {
+        SimError::Executor("simulation configuration hash was not resolved".into())
+    })?;
     Ok(SimResult {
         schema_version: SIM_RESULT_SCHEMA_VERSION,
         run_id: input.run_id.into(),
@@ -913,7 +925,9 @@ fn build_result(input: BuildResultInput<'_>) -> Result<SimResult, SimError> {
         nonce_namespace: input.nonce_namespace.get(),
         manifest_hashes: ManifestHashes {
             simulation_manifest_sha256: input.loaded_sim.sha256.clone(),
+            simulation_config_sha256: Some(simulation_config_sha256),
             runtime_manifest_sha256: input.runtime_manifest_sha256.into(),
+            runtime_config_sha256: Some(input.runtime_config_sha256.into()),
             bootstrap_manifest: MetricAvailability::Unsupported {
                 reason: "existing target cannot expose simulator launcher input".into(),
             },
@@ -982,7 +996,7 @@ mod tests {
     use crate::runtime::SimAccount;
     use crate::scheduler::{generate_schedule, phase_starts};
     use crate::target::{ChaosController, ChaosEventOutcome, TargetProviderFuture};
-    use crate::util::sha256_hex;
+    use crate::util::{sha256_hex, simulation_config_sha256};
 
     #[derive(Clone)]
     struct MockClient {
@@ -1069,10 +1083,74 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn execute_loaded_simulation_rejects_missing_config_hash_before_events() {
+        let manifest = manifest();
+        let bytes = serde_json::to_vec_pretty(&manifest).expect("manifest should encode");
+        let loaded_sim = LoadedSimulationManifest {
+            config_sha256: None,
+            manifest,
+            sha256: sha256_hex(&bytes),
+            bytes,
+        };
+        let runtime_manifest = runtime_manifest();
+        let schedule = generate_schedule(&loaded_sim.manifest).expect("schedule should generate");
+        let starts = phase_starts(&loaded_sim.manifest).expect("phase starts should generate");
+        let file = NamedTempFile::new().expect("temp file should be created");
+        let mut event_writer = EventWriter::create(file.path())
+            .await
+            .expect("event writer should open");
+        let mut actors = actor_states();
+        let target = resolved_target();
+
+        let error = execute_loaded_simulation(
+            MockClient {
+                tip: ChainTip {
+                    height: BlockHeight::from(42),
+                    block_hash: Hex0x(SHA256Hash::from([0x42; 32])),
+                },
+            },
+            LoadedExecution {
+                run_id: "test-run",
+                loaded_sim: &loaded_sim,
+                runtime_manifest: &runtime_manifest,
+                runtime_manifest_sha256: "runtime-sha",
+                runtime_config_sha256: "runtime-config-sha",
+                target: &target,
+                chaos_controller: None,
+                nonce_namespace: NonceNamespace::new(7).expect("nonce namespace should fit"),
+                actor_states: &mut actors,
+                scheduled_workloads: 1,
+                shutdown_simulation_time_ms: 0,
+                resource_sample_interval_ms: 1_000,
+                resource_sampler: None,
+                schedule: Some(&schedule),
+                phase_starts: &starts,
+                event_writer: &mut event_writer,
+                contract_setup: empty_contract_setup(),
+            },
+        )
+        .await
+        .expect_err("missing stable hash should fail before execution");
+
+        assert!(
+            matches!(error, SimError::Executor(message) if message.contains("hash was not resolved"))
+        );
+        assert_eq!(
+            tokio::fs::read(file.path())
+                .await
+                .expect("event file should read"),
+            Vec::<u8>::new()
+        );
+    }
+
+    #[tokio::test]
     async fn execute_loaded_simulation_records_chain_tip_result() {
         let manifest = manifest();
         let bytes = serde_json::to_vec_pretty(&manifest).expect("manifest should encode");
         let loaded_sim = LoadedSimulationManifest {
+            config_sha256: Some(
+                simulation_config_sha256(&manifest).expect("config hash should encode"),
+            ),
             manifest,
             sha256: sha256_hex(&bytes),
             bytes,
@@ -1099,6 +1177,7 @@ mod tests {
                 loaded_sim: &loaded_sim,
                 runtime_manifest: &runtime_manifest,
                 runtime_manifest_sha256: "runtime-sha",
+                runtime_config_sha256: "runtime-config-sha",
                 target: &target,
                 chaos_controller: None,
                 nonce_namespace: NonceNamespace::new(7).expect("nonce namespace should fit"),
@@ -1123,6 +1202,14 @@ mod tests {
 
         assert_eq!(result.outcome, SimRunOutcome::Passed);
         assert_eq!(result.run_id, "test-run");
+        assert_eq!(
+            result.manifest_hashes.simulation_config_sha256.as_deref(),
+            loaded_sim.config_sha256.as_deref()
+        );
+        assert_eq!(
+            result.manifest_hashes.runtime_config_sha256.as_deref(),
+            Some("runtime-config-sha")
+        );
         assert_eq!(
             result.target_identity.rpc_url.as_deref(),
             Some("http://127.0.0.1:9545")
@@ -1154,6 +1241,9 @@ mod tests {
         let manifest = chaos_manifest();
         let bytes = serde_json::to_vec_pretty(&manifest).expect("manifest should encode");
         let loaded_sim = LoadedSimulationManifest {
+            config_sha256: Some(
+                simulation_config_sha256(&manifest).expect("config hash should encode"),
+            ),
             manifest,
             sha256: sha256_hex(&bytes),
             bytes,
@@ -1180,6 +1270,7 @@ mod tests {
                 loaded_sim: &loaded_sim,
                 runtime_manifest: &runtime_manifest,
                 runtime_manifest_sha256: "runtime-sha",
+                runtime_config_sha256: "runtime-config-sha",
                 target: &target,
                 chaos_controller: Some(&FailingChaosController),
                 nonce_namespace: NonceNamespace::new(7).expect("nonce namespace should fit"),
@@ -1424,7 +1515,9 @@ mod tests {
         tokio::fs::create_dir_all(baseline_path.parent().expect("baseline should have parent"))
             .await
             .expect("baseline dir should create");
-        write_json_pretty(baseline_path, &result_fixture(1))
+        let mut baseline = result_fixture(1);
+        baseline.manifest_hashes.simulation_manifest_sha256 = "baseline-sim".into();
+        write_json_pretty(baseline_path, &baseline)
             .await
             .expect("baseline should write");
         let mut current = result_fixture(3);
@@ -1442,6 +1535,9 @@ mod tests {
             .as_ref()
             .expect("baseline diff should exist");
         assert_eq!(baseline_diff.path, "baselines/baseline-result.json");
+        assert!(baseline_diff.diff.same_config);
+        assert!(!baseline_diff.diff.simulation_manifest_match);
+        assert_eq!(baseline_diff.diff.simulation_config_match, Some(true));
         assert_eq!(
             baseline_diff
                 .diff
@@ -1736,7 +1832,9 @@ mod tests {
             nonce_namespace: 1,
             manifest_hashes: ManifestHashes {
                 simulation_manifest_sha256: "sim".into(),
+                simulation_config_sha256: Some("sim-config".into()),
                 runtime_manifest_sha256: "runtime".into(),
+                runtime_config_sha256: Some("runtime-config".into()),
                 bootstrap_manifest: MetricAvailability::Unsupported {
                     reason: "existing target".into(),
                 },

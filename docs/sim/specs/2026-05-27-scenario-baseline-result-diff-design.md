@@ -1,11 +1,14 @@
 # Scenario Baseline Result Diff (Phase 2, Slice D) - Design
 
 **Date:** 2026-05-27
-**Status:** Handoff design, ready for implementation.
+**Status:** Implemented; retained as a historical handoff design.
 **Owner of implementation:** TBD.
 
 This is a handoff design doc. It is self-contained: an implementer who has
 not seen the planning conversation should be able to build from it.
+
+The examples below describe the compare schema at implementation time. The
+current schema and semantics are documented in `docs/sim/README.md`.
 
 ## Summary
 
