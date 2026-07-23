@@ -11,7 +11,9 @@ use groundhog_xdr::contract::ContractEntrypointID;
 use groundhog_xdr::types::{ContractAddress, SHA256Hash};
 
 use crate::account::{Account, Deployed, SubmittedDeploy};
-use crate::artifact::{ArtifactEntry, ArtifactKind, PendingRegistration, Registry};
+use crate::artifact::{
+    ArtifactEntry, ArtifactKind, PendingRegistration, RegistrationOwner, Registry,
+};
 use xdrs::{ReadXDR, WriteXDR};
 
 use crate::clock::Clock;
@@ -154,8 +156,12 @@ impl AgentContext {
                 Ok(submitted) => return submitted.await_receipt().await,
                 Err(TestkitError::ArtifactRegistrationPending { .. }) => {
                     let entry = self.artifacts.get(name)?;
-                    if let Some(deployed) =
-                        await_pending_registration(&self.network, &entry, self.address()).await?
+                    if let Some(deployed) = await_pending_registration(
+                        &self.network,
+                        &entry,
+                        self.account.registration_owner(),
+                    )
+                    .await?
                     {
                         return Ok(deployed);
                     }
@@ -179,7 +185,7 @@ impl AgentContext {
             name,
             &entry,
             &mut pending,
-            self.address(),
+            self.account.registration_owner(),
         )
         .await?
         {
@@ -211,8 +217,12 @@ impl AgentContext {
                 Ok(submitted) => return submitted.await_receipt().await,
                 Err(TestkitError::ArtifactRegistrationPending { .. }) => {
                     let entry = self.artifacts.get(name)?;
-                    if let Some(deployed) =
-                        await_pending_registration(&self.network, &entry, self.address()).await?
+                    if let Some(deployed) = await_pending_registration(
+                        &self.network,
+                        &entry,
+                        self.account.registration_owner(),
+                    )
+                    .await?
                     {
                         return Ok(deployed);
                     }
@@ -234,7 +244,7 @@ impl AgentContext {
             name,
             &entry,
             &mut pending,
-            self.address(),
+            self.account.registration_owner(),
         )
         .await?
         {
@@ -437,7 +447,7 @@ async fn reconcile_pending_registration(
     name: &str,
     entry: &ArtifactEntry,
     pending: &mut Option<PendingRegistration>,
-    caller: ContractAddress,
+    caller: RegistrationOwner,
 ) -> Result<RegistrationResolution> {
     let Some(attempt) = pending.clone() else {
         return if entry.registered() {
@@ -490,7 +500,7 @@ async fn reconcile_pending_registration(
 async fn await_pending_registration(
     network: &Network,
     entry: &ArtifactEntry,
-    caller: ContractAddress,
+    caller: RegistrationOwner,
 ) -> Result<Option<Deployed>> {
     let attempt = {
         let pending = entry.registration_guard().await;
@@ -529,7 +539,7 @@ async fn finish_registration_receipt(
     entry: &ArtifactEntry,
     attempt: &PendingRegistration,
     receipt: TransactionReceipt,
-    caller: ContractAddress,
+    caller: RegistrationOwner,
 ) -> Option<Deployed> {
     let succeeded = matches!(receipt.status, ExecStatus::Ok);
     if !succeeded || attempt.owner == caller {

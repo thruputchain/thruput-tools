@@ -117,4 +117,8 @@ log "running testkit manual block-production smoke"
 env "${ENV_ARGS[@]}" \
     cargo test -p groundhog-testkit --test contract_smoke manual_block_production_stages_deploys_and_calls -- --ignored --nocapture
 
+log "running testkit cross-run registration smoke"
+env "${ENV_ARGS[@]}" \
+    cargo test -p groundhog-testkit --test contract_smoke later_run_does_not_recover_an_earlier_runs_pending_registration -- --ignored --nocapture
+
 log "testkit live contract smoke passed"

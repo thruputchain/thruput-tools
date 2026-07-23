@@ -21,7 +21,7 @@ use groundhog_testkit::rpc_types::view::RootInvocationOutput;
 use groundhog_testkit::xdr::types::ContractAddress;
 use groundhog_testkit::{
     Agent, AgentContext, BlockDriverConfig, LocalNetworkConfig, NetworkConfig, Result, Scenario,
-    entrypoint_id,
+    TestkitError, entrypoint_id,
 };
 use tokio::sync::Barrier;
 
@@ -236,6 +236,81 @@ async fn multiple_runs_are_possible() {
         .expect("agent runs to completion (second time against same scenario)");
 
     scenario.stop().await.expect("clean teardown");
+}
+
+#[tokio::test]
+#[ignore = "requires GROUNDHOG_DEVNODE_BINARY and a built caller-counter fixture in GROUNDHOG_TESTKIT_ARTIFACT_ROOT"]
+async fn later_run_does_not_recover_an_earlier_runs_pending_registration() {
+    let Some(artifact) = caller_counter_artifact() else {
+        eprintln!(
+            "skipping: set GROUNDHOG_TESTKIT_ARTIFACT_ROOT to a directory containing \
+             caller_counter.rv32a (see scripts/smoke-testkit-local.sh)"
+        );
+        return;
+    };
+
+    let mut config = LocalNetworkConfig::default();
+    config.block_driver = BlockDriverConfig::manual();
+    if let Ok(path) = std::env::var("GROUNDHOG_DEVNODE_BINARY") {
+        config.hog_devnode_binary = Some(path.into());
+    }
+    if let Ok(protocol) = std::env::var("HOGD_PROTOCOL_OVERRIDE") {
+        config.hogd_protocol = Some(protocol);
+    }
+
+    let scenario = Scenario::builder("registration-across-runs")
+        .network(NetworkConfig::local(config))
+        .artifact("caller-counter", artifact)
+        .build()
+        .await
+        .expect("manual local node starts");
+
+    let first_address = Arc::new(Mutex::new(None));
+    let stored_address = Arc::clone(&first_address);
+    scenario
+        .run_agents([Agent::new("alice", move |mut ctx| async move {
+            let registration = ctx.submit_deploy_artifact("caller-counter").await?;
+            registration.await_pending().await?;
+            *stored_address
+                .lock()
+                .expect("address mutex is not poisoned") = Some(registration.address());
+            Ok(())
+        })])
+        .await
+        .expect("first run stages registration");
+
+    let original_address = first_address
+        .lock()
+        .expect("address mutex is not poisoned")
+        .expect("first run records its deployment address");
+    scenario
+        .run_agents([Agent::new("alice", move |mut ctx| async move {
+            let registration_hash = match ctx.submit_deploy_artifact("caller-counter").await {
+                Err(TestkitError::ArtifactRegistrationPending { tx_hash, .. }) => tx_hash,
+                other => panic!("expected earlier run's pending registration, got {other:?}"),
+            };
+
+            let registration_block = ctx.network().produce_block().await?;
+            let registration_receipt = ctx.network().await_receipt(registration_hash).await?;
+            assert_eq!(*registration_receipt.height, registration_block.height);
+
+            let deployment = ctx.submit_deploy_artifact("caller-counter").await?;
+            assert_ne!(
+                deployment.address(),
+                original_address,
+                "the later run must submit its own hash-only deployment"
+            );
+            deployment.await_pending().await?;
+            let deployment_block = ctx.network().produce_block().await?;
+            let deployed = deployment.await_receipt().await?;
+            assert_eq!(*deployed.receipt.height, deployment_block.height);
+            assert!(!deployed.registered);
+            Ok(())
+        })])
+        .await
+        .expect("later run deploys by hash after the earlier registration commits");
+
+    scenario.stop().await.expect("clean manual-node teardown");
 }
 
 #[tokio::test]

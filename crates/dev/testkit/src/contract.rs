@@ -7,7 +7,9 @@
 
 pub use groundhog_xdr::contract::ContractEntrypointID;
 
-use groundhog_contract_util::{EntrypointSignature, NormalizedMethodSignature};
+use groundhog_contract_util::{
+    EntrypointSignature, NormalizedMethodSignature, semver::try_major_version_from_string,
+};
 use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
 use groundhog_json_rpc_types::transaction::TxHash;
 use groundhog_json_rpc_types::view::RootInvocationOutput;
@@ -71,6 +73,20 @@ pub fn entrypoint_id(interface: &str, version: &str, method: &str) -> ContractEn
     sig.id()
 }
 
+/// Fallible form of [`entrypoint_id`] for interface identities from untrusted input.
+pub fn try_entrypoint_id(
+    interface: &str,
+    version: &str,
+    method: &str,
+) -> Result<ContractEntrypointID> {
+    if try_major_version_from_string(version).is_none() {
+        return Err(TestkitError::InvalidContractVersion {
+            version: version.to_owned(),
+        });
+    }
+    Ok(entrypoint_id(interface, version, method))
+}
+
 /// A deployed contract instance bound to its interface identity.
 ///
 /// `call` and `view` encode the argument value (typically a tuple of the
@@ -105,8 +121,8 @@ impl Contract {
         self.address
     }
 
-    fn selector(&self, method: &str) -> ContractEntrypointID {
-        entrypoint_id(&self.interface, &self.version, method)
+    fn selector(&self, method: &str) -> Result<ContractEntrypointID> {
+        try_entrypoint_id(&self.interface, &self.version, method)
     }
 
     /// Submit a state-changing call to `method` through the agent's wallet,
@@ -127,7 +143,7 @@ impl Contract {
     {
         let calldata = xdrs::cxs::encode(args).map_err(TestkitError::encode)?;
         let receipt = ctx
-            .call(self.address, self.selector(method), &calldata)
+            .call(self.address, self.selector(method)?, &calldata)
             .await?;
         match receipt.status {
             ExecStatus::Ok => Ok(receipt),
@@ -150,7 +166,7 @@ impl Contract {
     {
         let calldata = xdrs::cxs::encode(args).map_err(TestkitError::encode)?;
         let transaction = ctx
-            .submit_call(self.address, self.selector(method), &calldata)
+            .submit_call(self.address, self.selector(method)?, &calldata)
             .await?;
         Ok(SubmittedContractCall {
             transaction,
@@ -195,7 +211,7 @@ impl Contract {
         let calldata = xdrs::cxs::encode(args).map_err(TestkitError::encode)?;
         let response = ctx
             .network()
-            .view_call(self.address, self.selector(method), &calldata, caller)
+            .view_call(self.address, self.selector(method)?, &calldata, caller)
             .await?;
         match response.output {
             RootInvocationOutput::Return { return_data } => decode_return(&return_data.0),
@@ -216,7 +232,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{ContractEntrypointID, decode_return, entrypoint_id};
+    use crate::error::TestkitError;
+
+    use super::{ContractEntrypointID, decode_return, entrypoint_id, try_entrypoint_id};
 
     #[test]
     fn matches_known_erc20_selector() {
@@ -225,6 +243,14 @@ mod tests {
             entrypoint_id("ERC20", "0.1.0", "transfer"),
             ContractEntrypointID::from([0x63, 0x28, 0x5b, 0x35, 0x23, 0xf9, 0xdc, 0x3f])
         );
+    }
+
+    #[test]
+    fn invalid_version_returns_an_error_instead_of_panicking() {
+        assert!(matches!(
+            try_entrypoint_id("ERC20", "latest", "transfer"),
+            Err(TestkitError::InvalidContractVersion { version }) if version == "latest"
+        ));
     }
 
     #[test]

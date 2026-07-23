@@ -192,6 +192,13 @@ pub enum TestkitError {
         detail: String,
     },
 
+    /// A contract interface version is not valid `SemVer`.
+    #[error("contract interface version `{version}` is not valid SemVer")]
+    InvalidContractVersion {
+        /// Version string used to derive the method selector.
+        version: String,
+    },
+
     /// A deploy transaction did not execute successfully.
     #[error("deploy did not succeed: {detail}")]
     Deploy {

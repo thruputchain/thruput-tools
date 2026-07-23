@@ -25,6 +25,7 @@ use tokio::sync::{Mutex, MutexGuard};
 use xdr_common::BytesM;
 
 use crate::error::{Result, TestkitError};
+use crate::nonce::NonceNamespace;
 
 /// Which artifact format a contract binary is in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,8 +77,15 @@ pub(crate) struct ArtifactEntry {
 pub(crate) struct PendingRegistration {
     pub(crate) tx_hash: TxHash,
     pub(crate) tx_hex: String,
-    pub(crate) owner: ContractAddress,
+    pub(crate) owner: RegistrationOwner,
     pub(crate) address: ContractAddress,
+}
+
+/// The account and scenario run that submitted an artifact registration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RegistrationOwner {
+    pub(crate) address: ContractAddress,
+    pub(crate) namespace: NonceNamespace,
 }
 
 impl ArtifactEntry {
@@ -208,9 +216,11 @@ fn infer_kind(path: &Path) -> Result<ArtifactKind> {
 #[cfg(test)]
 mod tests {
     use groundhog_json_rpc_types::{hex::Hex0x, transaction::TxHash};
-    use groundhog_xdr::types::SHA256Hash;
+    use groundhog_xdr::types::{ContractAddress, SHA256Hash};
 
-    use super::{ArtifactKind, ArtifactSpec, Registry};
+    use crate::nonce::NonceNamespace;
+
+    use super::{ArtifactKind, ArtifactSpec, RegistrationOwner, Registry};
 
     #[tokio::test]
     async fn registration_resolution_only_clears_the_matching_transaction() {
@@ -226,7 +236,10 @@ mod tests {
         *entry.registration_guard().await = Some(super::PendingRegistration {
             tx_hash: pending_hash,
             tx_hex: "0x01".to_owned(),
-            owner: [0; 32].into(),
+            owner: RegistrationOwner {
+                address: [0; 32].into(),
+                namespace: NonceNamespace::for_run("seed", 0),
+            },
             address: [0; 32].into(),
         });
 
@@ -244,5 +257,21 @@ mod tests {
         entry.finish_registration(pending_hash, true).await;
         assert!(entry.registration_guard().await.is_none());
         assert!(entry.registered());
+    }
+
+    #[test]
+    fn registration_owner_distinguishes_repeated_runs_using_the_same_account() {
+        let address = ContractAddress::from([0x42; 32]);
+
+        assert_ne!(
+            RegistrationOwner {
+                address,
+                namespace: NonceNamespace::for_run("seed", 0),
+            },
+            RegistrationOwner {
+                address,
+                namespace: NonceNamespace::for_run("seed", 1),
+            }
+        );
     }
 }

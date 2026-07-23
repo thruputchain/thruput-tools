@@ -18,7 +18,7 @@ use xdr_common::VecM;
 
 use crate::artifact::{
     ArtifactEntry, ArtifactKind, PendingRegistration as ArtifactPendingRegistration,
-    contract_from_bytes, contract_hash,
+    RegistrationOwner, contract_from_bytes, contract_hash,
 };
 use crate::error::{Result, TestkitError};
 use crate::manifest::DevAccount;
@@ -63,7 +63,7 @@ struct PendingRegistration {
 #[derive(Debug)]
 pub(crate) struct PreparedDeploy {
     network: Network,
-    owner: ContractAddress,
+    owner: RegistrationOwner,
     address: ContractAddress,
     tx_hash: TxHash,
     registered: bool,
@@ -113,8 +113,13 @@ impl SubmittedDeploy {
 
     /// Wait until the scheduler reports this deployment as pending.
     pub async fn await_pending(&self) -> Result<()> {
-        if self.cached_receipt.is_some() {
-            return Ok(());
+        if let Some(receipt) = &self.cached_receipt {
+            return Err(TestkitError::TransactionNotPending {
+                tx_hash: format!("{:?}", self.tx_hash),
+                status: groundhog_json_rpc_types::transaction::TransactionStatus::Committed {
+                    height: receipt.height.clone(),
+                },
+            });
         }
         self.network
             .await_pending_with_resubmission(self.tx_hash, &self.tx_hex)
@@ -200,6 +205,13 @@ impl Account {
 
     pub(crate) fn address(&self) -> ContractAddress {
         self.dev.wallet_address
+    }
+
+    pub(crate) fn registration_owner(&self) -> RegistrationOwner {
+        RegistrationOwner {
+            address: self.dev.wallet_address,
+            namespace: self.namespace,
+        }
     }
 
     fn next_nonce(&self) -> u64 {
@@ -297,7 +309,7 @@ impl Account {
                 .map_err(TestkitError::signing)?;
         Ok(PreparedDeploy {
             network: network.clone(),
-            owner: self.dev.wallet_address,
+            owner: self.registration_owner(),
             address,
             tx_hash,
             registered,
@@ -334,5 +346,60 @@ impl Account {
         let tx_hash = network.submit_raw(tx_hex.clone()).await?;
         self.advance()?;
         Ok(SubmittedTransaction::new(network.clone(), tx_hash, tx_hex))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use groundhog_json_rpc_types::BlockHeight;
+    use groundhog_json_rpc_types::hex::Hex0x;
+    use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
+    use groundhog_json_rpc_types::transaction::{TransactionStatus, TxHash};
+    use groundhog_xdr::types::{ContractAddress, SHA256Hash};
+
+    use crate::artifact::{PendingRegistration, RegistrationOwner};
+    use crate::error::TestkitError;
+    use crate::network::Network;
+    use crate::nonce::NonceNamespace;
+
+    use super::SubmittedDeploy;
+
+    #[tokio::test]
+    async fn recovered_committed_deploy_does_not_satisfy_pending_barrier() {
+        let tx_hash = TxHash(Hex0x(SHA256Hash::from([0x11; 32])));
+        let address = ContractAddress::from([0x22; 32]);
+        let attempt = PendingRegistration {
+            tx_hash,
+            tx_hex: "0x01".to_owned(),
+            owner: RegistrationOwner {
+                address,
+                namespace: NonceNamespace::for_run("seed", 0),
+            },
+            address,
+        };
+        let submitted = SubmittedDeploy::recovered(
+            Network::offline(),
+            &attempt,
+            TransactionReceipt {
+                tx_hash,
+                height: BlockHeight::from(7),
+                status: ExecStatus::Ok,
+                events: Vec::new(),
+                return_data: None,
+                abort_data: None,
+            },
+        );
+
+        let error = submitted
+            .await_pending()
+            .await
+            .expect_err("bug: a committed deployment is no longer pending");
+        assert!(matches!(
+            error,
+            TestkitError::TransactionNotPending {
+                status: TransactionStatus::Committed { height },
+                ..
+            } if height == BlockHeight::from(7)
+        ));
     }
 }

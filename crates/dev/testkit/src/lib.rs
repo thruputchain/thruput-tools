@@ -38,7 +38,9 @@ pub use account::{Deployed, SubmittedDeploy};
 pub use agent::{Agent, AgentContext, AgentId};
 pub use artifact::ArtifactKind;
 pub use clock::Clock;
-pub use contract::{Contract, ContractEntrypointID, SubmittedContractCall, entrypoint_id};
+pub use contract::{
+    Contract, ContractEntrypointID, SubmittedContractCall, entrypoint_id, try_entrypoint_id,
+};
 pub use error::{AgentFailure, AgentFailures, Result, TestkitError};
 pub use groundhog_node_supervisor::{
     BlockDriverConfig, BlockDriverMode, BlockProductionError, LogLevel, ProducedBlock,
