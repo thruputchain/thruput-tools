@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use groundhog_node_supervisor::LogLevel;
+use groundhog_node_supervisor::{BlockDriverConfig, LogLevel, ManualBlockProducer, ProducedBlock};
 
 use groundhog_json_rpc_client::{GroundhogApiClient, HttpClient, HttpClientBuilder};
 use groundhog_json_rpc_types::block::ChainTip;
@@ -24,6 +24,8 @@ use crate::error::{Result, TestkitError};
 
 const RECEIPT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const RECEIPT_POLL_ATTEMPTS: usize = 40; // ~10 seconds at the interval above.
+const PENDING_POLL_INTERVAL: Duration = Duration::from_millis(25);
+const PENDING_POLL_ATTEMPTS: usize = 400; // ~10 seconds at the interval above.
 
 /// A cheap, cloneable handle onto the target network.
 ///
@@ -35,11 +37,48 @@ pub struct Network {
     inner: Arc<NetworkInner>,
 }
 
+/// A submitted transaction whose pending status and receipt can be awaited separately.
+#[derive(Debug, Clone)]
+#[must_use = "submitted transactions should be awaited or intentionally retained"]
+pub struct SubmittedTransaction {
+    network: Network,
+    tx_hash: TxHash,
+    tx_hex: String,
+}
+
+impl SubmittedTransaction {
+    pub(crate) fn new(network: Network, tx_hash: TxHash, tx_hex: String) -> Self {
+        Self {
+            network,
+            tx_hash,
+            tx_hex,
+        }
+    }
+
+    /// Canonical transaction hash returned by submission.
+    pub fn tx_hash(&self) -> TxHash {
+        self.tx_hash
+    }
+
+    /// Wait until the scheduler reports this transaction as pending.
+    pub async fn await_pending(&self) -> Result<()> {
+        self.network
+            .await_pending_with_resubmission(self.tx_hash, &self.tx_hex)
+            .await
+    }
+
+    /// Wait until the indexer exposes this transaction's receipt.
+    pub async fn await_receipt(&self) -> Result<TransactionReceipt> {
+        self.network.await_receipt(self.tx_hash).await
+    }
+}
+
 struct NetworkInner {
     rpc_url: Option<String>,
     client: Option<HttpClient>,
     deploy_entrypoint: Option<ContractEntrypointID>,
     do_action_entrypoint: Option<ContractEntrypointID>,
+    manual_block_producer: Option<ManualBlockProducer>,
 }
 
 impl fmt::Debug for Network {
@@ -47,13 +86,21 @@ impl fmt::Debug for Network {
         f.debug_struct("Network")
             .field("rpc_url", &self.inner.rpc_url)
             .field("online", &self.inner.client.is_some())
+            .field(
+                "manual_block_production",
+                &self.inner.manual_block_producer.is_some(),
+            )
             .finish_non_exhaustive()
     }
 }
 
 impl Network {
     /// Connect to a live target and resolve the dev-wallet entrypoints.
-    pub(crate) fn connect(rpc_url: &str, manifest: &RuntimeManifest) -> Result<Self> {
+    pub(crate) fn connect(
+        rpc_url: &str,
+        manifest: &RuntimeManifest,
+        manual_block_producer: Option<ManualBlockProducer>,
+    ) -> Result<Self> {
         let client = HttpClientBuilder::default()
             .build(rpc_url)
             .map_err(|e| TestkitError::rpc("connect", e))?;
@@ -79,6 +126,7 @@ impl Network {
                 client: Some(client),
                 deploy_entrypoint: Some(deploy_entrypoint),
                 do_action_entrypoint: Some(do_action_entrypoint),
+                manual_block_producer,
             }),
         })
     }
@@ -91,6 +139,7 @@ impl Network {
                 client: None,
                 deploy_entrypoint: None,
                 do_action_entrypoint: None,
+                manual_block_producer: None,
             }),
         }
     }
@@ -154,6 +203,81 @@ impl Network {
             .get_transaction_status(tx_hash)
             .await
             .map_err(|e| TestkitError::rpc("getTransactionStatus", e))
+    }
+
+    /// Wait until the scheduler reports a submitted transaction as pending.
+    ///
+    /// A successful submit RPC only confirms `submit_unvetted` ingest. Manual
+    /// block tests should await this barrier before requesting nomination.
+    /// If the transaction commits before `Pending` is observed, this returns
+    /// [`TestkitError::TransactionNotPending`] because the requested nomination
+    /// boundary has already passed.
+    pub async fn await_pending(&self, tx_hash: TxHash) -> Result<()> {
+        self.await_pending_inner(tx_hash, None).await
+    }
+
+    pub(crate) async fn await_pending_with_resubmission(
+        &self,
+        tx_hash: TxHash,
+        tx_hex: &str,
+    ) -> Result<()> {
+        self.await_pending_inner(tx_hash, Some(tx_hex)).await
+    }
+
+    async fn await_pending_inner(&self, tx_hash: TxHash, tx_hex: Option<&str>) -> Result<()> {
+        let mut last_status = TransactionStatus::Unknown;
+        let mut resubmitted = false;
+        for _ in 0..PENDING_POLL_ATTEMPTS {
+            let status = self.transaction_status(tx_hash).await?;
+            match classify_pending_status(&status) {
+                PendingStatusClassification::Ready => return Ok(()),
+                PendingStatusClassification::Retry => {
+                    last_status = status;
+                    tokio::time::sleep(PENDING_POLL_INTERVAL).await;
+                }
+                PendingStatusClassification::Resubmit => {
+                    let Some(tx_hex) = tx_hex else {
+                        return Err(TestkitError::TransactionNotPending {
+                            tx_hash: format!("{tx_hash:?}"),
+                            status,
+                        });
+                    };
+                    if !resubmitted {
+                        let actual = self.submit_raw(tx_hex.to_owned()).await?;
+                        if actual != tx_hash {
+                            return Err(TestkitError::SubmissionHashMismatch {
+                                expected: format!("{tx_hash:?}"),
+                                actual: format!("{actual:?}"),
+                            });
+                        }
+                        resubmitted = true;
+                    }
+                    last_status = status;
+                    tokio::time::sleep(PENDING_POLL_INTERVAL).await;
+                }
+                PendingStatusClassification::Terminal => {
+                    return Err(TestkitError::TransactionNotPending {
+                        tx_hash: format!("{tx_hash:?}"),
+                        status,
+                    });
+                }
+            }
+        }
+        Err(TestkitError::PendingTimeout {
+            tx_hash: format!("{tx_hash:?}"),
+            last_status,
+        })
+    }
+
+    /// Produce one block through a harness-owned local node in manual mode.
+    pub async fn produce_block(&self) -> Result<ProducedBlock> {
+        self.inner
+            .manual_block_producer
+            .as_ref()
+            .ok_or(TestkitError::ManualBlockProductionUnavailable)?
+            .produce_block()
+            .await
+            .map_err(|source| TestkitError::BlockProduction { source })
     }
 
     /// Best-effort human summary of a transaction's status, for diagnostics.
@@ -227,6 +351,87 @@ impl Network {
             .client
             .as_ref()
             .ok_or(TestkitError::Offline { operation })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PendingStatusClassification {
+    Ready,
+    Retry,
+    Resubmit,
+    Terminal,
+}
+
+fn classify_pending_status(status: &TransactionStatus) -> PendingStatusClassification {
+    match status {
+        TransactionStatus::Pending => PendingStatusClassification::Ready,
+        TransactionStatus::Unknown => PendingStatusClassification::Retry,
+        TransactionStatus::RecentFailure { .. } => PendingStatusClassification::Resubmit,
+        _ => PendingStatusClassification::Terminal,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use groundhog_json_rpc_types::transaction::TransactionStatus;
+    use groundhog_node_supervisor::BlockDriverMode;
+
+    use super::{
+        LocalNetworkConfig, Network, PendingStatusClassification, classify_pending_status,
+    };
+    use crate::TestkitError;
+
+    #[test]
+    fn local_network_keeps_instant_block_production_by_default() {
+        assert_eq!(
+            LocalNetworkConfig::default().block_driver.mode,
+            BlockDriverMode::Instant
+        );
+    }
+
+    #[test]
+    fn pending_status_classification_distinguishes_resubmission() {
+        assert_eq!(
+            classify_pending_status(&TransactionStatus::Pending),
+            PendingStatusClassification::Ready
+        );
+        assert_eq!(
+            classify_pending_status(&TransactionStatus::Unknown),
+            PendingStatusClassification::Retry
+        );
+        assert_eq!(
+            classify_pending_status(&TransactionStatus::Invalid {
+                reason: "rejected".to_owned(),
+            }),
+            PendingStatusClassification::Terminal
+        );
+        assert_eq!(
+            classify_pending_status(&TransactionStatus::Committed { height: 2.into() }),
+            PendingStatusClassification::Terminal
+        );
+        assert_eq!(
+            classify_pending_status(&TransactionStatus::RecentFailure {
+                attempt_height: 1.into(),
+                conflict: groundhog_json_rpc_types::transaction::ConflictDiagnostic {
+                    address: groundhog_json_rpc_types::hex::Hex0x([0; 32].into()),
+                    key: groundhog_json_rpc_types::hex::HexBytes(Vec::new()),
+                    code: groundhog_json_rpc_types::transaction::ConflictCode::Other,
+                },
+            }),
+            PendingStatusClassification::Resubmit
+        );
+    }
+
+    #[tokio::test]
+    async fn offline_network_rejects_manual_block_production() {
+        let error = Network::offline()
+            .produce_block()
+            .await
+            .expect_err("offline network must not expose manual production");
+        assert!(matches!(
+            error,
+            TestkitError::ManualBlockProductionUnavailable
+        ));
     }
 }
 
@@ -328,6 +533,8 @@ pub struct LocalNetworkConfig {
     pub dev_account_tokens: u64,
     /// Maximum time to wait for the node to report readiness.
     pub startup_timeout: Duration,
+    /// Local block production policy. Defaults to submit-triggered production.
+    pub block_driver: BlockDriverConfig,
 }
 
 impl Default for LocalNetworkConfig {
@@ -341,6 +548,7 @@ impl Default for LocalNetworkConfig {
             dev_account_seed: "groundhog-dev-accounts".to_owned(),
             dev_account_tokens: 1_000_000_000,
             startup_timeout: Duration::from_secs(10),
+            block_driver: BlockDriverConfig::default(),
         }
     }
 }

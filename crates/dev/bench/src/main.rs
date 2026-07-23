@@ -8,10 +8,10 @@
 //!
 //! Usage:
 //!   # Against a local JSON-RPC endpoint (smoke):
-//!   groundhog-bench --url http://127.0.0.1:9545 --rate 1000 --duration 5
+//!   groundhog-bench --url http://127.0.0.1:9545 --method chainTip --rate 1000 --duration 5
 //!
 //!   # Against real gateway (load):
-//!   groundhog-bench --url http://127.0.0.1:8545 --rate 100000 --duration 60 --workers 16
+//!   groundhog-bench --url http://127.0.0.1:8545 --runtime-manifest /path/to/runtime-manifest.json --rate 100000 --duration 60 --workers 16
 
 use std::time::{Duration, Instant};
 use std::{path::Path, process, sync::Arc};
@@ -22,9 +22,9 @@ use groundhog_json_rpc_types::runtime_manifest::{
     RuntimeManifestEntrypointError,
 };
 use groundhog_signing::{
-    BuildDevWalletDoActionTransaction, DEFAULT_PUBKEY_ACCOUNT_NONCE, LocalSigner, PubkeyAccount,
-    SignTransactionParams, Signer, SigningError, build_dev_wallet_do_action_transaction,
-    derive_default_dev_account_signer, derive_dev_account_signer, sign_and_encode_transaction_hex,
+    BuildDevWalletDoActionTransaction, LocalSigner, SignTransactionParams, SigningError,
+    build_dev_wallet_do_action_transaction, derive_dev_account_signer,
+    sign_and_encode_transaction_hex,
 };
 use groundhog_xdr::contract::ContractEntrypointID;
 use groundhog_xdr::types::ContractAddress;
@@ -44,6 +44,12 @@ enum BenchError {
     InvalidDuration,
     #[error("--accounts must be >= 1 for sendRawTransaction")]
     MissingAccounts,
+    #[error(
+        "--accounts requested {requested} accounts, but the runtime manifest only contains {available}"
+    )]
+    NotEnoughAccounts { requested: usize, available: usize },
+    #[error("--runtime-manifest is required for sendRawTransaction")]
+    MissingRuntimeManifest,
     #[error("unknown method `{method}`")]
     UnknownMethod { method: String },
     #[error("failed to read runtime manifest {path}: {source}")]
@@ -73,8 +79,6 @@ enum BenchError {
         #[source]
         source: RuntimeManifestEntrypointError,
     },
-    #[error("failed to derive default dev account {index} address: {reason}")]
-    DefaultAccountAddress { index: usize, reason: String },
     #[error("failed to encode wallet action calldata: {source}")]
     WalletCalldata {
         #[source]
@@ -107,7 +111,7 @@ struct Cli {
     #[arg(long, default_value = "http://127.0.0.1:9545")]
     url: String,
 
-    /// Runtime manifest used to derive benchmark account signers.
+    /// Runtime manifest used to derive benchmark account signers. Required for sendRawTransaction.
     #[arg(long)]
     runtime_manifest: Option<std::path::PathBuf>,
 
@@ -156,14 +160,6 @@ struct Cli {
     max_skew: f64,
 }
 
-/// Derive a deterministic local-node dev account signer.
-///
-/// The resulting transactions are only auth-valid against endpoints whose
-/// genesis bootstraps matching dev accounts.
-fn dev_signer(index: usize) -> LocalSigner {
-    derive_default_dev_account_signer(index)
-}
-
 fn dev_signer_from_seed(seed: &str, index: usize) -> LocalSigner {
     derive_dev_account_signer(seed, index)
 }
@@ -198,27 +194,6 @@ fn generate_tx_batch(
 
             sign_and_encode_transaction_hex(tx, &account.signer, SignTransactionParams::default())
                 .map_err(|source| BenchError::SignAndEncodeTransaction { source })
-        })
-        .collect()
-}
-
-fn default_bench_accounts(num_accounts: usize) -> Result<Vec<BenchAccount>, BenchError> {
-    (0..num_accounts)
-        .map(|index| {
-            let signer = dev_signer(index);
-            let auth_account =
-                PubkeyAccount::new(signer.public_key(), DEFAULT_PUBKEY_ACCOUNT_NONCE);
-            let wallet_address =
-                auth_account
-                    .address()
-                    .map_err(|source| BenchError::DefaultAccountAddress {
-                        index,
-                        reason: source.to_string(),
-                    })?;
-            Ok(BenchAccount {
-                signer,
-                wallet_address,
-            })
         })
         .collect()
 }
@@ -266,19 +241,24 @@ fn transaction_inputs_for_method(
     if method != "sendRawTransaction" {
         return Ok((Vec::new(), ContractEntrypointID::from([0u8; 8])));
     }
+    if num_accounts == 0 {
+        return Err(BenchError::MissingAccounts);
+    }
 
-    let accounts = match manifest {
-        Some(manifest) => manifest_bench_accounts(manifest)?,
-        None => default_bench_accounts(num_accounts)?,
-    };
-    let entrypoint = match manifest {
-        Some(manifest) => manifest
-            .bootstrap
-            .dev_wallet
-            .do_action_entrypoint_id()
-            .map_err(|source| BenchError::Entrypoint { source })?,
-        None => ContractEntrypointID::from([0u8; 8]),
-    };
+    let manifest = manifest.ok_or(BenchError::MissingRuntimeManifest)?;
+    let mut accounts = manifest_bench_accounts(manifest)?;
+    if accounts.len() < num_accounts {
+        return Err(BenchError::NotEnoughAccounts {
+            requested: num_accounts,
+            available: accounts.len(),
+        });
+    }
+    accounts.truncate(num_accounts);
+    let entrypoint = manifest
+        .bootstrap
+        .dev_wallet
+        .do_action_entrypoint_id()
+        .map_err(|source| BenchError::Entrypoint { source })?;
     if accounts.is_empty() {
         return Err(BenchError::MissingAccounts);
     }
@@ -900,7 +880,7 @@ mod tests {
         let mut manifest = manifest();
         manifest.bootstrap_account_derivation.scheme = "future-scheme".into();
 
-        let err = match transaction_inputs_for_method("sendRawTransaction", Some(&manifest), 0) {
+        let err = match transaction_inputs_for_method("sendRawTransaction", Some(&manifest), 1) {
             Ok(_) => panic!("bug: unsupported derivation scheme should fail"),
             Err(error) => error,
         };
@@ -912,11 +892,76 @@ mod tests {
     }
 
     #[test]
+    fn send_raw_transaction_requires_runtime_manifest() {
+        let err = match transaction_inputs_for_method("sendRawTransaction", None, 1) {
+            Ok(_) => panic!("bug: submit benchmark without runtime metadata should fail"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(err, BenchError::MissingRuntimeManifest));
+    }
+
+    #[test]
+    fn send_raw_transaction_rejects_zero_accounts_before_manifest_validation() {
+        let mut manifest = manifest();
+        manifest.bootstrap_account_derivation.scheme = "future-scheme".into();
+
+        let err = match transaction_inputs_for_method("sendRawTransaction", Some(&manifest), 0) {
+            Ok(_) => panic!("bug: zero-account submit benchmark should fail"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(err, BenchError::MissingAccounts));
+    }
+
+    #[test]
+    fn send_raw_transaction_uses_manifest_do_action_entrypoint() {
+        let (accounts, entrypoint) =
+            transaction_inputs_for_method("sendRawTransaction", Some(&manifest()), 1)
+                .expect("bug: valid manifest should provide transaction inputs");
+
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(entrypoint, ContractEntrypointID::from(*b"doAction"));
+    }
+
+    #[test]
+    fn send_raw_transaction_uses_the_requested_subset_of_manifest_accounts() {
+        let (accounts, _) = transaction_inputs_for_method(
+            "sendRawTransaction",
+            Some(&manifest_with_accounts(3)),
+            2,
+        )
+        .expect("bug: manifest has the requested number of accounts");
+
+        assert_eq!(accounts.len(), 2);
+    }
+
+    #[test]
+    fn send_raw_transaction_rejects_more_accounts_than_the_manifest_contains() {
+        let err = match transaction_inputs_for_method(
+            "sendRawTransaction",
+            Some(&manifest_with_accounts(2)),
+            3,
+        ) {
+            Ok(_) => panic!("bug: account underfill should fail"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(
+            err,
+            BenchError::NotEnoughAccounts {
+                requested: 3,
+                available: 2
+            }
+        ));
+    }
+
+    #[test]
     fn send_raw_transaction_rejects_public_key_mismatch() {
         let mut manifest = manifest();
         manifest.bootstrap_accounts[0].public_key = Hex0x(XdrEd25519PublicKey::from([0x99; 32]));
 
-        let err = match transaction_inputs_for_method("sendRawTransaction", Some(&manifest), 0) {
+        let err = match transaction_inputs_for_method("sendRawTransaction", Some(&manifest), 1) {
             Ok(_) => panic!("bug: public key mismatch should fail"),
             Err(error) => error,
         };
@@ -980,6 +1025,22 @@ mod tests {
             },
         }))
         .expect("bug: manifest JSON should parse")
+    }
+
+    fn manifest_with_accounts(count: usize) -> RuntimeManifest {
+        let mut manifest = manifest();
+        for index in 1..count {
+            let signer =
+                derive_dev_account_signer(&manifest.bootstrap_account_derivation.seed, index);
+            let mut public_key = [0u8; 32];
+            public_key.copy_from_slice(&signer.verifying_key_bytes());
+            let mut account = manifest.bootstrap_accounts[0].clone();
+            account.index = u32::try_from(index).expect("bug: test account index should fit");
+            account.public_key = Hex0x(XdrEd25519PublicKey::from(public_key));
+            account.wallet_address = Hex0x(XdrContractAddress::from([index as u8; 32]));
+            manifest.bootstrap_accounts.push(account);
+        }
+        manifest
     }
 
     fn hash(byte: u8) -> Hex0x<SHA256Hash> {

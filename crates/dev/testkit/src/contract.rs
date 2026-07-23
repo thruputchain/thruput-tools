@@ -7,14 +7,50 @@
 
 pub use groundhog_xdr::contract::ContractEntrypointID;
 
-use groundhog_contract_util::{EntrypointSignature, NormalizedMethodSignature};
+use groundhog_contract_util::{
+    EntrypointSignature, NormalizedMethodSignature, semver::try_major_version_from_string,
+};
 use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
+use groundhog_json_rpc_types::transaction::TxHash;
 use groundhog_json_rpc_types::view::RootInvocationOutput;
 use groundhog_xdr::types::ContractAddress;
 use xdrs::{ReadXDR, WriteXDR};
 
 use crate::agent::AgentContext;
 use crate::error::{Result, TestkitError};
+use crate::network::SubmittedTransaction;
+
+/// A typed contract call submitted without waiting for block production.
+#[derive(Debug, Clone)]
+#[must_use = "submitted contract calls should be awaited or intentionally retained"]
+pub struct SubmittedContractCall {
+    transaction: SubmittedTransaction,
+    method: String,
+}
+
+impl SubmittedContractCall {
+    /// Canonical transaction hash returned by submission.
+    pub fn tx_hash(&self) -> TxHash {
+        self.transaction.tx_hash()
+    }
+
+    /// Wait until the scheduler reports this call as pending.
+    pub async fn await_pending(&self) -> Result<()> {
+        self.transaction.await_pending().await
+    }
+
+    /// Wait for the receipt and require successful execution.
+    pub async fn await_receipt(&self) -> Result<TransactionReceipt> {
+        let receipt = self.transaction.await_receipt().await?;
+        match receipt.status {
+            ExecStatus::Ok => Ok(receipt),
+            ref status => Err(TestkitError::Reverted {
+                method: self.method.clone(),
+                status: format!("{status:?}"),
+            }),
+        }
+    }
+}
 
 /// Compute the entrypoint selector for a contract method.
 ///
@@ -35,6 +71,20 @@ pub fn entrypoint_id(interface: &str, version: &str, method: &str) -> ContractEn
     };
 
     sig.id()
+}
+
+/// Fallible form of [`entrypoint_id`] for interface identities from untrusted input.
+pub fn try_entrypoint_id(
+    interface: &str,
+    version: &str,
+    method: &str,
+) -> Result<ContractEntrypointID> {
+    if try_major_version_from_string(version).is_none() {
+        return Err(TestkitError::InvalidContractVersion {
+            version: version.to_owned(),
+        });
+    }
+    Ok(entrypoint_id(interface, version, method))
 }
 
 /// A deployed contract instance bound to its interface identity.
@@ -71,8 +121,8 @@ impl Contract {
         self.address
     }
 
-    fn selector(&self, method: &str) -> ContractEntrypointID {
-        entrypoint_id(&self.interface, &self.version, method)
+    fn selector(&self, method: &str) -> Result<ContractEntrypointID> {
+        try_entrypoint_id(&self.interface, &self.version, method)
     }
 
     /// Submit a state-changing call to `method` through the agent's wallet,
@@ -93,7 +143,7 @@ impl Contract {
     {
         let calldata = xdrs::cxs::encode(args).map_err(TestkitError::encode)?;
         let receipt = ctx
-            .call(self.address, self.selector(method), &calldata)
+            .call(self.address, self.selector(method)?, &calldata)
             .await?;
         match receipt.status {
             ExecStatus::Ok => Ok(receipt),
@@ -102,6 +152,26 @@ impl Contract {
                 status: format!("{status:?}"),
             }),
         }
+    }
+
+    /// Submit a state-changing call without waiting for its receipt.
+    pub async fn submit_call<A>(
+        &self,
+        ctx: &mut AgentContext,
+        method: &str,
+        args: &A,
+    ) -> Result<SubmittedContractCall>
+    where
+        A: WriteXDR + ?Sized,
+    {
+        let calldata = xdrs::cxs::encode(args).map_err(TestkitError::encode)?;
+        let transaction = ctx
+            .submit_call(self.address, self.selector(method)?, &calldata)
+            .await?;
+        Ok(SubmittedContractCall {
+            transaction,
+            method: method.to_owned(),
+        })
     }
 
     /// Call `method`, requiring success, and decode the return value to `R`.
@@ -141,7 +211,7 @@ impl Contract {
         let calldata = xdrs::cxs::encode(args).map_err(TestkitError::encode)?;
         let response = ctx
             .network()
-            .view_call(self.address, self.selector(method), &calldata, caller)
+            .view_call(self.address, self.selector(method)?, &calldata, caller)
             .await?;
         match response.output {
             RootInvocationOutput::Return { return_data } => decode_return(&return_data.0),
@@ -162,7 +232,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{ContractEntrypointID, decode_return, entrypoint_id};
+    use crate::error::TestkitError;
+
+    use super::{ContractEntrypointID, decode_return, entrypoint_id, try_entrypoint_id};
 
     #[test]
     fn matches_known_erc20_selector() {
@@ -171,6 +243,14 @@ mod tests {
             entrypoint_id("ERC20", "0.1.0", "transfer"),
             ContractEntrypointID::from([0x63, 0x28, 0x5b, 0x35, 0x23, 0xf9, 0xdc, 0x3f])
         );
+    }
+
+    #[test]
+    fn invalid_version_returns_an_error_instead_of_panicking() {
+        assert!(matches!(
+            try_entrypoint_id("ERC20", "latest", "transfer"),
+            Err(TestkitError::InvalidContractVersion { version }) if version == "latest"
+        ));
     }
 
     #[test]

@@ -21,6 +21,7 @@ mod view_backend;
 #[cfg(test)]
 mod test_support;
 
+pub use block_driver::{BlockProductionError, ManualBlockProducer, ProducedBlock};
 pub use config::{
     BlockDriverConfig, BlockDriverMode, HogdDevConfig, LogLevel, NodeSupervisorConfig,
 };

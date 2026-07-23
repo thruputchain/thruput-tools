@@ -7,14 +7,23 @@
 //! Requires a `hog-devnode` binary and a built `caller-counter` artifact, so
 //! it is `#[ignore]`d and driven by `scripts/smoke-testkit-local.sh`.
 
-use std::path::PathBuf;
+use std::{
+    path::PathBuf,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicI64, Ordering},
+    },
+    time::Duration,
+};
 
 use groundhog_testkit::rpc_types::receipt::ExecStatus;
 use groundhog_testkit::rpc_types::view::RootInvocationOutput;
 use groundhog_testkit::xdr::types::ContractAddress;
 use groundhog_testkit::{
-    Agent, AgentContext, LocalNetworkConfig, NetworkConfig, Result, Scenario, entrypoint_id,
+    Agent, AgentContext, BlockDriverConfig, LocalNetworkConfig, NetworkConfig, Result, Scenario,
+    TestkitError, entrypoint_id,
 };
+use tokio::sync::Barrier;
 
 /// `caller-counter`'s interface identity, from which method selectors derive.
 const INTERFACE: &str = "CallerCounter";
@@ -60,6 +69,57 @@ async fn bump_counter(ctx: &mut AgentContext, contract: ContractAddress) -> Resu
     Ok(())
 }
 
+async fn run_non_conflicting_manual_calls(scenario: &Scenario, addresses: [ContractAddress; 2]) {
+    let barrier = Arc::new(Barrier::new(2));
+    let call_height = Arc::new(AtomicI64::new(-1));
+
+    let alice_barrier = Arc::clone(&barrier);
+    let alice_height = Arc::clone(&call_height);
+    let alice_address = addresses[0];
+    let alice = Agent::new("alice", move |mut ctx| async move {
+        let call = ctx
+            .submit_call(
+                alice_address,
+                entrypoint_id(INTERFACE, VERSION, "bump"),
+                &[],
+            )
+            .await?;
+        call.await_pending().await?;
+        alice_barrier.wait().await;
+        let block = ctx.network().produce_block().await?;
+        alice_height.store(block.height, Ordering::Release);
+        alice_barrier.wait().await;
+        let receipt = call.await_receipt().await?;
+        assert_eq!(*receipt.height, block.height);
+        assert!(matches!(receipt.status, ExecStatus::Ok));
+        assert_eq!(read_counter(&ctx, alice_address, ctx.address()).await?, 1);
+        Ok(())
+    });
+
+    let bob_barrier = Arc::clone(&barrier);
+    let bob_height = Arc::clone(&call_height);
+    let bob_address = addresses[1];
+    let bob = Agent::new("bob", move |mut ctx| async move {
+        let call = ctx
+            .submit_call(bob_address, entrypoint_id(INTERFACE, VERSION, "bump"), &[])
+            .await?;
+        call.await_pending().await?;
+        bob_barrier.wait().await;
+        bob_barrier.wait().await;
+        let height = bob_height.load(Ordering::Acquire);
+        let receipt = call.await_receipt().await?;
+        assert_eq!(*receipt.height, height);
+        assert!(matches!(receipt.status, ExecStatus::Ok));
+        assert_eq!(read_counter(&ctx, bob_address, ctx.address()).await?, 1);
+        Ok(())
+    });
+
+    tokio::time::timeout(Duration::from_secs(30), scenario.run_agents([alice, bob]))
+        .await
+        .expect("manual call phase does not deadlock")
+        .expect("non-conflicting calls commit in one manual block");
+}
+
 #[tokio::test]
 #[ignore = "requires GROUNDHOG_DEVNODE_BINARY and a built caller-counter fixture in GROUNDHOG_TESTKIT_ARTIFACT_ROOT"]
 async fn caller_counter_deploy_call_read() {
@@ -87,7 +147,7 @@ async fn caller_counter_deploy_call_read() {
         .await
         .expect("local node starts and advertises a runtime manifest");
 
-    let report = scenario
+    scenario
         .run_agents([Agent::new("alice", |mut ctx| async move {
             // The first deploy carries the binary (registers it) and creates an
             // instance; the harness reports it registered.
@@ -123,7 +183,6 @@ async fn caller_counter_deploy_call_read() {
         .await
         .expect("agent runs to completion");
 
-    assert!(report.all_ok(), "scenario failed: {report:#?}");
     scenario.stop().await.expect("clean teardown");
 }
 
@@ -166,17 +225,170 @@ async fn multiple_runs_are_possible() {
         })]
     };
 
-    let report = scenario
+    scenario
         .run_agents(make_agents())
         .await
         .expect("agent runs to completion");
-    assert!(report.all_ok(), "scenario failed: {report:?}");
 
-    let report = scenario
+    scenario
         .run_agents(make_agents())
         .await
         .expect("agent runs to completion (second time against same scenario)");
-    assert!(report.all_ok(), "scenario failed: {report:#?}");
 
     scenario.stop().await.expect("clean teardown");
+}
+
+#[tokio::test]
+#[ignore = "requires GROUNDHOG_DEVNODE_BINARY and a built caller-counter fixture in GROUNDHOG_TESTKIT_ARTIFACT_ROOT"]
+async fn later_run_does_not_recover_an_earlier_runs_pending_registration() {
+    let Some(artifact) = caller_counter_artifact() else {
+        eprintln!(
+            "skipping: set GROUNDHOG_TESTKIT_ARTIFACT_ROOT to a directory containing \
+             caller_counter.rv32a (see scripts/smoke-testkit-local.sh)"
+        );
+        return;
+    };
+
+    let mut config = LocalNetworkConfig::default();
+    config.block_driver = BlockDriverConfig::manual();
+    if let Ok(path) = std::env::var("GROUNDHOG_DEVNODE_BINARY") {
+        config.hog_devnode_binary = Some(path.into());
+    }
+    if let Ok(protocol) = std::env::var("HOGD_PROTOCOL_OVERRIDE") {
+        config.hogd_protocol = Some(protocol);
+    }
+
+    let scenario = Scenario::builder("registration-across-runs")
+        .network(NetworkConfig::local(config))
+        .artifact("caller-counter", artifact)
+        .build()
+        .await
+        .expect("manual local node starts");
+
+    let first_address = Arc::new(Mutex::new(None));
+    let stored_address = Arc::clone(&first_address);
+    scenario
+        .run_agents([Agent::new("alice", move |mut ctx| async move {
+            let registration = ctx.submit_deploy_artifact("caller-counter").await?;
+            registration.await_pending().await?;
+            *stored_address
+                .lock()
+                .expect("address mutex is not poisoned") = Some(registration.address());
+            Ok(())
+        })])
+        .await
+        .expect("first run stages registration");
+
+    let original_address = first_address
+        .lock()
+        .expect("address mutex is not poisoned")
+        .expect("first run records its deployment address");
+    scenario
+        .run_agents([Agent::new("alice", move |mut ctx| async move {
+            let registration_hash = match ctx.submit_deploy_artifact("caller-counter").await {
+                Err(TestkitError::ArtifactRegistrationPending { tx_hash, .. }) => tx_hash,
+                other => panic!("expected earlier run's pending registration, got {other:?}"),
+            };
+
+            let registration_block = ctx.network().produce_block().await?;
+            let registration_receipt = ctx.network().await_receipt(registration_hash).await?;
+            assert_eq!(*registration_receipt.height, registration_block.height);
+
+            let deployment = ctx.submit_deploy_artifact("caller-counter").await?;
+            assert_ne!(
+                deployment.address(),
+                original_address,
+                "the later run must submit its own hash-only deployment"
+            );
+            deployment.await_pending().await?;
+            let deployment_block = ctx.network().produce_block().await?;
+            let deployed = deployment.await_receipt().await?;
+            assert_eq!(*deployed.receipt.height, deployment_block.height);
+            assert!(!deployed.registered);
+            Ok(())
+        })])
+        .await
+        .expect("later run deploys by hash after the earlier registration commits");
+
+    scenario.stop().await.expect("clean manual-node teardown");
+}
+
+#[tokio::test]
+#[ignore = "requires GROUNDHOG_DEVNODE_BINARY and a built caller-counter fixture in GROUNDHOG_TESTKIT_ARTIFACT_ROOT"]
+async fn manual_block_production_stages_deploys_and_calls() {
+    let Some(artifact) = caller_counter_artifact() else {
+        eprintln!(
+            "skipping: set GROUNDHOG_TESTKIT_ARTIFACT_ROOT to a directory containing \
+             caller_counter.rv32a (see scripts/smoke-testkit-local.sh)"
+        );
+        return;
+    };
+
+    let mut config = LocalNetworkConfig::default();
+    config.block_driver = BlockDriverConfig::manual();
+    if let Ok(path) = std::env::var("GROUNDHOG_DEVNODE_BINARY") {
+        config.hog_devnode_binary = Some(path.into());
+    }
+    if let Ok(protocol) = std::env::var("HOGD_PROTOCOL_OVERRIDE") {
+        config.hogd_protocol = Some(protocol);
+    }
+
+    let scenario = Scenario::builder("manual-block-production")
+        .network(NetworkConfig::local(config))
+        .artifact("caller-counter", artifact)
+        .build()
+        .await
+        .expect("manual local node starts");
+
+    let addresses = Arc::new(Mutex::new(Vec::new()));
+    let deployment_addresses = Arc::clone(&addresses);
+    scenario
+        .run_agents([Agent::new("alice", move |mut ctx| async move {
+            let genesis = ctx.network().chain_tip().await?;
+            let registration = ctx.submit_deploy_artifact("caller-counter").await?;
+            registration.await_pending().await?;
+            assert_eq!(
+                ctx.network().chain_tip().await?.height,
+                genesis.height,
+                "manual mode must not commit the submitted deployment"
+            );
+
+            let registration_block = ctx.network().produce_block().await?;
+            let registered = registration.await_receipt().await?;
+            assert_eq!(*registered.receipt.height, registration_block.height);
+            assert!(registered.registered);
+            deployment_addresses
+                .lock()
+                .expect("address mutex is not poisoned")
+                .push(registered.address);
+
+            let second = ctx.submit_deploy_registered("caller-counter").await?;
+            second.await_pending().await?;
+            assert_eq!(
+                *ctx.network().chain_tip().await?.height,
+                registration_block.height,
+                "staged deployment must remain pending"
+            );
+
+            let deployment_block = ctx.network().produce_block().await?;
+            let second = second.await_receipt().await?;
+            assert_eq!(*second.receipt.height, deployment_block.height);
+            deployment_addresses
+                .lock()
+                .expect("address mutex is not poisoned")
+                .push(second.address);
+            Ok(())
+        })])
+        .await
+        .expect("manual deployment phase completes");
+
+    let addresses: [ContractAddress; 2] = addresses
+        .lock()
+        .expect("address mutex is not poisoned")
+        .clone()
+        .try_into()
+        .expect("deployment phase should produce two addresses");
+    run_non_conflicting_manual_calls(&scenario, addresses).await;
+
+    scenario.stop().await.expect("clean manual-node teardown");
 }

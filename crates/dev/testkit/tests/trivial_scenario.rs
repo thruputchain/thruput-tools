@@ -5,6 +5,9 @@
 //! off-chain messaging — with no node, so they run in CI. The live smoke needs
 //! a real `hog-devnode` and is `#[ignore]`d.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use groundhog_testkit::{
     Agent, ArtifactKind, LocalNetworkConfig, NetworkConfig, Scenario, TestkitError,
 };
@@ -17,7 +20,7 @@ async fn offline_two_agents_exchange_a_message() {
         .await
         .expect("offline scenario builds");
 
-    let report = scenario
+    scenario
         .run_agents([
             Agent::new("alice", |mut ctx| async move {
                 // Draw from the deterministic per-agent stream, then greet Bob.
@@ -37,7 +40,6 @@ async fn offline_two_agents_exchange_a_message() {
         .await
         .expect("agents run to completion");
 
-    assert!(report.all_ok(), "every agent returned Ok");
     scenario.stop().await.expect("clean teardown");
 }
 
@@ -49,7 +51,7 @@ async fn offline_agents_get_distinct_accounts() {
         .await
         .expect("offline scenario builds");
 
-    let report = scenario
+    scenario
         .run_agents([
             Agent::new("a0", |ctx| async move {
                 assert_eq!(ctx.account_index(), 0);
@@ -63,7 +65,6 @@ async fn offline_agents_get_distinct_accounts() {
         .await
         .expect("agents run to completion");
 
-    assert!(report.all_ok());
     scenario.stop().await.expect("clean teardown");
 }
 
@@ -75,7 +76,7 @@ async fn offline_chain_verbs_report_offline() {
         .await
         .expect("offline scenario builds");
 
-    let report = scenario
+    scenario
         .run_agents([Agent::new("solo", |mut ctx| async move {
             let err = ctx
                 .deploy(b"not-a-real-artifact", ArtifactKind::Wasm)
@@ -86,8 +87,109 @@ async fn offline_chain_verbs_report_offline() {
         })])
         .await
         .expect("agents run to completion");
+}
 
-    assert!(report.all_ok());
+#[tokio::test]
+async fn returned_agent_error_fails_the_run() {
+    let scenario = Scenario::builder("agent-error")
+        .network(NetworkConfig::offline(1))
+        .build()
+        .await
+        .expect("offline scenario builds");
+
+    let result = scenario
+        .run_agents([Agent::new("alice", |_ctx| async move {
+            Err(TestkitError::Offline {
+                operation: "intentional failure",
+            })
+        })])
+        .await;
+
+    let TestkitError::AgentsFailed { failures } = result.expect_err("agent error fails the run")
+    else {
+        panic!("expected aggregate agent failure");
+    };
+    let [failure] = failures.failures() else {
+        panic!("expected exactly one agent failure");
+    };
+    assert_eq!(failure.name(), "alice");
+    assert_eq!(failure.index(), 0);
+    assert!(matches!(failure.error(), TestkitError::Offline { .. }));
+}
+
+#[tokio::test]
+async fn multiple_agent_errors_are_reported_in_agent_order() {
+    let scenario = Scenario::builder("multiple-agent-errors")
+        .network(NetworkConfig::offline(2))
+        .build()
+        .await
+        .expect("offline scenario builds");
+
+    let result = scenario
+        .run_agents([
+            Agent::new("alice", |_ctx| async move {
+                tokio::task::yield_now().await;
+                Err(TestkitError::Offline {
+                    operation: "alice failure",
+                })
+            }),
+            Agent::new("bob", |_ctx| async move {
+                Err(TestkitError::Offline {
+                    operation: "bob failure",
+                })
+            }),
+        ])
+        .await;
+
+    let TestkitError::AgentsFailed { failures } = result.expect_err("agent errors fail the run")
+    else {
+        panic!("expected aggregate agent failure");
+    };
+    assert_eq!(
+        failures
+            .failures()
+            .iter()
+            .map(|failure| (failure.name(), failure.index()))
+            .collect::<Vec<_>>(),
+        vec![("alice", 0), ("bob", 1)]
+    );
+}
+
+#[tokio::test]
+async fn duplicate_agent_names_fail_before_agent_bodies_run() {
+    let scenario = Scenario::builder("duplicate-agent-names")
+        .network(NetworkConfig::offline(2))
+        .build()
+        .await
+        .expect("offline scenario builds");
+    let first_ran = Arc::new(AtomicBool::new(false));
+    let second_ran = Arc::new(AtomicBool::new(false));
+
+    let result = scenario
+        .run_agents([
+            Agent::new("alice", {
+                let first_ran = Arc::clone(&first_ran);
+                move |_ctx| async move {
+                    first_ran.store(true, Ordering::SeqCst);
+                    Ok(())
+                }
+            }),
+            Agent::new("alice", {
+                let second_ran = Arc::clone(&second_ran);
+                move |_ctx| async move {
+                    second_ran.store(true, Ordering::SeqCst);
+                    Ok(())
+                }
+            }),
+        ])
+        .await;
+
+    assert!(matches!(
+        result,
+        Err(TestkitError::DuplicateAgent { ref name }) if name == "alice"
+    ));
+    assert!(!first_ran.load(Ordering::SeqCst));
+    assert!(!second_ran.load(Ordering::SeqCst));
 }
 
 #[tokio::test]
@@ -146,7 +248,7 @@ async fn registry_exposes_hash_and_registration_state() {
         .await
         .expect("offline scenario builds with a registered artifact");
 
-    let report = scenario
+    scenario
         .run_agents([Agent::new("solo", |mut ctx| async move {
             // The contract hash is available before any deploy; nothing is
             // registered on-network yet.
@@ -165,8 +267,6 @@ async fn registry_exposes_hash_and_registration_state() {
         })])
         .await
         .expect("agents run to completion");
-
-    assert!(report.all_ok());
 }
 
 #[tokio::test]
@@ -226,7 +326,7 @@ async fn local_two_agents_live_smoke() {
         .await
         .expect("local node starts and advertises a runtime manifest");
 
-    let report = scenario
+    scenario
         .run_agents([
             Agent::new("alice", |ctx| async move {
                 // Prove the RPC client works end to end.
@@ -245,6 +345,5 @@ async fn local_two_agents_live_smoke() {
         .await
         .expect("agents run to completion");
 
-    assert!(report.all_ok());
     scenario.stop().await.expect("clean teardown");
 }

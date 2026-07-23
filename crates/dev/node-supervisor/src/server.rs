@@ -17,7 +17,7 @@ use serde::Serialize;
 
 use crate::{
     BlockDriverConfig, HogdDevProcess, HogdDevReadiness, NodeSupervisorConfig, NodeSupervisorError,
-    block_driver::BlockDriverTask,
+    block_driver::{BlockDriverTask, ManualBlockProducer},
     hogd_dev::validate_dev_accounts,
     read_backend::{HogdDevReadBackend, HogdDevStorageReadBackend},
     rpc_backend::HogdDevSchedulerBackend,
@@ -134,6 +134,7 @@ pub struct NodeSupervisorHandle {
     rpc_handle: ServerHandle,
     rpc_addr: SocketAddr,
     backend_planes: BackendPlanes,
+    manual_block_producer: Option<ManualBlockProducer>,
     block_driver: Option<BlockDriverTask>,
 }
 
@@ -182,6 +183,7 @@ impl NodeSupervisorHandle {
                     rpc_handle: started.handle,
                     rpc_addr: started.addr,
                     backend_planes: started.backend_planes,
+                    manual_block_producer: started.block_driver.manual_producer(),
                     block_driver: Some(started.block_driver),
                 })
             }
@@ -218,6 +220,11 @@ impl NodeSupervisorHandle {
     /// Operating-system process id for hogd-dev, if available.
     pub fn hogd_child_id(&self) -> Option<u32> {
         self.hogd.child_id()
+    }
+
+    /// In-process block production control when the supervisor runs in manual mode.
+    pub fn manual_block_producer(&self) -> Option<ManualBlockProducer> {
+        self.manual_block_producer.clone()
     }
 
     /// Wait until either hogd-dev exits or the JSON-RPC server stops, then
@@ -269,8 +276,8 @@ impl NodeSupervisorHandle {
                 if let Err(error) = self.rpc_handle.stop() {
                     tracing::debug!(%error, "JSON-RPC server already stopped");
                 }
-                self.rpc_handle.clone().stopped().await;
                 self.stop_block_driver().await;
+                self.rpc_handle.clone().stopped().await;
                 Ok(SupervisorStop::HogdExited(status))
             }
             () = rpc_done => {
@@ -304,8 +311,8 @@ impl NodeSupervisorHandle {
         if let Err(error) = self.rpc_handle.stop() {
             tracing::debug!(%error, "JSON-RPC server already stopped");
         }
-        self.rpc_handle.clone().stopped().await;
         self.stop_block_driver().await;
+        self.rpc_handle.clone().stopped().await;
         self.hogd.stop().await
     }
 
@@ -571,13 +578,14 @@ mod tests {
 
     use super::*;
     use crate::{
-        BlockDriverConfig, HogdDevConfig,
+        BlockDriverConfig, BlockProductionError, HogdDevConfig,
         test_support::{FAKE_HOGD_DEV_MODE_ENV, fake_hogd_dev_binary},
     };
 
     /// Env var the fake hogd-dev reads to write its PID before printing
     /// readiness. Tests use this to verify cleanup via `kill(pid, 0)`.
     const FAKE_HOGD_DEV_PID_FILE_ENV: &str = "GROUNDHOG_FAKE_HOGD_DEV_PID_FILE";
+    const FAKE_COMMIT_ENTERED_FILE_ENV: &str = "GROUNDHOG_FAKE_COMMIT_ENTERED_FILE";
     // Canonical XDR/hash vector only. This transaction is structurally valid
     // and has a stable hash, but it is not auth-valid against empty hogd-dev
     // genesis.
@@ -641,6 +649,16 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             .and_then(|raw| raw.trim().parse().ok())
     }
 
+    async fn wait_path_exists(path: &std::path::Path, deadline: Instant) -> bool {
+        while Instant::now() < deadline {
+            if path.exists() {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        path.exists()
+    }
+
     async fn start_fake_supervisor_expect_error(mode: &str) -> NodeSupervisorError {
         let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, mode);
         let pid_dir = TempDir::new().expect("bug: tempdir creates");
@@ -671,6 +689,32 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             "startup failure leaked fake hogd-dev pid {pid}",
         );
         err
+    }
+
+    async fn start_fake_with_block_driver(
+        mode: &str,
+        block_driver: BlockDriverConfig,
+    ) -> (
+        EnvGuard,
+        NodeSupervisorHandle,
+        jsonrpsee::http_client::HttpClient,
+    ) {
+        let mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, mode);
+        let hogd = HogdDevConfig::default()
+            .with_binary_path(fake_hogd_dev_binary())
+            .with_startup_timeout(Duration::from_secs(5))
+            .with_shutdown_grace(Duration::from_secs(2));
+        let config = NodeSupervisorConfig::default()
+            .with_rpc_listen_address("127.0.0.1:0")
+            .with_hogd_dev(hogd)
+            .with_block_driver(block_driver);
+        let handle = NodeSupervisorHandle::start(config)
+            .await
+            .expect("bug: supervisor should start against fake hogd-dev");
+        let client = HttpClientBuilder::default()
+            .build(format!("http://{}", handle.rpc_addr()))
+            .expect("bug: jsonrpsee http client builds");
+        (mode_guard, handle, client)
     }
 
     #[tokio::test]
@@ -919,6 +963,283 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         }
 
         handle.stop().await.expect("bug: clean shutdown");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn manual_block_driver_only_commits_on_explicit_request() {
+        let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "automine");
+
+        let hogd = HogdDevConfig::default()
+            .with_binary_path(fake_hogd_dev_binary())
+            .with_startup_timeout(Duration::from_secs(5))
+            .with_shutdown_grace(Duration::from_secs(2));
+        let config = NodeSupervisorConfig::default()
+            .with_rpc_listen_address("127.0.0.1:0")
+            .with_hogd_dev(hogd)
+            .with_block_driver(
+                BlockDriverConfig::manual().with_interval(Duration::from_millis(25)),
+            );
+        let handle = NodeSupervisorHandle::start(config)
+            .await
+            .expect("bug: supervisor should start against fake hogd-dev");
+        let producer = handle
+            .manual_block_producer()
+            .expect("bug: manual mode should expose a producer");
+
+        let url = format!("http://{}", handle.rpc_addr());
+        let client = HttpClientBuilder::default()
+            .build(&url)
+            .expect("bug: jsonrpsee http client builds");
+        let tx_hex = format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}");
+        client
+            .send_raw_transaction(tx_hex.clone())
+            .await
+            .expect("bug: first submit should reach fake scheduler");
+        client
+            .send_raw_transaction(tx_hex)
+            .await
+            .expect("bug: second submit should reach fake scheduler");
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let before = client
+            .chain_tip()
+            .await
+            .expect("bug: chainTip should dispatch to fake scheduler");
+        assert_eq!(*before.height, 0, "manual mode must not automine submits");
+
+        let produced = producer
+            .produce_block()
+            .await
+            .expect("bug: explicit production should commit one block");
+        assert_eq!(produced.height, 1);
+        let after = client
+            .chain_tip()
+            .await
+            .expect("bug: chainTip should dispatch to fake scheduler");
+        assert_eq!(*after.height, 1);
+
+        let empty_error = producer
+            .produce_block()
+            .await
+            .expect_err("bug: fake scheduler rejects nomination without pending submits");
+        assert!(matches!(
+            empty_error,
+            BlockProductionError::SchedulerRejected {
+                op: "schedulercoord_nominate",
+                ..
+            }
+        ));
+
+        handle.stop().await.expect("bug: clean shutdown");
+        let stopped = producer
+            .produce_block()
+            .await
+            .expect_err("bug: producer retained after shutdown must fail");
+        assert!(matches!(stopped, BlockProductionError::DriverStopped));
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn manual_block_requests_are_serialized_without_coalescing() {
+        let (_mode_guard, handle, client) =
+            start_fake_with_block_driver("automine-serialize-probe", BlockDriverConfig::manual())
+                .await;
+        let producer = handle
+            .manual_block_producer()
+            .expect("bug: manual mode should expose a producer");
+        let tx_hex = format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}");
+        for _ in 0..2 {
+            client
+                .send_raw_transaction(tx_hex.clone())
+                .await
+                .expect("bug: submit should reach fake scheduler");
+        }
+
+        let (first, second) = tokio::time::timeout(Duration::from_secs(2), async {
+            tokio::join!(producer.produce_block(), producer.produce_block())
+        })
+        .await
+        .expect("bug: serialized requests should complete before timeout");
+        let mut heights = [
+            first
+                .expect("bug: first serialized request should commit")
+                .height,
+            second
+                .expect("bug: second serialized request should commit")
+                .height,
+        ];
+        heights.sort_unstable();
+        assert_eq!(heights, [1, 2]);
+
+        handle.stop().await.expect("bug: clean shutdown");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn manual_block_request_times_out_instead_of_hanging() {
+        let (_mode_guard, handle, client) = start_fake_with_block_driver(
+            "automine-hanging-commit",
+            BlockDriverConfig::manual().with_manual_request_timeout(Duration::from_millis(100)),
+        )
+        .await;
+        let producer = handle
+            .manual_block_producer()
+            .expect("bug: manual mode should expose a producer");
+        client
+            .send_raw_transaction(format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}"))
+            .await
+            .expect("bug: submit should reach fake scheduler");
+
+        let error = tokio::time::timeout(Duration::from_secs(2), producer.produce_block())
+            .await
+            .expect("bug: configured block-production deadline should fire")
+            .expect_err("bug: hanging commit should hit the configured deadline");
+        assert!(matches!(error, BlockProductionError::TimedOut { .. }));
+        let stopped = producer
+            .produce_block()
+            .await
+            .expect_err("bug: timeout should make the producer terminal");
+        assert!(matches!(stopped, BlockProductionError::DriverStopped));
+
+        handle.stop().await.expect("bug: clean shutdown");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn shutdown_resolves_an_in_flight_manual_request() {
+        let marker_dir = TempDir::new().expect("bug: tempdir creates");
+        let marker_path = marker_dir.path().join("commit-entered");
+        let _marker_guard = EnvGuard::set(
+            FAKE_COMMIT_ENTERED_FILE_ENV,
+            marker_path.to_str().expect("bug: tempdir path is utf-8"),
+        );
+        let (_mode_guard, handle, client) = start_fake_with_block_driver(
+            "automine-hanging-commit",
+            BlockDriverConfig::manual().with_manual_request_timeout(Duration::from_secs(30)),
+        )
+        .await;
+        let producer = handle
+            .manual_block_producer()
+            .expect("bug: manual mode should expose a producer");
+        client
+            .send_raw_transaction(format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}"))
+            .await
+            .expect("bug: submit should reach fake scheduler");
+        let request = tokio::spawn(async move { producer.produce_block().await });
+        assert!(
+            wait_path_exists(&marker_path, Instant::now() + Duration::from_secs(2)).await,
+            "manual request never entered the fake commit RPC"
+        );
+
+        tokio::time::timeout(Duration::from_secs(2), handle.stop())
+            .await
+            .expect("bug: shutdown should not wait for the hanging commit")
+            .expect("bug: clean shutdown");
+        let error = tokio::time::timeout(Duration::from_secs(2), request)
+            .await
+            .expect("bug: pending request should resolve during shutdown")
+            .expect("bug: request task should join")
+            .expect_err("bug: interrupted request should not report success");
+        assert!(matches!(error, BlockProductionError::OutcomeUnknown));
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn commit_rpc_error_is_reconciled_against_the_scheduler_tip() {
+        let (_mode_guard, handle, client) = start_fake_with_block_driver(
+            "automine-commit-response-lost",
+            BlockDriverConfig::manual(),
+        )
+        .await;
+        let producer = handle
+            .manual_block_producer()
+            .expect("bug: manual mode should expose a producer");
+        client
+            .send_raw_transaction(format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}"))
+            .await
+            .expect("bug: submit should reach fake scheduler");
+
+        let produced = producer
+            .produce_block()
+            .await
+            .expect("bug: reconciled tip should confirm the committed block");
+        assert_eq!(produced.height, 1);
+
+        handle.stop().await.expect("bug: clean shutdown");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn commit_rpc_error_without_tip_confirmation_is_indeterminate() {
+        let (_mode_guard, handle, client) =
+            start_fake_with_block_driver("automine-commit-error", BlockDriverConfig::manual())
+                .await;
+        let producer = handle
+            .manual_block_producer()
+            .expect("bug: manual mode should expose a producer");
+        client
+            .send_raw_transaction(format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}"))
+            .await
+            .expect("bug: submit should reach fake scheduler");
+
+        let error = producer
+            .produce_block()
+            .await
+            .expect_err("bug: unchanged tip cannot confirm commit");
+        assert!(matches!(
+            error,
+            BlockProductionError::CommitOutcomeUnknown { .. }
+        ));
+        let stopped = producer
+            .produce_block()
+            .await
+            .expect_err("bug: indeterminate commit should make the producer terminal");
+        assert!(matches!(stopped, BlockProductionError::DriverStopped));
+
+        handle.stop().await.expect("bug: clean shutdown");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn runtime_scheduler_rpc_failures_are_typed() {
+        for mode in ["automine-runtime-get-tip-error", "automine-nominate-error"] {
+            let (_mode_guard, handle, client) =
+                start_fake_with_block_driver(mode, BlockDriverConfig::manual()).await;
+            let producer = handle
+                .manual_block_producer()
+                .expect("bug: manual mode should expose a producer");
+            client
+                .send_raw_transaction(format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}"))
+                .await
+                .expect("bug: submit should reach fake scheduler");
+
+            let error = producer
+                .produce_block()
+                .await
+                .expect_err("bug: fake runtime RPC failure should reach the caller");
+            if mode == "automine-runtime-get-tip-error" {
+                assert!(matches!(
+                    error,
+                    BlockProductionError::SchedulerRpc {
+                        op: "schedcoord_get_tip",
+                        ..
+                    }
+                ));
+            } else {
+                assert!(matches!(
+                    error,
+                    BlockProductionError::NominationOutcomeUnknown { .. }
+                ));
+                let stopped = producer
+                    .produce_block()
+                    .await
+                    .expect_err("bug: unknown nomination should make producer terminal");
+                assert!(matches!(stopped, BlockProductionError::DriverStopped));
+            }
+
+            handle.stop().await.expect("bug: clean shutdown");
+        }
     }
 
     #[tokio::test]
