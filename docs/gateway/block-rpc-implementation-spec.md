@@ -11,9 +11,7 @@ Support explorer block pages through the existing hogd indexer and JSON-RPC gate
 - `groundhog-rpc` forwards public JSON-RPC calls to the indexer.
   
 ## Protocol
-Add two queries to `IndexerBlockExplorer` using new procedure numbers.
-
-Open question: procedure `2` is currently unused. Confirm whether it is reserved or retired before assigning IDs; otherwise append new procedure numbers.
+Add two queries to `IndexerBlockExplorer`.
 ### Block By Height
 ```xdr
 enum BlockLookupOutcome {
@@ -28,7 +26,7 @@ default:
   void;
 };
 
-BlockLookupResult get_block_by_height(BlockHeight);
+BlockLookupResult get_block_by_height(BlockHeight) = 2;
 ```
 ### Transactions By Block
 ```xdr
@@ -38,7 +36,7 @@ struct BlockTransactionQuery {
   unsigned int limit;
 };
 
-TransactionRefPage get_transactions_by_block(BlockTransactionQuery);
+TransactionRefPage get_transactions_by_block(BlockTransactionQuery) = 6;
 ```
 
 Return lightweight `{ txHash, height }` references ordered by signed transaction hash for deterministic pagination.
