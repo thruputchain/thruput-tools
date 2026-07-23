@@ -100,7 +100,7 @@ observes `eventCount > 0`.
 The scenario uses the same raw Fibonacci entrypoint and calldata as the
 `view-call` smoke:
 
-- `compute`: `0xc573d6c80bb945ad`, calldata `0x0a`.
+- `compute`: `0x1450686bab1d6a5f`, calldata `0x0a`.
 
 ## Test Plan
 

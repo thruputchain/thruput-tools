@@ -59,14 +59,14 @@
       "name": "fib-hot-compute-10",
       "contract": "fibonacci",
       "weight": 9,
-      "entrypoint": "0xc573d6c80bb945ad",
+      "entrypoint": "0x1450686bab1d6a5f",
       "calldata": "0x0a"
     },
     {
       "name": "fib-cold-compute-20",
       "contract": "fibonacci",
       "weight": 1,
-      "entrypoint": "0xc573d6c80bb945ad",
+      "entrypoint": "0x1450686bab1d6a5f",
       "calldata": "0x14"
     }
   ],
@@ -96,11 +96,11 @@
       "name": "counter-roundtrip",
       "contract": "caller-counter",
       "write": {
-        "entrypoint": "0x4fbf8bcef9232a3a",
+        "entrypoint": "0xb304d6b5e057d0f6",
         "calldata": "0x"
       },
       "read": {
-        "entrypoint": "0xdfc5d5bd6c88f8c4",
+        "entrypoint": "0x67fa357d44ea25c5",
         "calldata": "0x"
       }
     }

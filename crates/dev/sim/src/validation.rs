@@ -1615,11 +1615,11 @@ mod tests {
             contract: "caller-counter".into(),
             weight: 1,
             write: crate::manifest::RawWriteSpec {
-                entrypoint: "0x4fbf8bcef9232a3a".into(),
+                entrypoint: "0xb304d6b5e057d0f6".into(),
                 calldata: "0x".into(),
             },
             read: crate::manifest::RawReadSpec {
-                entrypoint: "0xdfc5d5bd6c88f8c4".into(),
+                entrypoint: "0x67fa357d44ea25c5".into(),
                 calldata: "0x".into(),
             },
         }
