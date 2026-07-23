@@ -7,7 +7,6 @@ use groundhog_signing::{
     BuildDevWalletDoActionTransaction, DEFAULT_TX_GAS_LIMIT, SignTransactionParams,
     build_dev_wallet_do_action_transaction, sign_and_encode_transaction_hex,
 };
-use groundhog_xdr::contract::ContractEntrypointID;
 use groundhog_xdr::types::SHA256Hash;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -382,7 +381,7 @@ fn prepare_local_airdrop(
     let faucet = resolve_local_bootstrap_account(profile, LocalBootstrapRole::Faucet)?;
 
     let hog_address = parse_contract_address(hog::TOKEN_ADDRESS)?;
-    let transfer_entrypoint = ContractEntrypointID::from(hog::TRANSFER_ENTRYPOINT);
+    let transfer_entrypoint = hog::transfer_entrypoint();
     let transfer_calldata = hog::encode_transfer_calldata(&recipient_address, raw_amount)?;
 
     let rt =
@@ -959,7 +958,7 @@ mod tests {
             &NormalizedMethodSignature::new("transfer"),
         );
 
-        assert_eq!(entrypoint.as_ref(), hog::TRANSFER_ENTRYPOINT);
+        assert_eq!(entrypoint.as_ref(), hog::transfer_entrypoint().as_ref());
     }
 
     fn test_profile(wallets: BTreeMap<String, SavedWalletBinding>) -> ResolvedProfile {

@@ -715,17 +715,47 @@ mod tests {
     }
 
     #[test]
-    fn symbolic_entrypoint_uses_canonical_selector_derivation() {
-        let entrypoint = EntrypointSpec::Symbolic(SymbolicEntrypointSpec {
-            interface: "Fibonacci".into(),
-            version: "0.1.0".into(),
-            method: "compute".into(),
-        });
+    fn bundled_symbolic_entrypoints_use_known_canonical_selectors() {
+        let cases = [
+            (
+                "Fibonacci",
+                "compute",
+                [0x14, 0x50, 0x68, 0x6b, 0xab, 0x1d, 0x6a, 0x5f],
+            ),
+            (
+                "CallerCounter",
+                "bump",
+                [0xb3, 0x04, 0xd6, 0xb5, 0xe0, 0x57, 0xd0, 0xf6],
+            ),
+            (
+                "CallerCounter",
+                "get",
+                [0x67, 0xfa, 0x35, 0x7d, 0x44, 0xea, 0x25, 0xc5],
+            ),
+            (
+                "Calldata",
+                "sum16",
+                [0x5b, 0x8f, 0x68, 0xbd, 0x06, 0xe3, 0x17, 0x40],
+            ),
+            (
+                "NnintStress",
+                "churn",
+                [0xbe, 0x88, 0xa9, 0x58, 0x0f, 0xab, 0x0c, 0x83],
+            ),
+        ];
 
-        assert_eq!(
-            entrypoint.resolve().expect("entrypoint should resolve"),
-            [0x14, 0x50, 0x68, 0x6b, 0xab, 0x1d, 0x6a, 0x5f]
-        );
+        for (interface, method, expected) in cases {
+            let entrypoint = EntrypointSpec::Symbolic(SymbolicEntrypointSpec {
+                interface: interface.into(),
+                version: "0.1.0".into(),
+                method: method.into(),
+            });
+
+            assert_eq!(
+                entrypoint.resolve().expect("entrypoint should resolve"),
+                expected
+            );
+        }
     }
 
     #[test]

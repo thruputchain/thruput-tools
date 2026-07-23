@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use groundhog_contract_util::{NormalizedMethodSignature, contract_entrypoint_id};
 use groundhog_json_rpc_types::{
     receipt::{ExecStatus, TransactionReceipt},
     runtime_manifest::RuntimeManifest,
@@ -35,7 +36,6 @@ const HOG_TOKEN_ADDRESS: [u8; 32] = {
     bytes[31] = 1;
     bytes
 };
-const HOG_TRANSFER_ENTRYPOINT: [u8; 8] = 0x6328_5b35_23f9_dc3f_u64.to_be_bytes();
 const HOG_DECIMALS: usize = 7;
 const HOG_SCALE: u128 = 10_000_000;
 const PROVISION_RECEIPT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -484,7 +484,7 @@ where
         wallet_address: sponsor.wallet_address,
         wallet_entrypoint,
         target_address: ContractAddress::from(HOG_TOKEN_ADDRESS),
-        target_entrypoint: ContractEntrypointID::from(HOG_TRANSFER_ENTRYPOINT),
+        target_entrypoint: hog_transfer_entrypoint(),
         target_calldata: &calldata,
         gas_limit: DEFAULT_TX_GAS_LIMIT,
         target_gas_limit: DEFAULT_TX_GAS_LIMIT,
@@ -520,6 +520,19 @@ where
         ));
     }
     Ok((tx_hash, receipt))
+}
+
+fn hog_transfer_entrypoint() -> ContractEntrypointID {
+    let selector = contract_entrypoint_id(
+        Some("ERC20"),
+        "0.1.0",
+        &NormalizedMethodSignature::new("transfer"),
+    );
+    let bytes: [u8; 8] = selector
+        .as_ref()
+        .try_into()
+        .expect("bug: contract entrypoint selectors are always eight bytes");
+    ContractEntrypointID::from(bytes)
 }
 
 struct ProvisionTxError {
@@ -757,8 +770,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        load_dev_wallet_contract, next_unused_account_index, parse_hog_amount,
-        resolve_dev_wallet_artifact,
+        hog_transfer_entrypoint, load_dev_wallet_contract, next_unused_account_index,
+        parse_hog_amount, resolve_dev_wallet_artifact,
     };
     use crate::actor::ActorState;
     use crate::manifest::{ActorProvisioningSpec, ContractArtifactKind};
@@ -771,6 +784,14 @@ mod tests {
         assert_eq!(parse_hog_amount("1.25").unwrap(), 12_500_000);
         assert!(parse_hog_amount("0").is_err());
         assert!(parse_hog_amount("1.12345678").is_err());
+    }
+
+    #[test]
+    fn hog_transfer_entrypoint_uses_canonical_erc20_identity() {
+        assert_eq!(
+            hog_transfer_entrypoint().as_ref(),
+            &0x6328_5b35_23f9_dc3f_u64.to_be_bytes()
+        );
     }
 
     #[test]
