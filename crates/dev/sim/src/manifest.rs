@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use groundhog_contract_util::{NormalizedMethodSignature, contract_entrypoint_id};
 use serde::{Deserialize, Serialize};
 
 use crate::target::TargetProviderSpec;
@@ -177,6 +178,105 @@ pub struct ContractArtifactRef {
     pub path: PathBuf,
 }
 
+/// A contract entrypoint expressed as raw selector bytes or a stable method identity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum EntrypointSpec {
+    /// An eight-byte selector encoded as `0x`-prefixed hex.
+    Raw(String),
+    /// A selector derived through the canonical contract selector implementation.
+    Symbolic(SymbolicEntrypointSpec),
+}
+
+impl EntrypointSpec {
+    pub fn resolve(&self) -> Result<[u8; 8], EntrypointSpecError> {
+        match self {
+            Self::Raw(value) => {
+                let stripped = value
+                    .strip_prefix("0x")
+                    .or_else(|| value.strip_prefix("0X"))
+                    .ok_or(EntrypointSpecError::MissingHexPrefix)?;
+                let bytes = hex::decode(stripped)?;
+                let actual = bytes.len();
+                bytes
+                    .try_into()
+                    .map_err(|_| EntrypointSpecError::InvalidLength { actual })
+            }
+            Self::Symbolic(entrypoint) => entrypoint.resolve(),
+        }
+    }
+}
+
+impl From<String> for EntrypointSpec {
+    fn from(value: String) -> Self {
+        Self::Raw(value)
+    }
+}
+
+impl From<&str> for EntrypointSpec {
+    fn from(value: &str) -> Self {
+        Self::Raw(value.to_owned())
+    }
+}
+
+/// A contract method identity used to derive its canonical entrypoint selector.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SymbolicEntrypointSpec {
+    pub interface: String,
+    pub version: String,
+    pub method: String,
+}
+
+impl SymbolicEntrypointSpec {
+    fn resolve(&self) -> Result<[u8; 8], EntrypointSpecError> {
+        validate_symbolic_entrypoint_field("interface", &self.interface)?;
+        validate_symbolic_entrypoint_field("version", &self.version)?;
+        validate_symbolic_entrypoint_field("method", &self.method)?;
+        if groundhog_contract_util::semver::try_major_version_from_string(&self.version).is_none() {
+            return Err(EntrypointSpecError::InvalidVersion {
+                version: self.version.clone(),
+            });
+        }
+
+        let signature = NormalizedMethodSignature::new(&self.method);
+        let selector = contract_entrypoint_id(Some(&self.interface), &self.version, &signature);
+        Ok(selector
+            .as_ref()
+            .try_into()
+            .expect("bug: contract entrypoint selectors are always eight bytes"))
+    }
+}
+
+fn validate_symbolic_entrypoint_field(
+    field: &'static str,
+    value: &str,
+) -> Result<(), EntrypointSpecError> {
+    if value.is_empty() {
+        return Err(EntrypointSpecError::EmptySymbolicField { field });
+    }
+    if value.trim() != value {
+        return Err(EntrypointSpecError::PaddedSymbolicField { field });
+    }
+    Ok(())
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum EntrypointSpecError {
+    #[error("raw entrypoint selector must be 0x-prefixed")]
+    MissingHexPrefix,
+    #[error("raw entrypoint selector contains invalid hex: {0}")]
+    InvalidHex(#[from] hex::FromHexError),
+    #[error("raw entrypoint selector must be eight bytes, got {actual}")]
+    InvalidLength { actual: usize },
+    #[error("symbolic entrypoint {field} must not be empty")]
+    EmptySymbolicField { field: &'static str },
+    #[error("symbolic entrypoint {field} must not contain leading or trailing whitespace")]
+    PaddedSymbolicField { field: &'static str },
+    #[error("symbolic entrypoint version `{version}` is not valid SemVer")]
+    InvalidVersion { version: String },
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
 #[serde(rename_all = "kebab-case")]
@@ -195,7 +295,7 @@ pub struct ViewCallSpec {
         skip_serializing_if = "is_default_target_weight"
     )]
     pub weight: u32,
-    pub entrypoint: String,
+    pub entrypoint: EntrypointSpec,
     pub calldata: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expect_return_data: Option<String>,
@@ -203,9 +303,8 @@ pub struct ViewCallSpec {
 
 /// A scheduled state-changing contract call available to `contract-call` workloads.
 ///
-/// The simulator expects raw entrypoint and calldata hex. It does not inspect
-/// the contract ABI or encode method arguments for this manifest surface. This
-/// surface supports one or more configured targets selected by relative weight.
+/// The simulator accepts a raw selector or derives one from a symbolic method
+/// identity. Calldata remains raw hex and is not ABI-encoded by this surface.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContractCallSpec {
@@ -219,8 +318,8 @@ pub struct ContractCallSpec {
         skip_serializing_if = "is_default_target_weight"
     )]
     pub weight: u32,
-    /// Eight-byte target contract entrypoint selector as `0x`-prefixed hex.
-    pub entrypoint: String,
+    /// Raw selector bytes or the interface, version, and method used to derive them.
+    pub entrypoint: EntrypointSpec,
     /// Target contract calldata as `0x`-prefixed hex.
     pub calldata: String,
 }
@@ -297,9 +396,9 @@ fn default_event_query_limit() -> u32 {
 /// read back and asserted against an actor-tracked expectation.
 ///
 /// v1 reads are view-only; see the actor-state read-after-write design for the
-/// deferred storage read mode. The simulator uses raw 8-byte entrypoint and raw
-/// calldata hex; it does not encode method arguments. The workload supports one
-/// or more configured entries selected by relative weight.
+/// deferred storage read mode. Entrypoints may be raw selectors or symbolic
+/// method identities. Calldata remains raw hex and is not ABI-encoded. The
+/// workload supports one or more configured entries selected by relative weight.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReadAfterWriteSpec {
@@ -323,8 +422,8 @@ pub struct ReadAfterWriteSpec {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RawWriteSpec {
-    /// Eight-byte target contract entrypoint selector as `0x`-prefixed hex.
-    pub entrypoint: String,
+    /// Raw selector bytes or the interface, version, and method used to derive them.
+    pub entrypoint: EntrypointSpec,
     /// Target contract calldata as `0x`-prefixed hex; empty (`0x`) for no-arg writes.
     #[serde(default = "default_empty_calldata")]
     pub calldata: String,
@@ -334,8 +433,8 @@ pub struct RawWriteSpec {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RawReadSpec {
-    /// Eight-byte view entrypoint selector as `0x`-prefixed hex.
-    pub entrypoint: String,
+    /// Raw selector bytes or the interface, version, and method used to derive them.
+    pub entrypoint: EntrypointSpec,
     /// View calldata as `0x`-prefixed hex; empty (`0x`) for no-arg reads.
     #[serde(default = "default_empty_calldata")]
     pub calldata: String,
@@ -588,6 +687,98 @@ mod tests {
 
         assert_eq!(manifest.contract_calls[0].weight, 1);
         assert!(json["contractCalls"][0].get("weight").is_none());
+    }
+
+    #[test]
+    fn entrypoint_spec_preserves_raw_and_symbolic_json_shapes() {
+        let raw: EntrypointSpec = serde_json::from_value(json!("0x0123456789abcdef"))
+            .expect("raw entrypoint should parse");
+        let symbolic: EntrypointSpec = serde_json::from_value(json!({
+            "interface": "Fibonacci",
+            "version": "0.1.0",
+            "method": "compute"
+        }))
+        .expect("symbolic entrypoint should parse");
+
+        assert_eq!(
+            serde_json::to_value(&raw).expect("raw entrypoint should serialize"),
+            json!("0x0123456789abcdef")
+        );
+        assert_eq!(
+            serde_json::to_value(&symbolic).expect("symbolic entrypoint should serialize"),
+            json!({
+                "interface": "Fibonacci",
+                "version": "0.1.0",
+                "method": "compute"
+            })
+        );
+    }
+
+    #[test]
+    fn bundled_symbolic_entrypoints_use_known_canonical_selectors() {
+        let cases = [
+            (
+                "Fibonacci",
+                "compute",
+                [0x14, 0x50, 0x68, 0x6b, 0xab, 0x1d, 0x6a, 0x5f],
+            ),
+            (
+                "CallerCounter",
+                "bump",
+                [0xb3, 0x04, 0xd6, 0xb5, 0xe0, 0x57, 0xd0, 0xf6],
+            ),
+            (
+                "CallerCounter",
+                "get",
+                [0x67, 0xfa, 0x35, 0x7d, 0x44, 0xea, 0x25, 0xc5],
+            ),
+            (
+                "Calldata",
+                "sum16",
+                [0x5b, 0x8f, 0x68, 0xbd, 0x06, 0xe3, 0x17, 0x40],
+            ),
+            (
+                "NnintStress",
+                "churn",
+                [0xbe, 0x88, 0xa9, 0x58, 0x0f, 0xab, 0x0c, 0x83],
+            ),
+        ];
+
+        for (interface, method, expected) in cases {
+            let entrypoint = EntrypointSpec::Symbolic(SymbolicEntrypointSpec {
+                interface: interface.into(),
+                version: "0.1.0".into(),
+                method: method.into(),
+            });
+
+            assert_eq!(
+                entrypoint.resolve().expect("entrypoint should resolve"),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn symbolic_entrypoint_rejects_invalid_identity_without_panicking() {
+        let invalid_version = EntrypointSpec::Symbolic(SymbolicEntrypointSpec {
+            interface: "Fibonacci".into(),
+            version: "latest".into(),
+            method: "compute".into(),
+        });
+        let padded_method = EntrypointSpec::Symbolic(SymbolicEntrypointSpec {
+            interface: "Fibonacci".into(),
+            version: "0.1.0".into(),
+            method: " compute ".into(),
+        });
+
+        assert!(matches!(
+            invalid_version.resolve(),
+            Err(EntrypointSpecError::InvalidVersion { .. })
+        ));
+        assert!(matches!(
+            padded_method.resolve(),
+            Err(EntrypointSpecError::PaddedSymbolicField { field: "method" })
+        ));
     }
 
     #[test]

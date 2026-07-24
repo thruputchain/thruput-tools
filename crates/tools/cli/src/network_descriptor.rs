@@ -14,6 +14,8 @@ pub(crate) const WALLET_ENTRYPOINT_SOURCE_RUNTIME_MANIFEST: &str = "runtime_mani
 pub(crate) const WALLET_ENTRYPOINT_SOURCE_NETWORK_DESCRIPTOR: &str = "network_descriptor";
 pub(crate) const WALLET_ENTRYPOINT_SOURCE_LEGACY_DEFAULT: &str = "legacy_default";
 
+// Frozen compatibility selector for RPC-only saved-wallet profiles that have no
+// runtime manifest or network descriptor metadata.
 const LEGACY_WALLET_DO_ACTION_ENTRYPOINT: [u8; 8] = 0x1984_6D75_0FAD_81D6_u64.to_be_bytes();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -219,6 +221,22 @@ mod tests {
     use groundhog_json_rpc_types::hex::Hex0x;
 
     use super::*;
+
+    #[test]
+    fn legacy_default_entrypoints_remain_frozen_without_metadata() {
+        let entrypoints = runtime_or_legacy_entrypoints(None, "alice")
+            .expect("bug: RPC-only profiles should retain legacy wallet compatibility");
+
+        assert_eq!(
+            entrypoints.deploy,
+            ContractEntrypointID::from(0xADAC_4982_2214_8E4F_u64.to_be_bytes())
+        );
+        assert_eq!(
+            entrypoints.do_action,
+            ContractEntrypointID::from(0x1984_6D75_0FAD_81D6_u64.to_be_bytes())
+        );
+        assert_eq!(entrypoints.source, WALLET_ENTRYPOINT_SOURCE_LEGACY_DEFAULT);
+    }
 
     #[test]
     fn hosted_descriptor_rotates_both_wallet_entrypoints() {

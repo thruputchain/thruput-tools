@@ -38,7 +38,8 @@ executable when the manifest declares a deployed contract and a raw view call.
   return data, falling back to deterministic local address derivation when the
   receipt omits it.
 - Implement `view-call` by sending `groundhog_view` to the deployed contract
-  with raw entrypoint/calldata configured by the scenario.
+  with a raw or symbolically derived entrypoint and raw calldata configured by
+  the scenario.
 - Record deployment JSONL events and final `result.json.contracts` records.
 - Record view-call workload output status, height, emitted event count, and
   optional return-data expectation failures in workload events.
@@ -77,7 +78,11 @@ schema change under `schemaVersion: 2`.
     {
       "name": "fib-10",
       "contract": "fibonacci",
-      "entrypoint": "0x...",
+      "entrypoint": {
+        "interface": "Fibonacci",
+        "version": "0.1.0",
+        "method": "compute"
+      },
       "calldata": "0x...",
       "expectReturnData": "0x..."
     }
@@ -94,7 +99,8 @@ schema change under `schemaVersion: 2`.
   `--contract-artifact-root` when supplied, otherwise relative to the scenario
   file directory.
 - `viewCalls[].contract` references a deployed `contractArtifacts[].name`.
-- `viewCalls[].entrypoint` must be exactly 8 bytes.
+- `viewCalls[].entrypoint` is either exactly 8 raw bytes or an
+  `interface`/`version`/`method` identity resolved canonically to 8 bytes.
 - `viewCalls[].calldata` is raw CXS calldata encoded outside the simulator.
 - `viewCalls[].expectReturnData` is optional. When present, a mismatch records a
   failed workload with `errorClass: "view-return-mismatch"`.
@@ -159,7 +165,8 @@ The lifecycle insertion point is explicit:
 call:
 
 - `contract` is the deployed address for `viewCalls[].contract`.
-- `entrypoint` and `calldata` are raw bytes from manifest hex.
+- `entrypoint` is raw selector hex or a symbolic method identity; `calldata` is
+  raw bytes from manifest hex.
 - `caller` is actor wallet address for the scheduled actor.
 
 Successful `RootInvocationOutput::Return` counts as a successful workload unless

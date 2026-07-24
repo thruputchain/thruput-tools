@@ -1,14 +1,28 @@
+use groundhog_contract_util::{NormalizedMethodSignature, contract_entrypoint_id};
+use groundhog_xdr::contract::ContractEntrypointID;
 use groundhog_xdr::types::ContractAddress;
 
 use crate::CliError;
 
-// TODO: Load native HOG metadata from the local runtime manifest and hosted
-// Devnet /v1/network descriptor instead of hardcoding it here.
+// TODO: Load local native HOG metadata from the runtime manifest. Hosted
+// transaction construction already uses the Devnet /v1/network descriptor.
 pub(crate) const DECIMALS: u32 = 7;
 pub(crate) const SCALE: u128 = 10_000_000;
 pub(crate) const TOKEN_ADDRESS: &str =
     "0x0000000000000000000000000000000000000000000000000000000000000001";
-pub(crate) const TRANSFER_ENTRYPOINT: [u8; 8] = 0x6328_5b35_23f9_dc3f_u64.to_be_bytes();
+
+pub(crate) fn transfer_entrypoint() -> ContractEntrypointID {
+    let selector = contract_entrypoint_id(
+        Some("ERC20"),
+        "0.1.0",
+        &NormalizedMethodSignature::new("transfer"),
+    );
+    let bytes: [u8; 8] = selector
+        .as_ref()
+        .try_into()
+        .expect("bug: contract entrypoint selectors are always eight bytes");
+    ContractEntrypointID::from(bytes)
+}
 
 pub(crate) fn encode_transfer_calldata(
     recipient: &ContractAddress,

@@ -1,6 +1,9 @@
 use std::path::PathBuf;
 use std::process::Command;
 
+use groundhog_sim::compare::COMPARE_DIFF_SCHEMA_VERSION;
+use groundhog_sim::util::sha256_hex;
+
 #[test]
 #[ignore = "requires GROUNDHOG_SIM_RPC_URL and GROUNDHOG_SIM_RUNTIME_MANIFEST"]
 fn existing_target_chain_tip_smoke() {
@@ -74,7 +77,10 @@ fn existing_target_chain_tip_baseline_smoke() {
         result["baselineDiff"]["path"],
         "baselines/chain-tip-smoke-result.json"
     );
-    assert_eq!(result["baselineDiff"]["diff"]["schemaVersion"], 1);
+    assert_eq!(
+        result["baselineDiff"]["diff"]["schemaVersion"],
+        COMPARE_DIFF_SCHEMA_VERSION
+    );
     assert!(
         result["baselineDiff"]["diff"]["workloadCountDeltas"]["chain-tip"]["completed"]
             .as_i64()
@@ -100,6 +106,27 @@ fn assert_common_existing_artifacts(run_dir: &std::path::Path) {
     assert!(run_dir.join("simulation.json").exists());
     assert!(run_dir.join("runtime-manifest.json").exists());
     assert!(run_dir.join("target-ownership.json").exists());
+
+    let simulation =
+        std::fs::read(run_dir.join("simulation.json")).expect("normalized simulation should read");
+    let result: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(run_dir.join("result.json")).expect("result should read"),
+    )
+    .expect("result should parse");
+    assert_eq!(
+        result["manifestHashes"]["simulationManifestSha256"],
+        sha256_hex(&simulation)
+    );
+    assert!(
+        result["manifestHashes"]["simulationConfigSha256"]
+            .as_str()
+            .is_some_and(|hash| hash.starts_with("0x") && hash.len() == 66)
+    );
+    assert!(
+        result["manifestHashes"]["runtimeConfigSha256"]
+            .as_str()
+            .is_some_and(|hash| hash.starts_with("0x") && hash.len() == 66)
+    );
 
     let ownership: serde_json::Value = serde_json::from_slice(
         &std::fs::read(run_dir.join("target-ownership.json"))

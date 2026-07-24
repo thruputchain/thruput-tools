@@ -569,10 +569,10 @@ chaos, deploy new contracts, or create remote infrastructure.
   state machine to rebase on known-committed writes (not whole-workload success)
   with a `NeedsReconcile` pre-read for receipt-unknown/restart-aborted writes.
 - [x] Slice L2: per-caller `caller-counter` simulator fixture added to
-  `../groundhog-examples/sim-fixtures` (compiles; selectors
-  bump=`0x4fbf8bcef9232a3a`,
-  get=`0xdfc5d5bd6c88f8c4`, derivation verified against fibonacci
-  compute=`0xc573d6c80bb945ad`); caller identity verified at code level (both
+  `../groundhog-examples/sim-fixtures` (compiles; symbolic selector identities
+  `CallerCounter@0.1.0::bump`, `CallerCounter@0.1.0::get`, and
+  `Fibonacci@0.1.0::compute` use canonical runtime derivation); caller identity
+  verified at code level (both
   paths resolve to `actor.wallet_address`); manifest `readAfterWrite` +
   `read-after-write` workload kind + validation + the `ReadAfterWriteState`
   machine (`NeedsReconcile`/`Known(u64)`) landed with unit tests. Contract setup

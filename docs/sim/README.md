@@ -72,6 +72,20 @@ per-caller counter advanced. The opt-in soak runs
 
 Contract artifact scenarios declare `contractArtifacts` plus `viewCalls`,
 `contractCalls`, `storageReads`, or `eventQueries` in the manifest.
+Contract entrypoints can use raw eight-byte selector hex for compatibility, but
+bundled scenarios use a symbolic identity that the simulator resolves through
+the canonical selector implementation:
+
+```json
+"entrypoint": {
+  "interface": "Fibonacci",
+  "version": "0.1.0",
+  "method": "compute"
+}
+```
+
+Symbolic entrypoints avoid embedding derived selector bytes in scenario files.
+Calldata remains `0x`-prefixed CXS hex.
 `hogsim run --contract-artifact-root <dir>` resolves relative artifact paths from
 that directory.
 `scripts/smoke-sim-scenarios.sh` detects a sibling `../groundhog-examples`
@@ -158,18 +172,20 @@ view outputs record `viewResult`, `viewReturnData`, `viewAbortData`, and
 workload with `errorClass: "view-return-mismatch"`.
 
 `contract-call` submits a dev-wallet `doAction` transaction to the first
-configured `contractCalls` entry, using raw 8-byte entrypoint and calldata hex
-from the manifest. The workload waits for the transaction receipt before
-completing. Events record `contractCallName`, `contractCallContract`, `txHash`,
-`txNonce`, receipt fields, and submit-to-receipt latency. Non-`ok` receipts fail
-the workload with `errorClass: "contract-call-receipt-status"`.
+configured `contractCalls` entry, using a raw or symbolically derived entrypoint
+and raw calldata hex from the manifest. The workload waits for the transaction
+receipt before completing. Events record `contractCallName`,
+`contractCallContract`, `txHash`, `txNonce`, receipt fields, and
+submit-to-receipt latency. Non-`ok` receipts fail the workload with
+`errorClass: "contract-call-receipt-status"`.
 
 `read-after-write` uses the first configured `readAfterWrite` entry as a coupled
 round-trip. On the first actor tick, or after an invalidation, it reconciles by
 calling the configured read view to establish the actor's baseline. It then
 submits the configured write through dev-wallet `doAction`, waits for an `ok`
 receipt, calls the configured read view again, and requires the observed `u64`
-to match the actor's expected value. The post-receipt read retries stale values
+to match the actor's expected value. Both entrypoints accept raw or symbolic
+forms. The post-receipt read retries stale values
 for up to one second so short receipt/index/view visibility gaps are measured
 as workload latency instead of immediate mismatches. JSONL events record
 `readAfterWriteName`, `readAfterWriteContract`, `readAfterWriteExpected`,
@@ -336,10 +352,27 @@ Each run writes a self-contained result directory:
 `result.json` paths. It is a pure artifact comparison; it does not read the
 original target, runtime manifest path, or event stream.
 
-The diff reports whether the simulation manifest, runtime manifest, runtime
-identity, and producer identity match. When any of those differ,
-`sameConfig` is false and numeric deltas should be read as cross-config
-diagnostics rather than a strict regression signal.
+The result records both an exact `simulationManifestSha256` over the emitted
+`simulation.json` bytes and a stable `simulationConfigSha256` for comparison.
+The configuration hash excludes run-resolved identity: the `resolved` object,
+the diagnostic-only baseline reference, the runtime-manifest filesystem path,
+and the local provider's resolved RPC URL. An existing provider's RPC URL
+remains configuration because changing the endpoint can change the measured
+path. Raw and symbolic entrypoints are normalized to their resolved selectors.
+It also records exact `runtimeManifestSha256` bytes and a stable
+`runtimeConfigSha256` that excludes backend dial addresses while preserving
+endpoint availability and all other runtime metadata. This prevents
+run-assigned local ports from making equivalent local targets cross-config.
+Runtime identity and producer identity are compared separately.
+
+The diff reports exact simulation- and runtime-manifest equality separately
+from stable simulation configuration, stable runtime configuration, runtime
+identity, and producer identity. `sameConfig` uses both stable configuration
+hashes, so two runs may have exact manifest mismatches while remaining the same
+configuration when only nonce state, resolved paths, or backend dial addresses
+differ. When either configuration or any runtime identity check differs,
+numeric deltas should be read as cross-config diagnostics rather than a strict
+regression signal.
 
 For matching or cross-config runs, compare emits `b - a` deltas for workload
 counts, workload error classes, latency percentiles, observed chain progress,
@@ -375,6 +408,12 @@ Baseline comparison is diagnostic only. It does not change the run outcome or
 apply regression thresholds. If a configured baseline is missing, invalid, or
 uses an unsupported result schema, the run returns an error before writing the
 final `result.json`; target cleanup still runs.
+
+Older result artifacts without a stable simulation or runtime configuration
+hash remain readable. Comparison falls back conservatively to the corresponding
+exact manifest equality when either side lacks a stable hash. Regenerate a
+baseline to make run-resolved identity differences compare as the same
+configuration.
 
 RSS-growth thresholds in the soak presets are intentionally calibration-bound:
 collect a baseline artifact for each target class before treating

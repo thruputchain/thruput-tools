@@ -26,8 +26,8 @@ use crate::executor::{
     DEFAULT_RECEIPT_DRAIN_RETRY_INTERVAL, DEFAULT_RECEIPT_DRAIN_TIMEOUT, SimRpcClient,
 };
 use crate::manifest::{
-    ContractArtifactKind, ContractArtifactSpec, EventQueryAnchorSpec, EventQueryOrderSpec,
-    SimulationManifest,
+    ContractArtifactKind, ContractArtifactSpec, EntrypointSpec, EventQueryAnchorSpec,
+    EventQueryOrderSpec, SimulationManifest,
 };
 use crate::result::{ContractDeploymentRecord, ContractDeploymentStatus, DeployAddressSource};
 use crate::util::{json_string, sha256_hex};
@@ -560,7 +560,7 @@ fn prepare_view_calls(
                 contract_name: view.contract.clone(),
                 weight: view.weight,
                 contract,
-                entrypoint: parse_hex(&view.entrypoint)?,
+                entrypoint: resolve_entrypoint(&view.entrypoint)?,
                 calldata: parse_hex(&view.calldata)?,
                 expect_return_data: view
                     .expect_return_data
@@ -617,7 +617,7 @@ fn prepare_contract_calls(
                 contract_name: call.contract.clone(),
                 weight: call.weight,
                 contract,
-                entrypoint: parse_hex(&call.entrypoint)?,
+                entrypoint: resolve_entrypoint(&call.entrypoint)?,
                 calldata: parse_hex(&call.calldata)?,
             })
         })
@@ -643,9 +643,9 @@ fn prepare_read_after_write(
                 contract_name: entry.contract.clone(),
                 weight: entry.weight,
                 contract,
-                write_entrypoint: parse_hex(&entry.write.entrypoint)?,
+                write_entrypoint: resolve_entrypoint(&entry.write.entrypoint)?,
                 write_calldata: parse_hex(&entry.write.calldata)?,
-                read_entrypoint: parse_hex(&entry.read.entrypoint)?,
+                read_entrypoint: resolve_entrypoint(&entry.read.entrypoint)?,
                 read_calldata: parse_hex(&entry.read.calldata)?,
             })
         })
@@ -689,6 +689,13 @@ fn parse_hex(value: &str) -> Result<Vec<u8>, SimError> {
     hex::decode(stripped).map_err(|error| SimError::Executor(error.to_string()))
 }
 
+fn resolve_entrypoint(entrypoint: &EntrypointSpec) -> Result<Vec<u8>, SimError> {
+    entrypoint
+        .resolve()
+        .map(|selector| selector.to_vec())
+        .map_err(|error| SimError::Executor(format!("invalid contract entrypoint: {error}")))
+}
+
 fn parse_contract_address(value: &str) -> Result<ContractAddress, SimError> {
     let bytes = parse_hex(value)?;
     let bytes: [u8; 32] = bytes
@@ -727,8 +734,8 @@ mod tests {
 
     use crate::event::EventWriter;
     use crate::manifest::{
-        EventQueryAnchorSpec, EventQueryOrderSpec, EventQuerySpec, LoadPhase, ViewCallSpec,
-        WorkloadKind, WorkloadSpec,
+        EntrypointSpec, EventQueryAnchorSpec, EventQueryOrderSpec, EventQuerySpec, LoadPhase,
+        SymbolicEntrypointSpec, ViewCallSpec, WorkloadKind, WorkloadSpec,
     };
     use crate::nonce::NonceNamespace;
     use crate::runtime::SimAccount;
@@ -853,6 +860,10 @@ mod tests {
         assert_eq!(record.address_source, Some(DeployAddressSource::Receipt));
         assert_eq!(record.height, Some(42));
         assert_eq!(setup.view_calls.len(), 1);
+        assert_eq!(
+            setup.view_calls[0].entrypoint,
+            vec![0x14, 0x50, 0x68, 0x6b, 0xab, 0x1d, 0x6a, 0x5f]
+        );
         assert_eq!(setup.storage_reads.len(), 1);
         assert_eq!(setup.storage_reads[0].name, "fib-zero-key");
         assert_eq!(
@@ -873,7 +884,10 @@ mod tests {
             setup.read_after_write[0].contract,
             Hex0x(ContractAddress::from([0x77; 32])).0
         );
-        assert_eq!(setup.read_after_write[0].write_entrypoint, vec![0x4f; 8]);
+        assert_eq!(
+            setup.read_after_write[0].write_entrypoint,
+            vec![0xb3, 0x04, 0xd6, 0xb5, 0xe0, 0x57, 0xd0, 0xf6]
+        );
         assert_eq!(setup.read_after_write[0].read_entrypoint, vec![0xdf; 8]);
         assert_eq!(setup.contract_calls.len(), 1);
         assert_eq!(setup.contract_calls[0].name, "events-store-value");
@@ -1122,7 +1136,11 @@ mod tests {
                 name: "fib-10".into(),
                 contract: "fibonacci".into(),
                 weight: 1,
-                entrypoint: "0x1111111111111111".into(),
+                entrypoint: EntrypointSpec::Symbolic(SymbolicEntrypointSpec {
+                    interface: "Fibonacci".into(),
+                    version: "0.1.0".into(),
+                    method: "compute".into(),
+                }),
                 calldata: "0x0a".into(),
                 expect_return_data: Some("0x37".into()),
             }],
@@ -1148,7 +1166,11 @@ mod tests {
                 contract: "fibonacci".into(),
                 weight: 1,
                 write: crate::manifest::RawWriteSpec {
-                    entrypoint: "0x4f4f4f4f4f4f4f4f".into(),
+                    entrypoint: EntrypointSpec::Symbolic(SymbolicEntrypointSpec {
+                        interface: "CallerCounter".into(),
+                        version: "0.1.0".into(),
+                        method: "bump".into(),
+                    }),
                     calldata: "0x".into(),
                 },
                 read: crate::manifest::RawReadSpec {

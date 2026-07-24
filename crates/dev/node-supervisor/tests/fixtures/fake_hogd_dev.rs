@@ -51,6 +51,7 @@ const MODE_ENV: &str = "GROUNDHOG_FAKE_HOGD_DEV_MODE";
 /// Optional path the fake writes its PID to before printing readiness.
 /// Tests use this to verify cleanup (poll `kill(pid, 0)` until ESRCH).
 const PID_FILE_ENV: &str = "GROUNDHOG_FAKE_HOGD_DEV_PID_FILE";
+const COMMIT_ENTERED_FILE_ENV: &str = "GROUNDHOG_FAKE_COMMIT_ENTERED_FILE";
 const DERIVATION_SCHEME: &str = "groundhog-bootstrap-account-v1";
 static TERMINATED: AtomicBool = AtomicBool::new(false);
 
@@ -164,6 +165,24 @@ fn main() {
         Ok("automine") => run_ready_with_scheduler(FakeSchedulerMode::Automine),
         Ok("automine-slow-commit") => {
             run_ready_with_scheduler(FakeSchedulerMode::AutomineSlowCommit);
+        }
+        Ok("automine-serialize-probe") => {
+            run_ready_with_scheduler(FakeSchedulerMode::AutomineSerializeProbe);
+        }
+        Ok("automine-hanging-commit") => {
+            run_ready_with_scheduler(FakeSchedulerMode::AutomineHangingCommit);
+        }
+        Ok("automine-commit-response-lost") => {
+            run_ready_with_scheduler(FakeSchedulerMode::AutomineCommitResponseLost);
+        }
+        Ok("automine-commit-error") => {
+            run_ready_with_scheduler(FakeSchedulerMode::AutomineCommitError);
+        }
+        Ok("automine-runtime-get-tip-error") => {
+            run_ready_with_scheduler(FakeSchedulerMode::AutomineRuntimeGetTipError);
+        }
+        Ok("automine-nominate-error") => {
+            run_ready_with_scheduler(FakeSchedulerMode::AutomineNominateError);
         }
         Ok("ready-then-exit") => run_ready_then_exit(),
         Ok("spawn-helper-ignore-term") => run_with_helper(),
@@ -642,15 +661,39 @@ enum FakeSchedulerMode {
     Normal,
     Automine,
     AutomineSlowCommit,
+    AutomineSerializeProbe,
+    AutomineHangingCommit,
+    AutomineCommitResponseLost,
+    AutomineCommitError,
+    AutomineRuntimeGetTipError,
+    AutomineNominateError,
     GetTipError,
     LoadRejected,
     LoadNoEffect,
+}
+
+impl FakeSchedulerMode {
+    fn supports_block_driver(self) -> bool {
+        matches!(
+            self,
+            Self::Automine
+                | Self::AutomineSlowCommit
+                | Self::AutomineSerializeProbe
+                | Self::AutomineHangingCommit
+                | Self::AutomineCommitResponseLost
+                | Self::AutomineCommitError
+                | Self::AutomineRuntimeGetTipError
+                | Self::AutomineNominateError
+        )
+    }
 }
 
 #[derive(Debug)]
 struct FakeScheduler {
     tip: Arc<Mutex<Option<DbTip>>>,
     pending_submits: Arc<AtomicU64>,
+    commit_in_progress: Arc<AtomicBool>,
+    get_tip_calls: Arc<AtomicU64>,
     mode: FakeSchedulerMode,
 }
 
@@ -659,6 +702,8 @@ impl FakeScheduler {
         Self {
             tip: Arc::new(Mutex::new(None)),
             pending_submits: Arc::new(AtomicU64::new(0)),
+            commit_in_progress: Arc::new(AtomicBool::new(false)),
+            get_tip_calls: Arc::new(AtomicU64::new(0)),
             mode,
         }
     }
@@ -716,10 +761,7 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
                 "fake scheduler expected non-empty signed transaction xdr",
             ));
         }
-        if matches!(
-            self.mode,
-            FakeSchedulerMode::Automine | FakeSchedulerMode::AutomineSlowCommit
-        ) {
+        if self.mode.supports_block_driver() {
             self.pending_submits.fetch_add(1, Ordering::SeqCst);
         }
         Ok(())
@@ -737,11 +779,11 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
         &self,
         _onto: DbTip,
     ) -> Result<SchedulerNominationResult, ProgramError> {
-        if !matches!(
-            self.mode,
-            FakeSchedulerMode::Automine | FakeSchedulerMode::AutomineSlowCommit
-        ) {
+        if !self.mode.supports_block_driver() {
             return Err(ProgramError::msg("not implemented in fake hogd-dev"));
+        }
+        if self.mode == FakeSchedulerMode::AutomineNominateError {
+            return Err(ProgramError::msg("fake nomination RPC failure"));
         }
         if self.pending_submits.load(Ordering::SeqCst) == 0 {
             return Ok(SchedulerNominationResult::SchedulerNominationError);
@@ -796,16 +838,35 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
         &self,
         block_id: groundhog_scheduler::BlockID,
     ) -> Result<SchedulerCommitOutcome, ProgramError> {
-        if !matches!(
-            self.mode,
-            FakeSchedulerMode::Automine | FakeSchedulerMode::AutomineSlowCommit
-        ) {
+        if !self.mode.supports_block_driver() {
             return Err(ProgramError::msg("not implemented in fake hogd-dev"));
         }
         if self.mode == FakeSchedulerMode::AutomineSlowCommit {
             tokio::time::sleep(Duration::from_millis(75)).await;
         }
-        if self.pending_submits.swap(0, Ordering::SeqCst) == 0 {
+        if self.mode == FakeSchedulerMode::AutomineHangingCommit {
+            if let Ok(path) = env::var(COMMIT_ENTERED_FILE_ENV) {
+                fs::write(path, b"entered").map_err(|error| {
+                    ProgramError::msg(format!("failed to write commit marker: {error}"))
+                })?;
+            }
+            tokio::time::sleep(Duration::from_hours(1)).await;
+        }
+        if self.mode == FakeSchedulerMode::AutomineCommitError {
+            return Err(ProgramError::msg("fake commit RPC failure"));
+        }
+        if self.mode == FakeSchedulerMode::AutomineSerializeProbe {
+            if self.commit_in_progress.swap(true, Ordering::SeqCst) {
+                return Err(ProgramError::msg("overlapping fake scheduler commit"));
+            }
+            tokio::time::sleep(Duration::from_millis(75)).await;
+            let pending = self.pending_submits.fetch_sub(1, Ordering::SeqCst);
+            self.commit_in_progress.store(false, Ordering::SeqCst);
+            if pending == 0 {
+                self.pending_submits.store(0, Ordering::SeqCst);
+                return Ok(SchedulerCommitOutcome::SchedulerCommitBlockNotFound);
+            }
+        } else if self.pending_submits.swap(0, Ordering::SeqCst) == 0 {
             return Ok(SchedulerCommitOutcome::SchedulerCommitBlockNotFound);
         }
 
@@ -819,12 +880,19 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
         let height_byte = u8::try_from(next_height).unwrap_or(u8::MAX);
         tip.events_hash = SHA256Hash::from([height_byte; 32]);
         tip.id = block_id;
+        if self.mode == FakeSchedulerMode::AutomineCommitResponseLost {
+            return Err(ProgramError::msg("fake lost commit response"));
+        }
         Ok(SchedulerCommitOutcome::SchedulerCommitOK)
     }
 
     async fn schedcoord_get_tip(&self) -> Result<SchedulerGetTipResult, ProgramError> {
         if self.mode == FakeSchedulerMode::GetTipError {
             return Err(ProgramError::msg("fake get_tip failure"));
+        }
+        let call = self.get_tip_calls.fetch_add(1, Ordering::SeqCst);
+        if self.mode == FakeSchedulerMode::AutomineRuntimeGetTipError && call >= 2 {
+            return Err(ProgramError::msg("fake runtime get_tip failure"));
         }
 
         match self
