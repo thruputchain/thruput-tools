@@ -27,7 +27,7 @@ The workstream adds:
 3. paginated transaction history for an address.
   
 
-The commands should work consistently against local and hosted profiles, use the existing profile/RPC override model, and provide stable human and JSON output.
+The commands should work consistently against local and hosted profiles, use the existing profile/RPC override model, and provide clear human output plus stable JSON output.
 ## Non-goals
 This work does not add:
 
@@ -56,7 +56,7 @@ The CLI already contains nearly all transfer-building primitives:
 
 - `airdrop` and wallet prefunding construct native HOG transfers;
   
-- `hog.rs` defines the HOG address fallback, decimal scale, transfer entrypoint, and calldata encoding;
+- `hog.rs` defines the HOG address, decimal scale, transfer entrypoint, and calldata encoding;
   
 - `deploy` and `call` resolve the selected signer and wallet, build a wallet-wrapped transaction, sign it, submit it, and poll for a receipt;
   
@@ -100,6 +100,9 @@ For a wallet-wrapped HOG transfer, the root invocation is the sender's wallet. T
 | D6 | `tx list` returns one newest-first page of lightweight references. | Automatic hydration creates an N+1 RPC pattern; users can inspect selected hashes with `tx show`. |
 | D7 | History limitations are explicit in help and output. | Empty incoming history must not be mistaken for proof that an address received no nested transfers. |
 | D8 | Semantic statuses such as `unknown` and `invalid` are successful query results. | The lookup succeeded even when the transaction did not commit. |
+| D9 | Native HOG address, decimals, and transfer entrypoint are protocol constants. | These values do not vary by network, so descriptor resolution would add failure modes without adding correctness. |
+| D10 | A broadcast transfer that cannot be confirmed retains its locally computed hash and exits nonzero. | The user must be able to inspect a possibly accepted transaction without risking a duplicate transfer through a blind retry. |
+| D11 | `tx list` output omits traversal order. | Initial CLI requests are newest-first, but an opaque continuation cursor may carry an order the response does not expose. |
 ## Command surface
 ### `groundhog transfer <RECIPIENT> <AMOUNT>`
 Transfer native HOG from the effective signing wallet.
@@ -110,7 +113,6 @@ groundhog transfer counter 1 --profile devnet
 groundhog transfer 0xabcd... 0.0000001 --dry-run
 groundhog transfer dev-1 25 --profile local
 ```
-
 Options:
 
 ```text
@@ -151,7 +153,7 @@ Resolve the sender using the established transaction path:
   
 4. verify that a saved wallet's owner public key matches the local signer;
   
-5. load local or hosted wallet metadata needed to build `doAction`.
+5. resolve wallet entrypoints through the existing runtime-manifest, hosted-descriptor, or legacy-default path used by `deploy` and `call`.
   
 
 A non-dev key without a usable saved wallet fails with the same actionable guidance as deploy/call: create or select a wallet before sending.
@@ -160,7 +162,7 @@ Amounts
 
 `AMOUNT` is a user-facing decimal HOG amount. Parsing is exact and checked.
 
-For the current seven-decimal fallback, accept:
+With HOG's fixed seven-decimal scale, accept:
 
 ```text
 1
@@ -169,7 +171,7 @@ For the current seven-decimal fallback, accept:
 10.5000000
 ```
 
-Trim surrounding ASCII whitespace before parsing, matching the current airdrop amount behavior. Whitespace inside the value remains invalid.
+Trim surrounding whitespace with Rust's `str::trim`, matching the current airdrop behavior. Whitespace inside the value remains invalid.
 
 Reject:
 
@@ -181,7 +183,7 @@ Reject:
   
 - exponent notation;
   
-- more fractional digits than the selected network's HOG decimals;
+- more than seven fractional digits;
   
 - non-digits other than one decimal point;
   
@@ -192,24 +194,18 @@ The minimum amount is one raw unit. Output preserves both a canonical HOG decima
 
 Move the existing airdrop amount parsing/formatting into shared native-HOG helpers so airdrop and transfer cannot drift.
 
-Native HOG metadata
+Native HOG constants
 
-Hosted profiles should use authoritative native-token metadata from the fetched network descriptor, including token address, decimals, and transfer entrypoint. Local profiles use runtime metadata when available. The current `0x...01`, seven decimals, and standard transfer selector remain a documented local/RPC-only fallback until every endpoint advertises native-token metadata.
+Native HOG uses protocol-defined constants on every network:
 
-Validate hosted descriptor metadata before signing:
-
-- token address is exactly 32 bytes;
+- token address: `0x0000000000000000000000000000000000000000000000000000000000000001`;
   
-- transfer entrypoint is exactly 8 bytes;
+- decimals: seven;
   
-- decimals are at most 38 and `10^decimals` fits in `u128`;
-  
-- all required fields are present and parseable.
+- transfer entrypoint: the canonical native-HOG transfer selector.
   
 
-Authoritative metadata is not required to equal the fallback constants. A malformed hosted descriptor is a network configuration error, not a reason to silently fall back.
-
-All user-facing native-HOG commands must share the same metadata and formatting path. If a network advertises decimals other than seven, `balance`, `airdrop`, wallet-prefunding diagnostics, and `transfer` must not display conflicting units. Normalize those existing callers as part of extracting the shared helper.
+Keep these values in the existing `hog.rs` module and use them from `balance`, `airdrop`, wallet prefunding, and `transfer`. Do not add a second metadata abstraction. This decision supersedes the companion descriptor design's `nativeHog` fields as a CLI transaction-construction source; those redundant fields may remain for compatibility but are not consulted here.
 
 Transaction construction
 
@@ -226,6 +222,8 @@ Reuse:
   
 - wallet entrypoints from local manifest or hosted descriptor;
   
+- the frozen legacy wallet entrypoints when the existing resolver selects that path;
+
 - tip-derived block expiry;
   
 - transaction nonce generation;
@@ -234,7 +232,7 @@ Reuse:
   
 - `groundhog_sendRawTransaction` submission;
   
-- receipt polling and timeout behavior;
+- the existing submit and poll client operations, called separately so transfer retains its hash;
   
 - existing execution-status failure mapping.
   
@@ -243,7 +241,7 @@ Do not add a preflight balance rejection. A balance read can race another transa
 
 Dry run
 
-`--dry-run` resolves all metadata, queries the chain tip, builds and signs the transaction, and returns the prepared transaction without broadcasting it. It is not a simulation and does not predict execution success.
+`--dry-run` resolves the wallet entrypoints, queries the chain tip, builds and signs the transaction, and returns the prepared transaction without broadcasting it. It is not a simulation and does not predict execution success.
 
 Dry-run output clearly includes:
 
@@ -267,6 +265,30 @@ No `sendRawTransaction`, status, or receipt request may occur after preparation.
 Live result
 
 A live transfer succeeds only when the committed receipt has `ExecStatus::Ok`. Other committed statuses use the existing command-owned failure result and nonzero exit behavior, retaining the hash, height, receipt status, return or abort data, and emitted events where available.
+
+Compute the canonical transaction hash before submission. The hash returned by `sendRawTransaction` must match it, and a polled receipt's hash must match it. Treat either mismatch as an invalid RPC response and emit the inconclusive command-owned failure using only the locally computed hash; never poll, report success, or advise inspection using a conflicting hash.
+
+For transfer data, `submitted: true` means the CLI invoked the `sendRawTransaction` RPC method; it does not prove that a request reached the server or that the endpoint accepted the transaction. This distinction is observable at the client boundary and covers connection/transport failures and a lost submission response.
+
+Live outcomes are:
+
+1. A matching receipt is available. `ExecStatus::Ok` succeeds; every other execution status emits a command-owned failure with the full receipt context.
+
+2. Status is terminal `invalid`. Emit a command-owned failure with the hash, `confirmation: invalid`, and the complete `TransactionStatus::Invalid` object. This is conclusive and must not include the "may still commit" warning.
+
+3. The outcome remains inconclusive because the submission call had an ambiguous error or the poll operation failed or exhausted. Emit a command-owned failure with the locally computed hash and `confirmation: unavailable`. Include `transactionStatus` only when the poll operation returns an advisory `recentFailure`; do not require the poller to expose intermediate statuses it does not retain. Human output must warn that the transaction may still commit, advise against blindly resubmitting it, and suggest `groundhog tx show <TX_HASH>`.
+
+
+Use stable command-error code `transaction_invalid` for outcome 2 and `transaction_confirmation_unavailable` for outcome 3. Existing execution-status error codes remain authoritative for committed failures.
+
+Classify `sendRawTransaction` errors from their stable JSON-RPC codes:
+
+- `InvalidParams`, `TxInvalid`, `TxRejected`, `BackendUnavailable`, `NotImplemented`, and `Overloaded` are conclusive pre-acceptance failures under their documented RPC semantics and use the standard error envelope;
+
+- `BackendTimeout`, unknown server errors, and client transport errors have an ambiguous outcome and use outcome 3;
+
+- failure to construct the RPC client occurs before method invocation and uses the standard error envelope without transfer data.
+
 ### `groundhog tx show <TX_HASH>`
 Inspect the public status and receipt for one transaction:
 
@@ -315,7 +337,7 @@ Current shared RPC types normalize an unrecognized future status or execution re
 
 `pending`, `invalid`, `recentFailure`, and `unknown` are query results and exit successfully. Transport, RPC, validation, and capability failures exit nonzero.
 
-If status is committed but the receipt is temporarily absent, preserve the committed status and height and show `receipt: unavailable`. Do not downgrade it to unknown or fabricate an execution result.
+If status is committed but a successful receipt RPC returns no receipt, preserve the committed status and height and show `receipt: unavailable`; JSON uses `receipt: null`. Do not downgrade it to unknown or fabricate an execution result. A receipt RPC error, including `NotImplemented`, remains a command failure and must not be converted to `receipt: null`.
 
 When a receipt is present, its transaction hash must match the requested hash and its height must match the committed status height. Treat a mismatch as an invalid RPC response and exit nonzero rather than choosing one response as authoritative.
 
@@ -358,21 +380,15 @@ Options:
 
 Address resolution uses the same saved-wallet, contract-alias, direct-address, and `dev-N` precedence as transfer recipients.
 
-The first release always requests descending order anchored at the end of the indexed range. A non-empty cursor continues the server-authored traversal; its embedded order and anchor are authoritative.
+The first release always requests descending order anchored at the end of the indexed range when the cursor is empty. A non-empty cursor continues the server-authored traversal; its embedded order and anchor are authoritative. Because the response does not expose those values, CLI output does not report an order.
 
 Defaults and limits:
 
 - default page size: 50;
   
-- maximum accepted CLI limit: 200 as a conservative public-client bound;
+- `--limit` must parse as a nonzero `u32`; endpoint page-size validation remains authoritative;
   
-- endpoints configured with a lower limit may reject the request and their RPC validation remains authoritative;
-  
-- the CLI validates cursor hex and applies a 256-byte local safety bound;
-  
-- endpoints configured with a lower cursor bound may still reject it;
-  
-- `--limit 0` is rejected at the CLI rather than relying on the RPC's server-default sentinel.
+- the CLI validates cursor hex and decodes it into the existing variable-length `PaginationCursor`; endpoint cursor-size validation remains authoritative.
   
 
 The response includes:
@@ -400,9 +416,9 @@ tx.show
 tx.list
 ```
 
-Each command data object uses `schemaVersion: 1`, camelCase field names, and canonical lowercase `0x` hex. Raw `u128` values serialize as decimal strings.
+Each command data object uses `schemaVersion: 1`, camelCase field names, and canonical lowercase `0x` hex. Raw `u128` values serialize as decimal strings. JSON data fields and command-error codes are the versioned machine contract; error messages, hints, details, and human wording are diagnostic and may evolve while remaining deterministic, script-clean, and semantically equivalent.
 ### Transfer data
-Representative live success:
+Live success data:
 
 ```json
 {
@@ -425,9 +441,72 @@ Representative live success:
 }
 ```
 
-Dry-run data replaces receipt fields with prepared transaction metadata and the signed transaction encoding.
+Live success and committed failure preserve `returnData` and `abortData` when present in the receipt, regardless of execution status.
 
-Execution failure follows deploy/call precedent: emit an `ok: false` command-owned JSON record containing receipt context on stdout and exit nonzero. Preflight, parsing, transport, and RPC errors use the standard error object on stderr.
+Committed live data omits `confirmation`, `transactionStatus`, `expiryHeight`, and `signedTransaction`.
+
+Dry-run data:
+
+```json
+{
+  "schemaVersion": 1,
+  "profile": "devnet",
+  "rpcUrl": "https://rpc.devnet.example",
+  "dryRun": true,
+  "submitted": false,
+  "sender": "0x...",
+  "signerPublicKey": "0x...",
+  "recipientInput": "alice",
+  "recipient": "0x...",
+  "tokenAddress": "0x...0001",
+  "amount": "10.5",
+  "rawAmount": "105000000",
+  "txHash": "0x...",
+  "expiryHeight": 1123,
+  "signedTransaction": "0x..."
+}
+```
+
+Dry-run data omits `height`, `status`, `events`, `returnData`, `abortData`, `confirmation`, and `transactionStatus`.
+
+Broadcast-but-unconfirmed data:
+
+```json
+{
+  "schemaVersion": 1,
+  "profile": "devnet",
+  "rpcUrl": "https://rpc.devnet.example",
+  "dryRun": false,
+  "submitted": true,
+  "sender": "0x...",
+  "signerPublicKey": "0x...",
+  "recipientInput": "alice",
+  "recipient": "0x...",
+  "tokenAddress": "0x...0001",
+  "amount": "10.5",
+  "rawAmount": "105000000",
+  "txHash": "0x...",
+  "confirmation": "unavailable"
+}
+```
+
+Broadcast-but-unconfirmed data is emitted in an `ok: false` command-owned result on stdout and exits nonzero. It omits `height`, `status`, `events`, `returnData`, `abortData`, `expiryHeight`, and `signedTransaction`; the envelope error code is `transaction_confirmation_unavailable`. When the poll operation returns a `recentFailure`, add its complete shared RPC representation as `transactionStatus`. Absence of `transactionStatus` means no semantic status was retained, not `unknown`.
+
+Terminal invalid data uses the same common live fields with `confirmation: "invalid"` and the complete shared `TransactionStatus::Invalid` representation in `transactionStatus`. It is emitted in an `ok: false` command-owned result with error code `transaction_invalid` and exits nonzero.
+
+```json
+{
+  "confirmation": "invalid",
+  "transactionStatus": {
+    "status": "invalid",
+    "reason": "..."
+  }
+}
+```
+
+The snippet shows the invalid-only fields; all common live fields through `txHash` remain required. `height`, receipt fields, `expiryHeight`, and `signedTransaction` are omitted.
+
+Committed execution failure follows deploy/call precedent: emit an `ok: false` command-owned JSON record on stdout and exit nonzero. Its data has the live shape above, including `height`, `status`, and `events`, with `returnData` and `abortData` when present. Preflight and parsing failures, client-construction failures before method invocation, and the conclusive `sendRawTransaction` rejection codes listed above use the standard error object on stderr.
 ### Transaction-show data
 ```json
 {
@@ -445,7 +524,7 @@ Execution failure follows deploy/call precedent: emit an `ok: false` command-own
 }
 ```
 
-`receipt` is nullable. Preserve the RPC status and receipt structures rather than flattening them. Absent optional receipt fields remain omitted, matching the shared receipt serialization. Unknown variants use the shared type's lossy `other` normalization.
+`receipt` is always present in the data schema and nullable. It is `null` for every non-committed status and when a committed status is followed by a successful receipt lookup returning no receipt. Preserve the RPC status and receipt structures rather than flattening them. Absent optional receipt fields remain omitted, matching the shared receipt serialization. Unknown variants use the shared type's lossy `other` normalization.
 ### Transaction-list data
 ```json
 {
@@ -454,7 +533,6 @@ Execution failure follows deploy/call precedent: emit an `ok: false` command-own
   "rpcUrl": "https://rpc.devnet.example",
   "targetInput": "alice",
   "address": "0x...",
-  "order": "descending",
   "refs": [
     { "txHash": "0x...", "height": 123 }
   ],
@@ -464,7 +542,7 @@ Execution failure follows deploy/call precedent: emit an `ok: false` command-own
 }
 ```
 
-Human output should make a non-empty continuation cursor easy to reuse and should report indexer lag context when `latestBlock` is behind a separately known chain tip. The command need not issue an extra chain-tip request solely to calculate lag in v1.
+Human output should make a non-empty continuation cursor easy to reuse and report `latestBlock` and `oldestBlock`. The command does not fetch the chain tip or calculate indexer lag in v1.
 ## Validation and errors
 Add stable errors or reuse existing typed errors for:
 
@@ -480,11 +558,9 @@ Add stable errors or reuse existing typed errors for:
   
 - raw amount overflow;
   
-- invalid native-token metadata;
-  
 - malformed or wrong-length transaction hash;
   
-- invalid cursor encoding or excessive cursor size;
+- invalid cursor encoding;
   
 - invalid history limit;
   
@@ -495,9 +571,11 @@ Add stable errors or reuse existing typed errors for:
 - transaction submission, polling, or committed execution failure.
   
 
-Input parsing happens before RPC where possible. Direct CLI addresses require exactly 64 hexadecimal digits with a lowercase `0x` prefix, matching the existing address/alias configuration contract. Transaction hashes and cursors accept the shared RPC hex type's prefixed or unprefixed forms. All output uses canonical lowercase `0x` values.
+Input parsing happens before RPC where possible. Direct CLI addresses require a `0x` or `0X` prefix followed by exactly 64 case-insensitive hexadecimal digits. The shared target resolver must handle either prefix before fixed-size address parsing; this corrects the current balance path's incomplete `0X` handling. Transaction hashes accept the shared fixed-size RPC hex type's prefixed or unprefixed forms. Cursors accept the shared variable-length RPC hex form and decode into `PaginationCursor`. Output fields containing resolved addresses, transaction hashes, and cursors use canonical lowercase `0x` hex. `recipientInput` and `targetInput` preserve the user's argument verbatim.
 
 Do not convert `NotImplemented` into an empty receipt or history page. Explain that the selected endpoint does not expose the required indexer capability and suggest using a full local devnode or compatible remote RPC.
+
+Treat JSON-RPC `MethodNotFound` and Groundhog `NotImplemented` as the same unsupported-capability class for these commands. Other unavailable, timeout, overload, and rejected-request responses remain RPC failures; do not build a broader capability-discovery layer.
 
 Important edge cases:
 
@@ -530,9 +608,9 @@ Important edge cases:
   
 - The signed dry-run transaction is potentially submit-capable until expiry; label it accordingly and emit it only because existing deploy/call dry runs establish that contract.
   
-- Resolve hosted native-token and wallet entrypoint metadata from the same validated descriptor used by existing signed flows.
+- Resolve wallet entrypoints through the same validated manifest/descriptor or frozen legacy-default path used by existing signed flows; use protocol constants for native HOG.
   
-- Keep transaction hashes and cursors as untrusted input; validate size and encoding before RPC.
+- Keep transaction hashes and cursors as untrusted input; validate fixed hash length and hex encoding before RPC, then rely on the endpoint's configured bound for opaque cursor length.
   
 - Treat event, return, abort, status-reason, and backend strings as untrusted display data. Do not interpret them as terminal markup or instructions.
   
@@ -546,9 +624,10 @@ Expected behavior by endpoint capability:
 | Capability | Transfer | `tx show` | `tx list` |
 |---|---|---|---|
 | Submit + chain + indexer | Full support | Full support | Full support |
-| Submit + chain, no indexer | Submission may succeed but receipt polling/inspection is unavailable | `NotImplemented` or backend unavailable | `NotImplemented` or backend unavailable |
+| Submit + chain, no indexer | Broadcast may succeed; report confirmation unavailable with the retained local hash when receipt polling is unavailable | `NotImplemented` or backend unavailable | `NotImplemented` or backend unavailable |
 | Read-only indexer endpoint | No transfer | Committed hashes may be inspectable; pending/unknown status can be unavailable without scheduler access | History supported |
-| RPC-only profile with no usable wallet metadata | Fails before signing | Supported if read methods exist | Supported if read methods exist |
+| RPC-only profile with a saved wallet but no manifest/descriptor | Transfer uses the same frozen legacy wallet entrypoint defaults as deploy/call | Supported if read methods exist | Supported if read methods exist |
+| RPC-only profile with no usable saved wallet | Fails before signing | Supported if read methods exist | Supported if read methods exist |
 
 The CLI should report the missing capability, not infer support from profile names such as `local` or `devnet`.
 ## Implementation shape
@@ -562,27 +641,27 @@ Expected areas:
   
 - a `tx` command module for show/list orchestration;
   
-- shared HOG amount parsing/formatting and metadata resolution;
+- the existing `hog.rs` constants/encoding plus the airdrop amount parser/formatter moved there;
   
 - shared broad address resolution instead of command-specific copies;
   
 - existing account/wallet resolution and signing builders;
   
-- existing `tx_utils` submission and receipt behavior;
+- existing client submit and poll operations, orchestrated separately in transfer to retain and compare the locally computed and server-returned hashes;
   
 - stable versioned JSON report types;
   
 - command-specific errors and hints.
   
 
-Avoid copying the airdrop transaction builder wholesale. Extract only the native-HOG construction pieces shared by airdrop, wallet prefunding, and transfer, while leaving their higher-level policies separate.
+Do not copy or generalize the airdrop transaction builder. Reuse `hog.rs` calldata encoding and the existing wallet transaction builder directly. Move only the amount parser/formatter into `hog.rs`, where `airdrop` and `transfer` immediately share it; leave airdrop, wallet-prefunding, and transfer policy separate.
 
-No gateway, RPC API, or protocol change is expected. Local end-to-end tests may need richer fake-indexer fixtures to exercise non-empty address history.
+Keep each command as a thin orchestrator. Do not introduce a generalized transaction service, pagination framework, capability model, or new cross-crate abstraction. Expose the smallest existing target/HOG helpers needed by the new commands; generalize only when an existing caller can immediately share the result.
+
+No gateway, RPC API, or protocol change is expected. Hermetic binary tests use mock RPC responses for non-empty history and pagination. Process-level transfer/history end-to-end tests require a compatible external `hog-devnode` and belong in the existing ignored smoke path, not normal hermetic CI. Extend the fake indexer only if an existing supervisor integration test needs the same non-empty fixture.
 ## Phasing
 ### Phase 1: transfer
-- shared checked HOG amount parser and formatter;
-  
-- validated native-token metadata resolution;
+- move the checked HOG amount parser and formatter into the existing `hog.rs` module;
   
 - shared recipient resolution;
   
@@ -606,11 +685,11 @@ The phases can be implemented in parallel after shared target/RPC plumbing is ag
 ## Acceptance criteria
 1. A configured local or hosted wallet can transfer native HOG to a saved wallet, contract alias, direct address, or manifest-backed `dev-N` address.
   
-2. Transfer uses the effective signer wallet, authoritative network metadata, exact amount conversion, and existing expiry/sign/submit/poll semantics.
+2. Transfer uses the effective signer wallet, protocol-defined native-HOG constants, exact amount conversion, and existing expiry/sign/submit/poll semantics.
   
 3. Transfer dry-run makes no submission and clearly returns a prepared, submit-capable signed transaction.
   
-4. Live transfer exits successfully only after an `ExecStatus::Ok` receipt and retains receipt context on execution failure.
+4. Live transfer exits successfully only after a matching `ExecStatus::Ok` receipt, retains receipt context on execution failure, and retains the locally computed hash whenever confirmation is unavailable.
   
 5. `tx show` accurately represents pending, committed, invalid, recent-failure, unknown, future-status, and committed-without-receipt states.
   
@@ -622,7 +701,7 @@ The phases can be implemented in parallel after shared target/RPC plumbing is ag
   
 9. Unsupported endpoint capabilities produce actionable errors rather than empty results.
   
-10. Human and JSON output remain deterministic, versioned, and cleanly separated from status/error streams.
+10. JSON output remains deterministic and versioned; human and JSON output stay cleanly separated from status/error streams.
   
 ## Test plan
 ### Unit tests
@@ -630,15 +709,17 @@ The phases can be implemented in parallel after shared target/RPC plumbing is ag
   
 - recipient/address precedence and collision behavior;
   
+- prefixed mixed-case direct-address input and canonical lowercase output;
+
 - signer-wallet ownership validation;
   
-- hosted metadata validation and local fallback behavior;
+- native-HOG constants and fixed seven-decimal behavior;
   
 - transaction hash, cursor, and limit parsing;
   
 - `tx show` state composition, including committed status without a receipt;
   
-- stable JSON serialization for success, semantic statuses, and execution failure.
+- stable JSON serialization for dry-run, success, execution failure, terminal invalid, confirmation-unavailable failure, and semantic inspection statuses.
   
 ### Binary integration tests
 Use mock RPC fixtures to cover:
@@ -647,7 +728,9 @@ Use mock RPC fixtures to cover:
   
 - live transfer success and exact signed inner HOG invocation;
   
-- committed revert/deterministic failure, invalid status, timeout, and backend failure;
+- committed revert/deterministic failure, terminal invalid, advisory recent failure, lost submission response, and confirmation-unavailable timeout or backend failure with the retained local hash;
+
+- server-returned hash mismatch, receipt hash mismatch, and `tx show` receipt hash/height mismatch;
   
 - profile and RPC overrides;
   
@@ -662,6 +745,8 @@ Use mock RPC fixtures to cover:
 - human output and JSON stream discipline.
   
 ### End-to-end tests
+Run these through the ignored external-devnode smoke path:
+
 - local devnode HOG transfer updates sender and recipient balances;
   
 - the resulting hash is inspectable through `tx show`;
