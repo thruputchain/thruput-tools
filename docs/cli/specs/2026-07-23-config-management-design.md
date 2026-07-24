@@ -1,56 +1,51 @@
 # CLI Config Management
-**Date:** 2026-07-23 **Status:** Design ready for implementation planning
+**Date:** 2026-07-23 **Status:** Design ready for implementation
 
 **Companions:**
 
-- `2026-07-02-global-and-project-config-brief.md` - the global/project profile model this work exposes through the CLI.
+- `2026-07-02-global-and-project-config-brief.md` - the global/project profile model exposed by this command.
   
 - `../roadmap.md` - current CLI surface and sequencing.
   
 ## Goal
-Let users inspect, select, create, and edit Groundhog profiles without opening a TOML file, while preserving the existing global/project layering model.
+Let users inspect and edit Groundhog profiles without opening a TOML file.
 
-The common flows should be obvious:
+The common flows should be simple:
 
 ```bash
 groundhog config get
 groundhog config get devnet --sources
 groundhog config profiles
-groundhog config edit devnet
 groundhog config set rpc-url https://rpc.example --profile devnet --global
-groundhog config create staging --from devnet --global
-groundhog config use staging --project
+groundhog config unset faucet-url --profile devnet --project
+groundhog config use devnet --global
+groundhog config edit devnet
 ```
 
-The command must serve two audiences:
+The command serves two audiences:
 
 - humans need a guided editor that explains inherited values and where changes will be saved;
-  
-- scripts and CI need deterministic, non-interactive `get`, `set`, `create`, and `use` operations.
-  
+- scripts and CI need deterministic, non-interactive inspection and mutation commands.
+
 ## Non-goals
 This work does not:
 
 - replace profiles with a new network abstraction;
-  
 - introduce arbitrary dotted-path TOML editing;
-  
-- expose executor credentials, private keys, or local-node process state;
-  
+- expose or edit executor credentials, private keys, or local-node process state;
+- change signer selection or `dev-0` behavior;
 - add profile inheritance beyond the existing global/project merge;
-  
-- add `unset`, profile deletion, or inherited-value tombstones;
-  
-- change the precedence of `--profile`, `GROUNDHOG_PROFILE`, project defaults, and global defaults;
-  
-- resolve unrelated drift in the project scaffold's `default_profile` behavior.
-  
-## Current model and constraints
+- add tombstones that mask inherited values;
+- edit contract aliases or wallet bindings;
+- change profile-selection precedence;
+- resolve unrelated project scaffold behavior.
+
+## Current Model
 Groundhog has two durable configuration layers:
 
 | Layer | Location | Purpose |
 | --- | --- | --- |
-| Global | `$XDG_CONFIG_HOME/groundhog/config.toml`, otherwise `~/.config/groundhog/config.toml` | User-wide profiles, defaults, credentials, and local runtime state |
+| Global | `$XDG_CONFIG_HOME/groundhog/config.toml`, otherwise `~/.config/groundhog/config.toml` | User-wide profiles and defaults |
 | Project | Nearest ancestor `groundhog.toml` | Project-specific profile overrides, contract aliases, and wallet bindings |
 
 The selected profile name resolves in this order:
@@ -63,12 +58,10 @@ The selected profile name resolves in this order:
   
 4. global `default_profile`;
   
-5. the built-in `default` fallback.
+5. built-in `default`.
   
 
-For a selected name, global and project profiles merge field by field. Project scalar values override global scalar values. Contract and wallet maps merge per entry, with project entries winning. The resolver then fills missing local runtime fields from the global `local_runtime_state` record. See `crates/tools/cli/src/config/project.rs`.
-
-This means "show the config Groundhog will use" and "edit a TOML file" are different operations. The CLI must keep them distinct.
+For a selected name, global and project profiles merge field by field. Project scalar values override global scalar values. Contract and wallet maps merge per entry, with project entries winning.
 
 The editable profile fields are:
 
@@ -77,49 +70,34 @@ network
 rpc_url
 faucet_url
 default_key
-runtime_manifest
-runtime_artifacts_dir
 ```
 
-Contract aliases and wallet bindings are visible through config inspection, but their lifecycle remains owned by deploy and wallet commands in the first release.
+`config` shows runtime paths, contract aliases, and wallet bindings for context but does not edit them. `groundhog node`, deploy, and wallet commands continue to own those entries.
 
-Global config also contains `[executor]` credentials and `[local_runtime_state]`. Neither belongs in the config editor. The latter is ephemeral state managed by `groundhog node`, not a durable user preference.
+Global config also contains `[executor]`, the top-level key selected by `groundhog keys use`, and `[local_runtime_state]`. These values are outside this feature. Config output must not expose credentials or raw runtime state.
 ## Decisions
-| # | Decision | Rationale |
-|---|---|---|
-| D1 | `config get` shows the baseline resolved profile by default. | This matches normal profile resolution without pretending to include command-specific target overrides. |
-| D2 | Raw layer inspection uses explicit `--global` or `--project`. | Users need to distinguish inherited values from values stored in one file. |
-| D3 | Interactive editing is `config edit`, not an interactive mode of `config set`. | `set` must remain safe for scripts and CI. |
-| D4 | Writes target a physical layer, and the destination is always shown. | A merged profile cannot be written back without destroying the layering model. |
-| D5 | `config set` exposes typed fields, not arbitrary TOML paths. | Typed fields provide validation, help, completion, and a stable public interface. |
-| D6 | Resolved inspection reports provenance for profile values and separately reports active consumer overrides. | Persisted values, local runtime enrichment, profile selection, and consumer-specific environment overrides are distinct concepts. |
-| D7 | All config writers preserve comments and unknown fields and share one locking protocol. | Adding a safe editor is not useful if `keys use` or `groundhog node` can later rewrite or race the file. |
-| D8 | `unset` and profile deletion are deferred. | Removing a project value reveals its inherited global value; true clearing needs explicit tombstone semantics. |
-## Command surface
+| #   | Decision | Rationale |
+| --- | --- | --- |
+| D1  | `config get` shows the persisted global/project merge by default. | The command manages configuration files, not runtime invocation state. |
+| D2  | `--global` and `--project` inspect or mutate one physical layer. | A merged profile cannot be written back without destroying layering. |
+| D3  | `config set` and `config unset` expose typed profile fields. | Typed fields provide validation, help, completion, and a stable interface. |
+| D4  | `config set` creates a missing profile table in the selected layer. | This avoids a separate profile-creation command. |
+| D5  | `config unset` removes a field only from the selected layer. | An inherited value may become visible; no tombstone is created. |
+| D6  | `config edit` follows the existing `groundhog init` prompt model. | A line-based wizard is sufficient and requires no TUI dependency. |
+| D7  | All config writers preserve comments and unknown fields and share one lock. | Existing commands write the same files and must not erase or race config edits. |
+## Command Surface
 ### `groundhog config get [PROFILE]`
 Show one profile. With no positional profile, use the existing active-profile selection rules.
 
-Options:
-
 ```text
---sources    Include where the profile selection and each value came from
+--sources    Show where each merged value came from
 --global     Show only the global layer
 --project    Show only the project layer
---json       Use the existing global JSON output mode
 ```
 
-`--global` and `--project` conflict. Without either flag, output is the baseline resolved profile: global/project merge plus applicable `local_runtime_state`, using the profile name selected by `GROUNDHOG_PROFILE` when set. It does not apply command-specific flags or consumer-specific environment overrides such as `GROUNDHOG_RUNTIME_MANIFEST`. Active consumer-specific overrides are listed in a separate `Overrides` section so users can see that a later command may replace a baseline value without confusing that override with persisted profile data.
+`--global` and `--project` conflict. Without either flag, output is the persisted global/project merge. It does not include `local_runtime_state`, signer fallback, `GROUNDHOG_RUNTIME_MANIFEST`, or command-specific overrides.
 
-Default-key output distinguishes:
-
-- `Profile default key`: the merged profile's editable `default_key` field;
-  
-- `Effective signing key`: profile default, otherwise the global key selected by `groundhog keys use`, otherwise the valid local `dev-0` fallback.
-  
-
-`config set default-key` edits the profile field. The existing `keys use` command remains the owner of the top-level global key selection.
-
-Human output should prioritize the values users act on:
+Human output:
 
 ```text
 Profile: devnet
@@ -128,8 +106,7 @@ Selected by: project default
 Network:          devnet
 RPC URL:          https://rpc.devnet.example
 Faucet URL:       https://faucet.devnet.example
-Profile default:  alice
-Effective key:    alice
+Default key:      alice
 Runtime manifest: not set
 
 Contracts:
@@ -140,46 +117,106 @@ Wallets:
   alice            0x91c2...4d10
 ```
 
-With `--sources`, show provenance per scalar and map entry:
+With `--sources`, show global or project provenance per scalar and map entry:
 
 ```text
-Field             Effective value                  Source
-network           devnet                           global
-rpc_url           https://rpc.company.internal     project
-faucet_url        https://faucet.devnet.example    global
-default_key       alice                            project
-effective_key     alice                            project
-contracts.HOG     0x0000...0001                    global
-contracts.counter 0x18ab...9f23                    project
+Field             Value                              Source
+network           devnet                             global
+rpc_url           https://rpc.company.internal       project
+faucet_url        https://faucet.devnet.example      global
+default_key       alice                              project
+contracts.HOG     0x0000...0001                      global
+contracts.counter 0x18ab...9f23                      project
 ```
 
-Raw layer views are safe projections of known profile data. They must not dump the global TOML document or expose executor credentials or runtime state.
+Raw layer views show only values stored in that file. They use an allowlisted profile projection rather than printing the whole global document.
+
+Raw layer views preserve runtime paths exactly as stored. Merged output resolves relative runtime paths to absolute paths using the config file that supplied each value as the base. Inspection never rewrites the stored spelling.
 ### `groundhog config profiles`
 List the sorted union of global and project profile names:
 
 ```text
-PROFILE    ACTIVE    GLOBAL    PROJECT    NETWORK
-local      yes       yes       yes        local
-devnet               yes       yes        devnet
-staging              yes       no         devnet
+PROFILE    ACTIVE    GLOBAL    PROJECT    NETWORK    STATUS
+local      yes       yes       yes        local      valid
+devnet               yes       yes        devnet     valid
+staging              yes       no         -          invalid
 ```
 
 The command must:
 
-- mark the active profile and the source that selected it;
+- mark the active profile and how it was selected;
   
 - show whether each profile exists globally, in the project, or in both;
   
-- show the effective network when one is configured;
+- show the merged network when valid;
   
-- not invent profiles from `local_runtime_state`;
+- include active built-in `default` when no persisted profile exists;
   
-- include the built-in `default` only when it is active, and label it built-in.
+- include an active missing profile as `missing` rather than failing;
+  
+- include a schema-invalid profile as `invalid`, show a concise reason, and continue listing valid profiles.
   
 
-If profile selection names a profile that does not exist, include a synthetic active row marked `missing` and exit successfully. This lets `config profiles` diagnose a stale `GROUNDHOG_PROFILE` or `default_profile` instead of failing before it can explain the problem.
+A TOML syntax error still fails inspection of that file with its path and source location. Once TOML parses, profiles are decoded and validated independently so one invalid profile does not hide the others.
+### `groundhog config set <FIELD> <VALUE>`
+Set one typed field in one profile layer:
+
+```bash
+groundhog config set network devnet --profile devnet --global
+groundhog config set rpc-url https://rpc.example --profile devnet --global
+groundhog config set default-key alice --profile devnet --project
+```
+
+Supported fields:
+
+```text
+network
+rpc-url
+faucet-url
+default-key
+```
+
+Scope rules:
+
+- `--global` and `--project` conflict;
+- when a project config exists, the caller must choose a scope;
+- outside a project, omitted scope means global;
+- `--project` fails when no project config is discoverable;
+- the selected profile table is created when absent;
+- successful output names the profile, field, and file that changed.
+
+Parse the typed value before acquiring the write lock. Inside the lock, reread the file, apply the change, validate the edited profile, and replace the file atomically. Setting the current value succeeds with `changed: false`.
+### `groundhog config unset <FIELD>`
+Remove one supported field from one profile layer:
+
+```bash
+groundhog config unset faucet-url --profile devnet --project
+```
+
+`unset` follows the same scope rules as `set`. It removes only the selected TOML key. If a global value exists, it becomes the merged value after removing the project override.
+
+The command does not remove profile tables, contract aliases, wallet bindings, or top-level defaults. Removing a field that is not stored in the selected layer succeeds with `changed: false`. If the profile table itself is absent from that layer, `unset` is the same no-op and does not create an empty profile.
+
+Human output should explain when the merged value now comes from the other layer.
+### `groundhog config use <PROFILE>`
+Choose the profile Groundhog uses when a command omits `--profile`:
+
+```bash
+groundhog config use devnet --global
+groundhog config use local --project
+```
+
+The command writes the top-level `default_profile` field; it does not change any fields inside the profile.
+
+- `--global` changes the default outside projects and in projects that do not set their own default;
+- `--project` changes the default only for commands run in that project;
+- an explicit `--profile` or `GROUNDHOG_PROFILE` still takes precedence.
+
+The target profile must exist in global or project configuration; `use` does not create it. Scope follows the same rules as `set`.
+
+If `GROUNDHOG_PROFILE` is set, update the selected file but warn that the environment variable still controls active selection.
 ### `groundhog config edit [PROFILE]`
-Open a form-style terminal UI for one profile. With no profile argument, edit the active profile.
+`config edit` is Phase 2. It is a line-based wizard implemented with the same stdin and `Print::prompt` pattern as `groundhog init`. It does not use raw terminal mode, an alternate screen, or a TUI framework.
 
 Options:
 
@@ -188,268 +225,158 @@ Options:
 --project    Edit the project layer
 ```
 
-If neither scope is supplied, the UI must show a scope selector before edits can be committed. It may preselect the only existing layer, but the destination path must remain visible throughout the session.
+If scope is omitted, prompt the user to choose it. Then:
 
-The editor covers the typed scalar fields only:
-
-```text
-Network
-RPC URL
-Faucet URL
-Default key
-Runtime manifest
-Runtime artifacts directory
-```
-
-It also shows a read-only effective preview so users can see inherited values and the result of staged changes. Contract aliases and wallets may appear in a read-only section but are not edited in v1.
-
-The selected profile must exist in the chosen target layer. If it exists only in the other layer, the UI may offer to create an empty overlay after explicit confirmation, then edit that overlay. A profile missing from both layers fails with guidance to run `config create`.
-
-Clearing a persisted field is not supported in v1 because that is an `unset` operation with inheritance semantics. Empty inherited fields remain visibly inherited; deleting a stored value must wait for the deferred `config unset` design.
-
-Required behavior:
-
-- load and retain the original document before opening the UI;
+1. show the destination file and current merged profile;
   
-- stage all changes in memory;
+2. prompt for each editable scalar, allowing keep, replace, or unset;
   
-- validate fields as they change and validate the complete candidate before saving;
+3. show a summary of staged changes and the resulting merged profile;
   
-- show the destination file before confirmation;
+4. ask for confirmation;
   
-- save the profile in one atomic commit;
-  
-- leave the file byte-identical on cancellation or validation failure;
-  
-- detect a concurrent file change at commit time and ask the user to reload rather than overwriting it;
-  
-- restore terminal state after success, cancellation, panic, or I/O failure;
-  
-- reject `--json`, `--quiet`, or non-terminal input/output immediately rather than prompting or hanging.
+5. write all changes once.
   
 
-An optional "Test RPC" action may probe the staged RPC URL, but it must not be a save requirement and must not mutate configuration.
-### `groundhog config set <FIELD> <VALUE>`
-Set one typed field in one profile layer.
+If the profile does not exist in the selected layer, explain that saving will create an overlay and ask for confirmation before editing.
 
-```bash
-groundhog config set network devnet --profile devnet --global
-groundhog config set rpc-url https://rpc.example --profile devnet --global
-groundhog config set faucet-url https://faucet.example --profile devnet --global
-groundhog config set default-key alice --profile devnet --project
-groundhog config set runtime-manifest ./runtime.json --profile local --project
-```
+Cancellation or validation failure leaves the file unchanged. The wizard must not hold the lock while waiting for input. At save time it acquires the lock and rejects the update if the file changed since the session began.
 
-Supported field names:
+`config edit --json` and `config edit --quiet` fail immediately because the command is interactive. No new terminal UI dependency is needed.
+## Validation
+Use the same typed field validation for non-interactive commands and the editor:
 
-```text
-network
-rpc-url
-faucet-url
-default-key
-runtime-manifest
-runtime-artifacts-dir
-```
+- trim profile names before validation and storage;
+- reject empty profile names and control characters;
+- accept only `local`, `devnet`, or `mainnet` for `network`;
+- require absolute `http://` or `https://` RPC and faucet URLs;
+- require a non-empty configured default-key name;
+- allow default-key names not present on this machine, with a warning;
+- preserve unknown fields without exposing them through typed editing.
 
-Scope rules:
+Existing contract and wallet entries remain readable. Config commands do not take ownership of validating or rewriting those maps beyond what is needed to render them safely.
 
-- `--global` and `--project` conflict;
-  
-- when a project config exists, a non-interactive write requires one of them;
-  
-- outside a project, omitted scope means global;
-  
-- `--project` fails when no project config is discoverable and does not create a `groundhog.toml` in an arbitrary directory;
-  
-- successful output names the profile, field, and file that changed.
-  
+`get`, `set`, `unset`, and `edit` validate their target profile. `profiles` validates entries independently. Unrelated invalid profiles do not block inspection or repair.
+## Persistence and Concurrency
+Project alias and wallet writes already use `toml_edit`. Global mutations currently deserialize and serialize the whole typed document, which removes comments, formatting, and unknown fields.
 
-`set` parses and validates the value before acquiring the write lock, then revalidates the edited profile and document structure inside the write transaction. Unrelated profiles are preserved but do not block the repair. The profile must already exist in the target layer; `set` never creates a profile or overlay implicitly. Use `config create` first.
-### `groundhog config create <PROFILE>`
-Create a profile in one layer.
-
-```bash
-groundhog config create staging --global
-groundhog config create staging --from devnet --project
-```
-
-The same scope rules as `config set` apply. Creating a profile that already exists in the target layer fails, even if a same-named profile exists only in the other layer.
-
-Without `--from`, create an empty profile table. With `--from`, snapshot the source profile's durable global/project merge into the new profile. This is a copy, not persisted inheritance. Copy all six profile scalar fields plus contract aliases and wallet bindings. Do not copy executor credentials, private key data, top-level global default-key fallback, environment overrides, or `local_runtime_state`.
-
-Copied runtime paths are written as normalized absolute paths. This preserves their meaning when the source and destination use different config directories, at the cost of replacing their original relative spelling.
-
-The command reports exactly which layer was created. A project clone should usually remain a small overlay; the command may warn when cloning a large effective profile into project config, but its result remains deterministic.
-### `groundhog config use <PROFILE>`
-Set `default_profile` in one layer:
-
-```bash
-groundhog config use devnet --global
-groundhog config use local --project
-```
-
-The target profile must exist in global or project configuration; `use` does not create it. The same write-scope rules as `set` apply.
-
-If `GROUNDHOG_PROFILE` is set, the command still updates the selected file but warns that the environment override remains active. JSON output records that warning in the standard envelope.
-## Provenance model
-The existing `ResolvedProfile.source` is insufficient because a merged profile can have a different source for every field. Add a resolution result that pairs each exposed value with a source kind:
-
-```text
-builtIn
-global
-project
-environment
-localRuntime
-cliOverride
-```
-
-The source includes a file path for global and project values and an environment variable name for environment values. Contract and wallet map entries retain individual provenance.
-
-Normal `config get` describes the baseline resolved profile defined above. It does not invent command-specific CLI overrides or fold consumer-specific environment overrides into persisted values. The provenance model should still be reusable by `status` or future command diagnostics that need to explain a fully resolved invocation.
-
-Relative paths must retain their defining file as their base. A global relative path resolves relative to global `config.toml`; a project relative path resolves relative to `groundhog.toml`. Human source output should make that base clear.
-## Persistence and concurrency
-### Document-preserving writes
-Project alias and wallet writes already use `toml_edit`. Global mutations currently deserialize and serialize the full typed structure, which removes comments, formatting, and unknown fields.
-
-Introduce one document-oriented mutation path for both files. It must preserve:
+Introduce one document-oriented mutation path for global and project config. It must preserve:
 
 - comments and ordering where `toml_edit` supports them;
   
-- unknown top-level keys and unknown profile fields;
+- unknown fields and unrelated tables;
   
-- unrelated tables and values;
+- existing project-file permissions;
   
-- unrelated document content while normalizing the global file to private permissions;
-  
-- the existing project file's permissions.
+- global mode `0600` on Unix.
   
 
-All existing global writers must use the same path, including `init`, `keys use`, default-key cleanup, node runtime-state updates, and credential updates. Otherwise a later command could erase formatting or unknown fields preserved by the editor.
-### Locking
-Atomic rename protects readers from partial files but does not prevent two read-modify-write operations from losing one another's changes.
+All existing config writers must use this path, including:
 
-Use a stable sidecar lock per config path. The lock must cover:
+- `init` profile and credential updates;
+  
+- default-key changes from key commands;
+  
+- local runtime-state updates from `groundhog node`;
+  
+- deploy contract-alias persistence;
+  
+- wallet binding persistence.
+  
+
+Use a stable sidecar lock for each config file. Hold it across:
 
 ```text
-lock -> fresh read -> parse -> mutate -> validate -> atomic replace -> unlock
+fresh read -> parse -> mutate -> validate -> atomic replace
 ```
 
-All config writers must follow the same protocol. Lock acquisition has a bounded wait and returns an actionable error on contention.
+Lock acquisition has a bounded wait and returns an actionable error on contention. The implementation may choose the locking mechanism; it must compile on the repository's supported Linux and macOS targets.
 
-The interactive editor must not hold the lock during the UI session. At commit, it acquires the lock, rereads the file, and compares it with the original. A change produces a concurrent-edit error instead of a blind overwrite.
+Existing commands keep their current higher-level behavior when a config write fails. This work changes their persistence mechanism, not their transaction or process semantics. In particular, a completed deployment is not reclassified as failed because alias persistence failed.
 
-Writes continue to use same-directory temporary files and atomic rename. Every global write normalizes the global config to mode `0600` on Unix, matching current behavior. Existing project files preserve their mode; a newly created project file uses normal non-secret file creation permissions subject to the process umask.
-## Validation
-Use one field validator across `get`, `edit`, `set`, `create`, `use`, and existing profile consumers. Parsing always validates TOML structure, but an operation validates only the selected profile/layer and the candidate it will write; an unrelated invalid profile must not block inspection or repair.
-
-Validation rules include:
-
-- profile names are trimmed before validation and storage, are non-empty, and contain no control characters;
-  
-- `network` is `local`, `devnet`, or `mainnet`;
-  
-- RPC and faucet URLs are absolute `http://` or `https://` URLs;
-  
-- a configured default key name is non-empty; interactive and `set` flows allow a name not present on this machine but emit a warning so portable/shared profiles remain possible;
-  
-- runtime paths are non-empty and retain layer-relative resolution semantics;
-  
-- present contract addresses and wallet addresses remain valid 32-byte `0x` hex values;
-  
-- a present non-empty wallet owner public key is valid 32-byte `0x` hex; legacy bindings with an omitted/empty owner key remain readable and produce a warning until rewritten by wallet management;
-  
-- malformed TOML errors include the file path and source location;
-  
-- unknown fields are preserved and ignored by typed editing, not deleted.
-  
-
-Path existence is not required at write time because a runtime manifest or artifact directory may be created later. Existing command-time checks remain authoritative when a path is consumed.
-
-The editor may warn about suspicious combinations, such as a `devnet` profile with a local runtime manifest, but should use the same backend-selection rules as current commands rather than inventing a second policy.
-## Secrets and protected state
+Writes continue to use same-directory temporary files and atomic rename. Preserve an existing project file's mode; create a new project file using normal permissions subject to the process umask. Normalize global config to `0600` on every write.
+## Secrets and Protected State
 No config command may print or edit:
 
-- `[executor].password` or other executor credentials;
+- `[executor]` credentials;
   
 - private key material or key-file contents;
   
-- the raw `[local_runtime_state]` record or its internal node ID;
+- the top-level global default key selected by `groundhog keys use`;
   
-- cached network descriptors;
+- `[local_runtime_state]`;
   
-- pending wallet-create or airdrop attempt records.
-  
+- cached network descriptors or pending faucet records.
 
-The implementation must construct allowlisted output models. It must never redact after serializing the complete global document because future secret fields could otherwise leak by default.
+Build output from allowlisted profile fields. Never serialize the complete global document and redact it afterward.
+## Output Contracts
+All non-interactive commands support human and JSON output.
 
-`local_runtime_state` still participates in baseline resolved values where relevant. The resulting non-secret RPC URL and runtime paths may be shown as profile values with source `localRuntime`, but output must not dump the record, internal node ID, or manifest content.
-## Output contracts
-Every non-interactive config command supports human and JSON output. JSON uses the existing `CommandResult` envelope and command names:
+- human data from `config get` and `config profiles` goes to stdout;
+- mutation confirmations and warnings go to stderr;
+- JSON uses the existing `CommandResult` envelope on stdout;
+- JSON mode emits no human status text on stdout.
+
+Command names are:
 
 ```text
 config.get
 config.profiles
 config.set
-config.create
+config.unset
 config.use
 ```
 
-Command data uses `schemaVersion: 1` and camelCase fields. Stable source records use explicit source kinds instead of formatted strings.
+Each data payload includes `schemaVersion: 1` and camelCase fields.
 
-Example `config.get` data:
+`config.get` includes the profile, selection source, scope (`resolved`, `global`, or `project`), profile values, contracts, wallets, and optional per-value sources.
+
+A source is an object with a stable `kind` and optional location:
+
+```json
+{ "kind": "project", "path": "/work/app/groundhog.toml" }
+```
+
+Field source kinds are `global` and `project`. Profile-selection source kinds are `explicit`, `environment`, `project`, `global`, and `builtIn`; environment selection includes `name: "GROUNDHOG_PROFILE"` and file-backed selection includes `path`.
+
+When `--sources` is used, `config.get` groups source records by the same logical shape as the values:
 
 ```json
 {
-  "schemaVersion": 1,
-  "profile": "devnet",
-  "selectionSource": { "kind": "project", "path": "/work/app/groundhog.toml" },
-  "scope": "resolved",
-  "values": {
-    "network": "devnet",
-    "rpcUrl": "https://rpc.devnet.example",
-    "faucetUrl": "https://faucet.devnet.example",
-    "profileDefaultKey": "alice",
-    "effectiveSigningKey": "alice",
-    "runtimeManifest": null,
-    "runtimeArtifactsDir": null
-  },
-  "contracts": {},
-  "wallets": {},
-  "sources": null,
-  "overrides": []
+  "sources": {
+    "network": { "kind": "global", "path": "/home/user/.config/groundhog/config.toml" },
+    "rpcUrl": { "kind": "project", "path": "/work/app/groundhog.toml" },
+    "contracts": {
+      "HOG": { "kind": "global", "path": "/home/user/.config/groundhog/config.toml" }
+    },
+    "wallets": {}
+  }
 }
 ```
 
-When requested, `sources` mirrors the value structure with records shaped as `{ "kind": "project", "path": "/work/app/groundhog.toml" }` or `{ "kind": "environment", "name": "GROUNDHOG_PROFILE" }`. A raw layer view sets `scope` to `global` or `project`, reports only stored values from that layer, and sets derived `effectiveSigningKey` to `null`.
+Unset scalar fields have a `null` value and no source entry. Raw layer output uses that layer's source for every stored value. Runtime path values follow the raw-versus-merged rules above.
 
-`overrides` records recognized active consumer-specific overrides as `{ "field": "runtimeManifest", "value": "/tmp/runtime.json", "source": { "kind": "environment", "name": "GROUNDHOG_RUNTIME_MANIFEST" } }`. The current CLI has no general `GROUNDHOG_RPC_URL` override, so the config command must not report one until resolution actually supports it. `GROUNDHOG_PROFILE` appears as `selectionSource`, not in `overrides`.
+`config.profiles` includes the active profile, selection source, and sorted rows with layer presence, network, status, and an optional invalid reason.
 
-`config.profiles` data contains `activeProfile`, `selectionSource`, and sorted profile rows with `global`, `project`, `builtIn`, `missing`, and effective `network` fields. Mutation results contain `schemaVersion`, `profile`, `scope`, `path`, `changed`, and `field` where applicable. The environment-selection warning uses stable code `profile_environment_override_active`; missing local keys use `profile_default_key_not_found`; legacy owner-less wallet bindings use `wallet_owner_public_key_missing`. Results never include the entire global file.
-## Errors and edge cases
-Add stable config-specific errors for:
+Mutation results include the profile, scope, destination path, changed flag, and field where applicable. `config use` also warns when `GROUNDHOG_PROFILE` remains active.
+## Errors and Edge Cases
+Use stable config-specific errors for:
 
-- invalid profile name;
+- invalid or missing profile names;
   
-- profile not found or already present in the target layer;
+- unsupported fields or invalid values;
   
 - project config unavailable;
   
-- ambiguous or conflicting write scope;
+- ambiguous or conflicting scope;
   
-- unsupported field;
-  
-- invalid typed value;
-  
-- malformed or invalid config, including path and TOML location;
+- malformed TOML with path and location;
   
 - lock contention;
   
 - concurrent interactive edit;
   
-- interactive terminal required;
-  
-- unsupported `config edit --json` or `--quiet`;
+- unsupported interactive JSON/quiet mode;
   
 - destination write or atomic replacement failure.
   
@@ -458,133 +385,133 @@ Important behavior:
 
 - a profile may exist globally, in the project, or in both;
   
-- creating a project profile with the same name as a global profile is valid and creates an overlay;
+- `set --project` can create an overlay for a global profile;
   
-- a missing built-in `default` profile may still resolve as an empty fallback, but `config use default` must not silently persist or create it;
+- empty maps and unset scalar fields are normal;
   
-- empty effective maps and unset scalar fields are normal output;
-  
-- project `get` outside a project is an error, not an empty document;
-  
-- setting an unchanged value succeeds and reports `changed: false`;
+- `get --project` outside a project is an error;
   
 - environment-selected profiles remain selected until the environment changes;
   
-- stale local runtime state remains owned by node lifecycle/status diagnostics, not removed by config editing;
+- stale local runtime state remains owned by node lifecycle and status diagnostics;
   
-- interruption before atomic rename leaves the original document intact.
+- interruption before atomic rename leaves the original file intact.
   
-## Implementation shape
+## Implementation Shape
 Keep the work inside `crates/tools/cli`; no RPC or protocol changes are needed.
 
 Expected areas:
 
 - command parsing and dispatch in `src/main.rs`;
   
-- a config command module for human/JSON orchestration;
+- a config command module for human and JSON orchestration;
   
-- shared typed field and validation definitions under `src/config/`;
+- typed fields and validation under `src/config/`;
   
-- document-preserving read/write transactions and locking under `src/config/`;
+- document-preserving config transactions and locking under `src/config/`;
   
-- provenance-aware resolution alongside the existing profile resolver;
+- persisted global/project merge with per-value provenance;
   
 - stable JSON report types;
-  
-- a terminal UI module with explicit terminal lifecycle handling;
   
 - config-specific `CliError` variants and hints.
   
 
-Avoid duplicating a second profile resolver in the command module. Effective inspection, normal command resolution, and status diagnostics should share the same merge rules.
+Do not build a second runtime profile resolver. Config inspection may share the existing merge rules, but it deliberately stops before local runtime and signer resolution.
 ## Phasing
-### Phase 1: safe non-interactive foundation
-- document-preserving global and project mutations;
+### Phase 1: Non-interactive Foundation
+- document-preserving writes and shared locking;
   
-- shared config lock used by all writers;
+- typed validation;
   
-- typed validation and profile-name validation;
+- persisted merge provenance;
   
-- provenance-aware resolution;
-  
-- `config get`, `config profiles`, `config set`, `config create`, and `config use`;
+- `config get`, `config profiles`, `config set`, `config unset`, and `config use`;
   
 - stable JSON reports.
   
-### Phase 2: interactive editor
-- `config edit` terminal UI;
+### Phase 2: Guided Editor
+- line-based `config edit` using existing prompt conventions;
   
-- effective preview and scope selection;
+- staged changes and confirmation;
   
-- optimistic concurrent-edit detection;
+- keep, replace, and unset choices;
   
-- terminal restoration and non-TTY behavior;
+- concurrent-edit detection.
   
-- optional RPC probe.
+## Acceptance Criteria
+1. A user can discover persisted global, project, and merged profile values without reading TOML.
   
+2. Source output identifies global and project contributions per field and map entry.
+  
+3. A user can create an overlay, set a value, remove a stored value, and select a default profile.
+  
+4. Non-interactive writes never prompt and always identify their destination.
+  
+5. The guided editor uses existing prompt infrastructure and adds no TUI dependency.
+  
+6. All config writers preserve unrelated comments and unknown fields.
+  
+7. Concurrent config writers do not silently lose updates.
+  
+8. No config command changes signer or `dev-0` behavior.
+  
+9. No config command exposes credentials, key material, or local runtime state.
+  
+10. Human and JSON output follow existing stream and schema conventions.
+  
+## Test Plan
+Unit and config tests cover:
 
-The TUI may land in the same user-facing release, but it should build on the same mutation and validation APIs as Phase 1 rather than owning another write path.
-## Acceptance criteria
-1. A user can discover the active profile and its effective values without reading TOML.
-  
-2. Source output identifies global, project, built-in, and local-runtime contributions per field and map entry, reports environment-based profile selection, and lists consumer-specific environment overrides separately.
-  
-3. A user can create, select, and update profiles globally or per project.
-  
-4. Non-interactive writes never prompt and clearly identify their destination.
-  
-5. The interactive editor cannot overwrite a concurrently changed file.
-  
-6. All config writes preserve unrelated comments and unknown fields.
-  
-7. Concurrent CLI writers do not silently lose one another's changes.
-  
-8. Global config remains private and no command exposes credentials, key material, or protected runtime state.
-  
-9. Relative runtime paths keep the same resolution semantics as hand-written TOML.
-  
-10. Human and JSON output are stable, deterministic, and free of mixed status text on JSON stdout.
-  
-## Test plan
-Unit and config tests should cover:
-
-- active-profile precedence and selection provenance;
-  
+- active-profile precedence;
 - global/project scalar and per-entry map merging;
-  
-- effective, global-only, and project-only views;
-  
+- resolved, global-only, and project-only views;
+- per-value provenance;
 - every typed field's valid and invalid forms;
-  
-- write-scope conflicts and project absence;
-  
-- create empty, clone effective, duplicate, and missing-source cases;
-  
+- set-created overlays and unchanged values;
+- unset with and without inherited fallback;
+- profile listing with valid, invalid, missing, and built-in entries;
 - global/project `use` and the environment-override warning;
-  
-- comment, ordering, unknown-field, and permission preservation;
-  
+- comments, unknown fields, ordering, and permissions surviving every writer;
 - concurrent writers, lock timeout, and atomic-failure cleanup;
-  
 - relative path bases;
-  
 - omission of credentials and protected runtime state.
-  
 
-Binary integration tests should cover command parsing, human output, JSON schema, stable errors, and real file mutation under isolated XDG directories.
+Binary integration tests cover parser behavior, stdout/stderr rules, JSON schemas, stable errors, and real file mutation under isolated XDG directories.
 
-TUI tests should separate state transitions from terminal rendering where possible and cover save, cancel, invalid input, non-TTY rejection, terminal restoration, and concurrent-edit rejection.
-## Deferred follow-ups
-- `config unset` with explicit reveal-inherited semantics;
-  
-- profile removal and default-profile safety checks;
-  
+Phase 2 tests cover the prompt state machine separately from stdin/stdout plumbing, including save, cancel, invalid input, unset, and concurrent-edit rejection.
+## Deferred Follow-ups
+- profile deletion;
+- tombstones that mask inherited values;
 - contract alias and wallet binding editing;
-  
-- import/export and organization-managed profile bundles;
-  
-- a schema version and migration framework if incompatible config evolution becomes necessary;
-  
-- editor integration through `$EDITOR`;
-  
-- profile health checks beyond an optional RPC probe.
+- profile import/export and cloning;
+- `$EDITOR` integration;
+- network health checks.
+
+---
+comments:
+  c1:
+    body: this looks good but i dont understand what "config use" does, please
+      clarify that one
+    by: user
+    at: 2026-07-24T13:19:13.133Z
+  c2:
+    body: Clarified that `config use` selects the default profile used when
+      `--profile` is omitted, and explained global, project, environment, and
+      explicit-profile precedence.
+    by: OpenCode
+    at: 2026-07-24T13:19:53.000Z
+    re: c1
+  c3:
+    body: these two fields are auto written when running groundhog node so i dont
+      think we should support manually changing these. lets remove them from
+      supported fields list
+    by: user
+    at: 2026-07-24T13:21:36.000Z
+  c4:
+    body: Removed runtime manifest and runtime artifacts directory from `set`,
+      `unset`, and guided editing. They remain visible as read-only profile
+      context, while `groundhog node` owns their runtime management.
+    by: OpenCode
+    at: 2026-07-24T13:23:01.000Z
+    re: c3
