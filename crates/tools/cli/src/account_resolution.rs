@@ -6,7 +6,7 @@ use groundhog_signing::LocalSigner;
 
 use crate::{
     CliError, codec,
-    config::{ResolvedProfile, SavedWalletBinding},
+    config::ResolvedProfile,
     dev_keys,
     runtime_manifest::{SUPPORTED_DERIVATION_SCHEME, load_configured_runtime_manifest},
 };
@@ -49,30 +49,48 @@ pub(crate) fn resolve_wallet_address(
 ) -> Result<groundhog_xdr::types::ContractAddress, CliError> {
     if let Some(index) = dev_keys::dev_key_index(key_name) {
         resolve_dev_wallet_address(profile, key_name, index, signer)
-    } else if let Some(wallet) = profile.wallets.get(key_name) {
-        resolve_saved_wallet_address(key_name, wallet, signer)
     } else {
-        Err(CliError::SavedWalletMissing {
-            key_name: key_name.to_string(),
-            profile: profile.name.clone(),
-        })
+        resolve_saved_wallet_for_signer(profile, key_name, signer)
     }
 }
 
-fn resolve_saved_wallet_address(
+fn resolve_saved_wallet_for_signer(
+    profile: &ResolvedProfile,
     key_name: &str,
-    wallet: &SavedWalletBinding,
     signer: &LocalSigner,
 ) -> Result<groundhog_xdr::types::ContractAddress, CliError> {
-    let owner_public_key = parse_owner_public_key(key_name, &wallet.owner_public_key)?;
     let expected_public_key = signer.verifying_key_bytes();
-    if owner_public_key.as_slice() != expected_public_key.as_slice() {
-        return Err(CliError::SavedWalletOwnerMismatch {
-            key_name: key_name.to_string(),
-            configured: format_hex(&owner_public_key),
-            local: format_hex(&expected_public_key),
-        });
+    let mut matches = Vec::new();
+    let mut invalid_owner_error = None;
+    for (wallet_name, wallet) in &profile.wallets {
+        match parse_owner_public_key(wallet_name, &wallet.owner_public_key) {
+            Ok(owner_public_key)
+                if owner_public_key.as_slice() == expected_public_key.as_slice() =>
+            {
+                matches.push((wallet_name, wallet));
+            }
+            Ok(_) => {}
+            Err(error) => {
+                invalid_owner_error.get_or_insert(error);
+            }
+        }
     }
+    let [(_, wallet)] = matches.as_slice() else {
+        if matches.is_empty() {
+            if let Some(error) = invalid_owner_error {
+                return Err(error);
+            }
+            return Err(CliError::SavedWalletMissing {
+                key_name: key_name.to_string(),
+                profile: profile.name.clone(),
+            });
+        }
+        return Err(CliError::SavedWalletAmbiguous {
+            key_name: key_name.to_string(),
+            profile: profile.name.clone(),
+            wallet_names: matches.iter().map(|(name, _)| (*name).clone()).collect(),
+        });
+    };
 
     codec::parse_contract_address(&wallet.address)
 }
@@ -339,6 +357,8 @@ fn format_hex(bytes: &[u8]) -> String {
 mod tests {
     use std::collections::BTreeMap;
 
+    use crate::config::SavedWalletBinding;
+
     use super::*;
 
     #[test]
@@ -445,6 +465,79 @@ mod tests {
     }
 
     #[test]
+    fn non_dev_key_uses_unique_owner_matched_wallet_with_different_name() {
+        let signer = groundhog_signing::derive_default_dev_account_signer(0);
+        let wallet_address = groundhog_xdr::types::ContractAddress::from([0x81; 32]);
+        let mut wallets = BTreeMap::new();
+        wallets.insert(
+            "dev-default".into(),
+            SavedWalletBinding {
+                address: format_hex(wallet_address.as_ref()),
+                owner_public_key: format_hex(&signer.verifying_key_bytes()),
+            },
+        );
+        let profile = test_profile("default", None, wallets);
+
+        let resolved = resolve_wallet_address(&profile, "default", &signer)
+            .expect("bug: unique owner-matched wallet should resolve");
+
+        assert_eq!(resolved, wallet_address);
+    }
+
+    #[test]
+    fn non_dev_key_uses_owner_match_despite_unrelated_malformed_wallet() {
+        let signer = groundhog_signing::derive_default_dev_account_signer(0);
+        let wallet_address = groundhog_xdr::types::ContractAddress::from([0x84; 32]);
+        let mut wallets = BTreeMap::new();
+        wallets.insert(
+            "broken".into(),
+            SavedWalletBinding {
+                address: format_hex(&[0x85; 32]),
+                owner_public_key: "not-hex".into(),
+            },
+        );
+        wallets.insert(
+            "trading".into(),
+            SavedWalletBinding {
+                address: format_hex(wallet_address.as_ref()),
+                owner_public_key: format_hex(&signer.verifying_key_bytes()),
+            },
+        );
+        let profile = test_profile("alice", None, wallets);
+
+        let resolved = resolve_wallet_address(&profile, "alice", &signer)
+            .expect("bug: unrelated malformed wallet should not hide owner match");
+
+        assert_eq!(resolved, wallet_address);
+    }
+
+    #[test]
+    fn non_dev_key_rejects_multiple_owner_matched_wallets() {
+        let signer = groundhog_signing::derive_default_dev_account_signer(0);
+        let owner_public_key = format_hex(&signer.verifying_key_bytes());
+        let mut wallets = BTreeMap::new();
+        for (name, byte) in [("primary", 0x82), ("trading", 0x83)] {
+            wallets.insert(
+                name.into(),
+                SavedWalletBinding {
+                    address: format_hex(&[byte; 32]),
+                    owner_public_key: owner_public_key.clone(),
+                },
+            );
+        }
+        let profile = test_profile("default", None, wallets);
+
+        let error = resolve_wallet_address(&profile, "default", &signer)
+            .expect_err("bug: multiple owner-matched wallets should be ambiguous");
+
+        assert_eq!(error.code(), "saved_wallet_ambiguous");
+        assert_eq!(
+            error.details_json().expect("details expected")["walletNames"],
+            serde_json::json!(["primary", "trading"])
+        );
+    }
+
+    #[test]
     fn non_dev_key_requires_saved_wallet_address() {
         let signer = groundhog_signing::derive_default_dev_account_signer(0);
         let profile = test_profile("alice", None, BTreeMap::default());
@@ -506,7 +599,7 @@ mod tests {
     }
 
     #[test]
-    fn non_dev_key_rejects_mismatched_saved_wallet_owner() {
+    fn non_dev_key_ignores_wallet_owned_by_another_key() {
         let signer = groundhog_signing::derive_default_dev_account_signer(0);
         let other = groundhog_signing::derive_default_dev_account_signer(1);
         let wallet_address = groundhog_xdr::types::ContractAddress::from([0x41; 32]);
@@ -520,14 +613,9 @@ mod tests {
         );
 
         let error = resolve_wallet_address(&profile, "alice", &signer)
-            .expect_err("bug: mismatched saved wallet owner should fail");
+            .expect_err("bug: wallet owned by another key should not resolve");
 
-        assert_eq!(error.code(), "saved_wallet_owner_mismatch");
-        assert!(
-            error
-                .to_string()
-                .contains("saved wallet `alice` owner public key")
-        );
+        assert_eq!(error.code(), "saved_wallet_missing");
         assert_eq!(
             error.details_json().expect("details expected")["keyName"],
             "alice"

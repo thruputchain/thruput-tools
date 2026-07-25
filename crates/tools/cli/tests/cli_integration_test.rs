@@ -2484,6 +2484,373 @@ fn airdrop_json_rejects_invalid_hog_amount_before_rpc() {
 }
 
 #[test]
+fn transfer_dry_run_json_outputs_signed_wallet_wrapped_hog_transfer() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let sender = advertised_dev_wallet_address(0);
+    let recipient = format!("0x{}", "ab".repeat(32));
+    let manifest_path = write_runtime_manifest(&project, 0, &sender, None);
+    let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n\n[profile.default.wallets.alice]\naddress = \"{recipient}\"\nowner_public_key = \"0x{}\"\n",
+            manifest_path.file_name().unwrap().to_string_lossy(),
+            "cd".repeat(32),
+        ),
+    )
+    .unwrap();
+
+    let output = groundhog()
+        .args(["--json", "transfer", "alice", "10.5000000", "--dry-run"])
+        .current_dir(&project)
+        .output()
+        .unwrap();
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let data = &stdout["data"];
+    assert_eq!(stdout["ok"], true);
+    assert_eq!(stdout["command"], "transfer");
+    assert_eq!(stdout["warnings"], serde_json::json!([]));
+    assert_eq!(data["schemaVersion"], 1);
+    assert_eq!(data["profile"], "default");
+    assert_eq!(data["rpcUrl"], rpc_url);
+    assert_eq!(data["dryRun"], true);
+    assert_eq!(data["submitted"], false);
+    assert_eq!(data["sender"], sender);
+    assert_eq!(
+        data["signerPublicKey"],
+        format!(
+            "0x{}",
+            hex::encode(
+                groundhog_signing::derive_default_dev_account_signer(0).verifying_key_bytes()
+            )
+        )
+    );
+    assert_eq!(data["recipientInput"], "alice");
+    assert_eq!(data["recipient"], recipient);
+    assert_eq!(data["tokenAddress"], format!("0x{}01", "00".repeat(31)));
+    assert_eq!(data["amount"], "10.5");
+    assert_eq!(data["rawAmount"], "105000000");
+    assert_eq!(data["expiryHeight"], 1042);
+    for absent in [
+        "height",
+        "status",
+        "events",
+        "returnData",
+        "abortData",
+        "confirmation",
+        "transactionStatus",
+    ] {
+        assert!(data.get(absent).is_none(), "{absent} should be omitted");
+    }
+
+    let signed_tx = decode_signed_tx(data["signedTransaction"].as_str().unwrap());
+    assert_eq!(
+        format!(
+            "0x{}",
+            hex::encode(signed_tx.tx.invocation.invoked_address.as_ref())
+        ),
+        sender
+    );
+    assert_eq!(
+        signed_tx_entrypoint_from_decoded(&signed_tx),
+        "0x646f416374696f6e"
+    );
+    assert_eq!(*signed_tx.tx.uniquifier.block_expiry_height, 1042);
+    assert_eq!(
+        data["txHash"],
+        format!(
+            "0x{}",
+            hex::encode(groundhog_signing::transaction_hash(&signed_tx.tx).unwrap())
+        )
+    );
+    let (target, entrypoint, target_calldata) = decode_wallet_action(&signed_tx);
+    assert_eq!(target, format!("0x{}01", "00".repeat(31)));
+    assert_eq!(entrypoint, "0x63285b3523f9dc3f");
+    let (calldata_recipient, raw_amount): (groundhog_xdr::types::ContractAddress, u128) =
+        xdrs::cxs::decode(&target_calldata).unwrap();
+    assert_eq!(
+        format!("0x{}", hex::encode(calldata_recipient.as_ref())),
+        recipient
+    );
+    assert_eq!(raw_amount, 105_000_000);
+}
+
+#[test]
+fn transfer_dry_run_human_output_identifies_signer_and_submit_capability() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let sender = advertised_dev_wallet_address(0);
+    let manifest_path = write_runtime_manifest(&project, 0, &sender, None);
+    let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
+    let recipient = format!("0x{}", "ab".repeat(32));
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            manifest_path.file_name().unwrap().to_string_lossy()
+        ),
+    )
+    .unwrap();
+
+    let output = groundhog()
+        .args(["transfer", &recipient, "1", "--dry-run"])
+        .current_dir(&project)
+        .output()
+        .unwrap();
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let public_key = format!(
+        "0x{}",
+        hex::encode(groundhog_signing::derive_default_dev_account_signer(0).verifying_key_bytes())
+    );
+    assert!(stderr.contains(&format!("sender: {sender}")));
+    assert!(stderr.contains(&format!("signer public key: {public_key}")));
+    assert!(stderr.contains("signed transaction can be submitted until its expiry height"));
+    assert!(stderr.contains("submitted: no (--dry-run)"));
+    assert!(!stderr.contains(groundhog_signing::DEFAULT_DEV_ACCOUNT_SEED));
+}
+
+#[test]
+fn transfer_dry_run_uses_hosted_entrypoint_but_protocol_hog_constants() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    let config_home = tmp.path().join("config-home");
+    std::fs::create_dir_all(&project).unwrap();
+    let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
+    let (faucet_url, descriptor_server) = spawn_network_descriptor(&rpc_url);
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
+    add_faucet_to_default_profile(&project, &faucet_url);
+    let recipient = format!("0x{}", "bc".repeat(32));
+
+    let output = groundhog()
+        .args(["--json", "transfer", &recipient, "1", "--dry-run"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    descriptor_server.join().unwrap();
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let signed_tx = decode_signed_tx(stdout["data"]["signedTransaction"].as_str().unwrap());
+    let (target, entrypoint, _) = decode_wallet_action(&signed_tx);
+    assert_eq!(
+        signed_tx_entrypoint_from_decoded(&signed_tx),
+        "0xa0fff94c64fbaf3c"
+    );
+    assert_eq!(target, format!("0x{}01", "00".repeat(31)));
+    assert_eq!(entrypoint, "0x63285b3523f9dc3f");
+}
+
+#[test]
+fn transfer_dry_run_uses_legacy_wallet_entrypoint() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    let config_home = tmp.path().join("config-home");
+    std::fs::create_dir_all(&project).unwrap();
+    let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
+    let recipient = format!("0x{}", "bc".repeat(32));
+
+    let output = groundhog()
+        .args(["--json", "transfer", &recipient, "1", "--dry-run"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let signed_tx = decode_signed_tx(stdout["data"]["signedTransaction"].as_str().unwrap());
+    assert_eq!(
+        signed_tx_entrypoint_from_decoded(&signed_tx),
+        "0x19846d750fad81d6"
+    );
+}
+
+#[test]
+fn transfer_dry_run_profile_and_cli_target_overrides_select_endpoint() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let sender = advertised_dev_wallet_address(0);
+    let manifest_path = write_runtime_manifest(tmp.path(), 0, &sender, None);
+    let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
+    let recipient = format!("0x{}", "bc".repeat(32));
+    std::fs::write(
+        project.join("groundhog.toml"),
+        "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\n\n[profile.devnet]\nrpc_url = \"http://127.0.0.1:2\"\ndefault_key = \"dev-0\"\n",
+    )
+    .unwrap();
+
+    let output = groundhog()
+        .args([
+            "--json",
+            "transfer",
+            &recipient,
+            "1",
+            "--dry-run",
+            "--profile",
+            "devnet",
+            "--rpc-url",
+            &rpc_url,
+            "--runtime-manifest",
+            manifest_path.to_str().unwrap(),
+        ])
+        .current_dir(&project)
+        .output()
+        .unwrap();
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["data"]["profile"], "devnet");
+    assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
+    assert_eq!(stdout["data"]["sender"], sender);
+}
+
+#[test]
+fn transfer_dry_run_rejects_invalid_inputs_before_rpc() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let sender = advertised_dev_wallet_address(0);
+    let manifest_path = write_runtime_manifest(&project, 0, &sender, None);
+    let (rpc_url, rpc_server) = spawn_no_request_rpc();
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            manifest_path.file_name().unwrap().to_string_lossy()
+        ),
+    )
+    .unwrap();
+
+    for (recipient, amount, expected_code) in [
+        (
+            format!("0x{}", "ab".repeat(32)),
+            "1.00000001",
+            "invalid_hog_amount",
+        ),
+        ("missing".to_owned(), "1", "unknown_address_target"),
+    ] {
+        let output = groundhog()
+            .args(["--json", "transfer", &recipient, amount, "--dry-run"])
+            .current_dir(&project)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(stderr["command"], "transfer");
+        assert_eq!(stderr["error"]["code"], expected_code);
+    }
+    rpc_server.join().unwrap();
+}
+
+#[test]
+fn transfer_dry_run_phase_rejects_live_invocation_before_rpc() {
+    let (rpc_url, rpc_server) = spawn_no_request_rpc();
+    let recipient = format!("0x{}", "ab".repeat(32));
+    let output = groundhog()
+        .args(["--json", "transfer", &recipient, "1", "--rpc-url", &rpc_url])
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(stderr["command"], "transfer");
+    assert_eq!(stderr["error"]["code"], "not_implemented");
+}
+
+#[test]
+fn transfer_dry_run_saved_wallet_errors_remain_actionable() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    let config_home = tmp.path().join("config-home");
+    std::fs::create_dir_all(&project).unwrap();
+    generate_key_public_key(&config_home, "alice");
+    let recipient = format!("0x{}", "bc".repeat(32));
+
+    std::fs::write(
+        project.join("groundhog.toml"),
+        "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"alice\"\n",
+    )
+    .unwrap();
+    let missing = groundhog()
+        .args(["--json", "transfer", &recipient, "1", "--dry-run"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    assert!(!missing.status.success());
+    let error: serde_json::Value = serde_json::from_slice(&missing.stderr).unwrap();
+    assert_eq!(error["error"]["code"], "saved_wallet_missing");
+    assert!(
+        error["error"]["hint"]
+            .as_str()
+            .unwrap()
+            .contains("wallet create")
+    );
+
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!(
+            "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"alice\"\n\n[profile.default.wallets.broken-wallet]\naddress = \"0x{}\"\nowner_public_key = \"0x00\"\n",
+            "aa".repeat(32),
+        ),
+    )
+    .unwrap();
+    let invalid = groundhog()
+        .args(["--json", "transfer", &recipient, "1", "--dry-run"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    assert!(!invalid.status.success());
+    let error: serde_json::Value = serde_json::from_slice(&invalid.stderr).unwrap();
+    assert_eq!(
+        error["error"]["code"],
+        "saved_wallet_owner_public_key_invalid"
+    );
+    assert_eq!(error["error"]["details"]["keyName"], "broken-wallet");
+}
+
+#[test]
 fn deploy_dry_run_json_accepts_rv32_artifact() {
     let tmp = TempDir::new().unwrap();
     let config_home = tmp.path().join("config-home");
@@ -4886,6 +5253,28 @@ fn spawn_chain_tip_rpc(height: i64) -> (String, thread::JoinHandle<()>) {
     (format!("http://{addr}"), handle)
 }
 
+fn spawn_no_request_rpc() -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let handle = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_millis(500);
+        loop {
+            match listener.accept() {
+                Ok(_) => panic!("validation failure unexpectedly contacted RPC"),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("failed to inspect mock RPC listener: {error}"),
+            }
+        }
+    });
+    (format!("http://{addr}"), handle)
+}
+
 fn spawn_storage_rpc(address: &str, key: &str) -> (String, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
@@ -5217,6 +5606,38 @@ fn signed_tx_invoked_address(tx_hex: &str) -> String {
     format!(
         "0x{}",
         hex::encode(signed_tx.tx.invocation.invoked_address.as_ref())
+    )
+}
+
+fn decode_signed_tx(tx_hex: &str) -> groundhog_xdr::transaction::SignedTransaction {
+    let bytes = hex::decode(tx_hex.strip_prefix("0x").unwrap_or(tx_hex)).unwrap();
+    xdrs::txs::decode(&bytes).unwrap()
+}
+
+fn signed_tx_entrypoint_from_decoded(
+    signed_tx: &groundhog_xdr::transaction::SignedTransaction,
+) -> String {
+    format!(
+        "0x{}",
+        hex::encode(signed_tx.tx.invocation.entrypoint.as_ref())
+    )
+}
+
+fn decode_wallet_action(
+    signed_tx: &groundhog_xdr::transaction::SignedTransaction,
+) -> (String, String, Vec<u8>) {
+    let inner: Vec<u8> = xdrs::cxs::decode(&signed_tx.tx.invocation.calldata.0).unwrap();
+    let (target, entrypoint, gas_limit, calldata): (
+        groundhog_xdr::types::ContractAddress,
+        groundhog_xdr::contract::ContractEntrypointID,
+        u64,
+        Vec<u8>,
+    ) = xdrs::txs::decode(&inner).unwrap();
+    assert_eq!(gas_limit, groundhog_signing::DEFAULT_TX_GAS_LIMIT);
+    (
+        format!("0x{}", hex::encode(target.as_ref())),
+        format!("0x{}", hex::encode(entrypoint.as_ref())),
+        calldata,
     )
 }
 

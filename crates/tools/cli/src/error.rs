@@ -163,16 +163,16 @@ pub enum CliError {
         "no wallet saved for key `{key_name}` in profile `{profile}`; run `groundhog wallet create --key {key_name} --profile {profile}`"
     )]
     SavedWalletMissing { key_name: String, profile: String },
+    #[error(
+        "multiple wallets are saved for key `{key_name}` in profile `{profile}`: {wallet_names:?}"
+    )]
+    SavedWalletAmbiguous {
+        key_name: String,
+        profile: String,
+        wallet_names: Vec<String>,
+    },
     #[error("saved wallet `{key_name}` owner_public_key is invalid: {message}")]
     SavedWalletOwnerPublicKeyInvalid { key_name: String, message: String },
-    #[error(
-        "saved wallet `{key_name}` owner public key {configured} does not match local key `{key_name}` public key {local}"
-    )]
-    SavedWalletOwnerMismatch {
-        key_name: String,
-        configured: String,
-        local: String,
-    },
     #[error("transaction {tx_hash} submitted but no receipt after {seconds}s")]
     ReceiptTimeout { tx_hash: String, seconds: u64 },
     #[error("transaction {tx_hash} was rejected: {reason}")]
@@ -264,10 +264,10 @@ impl CliError {
             Self::NetworkDescriptorMismatch { .. } => "network_descriptor_mismatch",
             Self::WalletAddressDerivationFailed { .. } => "wallet_address_derivation_failed",
             Self::SavedWalletMissing { .. } => "saved_wallet_missing",
+            Self::SavedWalletAmbiguous { .. } => "saved_wallet_ambiguous",
             Self::SavedWalletOwnerPublicKeyInvalid { .. } => {
                 "saved_wallet_owner_public_key_invalid"
             }
-            Self::SavedWalletOwnerMismatch { .. } => "saved_wallet_owner_mismatch",
             Self::ReceiptTimeout { .. } => "receipt_timeout",
             Self::TransactionInvalid { .. } => "transaction_invalid",
             Self::TransactionRecentFailure { .. } => "transaction_recent_failure",
@@ -403,12 +403,12 @@ impl CliError {
             Self::SavedWalletMissing { key_name, profile } => Some(Cow::Owned(format!(
                 "run `groundhog wallet create --key {key_name} --profile {profile}` before using this stored key"
             ))),
+            Self::SavedWalletAmbiguous { .. } => Some(Cow::Borrowed(
+                "remove unused wallet bindings until one wallet remains for this key; explicit active-wallet selection is not available yet",
+            )),
             Self::SavedWalletOwnerPublicKeyInvalid { .. } => Some(Cow::Borrowed(
                 "recreate the wallet binding with `groundhog wallet create`, or fix owner_public_key in the selected profile",
             )),
-            Self::SavedWalletOwnerMismatch { key_name, .. } => Some(Cow::Owned(format!(
-                "use the local key that created wallet `{key_name}`, or recreate the wallet binding for this key"
-            ))),
             Self::ReceiptTimeout { .. } => Some(Cow::Borrowed(
                 "check the node logs, then rerun the command once the transaction is committed or rejected",
             )),
@@ -573,18 +573,18 @@ impl CliError {
                 "keyName": key_name,
                 "profile": profile,
             })),
+            Self::SavedWalletAmbiguous {
+                key_name,
+                profile,
+                wallet_names,
+            } => Some(json!({
+                "keyName": key_name,
+                "profile": profile,
+                "walletNames": wallet_names,
+            })),
             Self::SavedWalletOwnerPublicKeyInvalid { key_name, message } => Some(json!({
                 "keyName": key_name,
                 "message": message,
-            })),
-            Self::SavedWalletOwnerMismatch {
-                key_name,
-                configured,
-                local,
-            } => Some(json!({
-                "keyName": key_name,
-                "configured": configured,
-                "local": local,
             })),
             Self::InvalidHogAmount { input, message } => Some(json!({
                 "input": input,

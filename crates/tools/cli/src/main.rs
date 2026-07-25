@@ -290,6 +290,21 @@ enum Command {
         #[command(flatten)]
         artifacts: ArtifactArgs,
     },
+    /// Transfer native HOG from the effective profile wallet
+    Transfer {
+        /// Wallet name, contract alias, dev-N account, or direct address
+        recipient: String,
+        /// Amount in HOG, with up to 7 decimal places
+        amount: String,
+        /// Build and sign the transfer without submitting it
+        #[arg(long)]
+        dry_run: bool,
+        /// Config profile to use
+        #[arg(long = "profile")]
+        profile: Option<String>,
+        #[command(flatten)]
+        target_args: RpcTargetArgs,
+    },
     /// Request HOG funding for a wallet
     Airdrop {
         /// Wallet name, dev-N wallet, or direct 0x-prefixed wallet address
@@ -522,6 +537,7 @@ impl Command {
             Self::Test { .. } => "test",
             Self::Deploy { .. } => "deploy",
             Self::Call { .. } => "call",
+            Self::Transfer { .. } => "transfer",
             Self::Airdrop { .. } => "airdrop",
             Self::Balance { .. } => "balance",
             Self::View { .. } => "view",
@@ -720,6 +736,21 @@ fn main() {
                     &print,
                 )
             }),
+        Command::Transfer {
+            recipient,
+            amount,
+            dry_run,
+            profile,
+            target_args,
+        } => groundhog_cli::transfer::run(
+            &recipient,
+            &amount,
+            dry_run,
+            profile.as_deref(),
+            &target_args.into(),
+            cmd_name,
+            &print,
+        ),
         Command::Airdrop {
             recipient,
             amount,
@@ -1122,6 +1153,45 @@ mod tests {
                 assert_eq!(profile, None);
             }
             _ => panic!("expected airdrop command"),
+        }
+    }
+
+    #[test]
+    fn transfer_flags_and_command_name_parse() {
+        let cli = Cli::parse_from([
+            "groundhog",
+            "transfer",
+            "alice",
+            "1.5",
+            "--dry-run",
+            "--profile",
+            "devnet",
+            "--rpc-url",
+            "https://rpc.example",
+            "--runtime-manifest",
+            "/tmp/runtime.json",
+        ]);
+
+        assert_eq!(cli.command.command_name(), "transfer");
+        match cli.command {
+            Command::Transfer {
+                recipient,
+                amount,
+                dry_run,
+                profile,
+                target_args,
+            } => {
+                assert_eq!(recipient, "alice");
+                assert_eq!(amount, "1.5");
+                assert!(dry_run);
+                assert_eq!(profile.as_deref(), Some("devnet"));
+                assert_eq!(target_args.rpc_url.as_deref(), Some("https://rpc.example"));
+                assert_eq!(
+                    target_args.runtime_manifest.as_deref(),
+                    Some(std::path::Path::new("/tmp/runtime.json"))
+                );
+            }
+            _ => panic!("expected transfer command"),
         }
     }
 
