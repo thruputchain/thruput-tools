@@ -118,6 +118,11 @@ pub enum CliError {
         method: &'static str,
         message: String,
     },
+    #[error("RPC endpoint does not support {method}: {message}")]
+    RpcCapabilityUnsupported {
+        method: &'static str,
+        message: String,
+    },
     #[error("dev key `{key_name}` requires a local dev node: {message}")]
     LocalDevAccountUnavailable {
         /// Dev key name that required local dev-account metadata.
@@ -258,6 +263,7 @@ impl CliError {
             Self::UnknownAddressTarget { .. } => "unknown_address_target",
             Self::RuntimeInit(_) => "runtime_init_failed",
             Self::RpcMethodFailed { .. } => "rpc_method_failed",
+            Self::RpcCapabilityUnsupported { .. } => "rpc_capability_unsupported",
             Self::LocalDevAccountUnavailable { .. } => "local_dev_account_unavailable",
             Self::ManifestEntrypoint { .. } => "manifest_entrypoint_invalid",
             Self::NetworkDescriptorInvalid { .. } => "network_descriptor_invalid",
@@ -385,6 +391,9 @@ impl CliError {
             }
             Self::RpcMethodFailed { .. } => Some(Cow::Borrowed(
                 "check the RPC endpoint and node logs for details",
+            )),
+            Self::RpcCapabilityUnsupported { .. } => Some(Cow::Borrowed(
+                "use a full local devnode or a compatible remote RPC that supports transaction submission",
             )),
             Self::LocalDevAccountUnavailable { .. } => Some(Cow::Borrowed(
                 "run `groundhog node` backed by hog-devnode, or use a stored key for non-local endpoints",
@@ -547,6 +556,10 @@ impl CliError {
                     "message": message,
                 }))
             }
+            Self::RpcCapabilityUnsupported { method, message } => Some(json!({
+                "method": method,
+                "message": message,
+            })),
             Self::ManifestEntrypoint {
                 key_name,
                 field,
