@@ -1286,6 +1286,14 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for FakeIndexer {
     }
 
     #[tracing::instrument(skip_all)]
+    async fn get_block_by_height(
+        &self,
+        _height: groundhog_xdr::types::BlockHeight,
+    ) -> Result<groundhog_indexer::BlockLookupResult, ProgramError> {
+        Err(ProgramError::msg("fake indexer does not serve blocks"))
+    }
+
+    #[tracing::instrument(skip_all)]
     async fn get_events(&self, arg0: EventQuery) -> Result<EventPage, ProgramError> {
         if self.mode == FakeIndexerMode::RpcFail || self.mode == FakeIndexerMode::RuntimeRpcFail {
             return Err(ProgramError::msg("fake indexer rpc-fail mode"));
@@ -1331,6 +1339,16 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for FakeIndexer {
             latest_block: BlockHeight::from(CANNED_HEIGHT_B),
             oldest_block: BlockHeight::from(0_i64),
         })
+    }
+
+    #[tracing::instrument(skip_all)]
+    async fn get_transactions_by_block(
+        &self,
+        _query: groundhog_indexer::BlockTransactionQuery,
+    ) -> Result<TransactionRefPage, ProgramError> {
+        Err(ProgramError::msg(
+            "fake indexer does not serve transactions by block",
+        ))
     }
 }
 

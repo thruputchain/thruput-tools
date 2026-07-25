@@ -35,7 +35,7 @@ use groundhog_json_rpc_types::{
 };
 use groundhog_scheduler::{RPCError, sched_coord::SchedulerCoord_SchedulerCoord1_Client};
 use groundhog_scp::network::Protocol;
-use groundhog_x23_transport::connect;
+use groundhog_x23_transport::{connect, connect_with_config, hogd_large_message_config};
 use groundhog_xdr::{
     event::TxEmittedEvent,
     exec_result::ExecResult,
@@ -84,10 +84,11 @@ impl HogdDevReadBackend {
         protocol_version: &str,
         expected_protocol: Option<&str>,
     ) -> Result<Self, NodeSupervisorError> {
-        let indexer = connect(
+        let indexer = connect_with_config(
             "hogd-dev indexer",
             &endpoint.to_string(),
             HOGD_DEV_POOL_SIZE,
+            hogd_large_message_config(),
             IndexerBlockExplorer_IndexerBlockExplorer1_Client::new,
         )
         .await
@@ -1156,6 +1157,13 @@ mod tests {
             }
         }
 
+        async fn get_block_by_height(
+            &self,
+            _height: groundhog_xdr::types::BlockHeight,
+        ) -> Result<groundhog_indexer::BlockLookupResult, ProgramError> {
+            Err(ProgramError::msg("not implemented in fake indexer"))
+        }
+
         async fn get_events(
             &self,
             arg0: groundhog_indexer::EventQuery,
@@ -1202,6 +1210,13 @@ mod tests {
                 latest_block: IdxBlockHeight::from(CANNED_HEIGHT_B),
                 oldest_block: IdxBlockHeight::from(0_i64),
             })
+        }
+
+        async fn get_transactions_by_block(
+            &self,
+            _query: groundhog_indexer::BlockTransactionQuery,
+        ) -> Result<TransactionRefPage, ProgramError> {
+            Err(ProgramError::msg("not implemented in fake indexer"))
         }
     }
 

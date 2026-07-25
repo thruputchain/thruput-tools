@@ -18,7 +18,7 @@ use groundhog_scheduler::{
     DbTip, ParallelBatch, SchedulerGetTipResult, parallel::ParallelSignedTransactionBatch,
     sched_coord::SchedulerCoord_SchedulerCoord1_Client,
 };
-use groundhog_x23_transport::connect;
+use groundhog_x23_transport::{connect_with_config, hogd_large_message_config};
 use std::{fmt, net::SocketAddr};
 use xdr_common::{BytesM, VecM};
 
@@ -48,10 +48,11 @@ impl fmt::Debug for HogdDevSchedulerBackend {
 
 impl HogdDevSchedulerBackend {
     pub(crate) async fn connect(endpoint: SocketAddr) -> Result<Self, NodeSupervisorError> {
-        let scheduler = connect(
+        let scheduler = connect_with_config(
             "hogd-dev scheduler",
             &endpoint.to_string(),
             SCHEDULER_POOL_SIZE,
+            hogd_large_message_config(),
             SchedulerCoord_SchedulerCoord1_Client::new,
         )
         .await

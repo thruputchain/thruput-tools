@@ -118,9 +118,8 @@ impl SubmitSink for SchedulerSink {
 
 /// Map a scheduler RPC error to a gateway error.
 ///
-/// v1 is intentionally conservative: the `rpc_driver::RpcError` shape
-/// isn't stable enough to commit to timeout/overload detection yet, so
-/// all transport failures map to `BackendUnavailable`.
+/// Driver lifecycle and protocol errors do not imply a gateway deadline or
+/// admission failure, so they all map to `BackendUnavailable`.
 fn classify_rpc_error(e: &rpc_driver::RpcError) -> GatewayError {
     GatewayError::BackendUnavailable(format!("scheduler: {e}"))
 }
@@ -366,6 +365,21 @@ mod tests {
         atomic::{AtomicBool, Ordering},
     };
     use std::time::Duration;
+
+    #[test]
+    fn driver_lifecycle_errors_remain_backend_unavailable() {
+        for error in [
+            rpc_driver::RpcError::ConnectFailed,
+            rpc_driver::RpcError::PoolClosed,
+            rpc_driver::RpcError::Canceled,
+            rpc_driver::RpcError::InvalidPoolConfiguration,
+        ] {
+            assert!(matches!(
+                classify_rpc_error(&error),
+                GatewayError::BackendUnavailable(_)
+            ));
+        }
+    }
 
     /// Scripted mock sink.  Each `submit()` call records the batch size
     /// and, if a "gate" oneshot has been pre-queued, awaits it before

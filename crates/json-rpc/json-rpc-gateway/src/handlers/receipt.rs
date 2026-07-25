@@ -216,12 +216,13 @@ async fn transaction_is_pending(
             )
         })?;
     let generation = client.generation();
+    let lookup_client = client.lookup_client().clone();
     let hash = SignedTransactionHash::from(tx_hash.0.0.into_inner());
     let batch: VecM<SignedTransactionHash> = VecM(vec![hash]);
     let started_at = Instant::now();
     let worker = tokio::spawn(async move {
         let _permit = permit;
-        client.schedcoord_lookup_transactions(&batch).await
+        lookup_client.schedcoord_lookup_transactions(&batch).await
     });
     let mut guard = SchedulerLookupGuard::new(ctx.scheduler.clone(), generation, worker);
     let rpc_result = if let Ok(result) = tokio::time::timeout(
@@ -344,7 +345,8 @@ mod tests {
 
     use async_trait::async_trait;
     use groundhog_indexer::{
-        AddressTransactionQuery, EventPage, EventQuery, IndexerBlockExplorer_IndexerBlockExplorer1,
+        AddressTransactionQuery, BlockLookupResult, BlockTransactionQuery, EventPage, EventQuery,
+        IndexerBlockExplorer_IndexerBlockExplorer1,
         IndexerBlockExplorer_IndexerBlockExplorer1_Client,
         IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher, IndexerBlockExplorerIntroOutcome,
         TransactionPage, TransactionQuery, TransactionRefPage, TxInfoOutcome,
@@ -369,7 +371,9 @@ mod tests {
 
     use super::*;
     use crate::config::GatewayConfig;
-    use crate::context::{BackendClient, SCHEDULER_LOOKUP_CONCURRENCY, SchedulerClient};
+    use crate::context::{
+        BackendClient, SCHEDULER_LOOKUP_CONCURRENCY, SchedulerClient, connect_optional_scheduler,
+    };
     use crate::metrics::GatewayMetrics;
 
     /// Indexer that answers `get_transaction_info` with not-found.
@@ -393,6 +397,13 @@ mod tests {
             })
         }
 
+        async fn get_block_by_height(
+            &self,
+            _arg0: groundhog_xdr::types::BlockHeight,
+        ) -> Result<BlockLookupResult, ProgramError> {
+            panic!("bug: status tests should not query blocks")
+        }
+
         async fn get_events(&self, _arg0: EventQuery) -> Result<EventPage, ProgramError> {
             panic!("bug: status tests should not query events")
         }
@@ -409,6 +420,13 @@ mod tests {
             _arg0: AddressTransactionQuery,
         ) -> Result<TransactionRefPage, ProgramError> {
             panic!("bug: status tests should not query transactions by address")
+        }
+
+        async fn get_transactions_by_block(
+            &self,
+            _arg0: BlockTransactionQuery,
+        ) -> Result<TransactionRefPage, ProgramError> {
+            panic!("bug: status tests should not query transactions by block")
         }
     }
 
@@ -434,7 +452,7 @@ mod tests {
     #[async_trait]
     impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
         async fn schedulercoord_null(&self) -> Result<(), ProgramError> {
-            panic!("bug: status tests should not call null")
+            Ok(())
         }
 
         async fn schedulercoord_intro_coord(
@@ -556,14 +574,9 @@ mod tests {
         indexer_addr: std::net::SocketAddr,
     ) -> GatewayContext {
         let scheduler = match scheduler_addr {
-            Some(addr) => try_connect(
-                "scheduler",
-                &addr.to_string(),
-                1,
-                SchedulerCoord_SchedulerCoord1_Client::new,
-            )
-            .await
-            .expect("bug: test scheduler should connect"),
+            Some(addr) => connect_optional_scheduler(&addr.to_string(), 1)
+                .await
+                .expect("bug: test scheduler should connect"),
             None => None,
         };
         let indexer = try_connect(
@@ -576,9 +589,7 @@ mod tests {
         .expect("bug: test indexer should connect");
 
         GatewayContext::assemble(
-            Arc::new(RwLock::new(
-                scheduler.map(|client| SchedulerClient::new(client.clone(), client)),
-            )),
+            Arc::new(RwLock::new(scheduler)),
             Arc::new(RwLock::new(
                 indexer.map(|client| BackendClient::new(client.clone(), client)),
             )),
@@ -708,6 +719,21 @@ mod tests {
         });
         started.notified().await;
 
+        let normal_client = ctx
+            .scheduler
+            .read()
+            .await
+            .as_ref()
+            .expect("scheduler should remain connected")
+            .clone();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            normal_client.schedulercoord_null(),
+        )
+        .await
+        .expect("blocked lookup must not occupy the normal scheduler lane")
+        .expect("normal scheduler lane should remain healthy");
+
         let replacement = try_connect(
             "replacement scheduler",
             &new_scheduler_addr.to_string(),
@@ -717,7 +743,8 @@ mod tests {
         .await
         .expect("replacement scheduler should connect")
         .expect("replacement scheduler should be present");
-        let replacement = SchedulerClient::new(replacement.clone(), replacement);
+        let replacement =
+            SchedulerClient::new(replacement.clone(), replacement.clone(), replacement);
         let replacement_generation = replacement.generation();
         *ctx.scheduler.write().await = Some(replacement);
         release.notify_one();

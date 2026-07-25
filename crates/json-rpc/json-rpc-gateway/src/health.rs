@@ -1291,8 +1291,8 @@ mod tests {
         AddressAndKeyBatch, DbGateway_DbGateway1, DbGateway_DbGateway1_Dispatcher, DbGatewayResult,
     };
     use groundhog_indexer::{
-        AddressTransactionQuery, EventPage as IdxEventPage, EventQuery,
-        IndexerBlockExplorer_IndexerBlockExplorer1,
+        AddressTransactionQuery, BlockLookupResult, BlockTransactionQuery,
+        EventPage as IdxEventPage, EventQuery, IndexerBlockExplorer_IndexerBlockExplorer1,
         IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher,
         TransactionPage as IdxTransactionPage, TransactionQuery, TransactionRefPage, TxInfoResult,
     };
@@ -1373,6 +1373,13 @@ mod tests {
             Err(ProgramError::msg("released indexer handler"))
         }
 
+        async fn get_block_by_height(
+            &self,
+            _height: groundhog_xdr::types::BlockHeight,
+        ) -> Result<BlockLookupResult, ProgramError> {
+            panic!("probe isolation test should only issue transaction lookups")
+        }
+
         async fn get_events(&self, _query: EventQuery) -> Result<IdxEventPage, ProgramError> {
             panic!("probe isolation test should only issue transaction lookups")
         }
@@ -1387,6 +1394,13 @@ mod tests {
         async fn get_transactions_by_address(
             &self,
             _query: AddressTransactionQuery,
+        ) -> Result<TransactionRefPage, ProgramError> {
+            panic!("probe isolation test should only issue transaction lookups")
+        }
+
+        async fn get_transactions_by_block(
+            &self,
+            _query: BlockTransactionQuery,
         ) -> Result<TransactionRefPage, ProgramError> {
             panic!("probe isolation test should only issue transaction lookups")
         }
@@ -1555,6 +1569,13 @@ mod tests {
             panic!("reconnect test should not issue indexer data RPCs")
         }
 
+        async fn get_block_by_height(
+            &self,
+            _height: groundhog_xdr::types::BlockHeight,
+        ) -> Result<BlockLookupResult, ProgramError> {
+            panic!("reconnect test should not issue indexer data RPCs")
+        }
+
         async fn get_events(&self, _query: EventQuery) -> Result<IdxEventPage, ProgramError> {
             panic!("reconnect test should not issue indexer data RPCs")
         }
@@ -1569,6 +1590,13 @@ mod tests {
         async fn get_transactions_by_address(
             &self,
             _query: AddressTransactionQuery,
+        ) -> Result<TransactionRefPage, ProgramError> {
+            panic!("reconnect test should not issue indexer data RPCs")
+        }
+
+        async fn get_transactions_by_block(
+            &self,
+            _query: BlockTransactionQuery,
         ) -> Result<TransactionRefPage, ProgramError> {
             panic!("reconnect test should not issue indexer data RPCs")
         }

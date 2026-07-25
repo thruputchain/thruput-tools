@@ -14,9 +14,12 @@ use groundhog_indexer::{
 use groundhog_scheduler::sched_coord::SchedulerCoord_SchedulerCoord1_Client;
 use groundhog_scp::network::Protocol;
 use groundhog_view::{ViewGateway_ViewGateway1_Client, ViewGatewayIntroOutcome};
-use groundhog_x23_transport::{ConnectError, try_connect, try_connect_with_canceled_call_policy};
+use groundhog_x23_transport::{
+    ConnectError, hogd_large_message_config, try_connect, try_connect_with_canceled_call_policy,
+    try_connect_with_config, try_connect_with_config_and_canceled_call_policy,
+};
 use groundhog_xdr::PROTOCOL_VERSION;
-use rpc_driver::{CanceledCallPolicy, RpcSender};
+use rpc_driver::{CanceledCallPolicy, ConnectionConfig, RpcSender};
 use tokio::{
     sync::{RwLock, Semaphore},
     time::Instant,
@@ -68,6 +71,7 @@ pub(crate) type ViewGatewayClient = BackendClient<ViewGateway_ViewGateway1_Clien
 #[derive(Clone)]
 pub(crate) struct SchedulerClient {
     client: SchedulerCoord_SchedulerCoord1_Client,
+    lookup_client: SchedulerCoord_SchedulerCoord1_Client,
     probe_client: SchedulerCoord_SchedulerCoord1_Client,
     generation: u64,
 }
@@ -75,10 +79,12 @@ pub(crate) struct SchedulerClient {
 impl SchedulerClient {
     pub(crate) fn new(
         client: SchedulerCoord_SchedulerCoord1_Client,
+        lookup_client: SchedulerCoord_SchedulerCoord1_Client,
         probe_client: SchedulerCoord_SchedulerCoord1_Client,
     ) -> Self {
         Self {
             client,
+            lookup_client,
             probe_client,
             generation: NEXT_SCHEDULER_GENERATION.fetch_add(1, Ordering::Relaxed),
         }
@@ -90,6 +96,10 @@ impl SchedulerClient {
 
     pub(crate) fn probe_client(&self) -> &SchedulerCoord_SchedulerCoord1_Client {
         &self.probe_client
+    }
+
+    pub(crate) fn lookup_client(&self) -> &SchedulerCoord_SchedulerCoord1_Client {
+        &self.lookup_client
     }
 }
 
@@ -368,6 +378,18 @@ pub(crate) async fn connect_optional_scheduler(
     else {
         return Ok(None);
     };
+    let Some(lookup_client) = try_connect_with_config_and_canceled_call_policy(
+        "scheduler_lookup",
+        address,
+        SCHEDULER_LOOKUP_CONCURRENCY,
+        hogd_large_message_config(),
+        CanceledCallPolicy::PoisonConnection,
+        SchedulerCoord_SchedulerCoord1_Client::new,
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
     let Some(probe_client) = try_connect_with_canceled_call_policy(
         "scheduler_health",
         address,
@@ -379,7 +401,11 @@ pub(crate) async fn connect_optional_scheduler(
     else {
         return Ok(None);
     };
-    Ok(Some(SchedulerClient::new(client, probe_client)))
+    Ok(Some(SchedulerClient::new(
+        client,
+        lookup_client,
+        probe_client,
+    )))
 }
 
 async fn connect_backend_pair<C, F>(
@@ -387,6 +413,7 @@ async fn connect_backend_pair<C, F>(
     probe_service: &'static str,
     address: &str,
     pool_size: usize,
+    connection_config: ConnectionConfig,
     startup_timeout: Duration,
     build: F,
 ) -> Result<Option<BackendClient<C>>, ConnectError>
@@ -394,7 +421,9 @@ where
     F: Fn(Arc<dyn RpcSender>) -> C + Copy,
 {
     let result = tokio::time::timeout(startup_timeout, async {
-        let Some(client) = try_connect(service, address, pool_size, build).await? else {
+        let Some(client) =
+            try_connect_with_config(service, address, pool_size, connection_config, build).await?
+        else {
             return Ok(None);
         };
         let Some(probe_client) =
@@ -438,6 +467,7 @@ pub(crate) async fn connect_optional_indexer(
         "indexer_health",
         address,
         4,
+        hogd_large_message_config(),
         startup_timeout,
         IndexerBlockExplorer_IndexerBlockExplorer1_Client::new,
     )
@@ -533,6 +563,7 @@ pub(crate) async fn connect_optional_db_gateway(
         "db_gateway_health",
         address,
         pool_size,
+        ConnectionConfig::default(),
         startup_timeout,
         DbGateway_DbGateway1_Client::new,
     )
@@ -625,6 +656,7 @@ pub(crate) async fn connect_optional_view_gateway(
         "view_gateway_health",
         address,
         view_gateway_pool_size(),
+        ConnectionConfig::default(),
         startup_timeout,
         ViewGateway_ViewGateway1_Client::new,
     )
@@ -760,14 +792,10 @@ fn view_gateway_intro_rejection_reason(
 
 /// Pick a scheduler pool size that covers every concurrent RPC the gateway
 /// may have in flight against it.  x23 serializes one RPC per connection.
-/// The final term is reserved for admission-bounded transaction lookups.
+/// Transaction lookups use their own admission-matched pool.
 pub(crate) fn scheduler_pool_size(config: &GatewayConfig) -> usize {
     let tip = config.tip.max_inflight_tips.max(1) as usize;
-    config
-        .batch
-        .max_concurrent_rpcs()
-        .saturating_add(tip)
-        .saturating_add(SCHEDULER_LOOKUP_CONCURRENCY)
+    config.batch.max_concurrent_rpcs().saturating_add(tip)
 }
 
 /// Pick a `db_gateway` pool size that matches the storage batcher's own
@@ -794,8 +822,8 @@ mod tests {
         AddressAndKeyBatch, DbGateway_DbGateway1, DbGateway_DbGateway1_Dispatcher, DbGatewayResult,
     };
     use groundhog_indexer::{
-        AddressTransactionQuery, EventPage as IdxEventPage, EventQuery,
-        IndexerBlockExplorer_IndexerBlockExplorer1,
+        AddressTransactionQuery, BlockLookupResult, BlockTransactionQuery,
+        EventPage as IdxEventPage, EventQuery, IndexerBlockExplorer_IndexerBlockExplorer1,
         IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher,
         TransactionPage as IdxTransactionPage, TransactionQuery, TransactionRefPage, TxInfoResult,
     };
@@ -874,6 +902,13 @@ mod tests {
             panic!("bug: intro rejection test should not issue indexer data RPC")
         }
 
+        async fn get_block_by_height(
+            &self,
+            _arg0: groundhog_xdr::types::BlockHeight,
+        ) -> Result<BlockLookupResult, ProgramError> {
+            panic!("bug: intro rejection test should not issue indexer data RPC")
+        }
+
         async fn get_events(&self, _arg0: EventQuery) -> Result<IdxEventPage, ProgramError> {
             panic!("bug: intro rejection test should not issue indexer data RPC")
         }
@@ -888,6 +923,13 @@ mod tests {
         async fn get_transactions_by_address(
             &self,
             _arg0: AddressTransactionQuery,
+        ) -> Result<TransactionRefPage, ProgramError> {
+            panic!("bug: intro rejection test should not issue indexer data RPC")
+        }
+
+        async fn get_transactions_by_block(
+            &self,
+            _arg0: BlockTransactionQuery,
         ) -> Result<TransactionRefPage, ProgramError> {
             panic!("bug: intro rejection test should not issue indexer data RPC")
         }

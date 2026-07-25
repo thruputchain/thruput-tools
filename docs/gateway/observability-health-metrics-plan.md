@@ -626,6 +626,14 @@ series shape and Grafana queries. Treat changes as dashboard-affecting.
 - Each backend keeps its health probe on a dedicated one-connection x23 pool.
   Handler saturation therefore cannot queue an intro or tip probe behind public
   request work, and probe traffic does not consume handler capacity.
+- Scheduler transaction lookups use a dedicated four-connection lane, separate
+  from normal scheduler work and health probes. That lane and the four-connection
+  indexer handler pool accept records up to 64 MiB because lookup results contain
+  protocol-unbounded transaction data. This bounds retained large-record scratch
+  buffers to 512 MiB across those gateway lanes. Health and other gateway pools
+  keep the default 16 MiB limit. x23 uses ONC-RPC `AUTH_NONE`; backend listeners
+  using this trusted-backend allowance must remain isolated on private network
+  paths.
 - One active-client probe timeout marks that snapshot down but retains the pool.
   A second consecutive timeout discards it and starts the reconnect lifecycle.
   A successful response resets the timeout streak.
