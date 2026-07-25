@@ -3,7 +3,7 @@
 use std::{fmt, net::SocketAddr, time::Duration};
 
 use async_trait::async_trait;
-use groundhog_json_rpc_server::{RpcServerError, ViewPlane};
+use groundhog_json_rpc_server::{RpcRequestContext, RpcServerError, ViewPlane};
 use groundhog_json_rpc_types::{
     events::EmittedEvent,
     hex::{Hex0x, HexBytes, Topic},
@@ -22,7 +22,9 @@ use groundhog_xdr::{
 };
 use xdr_common::{BytesM, StringM, VecM};
 
-use crate::{NodeSupervisorError, stub_backend::StubBackend};
+use crate::{
+    NodeSupervisorError, request_deadline::within_request_deadline, stub_backend::StubBackend,
+};
 
 const HOGD_DEV_POOL_SIZE: usize = 2;
 // Keep event parsing in sync with read_backend.rs until the shared helper is
@@ -132,6 +134,7 @@ impl ViewPlane for HogdDevViewBackend {
     )]
     async fn view(
         &self,
+        context: RpcRequestContext,
         request: ViewRequest,
         gas_limit: u64,
     ) -> Result<ViewResponse, RpcServerError> {
@@ -144,12 +147,12 @@ impl ViewPlane for HogdDevViewBackend {
         };
 
         let query = view_query_from_request(request, gas_limit)?;
-        let result = tokio::time::timeout(*request_timeout, client.viewgateway_view(&query))
-            .await
-            .map_err(|_| RpcServerError::BackendTimeout)?
-            .map_err(|source| {
+        let result = within_request_deadline(context.capped(*request_timeout), async {
+            client.viewgateway_view(&query).await.map_err(|source| {
                 RpcServerError::BackendUnavailable(format!("hogd-dev ViewGateway: {source}"))
-            })?;
+            })
+        })
+        .await?;
 
         view_response_from_gateway_result(result)
     }
@@ -563,11 +566,39 @@ mod tests {
         .await
         .expect("fake ViewGateway should connect");
 
-        let result = backend.view(request(None), 123).await;
+        let result = backend
+            .view(RpcRequestContext::unbounded(), request(None), 123)
+            .await;
 
         assert!(
             matches!(result, Err(RpcServerError::BackendTimeout)),
             "ViewGateway timeout should surface BackendTimeout, got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn request_deadline_caps_view_gateway_timeout() {
+        let (addr, _server) = start_fake_view_gateway(FakeViewGatewayMode::ViewSlow).await;
+        let backend = HogdDevViewBackend::connect_optional(
+            Some(addr),
+            PROTOCOL_VERSION,
+            None,
+            Duration::from_secs(30),
+        )
+        .await
+        .expect("fake ViewGateway should connect");
+
+        let result = backend
+            .view(
+                RpcRequestContext::new(Some(Duration::from_millis(10))),
+                request(None),
+                123,
+            )
+            .await;
+
+        assert!(
+            matches!(result, Err(RpcServerError::BackendTimeout)),
+            "request deadline should cap ViewGateway timeout, got {result:?}"
         );
     }
 }

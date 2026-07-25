@@ -6,6 +6,12 @@ pub const DEFAULT_VIEW_GAS_LIMIT: u64 = 10_000_000;
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct RpcServerConfig {
+    /// Optional end-to-end deadline for one public JSON-RPC method.
+    ///
+    /// The deadline starts before shared validation and is passed explicitly to
+    /// backend planes. `None` preserves the embedding application's own policy.
+    pub request_timeout_ms: Option<u64>,
+
     /// Per-page cap on `getEvents` responses; requests with `limit`
     /// above this are rejected as `InvalidParam`.
     pub max_events_per_page: u32,
@@ -46,6 +52,7 @@ pub struct RpcServerConfig {
 impl Default for RpcServerConfig {
     fn default() -> Self {
         Self {
+            request_timeout_ms: None,
             max_events_per_page: 200,
             max_transactions_per_page: 200,
             max_cursor_bytes: 256,
@@ -58,6 +65,13 @@ impl Default for RpcServerConfig {
 }
 
 impl RpcServerConfig {
+    /// Set an end-to-end timeout for every public JSON-RPC request.
+    #[must_use]
+    pub fn with_request_timeout_ms(mut self, timeout_ms: u64) -> Self {
+        self.request_timeout_ms = Some(timeout_ms.max(1));
+        self
+    }
+
     /// Override the per-page event limit.
     #[must_use]
     pub fn with_max_events_per_page(mut self, max: u32) -> Self {

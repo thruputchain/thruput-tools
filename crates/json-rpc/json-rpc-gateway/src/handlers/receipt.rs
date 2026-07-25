@@ -13,7 +13,7 @@ use std::time::Instant;
 use xdr_common::VecM;
 
 use crate::config::HealthBackend;
-use crate::context::GatewayContext;
+use crate::context::{GatewayContext, clear_scheduler_if_current};
 use crate::error::GatewayError;
 use crate::metrics::{BackendRequestOutcome, REASON_PARSE_FAILED};
 
@@ -62,19 +62,24 @@ pub async fn get_transaction_receipt(
 
     let hash = SignedTransactionHash::from(tx_hash.0.0.into_inner());
     let started_at = Instant::now();
-    let rpc_result = client.get_transaction_info(&hash).await;
+    let rpc_result = tokio::time::timeout(
+        ctx.config.backend_request_timeout(),
+        client.get_transaction_info(&hash),
+    )
+    .await;
     ctx.metrics.observe_backend_request(
         HealthBackend::Indexer,
         "get_transaction_info",
-        if rpc_result.is_ok() {
-            BackendRequestOutcome::Ok
-        } else {
-            BackendRequestOutcome::Error
+        match &rpc_result {
+            Ok(Ok(_)) => BackendRequestOutcome::Ok,
+            Ok(Err(_)) => BackendRequestOutcome::Error,
+            Err(_) => BackendRequestOutcome::Timeout,
         },
         started_at.elapsed(),
     );
-    let result =
-        rpc_result.map_err(|e| GatewayError::BackendUnavailable(format!("indexer: {e}")))?;
+    let result = rpc_result
+        .map_err(|_| GatewayError::BackendTimeout)?
+        .map_err(|e| GatewayError::BackendUnavailable(format!("indexer: {e}")))?;
 
     match result {
         TxInfoResult::TxInfoFound { info } => {
@@ -135,40 +140,58 @@ pub async fn get_transaction_status(
     ctx: &GatewayContext,
     tx_hash: TxHash,
 ) -> Result<TransactionStatus, GatewayError> {
+    let deadline = Instant::now() + ctx.config.backend_request_timeout();
     // 1. Check scheduler mempool. Best-effort in that a failure does not
     // abort the indexer lookup, but tracked: `Unknown` asserts the
     // transaction is in neither place, which requires both to have answered.
     let mut mempool_checked = false;
     let maybe_scheduler = ctx.scheduler.read().await.clone();
     if let Some(client) = maybe_scheduler.as_ref() {
+        let generation = client.generation();
         let hash = SignedTransactionHash::from(tx_hash.0.0.into_inner());
         let batch: VecM<SignedTransactionHash> = VecM(vec![hash]);
 
         let started_at = Instant::now();
-        let rpc_result = client.schedcoord_lookup_transactions(&batch).await;
+        let client = client.clone();
+        let mut call =
+            tokio::spawn(async move { client.schedcoord_lookup_transactions(&batch).await });
+        let rpc_result = if let Ok(result) = tokio::time::timeout(
+            deadline.saturating_duration_since(Instant::now()),
+            &mut call,
+        )
+        .await
+        {
+            Ok(result.unwrap_or(Err(rpc_driver::RpcError::SystemError)))
+        } else {
+            clear_scheduler_if_current(&ctx.scheduler, generation).await;
+            call.abort();
+            let _ = call.await;
+            Err(())
+        };
         ctx.metrics.observe_backend_request(
             HealthBackend::Scheduler,
             "schedcoord_lookup_transactions",
-            if rpc_result.is_ok() {
-                BackendRequestOutcome::Ok
-            } else {
-                BackendRequestOutcome::Error
+            match &rpc_result {
+                Ok(Ok(_)) => BackendRequestOutcome::Ok,
+                Ok(Err(_)) => BackendRequestOutcome::Error,
+                Err(()) => BackendRequestOutcome::Timeout,
             },
             started_at.elapsed(),
         );
         match rpc_result {
             // Only a per-hash slot counts as a mempool answer; an empty
             // batch left the queried transaction unaccounted for.
-            Ok(results) => match results.iter().next() {
+            Ok(Ok(results)) => match results.iter().next() {
                 Some(Some(_)) => return Ok(TransactionStatus::Pending),
                 Some(None) => mempool_checked = true,
                 None => {
                     tracing::warn!("scheduler lookup returned no slot for the queried tx hash");
                 }
             },
-            Err(e) => {
+            Ok(Err(e)) => {
                 tracing::warn!(error = %e, "scheduler unreachable, cannot detect pending txs");
             }
+            Err(()) => tracing::warn!("scheduler lookup timed out, cannot detect pending txs"),
         }
     } else {
         tracing::warn!("scheduler not connected, cannot detect pending txs");
@@ -179,30 +202,35 @@ pub async fn get_transaction_status(
     if let Some(client) = maybe_indexer.as_ref() {
         let hash = SignedTransactionHash::from(tx_hash.0.0.into_inner());
         let started_at = Instant::now();
-        let rpc_result = client.get_transaction_info(&hash).await;
+        let rpc_result = tokio::time::timeout(
+            deadline.saturating_duration_since(Instant::now()),
+            client.get_transaction_info(&hash),
+        )
+        .await;
         ctx.metrics.observe_backend_request(
             HealthBackend::Indexer,
             "get_transaction_info",
-            if rpc_result.is_ok() {
-                BackendRequestOutcome::Ok
-            } else {
-                BackendRequestOutcome::Error
+            match &rpc_result {
+                Ok(Ok(_)) => BackendRequestOutcome::Ok,
+                Ok(Err(_)) => BackendRequestOutcome::Error,
+                Err(_) => BackendRequestOutcome::Timeout,
             },
             started_at.elapsed(),
         );
         match rpc_result {
-            Ok(TxInfoResult::TxInfoFound { info }) => {
+            Ok(Ok(TxInfoResult::TxInfoFound { info })) => {
                 return Ok(TransactionStatus::Committed {
                     height: info.height,
                 });
             }
-            Ok(TxInfoResult::TxInfoRecentFailure { recent_failure }) => {
+            Ok(Ok(TxInfoResult::TxInfoRecentFailure { recent_failure })) => {
                 return Ok(TransactionStatus::from(&recent_failure));
             }
-            Ok(_) => {}
-            Err(e) => {
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => {
                 return Err(GatewayError::BackendUnavailable(format!("indexer: {e}")));
             }
+            Err(_) => return Err(GatewayError::BackendTimeout),
         }
     } else {
         return Err(GatewayError::BackendUnavailable(
@@ -253,6 +281,7 @@ mod tests {
 
     use super::*;
     use crate::config::GatewayConfig;
+    use crate::context::SchedulerClient;
     use crate::metrics::GatewayMetrics;
 
     /// Indexer that answers `get_transaction_info` with not-found.
@@ -449,7 +478,9 @@ mod tests {
         .expect("bug: test indexer should connect");
 
         GatewayContext::assemble(
-            Arc::new(RwLock::new(scheduler)),
+            Arc::new(RwLock::new(
+                scheduler.map(|client| SchedulerClient::new(client.clone(), client)),
+            )),
             Arc::new(RwLock::new(indexer)),
             Arc::new(RwLock::new(None)),
             Arc::new(RwLock::new(None)),

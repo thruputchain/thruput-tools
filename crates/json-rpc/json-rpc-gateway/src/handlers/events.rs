@@ -33,18 +33,24 @@ pub async fn get_events(
 
     let wire_query: groundhog_indexer::indexer::EventQuery = query.into();
     let started_at = Instant::now();
-    let rpc_result = client.get_events(&wire_query).await;
+    let rpc_result = tokio::time::timeout(
+        ctx.config.backend_request_timeout(),
+        client.get_events(&wire_query),
+    )
+    .await;
     ctx.metrics.observe_backend_request(
         HealthBackend::Indexer,
         "get_events",
-        if rpc_result.is_ok() {
-            BackendRequestOutcome::Ok
-        } else {
-            BackendRequestOutcome::Error
+        match &rpc_result {
+            Ok(Ok(_)) => BackendRequestOutcome::Ok,
+            Ok(Err(_)) => BackendRequestOutcome::Error,
+            Err(_) => BackendRequestOutcome::Timeout,
         },
         started_at.elapsed(),
     );
-    let page = rpc_result.map_err(|e| GatewayError::BackendUnavailable(format!("indexer: {e}")))?;
+    let page = rpc_result
+        .map_err(|_| GatewayError::BackendTimeout)?
+        .map_err(|e| GatewayError::BackendUnavailable(format!("indexer: {e}")))?;
 
     let mut events: Vec<IdentifiedEvent> = Vec::with_capacity(page.events.0.len());
     for identified in &page.events.0 {

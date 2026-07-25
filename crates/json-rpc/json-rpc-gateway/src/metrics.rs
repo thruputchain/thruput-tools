@@ -55,6 +55,23 @@ pub(crate) enum BackendRequestOutcome {
     Rejected,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BackendReconnectOutcome {
+    Success,
+    Error,
+    Timeout,
+}
+
+impl BackendReconnectOutcome {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Success => "success",
+            Self::Error => "error",
+            Self::Timeout => "timeout",
+        }
+    }
+}
+
 impl BackendRequestOutcome {
     const fn as_str(self) -> &'static str {
         match self {
@@ -84,6 +101,7 @@ pub struct GatewayMetrics {
     chain_tip_age_seconds: Gauge,
     backend_requests_total: IntCounterVec,
     backend_request_duration_seconds: HistogramVec,
+    backend_reconnects_total: IntCounterVec,
     rpc_requests_total: IntCounterVec,
     rpc_request_duration_seconds: HistogramVec,
     rpc_in_flight: GaugeVec,
@@ -154,6 +172,13 @@ impl GatewayMetrics {
             )
             .buckets(BACKEND_REQUEST_DURATION_BUCKETS.to_vec()),
             &["backend", "operation", "result"],
+        )?;
+        let backend_reconnects_total = IntCounterVec::new(
+            Opts::new(
+                "groundhog_gateway_backend_reconnects_total",
+                "Total gateway backend reconnect attempts by bounded backend and outcome labels.",
+            ),
+            &["backend", "outcome"],
         )?;
         let rpc_requests_total = IntCounterVec::new(
             Opts::new(
@@ -259,6 +284,7 @@ impl GatewayMetrics {
         registry.register(Box::new(build_info.clone()))?;
         registry.register(Box::new(backend_requests_total.clone()))?;
         registry.register(Box::new(backend_request_duration_seconds.clone()))?;
+        registry.register(Box::new(backend_reconnects_total.clone()))?;
         registry.register(Box::new(rpc_requests_total.clone()))?;
         registry.register(Box::new(rpc_request_duration_seconds.clone()))?;
         registry.register(Box::new(rpc_in_flight.clone()))?;
@@ -291,6 +317,7 @@ impl GatewayMetrics {
             chain_tip_age_seconds,
             backend_requests_total,
             backend_request_duration_seconds,
+            backend_reconnects_total,
             rpc_requests_total,
             rpc_request_duration_seconds,
             rpc_in_flight,
@@ -321,6 +348,16 @@ impl GatewayMetrics {
         self.backend_request_duration_seconds
             .with_label_values(&[backend.as_str(), operation, outcome.result()])
             .observe(duration.as_secs_f64());
+    }
+
+    pub(crate) fn observe_backend_reconnect(
+        &self,
+        backend: HealthBackend,
+        outcome: BackendReconnectOutcome,
+    ) {
+        self.backend_reconnects_total
+            .with_label_values(&[backend.as_str(), outcome.as_str()])
+            .inc();
     }
 
     pub(crate) fn bound_rpc_method(method: &str) -> &'static str {
@@ -590,6 +627,13 @@ mod tests {
                 Duration::from_millis(3),
             );
         }
+        for outcome in [
+            BackendReconnectOutcome::Success,
+            BackendReconnectOutcome::Error,
+            BackendReconnectOutcome::Timeout,
+        ] {
+            metrics.observe_backend_reconnect(HealthBackend::Scheduler, outcome);
+        }
 
         let body = metrics.gather(&snapshot).expect("metrics should encode");
 
@@ -601,6 +645,15 @@ mod tests {
         ));
         assert!(body.contains(
             "groundhog_gateway_backend_requests_total{backend=\"scheduler\",operation=\"schedcoord_get_tip\",outcome=\"timeout\"} 1"
+        ));
+        assert!(body.contains(
+            "groundhog_gateway_backend_reconnects_total{backend=\"scheduler\",outcome=\"success\"} 1"
+        ));
+        assert!(body.contains(
+            "groundhog_gateway_backend_reconnects_total{backend=\"scheduler\",outcome=\"error\"} 1"
+        ));
+        assert!(body.contains(
+            "groundhog_gateway_backend_reconnects_total{backend=\"scheduler\",outcome=\"timeout\"} 1"
         ));
         assert!(body.contains(
             "groundhog_gateway_backend_requests_total{backend=\"scheduler\",operation=\"schedcoord_get_tip\",outcome=\"rejected\"} 1"

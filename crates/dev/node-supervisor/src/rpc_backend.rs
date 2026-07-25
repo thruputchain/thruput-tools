@@ -6,7 +6,9 @@
 //! pending a hogd-dev stable x23 surface.
 
 use async_trait::async_trait;
-use groundhog_json_rpc_server::{ChainPlane, RpcServerError, SubmitPlane, ValidatedTransaction};
+use groundhog_json_rpc_server::{
+    ChainPlane, RpcRequestContext, RpcServerError, SubmitPlane, ValidatedTransaction,
+};
 use groundhog_json_rpc_types::{
     BlockHeight,
     block::{BlockInfo, ChainTip},
@@ -20,7 +22,10 @@ use groundhog_x23_transport::connect;
 use std::{fmt, net::SocketAddr};
 use xdr_common::{BytesM, VecM};
 
-use crate::{NodeSupervisorError, block_driver::BlockDriverTrigger, genesis::ensure_dev_genesis};
+use crate::{
+    NodeSupervisorError, block_driver::BlockDriverTrigger, genesis::ensure_dev_genesis,
+    request_deadline::within_request_deadline,
+};
 
 // chainTip and submit share the SchedulerCoord endpoint. Keep a small pool so a
 // long-running submit does not block tip checks during local-node startup and
@@ -89,54 +94,70 @@ impl HogdDevSchedulerBackend {
 #[async_trait]
 impl SubmitPlane for HogdDevSchedulerBackend {
     #[tracing::instrument(skip_all, fields(tx_hash = ?tx.hash, tx_bytes_len = tx.bytes.len()))]
-    async fn submit_raw_transaction(&self, tx: ValidatedTransaction) -> Result<(), RpcServerError> {
-        let batch = single_transaction_batch(&tx.bytes)?;
-        self.scheduler
-            .schedulercoord_submit_unvetted(&batch)
-            .await
-            .map_err(|error| classify_submit_rpc_error(&error))?;
-        if let Some(block_driver) = &self.block_driver {
-            block_driver.trigger_after_submit();
-        }
-        Ok(())
+    async fn submit_raw_transaction(
+        &self,
+        context: RpcRequestContext,
+        tx: ValidatedTransaction,
+    ) -> Result<(), RpcServerError> {
+        within_request_deadline(context, async {
+            let batch = single_transaction_batch(&tx.bytes)?;
+            self.scheduler
+                .schedulercoord_submit_unvetted(&batch)
+                .await
+                .map_err(|error| classify_submit_rpc_error(&error))?;
+            if let Some(block_driver) = &self.block_driver {
+                block_driver.trigger_after_submit();
+            }
+            Ok(())
+        })
+        .await
     }
 }
 
 #[async_trait]
 impl ChainPlane for HogdDevSchedulerBackend {
     #[tracing::instrument(skip_all)]
-    async fn chain_tip(&self) -> Result<ChainTip, RpcServerError> {
-        let result = self
-            .scheduler
-            .schedcoord_get_tip()
-            .await
-            .map_err(|error| RpcServerError::BackendUnavailable(error.to_string()))?;
-        match result {
-            SchedulerGetTipResult::SchedulerGetTipOK { db_tip } => {
-                Ok(chain_tip_from_db_tip(db_tip))
+    async fn chain_tip(&self, context: RpcRequestContext) -> Result<ChainTip, RpcServerError> {
+        within_request_deadline(context, async {
+            let result = self
+                .scheduler
+                .schedcoord_get_tip()
+                .await
+                .map_err(|error| RpcServerError::BackendUnavailable(error.to_string()))?;
+            match result {
+                SchedulerGetTipResult::SchedulerGetTipOK { db_tip } => {
+                    Ok(chain_tip_from_db_tip(db_tip))
+                }
+                SchedulerGetTipResult::SchedulerGetTipNoGenesisBlock => {
+                    tracing::error!(
+                        "hogd-dev scheduler reported no genesis after startup bootstrap"
+                    );
+                    Err(RpcServerError::BackendUnavailable(
+                        "hogd-dev scheduler has no genesis block".into(),
+                    ))
+                }
+                other => Err(RpcServerError::BackendUnavailable(format!(
+                    "unexpected scheduler tip result: {other:?}"
+                ))),
             }
-            SchedulerGetTipResult::SchedulerGetTipNoGenesisBlock => {
-                tracing::error!("hogd-dev scheduler reported no genesis after startup bootstrap");
-                Err(RpcServerError::BackendUnavailable(
-                    "hogd-dev scheduler has no genesis block".into(),
-                ))
-            }
-            other => Err(RpcServerError::BackendUnavailable(format!(
-                "unexpected scheduler tip result: {other:?}"
-            ))),
-        }
+        })
+        .await
     }
 
     #[tracing::instrument(skip_all)]
     async fn get_block_by_number(
         &self,
+        _context: RpcRequestContext,
         _height: BlockHeight,
     ) -> Result<Option<BlockInfo>, RpcServerError> {
         Err(RpcServerError::NotImplemented("getBlockByNumber".into()))
     }
 
     #[tracing::instrument(skip_all)]
-    async fn pending_transaction_count(&self) -> Result<u64, RpcServerError> {
+    async fn pending_transaction_count(
+        &self,
+        _context: RpcRequestContext,
+    ) -> Result<u64, RpcServerError> {
         Err(RpcServerError::NotImplemented(
             "pendingTransactionCount".into(),
         ))

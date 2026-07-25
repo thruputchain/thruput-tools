@@ -1,4 +1,4 @@
-use std::{fmt, str::FromStr};
+use std::{fmt, str::FromStr, time::Duration};
 
 use serde::Deserialize;
 
@@ -170,7 +170,7 @@ pub struct GatewayConfig {
     /// Listen address for the JSON-RPC server.
     pub listen_address: String,
 
-    /// Request timeout in milliseconds.
+    /// End-to-end HTTP/WebSocket JSON-RPC timeout in milliseconds.
     pub request_timeout_ms: u64,
 
     /// Maximum simultaneous TCP/WebSocket connections.
@@ -188,13 +188,15 @@ pub struct GatewayConfig {
     /// Interval for background readiness probes.
     pub health_probe_interval_ms: u64,
 
-    /// Maximum time to rebuild one backend connection pool after disconnect.
+    /// Maximum time to build one backend connection pool at startup or after
+    /// disconnect.
     ///
     /// This is separate from the health probe interval because reconnecting a
     /// multi-connection x23 pool can take longer than one readiness cycle.
     pub backend_connect_timeout_ms: u64,
 
-    /// Delay scheduler tip probes after rebuilding its connection pool.
+    /// Delay scheduler tip probes after initially building or rebuilding its
+    /// connection pool.
     ///
     /// Older hogd schedulers accept TCP connections before coordinator
     /// registration makes `schedcoord_get_tip` safe to call.
@@ -309,6 +311,27 @@ impl Default for GatewayConfig {
 }
 
 impl GatewayConfig {
+    pub(crate) fn request_timeout(&self) -> Duration {
+        // Keep backend, application, and HTTP deadlines strictly ordered even
+        // for malformed or test-only sub-millisecond configurations.
+        Duration::from_millis(self.request_timeout_ms.max(3))
+    }
+
+    pub(crate) fn backend_request_timeout(&self) -> Duration {
+        self.request_timeout()
+            .saturating_sub(self.request_timeout_margin())
+            .max(Duration::from_millis(1))
+    }
+
+    pub(crate) fn http_request_timeout(&self) -> Duration {
+        self.request_timeout()
+            .saturating_add(self.request_timeout_margin())
+    }
+
+    fn request_timeout_margin(&self) -> Duration {
+        (self.request_timeout() / 10).clamp(Duration::from_millis(1), Duration::from_secs(1))
+    }
+
     /// Overlay backend endpoint configuration from a runtime manifest.
     pub fn apply_runtime_manifest(
         &mut self,
@@ -403,11 +426,33 @@ pub enum RuntimeManifestConfigError {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use groundhog_json_rpc_types::{hex::Hex0x, runtime_manifest::RuntimeManifest};
     use groundhog_xdr::types::SHA256Hash;
     use serde_json::json;
 
     use super::{GatewayConfig, RuntimeManifestConfigError};
+
+    #[test]
+    fn request_deadlines_are_nested() {
+        let config = GatewayConfig {
+            request_timeout_ms: 10_000,
+            ..GatewayConfig::default()
+        };
+
+        assert_eq!(config.backend_request_timeout(), Duration::from_secs(9));
+        assert_eq!(config.request_timeout(), Duration::from_secs(10));
+        assert_eq!(config.http_request_timeout(), Duration::from_secs(11));
+
+        let minimum = GatewayConfig {
+            request_timeout_ms: 0,
+            ..GatewayConfig::default()
+        };
+        assert_eq!(minimum.backend_request_timeout(), Duration::from_millis(2));
+        assert_eq!(minimum.request_timeout(), Duration::from_millis(3));
+        assert_eq!(minimum.http_request_timeout(), Duration::from_millis(4));
+    }
 
     #[test]
     fn runtime_manifest_overlays_gateway_backend_endpoints() {

@@ -11,7 +11,9 @@ pub mod error;
 pub mod server;
 pub mod tx;
 
-pub use backend::{ChainPlane, ReadPlane, SubmitPlane, ValidatedTransaction, ViewPlane};
+pub use backend::{
+    ChainPlane, ReadPlane, RpcRequestContext, SubmitPlane, ValidatedTransaction, ViewPlane,
+};
 pub use config::{DEFAULT_VIEW_GAS_LIMIT, RpcServerConfig};
 pub use error::RpcServerError;
 pub use server::{BuildInfo, GroundhogRpcServer};

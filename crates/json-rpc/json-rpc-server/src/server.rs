@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use std::time::{Duration, Instant};
+use std::{future::Future, sync::Arc};
 
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::types::ErrorObjectOwned;
@@ -20,8 +20,8 @@ use groundhog_json_rpc_types::{
 };
 
 use crate::{
-    ChainPlane, ReadPlane, RpcServerConfig, RpcServerError, SubmitPlane, ViewPlane,
-    tx::validate_raw_transaction,
+    ChainPlane, ReadPlane, RpcRequestContext, RpcServerConfig, RpcServerError, SubmitPlane,
+    ViewPlane, tx::validate_raw_transaction,
 };
 
 /// Generic implementation of the public Groundhog JSON-RPC API over
@@ -102,6 +102,23 @@ impl<S, C, R, V> GroundhogRpcServer<S, C, R, V> {
             tip_probe: TipProbe::default(),
         }
     }
+
+    fn request_context(&self) -> RpcRequestContext {
+        RpcRequestContext::new(self.config.request_timeout_ms.map(Duration::from_millis))
+    }
+
+    async fn within_request_deadline<T>(
+        &self,
+        context: RpcRequestContext,
+        future: impl Future<Output = RpcResult<T>>,
+    ) -> RpcResult<T> {
+        let Some(deadline) = context.deadline() else {
+            return future.await;
+        };
+        tokio::time::timeout_at(deadline.into(), future)
+            .await
+            .map_err(|_| ErrorObjectOwned::from(RpcServerError::BackendTimeout))?
+    }
 }
 
 impl<S, C, R, V> GroundhogRpcServer<S, C, R, V>
@@ -112,7 +129,7 @@ where
     /// rate-limited probe. Returns `None` when no reading is available
     /// (probe failed or timed out with no prior success); the caller
     /// skips the pre-check in that case.
-    async fn expiry_check_tip_height(&self) -> Option<i64> {
+    async fn expiry_check_tip_height(&self, context: RpcRequestContext) -> Option<i64> {
         let ttl = Duration::from_millis(self.config.tip_cache_ttl_ms);
         let now = Instant::now();
         {
@@ -124,7 +141,11 @@ where
         }
 
         let timeout = Duration::from_millis(self.config.tip_probe_timeout_ms);
-        match tokio::time::timeout(timeout, self.chain.chain_tip()).await {
+        let probe_context = context.capped(timeout);
+        let Some(remaining) = probe_context.remaining() else {
+            return self.tip_probe.state.lock().await.tip_height;
+        };
+        match tokio::time::timeout(remaining, self.chain.chain_tip(probe_context)).await {
             Ok(Ok(tip)) => {
                 let height = *tip.height;
                 self.tip_probe.state.lock().await.tip_height = Some(height);
@@ -170,24 +191,28 @@ where
 {
     #[tracing::instrument(skip_all, fields(tx_hex_len = tx_hex.len()))]
     async fn send_raw_transaction(&self, tx_hex: String) -> RpcResult<TxHash> {
-        let tx = validate_raw_transaction(&tx_hex)?;
-        // A transaction can only be included at heights strictly above the
-        // current tip, so `expiry <= tip` can never commit. The tip reading
-        // is rate-limited and best-effort: an unavailable tip must not block
-        // submission, since the scheduler enforces expiry authoritatively.
-        if let Some(tip_height) = self.expiry_check_tip_height().await
-            && *tx.block_expiry_height <= tip_height
-        {
-            return Err(RpcServerError::TxRejected(format!(
-                "transaction expired: blockExpiryHeight {} is not past chain tip {}; \
-                 re-sign with a later expiry height",
-                *tx.block_expiry_height, tip_height
-            ))
-            .into());
-        }
-        let tx_hash = tx.hash;
-        self.submit.submit_raw_transaction(tx).await?;
-        Ok(tx_hash)
+        let context = self.request_context();
+        self.within_request_deadline(context, async {
+            let tx = validate_raw_transaction(&tx_hex)?;
+            // A transaction can only be included at heights strictly above the
+            // current tip, so `expiry <= tip` can never commit. The tip reading
+            // is rate-limited and best-effort: an unavailable tip must not block
+            // submission, since the scheduler enforces expiry authoritatively.
+            if let Some(tip_height) = self.expiry_check_tip_height(context).await
+                && *tx.block_expiry_height <= tip_height
+            {
+                return Err(RpcServerError::TxRejected(format!(
+                    "transaction expired: blockExpiryHeight {} is not past chain tip {}; \
+                     re-sign with a later expiry height",
+                    *tx.block_expiry_height, tip_height
+                ))
+                .into());
+            }
+            let tx_hash = tx.hash;
+            self.submit.submit_raw_transaction(context, tx).await?;
+            Ok(tx_hash)
+        })
+        .await
     }
 
     #[tracing::instrument(skip_all, fields(?tx_hash))]
@@ -195,33 +220,55 @@ where
         &self,
         tx_hash: TxHash,
     ) -> RpcResult<Option<TransactionReceipt>> {
-        Ok(self.read.transaction_receipt(tx_hash).await?)
+        let context = self.request_context();
+        self.within_request_deadline(context, async {
+            Ok(self.read.transaction_receipt(context, tx_hash).await?)
+        })
+        .await
     }
 
     #[tracing::instrument(skip_all, fields(?tx_hash))]
     async fn get_transaction_status(&self, tx_hash: TxHash) -> RpcResult<TransactionStatus> {
-        Ok(self.read.transaction_status(tx_hash).await?)
+        let context = self.request_context();
+        self.within_request_deadline(context, async {
+            Ok(self.read.transaction_status(context, tx_hash).await?)
+        })
+        .await
     }
 
     #[tracing::instrument(skip_all)]
     async fn chain_tip(&self) -> RpcResult<ChainTip> {
-        Ok(self.chain.chain_tip().await?)
+        let context = self.request_context();
+        self.within_request_deadline(context, async { Ok(self.chain.chain_tip(context).await?) })
+            .await
     }
 
     #[tracing::instrument(skip_all, fields(?height))]
     async fn get_block_by_number(&self, height: BlockHeight) -> RpcResult<Option<BlockInfo>> {
-        Ok(self.chain.get_block_by_number(height).await?)
+        let context = self.request_context();
+        self.within_request_deadline(context, async {
+            Ok(self.chain.get_block_by_number(context, height).await?)
+        })
+        .await
     }
 
     #[tracing::instrument(skip_all)]
     async fn pending_transaction_count(&self) -> RpcResult<u64> {
-        Ok(self.chain.pending_transaction_count().await?)
+        let context = self.request_context();
+        self.within_request_deadline(context, async {
+            Ok(self.chain.pending_transaction_count(context).await?)
+        })
+        .await
     }
 
     #[tracing::instrument(skip_all, fields(filters_len = query.filters.0.len(), limit = query.limit))]
     async fn get_events(&self, query: EventQuery) -> RpcResult<EventPage> {
-        validate_event_query(&query, &self.config)?;
-        Ok(self.read.contract_events(query).await?)
+        let context = self.request_context();
+        self.within_request_deadline(context, async {
+            validate_event_query(&query, &self.config)?;
+            Ok(self.read.contract_events(context, query).await?)
+        })
+        .await
     }
 
     #[tracing::instrument(skip_all, fields(?query.address, limit = query.limit))]
@@ -229,8 +276,12 @@ where
         &self,
         query: AddressTransactionQuery,
     ) -> RpcResult<TransactionRefPage> {
-        validate_address_transaction_query(&query, &self.config)?;
-        Ok(self.read.transactions_by_address(query).await?)
+        let context = self.request_context();
+        self.within_request_deadline(context, async {
+            validate_address_transaction_query(&query, &self.config)?;
+            Ok(self.read.transactions_by_address(context, query).await?)
+        })
+        .await
     }
 
     #[tracing::instrument(skip_all, fields(?address, key_len = key.0.len()))]
@@ -239,34 +290,42 @@ where
         address: ContractAddress,
         key: HexBytes,
     ) -> RpcResult<StorageItemRead> {
-        let key: [u8; 32] = key.0.as_slice().try_into().map_err(|_| {
-            ErrorObjectOwned::owned(
-                codes::INVALID_PARAMS,
-                "storage key must be exactly 32 bytes",
-                None::<()>,
-            )
-        })?;
-        Ok(self.read.get_storage_at(address, key).await?)
+        let context = self.request_context();
+        self.within_request_deadline(context, async {
+            let key: [u8; 32] = key.0.as_slice().try_into().map_err(|_| {
+                ErrorObjectOwned::owned(
+                    codes::INVALID_PARAMS,
+                    "storage key must be exactly 32 bytes",
+                    None::<()>,
+                )
+            })?;
+            Ok(self.read.get_storage_at(context, address, key).await?)
+        })
+        .await
     }
 
     #[tracing::instrument(skip_all, fields(?address))]
     async fn get_balance(&self, address: ContractAddress) -> RpcResult<BalanceResponse> {
-        let read = self.read.read_native_hog_balance(address).await?;
-        let raw_balance = match read.item {
-            Some(StorageItemInfo::NonnegativeInt { value }) => value,
-            None => "0".into(),
-            Some(other) => {
-                return Err(RpcServerError::BackendUnavailable(format!(
-                    "native HOG balance storage had unexpected item kind: {other:?}"
-                ))
-                .into());
-            }
-        };
-        Ok(BalanceResponse {
-            address,
-            raw_balance,
-            height: read.block_height,
+        let context = self.request_context();
+        self.within_request_deadline(context, async {
+            let read = self.read.read_native_hog_balance(context, address).await?;
+            let raw_balance = match read.item {
+                Some(StorageItemInfo::NonnegativeInt { value }) => value,
+                None => "0".into(),
+                Some(other) => {
+                    return Err(RpcServerError::BackendUnavailable(format!(
+                        "native HOG balance storage had unexpected item kind: {other:?}"
+                    ))
+                    .into());
+                }
+            };
+            Ok(BalanceResponse {
+                address,
+                raw_balance,
+                height: read.block_height,
+            })
         })
+        .await
     }
 
     #[tracing::instrument(
@@ -278,34 +337,45 @@ where
         )
     )]
     async fn view(&self, request: ViewRequest) -> RpcResult<ViewResponse> {
-        if request.entrypoint.0.len() != 8 {
-            return Err(ErrorObjectOwned::owned(
-                codes::INVALID_PARAMS,
-                "view entrypoint must be exactly 8 bytes",
-                None::<()>,
-            ));
-        }
-        if request.calldata.0.len() > self.config.max_view_calldata_bytes {
-            return Err(ErrorObjectOwned::owned(
-                codes::INVALID_PARAMS,
-                format!(
-                    "view calldata length {} exceeds maximum {}",
-                    request.calldata.0.len(),
-                    self.config.max_view_calldata_bytes
-                ),
-                None::<()>,
-            ));
-        }
-        Ok(self.view.view(request, self.config.view_gas_limit).await?)
+        let context = self.request_context();
+        self.within_request_deadline(context, async {
+            if request.entrypoint.0.len() != 8 {
+                return Err(ErrorObjectOwned::owned(
+                    codes::INVALID_PARAMS,
+                    "view entrypoint must be exactly 8 bytes",
+                    None::<()>,
+                ));
+            }
+            if request.calldata.0.len() > self.config.max_view_calldata_bytes {
+                return Err(ErrorObjectOwned::owned(
+                    codes::INVALID_PARAMS,
+                    format!(
+                        "view calldata length {} exceeds maximum {}",
+                        request.calldata.0.len(),
+                        self.config.max_view_calldata_bytes
+                    ),
+                    None::<()>,
+                ));
+            }
+            Ok(self
+                .view
+                .view(context, request, self.config.view_gas_limit)
+                .await?)
+        })
+        .await
     }
 
     #[tracing::instrument(skip_all)]
     async fn version(&self) -> RpcResult<VersionInfo> {
-        Ok(VersionInfo::new(
-            WIRE_FORMAT_VERSION,
-            self.build_info.implementation_version,
-            self.build_info.commit_hash,
-        ))
+        let context = self.request_context();
+        self.within_request_deadline(context, async {
+            Ok(VersionInfo::new(
+                WIRE_FORMAT_VERSION,
+                self.build_info.implementation_version,
+                self.build_info.commit_hash,
+            ))
+        })
+        .await
     }
 }
 
@@ -424,6 +494,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     impl SubmitPlane for Arc<MockBackend> {
         async fn submit_raw_transaction(
             &self,
+            _context: RpcRequestContext,
             tx: ValidatedTransaction,
         ) -> Result<(), RpcServerError> {
             self.submitted.lock().await.push(tx);
@@ -435,6 +506,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     impl SubmitPlane for SubmitOnly {
         async fn submit_raw_transaction(
             &self,
+            _context: RpcRequestContext,
             tx: ValidatedTransaction,
         ) -> Result<(), RpcServerError> {
             self.submitted.lock().await.push(tx);
@@ -444,18 +516,22 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
     #[async_trait::async_trait]
     impl ChainPlane for Arc<MockBackend> {
-        async fn chain_tip(&self) -> Result<ChainTip, RpcServerError> {
+        async fn chain_tip(&self, _context: RpcRequestContext) -> Result<ChainTip, RpcServerError> {
             Err(RpcServerError::NotImplemented("chainTip".into()))
         }
 
         async fn get_block_by_number(
             &self,
+            _context: RpcRequestContext,
             _height: BlockHeight,
         ) -> Result<Option<BlockInfo>, RpcServerError> {
             Err(RpcServerError::NotImplemented("getBlockByNumber".into()))
         }
 
-        async fn pending_transaction_count(&self) -> Result<u64, RpcServerError> {
+        async fn pending_transaction_count(
+            &self,
+            _context: RpcRequestContext,
+        ) -> Result<u64, RpcServerError> {
             Err(RpcServerError::NotImplemented(
                 "pendingTransactionCount".into(),
             ))
@@ -464,7 +540,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
     #[async_trait::async_trait]
     impl ChainPlane for ChainOnly {
-        async fn chain_tip(&self) -> Result<ChainTip, RpcServerError> {
+        async fn chain_tip(&self, _context: RpcRequestContext) -> Result<ChainTip, RpcServerError> {
             Ok(ChainTip {
                 height: BlockHeight::from(42),
                 block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0u8; 32])),
@@ -473,12 +549,16 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
         async fn get_block_by_number(
             &self,
+            _context: RpcRequestContext,
             _height: BlockHeight,
         ) -> Result<Option<BlockInfo>, RpcServerError> {
             Ok(None)
         }
 
-        async fn pending_transaction_count(&self) -> Result<u64, RpcServerError> {
+        async fn pending_transaction_count(
+            &self,
+            _context: RpcRequestContext,
+        ) -> Result<u64, RpcServerError> {
             Ok(7)
         }
     }
@@ -487,6 +567,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     impl ReadPlane for Arc<MockBackend> {
         async fn transaction_receipt(
             &self,
+            _context: RpcRequestContext,
             _tx_hash: TxHash,
         ) -> Result<Option<TransactionReceipt>, RpcServerError> {
             Ok(None)
@@ -494,18 +575,24 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
         async fn transaction_status(
             &self,
+            _context: RpcRequestContext,
             _tx_hash: TxHash,
         ) -> Result<TransactionStatus, RpcServerError> {
             Ok(TransactionStatus::Unknown)
         }
 
-        async fn contract_events(&self, _query: EventQuery) -> Result<EventPage, RpcServerError> {
+        async fn contract_events(
+            &self,
+            _context: RpcRequestContext,
+            _query: EventQuery,
+        ) -> Result<EventPage, RpcServerError> {
             *self.event_calls.lock().await += 1;
             Ok(empty_page())
         }
 
         async fn transactions_by_address(
             &self,
+            _context: RpcRequestContext,
             _query: AddressTransactionQuery,
         ) -> Result<TransactionRefPage, RpcServerError> {
             *self.tx_by_address_calls.lock().await += 1;
@@ -514,6 +601,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
         async fn get_storage_at(
             &self,
+            _context: RpcRequestContext,
             _address: ContractAddress,
             _key: [u8; 32],
         ) -> Result<StorageItemRead, RpcServerError> {
@@ -525,6 +613,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
         async fn read_native_hog_balance(
             &self,
+            _context: RpcRequestContext,
             _address: ContractAddress,
         ) -> Result<StorageItemRead, RpcServerError> {
             Ok(StorageItemRead {
@@ -541,6 +630,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     impl ReadPlane for ReadOnly {
         async fn transaction_receipt(
             &self,
+            _context: RpcRequestContext,
             _tx_hash: TxHash,
         ) -> Result<Option<TransactionReceipt>, RpcServerError> {
             Ok(None)
@@ -548,18 +638,24 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
         async fn transaction_status(
             &self,
+            _context: RpcRequestContext,
             _tx_hash: TxHash,
         ) -> Result<TransactionStatus, RpcServerError> {
             Ok(TransactionStatus::Unknown)
         }
 
-        async fn contract_events(&self, _query: EventQuery) -> Result<EventPage, RpcServerError> {
+        async fn contract_events(
+            &self,
+            _context: RpcRequestContext,
+            _query: EventQuery,
+        ) -> Result<EventPage, RpcServerError> {
             *self.event_calls.lock().await += 1;
             Ok(empty_page())
         }
 
         async fn transactions_by_address(
             &self,
+            _context: RpcRequestContext,
             _query: AddressTransactionQuery,
         ) -> Result<TransactionRefPage, RpcServerError> {
             Ok(empty_ref_page())
@@ -567,6 +663,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
         async fn get_storage_at(
             &self,
+            _context: RpcRequestContext,
             _address: ContractAddress,
             _key: [u8; 32],
         ) -> Result<StorageItemRead, RpcServerError> {
@@ -578,6 +675,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
         async fn read_native_hog_balance(
             &self,
+            _context: RpcRequestContext,
             _address: ContractAddress,
         ) -> Result<StorageItemRead, RpcServerError> {
             Ok(StorageItemRead {
@@ -591,6 +689,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     impl ViewPlane for ViewOnly {
         async fn view(
             &self,
+            _context: RpcRequestContext,
             _request: ViewRequest,
             gas_limit: u64,
         ) -> Result<ViewResponse, RpcServerError> {
@@ -629,7 +728,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
     #[async_trait::async_trait]
     impl ChainPlane for ExpiredTipChain {
-        async fn chain_tip(&self) -> Result<ChainTip, RpcServerError> {
+        async fn chain_tip(&self, _context: RpcRequestContext) -> Result<ChainTip, RpcServerError> {
             Ok(ChainTip {
                 height: BlockHeight::from(1_000_000),
                 block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0u8; 32])),
@@ -638,12 +737,16 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
         async fn get_block_by_number(
             &self,
+            _context: RpcRequestContext,
             _height: BlockHeight,
         ) -> Result<Option<BlockInfo>, RpcServerError> {
             Ok(None)
         }
 
-        async fn pending_transaction_count(&self) -> Result<u64, RpcServerError> {
+        async fn pending_transaction_count(
+            &self,
+            _context: RpcRequestContext,
+        ) -> Result<u64, RpcServerError> {
             Ok(0)
         }
     }
@@ -657,7 +760,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
     #[async_trait::async_trait]
     impl ChainPlane for CountingTipChain {
-        async fn chain_tip(&self) -> Result<ChainTip, RpcServerError> {
+        async fn chain_tip(&self, _context: RpcRequestContext) -> Result<ChainTip, RpcServerError> {
             *self.tip_calls.lock().await += 1;
             Ok(ChainTip {
                 height: BlockHeight::from(42),
@@ -667,12 +770,16 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
         async fn get_block_by_number(
             &self,
+            _context: RpcRequestContext,
             _height: BlockHeight,
         ) -> Result<Option<BlockInfo>, RpcServerError> {
             Ok(None)
         }
 
-        async fn pending_transaction_count(&self) -> Result<u64, RpcServerError> {
+        async fn pending_transaction_count(
+            &self,
+            _context: RpcRequestContext,
+        ) -> Result<u64, RpcServerError> {
             Ok(0)
         }
     }
@@ -683,21 +790,96 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
     #[async_trait::async_trait]
     impl ChainPlane for StalledTipChain {
-        async fn chain_tip(&self) -> Result<ChainTip, RpcServerError> {
+        async fn chain_tip(&self, _context: RpcRequestContext) -> Result<ChainTip, RpcServerError> {
             tokio::time::sleep(std::time::Duration::from_hours(1)).await;
             unreachable!("bug: stalled tip probe should have been abandoned")
         }
 
         async fn get_block_by_number(
             &self,
+            _context: RpcRequestContext,
             _height: BlockHeight,
         ) -> Result<Option<BlockInfo>, RpcServerError> {
             Ok(None)
         }
 
-        async fn pending_transaction_count(&self) -> Result<u64, RpcServerError> {
+        async fn pending_transaction_count(
+            &self,
+            _context: RpcRequestContext,
+        ) -> Result<u64, RpcServerError> {
             Ok(0)
         }
+    }
+
+    #[derive(Clone)]
+    struct RecordingSubmit {
+        contexts: Arc<Mutex<Vec<RpcRequestContext>>>,
+        delay: Duration,
+    }
+
+    #[async_trait::async_trait]
+    impl SubmitPlane for RecordingSubmit {
+        async fn submit_raw_transaction(
+            &self,
+            context: RpcRequestContext,
+            _tx: ValidatedTransaction,
+        ) -> Result<(), RpcServerError> {
+            self.contexts.lock().await.push(context);
+            tokio::time::sleep(self.delay).await;
+            Ok(())
+        }
+    }
+
+    #[derive(Clone)]
+    struct RecordingTipChain {
+        contexts: Arc<Mutex<Vec<RpcRequestContext>>>,
+        delay: Duration,
+    }
+
+    #[async_trait::async_trait]
+    impl ChainPlane for RecordingTipChain {
+        async fn chain_tip(&self, context: RpcRequestContext) -> Result<ChainTip, RpcServerError> {
+            self.contexts.lock().await.push(context);
+            tokio::time::sleep(self.delay).await;
+            Ok(ChainTip {
+                height: BlockHeight::from(42),
+                block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0u8; 32])),
+            })
+        }
+
+        async fn get_block_by_number(
+            &self,
+            _context: RpcRequestContext,
+            _height: BlockHeight,
+        ) -> Result<Option<BlockInfo>, RpcServerError> {
+            Ok(None)
+        }
+
+        async fn pending_transaction_count(
+            &self,
+            _context: RpcRequestContext,
+        ) -> Result<u64, RpcServerError> {
+            Ok(0)
+        }
+    }
+
+    fn recording_deadline_server(
+        submit: RecordingSubmit,
+        chain: RecordingTipChain,
+        config: RpcServerConfig,
+    ) -> impl GroundhogApiServer {
+        GroundhogRpcServer::new(
+            submit,
+            chain,
+            ReadOnly {
+                event_calls: Arc::new(Mutex::new(0)),
+            },
+            ViewOnly {
+                view_gas_limits: Arc::new(Mutex::new(Vec::new())),
+            },
+            config,
+            BuildInfo::for_tests(),
+        )
     }
 
     fn expiry_check_server<C: ChainPlane + Clone>(
@@ -793,6 +975,69 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             started.elapsed()
         );
         assert_eq!(submitted.lock().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn validation_expiry_probe_and_submit_share_one_request_deadline() {
+        let submit_contexts = Arc::new(Mutex::new(Vec::new()));
+        let tip_contexts = Arc::new(Mutex::new(Vec::new()));
+        let server = recording_deadline_server(
+            RecordingSubmit {
+                contexts: submit_contexts.clone(),
+                delay: Duration::from_millis(40),
+            },
+            RecordingTipChain {
+                contexts: tip_contexts.clone(),
+                delay: Duration::from_millis(25),
+            },
+            RpcServerConfig::default()
+                .with_request_timeout_ms(50)
+                .with_tip_probe_timeout_ms(500),
+        );
+
+        let error = server
+            .send_raw_transaction(format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}"))
+            .await
+            .expect_err("the combined probe and submit work should exhaust one request budget");
+
+        assert_eq!(error.code(), codes::BACKEND_TIMEOUT);
+        let tip_context = tip_contexts.lock().await[0];
+        let submit_context = submit_contexts.lock().await[0];
+        assert_eq!(tip_context.started_at(), submit_context.started_at());
+        assert_eq!(tip_context.deadline(), submit_context.deadline());
+    }
+
+    #[tokio::test]
+    async fn expiry_probe_uses_a_shorter_deadline_without_resetting_request_start() {
+        let submit_contexts = Arc::new(Mutex::new(Vec::new()));
+        let tip_contexts = Arc::new(Mutex::new(Vec::new()));
+        let server = recording_deadline_server(
+            RecordingSubmit {
+                contexts: submit_contexts.clone(),
+                delay: Duration::ZERO,
+            },
+            RecordingTipChain {
+                contexts: tip_contexts.clone(),
+                delay: Duration::ZERO,
+            },
+            RpcServerConfig::default()
+                .with_request_timeout_ms(500)
+                .with_tip_probe_timeout_ms(50),
+        );
+
+        server
+            .send_raw_transaction(format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}"))
+            .await
+            .expect("the bounded expiry probe and submission should complete");
+
+        let tip_context = tip_contexts.lock().await[0];
+        let submit_context = submit_contexts.lock().await[0];
+        assert_eq!(tip_context.started_at(), submit_context.started_at());
+        assert!(
+            tip_context.deadline().expect("probe deadline")
+                < submit_context.deadline().expect("request deadline"),
+            "the nested expiry probe should receive the shorter deadline"
+        );
     }
 
     #[tokio::test]

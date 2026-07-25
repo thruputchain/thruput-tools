@@ -10,18 +10,19 @@
 //! BDP-style in-flight bounding, sharded for low contention) and
 //! `adaptive_batch.rs` for the shared shard runner.
 
-use std::{sync::Arc, time::Instant};
+use std::{sync::Arc, time::Duration, time::Instant};
 
 use async_trait::async_trait;
+use groundhog_json_rpc_server::RpcRequestContext;
 use groundhog_json_rpc_types::transaction::TxHash;
 use groundhog_scheduler::ParallelBatch;
 use groundhog_scheduler::parallel::ParallelSignedTransactionBatch;
-use groundhog_scheduler::sched_coord::SchedulerCoord_SchedulerCoord1_Client;
 use tokio::sync::{RwLock, oneshot};
 use xdr_common::{BytesM, VecM};
 
 use crate::adaptive_batch::{AdaptiveBatcher, BatchProcessor, shard_index_by_routing_key};
 use crate::config::AdaptiveBatchConfig;
+use crate::context::{SchedulerClient, clear_scheduler_if_current};
 use crate::error::GatewayError;
 use crate::metrics::{BackendRequestOutcome, GatewayMetrics};
 
@@ -29,7 +30,11 @@ use crate::metrics::{BackendRequestOutcome, GatewayMetrics};
 /// scheduler client; tests substitute a mock.
 #[async_trait]
 pub trait SubmitSink: Send + Sync + 'static {
-    async fn submit(&self, batch: ParallelSignedTransactionBatch) -> Result<(), GatewayError>;
+    async fn submit(
+        &self,
+        batch: ParallelSignedTransactionBatch,
+        deadline: Instant,
+    ) -> Result<(), GatewayError>;
 }
 
 /// Production sink: forwards to the hogd scheduler's
@@ -38,41 +43,66 @@ pub trait SubmitSink: Send + Sync + 'static {
 /// Holds a shared `Arc<RwLock<Option<Client>>>` so that scheduler
 /// reconnections in `GatewayContext` become visible on the next call.
 pub struct SchedulerSink {
-    scheduler: Arc<RwLock<Option<SchedulerCoord_SchedulerCoord1_Client>>>,
+    scheduler: Arc<RwLock<Option<SchedulerClient>>>,
     metrics: GatewayMetrics,
+    timeout: Duration,
 }
 
 impl SchedulerSink {
     pub(crate) fn new(
-        scheduler: Arc<RwLock<Option<SchedulerCoord_SchedulerCoord1_Client>>>,
+        scheduler: Arc<RwLock<Option<SchedulerClient>>>,
         metrics: GatewayMetrics,
+        timeout: Duration,
     ) -> Self {
-        Self { scheduler, metrics }
+        Self {
+            scheduler,
+            metrics,
+            timeout,
+        }
     }
 }
 
 #[async_trait]
 impl SubmitSink for SchedulerSink {
-    async fn submit(&self, batch: ParallelSignedTransactionBatch) -> Result<(), GatewayError> {
+    async fn submit(
+        &self,
+        batch: ParallelSignedTransactionBatch,
+        deadline: Instant,
+    ) -> Result<(), GatewayError> {
         let client = self.scheduler.read().await.clone();
         match client {
             None => Err(GatewayError::BackendUnavailable(
                 "scheduler not connected".into(),
             )),
             Some(c) => {
+                let generation = c.generation();
                 let started_at = Instant::now();
-                let result = c.schedulercoord_submit_unvetted(&batch).await;
+                let mut call =
+                    tokio::spawn(async move { c.schedulercoord_submit_unvetted(&batch).await });
+                let timeout = self
+                    .timeout
+                    .min(deadline.saturating_duration_since(Instant::now()));
+                let result = if let Ok(result) = tokio::time::timeout(timeout, &mut call).await {
+                    Ok(result.unwrap_or(Err(rpc_driver::RpcError::SystemError)))
+                } else {
+                    clear_scheduler_if_current(&self.scheduler, generation).await;
+                    call.abort();
+                    let _ = call.await;
+                    Err(())
+                };
                 self.metrics.observe_backend_request(
                     crate::config::HealthBackend::Scheduler,
                     "schedcoord_submit_unvetted",
-                    if result.is_ok() {
-                        BackendRequestOutcome::Ok
-                    } else {
-                        BackendRequestOutcome::Error
+                    match &result {
+                        Ok(Ok(())) => BackendRequestOutcome::Ok,
+                        Ok(Err(_)) => BackendRequestOutcome::Error,
+                        Err(()) => BackendRequestOutcome::Timeout,
                     },
                     started_at.elapsed(),
                 );
-                result.map_err(|e| classify_rpc_error(&e))
+                result
+                    .map_err(|()| GatewayError::BackendTimeout)?
+                    .map_err(|e| classify_rpc_error(&e))
             }
         }
     }
@@ -91,6 +121,7 @@ fn classify_rpc_error(e: &rpc_driver::RpcError) -> GatewayError {
 struct Item {
     tx_bytes: Vec<u8>,
     reply: oneshot::Sender<Result<(), GatewayError>>,
+    deadline: Instant,
 }
 
 /// Per-batch processor: pack, submit, and fan the shared result out
@@ -104,9 +135,19 @@ struct SubmitProcessor {
 impl BatchProcessor for SubmitProcessor {
     type Item = Item;
 
-    async fn process(&self, items: Vec<Item>) {
+    async fn process(&self, mut items: Vec<Item>) {
+        let now = Instant::now();
+        items.retain(|item| !item.reply.is_closed() && item.deadline > now);
+        if items.is_empty() {
+            return;
+        }
+        let deadline = items
+            .iter()
+            .map(|item| item.deadline)
+            .min()
+            .expect("non-empty batch should have a deadline");
         let packed = pack(&items);
-        let result = self.sink.submit(packed).await;
+        let result = self.sink.submit(packed, deadline).await;
         let outcome = outcome_for_submit_result(&result);
         for item in items {
             self.metrics.observe_submitted_transaction(outcome);
@@ -147,15 +188,26 @@ fn pack(items: &[Item]) -> ParallelSignedTransactionBatch {
 pub struct BatchSubmitter {
     inner: AdaptiveBatcher<Item>,
     metrics: GatewayMetrics,
+    timeout: Duration,
 }
 
 impl BatchSubmitter {
     /// Spawn one submitter task per shard.  Tasks live until the
     /// `BatchSubmitter` (and thus its shard senders) are dropped.
+    #[cfg(test)]
     pub fn spawn(
         config: &AdaptiveBatchConfig,
         sink: &Arc<dyn SubmitSink>,
         metrics: GatewayMetrics,
+    ) -> Self {
+        Self::spawn_with_timeout(config, sink, metrics, Duration::from_secs(30))
+    }
+
+    pub(crate) fn spawn_with_timeout(
+        config: &AdaptiveBatchConfig,
+        sink: &Arc<dyn SubmitSink>,
+        metrics: GatewayMetrics,
+        timeout: Duration,
     ) -> Self {
         let processor = Arc::new(SubmitProcessor {
             sink: sink.clone(),
@@ -168,22 +220,36 @@ impl BatchSubmitter {
             &processor,
             metrics.clone(),
         );
-        Self { inner, metrics }
+        Self {
+            inner,
+            metrics,
+            timeout,
+        }
     }
 
     /// Submit one tx.  Routes to a shard by tx hash; returns when the
     /// fanout completes.  Returns `Overloaded` if the target shard's
     /// ingress is full (client should retry with backoff).
     #[tracing::instrument(skip_all, fields(shard_idx, tx_bytes_len = tx_bytes.len()))]
-    pub async fn submit(&self, tx_bytes: Vec<u8>, hash: TxHash) -> Result<(), GatewayError> {
+    pub async fn submit(
+        &self,
+        context: RpcRequestContext,
+        tx_bytes: Vec<u8>,
+        hash: TxHash,
+    ) -> Result<(), GatewayError> {
         let bytes: &[u8] = hash.0.0.as_ref();
         let shard_idx = shard_index_by_routing_key(bytes, self.inner.n_shards());
         tracing::Span::current().record("shard_idx", shard_idx);
         let (reply_tx, reply_rx) = oneshot::channel();
+        let deadline = context
+            .capped(self.timeout)
+            .deadline()
+            .expect("operation timeout should bound submission");
         if let Err(err) = self.inner.try_send(
             Item {
                 tx_bytes,
                 reply: reply_tx,
+                deadline,
             },
             shard_idx,
         ) {
@@ -191,12 +257,21 @@ impl BatchSubmitter {
                 .observe_submitted_transaction(outcome_for_submit_error(&err));
             return Err(err);
         }
-        reply_rx.await.map_err(|_| {
-            let err = GatewayError::BackendUnavailable("batch submitter dropped reply".into());
-            self.metrics
-                .observe_submitted_transaction(outcome_for_submit_error(&err));
-            err
-        })?
+        match tokio::time::timeout_at(deadline.into(), reply_rx).await {
+            Err(_) => {
+                let err = GatewayError::BackendTimeout;
+                self.metrics
+                    .observe_submitted_transaction(outcome_for_submit_error(&err));
+                Err(err)
+            }
+            Ok(Err(_)) => {
+                let err = GatewayError::BackendUnavailable("batch submitter dropped reply".into());
+                self.metrics
+                    .observe_submitted_transaction(outcome_for_submit_error(&err));
+                Err(err)
+            }
+            Ok(Ok(result)) => result,
+        }
     }
 }
 
@@ -238,6 +313,7 @@ mod tests {
     #[derive(Default)]
     struct MockSink {
         seen: Mutex<Vec<usize>>,
+        deadlines: Mutex<Vec<Instant>>,
         pending: Mutex<VecDeque<oneshot::Receiver<Result<(), GatewayError>>>>,
     }
 
@@ -255,13 +331,22 @@ mod tests {
         fn seen(&self) -> Vec<usize> {
             self.seen.lock().unwrap().clone()
         }
+
+        fn deadlines(&self) -> Vec<Instant> {
+            self.deadlines.lock().unwrap().clone()
+        }
     }
 
     #[async_trait]
     impl SubmitSink for MockSink {
-        async fn submit(&self, batch: ParallelSignedTransactionBatch) -> Result<(), GatewayError> {
+        async fn submit(
+            &self,
+            batch: ParallelSignedTransactionBatch,
+            deadline: Instant,
+        ) -> Result<(), GatewayError> {
             let size = batch.segment_bytes.0.len();
             self.seen.lock().unwrap().push(size);
+            self.deadlines.lock().unwrap().push(deadline);
             let gate = self.pending.lock().unwrap().pop_front();
             match gate {
                 None => Ok(()),
@@ -303,6 +388,10 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(15)).await;
     }
 
+    fn request_context() -> RpcRequestContext {
+        RpcRequestContext::unbounded()
+    }
+
     #[tokio::test]
     async fn batch_of_1_at_low_load() {
         let mock = MockSink::arc();
@@ -313,11 +402,30 @@ mod tests {
         );
 
         submitter
-            .submit(vec![0xaa; 8], hash_from_u32(0))
+            .submit(request_context(), vec![0xaa; 8], hash_from_u32(0))
             .await
             .unwrap();
 
         assert_eq!(mock.seen(), vec![1], "exactly one batch of size 1");
+    }
+
+    #[tokio::test]
+    async fn request_deadline_reaches_submission_sink() {
+        let mock = MockSink::arc();
+        let submitter = BatchSubmitter::spawn(
+            &config_for_tests(1, 4, 1000, 100),
+            &(mock.clone() as Arc<dyn SubmitSink>),
+            metrics_for_tests(),
+        );
+        let context = RpcRequestContext::new(Some(Duration::from_secs(5)));
+        let expected = context.deadline().expect("bounded request deadline");
+
+        submitter
+            .submit(context, vec![0xaa; 8], hash_from_u32(0))
+            .await
+            .expect("submission should complete");
+
+        assert_eq!(mock.deadlines(), vec![expected]);
     }
 
     #[tokio::test]
@@ -334,7 +442,10 @@ mod tests {
         // First tx starts a gated batch of 1.
         let first = tokio::spawn({
             let s = submitter.clone();
-            async move { s.submit(vec![0x01], hash_from_u32(0)).await }
+            async move {
+                s.submit(request_context(), vec![0x01], hash_from_u32(0))
+                    .await
+            }
         });
         settle().await;
         assert_eq!(mock.seen(), vec![1], "first batch in flight");
@@ -344,8 +455,12 @@ mod tests {
         for i in 1..=5u32 {
             let s = submitter.clone();
             waiters.push(tokio::spawn(async move {
-                s.submit(vec![u8::try_from(i).unwrap()], hash_from_u32(i))
-                    .await
+                s.submit(
+                    request_context(),
+                    vec![u8::try_from(i).unwrap()],
+                    hash_from_u32(i),
+                )
+                .await
             }));
         }
         settle().await;
@@ -374,12 +489,18 @@ mod tests {
 
         let w1 = {
             let s = submitter.clone();
-            tokio::spawn(async move { s.submit(vec![0x01], hash_from_u32(1)).await })
+            tokio::spawn(async move {
+                s.submit(request_context(), vec![0x01], hash_from_u32(1))
+                    .await
+            })
         };
         settle().await;
         let w2 = {
             let s = submitter.clone();
-            tokio::spawn(async move { s.submit(vec![0x02], hash_from_u32(2)).await })
+            tokio::spawn(async move {
+                s.submit(request_context(), vec![0x02], hash_from_u32(2))
+                    .await
+            })
         };
         settle().await;
         assert_eq!(mock.seen(), vec![1, 1], "two concurrent in-flight batches");
@@ -387,7 +508,10 @@ mod tests {
         // A third should sit queued until one completes.
         let w3 = {
             let s = submitter.clone();
-            tokio::spawn(async move { s.submit(vec![0x03], hash_from_u32(3)).await })
+            tokio::spawn(async move {
+                s.submit(request_context(), vec![0x03], hash_from_u32(3))
+                    .await
+            })
         };
         settle().await;
         assert_eq!(mock.seen(), vec![1, 1], "third batch still held");
@@ -419,7 +543,10 @@ mod tests {
 
         let first = {
             let s = submitter.clone();
-            tokio::spawn(async move { s.submit(vec![0x01], hash_from_u32(0)).await })
+            tokio::spawn(async move {
+                s.submit(request_context(), vec![0x01], hash_from_u32(0))
+                    .await
+            })
         };
         settle().await;
 
@@ -427,8 +554,12 @@ mod tests {
         for i in 1..=10u32 {
             let s = submitter.clone();
             waiters.push(tokio::spawn(async move {
-                s.submit(vec![u8::try_from(i).unwrap()], hash_from_u32(i))
-                    .await
+                s.submit(
+                    request_context(),
+                    vec![u8::try_from(i).unwrap()],
+                    hash_from_u32(i),
+                )
+                .await
             }));
         }
 
@@ -456,7 +587,10 @@ mod tests {
         // First item is pulled from mpsc and starts the gated batch.
         let w1 = {
             let s = submitter.clone();
-            tokio::spawn(async move { s.submit(vec![0x01], hash_from_u32(0)).await })
+            tokio::spawn(async move {
+                s.submit(request_context(), vec![0x01], hash_from_u32(0))
+                    .await
+            })
         };
         settle().await;
 
@@ -466,14 +600,17 @@ mod tests {
         // disabled, so this item sits in the channel.
         let w2 = {
             let s = submitter.clone();
-            tokio::spawn(async move { s.submit(vec![0x02], hash_from_u32(1)).await })
+            tokio::spawn(async move {
+                s.submit(request_context(), vec![0x02], hash_from_u32(1))
+                    .await
+            })
         };
         settle().await;
 
         // Third item: channel is now full (item 2 occupies the only slot).
         // try_send → Full → Overloaded.
         let err = submitter
-            .submit(vec![0x99], hash_from_u32(99))
+            .submit(request_context(), vec![0x99], hash_from_u32(99))
             .await
             .expect_err("should be overloaded");
         assert!(
@@ -501,7 +638,10 @@ mod tests {
 
         let waiter = tokio::spawn({
             let s = submitter.clone();
-            async move { s.submit(vec![0x01], hash_from_u32(0)).await }
+            async move {
+                s.submit(request_context(), vec![0x01], hash_from_u32(0))
+                    .await
+            }
         });
         settle().await;
         assert_eq!(mock.seen(), vec![1], "submission reached the backend");
@@ -539,8 +679,12 @@ mod tests {
         for i in 0..4u32 {
             let s = submitter.clone();
             waiters.push(tokio::spawn(async move {
-                s.submit(vec![u8::try_from(i).unwrap()], hash_from_u32(i))
-                    .await
+                s.submit(
+                    request_context(),
+                    vec![u8::try_from(i).unwrap()],
+                    hash_from_u32(i),
+                )
+                .await
             }));
         }
         settle().await;
@@ -578,6 +722,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn queued_request_deadline_skips_stale_backend_work() {
+        let mock = MockSink::arc();
+        let gate = mock.queue_gate();
+        let submitter = BatchSubmitter::spawn_with_timeout(
+            &config_for_tests(1, 1, 1, 10),
+            &(mock.clone() as Arc<dyn SubmitSink>),
+            metrics_for_tests(),
+            Duration::from_millis(25),
+        );
+
+        let first = {
+            let submitter = submitter.clone();
+            tokio::spawn(async move {
+                submitter
+                    .submit(request_context(), vec![1], hash_from_u32(1))
+                    .await
+            })
+        };
+        settle().await;
+        let second = submitter
+            .submit(request_context(), vec![2], hash_from_u32(2))
+            .await;
+
+        assert!(matches!(
+            first.await.unwrap(),
+            Err(GatewayError::BackendTimeout)
+        ));
+        assert!(matches!(second, Err(GatewayError::BackendTimeout)));
+        gate.send(Ok(())).unwrap();
+        settle().await;
+        assert_eq!(mock.seen(), vec![1]);
+    }
+
+    #[tokio::test]
     async fn pack_shape_is_correct() {
         let items: Vec<Item> = [vec![0x11; 3], vec![0x22; 5], vec![0x33; 2]]
             .into_iter()
@@ -586,6 +764,7 @@ mod tests {
                 Item {
                     tx_bytes: bytes,
                     reply: tx,
+                    deadline: Instant::now() + Duration::from_secs(1),
                 }
             })
             .collect();

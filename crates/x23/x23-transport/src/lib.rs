@@ -24,7 +24,7 @@
 
 use std::{sync::Arc, time::Duration};
 
-use rpc_driver::{FixedSerialPool, RpcSender};
+use rpc_driver::{CanceledCallPolicy, FixedSerialPool, RpcSender};
 
 /// Errors from establishing an x23 connection pool.
 #[derive(Debug, thiserror::Error)]
@@ -80,18 +80,43 @@ pub async fn connect<C, F>(
 where
     F: FnOnce(Arc<dyn RpcSender>) -> C,
 {
+    connect_with_canceled_call_policy(
+        service,
+        addr,
+        pool_size,
+        CanceledCallPolicy::ReplaceConnection,
+        build,
+    )
+    .await
+}
+
+/// Establish a fixed pool with an explicit active-call cancellation policy.
+pub async fn connect_with_canceled_call_policy<C, F>(
+    service: &'static str,
+    addr: &str,
+    pool_size: usize,
+    canceled_call_policy: CanceledCallPolicy,
+    build: F,
+) -> Result<C, ConnectError>
+where
+    F: FnOnce(Arc<dyn RpcSender>) -> C,
+{
     let socket_addr: std::net::SocketAddr = addr.parse().map_err(|e| ConnectError::BadAddress {
         addr: addr.to_string(),
         source: e,
     })?;
     let pool: Arc<dyn RpcSender> = Arc::new(
-        FixedSerialPool::connect(&socket_addr, pool_size)
-            .await
-            .map_err(|e| ConnectError::ConnectFailed {
-                service,
-                addr: addr.to_string(),
-                source: e,
-            })?,
+        FixedSerialPool::connect_with_canceled_call_policy(
+            &socket_addr,
+            pool_size,
+            canceled_call_policy,
+        )
+        .await
+        .map_err(|e| ConnectError::ConnectFailed {
+            service,
+            addr: addr.to_string(),
+            source: e,
+        })?,
     );
     tracing::info!(addr, service, "connected");
     Ok(build(pool))
@@ -109,7 +134,30 @@ pub async fn try_connect<C, F>(
 where
     F: FnOnce(Arc<dyn RpcSender>) -> C,
 {
-    match connect(service, addr, pool_size, build).await {
+    try_connect_with_canceled_call_policy(
+        service,
+        addr,
+        pool_size,
+        CanceledCallPolicy::ReplaceConnection,
+        build,
+    )
+    .await
+}
+
+/// Like [`try_connect`], with an explicit active-call cancellation policy.
+pub async fn try_connect_with_canceled_call_policy<C, F>(
+    service: &'static str,
+    addr: &str,
+    pool_size: usize,
+    canceled_call_policy: CanceledCallPolicy,
+    build: F,
+) -> Result<Option<C>, ConnectError>
+where
+    F: FnOnce(Arc<dyn RpcSender>) -> C,
+{
+    match connect_with_canceled_call_policy(service, addr, pool_size, canceled_call_policy, build)
+        .await
+    {
         Ok(client) => Ok(Some(client)),
         Err(
             e @ (ConnectError::BadAddress { .. }

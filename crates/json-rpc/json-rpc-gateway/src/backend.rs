@@ -1,8 +1,9 @@
-use std::sync::Arc;
+use std::{future::Future, sync::Arc};
 
 use async_trait::async_trait;
 use groundhog_json_rpc_server::{
-    ChainPlane, ReadPlane, RpcServerError, SubmitPlane, ValidatedTransaction, ViewPlane,
+    ChainPlane, ReadPlane, RpcRequestContext, RpcServerError, SubmitPlane, ValidatedTransaction,
+    ViewPlane,
 };
 use groundhog_json_rpc_types::{
     BlockHeight, ContractAddress,
@@ -27,44 +28,77 @@ impl GatewayBackend {
     pub fn new(ctx: Arc<GatewayContext>) -> Self {
         Self { ctx }
     }
+
+    fn bounded_context(&self, context: RpcRequestContext) -> RpcRequestContext {
+        context.capped(self.ctx.config.request_timeout())
+    }
+
+    async fn with_deadline<T>(
+        &self,
+        context: RpcRequestContext,
+        future: impl Future<Output = Result<T, GatewayError>>,
+    ) -> Result<T, RpcServerError> {
+        let remaining = context
+            .remaining()
+            .expect("bounded gateway request context should have a deadline");
+        tokio::time::timeout(remaining, future)
+            .await
+            .map_err(|_| RpcServerError::BackendTimeout)?
+            .map_err(Into::into)
+    }
 }
 
 #[async_trait]
 impl SubmitPlane for GatewayBackend {
     #[tracing::instrument(skip_all, fields(tx_hash = ?tx.hash, tx_bytes_len = tx.bytes.len()))]
-    async fn submit_raw_transaction(&self, tx: ValidatedTransaction) -> Result<(), RpcServerError> {
-        self.ctx
-            .batch_submitter
-            .submit(tx.bytes, tx.hash)
-            .await
-            .map_err(Into::into)
+    async fn submit_raw_transaction(
+        &self,
+        context: RpcRequestContext,
+        tx: ValidatedTransaction,
+    ) -> Result<(), RpcServerError> {
+        let context = self.bounded_context(context);
+        self.with_deadline(
+            context,
+            self.ctx.batch_submitter.submit(context, tx.bytes, tx.hash),
+        )
+        .await
     }
 }
 
 #[async_trait]
 impl ChainPlane for GatewayBackend {
     #[tracing::instrument(skip_all)]
-    async fn chain_tip(&self) -> Result<ChainTip, RpcServerError> {
-        handlers::blocks::chain_tip(&self.ctx)
+    async fn chain_tip(&self, context: RpcRequestContext) -> Result<ChainTip, RpcServerError> {
+        let context = self.bounded_context(context);
+        self.with_deadline(context, handlers::blocks::chain_tip(&self.ctx, context))
             .await
-            .map_err(Into::into)
     }
 
     #[tracing::instrument(skip_all, fields(?height))]
     async fn get_block_by_number(
         &self,
+        context: RpcRequestContext,
         height: BlockHeight,
     ) -> Result<Option<BlockInfo>, RpcServerError> {
-        handlers::blocks::get_block_by_number(&self.ctx, height)
-            .await
-            .map_err(Into::into)
+        let context = self.bounded_context(context);
+        self.with_deadline(
+            context,
+            handlers::blocks::get_block_by_number(&self.ctx, height),
+        )
+        .await
     }
 
     #[tracing::instrument(skip_all)]
-    async fn pending_transaction_count(&self) -> Result<u64, RpcServerError> {
-        handlers::blocks::pending_transaction_count(&self.ctx)
-            .await
-            .map_err(Into::into)
+    async fn pending_transaction_count(
+        &self,
+        context: RpcRequestContext,
+    ) -> Result<u64, RpcServerError> {
+        let context = self.bounded_context(context);
+        self.with_deadline(
+            context,
+            handlers::blocks::pending_transaction_count(&self.ctx),
+        )
+        .await
     }
 }
 
@@ -73,63 +107,85 @@ impl ReadPlane for GatewayBackend {
     #[tracing::instrument(skip_all, fields(?tx_hash))]
     async fn transaction_receipt(
         &self,
+        context: RpcRequestContext,
         tx_hash: TxHash,
     ) -> Result<Option<TransactionReceipt>, RpcServerError> {
-        handlers::receipt::get_transaction_receipt(&self.ctx, tx_hash)
-            .await
-            .map_err(Into::into)
+        let context = self.bounded_context(context);
+        self.with_deadline(
+            context,
+            handlers::receipt::get_transaction_receipt(&self.ctx, tx_hash),
+        )
+        .await
     }
 
     #[tracing::instrument(skip_all, fields(?tx_hash))]
     async fn transaction_status(
         &self,
+        context: RpcRequestContext,
         tx_hash: TxHash,
     ) -> Result<TransactionStatus, RpcServerError> {
-        handlers::receipt::get_transaction_status(&self.ctx, tx_hash)
-            .await
-            .map_err(Into::into)
+        let context = self.bounded_context(context);
+        self.with_deadline(
+            context,
+            handlers::receipt::get_transaction_status(&self.ctx, tx_hash),
+        )
+        .await
     }
 
     #[tracing::instrument(skip_all, fields(filters_len = query.filters.0.len(), limit = query.limit))]
-    async fn contract_events(&self, query: EventQuery) -> Result<EventPage, RpcServerError> {
-        handlers::events::get_events(&self.ctx, query)
+    async fn contract_events(
+        &self,
+        context: RpcRequestContext,
+        query: EventQuery,
+    ) -> Result<EventPage, RpcServerError> {
+        let context = self.bounded_context(context);
+        self.with_deadline(context, handlers::events::get_events(&self.ctx, query))
             .await
-            .map_err(Into::into)
     }
 
     #[tracing::instrument(skip_all, fields(?query.address, limit = query.limit))]
     async fn transactions_by_address(
         &self,
+        context: RpcRequestContext,
         query: AddressTransactionQuery,
     ) -> Result<TransactionRefPage, RpcServerError> {
-        handlers::transactions::get_transactions_by_address(&self.ctx, query)
-            .await
-            .map_err(Into::into)
+        let context = self.bounded_context(context);
+        self.with_deadline(
+            context,
+            handlers::transactions::get_transactions_by_address(&self.ctx, query),
+        )
+        .await
     }
 
     #[tracing::instrument(skip_all, fields(?address))]
     async fn get_storage_at(
         &self,
+        context: RpcRequestContext,
         address: ContractAddress,
         key: [u8; 32],
     ) -> Result<StorageItemRead, RpcServerError> {
-        self.ctx
-            .storage_batcher
-            .read(address, key)
-            .await
-            .map_err(Into::into)
+        let context = self.bounded_context(context);
+        self.with_deadline(
+            context,
+            self.ctx.storage_batcher.read(context, address, key),
+        )
+        .await
     }
 
     #[tracing::instrument(skip_all, fields(?address))]
     async fn read_native_hog_balance(
         &self,
+        context: RpcRequestContext,
         address: ContractAddress,
     ) -> Result<StorageItemRead, RpcServerError> {
-        self.ctx
-            .storage_batcher
-            .read_native_hog_balance(address)
-            .await
-            .map_err(Into::into)
+        let context = self.bounded_context(context);
+        self.with_deadline(
+            context,
+            self.ctx
+                .storage_batcher
+                .read_native_hog_balance(context, address),
+        )
+        .await
     }
 }
 
@@ -138,12 +194,13 @@ impl ViewPlane for GatewayBackend {
     #[tracing::instrument(skip_all)]
     async fn view(
         &self,
+        context: RpcRequestContext,
         request: ViewRequest,
         gas_limit: u64,
     ) -> Result<ViewResponse, RpcServerError> {
-        handlers::view::view(&self.ctx, request, gas_limit)
+        let context = self.bounded_context(context);
+        self.with_deadline(context, handlers::view::view(&self.ctx, request, gas_limit))
             .await
-            .map_err(Into::into)
     }
 }
 

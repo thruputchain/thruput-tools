@@ -1,6 +1,10 @@
 use std::{
-    sync::Arc,
-    time::{Duration, Instant},
+    ops::Deref,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
 };
 
 use groundhog_db_gateway::{DbGateway_DbGateway1_Client, DbGatewayIntroOutcome};
@@ -10,9 +14,10 @@ use groundhog_indexer::{
 use groundhog_scheduler::sched_coord::SchedulerCoord_SchedulerCoord1_Client;
 use groundhog_scp::network::Protocol;
 use groundhog_view::{ViewGateway_ViewGateway1_Client, ViewGatewayIntroOutcome};
-use groundhog_x23_transport::{ConnectError, try_connect};
+use groundhog_x23_transport::{ConnectError, try_connect, try_connect_with_canceled_call_policy};
 use groundhog_xdr::PROTOCOL_VERSION;
-use tokio::sync::RwLock;
+use rpc_driver::CanceledCallPolicy;
+use tokio::{sync::RwLock, time::Instant};
 use xdr_common::StringM;
 
 use crate::config::{GatewayConfig, HealthBackend};
@@ -20,6 +25,57 @@ use crate::metrics::{BackendRequestOutcome, GatewayMetrics};
 use crate::storage_batcher::{DbGatewaySink, StorageReadBatcher, StorageReadSink};
 use crate::submitter::{BatchSubmitter, SchedulerSink, SubmitSink};
 use crate::tip_coalescer::{SchedulerTipSink, TipCoalescer, TipSink};
+
+static NEXT_SCHEDULER_GENERATION: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Clone)]
+pub(crate) struct SchedulerClient {
+    client: SchedulerCoord_SchedulerCoord1_Client,
+    probe_client: SchedulerCoord_SchedulerCoord1_Client,
+    generation: u64,
+}
+
+impl SchedulerClient {
+    pub(crate) fn new(
+        client: SchedulerCoord_SchedulerCoord1_Client,
+        probe_client: SchedulerCoord_SchedulerCoord1_Client,
+    ) -> Self {
+        Self {
+            client,
+            probe_client,
+            generation: NEXT_SCHEDULER_GENERATION.fetch_add(1, Ordering::Relaxed),
+        }
+    }
+
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub(crate) fn probe_client(&self) -> &SchedulerCoord_SchedulerCoord1_Client {
+        &self.probe_client
+    }
+}
+
+impl Deref for SchedulerClient {
+    type Target = SchedulerCoord_SchedulerCoord1_Client;
+
+    fn deref(&self) -> &Self::Target {
+        &self.client
+    }
+}
+
+pub(crate) async fn clear_scheduler_if_current(
+    scheduler: &RwLock<Option<SchedulerClient>>,
+    generation: u64,
+) {
+    let mut current = scheduler.write().await;
+    if current
+        .as_ref()
+        .is_some_and(|client| client.generation() == generation)
+    {
+        *current = None;
+    }
+}
 
 /// Shared state injected into every handler.
 ///
@@ -34,11 +90,11 @@ pub struct GatewayContext {
     ///
     /// Even when tx submission is routed through chuckd, read paths still use
     /// the scheduler directly.
-    pub scheduler: Arc<RwLock<Option<SchedulerCoord_SchedulerCoord1_Client>>>,
+    pub scheduler: Arc<RwLock<Option<SchedulerClient>>>,
 
-    /// Rebuilt scheduler pool held away from request handlers until its
-    /// readiness grace period has elapsed.
-    pub(crate) pending_scheduler: Arc<RwLock<Option<PendingSchedulerReconnect>>>,
+    /// Scheduler pool held away from request handlers until its readiness
+    /// grace period has elapsed.
+    pub(crate) scheduler_quarantine: Arc<RwLock<Option<QuarantinedScheduler>>>,
 
     /// x23 RPC client to hogd indexer.
     /// Used for: `get_transaction_info`, `get_events` (paginated).
@@ -102,26 +158,39 @@ impl GatewayContext {
         // protocol itself multiplexes via xid).  Size the pool to cover the
         // batch submitter (`max_inflight_batches` × shards) plus the tip
         // coalescer (`max_inflight_tips`) plus slack for ad-hoc RPCs.
+        let startup_timeout = Duration::from_millis(config.backend_connect_timeout_ms.max(1));
         let sched_pool_size = scheduler_pool_size(&config);
-        let scheduler = Arc::new(RwLock::new(
-            connect_optional_scheduler(&config.scheduler_address, sched_pool_size).await?,
-        ));
+        let scheduler_candidate = if let Ok(result) = tokio::time::timeout(
+            startup_timeout,
+            connect_optional_scheduler(&config.scheduler_address, sched_pool_size),
+        )
+        .await
+        {
+            result?
+        } else {
+            tracing::warn!(
+                addr = %config.scheduler_address,
+                timeout = ?startup_timeout,
+                "scheduler connect timed out, starting in degraded mode"
+            );
+            None
+        };
+        let scheduler = Arc::new(RwLock::new(None));
 
         let protocol_override = config.hogd_protocol_override.as_deref();
-        let startup_timeout = Duration::from_millis(config.backend_connect_timeout_ms.max(1));
 
-        let indexer = Arc::new(RwLock::new(
+        let indexer = Arc::new(RwLock::new(tolerate_optional_startup_timeout(
             connect_optional_indexer(
                 config.indexer_address.as_deref(),
                 protocol_override,
                 startup_timeout,
                 Some(&metrics),
             )
-            .await?,
-        ));
+            .await,
+        )?));
 
         let db_gateway_pool = db_gateway_pool_size(&config);
-        let db_gateway = Arc::new(RwLock::new(
+        let db_gateway = Arc::new(RwLock::new(tolerate_optional_startup_timeout(
             connect_optional_db_gateway(
                 config.db_gateway_address.as_deref(),
                 db_gateway_pool,
@@ -129,55 +198,87 @@ impl GatewayContext {
                 startup_timeout,
                 Some(&metrics),
             )
-            .await?,
-        ));
+            .await,
+        )?));
 
-        let view_gateway = Arc::new(RwLock::new(
+        let view_gateway = Arc::new(RwLock::new(tolerate_optional_startup_timeout(
             connect_optional_view_gateway(
                 config.view_gateway_address.as_deref(),
                 protocol_override,
                 startup_timeout,
                 Some(&metrics),
             )
-            .await?,
-        ));
+            .await,
+        )?));
 
-        Ok(Self::assemble(
+        let context = Self::assemble(
             scheduler,
             indexer,
             view_gateway,
             db_gateway,
             config,
             metrics,
-        ))
+        );
+        if let Some(client) = scheduler_candidate {
+            let ready_at =
+                Instant::now() + Duration::from_millis(context.config.scheduler_reconnect_grace_ms);
+            *context.scheduler_quarantine.write().await =
+                Some(QuarantinedScheduler { client, ready_at });
+        }
+        Ok(context)
     }
 
     /// Assemble a context from already-connected (or absent) backend
     /// clients, spawning the batching and coalescing tasks.
     pub(crate) fn assemble(
-        scheduler: Arc<RwLock<Option<SchedulerCoord_SchedulerCoord1_Client>>>,
+        scheduler: Arc<RwLock<Option<SchedulerClient>>>,
         indexer: Arc<RwLock<Option<IndexerBlockExplorer_IndexerBlockExplorer1_Client>>>,
         view_gateway: Arc<RwLock<Option<ViewGateway_ViewGateway1_Client>>>,
         db_gateway: Arc<RwLock<Option<DbGateway_DbGateway1_Client>>>,
         config: Arc<GatewayConfig>,
         metrics: GatewayMetrics,
     ) -> Self {
-        let submit_sink: Arc<dyn SubmitSink> =
-            Arc::new(SchedulerSink::new(scheduler.clone(), metrics.clone()));
-        let batch_submitter = BatchSubmitter::spawn(&config.batch, &submit_sink, metrics.clone());
+        let request_timeout = config.request_timeout();
+        let backend_request_timeout = config.backend_request_timeout();
+        let submit_sink: Arc<dyn SubmitSink> = Arc::new(SchedulerSink::new(
+            scheduler.clone(),
+            metrics.clone(),
+            backend_request_timeout,
+        ));
+        let batch_submitter = BatchSubmitter::spawn_with_timeout(
+            &config.batch,
+            &submit_sink,
+            metrics.clone(),
+            request_timeout,
+        );
 
-        let storage_sink: Arc<dyn StorageReadSink> =
-            Arc::new(DbGatewaySink::new(db_gateway.clone(), metrics.clone()));
-        let storage_batcher =
-            StorageReadBatcher::spawn(&config.storage, &storage_sink, metrics.clone());
+        let storage_sink: Arc<dyn StorageReadSink> = Arc::new(DbGatewaySink::new(
+            db_gateway.clone(),
+            metrics.clone(),
+            backend_request_timeout,
+        ));
+        let storage_batcher = StorageReadBatcher::spawn_with_timeout(
+            &config.storage,
+            &storage_sink,
+            metrics.clone(),
+            request_timeout,
+        );
 
-        let tip_sink: Arc<dyn TipSink> =
-            Arc::new(SchedulerTipSink::new(scheduler.clone(), metrics.clone()));
-        let tip_coalescer = TipCoalescer::spawn(&config.tip, &tip_sink, metrics.clone());
+        let tip_sink: Arc<dyn TipSink> = Arc::new(SchedulerTipSink::new(
+            scheduler.clone(),
+            metrics.clone(),
+            backend_request_timeout,
+        ));
+        let tip_coalescer = TipCoalescer::spawn_with_timeout(
+            &config.tip,
+            &tip_sink,
+            metrics.clone(),
+            request_timeout,
+        );
 
         Self {
             scheduler,
-            pending_scheduler: Arc::new(RwLock::new(None)),
+            scheduler_quarantine: Arc::new(RwLock::new(None)),
             indexer,
             batch_submitter,
             storage_batcher,
@@ -190,23 +291,48 @@ impl GatewayContext {
     }
 }
 
+fn tolerate_optional_startup_timeout<T>(
+    result: Result<Option<T>, ConnectError>,
+) -> Result<Option<T>, ConnectError> {
+    match result {
+        Err(ConnectError::StartupProbeTimedOut { .. }) => Ok(None),
+        result => result,
+    }
+}
+
 #[derive(Clone)]
-pub(crate) struct PendingSchedulerReconnect {
-    pub(crate) client: SchedulerCoord_SchedulerCoord1_Client,
-    pub(crate) probe_not_before: Instant,
+pub(crate) struct QuarantinedScheduler {
+    pub(crate) client: SchedulerClient,
+    pub(crate) ready_at: Instant,
 }
 
 pub(crate) async fn connect_optional_scheduler(
     address: &str,
     pool_size: usize,
-) -> Result<Option<SchedulerCoord_SchedulerCoord1_Client>, ConnectError> {
-    try_connect(
+) -> Result<Option<SchedulerClient>, ConnectError> {
+    let Some(client) = try_connect_with_canceled_call_policy(
         "scheduler",
         address,
         pool_size,
+        CanceledCallPolicy::PoisonConnection,
         SchedulerCoord_SchedulerCoord1_Client::new,
     )
-    .await
+    .await?
+    else {
+        return Ok(None);
+    };
+    let Some(probe_client) = try_connect_with_canceled_call_policy(
+        "scheduler_health",
+        address,
+        1,
+        CanceledCallPolicy::PoisonConnection,
+        SchedulerCoord_SchedulerCoord1_Client::new,
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(SchedulerClient::new(client, probe_client)))
 }
 
 pub(crate) async fn connect_optional_indexer(
@@ -238,7 +364,11 @@ pub(crate) async fn connect_optional_indexer(
                 timeout = ?startup_timeout,
                 "optional backend connect timed out, starting in degraded mode"
             );
-            return Ok(None);
+            return Err(ConnectError::StartupProbeTimedOut {
+                service: "indexer",
+                addr: address.to_string(),
+                timeout: startup_timeout,
+            });
         }
         Ok(result) => result?,
     }) else {
@@ -251,7 +381,11 @@ pub(crate) async fn connect_optional_indexer(
             timeout = ?startup_timeout,
             "optional backend connect consumed startup timeout, starting in degraded mode"
         );
-        return Ok(None);
+        return Err(ConnectError::StartupProbeTimedOut {
+            service: "indexer",
+            addr: address.to_string(),
+            timeout: startup_timeout,
+        });
     };
 
     let protocol_version = protocol_override.unwrap_or(PROTOCOL_VERSION);
@@ -283,7 +417,11 @@ pub(crate) async fn connect_optional_indexer(
             timeout = ?startup_timeout,
             "optional backend intro timed out, starting in degraded mode"
         );
-        return Ok(None);
+        return Err(ConnectError::StartupProbeTimedOut {
+            service: "indexer",
+            addr: address.to_string(),
+            timeout: startup_timeout,
+        });
     };
 
     match intro_outcome {
@@ -335,7 +473,11 @@ pub(crate) async fn connect_optional_db_gateway(
                 timeout = ?startup_timeout,
                 "optional backend connect timed out, starting in degraded mode"
             );
-            return Ok(None);
+            return Err(ConnectError::StartupProbeTimedOut {
+                service: "db_gateway",
+                addr: address.to_string(),
+                timeout: startup_timeout,
+            });
         }
         Ok(result) => result?,
     }) else {
@@ -348,7 +490,11 @@ pub(crate) async fn connect_optional_db_gateway(
             timeout = ?startup_timeout,
             "optional backend connect consumed startup timeout, starting in degraded mode"
         );
-        return Ok(None);
+        return Err(ConnectError::StartupProbeTimedOut {
+            service: "db_gateway",
+            addr: address.to_string(),
+            timeout: startup_timeout,
+        });
     };
 
     let protocol_version = protocol_override.unwrap_or(PROTOCOL_VERSION);
@@ -376,7 +522,11 @@ pub(crate) async fn connect_optional_db_gateway(
             timeout = ?startup_timeout,
             "optional backend intro timed out, starting in degraded mode"
         );
-        return Ok(None);
+        return Err(ConnectError::StartupProbeTimedOut {
+            service: "db_gateway",
+            addr: address.to_string(),
+            timeout: startup_timeout,
+        });
     };
 
     match intro_outcome {
@@ -427,7 +577,11 @@ pub(crate) async fn connect_optional_view_gateway(
                 timeout = ?startup_timeout,
                 "optional backend connect timed out, starting in degraded mode"
             );
-            return Ok(None);
+            return Err(ConnectError::StartupProbeTimedOut {
+                service: "view_gateway",
+                addr: address.to_string(),
+                timeout: startup_timeout,
+            });
         }
         Ok(result) => result?,
     }) else {
@@ -440,7 +594,11 @@ pub(crate) async fn connect_optional_view_gateway(
             timeout = ?startup_timeout,
             "optional backend connect consumed startup timeout, starting in degraded mode"
         );
-        return Ok(None);
+        return Err(ConnectError::StartupProbeTimedOut {
+            service: "view_gateway",
+            addr: address.to_string(),
+            timeout: startup_timeout,
+        });
     };
 
     let protocol_version = protocol_override.unwrap_or(PROTOCOL_VERSION);
@@ -469,7 +627,11 @@ pub(crate) async fn connect_optional_view_gateway(
             timeout = ?startup_timeout,
             "optional backend intro timed out, starting in degraded mode"
         );
-        return Ok(None);
+        return Err(ConnectError::StartupProbeTimedOut {
+            service: "view_gateway",
+            addr: address.to_string(),
+            timeout: startup_timeout,
+        });
     };
 
     match intro_outcome {
@@ -1001,23 +1163,40 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn configured_view_gateway_intro_timeout_degrades_startup() {
+    async fn configured_view_gateway_intro_timeout_is_typed() {
         let (addr, _server) = start_slow_intro_view_gateway().await;
 
-        let view_gateway = connect_optional_view_gateway(
+        let result = connect_optional_view_gateway(
             Some(&addr.to_string()),
             None,
             Duration::from_millis(10),
             None,
         )
-        .await
-        .expect("slow ViewGateway intro should preserve degraded startup");
+        .await;
 
-        assert!(view_gateway.is_none());
+        assert!(matches!(
+            result,
+            Err(ConnectError::StartupProbeTimedOut {
+                service: "view_gateway",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn optional_timeout_is_tolerated_only_at_process_startup() {
+        let result =
+            tolerate_optional_startup_timeout::<()>(Err(ConnectError::StartupProbeTimedOut {
+                service: "indexer",
+                addr: "127.0.0.1:1".into(),
+                timeout: Duration::from_secs(1),
+            }));
+
+        assert!(matches!(result, Ok(None)));
     }
 
     #[tokio::test]
-    async fn configured_indexer_and_db_gateway_intro_timeout_degrades_startup() {
+    async fn configured_indexer_and_db_gateway_intro_timeouts_are_typed() {
         let (indexer_addr, _indexer_server) = start_test_indexer(IntroMode::Slow).await;
         let (db_addr, _db_server) = start_test_db_gateway(IntroMode::Slow).await;
 
@@ -1027,8 +1206,7 @@ mod tests {
             Duration::from_millis(10),
             None,
         )
-        .await
-        .expect("slow indexer intro should preserve degraded startup");
+        .await;
         let db_gateway = connect_optional_db_gateway(
             Some(&db_addr.to_string()),
             1,
@@ -1036,11 +1214,22 @@ mod tests {
             Duration::from_millis(10),
             None,
         )
-        .await
-        .expect("slow DbGateway intro should preserve degraded startup");
+        .await;
 
-        assert!(indexer.is_none());
-        assert!(db_gateway.is_none());
+        assert!(matches!(
+            indexer,
+            Err(ConnectError::StartupProbeTimedOut {
+                service: "indexer",
+                ..
+            })
+        ));
+        assert!(matches!(
+            db_gateway,
+            Err(ConnectError::StartupProbeTimedOut {
+                service: "db_gateway",
+                ..
+            })
+        ));
     }
 
     #[tokio::test]

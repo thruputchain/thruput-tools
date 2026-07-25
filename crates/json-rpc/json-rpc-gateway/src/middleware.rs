@@ -13,7 +13,7 @@ use std::{
     future::Future,
     pin::Pin,
     task::{Context, Poll},
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 use axum::http::{Request, Response, StatusCode};
@@ -47,7 +47,7 @@ pub(crate) fn http_middleware(
         .layer(cors_layer())
         .layer(TimeoutLayer::with_status_code(
             axum::http::StatusCode::REQUEST_TIMEOUT,
-            Duration::from_millis(config.request_timeout_ms),
+            config.http_request_timeout(),
         ))
 }
 
@@ -155,6 +155,7 @@ mod tests {
         metrics::GatewayMetrics,
     };
     use axum::body::Body;
+    use std::time::Duration;
     use tower::{ServiceExt, service_fn};
 
     #[tokio::test]

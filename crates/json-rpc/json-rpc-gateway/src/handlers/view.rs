@@ -52,7 +52,8 @@ pub async fn view(
     })?;
 
     let query = view_query_from_request(request, gas_limit)?;
-    let timeout = Duration::from_millis(ctx.config.view_timeout_ms);
+    let timeout =
+        Duration::from_millis(ctx.config.view_timeout_ms).min(ctx.config.backend_request_timeout());
     view_response_from_client(&client, &ctx.metrics, &query, timeout).await
 }
 

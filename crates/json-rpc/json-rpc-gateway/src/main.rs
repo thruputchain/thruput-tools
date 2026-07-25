@@ -60,11 +60,11 @@ struct Cli {
     #[arg(long)]
     health_probe_interval_ms: Option<u64>,
 
-    /// Maximum time to rebuild one backend x23 connection pool
+    /// Maximum time to build one backend x23 connection pool
     #[arg(long)]
     backend_connect_timeout_ms: Option<u64>,
 
-    /// Delay scheduler tip probes after rebuilding its x23 connection pool
+    /// Delay scheduler tip probes after building its x23 connection pool
     #[arg(long)]
     scheduler_reconnect_grace_ms: Option<u64>,
 
@@ -173,6 +173,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     let rpc_config = RpcServerConfig::default()
+        .with_request_timeout_ms(ctx.config.request_timeout_ms.max(3))
         .with_max_events_per_page(ctx.config.max_events_per_page)
         .with_max_transactions_per_page(ctx.config.max_transactions_per_page)
         .with_max_cursor_bytes(ctx.config.max_cursor_bytes)
