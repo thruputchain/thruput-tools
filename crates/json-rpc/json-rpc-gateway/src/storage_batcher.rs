@@ -15,9 +15,7 @@ use std::{sync::Arc, time::Duration, time::Instant};
 
 use async_trait::async_trait;
 use groundhog_db_gateway::AddressAndKeyBatch;
-use groundhog_db_gateway::{
-    DbGateway_DbGateway1_Client, DbGatewayItemResult, DbGatewayPayload, DbGatewayResult,
-};
+use groundhog_db_gateway::{DbGatewayItemResult, DbGatewayPayload, DbGatewayResult};
 use groundhog_json_rpc_server::RpcRequestContext;
 use groundhog_json_rpc_types::{
     ContractAddress,
@@ -32,6 +30,7 @@ use crate::adaptive_batch::{
     AdaptiveBatcher, BatchProcessor, deadline_cohorts, shard_index_by_routing_key,
 };
 use crate::config::{AdaptiveBatchConfig, HealthBackend};
+use crate::context::DbGatewayClient;
 use crate::error::GatewayError;
 use crate::metrics::{BackendRequestOutcome, GatewayMetrics};
 
@@ -52,14 +51,14 @@ pub trait StorageReadSink: Send + Sync + 'static {
 /// Holds a shared `Arc<RwLock<Option<Client>>>` so that reconnections in
 /// `GatewayContext` become visible on the next call.
 pub struct DbGatewaySink {
-    db_gateway: Arc<RwLock<Option<DbGateway_DbGateway1_Client>>>,
+    db_gateway: Arc<RwLock<Option<DbGatewayClient>>>,
     metrics: GatewayMetrics,
     timeout: Duration,
 }
 
 impl DbGatewaySink {
     pub(crate) fn new(
-        db_gateway: Arc<RwLock<Option<DbGateway_DbGateway1_Client>>>,
+        db_gateway: Arc<RwLock<Option<DbGatewayClient>>>,
         metrics: GatewayMetrics,
         timeout: Duration,
     ) -> Self {

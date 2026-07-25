@@ -16,7 +16,7 @@ use groundhog_scp::network::Protocol;
 use groundhog_view::{ViewGateway_ViewGateway1_Client, ViewGatewayIntroOutcome};
 use groundhog_x23_transport::{ConnectError, try_connect, try_connect_with_canceled_call_policy};
 use groundhog_xdr::PROTOCOL_VERSION;
-use rpc_driver::CanceledCallPolicy;
+use rpc_driver::{CanceledCallPolicy, RpcSender};
 use tokio::{
     sync::{RwLock, Semaphore},
     time::Instant,
@@ -32,6 +32,38 @@ use crate::tip_coalescer::{SchedulerTipSink, TipCoalescer, TipSink};
 static NEXT_SCHEDULER_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 pub(crate) const SCHEDULER_LOOKUP_CONCURRENCY: usize = 4;
+const HEALTH_PROBE_POOL_SIZE: usize = 1;
+
+#[derive(Clone)]
+pub(crate) struct BackendClient<C> {
+    client: C,
+    probe_client: C,
+}
+
+impl<C> BackendClient<C> {
+    pub(crate) fn new(client: C, probe_client: C) -> Self {
+        Self {
+            client,
+            probe_client,
+        }
+    }
+
+    pub(crate) fn probe_client(&self) -> &C {
+        &self.probe_client
+    }
+}
+
+impl<C> Deref for BackendClient<C> {
+    type Target = C;
+
+    fn deref(&self) -> &Self::Target {
+        &self.client
+    }
+}
+
+pub(crate) type IndexerClient = BackendClient<IndexerBlockExplorer_IndexerBlockExplorer1_Client>;
+pub(crate) type DbGatewayClient = BackendClient<DbGateway_DbGateway1_Client>;
+pub(crate) type ViewGatewayClient = BackendClient<ViewGateway_ViewGateway1_Client>;
 
 #[derive(Clone)]
 pub(crate) struct SchedulerClient {
@@ -106,7 +138,7 @@ pub struct GatewayContext {
 
     /// x23 RPC client to hogd indexer.
     /// Used for: `get_transaction_info`, `get_events` (paginated).
-    pub indexer: Arc<RwLock<Option<IndexerBlockExplorer_IndexerBlockExplorer1_Client>>>,
+    pub indexer: Arc<RwLock<Option<IndexerClient>>>,
 
     /// Adaptive batching submitter for `sendRawTransaction`. Accumulates
     /// incoming client submissions and packs them into `submit_unvetted`
@@ -124,11 +156,10 @@ pub struct GatewayContext {
 
     /// x23 RPC client to hogd `ViewGateway`.
     /// Used for: `groundhog_view`.
-    pub view_gateway: Arc<RwLock<Option<ViewGateway_ViewGateway1_Client>>>,
+    pub view_gateway: Arc<RwLock<Option<ViewGatewayClient>>>,
 
     /// x23 RPC client to hogd `DbGateway`.
-    /// Shared by storage batching and readiness probes.
-    pub db_gateway: Arc<RwLock<Option<DbGateway_DbGateway1_Client>>>,
+    pub db_gateway: Arc<RwLock<Option<DbGatewayClient>>>,
 
     /// x23 RPC client to coordinator storage (optional).
     /// Used for: block/CV queries and optional tx submission relay path.
@@ -240,9 +271,9 @@ impl GatewayContext {
     /// clients, spawning the batching and coalescing tasks.
     pub(crate) fn assemble(
         scheduler: Arc<RwLock<Option<SchedulerClient>>>,
-        indexer: Arc<RwLock<Option<IndexerBlockExplorer_IndexerBlockExplorer1_Client>>>,
-        view_gateway: Arc<RwLock<Option<ViewGateway_ViewGateway1_Client>>>,
-        db_gateway: Arc<RwLock<Option<DbGateway_DbGateway1_Client>>>,
+        indexer: Arc<RwLock<Option<IndexerClient>>>,
+        view_gateway: Arc<RwLock<Option<ViewGatewayClient>>>,
+        db_gateway: Arc<RwLock<Option<DbGatewayClient>>>,
         config: Arc<GatewayConfig>,
         metrics: GatewayMetrics,
     ) -> Self {
@@ -351,43 +382,67 @@ pub(crate) async fn connect_optional_scheduler(
     Ok(Some(SchedulerClient::new(client, probe_client)))
 }
 
+async fn connect_backend_pair<C, F>(
+    service: &'static str,
+    probe_service: &'static str,
+    address: &str,
+    pool_size: usize,
+    startup_timeout: Duration,
+    build: F,
+) -> Result<Option<BackendClient<C>>, ConnectError>
+where
+    F: Fn(Arc<dyn RpcSender>) -> C + Copy,
+{
+    let result = tokio::time::timeout(startup_timeout, async {
+        let Some(client) = try_connect(service, address, pool_size, build).await? else {
+            return Ok(None);
+        };
+        let Some(probe_client) =
+            try_connect(probe_service, address, HEALTH_PROBE_POOL_SIZE, build).await?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(BackendClient::new(client, probe_client)))
+    })
+    .await;
+    if let Ok(result) = result {
+        result
+    } else {
+        tracing::warn!(
+            addr = address,
+            service,
+            timeout = ?startup_timeout,
+            "optional backend connection pools timed out, starting in degraded mode"
+        );
+        Err(ConnectError::StartupProbeTimedOut {
+            service,
+            addr: address.to_string(),
+            timeout: startup_timeout,
+        })
+    }
+}
+
 pub(crate) async fn connect_optional_indexer(
     address: Option<&str>,
     protocol_override: Option<&str>,
     startup_timeout: Duration,
     metrics: Option<&GatewayMetrics>,
-) -> Result<Option<IndexerBlockExplorer_IndexerBlockExplorer1_Client>, ConnectError> {
+) -> Result<Option<IndexerClient>, ConnectError> {
     let Some(address) = address else {
         return Ok(None);
     };
 
     let connect_started_at = Instant::now();
-    let connect_result = tokio::time::timeout(
+    let Some(client) = connect_backend_pair(
+        "indexer",
+        "indexer_health",
+        address,
+        4,
         startup_timeout,
-        try_connect(
-            "indexer",
-            address,
-            4,
-            IndexerBlockExplorer_IndexerBlockExplorer1_Client::new,
-        ),
+        IndexerBlockExplorer_IndexerBlockExplorer1_Client::new,
     )
-    .await;
-    let Some(client) = (match connect_result {
-        Err(_) => {
-            tracing::warn!(
-                addr = address,
-                service = "indexer",
-                timeout = ?startup_timeout,
-                "optional backend connect timed out, starting in degraded mode"
-            );
-            return Err(ConnectError::StartupProbeTimedOut {
-                service: "indexer",
-                addr: address.to_string(),
-                timeout: startup_timeout,
-            });
-        }
-        Ok(result) => result?,
-    }) else {
+    .await?
+    else {
         return Ok(None);
     };
     let Some(intro_timeout) = startup_timeout.checked_sub(connect_started_at.elapsed()) else {
@@ -409,7 +464,9 @@ pub(crate) async fn connect_optional_indexer(
     let started_at = Instant::now();
     let intro_result = tokio::time::timeout(
         intro_timeout,
-        client.indexer_block_explorer_intro(&protocol),
+        client
+            .probe_client()
+            .indexer_block_explorer_intro(&protocol),
     )
     .await;
     if let Some(metrics) = metrics {
@@ -465,38 +522,22 @@ pub(crate) async fn connect_optional_db_gateway(
     protocol_override: Option<&str>,
     startup_timeout: Duration,
     metrics: Option<&GatewayMetrics>,
-) -> Result<Option<DbGateway_DbGateway1_Client>, ConnectError> {
+) -> Result<Option<DbGatewayClient>, ConnectError> {
     let Some(address) = address else {
         return Ok(None);
     };
 
     let connect_started_at = Instant::now();
-    let connect_result = tokio::time::timeout(
+    let Some(client) = connect_backend_pair(
+        "db_gateway",
+        "db_gateway_health",
+        address,
+        pool_size,
         startup_timeout,
-        try_connect(
-            "db_gateway",
-            address,
-            pool_size,
-            DbGateway_DbGateway1_Client::new,
-        ),
+        DbGateway_DbGateway1_Client::new,
     )
-    .await;
-    let Some(client) = (match connect_result {
-        Err(_) => {
-            tracing::warn!(
-                addr = address,
-                service = "db_gateway",
-                timeout = ?startup_timeout,
-                "optional backend connect timed out, starting in degraded mode"
-            );
-            return Err(ConnectError::StartupProbeTimedOut {
-                service: "db_gateway",
-                addr: address.to_string(),
-                timeout: startup_timeout,
-            });
-        }
-        Ok(result) => result?,
-    }) else {
+    .await?
+    else {
         return Ok(None);
     };
     let Some(intro_timeout) = startup_timeout.checked_sub(connect_started_at.elapsed()) else {
@@ -516,7 +557,11 @@ pub(crate) async fn connect_optional_db_gateway(
     let protocol_version = protocol_override.unwrap_or(PROTOCOL_VERSION);
     let protocol: Protocol = StringM(protocol_version.as_bytes().to_vec());
     let started_at = Instant::now();
-    let intro_result = tokio::time::timeout(intro_timeout, client.dbgateway_intro(&protocol)).await;
+    let intro_result = tokio::time::timeout(
+        intro_timeout,
+        client.probe_client().dbgateway_intro(&protocol),
+    )
+    .await;
     if let Some(metrics) = metrics {
         let outcome = match &intro_result {
             Err(_) => BackendRequestOutcome::Timeout,
@@ -569,38 +614,22 @@ pub(crate) async fn connect_optional_view_gateway(
     protocol_override: Option<&str>,
     startup_timeout: Duration,
     metrics: Option<&GatewayMetrics>,
-) -> Result<Option<ViewGateway_ViewGateway1_Client>, ConnectError> {
+) -> Result<Option<ViewGatewayClient>, ConnectError> {
     let Some(address) = address else {
         return Ok(None);
     };
 
     let connect_started_at = Instant::now();
-    let connect_result = tokio::time::timeout(
+    let Some(client) = connect_backend_pair(
+        "view_gateway",
+        "view_gateway_health",
+        address,
+        view_gateway_pool_size(),
         startup_timeout,
-        try_connect(
-            "view_gateway",
-            address,
-            view_gateway_pool_size(),
-            ViewGateway_ViewGateway1_Client::new,
-        ),
+        ViewGateway_ViewGateway1_Client::new,
     )
-    .await;
-    let Some(client) = (match connect_result {
-        Err(_) => {
-            tracing::warn!(
-                addr = address,
-                service = "view_gateway",
-                timeout = ?startup_timeout,
-                "optional backend connect timed out, starting in degraded mode"
-            );
-            return Err(ConnectError::StartupProbeTimedOut {
-                service: "view_gateway",
-                addr: address.to_string(),
-                timeout: startup_timeout,
-            });
-        }
-        Ok(result) => result?,
-    }) else {
+    .await?
+    else {
         return Ok(None);
     };
     let Some(intro_timeout) = startup_timeout.checked_sub(connect_started_at.elapsed()) else {
@@ -620,8 +649,11 @@ pub(crate) async fn connect_optional_view_gateway(
     let protocol_version = protocol_override.unwrap_or(PROTOCOL_VERSION);
     let protocol: Protocol = StringM(protocol_version.as_bytes().to_vec());
     let started_at = Instant::now();
-    let intro_result =
-        tokio::time::timeout(intro_timeout, client.viewgateway_intro(&protocol)).await;
+    let intro_result = tokio::time::timeout(
+        intro_timeout,
+        client.probe_client().viewgateway_intro(&protocol),
+    )
+    .await;
     if let Some(metrics) = metrics {
         let outcome = match &intro_result {
             Err(_) => BackendRequestOutcome::Timeout,

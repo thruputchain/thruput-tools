@@ -13,7 +13,7 @@ mod storage_batcher;
 mod submitter;
 mod tip_coalescer;
 
-use std::{path::Path, sync::Arc};
+use std::{future::Future, path::Path, sync::Arc, time::Duration};
 
 use clap::Parser;
 use groundhog_json_rpc_types::runtime_manifest::RuntimeManifest;
@@ -68,6 +68,10 @@ struct Cli {
     #[arg(long)]
     scheduler_reconnect_grace_ms: Option<u64>,
 
+    /// Maximum total time to drain after a shutdown signal
+    #[arg(long)]
+    shutdown_grace_ms: Option<u64>,
+
     /// Scheduler (mempool) x23 RPC address (overrides config file)
     #[arg(long)]
     scheduler: Option<String>,
@@ -121,6 +125,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         health_required_backends = ?config.health_required_backends,
         backend_connect_timeout_ms = config.backend_connect_timeout_ms,
         scheduler_reconnect_grace_ms = config.scheduler_reconnect_grace_ms,
+        shutdown_grace_ms = config.shutdown_grace_ms,
         submission_backend = ?config.submission_backend,
         scheduler = %config.scheduler_address,
         indexer = ?config.indexer_address,
@@ -188,14 +193,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!("hog-gateway listening");
 
-    // Graceful shutdown on SIGINT/SIGTERM.
-    tokio::signal::ctrl_c().await?;
+    shutdown_signal().await?;
     let _ = health_shutdown_tx.send(());
     let _ = observability_shutdown_tx.send(());
     handle.stop()?;
-    handle.stopped().await;
-    health_handle.await?;
-    observability_server.handle.await??;
+    drain_shutdown(
+        handle.stopped(),
+        health_handle,
+        observability_server.handle,
+        Duration::from_millis(ctx.config.shutdown_grace_ms.max(1)),
+    )
+    .await?;
 
     Ok(())
 }
@@ -222,6 +230,9 @@ fn apply_cli_overrides(config: &mut GatewayConfig, cli: Cli) {
     if let Some(grace_ms) = cli.scheduler_reconnect_grace_ms {
         config.scheduler_reconnect_grace_ms = grace_ms;
     }
+    if let Some(grace_ms) = cli.shutdown_grace_ms {
+        config.shutdown_grace_ms = grace_ms;
+    }
     if let Some(scheduler) = cli.scheduler {
         config.scheduler_address = scheduler;
     }
@@ -239,6 +250,88 @@ fn apply_cli_overrides(config: &mut GatewayConfig, cli: Cli) {
     }
 }
 
+#[cfg(unix)]
+async fn shutdown_signal() -> std::io::Result<()> {
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    tokio::select! {
+        result = tokio::signal::ctrl_c() => result,
+        _ = terminate.recv() => Ok(()),
+    }
+}
+
+#[cfg(not(unix))]
+async fn shutdown_signal() -> std::io::Result<()> {
+    tokio::signal::ctrl_c().await
+}
+
+async fn drain_shutdown<R>(
+    rpc_stopped: R,
+    mut health_handle: tokio::task::JoinHandle<()>,
+    mut observability_handle: tokio::task::JoinHandle<std::io::Result<()>>,
+    grace: Duration,
+) -> std::io::Result<()>
+where
+    R: Future<Output = ()>,
+{
+    let deadline = tokio::time::Instant::now()
+        .checked_add(grace)
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "shutdown grace exceeds the platform timer range",
+            )
+        })?;
+    let mut rpc_stopped = std::pin::pin!(rpc_stopped);
+    let mut rpc_done = false;
+    let mut health_done = false;
+    let mut observability_done = false;
+    let mut first_error = None;
+
+    while !(rpc_done && health_done && observability_done) {
+        tokio::select! {
+            biased;
+            () = &mut rpc_stopped, if !rpc_done => rpc_done = true,
+            result = &mut health_handle, if !health_done => {
+                health_done = true;
+                if let Err(error) = result {
+                    first_error.get_or_insert_with(|| std::io::Error::other(error));
+                }
+            }
+            result = &mut observability_handle, if !observability_done => {
+                observability_done = true;
+                match result {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => {
+                        first_error.get_or_insert(error);
+                    }
+                    Err(error) => {
+                        first_error.get_or_insert_with(|| std::io::Error::other(error));
+                    }
+                }
+            }
+            () = tokio::time::sleep_until(deadline) => break,
+        }
+    }
+
+    if !(rpc_done && health_done && observability_done) {
+        tracing::warn!(
+            grace = ?grace,
+            rpc_pending = !rpc_done,
+            health_pending = !health_done,
+            observability_pending = !observability_done,
+            "gateway shutdown grace expired; canceling owned tasks"
+        );
+        if !health_done {
+            health_handle.abort();
+        }
+        if !observability_done {
+            observability_handle.abort();
+        }
+    }
+
+    first_error.map_or(Ok(()), Err)
+}
+
 async fn read_runtime_manifest(path: &Path) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let file = tokio::fs::File::open(path).await?;
     let mut contents = Vec::new();
@@ -253,4 +346,75 @@ async fn read_runtime_manifest(path: &Path) -> Result<Vec<u8>, Box<dyn std::erro
         .into());
     }
     Ok(contents)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct NotifyOnDrop(Option<tokio::sync::oneshot::Sender<()>>);
+
+    impl Drop for NotifyOnDrop {
+        fn drop(&mut self) {
+            if let Some(sender) = self.0.take() {
+                let _ = sender.send(());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn shutdown_joins_subsystems_that_finish_within_grace() {
+        let health = tokio::spawn(async {});
+        let observability = tokio::spawn(async { Ok(()) });
+
+        drain_shutdown(async {}, health, observability, Duration::from_secs(1))
+            .await
+            .expect("bug: graceful shutdown should succeed");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn shutdown_aborts_owned_tasks_at_one_total_deadline() {
+        let (health_dropped_tx, health_dropped_rx) = tokio::sync::oneshot::channel();
+        let health = tokio::spawn(async move {
+            let _notice = NotifyOnDrop(Some(health_dropped_tx));
+            std::future::pending::<()>().await;
+        });
+        let (observability_dropped_tx, observability_dropped_rx) = tokio::sync::oneshot::channel();
+        let observability = tokio::spawn(async move {
+            let _notice = NotifyOnDrop(Some(observability_dropped_tx));
+            std::future::pending::<std::io::Result<()>>().await
+        });
+        tokio::task::yield_now().await;
+
+        let started_at = tokio::time::Instant::now();
+        drain_shutdown(
+            async {
+                tokio::time::sleep(Duration::from_secs(7)).await;
+            },
+            health,
+            observability,
+            Duration::from_secs(10),
+        )
+        .await
+        .expect("bug: hard shutdown should not manufacture an error");
+        assert_eq!(started_at.elapsed(), Duration::from_secs(10));
+        health_dropped_rx
+            .await
+            .expect("bug: health task should be canceled and dropped");
+        observability_dropped_rx
+            .await
+            .expect("bug: observability task should be canceled and dropped");
+    }
+
+    #[tokio::test]
+    async fn shutdown_rejects_an_unrepresentable_deadline() {
+        let health = tokio::spawn(async {});
+        let observability = tokio::spawn(async { Ok(()) });
+
+        let error = drain_shutdown(async {}, health, observability, Duration::MAX)
+            .await
+            .expect_err("bug: an unrepresentable shutdown grace should fail");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    }
 }

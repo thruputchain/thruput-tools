@@ -1009,8 +1009,11 @@ async fn probe_indexer(
         return failed_probe("indexer not connected");
     };
     let started_at = Instant::now();
-    let rpc_result =
-        tokio::time::timeout(probe_timeout, client.indexer_block_explorer_intro(protocol)).await;
+    let rpc_result = tokio::time::timeout(
+        probe_timeout,
+        client.probe_client().indexer_block_explorer_intro(protocol),
+    )
+    .await;
     let outcome = match &rpc_result {
         Err(_) => BackendRequestOutcome::Timeout,
         Ok(Ok(IndexerBlockExplorerIntroOutcome::IntroSuccess)) => BackendRequestOutcome::Ok,
@@ -1063,7 +1066,11 @@ async fn probe_db_gateway(
         return failed_probe("db_gateway not connected");
     };
     let started_at = Instant::now();
-    let rpc_result = tokio::time::timeout(probe_timeout, client.dbgateway_intro(protocol)).await;
+    let rpc_result = tokio::time::timeout(
+        probe_timeout,
+        client.probe_client().dbgateway_intro(protocol),
+    )
+    .await;
     let outcome = match &rpc_result {
         Err(_) => BackendRequestOutcome::Timeout,
         Ok(Ok(DbGatewayIntroOutcome::DbGatewayIntroSuccess)) => BackendRequestOutcome::Ok,
@@ -1116,7 +1123,11 @@ async fn probe_view_gateway(
         return failed_probe("view_gateway not connected");
     };
     let started_at = Instant::now();
-    let rpc_result = tokio::time::timeout(probe_timeout, client.viewgateway_intro(protocol)).await;
+    let rpc_result = tokio::time::timeout(
+        probe_timeout,
+        client.probe_client().viewgateway_intro(protocol),
+    )
+    .await;
     let outcome = match &rpc_result {
         Err(_) => BackendRequestOutcome::Timeout,
         Ok(Ok(ViewGatewayIntroOutcome::ViewGatewayIntroSuccess)) => BackendRequestOutcome::Ok,
@@ -1276,6 +1287,9 @@ fn bounded_error(message: String) -> String {
 #[cfg(test)]
 mod tests {
     use async_trait::async_trait;
+    use groundhog_db_gateway::{
+        AddressAndKeyBatch, DbGateway_DbGateway1, DbGateway_DbGateway1_Dispatcher, DbGatewayResult,
+    };
     use groundhog_indexer::{
         AddressTransactionQuery, EventPage as IdxEventPage, EventQuery,
         IndexerBlockExplorer_IndexerBlockExplorer1,
@@ -1288,12 +1302,20 @@ mod tests {
         SchedulerNominationResult, SchedulerValidationResult,
         sched_coord::{SchedulerCoord_SchedulerCoord1, SchedulerCoord_SchedulerCoord1_Dispatcher},
     };
+    use groundhog_view::{
+        ViewGateway_ViewGateway1, ViewGateway_ViewGateway1_Dispatcher, ViewGatewayResult,
+    };
     use groundhog_xdr::transaction::{
         OptSignedTransactionBatch, SignedTransactionHash, SignedTransactionHashBatch,
     };
     use groundhog_xdr::{
+        auth_claim::{AuthClaim, AuthClaim_source_address_claim},
+        contract::ContractEntrypointID,
         genesis::GenesisConfiguration,
-        types::{BlockHash, SHA256Hash},
+        invoke_flag::InvokeFlag,
+        transaction::Invocation,
+        types::{BlockHash, ContractAddress, SHA256Hash},
+        view::TransactionViewQuery,
     };
     use rpc_driver::{ProgramError, RpcServer, ServiceMap};
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1301,6 +1323,7 @@ mod tests {
         io::{AsyncReadExt, AsyncWriteExt},
         net::{TcpListener, TcpStream},
     };
+    use xdr_common::{BytesM, VecM};
 
     use crate::{
         error::GatewayError,
@@ -1314,6 +1337,95 @@ mod tests {
     struct SlowIntroIndexer {
         intros: Arc<AtomicUsize>,
         release: Arc<tokio::sync::Notify>,
+    }
+
+    #[derive(Clone, Default)]
+    struct HandlerGate {
+        calls: Arc<AtomicUsize>,
+        release: Arc<tokio::sync::Notify>,
+    }
+
+    impl HandlerGate {
+        async fn wait(&self) {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.release.notified().await;
+        }
+    }
+
+    struct SaturatedIndexer(HandlerGate);
+    struct SaturatedDbGateway(HandlerGate);
+    struct SaturatedViewGateway(HandlerGate);
+
+    #[async_trait]
+    impl IndexerBlockExplorer_IndexerBlockExplorer1 for SaturatedIndexer {
+        async fn indexer_block_explorer_intro(
+            &self,
+            _protocol: Protocol,
+        ) -> Result<IndexerBlockExplorerIntroOutcome, ProgramError> {
+            Ok(IndexerBlockExplorerIntroOutcome::IntroSuccess)
+        }
+
+        async fn get_transaction_info(
+            &self,
+            _tx_hash: SignedTransactionHash,
+        ) -> Result<TxInfoResult, ProgramError> {
+            self.0.wait().await;
+            Err(ProgramError::msg("released indexer handler"))
+        }
+
+        async fn get_events(&self, _query: EventQuery) -> Result<IdxEventPage, ProgramError> {
+            panic!("probe isolation test should only issue transaction lookups")
+        }
+
+        async fn get_transactions(
+            &self,
+            _query: TransactionQuery,
+        ) -> Result<IdxTransactionPage, ProgramError> {
+            panic!("probe isolation test should only issue transaction lookups")
+        }
+
+        async fn get_transactions_by_address(
+            &self,
+            _query: AddressTransactionQuery,
+        ) -> Result<TransactionRefPage, ProgramError> {
+            panic!("probe isolation test should only issue transaction lookups")
+        }
+    }
+
+    #[async_trait]
+    impl DbGateway_DbGateway1 for SaturatedDbGateway {
+        async fn dbgateway_intro(
+            &self,
+            _protocol: Protocol,
+        ) -> Result<DbGatewayIntroOutcome, ProgramError> {
+            Ok(DbGatewayIntroOutcome::DbGatewayIntroSuccess)
+        }
+
+        async fn dbgateway_get_items(
+            &self,
+            _batch: AddressAndKeyBatch,
+        ) -> Result<DbGatewayResult, ProgramError> {
+            self.0.wait().await;
+            Err(ProgramError::msg("released db_gateway handler"))
+        }
+    }
+
+    #[async_trait]
+    impl ViewGateway_ViewGateway1 for SaturatedViewGateway {
+        async fn viewgateway_intro(
+            &self,
+            _protocol: Protocol,
+        ) -> Result<ViewGatewayIntroOutcome, ProgramError> {
+            Ok(ViewGatewayIntroOutcome::ViewGatewayIntroSuccess)
+        }
+
+        async fn viewgateway_view(
+            &self,
+            _query: TransactionViewQuery,
+        ) -> Result<ViewGatewayResult, ProgramError> {
+            self.0.wait().await;
+            Err(ProgramError::msg("released view_gateway handler"))
+        }
     }
 
     #[derive(Clone, Default)]
@@ -1488,6 +1600,88 @@ mod tests {
         let server = RpcServer::new(listener, services);
         let handle = server.start().await;
         (addr, handle, intros, release)
+    }
+
+    async fn start_saturated_indexer() -> (
+        std::net::SocketAddr,
+        tokio::task::JoinHandle<Result<(), std::io::Error>>,
+        HandlerGate,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bug: test indexer should bind");
+        let addr = listener
+            .local_addr()
+            .expect("bug: test indexer should have a local address");
+        let gate = HandlerGate::default();
+        let mut services = ServiceMap::new();
+        services.add_service(Box::new(
+            IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher::new(Box::new(SaturatedIndexer(
+                gate.clone(),
+            ))),
+        ));
+        let handle = RpcServer::new(listener, services).start().await;
+        (addr, handle, gate)
+    }
+
+    async fn start_saturated_db_gateway() -> (
+        std::net::SocketAddr,
+        tokio::task::JoinHandle<Result<(), std::io::Error>>,
+        HandlerGate,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bug: test db_gateway should bind");
+        let addr = listener
+            .local_addr()
+            .expect("bug: test db_gateway should have a local address");
+        let gate = HandlerGate::default();
+        let mut services = ServiceMap::new();
+        services.add_service(Box::new(DbGateway_DbGateway1_Dispatcher::new(Box::new(
+            SaturatedDbGateway(gate.clone()),
+        ))));
+        let handle = RpcServer::new(listener, services).start().await;
+        (addr, handle, gate)
+    }
+
+    async fn start_saturated_view_gateway() -> (
+        std::net::SocketAddr,
+        tokio::task::JoinHandle<Result<(), std::io::Error>>,
+        HandlerGate,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bug: test view_gateway should bind");
+        let addr = listener
+            .local_addr()
+            .expect("bug: test view_gateway should have a local address");
+        let gate = HandlerGate::default();
+        let mut services = ServiceMap::new();
+        services.add_service(Box::new(ViewGateway_ViewGateway1_Dispatcher::new(
+            Box::new(SaturatedViewGateway(gate.clone())),
+        )));
+        let handle = RpcServer::new(listener, services).start().await;
+        (addr, handle, gate)
+    }
+
+    fn test_view_query() -> TransactionViewQuery {
+        TransactionViewQuery {
+            invocation: Invocation {
+                invoked_address: ContractAddress::from([7; 32]),
+                entrypoint: ContractEntrypointID::from([8; 8]),
+                gas_limit: 1,
+                calldata: BytesM(vec![]),
+            },
+            parent_address: None,
+            auth_claim: AuthClaim::kSourceAddressAuthData {
+                source_address_claim: AuthClaim_source_address_claim {
+                    allowed_keys: 0,
+                    required_weight: 0,
+                },
+            },
+            forwarded_tokens: VecM(vec![]),
+            invoke_flags: InvokeFlag::None.0,
+        }
     }
 
     async fn start_test_scheduler(
@@ -2031,6 +2225,127 @@ mod tests {
             .expect("scheduler null call should succeed");
         assert_eq!(scheduler_state.timeout_streak, 0);
         assert!(ctx.scheduler.read().await.is_some());
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn optional_backend_probe_lanes_remain_available_during_handler_saturation() {
+        let (indexer_addr, _indexer_server, indexer_gate) = start_saturated_indexer().await;
+        let (db_gateway_addr, _db_gateway_server, db_gateway_gate) =
+            start_saturated_db_gateway().await;
+        let (view_gateway_addr, _view_gateway_server, view_gateway_gate) =
+            start_saturated_view_gateway().await;
+        let startup_timeout = Duration::from_secs(1);
+        let indexer =
+            connect_optional_indexer(Some(&indexer_addr.to_string()), None, startup_timeout, None)
+                .await
+                .expect("bug: indexer connection should succeed")
+                .expect("bug: indexer should be connected");
+        let db_gateway = connect_optional_db_gateway(
+            Some(&db_gateway_addr.to_string()),
+            1,
+            None,
+            startup_timeout,
+            None,
+        )
+        .await
+        .expect("bug: db_gateway connection should succeed")
+        .expect("bug: db_gateway should be connected");
+        let view_gateway = connect_optional_view_gateway(
+            Some(&view_gateway_addr.to_string()),
+            None,
+            startup_timeout,
+            None,
+        )
+        .await
+        .expect("bug: view_gateway connection should succeed")
+        .expect("bug: view_gateway should be connected");
+        let config = Arc::new(GatewayConfig {
+            indexer_address: Some(indexer_addr.to_string()),
+            db_gateway_address: Some(db_gateway_addr.to_string()),
+            view_gateway_address: Some(view_gateway_addr.to_string()),
+            ..GatewayConfig::default()
+        });
+        let ctx = GatewayContext::assemble(
+            Arc::new(RwLock::new(None)),
+            Arc::new(RwLock::new(Some(indexer.clone()))),
+            Arc::new(RwLock::new(Some(view_gateway.clone()))),
+            Arc::new(RwLock::new(Some(db_gateway.clone()))),
+            config,
+            GatewayMetrics::new("test", None).expect("bug: test metrics should initialize"),
+        );
+
+        let tx_hash = SignedTransactionHash::from(SHA256Hash::from([0; 32]));
+        let indexer_calls: Vec<_> = (0..4)
+            .map(|_| {
+                let client = indexer.clone();
+                tokio::spawn(async move { client.get_transaction_info(&tx_hash).await })
+            })
+            .collect();
+        let db_gateway_call = tokio::spawn(async move {
+            let batch: AddressAndKeyBatch = VecM(vec![]);
+            db_gateway.dbgateway_get_items(&batch).await
+        });
+        let query = test_view_query();
+        let view_gateway_calls: Vec<_> = (0..4)
+            .map(|_| {
+                let client = view_gateway.clone();
+                let query = query.clone();
+                tokio::spawn(async move { client.viewgateway_view(&query).await })
+            })
+            .collect();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while indexer_gate.calls.load(Ordering::SeqCst) < 4
+                || db_gateway_gate.calls.load(Ordering::SeqCst) < 1
+                || view_gateway_gate.calls.load(Ordering::SeqCst) < 4
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("bug: handler pools should saturate");
+
+        let protocol: Protocol = StringM(PROTOCOL_VERSION.as_bytes().to_vec());
+        let mut indexer_timeouts = 0;
+        let mut db_gateway_timeouts = 0;
+        let mut view_gateway_timeouts = 0;
+        let (indexer_probe, db_gateway_probe, view_gateway_probe) = tokio::join!(
+            probe_indexer(
+                &ctx,
+                &protocol,
+                Duration::from_millis(25),
+                &mut indexer_timeouts,
+            ),
+            probe_db_gateway(
+                &ctx,
+                &protocol,
+                Duration::from_millis(25),
+                &mut db_gateway_timeouts,
+            ),
+            probe_view_gateway(
+                &ctx,
+                &protocol,
+                Duration::from_millis(25),
+                &mut view_gateway_timeouts,
+            ),
+        );
+
+        assert!(indexer_probe.up);
+        assert!(db_gateway_probe.up);
+        assert!(view_gateway_probe.up);
+        assert!(ctx.indexer.read().await.is_some());
+        assert!(ctx.db_gateway.read().await.is_some());
+        assert!(ctx.view_gateway.read().await.is_some());
+        indexer_gate.release.notify_waiters();
+        db_gateway_gate.release.notify_waiters();
+        view_gateway_gate.release.notify_waiters();
+        for call in indexer_calls {
+            let _ = call.await;
+        }
+        for call in view_gateway_calls {
+            let _ = call.await;
+        }
+        let _ = db_gateway_call.await;
     }
 
     #[tokio::test]

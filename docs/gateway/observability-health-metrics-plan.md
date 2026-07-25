@@ -72,6 +72,7 @@ Add gateway config and CLI options:
 --health-probe-interval-ms <ms>
 --backend-connect-timeout-ms <ms>
 --scheduler-reconnect-grace-ms <ms>
+--shutdown-grace-ms <ms>
 ```
 
 Suggested binary defaults:
@@ -83,6 +84,7 @@ health_chain_tip_max_age_ms = 30000
 health_probe_interval_ms = 5000
 backend_connect_timeout_ms = 30000
 scheduler_reconnect_grace_ms = 30000
+shutdown_grace_ms = 10000
 ```
 
 Hosted release/ops override:
@@ -621,6 +623,9 @@ series shape and Grafana queries. Treat changes as dashboard-affecting.
   without entering the x23 queue or clearing a healthy scheduler.
 - Scheduler transport failures clear only the generation that produced the
   failure, so a stale request cannot remove a newer replacement pool.
+- Each backend keeps its health probe on a dedicated one-connection x23 pool.
+  Handler saturation therefore cannot queue an intro or tip probe behind public
+  request work, and probe traffic does not consume handler capacity.
 - One active-client probe timeout marks that snapshot down but retains the pool.
   A second consecutive timeout discards it and starts the reconnect lifecycle.
   A successful response resets the timeout streak.
@@ -643,6 +648,10 @@ series shape and Grafana queries. Treat changes as dashboard-affecting.
   may still abort on protocol/configuration rejection.
 - Probe errors should be recorded in the health snapshot and backend metrics with
   bounded outcomes.
+- SIGINT and SIGTERM start graceful shutdown. RPC, observability, and health
+  drains share one absolute `shutdown_grace_ms` deadline; after it expires, the
+  gateway cancels owned tasks and exits instead of waiting indefinitely on open
+  connections.
 
 ## RPC Instrumentation Approach
 

@@ -202,6 +202,10 @@ pub struct GatewayConfig {
     /// registration makes `schedcoord_get_tip` safe to call.
     pub scheduler_reconnect_grace_ms: u64,
 
+    /// Maximum total time to drain gateway servers and background health work
+    /// after receiving a shutdown signal.
+    pub shutdown_grace_ms: u64,
+
     /// Backend used for `groundhog_sendRawTransaction`.
     pub submission_backend: SubmissionBackend,
 
@@ -290,6 +294,7 @@ impl Default for GatewayConfig {
             health_probe_interval_ms: 5_000,
             backend_connect_timeout_ms: 30_000,
             scheduler_reconnect_grace_ms: 30_000,
+            shutdown_grace_ms: 10_000,
             submission_backend: SubmissionBackend::HogdScheduler,
             scheduler_address: "127.0.0.1:9000".into(),
             indexer_address: Some("127.0.0.1:9001".into()),

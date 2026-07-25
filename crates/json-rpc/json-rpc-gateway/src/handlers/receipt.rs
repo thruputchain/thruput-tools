@@ -369,7 +369,7 @@ mod tests {
 
     use super::*;
     use crate::config::GatewayConfig;
-    use crate::context::{SCHEDULER_LOOKUP_CONCURRENCY, SchedulerClient};
+    use crate::context::{BackendClient, SCHEDULER_LOOKUP_CONCURRENCY, SchedulerClient};
     use crate::metrics::GatewayMetrics;
 
     /// Indexer that answers `get_transaction_info` with not-found.
@@ -579,7 +579,9 @@ mod tests {
             Arc::new(RwLock::new(
                 scheduler.map(|client| SchedulerClient::new(client.clone(), client)),
             )),
-            Arc::new(RwLock::new(indexer)),
+            Arc::new(RwLock::new(
+                indexer.map(|client| BackendClient::new(client.clone(), client)),
+            )),
             Arc::new(RwLock::new(None)),
             Arc::new(RwLock::new(None)),
             Arc::new(GatewayConfig::default()),
