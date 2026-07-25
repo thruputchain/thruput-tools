@@ -27,6 +27,8 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct GatewayHealth {
     inner: Arc<RwLock<HealthSnapshot>>,
+    #[cfg(test)]
+    updated: Arc<tokio::sync::Notify>,
     max_chain_tip_age_ms: u64,
     max_snapshot_age_ms: u64,
     scheduler_required: bool,
@@ -51,6 +53,8 @@ impl GatewayHealth {
                 version,
                 commit_hash,
             ))),
+            #[cfg(test)]
+            updated: Arc::new(tokio::sync::Notify::new()),
             max_chain_tip_age_ms: config.health_chain_tip_max_age_ms,
             max_snapshot_age_ms: config.health_probe_interval_ms.saturating_mul(3).max(1),
             scheduler_required: backend_required(config, HealthBackend::Scheduler),
@@ -71,7 +75,11 @@ impl GatewayHealth {
     }
 
     async fn update(&self, snapshot: HealthSnapshot) {
-        *self.inner.write().await = snapshot;
+        {
+            *self.inner.write().await = snapshot;
+        }
+        #[cfg(test)]
+        self.updated.notify_one();
     }
 
     #[cfg(test)]
@@ -1288,22 +1296,32 @@ fn bounded_error(message: String) -> String {
 mod tests {
     use async_trait::async_trait;
     use groundhog_db_gateway::{
-        AddressAndKeyBatch, DbGateway_DbGateway1, DbGateway_DbGateway1_Dispatcher, DbGatewayResult,
+        AddressAndKeyBatch, DbGateway_DbGateway1, DbGateway_DbGateway1_Dispatcher,
+        DbGatewayItemResult, DbGatewayPayload, DbGatewayResult,
     };
     use groundhog_indexer::{
         AddressTransactionQuery, BlockLookupResult, BlockTransactionQuery,
         EventPage as IdxEventPage, EventQuery, IndexerBlockExplorer_IndexerBlockExplorer1,
         IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher,
-        TransactionPage as IdxTransactionPage, TransactionQuery, TransactionRefPage, TxInfoResult,
+        TransactionPage as IdxTransactionPage, TransactionQuery, TransactionRefPage, TxInfoOutcome,
+        TxInfoResult,
+    };
+    use groundhog_json_rpc_server::{ChainPlane, ReadPlane, RpcRequestContext, ViewPlane};
+    use groundhog_json_rpc_types::{
+        ContractAddress as RpcContractAddress,
+        hex::{Hex0x, HexBytes},
+        transaction::{TransactionStatus, TxHash},
+        view::{RootInvocationOutput, ViewRequest},
     };
     use groundhog_scheduler::{
         CoordinatorRegistrationOutcome, DbSchedResult, DbTip, Nomination,
-        ParallelSignedTransactionBatch, SchedulerCommitOutcome, SchedulerGetTipResult,
+        ParallelSignedTransactionBatch, RPCError, SchedulerCommitOutcome, SchedulerGetTipResult,
         SchedulerNominationResult, SchedulerValidationResult,
         sched_coord::{SchedulerCoord_SchedulerCoord1, SchedulerCoord_SchedulerCoord1_Dispatcher},
     };
     use groundhog_view::{
-        ViewGateway_ViewGateway1, ViewGateway_ViewGateway1_Dispatcher, ViewGatewayResult,
+        ViewGateway_ViewGateway1, ViewGateway_ViewGateway1_Dispatcher, ViewGatewayPayload,
+        ViewGatewayResult,
     };
     use groundhog_xdr::transaction::{
         OptSignedTransactionBatch, SignedTransactionHash, SignedTransactionHashBatch,
@@ -1313,12 +1331,15 @@ mod tests {
         contract::ContractEntrypointID,
         genesis::GenesisConfiguration,
         invoke_flag::InvokeFlag,
-        transaction::Invocation,
+        transaction::{Invocation, InvocationFrameOutput},
         types::{BlockHash, ContractAddress, SHA256Hash},
         view::TransactionViewQuery,
     };
     use rpc_driver::{ProgramError, RpcServer, ServiceMap};
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::{
+        net::SocketAddr,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::{TcpListener, TcpStream},
@@ -1326,6 +1347,7 @@ mod tests {
     use xdr_common::{BytesM, VecM};
 
     use crate::{
+        backend::GatewayBackend,
         error::GatewayError,
         metrics::GatewayMetrics,
         observability::spawn_observability_server,
@@ -1545,9 +1567,273 @@ mod tests {
 
         async fn schedcoord_lookup_transactions(
             &self,
-            _hashes: SignedTransactionHashBatch,
+            hashes: SignedTransactionHashBatch,
         ) -> Result<OptSignedTransactionBatch, ProgramError> {
-            panic!("health probe test should not look up transactions")
+            Ok(VecM(vec![None; hashes.0.len()]))
+        }
+    }
+
+    struct LifecycleIndexer;
+
+    #[async_trait]
+    impl IndexerBlockExplorer_IndexerBlockExplorer1 for LifecycleIndexer {
+        async fn indexer_block_explorer_intro(
+            &self,
+            _protocol: Protocol,
+        ) -> Result<IndexerBlockExplorerIntroOutcome, ProgramError> {
+            Ok(IndexerBlockExplorerIntroOutcome::IntroSuccess)
+        }
+
+        async fn get_transaction_info(
+            &self,
+            _tx_hash: SignedTransactionHash,
+        ) -> Result<TxInfoResult, ProgramError> {
+            Ok(TxInfoResult::Default {
+                outcome: TxInfoOutcome::TxInfoNotFound.0,
+            })
+        }
+
+        async fn get_block_by_height(
+            &self,
+            _height: groundhog_xdr::types::BlockHeight,
+        ) -> Result<BlockLookupResult, ProgramError> {
+            panic!("lifecycle test should not query blocks")
+        }
+
+        async fn get_events(&self, _query: EventQuery) -> Result<IdxEventPage, ProgramError> {
+            panic!("lifecycle test should not query events")
+        }
+
+        async fn get_transactions(
+            &self,
+            _query: TransactionQuery,
+        ) -> Result<IdxTransactionPage, ProgramError> {
+            panic!("lifecycle test should not query transactions")
+        }
+
+        async fn get_transactions_by_address(
+            &self,
+            _query: AddressTransactionQuery,
+        ) -> Result<TransactionRefPage, ProgramError> {
+            panic!("lifecycle test should not query transactions by address")
+        }
+
+        async fn get_transactions_by_block(
+            &self,
+            _query: BlockTransactionQuery,
+        ) -> Result<TransactionRefPage, ProgramError> {
+            panic!("lifecycle test should not query transactions by block")
+        }
+    }
+
+    struct LifecycleDbGateway;
+
+    #[async_trait]
+    impl DbGateway_DbGateway1 for LifecycleDbGateway {
+        async fn dbgateway_intro(
+            &self,
+            _protocol: Protocol,
+        ) -> Result<DbGatewayIntroOutcome, ProgramError> {
+            Ok(DbGatewayIntroOutcome::DbGatewayIntroSuccess)
+        }
+
+        async fn dbgateway_get_items(
+            &self,
+            batch: AddressAndKeyBatch,
+        ) -> Result<DbGatewayResult, ProgramError> {
+            Ok(DbGatewayResult::kRPCNone {
+                payload: DbGatewayPayload {
+                    block_height: 42.into(),
+                    items: VecM(
+                        batch
+                            .0
+                            .iter()
+                            .map(|_| DbGatewayItemResult::Default {
+                                error: RPCError::kRPCNotFound.0,
+                            })
+                            .collect(),
+                    ),
+                },
+            })
+        }
+    }
+
+    struct LifecycleViewGateway;
+
+    #[async_trait]
+    impl ViewGateway_ViewGateway1 for LifecycleViewGateway {
+        async fn viewgateway_intro(
+            &self,
+            _protocol: Protocol,
+        ) -> Result<ViewGatewayIntroOutcome, ProgramError> {
+            Ok(ViewGatewayIntroOutcome::ViewGatewayIntroSuccess)
+        }
+
+        async fn viewgateway_view(
+            &self,
+            _query: TransactionViewQuery,
+        ) -> Result<ViewGatewayResult, ProgramError> {
+            Ok(ViewGatewayResult::ViewGatewayOk {
+                payload: ViewGatewayPayload {
+                    height: 42.into(),
+                    output: InvocationFrameOutput::Return {
+                        return_buffer: BytesM(vec![1, 2, 3]),
+                    },
+                    events: VecM(vec![]),
+                },
+            })
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct LifecycleAddresses {
+        scheduler: SocketAddr,
+        indexer: SocketAddr,
+        db_gateway: SocketAddr,
+        view_gateway: SocketAddr,
+    }
+
+    struct LifecycleBackendCluster {
+        addresses: LifecycleAddresses,
+        shutdown: Option<tokio::sync::oneshot::Sender<()>>,
+        completed: Option<tokio::sync::oneshot::Receiver<()>>,
+        thread: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl LifecycleBackendCluster {
+        #[allow(clippy::too_many_lines)]
+        async fn start(addresses: Option<LifecycleAddresses>) -> Self {
+            let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+            let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+            let (completed_tx, completed_rx) = tokio::sync::oneshot::channel();
+            let thread = std::thread::spawn(move || {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("lifecycle fixture runtime should build");
+                runtime.block_on(async move {
+                    let ephemeral = SocketAddr::from(([127, 0, 0, 1], 0));
+                    let scheduler_listener = TcpListener::bind(
+                        addresses.map_or(ephemeral, |addresses| addresses.scheduler),
+                    )
+                    .await
+                    .expect("lifecycle scheduler should bind");
+                    let indexer_listener = TcpListener::bind(
+                        addresses.map_or(ephemeral, |addresses| addresses.indexer),
+                    )
+                    .await
+                    .expect("lifecycle indexer should bind");
+                    let db_gateway_listener = TcpListener::bind(
+                        addresses.map_or(ephemeral, |addresses| addresses.db_gateway),
+                    )
+                    .await
+                    .expect("lifecycle db gateway should bind");
+                    let view_gateway_listener = TcpListener::bind(
+                        addresses.map_or(ephemeral, |addresses| addresses.view_gateway),
+                    )
+                    .await
+                    .expect("lifecycle view gateway should bind");
+
+                    let addresses = LifecycleAddresses {
+                        scheduler: scheduler_listener
+                            .local_addr()
+                            .expect("lifecycle scheduler should have an address"),
+                        indexer: indexer_listener
+                            .local_addr()
+                            .expect("lifecycle indexer should have an address"),
+                        db_gateway: db_gateway_listener
+                            .local_addr()
+                            .expect("lifecycle db gateway should have an address"),
+                        view_gateway: view_gateway_listener
+                            .local_addr()
+                            .expect("lifecycle view gateway should have an address"),
+                    };
+
+                    let mut scheduler_services = ServiceMap::new();
+                    scheduler_services.add_service(Box::new(
+                        SchedulerCoord_SchedulerCoord1_Dispatcher::new(Box::new(TestScheduler {
+                            calls: SchedulerCallCounts::default(),
+                            tip_behavior: TipBehavior::Ready,
+                            null_behavior: NullBehavior::Ready,
+                        })),
+                    ));
+                    let mut indexer_services = ServiceMap::new();
+                    indexer_services.add_service(Box::new(
+                        IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher::new(Box::new(
+                            LifecycleIndexer,
+                        )),
+                    ));
+                    let mut db_gateway_services = ServiceMap::new();
+                    db_gateway_services.add_service(Box::new(
+                        DbGateway_DbGateway1_Dispatcher::new(Box::new(LifecycleDbGateway)),
+                    ));
+                    let mut view_gateway_services = ServiceMap::new();
+                    view_gateway_services.add_service(Box::new(
+                        ViewGateway_ViewGateway1_Dispatcher::new(Box::new(LifecycleViewGateway)),
+                    ));
+
+                    let mut handles = vec![
+                        RpcServer::new(scheduler_listener, scheduler_services)
+                            .start()
+                            .await,
+                        RpcServer::new(indexer_listener, indexer_services)
+                            .start()
+                            .await,
+                        RpcServer::new(db_gateway_listener, db_gateway_services)
+                            .start()
+                            .await,
+                        RpcServer::new(view_gateway_listener, view_gateway_services)
+                            .start()
+                            .await,
+                    ];
+                    ready_tx
+                        .send(addresses)
+                        .expect("lifecycle fixture owner should await startup");
+
+                    let _ = shutdown_rx.await;
+                    for handle in &handles {
+                        handle.abort();
+                    }
+                    for handle in handles.drain(..) {
+                        let _ = handle.await;
+                    }
+                });
+                drop(runtime);
+                let _ = completed_tx.send(());
+            });
+            let addresses = tokio::time::timeout(Duration::from_secs(5), ready_rx)
+                .await
+                .expect("lifecycle fixture startup should not hang")
+                .expect("lifecycle fixture thread should report startup");
+            Self {
+                addresses,
+                shutdown: Some(shutdown_tx),
+                completed: Some(completed_rx),
+                thread: Some(thread),
+            }
+        }
+
+        async fn stop(mut self) {
+            let _ = self
+                .shutdown
+                .take()
+                .expect("lifecycle fixture should have a shutdown sender")
+                .send(());
+            let completed = self
+                .completed
+                .take()
+                .expect("lifecycle fixture should have a completion receiver");
+            tokio::time::timeout(Duration::from_secs(5), completed)
+                .await
+                .expect("lifecycle fixture shutdown should not hang")
+                .expect("lifecycle fixture thread should signal completion");
+            let thread = self
+                .thread
+                .take()
+                .expect("lifecycle fixture should have a thread");
+            thread
+                .join()
+                .expect("completed lifecycle fixture thread should not panic");
         }
     }
 
@@ -1741,28 +2027,194 @@ mod tests {
     }
 
     async fn http_status(addr: std::net::SocketAddr, path: &str) -> u16 {
-        let mut stream = TcpStream::connect(addr)
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let mut stream = TcpStream::connect(addr)
+                .await
+                .expect("observability request should connect");
+            stream
+                .write_all(
+                    format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+                        .as_bytes(),
+                )
+                .await
+                .expect("observability request should write");
+            let mut response = Vec::new();
+            stream
+                .read_to_end(&mut response)
+                .await
+                .expect("observability response should read");
+            let response = String::from_utf8(response).expect("response should be UTF-8");
+            response
+                .lines()
+                .next()
+                .and_then(|line| line.split_whitespace().nth(1))
+                .and_then(|status| status.parse().ok())
+                .expect("response should contain an HTTP status")
+        })
+        .await
+        .expect("observability request should not hang")
+    }
+
+    async fn wait_for_health_snapshot(
+        health: &GatewayHealth,
+        mut predicate: impl FnMut(&HealthSnapshot) -> bool,
+    ) -> HealthSnapshot {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let notified = health.updated.notified();
+                let snapshot = health.snapshot().await;
+                if predicate(&snapshot) {
+                    return snapshot;
+                }
+                notified.await;
+            }
+        })
+        .await
+        .expect("health should reach the expected state")
+    }
+
+    async fn wait_for_lifecycle_clients_cleared(health: &GatewayHealth, ctx: &GatewayContext) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let notified = health.updated.notified();
+                let cleared = ctx.scheduler.read().await.is_none()
+                    && ctx.scheduler_quarantine.read().await.is_none()
+                    && ctx.indexer.read().await.is_none()
+                    && ctx.db_gateway.read().await.is_none()
+                    && ctx.view_gateway.read().await.is_none();
+                if cleared {
+                    return;
+                }
+                notified.await;
+            }
+        })
+        .await
+        .expect("health loop should clear unavailable clients");
+    }
+
+    async fn wait_for_failed_lifecycle_reconnects(
+        metrics: &GatewayMetrics,
+        health: &GatewayHealth,
+    ) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let snapshot = health.snapshot().await;
+                let body = metrics
+                    .gather(&snapshot)
+                    .expect("lifecycle reconnect metrics should encode");
+                let all_failed = HealthBackend::ALL.into_iter().all(|backend| {
+                    let prefix = format!(
+                        "groundhog_gateway_backend_reconnects_total{{backend=\"{}\",outcome=\"error\"}} ",
+                        backend.as_str()
+                    );
+                    body.lines()
+                        .find_map(|line| line.strip_prefix(&prefix))
+                        .and_then(|value| value.parse::<f64>().ok())
+                        .is_some_and(|value| value >= 1.0)
+                });
+                if all_failed {
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("every backend should complete a failed reconnect while ports are down");
+    }
+
+    fn lifecycle_tx_hash() -> TxHash {
+        TxHash(Hex0x(SHA256Hash::from([0x55; 32])))
+    }
+
+    fn lifecycle_contract_address() -> RpcContractAddress {
+        RpcContractAddress::from(ContractAddress::from([0x66; 32]))
+    }
+
+    fn lifecycle_view_request() -> ViewRequest {
+        ViewRequest {
+            contract: lifecycle_contract_address(),
+            entrypoint: HexBytes(vec![0x77; 8]),
+            calldata: HexBytes(vec![0x88]),
+            caller: None,
+        }
+    }
+
+    async fn assert_lifecycle_data_plane_available(backend: &GatewayBackend) {
+        let tip = backend
+            .chain_tip(RpcRequestContext::unbounded())
             .await
-            .expect("observability request should connect");
-        stream
-            .write_all(
-                format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
-                    .as_bytes(),
+            .expect("chain tip should be available");
+        assert_eq!(*tip.height, 1);
+
+        let status = backend
+            .transaction_status(RpcRequestContext::unbounded(), lifecycle_tx_hash())
+            .await
+            .expect("transaction status should be available");
+        assert!(matches!(status, TransactionStatus::Unknown));
+
+        let storage = backend
+            .get_storage_at(
+                RpcRequestContext::unbounded(),
+                lifecycle_contract_address(),
+                [0x99; 32],
             )
             .await
-            .expect("observability request should write");
-        let mut response = Vec::new();
-        stream
-            .read_to_end(&mut response)
+            .expect("storage read should be available");
+        assert_eq!(*storage.block_height, 42);
+        assert!(storage.item.is_none());
+
+        let view = backend
+            .view(
+                RpcRequestContext::unbounded(),
+                lifecycle_view_request(),
+                1_000,
+            )
             .await
-            .expect("observability response should read");
-        let response = String::from_utf8(response).expect("response should be UTF-8");
-        response
-            .lines()
-            .next()
-            .and_then(|line| line.split_whitespace().nth(1))
-            .and_then(|status| status.parse().ok())
-            .expect("response should contain an HTTP status")
+            .expect("view should be available");
+        assert_eq!(*view.height, 42);
+        assert!(matches!(
+            view.output,
+            RootInvocationOutput::Return { return_data } if return_data.0 == vec![1, 2, 3]
+        ));
+    }
+
+    async fn assert_lifecycle_data_plane_unavailable(backend: &GatewayBackend) {
+        assert!(
+            backend
+                .chain_tip(RpcRequestContext::unbounded())
+                .await
+                .is_err(),
+            "chain tip should fail closed"
+        );
+        assert!(
+            backend
+                .transaction_status(RpcRequestContext::unbounded(), lifecycle_tx_hash())
+                .await
+                .is_err(),
+            "transaction status should fail closed"
+        );
+        assert!(
+            backend
+                .get_storage_at(
+                    RpcRequestContext::unbounded(),
+                    lifecycle_contract_address(),
+                    [0x99; 32],
+                )
+                .await
+                .is_err(),
+            "storage read should fail closed"
+        );
+        assert!(
+            backend
+                .view(
+                    RpcRequestContext::unbounded(),
+                    lifecycle_view_request(),
+                    1_000,
+                )
+                .await
+                .is_err(),
+            "view should fail closed"
+        );
     }
 
     #[test]
@@ -2407,6 +2859,177 @@ mod tests {
             .await
             .expect("shutdown should cancel the reconnect future")
             .unwrap();
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn four_backend_restart_recovers_without_rebuilding_gateway() {
+        let cluster = LifecycleBackendCluster::start(None).await;
+        let addresses = cluster.addresses;
+        let config = GatewayConfig {
+            scheduler_address: addresses.scheduler.to_string(),
+            indexer_address: Some(addresses.indexer.to_string()),
+            db_gateway_address: Some(addresses.db_gateway.to_string()),
+            view_gateway_address: Some(addresses.view_gateway.to_string()),
+            health_required_backends: HealthBackend::ALL.to_vec(),
+            request_timeout_ms: 100,
+            health_probe_interval_ms: 500,
+            health_chain_tip_max_age_ms: 60_000,
+            backend_connect_timeout_ms: 1_000,
+            scheduler_reconnect_grace_ms: 60_000,
+            ..GatewayConfig::default()
+        };
+        let metrics = GatewayMetrics::new("test", None).expect("test metrics should initialize");
+        let health = GatewayHealth::new(&config, "test", None);
+        let ctx = Arc::new(
+            GatewayContext::new(config, metrics.clone())
+                .await
+                .expect("gateway should connect to the lifecycle fixtures"),
+        );
+        let backend = GatewayBackend::new(ctx.clone());
+
+        assert!(ctx.scheduler.read().await.is_none());
+        ctx.scheduler_quarantine
+            .write()
+            .await
+            .as_mut()
+            .expect("initial scheduler should be quarantined")
+            .ready_at = Instant::now();
+        let (health_shutdown_tx, health_shutdown_rx) = tokio::sync::oneshot::channel();
+        let health_handle =
+            spawn_health_probe_with_shutdown(ctx.clone(), health.clone(), health_shutdown_rx);
+
+        let (observability_shutdown_tx, observability_shutdown_rx) =
+            tokio::sync::oneshot::channel();
+        let observability = spawn_observability_server(
+            "127.0.0.1:0",
+            health.clone(),
+            metrics.clone(),
+            observability_shutdown_rx,
+        )
+        .await
+        .expect("observability server should start");
+        wait_for_health_snapshot(&health, |snapshot| snapshot.status() == HealthStatus::Ok).await;
+        assert_eq!(http_status(observability.local_addr, "/livez").await, 200);
+        assert_eq!(http_status(observability.local_addr, "/readyz").await, 200);
+        assert_eq!(http_status(observability.local_addr, "/health").await, 200);
+        assert_lifecycle_data_plane_available(&backend).await;
+
+        cluster.stop().await;
+        wait_for_health_snapshot(&health, |snapshot| snapshot.status() == HealthStatus::Error)
+            .await;
+        wait_for_lifecycle_clients_cleared(&health, &ctx).await;
+        assert!(ctx.scheduler.read().await.is_none());
+        assert!(ctx.scheduler_quarantine.read().await.is_none());
+        assert!(ctx.indexer.read().await.is_none());
+        assert!(ctx.db_gateway.read().await.is_none());
+        assert!(ctx.view_gateway.read().await.is_none());
+        assert_eq!(health.snapshot().await.status(), HealthStatus::Error);
+        wait_for_failed_lifecycle_reconnects(&metrics, &health).await;
+        assert_lifecycle_data_plane_unavailable(&backend).await;
+        assert_eq!(http_status(observability.local_addr, "/livez").await, 200);
+        assert_eq!(http_status(observability.local_addr, "/readyz").await, 503);
+        assert_eq!(http_status(observability.local_addr, "/health").await, 503);
+
+        let restarted_cluster = LifecycleBackendCluster::start(Some(addresses)).await;
+        assert_eq!(restarted_cluster.addresses, addresses);
+        let quarantine_snapshot = wait_for_health_snapshot(&health, |snapshot| {
+            snapshot.status() == HealthStatus::Error
+                && !snapshot.backend_up(HealthBackend::Scheduler)
+                && snapshot.backend_up(HealthBackend::Indexer)
+                && snapshot.backend_up(HealthBackend::DbGateway)
+                && snapshot.backend_up(HealthBackend::ViewGateway)
+        })
+        .await;
+        assert!(ctx.scheduler.read().await.is_none());
+        assert!(ctx.scheduler_quarantine.read().await.is_some());
+        assert!(ctx.indexer.read().await.is_some());
+        assert!(ctx.db_gateway.read().await.is_some());
+        assert!(ctx.view_gateway.read().await.is_some());
+
+        assert_eq!(quarantine_snapshot.status(), HealthStatus::Error);
+        assert!(!quarantine_snapshot.backend_up(HealthBackend::Scheduler));
+        assert!(quarantine_snapshot.backend_up(HealthBackend::Indexer));
+        assert!(quarantine_snapshot.backend_up(HealthBackend::DbGateway));
+        assert!(quarantine_snapshot.backend_up(HealthBackend::ViewGateway));
+        assert!(ctx.scheduler.read().await.is_none());
+        assert!(
+            ctx.scheduler_quarantine
+                .read()
+                .await
+                .as_ref()
+                .expect("scheduler should remain quarantined")
+                .ready_at
+                > Instant::now()
+        );
+        assert_eq!(http_status(observability.local_addr, "/readyz").await, 503);
+        assert_eq!(http_status(observability.local_addr, "/health").await, 503);
+
+        let receipt = backend
+            .transaction_receipt(RpcRequestContext::unbounded(), lifecycle_tx_hash())
+            .await
+            .expect("indexer-backed receipt lookup should recover during scheduler quarantine");
+        assert!(receipt.is_none());
+        let storage = backend
+            .get_storage_at(
+                RpcRequestContext::unbounded(),
+                lifecycle_contract_address(),
+                [0x99; 32],
+            )
+            .await
+            .expect("db gateway should recover during scheduler quarantine");
+        assert_eq!(*storage.block_height, 42);
+        let view = backend
+            .view(
+                RpcRequestContext::unbounded(),
+                lifecycle_view_request(),
+                1_000,
+            )
+            .await
+            .expect("view gateway should recover during scheduler quarantine");
+        assert_eq!(*view.height, 42);
+        assert!(
+            backend
+                .chain_tip(RpcRequestContext::unbounded())
+                .await
+                .is_err(),
+            "scheduler-backed calls should remain unavailable during quarantine"
+        );
+
+        ctx.scheduler_quarantine
+            .write()
+            .await
+            .as_mut()
+            .expect("scheduler should still be quarantined before promotion")
+            .ready_at = Instant::now();
+        wait_for_health_snapshot(&health, |snapshot| snapshot.status() == HealthStatus::Ok).await;
+        assert!(ctx.scheduler.read().await.is_some());
+        assert!(ctx.scheduler_quarantine.read().await.is_none());
+        assert!(ctx.indexer.read().await.is_some());
+        assert!(ctx.db_gateway.read().await.is_some());
+        assert!(ctx.view_gateway.read().await.is_some());
+        assert_eq!(health.snapshot().await.status(), HealthStatus::Ok);
+        assert_eq!(http_status(observability.local_addr, "/livez").await, 200);
+        assert_eq!(http_status(observability.local_addr, "/readyz").await, 200);
+        assert_eq!(http_status(observability.local_addr, "/health").await, 200);
+        assert_lifecycle_data_plane_available(&backend).await;
+
+        health_shutdown_tx
+            .send(())
+            .expect("health shutdown receiver should remain open");
+        observability_shutdown_tx
+            .send(())
+            .expect("observability shutdown receiver should remain open");
+        tokio::time::timeout(Duration::from_secs(5), health_handle)
+            .await
+            .expect("health loop shutdown should not hang")
+            .expect("health loop task should join");
+        tokio::time::timeout(Duration::from_secs(5), observability.handle)
+            .await
+            .expect("observability shutdown should not hang")
+            .expect("observability task should join")
+            .expect("observability server should stop cleanly");
+        restarted_cluster.stop().await;
     }
 
     #[tokio::test]
