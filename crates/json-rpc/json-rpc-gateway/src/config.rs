@@ -328,7 +328,7 @@ impl GatewayConfig {
             .saturating_add(self.request_timeout_margin())
     }
 
-    fn request_timeout_margin(&self) -> Duration {
+    pub(crate) fn request_timeout_margin(&self) -> Duration {
         (self.request_timeout() / 10).clamp(Duration::from_millis(1), Duration::from_secs(1))
     }
 

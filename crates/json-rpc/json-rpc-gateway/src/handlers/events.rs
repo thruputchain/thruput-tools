@@ -1,5 +1,6 @@
 //! `groundhog_getEvents` handler.
 
+use groundhog_json_rpc_server::RpcRequestContext;
 use groundhog_json_rpc_types::events::{EventPage, EventQuery, IdentifiedEvent};
 use groundhog_json_rpc_types::hex::Hex0x;
 use groundhog_json_rpc_types::transaction::TxHash;
@@ -10,6 +11,7 @@ use crate::context::GatewayContext;
 use crate::error::GatewayError;
 use crate::metrics::{BackendRequestOutcome, REASON_PARSE_FAILED};
 
+use super::backend_deadline;
 use super::parse_event::parse_emitted_event;
 
 /// Implementation of the `groundhog_getEvents` JSON-RPC method.
@@ -22,6 +24,7 @@ use super::parse_event::parse_emitted_event;
 #[tracing::instrument(skip_all, fields(filters_len = query.filters.0.len(), limit = query.limit))]
 pub async fn get_events(
     ctx: &GatewayContext,
+    context: RpcRequestContext,
     query: EventQuery,
 ) -> Result<EventPage, GatewayError> {
     let client = ctx
@@ -33,11 +36,8 @@ pub async fn get_events(
 
     let wire_query: groundhog_indexer::indexer::EventQuery = query.into();
     let started_at = Instant::now();
-    let rpc_result = tokio::time::timeout(
-        ctx.config.backend_request_timeout(),
-        client.get_events(&wire_query),
-    )
-    .await;
+    let deadline = backend_deadline(context, ctx.config.backend_request_timeout())?;
+    let rpc_result = tokio::time::timeout_at(deadline.into(), client.get_events(&wire_query)).await;
     ctx.metrics.observe_backend_request(
         HealthBackend::Indexer,
         "get_events",

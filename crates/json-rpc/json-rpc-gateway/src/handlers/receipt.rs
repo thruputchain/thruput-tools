@@ -2,6 +2,7 @@
 //! handlers.
 
 use groundhog_indexer::indexer::TxInfoResult;
+use groundhog_json_rpc_server::RpcRequestContext;
 use groundhog_json_rpc_types::{
     hex::HexBytes,
     receipt::{ExecStatus, TransactionReceipt},
@@ -17,6 +18,7 @@ use crate::context::{GatewayContext, clear_scheduler_if_current};
 use crate::error::GatewayError;
 use crate::metrics::{BackendRequestOutcome, REASON_PARSE_FAILED};
 
+use super::backend_deadline;
 use super::parse_event::parse_emitted_event;
 
 /// Map hogd's `ExecResult` (XDR int enum) to the gateway's `ExecStatus`.
@@ -51,6 +53,7 @@ fn map_exec_result(r: ExecResult) -> ExecStatus {
 #[tracing::instrument(skip_all, fields(?tx_hash))]
 pub async fn get_transaction_receipt(
     ctx: &GatewayContext,
+    context: RpcRequestContext,
     tx_hash: TxHash,
 ) -> Result<Option<TransactionReceipt>, GatewayError> {
     let client = ctx
@@ -62,11 +65,9 @@ pub async fn get_transaction_receipt(
 
     let hash = SignedTransactionHash::from(tx_hash.0.0.into_inner());
     let started_at = Instant::now();
-    let rpc_result = tokio::time::timeout(
-        ctx.config.backend_request_timeout(),
-        client.get_transaction_info(&hash),
-    )
-    .await;
+    let deadline = backend_deadline(context, ctx.config.backend_request_timeout())?;
+    let rpc_result =
+        tokio::time::timeout_at(deadline.into(), client.get_transaction_info(&hash)).await;
     ctx.metrics.observe_backend_request(
         HealthBackend::Indexer,
         "get_transaction_info",
@@ -138,9 +139,10 @@ pub async fn get_transaction_receipt(
 #[tracing::instrument(skip_all, fields(?tx_hash))]
 pub async fn get_transaction_status(
     ctx: &GatewayContext,
+    context: RpcRequestContext,
     tx_hash: TxHash,
 ) -> Result<TransactionStatus, GatewayError> {
-    let deadline = Instant::now() + ctx.config.backend_request_timeout();
+    let deadline = backend_deadline(context, ctx.config.backend_request_timeout())?;
     // 1. Check scheduler mempool. Best-effort in that a failure does not
     // abort the indexer lookup, but tracked: `Unknown` asserts the
     // transaction is in neither place, which requires both to have answered.
@@ -500,7 +502,7 @@ mod tests {
         let (indexer_addr, _indexer) = start_not_found_indexer().await;
         let ctx = test_context(None, indexer_addr).await;
 
-        let err = get_transaction_status(&ctx, test_hash())
+        let err = get_transaction_status(&ctx, RpcRequestContext::unbounded(), test_hash())
             .await
             .expect_err("bug: unconsulted mempool must not produce a definite status");
 
@@ -513,7 +515,7 @@ mod tests {
         let (indexer_addr, _indexer) = start_not_found_indexer().await;
         let ctx = test_context(Some(scheduler_addr), indexer_addr).await;
 
-        let err = get_transaction_status(&ctx, test_hash())
+        let err = get_transaction_status(&ctx, RpcRequestContext::unbounded(), test_hash())
             .await
             .expect_err("bug: failed mempool lookup must not produce a definite status");
 
@@ -527,7 +529,7 @@ mod tests {
         let (indexer_addr, _indexer) = start_not_found_indexer().await;
         let ctx = test_context(Some(scheduler_addr), indexer_addr).await;
 
-        let err = get_transaction_status(&ctx, test_hash())
+        let err = get_transaction_status(&ctx, RpcRequestContext::unbounded(), test_hash())
             .await
             .expect_err("bug: a lookup with no per-tx answer must not produce a definite status");
 
@@ -541,7 +543,7 @@ mod tests {
         let (indexer_addr, _indexer) = start_not_found_indexer().await;
         let ctx = test_context(Some(scheduler_addr), indexer_addr).await;
 
-        let status = get_transaction_status(&ctx, test_hash())
+        let status = get_transaction_status(&ctx, RpcRequestContext::unbounded(), test_hash())
             .await
             .expect("bug: consulted-and-missed lookups should produce a status");
 

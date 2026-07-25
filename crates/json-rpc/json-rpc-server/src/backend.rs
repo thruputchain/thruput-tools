@@ -119,6 +119,17 @@ impl RpcRequestContext {
     #[must_use]
     pub fn capped(self, timeout: Duration) -> Self {
         let cap = Instant::now().checked_add(timeout);
+        self.with_cap(cap)
+    }
+
+    /// Restrict this context to a timeout measured from request start.
+    #[must_use]
+    pub fn capped_from_start(self, timeout: Duration) -> Self {
+        let cap = self.started_at.checked_add(timeout);
+        self.with_cap(cap)
+    }
+
+    fn with_cap(self, cap: Option<Instant>) -> Self {
         Self {
             started_at: self.started_at,
             deadline: match (self.deadline, cap) {
@@ -264,5 +275,26 @@ pub trait ViewPlane: Send + Sync + 'static {
         _gas_limit: u64,
     ) -> Result<ViewResponse, RpcServerError> {
         Err(RpcServerError::NotImplemented("view".into()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::RpcRequestContext;
+
+    #[test]
+    fn cap_from_start_does_not_reset_after_elapsed_work() {
+        let context = RpcRequestContext::new(Some(Duration::from_secs(10)));
+        let expected = context
+            .started_at()
+            .checked_add(Duration::from_secs(5))
+            .expect("test deadline should fit");
+
+        let capped = context.capped_from_start(Duration::from_secs(5));
+
+        assert_eq!(capped.started_at(), context.started_at());
+        assert_eq!(capped.deadline(), Some(expected));
     }
 }

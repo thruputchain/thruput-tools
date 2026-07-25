@@ -19,6 +19,7 @@ use groundhog_json_rpc_types::hex::Hex0x;
 use groundhog_scheduler::sched_coord::SchedulerGetTipResult;
 use tokio::sync::{RwLock, mpsc, oneshot};
 
+use crate::adaptive_batch::deadline_cohorts;
 use crate::config::{HealthBackend, TipConfig};
 use crate::context::{SchedulerClient, clear_scheduler_if_current};
 use crate::error::GatewayError;
@@ -63,10 +64,13 @@ impl TipSink for SchedulerTipSink {
             .ok_or_else(|| GatewayError::BackendUnavailable("scheduler not connected".into()))?;
         let generation = client.generation();
         let started_at = Instant::now();
-        let mut call = tokio::spawn(async move { client.schedcoord_get_tip().await });
         let timeout = self
             .timeout
-            .min(deadline.saturating_duration_since(Instant::now()));
+            .min(deadline.saturating_duration_since(started_at));
+        if timeout.is_zero() {
+            return Err(GatewayError::BackendTimeout);
+        }
+        let mut call = tokio::spawn(async move { client.schedcoord_get_tip().await });
         let rpc_result = if let Ok(result) = tokio::time::timeout(timeout, &mut call).await {
             Ok(result.unwrap_or(Err(rpc_driver::RpcError::SystemError)))
         } else {
@@ -104,7 +108,7 @@ impl TipSink for SchedulerTipSink {
 
 struct Waiter {
     reply: oneshot::Sender<Result<ChainTip, GatewayError>>,
-    deadline: Instant,
+    backend_deadline: Instant,
 }
 
 struct Coalescer {
@@ -115,6 +119,7 @@ struct Coalescer {
     max_inflight: u32,
     sink: Arc<dyn TipSink>,
     metrics: GatewayMetrics,
+    max_deadline_skew: Duration,
 }
 
 impl Coalescer {
@@ -129,30 +134,40 @@ impl Coalescer {
 
                 maybe_waiter = self.ingress.recv(), if self.inflight < self.max_inflight => {
                     let Some(first) = maybe_waiter else { break; };
-                    // One RPC will satisfy every waiter currently queued, so
-                    // drain the entire channel before firing.  Unlike the
-                    // submitter there is no `max_size` — a bigger fanout is
-                    // strictly better (more coalescing per RPC).
+                    // Drain the channel, then split materially different
+                    // deadlines so an old waiter cannot poison newer ones.
                     let mut waiters = vec![first];
                     while let Ok(w) = self.ingress.try_recv() {
                         waiters.push(w);
                     }
                     let now = Instant::now();
-                    waiters.retain(|waiter| !waiter.reply.is_closed() && waiter.deadline > now);
-                    if waiters.is_empty() {
+                    let mut live = Vec::with_capacity(waiters.len());
+                    for waiter in waiters {
+                        if waiter.reply.is_closed() {
+                            continue;
+                        }
+                        if waiter.backend_deadline <= now {
+                            let _ = waiter.reply.send(Err(GatewayError::BackendTimeout));
+                        } else {
+                            live.push(waiter);
+                        }
+                    }
+                    let cohorts = deadline_cohorts(live, self.max_deadline_skew, |waiter| {
+                        waiter.backend_deadline
+                    });
+                    if cohorts.is_empty() {
                         continue;
                     }
                     self.inflight += 1;
-                    self.metrics
-                        .observe_coalesced_waiters(TIP_COALESCER_COMPONENT, waiters.len());
                     let in_flight = self
                         .metrics
                         .internal_batch_in_flight_guard(TIP_COALESCER_COMPONENT);
                     let sink = self.sink.clone();
+                    let metrics = self.metrics.clone();
                     let done = self.completion_tx.clone();
                     tokio::spawn(async move {
                         let _in_flight = in_flight;
-                        fetch_tip_once(sink, waiters, done).await;
+                        fetch_tip_cohorts(sink, cohorts, metrics, done).await;
                     });
                 }
             }
@@ -160,19 +175,30 @@ impl Coalescer {
     }
 }
 
-async fn fetch_tip_once(
+async fn fetch_tip_cohorts(
     sink: Arc<dyn TipSink>,
-    waiters: Vec<Waiter>,
+    cohorts: Vec<Vec<Waiter>>,
+    metrics: GatewayMetrics,
     done: mpsc::UnboundedSender<()>,
 ) {
-    let deadline = waiters
-        .iter()
-        .map(|waiter| waiter.deadline)
-        .min()
-        .expect("non-empty waiter set should have a deadline");
-    let result = sink.get_tip(deadline).await;
-    for w in waiters {
-        let _ = w.reply.send(result.clone());
+    for mut waiters in cohorts.into_iter().rev() {
+        let now = Instant::now();
+        waiters.retain(|waiter| !waiter.reply.is_closed());
+        if waiters.is_empty() {
+            continue;
+        }
+        let deadline = waiters[0].backend_deadline;
+        if deadline <= now {
+            for waiter in waiters {
+                let _ = waiter.reply.send(Err(GatewayError::BackendTimeout));
+            }
+            continue;
+        }
+        metrics.observe_coalesced_waiters(TIP_COALESCER_COMPONENT, waiters.len());
+        let result = sink.get_tip(deadline).await;
+        for waiter in waiters {
+            let _ = waiter.reply.send(result.clone());
+        }
     }
     let _ = done.send(());
 }
@@ -182,20 +208,30 @@ async fn fetch_tip_once(
 pub struct TipCoalescer {
     sender: mpsc::Sender<Waiter>,
     metrics: GatewayMetrics,
-    timeout: Duration,
+    request_timeout: Duration,
+    backend_timeout: Duration,
 }
 
 impl TipCoalescer {
     #[cfg(test)]
     pub fn spawn(config: &TipConfig, sink: &Arc<dyn TipSink>, metrics: GatewayMetrics) -> Self {
-        Self::spawn_with_timeout(config, sink, metrics, Duration::from_secs(30))
+        Self::spawn_with_deadlines(
+            config,
+            sink,
+            metrics,
+            Duration::from_secs(30),
+            Duration::from_secs(30),
+            Duration::from_secs(1),
+        )
     }
 
-    pub(crate) fn spawn_with_timeout(
+    pub(crate) fn spawn_with_deadlines(
         config: &TipConfig,
         sink: &Arc<dyn TipSink>,
         metrics: GatewayMetrics,
-        timeout: Duration,
+        request_timeout: Duration,
+        backend_timeout: Duration,
+        max_deadline_skew: Duration,
     ) -> Self {
         let (sender, ingress) = mpsc::channel(config.ingress_queue_depth.max(1));
         let (completion_tx, completion_rx) = mpsc::unbounded_channel();
@@ -207,12 +243,14 @@ impl TipCoalescer {
             max_inflight: config.max_inflight_tips.max(1),
             sink: sink.clone(),
             metrics: metrics.clone(),
+            max_deadline_skew,
         };
         tokio::spawn(coalescer.run());
         Self {
             sender,
             metrics,
-            timeout,
+            request_timeout,
+            backend_timeout,
         }
     }
 
@@ -222,14 +260,21 @@ impl TipCoalescer {
     #[tracing::instrument(skip_all)]
     pub async fn chain_tip(&self, context: RpcRequestContext) -> Result<ChainTip, GatewayError> {
         let (reply_tx, reply_rx) = oneshot::channel();
-        let deadline = context
-            .capped(self.timeout)
+        let request_deadline = context
+            .capped_from_start(self.request_timeout)
             .deadline()
             .expect("operation timeout should bound chain-tip lookup");
+        let backend_deadline = context
+            .capped_from_start(self.backend_timeout)
+            .deadline()
+            .expect("backend timeout should bound chain-tip lookup");
+        if backend_deadline <= Instant::now() {
+            return Err(GatewayError::BackendTimeout);
+        }
         self.sender
             .try_send(Waiter {
                 reply: reply_tx,
-                deadline,
+                backend_deadline,
             })
             .map_err(|e| match e {
                 mpsc::error::TrySendError::Full(_) => {
@@ -245,7 +290,7 @@ impl TipCoalescer {
                     GatewayError::BackendUnavailable("tip coalescer shut down".into())
                 }
             })?;
-        tokio::time::timeout_at(deadline.into(), reply_rx)
+        tokio::time::timeout_at(request_deadline.into(), reply_rx)
             .await
             .map_err(|_| GatewayError::BackendTimeout)?
             .map_err(|_| GatewayError::BackendUnavailable("tip coalescer dropped reply".into()))?
@@ -262,7 +307,10 @@ mod tests {
     use groundhog_json_rpc_types::BlockHeight;
     use groundhog_json_rpc_types::hex::Hex0x;
     use std::collections::VecDeque;
-    use std::sync::Mutex;
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    };
     use std::time::Duration;
 
     /// Scripted mock sink.  Each `get_tip()` call pops the next gated
@@ -341,6 +389,29 @@ mod tests {
         }
     }
 
+    struct TimeoutInvalidatesTipSink {
+        cutoff: Instant,
+        valid: AtomicBool,
+        deadlines: Mutex<Vec<Instant>>,
+    }
+
+    #[async_trait]
+    impl TipSink for TimeoutInvalidatesTipSink {
+        async fn get_tip(&self, deadline: Instant) -> Result<ChainTip, GatewayError> {
+            self.deadlines.lock().unwrap().push(deadline);
+            if deadline < self.cutoff {
+                self.valid.store(false, Ordering::SeqCst);
+                Err(GatewayError::BackendTimeout)
+            } else if self.valid.load(Ordering::SeqCst) {
+                Ok(default_tip(20))
+            } else {
+                Err(GatewayError::BackendUnavailable(
+                    "scheduler invalidated by older timeout".into(),
+                ))
+            }
+        }
+    }
+
     fn config_for_tests(max_inflight: u32, ingress: usize) -> TipConfig {
         TipConfig {
             max_inflight_tips: max_inflight,
@@ -394,6 +465,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn expired_tip_waiter_is_not_dispatched() {
+        let mock = MockSink::new(42);
+        let coalescer = TipCoalescer::spawn(
+            &config_for_tests(4, 100),
+            &(mock.clone() as Arc<dyn TipSink>),
+            metrics_for_tests(),
+        );
+
+        let result = coalescer
+            .chain_tip(RpcRequestContext::new(Some(Duration::ZERO)))
+            .await;
+
+        assert!(matches!(result, Err(GatewayError::BackendTimeout)));
+        assert_eq!(mock.seen(), 0);
+    }
+
+    #[tokio::test]
     async fn coalesces_during_inflight() {
         let mock = MockSink::new(7);
         let gate = mock.queue_gate();
@@ -432,6 +520,101 @@ mod tests {
             assert_eq!(tip.height, BlockHeight::new(7));
         }
         assert_eq!(mock.seen(), 2, "11 waiters, 2 backend calls");
+    }
+
+    #[tokio::test]
+    async fn older_deadline_cohort_does_not_timeout_newer_tip_waiters() {
+        let mock = MockSink::new(0);
+        let first_gate = mock.queue_gate();
+        mock.queue_response(Ok(default_tip(20)));
+        mock.queue_response(Err(GatewayError::BackendTimeout));
+        let coalescer = TipCoalescer::spawn_with_deadlines(
+            &config_for_tests(1, 100),
+            &(mock.clone() as Arc<dyn TipSink>),
+            metrics_for_tests(),
+            Duration::from_secs(5),
+            Duration::from_secs(5),
+            Duration::from_millis(10),
+        );
+
+        let first = tokio::spawn({
+            let coalescer = coalescer.clone();
+            async move { coalescer.chain_tip(request_context()).await }
+        });
+        settle().await;
+
+        let old = tokio::spawn({
+            let coalescer = coalescer.clone();
+            async move {
+                coalescer
+                    .chain_tip(RpcRequestContext::new(Some(Duration::from_secs(2))))
+                    .await
+            }
+        });
+        let newer = tokio::spawn({
+            let coalescer = coalescer.clone();
+            async move {
+                coalescer
+                    .chain_tip(RpcRequestContext::new(Some(Duration::from_secs(5))))
+                    .await
+            }
+        });
+        settle().await;
+
+        first_gate
+            .send(Ok(default_tip(10)))
+            .expect("first gate should be open");
+        first.await.unwrap().unwrap();
+
+        assert!(matches!(
+            old.await.unwrap(),
+            Err(GatewayError::BackendTimeout)
+        ));
+        assert_eq!(newer.await.unwrap().unwrap().height, BlockHeight::new(20));
+        assert_eq!(mock.seen(), 3);
+    }
+
+    #[tokio::test]
+    async fn newer_tip_finishes_before_old_timeout_invalidates_scheduler() {
+        let now = Instant::now();
+        let sink = Arc::new(TimeoutInvalidatesTipSink {
+            cutoff: now + Duration::from_secs(3),
+            valid: AtomicBool::new(true),
+            deadlines: Mutex::new(Vec::new()),
+        });
+        let (old_reply, old_waiter) = oneshot::channel();
+        let (newer_reply, newer_waiter) = oneshot::channel();
+        let (done, mut completed) = mpsc::unbounded_channel();
+        let cohorts = vec![
+            vec![Waiter {
+                reply: old_reply,
+                backend_deadline: now + Duration::from_secs(2),
+            }],
+            vec![Waiter {
+                reply: newer_reply,
+                backend_deadline: now + Duration::from_secs(5),
+            }],
+        ];
+
+        fetch_tip_cohorts(sink.clone(), cohorts, metrics_for_tests(), done).await;
+
+        assert_eq!(
+            newer_waiter
+                .await
+                .expect("newer reply should be sent")
+                .expect("newer cohort should finish before invalidation")
+                .height,
+            BlockHeight::new(20)
+        );
+        assert!(matches!(
+            old_waiter.await.expect("old reply should be sent"),
+            Err(GatewayError::BackendTimeout)
+        ));
+        assert_eq!(completed.recv().await, Some(()));
+        assert_eq!(
+            sink.deadlines.lock().unwrap().as_slice(),
+            &[now + Duration::from_secs(5), now + Duration::from_secs(2)]
+        );
     }
 
     #[tokio::test]

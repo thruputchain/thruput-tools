@@ -30,7 +30,7 @@ impl GatewayBackend {
     }
 
     fn bounded_context(&self, context: RpcRequestContext) -> RpcRequestContext {
-        context.capped(self.ctx.config.request_timeout())
+        context.capped_from_start(self.ctx.config.request_timeout())
     }
 
     async fn with_deadline<T>(
@@ -113,7 +113,7 @@ impl ReadPlane for GatewayBackend {
         let context = self.bounded_context(context);
         self.with_deadline(
             context,
-            handlers::receipt::get_transaction_receipt(&self.ctx, tx_hash),
+            handlers::receipt::get_transaction_receipt(&self.ctx, context, tx_hash),
         )
         .await
     }
@@ -127,7 +127,7 @@ impl ReadPlane for GatewayBackend {
         let context = self.bounded_context(context);
         self.with_deadline(
             context,
-            handlers::receipt::get_transaction_status(&self.ctx, tx_hash),
+            handlers::receipt::get_transaction_status(&self.ctx, context, tx_hash),
         )
         .await
     }
@@ -139,8 +139,11 @@ impl ReadPlane for GatewayBackend {
         query: EventQuery,
     ) -> Result<EventPage, RpcServerError> {
         let context = self.bounded_context(context);
-        self.with_deadline(context, handlers::events::get_events(&self.ctx, query))
-            .await
+        self.with_deadline(
+            context,
+            handlers::events::get_events(&self.ctx, context, query),
+        )
+        .await
     }
 
     #[tracing::instrument(skip_all, fields(?query.address, limit = query.limit))]
@@ -152,7 +155,7 @@ impl ReadPlane for GatewayBackend {
         let context = self.bounded_context(context);
         self.with_deadline(
             context,
-            handlers::transactions::get_transactions_by_address(&self.ctx, query),
+            handlers::transactions::get_transactions_by_address(&self.ctx, context, query),
         )
         .await
     }
@@ -199,8 +202,11 @@ impl ViewPlane for GatewayBackend {
         gas_limit: u64,
     ) -> Result<ViewResponse, RpcServerError> {
         let context = self.bounded_context(context);
-        self.with_deadline(context, handlers::view::view(&self.ctx, request, gas_limit))
-            .await
+        self.with_deadline(
+            context,
+            handlers::view::view(&self.ctx, context, request, gas_limit),
+        )
+        .await
     }
 }
 

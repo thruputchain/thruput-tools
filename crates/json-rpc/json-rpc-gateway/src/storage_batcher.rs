@@ -28,7 +28,9 @@ use groundhog_xdr::types::{AddressAndKey, StorageKey, StorageKeyContractData};
 use tokio::sync::{RwLock, oneshot};
 use xdr_common::VecM;
 
-use crate::adaptive_batch::{AdaptiveBatcher, BatchProcessor, shard_index_by_routing_key};
+use crate::adaptive_batch::{
+    AdaptiveBatcher, BatchProcessor, deadline_cohorts, shard_index_by_routing_key,
+};
 use crate::config::{AdaptiveBatchConfig, HealthBackend};
 use crate::error::GatewayError;
 use crate::metrics::{BackendRequestOutcome, GatewayMetrics};
@@ -82,7 +84,10 @@ impl StorageReadSink for DbGatewaySink {
         let started_at = Instant::now();
         let timeout = self
             .timeout
-            .min(deadline.saturating_duration_since(Instant::now()));
+            .min(deadline.saturating_duration_since(started_at));
+        if timeout.is_zero() {
+            return Err(GatewayError::BackendTimeout);
+        }
         let outer_result = tokio::time::timeout(timeout, client.dbgateway_get_items(&batch)).await;
         self.metrics.observe_backend_request(
             HealthBackend::DbGateway,
@@ -123,76 +128,101 @@ impl StorageReadSink for DbGatewaySink {
 struct Item {
     request: AddressAndKey,
     reply: oneshot::Sender<Result<StorageItemRead, GatewayError>>,
-    deadline: Instant,
+    backend_deadline: Instant,
 }
 
 /// Per-batch processor: pack concurrent reads into one
 /// `dbgateway_get_items` call and demux the response per waiter.
 struct StorageReadProcessor {
     sink: Arc<dyn StorageReadSink>,
+    metrics: GatewayMetrics,
+    max_deadline_skew: Duration,
 }
 
 #[async_trait]
 impl BatchProcessor for StorageReadProcessor {
     type Item = Item;
 
-    async fn process(&self, mut items: Vec<Item>) {
+    async fn process(&self, items: Vec<Item>) {
         let now = Instant::now();
-        items.retain(|item| !item.reply.is_closed() && item.deadline > now);
-        if items.is_empty() {
-            return;
-        }
-        let deadline = items
-            .iter()
-            .map(|item| item.deadline)
-            .min()
-            .expect("non-empty batch should have a deadline");
-        let batch: AddressAndKeyBatch = VecM(items.iter().map(|i| i.request.clone()).collect());
-        let result = self.sink.fetch(batch, deadline).await;
-        match result {
-            Err(e) => {
-                for item in items {
-                    let _ = item.reply.send(Err(e.clone()));
-                }
+        let mut live = Vec::with_capacity(items.len());
+        for item in items {
+            if item.reply.is_closed() {
+                continue;
             }
-            Ok(payload) => {
-                let block_height = payload.block_height;
-                let mut responses = payload.items.0.into_iter();
-                for item in items {
-                    let mapped = match responses.next() {
-                        Some(DbGatewayItemResult::kRPCNone { item: wire }) => Ok(StorageItemRead {
-                            block_height: block_height.clone(),
-                            item: Some(StorageItemInfo::from(wire)),
-                        }),
-                        Some(DbGatewayItemResult::Default { error }) => {
-                            let err = RPCError(error);
-                            if err == RPCError::kRPCNotFound {
+            if item.backend_deadline <= now {
+                let _ = item.reply.send(Err(GatewayError::BackendTimeout));
+            } else {
+                live.push(item);
+            }
+        }
+        for mut cohort in
+            deadline_cohorts(live, self.max_deadline_skew, |item| item.backend_deadline)
+        {
+            let now = Instant::now();
+            cohort.retain(|item| !item.reply.is_closed());
+            if cohort.is_empty() {
+                continue;
+            }
+            let deadline = cohort[0].backend_deadline;
+            if deadline <= now {
+                for item in cohort {
+                    let _ = item.reply.send(Err(GatewayError::BackendTimeout));
+                }
+                continue;
+            }
+            self.metrics
+                .observe_internal_batch_size("storage_batcher", cohort.len());
+            let batch: AddressAndKeyBatch =
+                VecM(cohort.iter().map(|i| i.request.clone()).collect());
+            let result = self.sink.fetch(batch, deadline).await;
+            match result {
+                Err(e) => {
+                    for item in cohort {
+                        let _ = item.reply.send(Err(e.clone()));
+                    }
+                }
+                Ok(payload) => {
+                    let block_height = payload.block_height;
+                    let mut responses = payload.items.0.into_iter();
+                    for item in cohort {
+                        let mapped = match responses.next() {
+                            Some(DbGatewayItemResult::kRPCNone { item: wire }) => {
                                 Ok(StorageItemRead {
                                     block_height: block_height.clone(),
-                                    item: None,
+                                    item: Some(StorageItemInfo::from(wire)),
                                 })
-                            } else {
-                                Err(GatewayError::BackendUnavailable(format!(
-                                    "db_gateway item: {err}"
-                                )))
                             }
-                        }
-                        Some(unexpected) => {
-                            tracing::warn!(
-                                ?unexpected,
-                                "db_gateway returned unsupported per-item result variant"
-                            );
-                            Err(GatewayError::BackendUnavailable(
-                                "db_gateway returned an unsupported per-item result variant; \
-                                 regenerate the DbGateway client for this protocol"
-                                    .into(),
-                            ))
-                        }
-                        None => Err(GatewayError::BackendUnavailable(
-                            "db_gateway response had fewer items than the batch".into(),
-                        )),
-                    };
-                    let _ = item.reply.send(mapped);
+                            Some(DbGatewayItemResult::Default { error }) => {
+                                let err = RPCError(error);
+                                if err == RPCError::kRPCNotFound {
+                                    Ok(StorageItemRead {
+                                        block_height: block_height.clone(),
+                                        item: None,
+                                    })
+                                } else {
+                                    Err(GatewayError::BackendUnavailable(format!(
+                                        "db_gateway item: {err}"
+                                    )))
+                                }
+                            }
+                            Some(unexpected) => {
+                                tracing::warn!(
+                                    ?unexpected,
+                                    "db_gateway returned unsupported per-item result variant"
+                                );
+                                Err(GatewayError::BackendUnavailable(
+                                    "db_gateway returned an unsupported per-item result variant; \
+                                     regenerate the DbGateway client for this protocol"
+                                        .into(),
+                                ))
+                            }
+                            None => Err(GatewayError::BackendUnavailable(
+                                "db_gateway response had fewer items than the batch".into(),
+                            )),
+                        };
+                        let _ = item.reply.send(mapped);
+                    }
                 }
             }
         }
@@ -204,7 +234,8 @@ impl BatchProcessor for StorageReadProcessor {
 #[derive(Clone)]
 pub struct StorageReadBatcher {
     inner: AdaptiveBatcher<Item>,
-    timeout: Duration,
+    request_timeout: Duration,
+    backend_timeout: Duration,
 }
 
 impl StorageReadBatcher {
@@ -216,16 +247,29 @@ impl StorageReadBatcher {
         sink: &Arc<dyn StorageReadSink>,
         metrics: GatewayMetrics,
     ) -> Self {
-        Self::spawn_with_timeout(config, sink, metrics, Duration::from_secs(30))
+        Self::spawn_with_deadlines(
+            config,
+            sink,
+            metrics,
+            Duration::from_secs(30),
+            Duration::from_secs(30),
+            Duration::from_secs(1),
+        )
     }
 
-    pub(crate) fn spawn_with_timeout(
+    pub(crate) fn spawn_with_deadlines(
         config: &AdaptiveBatchConfig,
         sink: &Arc<dyn StorageReadSink>,
         metrics: GatewayMetrics,
-        timeout: Duration,
+        request_timeout: Duration,
+        backend_timeout: Duration,
+        max_deadline_skew: Duration,
     ) -> Self {
-        let processor = Arc::new(StorageReadProcessor { sink: sink.clone() });
+        let processor = Arc::new(StorageReadProcessor {
+            sink: sink.clone(),
+            metrics: metrics.clone(),
+            max_deadline_skew,
+        });
         let inner = AdaptiveBatcher::spawn(
             "storage batcher",
             "storage_batcher",
@@ -233,7 +277,11 @@ impl StorageReadBatcher {
             &processor,
             metrics,
         );
-        Self { inner, timeout }
+        Self {
+            inner,
+            request_timeout,
+            backend_timeout,
+        }
     }
 
     /// Read one (`address`, `key`).  Routes to a shard by the storage
@@ -291,19 +339,26 @@ impl StorageReadBatcher {
             key: storage_key,
         };
         let (reply_tx, reply_rx) = oneshot::channel();
-        let deadline = context
-            .capped(self.timeout)
+        let request_deadline = context
+            .capped_from_start(self.request_timeout)
             .deadline()
             .expect("operation timeout should bound storage read");
+        let backend_deadline = context
+            .capped_from_start(self.backend_timeout)
+            .deadline()
+            .expect("backend timeout should bound storage read");
+        if backend_deadline <= Instant::now() {
+            return Err(GatewayError::BackendTimeout);
+        }
         self.inner.try_send(
             Item {
                 request,
                 reply: reply_tx,
-                deadline,
+                backend_deadline,
             },
             shard_idx,
         )?;
-        tokio::time::timeout_at(deadline.into(), reply_rx)
+        tokio::time::timeout_at(request_deadline.into(), reply_rx)
             .await
             .map_err(|_| GatewayError::BackendTimeout)?
             .map_err(|_| GatewayError::BackendUnavailable("storage batcher dropped reply".into()))?
@@ -504,6 +559,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn expired_storage_read_is_not_dispatched() {
+        let mock = MockSink::arc();
+        let batcher = StorageReadBatcher::spawn(
+            &config_for_tests(1, 4, 1000, 100),
+            &(mock.clone() as Arc<dyn StorageReadSink>),
+            metrics_for_tests(),
+        );
+
+        let result = batcher
+            .read(
+                RpcRequestContext::new(Some(Duration::ZERO)),
+                address_zero(),
+                key_from_u32(0),
+            )
+            .await;
+
+        assert!(matches!(result, Err(GatewayError::BackendTimeout)));
+        assert!(mock.seen().is_empty());
+    }
+
+    #[tokio::test]
     async fn native_hog_balance_read_uses_free_native_token_balance_key() {
         let mock = MockSink::arc();
         let gate = mock.queue_gate();
@@ -600,6 +676,79 @@ mod tests {
         );
 
         assert_eq!(mock.seen(), vec![3], "all three reads shared one batch");
+    }
+
+    #[tokio::test]
+    async fn older_deadline_cohort_does_not_timeout_newer_storage_reads() {
+        let mock = MockSink::arc();
+        let first_gate = mock.queue_gate();
+        let old_gate = mock.queue_gate();
+        let newer_gate = mock.queue_gate();
+        let batcher = StorageReadBatcher::spawn_with_deadlines(
+            &config_for_tests(1, 1, 1000, 100),
+            &(mock.clone() as Arc<dyn StorageReadSink>),
+            metrics_for_tests(),
+            Duration::from_secs(5),
+            Duration::from_secs(5),
+            Duration::from_millis(10),
+        );
+
+        let first = tokio::spawn({
+            let batcher = batcher.clone();
+            async move {
+                batcher
+                    .read(request_context(), address_zero(), key_from_u32(0))
+                    .await
+            }
+        });
+        settle().await;
+
+        let old = tokio::spawn({
+            let batcher = batcher.clone();
+            async move {
+                batcher
+                    .read(
+                        RpcRequestContext::new(Some(Duration::from_secs(2))),
+                        address_zero(),
+                        key_from_u32(1),
+                    )
+                    .await
+            }
+        });
+        let newer = tokio::spawn({
+            let batcher = batcher.clone();
+            async move {
+                batcher
+                    .read(
+                        RpcRequestContext::new(Some(Duration::from_secs(5))),
+                        address_zero(),
+                        key_from_u32(2),
+                    )
+                    .await
+            }
+        });
+        settle().await;
+
+        first_gate
+            .send(Ok(payload_at_height(1, vec![not_found_item()])))
+            .expect("first gate should be open");
+        first.await.unwrap().unwrap();
+        settle().await;
+        old_gate
+            .send(Err(GatewayError::BackendTimeout))
+            .expect("old cohort gate should be open");
+        assert!(matches!(
+            old.await.unwrap(),
+            Err(GatewayError::BackendTimeout)
+        ));
+        newer_gate
+            .send(Ok(payload_at_height(2, vec![not_found_item()])))
+            .expect("newer cohort gate should be open");
+        newer
+            .await
+            .unwrap()
+            .expect("newer cohort should complete independently");
+        assert_eq!(mock.seen(), vec![1, 1, 1]);
     }
 
     #[tokio::test]

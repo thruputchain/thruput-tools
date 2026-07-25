@@ -240,16 +240,19 @@ impl GatewayContext {
     ) -> Self {
         let request_timeout = config.request_timeout();
         let backend_request_timeout = config.backend_request_timeout();
+        let request_timeout_margin = config.request_timeout_margin();
         let submit_sink: Arc<dyn SubmitSink> = Arc::new(SchedulerSink::new(
             scheduler.clone(),
             metrics.clone(),
             backend_request_timeout,
         ));
-        let batch_submitter = BatchSubmitter::spawn_with_timeout(
+        let batch_submitter = BatchSubmitter::spawn_with_deadlines(
             &config.batch,
             &submit_sink,
             metrics.clone(),
             request_timeout,
+            backend_request_timeout,
+            request_timeout_margin,
         );
 
         let storage_sink: Arc<dyn StorageReadSink> = Arc::new(DbGatewaySink::new(
@@ -257,11 +260,13 @@ impl GatewayContext {
             metrics.clone(),
             backend_request_timeout,
         ));
-        let storage_batcher = StorageReadBatcher::spawn_with_timeout(
+        let storage_batcher = StorageReadBatcher::spawn_with_deadlines(
             &config.storage,
             &storage_sink,
             metrics.clone(),
             request_timeout,
+            backend_request_timeout,
+            request_timeout_margin,
         );
 
         let tip_sink: Arc<dyn TipSink> = Arc::new(SchedulerTipSink::new(
@@ -269,11 +274,13 @@ impl GatewayContext {
             metrics.clone(),
             backend_request_timeout,
         ));
-        let tip_coalescer = TipCoalescer::spawn_with_timeout(
+        let tip_coalescer = TipCoalescer::spawn_with_deadlines(
             &config.tip,
             &tip_sink,
             metrics.clone(),
             request_timeout,
+            backend_request_timeout,
+            request_timeout_margin,
         );
 
         Self {

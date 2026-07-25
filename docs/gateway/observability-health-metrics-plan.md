@@ -593,7 +593,12 @@ series shape and Grafana queries. Treat changes as dashboard-affecting.
   WebSocket calls, including time spent in internal batch/coalescer queues.
   Backend RPC deadlines reserve a bounded completion margin inside that budget;
   the HTTP transport watchdog uses the same margin outside it. Expired queued
-  waiters are discarded before backend dispatch.
+  waiters are discarded before backend dispatch. Internal batchers group
+  waiters into earliest-deadline cohorts whose maximum skew is that completion
+  margin, so a materially older waiter cannot share a backend timeout with
+  newer work from the same drain. Scheduler-backed submit and tip paths process
+  those cohorts newest-first because a timeout clears the active scheduler;
+  storage reads remain earliest-first.
 - The probe loop is non-overlapping, but probes the four active backends
   concurrently. An RPC against an existing client is capped by
   `min(request_timeout_ms, health_probe_interval_ms)`.
