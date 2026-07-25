@@ -105,6 +105,9 @@ impl SubmitSink for SchedulerSink {
                     },
                     started_at.elapsed(),
                 );
+                if matches!(result, Ok(Err(_))) {
+                    clear_scheduler_if_current(&self.scheduler, generation).await;
+                }
                 result
                     .map_err(|()| GatewayError::BackendTimeout)?
                     .map_err(|e| classify_rpc_error(&e))

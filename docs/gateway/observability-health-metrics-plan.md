@@ -616,6 +616,11 @@ series shape and Grafana queries. Treat changes as dashboard-affecting.
   scheduler request clears the handler-visible slot before canceling its worker;
   only the gateway reconnect manager may construct the replacement pool and put
   it through quarantine.
+- Direct transaction-status scheduler lookups use reserved admission permits
+  matched by scheduler pool capacity. Admission saturation returns overload
+  without entering the x23 queue or clearing a healthy scheduler.
+- Scheduler transport failures clear only the generation that produced the
+  failure, so a stale request cannot remove a newer replacement pool.
 - One active-client probe timeout marks that snapshot down but retains the pool.
   A second consecutive timeout discards it and starts the reconnect lifecycle.
   A successful response resets the timeout streak.

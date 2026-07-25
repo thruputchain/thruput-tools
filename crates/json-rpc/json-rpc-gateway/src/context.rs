@@ -17,7 +17,10 @@ use groundhog_view::{ViewGateway_ViewGateway1_Client, ViewGatewayIntroOutcome};
 use groundhog_x23_transport::{ConnectError, try_connect, try_connect_with_canceled_call_policy};
 use groundhog_xdr::PROTOCOL_VERSION;
 use rpc_driver::CanceledCallPolicy;
-use tokio::{sync::RwLock, time::Instant};
+use tokio::{
+    sync::{RwLock, Semaphore},
+    time::Instant,
+};
 use xdr_common::StringM;
 
 use crate::config::{GatewayConfig, HealthBackend};
@@ -27,6 +30,8 @@ use crate::submitter::{BatchSubmitter, SchedulerSink, SubmitSink};
 use crate::tip_coalescer::{SchedulerTipSink, TipCoalescer, TipSink};
 
 static NEXT_SCHEDULER_GENERATION: AtomicU64 = AtomicU64::new(1);
+
+pub(crate) const SCHEDULER_LOOKUP_CONCURRENCY: usize = 4;
 
 #[derive(Clone)]
 pub(crate) struct SchedulerClient {
@@ -91,6 +96,9 @@ pub struct GatewayContext {
     /// Even when tx submission is routed through chuckd, read paths still use
     /// the scheduler directly.
     pub scheduler: Arc<RwLock<Option<SchedulerClient>>>,
+
+    /// Admission bound for direct transaction-status scheduler lookups.
+    pub(crate) scheduler_lookup_admission: Arc<Semaphore>,
 
     /// Scheduler pool held away from request handlers until its readiness
     /// grace period has elapsed.
@@ -285,6 +293,7 @@ impl GatewayContext {
 
         Self {
             scheduler,
+            scheduler_lookup_admission: Arc::new(Semaphore::new(SCHEDULER_LOOKUP_CONCURRENCY)),
             scheduler_quarantine: Arc::new(RwLock::new(None)),
             indexer,
             batch_submitter,
@@ -719,15 +728,14 @@ fn view_gateway_intro_rejection_reason(
 
 /// Pick a scheduler pool size that covers every concurrent RPC the gateway
 /// may have in flight against it.  x23 serializes one RPC per connection.
-/// Slack covers ad-hoc calls (`lookup_transactions`, `pending_transaction_count`).
+/// The final term is reserved for admission-bounded transaction lookups.
 pub(crate) fn scheduler_pool_size(config: &GatewayConfig) -> usize {
-    const SLACK: usize = 4;
     let tip = config.tip.max_inflight_tips.max(1) as usize;
     config
         .batch
         .max_concurrent_rpcs()
         .saturating_add(tip)
-        .saturating_add(SLACK)
+        .saturating_add(SCHEDULER_LOOKUP_CONCURRENCY)
 }
 
 /// Pick a `db_gateway` pool size that matches the storage batcher's own

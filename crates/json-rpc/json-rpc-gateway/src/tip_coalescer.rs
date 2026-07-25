@@ -91,6 +91,9 @@ impl TipSink for SchedulerTipSink {
             outcome,
             started_at.elapsed(),
         );
+        if matches!(rpc_result, Ok(Err(_))) {
+            clear_scheduler_if_current(&self.scheduler, generation).await;
+        }
         let result = rpc_result
             .map_err(|()| GatewayError::BackendTimeout)?
             .map_err(|e| GatewayError::BackendUnavailable(e.to_string()))?;

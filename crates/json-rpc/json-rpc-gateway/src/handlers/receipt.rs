@@ -10,7 +10,8 @@ use groundhog_json_rpc_types::{
 };
 use groundhog_xdr::exec_result::ExecResult;
 use groundhog_xdr::transaction::{InvocationFrameOutput, SignedTransactionHash};
-use std::time::Instant;
+use std::{sync::Arc, time::Instant};
+use tokio::{sync::RwLock, task::JoinHandle};
 use xdr_common::VecM;
 
 use crate::config::HealthBackend;
@@ -20,6 +21,64 @@ use crate::metrics::{BackendRequestOutcome, REASON_PARSE_FAILED};
 
 use super::backend_deadline;
 use super::parse_event::parse_emitted_event;
+
+struct SchedulerLookupGuard<T: Send + 'static> {
+    scheduler: Arc<RwLock<Option<crate::context::SchedulerClient>>>,
+    generation: u64,
+    worker: Option<JoinHandle<T>>,
+    armed: bool,
+}
+
+impl<T: Send + 'static> SchedulerLookupGuard<T> {
+    fn new(
+        scheduler: Arc<RwLock<Option<crate::context::SchedulerClient>>>,
+        generation: u64,
+        worker: JoinHandle<T>,
+    ) -> Self {
+        Self {
+            scheduler,
+            generation,
+            worker: Some(worker),
+            armed: true,
+        }
+    }
+
+    fn worker_mut(&mut self) -> &mut JoinHandle<T> {
+        self.worker.as_mut().expect("scheduler worker should exist")
+    }
+
+    async fn clear_and_abort(&mut self) {
+        clear_scheduler_if_current(&self.scheduler, self.generation).await;
+        if let Some(worker) = self.worker.take() {
+            worker.abort();
+            let _ = worker.await;
+        }
+        self.armed = false;
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+        self.worker.take();
+    }
+}
+
+impl<T: Send + 'static> Drop for SchedulerLookupGuard<T> {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let scheduler = self.scheduler.clone();
+        let generation = self.generation;
+        let worker = self.worker.take();
+        tokio::spawn(async move {
+            clear_scheduler_if_current(&scheduler, generation).await;
+            if let Some(worker) = worker {
+                worker.abort();
+                let _ = worker.await;
+            }
+        });
+    }
+}
 
 /// Map hogd's `ExecResult` (XDR int enum) to the gateway's `ExecStatus`.
 fn map_exec_result(r: ExecResult) -> ExecStatus {
@@ -136,6 +195,75 @@ pub async fn get_transaction_receipt(
 ///   still-pending transaction must not read as gone.
 /// - Indexer unreachable → return `BackendUnavailable` error.
 ///   The indexer is the authoritative source.
+async fn transaction_is_pending(
+    ctx: &GatewayContext,
+    deadline: Instant,
+    tx_hash: TxHash,
+) -> Result<bool, GatewayError> {
+    let client = ctx
+        .scheduler
+        .read()
+        .await
+        .clone()
+        .ok_or_else(|| GatewayError::BackendUnavailable("scheduler not connected".into()))?;
+    let permit = ctx
+        .scheduler_lookup_admission
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| {
+            GatewayError::Overloaded(
+                "scheduler transaction-status lookup capacity exhausted".into(),
+            )
+        })?;
+    let generation = client.generation();
+    let hash = SignedTransactionHash::from(tx_hash.0.0.into_inner());
+    let batch: VecM<SignedTransactionHash> = VecM(vec![hash]);
+    let started_at = Instant::now();
+    let worker = tokio::spawn(async move {
+        let _permit = permit;
+        client.schedcoord_lookup_transactions(&batch).await
+    });
+    let mut guard = SchedulerLookupGuard::new(ctx.scheduler.clone(), generation, worker);
+    let rpc_result = if let Ok(result) = tokio::time::timeout(
+        deadline.saturating_duration_since(Instant::now()),
+        guard.worker_mut(),
+    )
+    .await
+    {
+        Ok(result.unwrap_or(Err(rpc_driver::RpcError::SystemError)))
+    } else {
+        guard.clear_and_abort().await;
+        Err(())
+    };
+    if matches!(rpc_result, Ok(Err(_))) {
+        clear_scheduler_if_current(&ctx.scheduler, generation).await;
+    }
+    guard.disarm();
+    ctx.metrics.observe_backend_request(
+        HealthBackend::Scheduler,
+        "schedcoord_lookup_transactions",
+        match &rpc_result {
+            Ok(Ok(_)) => BackendRequestOutcome::Ok,
+            Ok(Err(_)) => BackendRequestOutcome::Error,
+            Err(()) => BackendRequestOutcome::Timeout,
+        },
+        started_at.elapsed(),
+    );
+    match rpc_result {
+        Ok(Ok(results)) => match results.iter().next() {
+            Some(Some(_)) => Ok(true),
+            Some(None) => Ok(false),
+            None => Err(GatewayError::BackendUnavailable(
+                "scheduler lookup returned no slot for the queried transaction".into(),
+            )),
+        },
+        Ok(Err(error)) => Err(GatewayError::BackendUnavailable(format!(
+            "scheduler lookup failed: {error}"
+        ))),
+        Err(()) => Err(GatewayError::BackendTimeout),
+    }
+}
+
 #[tracing::instrument(skip_all, fields(?tx_hash))]
 pub async fn get_transaction_status(
     ctx: &GatewayContext,
@@ -143,61 +271,16 @@ pub async fn get_transaction_status(
     tx_hash: TxHash,
 ) -> Result<TransactionStatus, GatewayError> {
     let deadline = backend_deadline(context, ctx.config.backend_request_timeout())?;
-    // 1. Check scheduler mempool. Best-effort in that a failure does not
-    // abort the indexer lookup, but tracked: `Unknown` asserts the
-    // transaction is in neither place, which requires both to have answered.
-    let mut mempool_checked = false;
-    let maybe_scheduler = ctx.scheduler.read().await.clone();
-    if let Some(client) = maybe_scheduler.as_ref() {
-        let generation = client.generation();
-        let hash = SignedTransactionHash::from(tx_hash.0.0.into_inner());
-        let batch: VecM<SignedTransactionHash> = VecM(vec![hash]);
-
-        let started_at = Instant::now();
-        let client = client.clone();
-        let mut call =
-            tokio::spawn(async move { client.schedcoord_lookup_transactions(&batch).await });
-        let rpc_result = if let Ok(result) = tokio::time::timeout(
-            deadline.saturating_duration_since(Instant::now()),
-            &mut call,
-        )
-        .await
-        {
-            Ok(result.unwrap_or(Err(rpc_driver::RpcError::SystemError)))
-        } else {
-            clear_scheduler_if_current(&ctx.scheduler, generation).await;
-            call.abort();
-            let _ = call.await;
-            Err(())
-        };
-        ctx.metrics.observe_backend_request(
-            HealthBackend::Scheduler,
-            "schedcoord_lookup_transactions",
-            match &rpc_result {
-                Ok(Ok(_)) => BackendRequestOutcome::Ok,
-                Ok(Err(_)) => BackendRequestOutcome::Error,
-                Err(()) => BackendRequestOutcome::Timeout,
-            },
-            started_at.elapsed(),
-        );
-        match rpc_result {
-            // Only a per-hash slot counts as a mempool answer; an empty
-            // batch left the queried transaction unaccounted for.
-            Ok(Ok(results)) => match results.iter().next() {
-                Some(Some(_)) => return Ok(TransactionStatus::Pending),
-                Some(None) => mempool_checked = true,
-                None => {
-                    tracing::warn!("scheduler lookup returned no slot for the queried tx hash");
-                }
-            },
-            Ok(Err(e)) => {
-                tracing::warn!(error = %e, "scheduler unreachable, cannot detect pending txs");
-            }
-            Err(()) => tracing::warn!("scheduler lookup timed out, cannot detect pending txs"),
+    // Scheduler failures are advisory for terminal indexer answers, but an
+    // indexer miss cannot become `Unknown` without a successful mempool miss.
+    let scheduler_failure = match transaction_is_pending(ctx, deadline, tx_hash).await {
+        Ok(true) => return Ok(TransactionStatus::Pending),
+        Ok(false) => None,
+        Err(error) => {
+            tracing::warn!(%error, "scheduler unavailable, cannot detect pending txs");
+            Some(error)
         }
-    } else {
-        tracing::warn!("scheduler not connected, cannot detect pending txs");
-    }
+    };
 
     // 2. Check indexer (authoritative).
     let maybe_indexer = ctx.indexer.read().await.clone();
@@ -240,15 +323,18 @@ pub async fn get_transaction_status(
         ));
     }
 
-    if mempool_checked {
+    if scheduler_failure.is_none() {
         Ok(TransactionStatus::Unknown)
     } else {
         // `Unknown` tells the client "not in mempool or indexer"; without a
         // mempool answer that claim is unverified and a still-pending
         // transaction would read as gone (inviting an unsafe re-sign).
-        Err(GatewayError::BackendUnavailable(
-            "scheduler unreachable: transaction is not committed but may still be pending".into(),
-        ))
+        Err(scheduler_failure.unwrap_or_else(|| {
+            GatewayError::BackendUnavailable(
+                "scheduler unreachable: transaction is not committed but may still be pending"
+                    .into(),
+            )
+        }))
     }
 }
 
@@ -279,11 +365,11 @@ mod tests {
     use groundhog_xdr::types::SHA256Hash;
     use rpc_driver::{ProgramError, RpcServer, ServiceMap};
     use tokio::net::TcpListener;
-    use tokio::sync::RwLock;
+    use tokio::sync::{Notify, RwLock};
 
     use super::*;
     use crate::config::GatewayConfig;
-    use crate::context::SchedulerClient;
+    use crate::context::{SCHEDULER_LOOKUP_CONCURRENCY, SchedulerClient};
     use crate::metrics::GatewayMetrics;
 
     /// Indexer that answers `get_transaction_info` with not-found.
@@ -326,7 +412,7 @@ mod tests {
         }
     }
 
-    #[derive(Clone, Copy)]
+    #[derive(Clone)]
     enum FakeSchedulerMode {
         /// Mempool lookup succeeds and reports the transaction absent.
         MempoolMiss,
@@ -334,6 +420,11 @@ mod tests {
         EmptyBatch,
         /// Mempool lookup fails at the RPC layer.
         RpcFail,
+        /// Mempool lookup waits until the test replaces the active generation.
+        GatedRpcFail {
+            started: Arc<Notify>,
+            release: Arc<Notify>,
+        },
     }
 
     struct FakeScheduler {
@@ -405,11 +496,16 @@ mod tests {
             &self,
             _arg0: SignedTransactionHashBatch,
         ) -> Result<OptSignedTransactionBatch, ProgramError> {
-            match self.mode {
+            match &self.mode {
                 FakeSchedulerMode::MempoolMiss => Ok(VecM(vec![None])),
                 FakeSchedulerMode::EmptyBatch => Ok(VecM(vec![])),
                 FakeSchedulerMode::RpcFail => {
                     Err(ProgramError::msg("fake scheduler lookup failure"))
+                }
+                FakeSchedulerMode::GatedRpcFail { started, release } => {
+                    started.notify_one();
+                    release.notified().await;
+                    Err(ProgramError::msg("delayed scheduler lookup failure"))
                 }
             }
         }
@@ -520,6 +616,10 @@ mod tests {
             .expect_err("bug: failed mempool lookup must not produce a definite status");
 
         assert!(matches!(err, GatewayError::BackendUnavailable(_)));
+        assert!(
+            ctx.scheduler.read().await.is_none(),
+            "transport failure should clear the matching scheduler generation"
+        );
     }
 
     #[tokio::test]
@@ -548,5 +648,131 @@ mod tests {
             .expect("bug: consulted-and-missed lookups should produce a status");
 
         assert!(matches!(status, TransactionStatus::Unknown));
+    }
+
+    #[tokio::test]
+    async fn saturated_lookup_admission_does_not_clear_healthy_scheduler() {
+        let (scheduler_addr, _scheduler) =
+            start_fake_scheduler(FakeSchedulerMode::MempoolMiss).await;
+        let (indexer_addr, _indexer) = start_not_found_indexer().await;
+        let ctx = test_context(Some(scheduler_addr), indexer_addr).await;
+        let mut permits = Vec::new();
+        for _ in 0..SCHEDULER_LOOKUP_CONCURRENCY {
+            permits.push(
+                ctx.scheduler_lookup_admission
+                    .clone()
+                    .try_acquire_owned()
+                    .expect("test should reserve lookup capacity"),
+            );
+        }
+
+        let error = get_transaction_status(&ctx, RpcRequestContext::unbounded(), test_hash())
+            .await
+            .expect_err("saturated lookup admission should not claim an unknown status");
+
+        assert!(matches!(error, GatewayError::Overloaded(_)));
+        assert!(
+            ctx.scheduler.read().await.is_some(),
+            "local admission saturation must not clear a healthy scheduler"
+        );
+
+        drop(permits);
+        let status = get_transaction_status(&ctx, RpcRequestContext::unbounded(), test_hash())
+            .await
+            .expect("lookup should recover when admission capacity is released");
+        assert!(matches!(status, TransactionStatus::Unknown));
+    }
+
+    #[tokio::test]
+    async fn stale_transport_failure_does_not_clear_new_scheduler_generation() {
+        let started = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let (old_scheduler_addr, _old_scheduler) =
+            start_fake_scheduler(FakeSchedulerMode::GatedRpcFail {
+                started: started.clone(),
+                release: release.clone(),
+            })
+            .await;
+        let (new_scheduler_addr, _new_scheduler) =
+            start_fake_scheduler(FakeSchedulerMode::MempoolMiss).await;
+        let (indexer_addr, _indexer) = start_not_found_indexer().await;
+        let ctx = Arc::new(test_context(Some(old_scheduler_addr), indexer_addr).await);
+
+        let lookup = tokio::spawn({
+            let ctx = ctx.clone();
+            async move {
+                get_transaction_status(&ctx, RpcRequestContext::unbounded(), test_hash()).await
+            }
+        });
+        started.notified().await;
+
+        let replacement = try_connect(
+            "replacement scheduler",
+            &new_scheduler_addr.to_string(),
+            1,
+            SchedulerCoord_SchedulerCoord1_Client::new,
+        )
+        .await
+        .expect("replacement scheduler should connect")
+        .expect("replacement scheduler should be present");
+        let replacement = SchedulerClient::new(replacement.clone(), replacement);
+        let replacement_generation = replacement.generation();
+        *ctx.scheduler.write().await = Some(replacement);
+        release.notify_one();
+
+        assert!(matches!(
+            lookup.await.expect("lookup task should join"),
+            Err(GatewayError::BackendUnavailable(_))
+        ));
+        assert_eq!(
+            ctx.scheduler
+                .read()
+                .await
+                .as_ref()
+                .expect("replacement scheduler should survive")
+                .generation(),
+            replacement_generation
+        );
+    }
+
+    #[tokio::test]
+    async fn canceled_lookup_clears_generation_before_releasing_admission() {
+        let started = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let (scheduler_addr, _scheduler) = start_fake_scheduler(FakeSchedulerMode::GatedRpcFail {
+            started: started.clone(),
+            release: release.clone(),
+        })
+        .await;
+        let (indexer_addr, _indexer) = start_not_found_indexer().await;
+        let ctx = Arc::new(test_context(Some(scheduler_addr), indexer_addr).await);
+
+        let lookup = tokio::spawn({
+            let ctx = ctx.clone();
+            async move {
+                get_transaction_status(&ctx, RpcRequestContext::unbounded(), test_hash()).await
+            }
+        });
+        started.notified().await;
+        lookup.abort();
+        let _ = lookup.await;
+
+        let permits = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            ctx.scheduler_lookup_admission.clone().acquire_many_owned(
+                u32::try_from(SCHEDULER_LOOKUP_CONCURRENCY)
+                    .expect("test lookup capacity should fit u32"),
+            ),
+        )
+        .await
+        .expect("cancellation cleanup should release lookup admission")
+        .expect("lookup semaphore should remain open");
+        assert!(
+            ctx.scheduler.read().await.is_none(),
+            "cancellation must clear the generation before releasing its permit"
+        );
+
+        drop(permits);
+        release.notify_one();
     }
 }
