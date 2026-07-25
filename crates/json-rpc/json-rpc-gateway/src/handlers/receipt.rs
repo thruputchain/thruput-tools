@@ -67,16 +67,9 @@ impl<T: Send + 'static> Drop for SchedulerLookupGuard<T> {
         if !self.armed {
             return;
         }
-        let scheduler = self.scheduler.clone();
-        let generation = self.generation;
-        let worker = self.worker.take();
-        tokio::spawn(async move {
-            clear_scheduler_if_current(&scheduler, generation).await;
-            if let Some(worker) = worker {
-                worker.abort();
-                let _ = worker.await;
-            }
-        });
+        if let Some(worker) = self.worker.take() {
+            worker.abort();
+        }
     }
 }
 
@@ -341,7 +334,10 @@ pub async fn get_transaction_status(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
 
     use async_trait::async_trait;
     use groundhog_indexer::{
@@ -443,6 +439,13 @@ mod tests {
             started: Arc<Notify>,
             release: Arc<Notify>,
         },
+        /// The first calls wait for cancellation; subsequent lookups miss.
+        GatedThenMempoolMiss {
+            gated_calls: usize,
+            calls: Arc<AtomicUsize>,
+            started: Arc<Notify>,
+            release: Arc<Notify>,
+        },
     }
 
     struct FakeScheduler {
@@ -524,6 +527,19 @@ mod tests {
                     started.notify_one();
                     release.notified().await;
                     Err(ProgramError::msg("delayed scheduler lookup failure"))
+                }
+                FakeSchedulerMode::GatedThenMempoolMiss {
+                    gated_calls,
+                    calls,
+                    started,
+                    release,
+                } => {
+                    let call = calls.fetch_add(1, Ordering::SeqCst);
+                    if call < *gated_calls {
+                        started.notify_one();
+                        release.notified().await;
+                    }
+                    Ok(VecM(vec![None]))
                 }
             }
         }
@@ -765,26 +781,40 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn canceled_lookup_clears_generation_before_releasing_admission() {
+    async fn canceled_lookups_preserve_scheduler_and_recover_capacity() {
         let started = Arc::new(Notify::new());
         let release = Arc::new(Notify::new());
-        let (scheduler_addr, _scheduler) = start_fake_scheduler(FakeSchedulerMode::GatedRpcFail {
-            started: started.clone(),
-            release: release.clone(),
-        })
-        .await;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (scheduler_addr, _scheduler) =
+            start_fake_scheduler(FakeSchedulerMode::GatedThenMempoolMiss {
+                gated_calls: SCHEDULER_LOOKUP_CONCURRENCY,
+                calls,
+                started: started.clone(),
+                release: release.clone(),
+            })
+            .await;
         let (indexer_addr, _indexer) = start_not_found_indexer().await;
         let ctx = Arc::new(test_context(Some(scheduler_addr), indexer_addr).await);
+        let generation = ctx
+            .scheduler
+            .read()
+            .await
+            .as_ref()
+            .expect("scheduler should be connected")
+            .generation();
 
-        let lookup = tokio::spawn({
-            let ctx = ctx.clone();
-            async move {
-                get_transaction_status(&ctx, RpcRequestContext::unbounded(), test_hash()).await
-            }
-        });
-        started.notified().await;
-        lookup.abort();
-        let _ = lookup.await;
+        for _ in 0..SCHEDULER_LOOKUP_CONCURRENCY {
+            let lookup = tokio::spawn({
+                let ctx = ctx.clone();
+                async move {
+                    get_transaction_status(&ctx, RpcRequestContext::unbounded(), test_hash()).await
+                }
+            });
+            started.notified().await;
+            lookup.abort();
+            let _ = lookup.await;
+            release.notify_one();
+        }
 
         let permits = tokio::time::timeout(
             std::time::Duration::from_secs(1),
@@ -796,12 +826,35 @@ mod tests {
         .await
         .expect("cancellation cleanup should release lookup admission")
         .expect("lookup semaphore should remain open");
-        assert!(
-            ctx.scheduler.read().await.is_none(),
-            "cancellation must clear the generation before releasing its permit"
+        assert_eq!(
+            ctx.scheduler
+                .read()
+                .await
+                .as_ref()
+                .expect("lookup cancellation must preserve the scheduler")
+                .generation(),
+            generation
         );
-
         drop(permits);
-        release.notify_one();
+
+        let scheduler = ctx
+            .scheduler
+            .read()
+            .await
+            .as_ref()
+            .expect("scheduler should remain connected")
+            .clone();
+        scheduler
+            .schedulercoord_null()
+            .await
+            .expect("normal scheduler lane should remain available");
+        let status = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            get_transaction_status(&ctx, RpcRequestContext::unbounded(), test_hash()),
+        )
+        .await
+        .expect("lookup capacity should recover after cancellation")
+        .expect("replacement lookup connections should remain usable");
+        assert!(matches!(status, TransactionStatus::Unknown));
     }
 }

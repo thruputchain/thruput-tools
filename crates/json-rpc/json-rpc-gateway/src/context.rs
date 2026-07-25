@@ -383,7 +383,7 @@ pub(crate) async fn connect_optional_scheduler(
         address,
         SCHEDULER_LOOKUP_CONCURRENCY,
         hogd_large_message_config(),
-        CanceledCallPolicy::PoisonConnection,
+        CanceledCallPolicy::ReplaceConnection,
         SchedulerCoord_SchedulerCoord1_Client::new,
     )
     .await?
