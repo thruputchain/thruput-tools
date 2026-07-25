@@ -2438,6 +2438,52 @@ fn airdrop_dry_run_json_outputs_prepared_transaction() {
 }
 
 #[test]
+fn airdrop_json_rejects_invalid_hog_amount_before_rpc() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let faucet_wallet = advertised_dev_wallet_address(0);
+    let manifest_path = write_runtime_manifest(&project, 0, &faucet_wallet, None);
+    let recipient_wallet = format!("0x{}", "ab".repeat(32));
+    let recipient_owner = format!("0x{}", "cd".repeat(32));
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!(
+            "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\nruntime_manifest = \"{}\"\n\n[profile.default.wallets.alice]\naddress = \"{recipient_wallet}\"\nowner_public_key = \"{recipient_owner}\"\n",
+            manifest_path.file_name().unwrap().to_string_lossy()
+        ),
+    )
+    .unwrap();
+
+    let output = groundhog()
+        .args([
+            "--json",
+            "airdrop",
+            "alice",
+            "--amount",
+            "1.00000001",
+            "--dry-run",
+        ])
+        .current_dir(&project)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(stderr["command"], "airdrop");
+    assert_eq!(stderr["error"]["code"], "invalid_hog_amount");
+    assert_eq!(stderr["error"]["details"]["input"], "1.00000001");
+    assert!(
+        stderr["error"]["hint"]
+            .as_str()
+            .unwrap()
+            .contains("seven decimal")
+    );
+}
+
+#[test]
 fn deploy_dry_run_json_accepts_rv32_artifact() {
     let tmp = TempDir::new().unwrap();
     let config_home = tmp.path().join("config-home");
@@ -3674,6 +3720,62 @@ fn balance_json_rejects_invalid_cli_rpc_url_before_rpc() {
             .expect("bug: error message should be string")
             .contains("--rpc-url must start with http:// or https://")
     );
+}
+
+#[test]
+fn balance_json_rejects_malformed_address_target_before_rpc() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(
+        project.join("groundhog.toml"),
+        "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\n",
+    )
+    .unwrap();
+
+    let output = groundhog()
+        .args(["--json", "balance", "0xdeadbeef"])
+        .current_dir(&project)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(stderr["command"], "balance");
+    assert_eq!(stderr["error"]["code"], "invalid_address_target");
+    assert_eq!(stderr["error"]["details"]["target"], "0xdeadbeef");
+    assert!(
+        stderr["error"]["hint"]
+            .as_str()
+            .unwrap()
+            .contains("saved wallet")
+    );
+}
+
+#[test]
+fn balance_json_rejects_unknown_target_before_rpc() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(
+        project.join("groundhog.toml"),
+        "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\n",
+    )
+    .unwrap();
+
+    let output = groundhog()
+        .args(["--json", "balance", "missing"])
+        .current_dir(&project)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(stderr["command"], "balance");
+    assert_eq!(stderr["error"]["code"], "unknown_address_target");
+    assert_eq!(stderr["error"]["details"]["target"], "missing");
 }
 
 #[test]

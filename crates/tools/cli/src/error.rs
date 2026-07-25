@@ -105,6 +105,12 @@ pub enum CliError {
     ProfileConfigInvalid { profile: String, message: String },
     #[error("no signing key configured")]
     MissingSigningKey,
+    #[error("invalid HOG amount `{input}`: {message}")]
+    InvalidHogAmount { input: String, message: String },
+    #[error("address target `{target}` is invalid: {message}")]
+    InvalidAddressTarget { target: String, message: String },
+    #[error("unknown address target `{target}`")]
+    UnknownAddressTarget { target: String },
     #[error("failed to initialize async runtime: {0}")]
     RuntimeInit(String),
     #[error("{method} failed: {message}")]
@@ -247,6 +253,9 @@ impl CliError {
             Self::MissingRpcUrl => "missing_rpc_url",
             Self::ProfileConfigInvalid { .. } => "profile_config_invalid",
             Self::MissingSigningKey => "missing_signing_key",
+            Self::InvalidHogAmount { .. } => "invalid_hog_amount",
+            Self::InvalidAddressTarget { .. } => "invalid_address_target",
+            Self::UnknownAddressTarget { .. } => "unknown_address_target",
             Self::RuntimeInit(_) => "runtime_init_failed",
             Self::RpcMethodFailed { .. } => "rpc_method_failed",
             Self::LocalDevAccountUnavailable { .. } => "local_dev_account_unavailable",
@@ -366,6 +375,14 @@ impl CliError {
             Self::MissingSigningKey => Some(Cow::Borrowed(
                 "set `default_key` in project or global config, or run `groundhog keys generate`",
             )),
+            Self::InvalidHogAmount { .. } => Some(Cow::Borrowed(
+                "enter a positive decimal HOG amount with at most seven decimal places",
+            )),
+            Self::InvalidAddressTarget { .. } | Self::UnknownAddressTarget { .. } => {
+                Some(Cow::Borrowed(
+                    "use a saved wallet, contract alias, dev-N account, or 32-byte 0x-prefixed address",
+                ))
+            }
             Self::RpcMethodFailed { .. } => Some(Cow::Borrowed(
                 "check the RPC endpoint and node logs for details",
             )),
@@ -568,6 +585,17 @@ impl CliError {
                 "keyName": key_name,
                 "configured": configured,
                 "local": local,
+            })),
+            Self::InvalidHogAmount { input, message } => Some(json!({
+                "input": input,
+                "message": message,
+            })),
+            Self::InvalidAddressTarget { target, message } => Some(json!({
+                "target": target,
+                "message": message,
+            })),
+            Self::UnknownAddressTarget { target } => Some(json!({
+                "target": target,
             })),
             Self::TransactionInvalid { tx_hash, reason } => Some(json!({
                 "txHash": tx_hash,

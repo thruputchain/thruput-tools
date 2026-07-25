@@ -140,6 +140,41 @@ pub(crate) fn lookup_dev_account_address(
         .into())
 }
 
+/// Resolve a saved wallet, contract alias, direct address, or local dev account.
+pub(crate) fn resolve_address_target(
+    profile: &ResolvedProfile,
+    target: &str,
+) -> Result<groundhog_xdr::types::ContractAddress, CliError> {
+    if let Some(wallet) = profile.wallets.get(target) {
+        return parse_target_address(target, &wallet.address);
+    }
+    if let Some(address) = profile.contracts.get(target) {
+        return parse_target_address(target, address);
+    }
+    if target.starts_with("0x") || target.starts_with("0X") {
+        return parse_target_address(target, target);
+    }
+    if let Some(index) = dev_keys::dev_key_index(target) {
+        return Ok(lookup_dev_account_address(profile, target, index)?.0);
+    }
+    Err(CliError::UnknownAddressTarget {
+        target: target.to_owned(),
+    })
+}
+
+fn parse_target_address(
+    target: &str,
+    address: &str,
+) -> Result<groundhog_xdr::types::ContractAddress, CliError> {
+    let normalized = address.strip_prefix("0X").map(|value| format!("0x{value}"));
+    codec::parse_contract_address(normalized.as_deref().unwrap_or(address)).map_err(|error| {
+        CliError::InvalidAddressTarget {
+            target: target.to_owned(),
+            message: error.to_string(),
+        }
+    })
+}
+
 /// Resolve the local bootstrap account used for CLI-sponsored local flows.
 ///
 /// Dedicated manifest roles are preferred when present. Until hog-devnode emits
@@ -305,6 +340,89 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
+
+    #[test]
+    fn address_target_prefers_saved_wallet_over_contract_alias() {
+        let wallet_address = groundhog_xdr::types::ContractAddress::from([0x11; 32]);
+        let contract_address = groundhog_xdr::types::ContractAddress::from([0x22; 32]);
+        let mut wallets = BTreeMap::new();
+        wallets.insert(
+            "alice".into(),
+            SavedWalletBinding {
+                address: format_hex(wallet_address.as_ref()),
+                owner_public_key: format_hex(&[0x33; 32]),
+            },
+        );
+        let mut profile = test_profile("alice", None, wallets);
+        profile
+            .contracts
+            .insert("alice".into(), format_hex(contract_address.as_ref()));
+
+        let resolved = resolve_address_target(&profile, "alice")
+            .expect("bug: saved wallet target should resolve");
+
+        assert_eq!(resolved, wallet_address);
+    }
+
+    #[test]
+    fn address_target_resolves_contract_alias() {
+        let expected = groundhog_xdr::types::ContractAddress::from([0x44; 32]);
+        let mut profile = test_profile("alice", None, BTreeMap::new());
+        profile
+            .contracts
+            .insert("counter".into(), format_hex(expected.as_ref()));
+
+        let resolved = resolve_address_target(&profile, "counter")
+            .expect("bug: contract alias should resolve");
+
+        assert_eq!(resolved, expected);
+    }
+
+    #[test]
+    fn address_target_accepts_uppercase_prefix_and_canonicalizes_on_format() {
+        let target = format!("0X{}", "Ab".repeat(32));
+
+        let resolved =
+            resolve_address_target(&test_profile("alice", None, BTreeMap::new()), &target)
+                .expect("bug: mixed-case direct address should resolve");
+
+        assert_eq!(
+            codec::format_contract_address(&resolved),
+            format!("0x{}", "ab".repeat(32))
+        );
+    }
+
+    #[test]
+    fn address_target_rejects_malformed_prefixed_address() {
+        let error =
+            resolve_address_target(&test_profile("alice", None, BTreeMap::new()), "0xdeadbeef")
+                .expect_err("bug: malformed direct address should fail");
+
+        assert_eq!(error.code(), "invalid_address_target");
+    }
+
+    #[test]
+    fn address_target_rejects_unknown_name() {
+        let error =
+            resolve_address_target(&test_profile("alice", None, BTreeMap::new()), "missing")
+                .expect_err("bug: unknown target should fail");
+
+        assert_eq!(error.code(), "unknown_address_target");
+    }
+
+    #[test]
+    fn address_target_resolves_manifest_dev_account() {
+        let temp = tempfile::TempDir::new().expect("bug: tempdir should be created");
+        let manifest_path = temp.path().join("runtime-manifest.json");
+        let expected = groundhog_xdr::types::ContractAddress::from([0x55; 32]);
+        write_test_runtime_manifest_with_accounts(&manifest_path, &[(1, "local_user", expected)]);
+        let profile = test_profile("dev-1", Some(manifest_path), BTreeMap::new());
+
+        let resolved = resolve_address_target(&profile, "dev-1")
+            .expect("bug: manifest dev account should resolve");
+
+        assert_eq!(resolved, expected);
+    }
 
     #[test]
     fn non_dev_key_uses_saved_wallet_address() {
