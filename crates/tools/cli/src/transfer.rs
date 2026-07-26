@@ -14,13 +14,10 @@ use groundhog_signing::{
     transaction_hash,
 };
 
-use crate::account_resolution::{resolve_address_target, resolve_wallet_address};
+use crate::account_resolution::{resolve_address_target, resolve_transaction_sender};
 use crate::codec::{format_contract_address, parse_contract_address};
-use crate::config::{
-    ProfileOverrides, resolve_default_key_for_profile, resolve_profile_with_overrides,
-};
+use crate::config::{ProfileOverrides, resolve_profile_with_overrides};
 use crate::hog;
-use crate::keys::load_local_signer;
 use crate::network_descriptor::resolve_wallet_entrypoints;
 use crate::result::{CommandError, CommandResult};
 use crate::transfer_json::{
@@ -38,6 +35,7 @@ struct PreparedTransfer {
     profile: String,
     rpc_url: String,
     sender: groundhog_xdr::types::ContractAddress,
+    sender_wallet: Option<String>,
     signer_public_key: groundhog_xdr::types::Ed25519PublicKey,
     recipient_input: String,
     recipient: groundhog_xdr::types::ContractAddress,
@@ -50,16 +48,18 @@ struct PreparedTransfer {
 }
 
 /// Prepare a native HOG transfer from the effective profile wallet.
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     recipient: &str,
     amount: &str,
+    from: Option<&str>,
     dry_run: bool,
     profile: Option<&str>,
     overrides: &ProfileOverrides,
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    let prepared = prepare(recipient, amount, profile, overrides)?;
+    let prepared = prepare(recipient, amount, from, profile, overrides)?;
     if dry_run {
         return print_dry_run(&prepared, cmd, print);
     }
@@ -87,16 +87,15 @@ enum LiveOutcome {
 fn prepare(
     recipient_input: &str,
     amount_input: &str,
+    from: Option<&str>,
     profile_name: Option<&str>,
     overrides: &ProfileOverrides,
 ) -> Result<PreparedTransfer, CliError> {
     let cwd = std::env::current_dir()?;
     let profile = resolve_profile_with_overrides(&cwd, profile_name, overrides)?;
-    let key_name = resolve_default_key_for_profile(&profile)?;
-    if profile.rpc_url.is_none() && key_name.is_none() {
+    if profile.rpc_url.is_none() && profile.default_key.is_none() {
         return Err(CliError::MissingRpcUrl);
     }
-    let key_name = key_name.ok_or(CliError::MissingSigningKey)?;
     let rpc_url = profile.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
 
     let recipient = resolve_address_target(&profile, recipient_input)?;
@@ -105,9 +104,9 @@ fn prepare(
     let token_address = parse_contract_address(hog::TOKEN_ADDRESS)?;
     let calldata = hog::encode_transfer_calldata(&recipient, raw_amount)?;
 
-    let signer = load_local_signer(&key_name)?;
-    let sender = resolve_wallet_address(&profile, &key_name, &signer)?;
-    let wallet_entrypoints = resolve_wallet_entrypoints(&profile, &key_name)?;
+    let resolved_sender = resolve_transaction_sender(&profile, from)?;
+    let sender = resolved_sender.wallet_address;
+    let wallet_entrypoints = resolve_wallet_entrypoints(&profile, &resolved_sender.key_name)?;
     let rt =
         tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
     let expiry_height = rt.block_on(resolve_block_expiry_height(rpc_url))?;
@@ -129,8 +128,12 @@ fn prepare(
             .map_err(|error| CliError::Other(error.to_string()))?
             .into(),
     );
-    let authenticated_tx = sign_transaction(tx, &signer, SignTransactionParams::default())
-        .map_err(|error| CliError::Other(error.to_string()))?;
+    let authenticated_tx = sign_transaction(
+        tx,
+        &resolved_sender.signer,
+        SignTransactionParams::default(),
+    )
+    .map_err(|error| CliError::Other(error.to_string()))?;
     let signed_transaction = encode_signed_transaction_xdr(&authenticated_tx)
         .map_err(|error| CliError::Other(error.to_string()))?;
 
@@ -138,8 +141,9 @@ fn prepare(
         profile: profile.name,
         rpc_url: rpc_url.to_owned(),
         sender,
+        sender_wallet: resolved_sender.wallet_name,
         signer_public_key: groundhog_xdr::types::Ed25519PublicKey::from(
-            signer.verifying_key_bytes(),
+            resolved_sender.signer.verifying_key_bytes(),
         ),
         recipient_input: recipient_input.to_owned(),
         recipient,
@@ -426,6 +430,7 @@ fn report_common(
         dry_run,
         submitted,
         sender: prepared.sender.into(),
+        sender_wallet: prepared.sender_wallet.clone(),
         signer_public_key: prepared.signer_public_key.into(),
         recipient_input: prepared.recipient_input.clone(),
         recipient: prepared.recipient.into(),

@@ -94,7 +94,7 @@ For a wallet-wrapped HOG transfer, the root invocation is the sender's wallet. T
 |---|---|---|
 | D1 | Add top-level `groundhog transfer` for native HOG. | Funding and balance without sending leaves the wallet workflow incomplete. |
 | D2 | Group inspection under `groundhog tx show` and `groundhog tx list`. | A transaction namespace can grow without overloading contract-oriented `inspect`. |
-| D3 | Transfer uses the active profile's effective default key and associated wallet. | This matches deploy and call and avoids introducing a second signer-selection model. |
+| D3 | Transfer uses the active profile's effective default key as signer and resolves its source wallet through explicit, profile-default, or unique-owner selection. | Keys and wallet names are independent, and one key may own several wallets. Selection must never switch signers implicitly. |
 | D4 | `transfer --dry-run` builds and signs but does not submit. | This matches existing deploy/call dry-run semantics. |
 | D5 | `tx show` composes public status and receipt RPCs only. | The optional dev-detail method is not a stable public inspection contract. |
 | D6 | `tx list` returns one newest-first page of lightweight references. | Automatic hydration creates an N+1 RPC pattern; users can inspect selected hashes with `tx show`. |
@@ -103,6 +103,7 @@ For a wallet-wrapped HOG transfer, the root invocation is the sender's wallet. T
 | D9 | Native HOG address, decimals, and transfer entrypoint are protocol constants. | These values do not vary by network, so descriptor resolution would add failure modes without adding correctness. |
 | D10 | A broadcast transfer that cannot be confirmed retains its locally computed hash and exits nonzero. | The user must be able to inspect a possibly accepted transaction without risking a duplicate transfer through a blind retry. |
 | D11 | `tx list` output omits traversal order. | Initial CLI requests are newest-first, but an opaque continuation cursor may carry an order the response does not expose. |
+| D12 | Add profile-scoped `default_wallet`, `transfer --from`, and shared deploy/call `--wallet` selection. | All transaction commands need one consistent way to resolve multi-wallet ambiguity. |
 ## Command surface
 ### `groundhog transfer <RECIPIENT> <AMOUNT>`
 Transfer native HOG from the effective signing wallet.
@@ -120,9 +121,35 @@ Options:
 --profile <PROFILE>
 --rpc-url <URL>
 --runtime-manifest <PATH>
+--from <WALLET>
 ```
 
-The command does not add `--from` in v1. It uses the same effective default-key and saved-wallet resolution as `deploy` and `call`. If multiple-wallet selection is added later, transfer should adopt the same shared option rather than invent one first.
+`--from` accepts a saved wallet name in the selected profile. It does not accept
+an address and does not select a signing key. Deploy and call expose the same
+shared source-wallet selector as `--wallet <WALLET>`.
+
+Profiles may configure a default source wallet:
+
+```toml
+[profile.devnet]
+default_key = "default"
+default_wallet = "dev-default-1"
+```
+
+Resolve the source wallet in this order:
+
+1. the command's explicit `--from` or `--wallet` value;
+
+2. the merged profile's `default_wallet`;
+
+3. the only saved wallet owned by the effective signer;
+
+4. otherwise, a typed missing or ambiguous-wallet error.
+
+An explicit or configured wallet must exist and its `owner_public_key` must
+match the effective key. Wallet selection never searches for or switches to a
+different private key. Manifest-backed `dev-N` keys retain their fixed runtime
+wallet and reject explicit or configured saved-wallet selection.
 
 Recipient resolution
 
@@ -149,9 +176,10 @@ Resolve the sender using the established transaction path:
   
 2. choose the profile default key, global default key, or valid local `dev-0` fallback;
   
-3. resolve the wallet contract associated with that signer;
+3. resolve an explicit source wallet, the profile's `default_wallet`, or the
+   signer's unique saved wallet;
   
-4. verify that a saved wallet's owner public key matches the local signer;
+4. verify that a selected saved wallet's owner public key matches the local signer;
   
 5. resolve wallet entrypoints through the existing runtime-manifest, hosted-descriptor, or legacy-default path used by `deploy` and `call`.
   
@@ -417,6 +445,9 @@ tx.list
 ```
 
 Each command data object uses `schemaVersion: 1`, camelCase field names, and canonical lowercase `0x` hex. Raw `u128` values serialize as decimal strings. JSON data fields and command-error codes are the versioned machine contract; error messages, hints, details, and human wording are diagnostic and may evolve while remaining deterministic, script-clean, and semantically equivalent.
+
+Transfer data includes `senderWallet`: the selected saved-wallet name for stored
+keys, or `null` for manifest-backed `dev-N` senders.
 ### Transfer data
 Live success data:
 
@@ -428,6 +459,7 @@ Live success data:
   "dryRun": false,
   "submitted": true,
   "sender": "0x...",
+  "senderWallet": "dev-default-1",
   "signerPublicKey": "0x...",
   "recipientInput": "alice",
   "recipient": "0x...",
@@ -455,6 +487,7 @@ Dry-run data:
   "dryRun": true,
   "submitted": false,
   "sender": "0x...",
+  "senderWallet": "dev-default-1",
   "signerPublicKey": "0x...",
   "recipientInput": "alice",
   "recipient": "0x...",
@@ -479,6 +512,7 @@ Broadcast-but-unconfirmed data:
   "dryRun": false,
   "submitted": true,
   "sender": "0x...",
+  "senderWallet": "dev-default-1",
   "signerPublicKey": "0x...",
   "recipientInput": "alice",
   "recipient": "0x...",

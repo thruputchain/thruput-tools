@@ -23,6 +23,8 @@ pub struct ProjectProfile {
     #[serde(default)]
     pub default_key: Option<String>,
     #[serde(default)]
+    pub default_wallet: Option<String>,
+    #[serde(default)]
     pub runtime_manifest: Option<PathBuf>,
     #[serde(default)]
     pub runtime_artifacts_dir: Option<PathBuf>,
@@ -69,6 +71,8 @@ pub struct ResolvedProfile {
     #[schemars(skip)]
     pub rpc_url_cli_override: bool,
     pub default_key: Option<String>,
+    #[serde(default)]
+    pub default_wallet: Option<String>,
     pub runtime_manifest: Option<PathBuf>,
     #[serde(skip)]
     #[schemars(skip)]
@@ -245,6 +249,26 @@ pub fn save_profile_wallet_address(
     address: &str,
     owner_public_key: &str,
 ) -> Result<PathBuf, CliError> {
+    save_profile_wallet_address_with_default(
+        project_root,
+        explicit_profile,
+        name,
+        address,
+        owner_public_key,
+        false,
+    )
+}
+
+/// Persist a wallet binding and optionally select it as the profile default in
+/// one atomic config update.
+pub fn save_profile_wallet_address_with_default(
+    project_root: &Path,
+    explicit_profile: Option<&str>,
+    name: &str,
+    address: &str,
+    owner_public_key: &str,
+    make_default: bool,
+) -> Result<PathBuf, CliError> {
     if name.trim().is_empty() {
         return Err(CliError::EmptyWalletName);
     }
@@ -275,7 +299,7 @@ pub fn save_profile_wallet_address(
         .parse::<toml_edit::DocumentMut>()
         .map_err(|e| CliError::Other(e.to_string()))?;
 
-    let wallet = doc
+    let profile = doc
         .entry("profile")
         .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
         .as_table_mut()
@@ -283,7 +307,8 @@ pub fn save_profile_wallet_address(
         .entry(&profile_name)
         .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
         .as_table_mut()
-        .ok_or_else(|| CliError::Other("profile entry must be a table".into()))?
+        .ok_or_else(|| CliError::Other("profile entry must be a table".into()))?;
+    let wallet = profile
         .entry("wallets")
         .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
         .as_table_mut()
@@ -298,6 +323,9 @@ pub fn save_profile_wallet_address(
         "owner_public_key",
         toml_edit::value(owner_public_key.trim()),
     );
+    if make_default {
+        profile.insert("default_wallet", toml_edit::value(name.trim()));
+    }
 
     write_profile_config(&path, doc.to_string().as_bytes())?;
     Ok(path)
@@ -325,20 +353,100 @@ pub fn remove_profile_wallet_address(
         .parse::<toml_edit::DocumentMut>()
         .map_err(|e| CliError::Other(e.to_string()))?;
 
-    let wallets = doc
+    let profile = doc
         .get_mut("profile")
         .and_then(toml_edit::Item::as_table_mut)
         .and_then(|profiles| profiles.get_mut(&profile_name))
         .and_then(toml_edit::Item::as_table_mut)
-        .and_then(|profile| profile.get_mut("wallets"))
+        .ok_or_else(|| CliError::Other(format!("wallet `{name}` is not saved")))?;
+    let wallets = profile
+        .get_mut("wallets")
         .and_then(toml_edit::Item::as_table_mut)
         .ok_or_else(|| CliError::Other(format!("wallet `{name}` is not saved")))?;
 
     if wallets.remove(name).is_none() {
         return Err(CliError::Other(format!("wallet `{name}` is not saved")));
     }
+    if profile
+        .get("default_wallet")
+        .and_then(toml_edit::Item::as_str)
+        == Some(name)
+    {
+        profile.remove("default_wallet");
+    }
 
     write_profile_config(&path, doc.to_string().as_bytes())?;
+    Ok(path)
+}
+
+/// Persist the default wallet under the selected profile.
+///
+/// Creates the config file and profile when needed while preserving existing
+/// comments and formatting.
+pub fn save_profile_default_wallet(
+    project_root: &Path,
+    explicit_profile: Option<&str>,
+    wallet: &str,
+) -> Result<PathBuf, CliError> {
+    let wallet = wallet.trim();
+    if wallet.is_empty() {
+        return Err(CliError::Other("default wallet cannot be empty".into()));
+    }
+
+    let profile_name = active_profile_name(project_root, explicit_profile)?;
+    let path = profile_write_path(project_root)?;
+    let contents = match std::fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e.into()),
+    };
+    let mut doc: toml_edit::DocumentMut = contents
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|e| CliError::Other(e.to_string()))?;
+
+    doc.entry("profile")
+        .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
+        .as_table_mut()
+        .ok_or_else(|| CliError::Other("profile must be a table".into()))?
+        .entry(&profile_name)
+        .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
+        .as_table_mut()
+        .ok_or_else(|| CliError::Other("profile entry must be a table".into()))?
+        .insert("default_wallet", toml_edit::value(wallet));
+
+    write_profile_config(&path, doc.to_string().as_bytes())?;
+    Ok(path)
+}
+
+/// Remove the default wallet from the selected profile.
+///
+/// Existing comments and formatting are preserved. Clearing a project value
+/// allows a same-named global profile value to apply again during resolution.
+pub fn clear_profile_default_wallet(
+    project_root: &Path,
+    explicit_profile: Option<&str>,
+) -> Result<PathBuf, CliError> {
+    let profile_name = active_profile_name(project_root, explicit_profile)?;
+    let path = profile_write_path(project_root)?;
+    let contents = match std::fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(path),
+        Err(e) => return Err(e.into()),
+    };
+    let mut doc: toml_edit::DocumentMut = contents
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|e| CliError::Other(e.to_string()))?;
+
+    let removed = doc
+        .get_mut("profile")
+        .and_then(toml_edit::Item::as_table_mut)
+        .and_then(|profiles| profiles.get_mut(&profile_name))
+        .and_then(toml_edit::Item::as_table_mut)
+        .is_some_and(|profile| profile.remove("default_wallet").is_some());
+    if removed {
+        write_profile_config(&path, doc.to_string().as_bytes())?;
+    }
+
     Ok(path)
 }
 
@@ -434,6 +542,7 @@ pub fn resolve_profile(start: &Path, explicit: Option<&str>) -> Result<ResolvedP
         faucet_url: profile.faucet_url,
         rpc_url_cli_override: false,
         default_key: profile.default_key,
+        default_wallet: profile.default_wallet,
         runtime_manifest: profile.runtime_manifest,
         runtime_manifest_cli_override: false,
         runtime_artifacts_dir: profile.runtime_artifacts_dir,
@@ -455,6 +564,9 @@ fn merge_profiles(mut global: ProjectProfile, project: ProjectProfile) -> Projec
     }
     if project.default_key.is_some() {
         global.default_key = project.default_key;
+    }
+    if project.default_wallet.is_some() {
+        global.default_wallet = project.default_wallet;
     }
     if project.runtime_manifest.is_some() {
         global.runtime_manifest = project.runtime_manifest;

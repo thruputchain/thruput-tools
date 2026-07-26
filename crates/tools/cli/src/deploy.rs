@@ -13,14 +13,10 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use xdr_common::VecM;
 
-use crate::account_resolution::resolve_wallet_address;
+use crate::account_resolution::resolve_transaction_sender;
 use crate::artifacts::{ArtifactKind, ArtifactOptions, ResolvedArtifact};
-use crate::config::{
-    ProfileOverrides, ResolvedProfile, resolve_default_key_for_profile,
-    resolve_profile_with_overrides,
-};
+use crate::config::{ProfileOverrides, ResolvedProfile, resolve_profile_with_overrides};
 use crate::dev_detail::{fetch_transaction_detail_blocking, print_transaction_detail};
-use crate::keys::load_local_signer;
 use crate::network_descriptor::resolve_wallet_entrypoints;
 use crate::result::CommandResult;
 use crate::tx_utils::{
@@ -59,18 +55,30 @@ pub(crate) struct SubmittedDeploy {
 }
 
 /// Deploy a contract to the network.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub fn run(
     artifact_path: Option<&Path>,
     target: ArtifactKind,
     dry_run: bool,
+    wallet: Option<&str>,
     artifacts: &ArtifactOptions,
     profile: Option<&str>,
     overrides: &ProfileOverrides,
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    let prepared = prepare_deploy(artifact_path, target, artifacts, profile, overrides, print)?;
+    let prepared = match wallet {
+        Some(wallet) => prepare_deploy_with_wallet(
+            artifact_path,
+            target,
+            artifacts,
+            Some(wallet),
+            profile,
+            overrides,
+            print,
+        )?,
+        None => prepare_deploy(artifact_path, target, artifacts, profile, overrides, print)?,
+    };
     if dry_run {
         return print_dry_run(&prepared, cmd, print);
     }
@@ -258,15 +266,33 @@ pub(crate) fn prepare_deploy(
     overrides: &ProfileOverrides,
     print: &Print,
 ) -> Result<PreparedDeploy, CliError> {
+    prepare_deploy_with_wallet(
+        artifact_path,
+        target,
+        artifacts,
+        None,
+        profile,
+        overrides,
+        print,
+    )
+}
+
+#[allow(clippy::too_many_lines)]
+fn prepare_deploy_with_wallet(
+    artifact_path: Option<&Path>,
+    target: ArtifactKind,
+    artifacts: &ArtifactOptions,
+    wallet: Option<&str>,
+    profile: Option<&str>,
+    overrides: &ProfileOverrides,
+    print: &Print,
+) -> Result<PreparedDeploy, CliError> {
     let cwd = std::env::current_dir()?;
     let resolved = resolve_profile_with_overrides(&cwd, profile, overrides)?;
 
-    // Resolve signing key
-    let key_name = resolve_default_key_for_profile(&resolved)?;
-    if resolved.rpc_url.is_none() && key_name.is_none() {
+    if resolved.rpc_url.is_none() && resolved.default_key.is_none() {
         return Err(CliError::MissingRpcUrl);
     }
-    let key_name = key_name.ok_or(CliError::MissingSigningKey)?;
     resolved.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
 
     let artifact = if let Some(path) = artifact_path {
@@ -282,7 +308,7 @@ pub(crate) fn prepare_deploy(
     };
     let artifact_bytes = std::fs::read(&artifact.path)?;
 
-    prepare_deploy_transaction(artifact, artifact_bytes, &resolved, &key_name)
+    prepare_deploy_transaction(artifact, artifact_bytes, &resolved, wallet)
 }
 
 /// Build and sign a deploy transaction for a known artifact and RPC endpoint.
@@ -301,6 +327,7 @@ pub(crate) fn prepare_deploy_for_rpc_with_manifest(
         rpc_url_cli_override: false,
         faucet_url: None,
         default_key: Some(key_name.into()),
+        default_wallet: None,
         runtime_manifest,
         runtime_manifest_cli_override: false,
         runtime_artifacts_dir: None,
@@ -315,7 +342,7 @@ pub(crate) fn prepare_deploy_for_rpc_with_manifest(
         },
         artifact_bytes,
         &profile,
-        key_name,
+        None,
     )
 }
 
@@ -324,16 +351,16 @@ fn prepare_deploy_transaction(
     artifact: ResolvedArtifact,
     artifact_bytes: Vec<u8>,
     profile: &ResolvedProfile,
-    key_name: &str,
+    selected_wallet: Option<&str>,
 ) -> Result<PreparedDeploy, CliError> {
     let rpc_url = profile.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
-    let signer = load_local_signer(key_name)?;
+    let sender = resolve_transaction_sender(profile, selected_wallet)?;
 
     let artifact_bytes_len = artifact_bytes.len();
 
     // Build the deploy transaction — invokes the sender's wallet contract.
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
-    let wallet_address = resolve_wallet_address(profile, key_name, &signer)?;
+    let wallet_address = sender.wallet_address;
 
     let blob = groundhog_xdr::contract::ContractBlob {
         data: xdr_common::BytesM(artifact_bytes),
@@ -369,7 +396,7 @@ fn prepare_deploy_transaction(
     // Auth claim: source-address auth data at key slot 0.
     let auth_claim = source_address_auth_claim();
 
-    let wallet_entrypoints = resolve_wallet_entrypoints(profile, key_name)?;
+    let wallet_entrypoints = resolve_wallet_entrypoints(profile, &sender.key_name)?;
 
     let block_expiry_height = rt.block_on(async { resolve_block_expiry_height(rpc_url).await })?;
 
@@ -384,8 +411,9 @@ fn prepare_deploy_transaction(
         auth_claim,
     });
 
-    let tx_hex = sign_and_encode_transaction_hex(tx, &signer, SignTransactionParams::default())
-        .map_err(|e| CliError::Other(e.to_string()))?;
+    let tx_hex =
+        sign_and_encode_transaction_hex(tx, &sender.signer, SignTransactionParams::default())
+            .map_err(|e| CliError::Other(e.to_string()))?;
 
     Ok(PreparedDeploy {
         rpc_url: rpc_url.to_owned(),

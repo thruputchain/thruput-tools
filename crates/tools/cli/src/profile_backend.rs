@@ -78,6 +78,7 @@ mod tests {
             faucet_url: None,
             rpc_url_cli_override: false,
             default_key: None,
+            default_wallet: None,
             runtime_manifest: None,
             runtime_manifest_cli_override: false,
             runtime_artifacts_dir: None,

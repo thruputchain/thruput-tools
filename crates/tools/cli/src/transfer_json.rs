@@ -19,6 +19,7 @@ pub struct TransferReportCommon {
     pub dry_run: bool,
     pub submitted: bool,
     pub sender: ContractAddress,
+    pub sender_wallet: Option<String>,
     pub signer_public_key: Ed25519PublicKey,
     pub recipient_input: String,
     pub recipient: ContractAddress,
@@ -90,6 +91,7 @@ mod tests {
                 dry_run: true,
                 submitted: false,
                 sender: Hex0x(ContractAddress::from([0x11; 32])),
+                sender_wallet: Some("alice".into()),
                 signer_public_key: Hex0x(Ed25519PublicKey::from([0x22; 32])),
                 recipient_input: "alice".into(),
                 recipient: Hex0x(ContractAddress::from([0x33; 32])),
@@ -107,6 +109,7 @@ mod tests {
         assert_eq!(value["schemaVersion"], 1);
         assert_eq!(value["dryRun"], true);
         assert_eq!(value["submitted"], false);
+        assert_eq!(value["senderWallet"], "alice");
         assert_eq!(value["recipientInput"], "alice");
         assert_eq!(value["rawAmount"], "15000000");
         assert_eq!(value["expiryHeight"], 123);

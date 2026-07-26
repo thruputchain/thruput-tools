@@ -258,6 +258,9 @@ enum Command {
         /// Build and sign the deploy transaction without submitting it
         #[arg(long)]
         dry_run: bool,
+        /// Saved wallet to deploy from
+        #[arg(long)]
+        wallet: Option<String>,
         /// Config profile to use
         #[arg(long = "profile")]
         profile: Option<String>,
@@ -282,6 +285,9 @@ enum Command {
         /// Resolve, encode, and sign the transaction without submitting it
         #[arg(long)]
         dry_run: bool,
+        /// Saved wallet to call from
+        #[arg(long)]
+        wallet: Option<String>,
         /// Config profile to use
         #[arg(long = "profile")]
         profile: Option<String>,
@@ -299,6 +305,9 @@ enum Command {
         /// Build and sign the transfer without submitting it
         #[arg(long)]
         dry_run: bool,
+        /// Saved wallet to transfer from
+        #[arg(long = "from")]
+        from: Option<String>,
         /// Config profile to use
         #[arg(long = "profile")]
         profile: Option<String>,
@@ -476,6 +485,14 @@ enum WalletCommand {
         #[arg(long = "profile")]
         profile: Option<String>,
     },
+    /// Set the default transaction wallet
+    Use {
+        /// Saved wallet name to use by default
+        name: String,
+        /// Config profile to use
+        #[arg(long = "profile")]
+        profile: Option<String>,
+    },
     /// Prefund and create a wallet for a stored signing key
     Create {
         /// Existing key name that should own the new wallet
@@ -566,6 +583,7 @@ impl WalletCommand {
     fn command_name(&self) -> &'static str {
         match self {
             Self::Ls { .. } => "wallet.ls",
+            Self::Use { .. } => "wallet.use",
             Self::Create { .. } => "wallet.create",
             Self::Rm { .. } => "wallet.rm",
         }
@@ -688,6 +706,7 @@ fn main() {
             artifact,
             target,
             dry_run,
+            wallet,
             profile,
             target_args,
             artifacts,
@@ -702,6 +721,7 @@ fn main() {
                     artifact.as_deref(),
                     target.unwrap_or(BuildTargetArg::Rv32).into(),
                     dry_run,
+                    wallet.as_deref(),
                     &artifacts,
                     profile.as_deref(),
                     &target_args.into(),
@@ -714,6 +734,7 @@ fn main() {
             method,
             args,
             dry_run,
+            wallet,
             profile,
             target_args,
             artifacts,
@@ -729,6 +750,7 @@ fn main() {
                     &method,
                     &args,
                     dry_run,
+                    wallet.as_deref(),
                     &artifacts,
                     profile.as_deref(),
                     &target_args.into(),
@@ -740,11 +762,13 @@ fn main() {
             recipient,
             amount,
             dry_run,
+            from,
             profile,
             target_args,
         } => groundhog_cli::transfer::run(
             &recipient,
             &amount,
+            from.as_deref(),
             dry_run,
             profile.as_deref(),
             &target_args.into(),
@@ -865,6 +889,9 @@ fn main() {
         Command::Wallet { command } => match command {
             WalletCommand::Ls { profile } => {
                 groundhog_cli::wallet::list(profile.as_deref(), cmd_name, &print)
+            }
+            WalletCommand::Use { name, profile } => {
+                groundhog_cli::wallet::use_wallet(&name, profile.as_deref(), cmd_name, &print)
             }
             WalletCommand::Create {
                 key,
@@ -1027,6 +1054,28 @@ mod tests {
     }
 
     #[test]
+    fn wallet_use_flags_parse() {
+        let cli = Cli::parse_from([
+            "groundhog",
+            "wallet",
+            "use",
+            "trading",
+            "--profile",
+            "devnet",
+        ]);
+
+        match cli.command {
+            Command::Wallet {
+                command: WalletCommand::Use { name, profile },
+            } => {
+                assert_eq!(name, "trading");
+                assert_eq!(profile.as_deref(), Some("devnet"));
+            }
+            _ => panic!("expected wallet use command"),
+        }
+    }
+
+    #[test]
     fn wallet_create_key_flag_is_optional() {
         let cli = Cli::parse_from(["groundhog", "wallet", "create", "--dry-run"]);
 
@@ -1164,6 +1213,8 @@ mod tests {
             "alice",
             "1.5",
             "--dry-run",
+            "--from",
+            "trading",
             "--profile",
             "devnet",
             "--rpc-url",
@@ -1178,12 +1229,14 @@ mod tests {
                 recipient,
                 amount,
                 dry_run,
+                from,
                 profile,
                 target_args,
             } => {
                 assert_eq!(recipient, "alice");
                 assert_eq!(amount, "1.5");
                 assert!(dry_run);
+                assert_eq!(from.as_deref(), Some("trading"));
                 assert_eq!(profile.as_deref(), Some("devnet"));
                 assert_eq!(target_args.rpc_url.as_deref(), Some("https://rpc.example"));
                 assert_eq!(

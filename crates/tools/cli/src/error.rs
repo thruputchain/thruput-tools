@@ -176,6 +176,32 @@ pub enum CliError {
         profile: String,
         wallet_names: Vec<String>,
     },
+    #[error("wallet `{wallet_name}` is not saved in profile `{profile}`")]
+    SavedWalletNotFound {
+        wallet_name: String,
+        profile: String,
+    },
+    #[error(
+        "wallet `{wallet_name}` owner public key {configured} does not match key `{key_name}` public key {local}"
+    )]
+    SavedWalletOwnerMismatch {
+        wallet_name: String,
+        key_name: String,
+        configured: String,
+        local: String,
+    },
+    #[error("dev key `{key_name}` uses its manifest wallet and cannot select `{wallet_name}`")]
+    DevWalletSelectionUnsupported {
+        key_name: String,
+        wallet_name: String,
+    },
+    #[error(
+        "cannot remove wallet `{wallet_name}` from profile `{profile}` because it is the inherited default wallet"
+    )]
+    InheritedDefaultWalletRemoval {
+        wallet_name: String,
+        profile: String,
+    },
     #[error("saved wallet `{key_name}` owner_public_key is invalid: {message}")]
     SavedWalletOwnerPublicKeyInvalid { key_name: String, message: String },
     #[error("transaction {tx_hash} submitted but no receipt after {seconds}s")]
@@ -271,6 +297,10 @@ impl CliError {
             Self::WalletAddressDerivationFailed { .. } => "wallet_address_derivation_failed",
             Self::SavedWalletMissing { .. } => "saved_wallet_missing",
             Self::SavedWalletAmbiguous { .. } => "saved_wallet_ambiguous",
+            Self::SavedWalletNotFound { .. } => "saved_wallet_not_found",
+            Self::SavedWalletOwnerMismatch { .. } => "saved_wallet_owner_mismatch",
+            Self::DevWalletSelectionUnsupported { .. } => "dev_wallet_selection_unsupported",
+            Self::InheritedDefaultWalletRemoval { .. } => "inherited_default_wallet_removal",
             Self::SavedWalletOwnerPublicKeyInvalid { .. } => {
                 "saved_wallet_owner_public_key_invalid"
             }
@@ -413,8 +443,20 @@ impl CliError {
                 "run `groundhog wallet create --key {key_name} --profile {profile}` before using this stored key"
             ))),
             Self::SavedWalletAmbiguous { .. } => Some(Cow::Borrowed(
-                "remove unused wallet bindings until one wallet remains for this key; explicit active-wallet selection is not available yet",
+                "set `default_wallet` in the selected profile or pass the command's explicit wallet option",
             )),
+            Self::SavedWalletNotFound { .. } => Some(Cow::Borrowed(
+                "run `groundhog wallet ls` and select a saved wallet name",
+            )),
+            Self::SavedWalletOwnerMismatch { key_name, .. } => Some(Cow::Owned(format!(
+                "select a wallet owned by key `{key_name}`, or change the effective default key"
+            ))),
+            Self::DevWalletSelectionUnsupported { .. } => Some(Cow::Borrowed(
+                "remove the explicit/default wallet selection when using a manifest-backed dev key",
+            )),
+            Self::InheritedDefaultWalletRemoval { profile, .. } => Some(Cow::Owned(format!(
+                "run `groundhog wallet use <NAME> --profile {profile}` to select a project default before removing this wallet"
+            ))),
             Self::SavedWalletOwnerPublicKeyInvalid { .. } => Some(Cow::Borrowed(
                 "recreate the wallet binding with `groundhog wallet create`, or fix owner_public_key in the selected profile",
             )),
@@ -543,6 +585,7 @@ impl CliError {
     }
 
     /// Optional structured details for JSON error payloads.
+    #[allow(clippy::too_many_lines)]
     pub fn details_json(&self) -> Option<Value> {
         match self {
             Self::CargoFailedWithOutput { stdout, stderr, .. } => Some(json!({
@@ -594,6 +637,35 @@ impl CliError {
                 "keyName": key_name,
                 "profile": profile,
                 "walletNames": wallet_names,
+            })),
+            Self::SavedWalletNotFound {
+                wallet_name,
+                profile,
+            }
+            | Self::InheritedDefaultWalletRemoval {
+                wallet_name,
+                profile,
+            } => Some(json!({
+                "walletName": wallet_name,
+                "profile": profile,
+            })),
+            Self::SavedWalletOwnerMismatch {
+                wallet_name,
+                key_name,
+                configured,
+                local,
+            } => Some(json!({
+                "walletName": wallet_name,
+                "keyName": key_name,
+                "configured": configured,
+                "local": local,
+            })),
+            Self::DevWalletSelectionUnsupported {
+                key_name,
+                wallet_name,
+            } => Some(json!({
+                "keyName": key_name,
+                "walletName": wallet_name,
             })),
             Self::SavedWalletOwnerPublicKeyInvalid { key_name, message } => Some(json!({
                 "keyName": key_name,

@@ -121,11 +121,19 @@ pub struct ProjectContext {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub profile_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile_default_wallet: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_wallet: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_wallet_source: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub network: Option<crate::config::Network>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rpc_url: Option<String>,
     #[serde(skip_serializing_if = "is_zero")]
     pub contract_count: usize,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub wallet_count: usize,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub findings: Vec<Finding>,
 }
@@ -227,6 +235,16 @@ pub fn check_project(
     match crate::config::resolve_profile(start, explicit_profile) {
         Ok(profile) => {
             let profile_key = profile.default_key.clone();
+            let profile_default_wallet = crate::config::load_project_profiles(start)?
+                .and_then(|profiles| profiles.get(&profile.name).cloned())
+                .and_then(|profile| profile.default_wallet);
+            let default_wallet_source = profile.default_wallet.as_ref().map(|_| {
+                if profile_default_wallet.is_some() {
+                    "project profile"
+                } else {
+                    "global profile"
+                }
+            });
             if let Some(ref key_name) = profile_key {
                 let key_path = crate::config::keys_dir()?.join(format!("{key_name}.json"));
                 if !key_path.exists() {
@@ -246,14 +264,19 @@ pub fn check_project(
                     });
                 }
             }
+            check_default_wallet(&profile, &mut findings);
 
             Ok(ProjectContext {
                 config_path,
                 profile_name: Some(profile.name),
                 profile_key,
+                profile_default_wallet,
+                default_wallet: profile.default_wallet,
+                default_wallet_source,
                 network: profile.network,
                 rpc_url: profile.rpc_url,
                 contract_count: profile.contracts.len(),
+                wallet_count: profile.wallets.len(),
                 findings,
             })
         }
@@ -295,6 +318,84 @@ pub fn check_project(
             })
         }
         Err(e) => Err(e),
+    }
+}
+
+fn check_default_wallet(profile: &crate::config::ResolvedProfile, findings: &mut Vec<Finding>) {
+    let Some(wallet_name) = profile.default_wallet.as_deref() else {
+        return;
+    };
+    let key_name = crate::config::resolve_default_key_for_profile(profile)
+        .ok()
+        .flatten();
+    let uses_dev_key = key_name
+        .as_deref()
+        .and_then(crate::dev_keys::dev_key_index)
+        .is_some();
+    if uses_dev_key {
+        findings.push(Finding {
+            level: FindingLevel::Warn,
+            code: "default_wallet_with_dev_key",
+            message: format!(
+                "profile `{}` selects wallet `{wallet_name}` for manifest-backed key `{}`",
+                profile.name,
+                key_name.as_deref().expect("dev key must be present")
+            ),
+            hint: Some(Cow::Borrowed(
+                "remove default_wallet; manifest-backed dev keys use their fixed wallet",
+            )),
+        });
+    }
+    let Some(wallet) = profile.wallets.get(wallet_name) else {
+        findings.push(Finding {
+            level: FindingLevel::Warn,
+            code: "default_wallet_not_saved",
+            message: format!(
+                "profile `{}` selects wallet `{wallet_name}`, which is not saved",
+                profile.name
+            ),
+            hint: Some(Cow::Owned(format!(
+                "run `groundhog wallet use <NAME> --profile {}` to select a saved wallet",
+                profile.name
+            ))),
+        });
+        return;
+    };
+    let owner = wallet.owner_public_key.trim();
+    let valid_owner = owner
+        .strip_prefix("0x")
+        .or_else(|| owner.strip_prefix("0X"))
+        .is_some_and(|value| value.len() == 64 && hex::decode(value).is_ok());
+    if !valid_owner {
+        findings.push(Finding {
+            level: FindingLevel::Warn,
+            code: "default_wallet_owner_invalid",
+            message: format!("wallet `{wallet_name}` has malformed owner_public_key metadata"),
+            hint: Some(Cow::Borrowed(
+                "remove and recreate the wallet binding with valid owner metadata",
+            )),
+        });
+        return;
+    }
+    if uses_dev_key {
+        return;
+    }
+    let Some(key_name) = key_name else {
+        return;
+    };
+    let Ok(signer) = crate::keys::load_local_signer(&key_name) else {
+        return;
+    };
+    let expected = format!("0x{}", hex::encode(signer.verifying_key_bytes()));
+    if !owner.eq_ignore_ascii_case(&expected) {
+        findings.push(Finding {
+            level: FindingLevel::Warn,
+            code: "default_wallet_owner_mismatch",
+            message: format!("wallet `{wallet_name}` is not owned by effective key `{key_name}`"),
+            hint: Some(Cow::Owned(format!(
+                "select a wallet owned by `{key_name}` or change the profile's default_key"
+            ))),
+        });
     }
 }
 
@@ -1137,6 +1238,97 @@ fn missing_selected_key_finding(selected: &str, hint: &'static str) -> Finding {
 mod tests {
     use super::*;
     use serial_test::serial;
+
+    #[test]
+    fn default_wallet_check_reports_missing_binding() {
+        let profile = crate::config::ResolvedProfile {
+            name: "devnet".into(),
+            network: None,
+            rpc_url: None,
+            rpc_url_cli_override: false,
+            faucet_url: None,
+            default_key: Some("alice".into()),
+            default_wallet: Some("trading".into()),
+            runtime_manifest: None,
+            runtime_manifest_cli_override: false,
+            runtime_artifacts_dir: None,
+            contracts: std::collections::BTreeMap::new(),
+            wallets: std::collections::BTreeMap::new(),
+            source: None,
+        };
+        let mut findings = Vec::new();
+
+        check_default_wallet(&profile, &mut findings);
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].code, "default_wallet_not_saved");
+    }
+
+    #[test]
+    fn default_wallet_check_rejects_selection_for_dev_key() {
+        let mut wallets = std::collections::BTreeMap::new();
+        wallets.insert(
+            "trading".into(),
+            crate::config::SavedWalletBinding {
+                address: format!("0x{}", "11".repeat(32)),
+                owner_public_key: format!("0x{}", "22".repeat(32)),
+            },
+        );
+        let profile = crate::config::ResolvedProfile {
+            name: "local".into(),
+            network: None,
+            rpc_url: None,
+            rpc_url_cli_override: false,
+            faucet_url: None,
+            default_key: Some("dev-0".into()),
+            default_wallet: Some("trading".into()),
+            runtime_manifest: None,
+            runtime_manifest_cli_override: false,
+            runtime_artifacts_dir: None,
+            contracts: std::collections::BTreeMap::new(),
+            wallets,
+            source: None,
+        };
+        let mut findings = Vec::new();
+
+        check_default_wallet(&profile, &mut findings);
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].code, "default_wallet_with_dev_key");
+    }
+
+    #[test]
+    fn default_wallet_check_reports_malformed_owner_without_effective_key() {
+        let mut wallets = std::collections::BTreeMap::new();
+        wallets.insert(
+            "trading".into(),
+            crate::config::SavedWalletBinding {
+                address: format!("0x{}", "11".repeat(32)),
+                owner_public_key: "not-hex".into(),
+            },
+        );
+        let profile = crate::config::ResolvedProfile {
+            name: "devnet".into(),
+            network: None,
+            rpc_url: None,
+            rpc_url_cli_override: false,
+            faucet_url: None,
+            default_key: None,
+            default_wallet: Some("trading".into()),
+            runtime_manifest: None,
+            runtime_manifest_cli_override: false,
+            runtime_artifacts_dir: None,
+            contracts: std::collections::BTreeMap::new(),
+            wallets,
+            source: None,
+        };
+        let mut findings = Vec::new();
+
+        check_default_wallet(&profile, &mut findings);
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].code, "default_wallet_owner_invalid");
+    }
 
     #[test]
     fn empty_report_has_no_warnings() {
