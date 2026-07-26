@@ -173,9 +173,11 @@ pub struct Topic(pub [u8; 32]);
 ```rust
 // crates/json-rpc/json-rpc-types/src/transaction.rs
 
-/// Canonical transaction hash: sha256(xdrs::txs::encode(signed_tx.tx)).
-/// Covers the inner Transaction body (not signatures), matching
-/// the scheduler's lookup key and the indexer's primary key.
+/// Canonical transaction hash: sha256 over the TXS encoding of the
+/// inner Transaction — equivalently, the leading Transaction prefix of
+/// the submitted SignedTransaction bytes. Covers the inner Transaction
+/// body (not signatures), matching the scheduler's lookup key and the
+/// indexer's primary key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TxHash(pub SHA256Hash);
 
@@ -502,9 +504,12 @@ thiserror = "2"
   The full mapping needs your and Geoff's input on which variants
   are user-visible vs internal.
 
-- `TxHash` is `sha256(xdrs::txs::encode(signed_tx.tx))` — the inner
-  `Transaction` body, not the full `SignedTransaction`. This matches
-  the scheduler's canonical key and the indexer's primary key.
+- `TxHash` is sha256 over the TXS encoding of the inner `Transaction`,
+  not the full `SignedTransaction`. Since `SignedTransaction` is
+  `{ tx, signatures }`, that encoding is the leading prefix of the
+  submitted bytes, and the gateway hashes that prefix in place rather
+  than re-encoding. This matches the scheduler's canonical key and the
+  indexer's primary key.
   The hash computation should live in `json-rpc-types` (or a utility
   in `groundhog-xdr`) so the SDK and gateway compute it identically.
 
