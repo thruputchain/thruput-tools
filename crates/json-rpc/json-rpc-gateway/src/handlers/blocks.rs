@@ -1,6 +1,7 @@
 //! `groundhog_chainTip`, `groundhog_getBlockByNumber`, and
 //! `groundhog_pendingTransactionCount` handlers.
 
+use groundhog_json_rpc_server::RpcRequestContext;
 use groundhog_json_rpc_types::BlockHeight;
 use groundhog_json_rpc_types::block::{BlockInfo, ChainTip};
 
@@ -13,8 +14,11 @@ use crate::error::{self, GatewayError};
 /// client requests share a single in-flight `schedcoord_get_tip` RPC.
 /// See `crate::tip_coalescer` for the linearizable coalescing design.
 #[tracing::instrument(skip_all)]
-pub async fn chain_tip(ctx: &GatewayContext) -> Result<ChainTip, GatewayError> {
-    ctx.tip_coalescer.chain_tip().await
+pub async fn chain_tip(
+    ctx: &GatewayContext,
+    context: RpcRequestContext,
+) -> Result<ChainTip, GatewayError> {
+    ctx.tip_coalescer.chain_tip(context).await
 }
 
 /// Block data at a given height.

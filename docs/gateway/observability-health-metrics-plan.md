@@ -70,6 +70,9 @@ Add gateway config and CLI options:
 --health-required-backends scheduler,indexer,db_gateway,view_gateway
 --health-chain-tip-max-age-ms <ms>
 --health-probe-interval-ms <ms>
+--backend-connect-timeout-ms <ms>
+--scheduler-reconnect-grace-ms <ms>
+--shutdown-grace-ms <ms>
 ```
 
 Suggested binary defaults:
@@ -79,6 +82,9 @@ observability_listen = "127.0.0.1:9646"
 health_required_backends = ["scheduler", "indexer"]
 health_chain_tip_max_age_ms = 30000
 health_probe_interval_ms = 5000
+backend_connect_timeout_ms = 30000
+scheduler_reconnect_grace_ms = 30000
+shutdown_grace_ms = 10000
 ```
 
 Hosted release/ops override:
@@ -331,7 +337,12 @@ groundhog_gateway_backend_requests_total{backend,operation,outcome}
 groundhog_gateway_backend_request_duration_seconds_bucket{backend,operation,result,le}
 groundhog_gateway_backend_request_duration_seconds_sum{backend,operation,result}
 groundhog_gateway_backend_request_duration_seconds_count{backend,operation,result}
+groundhog_gateway_backend_reconnects_total{backend,outcome}
 ```
+
+Reconnect outcomes describe the connection attempt itself. Scheduler
+`outcome="success"` means a replacement pool was built and entered quarantine;
+handler readiness still requires the null-only grace period and a later tip probe.
 
 Inbound JSON-RPC batch metrics:
 
@@ -488,6 +499,8 @@ unexpected paths.
 Backend request metrics intentionally use the smaller transport/backend outcome
 domain `ok | error | timeout | rejected` under the same `outcome` label name. RPC
 method metrics use the JSON-RPC error-catalog-derived outcome set above.
+Backend reconnect counters use `success | error | timeout`; the backend label is
+the same bounded four-value domain as backend request metrics.
 
 Standard `backend` values:
 
@@ -502,10 +515,13 @@ Standard backend `operation` values:
 
 ```text
 schedcoord_get_tip
+schedulercoord_null
 schedcoord_submit_unvetted
+schedcoord_lookup_transactions
 indexer_block_explorer_intro
 get_events
 get_transaction_info
+get_transactions_by_address
 dbgateway_intro
 dbgateway_get_items
 viewgateway_intro
@@ -575,9 +591,54 @@ series shape and Grafana queries. Treat changes as dashboard-affecting.
 - Cold-start chain-tip gauges emit `NaN` until the first successful tip probe.
   Alerts should key off `groundhog_gateway_health_status` for readiness and handle
   `NaN`/unknown tip values explicitly rather than treating unknown as fresh zero.
-- The probe loop is non-overlapping. Each backend probe is capped by
-  `min(request_timeout_ms, health_probe_interval_ms)`, and the next loop sleeps
-  for `health_probe_interval_ms` after the current probe pass completes.
+- `request_timeout_ms` is the end-to-end JSON-RPC deadline for both HTTP and
+  WebSocket calls, including time spent in internal batch/coalescer queues.
+  Backend RPC deadlines reserve a bounded completion margin inside that budget;
+  the HTTP transport watchdog uses the same margin outside it. Expired queued
+  waiters are discarded before backend dispatch. Internal batchers group
+  waiters into earliest-deadline cohorts whose maximum skew is that completion
+  margin, so a materially older waiter cannot share a backend timeout with
+  newer work from the same drain. Scheduler-backed submit and tip paths process
+  those cohorts newest-first because a timeout clears the active scheduler;
+  storage reads remain earliest-first.
+- The probe loop is non-overlapping, but probes the four active backends
+  concurrently. An RPC against an existing client is capped by
+  `min(request_timeout_ms, health_probe_interval_ms)`.
+- Missing backends reconnect in one tracked background task per backend, capped
+  by `backend_connect_timeout_ms`. Pool construction never delays health
+  snapshot publication, and overlapping attempts for the same backend are not
+  allowed.
+- Initial and rebuilt scheduler pools are held outside the handler-visible
+  client slot and checked only with the safe null RPC for
+  `scheduler_reconnect_grace_ms`, so older hogd backends can finish coordinator
+  registration after their TCP listener opens. The pool is promoted only after
+  a successful null probe at or after the grace deadline; the next pass performs
+  the first tip probe.
+- Scheduler pools use rpc_driver's fail-closed cancellation policy. A timed-out
+  scheduler request clears the handler-visible slot before canceling its worker;
+  only the gateway reconnect manager may construct the replacement pool and put
+  it through quarantine.
+- Direct transaction-status scheduler lookups use reserved admission permits
+  matched by scheduler pool capacity. Admission saturation returns overload
+  without entering the x23 queue or clearing a healthy scheduler.
+- Scheduler transport failures clear only the generation that produced the
+  failure, so a stale request cannot remove a newer replacement pool.
+- Each backend keeps its health probe on a dedicated one-connection x23 pool.
+  Handler saturation therefore cannot queue an intro or tip probe behind public
+  request work, and probe traffic does not consume handler capacity.
+- Scheduler transaction lookups use a dedicated four-connection lane, separate
+  from normal scheduler work and health probes. That lane and the four-connection
+  indexer handler pool accept records up to 64 MiB because lookup results contain
+  protocol-unbounded transaction data. This bounds retained large-record scratch
+  buffers to 512 MiB across those gateway lanes. Health and other gateway pools
+  keep the default 16 MiB limit. x23 uses ONC-RPC `AUTH_NONE`; backend listeners
+  using this trusted-backend allowance must remain isolated on private network
+  paths.
+- One active-client probe timeout marks that snapshot down but retains the pool.
+  A second consecutive timeout discards it and starts the reconnect lifecycle.
+  A successful response resets the timeout streak.
+- The next loop sleeps for `health_probe_interval_ms` after the current pass
+  completes.
 - `/readyz` and `/health` also enforce a whole-snapshot freshness watchdog: if the
   cached snapshot is older than three probe intervals, readiness flips to
   `error`/HTTP 503 and the JSON exposes `snapshot_age_ms`.
@@ -595,6 +656,10 @@ series shape and Grafana queries. Treat changes as dashboard-affecting.
   may still abort on protocol/configuration rejection.
 - Probe errors should be recorded in the health snapshot and backend metrics with
   bounded outcomes.
+- SIGINT and SIGTERM start graceful shutdown. RPC, observability, and health
+  drains share one absolute `shutdown_grace_ms` deadline; after it expires, the
+  gateway cancels owned tasks and exits instead of waiting indefinitely on open
+  connections.
 
 ## RPC Instrumentation Approach
 

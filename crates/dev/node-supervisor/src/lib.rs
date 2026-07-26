@@ -13,6 +13,7 @@ pub mod hogd_dev;
 mod pid_file;
 pub mod process;
 mod read_backend;
+mod request_deadline;
 mod rpc_backend;
 pub mod server;
 mod stub_backend;

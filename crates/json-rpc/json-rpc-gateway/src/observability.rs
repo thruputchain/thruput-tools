@@ -164,7 +164,7 @@ mod tests {
         health::{GatewayHealth, GatewayHealthSnapshot},
         metrics::GatewayMetrics,
     };
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     #[tokio::test]
@@ -243,7 +243,7 @@ mod tests {
                 (HealthBackend::Indexer, true),
             ],
         );
-        snapshot.snapshot_at = Instant::now()
+        snapshot.snapshot_at = tokio::time::Instant::now()
             .checked_sub(Duration::from_millis(31))
             .expect("test duration should be in range");
         health.update_for_test(snapshot).await;

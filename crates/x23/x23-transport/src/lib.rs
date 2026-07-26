@@ -5,6 +5,8 @@
 //! codegen client crate. This crate hoists the small amount of
 //! plumbing — pool construction, address parsing, typed startup
 //! errors — into one place so consumers do not copy it.
+//! It is an internal workspace boundary and follows the Groundhog workspace
+//! release rather than maintaining an independent public API contract.
 //!
 //! Consumers pass a builder closure to construct their typed client
 //! from the pool. The closure receives an `Arc<dyn RpcSender>`, which
@@ -24,7 +26,24 @@
 
 use std::{sync::Arc, time::Duration};
 
-use rpc_driver::{FixedSerialPool, RpcSender};
+use rpc_driver::{
+    CanceledCallPolicy, ConnectionConfig, FixedSerialPool, RpcError, RpcSender, ServiceMap,
+};
+
+/// Maximum RPC message accepted from trusted hogd data-plane endpoints.
+///
+/// This provides headroom for full transactions and nomination batches while
+/// bounding the allocation triggered by a peer-supplied record header. It
+/// changes the decode limit, not the connection's preallocated read-buffer
+/// size. x23 uses ONC-RPC `AUTH_NONE`, so these endpoints must remain on a
+/// private, trusted network.
+pub const HOGD_LARGE_MESSAGE_SIZE: u32 = 64 * 1024 * 1024;
+
+/// Build a client configuration that accepts protocol-sized responses from a
+/// trusted hogd endpoint.
+pub fn hogd_large_message_config() -> ConnectionConfig {
+    ConnectionConfig::new(Some(HOGD_LARGE_MESSAGE_SIZE), ServiceMap::new())
+}
 
 /// Errors from establishing an x23 connection pool.
 #[derive(Debug, thiserror::Error)]
@@ -80,18 +99,90 @@ pub async fn connect<C, F>(
 where
     F: FnOnce(Arc<dyn RpcSender>) -> C,
 {
+    connect_with_config_and_canceled_call_policy(
+        service,
+        addr,
+        pool_size,
+        ConnectionConfig::default(),
+        CanceledCallPolicy::ReplaceConnection,
+        build,
+    )
+    .await
+}
+
+/// Establish a fixed pool using `connection_config`.
+pub async fn connect_with_config<C, F>(
+    service: &'static str,
+    addr: &str,
+    pool_size: usize,
+    connection_config: ConnectionConfig,
+    build: F,
+) -> Result<C, ConnectError>
+where
+    F: FnOnce(Arc<dyn RpcSender>) -> C,
+{
+    connect_with_config_and_canceled_call_policy(
+        service,
+        addr,
+        pool_size,
+        connection_config,
+        CanceledCallPolicy::ReplaceConnection,
+        build,
+    )
+    .await
+}
+
+/// Establish a fixed pool with an explicit active-call cancellation policy.
+pub async fn connect_with_canceled_call_policy<C, F>(
+    service: &'static str,
+    addr: &str,
+    pool_size: usize,
+    canceled_call_policy: CanceledCallPolicy,
+    build: F,
+) -> Result<C, ConnectError>
+where
+    F: FnOnce(Arc<dyn RpcSender>) -> C,
+{
+    connect_with_config_and_canceled_call_policy(
+        service,
+        addr,
+        pool_size,
+        ConnectionConfig::default(),
+        canceled_call_policy,
+        build,
+    )
+    .await
+}
+
+/// Establish a fixed pool with explicit connection and cancellation policies.
+pub async fn connect_with_config_and_canceled_call_policy<C, F>(
+    service: &'static str,
+    addr: &str,
+    pool_size: usize,
+    connection_config: ConnectionConfig,
+    canceled_call_policy: CanceledCallPolicy,
+    build: F,
+) -> Result<C, ConnectError>
+where
+    F: FnOnce(Arc<dyn RpcSender>) -> C,
+{
     let socket_addr: std::net::SocketAddr = addr.parse().map_err(|e| ConnectError::BadAddress {
         addr: addr.to_string(),
         source: e,
     })?;
     let pool: Arc<dyn RpcSender> = Arc::new(
-        FixedSerialPool::connect(&socket_addr, pool_size)
-            .await
-            .map_err(|e| ConnectError::ConnectFailed {
-                service,
-                addr: addr.to_string(),
-                source: e,
-            })?,
+        FixedSerialPool::connect_with_config_and_canceled_call_policy(
+            &socket_addr,
+            pool_size,
+            connection_config,
+            canceled_call_policy,
+        )
+        .await
+        .map_err(|e| ConnectError::ConnectFailed {
+            service,
+            addr: addr.to_string(),
+            source: e,
+        })?,
     );
     tracing::info!(addr, service, "connected");
     Ok(build(pool))
@@ -109,22 +200,104 @@ pub async fn try_connect<C, F>(
 where
     F: FnOnce(Arc<dyn RpcSender>) -> C,
 {
-    match connect(service, addr, pool_size, build).await {
+    try_connect_with_config_and_canceled_call_policy(
+        service,
+        addr,
+        pool_size,
+        ConnectionConfig::default(),
+        CanceledCallPolicy::ReplaceConnection,
+        build,
+    )
+    .await
+}
+
+/// Like [`connect_with_config`], but tolerates connection refusal.
+pub async fn try_connect_with_config<C, F>(
+    service: &'static str,
+    addr: &str,
+    pool_size: usize,
+    connection_config: ConnectionConfig,
+    build: F,
+) -> Result<Option<C>, ConnectError>
+where
+    F: FnOnce(Arc<dyn RpcSender>) -> C,
+{
+    try_connect_with_config_and_canceled_call_policy(
+        service,
+        addr,
+        pool_size,
+        connection_config,
+        CanceledCallPolicy::ReplaceConnection,
+        build,
+    )
+    .await
+}
+
+/// Like [`try_connect`], with an explicit active-call cancellation policy.
+pub async fn try_connect_with_canceled_call_policy<C, F>(
+    service: &'static str,
+    addr: &str,
+    pool_size: usize,
+    canceled_call_policy: CanceledCallPolicy,
+    build: F,
+) -> Result<Option<C>, ConnectError>
+where
+    F: FnOnce(Arc<dyn RpcSender>) -> C,
+{
+    try_connect_with_config_and_canceled_call_policy(
+        service,
+        addr,
+        pool_size,
+        ConnectionConfig::default(),
+        canceled_call_policy,
+        build,
+    )
+    .await
+}
+
+/// Like [`connect_with_config_and_canceled_call_policy`], but tolerates only
+/// explicit connection failures.
+pub async fn try_connect_with_config_and_canceled_call_policy<C, F>(
+    service: &'static str,
+    addr: &str,
+    pool_size: usize,
+    connection_config: ConnectionConfig,
+    canceled_call_policy: CanceledCallPolicy,
+    build: F,
+) -> Result<Option<C>, ConnectError>
+where
+    F: FnOnce(Arc<dyn RpcSender>) -> C,
+{
+    match connect_with_config_and_canceled_call_policy(
+        service,
+        addr,
+        pool_size,
+        connection_config,
+        canceled_call_policy,
+        build,
+    )
+    .await
+    {
         Ok(client) => Ok(Some(client)),
         Err(
-            e @ (ConnectError::BadAddress { .. }
-            | ConnectError::StartupRejected { .. }
-            | ConnectError::StartupProbeTimedOut { .. }),
-        ) => Err(e),
-        Err(e) => {
-            tracing::warn!(addr, service, error = %e, "unreachable, starting in degraded mode");
+            error @ ConnectError::ConnectFailed {
+                source: RpcError::ConnectFailed,
+                ..
+            },
+        ) => {
+            tracing::warn!(addr, service, error = %error, "unreachable, starting in degraded mode");
             Ok(None)
         }
+        Err(error) => Err(error),
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use async_trait::async_trait;
+    use rpc_driver::{ProgVers, RpcServer, handler::RpcHandler};
+    use tokio::net::TcpListener;
+
     use super::*;
 
     #[derive(Debug)]
@@ -132,6 +305,41 @@ mod tests {
 
     fn build_dummy(_pool: Arc<dyn RpcSender>) -> DummyClient {
         DummyClient
+    }
+
+    fn build_sender(pool: Arc<dyn RpcSender>) -> Arc<dyn RpcSender> {
+        pool
+    }
+
+    struct SizedResponse(usize);
+
+    #[async_trait]
+    impl RpcHandler for SizedResponse {
+        async fn dispatch(&self, _proc: u32, _data: &[u8]) -> Result<Vec<u8>, RpcError> {
+            Ok(vec![0; self.0])
+        }
+
+        fn prog_vers(&self) -> ProgVers {
+            ProgVers::new(1, 1)
+        }
+    }
+
+    async fn start_sized_response_server(
+        response_size: usize,
+    ) -> (
+        std::net::SocketAddr,
+        tokio::task::JoinHandle<Result<(), std::io::Error>>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bug: test RPC server should bind");
+        let addr = listener
+            .local_addr()
+            .expect("bug: test RPC server should have a local address");
+        let mut services = ServiceMap::new();
+        services.add_service(Box::new(SizedResponse(response_size)));
+        let handle = RpcServer::new(listener, services).start().await;
+        (addr, handle)
     }
 
     #[tokio::test]
@@ -174,5 +382,56 @@ mod tests {
         .await
         .expect("bug: try_connect should return promptly on ECONNREFUSED");
         assert!(matches!(result, Ok(None)));
+    }
+
+    #[tokio::test]
+    async fn try_connect_rejects_invalid_pool_configuration() {
+        let err = try_connect("dummy", "127.0.0.1:1", 0, build_dummy)
+            .await
+            .expect_err("bug: invalid pool configuration should not degrade startup");
+
+        assert!(matches!(
+            err,
+            ConnectError::ConnectFailed {
+                source: RpcError::InvalidPoolConfiguration,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn large_connection_limit_crosses_default_boundary() {
+        const DEFAULT_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
+        let response_size = DEFAULT_MESSAGE_SIZE + 1024;
+        let (addr, _server) = start_sized_response_server(response_size).await;
+        let default = connect("default", &addr.to_string(), 1, build_sender)
+            .await
+            .expect("bug: default client should connect");
+
+        assert_eq!(
+            default.send_call(ProgVers::new(1, 1), 1, &[]).await,
+            Err(RpcError::SystemError)
+        );
+
+        let accepting = connect_with_config(
+            "accepting",
+            &addr.to_string(),
+            1,
+            hogd_large_message_config(),
+            build_sender,
+        )
+        .await
+        .expect("bug: accepting client should connect");
+        let response = accepting
+            .send_call(ProgVers::new(1, 1), 1, &[])
+            .await
+            .expect("bug: larger configured limit should accept the response");
+
+        assert_eq!(response.len(), response_size);
+    }
+
+    #[test]
+    fn hogd_large_message_limit_is_bounded() {
+        assert_eq!(HOGD_LARGE_MESSAGE_SIZE, 64 * 1024 * 1024);
     }
 }

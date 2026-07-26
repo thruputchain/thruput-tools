@@ -2,6 +2,7 @@
 
 use std::time::{Duration, Instant};
 
+use groundhog_json_rpc_server::RpcRequestContext;
 use groundhog_json_rpc_types::{
     hex::HexBytes,
     view::{RootInvocationOutput, ViewRequest, ViewResponse},
@@ -23,6 +24,7 @@ use crate::{
     metrics::{BackendRequestOutcome, GatewayMetrics, REASON_PARSE_FAILED},
 };
 
+use super::backend_deadline;
 use super::parse_event::parse_emitted_event;
 
 /// Execute a sandboxed contract simulation through hogd `ViewGateway`.
@@ -38,6 +40,7 @@ use super::parse_event::parse_emitted_event;
 )]
 pub async fn view(
     ctx: &GatewayContext,
+    context: RpcRequestContext,
     request: ViewRequest,
     gas_limit: u64,
 ) -> Result<ViewResponse, GatewayError> {
@@ -52,18 +55,20 @@ pub async fn view(
     })?;
 
     let query = view_query_from_request(request, gas_limit)?;
-    let timeout = Duration::from_millis(ctx.config.view_timeout_ms);
-    view_response_from_client(&client, &ctx.metrics, &query, timeout).await
+    let timeout =
+        Duration::from_millis(ctx.config.view_timeout_ms).min(ctx.config.backend_request_timeout());
+    let deadline = backend_deadline(context, timeout)?;
+    view_response_from_client(&client, &ctx.metrics, &query, deadline).await
 }
 
 async fn view_response_from_client(
     client: &groundhog_view::ViewGateway_ViewGateway1_Client,
     metrics: &GatewayMetrics,
     query: &TransactionViewQuery,
-    timeout: Duration,
+    deadline: Instant,
 ) -> Result<ViewResponse, GatewayError> {
     let started_at = Instant::now();
-    let rpc_result = tokio::time::timeout(timeout, client.viewgateway_view(query)).await;
+    let rpc_result = tokio::time::timeout_at(deadline.into(), client.viewgateway_view(query)).await;
     let outcome = match &rpc_result {
         Err(_) => BackendRequestOutcome::Timeout,
         Ok(Ok(ViewGatewayResult::ViewGatewayOk { .. })) => BackendRequestOutcome::Ok,
@@ -391,8 +396,13 @@ mod tests {
         let query = view_query_from_request(request(None), 123).expect("query maps");
         let metrics = GatewayMetrics::new("test", None).expect("metrics should register");
 
-        let result =
-            view_response_from_client(&client, &metrics, &query, Duration::from_millis(10)).await;
+        let result = view_response_from_client(
+            &client,
+            &metrics,
+            &query,
+            Instant::now() + Duration::from_millis(10),
+        )
+        .await;
 
         assert!(
             matches!(result, Err(GatewayError::BackendTimeout)),

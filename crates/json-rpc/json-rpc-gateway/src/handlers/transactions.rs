@@ -1,5 +1,6 @@
 //! `groundhog_getTransactionsByAddress` handler.
 
+use groundhog_json_rpc_server::RpcRequestContext;
 use groundhog_json_rpc_types::transaction::{AddressTransactionQuery, TransactionRefPage};
 use std::time::Instant;
 
@@ -8,12 +9,15 @@ use crate::context::GatewayContext;
 use crate::error::GatewayError;
 use crate::metrics::BackendRequestOutcome;
 
+use super::backend_deadline;
+
 /// Implementation of the `groundhog_getTransactionsByAddress` JSON-RPC
 /// method.  Forwards the paginated `AddressTransactionQuery` to the
 /// hogd indexer and returns one page of transaction refs to the caller.
 #[tracing::instrument(skip_all, fields(?query.address, limit = query.limit))]
 pub async fn get_transactions_by_address(
     ctx: &GatewayContext,
+    context: RpcRequestContext,
     query: AddressTransactionQuery,
 ) -> Result<TransactionRefPage, GatewayError> {
     let client = ctx
@@ -25,18 +29,25 @@ pub async fn get_transactions_by_address(
 
     let wire_query: groundhog_indexer::indexer::AddressTransactionQuery = query.into();
     let started_at = Instant::now();
-    let rpc_result = client.get_transactions_by_address(&wire_query).await;
+    let deadline = backend_deadline(context, ctx.config.backend_request_timeout())?;
+    let rpc_result = tokio::time::timeout_at(
+        deadline.into(),
+        client.get_transactions_by_address(&wire_query),
+    )
+    .await;
     ctx.metrics.observe_backend_request(
         HealthBackend::Indexer,
         "get_transactions_by_address",
-        if rpc_result.is_ok() {
-            BackendRequestOutcome::Ok
-        } else {
-            BackendRequestOutcome::Error
+        match &rpc_result {
+            Ok(Ok(_)) => BackendRequestOutcome::Ok,
+            Ok(Err(_)) => BackendRequestOutcome::Error,
+            Err(_) => BackendRequestOutcome::Timeout,
         },
         started_at.elapsed(),
     );
-    let page = rpc_result.map_err(|e| GatewayError::BackendUnavailable(format!("indexer: {e}")))?;
+    let page = rpc_result
+        .map_err(|_| GatewayError::BackendTimeout)?
+        .map_err(|e| GatewayError::BackendUnavailable(format!("indexer: {e}")))?;
 
     Ok(page.into())
 }

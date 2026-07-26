@@ -52,17 +52,17 @@ groundhog-rv32-artifact = { path = "crates/rv32/artifact", version = "=0.5.20", 
 groundhog-rv32-lower = { path = "crates/rv32/lower", version = "=0.5.20", registry = "groundhog" }
 
 # --- Groundhog (private registry) ---
-groundhog-xdr = { version = "0.19.8", registry = "groundhog", features = ["serde", "xdrs", "schema"] }
-groundhog_indexer = { version = "0.19.8", registry = "groundhog", features = ["serde"] }
-groundhog_scheduler = { version = "0.19.8", registry = "groundhog" }
-groundhog_db_gateway = { version = "0.19.8", registry = "groundhog" }
-groundhog_view = { version = "0.19.8", registry = "groundhog" }
-groundhog_scp = { version = "0.19.8", registry = "groundhog" }
-groundhog_coordinator = { version = "0.19.8", registry = "groundhog" }
-groundhog-trace = { version = "0.19.8", registry = "groundhog" }
-xdrs = { version = "0.8.0", registry = "groundhog", features = ["alloc"] }
-xdr-common = { version = "0.8.0", registry = "groundhog" }
-rpc_driver = { version = "0.9", registry = "groundhog" }
+groundhog-xdr = { version = "0.19.10", registry = "groundhog", features = ["serde", "xdrs", "schema"] }
+groundhog_indexer = { version = "0.19.10", registry = "groundhog", features = ["serde"] }
+groundhog_scheduler = { version = "0.19.10", registry = "groundhog" }
+groundhog_db_gateway = { version = "0.19.10", registry = "groundhog" }
+groundhog_view = { version = "0.19.10", registry = "groundhog" }
+groundhog_scp = { version = "0.19.10", registry = "groundhog" }
+groundhog_coordinator = { version = "0.19.10", registry = "groundhog" }
+groundhog-trace = { version = "0.19.10", registry = "groundhog" }
+xdrs = { version = "0.8.2", registry = "groundhog", features = ["alloc"] }
+xdr-common = { version = "0.8.2", registry = "groundhog" }
+rpc_driver = { version = "0.10.0", registry = "groundhog" }
 groundhog-wasm-meter = { version = "0.8.0", registry = "groundhog" }
 # from the sdk crate:
 groundhog-spec-tool = { version = "0.17.2", registry = "groundhog" }

@@ -1,8 +1,8 @@
 use groundhog_json_rpc_api::GroundhogApiServer;
 use groundhog_json_rpc_client::{GroundhogApiClient, HttpClientBuilder};
 use groundhog_json_rpc_server::{
-    BuildInfo, ChainPlane, GroundhogRpcServer, ReadPlane, RpcServerConfig, RpcServerError,
-    SubmitPlane, ValidatedTransaction, ViewPlane,
+    BuildInfo, ChainPlane, GroundhogRpcServer, ReadPlane, RpcRequestContext, RpcServerConfig,
+    RpcServerError, SubmitPlane, ValidatedTransaction, ViewPlane,
 };
 use groundhog_json_rpc_types::{
     BlockHeight, ContractAddress,
@@ -21,6 +21,7 @@ struct VersionOnlyBackend;
 impl SubmitPlane for VersionOnlyBackend {
     async fn submit_raw_transaction(
         &self,
+        _context: RpcRequestContext,
         _tx: ValidatedTransaction,
     ) -> Result<(), RpcServerError> {
         Err(RpcServerError::NotImplemented("sendRawTransaction".into()))
@@ -29,18 +30,22 @@ impl SubmitPlane for VersionOnlyBackend {
 
 #[async_trait::async_trait]
 impl ChainPlane for VersionOnlyBackend {
-    async fn chain_tip(&self) -> Result<ChainTip, RpcServerError> {
+    async fn chain_tip(&self, _context: RpcRequestContext) -> Result<ChainTip, RpcServerError> {
         Err(RpcServerError::NotImplemented("chainTip".into()))
     }
 
     async fn get_block_by_number(
         &self,
+        _context: RpcRequestContext,
         _height: BlockHeight,
     ) -> Result<Option<BlockInfo>, RpcServerError> {
         Err(RpcServerError::NotImplemented("getBlockByNumber".into()))
     }
 
-    async fn pending_transaction_count(&self) -> Result<u64, RpcServerError> {
+    async fn pending_transaction_count(
+        &self,
+        _context: RpcRequestContext,
+    ) -> Result<u64, RpcServerError> {
         Err(RpcServerError::NotImplemented(
             "pendingTransactionCount".into(),
         ))
@@ -51,6 +56,7 @@ impl ChainPlane for VersionOnlyBackend {
 impl ReadPlane for VersionOnlyBackend {
     async fn transaction_receipt(
         &self,
+        _context: RpcRequestContext,
         _tx_hash: TxHash,
     ) -> Result<Option<TransactionReceipt>, RpcServerError> {
         Err(RpcServerError::NotImplemented(
@@ -60,6 +66,7 @@ impl ReadPlane for VersionOnlyBackend {
 
     async fn transaction_status(
         &self,
+        _context: RpcRequestContext,
         _tx_hash: TxHash,
     ) -> Result<TransactionStatus, RpcServerError> {
         Err(RpcServerError::NotImplemented(
@@ -67,12 +74,17 @@ impl ReadPlane for VersionOnlyBackend {
         ))
     }
 
-    async fn contract_events(&self, _query: EventQuery) -> Result<EventPage, RpcServerError> {
+    async fn contract_events(
+        &self,
+        _context: RpcRequestContext,
+        _query: EventQuery,
+    ) -> Result<EventPage, RpcServerError> {
         Err(RpcServerError::NotImplemented("getEvents".into()))
     }
 
     async fn transactions_by_address(
         &self,
+        _context: RpcRequestContext,
         _query: AddressTransactionQuery,
     ) -> Result<TransactionRefPage, RpcServerError> {
         Err(RpcServerError::NotImplemented(
@@ -82,6 +94,7 @@ impl ReadPlane for VersionOnlyBackend {
 
     async fn get_storage_at(
         &self,
+        _context: RpcRequestContext,
         _address: ContractAddress,
         _key: [u8; 32],
     ) -> Result<StorageItemRead, RpcServerError> {
@@ -90,6 +103,7 @@ impl ReadPlane for VersionOnlyBackend {
 
     async fn read_native_hog_balance(
         &self,
+        _context: RpcRequestContext,
         _address: ContractAddress,
     ) -> Result<StorageItemRead, RpcServerError> {
         Err(RpcServerError::NotImplemented("getBalance".into()))

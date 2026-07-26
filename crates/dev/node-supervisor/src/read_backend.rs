@@ -21,7 +21,7 @@ use groundhog_indexer::{
     IndexerBlockExplorer_IndexerBlockExplorer1_Client, IndexerBlockExplorerIntroOutcome,
     TxInfoOutcome, TxInfoResult,
 };
-use groundhog_json_rpc_server::{ReadPlane, RpcServerError};
+use groundhog_json_rpc_server::{ReadPlane, RpcRequestContext, RpcServerError};
 use groundhog_json_rpc_types::{
     ContractAddress,
     events::{EventPage, EventQuery, IdentifiedEvent},
@@ -35,7 +35,7 @@ use groundhog_json_rpc_types::{
 };
 use groundhog_scheduler::{RPCError, sched_coord::SchedulerCoord_SchedulerCoord1_Client};
 use groundhog_scp::network::Protocol;
-use groundhog_x23_transport::connect;
+use groundhog_x23_transport::{connect, connect_with_config, hogd_large_message_config};
 use groundhog_xdr::{
     event::TxEmittedEvent,
     exec_result::ExecResult,
@@ -44,7 +44,10 @@ use groundhog_xdr::{
 };
 use xdr_common::VecM;
 
-use crate::{NodeSupervisorError, rpc_backend::HogdDevSchedulerBackend};
+use crate::{
+    NodeSupervisorError, request_deadline::within_request_deadline,
+    rpc_backend::HogdDevSchedulerBackend,
+};
 
 const HOGD_DEV_POOL_SIZE: usize = 2;
 const TOPIC_SIZE: usize = 32;
@@ -81,10 +84,11 @@ impl HogdDevReadBackend {
         protocol_version: &str,
         expected_protocol: Option<&str>,
     ) -> Result<Self, NodeSupervisorError> {
-        let indexer = connect(
+        let indexer = connect_with_config(
             "hogd-dev indexer",
             &endpoint.to_string(),
             HOGD_DEV_POOL_SIZE,
+            hogd_large_message_config(),
             IndexerBlockExplorer_IndexerBlockExplorer1_Client::new,
         )
         .await
@@ -163,6 +167,7 @@ impl HogdDevStorageReadBackend {
 impl ReadPlane for HogdDevStorageReadBackend {
     async fn transaction_receipt(
         &self,
+        _context: RpcRequestContext,
         _tx_hash: TxHash,
     ) -> Result<Option<TransactionReceipt>, RpcServerError> {
         Err(RpcServerError::NotImplemented("transactionReceipt".into()))
@@ -170,17 +175,23 @@ impl ReadPlane for HogdDevStorageReadBackend {
 
     async fn transaction_status(
         &self,
+        _context: RpcRequestContext,
         _tx_hash: TxHash,
     ) -> Result<TransactionStatus, RpcServerError> {
         Err(RpcServerError::NotImplemented("transactionStatus".into()))
     }
 
-    async fn contract_events(&self, _query: EventQuery) -> Result<EventPage, RpcServerError> {
+    async fn contract_events(
+        &self,
+        _context: RpcRequestContext,
+        _query: EventQuery,
+    ) -> Result<EventPage, RpcServerError> {
         Err(RpcServerError::NotImplemented("getEvents".into()))
     }
 
     async fn transactions_by_address(
         &self,
+        _context: RpcRequestContext,
         _query: RpcAddressTransactionQuery,
     ) -> Result<TransactionRefPage, RpcServerError> {
         Err(RpcServerError::NotImplemented(
@@ -195,17 +206,27 @@ impl ReadPlane for HogdDevStorageReadBackend {
     #[tracing::instrument(skip_all, fields(?address, ?key))]
     async fn get_storage_at(
         &self,
+        context: RpcRequestContext,
         address: ContractAddress,
         key: [u8; 32],
     ) -> Result<StorageItemRead, RpcServerError> {
-        get_storage_at_from_db_gateway(&self.db_gateway, address, key).await
+        within_request_deadline(
+            context,
+            get_storage_at_from_db_gateway(&self.db_gateway, address, key),
+        )
+        .await
     }
 
     async fn read_native_hog_balance(
         &self,
+        context: RpcRequestContext,
         address: ContractAddress,
     ) -> Result<StorageItemRead, RpcServerError> {
-        get_native_hog_balance_from_db_gateway(&self.db_gateway, address).await
+        within_request_deadline(
+            context,
+            get_native_hog_balance_from_db_gateway(&self.db_gateway, address),
+        )
+        .await
     }
 }
 
@@ -216,65 +237,71 @@ impl ReadPlane for HogdDevReadBackend {
     #[tracing::instrument(skip_all, fields(?tx_hash))]
     async fn transaction_receipt(
         &self,
+        context: RpcRequestContext,
         tx_hash: TxHash,
     ) -> Result<Option<TransactionReceipt>, RpcServerError> {
-        let hash = tx_hash_to_signed(tx_hash);
-        let result = self
-            .indexer
-            .get_transaction_info(&hash)
-            .await
-            .map_err(|source| {
-                RpcServerError::BackendUnavailable(format!("hogd-dev indexer: {source}"))
-            })?;
+        within_request_deadline(context, async {
+            let hash = tx_hash_to_signed(tx_hash);
+            let result = self
+                .indexer
+                .get_transaction_info(&hash)
+                .await
+                .map_err(|source| {
+                    RpcServerError::BackendUnavailable(format!("hogd-dev indexer: {source}"))
+                })?;
 
-        match result {
-            TxInfoResult::TxInfoFound { info } => {
-                let events = info
-                    .events
-                    .events
-                    .iter()
-                    .filter_map(parse_emitted_event)
-                    .collect();
+            match result {
+                TxInfoResult::TxInfoFound { info } => {
+                    let events = info
+                        .events
+                        .events
+                        .iter()
+                        .filter_map(parse_emitted_event)
+                        .collect();
 
-                let (return_data, abort_data) = match &info.events.root_output {
-                    InvocationFrameOutput::Return { return_buffer } => {
-                        (Some(HexBytes(return_buffer.0.clone())), None)
-                    }
-                    InvocationFrameOutput::Abort { abort_buffer } => {
-                        (None, Some(HexBytes(abort_buffer.0.clone())))
-                    }
-                    _ => (None, None),
-                };
+                    let (return_data, abort_data) = match &info.events.root_output {
+                        InvocationFrameOutput::Return { return_buffer } => {
+                            (Some(HexBytes(return_buffer.0.clone())), None)
+                        }
+                        InvocationFrameOutput::Abort { abort_buffer } => {
+                            (None, Some(HexBytes(abort_buffer.0.clone())))
+                        }
+                        _ => (None, None),
+                    };
 
-                Ok(Some(TransactionReceipt {
-                    tx_hash,
-                    height: info.height,
-                    status: map_exec_result(info.events.exec_result),
-                    events,
-                    return_data,
-                    abort_data,
-                }))
+                    Ok(Some(TransactionReceipt {
+                        tx_hash,
+                        height: info.height,
+                        status: map_exec_result(info.events.exec_result),
+                        events,
+                        return_data,
+                        abort_data,
+                    }))
+                }
+                // A recent nondeterministic failure is not a committed record;
+                // receipts exist only for committed transactions. The diagnostic
+                // surfaces through `transaction_status`.
+                TxInfoResult::TxInfoRecentFailure { .. } => Ok(None),
+                TxInfoResult::Default { outcome }
+                    if outcome == TxInfoOutcome::TxInfoNotFound.0 =>
+                {
+                    Ok(None)
+                }
+                TxInfoResult::Default { outcome } => {
+                    tracing::warn!(%outcome, "unexpected TxInfoResult outcome from hogd-dev indexer");
+                    Err(RpcServerError::BackendUnavailable(format!(
+                        "hogd-dev indexer returned unexpected outcome: {outcome}"
+                    )))
+                }
+                _ => {
+                    tracing::warn!("unknown TxInfoResult variant from hogd-dev indexer");
+                    Err(RpcServerError::BackendUnavailable(
+                        "hogd-dev indexer returned unknown TxInfoResult variant".into(),
+                    ))
+                }
             }
-            // A recent nondeterministic failure is not a committed record;
-            // receipts exist only for committed transactions. The diagnostic
-            // surfaces through `transaction_status`.
-            TxInfoResult::TxInfoRecentFailure { .. } => Ok(None),
-            TxInfoResult::Default { outcome } if outcome == TxInfoOutcome::TxInfoNotFound.0 => {
-                Ok(None)
-            }
-            TxInfoResult::Default { outcome } => {
-                tracing::warn!(%outcome, "unexpected TxInfoResult outcome from hogd-dev indexer");
-                Err(RpcServerError::BackendUnavailable(format!(
-                    "hogd-dev indexer returned unexpected outcome: {outcome}"
-                )))
-            }
-            _ => {
-                tracing::warn!("unknown TxInfoResult variant from hogd-dev indexer");
-                Err(RpcServerError::BackendUnavailable(
-                    "hogd-dev indexer returned unknown TxInfoResult variant".into(),
-                ))
-            }
-        }
+        })
+        .await
     }
 
     /// Return the semantic transaction status.
@@ -295,9 +322,11 @@ impl ReadPlane for HogdDevReadBackend {
     #[tracing::instrument(skip_all, fields(?tx_hash))]
     async fn transaction_status(
         &self,
+        context: RpcRequestContext,
         tx_hash: TxHash,
     ) -> Result<TransactionStatus, RpcServerError> {
-        let hash = tx_hash_to_signed(tx_hash);
+        within_request_deadline(context, async {
+            let hash = tx_hash_to_signed(tx_hash);
 
         // 1. Check scheduler mempool. Best-effort in that a failure does not
         // abort the indexer lookup, but tracked: `Unknown` asserts the
@@ -356,18 +385,20 @@ impl ReadPlane for HogdDevReadBackend {
             }
         }
 
-        if mempool_checked {
-            Ok(TransactionStatus::Unknown)
-        } else {
-            // `Unknown` tells the client "not in mempool or indexer"; without
-            // a mempool answer that claim is unverified and a still-pending
-            // transaction would read as gone (inviting an unsafe re-sign).
-            Err(RpcServerError::BackendUnavailable(
-                "hogd-dev scheduler unreachable: transaction is not committed but may still be \
-                 pending"
-                    .into(),
-            ))
-        }
+            if mempool_checked {
+                Ok(TransactionStatus::Unknown)
+            } else {
+                // `Unknown` tells the client "not in mempool or indexer"; without
+                // a mempool answer that claim is unverified and a still-pending
+                // transaction would read as gone (inviting an unsafe re-sign).
+                Err(RpcServerError::BackendUnavailable(
+                    "hogd-dev scheduler unreachable: transaction is not committed but may still be \
+                     pending"
+                        .into(),
+                ))
+            }
+        })
+        .await
     }
 
     /// Return one page of contract events matching `query`.
@@ -376,41 +407,48 @@ impl ReadPlane for HogdDevReadBackend {
     /// `num_topics` or truncated payload) are dropped with a warning; the
     /// pagination cursor is not affected.
     #[tracing::instrument(skip_all, fields(limit = query.limit))]
-    async fn contract_events(&self, query: EventQuery) -> Result<EventPage, RpcServerError> {
-        let wire_query: groundhog_indexer::indexer::EventQuery = query.into();
-        let page = self
-            .indexer
-            .get_events(&wire_query)
-            .await
-            .map_err(|source| {
-                RpcServerError::BackendUnavailable(format!("hogd-dev indexer: {source}"))
-            })?;
+    async fn contract_events(
+        &self,
+        context: RpcRequestContext,
+        query: EventQuery,
+    ) -> Result<EventPage, RpcServerError> {
+        within_request_deadline(context, async {
+            let wire_query: groundhog_indexer::indexer::EventQuery = query.into();
+            let page = self
+                .indexer
+                .get_events(&wire_query)
+                .await
+                .map_err(|source| {
+                    RpcServerError::BackendUnavailable(format!("hogd-dev indexer: {source}"))
+                })?;
 
-        let mut events: Vec<IdentifiedEvent> = Vec::with_capacity(page.events.0.len());
-        for identified in &page.events.0 {
-            if let Some(event) = parse_emitted_event(&identified.emitted_event) {
-                events.push(IdentifiedEvent {
-                    tx_hash: TxHash(Hex0x(identified.proposed_tx_hash)),
-                    block_height: identified.block_height.clone(),
-                    sequence_number: identified.sequence_number,
-                    event,
-                });
-            } else {
-                tracing::warn!(
-                    tx_hash = ?identified.proposed_tx_hash,
-                    block_height = ?identified.block_height,
-                    sequence_number = identified.sequence_number,
-                    "dropped malformed event from hogd-dev indexer",
-                );
+            let mut events: Vec<IdentifiedEvent> = Vec::with_capacity(page.events.0.len());
+            for identified in &page.events.0 {
+                if let Some(event) = parse_emitted_event(&identified.emitted_event) {
+                    events.push(IdentifiedEvent {
+                        tx_hash: TxHash(Hex0x(identified.proposed_tx_hash)),
+                        block_height: identified.block_height.clone(),
+                        sequence_number: identified.sequence_number,
+                        event,
+                    });
+                } else {
+                    tracing::warn!(
+                        tx_hash = ?identified.proposed_tx_hash,
+                        block_height = ?identified.block_height,
+                        sequence_number = identified.sequence_number,
+                        "dropped malformed event from hogd-dev indexer",
+                    );
+                }
             }
-        }
 
-        Ok(EventPage {
-            events,
-            cursor: page.cursor.into(),
-            latest_block: page.latest_block,
-            oldest_block: page.oldest_block,
+            Ok(EventPage {
+                events,
+                cursor: page.cursor.into(),
+                latest_block: page.latest_block,
+                oldest_block: page.oldest_block,
+            })
         })
+        .await
     }
 
     /// Return one page of transaction refs from the history of the
@@ -418,17 +456,21 @@ impl ReadPlane for HogdDevReadBackend {
     #[tracing::instrument(skip_all, fields(limit = query.limit))]
     async fn transactions_by_address(
         &self,
+        context: RpcRequestContext,
         query: RpcAddressTransactionQuery,
     ) -> Result<TransactionRefPage, RpcServerError> {
-        let wire_query: groundhog_indexer::indexer::AddressTransactionQuery = query.into();
-        let page = self
-            .indexer
-            .get_transactions_by_address(&wire_query)
-            .await
-            .map_err(|source| {
-                RpcServerError::BackendUnavailable(format!("hogd-dev indexer: {source}"))
-            })?;
-        Ok(page.into())
+        within_request_deadline(context, async {
+            let wire_query: groundhog_indexer::indexer::AddressTransactionQuery = query.into();
+            let page = self
+                .indexer
+                .get_transactions_by_address(&wire_query)
+                .await
+                .map_err(|source| {
+                    RpcServerError::BackendUnavailable(format!("hogd-dev indexer: {source}"))
+                })?;
+            Ok(page.into())
+        })
+        .await
     }
 
     /// Latest-state storage read.
@@ -438,6 +480,7 @@ impl ReadPlane for HogdDevReadBackend {
     #[tracing::instrument(skip_all, fields(?address, ?key))]
     async fn get_storage_at(
         &self,
+        context: RpcRequestContext,
         address: ContractAddress,
         key: [u8; 32],
     ) -> Result<StorageItemRead, RpcServerError> {
@@ -445,18 +488,27 @@ impl ReadPlane for HogdDevReadBackend {
             .db_gateway
             .as_ref()
             .ok_or_else(|| RpcServerError::BackendUnavailable("db_gateway not connected".into()))?;
-        get_storage_at_from_db_gateway(db_gateway, address, key).await
+        within_request_deadline(
+            context,
+            get_storage_at_from_db_gateway(db_gateway, address, key),
+        )
+        .await
     }
 
     async fn read_native_hog_balance(
         &self,
+        context: RpcRequestContext,
         address: ContractAddress,
     ) -> Result<StorageItemRead, RpcServerError> {
         let db_gateway = self
             .db_gateway
             .as_ref()
             .ok_or_else(|| RpcServerError::BackendUnavailable("db_gateway not connected".into()))?;
-        get_native_hog_balance_from_db_gateway(db_gateway, address).await
+        within_request_deadline(
+            context,
+            get_native_hog_balance_from_db_gateway(db_gateway, address),
+        )
+        .await
     }
 }
 
@@ -714,7 +766,7 @@ mod tests {
         TransactionPage as IdxTransactionPage, TransactionQuery, TransactionRefPage, TxInfo,
         TxInfoResult,
     };
-    use groundhog_json_rpc_server::{ReadPlane, RpcServerError};
+    use groundhog_json_rpc_server::{ReadPlane, RpcRequestContext, RpcServerError};
     use groundhog_json_rpc_types::{
         events::{EventFilterList, EventQuery},
         hex::Hex0x,
@@ -950,6 +1002,7 @@ mod tests {
     enum FakeIndexerMode {
         Normal,
         RpcFail,
+        Slow,
     }
 
     type CommittedSet = HashMap<[u8; 32], TxInfo>;
@@ -1087,6 +1140,9 @@ mod tests {
             if self.mode == FakeIndexerMode::RpcFail {
                 return Err(ProgramError::msg("fake indexer rpc-fail"));
             }
+            if self.mode == FakeIndexerMode::Slow {
+                tokio::time::sleep(Duration::from_mins(1)).await;
+            }
             let key: [u8; 32] = arg0.into_inner();
             if key == CANNED_TX_HASH_FAILED {
                 return Ok(TxInfoResult::TxInfoRecentFailure {
@@ -1099,6 +1155,13 @@ mod tests {
                     outcome: groundhog_indexer::TxInfoOutcome::TxInfoNotFound.0,
                 }),
             }
+        }
+
+        async fn get_block_by_height(
+            &self,
+            _height: groundhog_xdr::types::BlockHeight,
+        ) -> Result<groundhog_indexer::BlockLookupResult, ProgramError> {
+            Err(ProgramError::msg("not implemented in fake indexer"))
         }
 
         async fn get_events(
@@ -1147,6 +1210,13 @@ mod tests {
                 latest_block: IdxBlockHeight::from(CANNED_HEIGHT_B),
                 oldest_block: IdxBlockHeight::from(0_i64),
             })
+        }
+
+        async fn get_transactions_by_block(
+            &self,
+            _query: groundhog_indexer::BlockTransactionQuery,
+        ) -> Result<TransactionRefPage, ProgramError> {
+            Err(ProgramError::msg("not implemented in fake indexer"))
         }
     }
 
@@ -1387,7 +1457,7 @@ mod tests {
 
         // Act
         let result = backend
-            .transaction_receipt(tx_hash)
+            .transaction_receipt(RpcRequestContext::unbounded(), tx_hash)
             .await
             .expect("bug: receipt lookup should succeed");
 
@@ -1409,7 +1479,7 @@ mod tests {
 
         // Act
         let result = backend
-            .transaction_receipt(tx_hash)
+            .transaction_receipt(RpcRequestContext::unbounded(), tx_hash)
             .await
             .expect("bug: receipt lookup should succeed");
 
@@ -1429,7 +1499,9 @@ mod tests {
         let tx_hash = canned_tx_hash(CANNED_TX_HASH_A);
 
         // Act
-        let result = backend.transaction_receipt(tx_hash).await;
+        let result = backend
+            .transaction_receipt(RpcRequestContext::unbounded(), tx_hash)
+            .await;
 
         // Assert
         assert!(
@@ -1439,6 +1511,23 @@ mod tests {
             ),
             "indexer rpc-fail should surface BackendUnavailable, got {result:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn transaction_receipt_respects_request_deadline() {
+        let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Slow).await;
+        let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
+        let backend = make_read_backend(idx_addr, sched_addr).await;
+        let tx_hash = canned_tx_hash(CANNED_TX_HASH_A);
+
+        let result = backend
+            .transaction_receipt(
+                RpcRequestContext::new(Some(Duration::from_millis(10))),
+                tx_hash,
+            )
+            .await;
+
+        assert!(matches!(result, Err(RpcServerError::BackendTimeout)));
     }
 
     // -----------------------------------------------------------------------
@@ -1454,7 +1543,11 @@ mod tests {
 
         // Act
         let result = backend
-            .get_storage_at(canned_storage_address(), CANNED_STORAGE_KEY)
+            .get_storage_at(
+                RpcRequestContext::unbounded(),
+                canned_storage_address(),
+                CANNED_STORAGE_KEY,
+            )
             .await;
 
         // Assert
@@ -1474,7 +1567,11 @@ mod tests {
 
         // Act
         let read = backend
-            .get_storage_at(canned_storage_address(), CANNED_STORAGE_KEY)
+            .get_storage_at(
+                RpcRequestContext::unbounded(),
+                canned_storage_address(),
+                CANNED_STORAGE_KEY,
+            )
             .await
             .expect("bug: storage read should succeed");
 
@@ -1499,7 +1596,11 @@ mod tests {
 
         // Act
         let read = backend
-            .get_storage_at(canned_storage_address(), CANNED_STORAGE_KEY)
+            .get_storage_at(
+                RpcRequestContext::unbounded(),
+                canned_storage_address(),
+                CANNED_STORAGE_KEY,
+            )
             .await
             .expect("bug: storage miss should still succeed");
 
@@ -1521,7 +1622,11 @@ mod tests {
 
         // Act
         let result = backend
-            .get_storage_at(canned_storage_address(), CANNED_STORAGE_KEY)
+            .get_storage_at(
+                RpcRequestContext::unbounded(),
+                canned_storage_address(),
+                CANNED_STORAGE_KEY,
+            )
             .await;
 
         // Assert
@@ -1541,7 +1646,11 @@ mod tests {
 
         // Act
         let result = backend
-            .get_storage_at(canned_storage_address(), CANNED_STORAGE_KEY)
+            .get_storage_at(
+                RpcRequestContext::unbounded(),
+                canned_storage_address(),
+                CANNED_STORAGE_KEY,
+            )
             .await;
 
         // Assert
@@ -1561,7 +1670,11 @@ mod tests {
 
         // Act
         let result = backend
-            .get_storage_at(canned_storage_address(), CANNED_STORAGE_KEY)
+            .get_storage_at(
+                RpcRequestContext::unbounded(),
+                canned_storage_address(),
+                CANNED_STORAGE_KEY,
+            )
             .await;
 
         // Assert
@@ -1582,7 +1695,11 @@ mod tests {
 
         // Act
         let result = backend
-            .get_storage_at(canned_storage_address(), CANNED_STORAGE_KEY)
+            .get_storage_at(
+                RpcRequestContext::unbounded(),
+                canned_storage_address(),
+                CANNED_STORAGE_KEY,
+            )
             .await;
 
         // Assert
@@ -1607,7 +1724,7 @@ mod tests {
 
         // Act
         let status = backend
-            .transaction_status(tx_hash)
+            .transaction_status(RpcRequestContext::unbounded(), tx_hash)
             .await
             .expect("bug: status check should succeed");
 
@@ -1628,7 +1745,7 @@ mod tests {
 
         // Act
         let status = backend
-            .transaction_status(tx_hash)
+            .transaction_status(RpcRequestContext::unbounded(), tx_hash)
             .await
             .expect("bug: status check should succeed");
 
@@ -1649,7 +1766,7 @@ mod tests {
 
         // Act
         let status = backend
-            .transaction_status(tx_hash)
+            .transaction_status(RpcRequestContext::unbounded(), tx_hash)
             .await
             .expect("bug: status check should succeed");
 
@@ -1671,7 +1788,7 @@ mod tests {
 
         // Act
         let status = backend
-            .transaction_status(tx_hash)
+            .transaction_status(RpcRequestContext::unbounded(), tx_hash)
             .await
             .expect("bug: status check should succeed");
 
@@ -1706,7 +1823,7 @@ mod tests {
 
         // Act
         let receipt = backend
-            .transaction_receipt(tx_hash)
+            .transaction_receipt(RpcRequestContext::unbounded(), tx_hash)
             .await
             .expect("bug: receipt lookup should succeed");
 
@@ -1724,7 +1841,7 @@ mod tests {
 
         // Act
         let status = backend
-            .transaction_status(tx_hash)
+            .transaction_status(RpcRequestContext::unbounded(), tx_hash)
             .await
             .expect("bug: status check should succeed even with scheduler failure");
 
@@ -1746,7 +1863,9 @@ mod tests {
         let tx_hash = canned_tx_hash(CANNED_TX_HASH_UNKNOWN);
 
         // Act
-        let result = backend.transaction_status(tx_hash).await;
+        let result = backend
+            .transaction_status(RpcRequestContext::unbounded(), tx_hash)
+            .await;
 
         // Assert
         assert!(
@@ -1768,7 +1887,9 @@ mod tests {
         let tx_hash = canned_tx_hash(CANNED_TX_HASH_UNKNOWN);
 
         // Act
-        let result = backend.transaction_status(tx_hash).await;
+        let result = backend
+            .transaction_status(RpcRequestContext::unbounded(), tx_hash)
+            .await;
 
         // Assert
         assert!(
@@ -1789,7 +1910,9 @@ mod tests {
         let tx_hash = canned_tx_hash(CANNED_TX_HASH_A);
 
         // Act
-        let result = backend.transaction_status(tx_hash).await;
+        let result = backend
+            .transaction_status(RpcRequestContext::unbounded(), tx_hash)
+            .await;
 
         // Assert
         assert!(
@@ -1814,7 +1937,7 @@ mod tests {
 
         // Act
         let page = backend
-            .contract_events(empty_event_query())
+            .contract_events(RpcRequestContext::unbounded(), empty_event_query())
             .await
             .expect("bug: first page should succeed");
 
@@ -1840,7 +1963,10 @@ mod tests {
 
         // Act
         let page = backend
-            .contract_events(event_query_with_cursor(CANNED_EVENT_CURSOR))
+            .contract_events(
+                RpcRequestContext::unbounded(),
+                event_query_with_cursor(CANNED_EVENT_CURSOR),
+            )
             .await
             .expect("bug: second page should succeed");
 
@@ -1861,11 +1987,14 @@ mod tests {
 
         // Act
         let page1 = backend
-            .contract_events(empty_event_query())
+            .contract_events(RpcRequestContext::unbounded(), empty_event_query())
             .await
             .expect("bug: page 1 should succeed");
         let page2 = backend
-            .contract_events(event_query_with_cursor(page1.cursor.0.as_slice()))
+            .contract_events(
+                RpcRequestContext::unbounded(),
+                event_query_with_cursor(page1.cursor.0.as_slice()),
+            )
             .await
             .expect("bug: page 2 should succeed");
 
@@ -1885,7 +2014,10 @@ mod tests {
         // Act: the fake indexer returns a ProgramError for unknown cursors,
         // which the client propagates as an RpcError → BackendUnavailable.
         let result = backend
-            .contract_events(event_query_with_cursor(unknown_cursor))
+            .contract_events(
+                RpcRequestContext::unbounded(),
+                event_query_with_cursor(unknown_cursor),
+            )
             .await;
 
         // Assert
@@ -1906,7 +2038,9 @@ mod tests {
         let backend = make_read_backend(idx_addr, sched_addr).await;
 
         // Act
-        let result = backend.contract_events(empty_event_query()).await;
+        let result = backend
+            .contract_events(RpcRequestContext::unbounded(), empty_event_query())
+            .await;
 
         // Assert
         assert!(

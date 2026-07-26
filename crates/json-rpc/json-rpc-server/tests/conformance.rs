@@ -15,8 +15,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use groundhog_json_rpc_api::{GroundhogApiServer, WIRE_FORMAT_VERSION};
 use groundhog_json_rpc_server::{
-    BuildInfo, ChainPlane, GroundhogRpcServer, ReadPlane, RpcServerConfig, RpcServerError,
-    SubmitPlane, ValidatedTransaction, ViewPlane,
+    BuildInfo, ChainPlane, GroundhogRpcServer, ReadPlane, RpcRequestContext, RpcServerConfig,
+    RpcServerError, SubmitPlane, ValidatedTransaction, ViewPlane,
 };
 use groundhog_json_rpc_types::{
     BlockHeight, ContractAddress,
@@ -102,7 +102,11 @@ impl ScriptedViewBackend {
 
 #[async_trait]
 impl SubmitPlane for ScriptedBackend {
-    async fn submit_raw_transaction(&self, tx: ValidatedTransaction) -> Result<(), RpcServerError> {
+    async fn submit_raw_transaction(
+        &self,
+        _context: RpcRequestContext,
+        tx: ValidatedTransaction,
+    ) -> Result<(), RpcServerError> {
         self.submitted.lock().await.push(tx);
         Ok(())
     }
@@ -110,7 +114,7 @@ impl SubmitPlane for ScriptedBackend {
 
 #[async_trait]
 impl ChainPlane for ScriptedBackend {
-    async fn chain_tip(&self) -> Result<ChainTip, RpcServerError> {
+    async fn chain_tip(&self, _context: RpcRequestContext) -> Result<ChainTip, RpcServerError> {
         Ok(ChainTip {
             height: BlockHeight::from(0),
             block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0u8; 32])),
@@ -119,12 +123,16 @@ impl ChainPlane for ScriptedBackend {
 
     async fn get_block_by_number(
         &self,
+        _context: RpcRequestContext,
         _height: BlockHeight,
     ) -> Result<Option<BlockInfo>, RpcServerError> {
         Err(RpcServerError::NotImplemented("getBlockByNumber".into()))
     }
 
-    async fn pending_transaction_count(&self) -> Result<u64, RpcServerError> {
+    async fn pending_transaction_count(
+        &self,
+        _context: RpcRequestContext,
+    ) -> Result<u64, RpcServerError> {
         Err(RpcServerError::NotImplemented(
             "pendingTransactionCount".into(),
         ))
@@ -135,6 +143,7 @@ impl ChainPlane for ScriptedBackend {
 impl ReadPlane for ScriptedBackend {
     async fn transaction_receipt(
         &self,
+        _context: RpcRequestContext,
         _tx_hash: TxHash,
     ) -> Result<Option<TransactionReceipt>, RpcServerError> {
         Ok(None)
@@ -142,12 +151,17 @@ impl ReadPlane for ScriptedBackend {
 
     async fn transaction_status(
         &self,
+        _context: RpcRequestContext,
         _tx_hash: TxHash,
     ) -> Result<TransactionStatus, RpcServerError> {
         Ok(TransactionStatus::Unknown)
     }
 
-    async fn contract_events(&self, _query: EventQuery) -> Result<EventPage, RpcServerError> {
+    async fn contract_events(
+        &self,
+        _context: RpcRequestContext,
+        _query: EventQuery,
+    ) -> Result<EventPage, RpcServerError> {
         *self.contract_events_calls.lock().await += 1;
         Ok(EventPage {
             events: vec![],
@@ -159,6 +173,7 @@ impl ReadPlane for ScriptedBackend {
 
     async fn transactions_by_address(
         &self,
+        _context: RpcRequestContext,
         _query: AddressTransactionQuery,
     ) -> Result<TransactionRefPage, RpcServerError> {
         Ok(TransactionRefPage {
@@ -171,6 +186,7 @@ impl ReadPlane for ScriptedBackend {
 
     async fn get_storage_at(
         &self,
+        _context: RpcRequestContext,
         address: ContractAddress,
         key: [u8; 32],
     ) -> Result<StorageItemRead, RpcServerError> {
@@ -184,6 +200,7 @@ impl ReadPlane for ScriptedBackend {
 
     async fn read_native_hog_balance(
         &self,
+        _context: RpcRequestContext,
         address: ContractAddress,
     ) -> Result<StorageItemRead, RpcServerError> {
         self.native_balance_calls.lock().await.push(address);
@@ -202,6 +219,7 @@ impl ViewPlane for ScriptedBackend {}
 impl ViewPlane for ScriptedViewBackend {
     async fn view(
         &self,
+        _context: RpcRequestContext,
         _request: ViewRequest,
         _gas_limit: u64,
     ) -> Result<ViewResponse, RpcServerError> {

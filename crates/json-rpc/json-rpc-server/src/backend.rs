@@ -73,8 +73,73 @@ use groundhog_json_rpc_types::{
     transaction::{AddressTransactionQuery, TransactionRefPage, TransactionStatus, TxHash},
     view::{ViewRequest, ViewResponse},
 };
+use std::time::{Duration, Instant};
 
 use crate::error::RpcServerError;
+
+/// Absolute timing budget for one public JSON-RPC request.
+#[derive(Debug, Clone, Copy)]
+pub struct RpcRequestContext {
+    started_at: Instant,
+    deadline: Option<Instant>,
+}
+
+impl RpcRequestContext {
+    /// Create a context with an optional end-to-end timeout.
+    pub fn new(timeout: Option<Duration>) -> Self {
+        let started_at = Instant::now();
+        Self {
+            started_at,
+            deadline: timeout.and_then(|timeout| started_at.checked_add(timeout)),
+        }
+    }
+
+    /// Create a context without an end-to-end deadline.
+    pub fn unbounded() -> Self {
+        Self::new(None)
+    }
+
+    /// Return the instant when this request started.
+    pub fn started_at(self) -> Instant {
+        self.started_at
+    }
+
+    /// Return the absolute request deadline, when configured.
+    pub fn deadline(self) -> Option<Instant> {
+        self.deadline
+    }
+
+    /// Return the remaining request budget, when configured.
+    pub fn remaining(self) -> Option<Duration> {
+        self.deadline
+            .map(|deadline| deadline.saturating_duration_since(Instant::now()))
+    }
+
+    /// Restrict this context to a shorter operation-specific timeout.
+    #[must_use]
+    pub fn capped(self, timeout: Duration) -> Self {
+        let cap = Instant::now().checked_add(timeout);
+        self.with_cap(cap)
+    }
+
+    /// Restrict this context to a timeout measured from request start.
+    #[must_use]
+    pub fn capped_from_start(self, timeout: Duration) -> Self {
+        let cap = self.started_at.checked_add(timeout);
+        self.with_cap(cap)
+    }
+
+    fn with_cap(self, cap: Option<Instant>) -> Self {
+        Self {
+            started_at: self.started_at,
+            deadline: match (self.deadline, cap) {
+                (Some(request), Some(cap)) => Some(request.min(cap)),
+                (Some(request), None) => Some(request),
+                (None, cap) => cap,
+            },
+        }
+    }
+}
 
 /// A transaction that has passed shared RPC-layer validation.
 ///
@@ -96,23 +161,31 @@ pub struct ValidatedTransaction {
 #[async_trait]
 pub trait SubmitPlane: Send + Sync + 'static {
     /// Submit one validated signed transaction.
-    async fn submit_raw_transaction(&self, tx: ValidatedTransaction) -> Result<(), RpcServerError>;
+    async fn submit_raw_transaction(
+        &self,
+        context: RpcRequestContext,
+        tx: ValidatedTransaction,
+    ) -> Result<(), RpcServerError>;
 }
 
 /// Backend plane for chain metadata and block-oriented reads.
 #[async_trait]
 pub trait ChainPlane: Send + Sync + 'static {
     /// Return the current chain tip.
-    async fn chain_tip(&self) -> Result<ChainTip, RpcServerError>;
+    async fn chain_tip(&self, context: RpcRequestContext) -> Result<ChainTip, RpcServerError>;
 
     /// Return block data at a specific height, if available.
     async fn get_block_by_number(
         &self,
+        context: RpcRequestContext,
         height: BlockHeight,
     ) -> Result<Option<BlockInfo>, RpcServerError>;
 
     /// Return the number of currently pending transactions.
-    async fn pending_transaction_count(&self) -> Result<u64, RpcServerError>;
+    async fn pending_transaction_count(
+        &self,
+        context: RpcRequestContext,
+    ) -> Result<u64, RpcServerError>;
 }
 
 /// Backend plane for transaction, event, and storage reads.
@@ -121,6 +194,7 @@ pub trait ReadPlane: Send + Sync + 'static {
     /// Return a committed transaction receipt, if available.
     async fn transaction_receipt(
         &self,
+        context: RpcRequestContext,
         tx_hash: TxHash,
     ) -> Result<Option<TransactionReceipt>, RpcServerError>;
 
@@ -131,6 +205,7 @@ pub trait ReadPlane: Send + Sync + 'static {
     /// committed state.
     async fn transaction_status(
         &self,
+        context: RpcRequestContext,
         tx_hash: TxHash,
     ) -> Result<TransactionStatus, RpcServerError>;
 
@@ -138,7 +213,11 @@ pub trait ReadPlane: Send + Sync + 'static {
     ///
     /// Walk further pages by sending the same query back with `cursor`
     /// set to the value from the previous page.
-    async fn contract_events(&self, query: EventQuery) -> Result<EventPage, RpcServerError>;
+    async fn contract_events(
+        &self,
+        context: RpcRequestContext,
+        query: EventQuery,
+    ) -> Result<EventPage, RpcServerError>;
 
     /// Return one page of transaction refs from the history of the
     /// query's address.
@@ -147,6 +226,7 @@ pub trait ReadPlane: Send + Sync + 'static {
     /// set to the value from the previous page.
     async fn transactions_by_address(
         &self,
+        context: RpcRequestContext,
         query: AddressTransactionQuery,
     ) -> Result<TransactionRefPage, RpcServerError>;
 
@@ -158,6 +238,7 @@ pub trait ReadPlane: Send + Sync + 'static {
     /// `chainTip` to gauge freshness.
     async fn get_storage_at(
         &self,
+        context: RpcRequestContext,
         address: ContractAddress,
         key: [u8; 32],
     ) -> Result<StorageItemRead, RpcServerError>;
@@ -166,6 +247,7 @@ pub trait ReadPlane: Send + Sync + 'static {
     /// This reads hogd's `FreeNativeTokenBalance` key, not contract storage.
     async fn read_native_hog_balance(
         &self,
+        context: RpcRequestContext,
         address: ContractAddress,
     ) -> Result<StorageItemRead, RpcServerError>;
 }
@@ -188,9 +270,31 @@ pub trait ViewPlane: Send + Sync + 'static {
     /// while capability rollout catches up.
     async fn view(
         &self,
+        _context: RpcRequestContext,
         _request: ViewRequest,
         _gas_limit: u64,
     ) -> Result<ViewResponse, RpcServerError> {
         Err(RpcServerError::NotImplemented("view".into()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::RpcRequestContext;
+
+    #[test]
+    fn cap_from_start_does_not_reset_after_elapsed_work() {
+        let context = RpcRequestContext::new(Some(Duration::from_secs(10)));
+        let expected = context
+            .started_at()
+            .checked_add(Duration::from_secs(5))
+            .expect("test deadline should fit");
+
+        let capped = context.capped_from_start(Duration::from_secs(5));
+
+        assert_eq!(capped.started_at(), context.started_at());
+        assert_eq!(capped.deadline(), Some(expected));
     }
 }

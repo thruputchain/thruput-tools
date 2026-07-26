@@ -20,6 +20,7 @@
 //! (`inflight < max_inflight`).
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use tokio::sync::mpsc;
@@ -87,7 +88,6 @@ impl<P: BatchProcessor> Shard<P> {
                         }
                     }
                     self.inflight += 1;
-                    self.metrics.observe_internal_batch_size(self.component, items.len());
                     let in_flight = self.metrics.internal_batch_in_flight_guard(self.component);
                     let processor = self.processor.clone();
                     let done = self.completion_tx.clone();
@@ -100,6 +100,30 @@ impl<P: BatchProcessor> Shard<P> {
             }
         }
     }
+}
+
+pub(crate) fn deadline_cohorts<I>(
+    mut items: Vec<I>,
+    max_skew: Duration,
+    deadline: impl Fn(&I) -> Instant,
+) -> Vec<Vec<I>> {
+    items.sort_unstable_by_key(&deadline);
+    let mut cohorts: Vec<Vec<I>> = Vec::new();
+    for item in items {
+        let item_deadline = deadline(&item);
+        let joins_current = cohorts.last().is_some_and(|cohort| {
+            item_deadline.saturating_duration_since(deadline(&cohort[0])) <= max_skew
+        });
+        if joins_current {
+            cohorts
+                .last_mut()
+                .expect("current cohort should exist")
+                .push(item);
+        } else {
+            cohorts.push(vec![item]);
+        }
+    }
+    cohorts
 }
 
 /// Shared, clone-friendly handle to a fleet of adaptive-batching shards.
@@ -217,4 +241,49 @@ pub(crate) fn shard_index_by_routing_key(routing_key: &[u8], n_shards: usize) ->
         routing_key[3],
     ]);
     (prefix as usize) % n_shards
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use super::deadline_cohorts;
+
+    #[test]
+    fn deadline_cohorts_bound_skew_from_each_anchor() {
+        let base = Instant::now();
+        let items = vec![
+            (3, base + Duration::from_millis(21)),
+            (1, base),
+            (2, base + Duration::from_millis(10)),
+            (4, base + Duration::from_millis(30)),
+        ];
+
+        let cohorts = deadline_cohorts(items, Duration::from_millis(10), |item| item.1);
+
+        assert_eq!(cohorts.len(), 2);
+        assert_eq!(
+            cohorts[0].iter().map(|item| item.0).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert_eq!(
+            cohorts[1].iter().map(|item| item.0).collect::<Vec<_>>(),
+            vec![3, 4]
+        );
+    }
+
+    #[test]
+    fn deadline_cohorts_do_not_chain_skew_transitively() {
+        let base = Instant::now();
+        let items = vec![
+            base,
+            base + Duration::from_millis(9),
+            base + Duration::from_millis(18),
+        ];
+        let expected = vec![vec![items[0], items[1]], vec![items[2]]];
+
+        let cohorts = deadline_cohorts(items, Duration::from_millis(10), |deadline| *deadline);
+
+        assert_eq!(cohorts, expected);
+    }
 }
