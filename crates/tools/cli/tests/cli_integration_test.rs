@@ -5,7 +5,6 @@ use std::process::Command;
 #[cfg(unix)]
 use std::process::{ExitStatus, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
-#[cfg(unix)]
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -3009,13 +3008,92 @@ fn transfer_from_selects_named_owner_matched_wallet() {
 }
 
 #[test]
+fn transfer_live_reports_selected_saved_wallet_for_every_outcome() {
+    let committed = run_saved_wallet_transfer_live_mock(
+        TransferRpcMock {
+            submit: TransferSubmitMock::MatchingHash,
+            poll: Some(TransferPollMock::Receipt {
+                status: serde_json::json!({ "result": "ok" }),
+                events: serde_json::json!([]),
+                return_data: None,
+                abort_data: None,
+                mismatched_hash: false,
+            }),
+        },
+        None,
+    );
+    assert!(committed.output.status.success());
+    let stdout: serde_json::Value = serde_json::from_slice(&committed.output.stdout).unwrap();
+    assert_eq!(stdout["data"]["senderWallet"], "primary");
+    assert_eq!(stdout["data"]["sender"], format!("0x{}", "a1".repeat(32)));
+    assert_eq!(stdout["data"]["txHash"], committed.local_hash);
+
+    let committed_failure = run_saved_wallet_transfer_live_mock(
+        TransferRpcMock {
+            submit: TransferSubmitMock::MatchingHash,
+            poll: Some(TransferPollMock::Receipt {
+                status: serde_json::json!({
+                    "result": "reverted",
+                    "message": "denied",
+                }),
+                events: serde_json::json!([]),
+                return_data: None,
+                abort_data: Some("0x0102"),
+                mismatched_hash: false,
+            }),
+        },
+        Some("trading"),
+    );
+    assert!(!committed_failure.output.status.success());
+    let stdout: serde_json::Value =
+        serde_json::from_slice(&committed_failure.output.stdout).unwrap();
+    assert_eq!(stdout["error"]["code"], "transaction_reverted");
+    assert_eq!(stdout["data"]["senderWallet"], "trading");
+    assert_eq!(stdout["data"]["sender"], format!("0x{}", "b2".repeat(32)));
+    assert_eq!(stdout["data"]["txHash"], committed_failure.local_hash);
+
+    let invalid = run_saved_wallet_transfer_live_mock(
+        TransferRpcMock {
+            submit: TransferSubmitMock::MatchingHash,
+            poll: Some(TransferPollMock::Status(serde_json::json!({
+                "status": "invalid",
+                "reason": "expired",
+            }))),
+        },
+        Some("trading"),
+    );
+    assert!(!invalid.output.status.success());
+    let stdout: serde_json::Value = serde_json::from_slice(&invalid.output.stdout).unwrap();
+    assert_eq!(stdout["data"]["confirmation"], "invalid");
+    assert_eq!(stdout["data"]["senderWallet"], "trading");
+    assert_eq!(stdout["data"]["sender"], format!("0x{}", "b2".repeat(32)));
+    assert_eq!(stdout["data"]["txHash"], invalid.local_hash);
+
+    let unavailable = run_saved_wallet_transfer_live_mock(
+        TransferRpcMock {
+            submit: TransferSubmitMock::DropResponse,
+            poll: Some(TransferPollMock::Status(
+                serde_json::json!({ "status": "unknown" }),
+            )),
+        },
+        Some("trading"),
+    );
+    assert!(!unavailable.output.status.success());
+    let stdout: serde_json::Value = serde_json::from_slice(&unavailable.output.stdout).unwrap();
+    assert_eq!(stdout["data"]["confirmation"], "unavailable");
+    assert_eq!(stdout["data"]["senderWallet"], "trading");
+    assert_eq!(stdout["data"]["sender"], format!("0x{}", "b2".repeat(32)));
+    assert_eq!(stdout["data"]["txHash"], unavailable.local_hash);
+}
+
+#[test]
 fn transfer_live_success_returns_matching_receipt_and_events() {
     let event = serde_json::json!({
         "contractAddress": format!("0x{}", "01".repeat(32)),
         "topics": [format!("0x{}", "02".repeat(32))],
         "data": "0x0304",
     });
-    let output = run_transfer_live_mock(
+    let run = run_transfer_live_mock_with_hash(
         TransferRpcMock {
             submit: TransferSubmitMock::MatchingHash,
             poll: Some(TransferPollMock::Receipt {
@@ -3030,22 +3108,17 @@ fn transfer_live_success_returns_matching_receipt_and_events() {
     );
 
     assert!(
-        output.status.success(),
+        run.output.status.success(),
         "stdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+        String::from_utf8_lossy(&run.output.stdout),
+        String::from_utf8_lossy(&run.output.stderr)
     );
-    assert!(output.stderr.is_empty());
-    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(run.output.stderr.is_empty());
+    let stdout: serde_json::Value = serde_json::from_slice(&run.output.stdout).unwrap();
     let data = &stdout["data"];
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "transfer");
-    assert_eq!(data["schemaVersion"], 1);
-    assert_eq!(data["dryRun"], false);
-    assert_eq!(data["submitted"], true);
-    assert_eq!(data["senderWallet"], serde_json::Value::Null);
-    assert_eq!(data["amount"], "1.5");
-    assert_eq!(data["rawAmount"], "15000000");
+    assert_transfer_live_common(data, &run.local_hash, None);
     assert_eq!(data["height"], 43);
     assert_eq!(data["status"], serde_json::json!({ "result": "ok" }));
     assert_eq!(data["events"], serde_json::json!([event]));
@@ -3102,12 +3175,17 @@ fn transfer_live_committed_failures_preserve_receipt_context() {
             "transaction_deterministic_error",
         ),
     ] {
-        let output = run_transfer_live_mock(
+        let event = serde_json::json!({
+            "contractAddress": format!("0x{}", "09".repeat(32)),
+            "topics": [],
+            "data": "0x0a0b",
+        });
+        let run = run_transfer_live_mock_with_hash(
             TransferRpcMock {
                 submit: TransferSubmitMock::MatchingHash,
                 poll: Some(TransferPollMock::Receipt {
                     status: status.clone(),
-                    events: serde_json::json!([]),
+                    events: serde_json::json!([event.clone()]),
                     return_data: Some("0x0102"),
                     abort_data: Some("0x0304"),
                     mismatched_hash: false,
@@ -3116,22 +3194,35 @@ fn transfer_live_committed_failures_preserve_receipt_context() {
             true,
         );
 
-        assert!(!output.status.success());
-        assert!(output.stderr.is_empty());
-        let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert!(!run.output.status.success());
+        assert!(run.output.stderr.is_empty());
+        let stdout: serde_json::Value = serde_json::from_slice(&run.output.stdout).unwrap();
         assert_eq!(stdout["ok"], false);
         assert_eq!(stdout["error"]["code"], expected_code);
+        assert_transfer_live_common(&stdout["data"], &run.local_hash, None);
         assert_eq!(stdout["data"]["height"], 43);
         assert_eq!(stdout["data"]["status"], status);
+        assert_eq!(stdout["data"]["events"], serde_json::json!([event]));
         assert_eq!(stdout["data"]["returnData"], "0x0102");
         assert_eq!(stdout["data"]["abortData"], "0x0304");
+        for absent in [
+            "confirmation",
+            "transactionStatus",
+            "expiryHeight",
+            "signedTransaction",
+        ] {
+            assert!(
+                stdout["data"].get(absent).is_none(),
+                "{absent} should be omitted"
+            );
+        }
     }
 }
 
 #[test]
 fn transfer_live_terminal_invalid_is_conclusive_command_failure() {
     let status = serde_json::json!({ "status": "invalid", "reason": "expired" });
-    let output = run_transfer_live_mock(
+    let run = run_transfer_live_mock_with_hash(
         TransferRpcMock {
             submit: TransferSubmitMock::MatchingHash,
             poll: Some(TransferPollMock::Status(status.clone())),
@@ -3139,13 +3230,14 @@ fn transfer_live_terminal_invalid_is_conclusive_command_failure() {
         true,
     );
 
-    assert!(!output.status.success());
-    assert!(output.stderr.is_empty());
-    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(!run.output.status.success());
+    assert!(run.output.stderr.is_empty());
+    let stdout: serde_json::Value = serde_json::from_slice(&run.output.stdout).unwrap();
     assert_eq!(stdout["ok"], false);
     assert_eq!(stdout["error"]["code"], "transaction_invalid");
     assert_eq!(stdout["data"]["confirmation"], "invalid");
     assert_eq!(stdout["data"]["transactionStatus"], status);
+    assert_transfer_live_common(&stdout["data"], &run.local_hash, None);
     assert_transfer_unconfirmed_omissions(&stdout["data"]);
 
     let human = run_transfer_live_mock(
@@ -3185,7 +3277,7 @@ fn transfer_live_poll_failures_are_unavailable_command_failures() {
         ),
         (TransferPollMock::ReceiptError(-32050), None),
     ] {
-        let output = run_transfer_live_mock(
+        let run = run_transfer_live_mock_with_hash(
             TransferRpcMock {
                 submit: TransferSubmitMock::MatchingHash,
                 poll: Some(poll),
@@ -3193,14 +3285,15 @@ fn transfer_live_poll_failures_are_unavailable_command_failures() {
             true,
         );
 
-        assert!(!output.status.success());
-        assert!(output.stderr.is_empty());
-        let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert!(!run.output.status.success());
+        assert!(run.output.stderr.is_empty());
+        let stdout: serde_json::Value = serde_json::from_slice(&run.output.stdout).unwrap();
         assert_eq!(
             stdout["error"]["code"],
             "transaction_confirmation_unavailable"
         );
         assert_eq!(stdout["data"]["confirmation"], "unavailable");
+        assert_transfer_live_common(&stdout["data"], &run.local_hash, None);
         assert_transfer_unconfirmed_omissions(&stdout["data"]);
         match expected_status {
             Some(status) => assert_eq!(stdout["data"]["transactionStatus"], status),
@@ -3230,7 +3323,7 @@ fn transfer_live_lost_submission_response_polls_local_hash() {
         String::from_utf8_lossy(&success.stderr)
     );
 
-    let unavailable = run_transfer_live_mock(
+    let unavailable = run_transfer_live_mock_with_hash(
         TransferRpcMock {
             submit: TransferSubmitMock::DropResponse,
             poll: Some(TransferPollMock::Status(
@@ -3239,13 +3332,14 @@ fn transfer_live_lost_submission_response_polls_local_hash() {
         },
         true,
     );
-    assert!(!unavailable.status.success());
-    let stdout: serde_json::Value = serde_json::from_slice(&unavailable.stdout).unwrap();
+    assert!(!unavailable.output.status.success());
+    let stdout: serde_json::Value = serde_json::from_slice(&unavailable.output.stdout).unwrap();
     assert_eq!(
         stdout["error"]["code"],
         "transaction_confirmation_unavailable"
     );
     assert_eq!(stdout["data"]["submitted"], true);
+    assert_transfer_live_common(&stdout["data"], &unavailable.local_hash, None);
     assert!(stdout["data"].get("transactionStatus").is_none());
     assert_transfer_unconfirmed_omissions(&stdout["data"]);
 }
@@ -3311,21 +3405,23 @@ fn transfer_live_classifies_send_errors_by_numeric_code() {
 
 #[test]
 fn transfer_live_hash_mismatches_never_report_commitment() {
-    let server_mismatch = run_transfer_live_mock(
+    let server_mismatch = run_transfer_live_mock_with_hash(
         TransferRpcMock {
             submit: TransferSubmitMock::MismatchedHash,
             poll: None,
         },
         true,
     );
-    assert!(!server_mismatch.status.success());
-    let stdout: serde_json::Value = serde_json::from_slice(&server_mismatch.stdout).unwrap();
+    assert!(!server_mismatch.output.status.success());
+    let stdout: serde_json::Value = serde_json::from_slice(&server_mismatch.output.stdout).unwrap();
     assert_eq!(stdout["data"]["confirmation"], "unavailable");
     assert_eq!(stdout["data"]["submitted"], true);
+    assert_transfer_live_common(&stdout["data"], &server_mismatch.local_hash, None);
+    assert_ne!(stdout["data"]["txHash"], format!("0x{}", "ff".repeat(32)));
     assert!(stdout["data"].get("transactionStatus").is_none());
     assert_transfer_unconfirmed_omissions(&stdout["data"]);
 
-    let receipt_mismatch = run_transfer_live_mock(
+    let receipt_mismatch = run_transfer_live_mock_with_hash(
         TransferRpcMock {
             submit: TransferSubmitMock::MatchingHash,
             poll: Some(TransferPollMock::Receipt {
@@ -3338,9 +3434,12 @@ fn transfer_live_hash_mismatches_never_report_commitment() {
         },
         true,
     );
-    assert!(!receipt_mismatch.status.success());
-    let stdout: serde_json::Value = serde_json::from_slice(&receipt_mismatch.stdout).unwrap();
+    assert!(!receipt_mismatch.output.status.success());
+    let stdout: serde_json::Value =
+        serde_json::from_slice(&receipt_mismatch.output.stdout).unwrap();
     assert_eq!(stdout["data"]["confirmation"], "unavailable");
+    assert_transfer_live_common(&stdout["data"], &receipt_mismatch.local_hash, None);
+    assert_ne!(stdout["data"]["txHash"], format!("0x{}", "ee".repeat(32)));
     assert!(stdout["data"].get("transactionStatus").is_none());
     assert_transfer_unconfirmed_omissions(&stdout["data"]);
 }
@@ -3364,6 +3463,54 @@ fn transfer_live_human_unavailable_warns_against_resubmission() {
     assert!(stderr.contains("do not blindly resubmit"));
     assert!(stderr.contains("groundhog tx show 0x"));
     assert!(!stderr.contains("signed transaction"));
+}
+
+#[test]
+fn transfer_live_human_success_and_committed_failure_stay_on_stderr() {
+    let success = run_transfer_live_mock(
+        TransferRpcMock {
+            submit: TransferSubmitMock::MatchingHash,
+            poll: Some(TransferPollMock::Receipt {
+                status: serde_json::json!({ "result": "ok" }),
+                events: serde_json::json!([]),
+                return_data: None,
+                abort_data: None,
+                mismatched_hash: false,
+            }),
+        },
+        false,
+    );
+    assert!(success.status.success());
+    assert!(success.stdout.is_empty());
+    let stderr = String::from_utf8(success.stderr).unwrap();
+    assert!(stderr.contains("Transferred 1.5 HOG."));
+    assert!(stderr.contains("recipient: 0x"));
+    assert!(stderr.contains("tx: 0x"));
+    assert!(stderr.contains("height: 43"));
+
+    let failure = run_transfer_live_mock(
+        TransferRpcMock {
+            submit: TransferSubmitMock::MatchingHash,
+            poll: Some(TransferPollMock::Receipt {
+                status: serde_json::json!({
+                    "result": "reverted",
+                    "message": "denied",
+                }),
+                events: serde_json::json!([]),
+                return_data: None,
+                abort_data: Some("0x0102"),
+                mismatched_hash: false,
+            }),
+        },
+        false,
+    );
+    assert!(!failure.status.success());
+    assert!(failure.stdout.is_empty());
+    let stderr = String::from_utf8(failure.stderr).unwrap();
+    assert!(stderr.contains("Transfer reverted: denied"));
+    assert!(stderr.contains("tx: 0x"));
+    assert!(stderr.contains("height: 43"));
+    assert!(stderr.contains("abort data: 0x0102"));
 }
 
 #[test]
@@ -3423,6 +3570,38 @@ fn assert_transfer_unconfirmed_omissions(data: &serde_json::Value) {
     ] {
         assert!(data.get(absent).is_none(), "{absent} should be omitted");
     }
+}
+
+fn assert_transfer_live_common(
+    data: &serde_json::Value,
+    local_hash: &str,
+    sender_wallet: Option<&str>,
+) {
+    assert_eq!(data["schemaVersion"], 1);
+    assert_eq!(data["profile"], "default");
+    assert!(
+        data["rpcUrl"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
+    assert_eq!(data["dryRun"], false);
+    assert_eq!(data["submitted"], true);
+    assert_eq!(data["sender"], advertised_dev_wallet_address(0));
+    match sender_wallet {
+        Some(name) => assert_eq!(data["senderWallet"], name),
+        None => assert_eq!(data["senderWallet"], serde_json::Value::Null),
+    }
+    assert!(
+        data["signerPublicKey"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("0x"))
+    );
+    assert_eq!(data["recipientInput"], format!("0x{}", "ab".repeat(32)));
+    assert_eq!(data["recipient"], format!("0x{}", "ab".repeat(32)));
+    assert_eq!(data["tokenAddress"], format!("0x{}01", "00".repeat(31)));
+    assert_eq!(data["amount"], "1.5");
+    assert_eq!(data["rawAmount"], "15000000");
+    assert_eq!(data["txHash"], local_hash);
 }
 
 #[test]
@@ -5896,13 +6075,22 @@ struct TransferRpcMock {
     poll: Option<TransferPollMock>,
 }
 
+struct TransferMockRun {
+    output: std::process::Output,
+    local_hash: String,
+}
+
 fn run_transfer_live_mock(mock: TransferRpcMock, json: bool) -> std::process::Output {
+    run_transfer_live_mock_with_hash(mock, json).output
+}
+
+fn run_transfer_live_mock_with_hash(mock: TransferRpcMock, json: bool) -> TransferMockRun {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
     let sender = advertised_dev_wallet_address(0);
     let manifest_path = write_runtime_manifest(&project, 0, &sender, None);
-    let (rpc_url, rpc_server) = spawn_transfer_rpc(mock);
+    let (rpc_url, rpc_server, local_hash_rx) = spawn_transfer_rpc(mock, sender.clone());
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
@@ -5923,14 +6111,61 @@ fn run_transfer_live_mock(mock: TransferRpcMock, json: bool) -> std::process::Ou
         .env("GROUNDHOG_TEST_RECEIPT_POLL_INTERVAL_MS", "0")
         .output()
         .unwrap();
+    let local_hash = local_hash_rx.recv().unwrap();
     rpc_server.join().unwrap();
-    output
+    TransferMockRun { output, local_hash }
 }
 
-fn spawn_transfer_rpc(mock: TransferRpcMock) -> (String, thread::JoinHandle<()>) {
+fn run_saved_wallet_transfer_live_mock(
+    mock: TransferRpcMock,
+    explicit_wallet: Option<&str>,
+) -> TransferMockRun {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    let config_home = tmp.path().join("config-home");
+    std::fs::create_dir_all(&project).unwrap();
+    let owner = generate_key_public_key(&config_home, "alice");
+    let primary = format!("0x{}", "a1".repeat(32));
+    let trading = format!("0x{}", "b2".repeat(32));
+    let expected_sender = if explicit_wallet.is_some() {
+        trading.clone()
+    } else {
+        primary.clone()
+    };
+    let (rpc_url, rpc_server, local_hash_rx) = spawn_transfer_rpc(mock, expected_sender);
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"alice\"\ndefault_wallet = \"primary\"\n\n[profile.default.wallets.primary]\naddress = \"{primary}\"\nowner_public_key = \"{owner}\"\n\n[profile.default.wallets.trading]\naddress = \"{trading}\"\nowner_public_key = \"{owner}\"\n"
+        ),
+    )
+    .unwrap();
+    let recipient = format!("0x{}", "ab".repeat(32));
+    let mut command = groundhog();
+    command.args(["--json", "transfer", &recipient, "1.5"]);
+    if let Some(wallet) = explicit_wallet {
+        command.args(["--from", wallet]);
+    }
+    let output = command
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .env("GROUNDHOG_TEST_RECEIPT_POLL_ATTEMPTS", "1")
+        .env("GROUNDHOG_TEST_RECEIPT_POLL_INTERVAL_MS", "0")
+        .output()
+        .unwrap();
+    let local_hash = local_hash_rx.recv().unwrap();
+    rpc_server.join().unwrap();
+    TransferMockRun { output, local_hash }
+}
+
+fn spawn_transfer_rpc(
+    mock: TransferRpcMock,
+    expected_sender: String,
+) -> (String, thread::JoinHandle<()>, mpsc::Receiver<String>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
+    let (local_hash_tx, local_hash_rx) = mpsc::channel();
     let handle = thread::spawn(move || {
         let deadline = Instant::now() + Duration::from_secs(5);
         let (stream, request) = read_jsonrpc_request(&listener, deadline, "chainTip");
@@ -5952,12 +6187,13 @@ fn spawn_transfer_rpc(mock: TransferRpcMock) -> (String, thread::JoinHandle<()>)
             "0x{}",
             hex::encode(groundhog_signing::transaction_hash(&signed_tx.tx).unwrap())
         );
+        local_hash_tx.send(local_hash.clone()).unwrap();
         assert_eq!(
             format!(
                 "0x{}",
                 hex::encode(signed_tx.tx.invocation.invoked_address.as_ref())
             ),
-            advertised_dev_wallet_address(0)
+            expected_sender
         );
         let (target, entrypoint, calldata) = decode_wallet_action(&signed_tx);
         assert_eq!(target, format!("0x{}01", "00".repeat(31)));
@@ -5997,7 +6233,7 @@ fn spawn_transfer_rpc(mock: TransferRpcMock) -> (String, thread::JoinHandle<()>)
             assert_no_follow_up_rpc(&listener);
         }
     });
-    (format!("http://{addr}"), handle)
+    (format!("http://{addr}"), handle, local_hash_rx)
 }
 
 fn serve_transfer_poll(

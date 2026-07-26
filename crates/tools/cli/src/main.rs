@@ -305,7 +305,7 @@ enum Command {
         /// Build and sign the transfer without submitting it
         #[arg(long)]
         dry_run: bool,
-        /// Saved wallet to transfer from
+        /// Saved source wallet owned by the effective signing key
         #[arg(long = "from")]
         from: Option<String>,
         /// Config profile to use
