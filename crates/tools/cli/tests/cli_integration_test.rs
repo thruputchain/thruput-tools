@@ -3461,7 +3461,8 @@ fn transfer_live_human_unavailable_warns_against_resubmission() {
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("may still commit"));
     assert!(stderr.contains("do not blindly resubmit"));
-    assert!(stderr.contains("groundhog tx show 0x"));
+    assert!(stderr.contains("retain this hash and verify its status"));
+    assert!(!stderr.contains("groundhog tx show"));
     assert!(!stderr.contains("signed transaction"));
 }
 

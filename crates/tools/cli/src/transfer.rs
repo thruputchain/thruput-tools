@@ -402,7 +402,7 @@ fn print_unavailable(
     ));
     print.detail("tx", &tx_hash);
     print.warn("the transaction may still commit; do not blindly resubmit it");
-    print.status(format_args!("  inspect: groundhog tx show {tx_hash}"));
+    print.status("  next: retain this hash and verify its status before resubmitting");
 
     let report = TransferUnconfirmedReport {
         common: report_common(prepared, false, true),
