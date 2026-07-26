@@ -23,18 +23,36 @@ pub fn validate_raw_transaction_bytes(
         return Err(RpcServerError::TxInvalid("transaction too large".into()));
     }
 
-    let signed_tx: groundhog_xdr::transaction::SignedTransaction = xdrs::txs::decode(&tx_bytes)
-        .map_err(|e| RpcServerError::TxInvalid(format!("invalid XDR: {e}")))?;
+    // `SignedTransaction` is `{ tx, signatures }`, so the inner `Transaction`
+    // occupies a contiguous prefix of `tx_bytes`. Hash that prefix directly
+    // instead of re-encoding the decoded value: it avoids an allocation on the
+    // submit path, and it hashes exactly the bytes the client signed rather
+    // than trusting XDR to round-trip bit-for-bit.
+    let mut reader = xdrs::txs::buf_reader::BufReader::new(&tx_bytes);
 
-    let tx_xdr = xdrs::txs::encode(&signed_tx.tx)
-        .map_err(|e| RpcServerError::TxInvalid(format!("cannot re-encode tx: {e}")))?;
-    let hash_bytes: [u8; 32] = sha2::Sha256::digest(&tx_xdr).into();
+    let tx: groundhog_xdr::transaction::Transaction = xdrs::read_xdr(&mut reader)
+        .map_err(|e| RpcServerError::TxInvalid(format!("invalid XDR: {e}")))?;
+    let tx_end = reader.position();
+
+    // Decode the signatures too, and reject trailing bytes, so this accepts
+    // exactly what a whole-buffer `xdrs::txs::decode::<SignedTransaction>`
+    // would have accepted.
+    let _signatures: xdrs::VecM<groundhog_xdr::transaction::DecoratedSignature> =
+        xdrs::read_xdr(&mut reader)
+            .map_err(|e| RpcServerError::TxInvalid(format!("invalid XDR: {e}")))?;
+    if reader.remaining() > 0 {
+        return Err(RpcServerError::TxInvalid(
+            "invalid XDR: trailing bytes after signed transaction".into(),
+        ));
+    }
+
+    let hash_bytes: [u8; 32] = sha2::Sha256::digest(&tx_bytes[..tx_end]).into();
     let hash = TxHash(Hex0x(groundhog_xdr::types::SHA256Hash::from(hash_bytes)));
 
     Ok(ValidatedTransaction {
         bytes: tx_bytes,
         hash,
-        block_expiry_height: signed_tx.tx.uniquifier.block_expiry_height,
+        block_expiry_height: tx.uniquifier.block_expiry_height,
     })
 }
 
@@ -95,6 +113,24 @@ bc10f38522c4e14265a1483af9e5375f5dea0e2c6bf25727ee8b429bf3c1a9b7\
             hex::encode(tx.hash.0.0.as_ref()),
             "9dc7ad0fc4f74a43a62e047c0d6885c8e4df2d4840298ecd52cf157681157ed3"
         );
+    }
+
+    #[test]
+    fn trailing_bytes_after_signed_transaction_are_rejected() {
+        let err = validate_raw_transaction(&format!("{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}00"))
+            .expect_err("bug: trailing bytes should be rejected");
+
+        assert!(matches!(err, RpcServerError::TxInvalid(_)));
+    }
+
+    #[test]
+    fn truncated_signatures_are_rejected() {
+        let truncated =
+            &CANONICAL_HASH_VECTOR_SIGNED_TX_XDR[..CANONICAL_HASH_VECTOR_SIGNED_TX_XDR.len() - 8];
+        let err = validate_raw_transaction(truncated)
+            .expect_err("bug: truncated signatures should be rejected");
+
+        assert!(matches!(err, RpcServerError::TxInvalid(_)));
     }
 
     #[test]
