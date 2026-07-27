@@ -5998,6 +5998,40 @@ fn tx_show_json_returns_committed_status_and_matching_receipt() {
 }
 
 #[test]
+fn tx_show_binary_accepts_unprefixed_and_mixed_case_hashes() {
+    let canonical = format!("0x{}", "ab".repeat(32));
+    for input in ["aB".repeat(32), format!("0x{}", "Ab".repeat(32))] {
+        let tmp = TempDir::new().unwrap();
+        let (rpc_url, rpc_server) = spawn_tx_show_rpc(
+            &canonical,
+            TxShowRpcResponse::Result(serde_json::json!({ "status": "pending" })),
+            None,
+        );
+        let output = groundhog()
+            .args(["--json", "tx", "show", &input, "--rpc-url", &rpc_url])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        rpc_server.join().unwrap();
+
+        assert!(output.status.success());
+        let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(stdout["data"]["txHash"], canonical);
+    }
+}
+
+#[test]
+fn tx_namespace_help_advertises_show_and_list() {
+    let output = groundhog().args(["tx", "--help"]).output().unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("show"));
+    assert!(stdout.contains("list"));
+    assert!(stdout.contains("transaction status and receipts"));
+}
+
+#[test]
 fn tx_show_help_describes_one_shot_public_lookup() {
     let output = groundhog().args(["tx", "show", "--help"]).output().unwrap();
 
@@ -6137,6 +6171,85 @@ fn tx_show_committed_without_receipt_preserves_status_and_null_receipt() {
             "receipt": null,
         })
     );
+}
+
+#[test]
+fn tx_show_matching_receipt_omits_absent_optional_fields() {
+    let tmp = TempDir::new().unwrap();
+    let hash = format!("0x{}", "cf".repeat(32));
+    let (rpc_url, rpc_server) = spawn_tx_show_rpc(
+        &hash,
+        TxShowRpcResponse::Result(serde_json::json!({
+            "status": "committed",
+            "height": 52,
+        })),
+        Some(TxShowRpcResponse::Result(serde_json::json!({
+            "txHash": hash,
+            "height": 52,
+            "status": { "result": "ok" },
+            "events": [],
+        }))),
+    );
+
+    let output = groundhog()
+        .args(["--json", "tx", "show", &hash, "--rpc-url", &rpc_url])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    rpc_server.join().unwrap();
+
+    assert!(output.status.success());
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        stdout["data"]["receipt"],
+        serde_json::json!({
+            "txHash": hash,
+            "height": 52,
+            "status": { "result": "ok" },
+            "events": [],
+        })
+    );
+    assert!(stdout["data"]["receipt"].get("returnData").is_none());
+    assert!(stdout["data"]["receipt"].get("abortData").is_none());
+}
+
+#[test]
+fn tx_show_human_output_distinguishes_unavailable_receipt_and_unknown_status() {
+    let hash = format!("0x{}", "d1".repeat(32));
+    for (status, receipt, expected, forbidden) in [
+        (
+            serde_json::json!({ "status": "committed", "height": 53 }),
+            Some(TxShowRpcResponse::Result(serde_json::Value::Null)),
+            "receipt: unavailable",
+            "status: invalid",
+        ),
+        (
+            serde_json::json!({ "status": "unknown" }),
+            None,
+            "status: unknown (not found in the mempool or indexer)",
+            "status: invalid",
+        ),
+    ] {
+        let tmp = TempDir::new().unwrap();
+        let (rpc_url, rpc_server) =
+            spawn_tx_show_rpc(&hash, TxShowRpcResponse::Result(status), receipt);
+        let output = groundhog()
+            .args(["tx", "show", &hash, "--rpc-url", &rpc_url])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        rpc_server.join().unwrap();
+
+        assert!(output.status.success());
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stderr.contains(expected));
+        assert!(!stderr.contains(forbidden));
+        if expected == "receipt: unavailable" {
+            assert!(stderr.contains("status: committed"));
+            assert!(stderr.contains("height: 53"));
+        }
+    }
 }
 
 #[test]
@@ -6557,7 +6670,16 @@ fn tx_list_accepts_empty_exhausted_page() {
     );
 
     let output = groundhog()
-        .args(["--json", "tx", "list", &address, "--rpc-url", &rpc_url])
+        .args([
+            "--json",
+            "tx",
+            "list",
+            &address,
+            "--cursor",
+            "0x",
+            "--rpc-url",
+            &rpc_url,
+        ])
         .current_dir(tmp.path())
         .output()
         .unwrap();
