@@ -718,6 +718,18 @@ done
     || die "sender history did not find transfer $TRANSFER_TX_HASH within $HISTORY_PAGES_VISITED page(s) (seen=$HISTORY_SEEN cursor=$HISTORY_CURSOR)"
 log "sender history result: found=$TRANSFER_TX_HASH pages=$HISTORY_PAGES_VISITED nonEmptyPages=$HISTORY_NONEMPTY_PAGES finalCursor=$HISTORY_CURSOR"
 
+RECIPIENT_HISTORY_JSON="$(run_json "recipient history" "$CLI" --json tx list "$TRANSFER_RECIPIENT")"
+RECIPIENT_HISTORY_COUNT="$(json_len data.refs "$RECIPIENT_HISTORY_JSON")"
+RECIPIENT_HISTORY_CURSOR="$(json_field data.cursor "$RECIPIENT_HISTORY_JSON")"
+[[ "$RECIPIENT_HISTORY_CURSOR" == "0x" ]] \
+    || die "recipient history did not exhaust in one fixture page (refs=$RECIPIENT_HISTORY_COUNT cursor=$RECIPIENT_HISTORY_CURSOR)"
+for ((index = 0; index < RECIPIENT_HISTORY_COUNT; index++)); do
+    RECIPIENT_HISTORY_HASH="$(json_field "data.refs.$index.txHash" "$RECIPIENT_HISTORY_JSON")"
+    [[ "$RECIPIENT_HISTORY_HASH" != "$TRANSFER_TX_HASH" ]] \
+        || die "recipient history unexpectedly included wallet-wrapped transfer $TRANSFER_TX_HASH"
+done
+log "recipient history result: transferAbsent=$TRANSFER_TX_HASH refs=$RECIPIENT_HISTORY_COUNT"
+
 GATEWAY_RPC_URL=""
 if [[ "${SMOKE_STANDALONE_GATEWAY:-0}" == "1" ]]; then
     GATEWAY_PORT="$(free_tcp_port)"

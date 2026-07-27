@@ -6028,7 +6028,7 @@ fn tx_namespace_help_advertises_show_and_list() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("show"));
     assert!(stdout.contains("list"));
-    assert!(stdout.contains("transaction status and receipts"));
+    assert!(stdout.contains("transactions and address history"));
 }
 
 #[test]
@@ -6478,7 +6478,7 @@ fn tx_show_human_output_escapes_untrusted_status_text() {
         &hash,
         TxShowRpcResponse::Result(serde_json::json!({
             "status": "invalid",
-            "reason": "bad\nreason\u{001b}[31m",
+            "reason": "bad\nreason\u{001b}[31m\u{202e}spoof",
         })),
         None,
     );
@@ -6494,8 +6494,9 @@ fn tx_show_human_output_escapes_untrusted_status_text() {
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("status: invalid"));
-    assert!(stderr.contains(r"bad\nreason\u{1b}[31m"));
+    assert!(stderr.contains(r"bad\nreason\u{1b}[31m\u{202e}spoof"));
     assert!(!stderr.contains('\u{1b}'));
+    assert!(!stderr.contains('\u{202e}'));
 }
 
 #[test]
@@ -6580,7 +6581,15 @@ fn tx_list_json_uses_wallet_first_resolution_and_default_query() {
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "tx.list");
-    assert_eq!(stdout["warnings"], serde_json::json!([]));
+    assert_eq!(
+        stdout["warnings"],
+        serde_json::json!([{
+            "level": "warn",
+            "code": "root_invocation_history_only",
+            "message": "history includes root invocations only; incoming wallet-wrapped transfers may not appear for recipients",
+            "hint": "do not treat this page as a complete incoming or outgoing asset ledger",
+        }])
+    );
     assert_eq!(
         stdout["data"],
         serde_json::json!({
@@ -6646,6 +6655,57 @@ fn tx_list_continuation_forwards_cursor_and_endpoint_owned_limit() {
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(stdout["data"]["refs"], serde_json::json!([]));
     assert_eq!(stdout["data"]["cursor"], "0x0102");
+}
+
+#[test]
+fn tx_list_rejects_page_larger_than_requested_limit() {
+    let tmp = TempDir::new().unwrap();
+    let address = format!("0x{}", "65".repeat(32));
+    let (rpc_url, rpc_server) = spawn_tx_list_rpc(
+        serde_json::json!({
+            "address": address,
+            "order": "descending",
+            "anchor": { "kind": "atEnd" },
+            "cursor": "0x",
+            "limit": 1,
+        }),
+        TxListRpcResponse::Result(serde_json::json!({
+            "refs": [
+                { "txHash": format!("0x{}", "66".repeat(32)), "height": 2 },
+                { "txHash": format!("0x{}", "67".repeat(32)), "height": 1 },
+            ],
+            "cursor": "0x",
+            "latestBlock": 2,
+            "oldestBlock": 0,
+        })),
+    );
+
+    let output = groundhog()
+        .args([
+            "--json",
+            "tx",
+            "list",
+            &address,
+            "--limit",
+            "1",
+            "--rpc-url",
+            &rpc_url,
+        ])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    rpc_server.join().unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(stderr["error"]["code"], "rpc_method_failed");
+    assert!(
+        stderr["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("returned 2 references for requested limit 1")
+    );
 }
 
 #[test]

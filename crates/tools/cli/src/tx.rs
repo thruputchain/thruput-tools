@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::path::Path;
 
 use groundhog_json_rpc_client::{GroundhogApiClient, HttpClientBuilder};
@@ -9,14 +10,17 @@ use groundhog_json_rpc_types::transaction::{
 use groundhog_json_rpc_types::{ContractAddress, error::codes};
 
 use crate::account_resolution::resolve_address_target;
+use crate::checks::{Finding, FindingLevel};
 use crate::codec::format_contract_address;
 use crate::config::{ProfileOverrides, resolve_profile_with_overrides};
 use crate::result::CommandResult;
 use crate::tx_json::{
     TX_LIST_JSON_SCHEMA_VERSION, TX_SHOW_JSON_SCHEMA_VERSION, TxListReport, TxShowReport,
 };
-use crate::tx_utils::{format_tx_hash, summarize_exec_status};
+use crate::tx_utils::{format_tx_hash, human_safe, summarize_exec_status};
 use crate::{CliError, Print};
+
+const ROOT_HISTORY_WARNING: &str = "history includes root invocations only; incoming wallet-wrapped transfers may not appear for recipients";
 
 /// Inspect a transaction's public status and committed receipt without waiting.
 pub fn show(
@@ -39,7 +43,9 @@ pub fn show(
         tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
     let (status, receipt) = rt.block_on(fetch_transaction(&rpc_url, tx_hash))?;
 
-    print_show(&tx_hash, &status, receipt.as_ref(), print);
+    if !print.is_json() && !print.is_quiet() {
+        print_show(&tx_hash, &status, receipt.as_ref(), print);
+    }
     print.json(&CommandResult::new(
         cmd,
         TxShowReport {
@@ -87,9 +93,19 @@ pub fn list(
         tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
     let page = rt.block_on(fetch_transaction_page(&rpc_url, query))?;
 
-    print_list(target_input, &address_hex, &page, print);
-    print.json(&CommandResult::new(
+    if !print.is_json() {
+        print_list(target_input, &address_hex, &page, print);
+    }
+    print.json(&CommandResult::with_warnings(
         cmd,
+        vec![Finding {
+            level: FindingLevel::Warn,
+            code: "root_invocation_history_only",
+            message: ROOT_HISTORY_WARNING.into(),
+            hint: Some(Cow::Borrowed(
+                "do not treat this page as a complete incoming or outgoing asset ledger",
+            )),
+        }],
         TxListReport {
             schema_version: TX_LIST_JSON_SCHEMA_VERSION,
             profile: profile.name,
@@ -142,13 +158,24 @@ async fn fetch_transaction_page(
     rpc_url: &str,
     query: AddressTransactionQuery,
 ) -> Result<TransactionRefPage, CliError> {
+    let requested_limit = query.limit;
     let client = HttpClientBuilder::default()
         .build(rpc_url)
         .map_err(|error| CliError::RpcConnect(format!("{rpc_url}: {error}")))?;
-    client
+    let page = client
         .get_transactions_by_address(query)
         .await
-        .map_err(|error| map_rpc_error("getTransactionsByAddress", &error))
+        .map_err(|error| map_rpc_error("getTransactionsByAddress", &error))?;
+    if u32::try_from(page.refs.len()).map_or(true, |len| len > requested_limit) {
+        return Err(CliError::RpcMethodFailed {
+            method: "getTransactionsByAddress",
+            message: format!(
+                "invalid response: returned {} references for requested limit {requested_limit}",
+                page.refs.len(),
+            ),
+        });
+    }
+    Ok(page)
 }
 
 fn parse_tx_hash(input: &str) -> Result<TxHash, CliError> {
@@ -291,9 +318,10 @@ fn print_show(
 }
 
 fn print_list(target_input: &str, address: &str, page: &TransactionRefPage, print: &Print) {
-    print.warn(
-        "history includes root invocations only; incoming wallet-wrapped transfers may not appear for recipients",
-    );
+    print.warn(ROOT_HISTORY_WARNING);
+    if print.is_quiet() {
+        return;
+    }
     if !target_input.eq_ignore_ascii_case(address) {
         print.detail("target", human_safe(target_input));
     }
@@ -325,18 +353,6 @@ fn print_list(target_input: &str, address: &str, page: &TransactionRefPage, prin
 
 fn format_cursor(cursor: &PaginationCursor) -> String {
     format!("0x{}", hex::encode(&cursor.0))
-}
-
-fn human_safe(value: &str) -> String {
-    let mut escaped = String::with_capacity(value.len());
-    for character in value.chars() {
-        if character.is_control() {
-            escaped.extend(character.escape_default());
-        } else {
-            escaped.push(character);
-        }
-    }
-    escaped
 }
 
 #[cfg(test)]

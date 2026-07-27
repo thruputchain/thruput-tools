@@ -97,6 +97,28 @@ pub fn format_tx_hash(tx_hash: &TxHash) -> String {
         .to_string()
 }
 
+/// Escape control and bidirectional-formatting characters in terminal output.
+pub(crate) fn human_safe(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        if character.is_control()
+            || matches!(
+                character,
+                '\u{061c}'
+                    | '\u{200e}'
+                    | '\u{200f}'
+                    | '\u{202a}'..='\u{202e}'
+                    | '\u{2066}'..='\u{2069}'
+            )
+        {
+            escaped.extend(character.escape_default());
+        } else {
+            escaped.push(character);
+        }
+    }
+    escaped
+}
+
 pub async fn resolve_block_expiry_height(rpc_url: &str) -> Result<i64, CliError> {
     use groundhog_json_rpc_client::{GroundhogApiClient, HttpClientBuilder};
 

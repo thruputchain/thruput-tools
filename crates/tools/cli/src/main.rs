@@ -445,7 +445,7 @@ enum Command {
         #[command(subcommand)]
         command: CodegenCommand,
     },
-    /// Inspect public transaction status and receipts
+    /// Inspect public transactions and address history
     Tx {
         #[command(subcommand)]
         command: TxCommand,

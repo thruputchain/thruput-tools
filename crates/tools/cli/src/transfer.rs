@@ -25,7 +25,7 @@ use crate::transfer_json::{
     TransferDryRunReport, TransferReportCommon, TransferUnconfirmedReport,
 };
 use crate::tx_utils::{
-    command_error_for_exec_status, format_tx_hash, nonce_from_timestamp,
+    command_error_for_exec_status, format_tx_hash, human_safe, nonce_from_timestamp,
     resolve_block_expiry_height, summarize_exec_status,
 };
 use crate::{CliError, Print};
@@ -456,8 +456,4 @@ fn print_receipt_data(receipt: &TransactionReceipt, print: &Print) {
     if let Some(data) = &receipt.abort_data {
         print.detail("abort data", format_args!("0x{}", hex::encode(&data.0)));
     }
-}
-
-fn human_safe(value: &str) -> String {
-    value.chars().flat_map(char::escape_default).collect()
 }
