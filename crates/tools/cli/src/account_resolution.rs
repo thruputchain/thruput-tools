@@ -6,7 +6,7 @@ use groundhog_signing::LocalSigner;
 
 use crate::{
     CliError, codec,
-    config::{ResolvedProfile, resolve_default_key_for_profile},
+    config::{ResolvedProfile, SavedWalletBinding, resolve_default_key_for_profile},
     dev_keys,
     keys::load_local_signer,
     runtime_manifest::{SUPPORTED_DERIVATION_SCHEME, load_configured_runtime_manifest},
@@ -47,6 +47,11 @@ pub(crate) struct ResolvedTransactionSender {
     pub(crate) wallet_address: groundhog_xdr::types::ContractAddress,
 }
 
+pub(crate) struct ValidatedSavedWalletBinding {
+    pub(crate) owner_public_key: Vec<u8>,
+    pub(crate) address: groundhog_xdr::types::ContractAddress,
+}
+
 pub(crate) fn resolve_transaction_sender(
     profile: &ResolvedProfile,
     explicit_wallet: Option<&str>,
@@ -62,19 +67,6 @@ pub(crate) fn resolve_transaction_sender(
         signer,
         wallet_address,
     })
-}
-
-/// Resolve the wallet address used as a transaction's invoked address.
-///
-/// Dev keys (`dev-N`) use wallet metadata advertised by the local dev backend.
-/// Stored non-dev keys use saved wallet bindings created by `wallet create`.
-#[cfg(test)]
-pub(crate) fn resolve_wallet_address(
-    profile: &ResolvedProfile,
-    key_name: &str,
-    signer: &LocalSigner,
-) -> Result<groundhog_xdr::types::ContractAddress, CliError> {
-    Ok(resolve_wallet_selection(profile, key_name, signer, profile.default_wallet.as_deref())?.1)
 }
 
 fn resolve_wallet_selection(
@@ -115,17 +107,27 @@ fn resolve_selected_wallet(
             wallet_name: wallet_name.to_owned(),
             profile: profile.name.clone(),
         })?;
-    let configured = parse_owner_public_key(wallet_name, &wallet.owner_public_key)?;
+    let validated = validate_saved_wallet_binding(wallet_name, wallet)?;
     let local = signer.verifying_key_bytes();
-    if configured.as_slice() != local.as_slice() {
+    if validated.owner_public_key.as_slice() != local.as_slice() {
         return Err(CliError::SavedWalletOwnerMismatch {
             wallet_name: wallet_name.to_owned(),
             key_name: key_name.to_owned(),
-            configured: format_hex(&configured),
+            configured: format_hex(&validated.owner_public_key),
             local: format_hex(&local),
         });
     }
-    codec::parse_contract_address(&wallet.address)
+    Ok(validated.address)
+}
+
+pub(crate) fn validate_saved_wallet_binding(
+    wallet_name: &str,
+    wallet: &SavedWalletBinding,
+) -> Result<ValidatedSavedWalletBinding, CliError> {
+    Ok(ValidatedSavedWalletBinding {
+        owner_public_key: parse_owner_public_key(wallet_name, &wallet.owner_public_key)?,
+        address: codec::parse_contract_address(&wallet.address)?,
+    })
 }
 
 fn resolve_saved_wallet_for_signer(
@@ -135,7 +137,6 @@ fn resolve_saved_wallet_for_signer(
 ) -> Result<(Option<String>, groundhog_xdr::types::ContractAddress), CliError> {
     let expected_public_key = signer.verifying_key_bytes();
     let mut matches = Vec::new();
-    let mut invalid_owner_error = None;
     for (wallet_name, wallet) in &profile.wallets {
         match parse_owner_public_key(wallet_name, &wallet.owner_public_key) {
             Ok(owner_public_key)
@@ -143,17 +144,12 @@ fn resolve_saved_wallet_for_signer(
             {
                 matches.push((wallet_name, wallet));
             }
-            Ok(_) => {}
-            Err(error) => {
-                invalid_owner_error.get_or_insert(error);
-            }
+            // Neither another owner nor invalid metadata establishes a match.
+            Ok(_) | Err(_) => {}
         }
     }
     let [(_, wallet)] = matches.as_slice() else {
         if matches.is_empty() {
-            if let Some(error) = invalid_owner_error {
-                return Err(error);
-            }
             return Err(CliError::SavedWalletMissing {
                 key_name: key_name.to_string(),
                 profile: profile.name.clone(),
@@ -535,8 +531,9 @@ mod tests {
         );
         let profile = test_profile("alice", None, wallets);
 
-        let resolved = resolve_wallet_address(&profile, "alice", &signer)
-            .expect("bug: saved wallet should resolve");
+        let resolved = resolve_wallet_selection(&profile, "alice", &signer, None)
+            .expect("bug: saved wallet should resolve")
+            .1;
 
         assert_eq!(resolved, wallet_address);
     }
@@ -555,8 +552,9 @@ mod tests {
         );
         let profile = test_profile("default", None, wallets);
 
-        let resolved = resolve_wallet_address(&profile, "default", &signer)
-            .expect("bug: unique owner-matched wallet should resolve");
+        let resolved = resolve_wallet_selection(&profile, "default", &signer, None)
+            .expect("bug: unique owner-matched wallet should resolve")
+            .1;
 
         assert_eq!(resolved, wallet_address);
     }
@@ -582,8 +580,9 @@ mod tests {
         );
         let profile = test_profile("alice", None, wallets);
 
-        let resolved = resolve_wallet_address(&profile, "alice", &signer)
-            .expect("bug: unrelated malformed wallet should not hide owner match");
+        let resolved = resolve_wallet_selection(&profile, "alice", &signer, None)
+            .expect("bug: unrelated malformed wallet should not hide owner match")
+            .1;
 
         assert_eq!(resolved, wallet_address);
     }
@@ -604,7 +603,7 @@ mod tests {
         }
         let profile = test_profile("default", None, wallets);
 
-        let error = resolve_wallet_address(&profile, "default", &signer)
+        let error = resolve_wallet_selection(&profile, "default", &signer, None)
             .expect_err("bug: multiple owner-matched wallets should be ambiguous");
 
         assert_eq!(error.code(), "saved_wallet_ambiguous");
@@ -655,8 +654,14 @@ mod tests {
         let mut profile = test_profile("default", None, wallets);
         profile.default_wallet = Some("primary".into());
 
-        let address = resolve_wallet_address(&profile, "default", &signer)
-            .expect("bug: profile default wallet should resolve ambiguity");
+        let address = resolve_wallet_selection(
+            &profile,
+            "default",
+            &signer,
+            profile.default_wallet.as_deref(),
+        )
+        .expect("bug: profile default wallet should resolve ambiguity")
+        .1;
 
         assert_eq!(address.as_ref(), &[0x82; 32]);
     }
@@ -712,7 +717,7 @@ mod tests {
         let signer = groundhog_signing::derive_default_dev_account_signer(0);
         let profile = test_profile("alice", None, BTreeMap::default());
 
-        let err = resolve_wallet_address(&profile, "alice", &signer)
+        let err = resolve_wallet_selection(&profile, "alice", &signer, None)
             .expect_err("bug: missing wallet should fail");
 
         assert_eq!(err.code(), "saved_wallet_missing");
@@ -751,30 +756,11 @@ mod tests {
     }
 
     #[test]
-    fn non_dev_key_uses_matching_saved_wallet_binding() {
-        let signer = groundhog_signing::derive_default_dev_account_signer(0);
-        let wallet_address = groundhog_xdr::types::ContractAddress::from([0x41; 32]);
-        let mut profile = test_profile_for_key("alice");
-        profile.wallets.insert(
-            "alice".into(),
-            SavedWalletBinding {
-                address: format_hex(wallet_address.as_ref()),
-                owner_public_key: format_hex(&signer.verifying_key_bytes()),
-            },
-        );
-
-        let resolved = resolve_wallet_address(&profile, "alice", &signer)
-            .expect("bug: matching saved wallet should resolve");
-
-        assert_eq!(resolved, wallet_address);
-    }
-
-    #[test]
     fn non_dev_key_ignores_wallet_owned_by_another_key() {
         let signer = groundhog_signing::derive_default_dev_account_signer(0);
         let other = groundhog_signing::derive_default_dev_account_signer(1);
         let wallet_address = groundhog_xdr::types::ContractAddress::from([0x41; 32]);
-        let mut profile = test_profile_for_key("alice");
+        let mut profile = test_profile("alice", None, BTreeMap::new());
         profile.wallets.insert(
             "alice".into(),
             SavedWalletBinding {
@@ -783,7 +769,7 @@ mod tests {
             },
         );
 
-        let error = resolve_wallet_address(&profile, "alice", &signer)
+        let error = resolve_wallet_selection(&profile, "alice", &signer, None)
             .expect_err("bug: wallet owned by another key should not resolve");
 
         assert_eq!(error.code(), "saved_wallet_missing");
@@ -794,10 +780,10 @@ mod tests {
     }
 
     #[test]
-    fn non_dev_key_rejects_invalid_saved_wallet_owner_public_key() {
+    fn selected_wallet_rejects_invalid_owner_public_key() {
         let signer = groundhog_signing::derive_default_dev_account_signer(0);
         let wallet_address = groundhog_xdr::types::ContractAddress::from([0x41; 32]);
-        let mut profile = test_profile_for_key("alice");
+        let mut profile = test_profile("alice", None, BTreeMap::new());
         profile.wallets.insert(
             "alice".into(),
             SavedWalletBinding {
@@ -806,7 +792,7 @@ mod tests {
             },
         );
 
-        let error = resolve_wallet_address(&profile, "alice", &signer)
+        let error = resolve_wallet_selection(&profile, "alice", &signer, Some("alice"))
             .expect_err("bug: invalid saved wallet owner should fail");
 
         assert_eq!(error.code(), "saved_wallet_owner_public_key_invalid");
@@ -820,10 +806,10 @@ mod tests {
     }
 
     #[test]
-    fn non_dev_key_rejects_missing_saved_wallet_owner_public_key() {
+    fn automatic_selection_ignores_malformed_owner_public_key() {
         let signer = groundhog_signing::derive_default_dev_account_signer(0);
         let wallet_address = groundhog_xdr::types::ContractAddress::from([0x41; 32]);
-        let mut profile = test_profile_for_key("alice");
+        let mut profile = test_profile("alice", None, BTreeMap::new());
         profile.wallets.insert(
             "alice".into(),
             SavedWalletBinding {
@@ -832,11 +818,10 @@ mod tests {
             },
         );
 
-        let error = resolve_wallet_address(&profile, "alice", &signer)
-            .expect_err("bug: missing saved wallet owner should fail");
+        let error = resolve_wallet_selection(&profile, "alice", &signer, None)
+            .expect_err("bug: malformed unrelated ownership should not match");
 
-        assert_eq!(error.code(), "saved_wallet_owner_public_key_invalid");
-        assert!(error.to_string().contains("owner_public_key is invalid"));
+        assert_eq!(error.code(), "saved_wallet_missing");
     }
 
     #[test]
@@ -913,8 +898,9 @@ mod tests {
             source: None,
         };
 
-        let resolved = resolve_wallet_address(&profile, "dev-0", &signer)
-            .expect("bug: manifest-backed dev key should not require rpc_url");
+        let resolved = resolve_wallet_selection(&profile, "dev-0", &signer, None)
+            .expect("bug: manifest-backed dev key should not require rpc_url")
+            .1;
 
         assert_eq!(resolved, wallet_address);
     }
@@ -947,8 +933,9 @@ mod tests {
             source: Some(config_path),
         };
 
-        let resolved = resolve_wallet_address(&profile, "dev-0", &signer)
-            .expect("bug: local-node state manifest should resolve dev key");
+        let resolved = resolve_wallet_selection(&profile, "dev-0", &signer, None)
+            .expect("bug: local-node state manifest should resolve dev key")
+            .1;
 
         assert_eq!(resolved, wallet_address);
     }
@@ -1016,24 +1003,6 @@ mod tests {
             default_key: Some("dev-0".into()),
             default_wallet: None,
             runtime_manifest: manifest_path,
-            runtime_manifest_cli_override: false,
-            runtime_artifacts_dir: None,
-            contracts: BTreeMap::default(),
-            wallets: BTreeMap::default(),
-            source: None,
-        }
-    }
-
-    fn test_profile_for_key(key_name: &str) -> ResolvedProfile {
-        ResolvedProfile {
-            name: "default".into(),
-            network: None,
-            rpc_url: Some("http://127.0.0.1:1".into()),
-            rpc_url_cli_override: false,
-            faucet_url: None,
-            default_key: Some(key_name.into()),
-            default_wallet: None,
-            runtime_manifest: None,
             runtime_manifest_cli_override: false,
             runtime_artifacts_dir: None,
             contracts: BTreeMap::default(),

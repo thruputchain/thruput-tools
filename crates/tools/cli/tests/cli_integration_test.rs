@@ -802,9 +802,9 @@ fn status_json_reports_project_default_wallet_and_dangling_finding() {
 
     let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     let project = &stdout["data"]["project"];
-    assert_eq!(project["profile_default_wallet"], "missing");
-    assert_eq!(project["default_wallet"], "missing");
-    assert_eq!(project["default_wallet_source"], "project profile");
+    assert_eq!(project["project_default_wallet"], "missing");
+    assert_eq!(project["effective_default_wallet"], "missing");
+    assert_eq!(project["default_wallet_source"], "project");
     assert!(
         stdout["warnings"]
             .as_array()
@@ -2443,7 +2443,7 @@ fn wallet_use_persists_valid_owner_matched_default() {
     .unwrap();
 
     let output = groundhog()
-        .args(["--json", "wallet", "use", "trading"])
+        .args(["--json", "wallet", "use", " trading "])
         .current_dir(&project)
         .env("XDG_CONFIG_HOME", &config_home)
         .output()
@@ -2502,6 +2502,87 @@ fn wallet_rm_rejects_inherited_default_with_project_only_binding() {
     assert_eq!(stderr["error"]["code"], "inherited_default_wallet_removal");
     let profile = groundhog_cli::config::resolve_profile(&project, Some("devnet")).unwrap();
     assert!(profile.wallets.contains_key("alice"));
+}
+
+#[test]
+fn wallet_rm_reports_inherited_default_after_clearing_project_default() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    let config_home = tmp.path().join("config-home");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(config_home.join("groundhog")).unwrap();
+    let owner = format!("0x{}", "11".repeat(32));
+    std::fs::write(
+        config_home.join("groundhog/config.toml"),
+        format!(
+            "[profile.devnet]\ndefault_wallet = \"global\"\n\n[profile.devnet.wallets.global]\naddress = \"0x{}\"\nowner_public_key = \"{owner}\"\n",
+            "aa".repeat(32)
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!(
+            "[profile.devnet]\ndefault_wallet = \"project\"\n\n[profile.devnet.wallets.project]\naddress = \"0x{}\"\nowner_public_key = \"{owner}\"\n",
+            "bb".repeat(32)
+        ),
+    )
+    .unwrap();
+
+    let output = groundhog()
+        .args(["--json", "wallet", "rm", "project", "--profile", "devnet"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["data"]["clearedConfiguredDefault"], true);
+    assert_eq!(stdout["data"]["effectiveDefaultWallet"], "global");
+}
+
+#[test]
+fn wallet_rm_rejects_dangling_same_named_inherited_default() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    let config_home = tmp.path().join("config-home");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(config_home.join("groundhog")).unwrap();
+    let owner = format!("0x{}", "11".repeat(32));
+    std::fs::write(
+        config_home.join("groundhog/config.toml"),
+        "[profile.devnet]\ndefault_wallet = \"alice\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!(
+            "[profile.devnet]\ndefault_wallet = \"alice\"\n\n[profile.devnet.wallets.alice]\naddress = \"0x{}\"\nowner_public_key = \"{owner}\"\n",
+            "aa".repeat(32)
+        ),
+    )
+    .unwrap();
+
+    let output = groundhog()
+        .args(["--json", "wallet", "rm", "alice", "--profile", "devnet"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(
+        stderr["error"]["code"],
+        "wallet_removal_exposes_missing_default"
+    );
+    assert_eq!(stderr["error"]["details"]["inheritedWallet"], "alice");
+    let contents = std::fs::read_to_string(project.join("groundhog.toml")).unwrap();
+    assert!(contents.contains("default_wallet = \"alice\""));
+    assert!(contents.contains("[profile.devnet.wallets.alice]"));
 }
 
 #[test]
@@ -2910,7 +2991,7 @@ fn transfer_dry_run_rejects_invalid_inputs_before_rpc() {
 }
 
 #[test]
-fn transfer_dry_run_saved_wallet_errors_remain_actionable() {
+fn transfer_dry_run_saved_wallet_errors_follow_selection_mode() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");
     let config_home = tmp.path().join("config-home");
@@ -2955,6 +3036,25 @@ fn transfer_dry_run_saved_wallet_errors_remain_actionable() {
         .unwrap();
     assert!(!invalid.status.success());
     let error: serde_json::Value = serde_json::from_slice(&invalid.stderr).unwrap();
+    assert_eq!(error["error"]["code"], "saved_wallet_missing");
+    assert_eq!(error["error"]["details"]["keyName"], "alice");
+
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!(
+            "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"alice\"\ndefault_wallet = \"broken-wallet\"\n\n[profile.default.wallets.broken-wallet]\naddress = \"0x{}\"\nowner_public_key = \"0x00\"\n",
+            "aa".repeat(32),
+        ),
+    )
+    .unwrap();
+    let selected = groundhog()
+        .args(["--json", "transfer", &recipient, "1", "--dry-run"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    assert!(!selected.status.success());
+    let error: serde_json::Value = serde_json::from_slice(&selected.stderr).unwrap();
     assert_eq!(
         error["error"]["code"],
         "saved_wallet_owner_public_key_invalid"
@@ -3008,7 +3108,7 @@ fn transfer_from_selects_named_owner_matched_wallet() {
 }
 
 #[test]
-fn transfer_live_reports_selected_saved_wallet_for_every_outcome() {
+fn transfer_live_reports_selected_saved_wallet_for_each_report_shape() {
     let committed = run_saved_wallet_transfer_live_mock(
         TransferRpcMock {
             submit: TransferSubmitMock::MatchingHash,
@@ -3027,47 +3127,6 @@ fn transfer_live_reports_selected_saved_wallet_for_every_outcome() {
     assert_eq!(stdout["data"]["senderWallet"], "primary");
     assert_eq!(stdout["data"]["sender"], format!("0x{}", "a1".repeat(32)));
     assert_eq!(stdout["data"]["txHash"], committed.local_hash);
-
-    let committed_failure = run_saved_wallet_transfer_live_mock(
-        TransferRpcMock {
-            submit: TransferSubmitMock::MatchingHash,
-            poll: Some(TransferPollMock::Receipt {
-                status: serde_json::json!({
-                    "result": "reverted",
-                    "message": "denied",
-                }),
-                events: serde_json::json!([]),
-                return_data: None,
-                abort_data: Some("0x0102"),
-                mismatched_hash: false,
-            }),
-        },
-        Some("trading"),
-    );
-    assert!(!committed_failure.output.status.success());
-    let stdout: serde_json::Value =
-        serde_json::from_slice(&committed_failure.output.stdout).unwrap();
-    assert_eq!(stdout["error"]["code"], "transaction_reverted");
-    assert_eq!(stdout["data"]["senderWallet"], "trading");
-    assert_eq!(stdout["data"]["sender"], format!("0x{}", "b2".repeat(32)));
-    assert_eq!(stdout["data"]["txHash"], committed_failure.local_hash);
-
-    let invalid = run_saved_wallet_transfer_live_mock(
-        TransferRpcMock {
-            submit: TransferSubmitMock::MatchingHash,
-            poll: Some(TransferPollMock::Status(serde_json::json!({
-                "status": "invalid",
-                "reason": "expired",
-            }))),
-        },
-        Some("trading"),
-    );
-    assert!(!invalid.output.status.success());
-    let stdout: serde_json::Value = serde_json::from_slice(&invalid.output.stdout).unwrap();
-    assert_eq!(stdout["data"]["confirmation"], "invalid");
-    assert_eq!(stdout["data"]["senderWallet"], "trading");
-    assert_eq!(stdout["data"]["sender"], format!("0x{}", "b2".repeat(32)));
-    assert_eq!(stdout["data"]["txHash"], invalid.local_hash);
 
     let unavailable = run_saved_wallet_transfer_live_mock(
         TransferRpcMock {

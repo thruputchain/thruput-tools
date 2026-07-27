@@ -48,7 +48,8 @@ struct PreparedTransfer {
 }
 
 /// Prepare a native HOG transfer from the effective profile wallet.
-#[allow(clippy::too_many_arguments)]
+// The command boundary mirrors its CLI flags plus shared output context.
+#[expect(clippy::too_many_arguments)]
 pub fn run(
     recipient: &str,
     amount: &str,
@@ -93,9 +94,6 @@ fn prepare(
 ) -> Result<PreparedTransfer, CliError> {
     let cwd = std::env::current_dir()?;
     let profile = resolve_profile_with_overrides(&cwd, profile_name, overrides)?;
-    if profile.rpc_url.is_none() && profile.default_key.is_none() {
-        return Err(CliError::MissingRpcUrl);
-    }
     let rpc_url = profile.rpc_url.as_deref().ok_or(CliError::MissingRpcUrl)?;
 
     let recipient = resolve_address_target(&profile, recipient_input)?;

@@ -58,6 +58,10 @@ pub(crate) fn read_config_file() -> Result<GlobalConfigFile, CliError> {
     }
 }
 
+pub(crate) fn load_global_profile(name: &str) -> Result<Option<ProjectProfile>, CliError> {
+    Ok(read_config_file()?.profile.remove(name))
+}
+
 fn write_config_file(config: &GlobalConfigFile) -> Result<(), CliError> {
     let path = config_file_path()?;
     if let Some(parent) = path.parent() {

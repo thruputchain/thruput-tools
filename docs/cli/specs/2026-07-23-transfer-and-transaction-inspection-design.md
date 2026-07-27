@@ -1,5 +1,5 @@
 # HOG Transfer and Transaction Inspection
-**Date:** 2026-07-23 **Status:** Design ready for implementation planning
+**Date:** 2026-07-23 **Status:** Transfer implemented; transaction inspection ready for implementation
 
 **Companions:**
 
@@ -150,6 +150,11 @@ An explicit or configured wallet must exist and its `owner_public_key` must
 match the effective key. Wallet selection never searches for or switches to a
 different private key. Manifest-backed `dev-N` keys retain their fixed runtime
 wallet and reject explicit or configured saved-wallet selection.
+
+Automatic owner matching ignores malformed ownership metadata because it
+cannot associate that binding with the effective signer. If no valid binding
+matches, selection returns the missing-wallet error. Explicit and configured
+wallets instead report their malformed ownership metadata directly.
 
 Recipient resolution
 
@@ -799,8 +804,6 @@ Run these through the ignored external-devnode smoke path:
 - typed return/abort decoding with an explicitly supplied contract spec;
 
 - event search and follow mode;
-
-- transfer source-wallet selection once shared across all write commands;
 
 - `ALL`, batch transfers, arbitrary token standards, and allowance flows;
 

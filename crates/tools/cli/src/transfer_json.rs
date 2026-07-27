@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 pub const TRANSFER_JSON_SCHEMA_VERSION: u32 = 1;
 
-/// Stable JSON data for a prepared native HOG transfer.
+/// Stable JSON fields shared by every native HOG transfer outcome.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TransferReportCommon {

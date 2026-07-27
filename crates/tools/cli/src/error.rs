@@ -202,6 +202,14 @@ pub enum CliError {
         wallet_name: String,
         profile: String,
     },
+    #[error(
+        "cannot remove wallet `{wallet_name}` from profile `{profile}` because it would expose inherited default wallet `{inherited_wallet}`, which is not saved"
+    )]
+    WalletRemovalExposesMissingDefault {
+        wallet_name: String,
+        inherited_wallet: String,
+        profile: String,
+    },
     #[error("saved wallet `{key_name}` owner_public_key is invalid: {message}")]
     SavedWalletOwnerPublicKeyInvalid { key_name: String, message: String },
     #[error("transaction {tx_hash} submitted but no receipt after {seconds}s")]
@@ -301,6 +309,9 @@ impl CliError {
             Self::SavedWalletOwnerMismatch { .. } => "saved_wallet_owner_mismatch",
             Self::DevWalletSelectionUnsupported { .. } => "dev_wallet_selection_unsupported",
             Self::InheritedDefaultWalletRemoval { .. } => "inherited_default_wallet_removal",
+            Self::WalletRemovalExposesMissingDefault { .. } => {
+                "wallet_removal_exposes_missing_default"
+            }
             Self::SavedWalletOwnerPublicKeyInvalid { .. } => {
                 "saved_wallet_owner_public_key_invalid"
             }
@@ -456,6 +467,9 @@ impl CliError {
             )),
             Self::InheritedDefaultWalletRemoval { profile, .. } => Some(Cow::Owned(format!(
                 "run `groundhog wallet use <NAME> --profile {profile}` to select a project default before removing this wallet"
+            ))),
+            Self::WalletRemovalExposesMissingDefault { profile, .. } => Some(Cow::Owned(format!(
+                "save the inherited wallet binding or select another project default with `groundhog wallet use <NAME> --profile {profile}`"
             ))),
             Self::SavedWalletOwnerPublicKeyInvalid { .. } => Some(Cow::Borrowed(
                 "recreate the wallet binding with `groundhog wallet create`, or fix owner_public_key in the selected profile",
@@ -647,6 +661,15 @@ impl CliError {
                 profile,
             } => Some(json!({
                 "walletName": wallet_name,
+                "profile": profile,
+            })),
+            Self::WalletRemovalExposesMissingDefault {
+                wallet_name,
+                inherited_wallet,
+                profile,
+            } => Some(json!({
+                "walletName": wallet_name,
+                "inheritedWallet": inherited_wallet,
                 "profile": profile,
             })),
             Self::SavedWalletOwnerMismatch {

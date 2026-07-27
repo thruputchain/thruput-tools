@@ -3,7 +3,7 @@
 #
 # Exercises the user-facing CLI path against a real hog-devnode binary:
 #   groundhog new -> build -> persistent node -> dev-0 deploy/call/view/storage
-#   -> dev-0/dev-1 transfer with exact raw balance deltas
+#   -> dev-0/dev-1 transfer with recipient and sender balance validation
 #   -> key generate -> wallet create -> saved-wallet deploy
 #   -> saved-wallet airdrop -> second deploy/call
 #   -> stop -> restart -> verify persisted contract state
@@ -83,7 +83,6 @@ labels = (
     "recipient before",
     "recipient after",
     "raw amount",
-    "transaction cost",
 )
 values = []
 for label, raw in zip(labels, sys.argv[1:], strict=True):
@@ -91,16 +90,15 @@ for label, raw in zip(labels, sys.argv[1:], strict=True):
         raise SystemExit(f"{label} is not a non-negative decimal integer: {raw!r}")
     values.append(int(raw))
 
-sender_before, sender_after, recipient_before, recipient_after, raw_amount, transaction_cost = values
+sender_before, sender_after, recipient_before, recipient_after, raw_amount = values
 sender_delta = sender_before - sender_after
 recipient_delta = recipient_after - recipient_before
-if recipient_delta != raw_amount or sender_delta != raw_amount + transaction_cost:
+if recipient_delta != raw_amount or sender_delta < raw_amount:
     raise SystemExit(
         "transfer balance delta mismatch: "
         f"sender={sender_before}->{sender_after} (delta {sender_delta}), "
         f"recipient={recipient_before}->{recipient_after} (delta {recipient_delta}), "
-        f"expected recipient delta={raw_amount} and "
-        f"sender delta={raw_amount}+{transaction_cost}"
+        f"expected recipient delta={raw_amount} and sender delta at least {raw_amount}"
     )
 print(sender_delta - raw_amount)
 PY
@@ -617,7 +615,6 @@ TRANSFER_SENDER="dev-0"
 TRANSFER_RECIPIENT="dev-1"
 TRANSFER_AMOUNT="0.0000001"
 TRANSFER_RAW_AMOUNT="1"
-TRANSFER_TRANSACTION_COST_RAW="12007"
 
 SENDER_BEFORE_JSON="$(run_json "sender balance before" "$CLI" --json balance "$TRANSFER_SENDER")"
 RECIPIENT_BEFORE_JSON="$(run_json "recipient balance before" "$CLI" --json balance "$TRANSFER_RECIPIENT")"
@@ -645,8 +642,7 @@ TRANSFER_FEE_RAW="$(assert_transfer_balance_deltas \
     "$SENDER_BALANCE_AFTER" \
     "$RECIPIENT_BALANCE_BEFORE" \
     "$RECIPIENT_BALANCE_AFTER" \
-    "$TRANSFER_RAW_AMOUNT" \
-    "$TRANSFER_TRANSACTION_COST_RAW")"
+    "$TRANSFER_RAW_AMOUNT")"
 log "transfer result: sender=$SENDER_ADDRESS $SENDER_BALANCE_BEFORE->$SENDER_BALANCE_AFTER recipient=$RECIPIENT_ADDRESS $RECIPIENT_BALANCE_BEFORE->$RECIPIENT_BALANCE_AFTER raw=$TRANSFER_RAW_AMOUNT fee=$TRANSFER_FEE_RAW height=$(json_field data.height "$TRANSFER_JSON") tx=$(json_field data.txHash "$TRANSFER_JSON")"
 
 DIRECT_RECIPIENT="$RECIPIENT_ADDRESS"

@@ -121,9 +121,9 @@ pub struct ProjectContext {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub profile_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub profile_default_wallet: Option<String>,
+    pub project_default_wallet: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_wallet: Option<String>,
+    pub effective_default_wallet: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_wallet_source: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -235,14 +235,14 @@ pub fn check_project(
     match crate::config::resolve_profile(start, explicit_profile) {
         Ok(profile) => {
             let profile_key = profile.default_key.clone();
-            let profile_default_wallet = crate::config::load_project_profiles(start)?
+            let project_default_wallet = crate::config::load_project_profiles(start)?
                 .and_then(|profiles| profiles.get(&profile.name).cloned())
                 .and_then(|profile| profile.default_wallet);
             let default_wallet_source = profile.default_wallet.as_ref().map(|_| {
-                if profile_default_wallet.is_some() {
-                    "project profile"
+                if project_default_wallet.is_some() {
+                    "project"
                 } else {
-                    "global profile"
+                    "global"
                 }
             });
             if let Some(ref key_name) = profile_key {
@@ -270,8 +270,8 @@ pub fn check_project(
                 config_path,
                 profile_name: Some(profile.name),
                 profile_key,
-                profile_default_wallet,
-                default_wallet: profile.default_wallet,
+                project_default_wallet,
+                effective_default_wallet: profile.default_wallet,
                 default_wallet_source,
                 network: profile.network,
                 rpc_url: profile.rpc_url,
@@ -345,6 +345,7 @@ fn check_default_wallet(profile: &crate::config::ResolvedProfile, findings: &mut
                 "remove default_wallet; manifest-backed dev keys use their fixed wallet",
             )),
         });
+        return;
     }
     let Some(wallet) = profile.wallets.get(wallet_name) else {
         findings.push(Finding {
@@ -361,33 +362,41 @@ fn check_default_wallet(profile: &crate::config::ResolvedProfile, findings: &mut
         });
         return;
     };
-    let owner = wallet.owner_public_key.trim();
-    let valid_owner = owner
-        .strip_prefix("0x")
-        .or_else(|| owner.strip_prefix("0X"))
-        .is_some_and(|value| value.len() == 64 && hex::decode(value).is_ok());
-    if !valid_owner {
-        findings.push(Finding {
-            level: FindingLevel::Warn,
-            code: "default_wallet_owner_invalid",
-            message: format!("wallet `{wallet_name}` has malformed owner_public_key metadata"),
-            hint: Some(Cow::Borrowed(
-                "remove and recreate the wallet binding with valid owner metadata",
-            )),
-        });
-        return;
-    }
-    if uses_dev_key {
-        return;
-    }
+    let validated =
+        match crate::account_resolution::validate_saved_wallet_binding(wallet_name, wallet) {
+            Ok(validated) => validated,
+            Err(CliError::SavedWalletOwnerPublicKeyInvalid { .. }) => {
+                findings.push(Finding {
+                    level: FindingLevel::Warn,
+                    code: "default_wallet_owner_invalid",
+                    message: format!(
+                        "wallet `{wallet_name}` has malformed owner_public_key metadata"
+                    ),
+                    hint: Some(Cow::Borrowed(
+                        "remove and recreate the wallet binding with valid owner metadata",
+                    )),
+                });
+                return;
+            }
+            Err(error) => {
+                findings.push(Finding {
+                    level: FindingLevel::Warn,
+                    code: "default_wallet_address_invalid",
+                    message: format!("wallet `{wallet_name}` has a malformed address: {error}"),
+                    hint: Some(Cow::Borrowed(
+                        "remove and recreate the wallet binding with a valid address",
+                    )),
+                });
+                return;
+            }
+        };
     let Some(key_name) = key_name else {
         return;
     };
     let Ok(signer) = crate::keys::load_local_signer(&key_name) else {
         return;
     };
-    let expected = format!("0x{}", hex::encode(signer.verifying_key_bytes()));
-    if !owner.eq_ignore_ascii_case(&expected) {
+    if validated.owner_public_key.as_slice() != signer.verifying_key_bytes().as_slice() {
         findings.push(Finding {
             level: FindingLevel::Warn,
             code: "default_wallet_owner_mismatch",
@@ -1328,6 +1337,39 @@ mod tests {
 
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].code, "default_wallet_owner_invalid");
+    }
+
+    #[test]
+    fn default_wallet_check_reports_malformed_address() {
+        let mut wallets = std::collections::BTreeMap::new();
+        wallets.insert(
+            "trading".into(),
+            crate::config::SavedWalletBinding {
+                address: "not-an-address".into(),
+                owner_public_key: format!("0x{}", "22".repeat(32)),
+            },
+        );
+        let profile = crate::config::ResolvedProfile {
+            name: "devnet".into(),
+            network: None,
+            rpc_url: None,
+            rpc_url_cli_override: false,
+            faucet_url: None,
+            default_key: None,
+            default_wallet: Some("trading".into()),
+            runtime_manifest: None,
+            runtime_manifest_cli_override: false,
+            runtime_artifacts_dir: None,
+            contracts: std::collections::BTreeMap::new(),
+            wallets,
+            source: None,
+        };
+        let mut findings = Vec::new();
+
+        check_default_wallet(&profile, &mut findings);
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].code, "default_wallet_address_invalid");
     }
 
     #[test]

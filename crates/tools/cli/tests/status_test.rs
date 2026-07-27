@@ -256,6 +256,8 @@ counter = "{project_counter}"
 fn collect_report_shows_global_profile_details_outside_project() {
     let tmp = TempDir::new().unwrap();
     let global_hog = format!("0x{}", "11".repeat(32));
+    let global_wallet = format!("0x{}", "22".repeat(32));
+    let global_owner = format!("0x{}", "33".repeat(32));
 
     fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
     fs::write(
@@ -266,9 +268,14 @@ default_profile = "local"
 
 [profile.local]
 rpc_url = "http://127.0.0.1:9545"
+default_wallet = "global-wallet"
 
 [profile.local.contracts]
 HOG = "{global_hog}"
+
+[profile.local.wallets.global-wallet]
+address = "{global_wallet}"
+owner_public_key = "{global_owner}"
 "#
         ),
     )
@@ -287,6 +294,12 @@ HOG = "{global_hog}"
         Some("http://127.0.0.1:9545")
     );
     assert_eq!(report.project.contract_count, 1);
+    assert!(report.project.project_default_wallet.is_none());
+    assert_eq!(
+        report.project.effective_default_wallet.as_deref(),
+        Some("global-wallet")
+    );
+    assert_eq!(report.project.default_wallet_source, Some("global"));
 
     unsafe {
         env::remove_var("CARGO_HOME");

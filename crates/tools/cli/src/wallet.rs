@@ -24,8 +24,8 @@ use crate::account_resolution::{
 use crate::codec::{format_contract_address, parse_contract_address};
 use crate::config::{
     Network, ProfileOverrides, ResolvedProfile, cache_dir, find_project_config,
-    remove_profile_wallet_address, resolve_default_key_for_profile, resolve_profile,
-    resolve_profile_with_overrides, save_profile_default_wallet,
+    load_global_profile, remove_profile_wallet_address, resolve_default_key_for_profile,
+    resolve_profile, resolve_profile_with_overrides, save_profile_default_wallet,
     save_profile_wallet_address_with_default,
 };
 use crate::faucet_client::{client as faucet_client, post_json};
@@ -383,6 +383,12 @@ pub fn remove(
     } else {
         resolved_profile.default_wallet.clone()
     };
+    let cleared_default = configured_default.as_deref() == Some(name.trim());
+    let inherited_profile = if writes_project_profile {
+        load_global_profile(&resolved_profile.name)?
+    } else {
+        None
+    };
     let removes_inherited_default = writes_project_profile
         && configured_default.is_none()
         && resolved_profile.default_wallet.as_deref() == Some(name.trim());
@@ -392,16 +398,47 @@ pub fn remove(
             profile: resolved_profile.name,
         });
     }
-    let cleared_default = configured_default.as_deref() == Some(name.trim());
+    if cleared_default
+        && let Some(inherited_wallet) = inherited_profile
+            .as_ref()
+            .and_then(|profile| profile.default_wallet.as_deref())
+    {
+        let remains_saved = if inherited_wallet == name.trim() {
+            inherited_profile
+                .as_ref()
+                .is_some_and(|profile| profile.wallets.contains_key(inherited_wallet))
+        } else {
+            resolved_profile.wallets.contains_key(inherited_wallet)
+        };
+        if !remains_saved {
+            return Err(CliError::WalletRemovalExposesMissingDefault {
+                wallet_name: name.trim().to_owned(),
+                inherited_wallet: inherited_wallet.to_owned(),
+                profile: resolved_profile.name,
+            });
+        }
+    }
     remove_profile_wallet_address(&project_root, Some(&resolved_profile.name), name)?;
+    let effective_default_wallet =
+        resolve_profile(&project_root, Some(&resolved_profile.name))?.default_wallet;
 
     print.status(format_args!("Removed wallet `{}`.", name.trim()));
+    if cleared_default
+        && writes_project_profile
+        && let Some(wallet_name) = effective_default_wallet.as_deref()
+    {
+        print.warn(format_args!(
+            "profile `{}` now inherits default wallet `{wallet_name}` from global config",
+            resolved_profile.name
+        ));
+    }
     print.json(&CommandResult::new(
         cmd,
         json!({
             "name": name.trim(),
             "profile": resolved_profile.name,
-            "clearedDefault": cleared_default,
+            "clearedConfiguredDefault": cleared_default,
+            "effectiveDefaultWallet": effective_default_wallet,
         }),
     ))?;
 
@@ -452,6 +489,7 @@ pub fn use_wallet(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
+    let name = name.trim();
     let cwd = std::env::current_dir()?;
     let project_root = find_project_config(&cwd)
         .and_then(|path| path.parent().map(Path::to_path_buf))

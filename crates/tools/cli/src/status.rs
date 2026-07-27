@@ -38,10 +38,10 @@ pub fn run(
                         report.project.profile_name,
                     "profile_key":
                         report.project.profile_key,
-                    "profile_default_wallet":
-                        report.project.profile_default_wallet,
-                    "default_wallet":
-                        report.project.default_wallet,
+                    "project_default_wallet":
+                        report.project.project_default_wallet,
+                    "effective_default_wallet":
+                        report.project.effective_default_wallet,
                     "default_wallet_source":
                         report.project.default_wallet_source,
                     "rpc_url": report.project.rpc_url,
@@ -130,12 +130,12 @@ fn summary_items(report: &checks::StatusReport) -> Vec<(String, String)> {
         items.push(("Profile".into(), profile_label(report)));
         items.push(("RPC URL".into(), rpc_url_label(report)));
         items.push((
-            "Profile Default Wallet".into(),
-            profile_default_wallet_label(report),
+            "Project Default Wallet".into(),
+            project_default_wallet_label(report),
         ));
         items.push((
             "Effective Default Wallet".into(),
-            default_wallet_label(report),
+            effective_default_wallet_label(report),
         ));
         items.push(("Wallets".into(), wallets_label(report)));
         items.push(("Contracts".into(), contracts_label(report)));
@@ -247,8 +247,8 @@ fn rpc_url_label(report: &checks::StatusReport) -> String {
     report.project.rpc_url.as_deref().unwrap_or("none").into()
 }
 
-fn default_wallet_label(report: &checks::StatusReport) -> String {
-    match report.project.default_wallet.as_deref() {
+fn effective_default_wallet_label(report: &checks::StatusReport) -> String {
+    match report.project.effective_default_wallet.as_deref() {
         Some(name) => format!(
             "{} ({})",
             name,
@@ -261,10 +261,10 @@ fn default_wallet_label(report: &checks::StatusReport) -> String {
     }
 }
 
-fn profile_default_wallet_label(report: &checks::StatusReport) -> String {
+fn project_default_wallet_label(report: &checks::StatusReport) -> String {
     report
         .project
-        .profile_default_wallet
+        .project_default_wallet
         .as_deref()
         .unwrap_or("none configured")
         .into()

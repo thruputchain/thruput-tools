@@ -418,38 +418,6 @@ pub fn save_profile_default_wallet(
     Ok(path)
 }
 
-/// Remove the default wallet from the selected profile.
-///
-/// Existing comments and formatting are preserved. Clearing a project value
-/// allows a same-named global profile value to apply again during resolution.
-pub fn clear_profile_default_wallet(
-    project_root: &Path,
-    explicit_profile: Option<&str>,
-) -> Result<PathBuf, CliError> {
-    let profile_name = active_profile_name(project_root, explicit_profile)?;
-    let path = profile_write_path(project_root)?;
-    let contents = match std::fs::read_to_string(&path) {
-        Ok(contents) => contents,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(path),
-        Err(e) => return Err(e.into()),
-    };
-    let mut doc: toml_edit::DocumentMut = contents
-        .parse::<toml_edit::DocumentMut>()
-        .map_err(|e| CliError::Other(e.to_string()))?;
-
-    let removed = doc
-        .get_mut("profile")
-        .and_then(toml_edit::Item::as_table_mut)
-        .and_then(|profiles| profiles.get_mut(&profile_name))
-        .and_then(toml_edit::Item::as_table_mut)
-        .is_some_and(|profile| profile.remove("default_wallet").is_some());
-    if removed {
-        write_profile_config(&path, doc.to_string().as_bytes())?;
-    }
-
-    Ok(path)
-}
-
 /// Resolve the effective default key for the active profile.
 ///
 /// Prefers `groundhog.toml` when the profile specifies

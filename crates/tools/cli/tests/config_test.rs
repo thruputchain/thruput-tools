@@ -502,46 +502,6 @@ fn save_wallet_and_default_uses_one_profile_update() {
 
 #[test]
 #[serial]
-fn clear_profile_default_wallet_reveals_layered_global_value() {
-    let tmp = TempDir::new().unwrap();
-    let project = tmp.path().join("project");
-    fs::create_dir(&project).unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
-    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
-    fs::write(
-        global_config_path(&tmp),
-        "[profile.devnet]\ndefault_wallet = \"global-wallet\"\n",
-    )
-    .unwrap();
-    let project_config = project.join("groundhog.toml");
-    fs::write(
-        &project_config,
-        r#"# keep project settings
-[profile.devnet]
-default_wallet = "project-wallet"
-rpc_url = "https://rpc.devnet.example"
-"#,
-    )
-    .unwrap();
-
-    let before = groundhog_cli::config::resolve_profile(&project, Some("devnet")).unwrap();
-    assert_eq!(before.default_wallet.as_deref(), Some("project-wallet"));
-
-    let written =
-        groundhog_cli::config::clear_profile_default_wallet(&project, Some("devnet")).unwrap();
-    assert_eq!(written, project_config);
-
-    let contents = fs::read_to_string(&project_config).unwrap();
-    assert!(contents.contains("# keep project settings"));
-    assert!(!contents.contains("default_wallet"));
-    let after = groundhog_cli::config::resolve_profile(&project, Some("devnet")).unwrap();
-    assert_eq!(after.default_wallet.as_deref(), Some("global-wallet"));
-
-    unsafe { env::remove_var("XDG_CONFIG_HOME") };
-}
-
-#[test]
-#[serial]
 fn save_profile_contract_alias_updates_existing_profile() {
     let tmp = TempDir::new().unwrap();
     let config_path = tmp.path().join("groundhog.toml");
