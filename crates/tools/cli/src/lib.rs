@@ -35,6 +35,8 @@ pub mod test_cmd;
 pub mod test_json;
 pub mod transfer;
 pub mod transfer_json;
+pub mod tx;
+pub mod tx_json;
 pub mod tx_utils;
 pub mod view;
 pub mod view_json;

@@ -111,6 +111,12 @@ pub enum CliError {
     InvalidAddressTarget { target: String, message: String },
     #[error("unknown address target `{target}`")]
     UnknownAddressTarget { target: String },
+    #[error("invalid transaction hash `{display_input}`: {message}")]
+    InvalidTransactionHash {
+        input: String,
+        display_input: String,
+        message: String,
+    },
     #[error("failed to initialize async runtime: {0}")]
     RuntimeInit(String),
     #[error("{method} failed: {message}")]
@@ -297,6 +303,7 @@ impl CliError {
             Self::InvalidHogAmount { .. } => "invalid_hog_amount",
             Self::InvalidAddressTarget { .. } => "invalid_address_target",
             Self::UnknownAddressTarget { .. } => "unknown_address_target",
+            Self::InvalidTransactionHash { .. } => "invalid_transaction_hash",
             Self::RuntimeInit(_) => "runtime_init_failed",
             Self::RpcMethodFailed { .. } => "rpc_method_failed",
             Self::RpcCapabilityUnsupported { .. } => "rpc_capability_unsupported",
@@ -433,11 +440,14 @@ impl CliError {
                     "use a saved wallet, contract alias, dev-N account, or 32-byte 0x-prefixed address",
                 ))
             }
+            Self::InvalidTransactionHash { .. } => Some(Cow::Borrowed(
+                "pass exactly 32 bytes as case-insensitive hex, with or without a 0x prefix",
+            )),
             Self::RpcMethodFailed { .. } => Some(Cow::Borrowed(
                 "check the RPC endpoint and node logs for details",
             )),
             Self::RpcCapabilityUnsupported { .. } => Some(Cow::Borrowed(
-                "use a full local devnode or a compatible remote RPC that supports transaction submission",
+                "use a full local devnode or a compatible remote RPC that supports the required transaction method",
             )),
             Self::LocalDevAccountUnavailable { .. } => Some(Cow::Borrowed(
                 "run `groundhog node` backed by hog-devnode, or use a stored key for non-local endpoints",
@@ -703,7 +713,8 @@ impl CliError {
             Self::TransferToSelf { address } => Some(json!({
                 "address": address,
             })),
-            Self::InvalidHogAmount { input, message } => Some(json!({
+            Self::InvalidHogAmount { input, message }
+            | Self::InvalidTransactionHash { input, message, .. } => Some(json!({
                 "input": input,
                 "message": message,
             })),

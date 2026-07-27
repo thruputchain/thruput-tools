@@ -5930,6 +5930,508 @@ fn keys_rm_nonexistent_fails() {
     assert_eq!(stderr["error"]["code"], "key_not_found");
 }
 
+#[test]
+fn tx_show_json_returns_committed_status_and_matching_receipt() {
+    let tmp = TempDir::new().unwrap();
+    std::fs::write(
+        tmp.path().join("groundhog.toml"),
+        "[profile.devnet]\nrpc_url = \"http://127.0.0.1:1\"\n",
+    )
+    .unwrap();
+    let hash = format!("0x{}", "ab".repeat(32));
+    let event = serde_json::json!({
+        "contractAddress": format!("0x{}", "11".repeat(32)),
+        "topics": [format!("0x{}", "22".repeat(32))],
+        "data": "0x0304",
+    });
+    let receipt = serde_json::json!({
+        "txHash": hash,
+        "height": 42,
+        "status": { "result": "ok" },
+        "events": [event.clone()],
+        "returnData": "0x0506",
+        "abortData": "0x0708",
+    });
+    let (rpc_url, rpc_server) = spawn_tx_show_rpc(
+        &hash,
+        TxShowRpcResponse::Result(serde_json::json!({
+            "status": "committed",
+            "height": 42,
+        })),
+        Some(TxShowRpcResponse::Result(receipt.clone())),
+    );
+
+    let output = groundhog()
+        .args([
+            "--json",
+            "tx",
+            "show",
+            &hash.to_uppercase(),
+            "--profile",
+            "devnet",
+            "--rpc-url",
+            &rpc_url,
+        ])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    rpc_server.join().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["ok"], true);
+    assert_eq!(stdout["command"], "tx.show");
+    assert_eq!(stdout["warnings"], serde_json::json!([]));
+    assert_eq!(stdout["data"]["schemaVersion"], 1);
+    assert_eq!(stdout["data"]["profile"], "devnet");
+    assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
+    assert_eq!(stdout["data"]["txHash"], hash);
+    assert_eq!(stdout["data"]["status"]["status"], "committed");
+    assert_eq!(stdout["data"]["status"]["height"], 42);
+    assert_eq!(stdout["data"]["receipt"], receipt);
+    assert_eq!(stdout["data"]["receipt"]["events"][0], event);
+}
+
+#[test]
+fn tx_show_help_describes_one_shot_public_lookup() {
+    let output = groundhog().args(["tx", "show", "--help"]).output().unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("one-shot public transaction lookup without waiting"));
+    assert!(stdout.contains("public status and receipt fields"));
+    assert!(stdout.contains("Raw transaction bodies"));
+    assert!(stdout.contains("deep traces are not available"));
+    assert!(stdout.contains("--profile"));
+    assert!(stdout.contains("--rpc-url"));
+    assert!(stdout.contains("--runtime-manifest"));
+}
+
+#[test]
+fn tx_show_human_output_includes_raw_committed_receipt_data() {
+    let tmp = TempDir::new().unwrap();
+    let hash = format!("0x{}", "ac".repeat(32));
+    let event = serde_json::json!({
+        "contractAddress": format!("0x{}", "11".repeat(32)),
+        "topics": [],
+        "data": "0xaabb",
+    });
+    let (rpc_url, rpc_server) = spawn_tx_show_rpc(
+        &hash,
+        TxShowRpcResponse::Result(serde_json::json!({
+            "status": "committed",
+            "height": 43,
+        })),
+        Some(TxShowRpcResponse::Result(serde_json::json!({
+            "txHash": hash,
+            "height": 43,
+            "status": { "result": "reverted", "message": "bad\ncall" },
+            "events": [event],
+            "returnData": "0xccdd",
+            "abortData": "0xeeff",
+        }))),
+    );
+
+    let output = groundhog()
+        .args(["tx", "show", &hash, "--rpc-url", &rpc_url])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    rpc_server.join().unwrap();
+
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("status: committed"));
+    assert!(stderr.contains("height: 43"));
+    assert!(stderr.contains(&format!("receipt hash: {hash}")));
+    assert!(stderr.contains("receipt height: 43"));
+    assert!(stderr.contains(r"execution: reverted: bad\ncall"));
+    assert!(stderr.contains(r#"event: {"contractAddress""#));
+    assert!(stderr.contains("return data: 0xccdd"));
+    assert!(stderr.contains("abort data: 0xeeff"));
+}
+
+#[test]
+fn tx_show_non_committed_statuses_succeed_without_receipt_request() {
+    let hash = format!("0x{}", "bc".repeat(32));
+    let statuses = [
+        serde_json::json!({ "status": "pending" }),
+        serde_json::json!({ "status": "invalid", "reason": "bad transaction" }),
+        serde_json::json!({
+            "status": "recentFailure",
+            "attemptHeight": 17,
+            "conflict": {
+                "address": format!("0x{}", "11".repeat(32)),
+                "key": "0xaabb",
+                "code": "boundsExceeded",
+            },
+        }),
+        serde_json::json!({ "status": "unknown" }),
+        serde_json::json!({ "status": "futureStatus", "futureField": 1 }),
+    ];
+
+    for (index, status) in statuses.into_iter().enumerate() {
+        let expected_status = if index == 4 {
+            serde_json::json!({ "status": "other" })
+        } else {
+            status.clone()
+        };
+        let tmp = TempDir::new().unwrap();
+        let (rpc_url, rpc_server) =
+            spawn_tx_show_rpc(&hash, TxShowRpcResponse::Result(status), None);
+        let output = groundhog()
+            .args(["--json", "tx", "show", &hash, "--rpc-url", &rpc_url])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        rpc_server.join().unwrap();
+
+        assert!(
+            output.status.success(),
+            "status case {index} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stderr.is_empty());
+        let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert!(stdout["data"]["receipt"].is_null());
+        assert_eq!(stdout["data"]["status"], expected_status);
+    }
+}
+
+#[test]
+fn tx_show_committed_without_receipt_preserves_status_and_null_receipt() {
+    let tmp = TempDir::new().unwrap();
+    let hash = format!("0x{}", "cd".repeat(32));
+    let (rpc_url, rpc_server) = spawn_tx_show_rpc(
+        &hash,
+        TxShowRpcResponse::Result(serde_json::json!({
+            "status": "committed",
+            "height": 51,
+        })),
+        Some(TxShowRpcResponse::Result(serde_json::Value::Null)),
+    );
+
+    let output = groundhog()
+        .args(["--json", "tx", "show", &hash, "--rpc-url", &rpc_url])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    rpc_server.join().unwrap();
+
+    assert!(output.status.success());
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        stdout["data"],
+        serde_json::json!({
+            "schemaVersion": 1,
+            "profile": "default",
+            "rpcUrl": rpc_url,
+            "txHash": hash,
+            "status": { "status": "committed", "height": 51 },
+            "receipt": null,
+        })
+    );
+}
+
+#[test]
+fn tx_show_uses_profile_rpc_url_without_cli_override() {
+    let tmp = TempDir::new().unwrap();
+    let hash = format!("0x{}", "ce".repeat(32));
+    let (rpc_url, rpc_server) = spawn_tx_show_rpc(
+        &hash,
+        TxShowRpcResponse::Result(serde_json::json!({ "status": "pending" })),
+        None,
+    );
+    std::fs::write(
+        tmp.path().join("groundhog.toml"),
+        format!("[profile.devnet]\nrpc_url = \"{rpc_url}\"\n"),
+    )
+    .unwrap();
+
+    let output = groundhog()
+        .args(["--json", "tx", "show", &hash, "--profile", "devnet"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    rpc_server.join().unwrap();
+
+    assert!(output.status.success());
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["data"]["profile"], "devnet");
+    assert_eq!(stdout["data"]["rpcUrl"], rpc_url);
+}
+
+#[test]
+fn tx_show_rejects_receipt_hash_and_height_mismatches() {
+    let hash = format!("0x{}", "de".repeat(32));
+    for (name, receipt) in [
+        (
+            "hash",
+            serde_json::json!({
+                "txHash": format!("0x{}", "ef".repeat(32)),
+                "height": 61,
+                "status": { "result": "ok" },
+                "events": [],
+            }),
+        ),
+        (
+            "height",
+            serde_json::json!({
+                "txHash": hash,
+                "height": 62,
+                "status": { "result": "ok" },
+                "events": [],
+            }),
+        ),
+    ] {
+        let tmp = TempDir::new().unwrap();
+        let (rpc_url, rpc_server) = spawn_tx_show_rpc(
+            &hash,
+            TxShowRpcResponse::Result(serde_json::json!({
+                "status": "committed",
+                "height": 61,
+            })),
+            Some(TxShowRpcResponse::Result(receipt)),
+        );
+        let output = groundhog()
+            .args(["--json", "tx", "show", &hash, "--rpc-url", &rpc_url])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        rpc_server.join().unwrap();
+
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(stderr["error"]["code"], "rpc_method_failed");
+        assert!(
+            stderr["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains(&format!("receipt {name}"))
+        );
+    }
+}
+
+#[test]
+fn tx_show_maps_only_unsupported_rpc_codes_to_capability_error() {
+    let hash = format!("0x{}", "ef".repeat(32));
+    for code in [-32601, -32052] {
+        let tmp = TempDir::new().unwrap();
+        let (rpc_url, rpc_server) = spawn_tx_show_rpc(
+            &hash,
+            TxShowRpcResponse::Error(code, "unsupported\nmethod"),
+            None,
+        );
+        let output = groundhog()
+            .args(["--json", "tx", "show", &hash, "--rpc-url", &rpc_url])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        rpc_server.join().unwrap();
+
+        assert!(!output.status.success());
+        let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(stderr["error"]["code"], "rpc_capability_unsupported");
+        assert_eq!(stderr["error"]["details"]["method"], "getTransactionStatus");
+        assert!(
+            stderr["error"]["hint"]
+                .as_str()
+                .unwrap()
+                .contains("full local devnode")
+        );
+        assert!(!stderr["error"]["message"].as_str().unwrap().contains('\n'));
+    }
+
+    for code in [-32602, -32050, -32051, -32053, -32099] {
+        let tmp = TempDir::new().unwrap();
+        let (rpc_url, rpc_server) = spawn_tx_show_rpc(
+            &hash,
+            TxShowRpcResponse::Error(code, "ordinary RPC error"),
+            None,
+        );
+        let output = groundhog()
+            .args(["--json", "tx", "show", &hash, "--rpc-url", &rpc_url])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        rpc_server.join().unwrap();
+        let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(stderr["error"]["code"], "rpc_method_failed");
+    }
+
+    let output = groundhog()
+        .args([
+            "--json",
+            "tx",
+            "show",
+            &hash,
+            "--rpc-url",
+            "http://127.0.0.1:1",
+        ])
+        .output()
+        .unwrap();
+    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(stderr["error"]["code"], "rpc_method_failed");
+}
+
+#[test]
+fn tx_show_receipt_rpc_errors_remain_failures() {
+    let tmp = TempDir::new().unwrap();
+    let hash = format!("0x{}", "f1".repeat(32));
+    let (rpc_url, rpc_server) = spawn_tx_show_rpc(
+        &hash,
+        TxShowRpcResponse::Result(serde_json::json!({
+            "status": "committed",
+            "height": 71,
+        })),
+        Some(TxShowRpcResponse::Error(-32052, "receipt unsupported")),
+    );
+
+    let output = groundhog()
+        .args(["--json", "tx", "show", &hash, "--rpc-url", &rpc_url])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    rpc_server.join().unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(stderr["error"]["code"], "rpc_capability_unsupported");
+    assert_eq!(
+        stderr["error"]["details"]["method"],
+        "getTransactionReceipt"
+    );
+}
+
+#[test]
+fn tx_show_rejects_invalid_hash_before_rpc() {
+    for hash in [
+        "0xdeadbeef".to_owned(),
+        format!("0x{}", "ab".repeat(33)),
+        "not-hex".into(),
+    ] {
+        let tmp = TempDir::new().unwrap();
+        let (rpc_url, rpc_server) = spawn_no_request_rpc();
+        let output = groundhog()
+            .args(["--json", "tx", "show", &hash, "--rpc-url", &rpc_url])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        rpc_server.join().unwrap();
+
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(stderr["command"], "tx.show");
+        assert_eq!(stderr["error"]["code"], "invalid_transaction_hash");
+        assert_eq!(stderr["error"]["details"]["input"], hash);
+    }
+}
+
+#[test]
+fn tx_show_human_error_escapes_invalid_hash_input() {
+    let output = groundhog()
+        .args([
+            "tx",
+            "show",
+            "bad\n\u{1b}[31m",
+            "--rpc-url",
+            "http://127.0.0.1:1",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains(r"bad\n\u{1b}[31m"));
+    assert!(!stderr.contains("bad\n"));
+    assert!(!stderr.contains('\u{1b}'));
+}
+
+#[test]
+fn tx_show_human_output_escapes_untrusted_status_text() {
+    let tmp = TempDir::new().unwrap();
+    let hash = format!("0x{}", "f2".repeat(32));
+    let (rpc_url, rpc_server) = spawn_tx_show_rpc(
+        &hash,
+        TxShowRpcResponse::Result(serde_json::json!({
+            "status": "invalid",
+            "reason": "bad\nreason\u{001b}[31m",
+        })),
+        None,
+    );
+
+    let output = groundhog()
+        .args(["tx", "show", &hash, "--rpc-url", &rpc_url])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    rpc_server.join().unwrap();
+
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("status: invalid"));
+    assert!(stderr.contains(r"bad\nreason\u{1b}[31m"));
+    assert!(!stderr.contains('\u{1b}'));
+}
+
+#[derive(Clone)]
+enum TxShowRpcResponse {
+    Result(serde_json::Value),
+    Error(i32, &'static str),
+}
+
+fn spawn_tx_show_rpc(
+    tx_hash: &str,
+    status: TxShowRpcResponse,
+    receipt: Option<TxShowRpcResponse>,
+) -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let tx_hash = tx_hash.to_owned();
+    let handle = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let (stream, request) = read_jsonrpc_request(&listener, deadline, "getTransactionStatus");
+        assert_eq!(request["method"], "groundhog_getTransactionStatus");
+        assert_eq!(request["params"], serde_json::json!([tx_hash]));
+        send_tx_show_response(stream, &request["id"], status);
+
+        if let Some(receipt) = receipt {
+            let (stream, request) =
+                read_jsonrpc_request(&listener, deadline, "getTransactionReceipt");
+            assert_eq!(request["method"], "groundhog_getTransactionReceipt");
+            assert_eq!(request["params"], serde_json::json!([tx_hash]));
+            send_tx_show_response(stream, &request["id"], receipt);
+        }
+        assert_no_follow_up_rpc(&listener);
+    });
+    (format!("http://{addr}"), handle)
+}
+
+fn send_tx_show_response(
+    stream: std::net::TcpStream,
+    request_id: &serde_json::Value,
+    response: TxShowRpcResponse,
+) {
+    match response {
+        TxShowRpcResponse::Result(result) => send_jsonrpc_response(stream, request_id, result),
+        TxShowRpcResponse::Error(code, message) => {
+            send_jsonrpc_error_response(stream, request_id, code, message);
+        }
+    }
+}
+
 /// Read one HTTP POST request from a TCP stream and return the parsed JSON body.
 fn read_jsonrpc_request(
     listener: &TcpListener,

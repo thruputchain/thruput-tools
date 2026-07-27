@@ -445,6 +445,11 @@ enum Command {
         #[command(subcommand)]
         command: CodegenCommand,
     },
+    /// Inspect public transaction status and receipts
+    Tx {
+        #[command(subcommand)]
+        command: TxCommand,
+    },
     /// Generate shell completions
     Completion {
         /// Shell to generate completions for
@@ -532,10 +537,37 @@ enum CodegenCommand {
     },
 }
 
+#[derive(Subcommand)]
+enum TxCommand {
+    /// Show one transaction's public status and receipt
+    #[command(
+        long_about = "Perform a one-shot public transaction lookup without waiting.\n\n\
+                       Shows only public status and receipt fields. Raw transaction bodies, \
+                       inferred transfers, and deep traces are not available."
+    )]
+    Show {
+        /// Transaction hash as exactly 32 bytes of hex
+        tx_hash: String,
+        /// Config profile to use
+        #[arg(long = "profile")]
+        profile: Option<String>,
+        #[command(flatten)]
+        target_args: RpcTargetArgs,
+    },
+}
+
 impl CodegenCommand {
     fn command_name(&self) -> &'static str {
         match self {
             Self::Ts { .. } => "codegen.ts",
+        }
+    }
+}
+
+impl TxCommand {
+    fn command_name(&self) -> &'static str {
+        match self {
+            Self::Show { .. } => "tx.show",
         }
     }
 }
@@ -563,6 +595,7 @@ impl Command {
             Self::Keys { command } => command.command_name(),
             Self::Wallet { command } => command.command_name(),
             Self::Codegen { command } => command.command_name(),
+            Self::Tx { command } => command.command_name(),
             Self::Completion { .. } => "completion",
         }
     }
@@ -917,6 +950,24 @@ fn main() {
                 groundhog_cli::codegen_cmd::run(&source, output.as_deref(), cmd_name, &print)
             }
         },
+        Command::Tx { command } => match command {
+            TxCommand::Show {
+                tx_hash,
+                profile,
+                target_args,
+            } => std::env::current_dir()
+                .map_err(groundhog_cli::CliError::Io)
+                .and_then(|cwd| {
+                    groundhog_cli::tx::show(
+                        &tx_hash,
+                        &cwd,
+                        profile.as_deref(),
+                        &target_args.into(),
+                        cmd_name,
+                        &print,
+                    )
+                }),
+        },
         Command::Completion { shell } => {
             let mut output = Vec::new();
             let shell_name = shell.to_string();
@@ -1245,6 +1296,43 @@ mod tests {
                 );
             }
             _ => panic!("expected transfer command"),
+        }
+    }
+
+    #[test]
+    fn tx_show_flags_and_command_name_parse() {
+        let cli = Cli::parse_from([
+            "groundhog",
+            "tx",
+            "show",
+            &format!("0x{}", "ab".repeat(32)),
+            "--profile",
+            "devnet",
+            "--rpc-url",
+            "https://rpc.example",
+            "--runtime-manifest",
+            "/tmp/runtime.json",
+        ]);
+
+        assert_eq!(cli.command.command_name(), "tx.show");
+        match cli.command {
+            Command::Tx {
+                command:
+                    TxCommand::Show {
+                        tx_hash,
+                        profile,
+                        target_args,
+                    },
+            } => {
+                assert_eq!(tx_hash, format!("0x{}", "ab".repeat(32)));
+                assert_eq!(profile.as_deref(), Some("devnet"));
+                assert_eq!(target_args.rpc_url.as_deref(), Some("https://rpc.example"));
+                assert_eq!(
+                    target_args.runtime_manifest.as_deref(),
+                    Some(std::path::Path::new("/tmp/runtime.json"))
+                );
+            }
+            _ => panic!("expected tx show command"),
         }
     }
 
