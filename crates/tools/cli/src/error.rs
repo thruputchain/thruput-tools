@@ -107,12 +107,24 @@ pub enum CliError {
     MissingSigningKey,
     #[error("invalid HOG amount `{input}`: {message}")]
     InvalidHogAmount { input: String, message: String },
-    #[error("address target `{target}` is invalid: {message}")]
+    #[error("address target {target:?} is invalid: {message}")]
     InvalidAddressTarget { target: String, message: String },
-    #[error("unknown address target `{target}`")]
+    #[error("unknown address target {target:?}")]
     UnknownAddressTarget { target: String },
     #[error("invalid transaction hash `{display_input}`: {message}")]
     InvalidTransactionHash {
+        input: String,
+        display_input: String,
+        message: String,
+    },
+    #[error("invalid transaction history limit `{display_input}`: {message}")]
+    InvalidTransactionHistoryLimit {
+        input: String,
+        display_input: String,
+        message: String,
+    },
+    #[error("invalid transaction cursor `{display_input}`: {message}")]
+    InvalidTransactionCursor {
         input: String,
         display_input: String,
         message: String,
@@ -304,6 +316,8 @@ impl CliError {
             Self::InvalidAddressTarget { .. } => "invalid_address_target",
             Self::UnknownAddressTarget { .. } => "unknown_address_target",
             Self::InvalidTransactionHash { .. } => "invalid_transaction_hash",
+            Self::InvalidTransactionHistoryLimit { .. } => "invalid_transaction_history_limit",
+            Self::InvalidTransactionCursor { .. } => "invalid_transaction_cursor",
             Self::RuntimeInit(_) => "runtime_init_failed",
             Self::RpcMethodFailed { .. } => "rpc_method_failed",
             Self::RpcCapabilityUnsupported { .. } => "rpc_capability_unsupported",
@@ -442,6 +456,12 @@ impl CliError {
             }
             Self::InvalidTransactionHash { .. } => Some(Cow::Borrowed(
                 "pass exactly 32 bytes as case-insensitive hex, with or without a 0x prefix",
+            )),
+            Self::InvalidTransactionHistoryLimit { .. } => Some(Cow::Borrowed(
+                "pass a positive whole-number page size; the selected endpoint enforces its maximum",
+            )),
+            Self::InvalidTransactionCursor { .. } => Some(Cow::Borrowed(
+                "pass the opaque hex cursor returned by the previous `groundhog tx list` page",
             )),
             Self::RpcMethodFailed { .. } => Some(Cow::Borrowed(
                 "check the RPC endpoint and node logs for details",
@@ -714,7 +734,9 @@ impl CliError {
                 "address": address,
             })),
             Self::InvalidHogAmount { input, message }
-            | Self::InvalidTransactionHash { input, message, .. } => Some(json!({
+            | Self::InvalidTransactionHash { input, message, .. }
+            | Self::InvalidTransactionHistoryLimit { input, message, .. }
+            | Self::InvalidTransactionCursor { input, message, .. } => Some(json!({
                 "input": input,
                 "message": message,
             })),

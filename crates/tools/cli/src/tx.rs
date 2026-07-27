@@ -1,13 +1,20 @@
 use std::path::Path;
 
 use groundhog_json_rpc_client::{GroundhogApiClient, HttpClientBuilder};
-use groundhog_json_rpc_types::error::codes;
+use groundhog_json_rpc_types::events::{BlockAnchor, IterationOrder, PaginationCursor};
 use groundhog_json_rpc_types::receipt::TransactionReceipt;
-use groundhog_json_rpc_types::transaction::{TransactionStatus, TxHash};
+use groundhog_json_rpc_types::transaction::{
+    AddressTransactionQuery, TransactionRefPage, TransactionStatus, TxHash,
+};
+use groundhog_json_rpc_types::{ContractAddress, error::codes};
 
+use crate::account_resolution::resolve_address_target;
+use crate::codec::format_contract_address;
 use crate::config::{ProfileOverrides, resolve_profile_with_overrides};
 use crate::result::CommandResult;
-use crate::tx_json::{TX_SHOW_JSON_SCHEMA_VERSION, TxShowReport};
+use crate::tx_json::{
+    TX_LIST_JSON_SCHEMA_VERSION, TX_SHOW_JSON_SCHEMA_VERSION, TxListReport, TxShowReport,
+};
 use crate::tx_utils::{format_tx_hash, summarize_exec_status};
 use crate::{CliError, Print};
 
@@ -44,6 +51,104 @@ pub fn show(
             receipt,
         },
     ))
+}
+
+/// List one page of root-invocation transaction history for an address.
+#[expect(clippy::too_many_arguments)]
+pub fn list(
+    target_input: &str,
+    limit_input: Option<&str>,
+    cursor_input: Option<&str>,
+    project_start: &Path,
+    profile_name: Option<&str>,
+    overrides: &ProfileOverrides,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
+    let limit = parse_history_limit(limit_input)?;
+    let cursor = parse_transaction_cursor(cursor_input)?;
+    let profile = resolve_profile_with_overrides(project_start, profile_name, overrides)?;
+    let rpc_url = profile
+        .rpc_url
+        .as_deref()
+        .ok_or(CliError::MissingRpcUrl)?
+        .to_owned();
+    let address = resolve_address_target(&profile, target_input)?;
+    let address_hex = format_contract_address(&address);
+
+    let query = AddressTransactionQuery {
+        address: ContractAddress::from(address),
+        order: IterationOrder::Descending,
+        anchor: BlockAnchor::AtEnd,
+        cursor,
+        limit,
+    };
+    let rt =
+        tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
+    let page = rt.block_on(fetch_transaction_page(&rpc_url, query))?;
+
+    print_list(target_input, &address_hex, &page, print);
+    print.json(&CommandResult::new(
+        cmd,
+        TxListReport {
+            schema_version: TX_LIST_JSON_SCHEMA_VERSION,
+            profile: profile.name,
+            rpc_url,
+            target_input: target_input.to_owned(),
+            address: ContractAddress::from(address),
+            refs: page.refs,
+            cursor: page.cursor,
+            latest_block: page.latest_block,
+            oldest_block: page.oldest_block,
+        },
+    ))
+}
+
+fn parse_history_limit(input: Option<&str>) -> Result<u32, CliError> {
+    let Some(input) = input else {
+        return Ok(50);
+    };
+    let limit = input
+        .parse::<u32>()
+        .map_err(|error| CliError::InvalidTransactionHistoryLimit {
+            input: input.to_owned(),
+            display_input: human_safe(input),
+            message: error.to_string(),
+        })?;
+    if limit == 0 {
+        return Err(CliError::InvalidTransactionHistoryLimit {
+            input: input.to_owned(),
+            display_input: human_safe(input),
+            message: "must be greater than zero".into(),
+        });
+    }
+    Ok(limit)
+}
+
+fn parse_transaction_cursor(input: Option<&str>) -> Result<PaginationCursor, CliError> {
+    let Some(input) = input else {
+        return Ok(PaginationCursor::default());
+    };
+    serde_json::from_value(serde_json::Value::String(input.to_owned())).map_err(|error| {
+        CliError::InvalidTransactionCursor {
+            input: input.to_owned(),
+            display_input: human_safe(input),
+            message: error.to_string(),
+        }
+    })
+}
+
+async fn fetch_transaction_page(
+    rpc_url: &str,
+    query: AddressTransactionQuery,
+) -> Result<TransactionRefPage, CliError> {
+    let client = HttpClientBuilder::default()
+        .build(rpc_url)
+        .map_err(|error| CliError::RpcConnect(format!("{rpc_url}: {error}")))?;
+    client
+        .get_transactions_by_address(query)
+        .await
+        .map_err(|error| map_rpc_error("getTransactionsByAddress", &error))
 }
 
 fn parse_tx_hash(input: &str) -> Result<TxHash, CliError> {
@@ -185,6 +290,43 @@ fn print_show(
     }
 }
 
+fn print_list(target_input: &str, address: &str, page: &TransactionRefPage, print: &Print) {
+    print.warn(
+        "history includes root invocations only; incoming wallet-wrapped transfers may not appear for recipients",
+    );
+    if !target_input.eq_ignore_ascii_case(address) {
+        print.detail("target", human_safe(target_input));
+    }
+    print.detail("address", address);
+    print.detail("latest indexed block", *page.latest_block);
+    print.detail("oldest retained block", *page.oldest_block);
+    if page.refs.is_empty() {
+        if page.cursor.0.is_empty() {
+            print.detail("transactions", "none (end of history)");
+        } else {
+            print.detail("transactions", "none in this page");
+        }
+    } else {
+        for transaction in &page.refs {
+            print.detail(
+                "tx",
+                format_args!(
+                    "{} at height {}",
+                    format_tx_hash(&transaction.tx_hash),
+                    *transaction.height,
+                ),
+            );
+        }
+    }
+    if !page.cursor.0.is_empty() {
+        print.detail("next cursor", format_cursor(&page.cursor));
+    }
+}
+
+fn format_cursor(cursor: &PaginationCursor) -> String {
+    format!("0x{}", hex::encode(&cursor.0))
+}
+
 fn human_safe(value: &str) -> String {
     let mut escaped = String::with_capacity(value.len());
     for character in value.chars() {
@@ -199,8 +341,9 @@ fn human_safe(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_tx_hash;
+    use super::{format_cursor, parse_history_limit, parse_transaction_cursor, parse_tx_hash};
     use crate::tx_utils::format_tx_hash;
+    use groundhog_json_rpc_types::events::PaginationCursor;
 
     #[test]
     fn transaction_hash_parser_accepts_shared_hex_forms() {
@@ -226,5 +369,48 @@ mod tests {
                 parse_tx_hash(&input).expect_err("bug: invalid transaction hash should fail");
             assert_eq!(error.code(), "invalid_transaction_hash");
         }
+    }
+
+    #[test]
+    fn history_limit_parser_defaults_and_accepts_nonzero_u32() {
+        assert_eq!(parse_history_limit(None).unwrap(), 50);
+        assert_eq!(parse_history_limit(Some("1")).unwrap(), 1);
+        assert_eq!(
+            parse_history_limit(Some(&u32::MAX.to_string())).unwrap(),
+            u32::MAX
+        );
+    }
+
+    #[test]
+    fn history_limit_parser_rejects_invalid_values() {
+        for input in ["0", "-1", "one", "4294967296"] {
+            let error = parse_history_limit(Some(input)).expect_err("invalid limit should fail");
+            assert_eq!(error.code(), "invalid_transaction_history_limit");
+        }
+    }
+
+    #[test]
+    fn transaction_cursor_parser_uses_shared_hex_contract() {
+        for (input, expected) in [(None, "0x"), (Some("0x"), "0x"), (Some("0XAbCd"), "0xabcd")] {
+            let cursor = parse_transaction_cursor(input).expect("shared cursor form should parse");
+            assert_eq!(format_cursor(&cursor), expected);
+        }
+    }
+
+    #[test]
+    fn transaction_cursor_parser_rejects_malformed_hex() {
+        for input in ["0xabc", "0xgg"] {
+            let error =
+                parse_transaction_cursor(Some(input)).expect_err("invalid cursor should fail");
+            assert_eq!(error.code(), "invalid_transaction_cursor");
+        }
+    }
+
+    #[test]
+    fn cursor_formatter_preserves_opaque_bytes() {
+        assert_eq!(
+            format_cursor(&PaginationCursor(vec![0x00, 0xab, 0xff])),
+            "0x00abff"
+        );
     }
 }

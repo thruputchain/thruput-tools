@@ -554,6 +554,28 @@ enum TxCommand {
         #[command(flatten)]
         target_args: RpcTargetArgs,
     },
+    /// List one page of root-invocation transaction history
+    #[command(
+        long_about = "List exactly one page of transactions whose root invocation targets \
+                       the resolved address. Incoming wallet-wrapped transfers may not appear \
+                       when querying the recipient.\n\nThe continuation cursor is opaque and reusable. \
+                       Receipts are not fetched; inspect selected hashes with `groundhog tx show`."
+    )]
+    List {
+        /// Wallet name, contract alias, dev-N account, or direct address
+        target: String,
+        /// Number of transaction references to request (default: 50)
+        #[arg(long, allow_hyphen_values = true)]
+        limit: Option<String>,
+        /// Opaque cursor returned by a previous page
+        #[arg(long)]
+        cursor: Option<String>,
+        /// Config profile to use
+        #[arg(long = "profile")]
+        profile: Option<String>,
+        #[command(flatten)]
+        target_args: RpcTargetArgs,
+    },
 }
 
 impl CodegenCommand {
@@ -568,6 +590,7 @@ impl TxCommand {
     fn command_name(&self) -> &'static str {
         match self {
             Self::Show { .. } => "tx.show",
+            Self::List { .. } => "tx.list",
         }
     }
 }
@@ -967,6 +990,26 @@ fn main() {
                         &print,
                     )
                 }),
+            TxCommand::List {
+                target,
+                limit,
+                cursor,
+                profile,
+                target_args,
+            } => std::env::current_dir()
+                .map_err(groundhog_cli::CliError::Io)
+                .and_then(|cwd| {
+                    groundhog_cli::tx::list(
+                        &target,
+                        limit.as_deref(),
+                        cursor.as_deref(),
+                        &cwd,
+                        profile.as_deref(),
+                        &target_args.into(),
+                        cmd_name,
+                        &print,
+                    )
+                }),
         },
         Command::Completion { shell } => {
             let mut output = Vec::new();
@@ -1333,6 +1376,51 @@ mod tests {
                 );
             }
             _ => panic!("expected tx show command"),
+        }
+    }
+
+    #[test]
+    fn tx_list_flags_and_command_name_parse() {
+        let cli = Cli::parse_from([
+            "groundhog",
+            "tx",
+            "list",
+            "alice",
+            "--limit",
+            "25",
+            "--cursor",
+            "0xaabb",
+            "--profile",
+            "devnet",
+            "--rpc-url",
+            "https://rpc.example",
+            "--runtime-manifest",
+            "/tmp/runtime.json",
+        ]);
+
+        assert_eq!(cli.command.command_name(), "tx.list");
+        match cli.command {
+            Command::Tx {
+                command:
+                    TxCommand::List {
+                        target,
+                        limit,
+                        cursor,
+                        profile,
+                        target_args,
+                    },
+            } => {
+                assert_eq!(target, "alice");
+                assert_eq!(limit.as_deref(), Some("25"));
+                assert_eq!(cursor.as_deref(), Some("0xaabb"));
+                assert_eq!(profile.as_deref(), Some("devnet"));
+                assert_eq!(target_args.rpc_url.as_deref(), Some("https://rpc.example"));
+                assert_eq!(
+                    target_args.runtime_manifest.as_deref(),
+                    Some(std::path::Path::new("/tmp/runtime.json"))
+                );
+            }
+            _ => panic!("expected tx list command"),
         }
     }
 
