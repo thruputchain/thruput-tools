@@ -24,7 +24,7 @@ use crate::adaptive_batch::{
     AdaptiveBatcher, BatchProcessor, deadline_cohorts, shard_index_by_routing_key,
 };
 use crate::config::AdaptiveBatchConfig;
-use crate::context::{SchedulerClient, clear_scheduler_if_current};
+use crate::context::{AbortTaskOnDrop, SchedulerClient, clear_scheduler_if_current};
 use crate::error::GatewayError;
 use crate::metrics::{BackendRequestOutcome, GatewayMetrics};
 
@@ -87,6 +87,7 @@ impl SubmitSink for SchedulerSink {
                 }
                 let mut call =
                     tokio::spawn(async move { c.schedulercoord_submit_unvetted(&batch).await });
+                let _abort_call_on_drop = AbortTaskOnDrop::new(&call);
                 let result = if let Ok(result) = tokio::time::timeout(timeout, &mut call).await {
                     Ok(result.unwrap_or(Err(rpc_driver::RpcError::SystemError)))
                 } else {
@@ -271,6 +272,11 @@ impl BatchSubmitter {
             request_timeout,
             backend_timeout,
         }
+    }
+
+    /// Abort submitter shard runners and all in-flight submissions.
+    pub(crate) fn abort(&self) {
+        self.inner.abort();
     }
 
     /// Submit one tx.  Routes to a shard by tx hash; returns when the

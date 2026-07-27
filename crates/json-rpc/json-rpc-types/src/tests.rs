@@ -68,7 +68,7 @@ mod schema_generation {
 mod wire_format {
     use serde_json::Value;
 
-    use crate::block::{BlockInfo, ChainTip};
+    use crate::block::{BlockInfo, BlockProjectionError, ChainTip, consensus_value_hash};
     use crate::events::{
         BlockAnchor, ContractAddressList, EmittedEvent, EventFilter, EventFilterList, EventQuery,
         EventTopicFilter, IdentifiedEvent, IterationOrder, PaginationCursor, TopicList,
@@ -84,8 +84,18 @@ mod wire_format {
         AddressTransactionQuery, TransactionRef, TransactionRefPage, TransactionStatus, TxHash,
     };
     use crate::view::{RootInvocationOutput, ViewRequest, ViewResponse};
-    use crate::{BlockHeader, BlockHeight, SHA256Hash};
-    use xdr_common::VecM;
+    use groundhog_scheduler::{ConsensusValue, ProposalTxsHash};
+    use groundhog_xdr::{
+        header::ProposalHeader,
+        types::{
+            ConsensusValueHash, EventsHash, ExtensionPoint, NetworkHash, Protocol,
+            SHA256Hash as XdrHash, StorageShortHash, TimePoint, TxsHash,
+        },
+        validator::ValidatorID,
+    };
+
+    use crate::{BlockHeight, SHA256Hash};
+    use xdr_common::{BytesM, VecM};
 
     fn zero_hash() -> SHA256Hash {
         Hex0x(groundhog_xdr::types::SHA256Hash::from([0u8; 32]))
@@ -93,6 +103,26 @@ mod wire_format {
 
     fn zero_address() -> crate::ContractAddress {
         Hex0x(groundhog_xdr::types::ContractAddress::from([0u8; 32]))
+    }
+
+    fn test_consensus_value() -> ConsensusValue {
+        ConsensusValue {
+            protocol: Protocol::new(1),
+            ext: ExtensionPoint::_0,
+            prev_hash: ConsensusValueHash::new(XdrHash::from([7; 32])),
+            proposal_header: ProposalHeader {
+                ext: ExtensionPoint::_0,
+                network_hash: NetworkHash::new(XdrHash::from([1; 32])),
+                proposer: ValidatorID::new([2; 32]),
+                block_timepoint: TimePoint::new(123),
+                block_height: BlockHeight::from(99i64),
+                txs_hash: TxsHash::new(XdrHash::from([3; 32])),
+                storage_hash: StorageShortHash::new(XdrHash::from([4; 32])),
+                events_hash: EventsHash::new(XdrHash::from([5; 32])),
+            },
+            proposal_txs_hash: ProposalTxsHash::new(XdrHash::from([6; 32])),
+            upgrades: VecM(vec![BytesM(vec![0xaa, 0xbb])]),
+        }
     }
 
     fn test_network_descriptor() -> NetworkDescriptor {
@@ -416,27 +446,58 @@ mod wire_format {
 
     #[test]
     fn block_info_wire_format() {
-        let info = BlockInfo::from(BlockHeader {
-            network_id: 1,
-            block_height: BlockHeight::from(99i64),
-            txset_hash: groundhog_xdr::types::SHA256Hash::from([0u8; 32]),
-            db_hash: groundhog_xdr::types::DbHash::from([0u8; 2048]),
-            events_hash: groundhog_xdr::types::SHA256Hash::from([0u8; 32]),
-            prev_block_hash: groundhog_xdr::types::BlockHash::from(
-                groundhog_xdr::types::SHA256Hash::from([0u8; 32]),
-            ),
-        });
+        let value = test_consensus_value();
+        let expected_block_hash =
+            consensus_value_hash(&value).expect("bug: valid consensus value should hash");
+        let info =
+            BlockInfo::try_from(value).expect("bug: supported consensus value should project");
         let v: Value = serde_json::to_value(&info).unwrap();
-        assert_eq!(v["networkId"], 1);
+        assert_eq!(
+            v["blockHash"],
+            serde_json::to_value(expected_block_hash).unwrap()
+        );
+        assert_eq!(v["protocol"], 1);
+        assert_eq!(v["networkHash"], format!("0x{}", "01".repeat(32)));
+        assert_eq!(v["proposer"], format!("0x{}", "02".repeat(32)));
+        assert_eq!(v["blockTimepoint"], 123);
         assert_eq!(v["blockHeight"], 99);
-        assert!(v["txsetHash"].as_str().unwrap().starts_with("0x"));
-        assert!(v["dbHash"].as_str().unwrap().starts_with("0x"));
-        assert!(v["eventsHash"].as_str().unwrap().starts_with("0x"));
-        assert!(v["prevBlockHash"].as_str().unwrap().starts_with("0x"));
+        assert_eq!(v["txsHash"], format!("0x{}", "03".repeat(32)));
+        assert_eq!(v["storageHash"], format!("0x{}", "04".repeat(32)));
+        assert_eq!(v["eventsHash"], format!("0x{}", "05".repeat(32)));
+        assert_eq!(v["proposalTxsHash"], format!("0x{}", "06".repeat(32)));
+        assert_eq!(v["prevBlockHash"], format!("0x{}", "07".repeat(32)));
+        assert_eq!(v["upgrades"], serde_json::json!(["0xaabb"]));
         // camelCase
-        assert!(v.get("network_id").is_none());
+        assert!(v.get("network_hash").is_none());
         assert!(v.get("block_height").is_none());
-        assert!(v.get("txset_hash").is_none());
+        assert!(v.get("txs_hash").is_none());
+    }
+
+    #[test]
+    fn consensus_value_hash_has_stable_golden_vector() {
+        let hash = consensus_value_hash(&test_consensus_value())
+            .expect("bug: valid consensus value should hash");
+        assert_eq!(
+            serde_json::to_value(hash).expect("bug: hash should serialize"),
+            "0xe5557e634c3ea1dd2a28038dbf721ef874c465dab6d11c55002e22cf16776fa8"
+        );
+    }
+
+    #[test]
+    fn consensus_value_hash_and_projection_return_encoding_errors() {
+        let mut value = test_consensus_value();
+        value.upgrades = VecM(vec![BytesM(vec![0; 129])]);
+
+        assert!(matches!(
+            consensus_value_hash(&value),
+            Err(xdrs::WriteError::InvalidArrayLength)
+        ));
+        assert!(matches!(
+            BlockInfo::try_from(value),
+            Err(BlockProjectionError::ConsensusValueEncoding {
+                source: xdrs::WriteError::InvalidArrayLength
+            })
+        ));
     }
 
     #[test]

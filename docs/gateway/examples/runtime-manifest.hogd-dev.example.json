@@ -1,7 +1,8 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "kind": "hogd-dev-runtime",
-  "networkId": "groundhog-local",
+  "chainState": "fresh",
+  "networkHash": "0000000000000000000000000000000000000000000000000000000000000000",
   "protocol": "hogp/020ed23d4e2f",
   "genesisHash": "0x4242424242424242424242424242424242424242424242424242424242424242",
   "producer": {

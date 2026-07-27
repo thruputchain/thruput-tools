@@ -88,9 +88,9 @@ Input to a backend launcher. Describes desired genesis/bootstrap state.
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "kind": "groundhog-bootstrap",
-  "networkId": "groundhog-bench-local",
+  "networkHash": "5151515151515151515151515151515151515151515151515151515151515151",
   "profile": "local-dev",
   "devWallet": {
     "profile": "hog-devnode-default",
@@ -155,7 +155,7 @@ into the concrete parameters actually applied. For example,
 `storageCostModel.profile = "hogd-default"` lowers to explicit cost-model
 fields in the runtime manifest.
 
-For v1, `bootstrapAccounts` describes a homogeneous account group. All
+For v2, `bootstrapAccounts` describes a homogeneous account group. All
 bootstrapped accounts share the same derivation scheme and initial storage-token
 funding. Account `role` values are producer-assigned runtime hints derived from
 the selected profile, not input fields in the bootstrap manifest. Per-account
@@ -171,7 +171,7 @@ Readiness stdout remains a small, bounded lifecycle protocol:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "status": "ready",
   "manifestPath": "/tmp/hog-devnode-xyz/runtime-manifest.json",
   "manifestHash": "0x..."
@@ -182,9 +182,10 @@ The runtime manifest file contains the full payload:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "kind": "hogd-dev-runtime",
-  "networkId": "groundhog-local",
+  "chainState": "fresh",
+  "networkHash": "0000000000000000000000000000000000000000000000000000000000000000",
   "protocol": "hogp/...",
   "genesisHash": "0x...",
   "producer": {
@@ -235,9 +236,11 @@ The runtime manifest file contains the full payload:
 }
 ```
 
-This is observed state. It answers: "What is actually running, where are the
-services, which accounts are funded, and which wallet addresses should clients
-invoke?"
+This is observed state. It answers: "What is actually running, whether this
+process initialized or recovered the committed chain, where are the services,
+which accounts are funded, and which wallet addresses should clients invoke?"
+`chainState` is based on successful chain recovery, not data-directory
+presence.
 
 The runtime manifest replaces the previous ad hoc readiness JSON without
 changing the tiny one-line stdout contract: read exactly one bounded JSON line
@@ -298,7 +301,7 @@ Terminology note: the runtime manifest uses `bootstrapAccounts` for
 accounts/wallets materialized at bootstrap so local CLI, bench, and test
 harnesses can submit valid transactions.
 
-For v1, all `bootstrapAccounts` share the top-level
+For v2, all `bootstrapAccounts` share the top-level
 `bootstrapAccountDerivation` scheme and seed; `index` is the only key
 discriminator. This matches the current deterministic account model and avoids
 per-account derivation ambiguity. The array length is authoritative; do not

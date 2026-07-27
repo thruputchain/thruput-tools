@@ -1,15 +1,18 @@
 //! Runtime manifest types emitted by local and benchmark backends.
 
-use std::net::SocketAddr;
+use std::{fmt, net::SocketAddr};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::{ContractAddress, Ed25519PublicKey, SHA256Hash};
+use crate::{ContractAddress, Ed25519PublicKey, NetworkHashHex, SHA256Hash};
 use groundhog_xdr::contract::ContractEntrypointID;
 
 /// Current runtime manifest schema version.
-pub const RUNTIME_MANIFEST_SCHEMA_VERSION: u32 = 1;
+pub const RUNTIME_MANIFEST_SCHEMA_VERSION: u32 = 2;
+
+/// Runtime manifest family emitted by hog-devnode.
+pub const HOGD_DEV_RUNTIME_MANIFEST_KIND: &str = "hogd-dev-runtime";
 
 /// Runtime manifest written by a backend after bootstrap is complete.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -18,10 +21,13 @@ pub const RUNTIME_MANIFEST_SCHEMA_VERSION: u32 = 1;
 pub struct RuntimeManifest {
     /// Version of this JSON contract.
     pub schema_version: u32,
-    /// Producer family, for example `hogd-dev-runtime`.
+    /// Producer family, for example [`HOGD_DEV_RUNTIME_MANIFEST_KIND`].
     pub kind: String,
-    /// Identifier shared by all services for this runtime.
-    pub network_id: String,
+    /// Whether this process initialized a new chain or recovered a committed chain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chain_state: Option<RuntimeManifestChainState>,
+    /// Unprefixed 32-byte network hash shared by all services for this runtime.
+    pub network_hash: NetworkHashHex,
     /// x23 protocol string expected by backend services.
     pub protocol: String,
     /// Hash of the materialized genesis state.
@@ -36,6 +42,59 @@ pub struct RuntimeManifest {
     pub bootstrap_accounts: Vec<BootstrapAccount>,
     /// Deployed bootstrap artifacts and cost model metadata.
     pub bootstrap: RuntimeManifestBootstrap,
+}
+
+/// How the producer obtained the chain served by this runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeManifestChainState {
+    /// No committed chain existed, so the producer initialized a new chain.
+    Fresh,
+    /// The producer opened and recovered an existing committed chain.
+    Recovered,
+}
+
+impl fmt::Display for RuntimeManifestChainState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Fresh => "fresh",
+            Self::Recovered => "recovered",
+        })
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RuntimeManifestEnvelope {
+    schema_version: u32,
+}
+
+/// Parse a runtime manifest after validating its schema envelope.
+pub fn parse_runtime_manifest(bytes: &[u8]) -> Result<RuntimeManifest, RuntimeManifestParseError> {
+    let envelope: RuntimeManifestEnvelope = serde_json::from_slice(bytes)?;
+    if envelope.schema_version != RUNTIME_MANIFEST_SCHEMA_VERSION {
+        return Err(RuntimeManifestParseError::UnsupportedSchema {
+            expected: RUNTIME_MANIFEST_SCHEMA_VERSION,
+            actual: envelope.schema_version,
+        });
+    }
+    Ok(serde_json::from_slice(bytes)?)
+}
+
+/// Errors returned while parsing a versioned runtime manifest.
+#[derive(Debug, thiserror::Error)]
+pub enum RuntimeManifestParseError {
+    /// The manifest is not valid JSON for its declared schema.
+    #[error("invalid runtime manifest JSON: {0}")]
+    Json(#[from] serde_json::Error),
+    /// The manifest declares a schema this build does not support.
+    #[error("unsupported runtime manifest schemaVersion {actual}; expected {expected}")]
+    UnsupportedSchema {
+        /// Schema supported by this build.
+        expected: u32,
+        /// Schema declared by the manifest.
+        actual: u32,
+    },
 }
 
 /// Runtime manifest producer metadata.
@@ -250,7 +309,8 @@ mod tests {
     use crate::hex::Hex0x;
 
     use super::{
-        BootstrapAccount, BootstrapAccountDerivation, RuntimeManifest, RuntimeManifestBootstrap,
+        BootstrapAccount, BootstrapAccountDerivation, RUNTIME_MANIFEST_SCHEMA_VERSION,
+        RuntimeManifest, RuntimeManifestBootstrap, RuntimeManifestChainState,
         RuntimeManifestDevWallet, RuntimeManifestEndpoints, RuntimeManifestProducer,
         RuntimeManifestStorageCostModel,
     };
@@ -262,9 +322,10 @@ mod tests {
         assert_eq!(
             value,
             json!({
-                "schemaVersion": 1,
+                "schemaVersion": 2,
                 "kind": "hogd-dev-runtime",
-                "networkId": "groundhog-local",
+                "chainState": "fresh",
+                "networkHash": "4242424242424242424242424242424242424242424242424242424242424242",
                 "protocol": "hogp/test",
                 "genesisHash": prefixed_hex(0x42),
                 "producer": {
@@ -314,11 +375,79 @@ mod tests {
         );
     }
 
+    #[test]
+    fn runtime_manifest_rejects_invalid_network_hash() {
+        let mut value = serde_json::to_value(full_manifest()).expect("bug: manifest serializes");
+        value["networkHash"] = json!("groundhog-local");
+
+        let error = serde_json::from_value::<RuntimeManifest>(value)
+            .expect_err("invalid network hash should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("networkHash must be exactly 64 lowercase hexadecimal characters")
+        );
+    }
+
+    #[test]
+    fn runtime_manifest_rejects_noncanonical_network_hash() {
+        let mut value = serde_json::to_value(full_manifest()).expect("bug: manifest serializes");
+        value["networkHash"] = json!("AA".repeat(32));
+
+        let error = serde_json::from_value::<RuntimeManifest>(value)
+            .expect_err("uppercase network hash should fail");
+
+        assert!(error.to_string().contains("lowercase hexadecimal"));
+    }
+
+    #[test]
+    fn runtime_manifest_rejects_unknown_chain_state() {
+        let mut value = serde_json::to_value(full_manifest()).expect("bug: manifest serializes");
+        value["chainState"] = json!("existing_data_dir");
+
+        let error = serde_json::from_value::<RuntimeManifest>(value)
+            .expect_err("unknown chain state should fail");
+
+        assert!(error.to_string().contains("unknown variant"));
+    }
+
+    #[test]
+    fn runtime_manifest_allows_missing_additive_chain_state() {
+        let mut value = serde_json::to_value(full_manifest()).expect("bug: manifest serializes");
+        value
+            .as_object_mut()
+            .expect("bug: manifest is an object")
+            .remove("chainState");
+
+        let manifest = serde_json::from_value::<RuntimeManifest>(value)
+            .expect("schema 2 compatibility should allow a missing additive field");
+
+        assert_eq!(manifest.chain_state, None);
+    }
+
+    #[test]
+    fn runtime_manifest_parser_rejects_schema_before_decoding_body() {
+        let bytes = br#"{"schemaVersion":99,"futureBody":true}"#;
+
+        let error = super::parse_runtime_manifest(bytes)
+            .expect_err("unsupported schema should fail before body decoding");
+
+        assert!(matches!(
+            error,
+            super::RuntimeManifestParseError::UnsupportedSchema {
+                expected: RUNTIME_MANIFEST_SCHEMA_VERSION,
+                actual: 99,
+            }
+        ));
+    }
+
     fn full_manifest() -> RuntimeManifest {
         RuntimeManifest {
-            schema_version: 1,
+            schema_version: RUNTIME_MANIFEST_SCHEMA_VERSION,
             kind: "hogd-dev-runtime".into(),
-            network_id: "groundhog-local".into(),
+            chain_state: Some(RuntimeManifestChainState::Fresh),
+            network_hash: crate::NetworkHashHex::from([0x42; 32]),
             protocol: "hogp/test".into(),
             genesis_hash: hash(0x42),
             producer: RuntimeManifestProducer {

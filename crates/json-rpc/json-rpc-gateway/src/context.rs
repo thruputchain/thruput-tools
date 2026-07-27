@@ -12,7 +12,7 @@ use groundhog_indexer::{
     IndexerBlockExplorer_IndexerBlockExplorer1_Client, IndexerBlockExplorerIntroOutcome,
 };
 use groundhog_scheduler::sched_coord::SchedulerCoord_SchedulerCoord1_Client;
-use groundhog_scp::network::Protocol;
+use groundhog_scp::network::ProtocolCommit as Protocol;
 use groundhog_view::{ViewGateway_ViewGateway1_Client, ViewGatewayIntroOutcome};
 use groundhog_x23_transport::{
     ConnectError, hogd_large_message_config, try_connect, try_connect_with_canceled_call_policy,
@@ -22,6 +22,7 @@ use groundhog_xdr::PROTOCOL_VERSION;
 use rpc_driver::{CanceledCallPolicy, ConnectionConfig, RpcSender};
 use tokio::{
     sync::{RwLock, Semaphore},
+    task::{AbortHandle, JoinHandle},
     time::Instant,
 };
 use xdr_common::StringM;
@@ -121,6 +122,24 @@ pub(crate) async fn clear_scheduler_if_current(
         .is_some_and(|client| client.generation() == generation)
     {
         *current = None;
+    }
+}
+
+pub(crate) struct AbortTaskOnDrop {
+    handle: AbortHandle,
+}
+
+impl AbortTaskOnDrop {
+    pub(crate) fn new<T>(task: &JoinHandle<T>) -> Self {
+        Self {
+            handle: task.abort_handle(),
+        }
+    }
+}
+
+impl Drop for AbortTaskOnDrop {
+    fn drop(&mut self) {
+        self.handle.abort();
     }
 }
 
@@ -345,6 +364,13 @@ impl GatewayContext {
             config,
             metrics,
         }
+    }
+
+    /// Abort request-batching workers after the RPC server has stopped accepting work.
+    pub(crate) fn abort_request_workers(&self) {
+        self.batch_submitter.abort();
+        self.storage_batcher.abort();
+        self.tip_coalescer.abort();
     }
 }
 
@@ -817,6 +843,8 @@ pub(crate) fn view_gateway_pool_size() -> usize {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
     use async_trait::async_trait;
     use groundhog_db_gateway::{
         AddressAndKeyBatch, DbGateway_DbGateway1, DbGateway_DbGateway1_Dispatcher, DbGatewayResult,
@@ -836,6 +864,34 @@ mod tests {
     use tokio::net::TcpListener;
 
     use super::*;
+
+    struct DropMarker(Arc<AtomicBool>);
+
+    impl Drop for DropMarker {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[tokio::test]
+    async fn abort_task_on_drop_cancels_spawned_task() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let task_dropped = dropped.clone();
+        let task = tokio::spawn(async move {
+            let _marker = DropMarker(task_dropped);
+            let _ = started_tx.send(());
+            std::future::pending::<()>().await;
+        });
+        started_rx.await.expect("bug: spawned task should start");
+        let guard = AbortTaskOnDrop::new(&task);
+
+        drop(guard);
+
+        let error = task.await.expect_err("bug: guarded task should be aborted");
+        assert!(error.is_cancelled());
+        assert!(dropped.load(Ordering::SeqCst));
+    }
 
     struct IntroRejectedViewGateway;
     #[derive(Clone, Copy)]

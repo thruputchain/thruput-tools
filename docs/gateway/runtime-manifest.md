@@ -7,8 +7,9 @@ dev-wallet installation, account funding, and endpoint binding are complete.
 Use it for local benchmark runs:
 
 - `groundhog node` consumes the manifest internally, reports its path in
-  `--json` startup output, and writes the matching RPC URL and absolute manifest
-  path into the selected profile.
+  `--json` startup output, reports whether the chain was fresh or recovered,
+  and writes the matching RPC URL and absolute manifest path into the selected
+  profile.
 - CLI commands that use `dev-N` keys resolve manifest paths in this order:
   `GROUNDHOG_RUNTIME_MANIFEST`, then `profile.<name>.runtime_manifest`.
 - `hog-gateway --runtime-manifest <path>` starts the standalone gateway from
@@ -156,11 +157,14 @@ run does not silently target a mixed topology.
 
 See
 [`examples/runtime-manifest.hogd-dev.example.json`](examples/runtime-manifest.hogd-dev.example.json)
-for a complete v1 shape.
+for a complete v2 shape.
 
 That file is a shape example, not a runnable manifest. A runnable manifest must
 come from a live producer because these fields are runtime state:
 
+- `chainState` is `fresh` when this process initialized the chain and
+  `recovered` only when hog-devnode actually recovered an existing committed
+  chain. Data-directory presence alone does not make a chain recovered.
 - `endpoints` contain bound ports.
 - `genesisHash` identifies the materialized genesis.
 - `bootstrapAccounts[].walletAddress` must match the deployed dev wallets.
@@ -175,7 +179,7 @@ Readiness stdout is a single bounded JSON pointer line:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "status": "ready",
   "manifestPath": "/tmp/hog-devnode/runtime-manifest.json",
   "manifestHash": "0x..."
@@ -197,3 +201,7 @@ configuration.
 
 Optional endpoints are absent when unavailable. They are never emitted as
 `null`.
+
+Runtime manifest schema 2 permits additive optional fields. `chainState` was
+added under that rule, so schema 2 is preserved; hog-devnode emits it and the
+local node supervisor requires it for authoritative startup reporting.

@@ -2,7 +2,7 @@ use std::{fmt, str::FromStr, time::Duration};
 
 use serde::Deserialize;
 
-use groundhog_json_rpc_types::runtime_manifest::RuntimeManifest;
+use groundhog_json_rpc_types::{NetworkHashHex, runtime_manifest::RuntimeManifest};
 
 /// Backend used for transaction submission.
 ///
@@ -215,6 +215,10 @@ pub struct GatewayConfig {
     /// `chainTip`, `pendingTransactionCount`, and pending tx lookup.
     pub scheduler_address: String,
 
+    /// Network hash expected from scheduler tips when supplied by a runtime manifest.
+    #[serde(skip)]
+    pub expected_network_hash: Option<NetworkHashHex>,
+
     /// x23 RPC address for hogd indexer.
     ///
     /// Optional in runtime-manifest mode. When absent, read APIs backed by the
@@ -297,6 +301,7 @@ impl Default for GatewayConfig {
             shutdown_grace_ms: 10_000,
             submission_backend: SubmissionBackend::HogdScheduler,
             scheduler_address: "127.0.0.1:9000".into(),
+            expected_network_hash: None,
             indexer_address: Some("127.0.0.1:9001".into()),
             db_gateway_address: None,
             view_gateway_address: None,
@@ -388,6 +393,7 @@ impl GatewayConfig {
         )?;
 
         self.scheduler_address = scheduler_address;
+        self.expected_network_hash = Some(manifest.network_hash.clone());
         self.indexer_address = indexer_address;
         self.db_gateway_address = db_gateway_address;
         self.view_gateway_address = view_gateway_address;
@@ -474,6 +480,7 @@ mod tests {
             .expect("bug: manifest should configure gateway");
 
         assert_eq!(config.scheduler_address, "127.0.0.1:1000");
+        assert_eq!(config.expected_network_hash, Some(manifest.network_hash));
         assert_eq!(config.indexer_address.as_deref(), Some("127.0.0.1:1001"));
         assert_eq!(config.db_gateway_address.as_deref(), Some("127.0.0.1:1002"));
         assert_eq!(
@@ -507,7 +514,7 @@ mod tests {
         let mut manifest = manifest_with_endpoints(&json!({
             "scheduler": "127.0.0.1:1000",
         }));
-        manifest.schema_version = 2;
+        manifest.schema_version = 3;
 
         let err = config
             .apply_runtime_manifest(&manifest)
@@ -515,7 +522,7 @@ mod tests {
 
         assert_eq!(
             err,
-            RuntimeManifestConfigError::UnsupportedSchemaVersion { actual: 2 }
+            RuntimeManifestConfigError::UnsupportedSchemaVersion { actual: 3 }
         );
     }
 
@@ -560,9 +567,10 @@ mod tests {
 
     fn manifest_with_endpoints(endpoints: &serde_json::Value) -> RuntimeManifest {
         serde_json::from_value(json!({
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "kind": "hogd-dev-runtime",
-            "networkId": "groundhog-local",
+            "chainState": "fresh",
+            "networkHash": "00".repeat(32),
             "protocol": "hogp/test",
             "genesisHash": hash(0x42),
             "producer": {

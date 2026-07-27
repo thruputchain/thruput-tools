@@ -3,10 +3,10 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::SHA256Hash;
+use crate::{NetworkHashHex, SHA256Hash};
 
 /// Current bootstrap manifest schema version.
-pub const BOOTSTRAP_MANIFEST_SCHEMA_VERSION: u32 = 1;
+pub const BOOTSTRAP_MANIFEST_SCHEMA_VERSION: u32 = 2;
 
 /// Bootstrap intent consumed by a backend launcher before genesis.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -17,8 +17,8 @@ pub struct BootstrapManifest {
     pub schema_version: u32,
     /// Manifest family, for example `groundhog-bootstrap`.
     pub kind: String,
-    /// Identifier the launcher should assign to the materialized runtime.
-    pub network_id: String,
+    /// Unprefixed 32-byte network hash stamped into proposed block headers.
+    pub network_hash: NetworkHashHex,
     /// Free-form profile name used by launcher-specific defaults.
     pub profile: String,
     /// Desired dev-wallet bootstrap artifact/profile.
@@ -33,7 +33,7 @@ impl BootstrapManifest {
     /// Construct a bootstrap manifest.
     pub fn new(
         kind: impl Into<String>,
-        network_id: impl Into<String>,
+        network_hash: NetworkHashHex,
         profile: impl Into<String>,
         dev_wallet: BootstrapManifestDevWallet,
         bootstrap_accounts: BootstrapManifestAccounts,
@@ -42,7 +42,7 @@ impl BootstrapManifest {
         Self {
             schema_version: BOOTSTRAP_MANIFEST_SCHEMA_VERSION,
             kind: kind.into(),
-            network_id: network_id.into(),
+            network_hash,
             profile: profile.into(),
             dev_wallet,
             bootstrap_accounts,
@@ -150,9 +150,9 @@ mod tests {
         assert_eq!(
             value,
             json!({
-                "schemaVersion": 1,
+                "schemaVersion": 2,
                 "kind": "groundhog-bootstrap",
-                "networkId": "groundhog-bench-local",
+                "networkHash": "5151515151515151515151515151515151515151515151515151515151515151",
                 "profile": "local-dev",
                 "devWallet": {
                     "profile": "hogd-dev-default",
@@ -192,11 +192,37 @@ mod tests {
         );
     }
 
+    #[test]
+    fn bootstrap_manifest_rejects_invalid_network_hash() {
+        let mut value = serde_json::to_value(full_manifest()).expect("bug: manifest serializes");
+        value["networkHash"] = json!("groundhog-local");
+
+        let error = serde_json::from_value::<BootstrapManifest>(value)
+            .expect_err("invalid network hash should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("networkHash must be exactly 64 lowercase hexadecimal characters")
+        );
+    }
+
+    #[test]
+    fn bootstrap_manifest_rejects_noncanonical_network_hash() {
+        let mut value = serde_json::to_value(full_manifest()).expect("bug: manifest serializes");
+        value["networkHash"] = json!("AA".repeat(32));
+
+        let error = serde_json::from_value::<BootstrapManifest>(value)
+            .expect_err("uppercase network hash should fail");
+
+        assert!(error.to_string().contains("lowercase hexadecimal"));
+    }
+
     fn full_manifest() -> BootstrapManifest {
         BootstrapManifest {
             schema_version: BOOTSTRAP_MANIFEST_SCHEMA_VERSION,
             kind: "groundhog-bootstrap".into(),
-            network_id: "groundhog-bench-local".into(),
+            network_hash: crate::NetworkHashHex::from([0x51; 32]),
             profile: "local-dev".into(),
             dev_wallet: BootstrapManifestDevWallet {
                 profile: "hogd-dev-default".into(),

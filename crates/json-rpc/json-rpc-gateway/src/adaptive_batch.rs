@@ -24,6 +24,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use tokio::sync::mpsc;
+use tokio::task::{AbortHandle, JoinSet};
 
 use crate::config::AdaptiveBatchConfig;
 use crate::error::GatewayError;
@@ -51,9 +52,6 @@ pub(crate) trait BatchProcessor: Send + Sync + 'static {
 /// the public surface is [`AdaptiveBatcher`].
 struct Shard<P: BatchProcessor> {
     ingress: mpsc::Receiver<P::Item>,
-    completion_rx: mpsc::UnboundedReceiver<()>,
-    completion_tx: mpsc::UnboundedSender<()>,
-    inflight: u32,
     max_inflight: u32,
     max_size: usize,
     processor: Arc<P>,
@@ -63,21 +61,28 @@ struct Shard<P: BatchProcessor> {
 
 impl<P: BatchProcessor> Shard<P> {
     async fn run(mut self) {
+        let mut workers = JoinSet::new();
         loop {
             tokio::select! {
-                // Prefer completions so `inflight` is decremented before we
-                // consider firing another batch.
                 biased;
 
-                Some(()) = self.completion_rx.recv() => {
-                    self.inflight = self.inflight.saturating_sub(1);
+                Some(result) = workers.join_next(), if !workers.is_empty() => {
+                    if let Err(error) = result
+                        && !error.is_cancelled()
+                    {
+                        tracing::error!(
+                            component = self.component,
+                            %error,
+                            "adaptive batch worker failed"
+                        );
+                    }
                 }
 
                 // Only read from ingress when we have capacity to fire.
-                // That's the backpressure hinge: when `inflight == max`,
+                // That's the backpressure hinge: when the worker set is full,
                 // new items pile up in the bounded mpsc until it fills,
                 // at which point handlers see `Overloaded` from `try_send`.
-                maybe_item = self.ingress.recv(), if self.inflight < self.max_inflight => {
+                maybe_item = self.ingress.recv(), if workers.len() < self.max_inflight as usize => {
                     let Some(first) = maybe_item else { break; };
                     let mut items = Vec::with_capacity(self.max_size.min(64));
                     items.push(first);
@@ -87,18 +92,16 @@ impl<P: BatchProcessor> Shard<P> {
                             Err(_) => break,
                         }
                     }
-                    self.inflight += 1;
                     let in_flight = self.metrics.internal_batch_in_flight_guard(self.component);
                     let processor = self.processor.clone();
-                    let done = self.completion_tx.clone();
-                    tokio::spawn(async move {
+                    workers.spawn(async move {
                         let _in_flight = in_flight;
                         processor.process(items).await;
-                        let _ = done.send(());
                     });
                 }
             }
         }
+        workers.shutdown().await;
     }
 }
 
@@ -131,8 +134,21 @@ pub(crate) fn deadline_cohorts<I>(
 /// Each shard carries its own ingress channel; `try_send` routes by
 /// the caller's chosen shard index. Drop the last clone to shut shard
 /// tasks down (they exit on the ingress channel closing).
-pub(crate) struct AdaptiveBatcher<I: Send + 'static> {
+struct AdaptiveBatcherInner<I: Send + 'static> {
     shards: Arc<[mpsc::Sender<I>]>,
+    tasks: Box<[AbortHandle]>,
+}
+
+impl<I: Send + 'static> Drop for AdaptiveBatcherInner<I> {
+    fn drop(&mut self) {
+        for task in &self.tasks {
+            task.abort();
+        }
+    }
+}
+
+pub(crate) struct AdaptiveBatcher<I: Send + 'static> {
+    inner: Arc<AdaptiveBatcherInner<I>>,
     /// Component name used in `Overloaded`/`BackendUnavailable` strings —
     /// e.g. "batch submitter" or "storage batcher".
     name: &'static str,
@@ -143,7 +159,7 @@ pub(crate) struct AdaptiveBatcher<I: Send + 'static> {
 impl<I: Send + 'static> Clone for AdaptiveBatcher<I> {
     fn clone(&self) -> Self {
         Self {
-            shards: self.shards.clone(),
+            inner: self.inner.clone(),
             name: self.name,
             component: self.component,
             metrics: self.metrics.clone(),
@@ -167,25 +183,26 @@ impl<I: Send + 'static> AdaptiveBatcher<I> {
     {
         let n_shards = config.shards.max(1);
         let mut senders = Vec::with_capacity(n_shards);
+        let mut tasks = Vec::with_capacity(n_shards);
         for _ in 0..n_shards {
             let (sender, ingress) = mpsc::channel(config.ingress_queue_depth.max(1));
-            let (completion_tx, completion_rx) = mpsc::unbounded_channel();
             let shard = Shard {
                 ingress,
-                completion_tx,
-                completion_rx,
-                inflight: 0,
                 max_inflight: config.max_inflight_batches.max(1),
                 max_size: config.max_size.max(1),
                 processor: processor.clone(),
                 component,
                 metrics: metrics.clone(),
             };
-            tokio::spawn(shard.run());
+            let task = tokio::spawn(shard.run());
+            tasks.push(task.abort_handle());
             senders.push(sender);
         }
         Self {
-            shards: senders.into(),
+            inner: Arc::new(AdaptiveBatcherInner {
+                shards: senders.into(),
+                tasks: tasks.into(),
+            }),
             name,
             component,
             metrics,
@@ -194,7 +211,14 @@ impl<I: Send + 'static> AdaptiveBatcher<I> {
 
     /// Number of shards configured.  Stable for the life of the batcher.
     pub(crate) fn n_shards(&self) -> usize {
-        self.shards.len()
+        self.inner.shards.len()
+    }
+
+    /// Abort shard runners and all in-flight workers. Safe to call repeatedly.
+    pub(crate) fn abort(&self) {
+        for task in &self.inner.tasks {
+            task.abort();
+        }
     }
 
     /// Try to enqueue one item on `shard_idx`.  Returns
@@ -203,11 +227,11 @@ impl<I: Send + 'static> AdaptiveBatcher<I> {
     /// shard channel has been closed (shard task exited);
     /// `Overloaded` when the shard's ingress channel is full.
     pub(crate) fn try_send(&self, item: I, shard_idx: usize) -> Result<(), GatewayError> {
-        let Some(sender) = self.shards.get(shard_idx) else {
+        let Some(sender) = self.inner.shards.get(shard_idx) else {
             return Err(GatewayError::BackendUnavailable(format!(
                 "{} shard index {shard_idx} out of range (n_shards={})",
                 self.name,
-                self.shards.len(),
+                self.inner.shards.len(),
             )));
         };
         sender.try_send(item).map_err(|e| match e {
@@ -245,9 +269,136 @@ pub(crate) fn shard_index_by_routing_key(routing_key: &[u8], n_shards: usize) ->
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
     use std::time::{Duration, Instant};
 
-    use super::deadline_cohorts;
+    use async_trait::async_trait;
+    use tokio::sync::{Notify, oneshot};
+
+    use super::{AdaptiveBatcher, BatchProcessor, deadline_cohorts};
+    use crate::config::AdaptiveBatchConfig;
+    use crate::metrics::GatewayMetrics;
+
+    struct TestItem {
+        reply: oneshot::Sender<()>,
+    }
+
+    struct PanicOnceProcessor {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl BatchProcessor for PanicOnceProcessor {
+        type Item = TestItem;
+
+        async fn process(&self, items: Vec<TestItem>) {
+            assert_ne!(
+                self.calls.fetch_add(1, Ordering::SeqCst),
+                0,
+                "intentional test panic"
+            );
+            for item in items {
+                let _ = item.reply.send(());
+            }
+        }
+    }
+
+    struct HangingProcessor {
+        started: Arc<Notify>,
+    }
+
+    #[async_trait]
+    impl BatchProcessor for HangingProcessor {
+        type Item = TestItem;
+
+        async fn process(&self, _items: Vec<TestItem>) {
+            self.started.notify_one();
+            std::future::pending::<()>().await;
+        }
+    }
+
+    fn test_config() -> AdaptiveBatchConfig {
+        AdaptiveBatchConfig {
+            shards: 1,
+            max_inflight_batches: 1,
+            max_size: 10,
+            ingress_queue_depth: 10,
+        }
+    }
+
+    fn test_metrics() -> GatewayMetrics {
+        GatewayMetrics::new("test", None).expect("bug: test metrics should register")
+    }
+
+    #[tokio::test]
+    async fn panicking_processor_releases_inflight_capacity() {
+        let processor = Arc::new(PanicOnceProcessor {
+            calls: AtomicUsize::new(0),
+        });
+        let batcher = AdaptiveBatcher::spawn(
+            "test batcher",
+            "test_batcher",
+            &test_config(),
+            &processor,
+            test_metrics(),
+        );
+        let (first_tx, first_rx) = oneshot::channel();
+        batcher
+            .try_send(TestItem { reply: first_tx }, 0)
+            .expect("bug: first item should enqueue");
+        assert!(first_rx.await.is_err(), "panicked worker should drop reply");
+
+        let (second_tx, second_rx) = oneshot::channel();
+        batcher
+            .try_send(TestItem { reply: second_tx }, 0)
+            .expect("bug: second item should enqueue");
+        tokio::time::timeout(Duration::from_secs(1), second_rx)
+            .await
+            .expect("bug: replacement worker should run")
+            .expect("bug: replacement worker should send its reply");
+    }
+
+    #[tokio::test]
+    async fn dropping_last_handle_aborts_inflight_processor() {
+        let started = Arc::new(Notify::new());
+        let processor = Arc::new(HangingProcessor {
+            started: started.clone(),
+        });
+        let batcher = AdaptiveBatcher::spawn(
+            "test batcher",
+            "test_batcher",
+            &test_config(),
+            &processor,
+            test_metrics(),
+        );
+        let final_handle = batcher.clone();
+        let (reply_tx, mut reply_rx) = oneshot::channel();
+        batcher
+            .try_send(TestItem { reply: reply_tx }, 0)
+            .expect("bug: item should enqueue");
+        tokio::time::timeout(Duration::from_secs(1), started.notified())
+            .await
+            .expect("bug: processor should start");
+
+        drop(batcher);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut reply_rx)
+                .await
+                .is_err(),
+            "dropping a non-final handle must not cancel work"
+        );
+        drop(final_handle);
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), reply_rx)
+                .await
+                .expect("bug: final handle drop should cancel worker")
+                .is_err(),
+            "cancelled worker should drop its reply"
+        );
+    }
 
     #[test]
     fn deadline_cohorts_bound_skew_from_each_anchor() {
