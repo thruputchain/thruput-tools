@@ -191,6 +191,8 @@ Resolve the sender using the established transaction path:
 
 A non-dev key without a usable saved wallet fails with the same actionable guidance as deploy/call: create or select a wallet before sending.
 
+After resolving both sides, reject a transfer whose sender and recipient are the same address. This validation runs before RPC access, transaction construction, signing, or submission so a no-op token transfer cannot consume a transaction fee.
+
 Amounts
 
 `AMOUNT` is a user-facing decimal HOG amount. Parsing is exact and checked.

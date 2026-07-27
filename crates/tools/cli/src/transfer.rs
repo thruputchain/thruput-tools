@@ -100,10 +100,15 @@ fn prepare(
     let raw_amount = hog::parse_amount(amount_input)?;
     let amount = hog::format_amount(raw_amount);
     let token_address = parse_contract_address(hog::TOKEN_ADDRESS)?;
-    let calldata = hog::encode_transfer_calldata(&recipient, raw_amount)?;
 
     let resolved_sender = resolve_transaction_sender(&profile, from)?;
     let sender = resolved_sender.wallet_address;
+    if sender == recipient {
+        return Err(CliError::TransferToSelf {
+            address: format_contract_address(&recipient),
+        });
+    }
+    let calldata = hog::encode_transfer_calldata(&recipient, raw_amount)?;
     let wallet_entrypoints = resolve_wallet_entrypoints(&profile, &resolved_sender.key_name)?;
     let rt =
         tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;

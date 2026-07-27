@@ -3063,6 +3063,39 @@ fn transfer_dry_run_saved_wallet_errors_follow_selection_mode() {
 }
 
 #[test]
+fn transfer_rejects_unique_wallet_self_transfer_before_rpc() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    let config_home = tmp.path().join("config-home");
+    std::fs::create_dir_all(&project).unwrap();
+    let owner = generate_key_public_key(&config_home, "alice");
+    let address = format!("0x{}", "ab".repeat(32));
+    let (rpc_url, rpc_server) = spawn_no_request_rpc();
+    std::fs::write(
+        project.join("groundhog.toml"),
+        format!(
+            "[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"alice\"\n\n[profile.default.wallets.wallet-a]\naddress = \"{address}\"\nowner_public_key = \"{owner}\"\n"
+        ),
+    )
+    .unwrap();
+
+    let output = groundhog()
+        .args(["--json", "transfer", "wallet-a", "1", "--dry-run"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    rpc_server.join().unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let error: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(error["error"]["code"], "transfer_to_self");
+    assert_eq!(error["error"]["details"]["address"], address);
+    assert!(error["error"]["hint"].as_str().unwrap().contains("--from"));
+}
+
+#[test]
 fn transfer_from_selects_named_owner_matched_wallet() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");

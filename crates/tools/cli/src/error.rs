@@ -212,6 +212,8 @@ pub enum CliError {
     },
     #[error("saved wallet `{key_name}` owner_public_key is invalid: {message}")]
     SavedWalletOwnerPublicKeyInvalid { key_name: String, message: String },
+    #[error("transfer sender and recipient resolve to the same address `{address}`")]
+    TransferToSelf { address: String },
     #[error("transaction {tx_hash} submitted but no receipt after {seconds}s")]
     ReceiptTimeout { tx_hash: String, seconds: u64 },
     #[error("transaction {tx_hash} was rejected: {reason}")]
@@ -315,6 +317,7 @@ impl CliError {
             Self::SavedWalletOwnerPublicKeyInvalid { .. } => {
                 "saved_wallet_owner_public_key_invalid"
             }
+            Self::TransferToSelf { .. } => "transfer_to_self",
             Self::ReceiptTimeout { .. } => "receipt_timeout",
             Self::TransactionInvalid { .. } => "transaction_invalid",
             Self::TransactionRecentFailure { .. } => "transaction_recent_failure",
@@ -473,6 +476,9 @@ impl CliError {
             ))),
             Self::SavedWalletOwnerPublicKeyInvalid { .. } => Some(Cow::Borrowed(
                 "recreate the wallet binding with `groundhog wallet create`, or fix owner_public_key in the selected profile",
+            )),
+            Self::TransferToSelf { .. } => Some(Cow::Borrowed(
+                "select a different recipient or use `--from` to select another source wallet",
             )),
             Self::ReceiptTimeout { .. } => Some(Cow::Borrowed(
                 "check the node logs, then rerun the command once the transaction is committed or rejected",
@@ -693,6 +699,9 @@ impl CliError {
             Self::SavedWalletOwnerPublicKeyInvalid { key_name, message } => Some(json!({
                 "keyName": key_name,
                 "message": message,
+            })),
+            Self::TransferToSelf { address } => Some(json!({
+                "address": address,
             })),
             Self::InvalidHogAmount { input, message } => Some(json!({
                 "input": input,
