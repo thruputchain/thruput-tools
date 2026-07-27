@@ -41,6 +41,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 xdr-common = { workspace = true }
+xdrs = { workspace = true }
 
 [dev-dependencies]
 groundhog-trace = { workspace = true }

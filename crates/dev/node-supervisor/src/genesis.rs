@@ -1,7 +1,7 @@
 //! hogd-dev genesis compatibility probe.
 
 use groundhog_scheduler::{
-    DbSchedResult, SchedulerGetTipResult, sched_coord::SchedulerCoord_SchedulerCoord1_Client,
+    DbSchedResult, DbTip, SchedulerGetTipResult, sched_coord::SchedulerCoord_SchedulerCoord1_Client,
 };
 use groundhog_xdr::{
     genesis::{GenesisConfiguration, InitialConfigurationList},
@@ -21,13 +21,13 @@ use crate::NodeSupervisorError;
 #[tracing::instrument(skip_all)]
 pub(crate) async fn ensure_dev_genesis(
     scheduler: &SchedulerCoord_SchedulerCoord1_Client,
-) -> Result<(), NodeSupervisorError> {
+) -> Result<DbTip, NodeSupervisorError> {
     match scheduler_get_tip(scheduler).await? {
-        SchedulerGetTipResult::SchedulerGetTipOK { .. } => Ok(()),
+        SchedulerGetTipResult::SchedulerGetTipOK { db_tip } => Ok(db_tip),
         SchedulerGetTipResult::SchedulerGetTipNoGenesisBlock => {
             load_dev_genesis(scheduler).await?;
             match scheduler_get_tip(scheduler).await? {
-                SchedulerGetTipResult::SchedulerGetTipOK { .. } => Ok(()),
+                SchedulerGetTipResult::SchedulerGetTipOK { db_tip } => Ok(db_tip),
                 SchedulerGetTipResult::SchedulerGetTipNoGenesisBlock => {
                     tracing::error!(
                         "hogd-dev scheduler still reports no genesis after load_genesis"

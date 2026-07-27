@@ -12,6 +12,7 @@ use std::time::Duration;
 
 const HOG_DEVNODE_PID_FILE: &str = "hog-devnode.pid";
 const LEGACY_HOGD_DEV_PID_FILE: &str = "hogd-dev.pid";
+const NODE_STARTUP_SCHEMA_VERSION: u32 = 3;
 pub(crate) const DEV_WALLET_ARTIFACT_FILENAME: &str = "dev_wallet.rv32a";
 
 #[cfg(test)]
@@ -74,27 +75,35 @@ pub fn run_with_block_driver(
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
+    run_with_options(
+        LocalNodeOptions {
+            port,
+            hogd_dev_binary,
+            hogd_protocol,
+            startup_timeout: startup_timeout_secs.map(Duration::from_secs),
+            dev_account_count,
+            block_driver,
+            block_interval: block_interval_ms.map(Duration::from_millis),
+            rpc_max_connections,
+            ..LocalNodeOptions::default()
+        },
+        verbose,
+        cmd,
+        print,
+    )
+}
+
+/// Start the hog-devnode local node server with reusable local-node options.
+pub fn run_with_options(
+    options: LocalNodeOptions,
+    verbose: bool,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
     init_node_tracing(verbose, print.is_json());
 
     let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
-    rt.block_on(async {
-        run_hogd_dev(
-            LocalNodeOptions {
-                port,
-                hogd_dev_binary,
-                hogd_protocol,
-                startup_timeout: startup_timeout_secs.map(Duration::from_secs),
-                dev_account_count,
-                block_driver,
-                block_interval: block_interval_ms.map(Duration::from_millis),
-                rpc_max_connections,
-                ..LocalNodeOptions::default()
-            },
-            cmd,
-            print,
-        )
-        .await
-    })
+    rt.block_on(async { run_hogd_dev(options, cmd, print).await })
 }
 
 /// Startup options for a local hog-devnode-backed node.
@@ -105,6 +114,8 @@ pub struct LocalNodeOptions {
     pub port: u16,
     /// Explicit hog-devnode binary path.
     pub hogd_dev_binary: Option<PathBuf>,
+    /// Directory where hog-devnode persists recoverable node state.
+    pub data_dir: Option<PathBuf>,
     /// Override hogd protocol string for local cross-repo smoke tests.
     pub hogd_protocol: Option<String>,
     /// Override readiness timeout while waiting for hogd-dev.
@@ -125,7 +136,7 @@ pub struct LocalNodeOptions {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum LocalNodePidFile {
-    /// Use the standard cache-directory PID file.
+    /// Use the data-directory PID file for persistent nodes, otherwise the cache directory.
     #[default]
     GlobalCache,
     /// Use an explicit PID-file path.
@@ -142,6 +153,7 @@ pub struct StartedLocalNode {
     rpc_addr: SocketAddr,
     readiness: groundhog_node_supervisor::HogdDevReadiness,
     backend_planes: groundhog_node_supervisor::BackendPlanes,
+    data_dir: Option<PathBuf>,
 }
 
 impl StartedLocalNode {
@@ -163,6 +175,11 @@ impl StartedLocalNode {
     /// Backend plane status for startup reporting and feature gating.
     pub fn backend_planes(&self) -> groundhog_node_supervisor::BackendPlanes {
         self.backend_planes
+    }
+
+    /// Absolute persistent data directory, when persistence is enabled.
+    pub fn data_dir(&self) -> Option<&std::path::Path> {
+        self.data_dir.as_deref()
     }
 
     /// Wait until hogd-dev or the JSON-RPC server stops, then tear down the
@@ -203,6 +220,7 @@ pub async fn start_local_node(options: LocalNodeOptions) -> Result<StartedLocalN
     use groundhog_node_supervisor::NodeSupervisorHandle;
 
     let config = local_node_config(options)?;
+    let data_dir = config.hogd_dev.data_dir.clone();
     let handle = NodeSupervisorHandle::start(config)
         .await
         .map_err(|e| map_node_supervisor_error(&e))?;
@@ -215,6 +233,7 @@ pub async fn start_local_node(options: LocalNodeOptions) -> Result<StartedLocalN
         rpc_addr,
         readiness,
         backend_planes,
+        data_dir,
     })
 }
 
@@ -254,15 +273,25 @@ async fn run_hogd_dev(
         local_runtime_state_cleanup(&started, runtime_artifacts_dir.as_deref());
 
     if print.is_json() {
-        print.json(&CommandResult::new(
+        if let Err(error) = print.json(&CommandResult::new(
             cmd,
             hogd_dev_startup_payload(
                 started.rpc_addr(),
                 started.readiness(),
                 started.backend_planes(),
                 &local_runtime_state_result,
+                started.data_dir(),
             ),
-        ))?;
+        )) {
+            let stop_result = started.stop().await;
+            cleanup_written_local_runtime_state(cleanup_local_runtime_state, print);
+            if let Err(stop_error) = stop_result {
+                return Err(CliError::NodeSupervisor(format!(
+                    "failed to stop local node after startup output failed: {stop_error}; startup output failed: {error}"
+                )));
+            }
+            return Err(error);
+        }
     } else {
         print_started_local_node(&started, &local_runtime_state_result, print);
     }
@@ -349,7 +378,10 @@ fn print_started_local_node(
     print: &Print,
 ) {
     print.success("Groundhog local node ready");
-    print.detail("chain", &started.readiness().network_id);
+    print.detail("chain", &started.readiness().network_hash);
+    if let Some(chain_state) = started.readiness().chain_state {
+        print.detail("chain state", chain_state);
+    }
     if started.backend_planes().read.is_indexer_backed() {
         print.warn("backend: hog-devnode (chainTip, submit, and reads live)");
     } else {
@@ -358,6 +390,9 @@ fn print_started_local_node(
         );
     }
     print.detail("rpc", started.rpc_url());
+    if let Some(data_dir) = started.data_dir() {
+        print.detail("data dir", data_dir.display());
+    }
     print.detail("scheduler", started.readiness().endpoints.scheduler_coord);
     if let Some(indexer) = started.readiness().endpoints.indexer_block_explorer {
         print.detail("indexer", indexer);
@@ -492,10 +527,25 @@ fn local_node_config(
         .map_or_else(HogdDevConfig::default, |binary| {
             HogdDevConfig::default().with_binary_path(binary)
         });
+    let hogd = match options.data_dir {
+        Some(data_dir) => hogd.with_data_dir(data_dir).with_shutdown_grace(
+            groundhog_node_supervisor::config::DEFAULT_HOGD_DEV_PERSISTENT_SHUTDOWN_GRACE,
+        ),
+        None => hogd,
+    };
+    let automatic_pid_file = if matches!(&options.pid_file, LocalNodePidFile::GlobalCache) {
+        let path = match hogd.data_dir.as_deref() {
+            Some(data_dir) => data_dir.join(HOG_DEVNODE_PID_FILE),
+            None => local_node_pid_file(&crate::config::cache_dir()?),
+        };
+        Some(path)
+    } else {
+        None
+    };
     let hogd = match options.pid_file {
-        LocalNodePidFile::GlobalCache => {
-            hogd.with_pid_file(global_local_node_pid_file(&crate::config::cache_dir()?))
-        }
+        LocalNodePidFile::GlobalCache => hogd.with_pid_file(
+            automatic_pid_file.expect("bug: automatic PID path resolved for automatic mode"),
+        ),
         LocalNodePidFile::Path(path) => hogd.with_pid_file(path),
         LocalNodePidFile::Disabled => hogd,
     };
@@ -540,12 +590,12 @@ fn local_node_config(
     })
 }
 
-fn global_local_node_pid_file(cache_dir: &std::path::Path) -> PathBuf {
-    let legacy = cache_dir.join(LEGACY_HOGD_DEV_PID_FILE);
+fn local_node_pid_file(scope: &std::path::Path) -> PathBuf {
+    let legacy = scope.join(LEGACY_HOGD_DEV_PID_FILE);
     if legacy.exists() {
         return legacy;
     }
-    cache_dir.join(HOG_DEVNODE_PID_FILE)
+    scope.join(HOG_DEVNODE_PID_FILE)
 }
 
 fn map_node_supervisor_error(err: &groundhog_node_supervisor::NodeSupervisorError) -> CliError {
@@ -573,9 +623,9 @@ fn default_tracing_filter(verbose: bool, json: bool) -> &'static str {
     if verbose {
         "groundhog_node_supervisor=info,hogd_dev=info"
     } else if json {
-        "groundhog_node_supervisor=warn"
+        "groundhog_node_supervisor=warn,hogd_dev=error"
     } else {
-        "groundhog_node_supervisor=info"
+        "groundhog_node_supervisor=info,hogd_dev=error"
     }
 }
 
@@ -621,10 +671,12 @@ fn hogd_dev_startup_payload(
     readiness: &groundhog_node_supervisor::HogdDevReadiness,
     backend_planes: groundhog_node_supervisor::BackendPlanes,
     local_runtime_state_result: &Result<PathBuf, CliError>,
+    data_dir: Option<&std::path::Path>,
 ) -> serde_json::Value {
     json!({
-        "schemaVersion": 1,
-        "chain": readiness.network_id,
+        "schemaVersion": NODE_STARTUP_SCHEMA_VERSION,
+        "chain": readiness.network_hash,
+        "chain_state": readiness.chain_state,
         "mode": "dev",
         "experimental": false,
         "backend": {
@@ -635,6 +687,7 @@ fn hogd_dev_startup_payload(
         },
         "runtime_manifest": runtime_manifest_payload(readiness),
         "local_runtime_state": local_runtime_state_payload(local_runtime_state_result),
+        "data_dir": data_dir,
         "rpc_url": format!("http://{addr}"),
     })
 }
@@ -705,10 +758,11 @@ fn hogd_dev_endpoints_payload(
 #[cfg(test)]
 mod tests {
     use super::{
-        LocalNodeBlockDriverMode, LocalNodeOptions, LocalNodePidFile, default_tracing_filter,
-        dev_wallet_artifact_for_binary, global_local_node_pid_file, hogd_dev_startup_payload,
-        local_node_config, local_runtime_state_payload, map_node_supervisor_error,
-        runtime_artifacts_dir_for_binary, test_local_runtime_state_result,
+        LocalNodeBlockDriverMode, LocalNodeOptions, LocalNodePidFile, NODE_STARTUP_SCHEMA_VERSION,
+        default_tracing_filter, dev_wallet_artifact_for_binary, hogd_dev_startup_payload,
+        local_node_config, local_node_pid_file, local_runtime_state_payload,
+        map_node_supervisor_error, runtime_artifacts_dir_for_binary,
+        test_local_runtime_state_result,
     };
     use crate::CliError;
     use groundhog_node_supervisor::{
@@ -724,6 +778,7 @@ mod tests {
         let config = local_node_config(LocalNodeOptions {
             port: 0,
             hogd_dev_binary: Some(binary.clone()),
+            data_dir: Some(PathBuf::from("/tmp/hog-devnode-data")),
             hogd_protocol: Some("test-protocol".into()),
             startup_timeout: Some(Duration::from_secs(30)),
             pid_file: LocalNodePidFile::Path(PathBuf::from("/tmp/hog-devnode-test.pid")),
@@ -737,6 +792,10 @@ mod tests {
         assert_eq!(config.rpc_listen_address, "127.0.0.1:0");
         assert_eq!(config.hogd_dev.binary_path, Some(binary));
         assert_eq!(
+            config.hogd_dev.data_dir.as_deref(),
+            Some(std::path::Path::new("/tmp/hog-devnode-data"))
+        );
+        assert_eq!(
             config.hogd_protocol_override.as_deref(),
             Some("test-protocol")
         );
@@ -747,11 +806,46 @@ mod tests {
         assert_eq!(config.hogd_dev.dev_account_count, 3);
         assert_eq!(config.hogd_dev.startup_timeout, Duration::from_secs(30));
         assert_eq!(
+            config.hogd_dev.shutdown_grace,
+            groundhog_node_supervisor::config::DEFAULT_HOGD_DEV_PERSISTENT_SHUTDOWN_GRACE
+        );
+        assert_eq!(
             config.block_driver.mode,
             groundhog_node_supervisor::BlockDriverMode::Interval
         );
         assert_eq!(config.block_driver.interval, Duration::from_millis(250));
         assert_eq!(config.rpc_max_connections, 512);
+    }
+
+    #[test]
+    fn persistent_nodes_scope_automatic_pid_files_to_their_data_dirs() {
+        let tmp = TempDir::new().expect("bug: temp dir should be created");
+        let first_data_dir = tmp.path().join("first");
+        let second_data_dir = tmp.path().join("second");
+        fs::create_dir(&first_data_dir).expect("bug: first data dir should be created");
+        fs::write(first_data_dir.join("hogd-dev.pid"), "")
+            .expect("bug: legacy cache-era PID fixture should be written");
+
+        let first = local_node_config(LocalNodeOptions {
+            data_dir: Some(first_data_dir.clone()),
+            ..LocalNodeOptions::default()
+        })
+        .expect("bug: first persistent config should build");
+        let second = local_node_config(LocalNodeOptions {
+            data_dir: Some(second_data_dir.clone()),
+            ..LocalNodeOptions::default()
+        })
+        .expect("bug: second persistent config should build");
+
+        assert_eq!(
+            first.hogd_dev.pid_file.as_deref(),
+            Some(first_data_dir.join("hog-devnode.pid").as_path())
+        );
+        assert_eq!(
+            second.hogd_dev.pid_file.as_deref(),
+            Some(second_data_dir.join("hog-devnode.pid").as_path())
+        );
+        assert_ne!(first.hogd_dev.pid_file, second.hogd_dev.pid_file);
     }
 
     #[test]
@@ -837,15 +931,15 @@ mod tests {
     }
 
     #[test]
-    fn global_pid_file_prefers_legacy_path_during_migration() {
+    fn automatic_pid_file_prefers_legacy_path_during_migration() {
         let tmp = TempDir::new().expect("bug: temp dir should be created");
         let new_path = tmp.path().join("hog-devnode.pid");
         let legacy_path = tmp.path().join("hogd-dev.pid");
 
-        assert_eq!(global_local_node_pid_file(tmp.path()), new_path);
+        assert_eq!(local_node_pid_file(tmp.path()), new_path);
 
         fs::write(&legacy_path, "").expect("bug: legacy pid file should write");
-        assert_eq!(global_local_node_pid_file(tmp.path()), legacy_path);
+        assert_eq!(local_node_pid_file(tmp.path()), legacy_path);
     }
 
     #[test]
@@ -927,11 +1021,11 @@ mod tests {
         );
         assert_eq!(
             default_tracing_filter(false, true),
-            "groundhog_node_supervisor=warn"
+            "groundhog_node_supervisor=warn,hogd_dev=error"
         );
         assert_eq!(
             default_tracing_filter(false, false),
-            "groundhog_node_supervisor=info"
+            "groundhog_node_supervisor=info,hogd_dev=error"
         );
     }
 
@@ -940,7 +1034,7 @@ mod tests {
         let addr = "127.0.0.1:9545".parse().expect("bug: valid socket addr");
         let readiness = parse_readiness_line(
             "hogd-dev",
-            r#"{"status":"ready","network_id":"groundhog-local","endpoints":{"scheduler_coord":"127.0.0.1:12345","indexer_block_explorer":"127.0.0.1:12346","db_gateway":"127.0.0.1:12347","view_gateway":"127.0.0.1:12348","dev_control":"127.0.0.1:12349"}}"#,
+            r#"{"status":"ready","network_hash":"0000000000000000000000000000000000000000000000000000000000000000","endpoints":{"scheduler_coord":"127.0.0.1:12345","indexer_block_explorer":"127.0.0.1:12346","db_gateway":"127.0.0.1:12347","view_gateway":"127.0.0.1:12348","dev_control":"127.0.0.1:12349"}}"#,
         )
         .expect("bug: readiness should parse");
 
@@ -950,9 +1044,11 @@ mod tests {
             &readiness,
             BackendPlanes::hogd_dev_scheduler_only(),
             &local_runtime_state,
+            Some(std::path::Path::new("/tmp/hog-devnode-data")),
         );
         assert_eq!(payload["rpc_url"], "http://127.0.0.1:9545");
-        assert_eq!(payload["chain"], "groundhog-local");
+        assert_eq!(payload["chain"], "00".repeat(32));
+        assert!(payload["chain_state"].is_null());
         assert_eq!(payload["backend"]["kind"], "hogd_dev");
         let expected_planes = serde_json::to_value(BackendPlanes::hogd_dev_scheduler_only())
             .expect("bug: backend planes should serialize");
@@ -980,6 +1076,7 @@ mod tests {
         );
         assert!(payload["runtime_manifest"].is_null());
         assert_eq!(payload["local_runtime_state"]["ok"], true);
+        assert_eq!(payload["data_dir"], "/tmp/hog-devnode-data");
         assert_eq!(
             payload["local_runtime_state"]["path"],
             "/tmp/groundhog-config.toml"
@@ -1008,9 +1105,10 @@ mod tests {
         }
         let manifest_path = temp.path().join("runtime-manifest.json");
         let manifest = br#"{
-          "schemaVersion": 1,
+          "schemaVersion": 2,
           "kind": "hogd-dev-runtime",
-          "networkId": "groundhog-local",
+          "chainState": "fresh",
+          "networkHash": "0000000000000000000000000000000000000000000000000000000000000000",
           "protocol": "hogp/test",
           "genesisHash": "0x4242424242424242424242424242424242424242424242424242424242424242",
           "producer": {"binary": "hog-devnode", "version": "0.1.0", "commitHash": "abcdef0"},
@@ -1051,7 +1149,7 @@ mod tests {
         }
         let hash = format!("0x{}", hex::encode(Sha256::digest(manifest)));
         let pointer = serde_json::json!({
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "status": "ready",
             "manifestPath": manifest_path,
             "manifestHash": hash,
@@ -1064,9 +1162,12 @@ mod tests {
             &readiness,
             BackendPlanes::hogd_dev_scheduler_only(),
             &local_runtime_state,
+            None,
         );
 
-        assert_eq!(payload["runtime_manifest"]["schemaVersion"], 1);
+        assert_eq!(payload["schemaVersion"], NODE_STARTUP_SCHEMA_VERSION);
+        assert_eq!(payload["chain_state"], "fresh");
+        assert_eq!(payload["runtime_manifest"]["schemaVersion"], 2);
         assert_eq!(
             payload["runtime_manifest"]["path"],
             manifest_path.display().to_string()
@@ -1079,7 +1180,7 @@ mod tests {
         let addr = "127.0.0.1:9545".parse().expect("bug: valid socket addr");
         let readiness = parse_readiness_line(
             "hogd-dev",
-            r#"{"status":"ready","network_id":"groundhog-local","endpoints":{"scheduler_coord":"127.0.0.1:12345"}}"#,
+            r#"{"status":"ready","network_hash":"0000000000000000000000000000000000000000000000000000000000000000","endpoints":{"scheduler_coord":"127.0.0.1:12345"}}"#,
         )
         .expect("bug: v1 readiness should parse");
 
@@ -1089,6 +1190,7 @@ mod tests {
             &readiness,
             BackendPlanes::hogd_dev_scheduler_only(),
             &local_runtime_state,
+            None,
         );
         assert_eq!(
             payload["backend"]["endpoints"]["scheduler_coord"],
@@ -1113,7 +1215,7 @@ mod tests {
         let addr = "127.0.0.1:9545".parse().expect("bug: valid socket addr");
         let readiness = parse_readiness_line(
             "hogd-dev",
-            r#"{"status":"ready","network_id":"groundhog-local","endpoints":{"scheduler_coord":"127.0.0.1:12345","indexer_block_explorer":"127.0.0.1:12346"}}"#,
+            r#"{"status":"ready","network_hash":"0000000000000000000000000000000000000000000000000000000000000000","endpoints":{"scheduler_coord":"127.0.0.1:12345","indexer_block_explorer":"127.0.0.1:12346"}}"#,
         )
         .expect("bug: readiness should parse");
 
@@ -1123,6 +1225,7 @@ mod tests {
             &readiness,
             BackendPlanes::hogd_dev_full(PlaneStatus::Stub),
             &local_runtime_state,
+            None,
         );
         let expected_planes = serde_json::to_value(BackendPlanes::hogd_dev_full(PlaneStatus::Stub))
             .expect("bug: planes serialize");

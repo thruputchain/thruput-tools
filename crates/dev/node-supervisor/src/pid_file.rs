@@ -20,6 +20,7 @@ use nix::unistd::Pid;
 pub(crate) struct PidGuard {
     path: PathBuf,
     file: File,
+    remove_on_drop: bool,
 }
 
 impl PidGuard {
@@ -37,18 +38,32 @@ impl PidGuard {
         #[cfg(not(unix))]
         {
             let file = open_pid_file(&path)?;
-            Ok(Self { path, file })
+            Ok(Self {
+                path,
+                file,
+                remove_on_drop: true,
+            })
         }
     }
 
     /// Write the supervised child PID into the already-owned PID file.
     pub(crate) fn write(&mut self, pid: u32) -> Result<(), NodeSupervisorError> {
-        write_pid(&self.path, &mut self.file, pid)
+        write_pid(&self.path, &mut self.file, pid)?;
+        self.remove_on_drop = false;
+        Ok(())
+    }
+
+    /// Remove the PID file after the supervised process group is confirmed stopped.
+    pub(crate) fn release(mut self) {
+        self.remove_on_drop = true;
     }
 }
 
 impl Drop for PidGuard {
     fn drop(&mut self) {
+        if !self.remove_on_drop {
+            return;
+        }
         if let Err(error) = fs::remove_file(&self.path)
             && error.kind() != io::ErrorKind::NotFound
         {
@@ -63,22 +78,54 @@ impl Drop for PidGuard {
 
 fn open_pid_file(path: &Path) -> Result<File, NodeSupervisorError> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|source| NodeSupervisorError::PidFile {
-            path: parent.to_path_buf(),
-            source,
-        })?;
+        create_pid_parent(parent)?;
     }
 
-    OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    }
+    let file = options
         .open(path)
         .map_err(|source| NodeSupervisorError::PidFile {
             path: path.to_path_buf(),
             source,
+        })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(fs::Permissions::from_mode(0o600))
+            .map_err(|source| NodeSupervisorError::PidFile {
+                path: path.to_path_buf(),
+                source,
+            })?;
+    }
+    Ok(file)
+}
+
+#[cfg(unix)]
+fn create_pid_parent(parent: &Path) -> Result<(), NodeSupervisorError> {
+    use std::os::unix::fs::DirBuilderExt;
+
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true).mode(0o700);
+    builder
+        .create(parent)
+        .map_err(|source| NodeSupervisorError::PidFile {
+            path: parent.to_path_buf(),
+            source,
         })
+}
+
+#[cfg(not(unix))]
+fn create_pid_parent(parent: &Path) -> Result<(), NodeSupervisorError> {
+    fs::create_dir_all(parent).map_err(|source| NodeSupervisorError::PidFile {
+        path: parent.to_path_buf(),
+        source,
+    })
 }
 
 fn read_pid(path: &Path, file: &mut File) -> Result<Option<u32>, NodeSupervisorError> {
@@ -144,7 +191,11 @@ async fn acquire_unix(
         Ok(()) => {
             clean_stale_pid(&path, &mut file, expected_program, grace).await?;
             clear_pid(&path, &mut file)?;
-            Ok(PidGuard { path, file })
+            Ok(PidGuard {
+                path,
+                file,
+                remove_on_drop: true,
+            })
         }
         Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
             let existing_pid = read_pid(&path, &mut file)?;
@@ -197,9 +248,24 @@ async fn clean_stale_pid(
                 "PID file points at a live process, but this platform could not verify \
                  its identity; refusing to signal it"
             );
-        } else {
-            tracing::debug!(pid, path = %path.display(), "removing stale hogd-dev PID file");
+            return Err(NodeSupervisorError::LocalNodeAlreadyRunning {
+                path: path.to_path_buf(),
+                pid: Some(pid),
+            });
         }
+        if process_group_exists(pid) {
+            tracing::warn!(
+                pid,
+                process_group = pid,
+                path = %path.display(),
+                "PID file's process-group leader exited but descendants remain; refusing startup because their identity cannot be verified safely"
+            );
+            return Err(NodeSupervisorError::LocalNodeAlreadyRunning {
+                path: path.to_path_buf(),
+                pid: Some(pid),
+            });
+        }
+        tracing::debug!(pid, path = %path.display(), "removing stale hogd-dev PID file");
         return Ok(());
     };
 
@@ -224,7 +290,10 @@ async fn clean_stale_pid(
             path = %path.display(),
             "PID file's hogd-dev is not the leader of its process group; refusing to signal"
         );
-        return Ok(());
+        return Err(NodeSupervisorError::LocalNodeAlreadyRunning {
+            path: path.to_path_buf(),
+            pid: Some(pid),
+        });
     }
 
     // Lock ownership already proved no live supervisor holds this PID file,
@@ -359,6 +428,14 @@ async fn kill_process_group(
         let now = time::Instant::now();
 
         if kill_deadline.is_none() && now >= term_deadline {
+            tracing::warn!(
+                pid = process_group,
+                process_group,
+                path = %path.display(),
+                shutdown_grace = ?grace,
+                orphan_cleanup = true,
+                "prior hog-devnode process group did not stop within its graceful shutdown deadline; sending SIGKILL; persistent state may require recovery"
+            );
             signal_process_group(path, process_group, libc::SIGKILL)?;
             kill_deadline = Some(now + POST_KILL_DRAIN);
         }
@@ -368,10 +445,15 @@ async fn kill_process_group(
         {
             tracing::warn!(
                 process_group,
+                path = %path.display(),
+                orphan_cleanup = true,
                 "hogd-dev process group still present after SIGKILL drain; \
-                 proceeding and letting the new child surface any port conflict"
+                 refusing startup while the prior node may still own persistent state"
             );
-            return Ok(());
+            return Err(NodeSupervisorError::LocalNodeAlreadyRunning {
+                path: path.to_path_buf(),
+                pid: Some(process_group),
+            });
         }
 
         time::sleep(Duration::from_millis(10)).await;
@@ -498,6 +580,80 @@ mod tests {
             fs::read_to_string(&path).expect("bug: PID file should be readable"),
             "1234\n"
         );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(path.parent().expect("bug: PID file has a parent"))
+                .expect("bug: PID parent metadata should be readable")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o700);
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&path)
+                .expect("bug: PID file metadata should be readable")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+    }
+
+    #[tokio::test]
+    async fn written_pid_file_survives_drop_until_explicit_release() {
+        let temp = TempDir::new().expect("bug: temp dir should be created");
+        let path = temp.path().join("hogd-dev.pid");
+        let stale_pid = i32::MAX as u32;
+        let mut guard = PidGuard::acquire(
+            path.clone(),
+            std::ffi::OsStr::new("hogd-dev"),
+            Duration::from_millis(10),
+        )
+        .await
+        .expect("bug: PID file should be acquired");
+        guard
+            .write(stale_pid)
+            .expect("bug: PID write should succeed");
+
+        drop(guard);
+        assert_eq!(
+            fs::read_to_string(&path).expect("bug: orphan recovery PID should remain"),
+            format!("{stale_pid}\n")
+        );
+
+        let guard = PidGuard::acquire(
+            path.clone(),
+            std::ffi::OsStr::new("hogd-dev"),
+            Duration::from_millis(10),
+        )
+        .await
+        .expect("bug: stale PID should be reacquired");
+        guard.release();
+        assert!(!path.exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn acquire_rejects_symlinked_pid_file() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().expect("bug: temp dir should be created");
+        let target = temp.path().join("target.pid");
+        let path = temp.path().join("hogd-dev.pid");
+        fs::write(&target, "").expect("bug: PID target should be written");
+        symlink(&target, &path).expect("bug: PID symlink should be created");
+
+        let err = PidGuard::acquire(
+            path,
+            std::ffi::OsStr::new("hogd-dev"),
+            Duration::from_millis(10),
+        )
+        .await
+        .expect_err("bug: symlinked PID file should fail closed");
+        assert!(matches!(err, NodeSupervisorError::PidFile { .. }));
     }
 
     #[tokio::test]
@@ -681,6 +837,49 @@ mod tests {
         );
 
         drop(guard);
+    }
+
+    #[tokio::test]
+    async fn acquire_fails_closed_for_leaderless_process_group() {
+        let temp = TempDir::new().expect("bug: temp dir should be created");
+        let path = temp.path().join("hogd-dev.pid");
+        let binary = fake_hogd_dev_binary();
+        let spec = ChildProcessSpec::new(&binary)
+            .env(FAKE_HOGD_DEV_MODE_ENV, "spawn-helper-then-exit")
+            .process_group(0);
+        let mut child = ChildSupervisor::new(spec)
+            .spawn()
+            .expect("bug: fake hogd-dev should spawn");
+        let pid = child.id().expect("bug: fake hogd-dev pid should be known");
+        fs::write(&path, format!("{pid}\n")).expect("bug: pid file should be written");
+        let status = child
+            .wait()
+            .await
+            .expect("bug: fake leader should be reaped");
+        assert!(status.success());
+        assert!(super::process_group_exists(pid));
+
+        let err = PidGuard::acquire(path.clone(), binary.as_os_str(), Duration::from_millis(10))
+            .await
+            .expect_err("bug: leaderless process group should block startup");
+        assert!(matches!(
+            err,
+            NodeSupervisorError::LocalNodeAlreadyRunning {
+                pid: Some(found),
+                ..
+            } if found == pid
+        ));
+
+        let target = -i32::try_from(pid).expect("bug: pid should fit pid_t");
+        let _ = unsafe { libc::kill(target, libc::SIGKILL) };
+        for _ in 0..50 {
+            if !super::process_group_exists(pid) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(!super::process_group_exists(pid));
+        fs::remove_file(path).expect("bug: test should remove preserved PID file");
     }
 
     #[tokio::test]

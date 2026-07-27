@@ -271,14 +271,16 @@ impl NodeSupervisorHandle {
         let rpc_done = self.rpc_handle.clone().stopped();
         tokio::select! {
             result = self.hogd.stopped() => {
-                let status = result?;
-                tracing::warn!(?status, "hogd-dev exited; stopping JSON-RPC server");
+                match &result {
+                    Ok(status) => tracing::warn!(?status, "hogd-dev exited; stopping JSON-RPC server"),
+                    Err(error) => tracing::error!(%error, "hog-devnode cleanup failed; stopping JSON-RPC server"),
+                }
                 if let Err(error) = self.rpc_handle.stop() {
                     tracing::debug!(%error, "JSON-RPC server already stopped");
                 }
                 self.stop_block_driver().await;
                 self.rpc_handle.clone().stopped().await;
-                Ok(SupervisorStop::HogdExited(status))
+                result.map(SupervisorStop::HogdExited)
             }
             () = rpc_done => {
                 tracing::info!("JSON-RPC server stopped; stopping hogd-dev");
@@ -334,7 +336,9 @@ async fn start_rpc_server(
 ) -> Result<StartedRpcServer, NodeSupervisorError> {
     let scheduler_backend =
         HogdDevSchedulerBackend::connect(readiness.endpoints.scheduler_coord).await?;
-    scheduler_backend.ensure_dev_genesis().await?;
+    scheduler_backend
+        .ensure_dev_genesis(&readiness.network_hash)
+        .await?;
 
     let view = HogdDevViewBackend::connect_optional(
         readiness.endpoints.view_gateway,
@@ -756,6 +760,10 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             *tip.height, 0,
             "chainTip should report the genesis block loaded during startup"
         );
+        assert_eq!(
+            serde_json::to_value(tip.block_hash).expect("bug: block hash should serialize"),
+            "0xffad887bb79d1ccb9d42920cdcb1bb4c80f8cb49ec42d85b71282ea208b02a2f"
+        );
 
         let tx_hash = client
             .send_raw_transaction(format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}"))
@@ -1026,7 +1034,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         assert!(matches!(
             empty_error,
             BlockProductionError::SchedulerRejected {
-                op: "schedulercoord_nominate",
+                op: "schedulercoord_propose_block",
                 ..
             }
         ));
@@ -1071,6 +1079,74 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         ];
         heights.sort_unstable();
         assert_eq!(heights, [1, 2]);
+
+        handle.stop().await.expect("bug: clean shutdown");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn malformed_scheduler_proposal_returns_typed_error_without_panicking_driver() {
+        let (_mode_guard, handle, client) = start_fake_with_block_driver(
+            "automine-malformed-proposal",
+            BlockDriverConfig::manual(),
+        )
+        .await;
+        let producer = handle
+            .manual_block_producer()
+            .expect("bug: manual mode should expose a producer");
+        client
+            .send_raw_transaction(format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}"))
+            .await
+            .expect("bug: submit should reach fake scheduler");
+
+        let error = producer
+            .produce_block()
+            .await
+            .expect_err("bug: malformed scheduler proposal should fail");
+        assert!(matches!(
+            error,
+            BlockProductionError::MalformedSchedulerProposal { batch: "hash", .. }
+        ));
+        let stopped = producer
+            .produce_block()
+            .await
+            .expect_err("bug: malformed retained proposal should stop manual producer");
+        assert!(matches!(stopped, BlockProductionError::DriverStopped));
+
+        handle.stop().await.expect("bug: clean shutdown");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn retained_commit_rejection_stops_manual_producer() {
+        let (_mode_guard, handle, client) =
+            start_fake_with_block_driver("automine-commit-rejected", BlockDriverConfig::manual())
+                .await;
+        let producer = handle
+            .manual_block_producer()
+            .expect("bug: manual mode should expose a producer");
+        client
+            .send_raw_transaction(format!("0x{CANONICAL_HASH_VECTOR_SIGNED_TX_XDR}"))
+            .await
+            .expect("bug: submit should reach fake scheduler");
+
+        let error = producer
+            .produce_block()
+            .await
+            .expect_err("bug: retained commit rejection should fail");
+        assert!(matches!(
+            error,
+            BlockProductionError::CommitRejected {
+                block_id: 1,
+                height: 1,
+                ..
+            }
+        ));
+        let stopped = producer
+            .produce_block()
+            .await
+            .expect_err("bug: retained commit candidate should stop manual producer");
+        assert!(matches!(stopped, BlockProductionError::DriverStopped));
 
         handle.stop().await.expect("bug: clean shutdown");
     }
@@ -1229,7 +1305,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             } else {
                 assert!(matches!(
                     error,
-                    BlockProductionError::NominationOutcomeUnknown { .. }
+                    BlockProductionError::ProposalOutcomeUnknown { .. }
                 ));
                 let stopped = producer
                     .produce_block()
@@ -1267,6 +1343,24 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
                 }
             ),
             "expected SchedulerRpc for get_tip, got {err:?}",
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn start_rolls_back_hogd_dev_when_scheduler_network_hash_mismatches_manifest() {
+        let err = start_fake_supervisor_expect_error("scheduler-network-hash-mismatch").await;
+
+        assert!(
+            matches!(
+                &err,
+                NodeSupervisorError::SchedulerNetworkHashMismatch {
+                    expected,
+                    observed,
+                } if expected == &groundhog_json_rpc_types::NetworkHashHex::from([0; 32])
+                    && observed == &groundhog_json_rpc_types::NetworkHashHex::from([0xff; 32])
+            ),
+            "expected SchedulerNetworkHashMismatch, got {err:?}",
         );
     }
 

@@ -9,7 +9,7 @@ use groundhog_json_rpc_types::{
     hex::{Hex0x, HexBytes, Topic},
     view::{RootInvocationOutput, ViewRequest, ViewResponse},
 };
-use groundhog_scp::network::Protocol;
+use groundhog_scp::network::ProtocolCommit as Protocol;
 use groundhog_view::{ViewGateway_ViewGateway1_Client, ViewGatewayIntroOutcome, ViewGatewayResult};
 use groundhog_x23_transport::connect;
 use groundhog_xdr::{
@@ -293,7 +293,7 @@ mod tests {
     use groundhog_json_rpc_server::ViewPlane;
     use groundhog_json_rpc_types::ContractAddress;
     use groundhog_json_rpc_types::hex::HexBytes;
-    use groundhog_scp::network::Protocol;
+    use groundhog_scp::network::ProtocolCommit as Protocol;
     use groundhog_view::{
         ViewGateway_ViewGateway1, ViewGateway_ViewGateway1_Dispatcher, ViewGatewayPayload,
     };

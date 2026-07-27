@@ -10,9 +10,8 @@ use groundhog_json_rpc_server::{
     ChainPlane, RpcRequestContext, RpcServerError, SubmitPlane, ValidatedTransaction,
 };
 use groundhog_json_rpc_types::{
-    BlockHeight,
-    block::{BlockInfo, ChainTip},
-    hex::Hex0x,
+    BlockHeight, NetworkHashHex,
+    block::{BlockInfo, ChainTip, consensus_value_hash},
 };
 use groundhog_scheduler::{
     DbTip, ParallelBatch, SchedulerGetTipResult, parallel::ParallelSignedTransactionBatch,
@@ -64,8 +63,12 @@ impl HogdDevSchedulerBackend {
     }
 
     #[tracing::instrument(skip_all)]
-    pub(crate) async fn ensure_dev_genesis(&self) -> Result<(), NodeSupervisorError> {
-        ensure_dev_genesis(&self.scheduler).await
+    pub(crate) async fn ensure_dev_genesis(
+        &self,
+        expected_network_hash: &NetworkHashHex,
+    ) -> Result<(), NodeSupervisorError> {
+        let db_tip = ensure_dev_genesis(&self.scheduler).await?;
+        validate_scheduler_network_hash(expected_network_hash, &db_tip)
     }
 
     /// Borrow the inner scheduler client for use by sibling backends
@@ -90,6 +93,30 @@ impl HogdDevSchedulerBackend {
             block_driver: None,
         }
     }
+}
+
+fn validate_scheduler_network_hash(
+    expected: &NetworkHashHex,
+    db_tip: &DbTip,
+) -> Result<(), NodeSupervisorError> {
+    let mut bytes = [0; 32];
+    bytes.copy_from_slice(
+        db_tip
+            .value
+            .proposal_header
+            .network_hash
+            .clone()
+            .into_inner()
+            .as_ref(),
+    );
+    let observed = NetworkHashHex::from(bytes);
+    if expected == &observed {
+        return Ok(());
+    }
+    Err(NodeSupervisorError::SchedulerNetworkHashMismatch {
+        expected: expected.clone(),
+        observed,
+    })
 }
 
 #[async_trait]
@@ -127,7 +154,7 @@ impl ChainPlane for HogdDevSchedulerBackend {
                 .map_err(|error| RpcServerError::BackendUnavailable(error.to_string()))?;
             match result {
                 SchedulerGetTipResult::SchedulerGetTipOK { db_tip } => {
-                    Ok(chain_tip_from_db_tip(db_tip))
+                    chain_tip_from_db_tip(db_tip)
                 }
                 SchedulerGetTipResult::SchedulerGetTipNoGenesisBlock => {
                     tracing::error!(
@@ -189,17 +216,20 @@ fn classify_submit_rpc_error(error: &rpc_driver::RpcError) -> RpcServerError {
 
 fn chain_tip_from_db_tip(
     DbTip {
-        height,
-        block_hash,
-        events_hash: _,
-        db_hash: _,
+        value,
+        storage_long_hash: _,
         id: _,
     }: DbTip,
-) -> ChainTip {
-    ChainTip {
-        height,
-        block_hash: Hex0x(block_hash.into_inner()),
-    }
+) -> Result<ChainTip, RpcServerError> {
+    let block_hash = consensus_value_hash(&value).map_err(|error| {
+        RpcServerError::BackendUnavailable(format!(
+            "hogd-dev scheduler returned an unencodable consensus value: {error}"
+        ))
+    })?;
+    Ok(ChainTip {
+        height: value.proposal_header.block_height.clone(),
+        block_hash,
+    })
 }
 
 #[cfg(test)]

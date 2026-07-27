@@ -11,15 +11,15 @@ supervisor path, with future extensions called out below.
 
 ## Scope
 
-`hogd-dev` is the single hogd-owned child process supervised by
+`hog-devnode` is the single hogd-owned child process supervised by
 `groundhog-node-supervisor`. It owns the local chain state, mempool, execution
 path, read APIs, and dev-control APIs. Rust owns only process lifecycle, dev
 account/genesis input, JSON-RPC facade wiring, log forwarding, and shutdown.
 
 ## Current Contract
 
-- **Process name.** The child binary is `hogd-dev`.
-- **Readiness.** The supervisor starts `hogd-dev` with `--readiness stdout`
+- **Process name.** The child binary is `hog-devnode`.
+- **Readiness.** The supervisor starts `hog-devnode` with `--readiness stdout`
   and reads exactly one capped JSON readiness line from stdout. Current
   readiness is a pointer to a versioned runtime manifest. Stdout is otherwise
   reserved for machine protocol.
@@ -46,7 +46,7 @@ account/genesis input, JSON-RPC facade wiring, log forwarding, and shutdown.
 
 ## Startup
 
-The supervisor resolves the child binary, named `hogd-dev`, in this order:
+The supervisor resolves the child binary, named `hog-devnode`, in this order:
 
 1. explicit `--hog-devnode-binary`;
 2. `GROUNDHOG_DEVNODE_BINARY`;
@@ -65,22 +65,23 @@ affected RPC.
 Current invocation shape:
 
 ```bash
-hogd-dev \
+hog-devnode \
   --listen-host 127.0.0.1 \
   --scheduler-port 0 \
   --readiness stdout \
   --bootstrap-manifest /tmp/groundhog-hogd-bootstrap-.../bootstrap-manifest.json
 ```
 
+`groundhog node --data-dir <DIR>` additionally passes `--data-dir <DIR>` and
+requests recoverable persistent state. Without it, the child remains ephemeral.
+
 The bootstrap manifest contains the local-dev network id, dev-wallet profile,
 deterministic dev-account count/seed/token funding, and storage-cost profile.
 Current `hogd-dev` treats this as small trusted operator input: the path must
 open to a regular file, the file is capped at 64 KiB, and
 `bootstrapAccounts.count` is capped at 1000.
-The supervisor also injects `HOGD_LOG_FORMAT=json`. `hogd-dev` remains
-ephemeral; no state directory is part of the contract until persistence is
-real. There are no `--read-port`, `--control-port`, or `--genesis-stdin`
-flags in the current binary.
+The supervisor also injects `HOGD_LOG_FORMAT=json`. There are no `--read-port`,
+`--control-port`, or `--genesis-stdin` flags in the current binary.
 
 ## Readiness
 
@@ -90,7 +91,7 @@ pointer to the runtime manifest:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "status": "ready",
   "manifestPath": "/tmp/hogd-dev/runtime-manifest.json",
   "manifestHash": "0x..."
@@ -99,8 +100,16 @@ pointer to the runtime manifest:
 
 The supervisor opens the manifest path, verifies `manifestHash`, parses the
 versioned runtime manifest, and derives its internal readiness view from that
-manifest. The manifest contains `networkId`, backend endpoints,
-`bootstrapAccountDerivation`, and `bootstrapAccounts`.
+manifest. The manifest contains `networkHash`, backend endpoints,
+`bootstrapAccountDerivation`, `bootstrapAccounts`, and the closed `chainState`
+value `fresh` or `recovered`. `chainState` reflects whether hog-devnode found
+and recovered a committed chain; merely reusing an existing data directory is
+not recovery.
+
+`groundhog node` carries that value into human startup output as `chain state`
+and into startup JSON as `data.chain_state`. This additive field preserves node
+startup `data.schemaVersion = 3`; startup schema versions only bump for field
+rename/removal/meaning changes, not additive fields.
 
 If startup fails before readiness, hogd-dev should exit non-zero and write a
 clear error record to stderr. The supervisor treats child exit before readiness
@@ -166,15 +175,30 @@ Follow-up when real user workflows justify it:
 
 ## Shutdown
 
-`SIGTERM` asks hogd-dev to stop accepting new requests, drain or fail in-flight
+`SIGTERM` asks hog-devnode to stop accepting new requests, drain or fail in-flight
 internal tasks deterministically, and exit within the configured grace timeout.
-The current default grace is 5s. Because hogd-dev is ephemeral, shutdown grace
-exists for log drain and clean SIGTERM handling, not state persistence. The
-supervisor sends `SIGKILL` to the process group only after that timeout.
+On Unix, the default grace is 5s for ephemeral nodes and 30s when `--data-dir`
+enables persistent state. Automatic PID ownership is scoped to the same
+lifecycle: ephemeral nodes use the Groundhog cache directory, while persistent
+nodes use `<data-dir>/hog-devnode.pid`. This prevents unrelated persistent
+chains from blocking each other and prevents the same state directory from
+being opened by supervisors with different cache roots. Persistent local-node
+state is rejected on non-Unix platforms until equivalent process-group and
+PID-lock guarantees exist there.
 
-On Linux, the supervisor may set `PR_SET_PDEATHSIG` for best-effort cleanup if
-the parent dies. macOS has no direct equivalent; orphaned children are a
-best-effort cleanup risk rather than adding a persistent agent.
+The supervisor sends `SIGKILL` to the process group only after the selected
+timeout, logs a warning that persistent state may require recovery, and waits a
+bounded interval for the process group to disappear. Dropping a supervisor
+handle is not a graceful persistence contract; callers must await `stop`,
+`stopped`, or `run_until`. If shutdown is canceled or termination cannot be
+confirmed, the supervisor preserves the PID file so the next startup fails
+closed or recovers the orphan before opening the data directory.
+
+Tokio's child-drop behavior sends a best-effort kill to the direct child if a
+supervisor future is canceled. It does not replace explicit process-group
+shutdown. A parent crash can leave descendants behind on Linux or macOS; the
+preserved PID file lets the next startup identify and clean that group before
+releasing state ownership.
 
 ## Required APIs
 

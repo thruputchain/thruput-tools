@@ -186,12 +186,15 @@ existing-provider process smokes stay in sync:
 GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode scripts/smoke-sim-local.sh
 ```
 
-These smokes start `groundhog node`, run `hog-devnode`, connect to localhost, and
-write the node PID file under `~/.cache/groundhog`; Codex should run them
-outside the sandbox. If they fail with permission, localhost-connect, network,
-or cache-write errors, rerun the same command with escalation rather than
-rewriting the workflow. Use absolute paths for `hog-devnode` because quoted `~`
-does not expand.
+These smokes start `groundhog node`, run `hog-devnode`, and connect to localhost.
+Nodes started without `--data-dir` write their PID file under
+`~/.cache/groundhog`; persistent nodes write `<data-dir>/hog-devnode.pid`. The
+local-DX smoke uses a per-run persistent directory and verifies stop/restart
+recovery. Codex should run these smokes outside the sandbox. If they fail with
+permission, localhost-connect, network, or cache-write errors, rerun the same
+command with escalation rather than rewriting the workflow. Use absolute paths
+for `hog-devnode`; `--data-dir` itself expands a leading `~` and reports the
+resolved absolute path.
 
 For the `groundhog-testkit` live contract smoke, build the `caller-counter`
 fixture from a `groundhog-examples` checkout and run the ignored contract test.
@@ -235,8 +238,11 @@ cargo run -p groundhog-cli -- keys generate alice
 cargo run -p groundhog-cli -- keys ls
 # Local node backed by hog-devnode
 cargo run -p groundhog-cli -- node --hog-devnode-binary /path/to/hog-devnode
+# Persist state across clean stop/restart cycles
+cargo run -p groundhog-cli -- node --hog-devnode-binary /path/to/hog-devnode \
+  --data-dir .groundhog/node
 # Machine-readable startup metadata includes data.rpc_url and
-# data.runtime_manifest.path/hash.
+# data.runtime_manifest.path/hash, data.chain_state, and resolved data.data_dir.
 cargo run -p groundhog-cli -- --json node --hog-devnode-binary /path/to/hog-devnode
 # Typical local loop
 # 1. cargo run -p groundhog-cli -- new my-counter && cd my-counter
@@ -530,7 +536,7 @@ history retains the design context for anything not currently active.
 - `docs/gateway/runtime-manifest.md` — runtime manifest quickstart for
   CLI, gateway, and benchmark runs.
 - `docs/gateway/examples/runtime-manifest.hogd-dev.example.json` —
-  example v1 runtime manifest shape. It is not runnable because endpoint
+  example v2 runtime manifest shape. It is not runnable because endpoint
   ports, genesis hash, wallet addresses, and hashes are runtime state.
 - `docs/gateway/open-questions.md` — cross-team open and resolved
   questions for the gateway design.

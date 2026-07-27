@@ -12,9 +12,12 @@ use std::{
 };
 
 use groundhog_json_rpc_types::{
-    ContractAddress,
+    ContractAddress, NetworkHashHex,
     hex::HexBytes,
-    runtime_manifest::{RUNTIME_MANIFEST_SCHEMA_VERSION, RuntimeManifest},
+    runtime_manifest::{
+        HOGD_DEV_RUNTIME_MANIFEST_KIND, RUNTIME_MANIFEST_SCHEMA_VERSION, RuntimeManifest,
+        RuntimeManifestChainState, parse_runtime_manifest,
+    },
 };
 use groundhog_signing::LocalSigner;
 use serde::{Deserialize, de::DeserializeOwned};
@@ -56,7 +59,6 @@ pub const MAX_RUNTIME_MANIFEST_BYTES: usize = 1024 * 1024;
 /// Bootstrap-account derivation contract supported by the Rust dev tooling.
 pub const SUPPORTED_BOOTSTRAP_ACCOUNT_DERIVATION_SCHEME: &str = "groundhog-bootstrap-account-v1";
 
-const HOGD_DEV_BOOTSTRAP_NETWORK_ID: &str = "groundhog-local";
 const BOOTSTRAP_MANIFEST_FILE_NAME: &str = "bootstrap-manifest.json";
 
 /// Ready endpoints exposed by hogd-dev.
@@ -106,8 +108,11 @@ pub(crate) struct HogdDevReadyAccount {
 pub struct HogdDevReadiness {
     /// Readiness status. Must be `ready`.
     pub status: String,
-    /// Local chain network identifier.
-    pub network_id: String,
+    /// Whether hog-devnode initialized a new chain or recovered a committed chain.
+    #[serde(default)]
+    pub chain_state: Option<RuntimeManifestChainState>,
+    /// Unprefixed 32-byte local chain network hash.
+    pub network_hash: NetworkHashHex,
     /// x23 protocol token expected by hogd-dev services.
     #[serde(default)]
     pub protocol: Option<String>,
@@ -148,6 +153,12 @@ struct HogdDevReadinessPointer {
     manifest_hash: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HogdDevReadinessEnvelope {
+    schema_version: u32,
+}
+
 /// Validate hog-devnode readiness account metadata against local dev-account config.
 pub(crate) fn validate_dev_accounts(
     readiness: &HogdDevReadiness,
@@ -183,6 +194,8 @@ pub struct HogdDevProcess {
     child: SupervisedChild,
     stderr_task: Option<JoinHandle<()>>,
     shutdown_grace: Duration,
+    data_dir: Option<PathBuf>,
+    pid_file: Option<PathBuf>,
     pid_guard: Option<PidGuard>,
     _bootstrap_manifest: Option<BootstrapManifestFile>,
 }
@@ -215,6 +228,7 @@ impl HogdDevProcess {
         spec: ChildProcessSpec,
         bootstrap_manifest: Option<BootstrapManifestFile>,
     ) -> Result<Self, NodeSupervisorError> {
+        prepare_persistent_data_dir(config)?;
         let mut pid_guard = match &config.pid_file {
             Some(pid_file) => Some(
                 PidGuard::acquire(pid_file.clone(), spec.program(), config.shutdown_grace).await?,
@@ -250,13 +264,8 @@ impl HogdDevProcess {
             })?;
         let mut stderr_task = Some(spawn_stderr_forwarder(stderr));
 
-        let readiness_result = read_readiness_line(
-            &mut child,
-            stdout,
-            config.startup_timeout,
-            stderr_task.as_ref(),
-        )
-        .await;
+        let readiness_result =
+            read_readiness_line(&mut child, stdout, config.startup_timeout).await;
         let readiness = match readiness_result {
             Ok(readiness) => readiness,
             Err(error) => {
@@ -270,6 +279,8 @@ impl HogdDevProcess {
             child,
             stderr_task,
             shutdown_grace: config.shutdown_grace,
+            data_dir: config.data_dir.clone(),
+            pid_file: config.pid_file.clone(),
             pid_guard,
             _bootstrap_manifest: bootstrap_manifest,
         })
@@ -288,67 +299,198 @@ impl HogdDevProcess {
     /// Wait for hogd-dev to exit.
     #[tracing::instrument(skip_all)]
     pub async fn stopped(&mut self) -> Result<ExitStatus, NodeSupervisorError> {
-        let status = self.child.wait().await?;
+        let mut status = Some(self.child.wait().await?);
+        #[cfg(unix)]
+        if self.child.process_group_exists()? {
+            tracing::warn!(
+                program = %self.child.program(),
+                process_group = ?self.child.process_group_id(),
+                persistent = self.data_dir.is_some(),
+                data_dir = ?self.data_dir,
+                pid_file = ?self.pid_file,
+                "hog-devnode leader exited while descendants remained; stopping its process group"
+            );
+            self.child.terminate_process_group()?;
+            self.drain_process_group(&mut status).await?;
+        }
         self.wait_for_stderr_task().await;
-        drop(self.pid_guard.take());
-        Ok(status)
+        self.release_pid_guard();
+        Ok(status.expect("bug: stopped child has an exit status"))
     }
 
     /// Gracefully stop hogd-dev, escalating after the configured timeout.
     #[tracing::instrument(skip_all, fields(shutdown_grace = ?self.shutdown_grace))]
     pub async fn stop(&mut self) -> Result<ExitStatus, NodeSupervisorError> {
-        #[cfg(not(unix))]
-        if let Some(status) = self.child.try_wait()? {
-            self.wait_for_stderr_task().await;
-            return Ok(status);
-        }
-
-        #[cfg(unix)]
-        self.child.terminate_process_group()?;
-
         #[cfg(unix)]
         let status = self.stop_process_group().await?;
 
         #[cfg(not(unix))]
-        let status = self.child.kill_and_wait().await?;
+        let status = match self.child.try_wait()? {
+            Some(status) => status,
+            None => self.child.kill_and_wait().await?,
+        };
 
         self.wait_for_stderr_task().await;
-        drop(self.pid_guard.take());
+        self.release_pid_guard();
         Ok(status)
     }
 
     #[cfg(unix)]
     async fn stop_process_group(&mut self) -> Result<ExitStatus, NodeSupervisorError> {
-        let deadline = time::Instant::now() + self.shutdown_grace;
-        let mut status = None;
-
-        loop {
-            if status.is_none() {
-                status = self.child.try_wait()?;
-            }
-
-            if !self.child.process_group_exists()? {
-                break;
-            }
-
-            let now = time::Instant::now();
-            if now >= deadline {
-                self.child.kill_process_group()?;
-                break;
-            }
-
-            time::sleep((deadline - now).min(Duration::from_millis(10))).await;
+        let mut status = self.child.try_wait()?;
+        if self.child.process_group_exists()? {
+            self.child.terminate_process_group()?;
+            self.drain_process_group(&mut status).await?;
         }
 
         match status {
             Some(status) => Ok(status),
-            None => self.child.wait().await,
+            None => time::timeout(Duration::from_millis(500), self.child.wait())
+                .await
+                .map_err(|_| self.shutdown_incomplete_error())?,
+        }
+    }
+
+    #[cfg(unix)]
+    async fn drain_process_group(
+        &mut self,
+        status: &mut Option<ExitStatus>,
+    ) -> Result<(), NodeSupervisorError> {
+        const POST_KILL_DRAIN: Duration = Duration::from_millis(500);
+
+        let deadline = time::Instant::now() + self.shutdown_grace;
+        let mut kill_deadline = None;
+
+        loop {
+            if status.is_none() {
+                *status = self.child.try_wait()?;
+            }
+
+            if !self.child.process_group_exists()? {
+                return Ok(());
+            }
+
+            let now = time::Instant::now();
+            if kill_deadline.is_none() && now >= deadline {
+                tracing::warn!(
+                    program = %self.child.program(),
+                    pid = ?self.child.id(),
+                    process_group = ?self.child.process_group_id(),
+                    shutdown_grace = ?self.shutdown_grace,
+                    persistent = self.data_dir.is_some(),
+                    data_dir = ?self.data_dir,
+                    pid_file = ?self.pid_file,
+                    "hog-devnode did not stop within its graceful shutdown deadline; sending SIGKILL; persistent state may require recovery"
+                );
+                self.child.kill_process_group()?;
+                kill_deadline = Some(now + POST_KILL_DRAIN);
+            }
+
+            if let Some(kill_deadline) = kill_deadline
+                && now >= kill_deadline
+            {
+                tracing::warn!(
+                    program = %self.child.program(),
+                    pid = ?self.child.id(),
+                    process_group = ?self.child.process_group_id(),
+                    persistent = self.data_dir.is_some(),
+                    data_dir = ?self.data_dir,
+                    pid_file = ?self.pid_file,
+                    "hog-devnode process group is still present after the SIGKILL drain"
+                );
+                return Err(self.shutdown_incomplete_error());
+            }
+
+            let next_deadline = kill_deadline.unwrap_or(deadline);
+            time::sleep(
+                next_deadline
+                    .saturating_duration_since(now)
+                    .min(Duration::from_millis(10)),
+            )
+            .await;
+        }
+    }
+
+    #[cfg(unix)]
+    fn shutdown_incomplete_error(&self) -> NodeSupervisorError {
+        NodeSupervisorError::ShutdownIncomplete {
+            program: self.child.program().to_string(),
+            process_group: self.child.process_group_id(),
         }
     }
 
     async fn wait_for_stderr_task(&mut self) {
-        wait_for_stderr_task(self.stderr_task.take()).await;
+        const STDERR_DRAIN: Duration = Duration::from_millis(500);
+
+        let Some(mut task) = self.stderr_task.take() else {
+            return;
+        };
+        if time::timeout(STDERR_DRAIN, &mut task).await.is_err() {
+            tracing::warn!(
+                program = %self.child.program(),
+                timeout = ?STDERR_DRAIN,
+                "hog-devnode stderr remained open after process-group shutdown; aborting log forwarding"
+            );
+            task.abort();
+            let _ = task.await;
+        }
     }
+
+    fn release_pid_guard(&mut self) {
+        if let Some(guard) = self.pid_guard.take() {
+            guard.release();
+        }
+    }
+}
+
+#[cfg(unix)]
+fn prepare_persistent_data_dir(config: &HogdDevConfig) -> Result<(), NodeSupervisorError> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+
+    let Some(data_dir) = config.data_dir.as_deref() else {
+        return Ok(());
+    };
+    match fs::symlink_metadata(data_dir) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            Err(NodeSupervisorError::DataDir {
+                path: data_dir.to_path_buf(),
+                source: io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "persistent data path must be a directory and must not be a symlink",
+                ),
+            })
+        }
+        Ok(_) => {
+            fs::set_permissions(data_dir, fs::Permissions::from_mode(0o700)).map_err(|source| {
+                NodeSupervisorError::DataDir {
+                    path: data_dir.to_path_buf(),
+                    source,
+                }
+            })
+        }
+        Err(source) if source.kind() == io::ErrorKind::NotFound => {
+            let mut builder = fs::DirBuilder::new();
+            builder.recursive(true).mode(0o700);
+            builder
+                .create(data_dir)
+                .map_err(|source| NodeSupervisorError::DataDir {
+                    path: data_dir.to_path_buf(),
+                    source,
+                })
+        }
+        Err(source) => Err(NodeSupervisorError::DataDir {
+            path: data_dir.to_path_buf(),
+            source,
+        }),
+    }
+}
+
+#[cfg(not(unix))]
+fn prepare_persistent_data_dir(config: &HogdDevConfig) -> Result<(), NodeSupervisorError> {
+    if config.data_dir.is_some() {
+        return Err(NodeSupervisorError::PersistentStateUnsupported);
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -367,7 +509,7 @@ fn write_bootstrap_manifest(
     config: &HogdDevConfig,
 ) -> Result<BootstrapManifestFile, NodeSupervisorError> {
     let manifest = config
-        .to_bootstrap_manifest(HOGD_DEV_BOOTSTRAP_NETWORK_ID)
+        .to_bootstrap_manifest(NetworkHashHex::from([0; 32]))
         .map_err(
             |source| NodeSupervisorError::InvalidBootstrapManifestConfig {
                 reason: format!("dev_account_count does not fit u32: {source}"),
@@ -393,7 +535,7 @@ fn write_bootstrap_manifest(
 /// shape for external callers. The supervisor startup path uses
 /// `--bootstrap-manifest` via `build_hogd_dev_spec_with_bootstrap_manifest`.
 pub fn build_hogd_dev_spec(binary: impl AsRef<Path>, config: &HogdDevConfig) -> ChildProcessSpec {
-    ChildProcessSpec::new(binary.as_ref().as_os_str().to_owned())
+    let mut spec = ChildProcessSpec::new(binary.as_ref().as_os_str().to_owned())
         .args([
             OsString::from("--listen-host"),
             OsString::from(config.listen_host.as_str()),
@@ -409,8 +551,18 @@ pub fn build_hogd_dev_spec(binary: impl AsRef<Path>, config: &HogdDevConfig) -> 
             OsString::from(config.dev_account_tokens.to_string()),
         ])
         .env(HOGD_LOG_FORMAT_ENV, "json")
+        .kill_on_drop(config.data_dir.is_none())
         .stdout_piped()
-        .stderr_piped()
+        .stderr_piped();
+
+    if let Some(data_dir) = &config.data_dir {
+        spec = spec.args([
+            OsString::from("--data-dir"),
+            data_dir.as_os_str().to_owned(),
+        ]);
+    }
+
+    spec
 }
 
 /// Build the hogd-dev command specification used by the supervisor path.
@@ -431,6 +583,7 @@ pub(crate) fn build_hogd_dev_spec_with_bootstrap_manifest(
             bootstrap_manifest_path.as_ref().as_os_str().to_owned(),
         ])
         .env(HOGD_LOG_FORMAT_ENV, "json")
+        .kill_on_drop(config.data_dir.is_none())
         .stdout_piped()
         .stderr_piped();
 
@@ -438,6 +591,13 @@ pub(crate) fn build_hogd_dev_spec_with_bootstrap_manifest(
         spec = spec.args([
             OsString::from("--log-level"),
             OsString::from(log_level.as_str()),
+        ]);
+    }
+
+    if let Some(data_dir) = &config.data_dir {
+        spec = spec.args([
+            OsString::from("--data-dir"),
+            data_dir.as_os_str().to_owned(),
         ]);
     }
 
@@ -490,6 +650,15 @@ pub fn parse_readiness_line(
     let value: serde_json::Value = parse_readiness_str(program, line)?;
 
     if has_manifest_pointer_fields(&value) {
+        let envelope: HogdDevReadinessEnvelope =
+            parse_readiness_value(program, value.clone(), line)?;
+        if envelope.schema_version != RUNTIME_MANIFEST_SCHEMA_VERSION {
+            return Err(NodeSupervisorError::InvalidReadinessSchemaVersion {
+                program: program.to_string(),
+                expected: RUNTIME_MANIFEST_SCHEMA_VERSION,
+                actual: envelope.schema_version,
+            });
+        }
         let pointer: HogdDevReadinessPointer = parse_readiness_value(program, value, line)?;
         return parse_manifest_readiness_pointer(program, pointer);
     }
@@ -537,13 +706,7 @@ fn parse_manifest_readiness_pointer(
     program: &str,
     pointer: HogdDevReadinessPointer,
 ) -> Result<HogdDevReadiness, NodeSupervisorError> {
-    if pointer.schema_version != RUNTIME_MANIFEST_SCHEMA_VERSION {
-        return Err(NodeSupervisorError::InvalidReadinessSchemaVersion {
-            program: program.to_string(),
-            expected: RUNTIME_MANIFEST_SCHEMA_VERSION,
-            actual: pointer.schema_version,
-        });
-    }
+    debug_assert_eq!(pointer.schema_version, RUNTIME_MANIFEST_SCHEMA_VERSION);
     if pointer.status != "ready" {
         return Err(NodeSupervisorError::InvalidReadinessStatus {
             program: program.to_string(),
@@ -566,7 +729,7 @@ fn parse_manifest_readiness_pointer(
         });
     }
 
-    let manifest: RuntimeManifest = serde_json::from_slice(&manifest_bytes).map_err(|source| {
+    let manifest = parse_runtime_manifest(&manifest_bytes).map_err(|source| {
         NodeSupervisorError::InvalidRuntimeManifest {
             program: program.to_string(),
             reason: source.to_string(),
@@ -769,16 +932,22 @@ fn readiness_from_runtime_manifest(
     manifest_path: PathBuf,
     manifest_hash: String,
 ) -> Result<HogdDevReadiness, NodeSupervisorError> {
-    if manifest.schema_version != RUNTIME_MANIFEST_SCHEMA_VERSION {
+    if manifest.kind != HOGD_DEV_RUNTIME_MANIFEST_KIND {
         return Err(NodeSupervisorError::InvalidRuntimeManifest {
             program: program.to_string(),
             reason: format!(
-                "expected schemaVersion {}, got {}",
-                RUNTIME_MANIFEST_SCHEMA_VERSION, manifest.schema_version
+                "unexpected runtime manifest kind `{}`; expected `{HOGD_DEV_RUNTIME_MANIFEST_KIND}`",
+                manifest.kind
             ),
         });
     }
-
+    let chain_state =
+        manifest
+            .chain_state
+            .ok_or_else(|| NodeSupervisorError::InvalidRuntimeManifest {
+                program: program.to_string(),
+                reason: "hog-devnode runtime manifest is missing chainState".to_string(),
+            })?;
     let dev_accounts = manifest
         .bootstrap_accounts
         .iter()
@@ -805,7 +974,8 @@ fn readiness_from_runtime_manifest(
 
     Ok(HogdDevReadiness {
         status: "ready".to_string(),
-        network_id: manifest.network_id.clone(),
+        chain_state: Some(chain_state),
+        network_hash: manifest.network_hash.clone(),
         protocol: Some(manifest.protocol.clone()),
         endpoints: HogdDevEndpoints {
             scheduler_coord: manifest.endpoints.scheduler,
@@ -964,7 +1134,6 @@ async fn read_readiness_line(
     child: &mut SupervisedChild,
     stdout: ChildStdout,
     timeout: Duration,
-    stderr_task: Option<&JoinHandle<()>>,
 ) -> Result<HogdDevReadiness, NodeSupervisorError> {
     let program = child.program().to_string();
     let mut stdout = BufReader::new(stdout);
@@ -975,7 +1144,6 @@ async fn read_readiness_line(
     .await;
     match read_result {
         Ok(Ok(CappedLine::Eof)) => {
-            abort_stderr_task(stderr_task);
             // EOF on stdout means the child has either already exited or is
             // about to. `try_wait()` polls `waitpid`, which races SIGCHLD
             // delivery on Linux — so a tight EOF→try_wait sequence can see
@@ -999,14 +1167,12 @@ async fn read_readiness_line(
                 Ok(readiness) => Ok(readiness),
                 Err(error) => {
                     kill_unready_child(child).await;
-                    abort_stderr_task(stderr_task);
                     Err(error)
                 }
             }
         }
         Ok(Ok(CappedLine::TooLarge)) => {
             kill_unready_child(child).await;
-            abort_stderr_task(stderr_task);
             Err(NodeSupervisorError::ReadinessTooLarge {
                 program,
                 max_bytes: MAX_READINESS_LINE_BYTES,
@@ -1014,12 +1180,10 @@ async fn read_readiness_line(
         }
         Ok(Err(source)) => {
             kill_unready_child(child).await;
-            abort_stderr_task(stderr_task);
             Err(NodeSupervisorError::ReadinessRead { program, source })
         }
         Err(_) => {
             kill_unready_child(child).await;
-            abort_stderr_task(stderr_task);
             Err(NodeSupervisorError::ReadinessTimeout { program, timeout })
         }
     }
@@ -1134,36 +1298,127 @@ where
     }
 }
 
+const UNREADY_SHUTDOWN_GRACE: Duration = Duration::from_millis(500);
+const UNREADY_KILL_DRAIN: Duration = Duration::from_millis(500);
+
 async fn kill_unready_child(child: &mut SupervisedChild) {
     #[cfg(unix)]
-    {
-        if let Err(error) = child.kill_process_group() {
+    kill_unready_process_group(child).await;
+
+    #[cfg(not(unix))]
+    match time::timeout(UNREADY_KILL_DRAIN, child.kill_and_wait()).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(error)) => tracing::warn!(
+            target: "hogd_dev",
+            %error,
+            program = child.program(),
+            "failed to kill unready hogd-dev child"
+        ),
+        Err(_) => tracing::warn!(
+            target: "hogd_dev",
+            program = child.program(),
+            timeout = ?UNREADY_KILL_DRAIN,
+            "timed out waiting for unready hog-devnode child after forced termination"
+        ),
+    }
+}
+
+#[cfg(unix)]
+async fn kill_unready_process_group(child: &mut SupervisedChild) {
+    if let Err(error) = child.terminate_process_group() {
+        tracing::warn!(
+            target: "hogd_dev",
+            %error,
+            program = child.program(),
+            "failed to SIGTERM unready hog-devnode process group"
+        );
+    }
+    let term_deadline = time::Instant::now() + UNREADY_SHUTDOWN_GRACE;
+    loop {
+        if let Err(error) = child.try_wait() {
             tracing::warn!(
                 target: "hogd_dev",
                 %error,
                 program = child.program(),
-                "failed to kill unready hog-devnode process group"
+                "failed checking unready hog-devnode child status"
             );
+            break;
         }
-        if let Err(error) = child.wait().await {
-            tracing::warn!(
+        match child.process_group_exists() {
+            Ok(false) => {
+                let _ = time::timeout(UNREADY_KILL_DRAIN, child.wait()).await;
+                return;
+            }
+            Ok(true) if time::Instant::now() < term_deadline => {
+                time::sleep(Duration::from_millis(10)).await;
+            }
+            Ok(true) => break,
+            Err(error) => {
+                tracing::warn!(
+                    target: "hogd_dev",
+                    %error,
+                    program = child.program(),
+                    "failed checking unready hog-devnode process group"
+                );
+                break;
+            }
+        }
+    }
+    tracing::warn!(
+        target: "hogd_dev",
+        program = child.program(),
+        process_group = ?child.process_group_id(),
+        shutdown_grace = ?UNREADY_SHUTDOWN_GRACE,
+        "unready hog-devnode did not stop after SIGTERM; sending SIGKILL"
+    );
+    if let Err(error) = child.kill_process_group() {
+        tracing::warn!(
+            target: "hogd_dev",
+            %error,
+            program = child.program(),
+            "failed to SIGKILL unready hog-devnode process group"
+        );
+    }
+    match time::timeout(UNREADY_KILL_DRAIN, child.wait()).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(error)) => tracing::warn!(
                 target: "hogd_dev",
                 %error,
                 program = child.program(),
                 "failed waiting for unready hogd-dev cleanup"
-            );
-        }
-    }
-
-    #[cfg(not(unix))]
-    {
-        if let Err(error) = child.kill_and_wait().await {
-            tracing::warn!(
+        ),
+        Err(_) => tracing::warn!(
                 target: "hogd_dev",
-                %error,
                 program = child.program(),
-                "failed to kill unready hogd-dev child"
-            );
+                timeout = ?UNREADY_KILL_DRAIN,
+                "timed out waiting for unready hog-devnode child after SIGKILL"
+        ),
+    }
+    let deadline = time::Instant::now() + UNREADY_KILL_DRAIN;
+    loop {
+        match child.process_group_exists() {
+            Ok(false) => break,
+            Ok(true) if time::Instant::now() < deadline => {
+                time::sleep(Duration::from_millis(10)).await;
+            }
+            Ok(true) => {
+                tracing::warn!(
+                    target: "hogd_dev",
+                    program = child.program(),
+                    process_group = ?child.process_group_id(),
+                    "unready hog-devnode process group remained after SIGKILL drain"
+                );
+                break;
+            }
+            Err(error) => {
+                tracing::warn!(
+                    target: "hogd_dev",
+                    %error,
+                    program = child.program(),
+                    "failed checking unready hog-devnode process group"
+                );
+                break;
+            }
         }
     }
 }
@@ -1364,14 +1619,18 @@ fn parse_log_fields(fields: Option<&serde_json::Value>) -> ForwardedLogFields {
 }
 
 async fn wait_for_stderr_task(task: Option<JoinHandle<()>>) {
-    if let Some(task) = task {
-        let _ = task.await;
-    }
-}
+    const STDERR_DRAIN: Duration = Duration::from_millis(500);
 
-fn abort_stderr_task(task: Option<&JoinHandle<()>>) {
-    if let Some(task) = task {
+    let Some(mut task) = task else {
+        return;
+    };
+    if time::timeout(STDERR_DRAIN, &mut task).await.is_err() {
+        tracing::warn!(
+            timeout = ?STDERR_DRAIN,
+            "hog-devnode stderr remained open after failed startup; aborting log forwarding"
+        );
         task.abort();
+        let _ = task.await;
     }
 }
 
@@ -1383,7 +1642,7 @@ mod tests {
         ffi::OsString,
         fs,
         os::unix::fs::PermissionsExt,
-        path::PathBuf,
+        path::{Path, PathBuf},
         time::{Duration, SystemTime, UNIX_EPOCH},
     };
 
@@ -1392,20 +1651,25 @@ mod tests {
 
     use super::{
         DEFAULT_HOGD_DEV_BINARY, DEVNODE_BINARY_ENV, HOGD_LOG_FORMAT_ENV, HogdDevProcess,
-        build_hogd_dev_spec, build_hogd_dev_spec_with_bootstrap_manifest, parse_readiness_line,
-        resolve_hogd_dev_binary, validate_dev_accounts, write_bootstrap_manifest,
+        RuntimeManifestChainState, build_hogd_dev_spec,
+        build_hogd_dev_spec_with_bootstrap_manifest, parse_readiness_line,
+        prepare_persistent_data_dir, resolve_hogd_dev_binary, validate_dev_accounts,
+        write_bootstrap_manifest,
     };
     use crate::{
         HogdDevConfig, NodeSupervisorError,
         test_support::{FAKE_HOGD_DEV_MODE_ENV, fake_hogd_dev_binary},
     };
 
-    const V1_READY: &str = r#"{"status":"ready","network_id":"groundhog-local","endpoints":{"scheduler_coord":"127.0.0.1:12345"}}"#;
-    const COMPACT_READY: &str = r#"{"status":"ready","network_id":"groundhog-local","endpoints":{"scheduler":"127.0.0.1:12345","read":"127.0.0.1:12346","gateway":"127.0.0.1:12347","view":"127.0.0.1:12348"}}"#;
+    const V1_READY: &str = r#"{"status":"ready","network_hash":"0000000000000000000000000000000000000000000000000000000000000000","endpoints":{"scheduler_coord":"127.0.0.1:12345"}}"#;
+    const COMPACT_READY: &str = r#"{"status":"ready","network_hash":"0000000000000000000000000000000000000000000000000000000000000000","endpoints":{"scheduler":"127.0.0.1:12345","read":"127.0.0.1:12346","gateway":"127.0.0.1:12347","view":"127.0.0.1:12348"}}"#;
+    const GRACEFUL_SHUTDOWN_FILE_ENV: &str = "GROUNDHOG_FAKE_GRACEFUL_SHUTDOWN_FILE";
 
     #[test]
     fn command_shape_matches_contract() {
-        let config = HogdDevConfig::default().with_listen_host("127.0.0.2");
+        let config = HogdDevConfig::default()
+            .with_listen_host("127.0.0.2")
+            .with_data_dir("/tmp/hog-devnode-data");
         let spec = build_hogd_dev_spec_with_bootstrap_manifest(
             "/tmp/hog-devnode",
             &config,
@@ -1425,6 +1689,8 @@ mod tests {
                 OsString::from("stdout"),
                 OsString::from("--bootstrap-manifest"),
                 OsString::from("/tmp/bootstrap-manifest.json"),
+                OsString::from("--data-dir"),
+                OsString::from("/tmp/hog-devnode-data"),
             ]
         );
         assert_eq!(
@@ -1435,7 +1701,9 @@ mod tests {
 
     #[test]
     fn public_command_builder_keeps_shorthand_compatibility() {
-        let config = HogdDevConfig::default().with_listen_host("127.0.0.2");
+        let config = HogdDevConfig::default()
+            .with_listen_host("127.0.0.2")
+            .with_data_dir("/tmp/hog-devnode-data");
         let spec = build_hogd_dev_spec("/tmp/hog-devnode", &config);
 
         assert_eq!(
@@ -1453,6 +1721,8 @@ mod tests {
                 OsString::from("groundhog-dev-accounts"),
                 OsString::from("--dev-account-tokens"),
                 OsString::from("1000000000"),
+                OsString::from("--data-dir"),
+                OsString::from("/tmp/hog-devnode-data"),
             ]
         );
     }
@@ -1472,7 +1742,10 @@ mod tests {
         .expect("bug: bootstrap manifest should parse");
 
         assert_eq!(value["kind"], "groundhog-bootstrap");
-        assert_eq!(value["networkId"], "groundhog-local");
+        assert_eq!(
+            value["networkHash"],
+            "0000000000000000000000000000000000000000000000000000000000000000"
+        );
         assert_eq!(value["profile"], "local-dev");
         assert_eq!(value["devWallet"]["profile"], "hog-devnode-default");
         assert_eq!(value["bootstrapAccounts"]["count"], 2);
@@ -1598,7 +1871,11 @@ mod tests {
             parse_readiness_line("hogd-dev", &line).expect("bug: readiness payload should parse");
 
         assert_eq!(readiness.status, "ready");
-        assert_eq!(readiness.network_id, "groundhog-local");
+        assert_eq!(
+            readiness.chain_state,
+            Some(RuntimeManifestChainState::Fresh)
+        );
+        assert_eq!(readiness.network_hash.as_str(), "00".repeat(32));
         assert_eq!(readiness.protocol.as_deref(), Some("hogp/test"));
         assert_eq!(
             readiness.manifest_hash,
@@ -1640,13 +1917,100 @@ mod tests {
     }
 
     #[test]
+    fn readiness_line_carries_recovered_chain_state() {
+        let line = manifest_readiness_line(r#"{"scheduler":"127.0.0.1:12345"}"#, r"[]");
+        let mut pointer: serde_json::Value =
+            serde_json::from_str(&line).expect("bug: pointer line should parse");
+        let path = PathBuf::from(
+            pointer["manifestPath"]
+                .as_str()
+                .expect("bug: pointer has manifest path"),
+        );
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).expect("bug: manifest should be readable"))
+                .expect("bug: manifest should parse");
+        manifest["chainState"] = serde_json::json!("recovered");
+        let bytes = serde_json::to_vec(&manifest).expect("bug: manifest should serialize");
+        fs::write(&path, &bytes).expect("bug: manifest should be writable");
+        pointer["manifestHash"] = serde_json::json!(super::sha256_hex(&bytes));
+
+        let readiness = parse_readiness_line("hogd-dev", &pointer.to_string())
+            .expect("bug: recovered readiness should parse");
+
+        assert_eq!(
+            readiness.chain_state,
+            Some(RuntimeManifestChainState::Recovered)
+        );
+    }
+
+    #[test]
+    fn manifest_readiness_requires_chain_state() {
+        let line = manifest_readiness_line(r#"{"scheduler":"127.0.0.1:12345"}"#, r"[]");
+        let mut pointer: serde_json::Value =
+            serde_json::from_str(&line).expect("bug: pointer line should parse");
+        let path = PathBuf::from(
+            pointer["manifestPath"]
+                .as_str()
+                .expect("bug: pointer has manifest path"),
+        );
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).expect("bug: manifest should be readable"))
+                .expect("bug: manifest should parse");
+        manifest
+            .as_object_mut()
+            .expect("bug: manifest is an object")
+            .remove("chainState");
+        let bytes = serde_json::to_vec(&manifest).expect("bug: manifest should serialize");
+        fs::write(&path, &bytes).expect("bug: manifest should be writable");
+        pointer["manifestHash"] = serde_json::json!(super::sha256_hex(&bytes));
+
+        let error = parse_readiness_line("hogd-dev", &pointer.to_string())
+            .expect_err("manifest readiness without chainState should fail");
+
+        assert!(matches!(
+            error,
+            NodeSupervisorError::InvalidRuntimeManifest { reason, .. }
+                if reason.contains("chainState")
+        ));
+    }
+
+    #[test]
+    fn manifest_readiness_requires_hogd_dev_runtime_kind() {
+        let line = manifest_readiness_line(r#"{"scheduler":"127.0.0.1:12345"}"#, r"[]");
+        let mut pointer: serde_json::Value =
+            serde_json::from_str(&line).expect("bug: pointer line should parse");
+        let path = PathBuf::from(
+            pointer["manifestPath"]
+                .as_str()
+                .expect("bug: pointer has manifest path"),
+        );
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).expect("bug: manifest should be readable"))
+                .expect("bug: manifest should parse");
+        manifest["kind"] = serde_json::json!("hog-devnode-runtime");
+        let bytes = serde_json::to_vec(&manifest).expect("bug: manifest should serialize");
+        fs::write(&path, &bytes).expect("bug: manifest should be writable");
+        pointer["manifestHash"] = serde_json::json!(super::sha256_hex(&bytes));
+
+        let error = parse_readiness_line("hog-devnode", &pointer.to_string())
+            .expect_err("unexpected runtime manifest kind should fail");
+
+        assert!(matches!(
+            error,
+            NodeSupervisorError::InvalidRuntimeManifest { reason, .. }
+                if reason.contains("hog-devnode-runtime")
+                    && reason.contains("hogd-dev-runtime")
+        ));
+    }
+
+    #[test]
     fn readiness_line_accepts_v1_scheduler_only_endpoint() {
         let line = manifest_readiness_line(r#"{"scheduler":"127.0.0.1:12345"}"#, r"[]");
         let readiness = parse_readiness_line("hogd-dev", &line)
             .expect("bug: v1 readiness payload should parse");
 
         assert_eq!(readiness.status, "ready");
-        assert_eq!(readiness.network_id, "groundhog-local");
+        assert_eq!(readiness.network_hash.as_str(), "00".repeat(32));
         assert_eq!(
             readiness.endpoints.scheduler_coord,
             "127.0.0.1:12345"
@@ -1804,7 +2168,7 @@ mod tests {
     #[test]
     fn manifest_pointer_fields_do_not_fall_back_to_legacy_readiness() {
         let line = format!(
-            r#"{{"schemaVersion":1,"status":"ready","manifestPath":"/tmp/missing","manifestHash":"{}","network_id":"groundhog-local","endpoints":{{"scheduler_coord":"127.0.0.1:12345"}}}}"#,
+            r#"{{"schemaVersion":2,"status":"ready","manifestPath":"/tmp/missing","manifestHash":"{}","network_id":"groundhog-local","endpoints":{{"scheduler_coord":"127.0.0.1:12345"}}}}"#,
             super::sha256_hex(b"missing"),
         );
 
@@ -1814,6 +2178,24 @@ mod tests {
         assert!(matches!(
             err,
             NodeSupervisorError::InvalidReadinessJson { .. }
+        ));
+    }
+
+    #[test]
+    fn manifest_pointer_rejects_future_schema_before_decoding_body() {
+        let err = parse_readiness_line(
+            "hogd-dev",
+            r#"{"schemaVersion":99,"manifestPath":42,"futureBody":true}"#,
+        )
+        .expect_err("bug: future schema should fail before pointer body decoding");
+
+        assert!(matches!(
+            err,
+            NodeSupervisorError::InvalidReadinessSchemaVersion {
+                expected: 2,
+                actual: 99,
+                ..
+            }
         ));
     }
 
@@ -2029,7 +2411,7 @@ mod tests {
     fn non_ready_status_is_rejected() {
         let err = parse_readiness_line(
             "hogd-dev",
-            r#"{"status":"starting","network_id":"groundhog-local","endpoints":{"scheduler_coord":"127.0.0.1:12345","indexer_block_explorer":"127.0.0.1:12346","dev_control":"127.0.0.1:12347"}}"#,
+            r#"{"status":"starting","network_hash":"0000000000000000000000000000000000000000000000000000000000000000","endpoints":{"scheduler_coord":"127.0.0.1:12345","indexer_block_explorer":"127.0.0.1:12346","dev_control":"127.0.0.1:12347"}}"#,
         )
         .expect_err("bug: non-ready status should fail");
 
@@ -2079,23 +2461,71 @@ mod tests {
         );
     }
 
+    #[test]
+    fn persistent_data_dir_is_private() {
+        let tmp = TempDir::new().expect("bug: temp dir should be created");
+        let data_dir = tmp.path().join("persistent");
+        fs::create_dir(&data_dir).expect("bug: data dir should be created");
+        fs::set_permissions(&data_dir, fs::Permissions::from_mode(0o755))
+            .expect("bug: fixture permissions should be set");
+        let config = HogdDevConfig::default().with_data_dir(&data_dir);
+
+        prepare_persistent_data_dir(&config).expect("bug: data dir should be prepared");
+
+        assert_eq!(
+            fs::metadata(data_dir)
+                .expect("bug: data dir metadata should be readable")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+    }
+
+    #[test]
+    fn persistent_data_dir_rejects_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = TempDir::new().expect("bug: temp dir should be created");
+        let target = tmp.path().join("target");
+        let data_dir = tmp.path().join("persistent");
+        fs::create_dir(&target).expect("bug: target dir should be created");
+        symlink(&target, &data_dir).expect("bug: data dir symlink should be created");
+        let config = HogdDevConfig::default().with_data_dir(data_dir);
+
+        let err = prepare_persistent_data_dir(&config)
+            .expect_err("bug: symlinked data dir should fail closed");
+        assert!(matches!(err, NodeSupervisorError::DataDir { .. }));
+    }
+
     #[tokio::test]
     async fn fake_child_reports_readiness_and_stops_cleanly() {
+        let temp = TempDir::new().expect("bug: temp dir should be created");
+        let marker = temp.path().join("graceful-shutdown");
         let config = HogdDevConfig::default()
             .with_startup_timeout(Duration::from_secs(2))
             .with_shutdown_grace(Duration::from_millis(500));
 
-        let mut process = start_fake_hogd_dev(&config, "ready")
-            .await
-            .expect("bug: fake hogd-dev should start");
+        let mut process = start_fake_hogd_dev_with_env(
+            &config,
+            "ready",
+            GRACEFUL_SHUTDOWN_FILE_ENV,
+            marker.as_os_str(),
+        )
+        .await
+        .expect("bug: fake hogd-dev should start");
 
-        assert_eq!(process.readiness().network_id, "groundhog-local");
+        assert_eq!(process.readiness().network_hash.as_str(), "00".repeat(32));
         assert!(process.readiness().manifest_path.is_some());
         assert!(process.readiness().manifest_hash.is_some());
         assert!(process.readiness().runtime_manifest.is_some());
 
         let status = process.stop().await.expect("bug: fake child should stop");
         assert!(status.success());
+        assert_eq!(
+            fs::read_to_string(marker).expect("bug: graceful marker should be written"),
+            "graceful\n"
+        );
     }
 
     #[tokio::test]
@@ -2139,6 +2569,11 @@ mod tests {
             .await
             .expect("bug: SIGKILL escalation should return child status");
         assert!(!status.success());
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            assert_eq!(status.signal(), Some(libc::SIGKILL));
+        }
     }
 
     #[tokio::test]
@@ -2156,6 +2591,84 @@ mod tests {
         let status = process.stop().await.expect("bug: fake child should stop");
         assert!(status.success());
         assert_process_group_exits(process_group).await;
+    }
+
+    #[tokio::test]
+    async fn unexpected_leader_exit_cleans_descendants_before_releasing_pid_file() {
+        let temp = TempDir::new().expect("bug: temp dir should be created");
+        let pid_file = temp.path().join("hog-devnode.pid");
+        let config = HogdDevConfig::default()
+            .with_startup_timeout(Duration::from_secs(2))
+            .with_shutdown_grace(Duration::from_millis(100))
+            .with_pid_file(pid_file.clone());
+        let mut process = start_fake_hogd_dev(&config, "spawn-helper-then-exit")
+            .await
+            .expect("bug: fake hogd-dev should start");
+        let process_group = i32::try_from(process.child_id().expect("bug: child should have pid"))
+            .expect("bug: child pid should fit in pid_t");
+
+        let status = process
+            .stopped()
+            .await
+            .expect("bug: unexpected leader exit cleanup should complete");
+
+        assert!(status.success());
+        assert!(!pid_file.exists());
+        assert_process_group_exits(process_group).await;
+    }
+
+    #[tokio::test]
+    async fn cancelled_shutdown_preserves_pid_file_for_recovery() {
+        let temp = TempDir::new().expect("bug: temp dir should be created");
+        let pid_file = temp.path().join("hog-devnode.pid");
+        let config = HogdDevConfig::default()
+            .with_startup_timeout(Duration::from_secs(2))
+            .with_shutdown_grace(Duration::from_secs(1))
+            .with_pid_file(pid_file.clone());
+        let mut process = start_fake_hogd_dev(&config, "ignore-term")
+            .await
+            .expect("bug: fake hogd-dev should start");
+        let process_group = i32::try_from(process.child_id().expect("bug: child should have pid"))
+            .expect("bug: child pid should fit in pid_t");
+
+        let result = tokio::time::timeout(Duration::from_millis(20), process.stop()).await;
+        assert!(
+            result.is_err(),
+            "shutdown should still be in its grace period"
+        );
+        drop(process);
+
+        assert!(pid_file.exists());
+        assert_process_group_exits(process_group).await;
+        fs::remove_file(pid_file).expect("bug: test should remove recovery PID file");
+    }
+
+    #[tokio::test]
+    async fn dropping_persistent_process_sends_sigterm_and_preserves_pid_file() {
+        let temp = TempDir::new().expect("bug: temp dir should be created");
+        let marker = temp.path().join("graceful-shutdown");
+        let pid_file = temp.path().join("hog-devnode.pid");
+        let config = HogdDevConfig::default()
+            .with_data_dir(temp.path().join("data"))
+            .with_startup_timeout(Duration::from_secs(2))
+            .with_pid_file(pid_file.clone());
+        let process = start_fake_hogd_dev_with_env(
+            &config,
+            "ready",
+            GRACEFUL_SHUTDOWN_FILE_ENV,
+            marker.as_os_str(),
+        )
+        .await
+        .expect("bug: persistent fake hogd-dev should start");
+        let process_group = i32::try_from(process.child_id().expect("bug: child should have pid"))
+            .expect("bug: child pid should fit in pid_t");
+
+        drop(process);
+
+        assert_file_contents(&marker, b"graceful\n").await;
+        assert_process_group_exits(process_group).await;
+        assert!(pid_file.exists());
+        fs::remove_file(pid_file).expect("bug: test should remove recovery PID file");
     }
 
     #[tokio::test]
@@ -2187,6 +2700,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unready_cleanup_sends_sigterm_before_escalating_to_sigkill() {
+        let temp = TempDir::new().expect("bug: temp dir should be created");
+        let marker = temp.path().join("sigterm-observed");
+        let pid_file = temp.path().join("hog-devnode.pid");
+        let config = HogdDevConfig::default()
+            .with_data_dir(temp.path().join("data"))
+            .with_pid_file(pid_file.clone())
+            .with_startup_timeout(Duration::from_millis(500));
+
+        let error = start_fake_hogd_dev_with_env(
+            &config,
+            "timeout-record-term-ignore",
+            GRACEFUL_SHUTDOWN_FILE_ENV,
+            marker.as_os_str(),
+        )
+        .await
+        .expect_err("bug: unready fake should time out and be killed");
+        assert!(
+            matches!(&error, NodeSupervisorError::ReadinessTimeout { .. }),
+            "unexpected startup error: {error:?}"
+        );
+        assert_eq!(
+            fs::read_to_string(marker).expect("bug: SIGTERM marker should be readable"),
+            "graceful\n"
+        );
+        let process_group = fs::read_to_string(&pid_file)
+            .expect("bug: recovery PID should remain")
+            .trim()
+            .parse::<i32>()
+            .expect("bug: recovery PID should parse");
+        assert_process_group_exits(process_group).await;
+        fs::remove_file(pid_file).expect("bug: test should remove recovery PID file");
+    }
+
+    #[tokio::test]
     async fn oversized_readiness_line_is_rejected() {
         let config = HogdDevConfig::default().with_startup_timeout(Duration::from_secs(2));
 
@@ -2215,6 +2763,24 @@ mod tests {
         HogdDevProcess::start_with_spec(config, spec, Some(bootstrap_manifest)).await
     }
 
+    async fn start_fake_hogd_dev_with_env(
+        config: &HogdDevConfig,
+        mode: &str,
+        key: &str,
+        value: &std::ffi::OsStr,
+    ) -> Result<HogdDevProcess, NodeSupervisorError> {
+        let bootstrap_manifest = write_bootstrap_manifest(config)
+            .expect("bug: bootstrap manifest file should be written");
+        let spec = build_hogd_dev_spec_with_bootstrap_manifest(
+            fake_hogd_dev_binary(),
+            config,
+            bootstrap_manifest.path(),
+        )
+        .env(FAKE_HOGD_DEV_MODE_ENV, mode)
+        .env(key, value);
+        HogdDevProcess::start_with_spec(config, spec, Some(bootstrap_manifest)).await
+    }
+
     async fn assert_process_group_exits(process_group: i32) {
         for _ in 0..50 {
             if !process_group_exists(process_group) {
@@ -2224,6 +2790,20 @@ mod tests {
         }
 
         panic!("bug: process group {process_group} should exit");
+    }
+
+    async fn assert_file_contents(path: &Path, expected: &[u8]) {
+        for _ in 0..100 {
+            if fs::read(path).is_ok_and(|contents| contents == expected) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!(
+            "bug: expected file contents at {}: {:?}",
+            path.display(),
+            String::from_utf8_lossy(expected)
+        );
     }
 
     fn process_group_exists(process_group: i32) -> bool {
@@ -2271,9 +2851,10 @@ mod tests {
         let manifest_path = manifest_dir.join("runtime-manifest.json");
         let manifest = format!(
             r#"{{
-              "schemaVersion":1,
+              "schemaVersion":2,
               "kind":"hogd-dev-runtime",
-              "networkId":"groundhog-local",
+              "chainState":"fresh",
+              "networkHash":"0000000000000000000000000000000000000000000000000000000000000000",
               "protocol":"hogp/test",
               "genesisHash":"0x{}",
               "producer":{{"binary":"hog-devnode","version":"0.1.0","commitHash":"abcdef0"}},
@@ -2314,7 +2895,7 @@ mod tests {
         fs::set_permissions(&manifest_path, fs::Permissions::from_mode(0o600))
             .expect("bug: manifest permissions should be set");
         format!(
-            r#"{{"schemaVersion":1,"status":"ready","manifestPath":"{}","manifestHash":"{}"}}"#,
+            r#"{{"schemaVersion":2,"status":"ready","manifestPath":"{}","manifestHash":"{}"}}"#,
             manifest_path.display(),
             super::sha256_hex(manifest.as_bytes()),
         )

@@ -1,7 +1,12 @@
 //! Configuration for the node supervisor.
 
-use std::{num::TryFromIntError, path::PathBuf, time::Duration};
+use std::{
+    num::TryFromIntError,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
+use groundhog_json_rpc_types::NetworkHashHex;
 use groundhog_json_rpc_types::bootstrap_manifest::{
     BootstrapManifest, BootstrapManifestAccounts, BootstrapManifestDevWallet,
     BootstrapManifestStorageCostModel,
@@ -30,6 +35,9 @@ pub const DEFAULT_HOGD_DEV_LISTEN_HOST: &str = "127.0.0.1";
 
 /// Default graceful shutdown timeout for ephemeral hogd-dev.
 pub const DEFAULT_HOGD_DEV_SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
+
+/// Default graceful shutdown timeout for hogd-dev with persistent state.
+pub const DEFAULT_HOGD_DEV_PERSISTENT_SHUTDOWN_GRACE: Duration = Duration::from_secs(30);
 
 /// Default startup timeout while waiting for hogd-dev readiness.
 pub const DEFAULT_HOGD_DEV_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
@@ -291,14 +299,18 @@ pub struct HogdDevConfig {
     /// When unset, the supervisor falls back to the documented hogd-dev binary
     /// lookup order.
     pub binary_path: Option<PathBuf>,
+    /// Directory where hog-devnode persists recoverable node state.
+    ///
+    /// When unset, hog-devnode runs with ephemeral state.
+    pub data_dir: Option<PathBuf>,
     /// Log level to request from hogd-dev
     pub log_level: Option<LogLevel>,
     /// Host address hogd-dev should bind its internal services to.
     pub listen_host: String,
     /// Grace period after SIGTERM before the supervisor escalates to SIGKILL.
     ///
-    /// v1 hogd-dev is ephemeral, so this exists for log drain and orderly task
-    /// cancellation rather than state persistence.
+    /// This allows log drain and orderly task cancellation before forced
+    /// process termination.
     pub shutdown_grace: Duration,
     /// Maximum time to wait for the readiness line after spawning hogd-dev.
     pub startup_timeout: Duration,
@@ -316,6 +328,7 @@ impl Default for HogdDevConfig {
     fn default() -> Self {
         Self {
             binary_path: None,
+            data_dir: None,
             log_level: None,
             listen_host: DEFAULT_HOGD_DEV_LISTEN_HOST.to_string(),
             shutdown_grace: DEFAULT_HOGD_DEV_SHUTDOWN_GRACE,
@@ -333,6 +346,13 @@ impl HogdDevConfig {
     #[must_use]
     pub fn with_binary_path(mut self, binary_path: impl Into<PathBuf>) -> Self {
         self.binary_path = Some(binary_path.into());
+        self
+    }
+
+    /// Return a copy with a directory for persistent hog-devnode state.
+    #[must_use]
+    pub fn with_data_dir(mut self, data_dir: impl Into<PathBuf>) -> Self {
+        self.data_dir = Some(resolve_data_dir(data_dir.into()));
         self
     }
 
@@ -398,11 +418,11 @@ impl HogdDevConfig {
     /// `hogd-dev --bootstrap-manifest`.
     pub fn to_bootstrap_manifest(
         &self,
-        network_id: impl Into<String>,
+        network_hash: NetworkHashHex,
     ) -> Result<BootstrapManifest, TryFromIntError> {
         Ok(BootstrapManifest::new(
             HOGD_DEV_BOOTSTRAP_MANIFEST_KIND,
-            network_id,
+            network_hash,
             DEFAULT_HOGD_DEV_BOOTSTRAP_PROFILE,
             BootstrapManifestDevWallet::profile(DEFAULT_HOGD_DEV_WALLET_PROFILE),
             BootstrapManifestAccounts::new(
@@ -415,11 +435,43 @@ impl HogdDevConfig {
     }
 }
 
+fn resolve_data_dir(path: PathBuf) -> PathBuf {
+    let expanded = match path.strip_prefix(Path::new("~")) {
+        Ok(rest) => std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .map(|home| home.join(rest))
+            .unwrap_or(path),
+        Err(_) => path,
+    };
+    std::path::absolute(&expanded).unwrap_or(expanded)
+}
+
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
+    use groundhog_json_rpc_types::NetworkHashHex;
     use serde_json::json;
 
     use super::{BlockDriverConfig, BlockDriverMode, HogdDevConfig};
+
+    #[test]
+    fn data_dir_is_absolute_and_expands_home() {
+        let relative = HogdDevConfig::default().with_data_dir("groundhog-test-data");
+        let relative = relative
+            .data_dir
+            .expect("bug: data dir should be configured");
+        assert!(relative.is_absolute());
+        assert!(relative.ends_with("groundhog-test-data"));
+
+        if let Some(home) = std::env::var_os("HOME") {
+            let expanded = HogdDevConfig::default().with_data_dir("~/groundhog-test-data");
+            assert_eq!(
+                expanded.data_dir,
+                Some(PathBuf::from(home).join("groundhog-test-data"))
+            );
+        }
+    }
 
     #[test]
     fn block_driver_default_keeps_instant_mode_with_500ms_interval() {
@@ -453,7 +505,7 @@ mod tests {
             .with_dev_account_tokens(42);
 
         let manifest = config
-            .to_bootstrap_manifest("groundhog-bench-local")
+            .to_bootstrap_manifest(NetworkHashHex::from([0x51; 32]))
             .expect("bug: account count fits u32");
 
         let value = serde_json::to_value(manifest).expect("bug: manifest serializes");
@@ -461,9 +513,9 @@ mod tests {
         assert_eq!(
             value,
             json!({
-                "schemaVersion": 1,
+                "schemaVersion": 2,
                 "kind": "groundhog-bootstrap",
-                "networkId": "groundhog-bench-local",
+                "networkHash": "5151515151515151515151515151515151515151515151515151515151515151",
                 "profile": "local-dev",
                 "devWallet": {
                     "profile": "hog-devnode-default",
