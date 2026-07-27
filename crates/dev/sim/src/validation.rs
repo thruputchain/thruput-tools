@@ -2122,9 +2122,10 @@ mod tests {
         let signer = derive_dev_account_signer("seed", 0);
         let public_key = Hex0x(Ed25519PublicKey::from(signer.verifying_key_bytes()));
         serde_json::from_value(json!({
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "kind": "hogd-dev-runtime",
-            "networkId": "groundhog-local",
+            "chainState": "fresh",
+            "networkHash": "00".repeat(32),
             "protocol": "hogp/test",
             "genesisHash": prefixed_hex(0x11),
             "producer": {

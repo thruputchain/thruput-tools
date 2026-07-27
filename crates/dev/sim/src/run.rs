@@ -5,6 +5,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
 };
+use std::time::Duration;
 
 use groundhog_json_rpc_client::{GroundhogApiClient, HttpClient, HttpClientBuilder};
 use groundhog_json_rpc_types::{
@@ -45,7 +46,7 @@ use crate::result::{
     RuntimeIdentity, SIM_RESULT_SCHEMA_VERSION, SimMetricAvailability, SimResult, SimRunOutcome,
     TargetIdentity, WorkloadCounts,
 };
-use crate::runtime::{derive_accounts, load_runtime_manifest};
+use crate::runtime::{derive_accounts, load_runtime_manifest, preflight_chain_identity};
 use crate::scheduler::{
     PhaseStart, ScheduledSimulationEvent, phase_starts, resource_sample_interval_ms,
     schedule_summary,
@@ -61,11 +62,13 @@ use crate::util::{
 use crate::validation::{validate_against_runtime, validate_manifest};
 
 pub const DEFAULT_RPC_CLIENT_CONCURRENCY: u32 = 512;
+const DEFAULT_RPC_REQUEST_TIMEOUT: Duration = Duration::from_mins(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RpcClientConfig {
     max_concurrent_requests: u32,
     pool_size: u32,
+    request_timeout: Duration,
 }
 
 impl RpcClientConfig {
@@ -96,6 +99,7 @@ impl SimHttpClientPool {
         for _ in 0..pool_size {
             clients.push(
                 HttpClientBuilder::default()
+                    .request_timeout(config.request_timeout)
                     .build(rpc_url)
                     .map_err(|error| SimError::RpcClient(error.to_string()))?,
             );
@@ -453,6 +457,12 @@ async fn run_resolved_target(
     loaded_sim.manifest.target.max_rpc_client_concurrency = None;
 
     let loaded_runtime = load_runtime_manifest(&target.runtime_manifest).await?;
+    preflight_chain_identity(
+        &loaded_runtime.manifest,
+        &target.rpc_url,
+        rpc_client_config.request_timeout,
+    )
+    .await?;
     let accounts = derive_accounts(&loaded_runtime.manifest)?;
     validate_executable_workloads(&loaded_sim.manifest)?;
     validate_against_runtime(&loaded_sim.manifest, &loaded_runtime.manifest)?;
@@ -594,6 +604,7 @@ fn effective_rpc_client_config(manifest: &SimulationManifest) -> RpcClientConfig
     RpcClientConfig {
         max_concurrent_requests,
         pool_size,
+        request_timeout: DEFAULT_RPC_REQUEST_TIMEOUT,
     }
 }
 
@@ -913,7 +924,7 @@ fn build_result(input: BuildResultInput<'_>) -> Result<SimResult, SimError> {
             rpc_url: Some(input.target.rpc_url.clone()),
         },
         runtime_identity: RuntimeIdentity {
-            network_id: input.runtime_manifest.network_id.clone(),
+            network_hash: input.runtime_manifest.network_hash.to_string(),
             protocol: input.runtime_manifest.protocol.clone(),
             genesis_hash: json_string(&input.runtime_manifest.genesis_hash, "genesisHash")?,
             producer: ProducerIdentity {
@@ -1042,6 +1053,7 @@ mod tests {
             RpcClientConfig {
                 max_concurrent_requests: DEFAULT_RPC_CLIENT_CONCURRENCY,
                 pool_size: DEFAULT_RPC_CLIENT_CONCURRENCY,
+                request_timeout: DEFAULT_RPC_REQUEST_TIMEOUT,
             }
         );
     }
@@ -1061,6 +1073,7 @@ mod tests {
             RpcClientConfig {
                 max_concurrent_requests: 128,
                 pool_size: 32,
+                request_timeout: DEFAULT_RPC_REQUEST_TIMEOUT,
             }
         );
     }
@@ -1078,6 +1091,7 @@ mod tests {
             RpcClientConfig {
                 max_concurrent_requests: 64,
                 pool_size: 64,
+                request_timeout: DEFAULT_RPC_REQUEST_TIMEOUT,
             }
         );
     }
@@ -1750,9 +1764,10 @@ mod tests {
 
     fn runtime_manifest() -> RuntimeManifest {
         serde_json::from_value(json!({
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "kind": "hogd-dev-runtime",
-            "networkId": "groundhog-local",
+            "chainState": "fresh",
+            "networkHash": "00".repeat(32),
             "protocol": "hogp/test",
             "genesisHash": prefixed_hex(0x42),
             "producer": {
@@ -1820,7 +1835,7 @@ mod tests {
                 rpc_url: Some("http://127.0.0.1:9545".into()),
             },
             runtime_identity: RuntimeIdentity {
-                network_id: "groundhog-local".into(),
+                network_hash: "00".repeat(32),
                 protocol: "hogp/test".into(),
                 genesis_hash: prefixed_hex(0x42),
                 producer: ProducerIdentity {

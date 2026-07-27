@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use groundhog_json_rpc_types::runtime_manifest::{
-    RUNTIME_MANIFEST_SCHEMA_VERSION, RuntimeManifest,
+    RuntimeManifest, RuntimeManifestParseError, parse_runtime_manifest,
 };
 use groundhog_signing::{
     DEFAULT_PUBKEY_ACCOUNT_NONCE, LocalSigner, PubkeyAccount, Signer,
@@ -59,16 +59,15 @@ pub(crate) fn load_runtime_manifest(path: &Path) -> Result<RuntimeManifest> {
             detail: format!("manifest exceeds {MAX_RUNTIME_MANIFEST_BYTES} bytes"),
         });
     }
-    let manifest: RuntimeManifest =
-        serde_json::from_slice(&bytes).map_err(|source| TestkitError::ManifestLoad {
+    let manifest = parse_runtime_manifest(&bytes).map_err(|error| match error {
+        RuntimeManifestParseError::Json(source) => TestkitError::ManifestLoad {
             path: display,
             detail: source.to_string(),
-        })?;
-    if manifest.schema_version != RUNTIME_MANIFEST_SCHEMA_VERSION {
-        return Err(TestkitError::ManifestSchema {
-            actual: manifest.schema_version,
-        });
-    }
+        },
+        RuntimeManifestParseError::UnsupportedSchema { actual, .. } => {
+            TestkitError::ManifestSchema { actual }
+        }
+    })?;
     Ok(manifest)
 }
 

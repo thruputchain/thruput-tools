@@ -1,9 +1,18 @@
-use std::path::Path;
+use std::{future::Future, path::Path, time::Duration};
 
-use groundhog_json_rpc_types::runtime_manifest::{
-    BootstrapAccount, RUNTIME_MANIFEST_SCHEMA_VERSION, RuntimeManifest,
+use groundhog_json_rpc_client::{GroundhogApiClient, HttpClientBuilder};
+use groundhog_json_rpc_types::{
+    BlockHeight, NetworkHashHex, SHA256Hash,
+    block::{ChainTip, consensus_value_hash},
+    runtime_manifest::{
+        BootstrapAccount, RuntimeManifest, RuntimeManifestParseError, parse_runtime_manifest,
+    },
+};
+use groundhog_scheduler::sched_coord::{
+    SchedulerCoord_SchedulerCoord1_Client, SchedulerGetTipResult,
 };
 use groundhog_signing::{LocalSigner, derive_dev_account_signer};
+use groundhog_x23_transport::{ConnectError, connect};
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncReadExt;
 
@@ -50,16 +59,15 @@ pub async fn load_runtime_manifest(
             max_bytes: MAX_RUNTIME_MANIFEST_BYTES,
         });
     }
-    let manifest: RuntimeManifest =
-        serde_json::from_slice(&bytes).map_err(|source| RuntimeManifestError::Parse {
+    let manifest = parse_runtime_manifest(&bytes).map_err(|error| match error {
+        RuntimeManifestParseError::Json(source) => RuntimeManifestError::Parse {
             path: path_display.clone(),
             source,
-        })?;
-    if manifest.schema_version != RUNTIME_MANIFEST_SCHEMA_VERSION {
-        return Err(RuntimeManifestError::UnsupportedSchema {
-            actual: manifest.schema_version,
-        });
-    }
+        },
+        RuntimeManifestParseError::UnsupportedSchema { actual, .. } => {
+            RuntimeManifestError::UnsupportedSchema { actual }
+        }
+    })?;
 
     let sha256 = format!("0x{}", hex::encode(Sha256::digest(&bytes)));
     let config_sha256 =
@@ -72,6 +80,159 @@ pub async fn load_runtime_manifest(
         bytes,
         sha256,
         config_sha256,
+    })
+}
+
+pub(crate) async fn preflight_chain_identity(
+    manifest: &RuntimeManifest,
+    rpc_url: &str,
+    request_timeout: Duration,
+) -> Result<(), RuntimeManifestError> {
+    let scheduler_address = manifest.endpoints.scheduler.to_string();
+    let scheduler = preflight_timeout(
+        request_timeout,
+        connect(
+            "sim_scheduler_preflight",
+            &scheduler_address,
+            1,
+            SchedulerCoord_SchedulerCoord1_Client::new,
+        ),
+    )
+    .await
+    .map_err(|_| RuntimeManifestError::SchedulerConnectTimeout {
+        address: scheduler_address.clone(),
+        timeout: request_timeout,
+    })?
+    .map_err(|source| RuntimeManifestError::SchedulerConnect {
+        address: scheduler_address.clone(),
+        source,
+    })?;
+    let scheduler_before = scheduler_tip(
+        &scheduler,
+        &scheduler_address,
+        request_timeout,
+        &manifest.network_hash,
+    )
+    .await?;
+
+    let public_client = HttpClientBuilder::default()
+        .request_timeout(request_timeout)
+        .build(rpc_url)
+        .map_err(|error| RuntimeManifestError::PublicRpcClient {
+            rpc_url: rpc_url.to_string(),
+            error: error.to_string(),
+        })?;
+    let public_tip = preflight_timeout(
+        request_timeout,
+        GroundhogApiClient::chain_tip(&public_client),
+    )
+    .await
+    .map_err(|_| RuntimeManifestError::PublicChainTipTimeout {
+        rpc_url: rpc_url.to_string(),
+        timeout: request_timeout,
+    })?
+    .map_err(|error| RuntimeManifestError::PublicChainTip {
+        rpc_url: rpc_url.to_string(),
+        error: error.to_string(),
+    })?;
+
+    if chain_tips_match(&scheduler_before, &public_tip) {
+        return Ok(());
+    }
+
+    let scheduler_after = scheduler_tip(
+        &scheduler,
+        &scheduler_address,
+        request_timeout,
+        &manifest.network_hash,
+    )
+    .await?;
+    validate_public_scheduler_tips(&scheduler_before, &scheduler_after, &public_tip)
+}
+
+async fn scheduler_tip(
+    scheduler: &SchedulerCoord_SchedulerCoord1_Client,
+    scheduler_address: &str,
+    request_timeout: Duration,
+    expected_network_hash: &NetworkHashHex,
+) -> Result<ChainTip, RuntimeManifestError> {
+    let tip = preflight_timeout(request_timeout, scheduler.schedcoord_get_tip())
+        .await
+        .map_err(|_| RuntimeManifestError::SchedulerTipTimeout {
+            address: scheduler_address.to_string(),
+            timeout: request_timeout,
+        })?
+        .map_err(|error| RuntimeManifestError::SchedulerTip {
+            address: scheduler_address.to_string(),
+            error: error.to_string(),
+        })?;
+    match tip {
+        SchedulerGetTipResult::SchedulerGetTipOK { db_tip } => {
+            validate_network_hash(
+                expected_network_hash,
+                db_tip
+                    .value
+                    .proposal_header
+                    .network_hash
+                    .clone()
+                    .into_inner()
+                    .as_ref(),
+            )?;
+            Ok(ChainTip {
+                height: db_tip.value.proposal_header.block_height.clone(),
+                block_hash: consensus_value_hash(&db_tip.value)
+                    .map_err(|source| RuntimeManifestError::SchedulerTipEncoding { source })?,
+            })
+        }
+        SchedulerGetTipResult::SchedulerGetTipNoGenesisBlock => {
+            Err(RuntimeManifestError::SchedulerHasNoGenesis)
+        }
+        other => Err(RuntimeManifestError::UnexpectedSchedulerTip {
+            result: format!("{other:?}"),
+        }),
+    }
+}
+
+async fn preflight_timeout<T>(
+    timeout: Duration,
+    future: impl Future<Output = T>,
+) -> Result<T, tokio::time::error::Elapsed> {
+    tokio::time::timeout(timeout, future).await
+}
+
+fn chain_tips_match(left: &ChainTip, right: &ChainTip) -> bool {
+    left.height == right.height && left.block_hash == right.block_hash
+}
+
+fn validate_public_scheduler_tips(
+    scheduler_before: &ChainTip,
+    scheduler_after: &ChainTip,
+    public: &ChainTip,
+) -> Result<(), RuntimeManifestError> {
+    if chain_tips_match(scheduler_before, public) || chain_tips_match(scheduler_after, public) {
+        return Ok(());
+    }
+    Err(RuntimeManifestError::PublicSchedulerTipMismatch {
+        scheduler_height: scheduler_after.height.clone(),
+        scheduler_block_hash: scheduler_after.block_hash,
+        public_height: public.height.clone(),
+        public_block_hash: public.block_hash,
+    })
+}
+
+fn validate_network_hash(
+    expected: &NetworkHashHex,
+    observed_bytes: &[u8],
+) -> Result<(), RuntimeManifestError> {
+    let mut bytes = [0; 32];
+    bytes.copy_from_slice(observed_bytes);
+    let observed = NetworkHashHex::from(bytes);
+    if expected == &observed {
+        return Ok(());
+    }
+    Err(RuntimeManifestError::NetworkHashMismatch {
+        expected: expected.clone(),
+        observed,
     })
 }
 
@@ -183,6 +344,50 @@ pub enum RuntimeManifestError {
     BootstrapAccountIndexTooLarge { index: u32 },
     #[error("runtime manifest bootstrap account {index} public key does not match derivation seed")]
     BootstrapPublicKeyMismatch { index: u32 },
+    #[error("failed to connect to runtime scheduler at {address}: {source}")]
+    SchedulerConnect {
+        address: String,
+        #[source]
+        source: ConnectError,
+    },
+    #[error("timed out connecting to runtime scheduler at {address} after {timeout:?}")]
+    SchedulerConnectTimeout { address: String, timeout: Duration },
+    #[error("failed to query runtime scheduler tip at {address}: {error}")]
+    SchedulerTip { address: String, error: String },
+    #[error("timed out querying runtime scheduler tip at {address} after {timeout:?}")]
+    SchedulerTipTimeout { address: String, timeout: Duration },
+    #[error("failed to encode runtime scheduler tip: {source}")]
+    SchedulerTipEncoding {
+        #[source]
+        source: xdrs::WriteError,
+    },
+    #[error("runtime scheduler has no committed genesis block")]
+    SchedulerHasNoGenesis,
+    #[error("runtime scheduler returned an unexpected tip result: {result}")]
+    UnexpectedSchedulerTip { result: String },
+    #[error(
+        "runtime network hash mismatch: manifest expected {expected}, scheduler reported {observed}"
+    )]
+    NetworkHashMismatch {
+        expected: NetworkHashHex,
+        observed: NetworkHashHex,
+    },
+    #[error("failed to build public JSON-RPC client for {rpc_url}: {error}")]
+    PublicRpcClient { rpc_url: String, error: String },
+    #[error("public groundhog_chainTip failed at {rpc_url}: {error}")]
+    PublicChainTip { rpc_url: String, error: String },
+    #[error("public groundhog_chainTip at {rpc_url} timed out after {timeout:?}")]
+    PublicChainTipTimeout { rpc_url: String, timeout: Duration },
+    #[error(
+        "public RPC tip does not match scheduler tip: scheduler height {scheduler_height:?} hash \
+         {scheduler_block_hash:?}, public height {public_height:?} hash {public_block_hash:?}"
+    )]
+    PublicSchedulerTipMismatch {
+        scheduler_height: BlockHeight,
+        scheduler_block_hash: SHA256Hash,
+        public_height: BlockHeight,
+        public_block_hash: SHA256Hash,
+    },
 }
 
 #[cfg(test)]
@@ -215,6 +420,82 @@ mod tests {
             err,
             RuntimeManifestError::BootstrapPublicKeyMismatch { index: 0 }
         ));
+    }
+
+    #[test]
+    fn runtime_preflight_rejects_scheduler_network_hash_mismatch() {
+        let manifest = runtime_manifest(false);
+
+        let err = validate_network_hash(&manifest.network_hash, &[0xff; 32])
+            .expect_err("mismatched scheduler identity should fail preflight");
+
+        assert!(matches!(
+            err,
+            RuntimeManifestError::NetworkHashMismatch {
+                expected,
+                observed,
+            } if expected == NetworkHashHex::from([0; 32])
+                && observed == NetworkHashHex::from([0xff; 32])
+        ));
+    }
+
+    #[test]
+    fn runtime_preflight_rejects_public_rpc_scheduler_fork_after_recheck() {
+        let scheduler_before = chain_tip(12, 0x11);
+        let scheduler_after = chain_tip(13, 0x33);
+        let public = chain_tip(13, 0x22);
+
+        let err = validate_public_scheduler_tips(&scheduler_before, &scheduler_after, &public)
+            .expect_err("public and scheduler block hashes must match");
+
+        assert!(matches!(
+            err,
+            RuntimeManifestError::PublicSchedulerTipMismatch {
+                scheduler_height,
+                scheduler_block_hash,
+                public_height,
+                public_block_hash,
+            } if scheduler_height == BlockHeight::from(13)
+                && scheduler_block_hash == scheduler_after.block_hash
+                && public_height == BlockHeight::from(13)
+                && public_block_hash == public.block_hash
+        ));
+    }
+
+    #[test]
+    fn runtime_preflight_rejects_stable_public_rpc_scheduler_tip_mismatch() {
+        let scheduler_before = chain_tip(12, 0x11);
+        let scheduler_after = chain_tip(12, 0x11);
+        let public = chain_tip(12, 0x22);
+
+        validate_public_scheduler_tips(&scheduler_before, &scheduler_after, &public)
+            .expect_err("stable wrong-chain tip must fail preflight");
+    }
+
+    #[test]
+    fn runtime_preflight_accepts_public_tip_matching_initial_scheduler_tip() {
+        let scheduler = chain_tip(12, 0x11);
+        let public = chain_tip(12, 0x11);
+
+        assert!(chain_tips_match(&scheduler, &public));
+    }
+
+    #[test]
+    fn runtime_preflight_accepts_public_tip_matching_scheduler_recheck_after_advance() {
+        let scheduler_before = chain_tip(12, 0x11);
+        let scheduler_after = chain_tip(13, 0x22);
+        let public = chain_tip(13, 0x22);
+
+        validate_public_scheduler_tips(&scheduler_before, &scheduler_after, &public)
+            .expect("public tip matching the scheduler recheck should pass");
+    }
+
+    #[tokio::test]
+    async fn runtime_preflight_timeout_bounds_pending_operations() {
+        let result =
+            preflight_timeout(Duration::from_millis(1), std::future::pending::<()>()).await;
+
+        assert!(result.is_err());
     }
 
     #[test]
@@ -306,9 +587,10 @@ mod tests {
             Hex0x(Ed25519PublicKey::from(signer.verifying_key_bytes()))
         };
         serde_json::from_value(json!({
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "kind": "hogd-dev-runtime",
-            "networkId": "groundhog-local",
+            "chainState": "fresh",
+            "networkHash": "00".repeat(32),
             "protocol": "hogp/test",
             "genesisHash": prefixed_hex(0x11),
             "producer": {
@@ -353,6 +635,13 @@ mod tests {
             }
         }))
         .expect("runtime manifest fixture should parse")
+    }
+
+    fn chain_tip(height: i64, block_hash: u8) -> ChainTip {
+        ChainTip {
+            height: BlockHeight::from(height),
+            block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([block_hash; 32])),
+        }
     }
 
     fn prefixed_hex(byte: u8) -> String {

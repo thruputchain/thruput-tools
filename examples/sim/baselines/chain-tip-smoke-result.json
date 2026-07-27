@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "runId": "baseline-chain-tip-smoke",
   "name": "chain-tip-smoke-baseline",
   "outcome": "passed",
@@ -13,7 +13,7 @@
     "rpcUrl": "http://127.0.0.1:9545"
   },
   "runtimeIdentity": {
-    "networkId": "groundhog-local",
+    "networkHash": "0000000000000000000000000000000000000000000000000000000000000000",
     "protocol": "hogp/test",
     "genesisHash": "0x4242424242424242424242424242424242424242424242424242424242424242",
     "producer": {

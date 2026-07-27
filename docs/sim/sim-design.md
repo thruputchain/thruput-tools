@@ -87,13 +87,13 @@ The simulator does not own:
 The bootstrap manifest is launcher input. Sim may write one, validate one, or
 pass one to a launcher. It should not reinterpret it as simulation state.
 
-For v1, sim only needs the existing local-dev shape:
+For v2, sim only needs the existing local-dev shape:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "kind": "groundhog-bootstrap",
-  "networkId": "groundhog-local",
+  "networkHash": "0000000000000000000000000000000000000000000000000000000000000000",
   "profile": "local-dev",
   "devWallet": {
     "profile": "hog-devnode-default"

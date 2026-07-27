@@ -89,7 +89,8 @@ impl ResultDiff {
             (Some(a), Some(b)) => a == b,
             _ => runtime_manifest_match,
         };
-        let runtime_identity_match = a.runtime_identity.network_id == b.runtime_identity.network_id
+        let runtime_identity_match = a.runtime_identity.network_hash
+            == b.runtime_identity.network_hash
             && a.runtime_identity.protocol == b.runtime_identity.protocol
             && a.runtime_identity.genesis_hash == b.runtime_identity.genesis_hash;
         let producer_identity_match = a.runtime_identity.producer == b.runtime_identity.producer;
