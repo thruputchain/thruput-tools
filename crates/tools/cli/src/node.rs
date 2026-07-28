@@ -245,6 +245,8 @@ async fn run_hogd_dev(
 ) -> Result<(), CliError> {
     use groundhog_node_supervisor::{NodeSupervisorError, SupervisorStop};
 
+    let shutdown_signal = prepare_stop_signal()
+        .map_err(|source| map_node_supervisor_error(&NodeSupervisorError::StopSignal { source }))?;
     let runtime_artifacts_dir = local_node_runtime_artifacts_dir(&options);
     if !print.is_json() {
         print.status("Starting Groundhog local node");
@@ -272,8 +274,6 @@ async fn run_hogd_dev(
     let local_runtime_state_result = Ok(local_runtime_state_path);
     let cleanup_local_runtime_state =
         local_runtime_state_cleanup(&started, runtime_artifacts_dir.as_deref());
-    let shutdown_signal = prepare_stop_signal()
-        .map_err(|source| map_node_supervisor_error(&NodeSupervisorError::StopSignal { source }))?;
 
     if print.is_json() {
         if let Err(error) = print.json(&CommandResult::new(

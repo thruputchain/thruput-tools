@@ -18,6 +18,7 @@ use tokio::io::AsyncReadExt;
 
 pub const SUPPORTED_DERIVATION_SCHEME: &str = "groundhog-bootstrap-account-v1";
 const MAX_RUNTIME_MANIFEST_BYTES: u64 = 1024 * 1024;
+const CHAIN_IDENTITY_PREFLIGHT_ATTEMPTS: usize = 5;
 
 #[derive(Debug)]
 pub struct SimAccount {
@@ -107,14 +108,6 @@ pub(crate) async fn preflight_chain_identity(
         address: scheduler_address.clone(),
         source,
     })?;
-    let scheduler_before = scheduler_tip(
-        &scheduler,
-        &scheduler_address,
-        request_timeout,
-        &manifest.network_hash,
-    )
-    .await?;
-
     let public_client = HttpClientBuilder::default()
         .request_timeout(request_timeout)
         .build(rpc_url)
@@ -122,32 +115,53 @@ pub(crate) async fn preflight_chain_identity(
             rpc_url: rpc_url.to_string(),
             error: error.to_string(),
         })?;
-    let public_tip = preflight_timeout(
-        request_timeout,
-        GroundhogApiClient::chain_tip(&public_client),
-    )
-    .await
-    .map_err(|_| RuntimeManifestError::PublicChainTipTimeout {
-        rpc_url: rpc_url.to_string(),
-        timeout: request_timeout,
-    })?
-    .map_err(|error| RuntimeManifestError::PublicChainTip {
-        rpc_url: rpc_url.to_string(),
-        error: error.to_string(),
-    })?;
+    for attempt in 0..CHAIN_IDENTITY_PREFLIGHT_ATTEMPTS {
+        let scheduler_before = scheduler_tip(
+            &scheduler,
+            &scheduler_address,
+            request_timeout,
+            &manifest.network_hash,
+        )
+        .await?;
+        let public_tip = preflight_timeout(
+            request_timeout,
+            GroundhogApiClient::chain_tip(&public_client),
+        )
+        .await
+        .map_err(|_| RuntimeManifestError::PublicChainTipTimeout {
+            rpc_url: rpc_url.to_string(),
+            timeout: request_timeout,
+        })?
+        .map_err(|error| RuntimeManifestError::PublicChainTip {
+            rpc_url: rpc_url.to_string(),
+            error: error.to_string(),
+        })?;
 
-    if chain_tips_match(&scheduler_before, &public_tip) {
-        return Ok(());
+        if chain_tips_match(&scheduler_before, &public_tip) {
+            return Ok(());
+        }
+
+        let scheduler_after = scheduler_tip(
+            &scheduler,
+            &scheduler_address,
+            request_timeout,
+            &manifest.network_hash,
+        )
+        .await?;
+        match validate_public_scheduler_tips(&scheduler_before, &scheduler_after, &public_tip) {
+            Ok(()) => return Ok(()),
+            Err(_)
+                if attempt + 1 < CHAIN_IDENTITY_PREFLIGHT_ATTEMPTS
+                    && scheduler_advanced_past_public(
+                        &scheduler_before,
+                        &scheduler_after,
+                        &public_tip,
+                    ) => {}
+            Err(error) => return Err(error),
+        }
     }
 
-    let scheduler_after = scheduler_tip(
-        &scheduler,
-        &scheduler_address,
-        request_timeout,
-        &manifest.network_hash,
-    )
-    .await?;
-    validate_public_scheduler_tips(&scheduler_before, &scheduler_after, &public_tip)
+    unreachable!("chain identity preflight loop always returns on its final attempt")
 }
 
 async fn scheduler_tip(
@@ -202,6 +216,14 @@ async fn preflight_timeout<T>(
 
 fn chain_tips_match(left: &ChainTip, right: &ChainTip) -> bool {
     left.height == right.height && left.block_hash == right.block_hash
+}
+
+fn scheduler_advanced_past_public(
+    scheduler_before: &ChainTip,
+    scheduler_after: &ChainTip,
+    public: &ChainTip,
+) -> bool {
+    scheduler_before.height < public.height && public.height < scheduler_after.height
 }
 
 fn validate_public_scheduler_tips(
@@ -488,6 +510,19 @@ mod tests {
 
         validate_public_scheduler_tips(&scheduler_before, &scheduler_after, &public)
             .expect("public tip matching the scheduler recheck should pass");
+    }
+
+    #[test]
+    fn runtime_preflight_retries_when_scheduler_advances_past_public_tip() {
+        let scheduler_before = chain_tip(12, 0x11);
+        let scheduler_after = chain_tip(14, 0x33);
+        let public = chain_tip(13, 0x22);
+
+        assert!(scheduler_advanced_past_public(
+            &scheduler_before,
+            &scheduler_after,
+            &public
+        ));
     }
 
     #[tokio::test]
