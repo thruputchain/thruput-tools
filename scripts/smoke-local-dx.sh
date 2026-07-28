@@ -2,9 +2,10 @@
 # Real local-DX smoke test.
 #
 # Exercises the user-facing CLI path against a real hog-devnode binary:
-#   groundhog new -> build -> node -> dev-0 deploy/call/view/storage
+#   groundhog new -> build -> persistent node -> dev-0 deploy/call/view/storage
 #   -> key generate -> wallet create -> saved-wallet deploy
 #   -> same-wallet deploy rejection -> airdrop -> deploy retry/call
+#   -> stop -> restart -> verify persisted contract state
 #
 # Required environment:
 #   GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode
@@ -13,6 +14,7 @@
 #   HOGD_PROTOCOL_OVERRIDE=hogp/<hash>  # intro token only; XDR still validates shape
 #   SMOKE_STANDALONE_GATEWAY=1  # route view/storage checks through hog-gateway
 #   SMOKE_SDK_PATH=/path/to/sdk_rs/crates/sdk  # test scaffold against local SDK
+#   SMOKE_PROTOCOL_RS_PATH=/path/to/protocol-rs  # defaults to sdk_rs sibling
 #   KEEP_WORKDIR=1
 set -euo pipefail
 
@@ -254,17 +256,27 @@ with open(path, "r", encoding="utf-8") as handle:
 lines = []
 replaced = False
 in_profile = False
+profile_found = False
 for line in text.splitlines():
     stripped = line.strip()
     if stripped.startswith("[profile."):
+        if in_profile and not replaced:
+            lines.append(f'rpc_url = "{rpc_url}"')
+            replaced = True
         in_profile = stripped == f"[profile.{profile}]"
+        profile_found = profile_found or in_profile
     if in_profile and stripped.startswith("rpc_url"):
         lines.append(f'rpc_url = "{rpc_url}"')
         replaced = True
     else:
         lines.append(line)
+if in_profile and not replaced:
+    lines.append(f'rpc_url = "{rpc_url}"')
+    replaced = True
+if not profile_found:
+    raise SystemExit(f"profile.{profile} section not found")
 if not replaced:
-    raise SystemExit(f"profile.{profile} rpc_url not found")
+    raise SystemExit(f"profile.{profile} rpc_url was not updated")
 with open(path, "w", encoding="utf-8") as handle:
     handle.write("\n".join(lines) + "\n")
 PY
@@ -273,15 +285,19 @@ PY
 override_sdk_path() {
     local manifest="$1"
     local sdk_path="$2"
+    local protocol_path="$3"
     [[ -d "$sdk_path" ]] || die "SMOKE_SDK_PATH is not a directory: $sdk_path"
+    [[ -d "$protocol_path" ]] \
+        || die "SMOKE_PROTOCOL_RS_PATH is not a directory: $protocol_path"
 
-    python3 - "$manifest" "$sdk_path" <<'PY'
+    python3 - "$manifest" "$sdk_path" "$protocol_path" <<'PY'
 import json
 import pathlib
 import sys
 
 manifest = pathlib.Path(sys.argv[1])
 sdk_path = pathlib.Path(sys.argv[2]).resolve()
+protocol_path = pathlib.Path(sys.argv[3]).resolve()
 replacement = f'sdk = {{ path = {json.dumps(str(sdk_path))} }}'
 lines = []
 replaced = False
@@ -293,6 +309,19 @@ for line in manifest.read_text(encoding="utf-8").splitlines():
         lines.append(line)
 if not replaced:
     raise SystemExit("sdk dependency line not found")
+patches = {
+    "groundhog-spec": "groundhog-spec",
+    "groundhog-trace": "groundhog-trace",
+    "groundhog-xdr": "groundhog-xdr",
+    "groundhog-syscall": "groundhog-syscall",
+    "hogexec-internal": "hogexec-internal",
+}
+lines.extend(["", '[patch."sparse+https://groundhog.dev/crates/api/v1/crates/"]'])
+for package, directory in patches.items():
+    path = protocol_path / directory
+    if not path.is_dir():
+        raise SystemExit(f"protocol crate path not found: {path}")
+    lines.append(f'{package} = {{ path = {json.dumps(str(path))} }}')
 manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")
 PY
 }
@@ -329,6 +358,53 @@ run_view_json() {
     else
         run_json "$label" "$CLI" --json view "$@"
     fi
+}
+
+rpc_hash_query() {
+    local url="$1"
+    local method="$2"
+    local tx_hash="$3"
+    python3 - "$url" "$method" "$tx_hash" <<'PY'
+import json
+import sys
+import urllib.request
+
+url, method, tx_hash = sys.argv[1:]
+payload = json.dumps({
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": method,
+    "params": [tx_hash],
+}).encode()
+request = urllib.request.Request(
+    url,
+    data=payload,
+    headers={"content-type": "application/json"},
+    method="POST",
+)
+with urllib.request.urlopen(request, timeout=5) as response:
+    print(response.read().decode())
+PY
+}
+
+assert_transaction_committed() {
+    local label="$1"
+    local url="$2"
+    local tx_hash="$3"
+    local expected_height="$4"
+    local receipt status
+    receipt="$(rpc_hash_query "$url" groundhog_getTransactionReceipt "$tx_hash")"
+    [[ "$(json_field result.txHash "$receipt")" == "$tx_hash" ]] \
+        || die "$label receipt hash did not match $tx_hash: $receipt"
+    [[ "$(json_field result.height "$receipt")" == "$expected_height" ]] \
+        || die "$label receipt height did not match $expected_height: $receipt"
+
+    status="$(rpc_hash_query "$url" groundhog_getTransactionStatus "$tx_hash")"
+    [[ "$(json_field result.status "$status")" == "committed" ]] \
+        || die "$label transaction status was not committed: $status"
+    [[ "$(json_field result.height "$status")" == "$expected_height" ]] \
+        || die "$label committed height did not match $expected_height: $status"
+    log "$label receipt/status agree: tx=$tx_hash height=$expected_height"
 }
 
 display_command() {
@@ -368,6 +444,27 @@ collect_descendants() {
     done
 }
 
+stop_node() {
+    local pid="$1"
+    [[ -n "$pid" ]] || return 0
+    if ! kill -0 "$pid" >/dev/null 2>&1; then
+        wait "$pid" >/dev/null 2>&1 || true
+        return 0
+    fi
+
+    kill -TERM "$pid" >/dev/null 2>&1 || true
+    local deadline=$((SECONDS + 40))
+    while kill -0 "$pid" >/dev/null 2>&1; do
+        if (( SECONDS >= deadline )); then
+            kill -KILL "$pid" >/dev/null 2>&1 || true
+            wait "$pid" >/dev/null 2>&1 || true
+            return 1
+        fi
+        sleep 0.2
+    done
+    wait "$pid" >/dev/null 2>&1
+}
+
 DEVNODE_BINARY="$(find_hogd_dev_binary)"
 [[ -x "$DEVNODE_BINARY" ]] || die "hog-devnode binary is not executable: $DEVNODE_BINARY"
 
@@ -383,7 +480,8 @@ fi
 
 WORK="$(mktemp -d)"
 export XDG_CONFIG_HOME="$WORK/config"
-NODE_ARGS=(--json node --port 0 --hog-devnode-binary "$DEVNODE_BINARY")
+NODE_DATA_DIR="$WORK/node-data"
+NODE_ARGS=(--json node --port 0 --hog-devnode-binary "$DEVNODE_BINARY" --data-dir "$NODE_DATA_DIR")
 if [[ -n "$HOGD_PROTOCOL" ]]; then
     NODE_ARGS+=(--hogd-protocol "$HOGD_PROTOCOL")
     log "Using hogd protocol override: $HOGD_PROTOCOL"
@@ -400,9 +498,7 @@ cleanup() {
     if [[ -n "$NODE_PID" ]] && kill -0 "$NODE_PID" >/dev/null 2>&1; then
         descendants="$(collect_descendants "$NODE_PID" || true)"
         NODE_DESCENDANTS="$descendants"
-        # shellcheck disable=SC2086
-        kill "$NODE_PID" $descendants >/dev/null 2>&1 || true
-        wait "$NODE_PID" >/dev/null 2>&1 || true
+        stop_node "$NODE_PID" || true
         sleep 0.5
     fi
     if [[ -n "$descendants" ]]; then
@@ -430,7 +526,10 @@ export GROUNDHOG_PROFILE="$SMOKE_PROFILE"
 
 if [[ -n "${SMOKE_SDK_PATH:-}" ]]; then
     log "Using local SDK path: $SMOKE_SDK_PATH"
-    override_sdk_path Cargo.toml "$SMOKE_SDK_PATH"
+    SDK_REPO_ROOT="$(cd "$SMOKE_SDK_PATH/../.." && pwd)"
+    SMOKE_PROTOCOL_RS_PATH="${SMOKE_PROTOCOL_RS_PATH:-$(dirname "$SDK_REPO_ROOT")/protocol-rs}"
+    log "Using local protocol-rs path: $SMOKE_PROTOCOL_RS_PATH"
+    override_sdk_path Cargo.toml "$SMOKE_SDK_PATH" "$SMOKE_PROTOCOL_RS_PATH"
 fi
 
 log "Building contract WASM"
@@ -449,7 +548,13 @@ RPC_URL="$(json_field data.rpc_url "$NODE_JSON")"
 READ_PLANE="$(json_field data.backend.planes.read "$NODE_JSON")"
 VIEW_PLANE="$(json_field data.backend.planes.view "$NODE_JSON")"
 RUNTIME_MANIFEST="$(json_field data.runtime_manifest.path "$NODE_JSON")"
+CHAIN_STATE="$(json_field data.chain_state "$NODE_JSON")"
+REPORTED_DATA_DIR="$(json_field data.data_dir "$NODE_JSON")"
 log "Node RPC: $RPC_URL (read plane: $READ_PLANE, view plane: $VIEW_PLANE)"
+[[ "$REPORTED_DATA_DIR" == "$NODE_DATA_DIR" ]] \
+    || die "node data_dir was $REPORTED_DATA_DIR, expected $NODE_DATA_DIR"
+[[ "$CHAIN_STATE" == "fresh" ]] \
+    || die "initial node chain_state was $CHAIN_STATE, expected fresh"
 [[ "$VIEW_PLANE" == "view_gateway" ]] || die "node view plane was $VIEW_PLANE, expected view_gateway"
 [[ "$RUNTIME_MANIFEST" != "null" && -n "$RUNTIME_MANIFEST" ]] \
     || die "groundhog node did not report a runtime manifest path"
@@ -479,6 +584,7 @@ if [[ "${SMOKE_STANDALONE_GATEWAY:-0}" == "1" ]]; then
 
     log "Starting standalone gateway from runtime manifest: $GATEWAY_RPC_URL"
     "$GATEWAY" --runtime-manifest "$RUNTIME_MANIFEST" --listen "127.0.0.1:$GATEWAY_PORT" \
+        --scheduler-reconnect-grace-ms 0 \
         > "$WORK/gateway.out" 2> "$WORK/gateway.err" &
     GATEWAY_PID=$!
     if ! wait_for_gateway_rpc "$GATEWAY_RPC_URL"; then
@@ -491,7 +597,14 @@ DEPLOY_JSON="$(run_json deploy "$CLI" --json deploy)"
 CONTRACT_ADDRESS="$(json_field data.address "$DEPLOY_JSON")"
 [[ "$CONTRACT_ADDRESS" != "null" && -n "$CONTRACT_ADDRESS" ]] \
     || die "deploy did not return a contract address"
-log "deploy result: address=$CONTRACT_ADDRESS height=$(json_field data.height "$DEPLOY_JSON") tx=$(json_field data.tx_hash "$DEPLOY_JSON")"
+DEPLOY_HEIGHT="$(json_field data.height "$DEPLOY_JSON")"
+DEPLOY_TX_HASH="$(json_field data.tx_hash "$DEPLOY_JSON")"
+log "deploy result: address=$CONTRACT_ADDRESS height=$DEPLOY_HEIGHT tx=$DEPLOY_TX_HASH"
+assert_transaction_committed "embedded gateway" "$RPC_URL" "$DEPLOY_TX_HASH" "$DEPLOY_HEIGHT"
+if [[ -n "$GATEWAY_RPC_URL" ]]; then
+    assert_transaction_committed \
+        "standalone gateway" "$GATEWAY_RPC_URL" "$DEPLOY_TX_HASH" "$DEPLOY_HEIGHT"
+fi
 
 INITIALIZE_JSON="$(run_json "call initialize" "$CLI" --json call "$PROJECT_NAME" initialize "$INITIAL_VALUE")"
 assert_call_succeeded "initialize" "$INITIALIZE_JSON"
@@ -643,5 +756,54 @@ assert_call_succeeded "saved-wallet initialize" "$USER_INITIALIZE_JSON"
 USER_INCREMENT_JSON="$(run_json "saved-wallet increment" "$CLI" --json call "$PROJECT_NAME" increment 2)"
 assert_call_succeeded "saved-wallet increment" "$USER_INCREMENT_JSON"
 log "saved-wallet call result: status=$(json_field data.status_summary "$USER_INCREMENT_JSON") height=$(json_field data.height "$USER_INCREMENT_JSON") tx=$(json_field data.tx_hash "$USER_INCREMENT_JSON")"
+
+unset GROUNDHOG_RUNTIME_MANIFEST
+VIEW_FROM="dev-0"
+PERSISTED_VIEW_BEFORE="$(run_view_json "view before persistent restart" "$PROJECT_NAME" get)"
+PERSISTED_VALUE_BEFORE="$(json_field data.returnValue "$PERSISTED_VIEW_BEFORE")"
+[[ "$PERSISTED_VALUE_BEFORE" != "null" ]] \
+    || die "view before persistent restart returned null"
+
+if [[ -n "$GATEWAY_PID" ]] && kill -0 "$GATEWAY_PID" >/dev/null 2>&1; then
+    kill -TERM "$GATEWAY_PID" >/dev/null 2>&1 || true
+    wait "$GATEWAY_PID" >/dev/null 2>&1 || true
+    GATEWAY_PID=""
+fi
+
+log "Stopping persistent local node"
+if ! stop_node "$NODE_PID"; then
+    die "persistent local node did not stop within its shutdown grace"
+fi
+NODE_PID=""
+NODE_DESCENDANTS=""
+
+log "Restarting persistent local node"
+: > "$WORK/node.json"
+: > "$WORK/node.err"
+"$CLI" "${NODE_ARGS[@]}" > "$WORK/node.json" 2> "$WORK/node.err" &
+NODE_PID=$!
+if ! wait_for_node_json "$WORK/node.json"; then
+    cat "$WORK/node.err" >&2 || true
+    die "restarted local node did not emit startup JSON"
+fi
+NODE_JSON="$(head -n 1 "$WORK/node.json")"
+NODE_DESCENDANTS="$(collect_descendants "$NODE_PID" || true)"
+RPC_URL="$(json_field data.rpc_url "$NODE_JSON")"
+RUNTIME_MANIFEST="$(json_field data.runtime_manifest.path "$NODE_JSON")"
+CHAIN_STATE="$(json_field data.chain_state "$NODE_JSON")"
+REPORTED_DATA_DIR="$(json_field data.data_dir "$NODE_JSON")"
+[[ "$REPORTED_DATA_DIR" == "$NODE_DATA_DIR" ]] \
+    || die "restarted node data_dir was $REPORTED_DATA_DIR, expected $NODE_DATA_DIR"
+[[ "$CHAIN_STATE" == "recovered" ]] \
+    || die "restarted node chain_state was $CHAIN_STATE, expected recovered"
+if [[ "${SMOKE_STANDALONE_GATEWAY:-0}" == "1" ]]; then
+    update_rpc_url groundhog.toml "$SMOKE_PROFILE" "$RPC_URL"
+fi
+
+PERSISTED_VIEW_AFTER="$(run_view_json "view after persistent restart" "$PROJECT_NAME" get)"
+PERSISTED_VALUE_AFTER="$(json_field data.returnValue "$PERSISTED_VIEW_AFTER")"
+[[ "$PERSISTED_VALUE_AFTER" == "$PERSISTED_VALUE_BEFORE" ]] \
+    || die "persisted counter changed across restart: before=$PERSISTED_VALUE_BEFORE after=$PERSISTED_VALUE_AFTER"
+log "persistent restart recovered counter value: $PERSISTED_VALUE_AFTER"
 
 log "Local DX smoke passed"

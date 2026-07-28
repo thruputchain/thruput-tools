@@ -2,6 +2,7 @@
 
 use std::{fmt, io, path::PathBuf, process::ExitStatus, time::Duration};
 
+use groundhog_json_rpc_types::NetworkHashHex;
 use groundhog_x23_transport::ConnectError;
 
 /// Unix child-process signal used by the supervisor.
@@ -256,6 +257,28 @@ pub enum NodeSupervisorError {
         reason: String,
     },
 
+    /// The runtime manifest advertised a different network than the bootstrap request.
+    #[error(
+        "hogd-dev runtime manifest network hash mismatch: bootstrap requested {expected}, runtime advertised {observed}"
+    )]
+    RuntimeNetworkHashMismatch {
+        /// Network hash requested in the bootstrap manifest.
+        expected: NetworkHashHex,
+        /// Network hash advertised by the runtime manifest.
+        observed: NetworkHashHex,
+    },
+
+    /// The runtime manifest advertised a different protocol token than requested.
+    #[error(
+        "hogd-dev runtime manifest protocol mismatch: supervisor requested {expected}, runtime advertised {observed:?}"
+    )]
+    RuntimeProtocolMismatch {
+        /// Protocol token requested by the supervisor.
+        expected: String,
+        /// Protocol token advertised by the runtime manifest, if present.
+        observed: Option<String>,
+    },
+
     /// hogd-dev advertised a different dev-account count than requested.
     #[error(
         "hogd-dev readiness advertised {actual} dev accounts, but supervisor requested {expected}"
@@ -408,6 +431,17 @@ pub enum NodeSupervisorError {
         source: ConnectError,
     },
 
+    /// The scheduler tip belongs to a different network than the runtime manifest.
+    #[error(
+        "hogd-dev scheduler network hash mismatch: runtime manifest expected {expected}, scheduler reported {observed}"
+    )]
+    SchedulerNetworkHashMismatch {
+        /// Network hash advertised by the runtime manifest.
+        expected: NetworkHashHex,
+        /// Network hash observed in the scheduler tip proposal header.
+        observed: NetworkHashHex,
+    },
+
     /// A hogd-dev scheduler RPC failed.
     #[error("hogd-dev scheduler RPC `{op}` failed: {source}")]
     SchedulerRpc {
@@ -552,6 +586,31 @@ pub enum NodeSupervisorError {
         path: PathBuf,
         /// Existing hogd-dev PID if it could be read from the PID file.
         pid: Option<u32>,
+    },
+
+    /// Forced shutdown did not conclusively stop the supervised process group.
+    #[error(
+        "child process `{program}` did not fully stop after SIGKILL (process group {process_group:?}); preserving its PID file to prevent unsafe restart"
+    )]
+    ShutdownIncomplete {
+        /// Program path or name used to spawn the child.
+        program: String,
+        /// Process group that may still be alive.
+        process_group: Option<i32>,
+    },
+
+    /// Persistent local-node lifecycle guarantees require Unix process groups.
+    #[error("persistent hog-devnode state is only supported on Unix platforms")]
+    PersistentStateUnsupported,
+
+    /// The supervisor could not prepare a private persistent data directory.
+    #[error("hog-devnode data directory operation failed at {}: {source}", path.display())]
+    DataDir {
+        /// Persistent data directory involved in the failed operation.
+        path: PathBuf,
+        /// Underlying I/O error.
+        #[source]
+        source: io::Error,
     },
 }
 

@@ -7,7 +7,7 @@ use crate::compare::ResultDiff;
 use crate::manifest::{ContractArtifactKind, WorkloadKind};
 use crate::target::{TargetOwnership, TargetProviderKind};
 
-pub const SIM_RESULT_SCHEMA_VERSION: u32 = 2;
+pub const SIM_RESULT_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -95,7 +95,7 @@ pub struct TargetIdentity {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeIdentity {
-    pub network_id: String,
+    pub network_hash: String,
     pub protocol: String,
     pub genesis_hash: String,
     pub producer: ProducerIdentity,

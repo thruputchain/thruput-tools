@@ -348,19 +348,23 @@ mod tests {
         TransactionPage, TransactionQuery, TransactionRefPage, TxInfoOutcome,
     };
     use groundhog_scheduler::{
-        CoordinatorRegistrationOutcome, DbSchedResult, DbTip, Nomination,
-        ParallelSignedTransactionBatch, SchedulerCommitOutcome, SchedulerGetTipResult,
-        SchedulerNominationResult, SchedulerValidationResult,
+        ConsensusValue, CoordinatorRegistrationOutcome, DbSchedResult,
+        ParallelSignedTransactionBatch, Proposal, SchedulerCommitOutcome, SchedulerGetTipResult,
+        SchedulerProposalResult, SchedulerValidationResult,
         sched_coord::{
             SchedulerCoord_SchedulerCoord1, SchedulerCoord_SchedulerCoord1_Client,
             SchedulerCoord_SchedulerCoord1_Dispatcher,
         },
     };
-    use groundhog_scp::network::Protocol;
+    use groundhog_scp::network::ProtocolCommit as Protocol;
     use groundhog_x23_transport::try_connect;
-    use groundhog_xdr::genesis::GenesisConfiguration;
-    use groundhog_xdr::transaction::{OptSignedTransactionBatch, SignedTransactionHashBatch};
-    use groundhog_xdr::types::SHA256Hash;
+    use groundhog_xdr::{
+        genesis::GenesisConfiguration,
+        header::ProposalContext,
+        transaction::{OptSignedTransactionBatch, SignedTransactionHashBatch},
+        types::SHA256Hash,
+        validator::ValidatorID,
+    };
     use rpc_driver::{ProgramError, RpcServer, ServiceMap};
     use tokio::net::TcpListener;
     use tokio::sync::{Notify, RwLock};
@@ -474,23 +478,24 @@ mod tests {
 
         async fn schedulercoord_submit_vetted(
             &self,
-            _arg0: groundhog_coordinator::discovery::ValidatorID,
+            _arg0: ValidatorID,
             _arg1: ParallelSignedTransactionBatch,
         ) -> Result<(), ProgramError> {
             panic!("bug: status tests should not submit")
         }
 
-        async fn schedulercoord_nominate(
+        async fn schedulercoord_propose_block(
             &self,
-            _arg0: DbTip,
-        ) -> Result<SchedulerNominationResult, ProgramError> {
-            panic!("bug: status tests should not nominate")
+            _arg0: groundhog_scheduler::BlockID,
+            _arg1: ProposalContext,
+        ) -> Result<SchedulerProposalResult, ProgramError> {
+            panic!("bug: status tests should not propose")
         }
 
-        async fn schedulercoord_validate(
+        async fn schedulercoord_validate_block(
             &self,
-            _arg0: DbTip,
-            _arg1: Nomination,
+            _arg0: groundhog_scheduler::BlockID,
+            _arg1: Proposal,
         ) -> Result<SchedulerValidationResult, ProgramError> {
             panic!("bug: status tests should not validate")
         }
@@ -498,6 +503,7 @@ mod tests {
         async fn schedulercoord_commit_block(
             &self,
             _arg0: groundhog_scheduler::BlockID,
+            _arg1: ConsensusValue,
         ) -> Result<SchedulerCommitOutcome, ProgramError> {
             panic!("bug: status tests should not commit")
         }

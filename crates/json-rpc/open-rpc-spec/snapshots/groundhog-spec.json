@@ -163,36 +163,63 @@
         "type": "integer"
       },
       "BlockInfo": {
-        "description": "Block data returned by getBlockByNumber.\n\nMaps the XDR `BlockHeader` to RPC-friendly serialization\n(camelCase fields, `0x`-prefixed hex). Add RPC-specific fields\nhere without modifying the wire type.\n\nThe `From<BlockHeader>` impl uses exhaustive destructuring so\nadding a field to `BlockHeader` causes a compile error here.",
+        "description": "Block data returned by getBlockByNumber.\n\nMaps the XDR `ConsensusValue` to RPC-friendly serialization\n(camelCase fields, `0x`-prefixed hex). Add RPC-specific fields\nhere without modifying the wire type.",
         "properties": {
+          "blockHash": {
+            "$ref": "#/components/schemas/Hex0x_SHA256Hash",
+            "description": "Canonical SHA-256 hash of the complete XDR-encoded consensus value."
+          },
           "blockHeight": {
             "$ref": "#/components/schemas/BlockHeight"
           },
-          "dbHash": {
-            "$ref": "#/components/schemas/Hex0x_DbHash"
+          "blockTimepoint": {
+            "$ref": "#/components/schemas/TimePoint"
           },
           "eventsHash": {
             "$ref": "#/components/schemas/Hex0x_SHA256Hash"
           },
-          "networkId": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
+          "networkHash": {
+            "$ref": "#/components/schemas/Hex0x_SHA256Hash"
           },
           "prevBlockHash": {
             "$ref": "#/components/schemas/Hex0x_SHA256Hash"
           },
-          "txsetHash": {
+          "proposalTxsHash": {
             "$ref": "#/components/schemas/Hex0x_SHA256Hash"
+          },
+          "proposer": {
+            "$ref": "#/components/schemas/Hex0x_ValidatorID"
+          },
+          "protocol": {
+            "$ref": "#/components/schemas/Protocol"
+          },
+          "storageHash": {
+            "$ref": "#/components/schemas/Hex0x_SHA256Hash"
+          },
+          "txsHash": {
+            "$ref": "#/components/schemas/Hex0x_SHA256Hash"
+          },
+          "upgrades": {
+            "description": "Opaque protocol upgrades selected by consensus for this block.",
+            "items": {
+              "$ref": "#/components/schemas/HexBytes"
+            },
+            "type": "array"
           }
         },
         "required": [
-          "networkId",
+          "blockHash",
+          "protocol",
+          "networkHash",
+          "proposer",
+          "blockTimepoint",
           "blockHeight",
-          "txsetHash",
-          "dbHash",
+          "txsHash",
+          "storageHash",
           "eventsHash",
-          "prevBlockHash"
+          "prevBlockHash",
+          "proposalTxsHash",
+          "upgrades"
         ],
         "type": "object"
       },
@@ -525,11 +552,11 @@
         "pattern": "^0x[0-9a-f]*$",
         "type": "string"
       },
-      "Hex0x_DbHash": {
+      "Hex0x_SHA256Hash": {
         "pattern": "^0x[0-9a-f]*$",
         "type": "string"
       },
-      "Hex0x_SHA256Hash": {
+      "Hex0x_ValidatorID": {
         "pattern": "^0x[0-9a-f]*$",
         "type": "string"
       },
@@ -578,6 +605,12 @@
       "PaginationCursor": {
         "pattern": "^0x[0-9a-f]*$",
         "type": "string"
+      },
+      "Protocol": {
+        "description": "Network protocol version.",
+        "format": "uint32",
+        "minimum": 0,
+        "type": "integer"
       },
       "RootInvocationOutput": {
         "description": "Root invocation output with raw buffers preserved as hex.",
@@ -784,6 +817,12 @@
           "blockHeight"
         ],
         "type": "object"
+      },
+      "TimePoint": {
+        "description": "uint64_t, Unix time as nanoseconds elapsed since\nJanuary 1, 1970 UTC",
+        "format": "uint64",
+        "minimum": 0,
+        "type": "integer"
       },
       "Topic": {
         "pattern": "^0x[0-9a-f]{64}$",
@@ -1091,7 +1130,7 @@
   },
   "info": {
     "title": "Groundhog JSON-RPC",
-    "version": "2.3.1"
+    "version": "3.0.0"
   },
   "methods": [
     {

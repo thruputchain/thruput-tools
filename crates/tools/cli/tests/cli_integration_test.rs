@@ -196,6 +196,50 @@ fn read_line_with_timeout(
         .expect("timed out waiting for child stdout line")
 }
 
+#[cfg(unix)]
+fn read_until_with_timeout<R>(
+    output: R,
+    needle: &'static str,
+    timeout: Duration,
+) -> std::io::Result<String>
+where
+    R: std::io::Read + Send + 'static,
+{
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut reader = BufReader::new(output);
+        let mut captured = String::new();
+        let mut tx = Some(tx);
+        loop {
+            let mut line = String::new();
+            match reader.read_line(&mut line) {
+                Ok(0) => break,
+                Ok(_) => {
+                    if tx.is_some() {
+                        captured.push_str(&line);
+                    }
+                    if captured.contains(needle)
+                        && let Some(tx) = tx.take()
+                    {
+                        let _ = tx.send(Ok(captured.clone()));
+                    }
+                }
+                Err(error) => {
+                    if let Some(tx) = tx.take() {
+                        let _ = tx.send(Err(error));
+                    }
+                    return;
+                }
+            }
+        }
+        if let Some(tx) = tx {
+            let _ = tx.send(Ok(captured));
+        }
+    });
+    rx.recv_timeout(timeout)
+        .expect("timed out waiting for child stdout output")
+}
+
 #[test]
 fn help_shows_subcommands() {
     let output = groundhog().arg("--help").output().unwrap();
@@ -242,6 +286,8 @@ fn version_flag_works() {
 fn node_hogd_dev_binary_json_starts_supervisor() {
     let fake = fake_hogd_dev_binary();
     let pid_dir = TempDir::new().unwrap();
+    let data_root = TempDir::new().unwrap();
+    let data_dir = data_root.path().join("node-data");
     let config_home = TempDir::new().unwrap();
     let pid_path = pid_dir.path().join("hogd.pid");
     let child = groundhog()
@@ -251,6 +297,8 @@ fn node_hogd_dev_binary_json_starts_supervisor() {
         .arg("0")
         .arg("--hog-devnode-binary")
         .arg(fake)
+        .arg("--data-dir")
+        .arg(&data_dir)
         .env("GROUNDHOG_FAKE_HOGD_DEV_MODE", "ready-with-indexer")
         .env("GROUNDHOG_FAKE_HOGD_DEV_PID_FILE", &pid_path)
         .env("XDG_CONFIG_HOME", config_home.path())
@@ -272,7 +320,9 @@ fn node_hogd_dev_binary_json_starts_supervisor() {
 
     assert_eq!(payload["ok"], true);
     assert_eq!(payload["command"], "node");
-    assert_eq!(payload["data"]["schemaVersion"], 1);
+    assert_eq!(payload["data"]["schemaVersion"], 3);
+    assert_eq!(payload["data"]["chain_state"], "fresh");
+    assert_eq!(payload["data"]["data_dir"], data_dir.display().to_string());
     assert_eq!(payload["data"]["experimental"], false);
     assert_eq!(payload["data"]["backend"]["kind"], "hogd_dev");
     assert_eq!(payload["data"]["backend"]["stability"], "supported");
@@ -321,6 +371,52 @@ fn node_hogd_dev_binary_json_starts_supervisor() {
     let global_config = std::fs::read_to_string(config_home.path().join("groundhog/config.toml"))
         .expect("groundhog node should leave config readable");
     assert!(!global_config.contains("local_runtime_state"));
+    assert!(
+        wait_pid_gone(pid, Duration::from_secs(2)),
+        "fake hogd-dev pid {pid} still alive after CLI exit",
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn node_human_startup_reports_chain_state() {
+    let fake = fake_hogd_dev_binary();
+    let temp = TempDir::new().unwrap();
+    let data_dir = temp.path().join("node-data");
+    let pid_path = temp.path().join("hogd.pid");
+    let config_home = temp.path().join("config");
+    let child = groundhog()
+        .arg("node")
+        .arg("--port")
+        .arg("0")
+        .arg("--hog-devnode-binary")
+        .arg(fake)
+        .arg("--data-dir")
+        .arg(&data_dir)
+        .env("GROUNDHOG_FAKE_HOGD_DEV_MODE", "ready-with-indexer")
+        .env("GROUNDHOG_FAKE_HOGD_DEV_PID_FILE", &pid_path)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("bug: groundhog node should spawn");
+    let mut child = ChildGuard::new(child);
+
+    let stderr = child
+        .child_mut()
+        .stderr
+        .take()
+        .expect("bug: stderr should be piped");
+    let output = read_until_with_timeout(stderr, "dev-key manifest", Duration::from_secs(10))
+        .expect("bug: human startup output should be readable");
+
+    assert!(output.contains("chain state"), "startup output: {output}");
+    assert!(output.contains("fresh"), "startup output: {output}");
+
+    let pid = read_pid_file(&pid_path);
+    send_sigint(child.child());
+    let status = wait_child(child.into_inner(), Duration::from_secs(10));
+    assert!(status.success(), "groundhog node should stop cleanly");
     assert!(
         wait_pid_gone(pid, Duration::from_secs(2)),
         "fake hogd-dev pid {pid} still alive after CLI exit",
@@ -1194,6 +1290,8 @@ fn node_help_mentions_hogd_dev_binary_and_log_contract() {
     assert!(stdout.contains("--verbose"));
     assert!(stdout.contains("--verbose is also honored with --json"));
     assert!(stdout.contains("--hog-devnode-binary"));
+    assert!(stdout.contains("--data-dir"));
+    assert!(stdout.contains("persistent hog-devnode state"));
     assert!(stdout.contains("--dev-account-count"));
     assert!(stdout.contains("--hogd-protocol"));
     assert!(stdout.contains("GROUNDHOG_DEVNODE_BINARY"));
@@ -4900,9 +4998,10 @@ fn write_runtime_manifest_with_seed(
     let public_key = public_key_override.unwrap_or_else(|| signer.verifying_key_bytes());
     let path = dir.join(format!("runtime-manifest-{index}.json"));
     let manifest = serde_json::json!({
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "kind": "hogd-dev-runtime",
-        "networkId": "groundhog-local",
+        "chainState": "fresh",
+        "networkHash": "00".repeat(32),
         "protocol": "hogp/test",
         "genesisHash": format!("0x{}", "42".repeat(32)),
         "producer": {

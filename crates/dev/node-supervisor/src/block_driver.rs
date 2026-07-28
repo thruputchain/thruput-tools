@@ -8,9 +8,16 @@
 use std::{fmt, sync::Arc, time::Duration};
 
 use groundhog_scheduler::{
-    BlockID, DbTip, SchedulerCommitOutcome, SchedulerGetTipResult, SchedulerNominatedBlock,
-    SchedulerNominationResult, sched_coord::SchedulerCoord_SchedulerCoord1_Client,
+    BlockID, ConsensusValue, ProposalTxsHash, SchedulerCommitOutcome, SchedulerGetTipResult,
+    SchedulerProposalResult, SchedulerProposedBlock,
+    sched_coord::SchedulerCoord_SchedulerCoord1_Client,
 };
+use groundhog_xdr::{
+    header::{ProposalContext, ProposalHeader},
+    types::{ConsensusValueHash, ExtensionPoint, Protocol, SHA256Hash, TimePoint},
+    validator::ValidatorID,
+};
+use sha2::{Digest, Sha256};
 use tokio::{
     sync::{Notify, mpsc, oneshot},
     task::JoinHandle,
@@ -25,11 +32,11 @@ const MANUAL_BLOCK_REQUEST_CAPACITY: usize = 1;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ProducedBlock {
-    /// Scheduler-local identifier used to commit the nominated block.
+    /// Scheduler-local identifier used to commit the proposed block.
     pub block_id: BlockID,
-    /// Height reported by the committed nomination.
+    /// Height reported by the committed proposal.
     pub height: i64,
-    /// Encoded transaction-batch size reported by the nomination.
+    /// Encoded transaction-batch size reported by the proposal.
     pub batch_xdr_bytes: usize,
 }
 
@@ -61,19 +68,29 @@ pub enum BlockProductionError {
         #[source]
         source: rpc_driver::RpcError,
     },
-    /// Nomination RPC failed after the scheduler may have retained a candidate.
-    #[error("nomination outcome is unknown after RPC failure: {source}")]
-    NominationOutcomeUnknown {
-        /// Failed nomination RPC.
+    /// Proposal RPC failed after the scheduler may have retained a candidate.
+    #[error("proposal outcome is unknown after RPC failure: {source}")]
+    ProposalOutcomeUnknown {
+        /// Failed proposal RPC.
         #[source]
         source: rpc_driver::RpcError,
     },
-    /// The scheduler rejected nomination or commit.
+    /// The scheduler rejected proposal or commit.
     #[error("scheduler rejected `{op}`: {result}")]
     SchedulerRejected {
         /// Scheduler operation that was rejected.
         op: &'static str,
         /// Scheduler result value.
+        result: String,
+    },
+    /// The scheduler rejected commit and may still retain the proposed candidate.
+    #[error("scheduler rejected commit for block {block_id} at height {height}: {result}")]
+    CommitRejected {
+        /// Scheduler-local proposed block identifier.
+        block_id: BlockID,
+        /// Proposed block height.
+        height: i64,
+        /// Scheduler commit result value.
         result: String,
     },
     /// The scheduler returned an unexpected tip result.
@@ -82,12 +99,12 @@ pub enum BlockProductionError {
         /// Debug representation of the unexpected result.
         result: String,
     },
-    /// Commit transport failed and the current tip did not confirm the nomination.
+    /// Commit transport failed and the current tip did not confirm the proposal.
     #[error(
         "commit outcome for block {block_id} at height {height} is unknown after RPC failure: {source}; reconciliation: {reconciliation}"
     )]
     CommitOutcomeUnknown {
-        /// Scheduler-local nominated block identifier.
+        /// Scheduler-local proposed block identifier.
         block_id: BlockID,
         /// Nominated block height.
         height: i64,
@@ -96,6 +113,23 @@ pub enum BlockProductionError {
         source: rpc_driver::RpcError,
         /// Result of the best-effort tip reconciliation.
         reconciliation: String,
+    },
+    /// The scheduler returned internally inconsistent proposal batch metadata.
+    #[error("scheduler returned malformed proposal batch `{batch}`: {detail}")]
+    MalformedSchedulerProposal {
+        /// Proposal batch whose metadata was inconsistent.
+        batch: &'static str,
+        /// Validation or range failure details.
+        detail: String,
+    },
+    /// A scheduler protocol value could not be encoded for consensus hashing.
+    #[error("failed to XDR-encode {value} for consensus hashing: {source}")]
+    ConsensusHashEncoding {
+        /// Protocol value being hashed.
+        value: &'static str,
+        /// XDR encoding failure.
+        #[source]
+        source: xdrs::WriteError,
     },
 }
 
@@ -106,15 +140,17 @@ pub struct ManualBlockProducer {
 }
 
 impl ManualBlockProducer {
-    /// Run one scheduler nomination/commit cycle and await its outcome.
+    /// Run one scheduler proposal/commit cycle and await its outcome.
     ///
     /// Dropping the returned future before the driver starts the request cancels
     /// it. Once scheduler work begins, dropping the future does not cancel the
     /// cycle. [`BlockProductionError::TimedOut`],
     /// [`BlockProductionError::OutcomeUnknown`],
-    /// [`BlockProductionError::NominationOutcomeUnknown`], and
+    /// [`BlockProductionError::ProposalOutcomeUnknown`], and
     /// [`BlockProductionError::CommitOutcomeUnknown`] mean callers must inspect
-    /// chain state before deciding whether to request another block.
+    /// chain state before deciding whether to request another block. Malformed
+    /// proposal, commit rejection, and consensus-hash errors are also terminal
+    /// because the scheduler may have retained the proposed candidate.
     /// The producer becomes terminal after an indeterminate result so queued
     /// requests cannot overlap scheduler work that may still be running.
     ///
@@ -284,9 +320,12 @@ async fn run_manual_driver(
                             &result,
                             Err(
                                 BlockProductionError::TimedOut { .. }
-                                    | BlockProductionError::NominationOutcomeUnknown { .. }
-                                    | BlockProductionError::CommitOutcomeUnknown { .. }
-                            )
+                                     | BlockProductionError::ProposalOutcomeUnknown { .. }
+                                     | BlockProductionError::CommitOutcomeUnknown { .. }
+                                     | BlockProductionError::CommitRejected { .. }
+                                     | BlockProductionError::MalformedSchedulerProposal { .. }
+                                     | BlockProductionError::ConsensusHashEncoding { .. }
+                             )
                         );
                         let _ = request.reply.send(result);
                         if terminal {
@@ -431,52 +470,57 @@ async fn drive_one_block(
         }
     };
 
-    let nominated = scheduler
-        .schedulercoord_nominate(&db_tip)
+    let proposal_context = ProposalContext {
+        protocol: Protocol::new(0),
+        proposer: ValidatorID::default(),
+        block_timepoint: TimePoint::new(0),
+    };
+    let proposed = scheduler
+        .schedulercoord_propose_block(&db_tip.id, &proposal_context)
         .await
-        .map_err(|source| BlockProductionError::NominationOutcomeUnknown { source })?;
+        .map_err(|source| BlockProductionError::ProposalOutcomeUnknown { source })?;
 
-    let nominated_block = match nominated {
-        SchedulerNominationResult::SchedulerNominationOK { nominated_block } => nominated_block,
-        SchedulerNominationResult::SchedulerNominationError => {
+    let proposed_block = match proposed {
+        SchedulerProposalResult::SchedulerProposalOK { proposed_block } => proposed_block,
+        SchedulerProposalResult::SchedulerProposalError => {
             return Err(BlockProductionError::SchedulerRejected {
-                op: "schedulercoord_nominate",
-                result: "SchedulerNominationError".into(),
+                op: "schedulercoord_propose_block",
+                result: "SchedulerProposalError".into(),
             });
         }
         other => {
             return Err(BlockProductionError::SchedulerRejected {
-                op: "schedulercoord_nominate",
+                op: "schedulercoord_propose_block",
                 result: format!("{other:?}"),
             });
         }
     };
 
-    commit_nominated_block(scheduler, db_tip, nominated_block).await
+    commit_proposed_block(scheduler, db_tip.value, proposed_block).await
 }
 
-async fn commit_nominated_block(
+async fn commit_proposed_block(
     scheduler: &SchedulerCoord_SchedulerCoord1_Client,
-    db_tip: DbTip,
-    nominated_block: SchedulerNominatedBlock,
+    parent_value: ConsensusValue,
+    proposed_block: SchedulerProposedBlock,
 ) -> Result<DriveOutcome, BlockProductionError> {
-    let block_id = nominated_block.block_id;
-    let batch_xdr_bytes = nominated_block.txs.xdr.0.len();
-    let height = nominated_block.nomination.block_height;
-    let block_hash = nominated_block.nomination.block_hash;
+    let block_id = proposed_block.block_id;
+    let batch_xdr_bytes = proposed_block.txs.xdr.0.len();
+    let height = proposed_block.proposal.header.block_height.clone();
+    let value = consensus_value(
+        &parent_value,
+        proposed_block.proposal.header,
+        &proposed_block.proposal.transactions,
+    )?;
 
-    let outcome = match scheduler.schedulercoord_commit_block(&block_id).await {
+    let outcome = match scheduler
+        .schedulercoord_commit_block(&block_id, &value)
+        .await
+    {
         Ok(outcome) => outcome,
         Err(source) => {
-            return reconcile_commit(
-                scheduler,
-                block_id,
-                *height,
-                block_hash,
-                batch_xdr_bytes,
-                source,
-            )
-            .await;
+            return reconcile_commit(scheduler, block_id, *height, value, batch_xdr_bytes, source)
+                .await;
         }
     };
     if outcome == SchedulerCommitOutcome::SchedulerCommitOK {
@@ -487,32 +531,156 @@ async fn commit_nominated_block(
         });
     }
 
-    Err(BlockProductionError::SchedulerRejected {
-        op: "schedulercoord_commit_block",
+    Err(BlockProductionError::CommitRejected {
+        block_id,
+        height: *height,
         result: format!(
-            "{outcome}; previous height={}, nominated height={}",
-            *db_tip.height, *height
+            "{outcome}; previous height={}",
+            *parent_value.proposal_header.block_height
         ),
     })
+}
+
+fn consensus_value(
+    parent: &ConsensusValue,
+    proposal_header: ProposalHeader,
+    proposal_txs: &groundhog_scheduler::ProposalTxs,
+) -> Result<ConsensusValue, BlockProductionError> {
+    Ok(ConsensusValue {
+        protocol: Protocol::new(0),
+        ext: ExtensionPoint::_0,
+        prev_hash: hash_consensus_value(parent)?,
+        proposal_header,
+        proposal_txs_hash: proposal_txs_compatibility_hash(proposal_txs)?,
+        upgrades: xdrs::VecM::default(),
+    })
+}
+
+// Matches hogd's temporary compatibility hash until the protocol moves to
+// canonical XDR hashing for ProposalTxs.
+fn proposal_txs_compatibility_hash(
+    proposal_txs: &groundhog_scheduler::ProposalTxs,
+) -> Result<ProposalTxsHash, BlockProductionError> {
+    let mut base = proposal_txs.clone();
+    base.hash.segment_tokens.0.clear();
+    base.hash.segment_bytes.0.clear();
+    base.hash.xdr.0.clear();
+    base.nondeterministic_data.segment_tokens.0.clear();
+    base.nondeterministic_data.segment_bytes.0.clear();
+    base.nondeterministic_data.xdr.0.clear();
+
+    let mut result = hash_xdr(&base)
+        .map_err(|source| BlockProductionError::ConsensusHashEncoding {
+            value: "proposal transactions base",
+            source,
+        })?
+        .into_inner();
+    xor_hash(
+        &mut result,
+        hash_parallel_batch_compatibility("hash", &proposal_txs.hash)?,
+    );
+    xor_hash(
+        &mut result,
+        hash_parallel_batch_compatibility(
+            "nondeterministic_data",
+            &proposal_txs.nondeterministic_data,
+        )?,
+    );
+    Ok(ProposalTxsHash::new(SHA256Hash::from(result)))
+}
+
+fn hash_parallel_batch_compatibility(
+    batch_name: &'static str,
+    batch: &groundhog_scheduler::ParallelBatch,
+) -> Result<[u8; 32], BlockProductionError> {
+    batch
+        .validate()
+        .map_err(|error| BlockProductionError::MalformedSchedulerProposal {
+            batch: batch_name,
+            detail: error.to_string(),
+        })?;
+
+    let mut result = [0u8; 32];
+    let mut offset = 0usize;
+    for &segment_size in &batch.segment_bytes.0 {
+        let end = offset.checked_add(segment_size as usize).ok_or_else(|| {
+            BlockProductionError::MalformedSchedulerProposal {
+                batch: batch_name,
+                detail: "segment byte offset overflowed usize".into(),
+            }
+        })?;
+        let segment = batch.xdr.0.get(offset..end).ok_or_else(|| {
+            BlockProductionError::MalformedSchedulerProposal {
+                batch: batch_name,
+                detail: format!(
+                    "segment range {offset}..{end} exceeds {}-byte payload",
+                    batch.xdr.len()
+                ),
+            }
+        })?;
+        xor_hash(&mut result, Sha256::digest(segment).into());
+        offset = end;
+    }
+    if offset != batch.xdr.len() {
+        return Err(BlockProductionError::MalformedSchedulerProposal {
+            batch: batch_name,
+            detail: format!(
+                "segment lengths cover {offset} bytes, payload has {} bytes",
+                batch.xdr.len()
+            ),
+        });
+    }
+
+    let mut index = batch.clone();
+    index.xdr.0.clear();
+    let index_hash =
+        hash_xdr(&index).map_err(|source| BlockProductionError::ConsensusHashEncoding {
+            value: batch_name,
+            source,
+        })?;
+    xor_hash(&mut result, index_hash.into_inner());
+    Ok(result)
+}
+
+fn xor_hash(result: &mut [u8; 32], hash: [u8; 32]) {
+    for (result_byte, hash_byte) in result.iter_mut().zip(hash) {
+        *result_byte ^= hash_byte;
+    }
+}
+
+fn hash_consensus_value(
+    value: &ConsensusValue,
+) -> Result<ConsensusValueHash, BlockProductionError> {
+    hash_xdr(value)
+        .map(ConsensusValueHash::new)
+        .map_err(|source| BlockProductionError::ConsensusHashEncoding {
+            value: "parent consensus value",
+            source,
+        })
+}
+
+fn hash_xdr<T: xdrs::WriteXDR>(value: &T) -> Result<SHA256Hash, xdrs::WriteError> {
+    xdrs::txs::encode(value)
+        .map(|encoded| SHA256Hash::from(<[u8; 32]>::from(Sha256::digest(encoded))))
 }
 
 async fn reconcile_commit(
     scheduler: &SchedulerCoord_SchedulerCoord1_Client,
     block_id: BlockID,
     height: i64,
-    block_hash: groundhog_xdr::types::BlockHash,
+    value: ConsensusValue,
     batch_xdr_bytes: usize,
     source: rpc_driver::RpcError,
 ) -> Result<DriveOutcome, BlockProductionError> {
     let reconciliation = match scheduler.schedcoord_get_tip().await {
         Ok(SchedulerGetTipResult::SchedulerGetTipOK { db_tip })
-            if *db_tip.height == height && db_tip.block_hash == block_hash =>
+            if *db_tip.value.proposal_header.block_height == height && db_tip.value == value =>
         {
             tracing::warn!(
                 block_id,
                 height,
                 error = %source,
-                "commit RPC failed but scheduler tip confirms the nominated block"
+                "commit RPC failed but scheduler tip confirms the proposed block"
             );
             return Ok(DriveOutcome::Committed {
                 block_id,
@@ -520,7 +688,7 @@ async fn reconcile_commit(
                 batch_xdr_bytes,
             });
         }
-        Ok(result) => format!("scheduler tip did not confirm the nomination: {result:?}"),
+        Ok(result) => format!("scheduler tip did not confirm the proposal: {result:?}"),
         Err(error) => format!("tip lookup failed: {error}"),
     };
     Err(BlockProductionError::CommitOutcomeUnknown {
@@ -529,4 +697,95 @@ async fn reconcile_commit(
         source,
         reconciliation,
     })
+}
+
+#[cfg(test)]
+mod hash_tests {
+    use groundhog_scheduler::{
+        ParallelBatch, ParallelNondeterministicProposalDataBatch,
+        ParallelSignedTransactionHashBatch, ProposalTxs,
+    };
+    use groundhog_xdr::types::{ExtensionPoint, SHA256Hash};
+    use xdrs::{BytesM, VecM};
+
+    use super::{BlockProductionError, hash_xdr, proposal_txs_compatibility_hash};
+
+    #[test]
+    fn proposal_txs_compatibility_hash_matches_hogd_golden_vector() {
+        let proposal_txs = ProposalTxs {
+            ext: ExtensionPoint::_0,
+            hash: ParallelSignedTransactionHashBatch::new(ParallelBatch {
+                segment_tokens: VecM(vec![1, 2]),
+                segment_bytes: VecM(vec![4, 8]),
+                xdr: BytesM(vec![0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3]),
+            }),
+            nondeterministic_data: ParallelNondeterministicProposalDataBatch::new(ParallelBatch {
+                segment_tokens: VecM(vec![1]),
+                segment_bytes: VecM(vec![4]),
+                xdr: BytesM(vec![0xde, 0xad, 0xbe, 0xef]),
+            }),
+        };
+
+        assert_eq!(
+            proposal_txs_compatibility_hash(&proposal_txs)
+                .expect("bug: valid proposal transactions should hash")
+                .into_inner(),
+            SHA256Hash::from([
+                0x3a, 0x3c, 0xe7, 0x82, 0x83, 0x94, 0x38, 0x26, 0xac, 0x43, 0x29, 0x1f, 0xab, 0x79,
+                0xbd, 0x17, 0xc4, 0xad, 0x1d, 0x1e, 0xf9, 0xe2, 0x2d, 0x8c, 0x72, 0x31, 0xa9, 0x7c,
+                0xb6, 0x68, 0xdc, 0xd9,
+            ])
+        );
+    }
+
+    #[test]
+    fn proposal_txs_hash_rejects_segment_count_mismatch() {
+        let proposal_txs = ProposalTxs {
+            ext: ExtensionPoint::_0,
+            hash: ParallelSignedTransactionHashBatch::new(ParallelBatch {
+                segment_tokens: VecM(vec![1]),
+                segment_bytes: VecM(vec![]),
+                xdr: BytesM(vec![]),
+            }),
+            nondeterministic_data: ParallelNondeterministicProposalDataBatch::new(
+                ParallelBatch::empty(),
+            ),
+        };
+
+        let error = proposal_txs_compatibility_hash(&proposal_txs)
+            .expect_err("bug: mismatched segment metadata should fail");
+        assert!(matches!(
+            error,
+            BlockProductionError::MalformedSchedulerProposal { batch: "hash", .. }
+        ));
+    }
+
+    #[test]
+    fn proposal_txs_hash_rejects_segment_byte_mismatch() {
+        let proposal_txs = ProposalTxs {
+            ext: ExtensionPoint::_0,
+            hash: ParallelSignedTransactionHashBatch::new(ParallelBatch {
+                segment_tokens: VecM(vec![1]),
+                segment_bytes: VecM(vec![2]),
+                xdr: BytesM(vec![0]),
+            }),
+            nondeterministic_data: ParallelNondeterministicProposalDataBatch::new(
+                ParallelBatch::empty(),
+            ),
+        };
+
+        let error = proposal_txs_compatibility_hash(&proposal_txs)
+            .expect_err("bug: segment lengths outside the payload should fail");
+        assert!(matches!(
+            error,
+            BlockProductionError::MalformedSchedulerProposal { batch: "hash", .. }
+        ));
+    }
+
+    #[test]
+    fn xdr_hashing_returns_encoding_errors() {
+        let over_bound = BytesM::<1>(vec![0, 1]);
+        let error = hash_xdr(&over_bound).expect_err("bug: over-bound XDR should fail to encode");
+        assert!(matches!(error, xdrs::WriteError::InvalidArrayLength));
+    }
 }

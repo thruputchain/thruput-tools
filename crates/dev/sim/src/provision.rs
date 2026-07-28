@@ -906,9 +906,10 @@ mod tests {
 
     fn runtime_manifest(artifact_hint: &str) -> RuntimeManifest {
         serde_json::from_value(json!({
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "kind": "hogd-dev-runtime",
-            "networkId": "groundhog-local",
+            "chainState": "fresh",
+            "networkHash": "00".repeat(32),
             "protocol": "hogp/test",
             "genesisHash": prefixed_hex(0x11),
             "producer": {

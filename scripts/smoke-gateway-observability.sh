@@ -361,6 +361,7 @@ RUST_LOG="$GATEWAY_RUST_LOG" \
     --listen "127.0.0.1:$GATEWAY_PORT" \
     --observability-listen "127.0.0.1:$OBSERVABILITY_PORT" \
     --health-probe-interval-ms 500 \
+    --scheduler-reconnect-grace-ms 0 \
     > "$WORK/gateway.out" 2> "$WORK/gateway.err" &
 GATEWAY_PID=$!
 

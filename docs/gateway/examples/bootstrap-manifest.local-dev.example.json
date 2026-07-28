@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "kind": "groundhog-bootstrap",
-  "networkId": "groundhog-local",
+  "networkHash": "0000000000000000000000000000000000000000000000000000000000000000",
   "profile": "local-dev",
   "devWallet": {
     "profile": "hog-devnode-default"

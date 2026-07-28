@@ -14,7 +14,6 @@ use std::{
 };
 
 use async_trait::async_trait;
-use groundhog_coordinator::ValidatorID;
 use groundhog_db_gateway::AddressAndKeyBatch;
 use groundhog_db_gateway::{
     DbGateway_DbGateway1, DbGateway_DbGateway1_Dispatcher, DbGatewayIntroOutcome,
@@ -27,20 +26,27 @@ use groundhog_indexer::{
 };
 use groundhog_json_rpc_types::hex::Hex0x;
 use groundhog_scheduler::{
-    CoordinatorRegistrationOutcome, DbSchedResult, DbTip, Nomination, ParallelBatch,
+    BlockID, ConsensusValue, CoordinatorRegistrationOutcome, DbSchedResult, DbTip, ParallelBatch,
     ParallelNondeterministicProposalDataBatch, ParallelSignedTransactionBatch,
-    ParallelSignedTransactionHashBatch, RPCError, SchedulerCommitOutcome, SchedulerGetTipResult,
-    SchedulerNominatedBlock, SchedulerNominationResult, SchedulerValidationResult,
+    ParallelSignedTransactionHashBatch, Proposal, ProposalTxs, ProposalTxsHash, RPCError,
+    SchedulerCommitOutcome, SchedulerGetTipResult, SchedulerProposalResult, SchedulerProposedBlock,
+    SchedulerValidationResult,
     sched_coord::{SchedulerCoord_SchedulerCoord1, SchedulerCoord_SchedulerCoord1_Dispatcher},
 };
-use groundhog_scp::network::Protocol;
+use groundhog_xdr::PROTOCOL_VERSION;
 use groundhog_xdr::event::IdentifiedEvent;
 use groundhog_xdr::genesis::GenesisConfiguration;
+use groundhog_xdr::header::{ProposalContext, ProposalHeader};
+use groundhog_xdr::network::ProtocolCommit;
 use groundhog_xdr::storage_item::WireStorageItem;
 use groundhog_xdr::transaction::{
     OptSignedTransactionBatch, SignedTransactionHash, SignedTransactionHashBatch,
 };
-use groundhog_xdr::types::{BlockHash, BlockHeight, Ed25519PublicKey, SHA256Hash, StorageKey};
+use groundhog_xdr::types::{
+    BlockHeight, ConsensusValueHash, Ed25519PublicKey, EventsHash, ExtensionPoint, NetworkHash,
+    Protocol, SHA256Hash, StorageKey, StorageShortHash, TimePoint, TxsHash,
+};
+use groundhog_xdr::validator::ValidatorID;
 use rpc_driver::{ProgramError, RpcServer, ServiceMap};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -52,6 +58,7 @@ const MODE_ENV: &str = "GROUNDHOG_FAKE_HOGD_DEV_MODE";
 /// Tests use this to verify cleanup (poll `kill(pid, 0)` until ESRCH).
 const PID_FILE_ENV: &str = "GROUNDHOG_FAKE_HOGD_DEV_PID_FILE";
 const COMMIT_ENTERED_FILE_ENV: &str = "GROUNDHOG_FAKE_COMMIT_ENTERED_FILE";
+const GRACEFUL_SHUTDOWN_FILE_ENV: &str = "GROUNDHOG_FAKE_GRACEFUL_SHUTDOWN_FILE";
 const DERIVATION_SCHEME: &str = "groundhog-bootstrap-account-v1";
 static TERMINATED: AtomicBool = AtomicBool::new(false);
 
@@ -158,6 +165,9 @@ fn main() {
         Ok("ready") => run_ready(),
         Ok("dead-scheduler") => run_dead_scheduler(),
         Ok("scheduler-get-tip-error") => run_ready_with_scheduler(FakeSchedulerMode::GetTipError),
+        Ok("scheduler-network-hash-mismatch") => {
+            run_ready_with_scheduler(FakeSchedulerMode::NetworkHashMismatch);
+        }
         Ok("scheduler-load-rejected") => run_ready_with_scheduler(FakeSchedulerMode::LoadRejected),
         Ok("scheduler-load-no-effect") => {
             run_ready_with_scheduler(FakeSchedulerMode::LoadNoEffect);
@@ -178,14 +188,21 @@ fn main() {
         Ok("automine-commit-error") => {
             run_ready_with_scheduler(FakeSchedulerMode::AutomineCommitError);
         }
+        Ok("automine-commit-rejected") => {
+            run_ready_with_scheduler(FakeSchedulerMode::AutomineCommitRejected);
+        }
         Ok("automine-runtime-get-tip-error") => {
             run_ready_with_scheduler(FakeSchedulerMode::AutomineRuntimeGetTipError);
+        }
+        Ok("automine-malformed-proposal") => {
+            run_ready_with_scheduler(FakeSchedulerMode::AutomineMalformedProposal);
         }
         Ok("automine-nominate-error") => {
             run_ready_with_scheduler(FakeSchedulerMode::AutomineNominateError);
         }
         Ok("ready-then-exit") => run_ready_then_exit(),
         Ok("spawn-helper-ignore-term") => run_with_helper(),
+        Ok("spawn-helper-then-exit") => run_with_helper_then_exit(),
         Ok("helper-ignore-term") => run_ignore_term_loop(),
         Ok("ignore-term") => run_ignore_term(),
         Ok("exit-before-ready") => process::exit(9),
@@ -195,6 +212,7 @@ fn main() {
                 thread::sleep(Duration::from_mins(1));
             }
         }
+        Ok("timeout-record-term-ignore") => run_record_term_then_ignore(),
         Ok("oversized-readiness") => {
             io::stdout()
                 .write_all(&vec![b'x'; 70_000])
@@ -258,6 +276,7 @@ fn run_ready_with_scheduler(mode: FakeSchedulerMode) {
     }
 
     eprintln!(r#"{{"level":"info","target":"hogd_dev","message":"stopping"}}"#);
+    write_graceful_shutdown_file_if_requested();
 }
 
 fn run_dead_scheduler() {
@@ -296,10 +315,33 @@ fn run_with_helper() {
     }
 }
 
+#[allow(clippy::zombie_processes)]
+fn run_with_helper_then_exit() {
+    let current_exe = env::current_exe().expect("bug: fake child binary path should resolve");
+    let _helper = Command::new(current_exe)
+        .env(MODE_ENV, "helper-ignore-term")
+        .spawn()
+        .expect("bug: helper process should spawn");
+
+    let scheduler = start_fake_scheduler(FakeSchedulerMode::Normal);
+    println!("{}", readiness_scheduler_only(scheduler.addr));
+    let _ = io::stdout().flush();
+    thread::sleep(Duration::from_millis(100));
+}
+
 fn run_ignore_term_loop() {
     loop {
         thread::sleep(Duration::from_mins(1));
     }
+}
+
+fn run_record_term_then_ignore() {
+    install_sigterm_handler();
+    while !TERMINATED.load(Ordering::SeqCst) {
+        thread::sleep(Duration::from_millis(10));
+    }
+    write_graceful_shutdown_file_if_requested();
+    run_ignore_term_loop();
 }
 
 /// Start scheduler + indexer on Normal/RpcFail mode, announce both in readiness.
@@ -407,6 +449,13 @@ fn write_pid_file_if_requested() {
     }
 }
 
+fn write_graceful_shutdown_file_if_requested() {
+    if let Ok(path) = env::var(GRACEFUL_SHUTDOWN_FILE_ENV) {
+        fs::write(path, "graceful\n")
+            .expect("bug: fake child should write its graceful shutdown marker");
+    }
+}
+
 fn install_sigterm_handler() {
     // SAFETY: installs a process-local handler that only stores to an atomic.
     #[allow(function_casts_as_integer)]
@@ -473,7 +522,7 @@ fn readiness_pointer(endpoints: &Value) -> String {
     let manifest_hash = sha256_hex(&manifest_bytes);
     let manifest_path = write_runtime_manifest(&manifest_bytes);
     format!(
-        r#"{{"schemaVersion":1,"status":"ready","manifestPath":"{}","manifestHash":"{}"}}"#,
+        r#"{{"schemaVersion":2,"status":"ready","manifestPath":"{}","manifestHash":"{}"}}"#,
         manifest_path.display(),
         manifest_hash,
     )
@@ -488,10 +537,11 @@ fn runtime_manifest(endpoints: &Value, config: &FakeStartupConfig) -> Value {
     }
 
     json!({
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "kind": "hogd-dev-runtime",
-        "networkId": "groundhog-local",
-        "protocol": "fake-hogd-dev/x23",
+        "chainState": "fresh",
+        "networkHash": "00".repeat(32),
+        "protocol": PROTOCOL_VERSION,
         "genesisHash": Hex0x(SHA256Hash::from([0x42; 32])),
         "producer": Value::Object(producer),
         "endpoints": endpoints,
@@ -665,9 +715,12 @@ enum FakeSchedulerMode {
     AutomineHangingCommit,
     AutomineCommitResponseLost,
     AutomineCommitError,
+    AutomineCommitRejected,
     AutomineRuntimeGetTipError,
+    AutomineMalformedProposal,
     AutomineNominateError,
     GetTipError,
+    NetworkHashMismatch,
     LoadRejected,
     LoadNoEffect,
 }
@@ -682,7 +735,9 @@ impl FakeSchedulerMode {
                 | Self::AutomineHangingCommit
                 | Self::AutomineCommitResponseLost
                 | Self::AutomineCommitError
+                | Self::AutomineCommitRejected
                 | Self::AutomineRuntimeGetTipError
+                | Self::AutomineMalformedProposal
                 | Self::AutomineNominateError
         )
     }
@@ -694,6 +749,7 @@ struct FakeScheduler {
     pending_submits: Arc<AtomicU64>,
     commit_in_progress: Arc<AtomicBool>,
     get_tip_calls: Arc<AtomicU64>,
+    candidate: Arc<Mutex<Option<(BlockID, ConsensusValue)>>>,
     mode: FakeSchedulerMode,
 }
 
@@ -704,24 +760,92 @@ impl FakeScheduler {
             pending_submits: Arc::new(AtomicU64::new(0)),
             commit_in_progress: Arc::new(AtomicBool::new(false)),
             get_tip_calls: Arc::new(AtomicU64::new(0)),
+            candidate: Arc::new(Mutex::new(None)),
             mode,
         }
     }
 
-    fn genesis_tip() -> DbTip {
+    fn genesis_tip(&self) -> DbTip {
+        let network_hash = if self.mode == FakeSchedulerMode::NetworkHashMismatch {
+            [0xff; 32]
+        } else {
+            [0; 32]
+        };
         DbTip {
-            height: 0.into(),
-            block_hash: BlockHash::from(SHA256Hash::from([0x42; 32])),
-            events_hash: SHA256Hash::from([0x43; 32]),
-            db_hash: [0u8; 2048].into(),
             id: 0,
+            storage_long_hash: [0u8; 2048].into(),
+            value: ConsensusValue {
+                protocol: Protocol::new(0),
+                ext: ExtensionPoint::_0,
+                prev_hash: ConsensusValueHash::new(SHA256Hash::from([0; 32])),
+                proposal_header: fake_proposal_header_with_network_hash(
+                    0,
+                    ValidatorID::default(),
+                    TimePoint::new(0),
+                    network_hash,
+                ),
+                proposal_txs_hash: expected_fake_proposal_txs_hash(),
+                upgrades: VecM::default(),
+            },
         }
     }
 }
 
-fn block_hash_for_height(height: i64) -> BlockHash {
+fn fake_proposal_header(
+    height: i64,
+    proposer: ValidatorID,
+    block_timepoint: TimePoint,
+) -> ProposalHeader {
+    fake_proposal_header_with_network_hash(height, proposer, block_timepoint, [0; 32])
+}
+
+fn fake_proposal_header_with_network_hash(
+    height: i64,
+    proposer: ValidatorID,
+    block_timepoint: TimePoint,
+    network_hash: [u8; 32],
+) -> ProposalHeader {
     let byte = u8::try_from(height).unwrap_or(u8::MAX);
-    BlockHash::from(SHA256Hash::from([byte; 32]))
+    ProposalHeader {
+        ext: ExtensionPoint::_0,
+        network_hash: NetworkHash::new(SHA256Hash::from(network_hash)),
+        proposer,
+        block_timepoint,
+        block_height: BlockHeight::from(height),
+        txs_hash: TxsHash::new(SHA256Hash::from([byte; 32])),
+        storage_hash: StorageShortHash::new(SHA256Hash::from([byte; 32])),
+        events_hash: EventsHash::new(SHA256Hash::from([byte; 32])),
+    }
+}
+
+fn fake_proposal_txs() -> ProposalTxs {
+    ProposalTxs {
+        ext: ExtensionPoint::_0,
+        hash: ParallelSignedTransactionHashBatch::new(ParallelBatch {
+            segment_tokens: VecM(vec![1, 2]),
+            segment_bytes: VecM(vec![4, 8]),
+            xdr: BytesM(vec![0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3]),
+        }),
+        nondeterministic_data: ParallelNondeterministicProposalDataBatch::new(ParallelBatch {
+            segment_tokens: VecM(vec![1]),
+            segment_bytes: VecM(vec![4]),
+            xdr: BytesM(vec![0xde, 0xad, 0xbe, 0xef]),
+        }),
+    }
+}
+
+fn expected_fake_proposal_txs_hash() -> ProposalTxsHash {
+    ProposalTxsHash::new(SHA256Hash::from([
+        0x3a, 0x3c, 0xe7, 0x82, 0x83, 0x94, 0x38, 0x26, 0xac, 0x43, 0x29, 0x1f, 0xab, 0x79, 0xbd,
+        0x17, 0xc4, 0xad, 0x1d, 0x1e, 0xf9, 0xe2, 0x2d, 0x8c, 0x72, 0x31, 0xa9, 0x7c, 0xb6, 0x68,
+        0xdc, 0xd9,
+    ]))
+}
+
+fn hash_xdr<T: xdrs::WriteXDR>(value: &T) -> SHA256Hash {
+    let encoded = xdrs::txs::encode(value)
+        .expect("bug: fake scheduler protocol values should encode successfully");
+    SHA256Hash::from(<[u8; 32]>::from(Sha256::digest(encoded)))
 }
 
 #[async_trait]
@@ -775,18 +899,19 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
         Ok(())
     }
 
-    async fn schedulercoord_nominate(
+    async fn schedulercoord_propose_block(
         &self,
-        _onto: DbTip,
-    ) -> Result<SchedulerNominationResult, ProgramError> {
+        onto: BlockID,
+        proposal_context: ProposalContext,
+    ) -> Result<SchedulerProposalResult, ProgramError> {
         if !self.mode.supports_block_driver() {
             return Err(ProgramError::msg("not implemented in fake hogd-dev"));
         }
         if self.mode == FakeSchedulerMode::AutomineNominateError {
-            return Err(ProgramError::msg("fake nomination RPC failure"));
+            return Err(ProgramError::msg("fake proposal RPC failure"));
         }
         if self.pending_submits.load(Ordering::SeqCst) == 0 {
-            return Ok(SchedulerNominationResult::SchedulerNominationError);
+            return Ok(SchedulerProposalResult::SchedulerProposalError);
         }
 
         let tip = self
@@ -795,48 +920,62 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
             .expect("bug: fake tip mutex poisoned")
             .clone()
             .expect("bug: automine should only run after genesis load");
-        let next_height = *tip.height + 1;
+        let next_height = *tip.value.proposal_header.block_height + 1;
         let block_id = tip.id + 1;
-        let block_hash = block_hash_for_height(next_height);
-        Ok(SchedulerNominationResult::SchedulerNominationOK {
-            nominated_block: SchedulerNominatedBlock {
+        if onto != tip.id {
+            return Ok(SchedulerProposalResult::SchedulerProposalError);
+        }
+        let mut transactions = fake_proposal_txs();
+        if self.mode == FakeSchedulerMode::AutomineMalformedProposal {
+            transactions.hash.segment_tokens.0.pop();
+        }
+        let header = fake_proposal_header(
+            next_height,
+            proposal_context.proposer,
+            proposal_context.block_timepoint,
+        );
+        if self.mode != FakeSchedulerMode::AutomineMalformedProposal {
+            let expected = ConsensusValue {
+                protocol: proposal_context.protocol,
+                ext: ExtensionPoint::_0,
+                prev_hash: ConsensusValueHash::new(hash_xdr(&tip.value)),
+                proposal_header: header.clone(),
+                proposal_txs_hash: expected_fake_proposal_txs_hash(),
+                upgrades: VecM::default(),
+            };
+            *self
+                .candidate
+                .lock()
+                .expect("bug: fake candidate mutex poisoned") = Some((block_id, expected));
+        }
+        Ok(SchedulerProposalResult::SchedulerProposalOK {
+            proposed_block: SchedulerProposedBlock {
                 block_id,
                 txs: ParallelSignedTransactionBatch::new(ParallelBatch {
                     segment_tokens: VecM(vec![1]),
                     segment_bytes: VecM(vec![1]),
                     xdr: BytesM(vec![0x01]),
                 }),
-                nomination: Nomination {
-                    block_height: next_height.into(),
-                    block_hash,
-                    prev_block_hash: tip.block_hash,
-                    transactions_hash: ParallelSignedTransactionHashBatch::new(ParallelBatch {
-                        segment_tokens: VecM(vec![]),
-                        segment_bytes: VecM(vec![]),
-                        xdr: BytesM(vec![]),
-                    }),
-                    transactions_nondeterministic_data:
-                        ParallelNondeterministicProposalDataBatch::new(ParallelBatch {
-                            segment_tokens: VecM(vec![]),
-                            segment_bytes: VecM(vec![]),
-                            xdr: BytesM(vec![]),
-                        }),
+                proposal: Proposal {
+                    header,
+                    transactions,
                 },
             },
         })
     }
 
-    async fn schedulercoord_validate(
+    async fn schedulercoord_validate_block(
         &self,
-        _onto: DbTip,
-        _nomination: Nomination,
+        _onto: BlockID,
+        _proposal: Proposal,
     ) -> Result<SchedulerValidationResult, ProgramError> {
         Err(ProgramError::msg("not implemented in fake hogd-dev"))
     }
 
     async fn schedulercoord_commit_block(
         &self,
-        block_id: groundhog_scheduler::BlockID,
+        block_id: BlockID,
+        value: ConsensusValue,
     ) -> Result<SchedulerCommitOutcome, ProgramError> {
         if !self.mode.supports_block_driver() {
             return Err(ProgramError::msg("not implemented in fake hogd-dev"));
@@ -854,6 +993,19 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
         }
         if self.mode == FakeSchedulerMode::AutomineCommitError {
             return Err(ProgramError::msg("fake commit RPC failure"));
+        }
+        {
+            let mut candidate = self
+                .candidate
+                .lock()
+                .expect("bug: fake candidate mutex poisoned");
+            if candidate.as_ref() != Some(&(block_id, value.clone())) {
+                return Ok(SchedulerCommitOutcome::SchedulerCommitInvalidConsensusValue);
+            }
+            if self.mode == FakeSchedulerMode::AutomineCommitRejected {
+                return Ok(SchedulerCommitOutcome::SchedulerCommitInvalidConsensusValue);
+            }
+            candidate.take();
         }
         if self.mode == FakeSchedulerMode::AutomineSerializeProbe {
             if self.commit_in_progress.swap(true, Ordering::SeqCst) {
@@ -874,12 +1026,8 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
         let tip = guard
             .as_mut()
             .expect("bug: automine should only run after genesis load");
-        let next_height = *tip.height + 1;
-        tip.height = next_height.into();
-        tip.block_hash = block_hash_for_height(next_height);
-        let height_byte = u8::try_from(next_height).unwrap_or(u8::MAX);
-        tip.events_hash = SHA256Hash::from([height_byte; 32]);
         tip.id = block_id;
+        tip.value = value;
         if self.mode == FakeSchedulerMode::AutomineCommitResponseLost {
             return Err(ProgramError::msg("fake lost commit response"));
         }
@@ -917,7 +1065,7 @@ impl SchedulerCoord_SchedulerCoord1 for FakeScheduler {
             return Ok(DbSchedResult::DbSchedResultOK);
         }
 
-        *self.tip.lock().expect("bug: fake tip mutex poisoned") = Some(Self::genesis_tip());
+        *self.tip.lock().expect("bug: fake tip mutex poisoned") = Some(self.genesis_tip());
         Ok(DbSchedResult::DbSchedResultOK)
     }
 
@@ -982,7 +1130,7 @@ struct FakeDbGateway {
 impl DbGateway_DbGateway1 for FakeDbGateway {
     async fn dbgateway_intro(
         &self,
-        _arg0: Protocol,
+        _arg0: ProtocolCommit,
     ) -> Result<DbGatewayIntroOutcome, ProgramError> {
         match self.mode {
             FakeDbGatewayMode::Normal => {}
@@ -1256,7 +1404,7 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for FakeIndexer {
     #[tracing::instrument(skip_all)]
     async fn indexer_block_explorer_intro(
         &self,
-        _arg0: Protocol,
+        _arg0: ProtocolCommit,
     ) -> Result<IndexerBlockExplorerIntroOutcome, ProgramError> {
         if self.mode == FakeIndexerMode::RpcFail {
             return Err(ProgramError::msg("fake indexer rpc-fail mode"));

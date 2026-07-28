@@ -52,6 +52,14 @@ From the generated project directory, start the local node in one terminal:
 groundhog node
 ```
 
+By default the node is ephemeral. Pass `--data-dir <dir>` to persist its
+committed chain and recover it on the next launch with the same bootstrap
+options:
+
+```bash
+groundhog node --data-dir .groundhog/node
+```
+
 Then deploy and call it from the same project directory in another terminal:
 
 ```bash
@@ -71,7 +79,8 @@ groundhog test --integration --differential
 
 `groundhog node` is script-safe: human status or startup JSON goes to stdout;
 child logs stay on stderr. Use `-v` / `--verbose` for normal debugging and
-`RUST_LOG` for exact tracing filters.
+`RUST_LOG` for exact tracing filters. Startup output reports `chain state` for
+humans and `data.chain_state` (`fresh` or `recovered`) in JSON.
 
 `groundhog test --integration` uses that same local-node path without a
 separate terminal: it builds the selected artifact (`--target rv32` by default,
@@ -117,7 +126,7 @@ full CLI/gateway/bench loop,
 [Benchmark Scenario Library](docs/gateway/bench-scenarios.md) for repeatable
 local load shapes, and
 [`docs/gateway/examples/runtime-manifest.hogd-dev.example.json`](docs/gateway/examples/runtime-manifest.hogd-dev.example.json)
-for the v1 JSON shape.
+for the v2 JSON shape.
 
 ### Releases
 

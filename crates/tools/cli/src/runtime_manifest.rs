@@ -4,9 +4,7 @@ use std::ffi::OsStr;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use groundhog_json_rpc_types::runtime_manifest::{
-    RUNTIME_MANIFEST_SCHEMA_VERSION, RuntimeManifest,
-};
+use groundhog_json_rpc_types::runtime_manifest::{RuntimeManifest, parse_runtime_manifest};
 
 use crate::{CliError, config::ResolvedProfile};
 
@@ -91,23 +89,13 @@ fn load_runtime_manifest(path: &Path, key_name: &str) -> Result<RuntimeManifest,
         ));
     }
 
-    let manifest: RuntimeManifest = serde_json::from_slice(&bytes).map_err(|source| {
+    let manifest = parse_runtime_manifest(&bytes).map_err(|source| {
         manifest_message(
             path,
             key_name,
             format!("failed to parse runtime manifest: {source}"),
         )
     })?;
-    if manifest.schema_version != RUNTIME_MANIFEST_SCHEMA_VERSION {
-        return Err(manifest_message(
-            path,
-            key_name,
-            format!(
-                "unsupported runtime manifest schemaVersion {}",
-                manifest.schema_version
-            ),
-        ));
-    }
     Ok(manifest)
 }
 

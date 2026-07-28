@@ -148,7 +148,6 @@ fn validate_descriptor(
     let Some(manifest) = runtime_manifest else {
         return Ok(());
     };
-    matches_expected("networkId", &manifest.network_id, &descriptor.network_id)?;
     matches_expected("protocol", &manifest.protocol, &descriptor.protocol)?;
     matches_expected(
         "genesisHash",
@@ -422,9 +421,10 @@ mod tests {
 
     fn runtime_manifest() -> RuntimeManifest {
         serde_json::from_value(serde_json::json!({
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "kind": "hogd-dev-runtime",
-            "networkId": "devnet",
+            "chainState": "fresh",
+            "networkHash": "42".repeat(32),
             "protocol": "hogp/test",
             "genesisHash": format!("0x{}", "42".repeat(32)),
             "producer": { "binary": "hogd", "version": "0.1.0" },

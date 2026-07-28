@@ -1045,9 +1045,9 @@ mod tests {
 
     fn runtime_manifest() -> RuntimeManifest {
         serde_json::from_value(json!({
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "kind": "hosted-devnet-runtime",
-            "networkId": "devnet",
+            "networkHash": "11".repeat(32),
             "protocol": "hogp/test",
             "genesisHash": prefixed_hex(0x11),
             "producer": {

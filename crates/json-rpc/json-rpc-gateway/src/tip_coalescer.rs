@@ -14,14 +14,14 @@ use std::{sync::Arc, time::Duration, time::Instant};
 
 use async_trait::async_trait;
 use groundhog_json_rpc_server::RpcRequestContext;
-use groundhog_json_rpc_types::block::ChainTip;
-use groundhog_json_rpc_types::hex::Hex0x;
+use groundhog_json_rpc_types::block::{ChainTip, consensus_value_hash};
 use groundhog_scheduler::sched_coord::SchedulerGetTipResult;
 use tokio::sync::{RwLock, mpsc, oneshot};
+use tokio::task::{AbortHandle, JoinSet};
 
 use crate::adaptive_batch::deadline_cohorts;
 use crate::config::{HealthBackend, TipConfig};
-use crate::context::{SchedulerClient, clear_scheduler_if_current};
+use crate::context::{AbortTaskOnDrop, SchedulerClient, clear_scheduler_if_current};
 use crate::error::GatewayError;
 use crate::metrics::{BackendRequestOutcome, GatewayMetrics, REASON_CLOSED, REASON_INGRESS_FULL};
 
@@ -71,6 +71,7 @@ impl TipSink for SchedulerTipSink {
             return Err(GatewayError::BackendTimeout);
         }
         let mut call = tokio::spawn(async move { client.schedcoord_get_tip().await });
+        let _abort_call_on_drop = AbortTaskOnDrop::new(&call);
         let rpc_result = if let Ok(result) = tokio::time::timeout(timeout, &mut call).await {
             Ok(result.unwrap_or(Err(rpc_driver::RpcError::SystemError)))
         } else {
@@ -98,13 +99,23 @@ impl TipSink for SchedulerTipSink {
             .map_err(|()| GatewayError::BackendTimeout)?
             .map_err(|e| GatewayError::BackendUnavailable(e.to_string()))?;
         match result {
-            SchedulerGetTipResult::SchedulerGetTipOK { db_tip } => Ok(ChainTip {
-                height: db_tip.height,
-                block_hash: Hex0x(db_tip.block_hash.into_inner()),
-            }),
-            _ => Err(GatewayError::BackendUnavailable(
-                "no committed blocks yet".into(),
-            )),
+            SchedulerGetTipResult::SchedulerGetTipOK { db_tip } => {
+                let block_hash = consensus_value_hash(&db_tip.value).map_err(|error| {
+                    GatewayError::BackendUnavailable(format!(
+                        "scheduler returned an unencodable consensus value: {error}"
+                    ))
+                })?;
+                Ok(ChainTip {
+                    height: db_tip.value.proposal_header.block_height.clone(),
+                    block_hash,
+                })
+            }
+            SchedulerGetTipResult::SchedulerGetTipNoGenesisBlock => Err(
+                GatewayError::BackendUnavailable("no committed blocks yet".into()),
+            ),
+            other => Err(GatewayError::BackendUnavailable(format!(
+                "unexpected scheduler tip result: {other:?}"
+            ))),
         }
     }
 }
@@ -116,9 +127,6 @@ struct Waiter {
 
 struct Coalescer {
     ingress: mpsc::Receiver<Waiter>,
-    completion_rx: mpsc::UnboundedReceiver<()>,
-    completion_tx: mpsc::UnboundedSender<()>,
-    inflight: u32,
     max_inflight: u32,
     sink: Arc<dyn TipSink>,
     metrics: GatewayMetrics,
@@ -127,15 +135,20 @@ struct Coalescer {
 
 impl Coalescer {
     async fn run(mut self) {
+        let mut workers = JoinSet::new();
         loop {
             tokio::select! {
                 biased;
 
-                Some(()) = self.completion_rx.recv() => {
-                    self.inflight = self.inflight.saturating_sub(1);
+                Some(result) = workers.join_next(), if !workers.is_empty() => {
+                    if let Err(error) = result
+                        && !error.is_cancelled()
+                    {
+                        tracing::error!(%error, "tip coalescer worker failed");
+                    }
                 }
 
-                maybe_waiter = self.ingress.recv(), if self.inflight < self.max_inflight => {
+                maybe_waiter = self.ingress.recv(), if workers.len() < self.max_inflight as usize => {
                     let Some(first) = maybe_waiter else { break; };
                     // Drain the channel, then split materially different
                     // deadlines so an old waiter cannot poison newer ones.
@@ -161,20 +174,19 @@ impl Coalescer {
                     if cohorts.is_empty() {
                         continue;
                     }
-                    self.inflight += 1;
                     let in_flight = self
                         .metrics
                         .internal_batch_in_flight_guard(TIP_COALESCER_COMPONENT);
                     let sink = self.sink.clone();
                     let metrics = self.metrics.clone();
-                    let done = self.completion_tx.clone();
-                    tokio::spawn(async move {
+                    workers.spawn(async move {
                         let _in_flight = in_flight;
-                        fetch_tip_cohorts(sink, cohorts, metrics, done).await;
+                        fetch_tip_cohorts(sink, cohorts, metrics).await;
                     });
                 }
             }
         }
+        workers.shutdown().await;
     }
 }
 
@@ -182,7 +194,6 @@ async fn fetch_tip_cohorts(
     sink: Arc<dyn TipSink>,
     cohorts: Vec<Vec<Waiter>>,
     metrics: GatewayMetrics,
-    done: mpsc::UnboundedSender<()>,
 ) {
     for mut waiters in cohorts.into_iter().rev() {
         let now = Instant::now();
@@ -203,16 +214,26 @@ async fn fetch_tip_cohorts(
             let _ = waiter.reply.send(result.clone());
         }
     }
-    let _ = done.send(());
 }
 
 /// Handle returned to the rest of the gateway.  Clone-friendly.
 #[derive(Clone)]
 pub struct TipCoalescer {
-    sender: mpsc::Sender<Waiter>,
+    inner: Arc<TipCoalescerInner>,
     metrics: GatewayMetrics,
     request_timeout: Duration,
     backend_timeout: Duration,
+}
+
+struct TipCoalescerInner {
+    sender: mpsc::Sender<Waiter>,
+    task: AbortHandle,
+}
+
+impl Drop for TipCoalescerInner {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
 }
 
 impl TipCoalescer {
@@ -237,24 +258,28 @@ impl TipCoalescer {
         max_deadline_skew: Duration,
     ) -> Self {
         let (sender, ingress) = mpsc::channel(config.ingress_queue_depth.max(1));
-        let (completion_tx, completion_rx) = mpsc::unbounded_channel();
         let coalescer = Coalescer {
             ingress,
-            completion_tx,
-            completion_rx,
-            inflight: 0,
             max_inflight: config.max_inflight_tips.max(1),
             sink: sink.clone(),
             metrics: metrics.clone(),
             max_deadline_skew,
         };
-        tokio::spawn(coalescer.run());
+        let task = tokio::spawn(coalescer.run());
         Self {
-            sender,
+            inner: Arc::new(TipCoalescerInner {
+                sender,
+                task: task.abort_handle(),
+            }),
             metrics,
             request_timeout,
             backend_timeout,
         }
+    }
+
+    /// Abort the coalescer runner and all in-flight workers. Safe to call repeatedly.
+    pub(crate) fn abort(&self) {
+        self.inner.task.abort();
     }
 
     /// Ask for the current chain tip.  Returns `Overloaded` if the
@@ -274,7 +299,8 @@ impl TipCoalescer {
         if backend_deadline <= Instant::now() {
             return Err(GatewayError::BackendTimeout);
         }
-        self.sender
+        self.inner
+            .sender
             .try_send(Waiter {
                 reply: reply_tx,
                 backend_deadline,
@@ -311,10 +337,11 @@ mod tests {
     use groundhog_json_rpc_types::hex::Hex0x;
     use std::collections::VecDeque;
     use std::sync::{
-        Mutex,
-        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     };
     use std::time::Duration;
+    use tokio::sync::Notify;
 
     /// Scripted mock sink.  Each `get_tip()` call pops the next gated
     /// response from a FIFO; if empty, returns a fixed default.
@@ -396,6 +423,44 @@ mod tests {
         cutoff: Instant,
         valid: AtomicBool,
         deadlines: Mutex<Vec<Instant>>,
+    }
+
+    struct PanicOnceTipSink {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl TipSink for PanicOnceTipSink {
+        async fn get_tip(&self, _deadline: Instant) -> Result<ChainTip, GatewayError> {
+            assert_ne!(
+                self.calls.fetch_add(1, Ordering::SeqCst),
+                0,
+                "intentional test panic"
+            );
+            Ok(default_tip(21))
+        }
+    }
+
+    struct PendingTipSink {
+        started: Arc<Notify>,
+        dropped: Arc<AtomicBool>,
+    }
+
+    struct DropMarker(Arc<AtomicBool>);
+
+    impl Drop for DropMarker {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[async_trait]
+    impl TipSink for PendingTipSink {
+        async fn get_tip(&self, _deadline: Instant) -> Result<ChainTip, GatewayError> {
+            let _marker = DropMarker(self.dropped.clone());
+            self.started.notify_one();
+            std::future::pending().await
+        }
     }
 
     #[async_trait]
@@ -482,6 +547,64 @@ mod tests {
 
         assert!(matches!(result, Err(GatewayError::BackendTimeout)));
         assert_eq!(mock.seen(), 0);
+    }
+
+    #[tokio::test]
+    async fn panicking_sink_does_not_wedge_max_inflight() {
+        let sink = Arc::new(PanicOnceTipSink {
+            calls: AtomicUsize::new(0),
+        });
+        let coalescer = TipCoalescer::spawn(
+            &config_for_tests(1, 10),
+            &(sink.clone() as Arc<dyn TipSink>),
+            metrics_for_tests(),
+        );
+
+        assert!(matches!(
+            coalescer.chain_tip(request_context()).await,
+            Err(GatewayError::BackendUnavailable(_))
+        ));
+        let tip = tokio::time::timeout(
+            Duration::from_secs(1),
+            coalescer.chain_tip(request_context()),
+        )
+        .await
+        .expect("bug: replacement tip worker should run")
+        .expect("bug: replacement tip worker should succeed");
+        assert_eq!(tip.height, BlockHeight::new(21));
+    }
+
+    #[tokio::test]
+    async fn abort_cancels_pending_sink_and_drops_reply() {
+        let started = Arc::new(Notify::new());
+        let dropped = Arc::new(AtomicBool::new(false));
+        let sink = Arc::new(PendingTipSink {
+            started: started.clone(),
+            dropped: dropped.clone(),
+        });
+        let coalescer = TipCoalescer::spawn(
+            &config_for_tests(1, 10),
+            &(sink as Arc<dyn TipSink>),
+            metrics_for_tests(),
+        );
+        let waiter = tokio::spawn({
+            let coalescer = coalescer.clone();
+            async move { coalescer.chain_tip(request_context()).await }
+        });
+        tokio::time::timeout(Duration::from_secs(1), started.notified())
+            .await
+            .expect("bug: pending sink should start");
+
+        coalescer.abort();
+
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(1), waiter)
+                .await
+                .expect("bug: waiter should finish after abort")
+                .expect("bug: waiter task should not panic"),
+            Err(GatewayError::BackendUnavailable(_))
+        ));
+        assert!(dropped.load(Ordering::SeqCst));
     }
 
     #[tokio::test]
@@ -587,7 +710,6 @@ mod tests {
         });
         let (old_reply, old_waiter) = oneshot::channel();
         let (newer_reply, newer_waiter) = oneshot::channel();
-        let (done, mut completed) = mpsc::unbounded_channel();
         let cohorts = vec![
             vec![Waiter {
                 reply: old_reply,
@@ -599,7 +721,7 @@ mod tests {
             }],
         ];
 
-        fetch_tip_cohorts(sink.clone(), cohorts, metrics_for_tests(), done).await;
+        fetch_tip_cohorts(sink.clone(), cohorts, metrics_for_tests()).await;
 
         assert_eq!(
             newer_waiter
@@ -613,7 +735,6 @@ mod tests {
             old_waiter.await.expect("old reply should be sent"),
             Err(GatewayError::BackendTimeout)
         ));
-        assert_eq!(completed.recv().await, Some(()));
         assert_eq!(
             sink.deadlines.lock().unwrap().as_slice(),
             &[now + Duration::from_secs(5), now + Duration::from_secs(2)]

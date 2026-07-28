@@ -469,9 +469,10 @@ mod tests {
         let signer = groundhog_signing::derive_default_dev_account_signer(0);
         let wallet_address = groundhog_xdr::types::ContractAddress::from([0x71; 32]);
         let manifest = serde_json::json!({
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "kind": "hogd-dev-runtime",
-            "networkId": "groundhog-local",
+            "chainState": "fresh",
+            "networkHash": "00".repeat(32),
             "protocol": "hogp/test",
             "genesisHash": format!("0x{}", "42".repeat(32)),
             "producer": {
@@ -700,9 +701,10 @@ mod tests {
         accounts: &[serde_json::Value],
     ) {
         let manifest = serde_json::json!({
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "kind": "hogd-dev-runtime",
-            "networkId": "groundhog-local",
+            "chainState": "fresh",
+            "networkHash": "00".repeat(32),
             "protocol": "hogp/test",
             "genesisHash": format!("0x{}", "42".repeat(32)),
             "producer": {

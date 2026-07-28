@@ -198,7 +198,7 @@ mod tests {
 
     use async_trait::async_trait;
     use groundhog_json_rpc_types::ContractAddress;
-    use groundhog_scp::network::Protocol;
+    use groundhog_scp::network::ProtocolCommit as Protocol;
     use groundhog_view::{
         ViewGateway_ViewGateway1, ViewGateway_ViewGateway1_Client,
         ViewGateway_ViewGateway1_Dispatcher, ViewGatewayIntroOutcome, ViewGatewayPayload,

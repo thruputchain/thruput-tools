@@ -411,9 +411,10 @@ Goal: eliminate dependency on a remote network for the main inner loop.
 3. **Core local-node features**
    - deterministic funded accounts
    - instant commit
-   - startup clean slate via restart (hogd-dev is ephemeral; `--reset`
-     is only meaningful once an optional persisted state file ships)
-   - optional persisted state file
+   - clean-slate startup by default when `--data-dir` is omitted
+   - recoverable persistent state with `groundhog node --data-dir <dir>`
+   - explicit `--reset` support remains a follow-up for clearing a selected
+     persistent data directory safely
 
 4. **Groundhog-specific observability**
    - delta logging
@@ -440,7 +441,7 @@ Goal: make `groundhog test` fast, inspectable, and CI-friendly.
      `--no-capture`, `--test-threads`, `--skip`, `--rerun`,
      `--watch`, `--integration`
    - `--integration` now orchestrates the v1 single-contract local-node
-     path: start ephemeral hogd-dev, deploy the target contract, run
+     path: start hogd-dev without `--data-dir`, deploy the target contract, run
      `tests/integration.rs` with RPC environment variables, then clean up.
    - Remaining follow-ups: `--watch` / `--rerun` support for the integration
      path, persistence-aware integration runs, and multi-contract orchestration.
@@ -490,11 +491,10 @@ historical Rust-track items are both resolved:
 
 - `groundhog_getStorageAt` parity + `groundhog storage` CLI wrapper
   shipped.
-- `groundhog node --reset` deferred — `HogdDevConfig` is documented as
-  ephemeral (`crates/dev/node-supervisor/src/config.rs:124-128`), so each
-  start is already a clean slate.  `--reset` only becomes meaningful
-  once an optional persisted-state file ships, and would be one flag
-  on top of that work, not a standalone item.
+- `groundhog node --reset` remains deferred. Persistent state is available with
+  `--data-dir`, but users can currently request a clean chain by omitting the
+  option or selecting a new directory. A reset command needs an explicit safety
+  contract for stopping ownership and clearing an existing data directory.
 
 The hogd-dev/control track and the deferred transaction-detail work
 (`docs/cli/specs/2026-05-07-transaction-detail-options.md`) remain
@@ -550,8 +550,9 @@ RV32 artifacts as the default deploy/test artifact:
   artifact kind/path/hash metadata and sim deploy branches to `Contract::kWasmi`
   or `Contract::kRv32`.
 - `groundhog test --integration --differential` builds WASM and RV32 artifacts,
-  runs the same `tests/integration.rs` target against isolated ephemeral local
-  nodes, and fails unless both runs pass with matching parsed test outcomes.
+  runs the same `tests/integration.rs` target against isolated local nodes started
+  without `--data-dir`, and fails unless both runs pass with matching parsed test
+  outcomes.
 
 Minimal sequence to flip the default without papering over WASM assumptions:
 

@@ -36,6 +36,7 @@ pub struct ChildProcessSpec {
     stdin: ChildStdio,
     stdout: ChildStdio,
     stderr: ChildStdio,
+    kill_on_drop: bool,
     #[cfg(unix)]
     process_group: Option<i32>,
 }
@@ -51,6 +52,7 @@ impl ChildProcessSpec {
             stdin: ChildStdio::Null,
             stdout: ChildStdio::Inherit,
             stderr: ChildStdio::Inherit,
+            kill_on_drop: true,
             #[cfg(unix)]
             process_group: None,
         }
@@ -109,6 +111,13 @@ impl ChildProcessSpec {
         self
     }
 
+    /// Configure whether Tokio force-kills the direct child when its handle is dropped.
+    #[must_use]
+    pub fn kill_on_drop(mut self, kill_on_drop: bool) -> Self {
+        self.kill_on_drop = kill_on_drop;
+        self
+    }
+
     /// Run the child in the requested Unix process group.
     #[cfg(unix)]
     #[must_use]
@@ -144,15 +153,7 @@ impl ChildProcessSpec {
             .stdin(self.stdin.into_stdio())
             .stdout(self.stdout.into_stdio())
             .stderr(self.stderr.into_stdio())
-            // Backstop for `start()` cancellation: if the supervisor's
-            // future is dropped between spawning hogd-dev and finishing
-            // startup (Ctrl-C, outer timeout, racing select!), Tokio
-            // SIGKILLs the direct child so it does not become an orphan
-            // parented to init/launchd. Note: this only reaps the direct
-            // child; on macOS, descendants of hogd-dev can still leak.
-            // On Linux, PR_SET_PDEATHSIG + a dedicated process group
-            // could close that gap if it ever bites.
-            .kill_on_drop(true);
+            .kill_on_drop(self.kill_on_drop);
 
         #[cfg(unix)]
         if let Some(process_group) = self.process_group {
@@ -248,6 +249,19 @@ pub struct SupervisedChild {
     child: Child,
     #[cfg(unix)]
     process_group: Option<i32>,
+}
+
+impl Drop for SupervisedChild {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        if let Err(error) = self.terminate_process_group() {
+            tracing::debug!(
+                program = %self.program,
+                %error,
+                "failed to SIGTERM supervised child process group during drop"
+            );
+        }
+    }
 }
 
 impl SupervisedChild {
@@ -353,6 +367,12 @@ impl SupervisedChild {
                 source,
             }),
         }
+    }
+
+    /// Unix process-group id used for child lifecycle signals.
+    #[cfg(unix)]
+    pub(crate) fn process_group_id(&self) -> Option<i32> {
+        self.process_group
     }
 
     #[cfg(unix)]

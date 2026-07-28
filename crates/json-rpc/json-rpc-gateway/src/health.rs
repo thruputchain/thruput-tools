@@ -2,9 +2,12 @@ use std::{collections::BTreeMap, future::Future, path::PathBuf, sync::Arc, time:
 
 use groundhog_db_gateway::DbGatewayIntroOutcome;
 use groundhog_indexer::IndexerBlockExplorerIntroOutcome;
-use groundhog_json_rpc_types::{BlockHeight, block::ChainTip, hex::Hex0x};
-use groundhog_scheduler::sched_coord::SchedulerGetTipResult;
-use groundhog_scp::network::Protocol;
+use groundhog_json_rpc_types::{
+    BlockHeight, NetworkHashHex,
+    block::{ChainTip, consensus_value_hash},
+};
+use groundhog_scheduler::{DbTip, sched_coord::SchedulerGetTipResult};
+use groundhog_scp::network::ProtocolCommit as Protocol;
 use groundhog_view::ViewGatewayIntroOutcome;
 use groundhog_x23_transport::ConnectError;
 use groundhog_xdr::PROTOCOL_VERSION;
@@ -153,6 +156,7 @@ impl HealthSnapshot {
                     up: false,
                     last_success_timestamp: None,
                     last_error,
+                    scheduler_identity: SchedulerIdentityStatus::Unverified,
                 },
             );
         }
@@ -219,6 +223,7 @@ impl HealthSnapshot {
                     up,
                     last_success_timestamp: None,
                     last_error: None,
+                    scheduler_identity: SchedulerIdentityStatus::Unverified,
                 },
             );
         }
@@ -277,6 +282,16 @@ struct BackendHealth {
     up: bool,
     last_success_timestamp: Option<String>,
     last_error: Option<String>,
+    #[serde(skip)]
+    scheduler_identity: SchedulerIdentityStatus,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum SchedulerIdentityStatus {
+    #[default]
+    Unverified,
+    Validated,
+    Mismatch,
 }
 
 /// Spawn the background readiness probe loop with an explicit shutdown signal.
@@ -289,7 +304,7 @@ pub fn spawn_health_probe_with_shutdown(
     let commit_hash = health.commit_hash;
     tokio::spawn(async move {
         let started_at = Instant::now();
-        let mut probe_state = ProbeState::default();
+        let mut probe_state = ProbeState::new(&ctx.config);
         let mut reconnects = ReconnectAttempts::default();
         let mut last_status = None;
         loop {
@@ -330,10 +345,34 @@ struct ProbeState {
     timeouts: ProbeTimeouts,
 }
 
+impl ProbeState {
+    fn new(config: &GatewayConfig) -> Self {
+        Self {
+            scheduler: SchedulerProbeState::with_expected_network_hash(
+                config.expected_network_hash.clone(),
+            ),
+            ..Self::default()
+        }
+    }
+}
+
 #[derive(Default)]
 struct SchedulerProbeState {
     timeout_streak: u8,
     pending: Option<PendingSchedulerProbe>,
+    expected_network_hash: Option<NetworkHashHex>,
+    identity_status: SchedulerIdentityStatus,
+}
+
+impl SchedulerProbeState {
+    fn with_expected_network_hash(expected_network_hash: Option<NetworkHashHex>) -> Self {
+        Self {
+            timeout_streak: 0,
+            pending: None,
+            expected_network_hash,
+            identity_status: SchedulerIdentityStatus::Unverified,
+        }
+    }
 }
 
 struct PendingSchedulerProbe {
@@ -637,7 +676,12 @@ async fn probe_once(
 ) -> HealthSnapshot {
     let config = &ctx.config;
     let mut backends = BTreeMap::new();
-    let probes = probe_backends(ctx, &mut state.scheduler, &mut state.timeouts).await;
+    let probes = Box::pin(probe_backends(
+        ctx,
+        &mut state.scheduler,
+        &mut state.timeouts,
+    ))
+    .await;
     let now = timestamp_now();
 
     let scheduler = probes.scheduler.result;
@@ -663,17 +707,16 @@ async fn probe_once(
             age_ms: Some(u64::try_from(seen_at.elapsed().as_millis()).unwrap_or(u64::MAX)),
         },
     );
-    backends.insert(
-        HealthBackend::Scheduler.as_str(),
-        backend_health(
-            config,
-            HealthBackend::Scheduler,
-            scheduler.up,
-            scheduler.error,
-            &probes.scheduler.completed_at,
-            &mut state.last_success,
-        ),
+    let mut scheduler_health = backend_health(
+        config,
+        HealthBackend::Scheduler,
+        scheduler.up,
+        scheduler.error,
+        &probes.scheduler.completed_at,
+        &mut state.last_success,
     );
+    scheduler_health.scheduler_identity = scheduler.identity_status;
+    backends.insert(HealthBackend::Scheduler.as_str(), scheduler_health);
 
     backends.insert(
         HealthBackend::Indexer.as_str(),
@@ -805,6 +848,7 @@ struct SchedulerProbeResult {
     tip: Option<ChainTip>,
     tip_observed_at: Option<Instant>,
     error: Option<String>,
+    identity_status: SchedulerIdentityStatus,
 }
 
 fn repeated_probe_timeout(streak: &mut u8) -> bool {
@@ -831,7 +875,7 @@ async fn probe_scheduler(
         if let Some(pending) = state.pending.take() {
             pending.handle.abort();
         }
-        if let Some(result) = probe_quarantined_scheduler(ctx, probe_timeout).await {
+        if let Some(result) = probe_quarantined_scheduler(ctx, probe_timeout, state).await {
             return result;
         }
         return SchedulerProbeResult {
@@ -839,6 +883,7 @@ async fn probe_scheduler(
             tip: None,
             tip_observed_at: None,
             error: Some("scheduler not connected".to_string()),
+            identity_status: state.identity_status,
         };
     };
     let generation = client.generation();
@@ -870,6 +915,7 @@ async fn probe_scheduler(
                 tip: None,
                 tip_observed_at: None,
                 error: Some("scheduler probe repeatedly timed out; reconnecting".to_string()),
+                identity_status: state.identity_status,
             };
         }
     } else {
@@ -900,6 +946,7 @@ async fn probe_scheduler(
                 tip: None,
                 tip_observed_at: None,
                 error: Some("scheduler probe timed out".to_string()),
+                identity_status: state.identity_status,
             };
         }
     };
@@ -920,23 +967,30 @@ async fn probe_scheduler(
     match rpc_result {
         Ok(SchedulerGetTipResult::SchedulerGetTipOK { db_tip }) => {
             state.timeout_streak = 0;
-            SchedulerProbeResult {
-                up: true,
-                tip: Some(ChainTip {
-                    height: db_tip.height,
-                    block_hash: Hex0x(db_tip.block_hash.into_inner()),
-                }),
-                tip_observed_at: Some(Instant::now()),
-                error: None,
+            let result = successful_scheduler_probe(&db_tip, state);
+            if result.identity_status == SchedulerIdentityStatus::Mismatch {
+                clear_scheduler_if_current(&ctx.scheduler, generation).await;
             }
+            result
         }
-        Ok(_) => {
+        Ok(SchedulerGetTipResult::SchedulerGetTipNoGenesisBlock) => {
             state.timeout_streak = 0;
             SchedulerProbeResult {
                 up: false,
                 tip: None,
                 tip_observed_at: None,
                 error: Some("scheduler returned no committed blocks".to_string()),
+                identity_status: state.identity_status,
+            }
+        }
+        Ok(other) => {
+            state.timeout_streak = 0;
+            SchedulerProbeResult {
+                up: false,
+                tip: None,
+                tip_observed_at: None,
+                error: Some(format!("unexpected scheduler tip result: {other:?}")),
+                identity_status: state.identity_status,
             }
         }
         Err(err) => {
@@ -947,14 +1001,81 @@ async fn probe_scheduler(
                 tip: None,
                 tip_observed_at: None,
                 error: Some(bounded_error(err.to_string())),
+                identity_status: state.identity_status,
             }
         }
     }
 }
 
+fn successful_scheduler_probe(
+    db_tip: &DbTip,
+    state: &mut SchedulerProbeState,
+) -> SchedulerProbeResult {
+    let observed = canonical_network_hash(
+        db_tip
+            .value
+            .proposal_header
+            .network_hash
+            .clone()
+            .into_inner()
+            .as_ref(),
+    );
+    if let Some(expected) = state.expected_network_hash.as_ref() {
+        if expected != &observed {
+            state.identity_status = SchedulerIdentityStatus::Mismatch;
+            tracing::error!(
+                expected_network_hash = %expected,
+                observed_network_hash = %observed,
+                "scheduler network identity mismatch"
+            );
+            return SchedulerProbeResult {
+                up: false,
+                tip: None,
+                tip_observed_at: None,
+                error: Some(format!(
+                    "scheduler network hash mismatch: expected {expected}, observed {observed}"
+                )),
+                identity_status: SchedulerIdentityStatus::Mismatch,
+            };
+        }
+    } else {
+        state.expected_network_hash = Some(observed);
+    }
+    state.identity_status = SchedulerIdentityStatus::Validated;
+
+    match consensus_value_hash(&db_tip.value) {
+        Ok(block_hash) => SchedulerProbeResult {
+            up: true,
+            tip: Some(ChainTip {
+                height: db_tip.value.proposal_header.block_height.clone(),
+                block_hash,
+            }),
+            tip_observed_at: Some(Instant::now()),
+            error: None,
+            identity_status: SchedulerIdentityStatus::Validated,
+        },
+        Err(error) => SchedulerProbeResult {
+            up: false,
+            tip: None,
+            tip_observed_at: None,
+            error: Some(format!(
+                "scheduler returned an unencodable consensus value: {error}"
+            )),
+            identity_status: SchedulerIdentityStatus::Validated,
+        },
+    }
+}
+
+fn canonical_network_hash(bytes: &[u8]) -> NetworkHashHex {
+    let mut hash = [0; 32];
+    hash.copy_from_slice(bytes);
+    NetworkHashHex::from(hash)
+}
+
 async fn probe_quarantined_scheduler(
     ctx: &GatewayContext,
     probe_timeout: Duration,
+    state: &mut SchedulerProbeState,
 ) -> Option<SchedulerProbeResult> {
     let quarantined = { ctx.scheduler_quarantine.read().await.clone() }?;
     let started_at = Instant::now();
@@ -981,6 +1102,7 @@ async fn probe_quarantined_scheduler(
             tip: None,
             tip_observed_at: None,
             error: Some("quarantined scheduler connection unavailable".to_string()),
+            identity_status: state.identity_status,
         });
     }
     if Instant::now() < quarantined.ready_at {
@@ -989,20 +1111,132 @@ async fn probe_quarantined_scheduler(
             tip: None,
             tip_observed_at: None,
             error: Some("scheduler reconnect readiness grace active".to_string()),
+            identity_status: state.identity_status,
         });
     }
 
-    *ctx.scheduler_quarantine.write().await = None;
-    let mut scheduler = ctx.scheduler.write().await;
-    if scheduler.is_none() {
-        *scheduler = Some(quarantined.client);
+    probe_quarantined_scheduler_tip(ctx, quarantined, probe_timeout, state).await
+}
+
+async fn probe_quarantined_scheduler_tip(
+    ctx: &GatewayContext,
+    quarantined: QuarantinedScheduler,
+    probe_timeout: Duration,
+    state: &mut SchedulerProbeState,
+) -> Option<SchedulerProbeResult> {
+    let generation = quarantined.client.generation();
+    let started_at = Instant::now();
+    let rpc_result = tokio::time::timeout(
+        probe_timeout,
+        quarantined.client.probe_client().schedcoord_get_tip(),
+    )
+    .await;
+    let outcome = match &rpc_result {
+        Err(_) => BackendRequestOutcome::Timeout,
+        Ok(Ok(SchedulerGetTipResult::SchedulerGetTipOK { .. })) => BackendRequestOutcome::Ok,
+        Ok(Ok(_)) => BackendRequestOutcome::Rejected,
+        Ok(Err(_)) => BackendRequestOutcome::Error,
+    };
+    ctx.metrics.observe_backend_request(
+        HealthBackend::Scheduler,
+        "schedcoord_get_tip",
+        outcome,
+        started_at.elapsed(),
+    );
+
+    let db_tip = match rpc_result {
+        Err(_) => {
+            clear_quarantined_scheduler_if_current(ctx, generation).await;
+            return Some(scheduler_probe_failure(
+                state,
+                "scheduler quarantine tip probe timed out; reconnecting",
+            ));
+        }
+        Ok(Err(error)) => {
+            clear_quarantined_scheduler_if_current(ctx, generation).await;
+            return Some(scheduler_probe_failure(
+                state,
+                format!("scheduler quarantine tip probe failed: {error}"),
+            ));
+        }
+        Ok(Ok(SchedulerGetTipResult::SchedulerGetTipOK { db_tip })) => db_tip,
+        Ok(Ok(SchedulerGetTipResult::SchedulerGetTipNoGenesisBlock)) => {
+            clear_quarantined_scheduler_if_current(ctx, generation).await;
+            return Some(scheduler_probe_failure(
+                state,
+                "scheduler quarantine returned no committed blocks",
+            ));
+        }
+        Ok(Ok(other)) => {
+            clear_quarantined_scheduler_if_current(ctx, generation).await;
+            return Some(scheduler_probe_failure(
+                state,
+                format!("unexpected scheduler quarantine tip result: {other:?}"),
+            ));
+        }
+    };
+
+    let mut quarantine_slot = ctx.scheduler_quarantine.write().await;
+    if quarantine_slot
+        .as_ref()
+        .is_none_or(|candidate| candidate.client.generation() != generation)
+    {
+        return Some(scheduler_probe_failure(
+            state,
+            "scheduler quarantine changed during identity validation",
+        ));
     }
-    Some(SchedulerProbeResult {
+
+    let mut scheduler = ctx.scheduler.write().await;
+    if scheduler.is_some() {
+        *quarantine_slot = None;
+        return Some(scheduler_probe_failure(
+            state,
+            "scheduler became active during quarantine validation",
+        ));
+    }
+
+    let result = successful_scheduler_probe(&db_tip, state);
+    if !result.up {
+        *quarantine_slot = None;
+        return Some(result);
+    }
+
+    let Some(candidate) = quarantine_slot.take().map(|candidate| candidate.client) else {
+        return Some(scheduler_probe_failure(
+            state,
+            "validated scheduler quarantine disappeared before publication",
+        ));
+    };
+    *scheduler = Some(candidate);
+    tracing::info!(
+        backend = "scheduler",
+        "backend identity validated and connection published"
+    );
+    Some(result)
+}
+
+async fn clear_quarantined_scheduler_if_current(ctx: &GatewayContext, generation: u64) {
+    let mut quarantine = ctx.scheduler_quarantine.write().await;
+    if quarantine
+        .as_ref()
+        .is_some_and(|candidate| candidate.client.generation() == generation)
+    {
+        *quarantine = None;
+    }
+}
+
+fn scheduler_probe_failure(
+    state: &SchedulerProbeState,
+    message: impl Into<String>,
+) -> SchedulerProbeResult {
+    SchedulerProbeResult {
         up: false,
         tip: None,
         tip_observed_at: None,
-        error: Some("scheduler reconnected; awaiting tip probe".to_string()),
-    })
+        error: Some(bounded_error(message.into())),
+        identity_status: state.identity_status,
+    }
 }
 
 async fn probe_indexer(
@@ -1217,6 +1451,7 @@ fn backend_health(
         up: configured && up,
         last_success_timestamp: last_success.get(&backend).cloned(),
         last_error,
+        scheduler_identity: SchedulerIdentityStatus::Unverified,
     }
 }
 
@@ -1225,6 +1460,12 @@ fn readiness_status(
     backends: &BTreeMap<&'static str, BackendHealth>,
     chain_tip: &ChainTipHealth,
 ) -> HealthStatus {
+    if backends
+        .get(HealthBackend::Scheduler.as_str())
+        .is_some_and(|health| health.scheduler_identity == SchedulerIdentityStatus::Mismatch)
+    {
+        return HealthStatus::Error;
+    }
     for backend in HealthBackend::ALL {
         let Some(health) = backends.get(backend.as_str()) else {
             return HealthStatus::Error;
@@ -1314,9 +1555,10 @@ mod tests {
         view::{RootInvocationOutput, ViewRequest},
     };
     use groundhog_scheduler::{
-        CoordinatorRegistrationOutcome, DbSchedResult, DbTip, Nomination,
-        ParallelSignedTransactionBatch, RPCError, SchedulerCommitOutcome, SchedulerGetTipResult,
-        SchedulerNominationResult, SchedulerValidationResult,
+        ConsensusValue, CoordinatorRegistrationOutcome, DbSchedResult, DbTip,
+        ParallelSignedTransactionBatch, Proposal, ProposalTxsHash, RPCError,
+        SchedulerCommitOutcome, SchedulerGetTipResult, SchedulerProposalResult,
+        SchedulerValidationResult,
         sched_coord::{SchedulerCoord_SchedulerCoord1, SchedulerCoord_SchedulerCoord1_Dispatcher},
     };
     use groundhog_view::{
@@ -1330,9 +1572,14 @@ mod tests {
         auth_claim::{AuthClaim, AuthClaim_source_address_claim},
         contract::ContractEntrypointID,
         genesis::GenesisConfiguration,
+        header::{ProposalContext, ProposalHeader},
         invoke_flag::InvokeFlag,
         transaction::{Invocation, InvocationFrameOutput},
-        types::{BlockHash, ContractAddress, SHA256Hash},
+        types::{
+            ConsensusValueHash, ContractAddress, EventsHash, ExtensionPoint, NetworkHash,
+            Protocol as ConsensusProtocol, SHA256Hash, StorageShortHash, TimePoint, TxsHash,
+        },
+        validator::ValidatorID,
         view::TransactionViewQuery,
     };
     use rpc_driver::{ProgramError, RpcServer, ServiceMap};
@@ -1488,6 +1735,114 @@ mod tests {
         null_behavior: NullBehavior,
     }
 
+    fn test_db_tip(network_hash: [u8; 32]) -> DbTip {
+        DbTip {
+            id: 1,
+            storage_long_hash: [0u8; 2048].into(),
+            value: ConsensusValue {
+                protocol: ConsensusProtocol::new(0),
+                ext: ExtensionPoint::_0,
+                prev_hash: ConsensusValueHash::new(SHA256Hash::from([0x42; 32])),
+                proposal_header: ProposalHeader {
+                    ext: ExtensionPoint::_0,
+                    network_hash: NetworkHash::new(SHA256Hash::from(network_hash)),
+                    proposer: ValidatorID::new([0x40; 32]),
+                    block_timepoint: TimePoint::new(1),
+                    block_height: 1.into(),
+                    txs_hash: TxsHash::new(SHA256Hash::from([0x43; 32])),
+                    storage_hash: StorageShortHash::new(SHA256Hash::from([0x44; 32])),
+                    events_hash: EventsHash::new(SHA256Hash::from([0x45; 32])),
+                },
+                proposal_txs_hash: ProposalTxsHash::new(SHA256Hash::from([0x46; 32])),
+                upgrades: VecM::default(),
+            },
+        }
+    }
+
+    #[test]
+    fn scheduler_network_hash_matching_pin_is_healthy() {
+        let expected = NetworkHashHex::from([0x41; 32]);
+        let mut state = SchedulerProbeState::with_expected_network_hash(Some(expected.clone()));
+
+        let result = successful_scheduler_probe(&test_db_tip([0x41; 32]), &mut state);
+
+        assert!(result.up);
+        assert!(result.error.is_none());
+        assert_eq!(result.identity_status, SchedulerIdentityStatus::Validated);
+        assert_eq!(state.expected_network_hash, Some(expected));
+    }
+
+    #[test]
+    fn optional_scheduler_network_hash_mismatch_is_readiness_error() {
+        let expected = NetworkHashHex::from([0x42; 32]);
+        let mut state = SchedulerProbeState::with_expected_network_hash(Some(expected.clone()));
+
+        let result = successful_scheduler_probe(&test_db_tip([0x41; 32]), &mut state);
+
+        assert!(!result.up);
+        assert!(result.tip.is_none());
+        assert_eq!(result.identity_status, SchedulerIdentityStatus::Mismatch);
+        assert_eq!(
+            result.error.as_deref(),
+            Some(
+                "scheduler network hash mismatch: expected \
+4242424242424242424242424242424242424242424242424242424242424242, observed \
+4141414141414141414141414141414141414141414141414141414141414141"
+            )
+        );
+        assert_eq!(state.expected_network_hash, Some(expected));
+
+        let config = GatewayConfig {
+            health_required_backends: Vec::new(),
+            indexer_address: None,
+            ..GatewayConfig::default()
+        };
+        let mut backends = BTreeMap::new();
+        let mut last_success = BTreeMap::new();
+        for backend in HealthBackend::ALL {
+            backends.insert(
+                backend.as_str(),
+                backend_health(
+                    &config,
+                    backend,
+                    backend != HealthBackend::Scheduler,
+                    result.error.clone(),
+                    "2026-01-01T00:00:00Z",
+                    &mut last_success,
+                ),
+            );
+        }
+        backends
+            .get_mut(HealthBackend::Scheduler.as_str())
+            .expect("scheduler health should be present")
+            .scheduler_identity = result.identity_status;
+        assert_eq!(
+            readiness_status(
+                &config,
+                &backends,
+                &ChainTipHealth {
+                    height: Some(1.into()),
+                    age_ms: Some(0),
+                },
+            ),
+            HealthStatus::Error
+        );
+    }
+
+    #[test]
+    fn scheduler_first_tip_pins_identity_across_later_probes() {
+        let pinned = NetworkHashHex::from([0x41; 32]);
+        let mut state = SchedulerProbeState::default();
+
+        let first = successful_scheduler_probe(&test_db_tip([0x41; 32]), &mut state);
+        let mismatch = successful_scheduler_probe(&test_db_tip([0x42; 32]), &mut state);
+
+        assert!(first.up);
+        assert!(!mismatch.up);
+        assert_eq!(mismatch.identity_status, SchedulerIdentityStatus::Mismatch);
+        assert_eq!(state.expected_network_hash, Some(pinned));
+    }
+
     #[async_trait]
     impl SchedulerCoord_SchedulerCoord1 for TestScheduler {
         async fn schedulercoord_null(&self) -> Result<(), ProgramError> {
@@ -1514,23 +1869,24 @@ mod tests {
 
         async fn schedulercoord_submit_vetted(
             &self,
-            _validator: groundhog_coordinator::discovery::ValidatorID,
+            _validator: ValidatorID,
             _batch: ParallelSignedTransactionBatch,
         ) -> Result<(), ProgramError> {
             panic!("health probe test should not submit")
         }
 
-        async fn schedulercoord_nominate(
+        async fn schedulercoord_propose_block(
             &self,
-            _tip: DbTip,
-        ) -> Result<SchedulerNominationResult, ProgramError> {
-            panic!("health probe test should not nominate")
+            _block: groundhog_scheduler::BlockID,
+            _context: ProposalContext,
+        ) -> Result<SchedulerProposalResult, ProgramError> {
+            panic!("health probe test should not propose")
         }
 
-        async fn schedulercoord_validate(
+        async fn schedulercoord_validate_block(
             &self,
-            _tip: DbTip,
-            _nomination: Nomination,
+            _block: groundhog_scheduler::BlockID,
+            _proposal: Proposal,
         ) -> Result<SchedulerValidationResult, ProgramError> {
             panic!("health probe test should not validate")
         }
@@ -1538,6 +1894,7 @@ mod tests {
         async fn schedulercoord_commit_block(
             &self,
             _block: groundhog_scheduler::BlockID,
+            _value: ConsensusValue,
         ) -> Result<SchedulerCommitOutcome, ProgramError> {
             panic!("health probe test should not commit")
         }
@@ -1547,13 +1904,7 @@ mod tests {
             match self.tip_behavior {
                 TipBehavior::Pending => std::future::pending().await,
                 TipBehavior::Ready => Ok(SchedulerGetTipResult::SchedulerGetTipOK {
-                    db_tip: DbTip {
-                        height: 1.into(),
-                        block_hash: BlockHash::from(SHA256Hash::from([0x42; 32])),
-                        events_hash: SHA256Hash::from([0x43; 32]),
-                        db_hash: [0u8; 2048].into(),
-                        id: 1,
-                    },
+                    db_tip: test_db_tip([0x41; 32]),
                 }),
             }
         }
@@ -2257,6 +2608,7 @@ mod tests {
                         && backend != HealthBackend::ViewGateway,
                     last_success_timestamp: None,
                     last_error: None,
+                    scheduler_identity: SchedulerIdentityStatus::Unverified,
                 },
             );
         }
@@ -2552,8 +2904,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[allow(clippy::too_many_lines)]
-    async fn scheduler_quarantine_and_timeout_policy_are_deterministic() {
+    async fn scheduler_quarantine_tip_timeout_never_publishes_and_retries() {
         let (scheduler_addr, _server, calls) =
             start_test_scheduler(TipBehavior::Pending, NullBehavior::Ready).await;
         let config = Arc::new(GatewayConfig {
@@ -2614,38 +2965,30 @@ mod tests {
             .as_mut()
             .expect("scheduler should remain quarantined")
             .ready_at = Instant::now();
-        let promote_result =
+        let timeout_result =
             probe_scheduler(&ctx, Duration::from_millis(25), &mut scheduler_state).await;
-        assert!(!promote_result.up);
+        assert!(!timeout_result.up);
         assert_eq!(
-            promote_result.error.as_deref(),
-            Some("scheduler reconnected; awaiting tip probe")
-        );
-        assert!(ctx.scheduler.read().await.is_some());
-        assert!(ctx.scheduler_quarantine.read().await.is_none());
-        assert_eq!(calls.null.load(Ordering::SeqCst), 3);
-        assert_eq!(calls.tip.load(Ordering::SeqCst), 0);
-
-        let first_timeout =
-            probe_scheduler(&ctx, Duration::from_millis(25), &mut scheduler_state).await;
-        assert!(!first_timeout.up);
-        assert_eq!(
-            first_timeout.error.as_deref(),
-            Some("scheduler probe timed out")
-        );
-        assert!(ctx.scheduler.read().await.is_some());
-
-        let second_timeout =
-            probe_scheduler(&ctx, Duration::from_millis(25), &mut scheduler_state).await;
-        assert_eq!(
-            second_timeout.error.as_deref(),
-            Some("scheduler probe repeatedly timed out; reconnecting")
+            timeout_result.error.as_deref(),
+            Some("scheduler quarantine tip probe timed out; reconnecting")
         );
         assert!(ctx.scheduler.read().await.is_none());
-        // The first timed-out probe remains in flight until the confirming
-        // health cycle evicts the pool, so no replacement connection can
-        // become visible before quarantine.
+        assert!(ctx.scheduler_quarantine.read().await.is_none());
+        assert_eq!(calls.null.load(Ordering::SeqCst), 3);
         assert_eq!(calls.tip.load(Ordering::SeqCst), 1);
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                maintain_reconnects(&ctx, &mut reconnects).await;
+                if ctx.scheduler_quarantine.read().await.is_some() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("scheduler reconnect should retry after quarantine timeout");
+        assert!(ctx.scheduler.read().await.is_none());
 
         let snapshot = HealthSnapshot::for_test(HealthStatus::Error, None, &[]);
         let body = ctx
@@ -2655,6 +2998,105 @@ mod tests {
         assert!(body.contains(
             "groundhog_gateway_backend_requests_total{backend=\"scheduler\",operation=\"schedulercoord_null\",outcome=\"ok\"} 3"
         ));
+        assert!(body.contains(
+            "groundhog_gateway_backend_requests_total{backend=\"scheduler\",operation=\"schedcoord_get_tip\",outcome=\"timeout\"} 1"
+        ));
+    }
+
+    #[tokio::test]
+    async fn quarantined_scheduler_identity_mismatch_is_never_published() {
+        let (scheduler_addr, _server, _calls) =
+            start_test_scheduler(TipBehavior::Ready, NullBehavior::Ready).await;
+        let config = Arc::new(GatewayConfig {
+            scheduler_address: scheduler_addr.to_string(),
+            expected_network_hash: Some(NetworkHashHex::from([0x42; 32])),
+            indexer_address: None,
+            db_gateway_address: None,
+            view_gateway_address: None,
+            scheduler_reconnect_grace_ms: 0,
+            ..GatewayConfig::default()
+        });
+        let ctx = Arc::new(GatewayContext::assemble(
+            Arc::new(RwLock::new(None)),
+            Arc::new(RwLock::new(None)),
+            Arc::new(RwLock::new(None)),
+            Arc::new(RwLock::new(None)),
+            config.clone(),
+            GatewayMetrics::new("test", None).expect("test metrics should initialize"),
+        ));
+        let mut reconnects = ReconnectAttempts::default();
+        maintain_reconnects(&ctx, &mut reconnects).await;
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                reconnects.reap_finished().await;
+                if ctx.scheduler_quarantine.read().await.is_some() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("scheduler reconnect should enter quarantine");
+        let mut scheduler_state =
+            SchedulerProbeState::with_expected_network_hash(config.expected_network_hash.clone());
+
+        let result = probe_scheduler(&ctx, Duration::from_secs(1), &mut scheduler_state).await;
+
+        assert!(!result.up);
+        assert_eq!(result.identity_status, SchedulerIdentityStatus::Mismatch);
+        assert!(ctx.scheduler.read().await.is_none());
+        assert!(ctx.scheduler_quarantine.read().await.is_none());
+        assert_eq!(
+            scheduler_state.expected_network_hash,
+            Some(NetworkHashHex::from([0x42; 32]))
+        );
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                maintain_reconnects(&ctx, &mut reconnects).await;
+                if ctx.scheduler_quarantine.read().await.is_some() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("identity mismatch should permit a new quarantined reconnect attempt");
+        assert!(ctx.scheduler.read().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn active_scheduler_identity_mismatch_is_evicted() {
+        let (scheduler_addr, _server, _calls) =
+            start_test_scheduler(TipBehavior::Ready, NullBehavior::Ready).await;
+        let config = Arc::new(GatewayConfig {
+            scheduler_address: scheduler_addr.to_string(),
+            expected_network_hash: Some(NetworkHashHex::from([0x42; 32])),
+            indexer_address: None,
+            db_gateway_address: None,
+            view_gateway_address: None,
+            ..GatewayConfig::default()
+        });
+        let client = connect_optional_scheduler(&scheduler_addr.to_string(), 1)
+            .await
+            .expect("scheduler connection should succeed")
+            .expect("scheduler should be connected");
+        let ctx = GatewayContext::assemble(
+            Arc::new(RwLock::new(Some(client))),
+            Arc::new(RwLock::new(None)),
+            Arc::new(RwLock::new(None)),
+            Arc::new(RwLock::new(None)),
+            config.clone(),
+            GatewayMetrics::new("test", None).expect("test metrics should initialize"),
+        );
+        let mut scheduler_state =
+            SchedulerProbeState::with_expected_network_hash(config.expected_network_hash.clone());
+
+        let result = probe_scheduler(&ctx, Duration::from_secs(1), &mut scheduler_state).await;
+
+        assert!(!result.up);
+        assert_eq!(result.identity_status, SchedulerIdentityStatus::Mismatch);
+        assert!(ctx.scheduler.read().await.is_none());
     }
 
     #[tokio::test]

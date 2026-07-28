@@ -14,6 +14,103 @@ use std::ops::{Deref, DerefMut};
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+/// A canonical lowercase, unprefixed 32-byte network hash.
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct NetworkHashHex(String);
+
+impl NetworkHashHex {
+    /// Construct a network hash from its raw bytes.
+    pub fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(hex::encode(bytes))
+    }
+
+    /// Borrow the canonical wire representation.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for NetworkHashHex {
+    type Error = NetworkHashHexError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        if value.len() == 64
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Ok(Self(value));
+        }
+        Err(NetworkHashHexError)
+    }
+}
+
+impl TryFrom<&str> for NetworkHashHex {
+    type Error = NetworkHashHexError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Self::try_from(value.to_owned())
+    }
+}
+
+impl From<[u8; 32]> for NetworkHashHex {
+    fn from(value: [u8; 32]) -> Self {
+        Self::from_bytes(value)
+    }
+}
+
+impl AsRef<str> for NetworkHashHex {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl fmt::Display for NetworkHashHex {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl fmt::Debug for NetworkHashHex {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("NetworkHashHex").field(&self.0).finish()
+    }
+}
+
+impl Serialize for NetworkHashHex {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for NetworkHashHex {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Self::try_from(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
+
+impl JsonSchema for NetworkHashHex {
+    fn schema_name() -> Cow<'static, str> {
+        "NetworkHashHex".into()
+    }
+
+    fn schema_id() -> Cow<'static, str> {
+        concat!(module_path!(), "::NetworkHashHex").into()
+    }
+
+    fn json_schema(_gen: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+        })
+    }
+}
+
+/// Error returned for a non-canonical network hash.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("networkHash must be exactly 64 lowercase hexadecimal characters without a 0x prefix")]
+pub struct NetworkHashHexError;
+
 // ---------------------------------------------------------------------------
 // Hex0x<T> — generic 0x-prefixed hex wrapper for fixed-size XDR byte types
 // ---------------------------------------------------------------------------
@@ -81,15 +178,8 @@ macro_rules! impl_try_from_slice_for {
 impl_try_from_slice_for!(groundhog_xdr::types::SHA256Hash, 32);
 impl_try_from_slice_for!(groundhog_xdr::types::ContractAddress, 32);
 impl_try_from_slice_for!(groundhog_xdr::types::Ed25519PublicKey, 32);
-impl_try_from_slice_for!(groundhog_xdr::types::DbHash, 2048);
-
-// BlockHash wraps SHA256Hash, so deserialize as SHA256Hash then convert.
-impl TryFromSlice for groundhog_xdr::types::BlockHash {
-    fn try_from_slice(slice: &[u8]) -> Result<Self, String> {
-        let hash = groundhog_xdr::types::SHA256Hash::try_from_slice(slice)?;
-        Ok(groundhog_xdr::types::BlockHash::from(hash))
-    }
-}
+impl_try_from_slice_for!(groundhog_xdr::types::StorageLongHash, 2048);
+impl_try_from_slice_for!(groundhog_xdr::validator::ValidatorID, 32);
 
 impl<T: JsonSchema> JsonSchema for Hex0x<T> {
     fn schema_name() -> Cow<'static, str> {

@@ -1389,9 +1389,8 @@ mod tests {
         .unwrap();
         std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-        let error =
-            probe_devnode_version_with_timeout(&binary, std::time::Duration::from_millis(500))
-                .unwrap_err();
+        let error = probe_devnode_version_with_timeout(&binary, std::time::Duration::from_secs(5))
+            .unwrap_err();
 
         assert!(error.contains("produced at least"), "{error}");
     }

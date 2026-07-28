@@ -16,7 +16,6 @@ mod tip_coalescer;
 use std::{future::Future, path::Path, sync::Arc, time::Duration};
 
 use clap::Parser;
-use groundhog_json_rpc_types::runtime_manifest::RuntimeManifest;
 use tokio::io::AsyncReadExt;
 use tracing_subscriber::EnvFilter;
 
@@ -113,7 +112,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if let Some(path) = &cli.runtime_manifest {
         let contents = read_runtime_manifest(path).await?;
-        let manifest = serde_json::from_slice::<RuntimeManifest>(&contents)?;
+        let manifest =
+            groundhog_json_rpc_types::runtime_manifest::parse_runtime_manifest(&contents)?;
         config.apply_runtime_manifest(&manifest)?;
     }
 
@@ -197,13 +197,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = health_shutdown_tx.send(());
     let _ = observability_shutdown_tx.send(());
     handle.stop()?;
-    drain_shutdown(
+    let shutdown_result = drain_shutdown(
         handle.stopped(),
         health_handle,
         observability_server.handle,
         Duration::from_millis(ctx.config.shutdown_grace_ms.max(1)),
     )
-    .await?;
+    .await;
+    ctx.abort_request_workers();
+    shutdown_result?;
 
     Ok(())
 }

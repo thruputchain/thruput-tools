@@ -17,9 +17,11 @@ use std::time::{Duration, Instant};
 use std::{path::Path, process, sync::Arc};
 
 use clap::Parser;
+#[cfg(test)]
+use groundhog_json_rpc_types::runtime_manifest::RUNTIME_MANIFEST_SCHEMA_VERSION;
 use groundhog_json_rpc_types::runtime_manifest::{
-    BootstrapAccount, RUNTIME_MANIFEST_SCHEMA_VERSION, RuntimeManifest,
-    RuntimeManifestEntrypointError,
+    BootstrapAccount, RuntimeManifest, RuntimeManifestEntrypointError, RuntimeManifestParseError,
+    parse_runtime_manifest,
 };
 use groundhog_signing::{
     BuildDevWalletDoActionTransaction, LocalSigner, SignTransactionParams, SigningError,
@@ -288,16 +290,15 @@ async fn load_runtime_manifest(path: &Path) -> Result<RuntimeManifest, BenchErro
             max_bytes: MAX_RUNTIME_MANIFEST_BYTES,
         });
     }
-    let manifest: RuntimeManifest =
-        serde_json::from_slice(&bytes).map_err(|source| BenchError::ManifestParse {
+    let manifest = parse_runtime_manifest(&bytes).map_err(|error| match error {
+        RuntimeManifestParseError::Json(source) => BenchError::ManifestParse {
             path: path_display,
             source,
-        })?;
-    if manifest.schema_version != RUNTIME_MANIFEST_SCHEMA_VERSION {
-        return Err(BenchError::UnsupportedManifestSchema {
-            actual: manifest.schema_version,
-        });
-    }
+        },
+        RuntimeManifestParseError::UnsupportedSchema { actual, .. } => {
+            BenchError::UnsupportedManifestSchema { actual }
+        }
+    })?;
     Ok(manifest)
 }
 
@@ -980,7 +981,8 @@ mod tests {
         serde_json::from_value(json!({
             "schemaVersion": RUNTIME_MANIFEST_SCHEMA_VERSION,
             "kind": "hogd-dev-runtime",
-            "networkId": "groundhog-local",
+            "chainState": "fresh",
+            "networkHash": "00".repeat(32),
             "protocol": "hogp/test",
             "genesisHash": hash(0x42),
             "producer": {

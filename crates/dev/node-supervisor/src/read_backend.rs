@@ -34,7 +34,7 @@ use groundhog_json_rpc_types::{
     },
 };
 use groundhog_scheduler::{RPCError, sched_coord::SchedulerCoord_SchedulerCoord1_Client};
-use groundhog_scp::network::Protocol;
+use groundhog_scp::network::ProtocolCommit as Protocol;
 use groundhog_x23_transport::{connect, connect_with_config, hogd_large_message_config};
 use groundhog_xdr::{
     event::TxEmittedEvent,
@@ -752,7 +752,6 @@ mod tests {
     use std::{collections::HashMap, net::SocketAddr, time::Duration};
 
     use async_trait::async_trait;
-    use groundhog_coordinator::ValidatorID;
     use groundhog_db_gateway::AddressAndKeyBatch;
     use groundhog_db_gateway::{
         DbGateway_DbGateway1, DbGateway_DbGateway1_Client, DbGateway_DbGateway1_Dispatcher,
@@ -773,18 +772,19 @@ mod tests {
         transaction::{TransactionStatus, TxHash},
     };
     use groundhog_scheduler::rpc_types::RPCError;
-    use groundhog_scheduler::{BlockID, Nomination, ParallelSignedTransactionBatch};
+    use groundhog_scheduler::{BlockID, ConsensusValue, ParallelSignedTransactionBatch, Proposal};
     use groundhog_scheduler::{
         CoordinatorRegistrationOutcome, DbSchedResult, SchedulerCommitOutcome,
-        SchedulerGetTipResult, SchedulerNominationResult, SchedulerValidationResult,
+        SchedulerGetTipResult, SchedulerProposalResult, SchedulerValidationResult,
         sched_coord::{
             SchedulerCoord_SchedulerCoord1, SchedulerCoord_SchedulerCoord1_Client,
             SchedulerCoord_SchedulerCoord1_Dispatcher,
         },
     };
-    use groundhog_scp::network::Protocol;
+    use groundhog_scp::network::ProtocolCommit as Protocol;
     use groundhog_xdr::event::IdentifiedEvent as IdxIdentifiedEvent;
     use groundhog_xdr::genesis::GenesisConfiguration;
+    use groundhog_xdr::header::ProposalContext;
     use groundhog_xdr::transaction::{
         Invocation, OptSignedTransactionBatch, SignedTransaction, SignedTransactionHashBatch,
         Transaction, Uniquifier,
@@ -797,6 +797,7 @@ mod tests {
         storage_item::WireStorageItem,
         transaction::SignedTransactionHash,
         types::{ContractAddress, SHA256Hash},
+        validator::ValidatorID,
     };
     use rpc_driver::{FixedSerialPool, ProgramError, RpcServer, ServiceMap};
     use tokio::net::TcpListener;
@@ -915,17 +916,18 @@ mod tests {
             Ok(())
         }
 
-        async fn schedulercoord_nominate(
+        async fn schedulercoord_propose_block(
             &self,
-            _onto: groundhog_scheduler::DbTip,
-        ) -> Result<SchedulerNominationResult, ProgramError> {
+            _block_id: BlockID,
+            _proposal_context: ProposalContext,
+        ) -> Result<SchedulerProposalResult, ProgramError> {
             Err(ProgramError::msg("not implemented in fake"))
         }
 
-        async fn schedulercoord_validate(
+        async fn schedulercoord_validate_block(
             &self,
-            _onto: groundhog_scheduler::DbTip,
-            _nomination: Nomination,
+            _block_id: BlockID,
+            _proposal: Proposal,
         ) -> Result<SchedulerValidationResult, ProgramError> {
             Err(ProgramError::msg("not implemented in fake"))
         }
@@ -933,6 +935,7 @@ mod tests {
         async fn schedulercoord_commit_block(
             &self,
             _block_id: BlockID,
+            _value: ConsensusValue,
         ) -> Result<SchedulerCommitOutcome, ProgramError> {
             Err(ProgramError::msg("not implemented in fake"))
         }

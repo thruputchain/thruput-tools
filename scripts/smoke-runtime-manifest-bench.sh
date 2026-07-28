@@ -379,6 +379,7 @@ GATEWAY_PORT="$(free_tcp_port)"
 GATEWAY_RPC_URL="http://127.0.0.1:$GATEWAY_PORT"
 log "Starting standalone gateway: $GATEWAY_RPC_URL"
 "$GATEWAY" --runtime-manifest "$RUNTIME_MANIFEST" --listen "127.0.0.1:$GATEWAY_PORT" \
+    --scheduler-reconnect-grace-ms 0 \
     > "$WORK/gateway.out" 2> "$WORK/gateway.err" &
 GATEWAY_PID=$!
 

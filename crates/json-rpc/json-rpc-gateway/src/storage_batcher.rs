@@ -283,6 +283,11 @@ impl StorageReadBatcher {
         }
     }
 
+    /// Abort storage shard runners and all in-flight reads.
+    pub(crate) fn abort(&self) {
+        self.inner.abort();
+    }
+
     /// Read one (`address`, `key`).  Routes to a shard by the storage
     /// key prefix (same key reads land on the same shard, so they
     /// share batch windows); returns when the fanout completes.

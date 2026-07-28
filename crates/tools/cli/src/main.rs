@@ -382,6 +382,9 @@ enum Command {
         /// Explicit hog-devnode binary path
         #[arg(long = "hog-devnode-binary", value_name = "GROUNDHOG_DEVNODE_BINARY")]
         hogd_dev_binary: Option<std::path::PathBuf>,
+        /// Directory for persistent hog-devnode state; omit for an ephemeral node
+        #[arg(long, value_name = "DIR")]
+        data_dir: Option<PathBuf>,
         /// Override hog-devnode x23 intro protocol token
         #[arg(long)]
         hogd_protocol: Option<String>,
@@ -801,24 +804,25 @@ fn main() {
             verbose,
             dev_account_count,
             hogd_dev_binary,
+            data_dir,
             hogd_protocol,
             startup_timeout_secs,
             block_driver,
             block_interval_ms,
             rpc_max_connections,
-        } => groundhog_cli::node::run_with_block_driver(
-            port,
-            verbose,
-            dev_account_count,
-            hogd_dev_binary,
-            hogd_protocol,
-            startup_timeout_secs,
-            block_driver.map(Into::into),
-            block_interval_ms,
-            rpc_max_connections,
-            cmd_name,
-            &print,
-        ),
+        } => {
+            let mut options = groundhog_cli::node::LocalNodeOptions::default();
+            options.port = port;
+            options.hogd_dev_binary = hogd_dev_binary;
+            options.data_dir = data_dir;
+            options.hogd_protocol = hogd_protocol;
+            options.startup_timeout = startup_timeout_secs.map(std::time::Duration::from_secs);
+            options.dev_account_count = dev_account_count;
+            options.block_driver = block_driver.map(Into::into);
+            options.block_interval = block_interval_ms.map(std::time::Duration::from_millis);
+            options.rpc_max_connections = rpc_max_connections;
+            groundhog_cli::node::run_with_options(options, verbose, cmd_name, &print)
+        }
         Command::Keys { command } => match command {
             KeysCommand::Generate { name, fund } => {
                 groundhog_cli::keys::generate(&name, fund, cmd_name, &print)
@@ -901,6 +905,18 @@ mod tests {
             Command::Node {
                 dev_account_count, ..
             } => assert_eq!(dev_account_count, Some(3)),
+            _ => panic!("expected node command"),
+        }
+    }
+
+    #[test]
+    fn node_data_dir_flag_parses() {
+        let cli = Cli::parse_from(["groundhog", "node", "--data-dir", "/tmp/groundhog"]);
+
+        match cli.command {
+            Command::Node { data_dir, .. } => {
+                assert_eq!(data_dir, Some(PathBuf::from("/tmp/groundhog")));
+            }
             _ => panic!("expected node command"),
         }
     }
