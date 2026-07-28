@@ -11,20 +11,16 @@ use groundhog_signing::{
 use groundhog_xdr::contract::ContractEntrypointID;
 use serde_json::json;
 
-use crate::account_resolution::resolve_wallet_address;
+use crate::account_resolution::resolve_transaction_sender;
 use crate::artifacts::ArtifactOptions;
 use crate::build::{cargo_metadata_with_artifacts, resolve_package};
 use crate::codec::{
     CallMetadata, ContractMetadata, MethodMetadata, SpecMethodMetadata, decode_return, encode_args,
     format_contract_address, parse_contract_address, spec_string_text,
 };
-use crate::config::{
-    ProfileOverrides, find_project_config, resolve_default_key_for_profile,
-    resolve_profile_with_overrides,
-};
+use crate::config::{ProfileOverrides, find_project_config, resolve_profile_with_overrides};
 use crate::contract_spec::{InterfaceSpec, load_contract_spec, load_registered_interfaces};
 use crate::dev_detail::{fetch_transaction_detail_blocking, print_transaction_detail};
-use crate::keys::load_local_signer;
 use crate::network_descriptor::resolve_wallet_entrypoints;
 use crate::result::CommandResult;
 use crate::tx_utils::{
@@ -56,18 +52,31 @@ pub(crate) struct PreparedCall {
 
 /// Call a method on a deployed contract.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_lines)]
 pub fn run(
     contract: &str,
     method: &str,
     args: &[String],
     dry_run: bool,
+    wallet: Option<&str>,
     artifacts: &ArtifactOptions,
     profile: Option<&str>,
     overrides: &ProfileOverrides,
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    let prepared = prepare_call(contract, method, args, artifacts, profile, overrides)?;
+    let prepared = match wallet {
+        Some(wallet) => prepare_call_with_wallet(
+            contract,
+            method,
+            args,
+            artifacts,
+            Some(wallet),
+            profile,
+            overrides,
+        )?,
+        None => prepare_call(contract, method, args, artifacts, profile, overrides)?,
+    };
     if dry_run {
         return print_dry_run(&prepared, cmd, print);
     }
@@ -315,27 +324,40 @@ pub(crate) fn prepare_call(
     profile: Option<&str>,
     overrides: &ProfileOverrides,
 ) -> Result<PreparedCall, CliError> {
-    let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
-    prepare_call_with_runtime(contract, method, args, artifacts, profile, overrides, &rt)
+    prepare_call_with_wallet(contract, method, args, artifacts, None, profile, overrides)
 }
 
-#[allow(clippy::too_many_lines)]
+fn prepare_call_with_wallet(
+    contract: &str,
+    method: &str,
+    args: &[String],
+    artifacts: &ArtifactOptions,
+    wallet: Option<&str>,
+    profile: Option<&str>,
+    overrides: &ProfileOverrides,
+) -> Result<PreparedCall, CliError> {
+    let rt = tokio::runtime::Runtime::new().map_err(|e| CliError::RuntimeInit(e.to_string()))?;
+    prepare_call_with_runtime(
+        contract, method, args, artifacts, wallet, profile, overrides, &rt,
+    )
+}
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn prepare_call_with_runtime(
     contract: &str,
     method: &str,
     args: &[String],
     artifacts: &ArtifactOptions,
+    wallet: Option<&str>,
     profile: Option<&str>,
     overrides: &ProfileOverrides,
     rt: &tokio::runtime::Runtime,
 ) -> Result<PreparedCall, CliError> {
     let cwd = std::env::current_dir()?;
     let resolved_profile = resolve_profile_with_overrides(&cwd, profile, overrides)?;
-    let key_name = resolve_default_key_for_profile(&resolved_profile)?;
-    if resolved_profile.rpc_url.is_none() && key_name.is_none() {
+    if resolved_profile.rpc_url.is_none() && resolved_profile.default_key.is_none() {
         return Err(CliError::MissingRpcUrl);
     }
-    let key_name = key_name.ok_or(CliError::MissingSigningKey)?;
     let rpc_url = resolved_profile
         .rpc_url
         .as_deref()
@@ -344,15 +366,15 @@ fn prepare_call_with_runtime(
     let contract_address_hex = resolved_profile.resolve_contract(contract);
     let contract_address = parse_contract_address(&contract_address_hex)?;
 
-    let signer = load_local_signer(&key_name)?;
+    let sender = resolve_transaction_sender(&resolved_profile, wallet)?;
 
     let resolved = resolve_call(&cwd, method, artifacts)?;
     let calldata = encode_args(args, resolved.metadata.as_ref())?;
 
-    let wallet_address = resolve_wallet_address(&resolved_profile, &key_name, &signer)?;
+    let wallet_address = sender.wallet_address;
     let wallet_address_hex = format_contract_address(&wallet_address);
 
-    let wallet_entrypoints = resolve_wallet_entrypoints(&resolved_profile, &key_name)?;
+    let wallet_entrypoints = resolve_wallet_entrypoints(&resolved_profile, &sender.key_name)?;
     let wallet_entrypoint_id = format_entrypoint_id(wallet_entrypoints.do_action);
     let block_expiry_height = rt.block_on(async { resolve_block_expiry_height(rpc_url).await })?;
 
@@ -369,8 +391,9 @@ fn prepare_call_with_runtime(
     })
     .map_err(|e| CliError::Other(e.to_string()))?;
 
-    let tx_hex = sign_and_encode_transaction_hex(tx, &signer, SignTransactionParams::default())
-        .map_err(|e| CliError::Other(e.to_string()))?;
+    let tx_hex =
+        sign_and_encode_transaction_hex(tx, &sender.signer, SignTransactionParams::default())
+            .map_err(|e| CliError::Other(e.to_string()))?;
 
     Ok(PreparedCall {
         rpc_url: rpc_url.to_owned(),

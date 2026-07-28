@@ -105,10 +105,21 @@ pub enum CliError {
     ProfileConfigInvalid { profile: String, message: String },
     #[error("no signing key configured")]
     MissingSigningKey,
+    #[error("invalid HOG amount `{input}`: {message}")]
+    InvalidHogAmount { input: String, message: String },
+    #[error("address target `{target}` is invalid: {message}")]
+    InvalidAddressTarget { target: String, message: String },
+    #[error("unknown address target `{target}`")]
+    UnknownAddressTarget { target: String },
     #[error("failed to initialize async runtime: {0}")]
     RuntimeInit(String),
     #[error("{method} failed: {message}")]
     RpcMethodFailed {
+        method: &'static str,
+        message: String,
+    },
+    #[error("RPC endpoint does not support {method}: {message}")]
+    RpcCapabilityUnsupported {
         method: &'static str,
         message: String,
     },
@@ -157,16 +168,52 @@ pub enum CliError {
         "no wallet saved for key `{key_name}` in profile `{profile}`; run `groundhog wallet create --key {key_name} --profile {profile}`"
     )]
     SavedWalletMissing { key_name: String, profile: String },
-    #[error("saved wallet `{key_name}` owner_public_key is invalid: {message}")]
-    SavedWalletOwnerPublicKeyInvalid { key_name: String, message: String },
     #[error(
-        "saved wallet `{key_name}` owner public key {configured} does not match local key `{key_name}` public key {local}"
+        "multiple wallets are saved for key `{key_name}` in profile `{profile}`: {wallet_names:?}"
+    )]
+    SavedWalletAmbiguous {
+        key_name: String,
+        profile: String,
+        wallet_names: Vec<String>,
+    },
+    #[error("wallet `{wallet_name}` is not saved in profile `{profile}`")]
+    SavedWalletNotFound {
+        wallet_name: String,
+        profile: String,
+    },
+    #[error(
+        "wallet `{wallet_name}` owner public key {configured} does not match key `{key_name}` public key {local}"
     )]
     SavedWalletOwnerMismatch {
+        wallet_name: String,
         key_name: String,
         configured: String,
         local: String,
     },
+    #[error("dev key `{key_name}` uses its manifest wallet and cannot select `{wallet_name}`")]
+    DevWalletSelectionUnsupported {
+        key_name: String,
+        wallet_name: String,
+    },
+    #[error(
+        "cannot remove wallet `{wallet_name}` from profile `{profile}` because it is the inherited default wallet"
+    )]
+    InheritedDefaultWalletRemoval {
+        wallet_name: String,
+        profile: String,
+    },
+    #[error(
+        "cannot remove wallet `{wallet_name}` from profile `{profile}` because it would expose inherited default wallet `{inherited_wallet}`, which is not saved"
+    )]
+    WalletRemovalExposesMissingDefault {
+        wallet_name: String,
+        inherited_wallet: String,
+        profile: String,
+    },
+    #[error("saved wallet `{key_name}` owner_public_key is invalid: {message}")]
+    SavedWalletOwnerPublicKeyInvalid { key_name: String, message: String },
+    #[error("transfer sender and recipient resolve to the same address `{address}`")]
+    TransferToSelf { address: String },
     #[error("transaction {tx_hash} submitted but no receipt after {seconds}s")]
     ReceiptTimeout { tx_hash: String, seconds: u64 },
     #[error("transaction {tx_hash} was rejected: {reason}")]
@@ -247,18 +294,30 @@ impl CliError {
             Self::MissingRpcUrl => "missing_rpc_url",
             Self::ProfileConfigInvalid { .. } => "profile_config_invalid",
             Self::MissingSigningKey => "missing_signing_key",
+            Self::InvalidHogAmount { .. } => "invalid_hog_amount",
+            Self::InvalidAddressTarget { .. } => "invalid_address_target",
+            Self::UnknownAddressTarget { .. } => "unknown_address_target",
             Self::RuntimeInit(_) => "runtime_init_failed",
             Self::RpcMethodFailed { .. } => "rpc_method_failed",
+            Self::RpcCapabilityUnsupported { .. } => "rpc_capability_unsupported",
             Self::LocalDevAccountUnavailable { .. } => "local_dev_account_unavailable",
             Self::ManifestEntrypoint { .. } => "manifest_entrypoint_invalid",
             Self::NetworkDescriptorInvalid { .. } => "network_descriptor_invalid",
             Self::NetworkDescriptorMismatch { .. } => "network_descriptor_mismatch",
             Self::WalletAddressDerivationFailed { .. } => "wallet_address_derivation_failed",
             Self::SavedWalletMissing { .. } => "saved_wallet_missing",
+            Self::SavedWalletAmbiguous { .. } => "saved_wallet_ambiguous",
+            Self::SavedWalletNotFound { .. } => "saved_wallet_not_found",
+            Self::SavedWalletOwnerMismatch { .. } => "saved_wallet_owner_mismatch",
+            Self::DevWalletSelectionUnsupported { .. } => "dev_wallet_selection_unsupported",
+            Self::InheritedDefaultWalletRemoval { .. } => "inherited_default_wallet_removal",
+            Self::WalletRemovalExposesMissingDefault { .. } => {
+                "wallet_removal_exposes_missing_default"
+            }
             Self::SavedWalletOwnerPublicKeyInvalid { .. } => {
                 "saved_wallet_owner_public_key_invalid"
             }
-            Self::SavedWalletOwnerMismatch { .. } => "saved_wallet_owner_mismatch",
+            Self::TransferToSelf { .. } => "transfer_to_self",
             Self::ReceiptTimeout { .. } => "receipt_timeout",
             Self::TransactionInvalid { .. } => "transaction_invalid",
             Self::TransactionRecentFailure { .. } => "transaction_recent_failure",
@@ -366,8 +425,19 @@ impl CliError {
             Self::MissingSigningKey => Some(Cow::Borrowed(
                 "set `default_key` in project or global config, or run `groundhog keys generate`",
             )),
+            Self::InvalidHogAmount { .. } => Some(Cow::Borrowed(
+                "enter a positive decimal HOG amount with at most seven decimal places",
+            )),
+            Self::InvalidAddressTarget { .. } | Self::UnknownAddressTarget { .. } => {
+                Some(Cow::Borrowed(
+                    "use a saved wallet, contract alias, dev-N account, or 32-byte 0x-prefixed address",
+                ))
+            }
             Self::RpcMethodFailed { .. } => Some(Cow::Borrowed(
                 "check the RPC endpoint and node logs for details",
+            )),
+            Self::RpcCapabilityUnsupported { .. } => Some(Cow::Borrowed(
+                "use a full local devnode or a compatible remote RPC that supports transaction submission",
             )),
             Self::LocalDevAccountUnavailable { .. } => Some(Cow::Borrowed(
                 "run `groundhog node` backed by hog-devnode, or use a stored key for non-local endpoints",
@@ -386,12 +456,30 @@ impl CliError {
             Self::SavedWalletMissing { key_name, profile } => Some(Cow::Owned(format!(
                 "run `groundhog wallet create --key {key_name} --profile {profile}` before using this stored key"
             ))),
+            Self::SavedWalletAmbiguous { .. } => Some(Cow::Borrowed(
+                "set `default_wallet` in the selected profile or pass the command's explicit wallet option",
+            )),
+            Self::SavedWalletNotFound { .. } => Some(Cow::Borrowed(
+                "run `groundhog wallet ls` and select a saved wallet name",
+            )),
+            Self::SavedWalletOwnerMismatch { key_name, .. } => Some(Cow::Owned(format!(
+                "select a wallet owned by key `{key_name}`, or change the effective default key"
+            ))),
+            Self::DevWalletSelectionUnsupported { .. } => Some(Cow::Borrowed(
+                "remove the explicit/default wallet selection when using a manifest-backed dev key",
+            )),
+            Self::InheritedDefaultWalletRemoval { profile, .. } => Some(Cow::Owned(format!(
+                "run `groundhog wallet use <NAME> --profile {profile}` to select a project default before removing this wallet"
+            ))),
+            Self::WalletRemovalExposesMissingDefault { profile, .. } => Some(Cow::Owned(format!(
+                "save the inherited wallet binding or select another project default with `groundhog wallet use <NAME> --profile {profile}`"
+            ))),
             Self::SavedWalletOwnerPublicKeyInvalid { .. } => Some(Cow::Borrowed(
                 "recreate the wallet binding with `groundhog wallet create`, or fix owner_public_key in the selected profile",
             )),
-            Self::SavedWalletOwnerMismatch { key_name, .. } => Some(Cow::Owned(format!(
-                "use the local key that created wallet `{key_name}`, or recreate the wallet binding for this key"
-            ))),
+            Self::TransferToSelf { .. } => Some(Cow::Borrowed(
+                "select a different recipient or use `--from` to select another source wallet",
+            )),
             Self::ReceiptTimeout { .. } => Some(Cow::Borrowed(
                 "check the node logs, then rerun the command once the transaction is committed or rejected",
             )),
@@ -517,6 +605,7 @@ impl CliError {
     }
 
     /// Optional structured details for JSON error payloads.
+    #[allow(clippy::too_many_lines)]
     pub fn details_json(&self) -> Option<Value> {
         match self {
             Self::CargoFailedWithOutput { stdout, stderr, .. } => Some(json!({
@@ -530,6 +619,10 @@ impl CliError {
                     "message": message,
                 }))
             }
+            Self::RpcCapabilityUnsupported { method, message } => Some(json!({
+                "method": method,
+                "message": message,
+            })),
             Self::ManifestEntrypoint {
                 key_name,
                 field,
@@ -556,18 +649,70 @@ impl CliError {
                 "keyName": key_name,
                 "profile": profile,
             })),
-            Self::SavedWalletOwnerPublicKeyInvalid { key_name, message } => Some(json!({
+            Self::SavedWalletAmbiguous {
+                key_name,
+                profile,
+                wallet_names,
+            } => Some(json!({
                 "keyName": key_name,
-                "message": message,
+                "profile": profile,
+                "walletNames": wallet_names,
+            })),
+            Self::SavedWalletNotFound {
+                wallet_name,
+                profile,
+            }
+            | Self::InheritedDefaultWalletRemoval {
+                wallet_name,
+                profile,
+            } => Some(json!({
+                "walletName": wallet_name,
+                "profile": profile,
+            })),
+            Self::WalletRemovalExposesMissingDefault {
+                wallet_name,
+                inherited_wallet,
+                profile,
+            } => Some(json!({
+                "walletName": wallet_name,
+                "inheritedWallet": inherited_wallet,
+                "profile": profile,
             })),
             Self::SavedWalletOwnerMismatch {
+                wallet_name,
                 key_name,
                 configured,
                 local,
             } => Some(json!({
+                "walletName": wallet_name,
                 "keyName": key_name,
                 "configured": configured,
                 "local": local,
+            })),
+            Self::DevWalletSelectionUnsupported {
+                key_name,
+                wallet_name,
+            } => Some(json!({
+                "keyName": key_name,
+                "walletName": wallet_name,
+            })),
+            Self::SavedWalletOwnerPublicKeyInvalid { key_name, message } => Some(json!({
+                "keyName": key_name,
+                "message": message,
+            })),
+            Self::TransferToSelf { address } => Some(json!({
+                "address": address,
+            })),
+            Self::InvalidHogAmount { input, message } => Some(json!({
+                "input": input,
+                "message": message,
+            })),
+            Self::InvalidAddressTarget { target, message } => Some(json!({
+                "target": target,
+                "message": message,
+            })),
+            Self::UnknownAddressTarget { target } => Some(json!({
+                "target": target,
             })),
             Self::TransactionInvalid { tx_hash, reason } => Some(json!({
                 "txHash": tx_hash,

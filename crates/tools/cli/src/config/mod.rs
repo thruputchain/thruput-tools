@@ -4,6 +4,7 @@ mod global;
 mod project;
 
 pub use dirs::{cache_dir, config_dir, home_dir, keys_dir};
+pub(crate) use global::load_global_profile;
 pub use global::{
     ExecutorCredentials, LocalRuntimeState, clear_default_key,
     clear_local_runtime_state_if_matches, initialize_global_profiles, load_default_key,
@@ -15,5 +16,6 @@ pub use project::{
     SavedWalletBinding, active_profile_name, find_project_config, load_project_profiles,
     remove_profile_wallet_address, resolve_default_key, resolve_default_key_for_profile,
     resolve_profile, resolve_profile_with_overrides, save_profile_contract_alias,
-    save_profile_wallet_address,
+    save_profile_default_wallet, save_profile_wallet_address,
+    save_profile_wallet_address_with_default,
 };

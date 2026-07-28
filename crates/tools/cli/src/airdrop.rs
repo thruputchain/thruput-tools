@@ -376,8 +376,8 @@ fn prepare_local_airdrop(
         .map_err(|error| CliError::Other(error.to_string()))?;
     let recipient_wallet = resolve_airdrop_recipient(profile, recipient)?;
     let recipient_address = parse_contract_address(&recipient_wallet)?;
-    let raw_amount = parse_hog_amount(amount.unwrap_or(DEFAULT_AIRDROP_HOG))?;
-    let amount_hog = format_hog_amount(raw_amount);
+    let raw_amount = hog::parse_amount(amount.unwrap_or(DEFAULT_AIRDROP_HOG))?;
+    let amount_hog = hog::format_amount(raw_amount);
     let faucet = resolve_local_bootstrap_account(profile, LocalBootstrapRole::Faucet)?;
 
     let hog_address = parse_contract_address(hog::TOKEN_ADDRESS)?;
@@ -671,70 +671,6 @@ fn print_remote_dry_run(
     ))
 }
 
-fn parse_hog_amount(input: &str) -> Result<u128, CliError> {
-    let input = input.trim();
-    if input.is_empty() {
-        return Err(CliError::Other("airdrop amount cannot be empty".into()));
-    }
-    if input.starts_with('-') || input.starts_with('+') {
-        return Err(CliError::Other("airdrop amount must be positive".into()));
-    }
-    let mut parts = input.split('.');
-    let whole = parts.next().unwrap_or_default();
-    let fractional = parts.next();
-    if parts.next().is_some() || whole.is_empty() || !whole.chars().all(|c| c.is_ascii_digit()) {
-        return Err(CliError::Other(format!("invalid HOG amount `{input}`")));
-    }
-    let whole = whole
-        .parse::<u128>()
-        .map_err(|error| CliError::Other(format!("invalid HOG amount `{input}`: {error}")))?;
-    let fractional = match fractional {
-        Some(value) => parse_fractional_hog(input, value)?,
-        None => 0,
-    };
-    let raw = whole
-        .checked_mul(hog::SCALE)
-        .and_then(|value| value.checked_add(fractional))
-        .ok_or_else(|| CliError::Other(format!("HOG amount `{input}` is too large")))?;
-    if raw == 0 {
-        return Err(CliError::Other(
-            "airdrop amount must be greater than zero".into(),
-        ));
-    }
-    Ok(raw)
-}
-
-fn parse_fractional_hog(input: &str, fractional: &str) -> Result<u128, CliError> {
-    if fractional.is_empty()
-        || fractional.len() > hog::DECIMALS as usize
-        || !fractional.chars().all(|c| c.is_ascii_digit())
-    {
-        return Err(CliError::Other(format!(
-            "invalid HOG amount `{input}`; at most {} decimal places are supported",
-            hog::DECIMALS
-        )));
-    }
-    let mut padded = fractional.to_owned();
-    while padded.len() < hog::DECIMALS as usize {
-        padded.push('0');
-    }
-    padded
-        .parse::<u128>()
-        .map_err(|error| CliError::Other(format!("invalid HOG amount `{input}`: {error}")))
-}
-
-pub(crate) fn format_hog_amount(raw_amount: u128) -> String {
-    let whole = raw_amount / hog::SCALE;
-    let fractional = raw_amount % hog::SCALE;
-    if fractional == 0 {
-        return whole.to_string();
-    }
-    let fractional = format!("{fractional:0width$}", width = hog::DECIMALS as usize)
-        .trim_end_matches('0')
-        .to_owned();
-    format!("{whole}.{fractional}")
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -745,8 +681,8 @@ mod tests {
     use serial_test::serial;
 
     use super::{
-        DEFAULT_AIRDROP_HOG, PreparedAirdrop, format_hog_amount, parse_hog_amount,
-        prepare_remote_airdrop_with_descriptor, resolve_airdrop_backend, resolve_airdrop_recipient,
+        PreparedAirdrop, prepare_remote_airdrop_with_descriptor, resolve_airdrop_backend,
+        resolve_airdrop_recipient,
     };
     use crate::config::{Network, ResolvedProfile, SavedWalletBinding};
     use crate::hog;
@@ -772,38 +708,6 @@ mod tests {
                 unsafe { std::env::remove_var(self.key) };
             }
         }
-    }
-
-    #[test]
-    fn parses_hog_amounts_to_raw_units() {
-        assert_eq!(parse_hog_amount(DEFAULT_AIRDROP_HOG).unwrap(), 100_000_000);
-        assert_eq!(parse_hog_amount("1").unwrap(), 10_000_000);
-        assert_eq!(parse_hog_amount("1.5").unwrap(), 15_000_000);
-        assert_eq!(parse_hog_amount("0.0000001").unwrap(), 1);
-        assert_eq!(parse_hog_amount("100.0000000").unwrap(), 1_000_000_000);
-    }
-
-    #[test]
-    fn rejects_invalid_hog_amounts() {
-        for input in [
-            "",
-            "0",
-            "0.0000000",
-            "1.00000001",
-            ".1",
-            "1.",
-            "-1",
-            "1.2.3",
-        ] {
-            assert!(parse_hog_amount(input).is_err(), "{input} should fail");
-        }
-    }
-
-    #[test]
-    fn formats_raw_units_as_hog() {
-        assert_eq!(format_hog_amount(10_000_000), "1");
-        assert_eq!(format_hog_amount(15_000_000), "1.5");
-        assert_eq!(format_hog_amount(1), "0.0000001");
     }
 
     #[test]
@@ -969,6 +873,7 @@ mod tests {
             rpc_url_cli_override: false,
             faucet_url: None,
             default_key: Some("dev-0".into()),
+            default_wallet: None,
             runtime_manifest: None,
             runtime_manifest_cli_override: false,
             runtime_artifacts_dir: None,

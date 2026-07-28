@@ -121,6 +121,7 @@ Maintenance rules:
 - [x] `groundhog test`
 - [x] `groundhog deploy`
 - [x] `groundhog call`
+- [x] `groundhog transfer`
 - [x] `groundhog view`
 - [x] `groundhog storage`
 - [x] `groundhog node`
@@ -587,11 +588,12 @@ prefer pinning/documenting the minimum `hog-devnode` protocol/runtime version
 over adding a compatibility capability probe unless a real multi-version need
 appears.
 
-Current minimum runtime reference: use a `hog-devnode` built from hogd
-`7ab700bf2073c8b47becc6bdf476aa2fb4f2aa35` or newer, advertising protocol
-`hogp/7874f05decb9`, for RV32 gas table v3 / artifact format v4 execution.
-Follow-up: replace this commit/protocol pair with the released `hog-devnode`
-version once hogd cuts one.
+Current validated runtime reference: `hog-devnode 0.1.8` with protocol
+`hogp/6d1e8e6eca4e`. The local-DX smoke validates current RV32 execution,
+prefund-first wallet creation, two manifest-backed dev wallets, balance reads,
+receipt-confirmed native HOG transfers, and saved-wallet deploy/call flows.
+This runtime accepts direct-address transfers to materialized balance addresses;
+an undeployed recipient currently fails with a `boundsExceeded` conflict.
 
 **Phase 3 testing DX, after `--integration` v1:**
 

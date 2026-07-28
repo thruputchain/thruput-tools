@@ -18,12 +18,15 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use xdr_common::VecM;
 
-use crate::account_resolution::{LocalBootstrapRole, resolve_local_bootstrap_account};
+use crate::account_resolution::{
+    LocalBootstrapRole, resolve_local_bootstrap_account, resolve_transaction_sender,
+};
 use crate::codec::{format_contract_address, parse_contract_address};
 use crate::config::{
     Network, ProfileOverrides, ResolvedProfile, cache_dir, find_project_config,
-    remove_profile_wallet_address, resolve_default_key_for_profile, resolve_profile,
-    resolve_profile_with_overrides, save_profile_wallet_address,
+    load_global_profile, remove_profile_wallet_address, resolve_default_key_for_profile,
+    resolve_profile, resolve_profile_with_overrides, save_profile_default_wallet,
+    save_profile_wallet_address_with_default,
 };
 use crate::faucet_client::{client as faucet_client, post_json};
 use crate::hog;
@@ -51,6 +54,7 @@ struct SavedWallet {
     name: String,
     address: String,
     owner_public_key: String,
+    is_default: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -204,12 +208,18 @@ fn create_local_wallet(
     let project_root = find_project_config(cwd)
         .and_then(|path| path.parent().map(Path::to_path_buf))
         .unwrap_or_else(|| cwd.to_path_buf());
-    save_profile_wallet_address(
+    let make_default = should_initialize_default_wallet(
+        &project_root,
+        &prepared.profile_name,
+        &prepared.key_name,
+    )?;
+    save_profile_wallet_address_with_default(
         &project_root,
         Some(&prepared.profile_name),
         &prepared.wallet_name,
         &prepared.wallet_address,
         &prepared.owner_public_key,
+        make_default,
     )?;
 
     print.status(format_args!("Wallet created: {}", prepared.wallet_address));
@@ -290,12 +300,18 @@ fn create_remote_wallet(
     let project_root = find_project_config(cwd)
         .and_then(|path| path.parent().map(Path::to_path_buf))
         .unwrap_or_else(|| cwd.to_path_buf());
-    save_profile_wallet_address(
+    let make_default = should_initialize_default_wallet(
+        &project_root,
+        &prepared.profile_name,
+        &prepared.key_name,
+    )?;
+    save_profile_wallet_address_with_default(
         &project_root,
         Some(&prepared.profile_name),
         &prepared.wallet_name,
         &prepared.wallet_address,
         &prepared.owner_public_key,
+        make_default,
     )?;
     remove_remote_wallet_create_attempt(prepared)?;
 
@@ -359,14 +375,70 @@ pub fn remove(
         .and_then(|path| path.parent().map(Path::to_path_buf))
         .unwrap_or(cwd);
     let resolved_profile = resolve_profile(&project_root, profile)?;
+    let writes_project_profile = find_project_config(&project_root).is_some();
+    let configured_default = if writes_project_profile {
+        crate::config::load_project_profiles(&project_root)?
+            .and_then(|profiles| profiles.get(&resolved_profile.name).cloned())
+            .and_then(|profile| profile.default_wallet)
+    } else {
+        resolved_profile.default_wallet.clone()
+    };
+    let cleared_default = configured_default.as_deref() == Some(name.trim());
+    let inherited_profile = if writes_project_profile {
+        load_global_profile(&resolved_profile.name)?
+    } else {
+        None
+    };
+    let removes_inherited_default = writes_project_profile
+        && configured_default.is_none()
+        && resolved_profile.default_wallet.as_deref() == Some(name.trim());
+    if removes_inherited_default {
+        return Err(CliError::InheritedDefaultWalletRemoval {
+            wallet_name: name.trim().to_owned(),
+            profile: resolved_profile.name,
+        });
+    }
+    if cleared_default
+        && let Some(inherited_wallet) = inherited_profile
+            .as_ref()
+            .and_then(|profile| profile.default_wallet.as_deref())
+    {
+        let remains_saved = if inherited_wallet == name.trim() {
+            inherited_profile
+                .as_ref()
+                .is_some_and(|profile| profile.wallets.contains_key(inherited_wallet))
+        } else {
+            resolved_profile.wallets.contains_key(inherited_wallet)
+        };
+        if !remains_saved {
+            return Err(CliError::WalletRemovalExposesMissingDefault {
+                wallet_name: name.trim().to_owned(),
+                inherited_wallet: inherited_wallet.to_owned(),
+                profile: resolved_profile.name,
+            });
+        }
+    }
     remove_profile_wallet_address(&project_root, Some(&resolved_profile.name), name)?;
+    let effective_default_wallet =
+        resolve_profile(&project_root, Some(&resolved_profile.name))?.default_wallet;
 
     print.status(format_args!("Removed wallet `{}`.", name.trim()));
+    if cleared_default
+        && writes_project_profile
+        && let Some(wallet_name) = effective_default_wallet.as_deref()
+    {
+        print.warn(format_args!(
+            "profile `{}` now inherits default wallet `{wallet_name}` from global config",
+            resolved_profile.name
+        ));
+    }
     print.json(&CommandResult::new(
         cmd,
         json!({
             "name": name.trim(),
             "profile": resolved_profile.name,
+            "clearedConfiguredDefault": cleared_default,
+            "effectiveDefaultWallet": effective_default_wallet,
         }),
     ))?;
 
@@ -376,10 +448,12 @@ pub fn remove(
 pub fn list(profile: Option<&str>, cmd: &'static str, print: &Print) -> Result<(), CliError> {
     let cwd = std::env::current_dir()?;
     let profile = resolve_profile(&cwd, profile)?;
+    let default_wallet = profile.default_wallet;
     let wallets: Vec<SavedWallet> = profile
         .wallets
         .into_iter()
         .map(|(name, wallet)| SavedWallet {
+            is_default: default_wallet.as_deref() == Some(&name),
             name,
             address: wallet.address,
             owner_public_key: wallet.owner_public_key,
@@ -398,12 +472,63 @@ pub fn list(profile: Option<&str>, cmd: &'static str, print: &Print) -> Result<(
 
     for wallet in wallets {
         println!(
-            "{} {} owner {}",
-            wallet.name, wallet.address, wallet.owner_public_key
+            "{}{} {} owner {}",
+            wallet.name,
+            if wallet.is_default { " (default)" } else { "" },
+            wallet.address,
+            wallet.owner_public_key
         );
     }
 
     Ok(())
+}
+
+pub fn use_wallet(
+    name: &str,
+    profile: Option<&str>,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
+    let name = name.trim();
+    let cwd = std::env::current_dir()?;
+    let project_root = find_project_config(&cwd)
+        .and_then(|path| path.parent().map(Path::to_path_buf))
+        .unwrap_or(cwd);
+    let resolved_profile = resolve_profile(&project_root, profile)?;
+    resolve_transaction_sender(&resolved_profile, Some(name))?;
+    save_profile_default_wallet(&project_root, Some(&resolved_profile.name), name)?;
+
+    print.status(format_args!("Using wallet `{name}` by default."));
+    print.json(&CommandResult::new(
+        cmd,
+        json!({
+            "name": name,
+            "profile": resolved_profile.name,
+        }),
+    ))?;
+    Ok(())
+}
+
+fn should_initialize_default_wallet(
+    project_root: &Path,
+    profile_name: &str,
+    wallet_key_name: &str,
+) -> Result<bool, CliError> {
+    let profile = resolve_profile(project_root, Some(profile_name))?;
+    let effective_key = resolve_default_key_for_profile(&profile)?;
+    Ok(wallet_should_become_default(
+        profile.default_wallet.as_deref(),
+        effective_key.as_deref(),
+        wallet_key_name,
+    ))
+}
+
+fn wallet_should_become_default(
+    default_wallet: Option<&str>,
+    effective_key: Option<&str>,
+    wallet_key: &str,
+) -> bool {
+    default_wallet.is_none() && effective_key == Some(wallet_key)
 }
 
 fn print_dry_run(
@@ -1094,9 +1219,21 @@ mod tests {
         remote_wallet_create_attempt_path, remove_remote_wallet_create_attempt,
         resolve_dev_wallet_artifact_path, resolve_wallet_create_backend,
         resolve_wallet_create_inputs, validate_remote_create_wallet_address,
-        write_remote_wallet_create_attempt,
+        wallet_should_become_default, write_remote_wallet_create_attempt,
     };
     use crate::config::{LocalRuntimeState, Network, ProfileOverrides, ResolvedProfile};
+
+    #[test]
+    fn first_wallet_becomes_default_only_for_effective_key() {
+        assert!(wallet_should_become_default(None, Some("alice"), "alice"));
+        assert!(!wallet_should_become_default(None, Some("alice"), "bob"));
+        assert!(!wallet_should_become_default(None, None, "alice"));
+        assert!(!wallet_should_become_default(
+            Some("primary"),
+            Some("alice"),
+            "alice"
+        ));
+    }
 
     struct EnvGuard {
         key: &'static str,
@@ -1553,6 +1690,7 @@ mod tests {
             faucet_url: Some("https://faucet.devnet.example".into()),
             rpc_url_cli_override: false,
             default_key: Some("alice".into()),
+            default_wallet: None,
             runtime_manifest: None,
             runtime_manifest_cli_override: false,
             runtime_artifacts_dir: None,

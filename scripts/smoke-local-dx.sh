@@ -3,8 +3,9 @@
 #
 # Exercises the user-facing CLI path against a real hog-devnode binary:
 #   groundhog new -> build -> persistent node -> dev-0 deploy/call/view/storage
+#   -> dev-0/dev-1 transfer with recipient and sender balance validation
 #   -> key generate -> wallet create -> saved-wallet deploy
-#   -> same-wallet deploy rejection -> airdrop -> deploy retry/call
+#   -> saved-wallet airdrop -> second deploy/call
 #   -> stop -> restart -> verify persisted contract state
 #
 # Required environment:
@@ -69,6 +70,50 @@ for part in path:
         break
     value = value.get(part) if isinstance(value, dict) else value[int(part)]
 print(len(value) if value is not None else 0)
+PY
+}
+
+assert_transfer_balance_deltas() {
+    python3 - "$@" <<'PY'
+import sys
+
+labels = (
+    "sender before",
+    "sender after",
+    "recipient before",
+    "recipient after",
+    "raw amount",
+)
+values = []
+for label, raw in zip(labels, sys.argv[1:], strict=True):
+    if not raw.isascii() or not raw.isdecimal():
+        raise SystemExit(f"{label} is not a non-negative decimal integer: {raw!r}")
+    values.append(int(raw))
+
+sender_before, sender_after, recipient_before, recipient_after, raw_amount = values
+sender_delta = sender_before - sender_after
+recipient_delta = recipient_after - recipient_before
+if recipient_delta != raw_amount or sender_delta < raw_amount:
+    raise SystemExit(
+        "transfer balance delta mismatch: "
+        f"sender={sender_before}->{sender_after} (delta {sender_delta}), "
+        f"recipient={recipient_before}->{recipient_after} (delta {recipient_delta}), "
+        f"expected recipient delta={raw_amount} and sender delta at least {raw_amount}"
+    )
+print(sender_delta - raw_amount)
+PY
+}
+
+assert_exact_balance_increase() {
+    python3 - "$@" <<'PY'
+import sys
+
+before, after, expected = (int(value) for value in sys.argv[1:])
+if before < 0 or after < 0 or expected < 0 or after - before != expected:
+    raise SystemExit(
+        f"balance increase mismatch: {before}->{after} "
+        f"(delta {after - before}), expected={expected}"
+    )
 PY
 }
 
@@ -338,18 +383,6 @@ run_json() {
     printf '%s\n' "$output"
 }
 
-run_failure_json() {
-    local label="$1"
-    shift
-    log "$label: $(display_command "$@")"
-    local output
-    if output="$("$@" 2>&1)"; then
-        printf '%s\n' "$output" >&2
-        die "$label unexpectedly succeeded"
-    fi
-    printf '%s\n' "$output"
-}
-
 run_view_json() {
     local label="$1"
     shift
@@ -480,6 +513,7 @@ fi
 
 WORK="$(mktemp -d)"
 export XDG_CONFIG_HOME="$WORK/config"
+export XDG_CACHE_HOME="$WORK/cache"
 NODE_DATA_DIR="$WORK/node-data"
 NODE_ARGS=(--json node --port 0 --hog-devnode-binary "$DEVNODE_BINARY" --data-dir "$NODE_DATA_DIR")
 if [[ -n "$HOGD_PROTOCOL" ]]; then
@@ -576,6 +610,53 @@ GLOBAL_RUNTIME_MANIFEST="$(toml_field "$GLOBAL_CONFIG" local_runtime_state.runti
 [[ "$GLOBAL_RUNTIME_MANIFEST" == "$RUNTIME_MANIFEST" ]] \
     || die "local_runtime_state.runtime_manifest was $GLOBAL_RUNTIME_MANIFEST, expected $RUNTIME_MANIFEST"
 unset GROUNDHOG_RUNTIME_MANIFEST
+
+TRANSFER_SENDER="dev-0"
+TRANSFER_RECIPIENT="dev-1"
+TRANSFER_AMOUNT="0.0000001"
+TRANSFER_RAW_AMOUNT="1"
+
+SENDER_BEFORE_JSON="$(run_json "sender balance before" "$CLI" --json balance "$TRANSFER_SENDER")"
+RECIPIENT_BEFORE_JSON="$(run_json "recipient balance before" "$CLI" --json balance "$TRANSFER_RECIPIENT")"
+SENDER_ADDRESS="$(json_field data.address "$SENDER_BEFORE_JSON")"
+RECIPIENT_ADDRESS="$(json_field data.address "$RECIPIENT_BEFORE_JSON")"
+SENDER_BALANCE_BEFORE="$(json_field data.raw_balance "$SENDER_BEFORE_JSON")"
+RECIPIENT_BALANCE_BEFORE="$(json_field data.raw_balance "$RECIPIENT_BEFORE_JSON")"
+
+TRANSFER_JSON="$(run_json transfer "$CLI" --json transfer "$TRANSFER_RECIPIENT" "$TRANSFER_AMOUNT")"
+[[ "$(json_field data.status.result "$TRANSFER_JSON")" == "ok" ]] \
+    || die "transfer did not commit successfully: $(json_field data.status "$TRANSFER_JSON")"
+[[ "$(json_field data.rawAmount "$TRANSFER_JSON")" == "$TRANSFER_RAW_AMOUNT" ]] \
+    || die "transfer raw amount did not equal $TRANSFER_RAW_AMOUNT"
+[[ "$(json_field data.sender "$TRANSFER_JSON")" == "$SENDER_ADDRESS" ]] \
+    || die "transfer sender did not match $TRANSFER_SENDER address $SENDER_ADDRESS"
+[[ "$(json_field data.recipient "$TRANSFER_JSON")" == "$RECIPIENT_ADDRESS" ]] \
+    || die "transfer recipient did not match $TRANSFER_RECIPIENT address $RECIPIENT_ADDRESS"
+
+SENDER_AFTER_JSON="$(run_json "sender balance after" "$CLI" --json balance "$TRANSFER_SENDER")"
+RECIPIENT_AFTER_JSON="$(run_json "recipient balance after" "$CLI" --json balance "$TRANSFER_RECIPIENT")"
+SENDER_BALANCE_AFTER="$(json_field data.raw_balance "$SENDER_AFTER_JSON")"
+RECIPIENT_BALANCE_AFTER="$(json_field data.raw_balance "$RECIPIENT_AFTER_JSON")"
+TRANSFER_FEE_RAW="$(assert_transfer_balance_deltas \
+    "$SENDER_BALANCE_BEFORE" \
+    "$SENDER_BALANCE_AFTER" \
+    "$RECIPIENT_BALANCE_BEFORE" \
+    "$RECIPIENT_BALANCE_AFTER" \
+    "$TRANSFER_RAW_AMOUNT")"
+log "transfer result: sender=$SENDER_ADDRESS $SENDER_BALANCE_BEFORE->$SENDER_BALANCE_AFTER recipient=$RECIPIENT_ADDRESS $RECIPIENT_BALANCE_BEFORE->$RECIPIENT_BALANCE_AFTER raw=$TRANSFER_RAW_AMOUNT fee=$TRANSFER_FEE_RAW height=$(json_field data.height "$TRANSFER_JSON") tx=$(json_field data.txHash "$TRANSFER_JSON")"
+
+DIRECT_RECIPIENT="$RECIPIENT_ADDRESS"
+DIRECT_BEFORE_JSON="$(run_json "direct recipient balance before" "$CLI" --json balance "$DIRECT_RECIPIENT")"
+DIRECT_BALANCE_BEFORE="$(json_field data.raw_balance "$DIRECT_BEFORE_JSON")"
+DIRECT_TRANSFER_JSON="$(run_json "direct recipient transfer" "$CLI" --json transfer "$DIRECT_RECIPIENT" "$TRANSFER_AMOUNT")"
+[[ "$(json_field data.status.result "$DIRECT_TRANSFER_JSON")" == "ok" ]] \
+    || die "direct recipient transfer did not commit successfully: $(json_field data.status "$DIRECT_TRANSFER_JSON")"
+[[ "$(json_field data.recipient "$DIRECT_TRANSFER_JSON")" == "$DIRECT_RECIPIENT" ]] \
+    || die "direct transfer recipient did not match $DIRECT_RECIPIENT"
+DIRECT_AFTER_JSON="$(run_json "direct recipient balance after" "$CLI" --json balance "$DIRECT_RECIPIENT")"
+DIRECT_BALANCE_AFTER="$(json_field data.raw_balance "$DIRECT_AFTER_JSON")"
+assert_exact_balance_increase "$DIRECT_BALANCE_BEFORE" "$DIRECT_BALANCE_AFTER" "$TRANSFER_RAW_AMOUNT"
+log "direct-address transfer result: recipient=$DIRECT_RECIPIENT $DIRECT_BALANCE_BEFORE->$DIRECT_BALANCE_AFTER raw=$TRANSFER_RAW_AMOUNT height=$(json_field data.height "$DIRECT_TRANSFER_JSON") tx=$(json_field data.txHash "$DIRECT_TRANSFER_JSON")"
 
 GATEWAY_RPC_URL=""
 if [[ "${SMOKE_STANDALONE_GATEWAY:-0}" == "1" ]]; then
@@ -731,18 +812,17 @@ USER_CONTRACT_ADDRESS="$(json_field data.address "$USER_DEPLOY_JSON")"
     || die "saved-wallet deploy did not return a contract address"
 log "saved-wallet deploy result: address=$USER_CONTRACT_ADDRESS height=$(json_field data.height "$USER_DEPLOY_JSON") tx=$(json_field data.tx_hash "$USER_DEPLOY_JSON")"
 
-SECOND_DEPLOY_ERROR="$(run_failure_json "same-wallet deploy before airdrop" "$CLI" --json deploy)"
-[[ "$(json_field error.code "$SECOND_DEPLOY_ERROR")" == "transaction_recent_failure" ]] \
-    || die "same-wallet deploy error code was $(json_field error.code "$SECOND_DEPLOY_ERROR"), expected transaction_recent_failure"
-[[ "$(json_field error.details.conflict.code "$SECOND_DEPLOY_ERROR")" == "boundsExceeded" ]] \
-    || die "same-wallet deploy conflict was $(json_field error.details.conflict.code "$SECOND_DEPLOY_ERROR"), expected boundsExceeded"
-[[ "$(json_field error.hint "$SECOND_DEPLOY_ERROR")" == *"groundhog airdrop"* ]] \
-    || die "same-wallet deploy error did not recommend groundhog airdrop"
-log "same-wallet deploy failed with actionable funding guidance"
-
+WALLET_BALANCE_BEFORE_JSON="$(run_json "saved-wallet balance before airdrop" "$CLI" --json balance "$USER_KEY")"
+WALLET_BALANCE_BEFORE="$(json_field data.raw_balance "$WALLET_BALANCE_BEFORE_JSON")"
 AIRDROP_JSON="$(run_json "saved-wallet airdrop" "$CLI" --json airdrop "$USER_KEY")"
 [[ "$(json_field data.status.result "$AIRDROP_JSON")" == "ok" ]] \
     || die "saved-wallet airdrop did not commit successfully"
+WALLET_BALANCE_AFTER_JSON="$(run_json "saved-wallet balance after airdrop" "$CLI" --json balance "$USER_KEY")"
+WALLET_BALANCE_AFTER="$(json_field data.raw_balance "$WALLET_BALANCE_AFTER_JSON")"
+AIRDROP_RAW_AMOUNT="$(json_field data.raw_amount "$AIRDROP_JSON")"
+assert_exact_balance_increase "$WALLET_BALANCE_BEFORE" "$WALLET_BALANCE_AFTER" "$AIRDROP_RAW_AMOUNT"
+log "saved-wallet airdrop result: balance=$WALLET_BALANCE_BEFORE->$WALLET_BALANCE_AFTER raw=$AIRDROP_RAW_AMOUNT height=$(json_field data.height "$AIRDROP_JSON") tx=$(json_field data.tx_hash "$AIRDROP_JSON")"
+
 SECOND_DEPLOY_JSON="$(run_json "same-wallet deploy after airdrop" "$CLI" --json deploy)"
 SECOND_CONTRACT_ADDRESS="$(json_field data.address "$SECOND_DEPLOY_JSON")"
 [[ "$SECOND_CONTRACT_ADDRESS" != "null" && -n "$SECOND_CONTRACT_ADDRESS" ]] \
