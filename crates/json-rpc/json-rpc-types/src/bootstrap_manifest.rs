@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::{NetworkHashHex, SHA256Hash};
 
 /// Current bootstrap manifest schema version.
-pub const BOOTSTRAP_MANIFEST_SCHEMA_VERSION: u32 = 2;
+pub const BOOTSTRAP_MANIFEST_SCHEMA_VERSION: u32 = 1;
 
 /// Bootstrap intent consumed by a backend launcher before genesis.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -150,7 +150,7 @@ mod tests {
         assert_eq!(
             value,
             json!({
-                "schemaVersion": 2,
+                "schemaVersion": 1,
                 "kind": "groundhog-bootstrap",
                 "networkHash": "5151515151515151515151515151515151515151515151515151515151515151",
                 "profile": "local-dev",

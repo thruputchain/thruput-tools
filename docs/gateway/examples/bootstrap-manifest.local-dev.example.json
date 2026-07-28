@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 1,
   "kind": "groundhog-bootstrap",
   "networkHash": "0000000000000000000000000000000000000000000000000000000000000000",
   "profile": "local-dev",

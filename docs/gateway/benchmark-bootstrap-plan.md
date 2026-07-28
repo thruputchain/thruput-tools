@@ -88,7 +88,7 @@ Input to a backend launcher. Describes desired genesis/bootstrap state.
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 1,
   "kind": "groundhog-bootstrap",
   "networkHash": "5151515151515151515151515151515151515151515151515151515151515151",
   "profile": "local-dev",
@@ -155,7 +155,7 @@ into the concrete parameters actually applied. For example,
 `storageCostModel.profile = "hogd-default"` lowers to explicit cost-model
 fields in the runtime manifest.
 
-For v2, `bootstrapAccounts` describes a homogeneous account group. All
+For v1, `bootstrapAccounts` describes a homogeneous account group. All
 bootstrapped accounts share the same derivation scheme and initial storage-token
 funding. Account `role` values are producer-assigned runtime hints derived from
 the selected profile, not input fields in the bootstrap manifest. Per-account
