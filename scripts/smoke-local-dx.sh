@@ -5,6 +5,7 @@
 #   groundhog new -> build -> persistent node -> dev-0 deploy/call/view/storage
 #   -> dev-0/dev-1 transfer with recipient and sender balance validation
 #   -> transaction show and bounded sender-history pagination
+#   -> raw/spec-decoded counter events and canonical token transfer history
 #   -> key generate -> wallet create -> saved-wallet deploy
 #   -> saved-wallet airdrop -> second deploy/call
 #   -> stop -> restart -> verify persisted contract state
@@ -116,6 +117,16 @@ if before < 0 or after < 0 or expected < 0 or after - before != expected:
         f"(delta {after - before}), expected={expected}"
     )
 PY
+}
+
+assert_height_at_least() {
+    local label="$1"
+    local actual="$2"
+    local expected="$3"
+    [[ "$actual" =~ ^[0-9]+$ && "$expected" =~ ^[0-9]+$ ]] \
+        || die "$label heights are not decimal integers: actual=$actual expected=$expected"
+    (( 10#$actual >= 10#$expected )) \
+        || die "$label is behind committed data: latest=$actual expected>=$expected"
 }
 
 toml_field() {
@@ -567,8 +578,10 @@ if [[ -n "${SMOKE_SDK_PATH:-}" ]]; then
     override_sdk_path Cargo.toml "$SMOKE_SDK_PATH" "$SMOKE_PROTOCOL_RS_PATH"
 fi
 
-log "Building contract WASM"
-"$CLI" build
+COUNTER_BUILD_JSON="$(run_json "build counter contract" "$CLI" --json build)"
+COUNTER_SPEC_XDR="$(json_field data.spec_xdr "$COUNTER_BUILD_JSON")"
+[[ "$COUNTER_SPEC_XDR" != "null" && -r "$COUNTER_SPEC_XDR" ]] \
+    || die "counter build did not return a readable spec_xdr path: $COUNTER_SPEC_XDR"
 
 log "Starting local node"
 "$CLI" "${NODE_ARGS[@]}" > "$WORK/node.json" 2> "$WORK/node.err" &
@@ -645,7 +658,26 @@ TRANSFER_FEE_RAW="$(assert_transfer_balance_deltas \
     "$RECIPIENT_BALANCE_BEFORE" \
     "$RECIPIENT_BALANCE_AFTER" \
     "$TRANSFER_RAW_AMOUNT")"
-log "transfer result: sender=$SENDER_ADDRESS $SENDER_BALANCE_BEFORE->$SENDER_BALANCE_AFTER recipient=$RECIPIENT_ADDRESS $RECIPIENT_BALANCE_BEFORE->$RECIPIENT_BALANCE_AFTER raw=$TRANSFER_RAW_AMOUNT fee=$TRANSFER_FEE_RAW height=$(json_field data.height "$TRANSFER_JSON") tx=$TRANSFER_TX_HASH"
+TRANSFER_HEIGHT="$(json_field data.height "$TRANSFER_JSON")"
+TOKEN_ADDRESS="$(json_field data.tokenAddress "$TRANSFER_JSON")"
+[[ "$TOKEN_ADDRESS" != "null" && -n "$TOKEN_ADDRESS" ]] \
+    || die "transfer did not report its token address"
+log "transfer result: sender=$SENDER_ADDRESS $SENDER_BALANCE_BEFORE->$SENDER_BALANCE_AFTER recipient=$RECIPIENT_ADDRESS $RECIPIENT_BALANCE_BEFORE->$RECIPIENT_BALANCE_AFTER raw=$TRANSFER_RAW_AMOUNT fee=$TRANSFER_FEE_RAW height=$TRANSFER_HEIGHT tx=$TRANSFER_TX_HASH"
+
+TOKEN_TRANSFERS_JSON="$(run_json "native token transfers" "$CLI" --json token transfers "$TOKEN_ADDRESS")"
+assert_height_at_least \
+    "token event index" \
+    "$(json_field data.latestBlock "$TOKEN_TRANSFERS_JSON")" \
+    "$TRANSFER_HEIGHT"
+[[ "$(json_field data.records.0.txHash "$TOKEN_TRANSFERS_JSON")" == "$TRANSFER_TX_HASH" ]] \
+    || die "token history did not return the committed transfer $TRANSFER_TX_HASH"
+[[ "$(json_field data.records.0.decodeStatus "$TOKEN_TRANSFERS_JSON")" == "decoded" ]] \
+    || die "native transfer was not decoded"
+[[ "$(json_field data.records.0.transfer.kind "$TOKEN_TRANSFERS_JSON")" == "transfer" ]] \
+    || die "native transfer was not classified as transfer"
+[[ "$(json_field data.records.0.transfer.rawAmount "$TOKEN_TRANSFERS_JSON")" == "$TRANSFER_RAW_AMOUNT" ]] \
+    || die "native transfer history reported the wrong raw amount"
+log "native token event result: tx=$TRANSFER_TX_HASH token=$TOKEN_ADDRESS"
 
 TX_SHOW_JSON="$(run_json "transaction show" "$CLI" --json tx show "$TRANSFER_TX_HASH")"
 [[ "$(json_field data.txHash "$TX_SHOW_JSON")" == "$TRANSFER_TX_HASH" ]] \
@@ -766,6 +798,31 @@ log "initialize result: status=$(json_field data.status_summary "$INITIALIZE_JSO
 INCREMENT_JSON="$(run_json "call increment" "$CLI" --json call "$PROJECT_NAME" increment "$INCREMENT_AMOUNT")"
 assert_call_succeeded "increment" "$INCREMENT_JSON"
 log "increment result: status=$(json_field data.status_summary "$INCREMENT_JSON") height=$(json_field data.height "$INCREMENT_JSON") tx=$(json_field data.tx_hash "$INCREMENT_JSON")"
+
+PING_TAG=99
+PING_CALL_JSON="$(run_json "call ping" "$CLI" --json call "$PROJECT_NAME" ping "$PING_TAG")"
+assert_call_succeeded "ping" "$PING_CALL_JSON"
+PING_TX_HASH="$(json_field data.tx_hash "$PING_CALL_JSON")"
+PING_HEIGHT="$(json_field data.height "$PING_CALL_JSON")"
+
+RAW_EVENTS_JSON="$(run_json "raw counter events" "$CLI" --json events list "$CONTRACT_ADDRESS")"
+assert_height_at_least \
+    "event index" \
+    "$(json_field data.latestBlock "$RAW_EVENTS_JSON")" \
+    "$PING_HEIGHT"
+[[ "$(json_field data.events.0.txHash "$RAW_EVENTS_JSON")" == "$PING_TX_HASH" ]] \
+    || die "raw event history did not return committed ping $PING_TX_HASH"
+[[ "$(json_field data.events.0.decodeStatus "$RAW_EVENTS_JSON")" == "notRequested" ]] \
+    || die "raw event history unexpectedly decoded the ping"
+
+DECODED_EVENTS_JSON="$(run_json "decoded counter events" "$CLI" --json events list "$CONTRACT_ADDRESS" --spec "$COUNTER_SPEC_XDR")"
+[[ "$(json_field data.events.0.txHash "$DECODED_EVENTS_JSON")" == "$PING_TX_HASH" ]] \
+    || die "decoded event history did not return committed ping $PING_TX_HASH"
+[[ "$(json_field data.events.0.decodeStatus "$DECODED_EVENTS_JSON")" == "decoded" ]] \
+    || die "counter ping was not decoded"
+[[ "$(json_field data.events.0.decoded.name "$DECODED_EVENTS_JSON")" == "PingEvent" ]] \
+    || die "counter ping decoded as the wrong event"
+log "counter event result: tx=$PING_TX_HASH raw+decoded"
 
 VIEW_FROM="dev-0"
 if [[ -n "$GATEWAY_RPC_URL" ]]; then

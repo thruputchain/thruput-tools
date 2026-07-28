@@ -157,7 +157,7 @@ fn parse_topic_values(inputs: &[String], position: &'static str) -> Result<Vec<T
         .collect()
 }
 
-fn parse_event_limit(input: Option<&str>) -> Result<u32, CliError> {
+pub(crate) fn parse_event_limit(input: Option<&str>) -> Result<u32, CliError> {
     let Some(input) = input else {
         return Ok(DEFAULT_EVENT_LIMIT);
     };
@@ -178,7 +178,7 @@ fn parse_event_limit(input: Option<&str>) -> Result<u32, CliError> {
     Ok(limit)
 }
 
-fn parse_event_cursor(input: Option<&str>) -> Result<PaginationCursor, CliError> {
+pub(crate) fn parse_event_cursor(input: Option<&str>) -> Result<PaginationCursor, CliError> {
     let Some(input) = input else {
         return Ok(PaginationCursor::default());
     };
@@ -191,7 +191,10 @@ fn parse_event_cursor(input: Option<&str>) -> Result<PaginationCursor, CliError>
     })
 }
 
-async fn fetch_event_page(rpc_url: &str, query: EventQuery) -> Result<EventPage, CliError> {
+pub(crate) async fn fetch_event_page(
+    rpc_url: &str,
+    query: EventQuery,
+) -> Result<EventPage, CliError> {
     let requested_limit = query.limit;
     let client = HttpClientBuilder::default()
         .build(rpc_url)
@@ -276,14 +279,10 @@ fn print_event_list(report: &EventListReport, continuation_requested: bool, prin
     } else {
         for item in &report.events {
             print.status("");
-            print.detail(
-                "event",
-                format_args!(
-                    "height {} sequence {}",
-                    *item.raw.block_height, item.raw.sequence_number,
-                ),
-            );
-            print.detail("tx", format_tx_hash(&item.raw.tx_hash));
+            print.status("event");
+            print.detail("height", *item.raw.block_height);
+            print.detail("sequence", item.raw.sequence_number);
+            print.detail("txn", format_tx_hash(&item.raw.tx_hash));
             if item.raw.contract_address != report.contract_address {
                 print.detail(
                     "event emitter",

@@ -581,7 +581,8 @@ mod tests {
     use xdr_common::VecM;
 
     use super::{
-        MAX_EVENT_VALUES, MAX_SPEC_BYTES, ValidatedEventSpec, read_bounded, validate_spec,
+        MAX_EVENT_VALUES, MAX_SPEC_BYTES, MAX_SPEC_MEMBERS, ValidatedEventSpec, read_bounded,
+        validate_spec,
     };
     use crate::events_json::EventDecodeStatus;
 
@@ -742,6 +743,87 @@ mod tests {
         };
         assert!(
             validate_spec(&event_spec(array))
+                .unwrap_err()
+                .contains("may materialize")
+        );
+    }
+
+    #[test]
+    fn validation_rejects_duplicate_signatures_and_excess_indexed_fields() {
+        let mut duplicate_signature = event_spec(ContractType::U64);
+        let mut second_event = duplicate_signature.events[0].clone();
+        second_event.name = spec_string("PongEvent");
+        duplicate_signature.events.0.push(second_event);
+        assert!(
+            validate_spec(&duplicate_signature)
+                .unwrap_err()
+                .contains("duplicate signature")
+        );
+
+        let mut excess_topics = event_spec(ContractType::U64);
+        excess_topics.events.0[0].topics.0.extend([
+            field("second", ContractType::U64),
+            field("third", ContractType::U64),
+        ]);
+        assert!(
+            validate_spec(&excess_topics)
+                .unwrap_err()
+                .contains("maximum is 2")
+        );
+    }
+
+    #[test]
+    fn validation_rejects_unresolved_types_and_duplicate_field_names() {
+        let unresolved = event_spec(ContractType::Named {
+            named: spec_string("Missing"),
+        });
+        assert!(
+            validate_spec(&unresolved)
+                .unwrap_err()
+                .contains("unresolved event type `Missing`")
+        );
+
+        let mut duplicate_field = event_spec(ContractType::U64);
+        duplicate_field.events.0[0]
+            .fields
+            .0
+            .push(field("value", ContractType::Bool));
+        assert!(
+            validate_spec(&duplicate_field)
+                .unwrap_err()
+                .contains("duplicate event payload field name `value`")
+        );
+    }
+
+    #[test]
+    fn validation_enforces_member_and_materialized_value_boundaries() {
+        let mut at_member_limit = event_spec(ContractType::Void);
+        at_member_limit.events.0[0].fields = VecM(
+            (0..MAX_SPEC_MEMBERS - 2)
+                .map(|index| field(&format!("field_{index}"), ContractType::Void))
+                .collect(),
+        );
+        validate_spec(&at_member_limit).expect("exact member limit should be accepted");
+        at_member_limit.events.0[0]
+            .fields
+            .0
+            .push(field("one_too_many", ContractType::Void));
+        assert!(
+            validate_spec(&at_member_limit)
+                .unwrap_err()
+                .contains("definitions and members")
+        );
+
+        let array = |len| ContractType::Array {
+            array: groundhog_contract_spec::ContractArrayType {
+                element: Box::new(ContractType::Void),
+                len: u32::try_from(len).unwrap(),
+            },
+        };
+        validate_spec(&event_spec(array(MAX_EVENT_VALUES - 2)))
+            .expect("exact materialized value limit should be accepted");
+        assert!(
+            validate_spec(&event_spec(array(MAX_EVENT_VALUES - 1)))
                 .unwrap_err()
                 .contains("may materialize")
         );

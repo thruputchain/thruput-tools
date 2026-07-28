@@ -455,6 +455,11 @@ enum Command {
         #[command(subcommand)]
         command: EventsCommand,
     },
+    /// Inspect canonical token activity
+    Token {
+        #[command(subcommand)]
+        command: TokenCommand,
+    },
     /// Generate shell completions
     Completion {
         /// Shell to generate completions for
@@ -625,6 +630,41 @@ enum EventsCommand {
     },
 }
 
+#[derive(Subcommand)]
+enum TokenCommand {
+    /// List one page of canonical ERC20 transfer history
+    #[command(
+        long_about = "List exactly one newest-first page of canonical ERC20 TransferEvent records.\n\n\
+                      Participant filters are applied by the server. --account matches transfers \
+                      where the address is either sender or recipient. Amounts remain unformatted \
+                      base-unit decimal strings; token metadata is not fetched."
+    )]
+    Transfers {
+        /// Token contract alias, wallet name, dev-N account, or direct address
+        token: String,
+        /// Include only transfers from this resolved address
+        #[arg(long)]
+        from: Option<String>,
+        /// Include only transfers to this resolved address
+        #[arg(long)]
+        to: Option<String>,
+        /// Include transfers where this address is sender or recipient
+        #[arg(long)]
+        account: Option<String>,
+        /// Number of transfer records to request (default: 50)
+        #[arg(long, allow_hyphen_values = true)]
+        limit: Option<String>,
+        /// Opaque cursor returned by a previous page
+        #[arg(long)]
+        cursor: Option<String>,
+        /// Config profile to use
+        #[arg(long = "profile")]
+        profile: Option<String>,
+        #[command(flatten)]
+        target_args: RpcTargetArgs,
+    },
+}
+
 impl CodegenCommand {
     fn command_name(&self) -> &'static str {
         match self {
@@ -646,6 +686,14 @@ impl EventsCommand {
     fn command_name(&self) -> &'static str {
         match self {
             Self::List { .. } => "events.list",
+        }
+    }
+}
+
+impl TokenCommand {
+    fn command_name(&self) -> &'static str {
+        match self {
+            Self::Transfers { .. } => "token.transfers",
         }
     }
 }
@@ -675,6 +723,7 @@ impl Command {
             Self::Codegen { command } => command.command_name(),
             Self::Tx { command } => command.command_name(),
             Self::Events { command } => command.command_name(),
+            Self::Token { command } => command.command_name(),
             Self::Completion { .. } => "completion",
         }
     }
@@ -1091,6 +1140,34 @@ fn main() {
                         cursor.as_deref(),
                         spec.as_deref(),
                         event.as_deref(),
+                        &cwd,
+                        profile.as_deref(),
+                        &target_args.into(),
+                        cmd_name,
+                        &print,
+                    )
+                }),
+        },
+        Command::Token { command } => match command {
+            TokenCommand::Transfers {
+                token,
+                from,
+                to,
+                account,
+                limit,
+                cursor,
+                profile,
+                target_args,
+            } => std::env::current_dir()
+                .map_err(groundhog_cli::CliError::Io)
+                .and_then(|cwd| {
+                    groundhog_cli::token::transfers(
+                        &token,
+                        from.as_deref(),
+                        to.as_deref(),
+                        account.as_deref(),
+                        limit.as_deref(),
+                        cursor.as_deref(),
                         &cwd,
                         profile.as_deref(),
                         &target_args.into(),
@@ -1579,6 +1656,61 @@ mod tests {
                 );
             }
             _ => panic!("expected events list command"),
+        }
+    }
+
+    #[test]
+    fn token_transfers_flags_and_command_name_parse() {
+        let cli = Cli::parse_from([
+            "groundhog",
+            "token",
+            "transfers",
+            "alula",
+            "--from",
+            "alice",
+            "--to",
+            "bob",
+            "--limit",
+            "25",
+            "--cursor",
+            "0xaabb",
+            "--profile",
+            "local",
+            "--rpc-url",
+            "https://rpc.example",
+            "--runtime-manifest",
+            "/tmp/runtime.json",
+        ]);
+
+        assert_eq!(cli.command.command_name(), "token.transfers");
+        match cli.command {
+            Command::Token {
+                command:
+                    TokenCommand::Transfers {
+                        token,
+                        from,
+                        to,
+                        account,
+                        limit,
+                        cursor,
+                        profile,
+                        target_args,
+                    },
+            } => {
+                assert_eq!(token, "alula");
+                assert_eq!(from.as_deref(), Some("alice"));
+                assert_eq!(to.as_deref(), Some("bob"));
+                assert!(account.is_none());
+                assert_eq!(limit.as_deref(), Some("25"));
+                assert_eq!(cursor.as_deref(), Some("0xaabb"));
+                assert_eq!(profile.as_deref(), Some("local"));
+                assert_eq!(target_args.rpc_url.as_deref(), Some("https://rpc.example"));
+                assert_eq!(
+                    target_args.runtime_manifest.as_deref(),
+                    Some(std::path::Path::new("/tmp/runtime.json"))
+                );
+            }
+            _ => panic!("expected token transfers command"),
         }
     }
 
