@@ -4,6 +4,7 @@ use crate::{CliError, Print};
 
 use crate::result::CommandResult;
 use serde_json::json;
+use std::future::Future;
 use std::io::{self, Write};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -271,6 +272,8 @@ async fn run_hogd_dev(
     let local_runtime_state_result = Ok(local_runtime_state_path);
     let cleanup_local_runtime_state =
         local_runtime_state_cleanup(&started, runtime_artifacts_dir.as_deref());
+    let shutdown_signal = prepare_stop_signal()
+        .map_err(|source| map_node_supervisor_error(&NodeSupervisorError::StopSignal { source }))?;
 
     if print.is_json() {
         if let Err(error) = print.json(&CommandResult::new(
@@ -297,7 +300,7 @@ async fn run_hogd_dev(
     }
 
     let stop_signal = async {
-        wait_for_stop_signal()
+        shutdown_signal
             .await
             .map_err(|source| NodeSupervisorError::StopSignal { source })?;
         if !print.is_json() {
@@ -356,20 +359,23 @@ fn cleanup_written_local_runtime_state(cleanup: Option<LocalRuntimeStateCleanup>
     }
 }
 
-async fn wait_for_stop_signal() -> Result<(), std::io::Error> {
-    #[cfg(unix)]
-    {
-        let mut sigterm =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+#[cfg(unix)]
+fn prepare_stop_signal() -> Result<impl Future<Output = Result<(), std::io::Error>>, std::io::Error>
+{
+    let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    Ok(async move {
         tokio::select! {
-            result = tokio::signal::ctrl_c() => result,
+            _ = sigint.recv() => Ok(()),
             _ = sigterm.recv() => Ok(()),
         }
-    }
-    #[cfg(not(unix))]
-    {
-        tokio::signal::ctrl_c().await
-    }
+    })
+}
+
+#[cfg(not(unix))]
+fn prepare_stop_signal() -> Result<impl Future<Output = Result<(), std::io::Error>>, std::io::Error>
+{
+    Ok(tokio::signal::ctrl_c())
 }
 
 fn print_started_local_node(
