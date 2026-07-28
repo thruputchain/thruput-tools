@@ -210,33 +210,11 @@ Without `--spec`, every item contains raw event data and provenance plus the fin
 
 With `--spec`, open, size-check, load, and validate the contract spec before RPC access. A `.wasm` file must contain finalized or raw embedded spec sections accepted by the existing canonicalizing loader. A `.xdr` file must decode as a `ContractSpec`. Check file existence separately because the current WASM loader returns the same `None` result for a missing file and an artifact without a spec. Missing specs, malformed files, and unsupported extensions fail the command before the event request.
 
-Apply explicit resource budgets to user-supplied specs:
+`--spec` accepts a trusted local developer artifact, such as output from `groundhog build` or trusted CI. It is not a hardened parser for arbitrary downloaded or uploaded files in v1. Read at most 16 MiB before parsing, dispatch only `.wasm` and `.xdr`, and reuse the CLI's existing owned contract-spec loaders and canonicalization semantics. Loading a WASM artifact parses spec sections but never instantiates or executes the module.
 
-- at most 16 MiB of artifact bytes;
-  
-- at most 4,096 decoded spec-definition and member nodes;
-  
-- at most 8,192 decoded wire records and collection elements across the artifact;
+After loading, perform complete event-focused structural validation before RPC. Reject cycles, ambiguous definitions, unresolved event-reachable types, unsupported event shapes, more than 4,096 spec definitions/members, more than 64 event-reachable type levels, and validation graphs requiring more than 65,536 type visits. While decoding one returned event, cap materialized values at 4,096 and reject expansions before allocating their output containers. These post-load checks protect event decoding and output but do not harden the initial owned XDR decode itself.
 
-- at most 64 nested contract-type levels;
-  
-- at most 4,096 materialized values while decoding one event payload.
-  
-
-The bounded XDR path must reject collection lengths that exceed the remaining bytes or resource budget before allocating them. Charge every decoded raw fragment, interface, interface anchor, method, argument, exception, top-level entry, recursive type, and collection element against the 8,192-item wire budget, including duplicates later removed by canonicalization. Do not call an unbounded decoder on an unchecked `.xdr` file. Reject fixed arrays and other statically expanded shapes that exceed the value budget even when their elements consume zero payload bytes. The 1 KiB protocol event bound limits input bytes but does not by itself limit allocations requested by a malicious spec.
-
-Budget accounting is deterministic:
-
-- the 4,096-node spec budget charges one node for each event, type definition, struct field, enum variant, union case, union-case field or tuple element, and each inline `ContractType` occurrence in the encoded spec; named references charge their occurrence but do not expand the referenced definition again for this count;
-  
-- the 8,192-item wire budget charges every decoded collection entry or schema record before allocation or descent and spans all raw sections in one artifact;
-
-- type depth starts at one for an event payload field and increments across every option, vector, array, tuple, or named-reference edge; cycles fail separately;
-  
-- the 4,096-value event budget charges every JSON scalar or container produced and every array, vector, tuple, struct-field, or union payload value visited, before allocation or insertion.
-  
-
-These checks apply equally to direct `.xdr` files and spec sections embedded in `.wasm`. The current owned spec loaders decode before these budgets can run, so Phase 2 must add bounded decoding at the shared loader/XDR boundary or introduce bounded loaders with the same extraction and canonicalization semantics. It must not wrap the current unbounded owned loader with only a post-decode validation pass. WASM extraction preserves current raw-section precedence and, when no raw section exists, the first-finalized-section behavior. It must reject unsupported model variants before canonicalization, and shared spec-tool paths reached by untrusted input must return typed errors rather than panic. Raw-fragment leakage validation must use bounded linear or multi-pattern work rather than multiplying every fragment by every data-segment byte.
+Known residual risk: a deliberately crafted local artifact may consume excessive CPU or memory, overflow parser recursion, or trigger a parser panic before post-load validation. The consequence is local CLI denial of service; the artifact is not executed and cannot sign or submit transactions. Hardened hostile-artifact decoding belongs in a broader SDK/CLI follow-up and does not block this workstream.
 
 Perform one complete structural validation pass before querying events. Reject duplicate event names, duplicate event signatures, duplicate type-definition names, duplicate topic-field names within an event, duplicate payload-field names within an event, unsupported definitions, unresolved named types reachable from an event, cyclic reachable type definitions, ambiguous members in reachable structs, enums, or unions, and any event whose signature plus indexed fields exceeds the protocol's three-topic limit. Ambiguous members include duplicate field or variant names and duplicate enum or union discriminants. This validation must not depend on which signatures happen to appear in the returned page.
 
@@ -555,7 +533,7 @@ Every token record always contains `decodeStatus` and nullable `transfer`. Stabl
 
 The raw `contractAddress`, `topics`, and `data` remain present even when `transfer` is decoded. Consumers can independently verify the projection and remain resilient to future schema additions.
 
-Human `events list` output shows the resolved emitter, supplied spec path and selected event when present, and one block per returned event containing block height, sequence number, transaction hash, emitter, every indexed topic, and raw data. It then shows decoded event name, named raw topics, and decoded payload fields when available, or labels unknown and malformed decode states explicitly. Raw evidence remains visible even after successful custom decoding.
+Human `events list` output shows the resolved emitter, supplied spec path and selected event when present, then a blank line before every returned event block. Transaction hash has its own line. The command-level emitter is not repeated inside normal event blocks; an event-level emitter is shown only if a returned record unexpectedly differs. Unknown and malformed records show numbered raw topics. Successfully decoded records show topic 0 as `signature` and topics 1 onward under their validated spec names, without duplicating the same bytes under numbered labels. Raw data and decoded payload fields remain visible. JSON always retains the complete raw and decoded representations.
 
 Human `token transfers` output shows the token address and participant filter, then one concise row per decoded record containing block height, transaction hash, sequence number, kind, source, destination, and raw amount. A malformed token record instead shows its raw topics and data with a warning because no transfer projection was established.
 
@@ -571,7 +549,7 @@ Use these stable command-error mappings:
 | malformed cursor hex | `invalid_event_cursor` |
 | zero, nonnumeric, negative, or overflowing limit | `invalid_event_limit` |
 | `--event` without `--spec`, unknown selected event, conflicting topic/event filters, or conflicting participant options | `invalid_event_options` |
-| missing, unreadable, oversized, unsupported, malformed, ambiguous, or unsafe spec | `invalid_event_spec` |
+| missing, unreadable, oversized, unsupported, malformed, or structurally invalid spec | `invalid_event_spec` |
 | `MethodNotFound` or Groundhog `NotImplemented` | existing `rpc_capability_unsupported` |
 | all other RPC failures or invalid response shapes | existing `rpc_method_failed` |
 
@@ -659,7 +637,7 @@ Important edge cases:
 ## Security considerations
 - Never read or print private keys or seed material; these commands are read-only.
   
-- Treat contract specs as untrusted local input. Bound file reads, XDR allocations, structure size, type depth, and decoded values; reject ambiguous names, signatures, discriminants, and recursive type graphs; validate reachable event types eagerly; and never execute code from a `.wasm` artifact.
+- Treat contract specs as explicitly selected, trusted local developer artifacts. Cap file reads, validate loaded event structures and decode expansion, document the remaining hostile-file denial-of-service risk, and never execute code from a `.wasm` artifact.
   
 - Loading `.wasm` parses the module and canonicalizes accepted raw or finalized spec sections through the existing spec tool. It must not instantiate the module, run constructors, invoke exports, or perform network-dependent build steps.
   
@@ -671,7 +649,7 @@ Important edge cases:
   
 - Do not follow paths referenced from spec contents. Read only the explicit `--spec` path.
   
-- Enforce the explicit spec and decode budgets before allocation. Protocol-bounded event bytes do not make spec-controlled array lengths or recursive type graphs safe.
+- Enforce post-load structure, depth, and per-event decode budgets before allocating decoded output containers. Initial owned spec decoding retains the existing trusted-artifact risk model.
   
 ## Backend compatibility
 No RPC schema change is required.
@@ -700,7 +678,7 @@ Expected areas:
   
 - existing broad target resolution shared with `balance` and `tx list`;
   
-- bounded contract-spec loading from `.wasm` and `.xdr`, sharing the existing extraction and canonicalization semantics but not invoking the current unbounded owned decoders on unchecked input;
+- size-limited contract-spec loading from `.wasm` and `.xdr`, reusing existing owned loaders and canonicalization semantics for trusted local artifacts;
   
 - the existing CXS contract-value decoder, exposed through the smallest helper needed to decode event payload fields;
   
@@ -781,7 +759,7 @@ Each phase should pass automated review and a human output gate before the next 
   
 12. JSON output remains deterministic and versioned; human and JSON output stay cleanly separated from status and error streams.
   
-13. Topic filters enforce the 16-value positional cap, specs pass complete eager bounded validation, and conflicting options fail before RPC with their assigned stable codes.
+13. Topic filters enforce the 16-value positional cap, trusted specs pass complete post-load event validation, and conflicting options fail before RPC with their assigned stable codes.
   
 14. `--account` issues exactly one RPC request containing both ORed filters and remains mutually exclusive with `--from` and `--to`.
   
@@ -801,7 +779,7 @@ Each phase should pass automated review and a human output gate before the next 
   
 - limit, topic-count, cursor-hex, per-record protocol bounds, and over-limit response validation;
   
-- bounded `.wasm` and `.xdr` spec loading, missing embedded specs, unsupported extensions, malformed specs, and every resource-budget boundary;
+- size-limited `.wasm` and `.xdr` spec loading, missing embedded specs, unsupported extensions, malformed specs, and post-load validation boundaries;
   
 - duplicate event names and signatures, ambiguous nested type members, and cyclic reachable types;
   
@@ -854,7 +832,7 @@ Use mock RPC fixtures to cover:
   
 - malformed input rejected before RPC;
   
-- every stable error mapping, option conflict, bounded-spec failure, over-limit response, and capability hint;
+- every stable error mapping, option conflict, spec failure, over-limit response, and capability hint;
   
 - human output and JSON stream discipline;
   
@@ -901,6 +879,8 @@ Hosted devnet validation must account for indexer freshness. A missing recent ev
 - contract-upgrade-aware selection among multiple specs;
   
 - typed projection for custom topics that the current SDK encodes directly, while hashed topic preimages remain unrecoverable;
+
+- hardened decoding for arbitrary hostile spec artifacts before owned XDR parsing.
   
 - token metadata, decimal amount formatting, symbol display, balances, approvals, and allowance history;
   

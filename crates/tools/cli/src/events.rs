@@ -12,8 +12,10 @@ use xdr_common::VecM;
 use crate::account_resolution::resolve_address_target;
 use crate::codec::format_contract_address;
 use crate::config::{ProfileOverrides, resolve_profile_with_overrides};
+use crate::event_spec::ValidatedEventSpec;
 use crate::events_json::{
-    EVENTS_LIST_JSON_SCHEMA_VERSION, EventFiltersReport, EventListItemReport, EventListReport,
+    EVENTS_LIST_JSON_SCHEMA_VERSION, EventDecodeStatus, EventFiltersReport, EventListItemReport,
+    EventListReport,
 };
 use crate::result::CommandResult;
 use crate::tx::map_rpc_error;
@@ -32,18 +34,45 @@ pub fn list(
     topic2_inputs: &[String],
     limit_input: Option<&str>,
     cursor_input: Option<&str>,
+    spec_path: Option<&Path>,
+    selected_event: Option<&str>,
     project_start: &Path,
     profile_name: Option<&str>,
     overrides: &ProfileOverrides,
     cmd: &'static str,
     print: &Print,
 ) -> Result<(), CliError> {
-    let topic0 = parse_topic_values(topic0_inputs, "topic0")?;
+    let mut topic0 = parse_topic_values(topic0_inputs, "topic0")?;
     let topic1 = parse_topic_values(topic1_inputs, "topic1")?;
     let topic2 = parse_topic_values(topic2_inputs, "topic2")?;
     let limit = parse_event_limit(limit_input)?;
     let cursor = parse_event_cursor(cursor_input)?;
     let continuation_requested = cursor_input.is_some();
+    let event_spec = match spec_path {
+        Some(path) => Some(ValidatedEventSpec::load(path)?),
+        None if selected_event.is_some() => {
+            return Err(CliError::InvalidEventOptions {
+                message: "`--event` requires `--spec <PATH>`".into(),
+            });
+        }
+        None => None,
+    };
+    if let Some(name) = selected_event {
+        let signature = event_spec
+            .as_ref()
+            .expect("event selection must have a loaded spec")
+            .selected_signature(name)?;
+        if topic0.is_empty() {
+            topic0.push(signature);
+        } else if topic0.iter().any(|topic| topic != &signature) {
+            return Err(CliError::InvalidEventOptions {
+                message: format!(
+                    "`--topic0` conflicts with selected event `{}`",
+                    human_safe(name)
+                ),
+            });
+        }
+    }
 
     let profile = resolve_profile_with_overrides(project_start, profile_name, overrides)?;
     let rpc_url = profile
@@ -76,6 +105,15 @@ pub fn list(
     let rt =
         tokio::runtime::Runtime::new().map_err(|error| CliError::RuntimeInit(error.to_string()))?;
     let page = rt.block_on(fetch_event_page(&rpc_url, query))?;
+    let spec_report = event_spec.as_ref().map(|spec| spec.report(selected_event));
+    let events = match &event_spec {
+        Some(spec) => spec.decode_events(page.events),
+        None => page
+            .events
+            .into_iter()
+            .map(EventListItemReport::from)
+            .collect(),
+    };
     let report = EventListReport {
         schema_version: EVENTS_LIST_JSON_SCHEMA_VERSION,
         profile: profile.name,
@@ -83,12 +121,8 @@ pub fn list(
         contract_input: contract_input.to_owned(),
         contract_address,
         filters,
-        spec: None,
-        events: page
-            .events
-            .into_iter()
-            .map(EventListItemReport::from)
-            .collect(),
+        spec: spec_report,
+        events,
         cursor: page.cursor,
         latest_block: page.latest_block,
         oldest_block: page.oldest_block,
@@ -221,6 +255,12 @@ fn print_event_list(report: &EventListReport, continuation_requested: bool, prin
         print.detail("contract", human_safe(&report.contract_input));
     }
     print.detail("emitter", &address);
+    if let Some(spec) = &report.spec {
+        print.detail("spec (user-supplied)", human_safe(&spec.path));
+        if let Some(selected_event) = &spec.selected_event {
+            print.detail("selected event", human_safe(selected_event));
+        }
+    }
     print.detail("latest indexed block", *report.latest_block);
     print.detail("oldest retained block", *report.oldest_block);
 
@@ -235,26 +275,62 @@ fn print_event_list(report: &EventListReport, continuation_requested: bool, prin
         print.detail("events", message);
     } else {
         for item in &report.events {
+            print.status("");
             print.detail(
                 "event",
                 format_args!(
-                    "height {} sequence {} tx {}",
-                    *item.raw.block_height,
-                    item.raw.sequence_number,
-                    format_tx_hash(&item.raw.tx_hash),
+                    "height {} sequence {}",
+                    *item.raw.block_height, item.raw.sequence_number,
                 ),
             );
-            print.detail(
-                "emitter",
-                format_contract_address(&item.raw.contract_address.0),
-            );
-            for (index, topic) in item.raw.topics.iter().enumerate() {
+            print.detail("tx", format_tx_hash(&item.raw.tx_hash));
+            if item.raw.contract_address != report.contract_address {
                 print.detail(
-                    &format!("topic {index}"),
-                    format_args!("0x{}", hex::encode(topic.0)),
+                    "event emitter",
+                    format_contract_address(&item.raw.contract_address.0),
                 );
             }
+            let decoded = item.decoded.as_ref();
+            if let Some(decoded) = decoded {
+                print.detail("decoded event", human_safe(&decoded.name));
+                if let Some(signature) = item.raw.topics.first() {
+                    print.detail("signature", format_args!("0x{}", hex::encode(signature.0)));
+                }
+                for (name, topic) in &decoded.topics {
+                    print.detail(
+                        &human_safe(name),
+                        format_args!("0x{}", hex::encode(topic.0)),
+                    );
+                }
+            } else {
+                for (topic_index, topic) in item.raw.topics.iter().enumerate() {
+                    print.detail(
+                        &format!("topic {topic_index}"),
+                        format_args!("0x{}", hex::encode(topic.0)),
+                    );
+                }
+            }
             print.detail("data", format_args!("0x{}", hex::encode(&item.raw.data.0)));
+            match item.decode_status {
+                EventDecodeStatus::NotRequested => {}
+                EventDecodeStatus::UnknownSignature => {
+                    print.detail("decode", "signature not declared by supplied spec");
+                }
+                EventDecodeStatus::Malformed => {
+                    print.detail(
+                        "decode",
+                        item.decode_error
+                            .as_deref()
+                            .unwrap_or("malformed known event"),
+                    );
+                }
+                EventDecodeStatus::Decoded => {
+                    let decoded = decoded.expect("decoded status must include decoded event data");
+                    for (name, value) in &decoded.fields {
+                        print.detail(&human_safe(name), human_safe(&value.to_string()));
+                    }
+                }
+            }
         }
     }
     if !report.cursor.0.is_empty() {

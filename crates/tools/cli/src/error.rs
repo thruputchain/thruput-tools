@@ -156,6 +156,14 @@ pub enum CliError {
         display_input: String,
         message: String,
     },
+    #[error("invalid event options: {message}")]
+    InvalidEventOptions { message: String },
+    #[error("invalid event spec `{display_path}`: {message}")]
+    InvalidEventSpec {
+        path: String,
+        display_path: String,
+        message: String,
+    },
     #[error("failed to initialize async runtime: {0}")]
     RuntimeInit(String),
     #[error("{method} failed: {message}")]
@@ -353,6 +361,8 @@ impl CliError {
             Self::InvalidEventFilter { .. } => "invalid_event_filter",
             Self::InvalidEventLimit { .. } => "invalid_event_limit",
             Self::InvalidEventCursor { .. } => "invalid_event_cursor",
+            Self::InvalidEventOptions { .. } => "invalid_event_options",
+            Self::InvalidEventSpec { .. } => "invalid_event_spec",
             Self::RuntimeInit(_) => "runtime_init_failed",
             Self::RpcMethodFailed { .. } => "rpc_method_failed",
             Self::RpcCapabilityUnsupported { .. } => "rpc_capability_unsupported",
@@ -508,6 +518,12 @@ impl CliError {
             )),
             Self::InvalidEventCursor { .. } => Some(Cow::Borrowed(
                 "pass the opaque hex cursor returned by the previous `groundhog events list` page with unchanged filters",
+            )),
+            Self::InvalidEventOptions { .. } => Some(Cow::Borrowed(
+                "pass `--spec <PATH>` with `--event`, and do not combine a selected event with a conflicting `--topic0`",
+            )),
+            Self::InvalidEventSpec { .. } => Some(Cow::Borrowed(
+                "pass a trusted local `.wasm` or `.xdr` artifact containing a valid contract event spec",
             )),
             Self::RpcMethodFailed { .. } => Some(Cow::Borrowed(
                 "check the RPC endpoint and node logs for details",
@@ -802,6 +818,13 @@ impl CliError {
                 "position": position,
                 "count": count,
                 "max": max,
+            })),
+            Self::InvalidEventOptions { message } => Some(json!({
+                "message": message,
+            })),
+            Self::InvalidEventSpec { path, message, .. } => Some(json!({
+                "path": path,
+                "message": message,
             })),
             Self::InvalidAddressTarget { target, message } => Some(json!({
                 "target": target,

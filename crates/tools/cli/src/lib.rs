@@ -17,6 +17,7 @@ pub mod deploy;
 pub(crate) mod dev_detail;
 pub mod dev_keys;
 pub mod error;
+pub(crate) mod event_spec;
 pub mod events;
 pub mod events_json;
 pub(crate) mod faucet_client;

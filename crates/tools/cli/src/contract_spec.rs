@@ -67,7 +67,9 @@ fn load_embedded_contract_spec(wasm: &Path) -> Result<Option<ContractSpec>, CliE
 }
 
 /// Extract the embedded `groundhogspecv0` custom section from raw WASM bytes.
-fn load_embedded_contract_spec_from_bytes(bytes: &[u8]) -> Result<Option<ContractSpec>, CliError> {
+pub(crate) fn load_embedded_contract_spec_from_bytes(
+    bytes: &[u8],
+) -> Result<Option<ContractSpec>, CliError> {
     let rewritten = groundhog_spec_tool::rewrite::rewrite_wasm_with_spec(bytes)
         .map_err(|e| CliError::SpecFailed(format!("failed to read wasm contract spec: {e}")))?;
     Ok(rewritten.spec)

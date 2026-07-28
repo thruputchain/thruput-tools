@@ -611,6 +611,12 @@ enum EventsCommand {
         /// Opaque cursor returned by a previous page
         #[arg(long)]
         cursor: Option<String>,
+        /// Trusted local .wasm or .xdr artifact used to decode matching events
+        #[arg(long)]
+        spec: Option<PathBuf>,
+        /// Case-sensitive event name declared by --spec
+        #[arg(long)]
+        event: Option<String>,
         /// Config profile to use
         #[arg(long = "profile")]
         profile: Option<String>,
@@ -1069,6 +1075,8 @@ fn main() {
                 topic2,
                 limit,
                 cursor,
+                spec,
+                event,
                 profile,
                 target_args,
             } => std::env::current_dir()
@@ -1081,6 +1089,8 @@ fn main() {
                         &topic2,
                         limit.as_deref(),
                         cursor.as_deref(),
+                        spec.as_deref(),
+                        event.as_deref(),
                         &cwd,
                         profile.as_deref(),
                         &target_args.into(),
@@ -1521,6 +1531,10 @@ mod tests {
             "25",
             "--cursor",
             "0xaabb",
+            "--spec",
+            "./counter.spec.xdr",
+            "--event",
+            "PingEvent",
             "--profile",
             "devnet",
             "--rpc-url",
@@ -1540,6 +1554,8 @@ mod tests {
                         topic2,
                         limit,
                         cursor,
+                        spec,
+                        event,
                         profile,
                         target_args,
                     },
@@ -1550,6 +1566,11 @@ mod tests {
                 assert_eq!(topic2, ["0x44"]);
                 assert_eq!(limit.as_deref(), Some("25"));
                 assert_eq!(cursor.as_deref(), Some("0xaabb"));
+                assert_eq!(
+                    spec.as_deref(),
+                    Some(std::path::Path::new("./counter.spec.xdr"))
+                );
+                assert_eq!(event.as_deref(), Some("PingEvent"));
                 assert_eq!(profile.as_deref(), Some("devnet"));
                 assert_eq!(target_args.rpc_url.as_deref(), Some("https://rpc.example"));
                 assert_eq!(
