@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::atomic::{atomic_write, atomic_write_private};
+use super::atomic::{ConfigFileKind, insert_preserving_decor, transact_document};
 use super::dirs::config_file_path;
 use super::global::{LocalRuntimeState, load_default_key, read_config_file};
 use crate::CliError;
@@ -209,31 +209,23 @@ pub fn save_profile_contract_alias(
     let profile_name = active_profile_name(project_root, explicit_profile)?;
     let path = profile_write_path(project_root)?;
 
-    let contents = match std::fs::read_to_string(&path) {
-        Ok(s) => s,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => return Err(e.into()),
-    };
-
-    let mut doc: toml_edit::DocumentMut = contents
-        .parse::<toml_edit::DocumentMut>()
-        .map_err(|e| CliError::Other(e.to_string()))?;
-
-    doc.entry("profile")
-        .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
-        .as_table_mut()
-        .ok_or_else(|| CliError::Other("profile must be a table".into()))?
-        .entry(&profile_name)
-        .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
-        .as_table_mut()
-        .ok_or_else(|| CliError::Other("profile entry must be a table".into()))?
-        .entry("contracts")
-        .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
-        .as_table_mut()
-        .ok_or_else(|| CliError::Other("contracts must be a table".into()))?
-        .insert(alias.trim(), toml_edit::value(address.trim()));
-
-    write_profile_config(&path, doc.to_string().as_bytes())?;
+    transact_profile_document(&path, |document| {
+        let contracts = document
+            .entry("profile")
+            .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
+            .as_table_mut()
+            .ok_or_else(|| CliError::Other("profile must be a table".into()))?
+            .entry(&profile_name)
+            .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
+            .as_table_mut()
+            .ok_or_else(|| CliError::Other("profile entry must be a table".into()))?
+            .entry("contracts")
+            .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
+            .as_table_mut()
+            .ok_or_else(|| CliError::Other("contracts must be a table".into()))?;
+        insert_preserving_decor(contracts, alias.trim(), toml_edit::value(address.trim()));
+        Ok(())
+    })?;
     Ok(path)
 }
 
@@ -289,45 +281,39 @@ pub fn save_profile_wallet_address_with_default(
     let profile_name = active_profile_name(project_root, explicit_profile)?;
     let path = profile_write_path(project_root)?;
 
-    let contents = match std::fs::read_to_string(&path) {
-        Ok(s) => s,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => return Err(e.into()),
-    };
+    transact_profile_document(&path, |document| {
+        let profile = document
+            .entry("profile")
+            .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
+            .as_table_mut()
+            .ok_or_else(|| CliError::Other("profile must be a table".into()))?
+            .entry(&profile_name)
+            .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
+            .as_table_mut()
+            .ok_or_else(|| CliError::Other("profile entry must be a table".into()))?;
 
-    let mut doc: toml_edit::DocumentMut = contents
-        .parse::<toml_edit::DocumentMut>()
-        .map_err(|e| CliError::Other(e.to_string()))?;
+        if make_default {
+            insert_preserving_decor(profile, "default_wallet", toml_edit::value(name.trim()));
+        }
 
-    let profile = doc
-        .entry("profile")
-        .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
-        .as_table_mut()
-        .ok_or_else(|| CliError::Other("profile must be a table".into()))?
-        .entry(&profile_name)
-        .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
-        .as_table_mut()
-        .ok_or_else(|| CliError::Other("profile entry must be a table".into()))?;
-    let wallet = profile
-        .entry("wallets")
-        .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
-        .as_table_mut()
-        .ok_or_else(|| CliError::Other("wallets must be a table".into()))?
-        .entry(name.trim())
-        .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
-        .as_table_mut()
-        .ok_or_else(|| CliError::Other("wallet entry must be a table".into()))?;
+        let wallet = profile
+            .entry("wallets")
+            .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
+            .as_table_mut()
+            .ok_or_else(|| CliError::Other("wallets must be a table".into()))?
+            .entry(name.trim())
+            .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
+            .as_table_mut()
+            .ok_or_else(|| CliError::Other("wallet entry must be a table".into()))?;
 
-    wallet.insert("address", toml_edit::value(address.trim()));
-    wallet.insert(
-        "owner_public_key",
-        toml_edit::value(owner_public_key.trim()),
-    );
-    if make_default {
-        profile.insert("default_wallet", toml_edit::value(name.trim()));
-    }
-
-    write_profile_config(&path, doc.to_string().as_bytes())?;
+        insert_preserving_decor(wallet, "address", toml_edit::value(address.trim()));
+        insert_preserving_decor(
+            wallet,
+            "owner_public_key",
+            toml_edit::value(owner_public_key.trim()),
+        );
+        Ok(())
+    })?;
     Ok(path)
 }
 
@@ -344,38 +330,30 @@ pub fn remove_profile_wallet_address(
 
     let profile_name = active_profile_name(project_root, explicit_profile)?;
     let path = profile_write_path(project_root)?;
-    let contents = match std::fs::read_to_string(&path) {
-        Ok(s) => s,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => return Err(e.into()),
-    };
-    let mut doc: toml_edit::DocumentMut = contents
-        .parse::<toml_edit::DocumentMut>()
-        .map_err(|e| CliError::Other(e.to_string()))?;
+    transact_profile_document(&path, |document| {
+        let profile = document
+            .get_mut("profile")
+            .and_then(toml_edit::Item::as_table_mut)
+            .and_then(|profiles| profiles.get_mut(&profile_name))
+            .and_then(toml_edit::Item::as_table_mut)
+            .ok_or_else(|| CliError::Other(format!("wallet `{name}` is not saved")))?;
+        let wallets = profile
+            .get_mut("wallets")
+            .and_then(toml_edit::Item::as_table_mut)
+            .ok_or_else(|| CliError::Other(format!("wallet `{name}` is not saved")))?;
 
-    let profile = doc
-        .get_mut("profile")
-        .and_then(toml_edit::Item::as_table_mut)
-        .and_then(|profiles| profiles.get_mut(&profile_name))
-        .and_then(toml_edit::Item::as_table_mut)
-        .ok_or_else(|| CliError::Other(format!("wallet `{name}` is not saved")))?;
-    let wallets = profile
-        .get_mut("wallets")
-        .and_then(toml_edit::Item::as_table_mut)
-        .ok_or_else(|| CliError::Other(format!("wallet `{name}` is not saved")))?;
-
-    if wallets.remove(name).is_none() {
-        return Err(CliError::Other(format!("wallet `{name}` is not saved")));
-    }
-    if profile
-        .get("default_wallet")
-        .and_then(toml_edit::Item::as_str)
-        == Some(name)
-    {
-        profile.remove("default_wallet");
-    }
-
-    write_profile_config(&path, doc.to_string().as_bytes())?;
+        if wallets.remove(name).is_none() {
+            return Err(CliError::Other(format!("wallet `{name}` is not saved")));
+        }
+        if profile
+            .get("default_wallet")
+            .and_then(toml_edit::Item::as_str)
+            == Some(name)
+        {
+            profile.remove("default_wallet");
+        }
+        Ok(())
+    })?;
     Ok(path)
 }
 
@@ -395,26 +373,19 @@ pub fn save_profile_default_wallet(
 
     let profile_name = active_profile_name(project_root, explicit_profile)?;
     let path = profile_write_path(project_root)?;
-    let contents = match std::fs::read_to_string(&path) {
-        Ok(contents) => contents,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => return Err(e.into()),
-    };
-    let mut doc: toml_edit::DocumentMut = contents
-        .parse::<toml_edit::DocumentMut>()
-        .map_err(|e| CliError::Other(e.to_string()))?;
-
-    doc.entry("profile")
-        .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
-        .as_table_mut()
-        .ok_or_else(|| CliError::Other("profile must be a table".into()))?
-        .entry(&profile_name)
-        .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
-        .as_table_mut()
-        .ok_or_else(|| CliError::Other("profile entry must be a table".into()))?
-        .insert("default_wallet", toml_edit::value(wallet));
-
-    write_profile_config(&path, doc.to_string().as_bytes())?;
+    transact_profile_document(&path, |document| {
+        let profile = document
+            .entry("profile")
+            .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
+            .as_table_mut()
+            .ok_or_else(|| CliError::Other("profile must be a table".into()))?
+            .entry(&profile_name)
+            .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
+            .as_table_mut()
+            .ok_or_else(|| CliError::Other("profile entry must be a table".into()))?;
+        insert_preserving_decor(profile, "default_wallet", toml_edit::value(wallet));
+        Ok(())
+    })?;
     Ok(path)
 }
 
@@ -601,12 +572,16 @@ fn profile_write_path(start: &Path) -> Result<PathBuf, CliError> {
     Ok(find_project_config(start).unwrap_or(config_file_path()?))
 }
 
-fn write_profile_config(path: &Path, data: &[u8]) -> Result<(), CliError> {
-    if path == config_file_path()? {
-        atomic_write_private(path, data)
+fn transact_profile_document(
+    path: &Path,
+    mutate: impl FnOnce(&mut toml_edit::DocumentMut) -> Result<(), CliError>,
+) -> Result<bool, CliError> {
+    let kind = if path == config_file_path()? {
+        ConfigFileKind::Global
     } else {
-        atomic_write(path, data)
-    }
+        ConfigFileKind::Project
+    };
+    transact_document(path, kind, mutate, |_| Ok(()))
 }
 
 /// Resolve a profile and apply explicit CLI target overrides.

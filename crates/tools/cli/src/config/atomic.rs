@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use toml_edit::DocumentMut;
+use toml_edit::{DocumentMut, Item, TableLike};
 
 use crate::CliError;
 
@@ -27,6 +27,15 @@ pub(crate) enum ConfigFileKind {
 pub(crate) fn load_document(path: &Path) -> Result<DocumentMut, CliError> {
     let contents = read_contents(path)?;
     parse_document(path, &contents)
+}
+
+pub(crate) fn insert_preserving_decor(table: &mut dyn TableLike, key: &str, mut item: Item) {
+    if let Some(previous) = table.get(key).and_then(Item::as_value)
+        && let Some(next) = item.as_value_mut()
+    {
+        next.decor_mut().clone_from(previous.decor());
+    }
+    table.insert(key, item);
 }
 
 /// Mutate and validate a fresh TOML document while holding its sidecar lock.
@@ -64,33 +73,6 @@ fn transact_document_with_timeout(
 
     atomic_replace(path, updated.as_bytes(), kind)?;
     Ok(true)
-}
-
-/// Write `data` to `path` atomically, preserving an existing file's
-/// permissions.
-pub(crate) fn atomic_write(path: &Path, data: &[u8]) -> Result<(), CliError> {
-    replace_document(path, data, ConfigFileKind::Project)
-}
-
-/// Write `data` to `path` atomically and restrict it to mode `0600` on Unix.
-pub(crate) fn atomic_write_private(path: &Path, data: &[u8]) -> Result<(), CliError> {
-    replace_document(path, data, ConfigFileKind::Global)
-}
-
-fn replace_document(path: &Path, data: &[u8], kind: ConfigFileKind) -> Result<(), CliError> {
-    let contents = std::str::from_utf8(data)
-        .map_err(|error| CliError::Other(format!("config is not valid UTF-8: {error}")))?;
-    let replacement = parse_document(path, contents)?;
-    transact_document(
-        path,
-        kind,
-        move |document| {
-            *document = replacement;
-            Ok(())
-        },
-        |_| Ok(()),
-    )?;
-    Ok(())
 }
 
 fn atomic_replace(path: &Path, data: &[u8], kind: ConfigFileKind) -> Result<(), CliError> {
@@ -410,7 +392,8 @@ mod tests {
         std::fs::set_permissions(&path, Permissions::from_mode(0o640))
             .expect("fixture permissions should be set");
 
-        atomic_write(&path, b"value = \"new\"\n").expect("document should be replaced");
+        atomic_replace(&path, b"value = \"new\"\n", ConfigFileKind::Project)
+            .expect("document should be replaced");
 
         assert_eq!(
             std::fs::metadata(path)
@@ -431,7 +414,8 @@ mod tests {
         std::fs::set_permissions(&path, Permissions::from_mode(0o644))
             .expect("fixture permissions should be set");
 
-        atomic_write_private(&path, b"value = \"new\"\n").expect("document should be replaced");
+        atomic_replace(&path, b"value = \"new\"\n", ConfigFileKind::Global)
+            .expect("document should be replaced");
 
         assert_eq!(
             std::fs::metadata(path)
@@ -453,7 +437,8 @@ mod tests {
         std::fs::set_permissions(&path, Permissions::from_mode(0o644))
             .expect("fixture permissions should be set");
 
-        atomic_write_private(&path, contents).expect("unchanged write should succeed");
+        transact_document(&path, ConfigFileKind::Global, |_| Ok(()), |_| Ok(()))
+            .expect("unchanged write should succeed");
 
         assert_eq!(
             std::fs::metadata(path)

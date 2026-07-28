@@ -2,12 +2,35 @@ use serial_test::serial;
 use std::env;
 use std::fs;
 #[cfg(unix)]
+use std::fs::{File, OpenOptions};
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
+#[cfg(unix)]
+use std::os::unix::ffi::OsStringExt;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
 fn global_config_path(tmp: &TempDir) -> PathBuf {
     tmp.path().join("groundhog/config.toml")
+}
+
+#[cfg(unix)]
+fn lock_config(path: &std::path::Path) -> File {
+    let mut lock_path = path.as_os_str().to_os_string();
+    lock_path.push(".lock");
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(PathBuf::from(lock_path))
+        .expect("config lock should open");
+    // SAFETY: `file` owns a valid descriptor for the duration of this call.
+    let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    assert_eq!(result, 0, "config lock should be acquired");
+    file
 }
 
 #[test]
@@ -37,6 +60,12 @@ fn cache_dir_respects_xdg_env() {
 fn roundtrip_executor_credentials() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    fs::write(
+        global_config_path(&tmp),
+        "# retained\nplugin = true\n\n[executor]\npassword = \"old\" # password comment\nplugin_token = \"keep\"\n",
+    )
+    .unwrap();
 
     let creds = groundhog_cli::config::ExecutorCredentials {
         username: "alice".into(),
@@ -49,6 +78,11 @@ fn roundtrip_executor_credentials() {
         .unwrap();
     assert_eq!(loaded.username, "alice");
     assert_eq!(loaded.password, "secret");
+    let contents = fs::read_to_string(global_config_path(&tmp)).unwrap();
+    assert!(contents.contains("# retained"));
+    assert!(contents.contains("plugin = true"));
+    assert!(contents.contains("plugin_token = \"keep\""));
+    assert!(contents.contains("# password comment"));
 
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
@@ -91,14 +125,28 @@ fn load_returns_none_when_no_config() {
 fn roundtrip_default_key() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    fs::write(
+        global_config_path(&tmp),
+        "# retained\nplugin = \"keep\"\ndefault_key = \"old\" # key comment\n",
+    )
+    .unwrap();
 
     groundhog_cli::config::save_default_key("alice").unwrap();
     let loaded = groundhog_cli::config::load_default_key().unwrap();
     assert_eq!(loaded.as_deref(), Some("alice"));
+    assert!(
+        fs::read_to_string(global_config_path(&tmp))
+            .unwrap()
+            .contains("# key comment")
+    );
 
     groundhog_cli::config::clear_default_key().unwrap();
     let cleared = groundhog_cli::config::load_default_key().unwrap();
     assert!(cleared.is_none());
+    let contents = fs::read_to_string(global_config_path(&tmp)).unwrap();
+    assert!(contents.contains("# retained"));
+    assert!(contents.contains("plugin = \"keep\""));
 
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
@@ -507,18 +555,21 @@ fn save_profile_contract_alias_updates_existing_profile() {
     let config_path = tmp.path().join("groundhog.toml");
     fs::write(
         &config_path,
-        r#"
+        r#"# retained
 default_profile = "default"
 
 [profile.default]
 rpc_url = "http://localhost:9545"
 default_key = "alice"
+plugin_field = "keep"
 
 [profile.default.contracts]
-counter = "0x1111"
+counter = "0x1111" # alias comment
 "#,
     )
     .unwrap();
+    #[cfg(unix)]
+    fs::set_permissions(&config_path, fs::Permissions::from_mode(0o640)).unwrap();
 
     let addr = format!("0x{}", "22".repeat(32));
     let written =
@@ -532,6 +583,15 @@ counter = "0x1111"
     assert_eq!(
         profile.contracts.get("counter").map(String::as_str),
         Some(addr.as_str())
+    );
+    let contents = fs::read_to_string(&config_path).unwrap();
+    assert!(contents.contains("# retained"));
+    assert!(contents.contains("# alias comment"));
+    assert!(contents.contains("plugin_field = \"keep\""));
+    #[cfg(unix)]
+    assert_eq!(
+        fs::metadata(config_path).unwrap().permissions().mode() & 0o777,
+        0o640
     );
 }
 
@@ -570,17 +630,18 @@ fn save_profile_wallet_address_updates_existing_profile() {
     let config_path = tmp.path().join("groundhog.toml");
     fs::write(
         &config_path,
-        r#"
+        r#"# retained
 default_profile = "default"
 
 [profile.default]
 rpc_url = "http://localhost:9545"
 default_key = "alice"
+plugin_field = "keep"
 
 [profile.default.wallets]
 
 [profile.default.wallets.alice]
-address = "0x1111"
+address = "0x1111" # wallet comment
 owner_public_key = "0x2222"
 "#,
     )
@@ -615,6 +676,10 @@ owner_public_key = "0x2222"
             .map(|wallet| wallet.owner_public_key.as_str()),
         Some(owner.as_str())
     );
+    let contents = fs::read_to_string(&config_path).unwrap();
+    assert!(contents.contains("# retained"));
+    assert!(contents.contains("# wallet comment"));
+    assert!(contents.contains("plugin_field = \"keep\""));
 }
 
 #[test]
@@ -671,6 +736,8 @@ default_key = "dev-0"
     let artifacts_dir = tmp.path().join("hog-devnode");
     fs::write(&manifest, "{}").unwrap();
     fs::create_dir(&artifacts_dir).unwrap();
+    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    fs::write(global_config_path(&tmp), "# retained\nplugin = \"keep\"\n").unwrap();
 
     let state = groundhog_cli::config::LocalRuntimeState {
         node_id: "node-1".into(),
@@ -680,6 +747,9 @@ default_key = "dev-0"
     };
     let written = groundhog_cli::config::save_local_runtime_state(&state).unwrap();
     assert_eq!(written, global_config_path(&tmp));
+    let global_config = fs::read_to_string(global_config_path(&tmp)).unwrap();
+    assert!(global_config.contains("# retained"));
+    assert!(global_config.contains("plugin = \"keep\""));
 
     let project_config = fs::read_to_string(project.join("groundhog.toml")).unwrap();
     assert!(!project_config.contains("rpc_url"));
@@ -732,6 +802,62 @@ fn save_local_runtime_state_keeps_global_config_private() {
         & 0o777;
     assert_eq!(mode, 0o600);
 
+    unsafe { env::remove_var("XDG_CONFIG_HOME") };
+}
+
+#[test]
+#[cfg(unix)]
+#[serial]
+fn save_local_runtime_state_rejects_non_utf8_manifest_path() {
+    let tmp = TempDir::new().unwrap();
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let invalid_path = PathBuf::from(std::ffi::OsString::from_vec(b"/tmp/manifest-\xff".to_vec()));
+
+    let error = groundhog_cli::config::save_local_runtime_state(
+        &groundhog_cli::config::LocalRuntimeState {
+            node_id: "node-1".into(),
+            rpc_url: "http://127.0.0.1:9545".into(),
+            runtime_manifest: invalid_path,
+            runtime_artifacts_dir: None,
+        },
+    )
+    .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("runtime_manifest must be valid UTF-8")
+    );
+    assert!(!global_config_path(&tmp).exists());
+    unsafe { env::remove_var("XDG_CONFIG_HOME") };
+}
+
+#[test]
+#[cfg(unix)]
+#[serial]
+fn save_local_runtime_state_rejects_non_utf8_artifacts_path() {
+    let tmp = TempDir::new().unwrap();
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let invalid_path = PathBuf::from(std::ffi::OsString::from_vec(
+        b"/tmp/artifacts-\xff".to_vec(),
+    ));
+
+    let error = groundhog_cli::config::save_local_runtime_state(
+        &groundhog_cli::config::LocalRuntimeState {
+            node_id: "node-1".into(),
+            rpc_url: "http://127.0.0.1:9545".into(),
+            runtime_manifest: tmp.path().join("runtime-manifest.json"),
+            runtime_artifacts_dir: Some(invalid_path),
+        },
+    )
+    .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("runtime_artifacts_dir must be valid UTF-8")
+    );
+    assert!(!global_config_path(&tmp).exists());
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
@@ -829,11 +955,15 @@ fn clear_local_runtime_state_removes_matching_state() {
         runtime_artifacts_dir: None,
     };
 
+    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    fs::write(global_config_path(&tmp), "# retained\nplugin = \"keep\"\n").unwrap();
     groundhog_cli::config::save_local_runtime_state(&state).unwrap();
     groundhog_cli::config::clear_local_runtime_state_if_matches(&state).unwrap();
 
     let config = fs::read_to_string(global_config_path(&tmp)).unwrap();
     assert!(!config.contains("local_runtime_state"));
+    assert!(config.contains("# retained"));
+    assert!(config.contains("plugin = \"keep\""));
 
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
@@ -1242,6 +1372,9 @@ fn remove_wallet_deletes_saved_entry() {
     .unwrap();
     groundhog_cli::config::save_profile_wallet_address(tmp.path(), None, "bob", &addr_b, &owner_b)
         .unwrap();
+    let config_path = global_config_path(&tmp);
+    let config = fs::read_to_string(&config_path).unwrap();
+    fs::write(&config_path, format!("# retained\nplugin = true\n{config}")).unwrap();
     groundhog_cli::config::remove_profile_wallet_address(tmp.path(), None, "alice").unwrap();
 
     let profile = groundhog_cli::config::resolve_profile(tmp.path(), None).unwrap();
@@ -1253,6 +1386,9 @@ fn remove_wallet_deletes_saved_entry() {
             .map(|wallet| wallet.address.as_str()),
         Some(addr_b.as_str())
     );
+    let config = fs::read_to_string(config_path).unwrap();
+    assert!(config.contains("# retained"));
+    assert!(config.contains("plugin = true"));
 
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
@@ -1295,4 +1431,125 @@ fn remove_wallet_rejects_missing_entry() {
     assert!(result.is_err());
 
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
+}
+
+#[test]
+#[serial]
+fn initialize_global_profiles_preserves_inline_profile_fields() {
+    let tmp = TempDir::new().unwrap();
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    fs::write(
+        global_config_path(&tmp),
+        r#"profile = { local = { rpc_url = "http://127.0.0.1:9999", plugin = "keep" } }
+"#,
+    )
+    .unwrap();
+
+    groundhog_cli::config::initialize_global_profiles().unwrap();
+
+    let local = groundhog_cli::config::resolve_profile(tmp.path(), Some("local")).unwrap();
+    assert_eq!(local.rpc_url.as_deref(), Some("http://127.0.0.1:9999"));
+    let contents = fs::read_to_string(global_config_path(&tmp)).unwrap();
+    assert!(contents.contains("plugin = \"keep\""));
+
+    unsafe { env::remove_var("XDG_CONFIG_HOME") };
+}
+
+#[test]
+#[cfg(unix)]
+#[serial]
+fn concurrent_global_writers_preserve_independent_updates() {
+    let tmp = TempDir::new().unwrap();
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    let path = global_config_path(&tmp);
+    fs::write(&path, "plugin = true\n").unwrap();
+    let lock = lock_config(&path);
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+
+    let key_started = started_tx.clone();
+    let key_writer = std::thread::spawn(move || {
+        key_started.send(()).unwrap();
+        groundhog_cli::config::save_default_key("alice")
+    });
+    let credentials_writer = std::thread::spawn(move || {
+        started_tx.send(()).unwrap();
+        groundhog_cli::config::save_executor_credentials(
+            &groundhog_cli::config::ExecutorCredentials {
+                username: "user".into(),
+                password: "secret".into(),
+            },
+        )
+    });
+
+    started_rx.recv().unwrap();
+    started_rx.recv().unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    drop(lock);
+    key_writer.join().unwrap().unwrap();
+    credentials_writer.join().unwrap().unwrap();
+
+    assert_eq!(
+        groundhog_cli::config::load_default_key()
+            .unwrap()
+            .as_deref(),
+        Some("alice")
+    );
+    assert_eq!(
+        groundhog_cli::config::load_executor_credentials()
+            .unwrap()
+            .unwrap()
+            .password,
+        "secret"
+    );
+
+    unsafe { env::remove_var("XDG_CONFIG_HOME") };
+}
+
+#[test]
+#[cfg(unix)]
+fn concurrent_project_writers_preserve_independent_updates() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("groundhog.toml");
+    fs::write(&path, "[profile.default]\nplugin = true\n").unwrap();
+    let lock = lock_config(&path);
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let alias_address = format!("0x{}", "aa".repeat(32));
+    let wallet_address = format!("0x{}", "bb".repeat(32));
+    let owner = format!("0x{}", "cc".repeat(32));
+
+    let project = tmp.path().to_path_buf();
+    let alias_started = started_tx.clone();
+    let alias_writer = std::thread::spawn(move || {
+        alias_started.send(()).unwrap();
+        groundhog_cli::config::save_profile_contract_alias(
+            &project,
+            Some("default"),
+            "counter",
+            &alias_address,
+        )
+    });
+    let project = tmp.path().to_path_buf();
+    let wallet_writer = std::thread::spawn(move || {
+        started_tx.send(()).unwrap();
+        groundhog_cli::config::save_profile_wallet_address(
+            &project,
+            Some("default"),
+            "alice",
+            &wallet_address,
+            &owner,
+        )
+    });
+
+    started_rx.recv().unwrap();
+    started_rx.recv().unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    drop(lock);
+    alias_writer.join().unwrap().unwrap();
+    wallet_writer.join().unwrap().unwrap();
+
+    let profile = groundhog_cli::config::resolve_profile(tmp.path(), Some("default")).unwrap();
+    assert!(profile.contracts.contains_key("counter"));
+    assert!(profile.wallets.contains_key("alice"));
 }
