@@ -450,6 +450,11 @@ enum Command {
         #[command(subcommand)]
         command: TxCommand,
     },
+    /// Inspect indexed contract events
+    Events {
+        #[command(subcommand)]
+        command: EventsCommand,
+    },
     /// Generate shell completions
     Completion {
         /// Shell to generate completions for
@@ -578,6 +583,42 @@ enum TxCommand {
     },
 }
 
+#[derive(Subcommand)]
+enum EventsCommand {
+    /// List one page of raw events emitted by a contract
+    #[command(
+        long_about = "List exactly one newest-first page of raw events emitted by one resolved \
+                       contract address. A global event scan is not performed.\n\nRepeat a topic \
+                       option for OR within that position; constraints across topic positions \
+                       combine with AND. Raw topics and data are authoritative. The continuation \
+                       cursor is opaque and must be reused with the same contract and filters."
+    )]
+    List {
+        /// Wallet name, contract alias, dev-N account, or direct address
+        contract: String,
+        /// Topic-0 value; repeat for OR within this position
+        #[arg(long)]
+        topic0: Vec<String>,
+        /// Topic-1 value; repeat for OR within this position
+        #[arg(long)]
+        topic1: Vec<String>,
+        /// Topic-2 value; repeat for OR within this position
+        #[arg(long)]
+        topic2: Vec<String>,
+        /// Number of events to request (default: 50)
+        #[arg(long, allow_hyphen_values = true)]
+        limit: Option<String>,
+        /// Opaque cursor returned by a previous page
+        #[arg(long)]
+        cursor: Option<String>,
+        /// Config profile to use
+        #[arg(long = "profile")]
+        profile: Option<String>,
+        #[command(flatten)]
+        target_args: RpcTargetArgs,
+    },
+}
+
 impl CodegenCommand {
     fn command_name(&self) -> &'static str {
         match self {
@@ -591,6 +632,14 @@ impl TxCommand {
         match self {
             Self::Show { .. } => "tx.show",
             Self::List { .. } => "tx.list",
+        }
+    }
+}
+
+impl EventsCommand {
+    fn command_name(&self) -> &'static str {
+        match self {
+            Self::List { .. } => "events.list",
         }
     }
 }
@@ -619,6 +668,7 @@ impl Command {
             Self::Wallet { command } => command.command_name(),
             Self::Codegen { command } => command.command_name(),
             Self::Tx { command } => command.command_name(),
+            Self::Events { command } => command.command_name(),
             Self::Completion { .. } => "completion",
         }
     }
@@ -1001,6 +1051,34 @@ fn main() {
                 .and_then(|cwd| {
                     groundhog_cli::tx::list(
                         &target,
+                        limit.as_deref(),
+                        cursor.as_deref(),
+                        &cwd,
+                        profile.as_deref(),
+                        &target_args.into(),
+                        cmd_name,
+                        &print,
+                    )
+                }),
+        },
+        Command::Events { command } => match command {
+            EventsCommand::List {
+                contract,
+                topic0,
+                topic1,
+                topic2,
+                limit,
+                cursor,
+                profile,
+                target_args,
+            } => std::env::current_dir()
+                .map_err(groundhog_cli::CliError::Io)
+                .and_then(|cwd| {
+                    groundhog_cli::events::list(
+                        &contract,
+                        &topic0,
+                        &topic1,
+                        &topic2,
                         limit.as_deref(),
                         cursor.as_deref(),
                         &cwd,
@@ -1421,6 +1499,65 @@ mod tests {
                 );
             }
             _ => panic!("expected tx list command"),
+        }
+    }
+
+    #[test]
+    fn events_list_flags_and_command_name_parse() {
+        let cli = Cli::parse_from([
+            "groundhog",
+            "events",
+            "list",
+            "counter",
+            "--topic0",
+            "0x11",
+            "--topic0",
+            "0x22",
+            "--topic1",
+            "0x33",
+            "--topic2",
+            "0x44",
+            "--limit",
+            "25",
+            "--cursor",
+            "0xaabb",
+            "--profile",
+            "devnet",
+            "--rpc-url",
+            "https://rpc.example",
+            "--runtime-manifest",
+            "/tmp/runtime.json",
+        ]);
+
+        assert_eq!(cli.command.command_name(), "events.list");
+        match cli.command {
+            Command::Events {
+                command:
+                    EventsCommand::List {
+                        contract,
+                        topic0,
+                        topic1,
+                        topic2,
+                        limit,
+                        cursor,
+                        profile,
+                        target_args,
+                    },
+            } => {
+                assert_eq!(contract, "counter");
+                assert_eq!(topic0, ["0x11", "0x22"]);
+                assert_eq!(topic1, ["0x33"]);
+                assert_eq!(topic2, ["0x44"]);
+                assert_eq!(limit.as_deref(), Some("25"));
+                assert_eq!(cursor.as_deref(), Some("0xaabb"));
+                assert_eq!(profile.as_deref(), Some("devnet"));
+                assert_eq!(target_args.rpc_url.as_deref(), Some("https://rpc.example"));
+                assert_eq!(
+                    target_args.runtime_manifest.as_deref(),
+                    Some(std::path::Path::new("/tmp/runtime.json"))
+                );
+            }
+            _ => panic!("expected events list command"),
         }
     }
 

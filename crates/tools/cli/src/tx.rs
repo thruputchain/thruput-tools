@@ -239,7 +239,10 @@ async fn fetch_transaction(
     Ok((status, receipt))
 }
 
-fn map_rpc_error(method: &'static str, error: &jsonrpsee::core::client::Error) -> CliError {
+pub(crate) fn map_rpc_error(
+    method: &'static str,
+    error: &jsonrpsee::core::client::Error,
+) -> CliError {
     let message = rpc_error_message(error);
     if is_unsupported_rpc_method_error(error) {
         return CliError::RpcCapabilityUnsupported { method, message };

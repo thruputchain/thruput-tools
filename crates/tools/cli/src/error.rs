@@ -131,6 +131,31 @@ pub enum CliError {
         display_input: String,
         message: String,
     },
+    #[error("invalid event {position} value `{display_input}`: {message}")]
+    InvalidEventTopic {
+        position: &'static str,
+        input: String,
+        display_input: String,
+        message: String,
+    },
+    #[error("invalid event filter: {position} has {count} values; maximum is {max}")]
+    InvalidEventFilter {
+        position: &'static str,
+        count: usize,
+        max: u32,
+    },
+    #[error("invalid event limit `{display_input}`: {message}")]
+    InvalidEventLimit {
+        input: String,
+        display_input: String,
+        message: String,
+    },
+    #[error("invalid event cursor `{display_input}`: {message}")]
+    InvalidEventCursor {
+        input: String,
+        display_input: String,
+        message: String,
+    },
     #[error("failed to initialize async runtime: {0}")]
     RuntimeInit(String),
     #[error("{method} failed: {message}")]
@@ -324,6 +349,10 @@ impl CliError {
             Self::InvalidTransactionHash { .. } => "invalid_transaction_hash",
             Self::InvalidTransactionHistoryLimit { .. } => "invalid_transaction_history_limit",
             Self::InvalidTransactionCursor { .. } => "invalid_transaction_cursor",
+            Self::InvalidEventTopic { .. } => "invalid_event_topic",
+            Self::InvalidEventFilter { .. } => "invalid_event_filter",
+            Self::InvalidEventLimit { .. } => "invalid_event_limit",
+            Self::InvalidEventCursor { .. } => "invalid_event_cursor",
             Self::RuntimeInit(_) => "runtime_init_failed",
             Self::RpcMethodFailed { .. } => "rpc_method_failed",
             Self::RpcCapabilityUnsupported { .. } => "rpc_capability_unsupported",
@@ -461,20 +490,30 @@ impl CliError {
                     "use a saved wallet, contract alias, dev-N account, or 32-byte 0x-prefixed address",
                 ))
             }
-            Self::InvalidTransactionHash { .. } => Some(Cow::Borrowed(
-                "pass exactly 32 bytes as case-insensitive hex, with or without a 0x prefix",
-            )),
-            Self::InvalidTransactionHistoryLimit { .. } => Some(Cow::Borrowed(
-                "pass a positive whole-number page size; the selected endpoint enforces its maximum",
-            )),
+            Self::InvalidTransactionHash { .. } | Self::InvalidEventTopic { .. } => {
+                Some(Cow::Borrowed(
+                    "pass exactly 32 bytes as case-insensitive hex, with or without a 0x prefix",
+                ))
+            }
+            Self::InvalidTransactionHistoryLimit { .. } | Self::InvalidEventLimit { .. } => {
+                Some(Cow::Borrowed(
+                    "pass a positive whole-number page size; the selected endpoint enforces its maximum",
+                ))
+            }
             Self::InvalidTransactionCursor { .. } => Some(Cow::Borrowed(
                 "pass the opaque hex cursor returned by the previous `groundhog tx list` page",
+            )),
+            Self::InvalidEventFilter { .. } => Some(Cow::Borrowed(
+                "pass at most 16 values at each event topic position",
+            )),
+            Self::InvalidEventCursor { .. } => Some(Cow::Borrowed(
+                "pass the opaque hex cursor returned by the previous `groundhog events list` page with unchanged filters",
             )),
             Self::RpcMethodFailed { .. } => Some(Cow::Borrowed(
                 "check the RPC endpoint and node logs for details",
             )),
             Self::RpcCapabilityUnsupported { .. } => Some(Cow::Borrowed(
-                "use a full local devnode or a compatible remote RPC that supports the required transaction method",
+                "use a full local devnode or a compatible remote RPC that supports the required RPC method",
             )),
             Self::LocalDevAccountUnavailable { .. } => Some(Cow::Borrowed(
                 "run `groundhog node` backed by hog-devnode, or use a stored key for non-local endpoints",
@@ -748,9 +787,21 @@ impl CliError {
             Self::InvalidHogAmount { input, message }
             | Self::InvalidTransactionHash { input, message, .. }
             | Self::InvalidTransactionHistoryLimit { input, message, .. }
-            | Self::InvalidTransactionCursor { input, message, .. } => Some(json!({
+            | Self::InvalidTransactionCursor { input, message, .. }
+            | Self::InvalidEventTopic { input, message, .. }
+            | Self::InvalidEventLimit { input, message, .. }
+            | Self::InvalidEventCursor { input, message, .. } => Some(json!({
                 "input": input,
                 "message": message,
+            })),
+            Self::InvalidEventFilter {
+                position,
+                count,
+                max,
+            } => Some(json!({
+                "position": position,
+                "count": count,
+                "max": max,
             })),
             Self::InvalidAddressTarget { target, message } => Some(json!({
                 "target": target,
