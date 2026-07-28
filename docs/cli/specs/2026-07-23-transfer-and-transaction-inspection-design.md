@@ -1,5 +1,5 @@
 # HOG Transfer and Transaction Inspection
-**Date:** 2026-07-23 **Status:** Transfer implemented; transaction inspection ready for implementation
+**Date:** 2026-07-23 **Status:** Implemented
 
 **Companions:**
 

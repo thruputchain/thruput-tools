@@ -25,8 +25,9 @@ use crate::transfer_json::{
     TransferDryRunReport, TransferReportCommon, TransferUnconfirmedReport,
 };
 use crate::tx_utils::{
-    command_error_for_exec_status, format_tx_hash, human_safe, nonce_from_timestamp,
-    resolve_block_expiry_height, summarize_exec_status,
+    command_error_for_exec_status, format_tx_hash, human_safe, is_unsupported_rpc_method_error,
+    nonce_from_timestamp, print_receipt_data, resolve_block_expiry_height, rpc_error_message,
+    summarize_exec_status,
 };
 use crate::{CliError, Print};
 
@@ -209,11 +210,11 @@ fn submit_and_confirm(prepared: &PreparedTransfer) -> Result<LiveOutcome, CliErr
                 return Err(CliError::RpcConnect(format!("{rpc_url}: {source}")));
             }
             Err(SubmitTransactionError::SendRawTransaction(source))
-                if is_unsupported_send_error(&source) =>
+                if is_unsupported_rpc_method_error(&source) =>
             {
                 return Err(CliError::RpcCapabilityUnsupported {
                     method: "sendRawTransaction",
-                    message: safe_rpc_error(&source),
+                    message: rpc_error_message(&source),
                 });
             }
             Err(SubmitTransactionError::SendRawTransaction(source))
@@ -221,7 +222,7 @@ fn submit_and_confirm(prepared: &PreparedTransfer) -> Result<LiveOutcome, CliErr
             {
                 return Err(CliError::RpcMethodFailed {
                     method: "sendRawTransaction",
-                    message: safe_rpc_error(&source),
+                    message: rpc_error_message(&source),
                 });
             }
             Ok(_) | Err(SubmitTransactionError::SendRawTransaction(_)) => {}
@@ -292,24 +293,6 @@ fn is_conclusive_send_error(error: &jsonrpsee::core::client::Error) -> bool {
             | codes::BACKEND_UNAVAILABLE
             | codes::OVERLOADED
     )
-}
-
-fn is_unsupported_send_error(error: &jsonrpsee::core::client::Error) -> bool {
-    const METHOD_NOT_FOUND: i32 = -32601;
-    matches!(
-        error,
-        jsonrpsee::core::client::Error::Call(object)
-            if matches!(object.code(), METHOD_NOT_FOUND | codes::NOT_IMPLEMENTED)
-    )
-}
-
-fn safe_rpc_error(error: &jsonrpsee::core::client::Error) -> String {
-    match error {
-        jsonrpsee::core::client::Error::Call(object) => {
-            format!("{} (code {})", human_safe(object.message()), object.code())
-        }
-        _ => human_safe(&error.to_string()),
-    }
 }
 
 fn receipt_poll_config() -> (usize, Duration) {
@@ -405,7 +388,10 @@ fn print_unavailable(
     ));
     print.detail("tx", &tx_hash);
     print.warn("the transaction may still commit; do not blindly resubmit it");
-    print.status("  next: retain this hash and verify its status before resubmitting");
+    print.status(format_args!(
+        "  next: groundhog tx show {tx_hash} --rpc-url {}",
+        human_safe(&prepared.rpc_url),
+    ));
 
     let report = TransferUnconfirmedReport {
         common: report_common(prepared, false, true),
@@ -441,19 +427,5 @@ fn report_common(
         amount: prepared.amount.clone(),
         raw_amount: prepared.raw_amount.to_string(),
         tx_hash: prepared.tx_hash,
-    }
-}
-
-fn print_receipt_data(receipt: &TransactionReceipt, print: &Print) {
-    for event in &receipt.events {
-        if let Ok(event) = serde_json::to_string(event) {
-            print.detail("event", human_safe(&event));
-        }
-    }
-    if let Some(data) = &receipt.return_data {
-        print.detail("return data", format_args!("0x{}", hex::encode(&data.0)));
-    }
-    if let Some(data) = &receipt.abort_data {
-        print.detail("abort data", format_args!("0x{}", hex::encode(&data.0)));
     }
 }

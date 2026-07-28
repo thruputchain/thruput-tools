@@ -1,5 +1,8 @@
+use groundhog_json_rpc_types::error::codes;
 use groundhog_json_rpc_types::receipt::{ExecStatus, TransactionReceipt};
 use groundhog_json_rpc_types::transaction::{TransactionStatus, TxHash};
+use jsonrpsee::core::ClientError;
+use jsonrpsee::types::error::METHOD_NOT_FOUND_CODE;
 
 use crate::codec::{AbortDecodeError, CallMetadata, DecodedAbort, decode_abort};
 use crate::result::CommandError;
@@ -117,6 +120,37 @@ pub(crate) fn human_safe(value: &str) -> String {
         }
     }
     escaped
+}
+
+pub(crate) fn rpc_error_message(error: &ClientError) -> String {
+    match error {
+        ClientError::Call(object) => {
+            format!("{} (code {})", human_safe(object.message()), object.code())
+        }
+        _ => human_safe(&error.to_string()),
+    }
+}
+
+pub(crate) fn is_unsupported_rpc_method_error(error: &ClientError) -> bool {
+    matches!(
+        error,
+        ClientError::Call(object)
+            if matches!(object.code(), METHOD_NOT_FOUND_CODE | codes::NOT_IMPLEMENTED)
+    )
+}
+
+pub(crate) fn print_receipt_data(receipt: &TransactionReceipt, print: &Print) {
+    for event in &receipt.events {
+        if let Ok(event) = serde_json::to_string(event) {
+            print.detail("event", human_safe(&event));
+        }
+    }
+    if let Some(data) = &receipt.return_data {
+        print.detail("return data", format_args!("0x{}", hex::encode(&data.0)));
+    }
+    if let Some(data) = &receipt.abort_data {
+        print.detail("abort data", format_args!("0x{}", hex::encode(&data.0)));
+    }
 }
 
 pub async fn resolve_block_expiry_height(rpc_url: &str) -> Result<i64, CliError> {

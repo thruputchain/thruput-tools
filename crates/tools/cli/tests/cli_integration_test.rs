@@ -3553,8 +3553,8 @@ fn transfer_live_human_unavailable_warns_against_resubmission() {
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("may still commit"));
     assert!(stderr.contains("do not blindly resubmit"));
-    assert!(stderr.contains("retain this hash and verify its status"));
-    assert!(!stderr.contains("groundhog tx show"));
+    assert!(stderr.contains("groundhog tx show"));
+    assert!(stderr.contains("--rpc-url http://127.0.0.1:"));
     assert!(!stderr.contains("signed transaction"));
 }
 
@@ -6392,6 +6392,23 @@ fn tx_show_maps_only_unsupported_rpc_codes_to_capability_error() {
         .unwrap();
     let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(stderr["error"]["code"], "rpc_method_failed");
+}
+
+#[test]
+fn tx_show_human_error_escapes_invalid_rpc_url() {
+    let hash = format!("0x{}", "ab".repeat(32));
+    let rpc_url = "http://[bad\n\u{1b}[31m";
+    let output = groundhog()
+        .args(["tx", "show", &hash, "--rpc-url", rpc_url])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(!stderr.contains('\u{1b}'));
+    assert!(!stderr.contains("http://[bad\n"));
+    assert!(stderr.contains(r"http://[bad\n\u{1b}[31m"));
 }
 
 #[test]

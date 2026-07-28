@@ -2,12 +2,12 @@ use std::borrow::Cow;
 use std::path::Path;
 
 use groundhog_json_rpc_client::{GroundhogApiClient, HttpClientBuilder};
+use groundhog_json_rpc_types::ContractAddress;
 use groundhog_json_rpc_types::events::{BlockAnchor, IterationOrder, PaginationCursor};
 use groundhog_json_rpc_types::receipt::TransactionReceipt;
 use groundhog_json_rpc_types::transaction::{
     AddressTransactionQuery, TransactionRefPage, TransactionStatus, TxHash,
 };
-use groundhog_json_rpc_types::{ContractAddress, error::codes};
 
 use crate::account_resolution::resolve_address_target;
 use crate::checks::{Finding, FindingLevel};
@@ -17,7 +17,10 @@ use crate::result::CommandResult;
 use crate::tx_json::{
     TX_LIST_JSON_SCHEMA_VERSION, TX_SHOW_JSON_SCHEMA_VERSION, TxListReport, TxShowReport,
 };
-use crate::tx_utils::{format_tx_hash, human_safe, summarize_exec_status};
+use crate::tx_utils::{
+    format_tx_hash, human_safe, is_unsupported_rpc_method_error, print_receipt_data,
+    rpc_error_message, summarize_exec_status,
+};
 use crate::{CliError, Print};
 
 const ROOT_HISTORY_WARNING: &str = "history includes root invocations only; incoming wallet-wrapped transfers may not appear for recipients";
@@ -161,7 +164,7 @@ async fn fetch_transaction_page(
     let requested_limit = query.limit;
     let client = HttpClientBuilder::default()
         .build(rpc_url)
-        .map_err(|error| CliError::RpcConnect(format!("{rpc_url}: {error}")))?;
+        .map_err(|error| CliError::RpcConnect(human_safe(&format!("{rpc_url}: {error}"))))?;
     let page = client
         .get_transactions_by_address(query)
         .await
@@ -194,7 +197,7 @@ async fn fetch_transaction(
 ) -> Result<(TransactionStatus, Option<TransactionReceipt>), CliError> {
     let client = HttpClientBuilder::default()
         .build(rpc_url)
-        .map_err(|error| CliError::RpcConnect(format!("{rpc_url}: {error}")))?;
+        .map_err(|error| CliError::RpcConnect(human_safe(&format!("{rpc_url}: {error}"))))?;
     let status = client
         .get_transaction_status(tx_hash)
         .await
@@ -236,25 +239,11 @@ async fn fetch_transaction(
 }
 
 fn map_rpc_error(method: &'static str, error: &jsonrpsee::core::client::Error) -> CliError {
-    const METHOD_NOT_FOUND: i32 = -32601;
-    let message = safe_rpc_error(error);
-    if matches!(
-        error,
-        jsonrpsee::core::client::Error::Call(object)
-            if matches!(object.code(), METHOD_NOT_FOUND | codes::NOT_IMPLEMENTED)
-    ) {
+    let message = rpc_error_message(error);
+    if is_unsupported_rpc_method_error(error) {
         return CliError::RpcCapabilityUnsupported { method, message };
     }
     CliError::RpcMethodFailed { method, message }
-}
-
-fn safe_rpc_error(error: &jsonrpsee::core::client::Error) -> String {
-    match error {
-        jsonrpsee::core::client::Error::Call(object) => {
-            format!("{} (code {})", human_safe(object.message()), object.code())
-        }
-        _ => human_safe(&error.to_string()),
-    }
 }
 
 fn print_show(
@@ -303,17 +292,7 @@ fn print_show(
             "execution",
             human_safe(&summarize_exec_status(&receipt.status)),
         );
-        for event in &receipt.events {
-            if let Ok(event) = serde_json::to_string(event) {
-                print.detail("event", human_safe(&event));
-            }
-        }
-        if let Some(data) = &receipt.return_data {
-            print.detail("return data", format_args!("0x{}", hex::encode(&data.0)));
-        }
-        if let Some(data) = &receipt.abort_data {
-            print.detail("abort data", format_args!("0x{}", hex::encode(&data.0)));
-        }
+        print_receipt_data(receipt, print);
     }
 }
 
