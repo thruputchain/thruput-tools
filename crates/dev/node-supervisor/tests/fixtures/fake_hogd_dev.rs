@@ -33,6 +33,7 @@ use groundhog_scheduler::{
     SchedulerValidationResult,
     sched_coord::{SchedulerCoord_SchedulerCoord1, SchedulerCoord_SchedulerCoord1_Dispatcher},
 };
+use groundhog_xdr::PROTOCOL_VERSION;
 use groundhog_xdr::event::IdentifiedEvent;
 use groundhog_xdr::genesis::GenesisConfiguration;
 use groundhog_xdr::header::{ProposalContext, ProposalHeader};
@@ -540,7 +541,7 @@ fn runtime_manifest(endpoints: &Value, config: &FakeStartupConfig) -> Value {
         "kind": "hogd-dev-runtime",
         "chainState": "fresh",
         "networkHash": "00".repeat(32),
-        "protocol": "fake-hogd-dev/x23",
+        "protocol": PROTOCOL_VERSION,
         "genesisHash": Hex0x(SHA256Hash::from([0x42; 32])),
         "producer": Value::Object(producer),
         "endpoints": endpoints,

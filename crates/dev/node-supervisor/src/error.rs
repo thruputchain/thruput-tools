@@ -257,6 +257,28 @@ pub enum NodeSupervisorError {
         reason: String,
     },
 
+    /// The runtime manifest advertised a different network than the bootstrap request.
+    #[error(
+        "hogd-dev runtime manifest network hash mismatch: bootstrap requested {expected}, runtime advertised {observed}"
+    )]
+    RuntimeNetworkHashMismatch {
+        /// Network hash requested in the bootstrap manifest.
+        expected: NetworkHashHex,
+        /// Network hash advertised by the runtime manifest.
+        observed: NetworkHashHex,
+    },
+
+    /// The runtime manifest advertised a different protocol token than requested.
+    #[error(
+        "hogd-dev runtime manifest protocol mismatch: supervisor requested {expected}, runtime advertised {observed:?}"
+    )]
+    RuntimeProtocolMismatch {
+        /// Protocol token requested by the supervisor.
+        expected: String,
+        /// Protocol token advertised by the runtime manifest, if present.
+        observed: Option<String>,
+    },
+
     /// hogd-dev advertised a different dev-account count than requested.
     #[error(
         "hogd-dev readiness advertised {actual} dev accounts, but supervisor requested {expected}"

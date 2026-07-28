@@ -60,6 +60,7 @@ pub const MAX_RUNTIME_MANIFEST_BYTES: usize = 1024 * 1024;
 pub const SUPPORTED_BOOTSTRAP_ACCOUNT_DERIVATION_SCHEME: &str = "groundhog-bootstrap-account-v1";
 
 const BOOTSTRAP_MANIFEST_FILE_NAME: &str = "bootstrap-manifest.json";
+const PERSISTENT_PID_FILE_NAME: &str = "hog-devnode.pid";
 
 /// Ready endpoints exposed by hogd-dev.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -187,6 +188,26 @@ pub(crate) fn validate_dev_accounts(
     Ok(())
 }
 
+pub(crate) fn validate_runtime_identity(
+    readiness: &HogdDevReadiness,
+    expected_protocol: &str,
+) -> Result<(), NodeSupervisorError> {
+    let expected_network_hash = local_dev_network_hash();
+    if readiness.network_hash != expected_network_hash {
+        return Err(NodeSupervisorError::RuntimeNetworkHashMismatch {
+            expected: expected_network_hash,
+            observed: readiness.network_hash.clone(),
+        });
+    }
+    if readiness.protocol.as_deref() != Some(expected_protocol) {
+        return Err(NodeSupervisorError::RuntimeProtocolMismatch {
+            expected: expected_protocol.to_string(),
+            observed: readiness.protocol.clone(),
+        });
+    }
+    Ok(())
+}
+
 /// Running hogd-dev child process plus its parsed readiness metadata.
 #[derive(Debug)]
 pub struct HogdDevProcess {
@@ -196,7 +217,7 @@ pub struct HogdDevProcess {
     shutdown_grace: Duration,
     data_dir: Option<PathBuf>,
     pid_file: Option<PathBuf>,
-    pid_guard: Option<PidGuard>,
+    pid_guards: Vec<PidGuard>,
     _bootstrap_manifest: Option<BootstrapManifestFile>,
 }
 
@@ -229,16 +250,40 @@ impl HogdDevProcess {
         bootstrap_manifest: Option<BootstrapManifestFile>,
     ) -> Result<Self, NodeSupervisorError> {
         prepare_persistent_data_dir(config)?;
-        let mut pid_guard = match &config.pid_file {
-            Some(pid_file) => Some(
-                PidGuard::acquire(pid_file.clone(), spec.program(), config.shutdown_grace).await?,
-            ),
-            None => None,
-        };
+        let persistent_pid_file = config
+            .data_dir
+            .as_ref()
+            .map(|data_dir| data_dir.join(PERSISTENT_PID_FILE_NAME));
+        let mut pid_guards = Vec::new();
+        if let Some(pid_file) = &persistent_pid_file {
+            pid_guards.push(
+                PidGuard::acquire_persistent(
+                    pid_file.clone(),
+                    spec.program(),
+                    config.shutdown_grace,
+                )
+                .await?,
+            );
+        }
+        if let Some(pid_file) = &config.pid_file
+            && Some(pid_file) != persistent_pid_file.as_ref()
+        {
+            let guard = if config.data_dir.is_some() {
+                PidGuard::acquire_persistent(
+                    pid_file.clone(),
+                    spec.program(),
+                    config.shutdown_grace,
+                )
+                .await?
+            } else {
+                PidGuard::acquire(pid_file.clone(), spec.program(), config.shutdown_grace).await?
+            };
+            pid_guards.push(guard);
+        }
 
         let mut child = ChildSupervisor::new(spec).spawn()?;
         let program = child.program().to_string();
-        if let Some(guard) = &mut pid_guard {
+        if !pid_guards.is_empty() {
             let pid = child.id().ok_or_else(|| NodeSupervisorError::Status {
                 program: program.clone(),
                 source: io::Error::new(
@@ -246,9 +291,11 @@ impl HogdDevProcess {
                     "child process id is unavailable",
                 ),
             })?;
-            if let Err(error) = guard.write(pid) {
-                kill_unready_child(&mut child).await;
-                return Err(error);
+            for guard in &mut pid_guards {
+                if let Err(error) = guard.write(pid) {
+                    kill_unready_child(&mut child).await;
+                    return Err(error);
+                }
             }
         }
 
@@ -281,7 +328,7 @@ impl HogdDevProcess {
             shutdown_grace: config.shutdown_grace,
             data_dir: config.data_dir.clone(),
             pid_file: config.pid_file.clone(),
-            pid_guard,
+            pid_guards,
             _bootstrap_manifest: bootstrap_manifest,
         })
     }
@@ -437,7 +484,7 @@ impl HogdDevProcess {
     }
 
     fn release_pid_guard(&mut self) {
-        if let Some(guard) = self.pid_guard.take() {
+        for guard in self.pid_guards.drain(..) {
             guard.release();
         }
     }
@@ -509,7 +556,7 @@ fn write_bootstrap_manifest(
     config: &HogdDevConfig,
 ) -> Result<BootstrapManifestFile, NodeSupervisorError> {
     let manifest = config
-        .to_bootstrap_manifest(NetworkHashHex::from([0; 32]))
+        .to_bootstrap_manifest(local_dev_network_hash())
         .map_err(
             |source| NodeSupervisorError::InvalidBootstrapManifestConfig {
                 reason: format!("dev_account_count does not fit u32: {source}"),
@@ -527,6 +574,10 @@ fn write_bootstrap_manifest(
         source,
     })?;
     Ok(BootstrapManifestFile { _dir: dir, path })
+}
+
+fn local_dev_network_hash() -> NetworkHashHex {
+    NetworkHashHex::from([0; 32])
 }
 
 /// Build the hogd-dev child process command specification.
@@ -1651,10 +1702,10 @@ mod tests {
 
     use super::{
         DEFAULT_HOGD_DEV_BINARY, DEVNODE_BINARY_ENV, HOGD_LOG_FORMAT_ENV, HogdDevProcess,
-        RuntimeManifestChainState, build_hogd_dev_spec,
+        PERSISTENT_PID_FILE_NAME, RuntimeManifestChainState, build_hogd_dev_spec,
         build_hogd_dev_spec_with_bootstrap_manifest, parse_readiness_line,
         prepare_persistent_data_dir, resolve_hogd_dev_binary, validate_dev_accounts,
-        write_bootstrap_manifest,
+        validate_runtime_identity, write_bootstrap_manifest,
     };
     use crate::{
         HogdDevConfig, NodeSupervisorError,
@@ -1752,6 +1803,38 @@ mod tests {
         assert_eq!(value["bootstrapAccounts"]["seed"], "manifest-seed");
         assert_eq!(value["bootstrapAccounts"]["initialStorageTokens"], "1234");
         assert_eq!(value["storageCostModel"]["profile"], "hogd-default");
+    }
+
+    #[test]
+    fn runtime_identity_rejects_non_bootstrap_network() {
+        let line = manifest_readiness_line(r#"{"scheduler":"127.0.0.1:12345"}"#, r"[]");
+        let mut readiness =
+            parse_readiness_line("hogd-dev", &line).expect("bug: readiness should parse");
+        readiness.network_hash = groundhog_json_rpc_types::NetworkHashHex::from([0xff; 32]);
+
+        let err = validate_runtime_identity(&readiness, "hogp/test")
+            .expect_err("bug: a non-bootstrap network should fail closed");
+        assert!(matches!(
+            err,
+            NodeSupervisorError::RuntimeNetworkHashMismatch { expected, observed }
+                if expected == groundhog_json_rpc_types::NetworkHashHex::from([0; 32])
+                    && observed == groundhog_json_rpc_types::NetworkHashHex::from([0xff; 32])
+        ));
+    }
+
+    #[test]
+    fn runtime_identity_rejects_protocol_mismatch() {
+        let line = manifest_readiness_line(r#"{"scheduler":"127.0.0.1:12345"}"#, r"[]");
+        let readiness =
+            parse_readiness_line("hogd-dev", &line).expect("bug: readiness should parse");
+
+        let err = validate_runtime_identity(&readiness, "hogp/expected")
+            .expect_err("bug: a protocol mismatch should fail closed");
+        assert!(matches!(
+            err,
+            NodeSupervisorError::RuntimeProtocolMismatch { expected, observed }
+                if expected == "hogp/expected" && observed.as_deref() == Some("hogp/test")
+        ));
     }
 
     #[test]
@@ -2496,6 +2579,51 @@ mod tests {
         let err = prepare_persistent_data_dir(&config)
             .expect_err("bug: symlinked data dir should fail closed");
         assert!(matches!(err, NodeSupervisorError::DataDir { .. }));
+    }
+
+    #[tokio::test]
+    async fn persistent_start_uses_data_dir_pid_file() {
+        let temp = TempDir::new().expect("bug: temp dir should be created");
+        let data_dir = temp.path().join("persistent");
+        let pid_file = data_dir.join(PERSISTENT_PID_FILE_NAME);
+        let config = HogdDevConfig::default()
+            .with_data_dir(&data_dir)
+            .with_startup_timeout(Duration::from_secs(2));
+
+        let mut process = start_fake_hogd_dev(&config, "ready")
+            .await
+            .expect("bug: persistent startup should create its canonical PID file");
+        assert!(pid_file.exists());
+        process.stop().await.expect("bug: fake child should stop");
+        assert!(!pid_file.exists());
+    }
+
+    #[tokio::test]
+    async fn persistent_data_dir_cannot_use_multiple_explicit_pid_files() {
+        let temp = TempDir::new().expect("bug: temp dir should be created");
+        let data_dir = temp.path().join("persistent");
+        let first_config = HogdDevConfig::default()
+            .with_data_dir(&data_dir)
+            .with_pid_file(temp.path().join("first.pid"))
+            .with_startup_timeout(Duration::from_secs(2));
+        let second_config = HogdDevConfig::default()
+            .with_data_dir(&data_dir)
+            .with_pid_file(temp.path().join("second.pid"))
+            .with_startup_timeout(Duration::from_secs(2));
+        let mut process = start_fake_hogd_dev(&first_config, "ready")
+            .await
+            .expect("bug: first persistent child should start");
+
+        let err = start_fake_hogd_dev(&second_config, "ready")
+            .await
+            .expect_err("bug: the data-directory PID guard should prevent a second child");
+        assert!(matches!(
+            err,
+            NodeSupervisorError::LocalNodeAlreadyRunning { path, .. }
+                if path == data_dir.join(PERSISTENT_PID_FILE_NAME)
+        ));
+
+        process.stop().await.expect("bug: fake child should stop");
     }
 
     #[tokio::test]

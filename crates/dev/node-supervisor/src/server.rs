@@ -18,7 +18,7 @@ use serde::Serialize;
 use crate::{
     BlockDriverConfig, HogdDevProcess, HogdDevReadiness, NodeSupervisorConfig, NodeSupervisorError,
     block_driver::{BlockDriverTask, ManualBlockProducer},
-    hogd_dev::validate_dev_accounts,
+    hogd_dev::{validate_dev_accounts, validate_runtime_identity},
     read_backend::{HogdDevReadBackend, HogdDevStorageReadBackend},
     rpc_backend::HogdDevSchedulerBackend,
     stub_backend::StubBackend,
@@ -149,7 +149,14 @@ impl NodeSupervisorHandle {
     pub async fn start(config: NodeSupervisorConfig) -> Result<Self, NodeSupervisorError> {
         let mut hogd = HogdDevProcess::start(&config.hogd_dev).await?;
 
-        match validate_dev_accounts(hogd.readiness(), &config.hogd_dev) {
+        let protocol_version = config
+            .hogd_protocol_override
+            .as_deref()
+            .unwrap_or(PROTOCOL_VERSION);
+
+        match validate_runtime_identity(hogd.readiness(), protocol_version)
+            .and_then(|()| validate_dev_accounts(hogd.readiness(), &config.hogd_dev))
+        {
             Ok(()) => {}
             Err(error) => {
                 if let Err(stop_err) = hogd.stop().await {
@@ -165,10 +172,7 @@ impl NodeSupervisorHandle {
         match start_rpc_server(
             &config.rpc_listen_address,
             hogd.readiness(),
-            config
-                .hogd_protocol_override
-                .as_deref()
-                .unwrap_or(PROTOCOL_VERSION),
+            protocol_version,
             config.view_gas_limit,
             config.view_timeout,
             config.block_driver,
@@ -2200,10 +2204,9 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
                 assert_eq!(outcome_name, "DbGatewayIntroMismatchedProtocol");
                 assert!(is_protocol_mismatch);
                 assert_eq!(protocol, PROTOCOL_VERSION);
-                assert_eq!(expected_protocol.as_deref(), Some("fake-hogd-dev/x23"));
+                assert_eq!(expected_protocol.as_deref(), Some(PROTOCOL_VERSION));
                 assert!(message.contains("DbGateway intro mismatch"));
                 assert!(message.contains(PROTOCOL_VERSION));
-                assert!(message.contains("fake-hogd-dev/x23"));
                 assert!(message.contains("DbGatewayIntroMismatchedProtocol"));
             }
             other => panic!("expected ProtocolIntroRejected error, got {other:?}"),
@@ -2230,10 +2233,9 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
                 assert_eq!(outcome_name, "IntroMismatchedProtocol");
                 assert!(is_protocol_mismatch);
                 assert_eq!(protocol, PROTOCOL_VERSION);
-                assert_eq!(expected_protocol.as_deref(), Some("fake-hogd-dev/x23"));
+                assert_eq!(expected_protocol.as_deref(), Some(PROTOCOL_VERSION));
                 assert!(message.contains("IndexerBlockExplorer intro mismatch"));
                 assert!(message.contains(PROTOCOL_VERSION));
-                assert!(message.contains("fake-hogd-dev/x23"));
                 assert!(message.contains("IntroMismatchedProtocol"));
             }
             other => panic!("expected ProtocolIntroRejected error, got {other:?}"),

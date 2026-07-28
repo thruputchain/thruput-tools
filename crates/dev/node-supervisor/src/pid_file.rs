@@ -30,9 +30,27 @@ impl PidGuard {
         expected_program: &OsStr,
         grace: Duration,
     ) -> Result<Self, NodeSupervisorError> {
+        Self::acquire_with_policy(path, expected_program, grace, false).await
+    }
+
+    /// Acquire PID-file ownership without accepting an unverifiable live process.
+    pub(crate) async fn acquire_persistent(
+        path: PathBuf,
+        expected_program: &OsStr,
+        grace: Duration,
+    ) -> Result<Self, NodeSupervisorError> {
+        Self::acquire_with_policy(path, expected_program, grace, true).await
+    }
+
+    async fn acquire_with_policy(
+        path: PathBuf,
+        expected_program: &OsStr,
+        grace: Duration,
+        reject_live_program_mismatch: bool,
+    ) -> Result<Self, NodeSupervisorError> {
         #[cfg(unix)]
         {
-            acquire_unix(path, expected_program, grace).await
+            acquire_unix(path, expected_program, grace, reject_live_program_mismatch).await
         }
 
         #[cfg(not(unix))]
@@ -184,12 +202,20 @@ async fn acquire_unix(
     path: PathBuf,
     expected_program: &OsStr,
     grace: Duration,
+    reject_live_program_mismatch: bool,
 ) -> Result<PidGuard, NodeSupervisorError> {
     let mut file = open_pid_file(&path)?;
 
     match try_lock(&path, &file) {
         Ok(()) => {
-            clean_stale_pid(&path, &mut file, expected_program, grace).await?;
+            clean_stale_pid(
+                &path,
+                &mut file,
+                expected_program,
+                grace,
+                reject_live_program_mismatch,
+            )
+            .await?;
             clear_pid(&path, &mut file)?;
             Ok(PidGuard {
                 path,
@@ -235,6 +261,7 @@ async fn clean_stale_pid(
     file: &mut File,
     expected_program: &OsStr,
     grace: Duration,
+    reject_live_program_mismatch: bool,
 ) -> Result<(), NodeSupervisorError> {
     let Some(pid) = read_pid(path, file)? else {
         return Ok(());
@@ -276,6 +303,12 @@ async fn clean_stale_pid(
             path = %path.display(),
             "PID file points at a different program (likely PID reuse); ignoring"
         );
+        if reject_live_program_mismatch {
+            return Err(NodeSupervisorError::LocalNodeAlreadyRunning {
+                path: path.to_path_buf(),
+                pid: Some(pid),
+            });
+        }
         return Ok(());
     }
 
@@ -921,6 +954,47 @@ mod tests {
         let _ = child.kill();
         let _ = child.wait();
         drop(guard);
+    }
+
+    #[tokio::test]
+    async fn persistent_acquire_rejects_unrelated_live_program() {
+        use std::os::unix::process::CommandExt;
+
+        let temp = TempDir::new().expect("bug: temp dir should be created");
+        let path = temp.path().join("hogd-dev.pid");
+        let mut child = std::process::Command::new(sleep_command())
+            .arg("2")
+            .process_group(0)
+            .spawn()
+            .expect("bug: sleep should spawn");
+        let pid = child.id();
+        fs::write(&path, format!("{pid}\n")).expect("bug: pid file write");
+
+        let err = PidGuard::acquire_persistent(
+            path.clone(),
+            std::ffi::OsStr::new("hogd-dev"),
+            Duration::from_millis(50),
+        )
+        .await
+        .expect_err("bug: persistent startup should reject an unverifiable live process");
+        assert!(matches!(
+            err,
+            NodeSupervisorError::LocalNodeAlreadyRunning {
+                pid: Some(found),
+                ..
+            } if found == pid
+        ));
+        assert!(
+            child
+                .try_wait()
+                .expect("bug: try_wait should succeed")
+                .is_none(),
+            "sleep should remain running after fail-closed acquisition"
+        );
+
+        let _ = child.kill();
+        let _ = child.wait();
+        fs::remove_file(path).expect("bug: test should remove preserved PID file");
     }
 
     #[test]
