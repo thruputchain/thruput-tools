@@ -967,7 +967,11 @@ async fn probe_scheduler(
     match rpc_result {
         Ok(SchedulerGetTipResult::SchedulerGetTipOK { db_tip }) => {
             state.timeout_streak = 0;
-            successful_scheduler_probe(&db_tip, state)
+            let result = successful_scheduler_probe(&db_tip, state);
+            if result.identity_status == SchedulerIdentityStatus::Mismatch {
+                clear_scheduler_if_current(&ctx.scheduler, generation).await;
+            }
+            result
         }
         Ok(SchedulerGetTipResult::SchedulerGetTipNoGenesisBlock) => {
             state.timeout_streak = 0;
@@ -3058,6 +3062,40 @@ mod tests {
         })
         .await
         .expect("identity mismatch should permit a new quarantined reconnect attempt");
+        assert!(ctx.scheduler.read().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn active_scheduler_identity_mismatch_is_evicted() {
+        let (scheduler_addr, _server, _calls) =
+            start_test_scheduler(TipBehavior::Ready, NullBehavior::Ready).await;
+        let config = Arc::new(GatewayConfig {
+            scheduler_address: scheduler_addr.to_string(),
+            expected_network_hash: Some(NetworkHashHex::from([0x42; 32])),
+            indexer_address: None,
+            db_gateway_address: None,
+            view_gateway_address: None,
+            ..GatewayConfig::default()
+        });
+        let client = connect_optional_scheduler(&scheduler_addr.to_string(), 1)
+            .await
+            .expect("scheduler connection should succeed")
+            .expect("scheduler should be connected");
+        let ctx = GatewayContext::assemble(
+            Arc::new(RwLock::new(Some(client))),
+            Arc::new(RwLock::new(None)),
+            Arc::new(RwLock::new(None)),
+            Arc::new(RwLock::new(None)),
+            config.clone(),
+            GatewayMetrics::new("test", None).expect("test metrics should initialize"),
+        );
+        let mut scheduler_state =
+            SchedulerProbeState::with_expected_network_hash(config.expected_network_hash.clone());
+
+        let result = probe_scheduler(&ctx, Duration::from_secs(1), &mut scheduler_state).await;
+
+        assert!(!result.up);
+        assert_eq!(result.identity_status, SchedulerIdentityStatus::Mismatch);
         assert!(ctx.scheduler.read().await.is_none());
     }
 
