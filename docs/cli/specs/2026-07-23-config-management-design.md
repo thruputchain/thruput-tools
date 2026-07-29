@@ -57,9 +57,8 @@ The selected profile name resolves in this order:
 3. project `default_profile`;
   
 4. global `default_profile`;
-  
-5. built-in `default`.
-  
+
+If no source selects a profile, resolution fails with a stable no-active-profile error. A selected name must exist in the global layer, project layer, or both. The name `default` has no special behavior.
 
 For a selected name, global and project profiles merge field by field. Project scalar values override global scalar values. Contract and wallet maps merge per entry, with project entries winning.
 
@@ -85,6 +84,7 @@ Global config also contains `[executor]`, the top-level key selected by `groundh
 | D5  | `config unset` removes a field only from the selected layer. | An inherited value may become visible; no tombstone is created. |
 | D6  | `config edit` follows the existing `groundhog init` prompt model. | A line-based wizard is sufficient and requires no TUI dependency. |
 | D7  | All config writers preserve comments and unknown fields and share one lock. | Existing commands write the same files and must not erase or race config edits. |
+| D8  | Active-profile resolution requires a selected existing profile. | Inventing an empty `default` profile hides missing or invalid configuration. |
 ## Command Surface
 ### `groundhog config get [PROFILE]`
 Show one profile. With no positional profile, use the existing active-profile selection rules.
@@ -149,8 +149,6 @@ The command must:
 - show whether each profile exists globally, in the project, or in both;
   
 - show the merged network when valid;
-  
-- include active built-in `default` when no persisted profile exists;
   
 - include an active missing profile as `missing` rather than failing;
   
@@ -337,7 +335,7 @@ A source is an object with a stable `kind` and optional location:
 { "kind": "project", "path": "/work/app/groundhog.toml" }
 ```
 
-Field source kinds are `global` and `project`. Profile-selection source kinds are `explicit`, `environment`, `project`, `global`, and `builtIn`; environment selection includes `name: "GROUNDHOG_PROFILE"` and file-backed selection includes `path`.
+Field source kinds are `global` and `project`. Profile-selection source kinds are `explicit`, `environment`, `project`, and `global`; environment selection includes `name: "GROUNDHOG_PROFILE"` and file-backed selection includes `path`.
 
 When `--sources` is used, `config.get` groups source records by the same logical shape as the values:
 
@@ -363,6 +361,8 @@ Mutation results include the profile, scope, destination path, changed flag, and
 Use stable config-specific errors for:
 
 - invalid or missing profile names;
+
+- no active profile selected;
   
 - unsupported fields or invalid values;
   
@@ -470,7 +470,7 @@ Unit and config tests cover:
 - every typed field's valid and invalid forms;
 - set-created overlays and unchanged values;
 - unset with and without inherited fallback;
-- profile listing with valid, invalid, missing, and built-in entries;
+- profile listing with valid, invalid, and active-missing entries;
 - global/project `use` and the environment-override warning;
 - comments, unknown fields, ordering, and permissions surviving every writer;
 - concurrent writers, lock timeout, and atomic-failure cleanup;
