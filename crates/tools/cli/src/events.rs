@@ -61,7 +61,7 @@ pub fn list(
     if let Some(name) = selected_event {
         let signature = event_spec
             .as_ref()
-            .expect("event selection must have a loaded spec")
+            .expect("bug: event selection must have a loaded spec")
             .selected_signature(name)?;
         if topic0.is_empty() {
             topic0.push(signature);
@@ -325,7 +325,8 @@ fn print_event_list(report: &EventListReport, continuation_requested: bool, prin
                     );
                 }
                 EventDecodeStatus::Decoded => {
-                    let decoded = decoded.expect("decoded status must include decoded event data");
+                    let decoded =
+                        decoded.expect("bug: decoded status must include decoded event data");
                     for (name, value) in &decoded.fields {
                         print.detail(&terminal_safe(name), terminal_safe(&value.to_string()));
                     }

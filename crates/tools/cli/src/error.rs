@@ -373,12 +373,15 @@ impl CliError {
             Self::InvalidTransactionCursor { .. } => "invalid_transaction_cursor",
             Self::InvalidEventTopic { .. } => "invalid_event_topic",
             Self::InvalidEventFilter { .. } => "invalid_event_filter",
-            Self::InvalidEventLimit { .. } => "invalid_event_limit",
-            Self::InvalidEventCursor { .. } => "invalid_event_cursor",
-            Self::InvalidEventOptions { .. } => "invalid_event_options",
-            Self::InvalidTokenTransferLimit { .. } => "invalid_token_transfer_limit",
-            Self::InvalidTokenTransferCursor { .. } => "invalid_token_transfer_cursor",
-            Self::InvalidTokenTransferOptions { .. } => "invalid_token_transfer_options",
+            Self::InvalidEventLimit { .. } | Self::InvalidTokenTransferLimit { .. } => {
+                "invalid_event_limit"
+            }
+            Self::InvalidEventCursor { .. } | Self::InvalidTokenTransferCursor { .. } => {
+                "invalid_event_cursor"
+            }
+            Self::InvalidEventOptions { .. } | Self::InvalidTokenTransferOptions { .. } => {
+                "invalid_event_options"
+            }
             Self::InvalidEventSpec { .. } => "invalid_event_spec",
             Self::RuntimeInit(_) => "runtime_init_failed",
             Self::RpcMethodFailed { .. } => "rpc_method_failed",

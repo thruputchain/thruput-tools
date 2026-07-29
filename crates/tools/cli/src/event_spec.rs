@@ -75,7 +75,7 @@ impl ValidatedEventSpec {
 
     pub(crate) fn decode_events(&self, events: Vec<IdentifiedEvent>) -> Vec<EventListItemReport> {
         let type_defs = build_type_def_index(&self.spec.type_defs)
-            .expect("validated event spec must have unique type definitions");
+            .expect("bug: validated event spec must have unique type definitions");
         events
             .into_iter()
             .map(|event| self.decode_event(event, &type_defs))
@@ -96,7 +96,7 @@ impl ValidatedEventSpec {
         };
         let event_def = &self.spec.events[*index];
         let event_name = spec_string_text(&event_def.name)
-            .expect("validated event name must be text")
+            .expect("bug: validated event name must be text")
             .to_owned();
 
         match decode_known_event(event_def, &raw.topics, &raw.data.0, type_defs) {

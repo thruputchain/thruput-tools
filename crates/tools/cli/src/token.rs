@@ -203,7 +203,7 @@ fn address_topic(address: ContractAddress) -> Topic {
         .0
         .as_ref()
         .try_into()
-        .expect("contract address must contain 32 bytes");
+        .expect("bug: contract address must contain 32 bytes");
     Topic(bytes)
 }
 
@@ -293,12 +293,8 @@ fn print_transfers(report: &TokenTransfersReport, continuation_requested: bool, 
                 print.detail("height", *record.raw.block_height);
                 print.detail("sequence", record.raw.sequence_number);
                 print.detail("txn", format_tx_hash(&record.raw.tx_hash));
-                if transfer.kind != TokenTransferKind::Mint {
-                    print.detail("from", format_contract_address(&transfer.from.0));
-                }
-                if transfer.kind != TokenTransferKind::Burn {
-                    print.detail("to", format_contract_address(&transfer.to.0));
-                }
+                print.detail("from", format_contract_address(&transfer.from.0));
+                print.detail("to", format_contract_address(&transfer.to.0));
                 print.detail("raw amount", &transfer.raw_amount);
             } else {
                 print.warn(format_args!(

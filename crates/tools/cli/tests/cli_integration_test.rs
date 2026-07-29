@@ -8471,11 +8471,12 @@ fn token_transfers_maps_directional_filters_and_cursor_to_one_query() {
 }
 
 #[test]
-fn token_transfers_human_output_labels_transfer_without_debug_quotes() {
+fn token_transfers_human_output_preserves_participants_and_malformed_evidence() {
     let tmp = TempDir::new().unwrap();
     let token = format!("0x{}", "e1".repeat(32));
     let from = format!("0x{}", "e2".repeat(32));
     let to = format!("0x{}", "e3".repeat(32));
+    let zero = format!("0x{}", "00".repeat(32));
     let signature = transfer_signature();
     let amount_data = format!("0x{}", hex::encode(xdrs::cxs::encode(&125_i128).unwrap()));
     let malformed_data = "0xff";
@@ -8505,6 +8506,26 @@ fn token_transfers_human_output_labels_transfer_without_debug_quotes() {
                 {
                     "txHash": format!("0x{}", "e5".repeat(32)),
                     "blockHeight": 11,
+                    "sequenceNumber": 2,
+                    "event": {
+                        "contractAddress": token,
+                        "topics": [signature, zero, to],
+                        "data": amount_data,
+                    },
+                },
+                {
+                    "txHash": format!("0x{}", "e6".repeat(32)),
+                    "blockHeight": 10,
+                    "sequenceNumber": 1,
+                    "event": {
+                        "contractAddress": token,
+                        "topics": [signature, from, zero],
+                        "data": amount_data,
+                    },
+                },
+                {
+                    "txHash": format!("0x{}", "e7".repeat(32)),
+                    "blockHeight": 9,
                     "sequenceNumber": 0,
                     "event": {
                         "contractAddress": token,
@@ -8534,8 +8555,15 @@ fn token_transfers_human_output_labels_transfer_without_debug_quotes() {
     assert!(stderr.contains("txn: 0x"), "stderr: {stderr}");
     assert!(stderr.contains("raw amount: 125"), "stderr: {stderr}");
     assert!(!stderr.contains("\"transfer\""), "stderr: {stderr}");
+    assert!(stderr.contains("\nmint\n"), "stderr: {stderr}");
+    assert!(stderr.contains("\nburn\n"), "stderr: {stderr}");
     assert!(
-        stderr.contains("warning: malformed transfer event at height 11 sequence 0"),
+        stderr.contains(&format!("from: {zero}")),
+        "stderr: {stderr}"
+    );
+    assert!(stderr.contains(&format!("to: {zero}")), "stderr: {stderr}");
+    assert!(
+        stderr.contains("warning: malformed transfer event at height 9 sequence 0"),
         "stderr: {stderr}"
     );
     assert!(stderr.contains("data: 0xff"), "stderr: {stderr}");
@@ -8623,7 +8651,7 @@ fn token_transfers_rejects_account_conflicts_before_rpc() {
 
     assert!(!output.status.success());
     let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-    assert_eq!(stderr["error"]["code"], "invalid_token_transfer_options");
+    assert_eq!(stderr["error"]["code"], "invalid_event_options");
     assert_eq!(
         stderr["error"]["hint"],
         "use `--account` by itself, or use `--from` and `--to` separately or together"
@@ -8637,13 +8665,13 @@ fn token_transfers_reports_command_specific_pagination_errors() {
         (
             "--limit",
             "0",
-            "invalid_token_transfer_limit",
+            "invalid_event_limit",
             "pass a positive whole-number page size",
         ),
         (
             "--cursor",
             "not-hex",
-            "invalid_token_transfer_cursor",
+            "invalid_event_cursor",
             "previous `groundhog token transfers` page",
         ),
     ] {
