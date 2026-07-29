@@ -18,7 +18,7 @@ use crate::contract_spec::{load_contract_spec_from_xdr, load_embedded_contract_s
 use crate::events_json::{
     DecodedEventReport, EventDecodeStatus, EventListItemReport, EventSpecReport, EventSpecSource,
 };
-use crate::tx_utils::human_safe;
+use crate::terminal::terminal_safe;
 
 const MAX_SPEC_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_SPEC_MEMBERS: usize = 4_096;
@@ -59,7 +59,7 @@ impl ValidatedEventSpec {
             .ok_or_else(|| CliError::InvalidEventOptions {
                 message: format!(
                     "event `{}` is not declared by the supplied spec",
-                    human_safe(name)
+                    terminal_safe(name)
                 ),
             })?;
         Ok(Topic(self.spec.events[*index].signature.into_inner()))
@@ -110,7 +110,7 @@ impl ValidatedEventSpec {
                 raw,
                 decode_status: EventDecodeStatus::Malformed,
                 decoded: None,
-                decode_error: Some(human_safe(&format!("{event_name}: {error}"))),
+                decode_error: Some(terminal_safe(&format!("{event_name}: {error}"))),
             },
         }
     }
@@ -564,8 +564,8 @@ fn unknown_event(raw: crate::events_json::RawEventReport) -> EventListItemReport
 fn invalid_spec(path: &str, message: &str) -> CliError {
     CliError::InvalidEventSpec {
         path: path.to_owned(),
-        display_path: human_safe(path),
-        message: human_safe(message),
+        display_path: terminal_safe(path),
+        message: terminal_safe(message),
     }
 }
 

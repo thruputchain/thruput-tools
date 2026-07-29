@@ -1440,9 +1440,9 @@ dependencies = [
 
 [[package]]
 name = "groundhog-erc20-if"
-version = "0.1.5"
+version = "0.1.6"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "2b7b5ab5a6135034a240952ec429a0c3e25a74e121d1a6cccabf66e8c737531a"
+checksum = "114933db160b58e87ca817364418a2273357c89bf91a889827f0a0531288c8d7"
 dependencies = [
  "groundhog-xdr",
  "sdk",

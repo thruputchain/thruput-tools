@@ -15,11 +15,12 @@ use crate::config::{ProfileOverrides, resolve_profile_with_overrides};
 use crate::events::{fetch_event_page, parse_event_cursor, parse_event_limit};
 use crate::events_json::RawEventReport;
 use crate::result::CommandResult;
+use crate::terminal::terminal_safe;
 use crate::token_json::{
     DecodedTokenTransferReport, TOKEN_TRANSFERS_JSON_SCHEMA_VERSION, TokenParticipantFilter,
     TokenTransferDecodeStatus, TokenTransferKind, TokenTransferRecordReport, TokenTransfersReport,
 };
-use crate::tx_utils::{format_tx_hash, human_safe};
+use crate::tx_utils::format_tx_hash;
 use crate::{CliError, Print};
 
 const ZERO_ADDRESS: [u8; 32] = [0; 32];
@@ -185,7 +186,7 @@ fn decode_transfer_record(event: IdentifiedEvent) -> TokenTransferRecordReport {
             raw,
             decode_status: TokenTransferDecodeStatus::Malformed,
             transfer: None,
-            decode_error: Some(human_safe(&error)),
+            decode_error: Some(terminal_safe(&error)),
         },
     }
 }
@@ -232,7 +233,7 @@ fn print_transfers(report: &TokenTransfersReport, continuation_requested: bool, 
     }
     let token = format_contract_address(&report.token_address.0);
     if !report.token_input.eq_ignore_ascii_case(&token) {
-        print.detail("token", human_safe(&report.token_input));
+        print.detail("token", terminal_safe(&report.token_input));
     }
     print.detail("token address", token);
     if let Some(filter) = &report.participant_filter {
@@ -306,12 +307,12 @@ fn format_participant_filter(filter: &TokenParticipantFilter) -> String {
     match filter {
         TokenParticipantFilter::From { input, address } => format!(
             "from {} ({})",
-            human_safe(input),
+            terminal_safe(input),
             format_contract_address(&address.0)
         ),
         TokenParticipantFilter::To { input, address } => format!(
             "to {} ({})",
-            human_safe(input),
+            terminal_safe(input),
             format_contract_address(&address.0)
         ),
         TokenParticipantFilter::FromTo {
@@ -321,14 +322,14 @@ fn format_participant_filter(filter: &TokenParticipantFilter) -> String {
             to,
         } => format!(
             "from {} ({}) to {} ({})",
-            human_safe(from_input),
+            terminal_safe(from_input),
             format_contract_address(&from.0),
-            human_safe(to_input),
+            terminal_safe(to_input),
             format_contract_address(&to.0),
         ),
         TokenParticipantFilter::Account { input, address } => format!(
             "account {} ({})",
-            human_safe(input),
+            terminal_safe(input),
             format_contract_address(&address.0)
         ),
     }

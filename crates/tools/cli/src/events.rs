@@ -18,8 +18,9 @@ use crate::events_json::{
     EventListReport,
 };
 use crate::result::CommandResult;
+use crate::terminal::terminal_safe;
 use crate::tx::map_rpc_error;
-use crate::tx_utils::{format_tx_hash, human_safe};
+use crate::tx_utils::format_tx_hash;
 use crate::{CliError, Print};
 
 const DEFAULT_EVENT_LIMIT: u32 = 50;
@@ -68,7 +69,7 @@ pub fn list(
             return Err(CliError::InvalidEventOptions {
                 message: format!(
                     "`--topic0` conflicts with selected event `{}`",
-                    human_safe(name)
+                    terminal_safe(name)
                 ),
             });
         }
@@ -149,7 +150,7 @@ fn parse_topic_values(inputs: &[String], position: &'static str) -> Result<Vec<T
                 CliError::InvalidEventTopic {
                     position,
                     input: input.clone(),
-                    display_input: human_safe(input),
+                    display_input: terminal_safe(input),
                     message: error.to_string(),
                 }
             })
@@ -165,13 +166,13 @@ pub(crate) fn parse_event_limit(input: Option<&str>) -> Result<u32, CliError> {
         .parse::<u32>()
         .map_err(|error| CliError::InvalidEventLimit {
             input: input.to_owned(),
-            display_input: human_safe(input),
+            display_input: terminal_safe(input),
             message: error.to_string(),
         })?;
     if limit == 0 {
         return Err(CliError::InvalidEventLimit {
             input: input.to_owned(),
-            display_input: human_safe(input),
+            display_input: terminal_safe(input),
             message: "must be greater than zero".into(),
         });
     }
@@ -185,7 +186,7 @@ pub(crate) fn parse_event_cursor(input: Option<&str>) -> Result<PaginationCursor
     serde_json::from_value(serde_json::Value::String(input.to_owned())).map_err(|error| {
         CliError::InvalidEventCursor {
             input: input.to_owned(),
-            display_input: human_safe(input),
+            display_input: terminal_safe(input),
             message: error.to_string(),
         }
     })
@@ -198,7 +199,7 @@ pub(crate) async fn fetch_event_page(
     let requested_limit = query.limit;
     let client = HttpClientBuilder::default()
         .build(rpc_url)
-        .map_err(|error| CliError::RpcConnect(human_safe(&format!("{rpc_url}: {error}"))))?;
+        .map_err(|error| CliError::RpcConnect(terminal_safe(&format!("{rpc_url}: {error}"))))?;
     let page = client
         .get_events(query)
         .await
@@ -255,13 +256,13 @@ fn print_event_list(report: &EventListReport, continuation_requested: bool, prin
     }
     let address = format_contract_address(&report.contract_address.0);
     if !report.contract_input.eq_ignore_ascii_case(&address) {
-        print.detail("contract", human_safe(&report.contract_input));
+        print.detail("contract", terminal_safe(&report.contract_input));
     }
     print.detail("emitter", &address);
     if let Some(spec) = &report.spec {
-        print.detail("spec (user-supplied)", human_safe(&spec.path));
+        print.detail("spec (user-supplied)", terminal_safe(&spec.path));
         if let Some(selected_event) = &spec.selected_event {
-            print.detail("selected event", human_safe(selected_event));
+            print.detail("selected event", terminal_safe(selected_event));
         }
     }
     print.detail("latest indexed block", *report.latest_block);
@@ -291,13 +292,13 @@ fn print_event_list(report: &EventListReport, continuation_requested: bool, prin
             }
             let decoded = item.decoded.as_ref();
             if let Some(decoded) = decoded {
-                print.detail("decoded event", human_safe(&decoded.name));
+                print.detail("decoded event", terminal_safe(&decoded.name));
                 if let Some(signature) = item.raw.topics.first() {
                     print.detail("signature", format_args!("0x{}", hex::encode(signature.0)));
                 }
                 for (name, topic) in &decoded.topics {
                     print.detail(
-                        &human_safe(name),
+                        &terminal_safe(name),
                         format_args!("0x{}", hex::encode(topic.0)),
                     );
                 }
@@ -326,7 +327,7 @@ fn print_event_list(report: &EventListReport, continuation_requested: bool, prin
                 EventDecodeStatus::Decoded => {
                     let decoded = decoded.expect("decoded status must include decoded event data");
                     for (name, value) in &decoded.fields {
-                        print.detail(&human_safe(name), human_safe(&value.to_string()));
+                        print.detail(&terminal_safe(name), terminal_safe(&value.to_string()));
                     }
                 }
             }

@@ -68,7 +68,7 @@ groundhog-wasm-meter = { version = "0.8.0", registry = "groundhog" }
 groundhog-spec-tool = { version = "0.17.4", registry = "groundhog" }
 groundhog-contract-util = { version = "0.17.4", registry = "groundhog" }
 groundhog-contract-spec = { version = "0.17.4", registry = "groundhog" }
-groundhog-erc20-if = { version = "=0.1.5", registry = "groundhog" }
+groundhog-erc20-if = { version = "=0.1.6", registry = "groundhog" }
 
 # --- Async ---
 async-trait = "0.1"
