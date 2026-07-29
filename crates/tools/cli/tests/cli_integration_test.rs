@@ -8623,7 +8623,57 @@ fn token_transfers_rejects_account_conflicts_before_rpc() {
 
     assert!(!output.status.success());
     let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-    assert_eq!(stderr["error"]["code"], "invalid_event_options");
+    assert_eq!(stderr["error"]["code"], "invalid_token_transfer_options");
+    assert_eq!(
+        stderr["error"]["hint"],
+        "use `--account` by itself, or use `--from` and `--to` separately or together"
+    );
+}
+
+#[test]
+fn token_transfers_reports_command_specific_pagination_errors() {
+    let token = format!("0x{}", "c1".repeat(32));
+    for (option, value, expected_code, expected_hint) in [
+        (
+            "--limit",
+            "0",
+            "invalid_token_transfer_limit",
+            "pass a positive whole-number page size",
+        ),
+        (
+            "--cursor",
+            "not-hex",
+            "invalid_token_transfer_cursor",
+            "previous `groundhog token transfers` page",
+        ),
+    ] {
+        let output = groundhog()
+            .args([
+                "--json",
+                "token",
+                "transfers",
+                &token,
+                option,
+                value,
+                "--rpc-url",
+                "http://127.0.0.1:1",
+            ])
+            .output()
+            .unwrap();
+
+        assert!(!output.status.success());
+        let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(stderr["error"]["code"], expected_code);
+        assert_eq!(stderr["error"]["details"]["input"], value);
+        assert!(
+            stderr["error"]["hint"]
+                .as_str()
+                .unwrap()
+                .contains(expected_hint),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
 
 #[derive(Clone)]

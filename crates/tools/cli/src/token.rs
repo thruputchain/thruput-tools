@@ -3,7 +3,7 @@ use std::path::Path;
 use groundhog_erc20_if::TransferEvent;
 use groundhog_json_rpc_types::events::{
     BlockAnchor, ContractAddressList, EventFilter, EventFilterList, EventQuery, EventTopicFilter,
-    IterationOrder, TopicList,
+    IterationOrder, PaginationCursor, TopicList,
 };
 use groundhog_json_rpc_types::hex::Topic;
 use groundhog_json_rpc_types::{ContractAddress, events::IdentifiedEvent};
@@ -12,7 +12,7 @@ use xdr_common::VecM;
 use crate::account_resolution::resolve_address_target;
 use crate::codec::format_contract_address;
 use crate::config::{ProfileOverrides, resolve_profile_with_overrides};
-use crate::events::{fetch_event_page, parse_event_cursor, parse_event_limit};
+use crate::events::fetch_event_page;
 use crate::events_json::RawEventReport;
 use crate::result::CommandResult;
 use crate::terminal::terminal_safe;
@@ -41,12 +41,12 @@ pub fn transfers(
     print: &Print,
 ) -> Result<(), CliError> {
     if account_input.is_some() && (from_input.is_some() || to_input.is_some()) {
-        return Err(CliError::InvalidEventOptions {
+        return Err(CliError::InvalidTokenTransferOptions {
             message: "`--account` cannot be combined with `--from` or `--to`".into(),
         });
     }
-    let limit = parse_event_limit(limit_input)?;
-    let cursor = parse_event_cursor(cursor_input)?;
+    let limit = parse_token_transfer_limit(limit_input)?;
+    let cursor = parse_token_transfer_cursor(cursor_input)?;
     let continuation_requested = cursor_input.is_some();
     let profile = resolve_profile_with_overrides(project_start, profile_name, overrides)?;
     let rpc_url = profile
@@ -99,6 +99,40 @@ pub fn transfers(
         print_transfers(&report, continuation_requested, print);
     }
     print.json(&CommandResult::new(cmd, report))
+}
+
+fn parse_token_transfer_limit(input: Option<&str>) -> Result<u32, CliError> {
+    let Some(input) = input else {
+        return Ok(50);
+    };
+    let limit = input
+        .parse::<u32>()
+        .map_err(|error| CliError::InvalidTokenTransferLimit {
+            input: input.to_owned(),
+            display_input: terminal_safe(input),
+            message: error.to_string(),
+        })?;
+    if limit == 0 {
+        return Err(CliError::InvalidTokenTransferLimit {
+            input: input.to_owned(),
+            display_input: terminal_safe(input),
+            message: "must be greater than zero".into(),
+        });
+    }
+    Ok(limit)
+}
+
+fn parse_token_transfer_cursor(input: Option<&str>) -> Result<PaginationCursor, CliError> {
+    let Some(input) = input else {
+        return Ok(PaginationCursor::default());
+    };
+    serde_json::from_value(serde_json::Value::String(input.to_owned())).map_err(|error| {
+        CliError::InvalidTokenTransferCursor {
+            input: input.to_owned(),
+            display_input: terminal_safe(input),
+            message: error.to_string(),
+        }
+    })
 }
 
 fn participant_report(

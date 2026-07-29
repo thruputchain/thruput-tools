@@ -158,6 +158,20 @@ pub enum CliError {
     },
     #[error("invalid event options: {message}")]
     InvalidEventOptions { message: String },
+    #[error("invalid token transfer limit `{display_input}`: {message}")]
+    InvalidTokenTransferLimit {
+        input: String,
+        display_input: String,
+        message: String,
+    },
+    #[error("invalid token transfer cursor `{display_input}`: {message}")]
+    InvalidTokenTransferCursor {
+        input: String,
+        display_input: String,
+        message: String,
+    },
+    #[error("invalid token transfer options: {message}")]
+    InvalidTokenTransferOptions { message: String },
     #[error("invalid event spec `{display_path}`: {message}")]
     InvalidEventSpec {
         path: String,
@@ -362,6 +376,9 @@ impl CliError {
             Self::InvalidEventLimit { .. } => "invalid_event_limit",
             Self::InvalidEventCursor { .. } => "invalid_event_cursor",
             Self::InvalidEventOptions { .. } => "invalid_event_options",
+            Self::InvalidTokenTransferLimit { .. } => "invalid_token_transfer_limit",
+            Self::InvalidTokenTransferCursor { .. } => "invalid_token_transfer_cursor",
+            Self::InvalidTokenTransferOptions { .. } => "invalid_token_transfer_options",
             Self::InvalidEventSpec { .. } => "invalid_event_spec",
             Self::RuntimeInit(_) => "runtime_init_failed",
             Self::RpcMethodFailed { .. } => "rpc_method_failed",
@@ -505,11 +522,11 @@ impl CliError {
                     "pass exactly 32 bytes as case-insensitive hex, with or without a 0x prefix",
                 ))
             }
-            Self::InvalidTransactionHistoryLimit { .. } | Self::InvalidEventLimit { .. } => {
-                Some(Cow::Borrowed(
-                    "pass a positive whole-number page size; the selected endpoint enforces its maximum",
-                ))
-            }
+            Self::InvalidTransactionHistoryLimit { .. }
+            | Self::InvalidEventLimit { .. }
+            | Self::InvalidTokenTransferLimit { .. } => Some(Cow::Borrowed(
+                "pass a positive whole-number page size; the selected endpoint enforces its maximum",
+            )),
             Self::InvalidTransactionCursor { .. } => Some(Cow::Borrowed(
                 "pass the opaque hex cursor returned by the previous `groundhog tx list` page",
             )),
@@ -521,6 +538,12 @@ impl CliError {
             )),
             Self::InvalidEventOptions { .. } => Some(Cow::Borrowed(
                 "pass `--spec <PATH>` with `--event`, and do not combine a selected event with a conflicting `--topic0`",
+            )),
+            Self::InvalidTokenTransferCursor { .. } => Some(Cow::Borrowed(
+                "pass the opaque hex cursor returned by the previous `groundhog token transfers` page with the same token and participant filters",
+            )),
+            Self::InvalidTokenTransferOptions { .. } => Some(Cow::Borrowed(
+                "use `--account` by itself, or use `--from` and `--to` separately or together",
             )),
             Self::InvalidEventSpec { .. } => Some(Cow::Borrowed(
                 "pass a trusted local `.wasm` or `.xdr` artifact containing a valid contract event spec",
@@ -806,7 +829,9 @@ impl CliError {
             | Self::InvalidTransactionCursor { input, message, .. }
             | Self::InvalidEventTopic { input, message, .. }
             | Self::InvalidEventLimit { input, message, .. }
-            | Self::InvalidEventCursor { input, message, .. } => Some(json!({
+            | Self::InvalidEventCursor { input, message, .. }
+            | Self::InvalidTokenTransferLimit { input, message, .. }
+            | Self::InvalidTokenTransferCursor { input, message, .. } => Some(json!({
                 "input": input,
                 "message": message,
             })),
@@ -819,7 +844,8 @@ impl CliError {
                 "count": count,
                 "max": max,
             })),
-            Self::InvalidEventOptions { message } => Some(json!({
+            Self::InvalidEventOptions { message }
+            | Self::InvalidTokenTransferOptions { message } => Some(json!({
                 "message": message,
             })),
             Self::InvalidEventSpec { path, message, .. } => Some(json!({

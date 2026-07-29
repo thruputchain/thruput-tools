@@ -457,7 +457,43 @@ display_command() {
     if [[ "${parts[0]}" == "$CLI" ]]; then
         parts[0]="groundhog"
     fi
-    printf '%q ' "${parts[@]}"
+    python3 - "${parts[@]}" <<'PY'
+import sys
+
+BIDI_FORMATTING = {
+    "\u061c",
+    "\u200e",
+    "\u200f",
+    *map(chr, range(0x202A, 0x202F)),
+    *map(chr, range(0x2066, 0x206A)),
+}
+SHELL_SAFE = frozenset("%+,-./:=@_")
+
+
+def terminal_safe(value):
+    escaped = []
+    for character in value:
+        codepoint = ord(character)
+        if character in BIDI_FORMATTING or codepoint < 32 or 0x7F <= codepoint <= 0x9F:
+            escaped.append(
+                {"\t": r"\t", "\n": r"\n", "\r": r"\r"}.get(
+                    character, rf"\u{{{codepoint:x}}}"
+                )
+            )
+        else:
+            escaped.append(character)
+    return "".join(escaped)
+
+
+def shell_arg(value):
+    value = terminal_safe(value)
+    if value and all(character.isascii() and (character.isalnum() or character in SHELL_SAFE) for character in value):
+        return value
+    return "'" + value.replace("'", "'\\''") + "'"
+
+
+print(" ".join(shell_arg(part) for part in sys.argv[1:]), end="")
+PY
 }
 
 assert_call_succeeded() {
