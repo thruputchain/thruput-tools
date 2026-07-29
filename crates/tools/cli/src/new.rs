@@ -1,3 +1,4 @@
+use crate::terminal::render_shell_arg;
 use crate::{CliError, Print};
 use serde_json::json;
 use std::env;
@@ -63,7 +64,7 @@ fn render_project_ready(dir: &Path, name: &str, template: &str, print: &Print) {
     print.summary_card("Project Ready", &items);
 
     let next_steps = vec![
-        format!("cd {}", dir.display()),
+        format!("cd {}", render_shell_arg(&dir.to_string_lossy())),
         "groundhog build".to_string(),
     ];
     print.next_steps(&next_steps);

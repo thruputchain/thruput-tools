@@ -20,12 +20,13 @@ use crate::config::{ProfileOverrides, resolve_profile_with_overrides};
 use crate::hog;
 use crate::network_descriptor::resolve_wallet_entrypoints;
 use crate::result::{CommandError, CommandResult};
+use crate::terminal::{render_shell_arg, terminal_safe};
 use crate::transfer_json::{
     TRANSFER_JSON_SCHEMA_VERSION, TransferCommittedReport, TransferConfirmation,
     TransferDryRunReport, TransferReportCommon, TransferUnconfirmedReport,
 };
 use crate::tx_utils::{
-    command_error_for_exec_status, format_tx_hash, human_safe, is_unsupported_rpc_method_error,
+    command_error_for_exec_status, format_tx_hash, is_unsupported_rpc_method_error,
     nonce_from_timestamp, print_receipt_data, resolve_block_expiry_height, rpc_error_message,
     summarize_exec_status,
 };
@@ -35,6 +36,7 @@ use crate::{CliError, Print};
 struct PreparedTransfer {
     profile: String,
     rpc_url: String,
+    rpc_url_cli_override: bool,
     sender: groundhog_xdr::types::ContractAddress,
     sender_wallet: Option<String>,
     signer_public_key: groundhog_xdr::types::Ed25519PublicKey,
@@ -144,6 +146,7 @@ fn prepare(
     Ok(PreparedTransfer {
         profile: profile.name,
         rpc_url: rpc_url.to_owned(),
+        rpc_url_cli_override: profile.rpc_url_cli_override,
         sender,
         sender_wallet: resolved_sender.wallet_name,
         signer_public_key: groundhog_xdr::types::Ed25519PublicKey::from(
@@ -320,7 +323,7 @@ fn print_committed(
     print: &Print,
 ) -> Result<(), CliError> {
     let tx_hash = format_tx_hash(&prepared.tx_hash);
-    let status_summary = human_safe(&summarize_exec_status(&receipt.status));
+    let status_summary = terminal_safe(&summarize_exec_status(&receipt.status));
     if matches!(receipt.status, ExecStatus::Ok) {
         print.success(format_args!("Transferred {} HOG.", prepared.amount));
     } else {
@@ -355,7 +358,7 @@ fn print_invalid(
 ) -> Result<(), CliError> {
     let tx_hash = format_tx_hash(&prepared.tx_hash);
     let reason = match &status {
-        TransactionStatus::Invalid { reason } => human_safe(reason),
+        TransactionStatus::Invalid { reason } => terminal_safe(reason),
         _ => "invalid".to_owned(),
     };
     print.warn(format_args!("Transfer was rejected: {reason}"));
@@ -388,10 +391,15 @@ fn print_unavailable(
     ));
     print.detail("tx", &tx_hash);
     print.warn("the transaction may still commit; do not blindly resubmit it");
-    print.status(format_args!(
-        "  next: groundhog tx show {tx_hash} --rpc-url {}",
-        human_safe(&prepared.rpc_url),
-    ));
+    let mut next = format!(
+        "groundhog tx show {tx_hash} --profile={}",
+        render_shell_arg(&prepared.profile),
+    );
+    if prepared.rpc_url_cli_override {
+        use std::fmt::Write as _;
+        let _ = write!(next, " --rpc-url={}", render_shell_arg(&prepared.rpc_url));
+    }
+    print.status(format_args!("  next: {next}"));
 
     let report = TransferUnconfirmedReport {
         common: report_common(prepared, false, true),

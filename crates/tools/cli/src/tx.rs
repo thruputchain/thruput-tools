@@ -14,12 +14,13 @@ use crate::checks::{Finding, FindingLevel};
 use crate::codec::format_contract_address;
 use crate::config::{ProfileOverrides, resolve_profile_with_overrides};
 use crate::result::CommandResult;
+use crate::terminal::terminal_safe;
 use crate::tx_json::{
     TX_LIST_JSON_SCHEMA_VERSION, TX_SHOW_JSON_SCHEMA_VERSION, TxListReport, TxShowReport,
 };
 use crate::tx_utils::{
-    format_tx_hash, human_safe, is_unsupported_rpc_method_error, print_receipt_data,
-    rpc_error_message, summarize_exec_status,
+    format_tx_hash, is_unsupported_rpc_method_error, print_receipt_data, rpc_error_message,
+    summarize_exec_status,
 };
 use crate::{CliError, Print};
 
@@ -131,13 +132,13 @@ fn parse_history_limit(input: Option<&str>) -> Result<u32, CliError> {
         .parse::<u32>()
         .map_err(|error| CliError::InvalidTransactionHistoryLimit {
             input: input.to_owned(),
-            display_input: human_safe(input),
+            display_input: terminal_safe(input),
             message: error.to_string(),
         })?;
     if limit == 0 {
         return Err(CliError::InvalidTransactionHistoryLimit {
             input: input.to_owned(),
-            display_input: human_safe(input),
+            display_input: terminal_safe(input),
             message: "must be greater than zero".into(),
         });
     }
@@ -151,7 +152,7 @@ fn parse_transaction_cursor(input: Option<&str>) -> Result<PaginationCursor, Cli
     serde_json::from_value(serde_json::Value::String(input.to_owned())).map_err(|error| {
         CliError::InvalidTransactionCursor {
             input: input.to_owned(),
-            display_input: human_safe(input),
+            display_input: terminal_safe(input),
             message: error.to_string(),
         }
     })
@@ -164,7 +165,7 @@ async fn fetch_transaction_page(
     let requested_limit = query.limit;
     let client = HttpClientBuilder::default()
         .build(rpc_url)
-        .map_err(|error| CliError::RpcConnect(human_safe(&format!("{rpc_url}: {error}"))))?;
+        .map_err(|error| CliError::RpcConnect(terminal_safe(&format!("{rpc_url}: {error}"))))?;
     let page = client
         .get_transactions_by_address(query)
         .await
@@ -185,7 +186,7 @@ fn parse_tx_hash(input: &str) -> Result<TxHash, CliError> {
     serde_json::from_value(serde_json::Value::String(input.to_owned())).map_err(|error| {
         CliError::InvalidTransactionHash {
             input: input.to_owned(),
-            display_input: human_safe(input),
+            display_input: terminal_safe(input),
             message: error.to_string(),
         }
     })
@@ -197,7 +198,7 @@ async fn fetch_transaction(
 ) -> Result<(TransactionStatus, Option<TransactionReceipt>), CliError> {
     let client = HttpClientBuilder::default()
         .build(rpc_url)
-        .map_err(|error| CliError::RpcConnect(human_safe(&format!("{rpc_url}: {error}"))))?;
+        .map_err(|error| CliError::RpcConnect(terminal_safe(&format!("{rpc_url}: {error}"))))?;
     let status = client
         .get_transaction_status(tx_hash)
         .await
@@ -261,7 +262,7 @@ fn print_show(
         }
         TransactionStatus::Invalid { reason } => {
             print.detail("status", "invalid");
-            print.detail("reason", human_safe(reason));
+            print.detail("reason", terminal_safe(reason));
         }
         TransactionStatus::RecentFailure {
             attempt_height,
@@ -270,7 +271,7 @@ fn print_show(
             print.detail("status", "recent failure (advisory)");
             print.detail("attempt height", **attempt_height);
             if let Ok(conflict) = serde_json::to_string(conflict) {
-                print.detail("conflict", human_safe(&conflict));
+                print.detail("conflict", terminal_safe(&conflict));
             }
         }
         TransactionStatus::Unknown => {
@@ -290,7 +291,7 @@ fn print_show(
         print.detail("receipt height", *receipt.height);
         print.detail(
             "execution",
-            human_safe(&summarize_exec_status(&receipt.status)),
+            terminal_safe(&summarize_exec_status(&receipt.status)),
         );
         print_receipt_data(receipt, print);
     }
@@ -302,7 +303,7 @@ fn print_list(target_input: &str, address: &str, page: &TransactionRefPage, prin
         return;
     }
     if !target_input.eq_ignore_ascii_case(address) {
-        print.detail("target", human_safe(target_input));
+        print.detail("target", terminal_safe(target_input));
     }
     print.detail("address", address);
     print.detail("latest indexed block", *page.latest_block);

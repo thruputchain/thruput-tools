@@ -420,7 +420,10 @@ fn print_started_local_node(
         }
         print.detail(
             "dev-key manifest",
-            format_args!("export GROUNDHOG_RUNTIME_MANIFEST={}", path.display()),
+            format_args!(
+                "export GROUNDHOG_RUNTIME_MANIFEST={}",
+                crate::terminal::render_shell_arg(&path.to_string_lossy()),
+            ),
         );
     }
 }
@@ -1010,7 +1013,7 @@ mod tests {
             cli_error
                 .hint()
                 .expect("intro rejection should have a specific hint"),
-            "pass `--hogd-protocol hogp/expected` to override, or rebuild groundhog node \
+            "pass `--hogd-protocol=hogp/expected` to override, or rebuild groundhog node \
              against a matching groundhog-xdr"
         );
     }

@@ -31,6 +31,7 @@ pub(crate) mod runtime_manifest;
 pub mod scaffold;
 pub mod status;
 pub mod storage;
+pub(crate) mod terminal;
 pub mod test_cmd;
 pub mod test_json;
 pub mod transfer;

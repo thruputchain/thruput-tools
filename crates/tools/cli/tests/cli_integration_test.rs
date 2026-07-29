@@ -383,6 +383,8 @@ fn node_human_startup_reports_chain_state() {
     let fake = fake_hogd_dev_binary();
     let temp = TempDir::new().unwrap();
     let data_dir = temp.path().join("node-data");
+    let temp_root = temp.path().join("tmp & root");
+    std::fs::create_dir(&temp_root).unwrap();
     let pid_path = temp.path().join("hogd.pid");
     let config_home = temp.path().join("config");
     let child = groundhog()
@@ -396,6 +398,7 @@ fn node_human_startup_reports_chain_state() {
         .env("GROUNDHOG_FAKE_HOGD_DEV_MODE", "ready-with-indexer")
         .env("GROUNDHOG_FAKE_HOGD_DEV_PID_FILE", &pid_path)
         .env("XDG_CONFIG_HOME", &config_home)
+        .env("TMPDIR", &temp_root)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -412,6 +415,10 @@ fn node_human_startup_reports_chain_state() {
 
     assert!(output.contains("chain state"), "startup output: {output}");
     assert!(output.contains("fresh"), "startup output: {output}");
+    assert!(
+        output.contains("export GROUNDHOG_RUNTIME_MANIFEST='") && output.contains("tmp & root"),
+        "startup output: {output}"
+    );
 
     let pid = read_pid_file(&pid_path);
     send_sigint(child.child());
@@ -493,10 +500,12 @@ fn node_hogd_dev_missing_binary_fails_without_native_fallback() {
 #[test]
 fn new_creates_project() {
     let tmp = TempDir::new().unwrap();
+    let workspace = tmp.path().join("work & space");
+    std::fs::create_dir(&workspace).unwrap();
     let output = groundhog()
         .arg("new")
         .arg("my-test-project")
-        .current_dir(tmp.path())
+        .current_dir(&workspace)
         .output()
         .unwrap();
 
@@ -506,7 +515,7 @@ fn new_creates_project() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let dir = tmp.path().join("my-test-project");
+    let dir = workspace.join("my-test-project");
     assert!(dir.join("Cargo.toml").exists());
     assert!(dir.join("groundhog.toml").exists());
     assert!(dir.join("build.rs").exists());
@@ -527,6 +536,7 @@ fn new_creates_project() {
     assert!(stderr.contains("Template: counter"));
     assert!(stderr.contains("Config: "));
     assert!(stderr.contains("Next:"));
+    assert!(stderr.contains(&format!("cd '{}'", dir.display())));
     assert!(!stderr.contains("Cargo Registry:"));
     assert!(!stderr.contains("cargo login --registry groundhog"));
     assert!(stderr.contains("groundhog build"));
@@ -3554,8 +3564,27 @@ fn transfer_live_human_unavailable_warns_against_resubmission() {
     assert!(stderr.contains("may still commit"));
     assert!(stderr.contains("do not blindly resubmit"));
     assert!(stderr.contains("groundhog tx show"));
-    assert!(stderr.contains("--rpc-url http://127.0.0.1:"));
+    assert!(stderr.contains("--profile=default"));
+    assert!(!stderr.contains("--rpc-url"));
     assert!(!stderr.contains("signed transaction"));
+}
+
+#[test]
+fn transfer_live_human_unavailable_quotes_cli_rpc_override() {
+    let run = run_transfer_live_mock_with_rpc_override(
+        TransferRpcMock {
+            submit: TransferSubmitMock::Error(-32051),
+            poll: Some(TransferPollMock::Status(
+                serde_json::json!({ "status": "unknown" }),
+            )),
+        },
+        false,
+        "?key=x&network=test",
+    );
+
+    assert!(!run.output.status.success());
+    let stderr = String::from_utf8(run.output.stderr).unwrap();
+    assert!(stderr.contains(&format!("--rpc-url='{}'", run.rpc_url)));
 }
 
 #[test]
@@ -7412,6 +7441,7 @@ struct TransferRpcMock {
 struct TransferMockRun {
     output: std::process::Output,
     local_hash: String,
+    rpc_url: String,
 }
 
 fn run_transfer_live_mock(mock: TransferRpcMock, json: bool) -> std::process::Output {
@@ -7419,12 +7449,21 @@ fn run_transfer_live_mock(mock: TransferRpcMock, json: bool) -> std::process::Ou
 }
 
 fn run_transfer_live_mock_with_hash(mock: TransferRpcMock, json: bool) -> TransferMockRun {
+    run_transfer_live_mock_with_rpc_override(mock, json, "")
+}
+
+fn run_transfer_live_mock_with_rpc_override(
+    mock: TransferRpcMock,
+    json: bool,
+    rpc_url_suffix: &str,
+) -> TransferMockRun {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
     let sender = advertised_dev_wallet_address(0);
     let manifest_path = write_runtime_manifest(&project, 0, &sender, None);
     let (rpc_url, rpc_server, local_hash_rx) = spawn_transfer_rpc(mock, sender.clone());
+    let effective_rpc_url = format!("{rpc_url}{rpc_url_suffix}");
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
@@ -7438,8 +7477,11 @@ fn run_transfer_live_mock_with_hash(mock: TransferRpcMock, json: bool) -> Transf
     if json {
         command.arg("--json");
     }
+    command.args(["transfer", &recipient, "1.5"]);
+    if !rpc_url_suffix.is_empty() {
+        command.args(["--rpc-url", &effective_rpc_url]);
+    }
     let output = command
-        .args(["transfer", &recipient, "1.5"])
         .current_dir(&project)
         .env("GROUNDHOG_TEST_RECEIPT_POLL_ATTEMPTS", "1")
         .env("GROUNDHOG_TEST_RECEIPT_POLL_INTERVAL_MS", "0")
@@ -7447,7 +7489,11 @@ fn run_transfer_live_mock_with_hash(mock: TransferRpcMock, json: bool) -> Transf
         .unwrap();
     let local_hash = local_hash_rx.recv().unwrap();
     rpc_server.join().unwrap();
-    TransferMockRun { output, local_hash }
+    TransferMockRun {
+        output,
+        local_hash,
+        rpc_url: effective_rpc_url,
+    }
 }
 
 fn run_saved_wallet_transfer_live_mock(
@@ -7489,7 +7535,11 @@ fn run_saved_wallet_transfer_live_mock(
         .unwrap();
     let local_hash = local_hash_rx.recv().unwrap();
     rpc_server.join().unwrap();
-    TransferMockRun { output, local_hash }
+    TransferMockRun {
+        output,
+        local_hash,
+        rpc_url,
+    }
 }
 
 fn spawn_transfer_rpc(
