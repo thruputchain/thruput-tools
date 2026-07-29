@@ -4,6 +4,7 @@
 # Exercises the user-facing CLI path against a real hog-devnode binary:
 #   groundhog new -> build -> persistent node -> dev-0 deploy/call/view/storage
 #   -> dev-0/dev-1 transfer with recipient and sender balance validation
+#   -> transaction show and bounded sender-history pagination
 #   -> key generate -> wallet create -> saved-wallet deploy
 #   -> saved-wallet airdrop -> second deploy/call
 #   -> stop -> restart -> verify persisted contract state
@@ -624,6 +625,7 @@ SENDER_BALANCE_BEFORE="$(json_field data.raw_balance "$SENDER_BEFORE_JSON")"
 RECIPIENT_BALANCE_BEFORE="$(json_field data.raw_balance "$RECIPIENT_BEFORE_JSON")"
 
 TRANSFER_JSON="$(run_json transfer "$CLI" --json transfer "$TRANSFER_RECIPIENT" "$TRANSFER_AMOUNT")"
+TRANSFER_TX_HASH="$(json_field data.txHash "$TRANSFER_JSON")"
 [[ "$(json_field data.status.result "$TRANSFER_JSON")" == "ok" ]] \
     || die "transfer did not commit successfully: $(json_field data.status "$TRANSFER_JSON")"
 [[ "$(json_field data.rawAmount "$TRANSFER_JSON")" == "$TRANSFER_RAW_AMOUNT" ]] \
@@ -643,7 +645,20 @@ TRANSFER_FEE_RAW="$(assert_transfer_balance_deltas \
     "$RECIPIENT_BALANCE_BEFORE" \
     "$RECIPIENT_BALANCE_AFTER" \
     "$TRANSFER_RAW_AMOUNT")"
-log "transfer result: sender=$SENDER_ADDRESS $SENDER_BALANCE_BEFORE->$SENDER_BALANCE_AFTER recipient=$RECIPIENT_ADDRESS $RECIPIENT_BALANCE_BEFORE->$RECIPIENT_BALANCE_AFTER raw=$TRANSFER_RAW_AMOUNT fee=$TRANSFER_FEE_RAW height=$(json_field data.height "$TRANSFER_JSON") tx=$(json_field data.txHash "$TRANSFER_JSON")"
+log "transfer result: sender=$SENDER_ADDRESS $SENDER_BALANCE_BEFORE->$SENDER_BALANCE_AFTER recipient=$RECIPIENT_ADDRESS $RECIPIENT_BALANCE_BEFORE->$RECIPIENT_BALANCE_AFTER raw=$TRANSFER_RAW_AMOUNT fee=$TRANSFER_FEE_RAW height=$(json_field data.height "$TRANSFER_JSON") tx=$TRANSFER_TX_HASH"
+
+TX_SHOW_JSON="$(run_json "transaction show" "$CLI" --json tx show "$TRANSFER_TX_HASH")"
+[[ "$(json_field data.txHash "$TX_SHOW_JSON")" == "$TRANSFER_TX_HASH" ]] \
+    || die "tx show hash did not match transfer hash $TRANSFER_TX_HASH"
+[[ "$(json_field data.status.status "$TX_SHOW_JSON")" == "committed" ]] \
+    || die "tx show did not report committed status: $(json_field data.status "$TX_SHOW_JSON")"
+[[ "$(json_field data.receipt.txHash "$TX_SHOW_JSON")" == "$TRANSFER_TX_HASH" ]] \
+    || die "tx show receipt hash did not match transfer hash $TRANSFER_TX_HASH"
+TX_SHOW_STATUS_HEIGHT="$(json_field data.status.height "$TX_SHOW_JSON")"
+TX_SHOW_RECEIPT_HEIGHT="$(json_field data.receipt.height "$TX_SHOW_JSON")"
+[[ "$TX_SHOW_RECEIPT_HEIGHT" == "$TX_SHOW_STATUS_HEIGHT" ]] \
+    || die "tx show receipt height $TX_SHOW_RECEIPT_HEIGHT did not match status height $TX_SHOW_STATUS_HEIGHT"
+log "transaction show result: tx=$TRANSFER_TX_HASH height=$TX_SHOW_STATUS_HEIGHT status=committed"
 
 DIRECT_RECIPIENT="$RECIPIENT_ADDRESS"
 DIRECT_BEFORE_JSON="$(run_json "direct recipient balance before" "$CLI" --json balance "$DIRECT_RECIPIENT")"
@@ -657,6 +672,63 @@ DIRECT_AFTER_JSON="$(run_json "direct recipient balance after" "$CLI" --json bal
 DIRECT_BALANCE_AFTER="$(json_field data.raw_balance "$DIRECT_AFTER_JSON")"
 assert_exact_balance_increase "$DIRECT_BALANCE_BEFORE" "$DIRECT_BALANCE_AFTER" "$TRANSFER_RAW_AMOUNT"
 log "direct-address transfer result: recipient=$DIRECT_RECIPIENT $DIRECT_BALANCE_BEFORE->$DIRECT_BALANCE_AFTER raw=$TRANSFER_RAW_AMOUNT height=$(json_field data.height "$DIRECT_TRANSFER_JSON") tx=$(json_field data.txHash "$DIRECT_TRANSFER_JSON")"
+
+HISTORY_CURSOR=""
+HISTORY_SEEN="|"
+HISTORY_FOUND=0
+HISTORY_MAX_PAGES=4
+HISTORY_PAGES_VISITED=0
+HISTORY_NONEMPTY_PAGES=0
+for ((page = 1; page <= HISTORY_MAX_PAGES; page++)); do
+    HISTORY_PAGES_VISITED=$page
+    HISTORY_ARGS=("$CLI" --json tx list "$TRANSFER_SENDER" --limit 1)
+    if [[ -n "$HISTORY_CURSOR" ]]; then
+        HISTORY_ARGS+=(--cursor "$HISTORY_CURSOR")
+    fi
+    HISTORY_JSON="$(run_json "sender history page $page" "${HISTORY_ARGS[@]}")"
+    [[ "$(json_field data.address "$HISTORY_JSON")" == "$SENDER_ADDRESS" ]] \
+        || die "sender history resolved the wrong address"
+    [[ "$(json_field data.latestBlock "$HISTORY_JSON")" != "null" ]] \
+        || die "sender history omitted latestBlock"
+    [[ "$(json_field data.oldestBlock "$HISTORY_JSON")" != "null" ]] \
+        || die "sender history omitted oldestBlock"
+
+    HISTORY_REF_COUNT="$(json_len data.refs "$HISTORY_JSON")"
+    (( HISTORY_REF_COUNT <= 1 )) \
+        || die "sender history page $page exceeded requested limit 1"
+    if (( HISTORY_REF_COUNT == 1 )); then
+        (( HISTORY_NONEMPTY_PAGES += 1 ))
+        HISTORY_REF_HASH="$(json_field data.refs.0.txHash "$HISTORY_JSON")"
+        [[ "$HISTORY_SEEN" != *"|$HISTORY_REF_HASH|"* ]] \
+            || die "sender history repeated transaction $HISTORY_REF_HASH across pages"
+        HISTORY_SEEN+="$HISTORY_REF_HASH|"
+        if [[ "$HISTORY_REF_HASH" == "$TRANSFER_TX_HASH" ]]; then
+            HISTORY_FOUND=1
+        fi
+    fi
+
+    HISTORY_CURSOR="$(json_field data.cursor "$HISTORY_JSON")"
+    if [[ "$HISTORY_CURSOR" == "0x" ]]; then
+        break
+    fi
+done
+(( HISTORY_NONEMPTY_PAGES >= 2 )) \
+    || die "sender history returned only $HISTORY_NONEMPTY_PAGES non-empty page(s); expected two to verify non-overlap (seen=$HISTORY_SEEN cursor=$HISTORY_CURSOR)"
+(( HISTORY_FOUND == 1 )) \
+    || die "sender history did not find transfer $TRANSFER_TX_HASH within $HISTORY_PAGES_VISITED page(s) (seen=$HISTORY_SEEN cursor=$HISTORY_CURSOR)"
+log "sender history result: found=$TRANSFER_TX_HASH pages=$HISTORY_PAGES_VISITED nonEmptyPages=$HISTORY_NONEMPTY_PAGES finalCursor=$HISTORY_CURSOR"
+
+RECIPIENT_HISTORY_JSON="$(run_json "recipient history" "$CLI" --json tx list "$TRANSFER_RECIPIENT")"
+RECIPIENT_HISTORY_COUNT="$(json_len data.refs "$RECIPIENT_HISTORY_JSON")"
+RECIPIENT_HISTORY_CURSOR="$(json_field data.cursor "$RECIPIENT_HISTORY_JSON")"
+[[ "$RECIPIENT_HISTORY_CURSOR" == "0x" ]] \
+    || die "recipient history did not exhaust in one fixture page (refs=$RECIPIENT_HISTORY_COUNT cursor=$RECIPIENT_HISTORY_CURSOR)"
+for ((index = 0; index < RECIPIENT_HISTORY_COUNT; index++)); do
+    RECIPIENT_HISTORY_HASH="$(json_field "data.refs.$index.txHash" "$RECIPIENT_HISTORY_JSON")"
+    [[ "$RECIPIENT_HISTORY_HASH" != "$TRANSFER_TX_HASH" ]] \
+        || die "recipient history unexpectedly included wallet-wrapped transfer $TRANSFER_TX_HASH"
+done
+log "recipient history result: transferAbsent=$TRANSFER_TX_HASH refs=$RECIPIENT_HISTORY_COUNT"
 
 GATEWAY_RPC_URL=""
 if [[ "${SMOKE_STANDALONE_GATEWAY:-0}" == "1" ]]; then

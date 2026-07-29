@@ -1,5 +1,5 @@
 # HOG Transfer and Transaction Inspection
-**Date:** 2026-07-23 **Status:** Transfer implemented; transaction inspection ready for implementation
+**Date:** 2026-07-23 **Status:** Implemented
 
 **Companions:**
 
@@ -421,7 +421,7 @@ Defaults and limits:
 
 - default page size: 50;
 
-- `--limit` must parse as a nonzero `u32`; endpoint page-size validation remains authoritative;
+- `--limit` must parse as a nonzero `u32`; endpoint request-size validation remains authoritative, and a response containing more references than requested is rejected as invalid;
 
 - the CLI validates cursor hex and decodes it into the existing variable-length `PaginationCursor`; endpoint cursor-size validation remains authoritative.
 
@@ -441,7 +441,7 @@ The response includes:
 
 Do not automatically fetch a receipt for every reference. An empty reference array with an empty cursor is normal exhaustion. An empty array with a non-empty cursor is also valid if the backend advances a sparse/selective scan; callers may continue with that cursor.
 
-Human help and output must state that history matches root invocations only. Specifically, querying a transfer recipient does not guarantee that incoming wallet-wrapped transfers will appear.
+Human help and output must state that history matches root invocations only. Specifically, querying a transfer recipient does not guarantee that incoming wallet-wrapped transfers will appear. The JSON envelope carries the same caveat as a `root_invocation_history_only` warning so machine consumers do not silently interpret the page as a complete asset ledger.
 ## Output contracts
 All three commands use the existing `CommandResult` envelope. Command names are:
 
@@ -652,6 +652,8 @@ Important edge cases:
 - Resolve wallet entrypoints through the same validated manifest/descriptor or frozen legacy-default path used by existing signed flows; use protocol constants for native HOG.
 
 - Keep transaction hashes and cursors as untrusted input; validate fixed hash length and hex encoding before RPC, then rely on the endpoint's configured bound for opaque cursor length.
+
+- Escape control and bidirectional-formatting characters in untrusted terminal text without obscuring ordinary printable output.
 
 - Treat event, return, abort, status-reason, and backend strings as untrusted display data. Do not interpret them as terminal markup or instructions.
 

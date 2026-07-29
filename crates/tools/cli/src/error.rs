@@ -2,6 +2,8 @@ use serde_json::{Value, json};
 use std::borrow::Cow;
 use thiserror::Error;
 
+use crate::terminal::{render_shell_arg, terminal_safe};
+
 /// All errors returned by CLI commands.
 #[derive(Error, Debug)]
 pub enum CliError {
@@ -107,10 +109,28 @@ pub enum CliError {
     MissingSigningKey,
     #[error("invalid HOG amount `{input}`: {message}")]
     InvalidHogAmount { input: String, message: String },
-    #[error("address target `{target}` is invalid: {message}")]
+    #[error("address target {target:?} is invalid: {message}")]
     InvalidAddressTarget { target: String, message: String },
-    #[error("unknown address target `{target}`")]
+    #[error("unknown address target {target:?}")]
     UnknownAddressTarget { target: String },
+    #[error("invalid transaction hash `{display_input}`: {message}")]
+    InvalidTransactionHash {
+        input: String,
+        display_input: String,
+        message: String,
+    },
+    #[error("invalid transaction history limit `{display_input}`: {message}")]
+    InvalidTransactionHistoryLimit {
+        input: String,
+        display_input: String,
+        message: String,
+    },
+    #[error("invalid transaction cursor `{display_input}`: {message}")]
+    InvalidTransactionCursor {
+        input: String,
+        display_input: String,
+        message: String,
+    },
     #[error("failed to initialize async runtime: {0}")]
     RuntimeInit(String),
     #[error("{method} failed: {message}")]
@@ -165,7 +185,11 @@ pub enum CliError {
         message: String,
     },
     #[error(
-        "no wallet saved for key `{key_name}` in profile `{profile}`; run `groundhog wallet create --key {key_name} --profile {profile}`"
+        "no wallet saved for key `{}` in profile `{}`; run `groundhog wallet create --key={} --profile={}`",
+        terminal_safe(.key_name.as_str()),
+        terminal_safe(.profile.as_str()),
+        render_shell_arg(.key_name.as_str()),
+        render_shell_arg(.profile.as_str()),
     )]
     SavedWalletMissing { key_name: String, profile: String },
     #[error(
@@ -297,6 +321,9 @@ impl CliError {
             Self::InvalidHogAmount { .. } => "invalid_hog_amount",
             Self::InvalidAddressTarget { .. } => "invalid_address_target",
             Self::UnknownAddressTarget { .. } => "unknown_address_target",
+            Self::InvalidTransactionHash { .. } => "invalid_transaction_hash",
+            Self::InvalidTransactionHistoryLimit { .. } => "invalid_transaction_history_limit",
+            Self::InvalidTransactionCursor { .. } => "invalid_transaction_cursor",
             Self::RuntimeInit(_) => "runtime_init_failed",
             Self::RpcMethodFailed { .. } => "rpc_method_failed",
             Self::RpcCapabilityUnsupported { .. } => "rpc_capability_unsupported",
@@ -399,8 +426,9 @@ impl CliError {
                 expected_protocol: Some(protocol),
                 ..
             } => Some(Cow::Owned(format!(
-                "pass `--hogd-protocol {protocol}` to override, or rebuild groundhog node \
-                 against a matching groundhog-xdr"
+                "pass `--hogd-protocol={}` to override, or rebuild groundhog node \
+                 against a matching groundhog-xdr",
+                render_shell_arg(protocol),
             ))),
             Self::NodeSupervisorProtocolIntroRejected {
                 expected_protocol: None,
@@ -433,11 +461,20 @@ impl CliError {
                     "use a saved wallet, contract alias, dev-N account, or 32-byte 0x-prefixed address",
                 ))
             }
+            Self::InvalidTransactionHash { .. } => Some(Cow::Borrowed(
+                "pass exactly 32 bytes as case-insensitive hex, with or without a 0x prefix",
+            )),
+            Self::InvalidTransactionHistoryLimit { .. } => Some(Cow::Borrowed(
+                "pass a positive whole-number page size; the selected endpoint enforces its maximum",
+            )),
+            Self::InvalidTransactionCursor { .. } => Some(Cow::Borrowed(
+                "pass the opaque hex cursor returned by the previous `groundhog tx list` page",
+            )),
             Self::RpcMethodFailed { .. } => Some(Cow::Borrowed(
                 "check the RPC endpoint and node logs for details",
             )),
             Self::RpcCapabilityUnsupported { .. } => Some(Cow::Borrowed(
-                "use a full local devnode or a compatible remote RPC that supports transaction submission",
+                "use a full local devnode or a compatible remote RPC that supports the required transaction method",
             )),
             Self::LocalDevAccountUnavailable { .. } => Some(Cow::Borrowed(
                 "run `groundhog node` backed by hog-devnode, or use a stored key for non-local endpoints",
@@ -454,7 +491,9 @@ impl CliError {
                 "check the stored public key material, or regenerate the key",
             )),
             Self::SavedWalletMissing { key_name, profile } => Some(Cow::Owned(format!(
-                "run `groundhog wallet create --key {key_name} --profile {profile}` before using this stored key"
+                "run `groundhog wallet create --key={} --profile={}` before using this stored key",
+                render_shell_arg(key_name),
+                render_shell_arg(profile),
             ))),
             Self::SavedWalletAmbiguous { .. } => Some(Cow::Borrowed(
                 "set `default_wallet` in the selected profile or pass the command's explicit wallet option",
@@ -469,10 +508,12 @@ impl CliError {
                 "remove the explicit/default wallet selection when using a manifest-backed dev key",
             )),
             Self::InheritedDefaultWalletRemoval { profile, .. } => Some(Cow::Owned(format!(
-                "run `groundhog wallet use <NAME> --profile {profile}` to select a project default before removing this wallet"
+                "run `groundhog wallet use <NAME> --profile={}` to select a project default before removing this wallet",
+                render_shell_arg(profile),
             ))),
             Self::WalletRemovalExposesMissingDefault { profile, .. } => Some(Cow::Owned(format!(
-                "save the inherited wallet binding or select another project default with `groundhog wallet use <NAME> --profile {profile}`"
+                "save the inherited wallet binding or select another project default with `groundhog wallet use <NAME> --profile={}`",
+                render_shell_arg(profile),
             ))),
             Self::SavedWalletOwnerPublicKeyInvalid { .. } => Some(Cow::Borrowed(
                 "recreate the wallet binding with `groundhog wallet create`, or fix owner_public_key in the selected profile",
@@ -576,7 +617,8 @@ impl CliError {
             )),
             Self::KeyExists(name) => Some(Cow::Owned(format!(
                 "use a different name, or remove the existing key \
-                 with `groundhog keys rm {name}`"
+                 with `groundhog keys rm -- {}`",
+                render_shell_arg(name),
             ))),
             Self::KeyNotFound(_) => Some(Cow::Borrowed(
                 "list available keys with `groundhog keys ls`",
@@ -703,7 +745,10 @@ impl CliError {
             Self::TransferToSelf { address } => Some(json!({
                 "address": address,
             })),
-            Self::InvalidHogAmount { input, message } => Some(json!({
+            Self::InvalidHogAmount { input, message }
+            | Self::InvalidTransactionHash { input, message, .. }
+            | Self::InvalidTransactionHistoryLimit { input, message, .. }
+            | Self::InvalidTransactionCursor { input, message, .. } => Some(json!({
                 "input": input,
                 "message": message,
             })),
@@ -792,5 +837,29 @@ mod tests {
             .details_json()
             .expect("details expected");
         assert_eq!(details["message"], message);
+    }
+
+    #[test]
+    fn generated_command_hints_quote_dynamic_arguments() {
+        let error = CliError::SavedWalletMissing {
+            key_name: "-alice;echo bad\n".into(),
+            profile: "-dev&net\u{202e}".into(),
+        };
+        let rendered = error.to_string();
+        assert!(!rendered.contains('\n'));
+        assert!(!rendered.contains('\u{202e}'));
+        assert_eq!(
+            hint(&error),
+            r"run `groundhog wallet create --key='-alice;echo bad\n' --profile='-dev&net\u{202e}'` before using this stored key"
+        );
+
+        let error = CliError::NodeSupervisorProtocolIntroRejected {
+            message: "rejected".into(),
+            expected_protocol: Some("hogp/test;echo bad".into()),
+        };
+        assert_eq!(
+            hint(&error),
+            "pass `--hogd-protocol='hogp/test;echo bad'` to override, or rebuild groundhog node against a matching groundhog-xdr"
+        );
     }
 }

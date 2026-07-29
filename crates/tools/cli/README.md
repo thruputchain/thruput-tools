@@ -23,9 +23,10 @@ scripts/smoke-local-dx.sh
 ```
 
 The smoke scaffolds a counter project, builds the default artifact, starts
-`groundhog node`, deploys and calls through `dev-0`, exercises `groundhog
-view`, performs a raw `groundhog storage` read, then creates a normal saved
-wallet and proves that it can deploy and call an RV32 contract.
+`groundhog node`, transfers HOG, inspects transaction status and paginated
+history, deploys and calls through `dev-0`, exercises `groundhog view`, performs
+a raw `groundhog storage` read, creates a normal saved wallet, and verifies
+state after a persistent-node restart.
 
 For a gateway/bench smoke against the runtime manifest path:
 
@@ -328,6 +329,23 @@ Local requests are signed by the bootstrap faucet account. Remote requests go
 through the configured faucet HTTP service and use its quota and idempotency
 policy.
 
+### `groundhog transfer` and `groundhog tx`
+
+Transfer native HOG from the selected profile wallet, inspect one transaction,
+or request one page of address history:
+
+```bash
+groundhog transfer alice 10.5
+groundhog tx show 0x0123...
+groundhog tx list alice --limit 25
+groundhog tx list alice --cursor 0x0123...
+```
+
+`tx show` performs one status lookup and fetches a receipt only for a committed
+transaction; it does not wait. `tx list` preserves the endpoint's opaque cursor
+and does not fetch receipts. Address history includes root invocations only, so
+incoming wallet-wrapped transfers may not appear in a recipient's history.
+
 ### `groundhog deploy`
 
 Deploy a contract to the active profile's RPC URL. Resolves the selected
@@ -406,6 +424,8 @@ RPC-facing commands can target a remote endpoint without editing
 groundhog deploy --rpc-url http://<your-rpc-host>:8545
 groundhog call my-counter increment 1 --rpc-url http://<your-rpc-host>:8545
 groundhog balance alice --rpc-url http://<your-rpc-host>:8545
+groundhog tx show 0x0123... --rpc-url http://<your-rpc-host>:8545
+groundhog tx list alice --rpc-url http://<your-rpc-host>:8545
 groundhog view my-counter get --rpc-url http://<your-rpc-host>:8545
 groundhog storage my-counter <32-byte-storage-key> --rpc-url http://<your-rpc-host>:8545
 ```

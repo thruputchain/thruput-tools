@@ -436,7 +436,10 @@ impl<'a> InitUi<'a> {
             }
             NextSteps::BuildProject(project) => {
                 if project.needs_cd {
-                    self.print.status(format_args!("  cd {}", project.name));
+                    self.print.status(format_args!(
+                        "  cd {}",
+                        crate::terminal::render_shell_arg(&project.name),
+                    ));
                 }
                 self.print.status("  groundhog build");
             }

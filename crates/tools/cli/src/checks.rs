@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::CliError;
+use crate::terminal::render_shell_arg;
 
 /// Severity of a non-fatal diagnostic finding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -258,8 +259,9 @@ pub fn check_project(
                         ),
                         hint: Some(Cow::Owned(format!(
                             "generate it with \
-                             `groundhog keys generate {key_name}` \
-                             or change the profile's default_key"
+                             `groundhog keys generate -- {}` \
+                             or change the profile's default_key",
+                            render_shell_arg(key_name),
                         ))),
                     });
                 }
@@ -356,8 +358,8 @@ fn check_default_wallet(profile: &crate::config::ResolvedProfile, findings: &mut
                 profile.name
             ),
             hint: Some(Cow::Owned(format!(
-                "run `groundhog wallet use <NAME> --profile {}` to select a saved wallet",
-                profile.name
+                "run `groundhog wallet use <NAME> --profile={}` to select a saved wallet",
+                render_shell_arg(&profile.name),
             ))),
         });
         return;
@@ -528,8 +530,9 @@ fn add_rust_toolchain_findings(
             || Cow::Borrowed("install rustup and the Rust toolchain declared by the project"),
             |toolchain| {
                 Cow::Owned(format!(
-                    "run `rustup toolchain install {toolchain} --component rust-src --target {}`",
-                    crate::build::RV32_TARGET_TRIPLE
+                    "run `rustup toolchain install --component rust-src --target {} -- {}`",
+                    crate::build::RV32_TARGET_TRIPLE,
+                    render_shell_arg(toolchain),
                 ))
             },
         );
@@ -1251,7 +1254,7 @@ mod tests {
     #[test]
     fn default_wallet_check_reports_missing_binding() {
         let profile = crate::config::ResolvedProfile {
-            name: "devnet".into(),
+            name: "dev&net".into(),
             network: None,
             rpc_url: None,
             rpc_url_cli_override: false,
@@ -1271,6 +1274,10 @@ mod tests {
 
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].code, "default_wallet_not_saved");
+        assert_eq!(
+            findings[0].hint.as_deref(),
+            Some("run `groundhog wallet use <NAME> --profile='dev&net'` to select a saved wallet")
+        );
     }
 
     #[test]
@@ -1780,14 +1787,20 @@ mod tests {
         std::fs::create_dir(&project).unwrap();
         std::fs::write(
             project.join("groundhog.toml"),
-            "[profile.default]\ndefault_key = \"ghost\"\n",
+            "[profile.default]\ndefault_key = \"ghost;echo bad\"\n",
         )
         .unwrap();
 
         let context = check_project(&project, None).unwrap();
-        assert_eq!(context.profile_key.as_deref(), Some("ghost"));
+        assert_eq!(context.profile_key.as_deref(), Some("ghost;echo bad"));
         assert_eq!(context.findings.len(), 1);
         assert_eq!(context.findings[0].code, "key_not_on_disk");
+        assert!(
+            context.findings[0]
+                .hint
+                .as_deref()
+                .is_some_and(|hint| hint.contains("groundhog keys generate -- 'ghost;echo bad'"))
+        );
 
         unsafe {
             std::env::remove_var("XDG_CONFIG_HOME");
