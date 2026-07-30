@@ -29,6 +29,13 @@ fn groundhog() -> Command {
         std::process::id(),
         CONFIG_HOME_COUNTER.fetch_add(1, Ordering::Relaxed)
     ));
+    let groundhog_config = config_home.join("groundhog");
+    std::fs::create_dir_all(&groundhog_config).expect("bug: test config directory should exist");
+    std::fs::write(
+        groundhog_config.join("config.toml"),
+        "default_profile = \"default\"\n\n[profile.default]\n",
+    )
+    .expect("bug: test config should be writable");
     command.env_remove("GROUNDHOG_RUNTIME_MANIFEST");
     command.env_remove("GROUNDHOG_PROFILE");
     command.env_remove("GROUNDHOG_DEVNODE_BINARY");
@@ -767,7 +774,11 @@ fn status_json_outputs_structured_payload() {
 #[test]
 fn status_json_flattens_project_findings_into_warnings() {
     let tmp = TempDir::new().unwrap();
-    std::fs::write(tmp.path().join("groundhog.toml"), "[profile.default]\n").unwrap();
+    std::fs::write(
+        tmp.path().join("groundhog.toml"),
+        "default_profile = \"default\"\n\n[profile.default]\n",
+    )
+    .unwrap();
 
     let output = groundhog()
         .arg("--json")
@@ -797,7 +808,7 @@ fn status_json_reports_project_default_wallet_and_dangling_finding() {
     let tmp = TempDir::new().unwrap();
     std::fs::write(
         tmp.path().join("groundhog.toml"),
-        "[profile.default]\ndefault_wallet = \"missing\"\n",
+        "default_profile = \"default\"\n\n[profile.default]\ndefault_wallet = \"missing\"\n",
     )
     .unwrap();
 
@@ -904,6 +915,7 @@ fn quiet_status_exits_zero_with_no_output_when_fully_configured() {
         password: "pass".into(),
     };
     groundhog_cli::config::save_executor_credentials(&creds).unwrap();
+    groundhog_cli::config::initialize_global_profiles().unwrap();
 
     let output = groundhog()
         .arg("-q")
@@ -2047,7 +2059,7 @@ fn deploy_fails_without_config() {
         .unwrap();
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("no rpc_url") || stderr.contains("no signing key"));
+    assert!(stderr.contains("no active profile"));
 }
 
 #[test]
@@ -2065,7 +2077,7 @@ fn deploy_json_fails_without_config() {
     let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(stderr["ok"], false);
     assert_eq!(stderr["command"], "deploy");
-    assert_eq!(stderr["error"]["code"], "missing_rpc_url");
+    assert_eq!(stderr["error"]["code"], "no_active_profile");
 }
 
 #[test]
@@ -2217,7 +2229,7 @@ fn wallet_create_dry_run_json_outputs_prepared_transaction() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\nruntime_manifest = \"{}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\nruntime_manifest = \"{}\"\n",
             manifest_path.file_name().unwrap().to_string_lossy()
         ),
     )
@@ -2300,7 +2312,7 @@ fn wallet_create_dry_run_defaults_name_to_key() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\nruntime_manifest = \"{}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\nruntime_manifest = \"{}\"\n",
             manifest_path.file_name().unwrap().to_string_lossy()
         ),
     )
@@ -2406,7 +2418,7 @@ fn wallet_ls_json_outputs_saved_wallets() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"http://127.0.0.1:9545\"\ndefault_wallet = \"alice\"\n\n[profile.default.wallets.alice]\naddress = \"{alice}\"\nowner_public_key = \"{alice_owner}\"\n\n[profile.default.wallets.bob]\naddress = \"{bob}\"\nowner_public_key = \"{bob_owner}\"\n"
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:9545\"\ndefault_wallet = \"alice\"\n\n[profile.default.wallets.alice]\naddress = \"{alice}\"\nowner_public_key = \"{alice_owner}\"\n\n[profile.default.wallets.bob]\naddress = \"{bob}\"\nowner_public_key = \"{bob_owner}\"\n"
         ),
     )
     .unwrap();
@@ -2447,7 +2459,7 @@ fn wallet_use_persists_valid_owner_matched_default() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\ndefault_key = \"alice\"\n\n[profile.default.wallets.trading]\naddress = \"{address}\"\nowner_public_key = \"{owner}\"\n"
+            "default_profile = \"default\"\n\n[profile.default]\ndefault_key = \"alice\"\n\n[profile.default.wallets.trading]\naddress = \"{address}\"\nowner_public_key = \"{owner}\"\n"
         ),
     )
     .unwrap();
@@ -2609,7 +2621,7 @@ fn airdrop_dry_run_json_outputs_prepared_transaction() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\nruntime_manifest = \"{}\"\n\n[profile.default.wallets.alice]\naddress = \"{recipient_wallet}\"\nowner_public_key = \"{recipient_owner}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\nruntime_manifest = \"{}\"\n\n[profile.default.wallets.alice]\naddress = \"{recipient_wallet}\"\nowner_public_key = \"{recipient_owner}\"\n",
             manifest_path.file_name().unwrap().to_string_lossy()
         ),
     )
@@ -2669,7 +2681,7 @@ fn airdrop_json_rejects_invalid_hog_amount_before_rpc() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\nruntime_manifest = \"{}\"\n\n[profile.default.wallets.alice]\naddress = \"{recipient_wallet}\"\nowner_public_key = \"{recipient_owner}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\nruntime_manifest = \"{}\"\n\n[profile.default.wallets.alice]\naddress = \"{recipient_wallet}\"\nowner_public_key = \"{recipient_owner}\"\n",
             manifest_path.file_name().unwrap().to_string_lossy()
         ),
     )
@@ -2714,7 +2726,7 @@ fn transfer_dry_run_json_outputs_signed_wallet_wrapped_hog_transfer() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n\n[profile.default.wallets.alice]\naddress = \"{recipient}\"\nowner_public_key = \"0x{}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n\n[profile.default.wallets.alice]\naddress = \"{recipient}\"\nowner_public_key = \"0x{}\"\n",
             manifest_path.file_name().unwrap().to_string_lossy(),
             "cd".repeat(32),
         ),
@@ -2817,7 +2829,7 @@ fn transfer_dry_run_human_output_identifies_signer_and_submit_capability() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
             manifest_path.file_name().unwrap().to_string_lossy()
         ),
     )
@@ -2927,7 +2939,7 @@ fn transfer_dry_run_profile_and_cli_target_overrides_select_endpoint() {
     let recipient = format!("0x{}", "bc".repeat(32));
     std::fs::write(
         project.join("groundhog.toml"),
-        "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\n\n[profile.devnet]\nrpc_url = \"http://127.0.0.1:2\"\ndefault_key = \"dev-0\"\n",
+        "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\n\n[profile.devnet]\nrpc_url = \"http://127.0.0.1:2\"\ndefault_key = \"dev-0\"\n",
     )
     .unwrap();
 
@@ -2972,7 +2984,7 @@ fn transfer_dry_run_rejects_invalid_inputs_before_rpc() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
             manifest_path.file_name().unwrap().to_string_lossy()
         ),
     )
@@ -3011,7 +3023,7 @@ fn transfer_dry_run_saved_wallet_errors_follow_selection_mode() {
 
     std::fs::write(
         project.join("groundhog.toml"),
-        "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"alice\"\n",
+        "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"alice\"\n",
     )
     .unwrap();
     let missing = groundhog()
@@ -3033,7 +3045,7 @@ fn transfer_dry_run_saved_wallet_errors_follow_selection_mode() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"alice\"\n\n[profile.default.wallets.broken-wallet]\naddress = \"0x{}\"\nowner_public_key = \"0x00\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"alice\"\n\n[profile.default.wallets.broken-wallet]\naddress = \"0x{}\"\nowner_public_key = \"0x00\"\n",
             "aa".repeat(32),
         ),
     )
@@ -3052,7 +3064,7 @@ fn transfer_dry_run_saved_wallet_errors_follow_selection_mode() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"alice\"\ndefault_wallet = \"broken-wallet\"\n\n[profile.default.wallets.broken-wallet]\naddress = \"0x{}\"\nowner_public_key = \"0x00\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"alice\"\ndefault_wallet = \"broken-wallet\"\n\n[profile.default.wallets.broken-wallet]\naddress = \"0x{}\"\nowner_public_key = \"0x00\"\n",
             "aa".repeat(32),
         ),
     )
@@ -3084,7 +3096,7 @@ fn transfer_rejects_unique_wallet_self_transfer_before_rpc() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"alice\"\n\n[profile.default.wallets.wallet-a]\naddress = \"{address}\"\nowner_public_key = \"{owner}\"\n"
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"alice\"\n\n[profile.default.wallets.wallet-a]\naddress = \"{address}\"\nowner_public_key = \"{owner}\"\n"
         ),
     )
     .unwrap();
@@ -3119,7 +3131,7 @@ fn transfer_from_selects_named_owner_matched_wallet() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"alice\"\ndefault_wallet = \"primary\"\n\n[profile.default.wallets.primary]\naddress = \"{primary}\"\nowner_public_key = \"{owner}\"\n\n[profile.default.wallets.trading]\naddress = \"{trading}\"\nowner_public_key = \"{owner}\"\n"
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"alice\"\ndefault_wallet = \"primary\"\n\n[profile.default.wallets.primary]\naddress = \"{primary}\"\nowner_public_key = \"{owner}\"\n\n[profile.default.wallets.trading]\naddress = \"{trading}\"\nowner_public_key = \"{owner}\"\n"
         ),
     )
     .unwrap();
@@ -3237,7 +3249,7 @@ fn transfer_live_success_returns_matching_receipt_and_events() {
 }
 
 #[test]
-fn transfer_live_client_construction_failure_uses_standard_error_stream() {
+fn transfer_live_rejects_invalid_persisted_rpc_url() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
@@ -3246,7 +3258,7 @@ fn transfer_live_client_construction_failure_uses_standard_error_stream() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"not a URL\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"not a URL\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
             manifest_path.file_name().unwrap().to_string_lossy()
         ),
     )
@@ -3262,7 +3274,7 @@ fn transfer_live_client_construction_failure_uses_standard_error_stream() {
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
     let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-    assert_eq!(stderr["error"]["code"], "rpc_connect");
+    assert_eq!(stderr["error"]["code"], "profile_config_invalid");
 }
 
 #[test]
@@ -3846,7 +3858,7 @@ fn deploy_dry_run_uses_manifest_dev_wallet_address_without_dev_rpc() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
             manifest_path.file_name().unwrap().to_string_lossy()
         ),
     )
@@ -3896,7 +3908,7 @@ fn deploy_dry_run_uses_profile_rpc_and_manifest() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
             manifest_path.display()
         ),
     )
@@ -3948,7 +3960,7 @@ fn deploy_dry_run_runtime_manifest_env_overrides_profile() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
             profile_manifest.file_name().unwrap().to_string_lossy()
         ),
     )
@@ -4003,7 +4015,7 @@ fn deploy_dry_run_cli_target_overrides_profile_rpc_and_manifest() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
             profile_manifest.file_name().unwrap().to_string_lossy()
         ),
     )
@@ -4057,7 +4069,7 @@ fn deploy_dry_run_blank_runtime_manifest_env_falls_back_to_profile() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
             profile_manifest.file_name().unwrap().to_string_lossy()
         ),
     )
@@ -4108,7 +4120,7 @@ fn deploy_dry_run_rejects_runtime_manifest_symlink() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
             symlink_path.display()
         ),
     )
@@ -4151,7 +4163,7 @@ fn deploy_dry_run_rejects_manifest_public_key_mismatch_before_rpc() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
             manifest_path.display()
         ),
     )
@@ -4200,7 +4212,7 @@ fn deploy_dry_run_rejects_manifest_seed_that_does_not_match_signer() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
             manifest_path.display()
         ),
     )
@@ -4241,7 +4253,7 @@ fn deploy_dev_key_requires_runtime_manifest() {
 
     std::fs::write(
         project.join("groundhog.toml"),
-        "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"dev-0\"\n",
+        "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"dev-0\"\n",
     )
     .unwrap();
 
@@ -4477,7 +4489,7 @@ fn call_json_fails_without_config() {
     let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(stderr["ok"], false);
     assert_eq!(stderr["command"], "call");
-    assert_eq!(stderr["error"]["code"], "missing_rpc_url");
+    assert_eq!(stderr["error"]["code"], "no_active_profile");
 }
 
 #[test]
@@ -4495,7 +4507,7 @@ fn storage_json_fails_without_config() {
     let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(stderr["ok"], false);
     assert_eq!(stderr["command"], "storage");
-    assert_eq!(stderr["error"]["code"], "missing_rpc_url");
+    assert_eq!(stderr["error"]["code"], "no_active_profile");
 }
 
 #[test]
@@ -4512,7 +4524,7 @@ fn view_json_fails_without_config() {
     let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(stderr["ok"], false);
     assert_eq!(stderr["command"], "view");
-    assert_eq!(stderr["error"]["code"], "missing_rpc_url");
+    assert_eq!(stderr["error"]["code"], "no_active_profile");
 }
 
 #[test]
@@ -4584,7 +4596,7 @@ fn view_json_resolves_contract_alias_and_from_address() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.contracts]\ncounter = \"{address}\"\n"
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.contracts]\ncounter = \"{address}\"\n"
         ),
     )
     .unwrap();
@@ -4634,7 +4646,7 @@ fn view_json_uses_manifest_dev_account_as_caller_without_dev_rpc() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\nruntime_manifest = \"{}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\nruntime_manifest = \"{}\"\n",
             manifest_path.display()
         ),
     )
@@ -4839,7 +4851,7 @@ fn balance_json_reads_native_hog_balance() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets.alice]\naddress = \"{address}\"\nowner_public_key = \"{owner}\"\n"
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets.alice]\naddress = \"{address}\"\nowner_public_key = \"{owner}\"\n"
         ),
     )
     .unwrap();
@@ -4916,7 +4928,7 @@ fn balance_json_cli_rpc_url_overrides_profile() {
     let (rpc_url, rpc_server) = spawn_balance_rpc(&address, "42");
     std::fs::write(
         project.join("groundhog.toml"),
-        "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\n",
+        "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\n",
     )
     .unwrap();
 
@@ -4972,7 +4984,7 @@ fn balance_json_rejects_malformed_address_target_before_rpc() {
     std::fs::create_dir_all(&project).unwrap();
     std::fs::write(
         project.join("groundhog.toml"),
-        "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\n",
+        "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\n",
     )
     .unwrap();
 
@@ -5003,7 +5015,7 @@ fn balance_json_rejects_unknown_target_before_rpc() {
     std::fs::create_dir_all(&project).unwrap();
     std::fs::write(
         project.join("groundhog.toml"),
-        "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\n",
+        "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\n",
     )
     .unwrap();
 
@@ -5042,7 +5054,7 @@ fn storage_json_uses_profile_runtime_manifest_with_global_dev_key() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\nruntime_manifest = \"{}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\nruntime_manifest = \"{}\"\n",
             manifest_path.display()
         ),
     )
@@ -5081,7 +5093,7 @@ fn storage_json_cli_rpc_url_overrides_profile_rpc_url() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
             manifest_path.display()
         ),
     )
@@ -5117,7 +5129,7 @@ fn storage_json_resolves_contract_alias() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.contracts]\ncounter = \"{address}\"\n"
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.contracts]\ncounter = \"{address}\"\n"
         ),
     )
     .unwrap();
@@ -5151,7 +5163,7 @@ fn storage_json_rejects_short_key_before_rpc() {
     std::fs::create_dir_all(&project).unwrap();
     std::fs::write(
         project.join("groundhog.toml"),
-        "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\n",
+        "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\n",
     )
     .unwrap();
 
@@ -5312,7 +5324,7 @@ fn call_dry_run_uses_manifest_dev_wallet_address_without_dev_rpc() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
             manifest_path.display()
         ),
     )
@@ -5441,7 +5453,7 @@ fn call_live_json_includes_diagnostics_for_failed_local_dev_call() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
             manifest_path.display()
         ),
     )
@@ -6866,12 +6878,12 @@ fn tx_list_resolves_contract_direct_and_manifest_dev_targets() {
         match target_kind {
             "contract" => std::fs::write(
                 tmp.path().join("groundhog.toml"),
-                format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n[profile.default.contracts]\ncounter = \"{address}\"\n"),
+                format!("default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\n[profile.default.contracts]\ncounter = \"{address}\"\n"),
             )
             .unwrap(),
             "direct" => std::fs::write(
                 tmp.path().join("groundhog.toml"),
-                format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
+                format!("default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
             )
             .unwrap(),
             _ => {
@@ -6879,7 +6891,7 @@ fn tx_list_resolves_contract_direct_and_manifest_dev_targets() {
                 std::fs::write(
                     tmp.path().join("groundhog.toml"),
                     format!(
-                        "[profile.default]\nrpc_url = \"{rpc_url}\"\nruntime_manifest = \"{}\"\n",
+                        "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\nruntime_manifest = \"{}\"\n",
                         manifest.file_name().unwrap().to_string_lossy()
                     ),
                 )
@@ -6975,7 +6987,7 @@ fn tx_list_rejects_address_resolution_failures_before_rpc() {
     let tmp = TempDir::new().unwrap();
     std::fs::write(
         tmp.path().join("groundhog.toml"),
-        "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\n[profile.default.contracts]\nbroken = \"0xdeadbeef\"\n",
+        "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\n[profile.default.contracts]\nbroken = \"0xdeadbeef\"\n",
     )
     .unwrap();
     let (rpc_url, rpc_server) = spawn_no_request_rpc();
@@ -7088,7 +7100,7 @@ fn tx_list_human_output_shows_each_reference_without_receipts() {
     std::fs::write(
         tmp.path().join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\n[profile.default.wallets.local-wallet]\naddress = \"{address}\"\nowner_public_key = \"0x{}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\n[profile.default.wallets.local-wallet]\naddress = \"{address}\"\nowner_public_key = \"0x{}\"\n",
             "86".repeat(32)
         ),
     )
@@ -9107,7 +9119,7 @@ fn run_transfer_live_mock_with_rpc_override(
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
             manifest_path.file_name().unwrap().to_string_lossy()
         ),
     )
@@ -9156,7 +9168,7 @@ fn run_saved_wallet_transfer_live_mock(
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"alice\"\ndefault_wallet = \"primary\"\n\n[profile.default.wallets.primary]\naddress = \"{primary}\"\nowner_public_key = \"{owner}\"\n\n[profile.default.wallets.trading]\naddress = \"{trading}\"\nowner_public_key = \"{owner}\"\n"
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"alice\"\ndefault_wallet = \"primary\"\n\n[profile.default.wallets.primary]\naddress = \"{primary}\"\nowner_public_key = \"{owner}\"\n\n[profile.default.wallets.trading]\naddress = \"{trading}\"\nowner_public_key = \"{owner}\"\n"
         ),
     )
     .unwrap();
@@ -9598,7 +9610,7 @@ fn write_project_config_with_alice_wallet(
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets.alice]\naddress = \"0x{}\"\nowner_public_key = \"{owner_public_key}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets.alice]\naddress = \"0x{}\"\nowner_public_key = \"{owner_public_key}\"\n",
             "aa".repeat(32)
         ),
     )
@@ -9612,8 +9624,8 @@ fn add_faucet_to_default_profile(project: &std::path::Path, faucet_url: &str) {
     std::fs::write(
         path,
         config.replacen(
-            "[profile.default]\n",
-            &format!("[profile.default]\nfaucet_url = \"{faucet_url}\"\n"),
+            "default_profile = \"default\"\n\n[profile.default]\n",
+            &format!("default_profile = \"default\"\n\n[profile.default]\nfaucet_url = \"{faucet_url}\"\n"),
             1,
         ),
     )
@@ -9624,7 +9636,7 @@ fn write_project_config_with_dummy_alice_wallet(project: &std::path::Path, rpc_u
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets.alice]\naddress = \"0x{}\"\nowner_public_key = \"0x{}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets.alice]\naddress = \"0x{}\"\nowner_public_key = \"0x{}\"\n",
             "aa".repeat(32),
             "bb".repeat(32),
         ),

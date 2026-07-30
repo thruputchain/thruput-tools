@@ -47,8 +47,28 @@ pub enum CliError {
     Io(#[from] std::io::Error),
     #[error("profile `{0}` not found in project or global config")]
     ProfileNotFound(String),
-    #[error("profile `{0}` requested but no project or global config found")]
-    NoProjectConfig(String),
+    #[error("no active profile selected")]
+    NoActiveProfile,
+    #[error("invalid profile name: {0}")]
+    ProfileNameInvalid(&'static str),
+    #[error("unsupported config field `{0}`")]
+    ConfigFieldUnsupported(String),
+    #[error("invalid value for config field `{field}`: {message}")]
+    ConfigValueInvalid { field: String, message: String },
+    #[error("failed to parse config `{}`: {message}", .path.display())]
+    ConfigParse {
+        path: std::path::PathBuf,
+        message: String,
+        line: Option<usize>,
+        column: Option<usize>,
+    },
+    #[error("invalid config `{}`: {message}", .path.display())]
+    ConfigFileInvalid {
+        path: std::path::PathBuf,
+        message: String,
+    },
+    #[error("project config not found")]
+    ProjectConfigUnavailable,
     #[error("credential password cannot be empty")]
     CredentialsEmpty,
     #[error("unsupported OS: {0}")]
@@ -338,7 +358,13 @@ impl CliError {
             Self::UnknownTemplate(_) => "unknown_template",
             Self::Io(_) => "io_error",
             Self::ProfileNotFound(_) => "profile_not_found",
-            Self::NoProjectConfig(_) => "no_project_config",
+            Self::NoActiveProfile => "no_active_profile",
+            Self::ProfileNameInvalid(_) => "profile_name_invalid",
+            Self::ConfigFieldUnsupported(_) => "config_field_unsupported",
+            Self::ConfigValueInvalid { .. } => "config_value_invalid",
+            Self::ConfigParse { .. } => "config_parse_failed",
+            Self::ConfigFileInvalid { .. } => "config_file_invalid",
+            Self::ProjectConfigUnavailable => "project_config_unavailable",
             Self::CredentialsEmpty => "credentials_empty",
             Self::UnsupportedOs(_) => "unsupported_os",
             Self::WasmOptFailed(_) => "wasm_opt_failed",
@@ -647,9 +673,23 @@ impl CliError {
                  an existing one with `--profile` or \
                  `GROUNDHOG_PROFILE`",
             )),
-            Self::NoProjectConfig(_) => Some(Cow::Borrowed(
-                "run `groundhog init`, create `groundhog.toml`, unset \
-                 `GROUNDHOG_PROFILE`, or use the default profile",
+            Self::NoActiveProfile => Some(Cow::Borrowed(
+                "select a profile with `--profile` or `GROUNDHOG_PROFILE`, or set default_profile in project or global config",
+            )),
+            Self::ProfileNameInvalid(_) => Some(Cow::Borrowed(
+                "use a non-empty profile name without control characters",
+            )),
+            Self::ConfigFieldUnsupported(_) => Some(Cow::Borrowed(
+                "supported fields: network, rpc-url, faucet-url, default-key",
+            )),
+            Self::ConfigValueInvalid { .. } => Some(Cow::Borrowed(
+                "check the field's accepted values with `groundhog config set --help`",
+            )),
+            Self::ConfigParse { .. } | Self::ConfigFileInvalid { .. } => Some(Cow::Borrowed(
+                "fix the reported config file and rerun the command",
+            )),
+            Self::ProjectConfigUnavailable => Some(Cow::Borrowed(
+                "run from inside a Groundhog project or remove `--project`",
             )),
             Self::CredentialsEmpty => Some(Cow::Borrowed(
                 "rerun `groundhog init` and provide a password; the username \
@@ -742,6 +782,21 @@ impl CliError {
                     "message": message,
                 }))
             }
+            Self::ConfigParse {
+                path,
+                message,
+                line,
+                column,
+            } => Some(json!({
+                "path": path,
+                "message": message,
+                "line": line,
+                "column": column,
+            })),
+            Self::ConfigFileInvalid { path, message } => Some(json!({
+                "path": path,
+                "message": message,
+            })),
             Self::RpcCapabilityUnsupported { method, message } => Some(json!({
                 "method": method,
                 "message": message,

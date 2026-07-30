@@ -7,6 +7,14 @@ use tempfile::TempDir;
 
 mod support;
 
+fn write_active_profile(project_root: &Path) {
+    fs::write(
+        project_root.join("groundhog.toml"),
+        "default_profile = \"default\"\n\n[profile.default]\n",
+    )
+    .unwrap();
+}
+
 #[test]
 fn resolve_package_with_explicit_name() {
     let meta = groundhog_cli::build::CargoMetadata {
@@ -328,6 +336,7 @@ fn build_project_reports_groundhog_processed_wasm_path() {
     let tmp = TempDir::new().unwrap();
     let project_root =
         std::fs::canonicalize(tmp.path()).expect("bug: project path should canonicalize");
+    write_active_profile(&project_root);
     fs::write(
         project_root.join("Cargo.toml"),
         "[package]\nname = \"demo-contract\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
@@ -404,10 +413,67 @@ fn build_project_reports_groundhog_processed_wasm_path() {
 
 #[test]
 #[serial]
+fn build_rejects_missing_active_profile_before_compiling() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(
+        tmp.path().join("Cargo.toml"),
+        "[package]\nname = \"demo-contract\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+    fs::create_dir_all(tmp.path().join(".cargo")).unwrap();
+    fs::write(tmp.path().join(".cargo/contract.toml"), "").unwrap();
+    let fake_bin = tmp.path().join("bin");
+    fs::create_dir_all(&fake_bin).unwrap();
+    let compile_marker = tmp.path().join("compiled");
+    let metadata_json = format!(
+        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract","manifest_path":"{}"}}]}}"#,
+        tmp.path().display(),
+        tmp.path().join("target").display(),
+        tmp.path().join("Cargo.toml").display()
+    );
+    let cargo = fake_bin.join("cargo");
+    fs::write(
+        &cargo,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = \"metadata\" ]; then\n  printf '%s' '{metadata_json}'\n  exit 0\nfi\n/bin/touch '{}'\n",
+            compile_marker.display()
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = fs::metadata(&cargo).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&cargo, permissions).unwrap();
+    }
+    let _cwd = CurrentDirGuard::enter(tmp.path());
+    let _path = PathGuard::set(fake_bin.as_os_str());
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path().join("config-home")) };
+
+    let error = groundhog_cli::build::build_project(
+        Some("demo-contract"),
+        false,
+        &[],
+        &groundhog_cli::artifacts::ArtifactOptions::default(),
+        None,
+        &[],
+        &groundhog_cli::Print::quiet(),
+    )
+    .unwrap_err();
+
+    assert_eq!(error.code(), "no_active_profile");
+    assert!(!compile_marker.exists());
+    unsafe { env::remove_var("XDG_CONFIG_HOME") };
+}
+
+#[test]
+#[serial]
 fn build_project_recopies_raw_wasm_before_reprocessing_on_repeated_runs() {
     let tmp = TempDir::new().unwrap();
     let project_root =
         std::fs::canonicalize(tmp.path()).expect("bug: project path should canonicalize");
+    write_active_profile(&project_root);
     fs::write(
         project_root.join("Cargo.toml"),
         "[package]\nname = \"demo-contract\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
@@ -500,6 +566,7 @@ fn build_rv32_project_compiles_and_lowers_elf() {
     let tmp = TempDir::new().unwrap();
     let project_root =
         std::fs::canonicalize(tmp.path()).expect("bug: project path should canonicalize");
+    write_active_profile(&project_root);
     fs::write(
         project_root.join("Cargo.toml"),
         "[package]\nname = \"demo-contract-rv32\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\nentrypoints = []\nrv32-entrypoints = [\"entrypoints\"]\n",
@@ -655,6 +722,7 @@ fn build_rv32_project_with_stack_size_uses_cargo_rustc_defsym() {
     let tmp = TempDir::new().unwrap();
     let project_root =
         std::fs::canonicalize(tmp.path()).expect("bug: project path should canonicalize");
+    write_active_profile(&project_root);
     fs::write(
         project_root.join("Cargo.toml"),
         "[package]\nname = \"demo-contract-rv32\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\nentrypoints = []\nrv32-entrypoints = [\"entrypoints\"]\n",
@@ -814,6 +882,7 @@ fn build_show_cargo_commands_traces_invocation_to_stderr() {
     let tmp = TempDir::new().unwrap();
     let project_root =
         std::fs::canonicalize(tmp.path()).expect("bug: project path should canonicalize");
+    write_active_profile(&project_root);
     fs::write(
         project_root.join("Cargo.toml"),
         "[package]\nname = \"demo-contract\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",

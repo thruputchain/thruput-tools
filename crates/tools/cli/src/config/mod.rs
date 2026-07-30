@@ -2,6 +2,7 @@ mod atomic;
 mod dirs;
 mod global;
 mod project;
+mod read;
 
 pub use dirs::{cache_dir, config_dir, home_dir, keys_dir};
 pub(crate) use global::load_global_profile;
@@ -12,10 +13,16 @@ pub use global::{
     save_local_runtime_state,
 };
 pub use project::{
-    DEFAULT_PROFILE, Network, ProfileOverrides, ProjectProfile, ResolvedProfile,
-    SavedWalletBinding, active_profile_name, find_project_config, load_project_profiles,
-    remove_profile_wallet_address, resolve_default_key, resolve_default_key_for_profile,
-    resolve_profile, resolve_profile_with_overrides, save_profile_contract_alias,
-    save_profile_default_wallet, save_profile_wallet_address,
-    save_profile_wallet_address_with_default,
+    Network, ProfileOverrides, ProjectProfile, ResolvedProfile, SavedWalletBinding,
+    active_profile_name, find_project_config, load_project_profiles, remove_profile_wallet_address,
+    resolve_default_key, resolve_default_key_for_profile, resolve_profile,
+    resolve_profile_with_overrides, save_profile_contract_alias, save_profile_default_wallet,
+    save_profile_wallet_address, save_profile_wallet_address_with_default,
+};
+pub use read::{
+    CONFIG_GET_JSON_SCHEMA_VERSION, CONFIG_PROFILES_JSON_SCHEMA_VERSION, ConfigField,
+    ConfigFieldValue, ConfigGetReport, ConfigProfileRow, ConfigProfileStatus, ConfigProfilesReport,
+    ConfigScope, ConfigSource, ConfigSourceKind, ConfigWalletBinding, PersistedConfig,
+    PersistedConfigLayer, PersistedProfile, PersistedProfileState, ProfileSelection,
+    ProfileSources, load_persisted_config, resolve_persisted_profile, validate_profile_name,
 };

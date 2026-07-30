@@ -217,14 +217,14 @@ owner_public_key = "0x1111"
     )
     .unwrap();
 
-    let profile = groundhog_cli::config::resolve_profile(tmp.path(), None).unwrap();
+    let profile = groundhog_cli::config::resolve_profile(tmp.path(), Some("default")).unwrap();
     assert_eq!(profile.name, "default");
     assert_eq!(profile.rpc_url.as_deref(), Some("http://localhost:9545"));
     assert_eq!(profile.default_key.as_deref(), Some("alice"));
     assert_eq!(profile.default_wallet.as_deref(), Some("alice-wallet"));
     assert_eq!(
         profile.runtime_manifest.as_deref(),
-        Some(std::path::Path::new("runtime-manifest.json"))
+        Some(tmp.path().join("runtime-manifest.json").as_path())
     );
     assert_eq!(
         profile.contracts.get("counter").map(String::as_str),
@@ -291,36 +291,25 @@ greeter = "0xbeef"
 
 #[test]
 #[serial]
-fn resolve_profile_defaults_when_no_project_config_exists() {
+fn resolve_profile_requires_selection_when_no_config_exists() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
 
-    let profile = groundhog_cli::config::resolve_profile(tmp.path(), None).unwrap();
-    assert_eq!(profile.name, "default");
-    assert!(profile.rpc_url.is_none());
-    assert!(profile.default_key.is_none());
-    assert!(profile.default_wallet.is_none());
-    assert!(profile.contracts.is_empty());
-    assert!(profile.wallets.is_empty());
-    assert!(profile.source.is_none());
+    let error = groundhog_cli::config::resolve_profile(tmp.path(), None).unwrap_err();
+    assert_eq!(error.code(), "no_active_profile");
 
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]
 #[serial]
-fn resolve_profile_defaults_when_project_config_has_no_default_profile() {
+fn resolve_profile_requires_selection_when_project_has_no_default_profile() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
     fs::write(tmp.path().join("groundhog.toml"), "[contracts]\n").unwrap();
 
-    let profile = groundhog_cli::config::resolve_profile(tmp.path(), None).unwrap();
-    assert_eq!(profile.name, "default");
-    assert!(profile.rpc_url.is_none());
-    assert!(profile.default_key.is_none());
-    assert!(profile.contracts.is_empty());
-    assert!(profile.wallets.is_empty());
-    assert!(profile.source.is_none());
+    let error = groundhog_cli::config::resolve_profile(tmp.path(), None).unwrap_err();
+    assert_eq!(error.code(), "no_active_profile");
 
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
@@ -505,6 +494,8 @@ fn save_profile_default_wallet_preserves_existing_formatting() {
     fs::write(
         &config_path,
         r#"# keep this project comment
+default_profile = "default"
+
 [profile.default]
 rpc_url = "http://localhost:9545" # keep this field comment
 "#,
@@ -528,7 +519,11 @@ rpc_url = "http://localhost:9545" # keep this field comment
 fn save_wallet_and_default_uses_one_profile_update() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
-    fs::write(tmp.path().join("groundhog.toml"), "[profile.default]\n").unwrap();
+    fs::write(
+        tmp.path().join("groundhog.toml"),
+        "default_profile = \"default\"\n\n[profile.default]\n",
+    )
+    .unwrap();
     let address = format!("0x{}", "aa".repeat(32));
     let owner = format!("0x{}", "bb".repeat(32));
 
@@ -1017,6 +1012,8 @@ fn resolve_default_key_falls_back_to_global_selection() {
     fs::write(
         tmp.path().join("groundhog.toml"),
         r#"
+default_profile = "default"
+
 [profile.default]
 rpc_url = "http://localhost:9545"
 "#,
@@ -1039,6 +1036,8 @@ fn resolve_default_key_prefers_profile_value_over_global_selection() {
     fs::write(
         tmp.path().join("groundhog.toml"),
         r#"
+default_profile = "default"
+
 [profile.default]
 rpc_url = "http://localhost:9545"
 default_key = "project-key"
@@ -1172,8 +1171,12 @@ fn save_alias_accepts_valid_hex_address() {
     let tmp = TempDir::new().unwrap();
     unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
     let addr = format!("0x{}", "ab".repeat(32));
-    let result =
-        groundhog_cli::config::save_profile_contract_alias(tmp.path(), None, "counter", &addr);
+    let result = groundhog_cli::config::save_profile_contract_alias(
+        tmp.path(),
+        Some("default"),
+        "counter",
+        &addr,
+    );
     assert!(result.is_ok());
     assert!(global_config_path(&tmp).exists());
 
@@ -1208,7 +1211,7 @@ fn save_wallet_rejects_malformed_address() {
     let owner = format!("0x{}", "cd".repeat(32));
     let result = groundhog_cli::config::save_profile_wallet_address(
         tmp.path(),
-        None,
+        Some("default"),
         "alice",
         "banana",
         &owner,
@@ -1225,7 +1228,7 @@ fn save_wallet_accepts_valid_hex_address() {
     let owner = format!("0x{}", "cd".repeat(32));
     let result = groundhog_cli::config::save_profile_wallet_address(
         tmp.path(),
-        None,
+        Some("default"),
         "alice",
         &addr,
         &owner,
@@ -1275,7 +1278,7 @@ address = "0x{}"
     )
     .unwrap();
 
-    let profile = groundhog_cli::config::resolve_profile(tmp.path(), None).unwrap();
+    let profile = groundhog_cli::config::resolve_profile(tmp.path(), Some("default")).unwrap();
 
     assert_eq!(
         profile
@@ -1294,12 +1297,22 @@ fn save_second_alias_preserves_first() {
     let addr_a = format!("0x{}", "aa".repeat(32));
     let addr_b = format!("0x{}", "bb".repeat(32));
 
-    groundhog_cli::config::save_profile_contract_alias(tmp.path(), None, "counter", &addr_a)
-        .unwrap();
-    groundhog_cli::config::save_profile_contract_alias(tmp.path(), None, "greeter", &addr_b)
-        .unwrap();
+    groundhog_cli::config::save_profile_contract_alias(
+        tmp.path(),
+        Some("default"),
+        "counter",
+        &addr_a,
+    )
+    .unwrap();
+    groundhog_cli::config::save_profile_contract_alias(
+        tmp.path(),
+        Some("default"),
+        "greeter",
+        &addr_b,
+    )
+    .unwrap();
 
-    let profile = groundhog_cli::config::resolve_profile(tmp.path(), None).unwrap();
+    let profile = groundhog_cli::config::resolve_profile(tmp.path(), Some("default")).unwrap();
     assert_eq!(
         profile.contracts.get("counter").map(String::as_str),
         Some(addr_a.as_str())
@@ -1324,16 +1337,22 @@ fn save_second_wallet_preserves_first() {
 
     groundhog_cli::config::save_profile_wallet_address(
         tmp.path(),
-        None,
+        Some("default"),
         "alice",
         &addr_a,
         &owner_a,
     )
     .unwrap();
-    groundhog_cli::config::save_profile_wallet_address(tmp.path(), None, "bob", &addr_b, &owner_b)
-        .unwrap();
+    groundhog_cli::config::save_profile_wallet_address(
+        tmp.path(),
+        Some("default"),
+        "bob",
+        &addr_b,
+        &owner_b,
+    )
+    .unwrap();
 
-    let profile = groundhog_cli::config::resolve_profile(tmp.path(), None).unwrap();
+    let profile = groundhog_cli::config::resolve_profile(tmp.path(), Some("default")).unwrap();
     assert_eq!(
         profile
             .wallets
@@ -1364,20 +1383,27 @@ fn remove_wallet_deletes_saved_entry() {
 
     groundhog_cli::config::save_profile_wallet_address(
         tmp.path(),
-        None,
+        Some("default"),
         "alice",
         &addr_a,
         &owner_a,
     )
     .unwrap();
-    groundhog_cli::config::save_profile_wallet_address(tmp.path(), None, "bob", &addr_b, &owner_b)
-        .unwrap();
+    groundhog_cli::config::save_profile_wallet_address(
+        tmp.path(),
+        Some("default"),
+        "bob",
+        &addr_b,
+        &owner_b,
+    )
+    .unwrap();
     let config_path = global_config_path(&tmp);
     let config = fs::read_to_string(&config_path).unwrap();
     fs::write(&config_path, format!("# retained\nplugin = true\n{config}")).unwrap();
-    groundhog_cli::config::remove_profile_wallet_address(tmp.path(), None, "alice").unwrap();
+    groundhog_cli::config::remove_profile_wallet_address(tmp.path(), Some("default"), "alice")
+        .unwrap();
 
-    let profile = groundhog_cli::config::resolve_profile(tmp.path(), None).unwrap();
+    let profile = groundhog_cli::config::resolve_profile(tmp.path(), Some("default")).unwrap();
     assert!(!profile.wallets.contains_key("alice"));
     assert_eq!(
         profile
@@ -1402,14 +1428,22 @@ fn remove_wallet_clears_matching_default_in_same_write() {
     let owner = format!("0x{}", "bb".repeat(32));
     fs::write(tmp.path().join("groundhog.toml"), "").unwrap();
 
-    groundhog_cli::config::save_profile_wallet_address(tmp.path(), None, "alice", &address, &owner)
+    groundhog_cli::config::save_profile_wallet_address(
+        tmp.path(),
+        Some("default"),
+        "alice",
+        &address,
+        &owner,
+    )
+    .unwrap();
+    groundhog_cli::config::save_profile_default_wallet(tmp.path(), Some("default"), "alice")
         .unwrap();
-    groundhog_cli::config::save_profile_default_wallet(tmp.path(), None, "alice").unwrap();
-    groundhog_cli::config::remove_profile_wallet_address(tmp.path(), None, "alice").unwrap();
+    groundhog_cli::config::remove_profile_wallet_address(tmp.path(), Some("default"), "alice")
+        .unwrap();
 
     let contents = fs::read_to_string(tmp.path().join("groundhog.toml")).unwrap();
     assert!(!contents.contains("default_wallet"));
-    let profile = groundhog_cli::config::resolve_profile(tmp.path(), None).unwrap();
+    let profile = groundhog_cli::config::resolve_profile(tmp.path(), Some("default")).unwrap();
     assert!(profile.default_wallet.is_none());
     assert!(!profile.wallets.contains_key("alice"));
 
@@ -1424,9 +1458,16 @@ fn remove_wallet_rejects_missing_entry() {
     let addr = format!("0x{}", "aa".repeat(32));
     let owner = format!("0x{}", "bb".repeat(32));
 
-    groundhog_cli::config::save_profile_wallet_address(tmp.path(), None, "alice", &addr, &owner)
-        .unwrap();
-    let result = groundhog_cli::config::remove_profile_wallet_address(tmp.path(), None, "bob");
+    groundhog_cli::config::save_profile_wallet_address(
+        tmp.path(),
+        Some("default"),
+        "alice",
+        &addr,
+        &owner,
+    )
+    .unwrap();
+    let result =
+        groundhog_cli::config::remove_profile_wallet_address(tmp.path(), Some("default"), "bob");
 
     assert!(result.is_err());
 
@@ -1552,4 +1593,367 @@ fn concurrent_project_writers_preserve_independent_updates() {
     let profile = groundhog_cli::config::resolve_profile(tmp.path(), Some("default")).unwrap();
     assert!(profile.contracts.contains_key("counter"));
     assert!(profile.wallets.contains_key("alice"));
+}
+
+#[test]
+#[serial]
+fn persisted_profile_merge_tracks_sources_and_normalizes_runtime_paths() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    fs::create_dir(&project).unwrap();
+    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    fs::write(
+        global_config_path(&tmp),
+        r#"default_profile = "devnet"
+
+[profile.devnet]
+network = "devnet"
+rpc_url = "https://global.example"
+
+[profile.devnet.contracts]
+HOG = "0x01"
+"#,
+    )
+    .unwrap();
+    fs::write(
+        project.join("groundhog.toml"),
+        r#"[profile.devnet]
+faucet_url = "https://faucet.example"
+runtime_manifest = "state/runtime.json"
+
+[profile.devnet.contracts]
+counter = "0x02"
+"#,
+    )
+    .unwrap();
+
+    let config = groundhog_cli::config::load_persisted_config(&project).unwrap();
+    let resolved = config.resolve("devnet").unwrap();
+    let raw_project = config
+        .inspect("devnet", groundhog_cli::config::ConfigScope::Project)
+        .unwrap();
+
+    assert_eq!(
+        resolved.values.rpc_url.as_deref(),
+        Some("https://global.example")
+    );
+    assert_eq!(
+        resolved.values.runtime_manifest.as_deref(),
+        Some(project.join("state/runtime.json").as_path())
+    );
+    assert_eq!(
+        raw_project.values.runtime_manifest.as_deref(),
+        Some(std::path::Path::new("state/runtime.json"))
+    );
+    assert_eq!(
+        resolved.sources.rpc_url.as_ref().map(|source| source.kind),
+        Some(groundhog_cli::config::ConfigSourceKind::Global)
+    );
+    assert_eq!(
+        resolved
+            .sources
+            .faucet_url
+            .as_ref()
+            .map(|source| source.kind),
+        Some(groundhog_cli::config::ConfigSourceKind::Project)
+    );
+    assert_eq!(
+        resolved
+            .sources
+            .contracts
+            .get("counter")
+            .map(|source| source.kind),
+        Some(groundhog_cli::config::ConfigSourceKind::Project)
+    );
+
+    unsafe { env::remove_var("XDG_CONFIG_HOME") };
+}
+
+#[test]
+#[serial]
+fn profile_listing_isolates_invalid_and_active_missing_profiles() {
+    let tmp = TempDir::new().unwrap();
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    fs::write(
+        tmp.path().join("groundhog.toml"),
+        r#"[profile.valid]
+network = "devnet"
+
+[profile.invalid]
+network = "preview"
+"#,
+    )
+    .unwrap();
+
+    let config = groundhog_cli::config::load_persisted_config(tmp.path()).unwrap();
+    let valid = config.resolve("valid").unwrap();
+    let report = config.profiles_report(Some("missing")).unwrap();
+
+    assert_eq!(
+        valid.values.network,
+        Some(groundhog_cli::config::Network::Devnet)
+    );
+    assert_eq!(report.active_profile.as_deref(), Some("missing"));
+    assert_eq!(report.profiles.len(), 3);
+    assert!(report.profiles.iter().any(|row| {
+        row.profile == "invalid"
+            && row.status == groundhog_cli::config::ConfigProfileStatus::Invalid
+    }));
+    assert!(report.profiles.iter().any(|row| {
+        row.profile == "missing"
+            && row.active
+            && row.status == groundhog_cli::config::ConfigProfileStatus::Missing
+    }));
+
+    unsafe { env::remove_var("XDG_CONFIG_HOME") };
+}
+
+#[test]
+#[serial]
+fn config_get_json_projection_omits_protected_global_state() {
+    let tmp = TempDir::new().unwrap();
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    fs::write(
+        global_config_path(&tmp),
+        r#"default_profile = "devnet"
+default_key = "top-level-secret-selection"
+
+[executor]
+username = "private-user"
+password = "private-password"
+
+[local_runtime_state]
+node_id = "node-private"
+rpc_url = "http://127.0.0.1:9545"
+runtime_manifest = "/private/runtime.json"
+
+[profile.devnet]
+rpc_url = "https://rpc.example"
+
+[profile.devnet.wallets.primary]
+address = "0x1111111111111111111111111111111111111111111111111111111111111111"
+owner_public_key = "0x2222222222222222222222222222222222222222222222222222222222222222"
+"#,
+    )
+    .unwrap();
+
+    let config = groundhog_cli::config::load_persisted_config(tmp.path()).unwrap();
+    let selection = config.selection(None).unwrap().unwrap();
+    let report = groundhog_cli::config::ConfigGetReport::new(
+        config.resolve("devnet").unwrap(),
+        Some(selection.source),
+        groundhog_cli::config::ConfigScope::Resolved,
+        true,
+    );
+    let json = serde_json::to_string(&report).unwrap();
+    let roundtrip: groundhog_cli::config::ConfigGetReport = serde_json::from_str(&json).unwrap();
+
+    assert!(json.contains("\"schemaVersion\":1"));
+    assert!(json.contains("\"ownerPublicKey\""));
+    assert!(!json.contains("owner_public_key"));
+    assert_eq!(roundtrip, report);
+    assert!(!json.contains("private-user"));
+    assert!(!json.contains("private-password"));
+    assert!(!json.contains("top-level-secret-selection"));
+    assert!(!json.contains("node-private"));
+
+    unsafe { env::remove_var("XDG_CONFIG_HOME") };
+}
+
+#[test]
+fn config_field_validation_accepts_typed_values_and_rejects_invalid_values() {
+    use std::str::FromStr as _;
+
+    assert!(groundhog_cli::config::ConfigField::from_str("network").is_ok());
+    assert!(
+        groundhog_cli::config::ConfigField::RpcUrl
+            .parse_value("https://rpc.example")
+            .is_ok()
+    );
+    assert!(
+        groundhog_cli::config::ConfigField::FaucetUrl
+            .parse_value("relative/path")
+            .is_err()
+    );
+    assert!(
+        groundhog_cli::config::ConfigField::DefaultKey
+            .parse_value("  ")
+            .is_err()
+    );
+}
+
+#[test]
+#[serial]
+fn malformed_toml_reports_the_config_path() {
+    let tmp = TempDir::new().unwrap();
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let path = tmp.path().join("groundhog.toml");
+    fs::write(&path, "[profile.devnet\n").unwrap();
+
+    let error = groundhog_cli::config::load_persisted_config(tmp.path()).unwrap_err();
+
+    assert_eq!(error.code(), "config_parse_failed");
+    assert!(error.to_string().contains(path.to_string_lossy().as_ref()));
+    let details = error.details_json().unwrap();
+    assert_eq!(details["path"], path.display().to_string());
+    assert!(details["line"].as_u64().is_some());
+    assert!(details["column"].as_u64().is_some());
+    unsafe { env::remove_var("XDG_CONFIG_HOME") };
+}
+
+#[test]
+#[serial]
+fn invalid_unrelated_profile_does_not_hide_global_scalars_or_valid_profile() {
+    let tmp = TempDir::new().unwrap();
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    fs::write(
+        global_config_path(&tmp),
+        r#"default_profile = "valid"
+default_key = "alice"
+
+[executor]
+username = "sdk"
+password = "secret"
+
+[profile.valid]
+network = "devnet"
+
+[profile.invalid]
+network = "preview"
+"#,
+    )
+    .unwrap();
+
+    let profile = groundhog_cli::config::resolve_profile(tmp.path(), None).unwrap();
+    let key = groundhog_cli::config::load_default_key().unwrap();
+    let credentials = groundhog_cli::config::load_executor_credentials()
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(profile.name, "valid");
+    assert_eq!(key.as_deref(), Some("alice"));
+    assert_eq!(credentials.username, "sdk");
+    unsafe { env::remove_var("XDG_CONFIG_HOME") };
+}
+
+#[test]
+#[serial]
+fn invalid_local_runtime_state_does_not_block_non_local_profile() {
+    let tmp = TempDir::new().unwrap();
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    fs::write(
+        global_config_path(&tmp),
+        r#"default_profile = "devnet"
+
+[profile.devnet]
+network = "devnet"
+rpc_url = "https://rpc.example"
+
+[local_runtime_state]
+node_id = "node-1"
+rpc_url = "not-a-url"
+runtime_manifest = "relative.json"
+"#,
+    )
+    .unwrap();
+
+    let profile = groundhog_cli::config::resolve_profile(tmp.path(), None).unwrap();
+
+    assert_eq!(profile.name, "devnet");
+    assert_eq!(profile.rpc_url.as_deref(), Some("https://rpc.example"));
+    assert_eq!(
+        groundhog_cli::config::resolve_default_key_for_profile(&profile).unwrap(),
+        None
+    );
+    unsafe { env::remove_var("XDG_CONFIG_HOME") };
+}
+
+#[test]
+#[serial]
+fn invalid_local_runtime_state_is_rejected_for_local_profile() {
+    let tmp = TempDir::new().unwrap();
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    fs::write(
+        global_config_path(&tmp),
+        r#"default_profile = "local"
+
+[profile.local]
+network = "local"
+
+[local_runtime_state]
+node_id = "node-1"
+rpc_url = "http://"
+runtime_manifest = "/tmp/runtime.json"
+"#,
+    )
+    .unwrap();
+
+    let error = groundhog_cli::config::resolve_profile(tmp.path(), None).unwrap_err();
+
+    assert_eq!(error.code(), "config_file_invalid");
+    assert!(error.to_string().contains("local_runtime_state is invalid"));
+    unsafe { env::remove_var("XDG_CONFIG_HOME") };
+}
+
+#[test]
+#[serial]
+fn invalid_persisted_default_profile_reports_its_layer_path() {
+    let tmp = TempDir::new().unwrap();
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    let global_path = global_config_path(&tmp);
+    fs::write(&global_path, "default_profile = \" \"\n").unwrap();
+
+    let global_error = groundhog_cli::config::load_persisted_config(tmp.path()).unwrap_err();
+
+    assert_eq!(global_error.code(), "config_file_invalid");
+    assert!(
+        global_error
+            .to_string()
+            .contains(global_path.to_string_lossy().as_ref())
+    );
+
+    fs::write(&global_path, "").unwrap();
+    let project_path = tmp.path().join("groundhog.toml");
+    fs::write(&project_path, "default_profile = \" \"\n").unwrap();
+
+    let project_error = groundhog_cli::config::load_persisted_config(tmp.path()).unwrap_err();
+
+    assert_eq!(project_error.code(), "config_file_invalid");
+    assert!(
+        project_error
+            .to_string()
+            .contains(project_path.to_string_lossy().as_ref())
+    );
+    unsafe { env::remove_var("XDG_CONFIG_HOME") };
+}
+
+#[test]
+#[serial]
+fn invalid_profile_reason_identifies_layer_without_duplicate_wrapping() {
+    let tmp = TempDir::new().unwrap();
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let project_path = tmp.path().join("groundhog.toml");
+    fs::write(
+        &project_path,
+        "default_profile = \"broken\"\n\n[profile.broken]\nnetwork = \"preview\"\n",
+    )
+    .unwrap();
+
+    let error = groundhog_cli::config::resolve_profile(tmp.path(), None).unwrap_err();
+    let message = error.to_string();
+
+    assert_eq!(
+        message.matches("profile `broken` is invalid").count(),
+        1,
+        "{message}"
+    );
+    assert!(message.contains("project config"));
+    assert!(message.contains(project_path.to_string_lossy().as_ref()));
+    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }

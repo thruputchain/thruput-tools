@@ -7,6 +7,9 @@ use toml_edit::{DocumentMut, InlineTable, Item, Table, Value, value};
 use super::atomic::{ConfigFileKind, insert_preserving_decor, transact_document};
 use super::dirs::config_file_path;
 use super::project::ProjectProfile;
+use super::read::{
+    PersistedProfileState, load_global_field, load_global_profile_state, validate_http_url,
+};
 use crate::CliError;
 
 const INITIAL_DEFAULT_PROFILE: &str = "local";
@@ -45,21 +48,18 @@ pub(crate) struct GlobalConfigFile {
     pub(crate) local_runtime_state: Option<LocalRuntimeState>,
 }
 
-pub(crate) fn read_config_file() -> Result<GlobalConfigFile, CliError> {
-    let path = config_file_path()?;
-    match std::fs::read_to_string(&path) {
-        Ok(contents) => {
-            let config: GlobalConfigFile =
-                toml::from_str(&contents).map_err(|e| CliError::Other(e.to_string()))?;
-            Ok(config)
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(GlobalConfigFile::default()),
-        Err(e) => Err(e.into()),
-    }
-}
-
 pub(crate) fn load_global_profile(name: &str) -> Result<Option<ProjectProfile>, CliError> {
-    Ok(read_config_file()?.profile.remove(name))
+    match load_global_profile_state(name)? {
+        Some(PersistedProfileState::Valid(profile)) => Ok(Some(profile)),
+        Some(PersistedProfileState::Invalid { reason }) => Err(CliError::ProfileConfigInvalid {
+            profile: name.to_owned(),
+            message: format!(
+                "is invalid in global config `{}`: {reason}",
+                config_file_path()?.display()
+            ),
+        }),
+        None => Ok(None),
+    }
 }
 
 fn transact_config_file(
@@ -134,8 +134,7 @@ pub fn save_executor_credentials(creds: &ExecutorCredentials) -> Result<(), CliE
 /// Returns `Ok(None)` if no credentials are stored
 /// or the file does not exist.
 pub fn load_executor_credentials() -> Result<Option<ExecutorCredentials>, CliError> {
-    let config = read_config_file()?;
-    Ok(config.executor)
+    load_global_field("executor")
 }
 
 /// Save the default key name to `config.toml`.
@@ -149,8 +148,7 @@ pub fn save_default_key(name: &str) -> Result<(), CliError> {
 
 /// Load the default key name from `config.toml`.
 pub fn load_default_key() -> Result<Option<String>, CliError> {
-    let config = read_config_file()?;
-    Ok(config.default_key)
+    load_global_field("default_key")
 }
 
 /// Remove the default key selection from `config.toml`.
@@ -280,16 +278,9 @@ pub fn clear_local_runtime_state_if_matches(
     Ok(path)
 }
 
-fn validate_local_runtime_state(state: &LocalRuntimeState) -> Result<(), CliError> {
-    let rpc_url = state.rpc_url.trim();
-    if rpc_url.is_empty() {
-        return Err(CliError::Other("rpc_url cannot be empty".into()));
-    }
-    if !rpc_url.starts_with("http://") && !rpc_url.starts_with("https://") {
-        return Err(CliError::Other(
-            "rpc_url must start with http:// or https://".into(),
-        ));
-    }
+pub(super) fn validate_local_runtime_state(state: &LocalRuntimeState) -> Result<(), CliError> {
+    validate_http_url(&state.rpc_url)
+        .map_err(|message| CliError::Other(format!("rpc_url {message}")))?;
     if state.node_id.trim().is_empty() {
         return Err(CliError::Other("node_id cannot be empty".into()));
     }

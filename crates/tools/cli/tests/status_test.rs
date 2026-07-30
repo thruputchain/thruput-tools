@@ -42,6 +42,7 @@ fn status_succeeds_when_fully_configured() {
         password: "pass".into(),
     };
     groundhog_cli::config::save_executor_credentials(&creds).unwrap();
+    groundhog_cli::config::initialize_global_profiles().unwrap();
 
     let result = groundhog_cli::status::run(tmp.path(), None, "status", &quiet());
     assert!(result.is_ok());
@@ -82,7 +83,7 @@ fn collect_report_prefers_profile_default_key_over_global_default() {
     fs::create_dir(&project).unwrap();
     fs::write(
         project.join("groundhog.toml"),
-        "[profile.default]\ndefault_key = \"bob\"\n",
+        "default_profile = \"default\"\n\n[profile.default]\ndefault_key = \"bob\"\n",
     )
     .unwrap();
 

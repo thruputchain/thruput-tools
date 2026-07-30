@@ -287,11 +287,12 @@ fn contracts_label(report: &checks::StatusReport) -> String {
 }
 
 fn profile_resolved(report: &checks::StatusReport) -> bool {
-    !report
-        .project
-        .findings
-        .iter()
-        .any(|finding| finding.code == "profile_not_found" || finding.code == "no_project_config")
+    !report.project.findings.iter().any(|finding| {
+        matches!(
+            finding.code,
+            "profile_not_found" | "profile_config_invalid" | "no_active_profile"
+        )
+    })
 }
 
 fn render_findings(report: &checks::StatusReport, print: &Print) {
