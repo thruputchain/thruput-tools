@@ -1,5 +1,5 @@
-use groundhog_json_rpc_types::ContractAddress;
 use groundhog_json_rpc_types::events::PaginationCursor;
+use groundhog_json_rpc_types::{BlockHeight, ContractAddress};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -82,6 +82,6 @@ pub struct TokenTransfersReport {
     pub participant_filter: Option<TokenParticipantFilter>,
     pub records: Vec<TokenTransferRecordReport>,
     pub cursor: PaginationCursor,
-    pub latest_block: groundhog_json_rpc_types::BlockHeight,
-    pub oldest_block: groundhog_json_rpc_types::BlockHeight,
+    pub latest_block: BlockHeight,
+    pub oldest_block: BlockHeight,
 }

@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use groundhog_erc20_if::TransferEvent;
+use groundhog_erc20_if::{CONTRACT_ADDR_ZERO, TransferEvent};
 use groundhog_json_rpc_types::events::{
     BlockAnchor, ContractAddressList, EventFilter, EventFilterList, EventQuery, EventTopicFilter,
     IterationOrder, PaginationCursor, TopicList,
@@ -23,8 +23,6 @@ use crate::token_json::{
 };
 use crate::tx_utils::format_tx_hash;
 use crate::{CliError, Print};
-
-const ZERO_ADDRESS: [u8; 32] = [0; 32];
 
 /// List one newest-first page of canonical ERC20 transfer events.
 #[expect(clippy::too_many_arguments)]
@@ -215,8 +213,8 @@ fn decode_transfer(raw: &RawEventReport) -> Result<DecodedTokenTransferReport, S
     if raw.topics[0].0 != *TransferEvent::SIGNATURE {
         return Err("topic 0 is not the canonical TransferEvent signature".into());
     }
-    let from = ContractAddress::from(groundhog_xdr::types::ContractAddress::from(raw.topics[1].0));
-    let to = ContractAddress::from(groundhog_xdr::types::ContractAddress::from(raw.topics[2].0));
+    let from = groundhog_xdr::types::ContractAddress::from(raw.topics[1].0);
+    let to = groundhog_xdr::types::ContractAddress::from(raw.topics[2].0);
     let mut reader = xdrs::cxs::buf_reader::BufReader::new(&raw.data.0);
     let amount: i128 = xdrs::read_xdr(&mut reader)
         .map_err(|error| format!("failed to decode transfer amount: {error}"))?;
@@ -229,17 +227,17 @@ fn decode_transfer(raw: &RawEventReport) -> Result<DecodedTokenTransferReport, S
     if amount < 0 {
         return Err("transfer amount must be nonnegative".into());
     }
-    let kind = if raw.topics[1].0 == ZERO_ADDRESS {
+    let kind = if &from == CONTRACT_ADDR_ZERO {
         TokenTransferKind::Mint
-    } else if raw.topics[2].0 == ZERO_ADDRESS {
+    } else if &to == CONTRACT_ADDR_ZERO {
         TokenTransferKind::Burn
     } else {
         TokenTransferKind::Transfer
     };
     Ok(DecodedTokenTransferReport {
         kind,
-        from,
-        to,
+        from: ContractAddress::from(from),
+        to: ContractAddress::from(to),
         raw_amount: amount.to_string(),
     })
 }
@@ -359,12 +357,12 @@ fn transfer_kind_label(kind: TokenTransferKind) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use groundhog_erc20_if::TransferEvent;
+    use groundhog_erc20_if::{CONTRACT_ADDR_ZERO, TransferEvent};
     use groundhog_json_rpc_types::events::{EmittedEvent, IdentifiedEvent};
     use groundhog_json_rpc_types::hex::{HexBytes, Topic};
     use groundhog_json_rpc_types::{BlockHeight, ContractAddress};
 
-    use super::{ZERO_ADDRESS, address_topic, decode_transfer_record, transfer_filters};
+    use super::{address_topic, decode_transfer_record, transfer_filters};
     use crate::token_json::{TokenTransferDecodeStatus, TokenTransferKind};
 
     fn event(from: [u8; 32], to: [u8; 32], amount: i128) -> IdentifiedEvent {
@@ -391,11 +389,12 @@ mod tests {
 
     #[test]
     fn classifies_transfer_mint_burn_and_zero_to_zero() {
+        let zero_address = (*CONTRACT_ADDR_ZERO).into_inner();
         for (from, to, expected) in [
             ([1; 32], [2; 32], TokenTransferKind::Transfer),
-            (ZERO_ADDRESS, [2; 32], TokenTransferKind::Mint),
-            ([1; 32], ZERO_ADDRESS, TokenTransferKind::Burn),
-            (ZERO_ADDRESS, ZERO_ADDRESS, TokenTransferKind::Mint),
+            (zero_address, [2; 32], TokenTransferKind::Mint),
+            ([1; 32], zero_address, TokenTransferKind::Burn),
+            (zero_address, zero_address, TokenTransferKind::Mint),
         ] {
             let record = decode_transfer_record(event(from, to, 0));
             assert_eq!(record.decode_status, TokenTransferDecodeStatus::Decoded);

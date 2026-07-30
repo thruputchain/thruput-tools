@@ -7866,6 +7866,12 @@ fn events_list_rejects_invalid_inputs_before_rpc_with_structured_details() {
         assert_eq!(stderr["command"], "events.list");
         assert_eq!(stderr["error"]["code"], expected_code);
         assert_eq!(stderr["error"]["details"], expected_details);
+        if expected_code == "invalid_event_filter" {
+            assert_eq!(
+                stderr["error"]["hint"],
+                "pass at most 16 values at each event topic position"
+            );
+        }
     }
 }
 
@@ -7930,7 +7936,7 @@ fn events_list_rejects_oversized_event_shapes() {
     for (topics, data, expected_message) in [
         (
             vec![topic.clone(); 4],
-            "0x".to_owned(),
+            format!("0x{}", "a3".repeat(1025)),
             "event at height 12 sequence 4 returned 4 topics; maximum is 3".to_owned(),
         ),
         (

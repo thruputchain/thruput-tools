@@ -7,6 +7,7 @@ use groundhog_json_rpc_types::events::{
     EventTopicFilter, IterationOrder, MAX_TOPIC_VALUES_PER_POSITION, PaginationCursor, TopicList,
 };
 use groundhog_json_rpc_types::hex::Topic;
+use groundhog_xdr::event::{kMaxEventLength, kMaxTopics};
 use xdr_common::VecM;
 
 use crate::account_resolution::resolve_address_target;
@@ -23,8 +24,6 @@ use crate::terminal::terminal_safe;
 use crate::tx::map_rpc_error;
 use crate::tx_utils::format_tx_hash;
 use crate::{CliError, Print};
-
-const MAX_SERIALIZED_EVENT_BYTES: usize = 1024;
 
 /// List one page of raw events emitted by a resolved contract address.
 #[expect(clippy::too_many_arguments)]
@@ -197,7 +196,17 @@ fn validate_event_page(page: &EventPage, requested_limit: u32) -> Result<(), Cli
             page.events.len(),
         )));
     }
+    let max_event_length =
+        usize::try_from(kMaxEventLength).expect("bug: protocol event length must fit in usize");
     for event in &page.events {
+        if u32::try_from(event.event.topics.len()).map_or(true, |len| len > kMaxTopics) {
+            return Err(invalid_response(format!(
+                "event at height {} sequence {} returned {} topics; maximum is {kMaxTopics}",
+                *event.block_height,
+                event.sequence_number,
+                event.event.topics.len(),
+            )));
+        }
         let topic_bytes = event
             .event
             .topics
@@ -207,17 +216,9 @@ fn validate_event_page(page: &EventPage, requested_limit: u32) -> Result<(), Cli
         let serialized_bytes = topic_bytes
             .checked_add(event.event.data.0.len())
             .ok_or_else(|| invalid_response("serialized event length overflow"))?;
-        if event.event.topics.len() > 3 {
+        if serialized_bytes > max_event_length {
             return Err(invalid_response(format!(
-                "event at height {} sequence {} returned {} topics; maximum is 3",
-                *event.block_height,
-                event.sequence_number,
-                event.event.topics.len(),
-            )));
-        }
-        if serialized_bytes > MAX_SERIALIZED_EVENT_BYTES {
-            return Err(invalid_response(format!(
-                "event at height {} sequence {} is {serialized_bytes} bytes; maximum is {MAX_SERIALIZED_EVENT_BYTES}",
+                "event at height {} sequence {} is {serialized_bytes} bytes; maximum is {kMaxEventLength}",
                 *event.block_height, event.sequence_number,
             )));
         }

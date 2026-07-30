@@ -533,9 +533,9 @@ impl CliError {
             Self::InvalidTransactionCursor { .. } => Some(Cow::Borrowed(
                 "pass the opaque hex cursor returned by the previous `groundhog tx list` page",
             )),
-            Self::InvalidEventFilter { .. } => Some(Cow::Borrowed(
-                "pass at most 16 values at each event topic position",
-            )),
+            Self::InvalidEventFilter { max, .. } => Some(Cow::Owned(format!(
+                "pass at most {max} values at each event topic position"
+            ))),
             Self::InvalidEventCursor { .. } => Some(Cow::Borrowed(
                 "pass the opaque hex cursor returned by the previous `groundhog events list` page with unchanged filters",
             )),
