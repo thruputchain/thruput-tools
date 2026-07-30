@@ -133,7 +133,13 @@ enum Command {
         #[arg(long = "profile")]
         profile: Option<String>,
     },
-    /// Inspect persisted Groundhog configuration
+    /// Manage persisted Groundhog configuration
+    #[command(
+        long_about = "Inspect and manage persisted global and project profiles. Inspection \
+                      commands show the merged configuration. Mutations update one physical \
+                      layer: inside a project, pass --global or --project; outside a project, \
+                      omitted scope means global. Use --json for stable machine-readable output."
+    )]
     Config {
         #[command(subcommand)]
         command: ConfigCommand,
@@ -547,8 +553,9 @@ enum ConfigCommand {
     /// Remove an entire profile from one config layer
     #[command(
         long_about = "Remove an entire profile from one config layer, including its contract \
-                      aliases and wallet bindings. Interactive output asks for confirmation. A \
-                      matching default profile selection is cleared in the same atomic update."
+                      aliases and wallet bindings. Normal output asks for confirmation; --json \
+                      and --quiet delete without prompting. A matching default profile selection \
+                      is cleared in the same atomic update."
     )]
     Rm {
         /// Profile to remove
@@ -561,6 +568,12 @@ enum ConfigCommand {
         project: bool,
     },
     /// Set one typed field in a profile layer
+    #[command(
+        long_about = "Set network, rpc-url, faucet-url, or default-key on an existing \
+                      profile in one config layer. The profile must already exist in that layer. \
+                      Inside a project, pass --global or --project; outside a project, omitted \
+                      scope means global."
+    )]
     Set {
         /// Field to set: network, rpc-url, faucet-url, or default-key
         field: String,
@@ -577,6 +590,11 @@ enum ConfigCommand {
         project: bool,
     },
     /// Remove one typed field from a profile layer
+    #[command(
+        long_about = "Remove network, rpc-url, faucet-url, or default-key from one config \
+                      layer. Missing fields and missing target-layer profiles are no-ops. Removing \
+                      a project override may reveal the inherited global value."
+    )]
     Unset {
         /// Field to remove: network, rpc-url, faucet-url, or default-key
         field: String,
@@ -591,6 +609,12 @@ enum ConfigCommand {
         project: bool,
     },
     /// Select the default profile in one config layer
+    #[command(
+        long_about = "Set the profile used when --profile and GROUNDHOG_PROFILE are omitted. \
+                      A global selection requires a global profile. A project selection may use a \
+                      profile from either layer. Explicit --profile and GROUNDHOG_PROFILE still \
+                      take precedence."
+    )]
     Use {
         /// Profile to select
         profile: String,

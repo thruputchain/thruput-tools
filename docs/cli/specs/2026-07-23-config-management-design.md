@@ -1,5 +1,5 @@
 # CLI Config Management
-**Date:** 2026-07-23 **Status:** Design ready for implementation
+**Date:** 2026-07-23 **Status:** Implemented
 
 **Companions:**
 
@@ -69,7 +69,7 @@ faucet_url
 default_key
 ```
 
-`config` shows runtime paths, contract aliases, and wallet bindings for context but does not edit them. `groundhog node`, deploy, and wallet commands continue to own those entries.
+`config get` JSON includes persisted runtime paths, contract aliases, and wallet bindings for context but does not edit them. Human output omits runtime paths. Persisted profile runtime paths remain read-only context; `groundhog node` owns separate top-level local runtime state, while deploy and wallet commands own aliases and wallet bindings.
 
 Global config also contains `[executor]`, the top-level key selected by `groundhog keys use`, and `[local_runtime_state]`. These values are outside this feature. Config output must not expose credentials or raw runtime state.
 ## Decisions
@@ -81,8 +81,8 @@ Global config also contains `[executor]`, the top-level key selected by `groundh
 | D4  | `config set` and `config unset` modify typed profile fields. | Typed fields provide validation, help, completion, and a stable interface. |
 | D5  | `config new` owns profile creation; `config set` requires the profile in the selected layer. | Creation and modification have distinct, predictable failure behavior. |
 | D6  | `config unset` removes a field only from the selected layer. | An inherited value may become visible; no tombstone is created. |
-| D7  | Profile deletion requires confirmation in interactive human mode. | Deletion removes the entire profile table, including aliases and wallet bindings. JSON and quiet modes remain non-interactive for scripts. |
-| D8  | All config writers preserve comments and unknown fields and share one lock. | Existing commands write the same files and must not erase or race config edits. |
+| D7  | Profile deletion requires confirmation in normal human output mode. | Deletion removes the entire profile table, including aliases and wallet bindings. JSON and quiet modes remain non-interactive for scripts. |
+| D8  | All config writers preserve comments and unknown fields and use shared sidecar locks. | Existing commands write the same files and must not erase or race config edits. Cross-layer validation locks both files in canonical order. |
 | D9  | Active-profile resolution requires a selected existing profile. | Inventing an empty `default` profile hides missing or invalid configuration. |
 ## Command Surface
 ### `groundhog config get [PROFILE]`
@@ -193,7 +193,7 @@ groundhog config rm staging --global
 
 The command follows the mutation scope rules. Profile existence is relative to the selected layer, so removing a project overlay leaves a same-named global profile intact. A missing target-layer profile fails with `profile_not_found_in_scope`.
 
-Interactive human output asks for confirmation and defaults to cancellation. JSON and quiet modes skip the prompt, matching `groundhog keys rm`. If the destination file changes while the prompt is open, deletion fails and asks the user to review and retry. Confirmed deletion removes the complete target-layer profile table, including its scalar fields, contract aliases, wallet bindings, and unknown profile-owned entries. If that layer's `default_profile` names the removed profile, the command clears the selection in the same locked transaction.
+Normal human output asks for confirmation and defaults to cancellation. JSON and quiet modes skip the prompt, matching `groundhog keys rm`. If the destination file changes while the prompt is open, deletion fails and asks the user to review and retry. Confirmed deletion removes the complete target-layer profile table, including its scalar fields, contract aliases, wallet bindings, and unknown profile-owned entries. If that layer's `default_profile` names the removed profile, the command clears the selection in the same locked transaction.
 
 Deletion preserves unrelated profiles, top-level fields, comments, credentials, and runtime state. The JSON report includes the profile, scope, destination path, `changed`, and `clearedDefault`.
 ### `groundhog config set <FIELD> <VALUE>`
@@ -272,9 +272,7 @@ Existing contract and wallet entries remain readable. Config commands do not tak
 
 `get`, `new`, `set`, and `unset` validate their target profile. `profiles` validates entries independently. Unrelated invalid profiles do not block inspection or repair.
 ## Persistence and Concurrency
-Project alias and wallet writes already use `toml_edit`. Global mutations currently deserialize and serialize the whole typed document, which removes comments, formatting, and unknown fields.
-
-Introduce one document-oriented mutation path for global and project config. It must preserve:
+All global and project config writers use one document-oriented mutation path. It preserves:
 
 - comments and ordering where `toml_edit` supports them;
   
@@ -285,7 +283,7 @@ Introduce one document-oriented mutation path for global and project config. It 
 - global mode `0600` on Unix.
   
 
-All existing config writers must use this path, including:
+The shared path covers:
 
 - `init` profile and credential updates;
   
@@ -298,17 +296,17 @@ All existing config writers must use this path, including:
 - wallet binding persistence.
   
 
-Use a stable sidecar lock for each config file. Hold it across:
+Each config file uses a stable sidecar lock held across:
 
 ```text
 fresh read -> parse -> mutate -> validate -> atomic replace
 ```
 
-Lock acquisition has a bounded wait and returns an actionable error on contention. The implementation may choose the locking mechanism; it must compile on the repository's supported Linux and macOS targets.
+Lock acquisition has a bounded wait and returns an actionable error on contention. Cross-layer validation locks canonical global and project paths in deterministic order.
 
 Existing commands keep their current higher-level behavior when a config write fails. This work changes their persistence mechanism, not their transaction or process semantics. In particular, a completed deployment is not reclassified as failed because alias persistence failed.
 
-Writes continue to use same-directory temporary files and atomic rename. Preserve an existing project file's mode; create a new project file using normal permissions subject to the process umask. Normalize global config to `0600` on every write.
+Writes use same-directory temporary files, sync file contents, rename atomically, and sync the parent directory. Existing project files retain their mode; new project files use normal permissions subject to the process umask. Global config is normalized to `0600` on every write.
 ## Secrets and Protected State
 No config command may print or edit:
 
@@ -324,11 +322,12 @@ No config command may print or edit:
 
 Build output from allowlisted profile fields. Never serialize the complete global document and redact it afterward.
 ## Output Contracts
-All non-interactive commands support human and JSON output.
+All config commands support human and JSON output.
 
 - human data from `config get` and `config profiles` goes to stdout;
 - mutation confirmations and warnings go to stderr;
 - JSON uses the existing `CommandResult` envelope on stdout;
+- JSON warnings appear in that envelope instead of stderr;
 - JSON mode emits no human status text on stdout.
 
 Command names are:
@@ -457,7 +456,7 @@ Do not build a second runtime profile resolver. Config inspection may share the 
   
 4. A user can set a value, remove a stored value or complete profile, and select a default profile.
   
-5. Only profile deletion prompts in interactive human mode; config writes always identify their destination.
+5. Only profile deletion prompts in normal human output mode; config writes always identify their destination.
   
 6. Profile creation writes all supplied fields, plus optional selection, in one transaction.
   
@@ -471,7 +470,7 @@ Do not build a second runtime profile resolver. Config inspection may share the 
   
 11. Human and JSON output follow existing stream and schema conventions.
 
-## Test Plan
+## Verification
 Unit and config tests cover:
 
 - active-profile precedence;
@@ -499,31 +498,3 @@ Binary integration tests cover parser behavior, stdout/stderr rules, JSON schema
 - contract alias and wallet binding editing;
 - profile import/export and cloning;
 - network health checks.
-
----
-comments:
-  c1:
-    body: this looks good but i dont understand what "config use" does, please
-      clarify that one
-    by: user
-    at: 2026-07-24T13:19:13.133Z
-  c2:
-    body: Clarified that `config use` selects the default profile used when
-      `--profile` is omitted, and explained global, project, environment, and
-      explicit-profile precedence.
-    by: OpenCode
-    at: 2026-07-24T13:19:53.000Z
-    re: c1
-  c3:
-    body: these two fields are auto written when running groundhog node so i dont
-      think we should support manually changing these. lets remove them from
-      supported fields list
-    by: user
-    at: 2026-07-24T13:21:36.000Z
-  c4:
-    body: Removed runtime manifest and runtime artifacts directory from typed
-      config creation and mutation. They remain visible as read-only profile
-      context, while `groundhog node` owns their runtime management.
-    by: OpenCode
-    at: 2026-07-24T13:23:01.000Z
-    re: c3

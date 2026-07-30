@@ -319,6 +319,46 @@ fn config_help_describes_merged_inspection() {
 }
 
 #[test]
+fn config_parent_help_describes_management_and_scope_rules() {
+    let output = groundhog().args(["config", "--help"]).output().unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Inspect and manage persisted global and project profiles"));
+    assert!(stdout.contains("pass --global or --project"));
+    assert!(stdout.contains("omitted scope means global"));
+    for command in ["get", "profiles", "new", "rm", "set", "unset", "use"] {
+        assert!(
+            stdout.contains(command),
+            "missing config command `{command}`"
+        );
+    }
+}
+
+#[test]
+fn config_mutation_help_describes_layer_specific_behavior() {
+    let set = groundhog()
+        .args(["config", "set", "--help"])
+        .output()
+        .unwrap();
+    let unset = groundhog()
+        .args(["config", "unset", "--help"])
+        .output()
+        .unwrap();
+    let use_profile = groundhog()
+        .args(["config", "use", "--help"])
+        .output()
+        .unwrap();
+
+    assert!(set.status.success() && unset.status.success() && use_profile.status.success());
+    assert!(String::from_utf8_lossy(&set.stdout).contains("must already exist in that layer"));
+    assert!(String::from_utf8_lossy(&unset.stdout).contains("Missing fields"));
+    assert!(String::from_utf8_lossy(&unset.stdout).contains("inherited global value"));
+    assert!(String::from_utf8_lossy(&use_profile.stdout).contains("GROUNDHOG_PROFILE"));
+    assert!(String::from_utf8_lossy(&use_profile.stdout).contains("either layer"));
+}
+
+#[test]
 fn config_new_help_describes_atomic_creation_and_scope_rules() {
     let output = groundhog()
         .args(["config", "new", "--help"])
