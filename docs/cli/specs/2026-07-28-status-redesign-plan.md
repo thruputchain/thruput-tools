@@ -41,7 +41,7 @@ The profile name follows the existing precedence:
 4. global `default_profile`.
   
 
-Remove the legacy `active_profile_name` fallback to `default`. If no source selects a profile, profile resolution returns a stable no-active-profile configuration error. If a source selects a name that does not exist in either config layer, resolution returns `ProfileNotFound`.
+Config-management Slice 3 removes the legacy `active_profile_name` fallback to `default`. If no source selects a profile, profile resolution returns a stable no-active-profile configuration error. If a source selects a name that does not exist in either config layer, resolution returns `ProfileNotFound`.
 
 The name `default` has no special behavior. It is valid only when selected through the normal precedence and defined by a global or project `profile.default` table.
 
@@ -335,9 +335,9 @@ The old status JSON has no schema version and reflects obsolete behavior. Replac
 - `status.rs` composes safe projections from those authorities and renders them.
   
 ### Required Refactors
-1. Make `active_profile_name` fail when explicit, environment, project-default, and global-default selection all produce no name.
+1. Consume strict active-profile selection and missing-profile errors from config-management Slice 3.
   
-2. Make `resolve_profile` fail when the selected profile has no global or project definition; remove special empty handling for `default`.
+2. Preserve the config resolver's rule that `default` has no special behavior.
   
 3. Consume persisted profile selection and field provenance from config-management Slice 3.
   
@@ -390,13 +390,15 @@ This work does not:
   
 - Explicit, environment, project-default, and global-default selection.
   
-- No selected name returns a stable no-active-profile error.
+- Resolver unit tests keep the stable no-active-profile error when no source selects a name.
   
-- A selected profile missing from both layers returns `ProfileNotFound`, including the name `default`.
+- Resolver unit tests keep `ProfileNotFound` when the selected profile is absent from both layers, including the name `default`.
   
 - Global profile fields with project overrides and per-field sources.
   
 - Missing or malformed selected profile findings.
+
+- Status command tests convert no selection and missing or invalid profiles into warning findings, the documented nullable/status fields, and exit code `1`.
   
 ### Local Node Overlay
 - Active local profile receives missing RPC, manifest, and artifact values from transient node state.
@@ -440,11 +442,11 @@ This work does not:
 - `init --json` uses its setup report and no longer depends on status JSON.
   
 ## Delivery Sequence
-Execute this work after config-management Phase 1 Slice 6 and before the Phase 2 guided editor.
+Execute this work after config-management Phase 1 Slice 7 and before Phase 1.6 terminal box layout hardening.
 ### Status Slice A: Active Profile Report
 - Consume selection and field provenance from the config read model.
   
-- Remove the implicit `default` fallback and require a selected existing profile.
+- Consume strict selection and missing-profile errors from the config read model.
   
 - Add effective `localNode` provenance without changing persisted config inspection.
   
