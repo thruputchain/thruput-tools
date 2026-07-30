@@ -169,27 +169,13 @@ fn validate_spec(spec: &ContractSpec) -> Result<(EventNameIndex, EventSignatureI
             &type_defs,
             &mut remaining_visits,
         )?;
-        validate_fields(
+        let payload_values = validate_fields(
             &event.fields,
             "event payload",
             &type_defs,
             &mut remaining_visits,
         )?;
-
-        let mut values = 1usize;
-        for field in event.fields.iter() {
-            let mut visiting = BTreeSet::new();
-            values = checked_values(
-                values,
-                validate_type(
-                    &field.ty,
-                    &type_defs,
-                    &mut visiting,
-                    &mut remaining_visits,
-                    1,
-                )?,
-            )?;
-        }
+        checked_values(1, payload_values)?;
     }
     Ok((events_by_name, events_by_signature))
 }
@@ -253,17 +239,26 @@ fn validate_fields(
     context: &str,
     type_defs: &BTreeMap<String, &ContractTypeDef>,
     remaining_visits: &mut usize,
-) -> Result<(), String> {
+) -> Result<usize, String> {
     let mut names = BTreeSet::new();
+    let mut values = 0usize;
     for field in fields {
         let name = required_name(&field.name, context, true)?;
         if !names.insert(name.to_owned()) {
             return Err(format!("duplicate {context} field name `{name}`"));
         }
         let mut visiting = BTreeSet::new();
-        validate_type(&field.ty, type_defs, &mut visiting, remaining_visits, 1)?;
+        values = values
+            .checked_add(validate_type(
+                &field.ty,
+                type_defs,
+                &mut visiting,
+                remaining_visits,
+                1,
+            )?)
+            .ok_or_else(|| "event value expansion overflows".to_owned())?;
     }
-    Ok(())
+    Ok(values)
 }
 
 fn validate_type(
@@ -581,8 +576,8 @@ mod tests {
     use xdr_common::VecM;
 
     use super::{
-        MAX_EVENT_VALUES, MAX_SPEC_BYTES, MAX_SPEC_MEMBERS, ValidatedEventSpec, read_bounded,
-        validate_spec,
+        MAX_EVENT_VALUES, MAX_SPEC_BYTES, MAX_SPEC_MEMBERS, MAX_TYPE_DEPTH, MAX_VALIDATION_VISITS,
+        ValidatedEventSpec, read_bounded, validate_spec,
     };
     use crate::events_json::EventDecodeStatus;
 
@@ -631,6 +626,32 @@ mod tests {
                         )]),
                     },
                 })
+                .collect(),
+        );
+        spec
+    }
+
+    fn nested_vectors(depth: usize) -> ContractType {
+        let mut ty = ContractType::U64;
+        for _ in 1..depth {
+            ty = ContractType::Vector {
+                vector: groundhog_contract_spec::ContractVectorType {
+                    element: Box::new(ty),
+                    max_len: 1,
+                },
+            };
+        }
+        ty
+    }
+
+    fn validation_visit_limit_spec() -> ContractSpec {
+        assert_eq!(MAX_VALIDATION_VISITS % MAX_TYPE_DEPTH, 0);
+        let field_count = MAX_VALIDATION_VISITS / MAX_TYPE_DEPTH;
+        let mut spec = event_spec(ContractType::Void);
+        spec.events.0[0].topics = VecM(vec![]);
+        spec.events.0[0].fields = VecM(
+            (0..field_count)
+                .map(|index| field(&format!("field_{index}"), nested_vectors(MAX_TYPE_DEPTH)))
                 .collect(),
         );
         spec
@@ -826,6 +847,21 @@ mod tests {
             validate_spec(&event_spec(array(MAX_EVENT_VALUES - 1)))
                 .unwrap_err()
                 .contains("may materialize")
+        );
+    }
+
+    #[test]
+    fn validation_visit_budget_counts_each_payload_type_once() {
+        let mut at_limit = validation_visit_limit_spec();
+        validate_spec(&at_limit).expect("exact validation visit limit should be accepted");
+
+        at_limit.events.0[0]
+            .fields
+            .0
+            .push(field("one_visit_too_many", ContractType::U64));
+        assert_eq!(
+            validate_spec(&at_limit).unwrap_err(),
+            "event type validation exceeds the complexity limit"
         );
     }
 
