@@ -5,6 +5,15 @@ mod mutate;
 mod project;
 mod read;
 
+fn line_column(contents: &str, offset: usize) -> (usize, usize) {
+    let prefix = contents.get(..offset).unwrap_or(contents);
+    let line = prefix.bytes().filter(|byte| *byte == b'\n').count() + 1;
+    let current_line = prefix
+        .rsplit_once('\n')
+        .map_or(prefix, |(_, current_line)| current_line);
+    (line, current_line.chars().count() + 1)
+}
+
 pub use dirs::{cache_dir, config_dir, home_dir, keys_dir};
 pub(crate) use global::load_global_profile;
 pub use global::{

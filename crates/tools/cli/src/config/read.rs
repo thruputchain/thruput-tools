@@ -615,7 +615,7 @@ fn read_optional_root(path: &Path) -> Result<Option<toml::Value>, CliError> {
     toml::from_str(&contents).map(Some).map_err(|error| {
         let (line, column) = error
             .span()
-            .map(|span| line_column(&contents, span.start))
+            .map(|span| super::line_column(&contents, span.start))
             .map_or((None, None), |(line, column)| (Some(line), Some(column)));
         CliError::ConfigParse {
             path: path.to_path_buf(),
@@ -624,16 +624,6 @@ fn read_optional_root(path: &Path) -> Result<Option<toml::Value>, CliError> {
             column,
         }
     })
-}
-
-fn line_column(contents: &str, offset: usize) -> (usize, usize) {
-    let prefix = contents.get(..offset).unwrap_or(contents);
-    let line = prefix.bytes().filter(|byte| *byte == b'\n').count() + 1;
-    let column = prefix
-        .rsplit_once('\n')
-        .map_or(prefix.len(), |(_, current_line)| current_line.len())
-        + 1;
-    (line, column)
 }
 
 fn decode_profile(name: &str, value: &toml::Value) -> PersistedProfileState {

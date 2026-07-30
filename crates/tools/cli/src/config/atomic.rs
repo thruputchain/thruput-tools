@@ -3,7 +3,7 @@ use std::io::{self, Write};
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
 #[cfg(unix)]
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -25,8 +25,12 @@ pub(crate) enum ConfigFileKind {
 
 /// Load a TOML document, returning an empty document when `path` does not exist.
 pub(crate) fn load_document(path: &Path) -> Result<DocumentMut, CliError> {
+    load_document_at(path, path)
+}
+
+fn load_document_at(path: &Path, reported_path: &Path) -> Result<DocumentMut, CliError> {
     let contents = read_contents(path)?;
-    parse_document(path, &contents)
+    parse_document(reported_path, &contents)
 }
 
 pub(crate) fn insert_preserving_decor(table: &mut dyn TableLike, key: &str, mut item: Item) {
@@ -63,9 +67,33 @@ pub(crate) fn transact_document_with_peer(
     mutate: impl FnOnce(&mut DocumentMut, &DocumentMut) -> Result<(), CliError>,
     validate: impl FnOnce(&DocumentMut, &DocumentMut) -> Result<(), CliError>,
 ) -> Result<bool, CliError> {
-    let (_first_lock, _second_lock) = ConfigLock::acquire_pair(path, peer_path, LOCK_TIMEOUT)?;
-    let mut document = load_document(path)?;
-    let peer = load_document(peer_path)?;
+    let resolved_path = resolve_config_path(path)?;
+    let resolved_peer_path = resolve_config_path(peer_path)?;
+    if resolved_path == resolved_peer_path {
+        return Err(CliError::ConfigFileInvalid {
+            path: path.to_path_buf(),
+            message: format!(
+                "config and peer `{}` resolve to the same file",
+                peer_path.display()
+            ),
+        });
+    }
+    let (_first_lock, _second_lock) = ConfigLock::acquire_resolved_pair(
+        &resolved_path,
+        path,
+        &resolved_peer_path,
+        peer_path,
+        LOCK_TIMEOUT,
+    )?;
+    ensure_config_path_identity(path, &resolved_path)?;
+    ensure_config_path_identity(peer_path, &resolved_peer_path)?;
+    #[cfg(unix)]
+    {
+        reject_hardlinked_config(&resolved_path, path)?;
+        reject_hardlinked_config(&resolved_peer_path, peer_path)?;
+    }
+    let mut document = load_document_at(&resolved_path, path)?;
+    let peer = load_document_at(&resolved_peer_path, peer_path)?;
     let original = document.to_string();
 
     mutate(&mut document, &peer)?;
@@ -73,11 +101,11 @@ pub(crate) fn transact_document_with_peer(
 
     let updated = document.to_string();
     if updated == original {
-        normalize_global_permissions(path, kind)?;
+        normalize_global_permissions(&resolved_path, kind)?;
         return Ok(false);
     }
 
-    atomic_replace(path, updated.as_bytes(), kind)?;
+    atomic_replace(&resolved_path, updated.as_bytes(), kind)?;
     Ok(true)
 }
 
@@ -88,8 +116,12 @@ fn transact_document_with_timeout(
     mutate: impl FnOnce(&mut DocumentMut) -> Result<(), CliError>,
     validate: impl FnOnce(&DocumentMut) -> Result<(), CliError>,
 ) -> Result<bool, CliError> {
-    let _lock = ConfigLock::acquire(path, timeout)?;
-    let mut document = load_document(path)?;
+    let resolved_path = resolve_config_path(path)?;
+    let _lock = ConfigLock::acquire_identity(&resolved_path, path, timeout)?;
+    ensure_config_path_identity(path, &resolved_path)?;
+    #[cfg(unix)]
+    reject_hardlinked_config(&resolved_path, path)?;
+    let mut document = load_document_at(&resolved_path, path)?;
     let original = document.to_string();
 
     mutate(&mut document)?;
@@ -97,11 +129,11 @@ fn transact_document_with_timeout(
 
     let updated = document.to_string();
     if updated == original {
-        normalize_global_permissions(path, kind)?;
+        normalize_global_permissions(&resolved_path, kind)?;
         return Ok(false);
     }
 
-    atomic_replace(path, updated.as_bytes(), kind)?;
+    atomic_replace(&resolved_path, updated.as_bytes(), kind)?;
     Ok(true)
 }
 
@@ -205,7 +237,7 @@ fn parse_document(path: &Path, contents: &str) -> Result<DocumentMut, CliError> 
     contents.parse().map_err(|error: toml_edit::TomlError| {
         let (line, column) = error
             .span()
-            .map(|span| line_column(contents, span.start))
+            .map(|span| super::line_column(contents, span.start))
             .map_or((None, None), |(line, column)| (Some(line), Some(column)));
         CliError::ConfigParse {
             path: path.to_path_buf(),
@@ -214,16 +246,6 @@ fn parse_document(path: &Path, contents: &str) -> Result<DocumentMut, CliError> 
             column,
         }
     })
-}
-
-fn line_column(contents: &str, offset: usize) -> (usize, usize) {
-    let prefix = contents.get(..offset).unwrap_or(contents);
-    let line = prefix.bytes().filter(|byte| *byte == b'\n').count() + 1;
-    let column = prefix
-        .rsplit_once('\n')
-        .map_or(prefix.len(), |(_, current_line)| current_line.len())
-        + 1;
-    (line, column)
 }
 
 fn unique_temp_path(path: &Path) -> PathBuf {
@@ -244,8 +266,9 @@ struct ConfigLock {
 }
 
 impl ConfigLock {
+    #[cfg(test)]
     fn acquire(config_path: &Path, timeout: Duration) -> Result<Self, CliError> {
-        let identity = config_lock_identity(config_path)?;
+        let identity = resolve_config_path(config_path)?;
         Self::acquire_identity(&identity, config_path, timeout)
     }
 
@@ -285,36 +308,71 @@ impl ConfigLock {
         }
     }
 
+    #[cfg(test)]
     fn acquire_pair(
         first_path: &Path,
         second_path: &Path,
         timeout: Duration,
     ) -> Result<(Self, Option<Self>), CliError> {
-        let first_identity = config_lock_identity(first_path)?;
-        let second_identity = config_lock_identity(second_path)?;
+        let first_identity = resolve_config_path(first_path)?;
+        let second_identity = resolve_config_path(second_path)?;
+        Self::acquire_resolved_pair(
+            &first_identity,
+            first_path,
+            &second_identity,
+            second_path,
+            timeout,
+        )
+    }
+
+    fn acquire_resolved_pair(
+        first_identity: &Path,
+        first_reported: &Path,
+        second_identity: &Path,
+        second_reported: &Path,
+        timeout: Duration,
+    ) -> Result<(Self, Option<Self>), CliError> {
         if first_identity == second_identity {
-            return Self::acquire_identity(&first_identity, first_path, timeout)
+            return Self::acquire_identity(first_identity, first_reported, timeout)
                 .map(|lock| (lock, None));
         }
         let (first_identity, first_reported, second_identity, second_reported) =
             if first_identity <= second_identity {
-                (first_identity, first_path, second_identity, second_path)
+                (
+                    first_identity,
+                    first_reported,
+                    second_identity,
+                    second_reported,
+                )
             } else {
-                (second_identity, second_path, first_identity, first_path)
+                (
+                    second_identity,
+                    second_reported,
+                    first_identity,
+                    first_reported,
+                )
             };
         let started = Instant::now();
-        let first = Self::acquire_identity(&first_identity, first_reported, timeout)?;
+        let first = Self::acquire_identity(first_identity, first_reported, timeout)?;
         let remaining = timeout.saturating_sub(started.elapsed());
-        let second = Self::acquire_identity(&second_identity, second_reported, remaining)?;
+        let second = Self::acquire_identity(second_identity, second_reported, remaining)?;
         Ok((first, Some(second)))
     }
 }
 
-fn config_lock_identity(config_path: &Path) -> Result<PathBuf, CliError> {
+fn resolve_config_path(config_path: &Path) -> Result<PathBuf, CliError> {
     create_parent_directories(config_path)?;
     match std::fs::canonicalize(config_path) {
         Ok(path) => Ok(path),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            if std::fs::symlink_metadata(config_path)
+                .is_ok_and(|metadata| metadata.file_type().is_symlink())
+            {
+                return Err(CliError::ConfigFileInvalid {
+                    path: config_path.to_path_buf(),
+                    message: "config path is a dangling symbolic link".into(),
+                });
+            }
             let Some(parent) = config_path.parent() else {
                 return Ok(config_path.to_path_buf());
             };
@@ -324,6 +382,32 @@ fn config_lock_identity(config_path: &Path) -> Result<PathBuf, CliError> {
             };
             Ok(parent.join(file_name))
         }
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn ensure_config_path_identity(config_path: &Path, expected: &Path) -> Result<(), CliError> {
+    if resolve_config_path(config_path)? == expected {
+        return Ok(());
+    }
+
+    Err(CliError::ConfigFileInvalid {
+        path: config_path.to_path_buf(),
+        message: "config path changed while acquiring its lock; retry the command".into(),
+    })
+}
+
+#[cfg(unix)]
+fn reject_hardlinked_config(path: &Path, reported_path: &Path) -> Result<(), CliError> {
+    match std::fs::metadata(path) {
+        Ok(metadata) if metadata.file_type().is_file() && metadata.nlink() > 1 => {
+            Err(CliError::ConfigFileInvalid {
+                path: reported_path.to_path_buf(),
+                message: "config files with multiple hard links are not supported".into(),
+            })
+        }
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error.into()),
     }
 }
@@ -401,9 +485,9 @@ fn try_lock(_file: &File) -> Result<(), io::Error> {
 mod tests {
     use super::*;
     #[cfg(unix)]
-    use std::os::unix::fs::symlink;
+    use std::os::unix::fs::PermissionsExt;
     #[cfg(unix)]
-    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    use std::os::unix::fs::symlink;
 
     #[test]
     fn load_document_preserves_comments_and_unknown_fields() {
@@ -488,8 +572,140 @@ mod tests {
         let through_alias = alias.join("config.toml");
 
         assert_eq!(
-            config_lock_identity(&direct).expect("direct identity should resolve"),
-            config_lock_identity(&through_alias).expect("alias identity should resolve")
+            resolve_config_path(&direct).expect("direct identity should resolve"),
+            resolve_config_path(&through_alias).expect("alias identity should resolve")
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn transaction_updates_file_symlink_target_without_replacing_link() {
+        let temporary = tempfile::TempDir::new().expect("tempdir should be created");
+        let target = temporary.path().join("managed.toml");
+        let link = temporary.path().join("config.toml");
+        std::fs::write(&target, "value = 1\n").expect("target config should be written");
+        symlink(&target, &link).expect("config symlink should be created");
+
+        let changed = transact_document(
+            &link,
+            ConfigFileKind::Project,
+            |document| {
+                document["value"] = toml_edit::value(2);
+                Ok(())
+            },
+            |_| Ok(()),
+        )
+        .expect("symlinked config transaction should succeed");
+
+        assert!(changed);
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .expect("config link metadata should be readable")
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            std::fs::read_to_string(target).expect("target config should remain readable"),
+            "value = 2\n"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn changed_symlink_identity_is_rejected() {
+        let temporary = tempfile::TempDir::new().expect("tempdir should be created");
+        let first_target = temporary.path().join("first.toml");
+        let second_target = temporary.path().join("second.toml");
+        let link = temporary.path().join("config.toml");
+        std::fs::write(&first_target, "value = 1\n").expect("first config should be written");
+        std::fs::write(&second_target, "value = 2\n").expect("second config should be written");
+        symlink(&first_target, &link).expect("config symlink should be created");
+        let expected = resolve_config_path(&link).expect("initial identity should resolve");
+        std::fs::remove_file(&link).expect("initial symlink should be removed");
+        symlink(&second_target, &link).expect("config symlink should be retargeted");
+
+        let error = ensure_config_path_identity(&link, &expected)
+            .expect_err("changed config identity should fail");
+
+        assert_eq!(error.code(), "config_file_invalid");
+        assert!(error.to_string().contains("changed while acquiring"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn dangling_config_symlink_reports_logical_path() {
+        let temporary = tempfile::TempDir::new().expect("tempdir should be created");
+        let link = temporary.path().join("config.toml");
+        symlink(temporary.path().join("missing.toml"), &link)
+            .expect("dangling config symlink should be created");
+
+        let error = resolve_config_path(&link).expect_err("dangling config symlink should fail");
+
+        assert_eq!(error.code(), "config_file_invalid");
+        assert_eq!(
+            error.details_json().expect("details should be present")["path"],
+            link.display().to_string()
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn peer_transaction_rejects_layers_resolving_to_same_file() {
+        let temporary = tempfile::TempDir::new().expect("tempdir should be created");
+        let global = temporary.path().join("global.toml");
+        let project = temporary.path().join("project.toml");
+        std::fs::write(&global, "value = 1\n").expect("global config should be written");
+        symlink(&global, &project).expect("project config symlink should be created");
+
+        let error = transact_document_with_peer(
+            &project,
+            ConfigFileKind::Project,
+            &global,
+            |document, _| {
+                document["value"] = toml_edit::value(2);
+                Ok(())
+            },
+            |_, _| Ok(()),
+        )
+        .expect_err("aliased config layers should fail");
+
+        assert_eq!(error.code(), "config_file_invalid");
+        assert!(error.to_string().contains("resolve to the same file"));
+        assert_eq!(
+            std::fs::read_to_string(global).expect("global config should remain readable"),
+            "value = 1\n"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn transaction_rejects_hardlinked_config_without_changing_aliases() {
+        let temporary = tempfile::TempDir::new().expect("tempdir should be created");
+        let path = temporary.path().join("config.toml");
+        let alias = temporary.path().join("alias.toml");
+        std::fs::write(&path, "value = 1\n").expect("config should be written");
+        std::fs::hard_link(&path, &alias).expect("hard link should be created");
+
+        let error = transact_document(
+            &path,
+            ConfigFileKind::Project,
+            |document| {
+                document["value"] = toml_edit::value(2);
+                Ok(())
+            },
+            |_| Ok(()),
+        )
+        .expect_err("hardlinked config transaction should fail");
+
+        assert_eq!(error.code(), "config_file_invalid");
+        assert!(error.to_string().contains("multiple hard links"));
+        assert_eq!(
+            std::fs::read_to_string(path).expect("config should remain readable"),
+            "value = 1\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(alias).expect("alias should remain readable"),
+            "value = 1\n"
         );
     }
 

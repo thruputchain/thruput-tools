@@ -4,9 +4,9 @@
 **Companions:**
 
 - `2026-07-02-global-and-project-config-brief.md` - the global/project profile model exposed by this command.
-  
+
 - `../roadmap.md` - current CLI surface and sequencing.
-  
+
 ## Goal
 Let users inspect and edit Groundhog profiles without opening a TOML file.
 
@@ -49,11 +49,11 @@ Groundhog has two durable configuration layers:
 The selected profile name resolves in this order:
 
 1. explicit `--profile`;
-  
+
 2. `GROUNDHOG_PROFILE`;
-  
+
 3. project `default_profile`;
-  
+
 4. global `default_profile`;
 
 If no source selects a profile, resolution fails with a stable no-active-profile error. A selected name must exist in the global layer, project layer, or both. The name `default` has no special behavior.
@@ -143,13 +143,13 @@ Interactive and piped output use `*` for the active profile and `!` for invalid 
 The command must:
 
 - mark the active profile;
-  
+
 - show the merged network when valid;
-  
+
 - include an active missing profile as `missing` rather than failing;
-  
+
 - include a schema-invalid profile as `invalid`, show a concise reason, and continue listing valid profiles.
-  
+
 
 When no source selects a profile, listing still succeeds, marks no row active, and emits `activeProfile: null` with no `selectionSource` in JSON. A TOML syntax error still fails inspection of that file with its path and source location. Once TOML parses, profiles are decoded and validated independently so one invalid profile does not hide the others.
 ### `groundhog config new <PROFILE>`
@@ -275,26 +275,26 @@ Existing contract and wallet entries remain readable. Config commands do not tak
 All global and project config writers use one document-oriented mutation path. It preserves:
 
 - comments and ordering where `toml_edit` supports them;
-  
+
 - unknown fields and unrelated tables;
-  
+
 - existing project-file permissions;
-  
+
 - global mode `0600` on Unix.
-  
+
 
 The shared path covers:
 
 - `init` profile and credential updates;
-  
+
 - default-key changes from key commands;
-  
+
 - local runtime-state updates from `groundhog node`;
-  
+
 - deploy contract-alias persistence;
-  
+
 - wallet binding persistence.
-  
+
 
 Each config file uses a stable sidecar lock held across:
 
@@ -311,13 +311,13 @@ Writes use same-directory temporary files, sync file contents, rename atomically
 No config command may print or edit:
 
 - `[executor]` credentials;
-  
+
 - private key material or key-file contents;
-  
+
 - the top-level global default key selected by `groundhog keys use`;
-  
+
 - `[local_runtime_state]`;
-  
+
 - cached network descriptors or pending faucet records.
 
 Build output from allowlisted profile fields. Never serialize the complete global document and redact it afterward.
@@ -384,90 +384,90 @@ Use stable config-specific errors for:
 - a profile missing from the selected mutation scope;
 
 - no active profile selected;
-  
+
 - unsupported fields or invalid values;
-  
+
 - project config unavailable;
-  
+
 - ambiguous or conflicting scope;
-  
+
 - malformed TOML with path and location;
-  
+
 - lock contention;
 
 - destination changes while a deletion confirmation is open;
-  
+
 - destination write or atomic replacement failure.
-  
+
 
 Important behavior:
 
 - a profile may exist globally, in the project, or in both;
-  
+
 - `new --project` can create an overlay for a global profile;
-  
+
 - empty maps and unset scalar fields are normal;
-  
+
 - environment-selected profiles remain selected until the environment changes;
-  
+
 - stale local runtime state remains owned by node lifecycle and status diagnostics;
-  
+
 - interruption before atomic rename leaves the original file intact.
-  
+
 ## Implementation Shape
 Keep the work inside `crates/tools/cli`; no RPC or protocol changes are needed.
 
 Expected areas:
 
 - command parsing and dispatch in `src/main.rs`;
-  
+
 - a config command module for human and JSON orchestration;
-  
+
 - typed fields and validation under `src/config/`;
-  
+
 - document-preserving config transactions and locking under `src/config/`;
-  
+
 - persisted global/project merge with per-value provenance;
-  
+
 - stable JSON report types;
-  
+
 - config-specific `CliError` variants and hints.
-  
+
 
 Do not build a second runtime profile resolver. Config inspection may share the existing merge rules, but it deliberately stops before local runtime and signer resolution.
 ## Phasing
 ### Phase 1: Non-interactive Foundation
 - document-preserving writes and shared locking;
-  
+
 - typed validation;
-  
+
 - persisted merge provenance;
-  
+
 - `config get`, `config profiles`, `config new`, `config rm`, `config set`, `config unset`, and `config use`;
-  
+
 - stable JSON reports.
-  
+
 ## Acceptance Criteria
 1. A user can inspect effective persisted profile values without reading TOML.
-  
+
 2. Source output identifies global and project contributions per field and map entry.
-  
+
 3. A user can create a complete profile or project overlay in one command.
-  
+
 4. A user can set a value, remove a stored value or complete profile, and select a default profile.
-  
+
 5. Only profile deletion prompts in normal human output mode; config writes always identify their destination.
-  
+
 6. Profile creation writes all supplied fields, plus optional selection, in one transaction.
-  
+
 7. All config writers preserve unrelated comments and unknown fields.
-  
+
 8. Concurrent config writers do not silently lose updates.
-  
+
 9. No config command changes signer or `dev-0` behavior.
-  
+
 10. No config command exposes credentials, key material, or local runtime state.
-  
+
 11. Human and JSON output follow existing stream and schema conventions.
 
 ## Verification

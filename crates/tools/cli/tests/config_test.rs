@@ -8,7 +8,7 @@ use std::os::fd::AsRawFd;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStringExt;
 #[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::PathBuf;
 use tempfile::TempDir;
 
@@ -2147,6 +2147,45 @@ fn config_set_reports_unchanged_for_existing_value() {
 }
 
 #[test]
+#[cfg(unix)]
+#[serial]
+fn config_set_updates_global_file_symlink_target_without_replacing_link() {
+    let tmp = TempDir::new().unwrap();
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let global_path = global_config_path(&tmp);
+    fs::create_dir_all(global_path.parent().unwrap()).unwrap();
+    let managed_dir = tmp.path().join("dotfiles");
+    fs::create_dir(&managed_dir).unwrap();
+    let managed_path = managed_dir.join("config.toml");
+    fs::write(&managed_path, "[profile.devnet]\nnetwork = \"devnet\"\n").unwrap();
+    symlink(&managed_path, &global_path).unwrap();
+
+    let report = groundhog_cli::config::set_profile_field(
+        tmp.path(),
+        "devnet",
+        groundhog_cli::config::ConfigField::RpcUrl,
+        "https://rpc.example",
+        true,
+        false,
+    )
+    .unwrap();
+
+    assert!(report.changed);
+    assert_eq!(report.path, global_path);
+    assert!(
+        fs::symlink_metadata(&global_path)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(
+        fs::read_to_string(managed_path).unwrap(),
+        "[profile.devnet]\nnetwork = \"devnet\"\nrpc_url = \"https://rpc.example\"\n"
+    );
+    unsafe { env::remove_var("XDG_CONFIG_HOME") };
+}
+
+#[test]
 fn config_unset_missing_project_profile_is_noop_without_creating_table() {
     let tmp = TempDir::new().unwrap();
     let path = tmp.path().join("groundhog.toml");
@@ -2325,6 +2364,21 @@ fn malformed_toml_reports_the_config_path() {
     assert_eq!(details["path"], path.display().to_string());
     assert!(details["line"].as_u64().is_some());
     assert!(details["column"].as_u64().is_some());
+    unsafe { env::remove_var("XDG_CONFIG_HOME") };
+}
+
+#[test]
+#[serial]
+fn malformed_toml_reports_character_based_column() {
+    let tmp = TempDir::new().unwrap();
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    let path = tmp.path().join("groundhog.toml");
+    fs::write(&path, "name = \"é\" trailing\n").unwrap();
+
+    let error = groundhog_cli::config::load_persisted_config(tmp.path()).unwrap_err();
+
+    assert_eq!(error.code(), "config_parse_failed");
+    assert_eq!(error.details_json().unwrap()["column"], 12);
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
