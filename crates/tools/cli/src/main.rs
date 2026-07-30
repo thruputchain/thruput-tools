@@ -514,6 +514,52 @@ enum ConfigCommand {
     },
     /// List global and project profiles
     Profiles,
+    /// Create a complete profile in one config layer
+    #[command(long_about = "Create a complete profile in one atomic config update. \
+                      Outside a project, omitted scope means global. When a project config is \
+                      discoverable, choose --global or --project explicitly. The two scope flags \
+                      cannot be used together.")]
+    New {
+        /// Profile to create
+        profile: String,
+        /// Network: local, devnet, or mainnet
+        #[arg(long)]
+        network: String,
+        /// Absolute HTTP(S) RPC URL
+        #[arg(long)]
+        rpc_url: Option<String>,
+        /// Absolute HTTP(S) faucet URL
+        #[arg(long)]
+        faucet_url: Option<String>,
+        /// Profile-specific signing key
+        #[arg(long)]
+        default_key: Option<String>,
+        /// Also select the new profile as this layer's default
+        #[arg(long = "use")]
+        select: bool,
+        /// Create the profile in global config
+        #[arg(long)]
+        global: bool,
+        /// Create the profile in project config
+        #[arg(long)]
+        project: bool,
+    },
+    /// Remove an entire profile from one config layer
+    #[command(
+        long_about = "Remove an entire profile from one config layer, including its contract \
+                      aliases and wallet bindings. Interactive output asks for confirmation. A \
+                      matching default profile selection is cleared in the same atomic update."
+    )]
+    Rm {
+        /// Profile to remove
+        profile: String,
+        /// Remove the profile from global config
+        #[arg(long)]
+        global: bool,
+        /// Remove the profile from project config
+        #[arg(long)]
+        project: bool,
+    },
     /// Set one typed field in a profile layer
     Set {
         /// Field to set: network, rpc-url, faucet-url, or default-key
@@ -768,6 +814,8 @@ impl ConfigCommand {
         match self {
             Self::Get { .. } => "config.get",
             Self::Profiles => "config.profiles",
+            Self::New { .. } => "config.new",
+            Self::Rm { .. } => "config.rm",
             Self::Set { .. } => "config.set",
             Self::Unset { .. } => "config.unset",
             Self::Use { .. } => "config.use",
@@ -859,6 +907,37 @@ fn main() {
                 ConfigCommand::Profiles => {
                     groundhog_cli::config_cmd::profiles(&cwd, cmd_name, &print)
                 }
+                ConfigCommand::New {
+                    profile,
+                    network,
+                    rpc_url,
+                    faucet_url,
+                    default_key,
+                    select,
+                    global,
+                    project,
+                } => groundhog_cli::config_cmd::new_profile(
+                    &cwd,
+                    &profile,
+                    &groundhog_cli::config::NewProfileOptions {
+                        network,
+                        rpc_url,
+                        faucet_url,
+                        default_key,
+                        select,
+                    },
+                    global,
+                    project,
+                    cmd_name,
+                    &print,
+                ),
+                ConfigCommand::Rm {
+                    profile,
+                    global,
+                    project,
+                } => groundhog_cli::config_cmd::remove(
+                    &cwd, &profile, global, project, cmd_name, &print,
+                ),
                 ConfigCommand::Set {
                     field,
                     value,
@@ -1361,6 +1440,50 @@ mod tests {
 
     #[test]
     fn config_mutation_commands_and_flags_parse() {
+        let new_profile = Cli::parse_from([
+            "groundhog",
+            "config",
+            "new",
+            "staging",
+            "--network",
+            "devnet",
+            "--rpc-url",
+            "https://rpc.example",
+            "--faucet-url",
+            "https://faucet.example",
+            "--default-key",
+            "alice",
+            "--use",
+            "--global",
+        ]);
+        assert_eq!(new_profile.command.command_name(), "config.new");
+        assert!(matches!(
+            new_profile.command,
+            Command::Config {
+                command: ConfigCommand::New {
+                    profile,
+                    network,
+                    select: true,
+                    global: true,
+                    project: false,
+                    ..
+                }
+            } if profile == "staging" && network == "devnet"
+        ));
+
+        let remove = Cli::parse_from(["groundhog", "config", "rm", "staging", "--project"]);
+        assert_eq!(remove.command.command_name(), "config.rm");
+        assert!(matches!(
+            remove.command,
+            Command::Config {
+                command: ConfigCommand::Rm {
+                    profile,
+                    global: false,
+                    project: true,
+                }
+            } if profile == "staging"
+        ));
+
         let set = Cli::parse_from([
             "groundhog",
             "config",

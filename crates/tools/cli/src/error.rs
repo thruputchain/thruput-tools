@@ -52,6 +52,11 @@ pub enum CliError {
         profile: String,
         scope: &'static str,
     },
+    #[error("profile `{profile}` already exists in {scope} config")]
+    ProfileAlreadyExists {
+        profile: String,
+        scope: &'static str,
+    },
     #[error("no active profile selected")]
     NoActiveProfile,
     #[error("invalid profile name: {0}")]
@@ -80,6 +85,8 @@ pub enum CliError {
     ConfigScopeAmbiguous,
     #[error("config `{}` is busy; another process may be updating it", .path.display())]
     ConfigLockTimeout { path: std::path::PathBuf },
+    #[error("config `{}` changed while awaiting confirmation", .path.display())]
+    ConfigChangedDuringConfirmation { path: std::path::PathBuf },
     #[error("credential password cannot be empty")]
     CredentialsEmpty,
     #[error("unsupported OS: {0}")]
@@ -370,6 +377,7 @@ impl CliError {
             Self::Io(_) => "io_error",
             Self::ProfileNotFound(_) => "profile_not_found",
             Self::ProfileNotFoundInScope { .. } => "profile_not_found_in_scope",
+            Self::ProfileAlreadyExists { .. } => "profile_already_exists",
             Self::NoActiveProfile => "no_active_profile",
             Self::ProfileNameInvalid(_) => "profile_name_invalid",
             Self::ConfigFieldUnsupported(_) => "config_field_unsupported",
@@ -380,6 +388,7 @@ impl CliError {
             Self::ConfigScopeConflict => "config_scope_conflict",
             Self::ConfigScopeAmbiguous => "config_scope_ambiguous",
             Self::ConfigLockTimeout { .. } => "config_lock_timeout",
+            Self::ConfigChangedDuringConfirmation { .. } => "config_changed_during_confirmation",
             Self::CredentialsEmpty => "credentials_empty",
             Self::UnsupportedOs(_) => "unsupported_os",
             Self::WasmOptFailed(_) => "wasm_opt_failed",
@@ -689,7 +698,11 @@ impl CliError {
                  `GROUNDHOG_PROFILE`",
             )),
             Self::ProfileNotFoundInScope { profile, scope } => Some(Cow::Owned(format!(
-                "create the profile with `groundhog config set network <NETWORK> --profile={} --{scope}`",
+                "create the profile with `groundhog config new {} --network <NETWORK> --{scope}`",
+                render_shell_arg(profile)
+            ))),
+            Self::ProfileAlreadyExists { profile, scope } => Some(Cow::Owned(format!(
+                "update it with `groundhog config set <FIELD> <VALUE> --profile={} --{scope}`",
                 render_shell_arg(profile)
             ))),
             Self::NoActiveProfile => Some(Cow::Borrowed(
@@ -702,7 +715,7 @@ impl CliError {
                 "supported fields: network, rpc-url, faucet-url, default-key",
             )),
             Self::ConfigValueInvalid { .. } => Some(Cow::Borrowed(
-                "check the field's accepted values with `groundhog config set --help`",
+                "use local, devnet, or mainnet for network; absolute HTTP(S) URLs; and a non-empty default key",
             )),
             Self::ConfigParse { .. } | Self::ConfigFileInvalid { .. } => Some(Cow::Borrowed(
                 "fix the reported config file and rerun the command",
@@ -718,6 +731,9 @@ impl CliError {
             )),
             Self::ConfigLockTimeout { .. } => Some(Cow::Borrowed(
                 "wait for the other config command to finish, then retry",
+            )),
+            Self::ConfigChangedDuringConfirmation { .. } => Some(Cow::Borrowed(
+                "review the current profile and rerun the removal command",
             )),
             Self::CredentialsEmpty => Some(Cow::Borrowed(
                 "rerun `groundhog init` and provide a password; the username \
@@ -825,13 +841,20 @@ impl CliError {
                 "path": path,
                 "message": message,
             })),
-            Self::ProfileNotFoundInScope { profile, scope } => Some(json!({
+            Self::ConfigValueInvalid { field, message } => Some(json!({
+                "field": field,
+                "message": message,
+            })),
+            Self::ProfileNotFoundInScope { profile, scope }
+            | Self::ProfileAlreadyExists { profile, scope } => Some(json!({
                 "profile": profile,
                 "scope": scope,
             })),
-            Self::ConfigLockTimeout { path } => Some(json!({
-                "path": path,
-            })),
+            Self::ConfigLockTimeout { path } | Self::ConfigChangedDuringConfirmation { path } => {
+                Some(json!({
+                    "path": path,
+                }))
+            }
             Self::RpcCapabilityUnsupported { method, message } => Some(json!({
                 "method": method,
                 "message": message,

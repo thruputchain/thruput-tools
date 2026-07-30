@@ -14,9 +14,12 @@ pub use global::{
     save_local_runtime_state,
 };
 pub use mutate::{
-    CONFIG_MUTATION_JSON_SCHEMA_VERSION, ConfigMutationReport, set_profile_field,
-    unset_profile_field, use_profile,
+    CONFIG_MUTATION_JSON_SCHEMA_VERSION, CONFIG_NEW_JSON_SCHEMA_VERSION,
+    CONFIG_REMOVE_JSON_SCHEMA_VERSION, ConfigMutationReport, ConfigNewReport, ConfigRemoveReport,
+    NewProfileOptions, create_profile, remove_profile, set_profile_field, unset_profile_field,
+    use_profile,
 };
+pub(crate) use mutate::{prepare_profile_removal, remove_confirmed_profile};
 pub use project::{
     Network, ProfileOverrides, ProjectProfile, ResolvedProfile, SavedWalletBinding,
     active_profile_name, find_project_config, load_project_profiles, remove_profile_wallet_address,

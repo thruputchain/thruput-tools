@@ -1787,7 +1787,7 @@ fn config_field_validation_accepts_typed_values_and_rejects_invalid_values() {
 }
 
 #[test]
-fn config_set_creates_project_overlay_and_preserves_unrelated_content() {
+fn config_new_creates_complete_project_profile_and_preserves_unrelated_content() {
     let tmp = TempDir::new().unwrap();
     let path = tmp.path().join("groundhog.toml");
     fs::write(
@@ -1796,11 +1796,16 @@ fn config_set_creates_project_overlay_and_preserves_unrelated_content() {
     )
     .unwrap();
 
-    let report = groundhog_cli::config::set_profile_field(
+    let report = groundhog_cli::config::create_profile(
         tmp.path(),
-        "devnet",
-        groundhog_cli::config::ConfigField::RpcUrl,
-        "https://rpc.example",
+        "staging",
+        &groundhog_cli::config::NewProfileOptions {
+            network: "devnet".into(),
+            rpc_url: Some("https://rpc.example".into()),
+            faucet_url: Some("https://faucet.example".into()),
+            default_key: Some("alice".into()),
+            select: true,
+        },
         false,
         true,
     )
@@ -1810,13 +1815,274 @@ fn config_set_creates_project_overlay_and_preserves_unrelated_content() {
     assert_eq!(report.scope, groundhog_cli::config::ConfigScope::Project);
     assert_eq!(report.path, path);
     assert_eq!(
-        report.field,
-        Some(groundhog_cli::config::ConfigField::RpcUrl)
+        report.created_fields,
+        [
+            groundhog_cli::config::ConfigField::DefaultKey,
+            groundhog_cli::config::ConfigField::FaucetUrl,
+            groundhog_cli::config::ConfigField::Network,
+            groundhog_cli::config::ConfigField::RpcUrl,
+        ]
     );
+    assert!(report.selected);
     assert_eq!(
         fs::read_to_string(report.path).unwrap(),
-        "# retained\ndefault_profile = \"devnet\"\nplugin = true\n\n[profile.devnet]\nrpc_url = \"https://rpc.example\"\n"
+        "# retained\ndefault_profile = \"staging\"\nplugin = true\n\n[profile.staging]\nnetwork = \"devnet\"\nrpc_url = \"https://rpc.example\"\nfaucet_url = \"https://faucet.example\"\ndefault_key = \"alice\"\n"
     );
+}
+
+#[test]
+fn config_new_rejects_existing_target_layer_profile_without_changes() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("groundhog.toml");
+    let contents = "# retained\ndefault_profile = \"local\"\n\n[profile]\ndevnet = \"malformed\"\n\n[profile.local]\nnetwork = \"local\"\n";
+    fs::write(&path, contents).unwrap();
+
+    let error = groundhog_cli::config::create_profile(
+        tmp.path(),
+        "devnet",
+        &groundhog_cli::config::NewProfileOptions {
+            network: "mainnet".into(),
+            rpc_url: None,
+            faucet_url: None,
+            default_key: None,
+            select: true,
+        },
+        false,
+        true,
+    )
+    .unwrap_err();
+
+    assert_eq!(error.code(), "profile_already_exists");
+    assert_eq!(fs::read_to_string(path).unwrap(), contents);
+}
+
+#[test]
+#[cfg(unix)]
+fn config_new_validates_all_values_before_waiting_for_lock() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("groundhog.toml");
+    fs::write(&path, "# retained\n").unwrap();
+    let _lock = lock_config(&path);
+
+    let error = groundhog_cli::config::create_profile(
+        tmp.path(),
+        "staging",
+        &groundhog_cli::config::NewProfileOptions {
+            network: "devnet".into(),
+            rpc_url: Some("relative/path".into()),
+            faucet_url: None,
+            default_key: None,
+            select: false,
+        },
+        false,
+        true,
+    )
+    .unwrap_err();
+
+    assert_eq!(error.code(), "config_value_invalid");
+}
+
+#[test]
+fn concurrent_config_new_allows_only_one_creator() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(tmp.path().join("groundhog.toml"), "# retained\n").unwrap();
+    let options = groundhog_cli::config::NewProfileOptions {
+        network: "devnet".into(),
+        rpc_url: None,
+        faucet_url: None,
+        default_key: None,
+        select: false,
+    };
+    let project = tmp.path().to_path_buf();
+    let first_options = options.clone();
+    let first = std::thread::spawn(move || {
+        groundhog_cli::config::create_profile(&project, "staging", &first_options, false, true)
+    });
+    let project = tmp.path().to_path_buf();
+    let second = std::thread::spawn(move || {
+        groundhog_cli::config::create_profile(&project, "staging", &options, false, true)
+    });
+
+    let results = [first.join().unwrap(), second.join().unwrap()];
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(
+        results
+            .iter()
+            .filter_map(|result| result.as_ref().err())
+            .map(groundhog_cli::CliError::code)
+            .collect::<Vec<_>>(),
+        ["profile_already_exists"]
+    );
+}
+
+#[test]
+#[serial]
+fn config_new_project_allows_overlay_for_global_profile() {
+    let tmp = TempDir::new().unwrap();
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    fs::write(
+        global_config_path(&tmp),
+        "[profile.staging]\nnetwork = \"devnet\"\nrpc_url = \"https://global.example\"\n",
+    )
+    .unwrap();
+    fs::write(tmp.path().join("groundhog.toml"), "# project\n").unwrap();
+
+    let report = groundhog_cli::config::create_profile(
+        tmp.path(),
+        "staging",
+        &groundhog_cli::config::NewProfileOptions {
+            network: "devnet".into(),
+            rpc_url: Some("https://project.example".into()),
+            faucet_url: None,
+            default_key: None,
+            select: false,
+        },
+        false,
+        true,
+    )
+    .unwrap();
+
+    assert!(report.changed);
+    assert_eq!(
+        groundhog_cli::config::load_persisted_config(tmp.path())
+            .unwrap()
+            .resolve("staging")
+            .unwrap()
+            .values
+            .rpc_url
+            .as_deref(),
+        Some("https://project.example")
+    );
+    unsafe { env::remove_var("XDG_CONFIG_HOME") };
+}
+
+#[test]
+fn config_rm_removes_complete_profile_and_matching_default() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("groundhog.toml");
+    fs::write(
+        &path,
+        "# retained\ndefault_profile = \"staging\"\nplugin = true\n\n[profile.keep]\nnetwork = \"local\"\n\n[profile.staging]\nnetwork = \"devnet\"\nunknown = true\n\n[profile.staging.contracts]\ncounter = \"0x1234\"\n\n[profile.staging.wallets.alice]\naddress = \"0xabcd\"\nowner_public_key = \"0xef01\"\n",
+    )
+    .unwrap();
+
+    let report = groundhog_cli::config::remove_profile(tmp.path(), "staging", false, true).unwrap();
+
+    assert!(report.changed);
+    assert!(report.cleared_default);
+    assert_eq!(report.scope, groundhog_cli::config::ConfigScope::Project);
+    assert_eq!(report.path, path);
+    assert_eq!(
+        fs::read_to_string(report.path).unwrap(),
+        "# retained\nplugin = true\n\n[profile.keep]\nnetwork = \"local\"\n"
+    );
+}
+
+#[test]
+fn config_rm_rejects_missing_target_layer_profile_without_changes() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("groundhog.toml");
+    let contents = "# retained\n[profile.keep]\nnetwork = \"local\"\n";
+    fs::write(&path, contents).unwrap();
+
+    let error =
+        groundhog_cli::config::remove_profile(tmp.path(), "missing", false, true).unwrap_err();
+
+    assert_eq!(error.code(), "profile_not_found_in_scope");
+    assert_eq!(fs::read_to_string(path).unwrap(), contents);
+}
+
+#[test]
+fn config_rm_preserves_comment_position_when_default_is_between_keys() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("groundhog.toml");
+    fs::write(
+        &path,
+        "before = true\n# selected profile\ndefault_profile = \"staging\"\nafter = true\n\n[profile.staging]\nnetwork = \"devnet\"\n",
+    )
+    .unwrap();
+
+    groundhog_cli::config::remove_profile(tmp.path(), "staging", false, true).unwrap();
+
+    assert_eq!(
+        fs::read_to_string(path).unwrap(),
+        "before = true\n# selected profile\nafter = true\n"
+    );
+}
+
+#[test]
+fn config_rm_preserves_leading_comment_when_profile_is_only_content() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("groundhog.toml");
+    fs::write(
+        &path,
+        "# retained\ndefault_profile = \"staging\"\n\n[profile.staging]\nnetwork = \"devnet\"\n",
+    )
+    .unwrap();
+
+    groundhog_cli::config::remove_profile(tmp.path(), "staging", false, true).unwrap();
+
+    assert_eq!(fs::read_to_string(path).unwrap(), "# retained\n");
+}
+
+#[test]
+fn concurrent_config_rm_allows_only_one_removal() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(
+        tmp.path().join("groundhog.toml"),
+        "[profile.staging]\nnetwork = \"devnet\"\n",
+    )
+    .unwrap();
+    let project = tmp.path().to_path_buf();
+    let first = std::thread::spawn(move || {
+        groundhog_cli::config::remove_profile(&project, "staging", false, true)
+    });
+    let project = tmp.path().to_path_buf();
+    let second = std::thread::spawn(move || {
+        groundhog_cli::config::remove_profile(&project, "staging", false, true)
+    });
+
+    let results = [first.join().unwrap(), second.join().unwrap()];
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(
+        results
+            .iter()
+            .filter_map(|result| result.as_ref().err())
+            .map(groundhog_cli::CliError::code)
+            .collect::<Vec<_>>(),
+        ["profile_not_found_in_scope"]
+    );
+}
+
+#[test]
+#[serial]
+fn config_set_rejects_missing_target_layer_profile_without_creating_it() {
+    let tmp = TempDir::new().unwrap();
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    fs::write(
+        global_config_path(&tmp),
+        "[profile.missing]\nnetwork = \"devnet\"\n",
+    )
+    .unwrap();
+    let path = tmp.path().join("groundhog.toml");
+    let contents = "# retained\nplugin = true\n";
+    fs::write(&path, contents).unwrap();
+
+    let error = groundhog_cli::config::set_profile_field(
+        tmp.path(),
+        "missing",
+        groundhog_cli::config::ConfigField::Network,
+        "devnet",
+        false,
+        true,
+    )
+    .unwrap_err();
+
+    assert_eq!(error.code(), "profile_not_found_in_scope");
+    assert_eq!(fs::read_to_string(path).unwrap(), contents);
+    unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
 #[test]

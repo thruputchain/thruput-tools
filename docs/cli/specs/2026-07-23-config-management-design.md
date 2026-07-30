@@ -17,6 +17,7 @@ groundhog config get
 groundhog config get devnet --sources
 groundhog config profiles
 groundhog config new staging --network devnet --rpc-url https://rpc.example --global --use
+groundhog config rm staging --global
 groundhog config set rpc-url https://rpc.example --profile devnet --global
 groundhog config unset faucet-url --profile devnet --project
 groundhog config use devnet --global
@@ -33,7 +34,7 @@ This work does not:
 - change signer selection or `dev-0` behavior;
 - add profile inheritance beyond the existing global/project merge;
 - add tombstones that mask inherited values;
-- edit contract aliases or wallet bindings;
+- edit individual contract aliases or wallet bindings;
 - change profile-selection precedence;
 - resolve unrelated project scaffold behavior.
 
@@ -80,7 +81,7 @@ Global config also contains `[executor]`, the top-level key selected by `groundh
 | D4  | `config set` and `config unset` modify typed profile fields. | Typed fields provide validation, help, completion, and a stable interface. |
 | D5  | `config new` owns profile creation; `config set` requires the profile in the selected layer. | Creation and modification have distinct, predictable failure behavior. |
 | D6  | `config unset` removes a field only from the selected layer. | An inherited value may become visible; no tombstone is created. |
-| D7  | Config management remains non-interactive. | The command surface is scriptable and avoids a prompt state machine that duplicates typed mutations. |
+| D7  | Profile deletion requires confirmation in interactive human mode. | Deletion removes the entire profile table, including aliases and wallet bindings. JSON and quiet modes remain non-interactive for scripts. |
 | D8  | All config writers preserve comments and unknown fields and share one lock. | Existing commands write the same files and must not erase or race config edits. |
 | D9  | Active-profile resolution requires a selected existing profile. | Inventing an empty `default` profile hides missing or invalid configuration. |
 ## Command Surface
@@ -183,6 +184,18 @@ Existence is relative to the selected layer. `config new staging --project` may 
 Parse and validate every supplied value before acquiring the write lock. Inside the lock, reread the file, confirm that the target-layer profile is still absent, insert all supplied fields, validate the complete profile, and replace the file atomically. `--use` writes top-level `default_profile` in the same transaction. Successful creation reports `changed: true`; an existing target-layer profile is an error rather than a no-op.
 
 Warn when `--default-key` names a key not stored on this machine. When `--use` is present, also warn if `GROUNDHOG_PROFILE` still controls active selection.
+### `groundhog config rm <PROFILE>`
+Remove one complete profile from one config layer:
+
+```bash
+groundhog config rm staging --global
+```
+
+The command follows the mutation scope rules. Profile existence is relative to the selected layer, so removing a project overlay leaves a same-named global profile intact. A missing target-layer profile fails with `profile_not_found_in_scope`.
+
+Interactive human output asks for confirmation and defaults to cancellation. JSON and quiet modes skip the prompt, matching `groundhog keys rm`. If the destination file changes while the prompt is open, deletion fails and asks the user to review and retry. Confirmed deletion removes the complete target-layer profile table, including its scalar fields, contract aliases, wallet bindings, and unknown profile-owned entries. If that layer's `default_profile` names the removed profile, the command clears the selection in the same locked transaction.
+
+Deletion preserves unrelated profiles, top-level fields, comments, credentials, and runtime state. The JSON report includes the profile, scope, destination path, `changed`, and `clearedDefault`.
 ### `groundhog config set <FIELD> <VALUE>`
 Set one typed field in one profile layer:
 
@@ -324,6 +337,7 @@ Command names are:
 config.get
 config.profiles
 config.new
+config.rm
 config.set
 config.unset
 config.use
@@ -360,7 +374,7 @@ Unset scalar fields have a `null` value and no source entry. Runtime path values
 
 `config.profiles` includes the active profile, selection source, and sorted rows with layer presence, network, status, and an optional invalid reason.
 
-Mutation results include the profile, scope, destination path, and changed flag. `config.set` and `config.unset` include the field. `config.new` includes sorted `createdFields` and `selected`. `createdFields` uses kebab-case CLI names such as `rpc-url` and always includes `network`. `selected` is true when `--use` was requested and the new profile is the target layer's default after the transaction. `config use` and `config new --use` warn when `GROUNDHOG_PROFILE` remains active.
+Mutation results include the profile, scope, destination path, and changed flag. `config.set` and `config.unset` include the field. `config.new` includes sorted `createdFields` and `selected`. `config.rm` includes `clearedDefault`. `createdFields` uses kebab-case CLI names such as `rpc-url` and always includes `network`. `selected` is true when `--use` was requested and the new profile is the target layer's default after the transaction. `config use` and `config new --use` warn when `GROUNDHOG_PROFILE` remains active.
 ## Errors and Edge Cases
 Use stable config-specific errors for:
 
@@ -381,6 +395,8 @@ Use stable config-specific errors for:
 - malformed TOML with path and location;
   
 - lock contention;
+
+- destination changes while a deletion confirmation is open;
   
 - destination write or atomic replacement failure.
   
@@ -428,7 +444,7 @@ Do not build a second runtime profile resolver. Config inspection may share the 
   
 - persisted merge provenance;
   
-- `config get`, `config profiles`, `config new`, `config set`, `config unset`, and `config use`;
+- `config get`, `config profiles`, `config new`, `config rm`, `config set`, `config unset`, and `config use`;
   
 - stable JSON reports.
   
@@ -439,9 +455,9 @@ Do not build a second runtime profile resolver. Config inspection may share the 
   
 3. A user can create a complete profile or project overlay in one command.
   
-4. A user can set a value, remove a stored value, and select a default profile.
+4. A user can set a value, remove a stored value or complete profile, and select a default profile.
   
-5. Config writes never prompt and always identify their destination.
+5. Only profile deletion prompts in interactive human mode; config writes always identify their destination.
   
 6. Profile creation writes all supplied fields, plus optional selection, in one transaction.
   
@@ -466,6 +482,7 @@ Unit and config tests cover:
 - atomic profile creation with required and optional fields;
 - target-layer duplicate rejection and project-overlay creation;
 - `new --use` selection and environment-override warnings;
+- profile deletion confirmation, cancellation, default clearing, selected-layer errors, and concurrent removal;
 - set updates, selected-layer missing errors, unchanged values, and missing default-key warnings;
 - unset with and without inherited fallback;
 - profile listing with valid, invalid, and active-missing entries;
@@ -478,7 +495,6 @@ Unit and config tests cover:
 
 Binary integration tests cover parser behavior, stdout/stderr rules, JSON schemas, stable errors, and real file mutation under isolated XDG directories.
 ## Deferred Follow-ups
-- profile deletion;
 - tombstones that mask inherited values;
 - contract alias and wallet binding editing;
 - profile import/export and cloning;

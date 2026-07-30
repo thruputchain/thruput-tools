@@ -1,12 +1,15 @@
 use std::borrow::Cow;
+use std::io::BufRead as _;
 use std::path::Path;
 use std::str::FromStr as _;
 
 use crate::checks::{Finding, FindingLevel};
 use crate::config::{
-    ConfigField, ConfigGetReport, ConfigMutationReport, ConfigProfileStatus, ConfigProfilesReport,
-    ConfigScope, ConfigSource, ConfigSourceKind, Network, ProfileSources, load_persisted_config,
-    set_profile_field, unset_profile_field, use_profile,
+    ConfigField, ConfigGetReport, ConfigMutationReport, ConfigNewReport, ConfigProfileStatus,
+    ConfigProfilesReport, ConfigRemoveReport, ConfigScope, ConfigSource, ConfigSourceKind, Network,
+    NewProfileOptions, ProfileSources, create_profile, load_persisted_config,
+    prepare_profile_removal, remove_confirmed_profile, remove_profile, set_profile_field,
+    unset_profile_field, use_profile,
 };
 use crate::result::CommandResult;
 use crate::terminal::terminal_safe;
@@ -56,6 +59,64 @@ pub fn profiles(start: &Path, cmd: &'static str, print: &Print) -> Result<(), Cl
         render_profiles(&report, print.is_human_stdout_tty());
     }
     Ok(())
+}
+
+/// Create one complete profile in a selected config layer.
+pub fn new_profile(
+    start: &Path,
+    profile: &str,
+    options: &NewProfileOptions,
+    global: bool,
+    project: bool,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
+    let report = create_profile(start, profile, options, global, project)?;
+    let mut warnings = options
+        .default_key
+        .as_deref()
+        .map_or_else(Vec::new, missing_default_key_warnings);
+    if options.select {
+        warnings.extend(environment_profile_warnings());
+    }
+    render_new_profile(&report, print);
+    if !print.is_json() {
+        render_warnings(&warnings, print);
+    }
+    print.json(&CommandResult::with_warnings(cmd, warnings, report))
+}
+
+/// Remove an entire profile from a selected config layer.
+pub fn remove(
+    start: &Path,
+    profile: &str,
+    global: bool,
+    project: bool,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
+    let report = if !print.is_json() && !print.is_quiet() {
+        let confirmation = prepare_profile_removal(start, profile, global, project)?;
+        print.prompt(format_args!(
+            "Remove profile `{}` from {} config? This deletes all profile data and cannot be undone. [y/N] ",
+            terminal_safe(profile.trim()),
+            scope_label(confirmation.scope()),
+        ))?;
+        let mut answer = String::new();
+        std::io::stdin()
+            .lock()
+            .read_line(&mut answer)
+            .map_err(CliError::Io)?;
+        if !answer.trim().eq_ignore_ascii_case("y") {
+            print.note("Cancelled");
+            return Ok(());
+        }
+        remove_confirmed_profile(confirmation)?
+    } else {
+        remove_profile(start, profile, global, project)?
+    };
+    render_remove_profile(&report, print);
+    print.json(&CommandResult::new(cmd, report))
 }
 
 /// Set one typed profile field in a selected config layer.
@@ -128,6 +189,39 @@ fn render_mutation(action: &str, report: &ConfigMutationReport, print: &Print) {
     print.detail("path", terminal_safe(&report.path.display().to_string()));
 }
 
+fn render_new_profile(report: &ConfigNewReport, print: &Print) {
+    print.success(format_args!(
+        "Created profile `{}`",
+        terminal_safe(&report.profile)
+    ));
+    print.detail("scope", scope_label(report.scope));
+    print.detail("path", terminal_safe(&report.path.display().to_string()));
+    print.detail(
+        "fields",
+        report
+            .created_fields
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", "),
+    );
+    if report.selected {
+        print.detail("default", "selected");
+    }
+}
+
+fn render_remove_profile(report: &ConfigRemoveReport, print: &Print) {
+    print.success(format_args!(
+        "Removed profile `{}`",
+        terminal_safe(&report.profile)
+    ));
+    print.detail("scope", scope_label(report.scope));
+    print.detail("path", terminal_safe(&report.path.display().to_string()));
+    if report.cleared_default {
+        print.note("Default profile selection cleared");
+    }
+}
+
 fn render_inherited_fallback(
     start: &Path,
     report: &ConfigMutationReport,
@@ -183,6 +277,10 @@ fn default_key_warnings(field: ConfigField, value: &str) -> Vec<Finding> {
     if field != ConfigField::DefaultKey {
         return Vec::new();
     }
+    missing_default_key_warnings(value)
+}
+
+fn missing_default_key_warnings(value: &str) -> Vec<Finding> {
     let value = value.trim();
     if crate::keys::load_key_summaries()
         .ok()
@@ -227,11 +325,15 @@ fn emit_mutation(
     print: &Print,
 ) -> Result<(), CliError> {
     if !print.is_json() {
-        for warning in &warnings {
-            print.warn(terminal_safe(&warning.message));
-        }
+        render_warnings(&warnings, print);
     }
     print.json(&CommandResult::with_warnings(cmd, warnings, report))
+}
+
+fn render_warnings(warnings: &[Finding], print: &Print) {
+    for warning in warnings {
+        print.warn(terminal_safe(&warning.message));
+    }
 }
 
 fn scope_label(scope: ConfigScope) -> &'static str {
