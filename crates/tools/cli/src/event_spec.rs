@@ -182,31 +182,74 @@ fn validate_spec(spec: &ContractSpec) -> Result<(EventNameIndex, EventSignatureI
 
 fn validate_member_limit(spec: &ContractSpec) -> Result<(), String> {
     let mut count = spec.events.len().saturating_add(spec.type_defs.len());
+    check_member_limit(count)?;
     for event in spec.events.iter() {
-        count = count
-            .saturating_add(event.topics.len())
-            .saturating_add(event.fields.len());
+        add_members(&mut count, event.topics.len())?;
+        add_members(&mut count, event.fields.len())?;
+        for field in event.topics.iter().chain(event.fields.iter()) {
+            add_nested_tuple_members(&mut count, &field.ty)?;
+        }
     }
     for def in spec.type_defs.iter() {
-        count = count.saturating_add(match def {
-            ContractTypeDef::TypeDefStruct { struct_def } => struct_def.fields.len(),
-            ContractTypeDef::TypeDefEnum { enum_def } => enum_def.variants.len(),
-            ContractTypeDef::TypeDefUnion { union_def } => union_def
-                .cases
-                .iter()
-                .map(|case| {
-                    1 + match &case.case_type {
+        match def {
+            ContractTypeDef::TypeDefStruct { struct_def } => {
+                add_members(&mut count, struct_def.fields.len())?;
+                for field in struct_def.fields.iter() {
+                    add_nested_tuple_members(&mut count, &field.ty)?;
+                }
+            }
+            ContractTypeDef::TypeDefEnum { enum_def } => {
+                add_members(&mut count, enum_def.variants.len())?;
+            }
+            ContractTypeDef::TypeDefUnion { union_def } => {
+                for case in union_def.cases.iter() {
+                    add_members(&mut count, 1)?;
+                    match &case.case_type {
                         ContractUnionCaseType::UnionCaseStruct { struct_fields } => {
-                            struct_fields.len()
+                            add_members(&mut count, struct_fields.len())?;
+                            for field in struct_fields.iter() {
+                                add_nested_tuple_members(&mut count, &field.ty)?;
+                            }
                         }
-                        ContractUnionCaseType::UnionCaseTuple { tuple } => tuple.len(),
-                        _ => 0,
+                        ContractUnionCaseType::UnionCaseTuple { tuple } => {
+                            add_members(&mut count, tuple.len())?;
+                            for ty in tuple.iter() {
+                                add_nested_tuple_members(&mut count, ty)?;
+                            }
+                        }
+                        _ => {}
                     }
-                })
-                .sum(),
+                }
+            }
             _ => return Err("unsupported contract type definition".into()),
-        });
+        }
     }
+    Ok(())
+}
+
+fn add_nested_tuple_members(count: &mut usize, ty: &ContractType) -> Result<(), String> {
+    let mut pending = vec![ty];
+    while let Some(ty) = pending.pop() {
+        match ty {
+            ContractType::Option { option_inner } => pending.push(option_inner),
+            ContractType::Vector { vector } => pending.push(&vector.element),
+            ContractType::Array { array } => pending.push(&array.element),
+            ContractType::Tuple { tuple } => {
+                add_members(count, tuple.len())?;
+                pending.extend(tuple.iter());
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn add_members(count: &mut usize, members: usize) -> Result<(), String> {
+    *count = count.saturating_add(members);
+    check_member_limit(*count)
+}
+
+fn check_member_limit(count: usize) -> Result<(), String> {
     if count > MAX_SPEC_MEMBERS {
         return Err(format!(
             "spec contains {count} definitions and members; maximum is {MAX_SPEC_MEMBERS}"
@@ -831,6 +874,19 @@ mod tests {
             .push(field("one_too_many", ContractType::Void));
         assert!(
             validate_spec(&at_member_limit)
+                .unwrap_err()
+                .contains("definitions and members")
+        );
+
+        let nested_tuple = |members| ContractType::Option {
+            option_inner: Box::new(ContractType::Tuple {
+                tuple: VecM(vec![ContractType::Void; members]),
+            }),
+        };
+        validate_spec(&event_spec(nested_tuple(MAX_SPEC_MEMBERS - 3)))
+            .expect("nested tuple at exact member limit should be accepted");
+        assert!(
+            validate_spec(&event_spec(nested_tuple(MAX_SPEC_MEMBERS - 2)))
                 .unwrap_err()
                 .contains("definitions and members")
         );
