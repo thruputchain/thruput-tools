@@ -168,12 +168,14 @@ fn validate_spec(spec: &ContractSpec) -> Result<(EventNameIndex, EventSignatureI
             "event topic",
             &type_defs,
             &mut remaining_visits,
+            false,
         )?;
         let payload_values = validate_fields(
             &event.fields,
             "event payload",
             &type_defs,
             &mut remaining_visits,
+            true,
         )?;
         checked_values(1, payload_values)?;
     }
@@ -282,6 +284,7 @@ fn validate_fields(
     context: &str,
     type_defs: &BTreeMap<String, &ContractTypeDef>,
     remaining_visits: &mut usize,
+    count_values: bool,
 ) -> Result<usize, String> {
     let mut names = BTreeSet::new();
     let mut values = 0usize;
@@ -298,6 +301,7 @@ fn validate_fields(
                 &mut visiting,
                 remaining_visits,
                 1,
+                count_values,
             )?)
             .ok_or_else(|| "event value expansion overflows".to_owned())?;
     }
@@ -310,15 +314,9 @@ fn validate_type(
     visiting: &mut BTreeSet<String>,
     remaining_visits: &mut usize,
     depth: usize,
+    count_values: bool,
 ) -> Result<usize, String> {
-    *remaining_visits = remaining_visits
-        .checked_sub(1)
-        .ok_or_else(|| "event type validation exceeds the complexity limit".to_owned())?;
-    if depth > MAX_TYPE_DEPTH {
-        return Err(format!(
-            "event type exceeds the maximum depth of {MAX_TYPE_DEPTH}"
-        ));
-    }
+    validate_type_limits(remaining_visits, depth)?;
     match ty {
         ContractType::Void
         | ContractType::Bool
@@ -331,17 +329,18 @@ fn validate_type(
         | ContractType::I128
         | ContractType::String
         | ContractType::Bytes
-        | ContractType::Address => Ok(1),
+        | ContractType::Address => Ok(usize::from(count_values)),
         ContractType::Option { option_inner } => validate_type(
             option_inner,
             type_defs,
             visiting,
             remaining_visits,
             depth + 1,
+            count_values,
         ),
         ContractType::Vector { vector } => {
             if matches!(vector.element.as_ref(), ContractType::U8) {
-                return Ok(1);
+                return Ok(usize::from(count_values));
             }
             validate_type(
                 &vector.element,
@@ -349,12 +348,13 @@ fn validate_type(
                 visiting,
                 remaining_visits,
                 depth + 1,
+                count_values,
             )?;
-            Ok(1)
+            Ok(usize::from(count_values))
         }
         ContractType::Array { array } => {
             if matches!(array.element.as_ref(), ContractType::U8) {
-                return Ok(1);
+                return Ok(usize::from(count_values));
             }
             let inner = validate_type(
                 &array.element,
@@ -362,15 +362,27 @@ fn validate_type(
                 visiting,
                 remaining_visits,
                 depth + 1,
+                count_values,
             )?;
-            bounded_container(inner, array.len as usize)
+            if count_values {
+                bounded_container(inner, array.len as usize)
+            } else {
+                Ok(0)
+            }
         }
         ContractType::Tuple { tuple } => {
-            let mut values = 1;
+            let mut values = usize::from(count_values);
             for item in tuple.iter() {
                 values = checked_values(
                     values,
-                    validate_type(item, type_defs, visiting, remaining_visits, depth + 1)?,
+                    validate_type(
+                        item,
+                        type_defs,
+                        visiting,
+                        remaining_visits,
+                        depth + 1,
+                        count_values,
+                    )?,
                 )?;
             }
             Ok(values)
@@ -383,8 +395,14 @@ fn validate_type(
             let definition = type_defs
                 .get(name)
                 .ok_or_else(|| format!("unresolved event type `{name}`"))?;
-            let result =
-                validate_type_definition(definition, type_defs, visiting, remaining_visits, depth);
+            let result = validate_type_definition(
+                definition,
+                type_defs,
+                visiting,
+                remaining_visits,
+                depth,
+                count_values,
+            );
             visiting.remove(name);
             result
         }
@@ -395,12 +413,25 @@ fn validate_type(
     }
 }
 
+fn validate_type_limits(remaining_visits: &mut usize, depth: usize) -> Result<(), String> {
+    *remaining_visits = remaining_visits
+        .checked_sub(1)
+        .ok_or_else(|| "event type validation exceeds the complexity limit".to_owned())?;
+    if depth > MAX_TYPE_DEPTH {
+        return Err(format!(
+            "event type exceeds the maximum depth of {MAX_TYPE_DEPTH}"
+        ));
+    }
+    Ok(())
+}
+
 fn validate_type_definition(
     definition: &ContractTypeDef,
     type_defs: &BTreeMap<String, &ContractTypeDef>,
     visiting: &mut BTreeSet<String>,
     remaining_visits: &mut usize,
     depth: usize,
+    count_values: bool,
 ) -> Result<usize, String> {
     match definition {
         ContractTypeDef::TypeDefStruct { struct_def } => validate_named_fields(
@@ -410,6 +441,7 @@ fn validate_type_definition(
             visiting,
             remaining_visits,
             depth,
+            count_values,
         ),
         ContractTypeDef::TypeDefEnum { enum_def } => {
             let mut names = BTreeSet::new();
@@ -423,12 +455,12 @@ fn validate_type_definition(
                     return Err(format!("duplicate enum discriminant `{}`", variant.value));
                 }
             }
-            Ok(1)
+            Ok(usize::from(count_values))
         }
         ContractTypeDef::TypeDefUnion { union_def } => {
             let mut names = BTreeSet::new();
             let mut discriminants = BTreeSet::new();
-            let mut max_values = 2;
+            let mut max_values = if count_values { 2 } else { 0 };
             for case in union_def.cases.iter() {
                 let name = required_name(&case.name, "union case", false)?;
                 if !names.insert(name) {
@@ -441,9 +473,15 @@ fn validate_type_definition(
                     ));
                 }
                 let values = match &case.case_type {
-                    ContractUnionCaseType::UnionCaseVoid => 2,
+                    ContractUnionCaseType::UnionCaseVoid => {
+                        if count_values {
+                            2
+                        } else {
+                            0
+                        }
+                    }
                     ContractUnionCaseType::UnionCaseTuple { tuple } => {
-                        let mut values = 3;
+                        let mut values = if count_values { 3 } else { 0 };
                         for ty in tuple.iter() {
                             values = checked_values(
                                 values,
@@ -453,13 +491,14 @@ fn validate_type_definition(
                                     visiting,
                                     remaining_visits,
                                     depth + 1,
+                                    count_values,
                                 )?,
                             )?;
                         }
                         values
                     }
                     ContractUnionCaseType::UnionCaseStruct { struct_fields } => checked_values(
-                        2,
+                        if count_values { 2 } else { 0 },
                         validate_named_fields(
                             struct_fields,
                             "union struct",
@@ -467,6 +506,7 @@ fn validate_type_definition(
                             visiting,
                             remaining_visits,
                             depth,
+                            count_values,
                         )?,
                     )?,
                     _ => return Err("unsupported union case type in event payload".into()),
@@ -486,9 +526,10 @@ fn validate_named_fields(
     visiting: &mut BTreeSet<String>,
     remaining_visits: &mut usize,
     depth: usize,
+    count_values: bool,
 ) -> Result<usize, String> {
     let mut names = BTreeSet::new();
-    let mut values = 1;
+    let mut values = usize::from(count_values);
     for field in fields {
         let name = required_name(&field.name, context, true)?;
         if !names.insert(name) {
@@ -496,7 +537,14 @@ fn validate_named_fields(
         }
         values = checked_values(
             values,
-            validate_type(&field.ty, type_defs, visiting, remaining_visits, depth + 1)?,
+            validate_type(
+                &field.ty,
+                type_defs,
+                visiting,
+                remaining_visits,
+                depth + 1,
+                count_values,
+            )?,
         )?;
     }
     Ok(values)
@@ -807,6 +855,25 @@ mod tests {
         };
         assert!(
             validate_spec(&event_spec(array))
+                .unwrap_err()
+                .contains("may materialize")
+        );
+    }
+
+    #[test]
+    fn indexed_topics_ignore_payload_materialization_limit() {
+        let large_array = || ContractType::Array {
+            array: groundhog_contract_spec::ContractArrayType {
+                element: Box::new(ContractType::U64),
+                len: u32::try_from(MAX_EVENT_VALUES).unwrap(),
+            },
+        };
+        let mut indexed = event_spec(ContractType::Void);
+        indexed.events.0[0].topics = VecM(vec![field("large", large_array())]);
+
+        validate_spec(&indexed).expect("indexed values should not use the payload value budget");
+        assert!(
+            validate_spec(&event_spec(large_array()))
                 .unwrap_err()
                 .contains("may materialize")
         );
