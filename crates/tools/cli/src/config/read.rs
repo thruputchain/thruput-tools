@@ -653,7 +653,7 @@ fn decode_profile(name: &str, value: &toml::Value) -> PersistedProfileState {
     }
 }
 
-fn validate_profile(profile: ProjectProfile) -> Result<ProjectProfile, String> {
+pub(super) fn validate_profile(profile: ProjectProfile) -> Result<ProjectProfile, String> {
     if let Some(url) = profile.rpc_url.as_deref() {
         validate_http_url(url).map_err(|message| format!("rpc_url {message}"))?;
     }

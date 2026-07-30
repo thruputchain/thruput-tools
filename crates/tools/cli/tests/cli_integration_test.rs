@@ -722,6 +722,254 @@ fn config_get_reports_stable_selection_and_parse_errors() {
     );
 }
 
+#[test]
+fn config_set_json_creates_global_profile_and_reports_noop() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    write_global_config(&config_home, "# retained\nunknown = true\n");
+
+    let first = groundhog()
+        .args([
+            "--json",
+            "config",
+            "set",
+            "network",
+            "devnet",
+            "--profile",
+            "ci",
+        ])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(first.status.success());
+    assert!(first.stderr.is_empty());
+    let first_payload: serde_json::Value = serde_json::from_slice(&first.stdout).unwrap();
+    assert_eq!(first_payload["command"], "config.set");
+    assert_eq!(first_payload["data"]["schemaVersion"], 1);
+    assert_eq!(first_payload["data"]["profile"], "ci");
+    assert_eq!(first_payload["data"]["scope"], "global");
+    assert_eq!(first_payload["data"]["field"], "network");
+    assert_eq!(first_payload["data"]["changed"], true);
+
+    let second = groundhog()
+        .args([
+            "--json",
+            "config",
+            "set",
+            "network",
+            "devnet",
+            "--profile",
+            "ci",
+        ])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(second.status.success());
+    let second_payload: serde_json::Value = serde_json::from_slice(&second.stdout).unwrap();
+    assert_eq!(second_payload["data"]["changed"], false);
+
+    let contents = std::fs::read_to_string(config_home.join("groundhog/config.toml")).unwrap();
+    assert!(contents.starts_with("# retained\nunknown = true\n"));
+    assert!(contents.contains("[profile.ci]\nnetwork = \"devnet\""));
+}
+
+#[test]
+fn config_mutations_report_scope_and_value_errors() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    write_global_config(&config_home, "[profile.devnet]\nnetwork = \"devnet\"\n");
+    std::fs::write(project.join("groundhog.toml"), "# project\n").unwrap();
+
+    let ambiguous = groundhog()
+        .args([
+            "--json",
+            "config",
+            "set",
+            "network",
+            "devnet",
+            "--profile",
+            "devnet",
+        ])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .current_dir(&project)
+        .output()
+        .unwrap();
+    assert!(!ambiguous.status.success());
+    let ambiguous_error: serde_json::Value = serde_json::from_slice(&ambiguous.stderr).unwrap();
+    assert_eq!(ambiguous_error["error"]["code"], "config_scope_ambiguous");
+
+    let conflicting = groundhog()
+        .args([
+            "--json",
+            "config",
+            "unset",
+            "network",
+            "--profile",
+            "devnet",
+            "--global",
+            "--project",
+        ])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .current_dir(&project)
+        .output()
+        .unwrap();
+    assert!(!conflicting.status.success());
+    let conflict_error: serde_json::Value = serde_json::from_slice(&conflicting.stderr).unwrap();
+    assert_eq!(conflict_error["error"]["code"], "config_scope_conflict");
+
+    let invalid = groundhog()
+        .args([
+            "--json",
+            "config",
+            "set",
+            "rpc-url",
+            "relative/path",
+            "--profile",
+            "devnet",
+            "--global",
+        ])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .current_dir(&project)
+        .output()
+        .unwrap();
+    assert!(!invalid.status.success());
+    let invalid_error: serde_json::Value = serde_json::from_slice(&invalid.stderr).unwrap();
+    assert_eq!(invalid_error["error"]["code"], "config_value_invalid");
+
+    let unavailable = groundhog()
+        .args([
+            "--json",
+            "config",
+            "unset",
+            "network",
+            "--profile",
+            "devnet",
+            "--project",
+        ])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(!unavailable.status.success());
+    let unavailable_error: serde_json::Value = serde_json::from_slice(&unavailable.stderr).unwrap();
+    assert_eq!(
+        unavailable_error["error"]["code"],
+        "project_config_unavailable"
+    );
+}
+
+#[test]
+fn config_mutation_reports_stable_malformed_toml_error() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    write_global_config(&config_home, "[profile.devnet]\nsecret = \"not-closed\n");
+
+    let output = groundhog()
+        .args([
+            "--json",
+            "config",
+            "set",
+            "network",
+            "devnet",
+            "--profile",
+            "devnet",
+            "--global",
+        ])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let payload: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(payload["command"], "config.set");
+    assert_eq!(payload["error"]["code"], "config_parse_failed");
+    assert!(payload["error"]["details"]["line"].is_number());
+    assert!(
+        !String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("not-closed")
+    );
+}
+
+#[test]
+fn config_unset_project_override_reports_inherited_global_value() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    write_global_config(
+        &config_home,
+        "[profile.devnet]\nrpc_url = \"https://global.example\"\n",
+    );
+    std::fs::write(
+        project.join("groundhog.toml"),
+        "[profile.devnet]\nrpc_url = \"https://project.example\"\nunknown = true\n",
+    )
+    .unwrap();
+
+    let output = groundhog()
+        .args([
+            "config",
+            "unset",
+            "rpc-url",
+            "--profile",
+            "devnet",
+            "--project",
+        ])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .current_dir(&project)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("Unset `rpc-url` in profile `devnet`"));
+    assert!(stderr.contains("inherits `rpc-url` = `https://global.example`"));
+    assert!(stderr.contains(project.join("groundhog.toml").to_string_lossy().as_ref()));
+    let contents = std::fs::read_to_string(project.join("groundhog.toml")).unwrap();
+    assert!(!contents.contains("rpc_url"));
+    assert!(contents.contains("unknown = true"));
+}
+
+#[test]
+fn config_use_warns_when_environment_profile_remains_active() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    write_global_config(
+        &config_home,
+        "default_profile = \"local\"\n\n[profile.local]\nnetwork = \"local\"\n\n[profile.devnet]\nnetwork = \"devnet\"\n",
+    );
+
+    let output = groundhog()
+        .args(["--json", "config", "use", "devnet", "--global"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .env("GROUNDHOG_PROFILE", "local")
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(payload["command"], "config.use");
+    assert_eq!(payload["data"]["profile"], "devnet");
+    assert!(payload["data"].get("field").is_none());
+    assert_eq!(
+        payload["warnings"][0]["code"],
+        "environment_profile_override"
+    );
+    let contents = std::fs::read_to_string(config_home.join("groundhog/config.toml")).unwrap();
+    assert!(contents.starts_with("default_profile = \"devnet\""));
+    assert!(contents.contains("[profile.local]"));
+    assert!(contents.contains("[profile.devnet]"));
+}
+
 #[cfg(unix)]
 #[test]
 fn node_hogd_dev_binary_json_starts_supervisor() {

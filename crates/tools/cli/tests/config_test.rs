@@ -1787,6 +1787,179 @@ fn config_field_validation_accepts_typed_values_and_rejects_invalid_values() {
 }
 
 #[test]
+fn config_set_creates_project_overlay_and_preserves_unrelated_content() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("groundhog.toml");
+    fs::write(
+        &path,
+        "# retained\ndefault_profile = \"devnet\"\nplugin = true\n",
+    )
+    .unwrap();
+
+    let report = groundhog_cli::config::set_profile_field(
+        tmp.path(),
+        "devnet",
+        groundhog_cli::config::ConfigField::RpcUrl,
+        "https://rpc.example",
+        false,
+        true,
+    )
+    .unwrap();
+
+    assert!(report.changed);
+    assert_eq!(report.scope, groundhog_cli::config::ConfigScope::Project);
+    assert_eq!(report.path, path);
+    assert_eq!(
+        report.field,
+        Some(groundhog_cli::config::ConfigField::RpcUrl)
+    );
+    assert_eq!(
+        fs::read_to_string(report.path).unwrap(),
+        "# retained\ndefault_profile = \"devnet\"\nplugin = true\n\n[profile.devnet]\nrpc_url = \"https://rpc.example\"\n"
+    );
+}
+
+#[test]
+fn config_set_reports_unchanged_for_existing_value() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(
+        tmp.path().join("groundhog.toml"),
+        "[profile.devnet]\nnetwork = 'devnet'\n",
+    )
+    .unwrap();
+
+    let report = groundhog_cli::config::set_profile_field(
+        tmp.path(),
+        "devnet",
+        groundhog_cli::config::ConfigField::Network,
+        "devnet",
+        false,
+        true,
+    )
+    .unwrap();
+
+    assert!(!report.changed);
+    assert_eq!(
+        fs::read_to_string(tmp.path().join("groundhog.toml")).unwrap(),
+        "[profile.devnet]\nnetwork = 'devnet'\n"
+    );
+}
+
+#[test]
+fn config_unset_missing_project_profile_is_noop_without_creating_table() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("groundhog.toml");
+    let contents = "# retained\nplugin = true\n";
+    fs::write(&path, contents).unwrap();
+
+    let report = groundhog_cli::config::unset_profile_field(
+        tmp.path(),
+        "missing",
+        groundhog_cli::config::ConfigField::FaucetUrl,
+        false,
+        true,
+    )
+    .unwrap();
+
+    assert!(!report.changed);
+    assert_eq!(fs::read_to_string(path).unwrap(), contents);
+}
+
+#[test]
+fn config_set_validation_failure_leaves_selected_profile_unchanged() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("groundhog.toml");
+    let contents = "# retained\n[profile.devnet]\nrpc_url = \"relative/path\"\nunknown = true\n";
+    fs::write(&path, contents).unwrap();
+
+    let error = groundhog_cli::config::set_profile_field(
+        tmp.path(),
+        "devnet",
+        groundhog_cli::config::ConfigField::Network,
+        "devnet",
+        false,
+        true,
+    )
+    .unwrap_err();
+
+    assert_eq!(error.code(), "profile_config_invalid");
+    assert_eq!(fs::read_to_string(path).unwrap(), contents);
+}
+
+#[test]
+#[serial]
+fn config_use_updates_only_selected_default_profile() {
+    let tmp = TempDir::new().unwrap();
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    let path = global_config_path(&tmp);
+    fs::write(
+        &path,
+        "# retained\ndefault_profile = \"local\"\nunknown = true\n\n[profile.local]\nnetwork = \"local\"\n\n[profile.devnet]\nnetwork = \"devnet\"\n",
+    )
+    .unwrap();
+
+    let report = groundhog_cli::config::use_profile(tmp.path(), "devnet", true, false).unwrap();
+
+    assert!(report.changed);
+    assert_eq!(
+        fs::read_to_string(path).unwrap(),
+        "# retained\ndefault_profile = \"devnet\"\nunknown = true\n\n[profile.local]\nnetwork = \"local\"\n\n[profile.devnet]\nnetwork = \"devnet\"\n"
+    );
+    unsafe { env::remove_var("XDG_CONFIG_HOME") };
+}
+
+#[test]
+#[serial]
+fn config_use_global_rejects_project_only_profile() {
+    let tmp = TempDir::new().unwrap();
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    fs::write(
+        global_config_path(&tmp),
+        "default_profile = \"local\"\n\n[profile.local]\nnetwork = \"local\"\n",
+    )
+    .unwrap();
+    fs::write(
+        tmp.path().join("groundhog.toml"),
+        "[profile.project-only]\nnetwork = \"devnet\"\n",
+    )
+    .unwrap();
+
+    let error =
+        groundhog_cli::config::use_profile(tmp.path(), "project-only", true, false).unwrap_err();
+
+    assert_eq!(error.code(), "profile_not_found_in_scope");
+    assert_eq!(
+        error.to_string(),
+        "profile `project-only` not found in global config"
+    );
+    assert!(
+        fs::read_to_string(global_config_path(&tmp))
+            .unwrap()
+            .starts_with("default_profile = \"local\"")
+    );
+    unsafe { env::remove_var("XDG_CONFIG_HOME") };
+}
+
+#[test]
+#[serial]
+fn config_use_reports_noop_without_normalizing_string_style() {
+    let tmp = TempDir::new().unwrap();
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    let path = global_config_path(&tmp);
+    let contents = "default_profile = 'devnet'\n\n[profile.devnet]\nnetwork = \"devnet\"\n";
+    fs::write(&path, contents).unwrap();
+
+    let report = groundhog_cli::config::use_profile(tmp.path(), "devnet", true, false).unwrap();
+
+    assert!(!report.changed);
+    assert_eq!(fs::read_to_string(path).unwrap(), contents);
+    unsafe { env::remove_var("XDG_CONFIG_HOME") };
+}
+
+#[test]
 #[serial]
 fn malformed_toml_reports_the_config_path() {
     let tmp = TempDir::new().unwrap();

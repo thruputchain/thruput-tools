@@ -30,12 +30,16 @@ pub(crate) fn load_document(path: &Path) -> Result<DocumentMut, CliError> {
 }
 
 pub(crate) fn insert_preserving_decor(table: &mut dyn TableLike, key: &str, mut item: Item) {
-    if let Some(previous) = table.get(key).and_then(Item::as_value)
-        && let Some(next) = item.as_value_mut()
-    {
-        next.decor_mut().clone_from(previous.decor());
+    if let Some(previous) = table.get_mut(key) {
+        if let Some(previous_value) = previous.as_value()
+            && let Some(next) = item.as_value_mut()
+        {
+            next.decor_mut().clone_from(previous_value.decor());
+        }
+        *previous = item;
+    } else {
+        table.insert(key, item);
     }
-    table.insert(key, item);
 }
 
 /// Mutate and validate a fresh TOML document while holding its sidecar lock.
@@ -173,12 +177,28 @@ fn read_contents(path: &Path) -> Result<String, CliError> {
 }
 
 fn parse_document(path: &Path, contents: &str) -> Result<DocumentMut, CliError> {
-    contents.parse().map_err(|error| {
-        CliError::Other(format!(
-            "failed to parse config `{}`: {error}",
-            path.display()
-        ))
+    contents.parse().map_err(|error: toml_edit::TomlError| {
+        let (line, column) = error
+            .span()
+            .map(|span| line_column(contents, span.start))
+            .map_or((None, None), |(line, column)| (Some(line), Some(column)));
+        CliError::ConfigParse {
+            path: path.to_path_buf(),
+            message: error.message().to_owned(),
+            line,
+            column,
+        }
     })
+}
+
+fn line_column(contents: &str, offset: usize) -> (usize, usize) {
+    let prefix = contents.get(..offset).unwrap_or(contents);
+    let line = prefix.bytes().filter(|byte| *byte == b'\n').count() + 1;
+    let column = prefix
+        .rsplit_once('\n')
+        .map_or(prefix.len(), |(_, current_line)| current_line.len())
+        + 1;
+    (line, column)
 }
 
 fn unique_temp_path(path: &Path) -> PathBuf {
@@ -243,10 +263,9 @@ fn lock_path(config_path: &Path) -> PathBuf {
 }
 
 fn lock_timeout(config_path: &Path) -> CliError {
-    CliError::Other(format!(
-        "config `{}` is busy; another process may be updating it, try again shortly",
-        config_path.display()
-    ))
+    CliError::ConfigLockTimeout {
+        path: config_path.to_path_buf(),
+    }
 }
 
 #[cfg(unix)]
@@ -339,8 +358,14 @@ mod tests {
         .expect_err("contending transaction should time out");
 
         assert!(
-            error.to_string().contains("is busy") && started.elapsed() < Duration::from_secs(1),
+            error.code() == "config_lock_timeout"
+                && error.to_string().contains("is busy")
+                && started.elapsed() < Duration::from_secs(1),
             "unexpected contention error: {error}"
+        );
+        assert_eq!(
+            error.details_json().expect("details should be present")["path"],
+            path.display().to_string()
         );
     }
 

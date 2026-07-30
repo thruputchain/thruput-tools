@@ -1,8 +1,12 @@
+use std::borrow::Cow;
 use std::path::Path;
+use std::str::FromStr as _;
 
+use crate::checks::{Finding, FindingLevel};
 use crate::config::{
-    ConfigGetReport, ConfigProfileStatus, ConfigProfilesReport, ConfigScope, ConfigSource,
-    ConfigSourceKind, Network, ProfileSources, load_persisted_config,
+    ConfigField, ConfigGetReport, ConfigMutationReport, ConfigProfileStatus, ConfigProfilesReport,
+    ConfigScope, ConfigSource, ConfigSourceKind, Network, ProfileSources, load_persisted_config,
+    set_profile_field, unset_profile_field, use_profile,
 };
 use crate::result::CommandResult;
 use crate::terminal::terminal_safe;
@@ -52,6 +56,190 @@ pub fn profiles(start: &Path, cmd: &'static str, print: &Print) -> Result<(), Cl
         render_profiles(&report, print.is_human_stdout_tty());
     }
     Ok(())
+}
+
+/// Set one typed profile field in a selected config layer.
+#[allow(clippy::too_many_arguments)]
+pub fn set(
+    start: &Path,
+    profile: &str,
+    field: &str,
+    value: &str,
+    global: bool,
+    project: bool,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
+    let field = ConfigField::from_str(field)?;
+    let report = set_profile_field(start, profile, field, value, global, project)?;
+    let warnings = default_key_warnings(field, value);
+    render_mutation("Set", &report, print);
+    emit_mutation(report, warnings, cmd, print)
+}
+
+/// Unset one typed profile field in a selected config layer.
+#[allow(clippy::too_many_arguments)]
+pub fn unset(
+    start: &Path,
+    profile: &str,
+    field: &str,
+    global: bool,
+    project: bool,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
+    let field = ConfigField::from_str(field)?;
+    let report = unset_profile_field(start, profile, field, global, project)?;
+    render_mutation("Unset", &report, print);
+    if !print.is_json() {
+        render_inherited_fallback(start, &report, field, print);
+    }
+    emit_mutation(report, Vec::new(), cmd, print)
+}
+
+/// Set one layer's default profile.
+pub fn use_default(
+    start: &Path,
+    profile: &str,
+    global: bool,
+    project: bool,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
+    let report = use_profile(start, profile, global, project)?;
+    let warnings = environment_profile_warnings();
+    render_mutation("Selected", &report, print);
+    emit_mutation(report, warnings, cmd, print)
+}
+
+fn render_mutation(action: &str, report: &ConfigMutationReport, print: &Print) {
+    let state = if report.changed {
+        action
+    } else {
+        "No change for"
+    };
+    let profile = terminal_safe(&report.profile);
+    if let Some(field) = report.field {
+        print.success(format_args!("{state} `{field}` in profile `{profile}`"));
+    } else {
+        print.success(format_args!("{state} default profile `{profile}`"));
+    }
+    print.detail("scope", scope_label(report.scope));
+    print.detail("path", terminal_safe(&report.path.display().to_string()));
+}
+
+fn render_inherited_fallback(
+    start: &Path,
+    report: &ConfigMutationReport,
+    field: ConfigField,
+    print: &Print,
+) {
+    if report.scope != ConfigScope::Project || !report.changed {
+        return;
+    }
+    let Some((value, ConfigSourceKind::Global)) = load_persisted_config(start)
+        .ok()
+        .and_then(|config| config.resolve(&report.profile).ok())
+        .and_then(|profile| merged_field(&profile, field))
+    else {
+        return;
+    };
+    print.note(format_args!(
+        "Now inherits `{field}` = `{}` from global config",
+        terminal_safe(&value)
+    ));
+}
+
+fn merged_field(
+    profile: &crate::config::PersistedProfile,
+    field: ConfigField,
+) -> Option<(String, ConfigSourceKind)> {
+    let (value, source) = match field {
+        ConfigField::Network => (
+            profile
+                .values
+                .network
+                .map(|network| network_table_label(Some(network)))?
+                .to_owned(),
+            profile.sources.network.as_ref()?,
+        ),
+        ConfigField::RpcUrl => (
+            profile.values.rpc_url.clone()?,
+            profile.sources.rpc_url.as_ref()?,
+        ),
+        ConfigField::FaucetUrl => (
+            profile.values.faucet_url.clone()?,
+            profile.sources.faucet_url.as_ref()?,
+        ),
+        ConfigField::DefaultKey => (
+            profile.values.default_key.clone()?,
+            profile.sources.default_key.as_ref()?,
+        ),
+    };
+    Some((value, source.kind))
+}
+
+fn default_key_warnings(field: ConfigField, value: &str) -> Vec<Finding> {
+    if field != ConfigField::DefaultKey {
+        return Vec::new();
+    }
+    let value = value.trim();
+    if crate::keys::load_key_summaries()
+        .ok()
+        .is_some_and(|keys| keys.iter().any(|key| key.name == value))
+    {
+        return Vec::new();
+    }
+    vec![Finding {
+        level: FindingLevel::Warn,
+        code: "default_key_not_found",
+        message: format!("default key `{value}` is not stored on this machine"),
+        hint: Some(Cow::Borrowed(
+            "generate the key before using commands that require signing",
+        )),
+    }]
+}
+
+fn environment_profile_warnings() -> Vec<Finding> {
+    let Some(profile) = std::env::var("GROUNDHOG_PROFILE")
+        .ok()
+        .filter(|profile| !profile.trim().is_empty())
+    else {
+        return Vec::new();
+    };
+    vec![Finding {
+        level: FindingLevel::Warn,
+        code: "environment_profile_override",
+        message: format!(
+            "GROUNDHOG_PROFILE remains set to `{}` and still controls active profile selection",
+            profile.trim()
+        ),
+        hint: Some(Cow::Borrowed(
+            "unset GROUNDHOG_PROFILE to use the configured default profile",
+        )),
+    }]
+}
+
+fn emit_mutation(
+    report: ConfigMutationReport,
+    warnings: Vec<Finding>,
+    cmd: &'static str,
+    print: &Print,
+) -> Result<(), CliError> {
+    if !print.is_json() {
+        for warning in &warnings {
+            print.warn(terminal_safe(&warning.message));
+        }
+    }
+    print.json(&CommandResult::with_warnings(cmd, warnings, report))
+}
+
+fn scope_label(scope: ConfigScope) -> &'static str {
+    match scope {
+        ConfigScope::Global => "global",
+        ConfigScope::Project => "project",
+        ConfigScope::Resolved => "resolved",
+    }
 }
 
 fn render_get(report: &ConfigGetReport, styled: bool) {

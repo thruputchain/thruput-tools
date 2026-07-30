@@ -1,6 +1,7 @@
 mod atomic;
 mod dirs;
 mod global;
+mod mutate;
 mod project;
 mod read;
 
@@ -11,6 +12,10 @@ pub use global::{
     clear_local_runtime_state_if_matches, initialize_global_profiles, load_default_key,
     load_executor_credentials, save_default_key, save_executor_credentials,
     save_local_runtime_state,
+};
+pub use mutate::{
+    CONFIG_MUTATION_JSON_SCHEMA_VERSION, ConfigMutationReport, set_profile_field,
+    unset_profile_field, use_profile,
 };
 pub use project::{
     Network, ProfileOverrides, ProjectProfile, ResolvedProfile, SavedWalletBinding,

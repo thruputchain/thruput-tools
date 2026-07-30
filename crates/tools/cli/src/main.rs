@@ -514,6 +514,47 @@ enum ConfigCommand {
     },
     /// List global and project profiles
     Profiles,
+    /// Set one typed field in a profile layer
+    Set {
+        /// Field to set: network, rpc-url, faucet-url, or default-key
+        field: String,
+        /// New field value
+        value: String,
+        /// Profile to update
+        #[arg(long)]
+        profile: String,
+        /// Update the global config layer
+        #[arg(long)]
+        global: bool,
+        /// Update the project config layer
+        #[arg(long)]
+        project: bool,
+    },
+    /// Remove one typed field from a profile layer
+    Unset {
+        /// Field to remove: network, rpc-url, faucet-url, or default-key
+        field: String,
+        /// Profile to update
+        #[arg(long)]
+        profile: String,
+        /// Update the global config layer
+        #[arg(long)]
+        global: bool,
+        /// Update the project config layer
+        #[arg(long)]
+        project: bool,
+    },
+    /// Select the default profile in one config layer
+    Use {
+        /// Profile to select
+        profile: String,
+        /// Update the global config layer
+        #[arg(long)]
+        global: bool,
+        /// Update the project config layer
+        #[arg(long)]
+        project: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -727,6 +768,9 @@ impl ConfigCommand {
         match self {
             Self::Get { .. } => "config.get",
             Self::Profiles => "config.profiles",
+            Self::Set { .. } => "config.set",
+            Self::Unset { .. } => "config.unset",
+            Self::Use { .. } => "config.use",
         }
     }
 }
@@ -815,6 +859,30 @@ fn main() {
                 ConfigCommand::Profiles => {
                     groundhog_cli::config_cmd::profiles(&cwd, cmd_name, &print)
                 }
+                ConfigCommand::Set {
+                    field,
+                    value,
+                    profile,
+                    global,
+                    project,
+                } => groundhog_cli::config_cmd::set(
+                    &cwd, &profile, &field, &value, global, project, cmd_name, &print,
+                ),
+                ConfigCommand::Unset {
+                    field,
+                    profile,
+                    global,
+                    project,
+                } => groundhog_cli::config_cmd::unset(
+                    &cwd, &profile, &field, global, project, cmd_name, &print,
+                ),
+                ConfigCommand::Use {
+                    profile,
+                    global,
+                    project,
+                } => groundhog_cli::config_cmd::use_default(
+                    &cwd, &profile, global, project, cmd_name, &print,
+                ),
             }),
         Command::Build {
             package,
@@ -1289,6 +1357,46 @@ mod tests {
                 command: ConfigCommand::Profiles
             }
         ));
+    }
+
+    #[test]
+    fn config_mutation_commands_and_flags_parse() {
+        let set = Cli::parse_from([
+            "groundhog",
+            "config",
+            "set",
+            "rpc-url",
+            "https://rpc.example",
+            "--profile",
+            "devnet",
+            "--project",
+        ]);
+        assert_eq!(set.command.command_name(), "config.set");
+        assert!(matches!(
+            set.command,
+            Command::Config {
+                command: ConfigCommand::Set {
+                    profile,
+                    project: true,
+                    global: false,
+                    ..
+                }
+            } if profile == "devnet"
+        ));
+
+        let unset = Cli::parse_from([
+            "groundhog",
+            "config",
+            "unset",
+            "faucet-url",
+            "--profile",
+            "devnet",
+            "--global",
+        ]);
+        assert_eq!(unset.command.command_name(), "config.unset");
+
+        let use_profile = Cli::parse_from(["groundhog", "config", "use", "devnet", "--global"]);
+        assert_eq!(use_profile.command.command_name(), "config.use");
     }
 
     #[test]

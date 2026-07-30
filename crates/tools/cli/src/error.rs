@@ -47,6 +47,11 @@ pub enum CliError {
     Io(#[from] std::io::Error),
     #[error("profile `{0}` not found in project or global config")]
     ProfileNotFound(String),
+    #[error("profile `{profile}` not found in {scope} config")]
+    ProfileNotFoundInScope {
+        profile: String,
+        scope: &'static str,
+    },
     #[error("no active profile selected")]
     NoActiveProfile,
     #[error("invalid profile name: {0}")]
@@ -69,6 +74,12 @@ pub enum CliError {
     },
     #[error("project config not found")]
     ProjectConfigUnavailable,
+    #[error("`--global` and `--project` cannot be used together")]
+    ConfigScopeConflict,
+    #[error("config scope is ambiguous because a project config exists")]
+    ConfigScopeAmbiguous,
+    #[error("config `{}` is busy; another process may be updating it", .path.display())]
+    ConfigLockTimeout { path: std::path::PathBuf },
     #[error("credential password cannot be empty")]
     CredentialsEmpty,
     #[error("unsupported OS: {0}")]
@@ -358,6 +369,7 @@ impl CliError {
             Self::UnknownTemplate(_) => "unknown_template",
             Self::Io(_) => "io_error",
             Self::ProfileNotFound(_) => "profile_not_found",
+            Self::ProfileNotFoundInScope { .. } => "profile_not_found_in_scope",
             Self::NoActiveProfile => "no_active_profile",
             Self::ProfileNameInvalid(_) => "profile_name_invalid",
             Self::ConfigFieldUnsupported(_) => "config_field_unsupported",
@@ -365,6 +377,9 @@ impl CliError {
             Self::ConfigParse { .. } => "config_parse_failed",
             Self::ConfigFileInvalid { .. } => "config_file_invalid",
             Self::ProjectConfigUnavailable => "project_config_unavailable",
+            Self::ConfigScopeConflict => "config_scope_conflict",
+            Self::ConfigScopeAmbiguous => "config_scope_ambiguous",
+            Self::ConfigLockTimeout { .. } => "config_lock_timeout",
             Self::CredentialsEmpty => "credentials_empty",
             Self::UnsupportedOs(_) => "unsupported_os",
             Self::WasmOptFailed(_) => "wasm_opt_failed",
@@ -673,6 +688,10 @@ impl CliError {
                  an existing one with `--profile` or \
                  `GROUNDHOG_PROFILE`",
             )),
+            Self::ProfileNotFoundInScope { profile, scope } => Some(Cow::Owned(format!(
+                "create the profile with `groundhog config set network <NETWORK> --profile={} --{scope}`",
+                render_shell_arg(profile)
+            ))),
             Self::NoActiveProfile => Some(Cow::Borrowed(
                 "select a profile with `--profile` or `GROUNDHOG_PROFILE`, or set default_profile in project or global config",
             )),
@@ -690,6 +709,15 @@ impl CliError {
             )),
             Self::ProjectConfigUnavailable => Some(Cow::Borrowed(
                 "run from inside a Groundhog project or remove `--project`",
+            )),
+            Self::ConfigScopeConflict => Some(Cow::Borrowed(
+                "choose exactly one of `--global` or `--project`",
+            )),
+            Self::ConfigScopeAmbiguous => Some(Cow::Borrowed(
+                "rerun with `--global` or `--project` to choose the destination file",
+            )),
+            Self::ConfigLockTimeout { .. } => Some(Cow::Borrowed(
+                "wait for the other config command to finish, then retry",
             )),
             Self::CredentialsEmpty => Some(Cow::Borrowed(
                 "rerun `groundhog init` and provide a password; the username \
@@ -796,6 +824,13 @@ impl CliError {
             Self::ConfigFileInvalid { path, message } => Some(json!({
                 "path": path,
                 "message": message,
+            })),
+            Self::ProfileNotFoundInScope { profile, scope } => Some(json!({
+                "profile": profile,
+                "scope": scope,
+            })),
+            Self::ConfigLockTimeout { path } => Some(json!({
+                "path": path,
             })),
             Self::RpcCapabilityUnsupported { method, message } => Some(json!({
                 "method": method,
