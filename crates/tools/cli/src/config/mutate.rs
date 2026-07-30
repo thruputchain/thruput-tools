@@ -5,12 +5,12 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use toml_edit::{DocumentMut, Item, Table, TableLike, value};
 
-use super::atomic::{ConfigFileKind, insert_preserving_decor, transact_document};
+use super::atomic::{
+    ConfigFileKind, insert_preserving_decor, transact_document, transact_document_with_peer,
+};
 use super::dirs::config_file_path;
 use super::project::{Network, ProjectProfile, find_project_config};
-use super::read::{
-    ConfigField, ConfigFieldValue, ConfigScope, load_persisted_config, validate_profile_name,
-};
+use super::read::{ConfigField, ConfigFieldValue, ConfigScope, validate_profile_name};
 use crate::CliError;
 
 pub const CONFIG_MUTATION_JSON_SCHEMA_VERSION: u32 = 1;
@@ -91,38 +91,50 @@ pub fn create_profile(
     created_fields.sort_by_key(ToString::to_string);
     let destination = mutation_destination(start, global, project)?;
     let scope = scope_name(destination.scope);
-    let changed = transact_document(
-        &destination.path,
-        destination.kind,
-        |document| {
-            if profile_exists(document, &destination.path, &profile)? {
-                return Err(CliError::ProfileAlreadyExists {
-                    profile: profile.clone(),
-                    scope,
-                });
-            }
-            let profile_table = profile_table_mut(document, &destination.path, &profile, true)?
-                .ok_or_else(|| config_file_invalid(&destination.path, "profile was not created"))?;
-            for (field, value) in fields {
-                insert_preserving_decor(profile_table, field_key(field), field_item(value));
-            }
-            if options.select {
-                insert_preserving_decor(
-                    document.as_table_mut(),
-                    "default_profile",
-                    value(profile.as_str()),
-                );
-            }
-            Ok(())
-        },
-        |document| {
-            validate_document_profile(document, &destination.path, &profile, false)?;
-            if options.select {
+    let changed = if destination.scope == ConfigScope::Project && options.select {
+        let global_path = config_file_path()?;
+        transact_document_with_peer(
+            &destination.path,
+            destination.kind,
+            &global_path,
+            |document, _| {
+                insert_profile(document, &destination.path, &profile, fields, true, scope)
+            },
+            |document, global| {
+                validate_document_profile(document, &destination.path, &profile, false)?;
                 validate_default_profile(document, &destination.path)?;
-            }
-            Ok(())
-        },
-    )?;
+                validate_resolved_profile_documents(
+                    global,
+                    &global_path,
+                    document,
+                    &destination.path,
+                    &profile,
+                )
+            },
+        )?
+    } else {
+        transact_document(
+            &destination.path,
+            destination.kind,
+            |document| {
+                insert_profile(
+                    document,
+                    &destination.path,
+                    &profile,
+                    fields,
+                    options.select,
+                    scope,
+                )
+            },
+            |document| {
+                validate_document_profile(document, &destination.path, &profile, false)?;
+                if options.select {
+                    validate_default_profile(document, &destination.path)?;
+                }
+                Ok(())
+            },
+        )?
+    };
     Ok(ConfigNewReport {
         schema_version: CONFIG_NEW_JSON_SCHEMA_VERSION,
         profile,
@@ -318,47 +330,49 @@ pub fn use_profile(
 ) -> Result<ConfigMutationReport, CliError> {
     let profile = validate_profile_name(profile)?;
     let destination = mutation_destination(start, global, project)?;
-    let config = load_persisted_config(start)?;
-    let validate_destination_profile = if destination.scope == ConfigScope::Global {
-        config
-            .inspect(&profile, ConfigScope::Global)
-            .map_err(|error| match error {
-                CliError::ProfileNotFound(_) => CliError::ProfileNotFoundInScope {
-                    profile: profile.clone(),
-                    scope: "global",
-                },
-                error => error,
-            })?;
-        true
+    let changed = if destination.scope == ConfigScope::Project {
+        let global_path = config_file_path()?;
+        transact_document_with_peer(
+            &destination.path,
+            destination.kind,
+            &global_path,
+            |document, _| {
+                select_default_profile(document, &profile);
+                Ok(())
+            },
+            |document, global| {
+                validate_default_profile(document, &destination.path)?;
+                validate_resolved_profile_documents(
+                    global,
+                    &global_path,
+                    document,
+                    &destination.path,
+                    &profile,
+                )
+            },
+        )?
     } else {
-        config.resolve(&profile)?;
-        config
-            .project
-            .as_ref()
-            .is_some_and(|layer| layer.profiles.contains_key(&profile))
+        transact_document(
+            &destination.path,
+            destination.kind,
+            |document| {
+                select_default_profile(document, &profile);
+                Ok(())
+            },
+            |document| {
+                validate_default_profile(document, &destination.path)?;
+                validate_document_profile(document, &destination.path, &profile, false).map_err(
+                    |error| match error {
+                        CliError::ProfileNotFound(_) => CliError::ProfileNotFoundInScope {
+                            profile: profile.clone(),
+                            scope: "global",
+                        },
+                        error => error,
+                    },
+                )
+            },
+        )?
     };
-    let changed = transact_document(
-        &destination.path,
-        destination.kind,
-        |document| {
-            if document.get("default_profile").and_then(Item::as_str) == Some(profile.as_str()) {
-                return Ok(());
-            }
-            insert_preserving_decor(
-                document.as_table_mut(),
-                "default_profile",
-                value(profile.as_str()),
-            );
-            Ok(())
-        },
-        |document| {
-            validate_default_profile(document, &destination.path)?;
-            if validate_destination_profile {
-                validate_document_profile(document, &destination.path, &profile, false)?;
-            }
-            Ok(())
-        },
-    )?;
     Ok(mutation_report(profile, destination, changed, None))
 }
 
@@ -411,6 +425,58 @@ fn mutation_report(
         changed,
         field,
     }
+}
+
+fn insert_profile(
+    document: &mut DocumentMut,
+    path: &Path,
+    profile: &str,
+    fields: Vec<(ConfigField, ConfigFieldValue)>,
+    select: bool,
+    scope: &'static str,
+) -> Result<(), CliError> {
+    if profile_exists(document, path, profile)? {
+        return Err(CliError::ProfileAlreadyExists {
+            profile: profile.to_owned(),
+            scope,
+        });
+    }
+    let profile_table = profile_table_mut(document, path, profile, true)?
+        .ok_or_else(|| config_file_invalid(path, "profile was not created"))?;
+    for (field, value) in fields {
+        insert_preserving_decor(profile_table, field_key(field), field_item(value));
+    }
+    if select {
+        select_default_profile(document, profile);
+    }
+    Ok(())
+}
+
+fn select_default_profile(document: &mut DocumentMut, profile: &str) {
+    if document.get("default_profile").and_then(Item::as_str) != Some(profile) {
+        insert_preserving_decor(document.as_table_mut(), "default_profile", value(profile));
+    }
+}
+
+fn validate_resolved_profile_documents(
+    global: &DocumentMut,
+    global_path: &Path,
+    project: &DocumentMut,
+    project_path: &Path,
+    profile: &str,
+) -> Result<(), CliError> {
+    let global_exists = profile_exists(global, global_path, profile)?;
+    let project_exists = profile_exists(project, project_path, profile)?;
+    if !global_exists && !project_exists {
+        return Err(CliError::ProfileNotFound(profile.to_owned()));
+    }
+    if global_exists {
+        validate_document_profile(global, global_path, profile, false)?;
+    }
+    if project_exists {
+        validate_document_profile(project, project_path, profile, false)?;
+    }
+    Ok(())
 }
 
 fn parse_new_profile_fields(

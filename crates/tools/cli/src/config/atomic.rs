@@ -55,6 +55,32 @@ pub(crate) fn transact_document(
     transact_document_with_timeout(path, kind, LOCK_TIMEOUT, mutate, validate)
 }
 
+/// Mutate one document while holding stable locks for it and a read-only peer.
+pub(crate) fn transact_document_with_peer(
+    path: &Path,
+    kind: ConfigFileKind,
+    peer_path: &Path,
+    mutate: impl FnOnce(&mut DocumentMut, &DocumentMut) -> Result<(), CliError>,
+    validate: impl FnOnce(&DocumentMut, &DocumentMut) -> Result<(), CliError>,
+) -> Result<bool, CliError> {
+    let (_first_lock, _second_lock) = ConfigLock::acquire_pair(path, peer_path, LOCK_TIMEOUT)?;
+    let mut document = load_document(path)?;
+    let peer = load_document(peer_path)?;
+    let original = document.to_string();
+
+    mutate(&mut document, &peer)?;
+    validate(&document, &peer)?;
+
+    let updated = document.to_string();
+    if updated == original {
+        normalize_global_permissions(path, kind)?;
+        return Ok(false);
+    }
+
+    atomic_replace(path, updated.as_bytes(), kind)?;
+    Ok(true)
+}
+
 fn transact_document_with_timeout(
     path: &Path,
     kind: ConfigFileKind,
@@ -80,9 +106,7 @@ fn transact_document_with_timeout(
 }
 
 fn atomic_replace(path: &Path, data: &[u8], kind: ConfigFileKind) -> Result<(), CliError> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
+    create_parent_directories(path)?;
 
     let mut attempts_remaining = TEMP_FILE_ATTEMPTS;
     loop {
@@ -125,6 +149,7 @@ fn atomic_replace_at(
     drop(file);
     let result = result.and_then(|()| {
         std::fs::rename(temporary_path, path)?;
+        sync_parent_directory(path)?;
         Ok(())
     });
 
@@ -220,11 +245,16 @@ struct ConfigLock {
 
 impl ConfigLock {
     fn acquire(config_path: &Path, timeout: Duration) -> Result<Self, CliError> {
-        if let Some(parent) = config_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
+        let identity = config_lock_identity(config_path)?;
+        Self::acquire_identity(&identity, config_path, timeout)
+    }
 
-        let lock_path = lock_path(config_path);
+    fn acquire_identity(
+        identity: &Path,
+        reported_path: &Path,
+        timeout: Duration,
+    ) -> Result<Self, CliError> {
+        let lock_path = lock_path(identity);
         let mut options = OpenOptions::new();
         options.read(true).write(true).create(true);
         #[cfg(unix)]
@@ -237,10 +267,10 @@ impl ConfigLock {
                 Ok(()) => return Ok(Self { _file: file }),
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                     let Some(remaining) = timeout.checked_sub(started.elapsed()) else {
-                        return Err(lock_timeout(config_path));
+                        return Err(lock_timeout(reported_path));
                     };
                     if remaining.is_zero() {
-                        return Err(lock_timeout(config_path));
+                        return Err(lock_timeout(reported_path));
                     }
                     std::thread::sleep(remaining.min(LOCK_RETRY_INTERVAL));
                 }
@@ -248,12 +278,87 @@ impl ConfigLock {
                     if error.kind() == io::ErrorKind::Interrupted
                         && started.elapsed() < timeout => {}
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => {
-                    return Err(lock_timeout(config_path));
+                    return Err(lock_timeout(reported_path));
                 }
                 Err(error) => return Err(error.into()),
             }
         }
     }
+
+    fn acquire_pair(
+        first_path: &Path,
+        second_path: &Path,
+        timeout: Duration,
+    ) -> Result<(Self, Option<Self>), CliError> {
+        let first_identity = config_lock_identity(first_path)?;
+        let second_identity = config_lock_identity(second_path)?;
+        if first_identity == second_identity {
+            return Self::acquire_identity(&first_identity, first_path, timeout)
+                .map(|lock| (lock, None));
+        }
+        let (first_identity, first_reported, second_identity, second_reported) =
+            if first_identity <= second_identity {
+                (first_identity, first_path, second_identity, second_path)
+            } else {
+                (second_identity, second_path, first_identity, first_path)
+            };
+        let started = Instant::now();
+        let first = Self::acquire_identity(&first_identity, first_reported, timeout)?;
+        let remaining = timeout.saturating_sub(started.elapsed());
+        let second = Self::acquire_identity(&second_identity, second_reported, remaining)?;
+        Ok((first, Some(second)))
+    }
+}
+
+fn config_lock_identity(config_path: &Path) -> Result<PathBuf, CliError> {
+    create_parent_directories(config_path)?;
+    match std::fs::canonicalize(config_path) {
+        Ok(path) => Ok(path),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            let Some(parent) = config_path.parent() else {
+                return Ok(config_path.to_path_buf());
+            };
+            let parent = std::fs::canonicalize(parent)?;
+            let Some(file_name) = config_path.file_name() else {
+                return Ok(parent);
+            };
+            Ok(parent.join(file_name))
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn create_parent_directories(path: &Path) -> Result<(), CliError> {
+    let Some(parent) = path.parent() else {
+        return Ok(());
+    };
+    let mut missing = Vec::new();
+    let mut candidate = parent;
+    while !candidate.exists() {
+        missing.push(candidate.to_path_buf());
+        let Some(next) = candidate.parent() else {
+            break;
+        };
+        candidate = next;
+    }
+    std::fs::create_dir_all(parent)?;
+    for directory in missing.iter().rev() {
+        sync_parent_directory(directory)?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn sync_parent_directory(path: &Path) -> Result<(), CliError> {
+    if let Some(parent) = path.parent() {
+        File::open(parent)?.sync_all()?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn sync_parent_directory(_path: &Path) -> Result<(), CliError> {
+    Ok(())
 }
 
 fn lock_path(config_path: &Path) -> PathBuf {
@@ -295,6 +400,8 @@ fn try_lock(_file: &File) -> Result<(), io::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
     #[cfg(unix)]
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
@@ -367,6 +474,38 @@ mod tests {
             error.details_json().expect("details should be present")["path"],
             path.display().to_string()
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn lock_identity_resolves_directory_symlink_aliases() {
+        let temporary = tempfile::TempDir::new().expect("tempdir should be created");
+        let directory = temporary.path().join("config");
+        let alias = temporary.path().join("alias");
+        std::fs::create_dir(&directory).expect("config directory should be created");
+        symlink(&directory, &alias).expect("directory symlink should be created");
+        let direct = directory.join("config.toml");
+        let through_alias = alias.join("config.toml");
+
+        assert_eq!(
+            config_lock_identity(&direct).expect("direct identity should resolve"),
+            config_lock_identity(&through_alias).expect("alias identity should resolve")
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn lock_pair_acquires_canonical_alias_once() {
+        let temporary = tempfile::TempDir::new().expect("tempdir should be created");
+        let path = temporary.path().join("config.toml");
+        let alias = temporary.path().join("alias.toml");
+        std::fs::write(&path, "value = true\n").expect("config should be written");
+        symlink(&path, &alias).expect("config symlink should be created");
+
+        let (_lock, duplicate) = ConfigLock::acquire_pair(&path, &alias, Duration::ZERO)
+            .expect("canonical aliases should share one lock");
+
+        assert!(duplicate.is_none());
     }
 
     #[test]

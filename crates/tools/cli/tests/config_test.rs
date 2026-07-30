@@ -1958,6 +1958,41 @@ fn config_new_project_allows_overlay_for_global_profile() {
 }
 
 #[test]
+#[serial]
+fn config_new_project_use_rejects_invalid_global_layer_without_changes() {
+    let tmp = TempDir::new().unwrap();
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    fs::write(
+        global_config_path(&tmp),
+        "[profile.staging]\nnetwork = \"preview\"\n",
+    )
+    .unwrap();
+    let project_path = tmp.path().join("groundhog.toml");
+    let project_contents = "# project\n";
+    fs::write(&project_path, project_contents).unwrap();
+
+    let error = groundhog_cli::config::create_profile(
+        tmp.path(),
+        "staging",
+        &groundhog_cli::config::NewProfileOptions {
+            network: "devnet".into(),
+            rpc_url: None,
+            faucet_url: None,
+            default_key: None,
+            select: true,
+        },
+        false,
+        true,
+    )
+    .unwrap_err();
+
+    assert_eq!(error.code(), "profile_config_invalid");
+    assert_eq!(fs::read_to_string(project_path).unwrap(), project_contents);
+    unsafe { env::remove_var("XDG_CONFIG_HOME") };
+}
+
+#[test]
 fn config_rm_removes_complete_profile_and_matching_default() {
     let tmp = TempDir::new().unwrap();
     let path = tmp.path().join("groundhog.toml");
@@ -2172,6 +2207,55 @@ fn config_use_updates_only_selected_default_profile() {
         fs::read_to_string(path).unwrap(),
         "# retained\ndefault_profile = \"devnet\"\nunknown = true\n\n[profile.local]\nnetwork = \"local\"\n\n[profile.devnet]\nnetwork = \"devnet\"\n"
     );
+    unsafe { env::remove_var("XDG_CONFIG_HOME") };
+}
+
+#[test]
+#[cfg(unix)]
+#[serial]
+fn config_use_project_locks_global_before_updating_selection() {
+    let tmp = TempDir::new().unwrap();
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    let global_path = global_config_path(&tmp);
+    fs::write(&global_path, "[profile.devnet]\nnetwork = \"devnet\"\n").unwrap();
+    let project_path = tmp.path().join("groundhog.toml");
+    let project_contents = "# project\n";
+    fs::write(&project_path, project_contents).unwrap();
+    let _lock = lock_config(&global_path);
+
+    let error = groundhog_cli::config::use_profile(tmp.path(), "devnet", false, true).unwrap_err();
+
+    assert_eq!(error.code(), "config_lock_timeout");
+    assert_eq!(fs::read_to_string(project_path).unwrap(), project_contents);
+    unsafe { env::remove_var("XDG_CONFIG_HOME") };
+}
+
+#[test]
+#[cfg(unix)]
+#[serial]
+fn config_use_project_validates_global_after_waiting_for_lock() {
+    let tmp = TempDir::new().unwrap();
+    unsafe { env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+    fs::create_dir_all(tmp.path().join("groundhog")).unwrap();
+    let global_path = global_config_path(&tmp);
+    fs::write(&global_path, "[profile.devnet]\nnetwork = \"devnet\"\n").unwrap();
+    let project_path = tmp.path().join("groundhog.toml");
+    let project_contents = "# project\n";
+    fs::write(&project_path, project_contents).unwrap();
+    let lock = lock_config(&global_path);
+    let project = tmp.path().to_path_buf();
+    let mutation = std::thread::spawn(move || {
+        groundhog_cli::config::use_profile(&project, "devnet", false, true)
+    });
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    fs::write(&global_path, "[profile.devnet]\nnetwork = \"preview\"\n").unwrap();
+    drop(lock);
+
+    let error = mutation.join().unwrap().unwrap_err();
+
+    assert_eq!(error.code(), "profile_config_invalid");
+    assert_eq!(fs::read_to_string(project_path).unwrap(), project_contents);
     unsafe { env::remove_var("XDG_CONFIG_HOME") };
 }
 
