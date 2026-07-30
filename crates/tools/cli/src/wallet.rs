@@ -471,12 +471,10 @@ pub fn list(profile: Option<&str>, cmd: &'static str, print: &Print) -> Result<(
     }
 
     for wallet in wallets {
+        let marker = if wallet.is_default { "*" } else { " " };
         println!(
-            "{}{} {} owner {}",
-            wallet.name,
-            if wallet.is_default { " (default)" } else { "" },
-            wallet.address,
-            wallet.owner_public_key
+            "{marker} {} {} owner {}",
+            wallet.name, wallet.address, wallet.owner_public_key
         );
     }
 

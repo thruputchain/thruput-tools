@@ -513,7 +513,18 @@ faucet_url = "http://44.236.180.135:8085"
 ```
 
 Select a profile via `--profile`, `GROUNDHOG_PROFILE`, or `default_profile`.
-If none is configured, the fallback profile name is `default`.
+If none is configured, commands that require a profile report that no active
+profile is selected. The name `default` has no special behavior.
+
+Inspect the merged persisted configuration without applying local-node state,
+signer fallback, or command-specific overrides:
+
+```bash
+groundhog config get
+groundhog config get devnet
+groundhog config get devnet --sources
+groundhog config profiles
+```
 
 Contract aliases map names to addresses per profile. `deploy`, `call`, and
 `storage` resolve aliases from the active profile. When `runtime_manifest` is

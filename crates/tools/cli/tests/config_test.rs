@@ -1247,6 +1247,8 @@ fn resolve_profile_rejects_legacy_string_wallet_binding() {
         tmp.path().join("groundhog.toml"),
         format!(
             r#"
+default_profile = "default"
+
 [profile.default.wallets]
 alice = "0x{}"
 "#,

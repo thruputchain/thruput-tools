@@ -133,6 +133,11 @@ enum Command {
         #[arg(long = "profile")]
         profile: Option<String>,
     },
+    /// Inspect persisted Groundhog configuration
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
     /// Build contract artifact
     #[command(long_about = "Cross-compile the contract to \
                       wasm32-unknown-unknown or \
@@ -493,6 +498,25 @@ enum KeysCommand {
 }
 
 #[derive(Subcommand)]
+enum ConfigCommand {
+    /// Show one persisted profile
+    #[command(
+        long_about = "Show one persisted profile merged from global and project configuration. \
+                      This excludes local-node state, signer fallback, and command-specific \
+                      overrides."
+    )]
+    Get {
+        /// Profile name; omit to use active-profile selection
+        profile: Option<String>,
+        /// Include the global or project source of each value
+        #[arg(long)]
+        sources: bool,
+    },
+    /// List global and project profiles
+    Profiles,
+}
+
+#[derive(Subcommand)]
 enum WalletCommand {
     /// List saved project wallets
     Ls {
@@ -698,6 +722,15 @@ impl TokenCommand {
     }
 }
 
+impl ConfigCommand {
+    fn command_name(&self) -> &'static str {
+        match self {
+            Self::Get { .. } => "config.get",
+            Self::Profiles => "config.profiles",
+        }
+    }
+}
+
 impl Command {
     /// Canonical command name for JSON envelopes.
     ///
@@ -718,6 +751,7 @@ impl Command {
             Self::View { .. } => "view",
             Self::Storage { .. } => "storage",
             Self::Node { .. } => "node",
+            Self::Config { command } => command.command_name(),
             Self::Keys { command } => command.command_name(),
             Self::Wallet { command } => command.command_name(),
             Self::Codegen { command } => command.command_name(),
@@ -768,6 +802,20 @@ fn main() {
         Command::Status { profile } => std::env::current_dir()
             .map_err(groundhog_cli::CliError::Io)
             .and_then(|cwd| groundhog_cli::status::run(&cwd, profile.as_deref(), cmd_name, &print)),
+        Command::Config { command } => std::env::current_dir()
+            .map_err(groundhog_cli::CliError::Io)
+            .and_then(|cwd| match command {
+                ConfigCommand::Get { profile, sources } => groundhog_cli::config_cmd::get(
+                    &cwd,
+                    profile.as_deref(),
+                    sources,
+                    cmd_name,
+                    &print,
+                ),
+                ConfigCommand::Profiles => {
+                    groundhog_cli::config_cmd::profiles(&cwd, cmd_name, &print)
+                }
+            }),
         Command::Build {
             package,
             target,
@@ -1213,6 +1261,35 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn config_get_flags_and_command_name_parse() {
+        let cli = Cli::parse_from(["groundhog", "config", "get", "devnet", "--sources"]);
+
+        assert_eq!(cli.command.command_name(), "config.get");
+        match cli.command {
+            Command::Config {
+                command: ConfigCommand::Get { profile, sources },
+            } => {
+                assert_eq!(profile.as_deref(), Some("devnet"));
+                assert!(sources);
+            }
+            _ => panic!("expected config get command"),
+        }
+    }
+
+    #[test]
+    fn config_profiles_command_name_parses() {
+        let cli = Cli::parse_from(["groundhog", "config", "profiles"]);
+
+        assert_eq!(cli.command.command_name(), "config.profiles");
+        assert!(matches!(
+            cli.command,
+            Command::Config {
+                command: ConfigCommand::Profiles
+            }
+        ));
+    }
 
     #[test]
     fn node_dev_account_count_flag_parses() {

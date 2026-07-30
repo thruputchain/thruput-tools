@@ -78,7 +78,7 @@ Global config also contains `[executor]`, the top-level key selected by `groundh
 | #   | Decision | Rationale |
 | --- | --- | --- |
 | D1  | `config get` shows the persisted global/project merge by default. | The command manages configuration files, not runtime invocation state. |
-| D2  | `--global` and `--project` inspect or mutate one physical layer. | A merged profile cannot be written back without destroying layering. |
+| D2  | Mutations use `--global` and `--project` to target one physical layer. | A merged profile cannot be written back without destroying layering. |
 | D3  | `config set` and `config unset` expose typed profile fields. | Typed fields provide validation, help, completion, and a stable interface. |
 | D4  | `config set` creates a missing profile table in the selected layer. | This avoids a separate profile-creation command. |
 | D5  | `config unset` removes a field only from the selected layer. | An inherited value may become visible; no tombstone is created. |
@@ -91,29 +91,26 @@ Show one profile. With no positional profile, use the existing active-profile se
 
 ```text
 --sources    Show where each merged value came from
---global     Show only the global layer
---project    Show only the project layer
 ```
 
-`--global` and `--project` conflict. Without either flag, output is the persisted global/project merge. It does not include `local_runtime_state`, signer fallback, `GROUNDHOG_RUNTIME_MANIFEST`, or command-specific overrides.
+Output is always the persisted global/project merge. It does not include `local_runtime_state`, signer fallback, `GROUNDHOG_RUNTIME_MANIFEST`, or command-specific overrides. `--sources` identifies which layer contributed each effective value.
 
 Human output:
 
 ```text
 Profile: devnet
-Selected by: project default
 
-Network:          devnet
-RPC URL:          https://rpc.devnet.example
-Faucet URL:       https://faucet.devnet.example
-Default key:      alice
-Runtime manifest: not set
+Network           devnet
+RPC URL           https://rpc.devnet.example
+Faucet URL        https://faucet.devnet.example
+Default key       alice
+Default wallet    not set
 
-Contracts:
+Contracts
   HOG              0x0000...0001
   counter          0x18ab...9f23
 
-Wallets:
+Wallets
   alice            0x91c2...4d10
 ```
 
@@ -129,24 +126,24 @@ contracts.HOG     0x0000...0001                      global
 contracts.counter 0x18ab...9f23                      project
 ```
 
-Raw layer views show only values stored in that file. They use an allowlisted profile projection rather than printing the whole global document.
-
-Raw layer views preserve runtime paths exactly as stored. Merged output resolves relative runtime paths to absolute paths using the config file that supplied each value as the base. Inspection never rewrites the stored spelling.
+Human output omits selection provenance, internal scope, runtime manifest, and runtime artifact fields. JSON retains the reviewed typed inspection model for machine consumers. Merged runtime paths are normalized internally using the config file that supplied each value as the base.
 ### `groundhog config profiles`
 List the sorted union of global and project profile names:
 
 ```text
-PROFILE    ACTIVE    GLOBAL    PROJECT    NETWORK    STATUS
-local      yes       yes       yes        local      valid
-devnet               yes       yes        devnet     valid
-staging              yes       no         -          invalid
+Profiles
+
+    PROFILE   NETWORK
+  * local     local
+    devnet    devnet
+  ! staging   invalid
 ```
+
+Interactive and piped output use `*` for the active profile and `!` for invalid or missing profiles. Interactive output uses warning color for `!` and dims network values.
 
 The command must:
 
-- mark the active profile and how it was selected;
-  
-- show whether each profile exists globally, in the project, or in both;
+- mark the active profile;
   
 - show the merged network when valid;
   
@@ -327,7 +324,7 @@ config.use
 
 Each data payload includes `schemaVersion: 1` and camelCase fields.
 
-`config.get` includes the profile, selection source, scope (`resolved`, `global`, or `project`), profile values, contracts, wallets, and optional per-value sources.
+`config.get` includes the profile, selection source, fixed `resolved` scope, profile values, contracts, wallets, and optional per-value sources. Selection source and scope are machine metadata and do not appear in human output.
 
 A source is an object with a stable `kind` and optional location:
 
@@ -352,7 +349,7 @@ When `--sources` is used, `config.get` groups source records by the same logical
 }
 ```
 
-Unset scalar fields have a `null` value and no source entry. Raw layer output uses that layer's source for every stored value. Runtime path values follow the raw-versus-merged rules above.
+Unset scalar fields have a `null` value and no source entry. Runtime path values use their normalized merged form.
 
 `config.profiles` includes the active profile, selection source, and sorted rows with layer presence, network, status, and an optional invalid reason.
 
@@ -388,8 +385,6 @@ Important behavior:
 - `set --project` can create an overlay for a global profile;
   
 - empty maps and unset scalar fields are normal;
-  
-- `get --project` outside a project is an error;
   
 - environment-selected profiles remain selected until the environment changes;
   
@@ -440,7 +435,7 @@ Do not build a second runtime profile resolver. Config inspection may share the 
 - concurrent-edit detection.
   
 ## Acceptance Criteria
-1. A user can discover persisted global, project, and merged profile values without reading TOML.
+1. A user can inspect effective persisted profile values without reading TOML.
   
 2. Source output identifies global and project contributions per field and map entry.
   
@@ -465,7 +460,7 @@ Unit and config tests cover:
 
 - active-profile precedence;
 - global/project scalar and per-entry map merging;
-- resolved, global-only, and project-only views;
+- merged profile views;
 - per-value provenance;
 - every typed field's valid and invalid forms;
 - set-created overlays and unchanged values;

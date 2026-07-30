@@ -159,9 +159,9 @@ pub struct ProfileSources {
     pub runtime_manifest: Option<ConfigSource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runtime_artifacts_dir: Option<ConfigSource>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(default)]
     pub contracts: BTreeMap<String, ConfigSource>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(default)]
     pub wallets: BTreeMap<String, ConfigSource>,
 }
 
@@ -619,7 +619,7 @@ fn read_optional_root(path: &Path) -> Result<Option<toml::Value>, CliError> {
             .map_or((None, None), |(line, column)| (Some(line), Some(column)));
         CliError::ConfigParse {
             path: path.to_path_buf(),
-            message: error.to_string(),
+            message: error.message().to_owned(),
             line,
             column,
         }

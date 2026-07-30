@@ -12,6 +12,7 @@ pub(crate) mod codec;
 pub(crate) mod codegen;
 pub mod codegen_cmd;
 pub mod config;
+pub mod config_cmd;
 pub mod contract_spec;
 pub mod deploy;
 pub(crate) mod dev_detail;
