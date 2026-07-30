@@ -17,13 +17,13 @@ use crate::events_json::{
     EVENTS_LIST_JSON_SCHEMA_VERSION, EventDecodeStatus, EventFiltersReport, EventListItemReport,
     EventListReport,
 };
+use crate::pagination::{parse_cursor, parse_limit};
 use crate::result::CommandResult;
 use crate::terminal::terminal_safe;
 use crate::tx::map_rpc_error;
 use crate::tx_utils::format_tx_hash;
 use crate::{CliError, Print};
 
-const DEFAULT_EVENT_LIMIT: u32 = 50;
 const MAX_SERIALIZED_EVENT_BYTES: usize = 1024;
 
 /// List one page of raw events emitted by a resolved contract address.
@@ -158,37 +158,19 @@ fn parse_topic_values(inputs: &[String], position: &'static str) -> Result<Vec<T
         .collect()
 }
 
-pub(crate) fn parse_event_limit(input: Option<&str>) -> Result<u32, CliError> {
-    let Some(input) = input else {
-        return Ok(DEFAULT_EVENT_LIMIT);
-    };
-    let limit = input
-        .parse::<u32>()
-        .map_err(|error| CliError::InvalidEventLimit {
-            input: input.to_owned(),
-            display_input: terminal_safe(input),
-            message: error.to_string(),
-        })?;
-    if limit == 0 {
-        return Err(CliError::InvalidEventLimit {
-            input: input.to_owned(),
-            display_input: terminal_safe(input),
-            message: "must be greater than zero".into(),
-        });
-    }
-    Ok(limit)
+fn parse_event_limit(input: Option<&str>) -> Result<u32, CliError> {
+    parse_limit(input).map_err(|error| CliError::InvalidEventLimit {
+        display_input: terminal_safe(&error.input),
+        input: error.input,
+        message: error.message,
+    })
 }
 
-pub(crate) fn parse_event_cursor(input: Option<&str>) -> Result<PaginationCursor, CliError> {
-    let Some(input) = input else {
-        return Ok(PaginationCursor::default());
-    };
-    serde_json::from_value(serde_json::Value::String(input.to_owned())).map_err(|error| {
-        CliError::InvalidEventCursor {
-            input: input.to_owned(),
-            display_input: terminal_safe(input),
-            message: error.to_string(),
-        }
+fn parse_event_cursor(input: Option<&str>) -> Result<PaginationCursor, CliError> {
+    parse_cursor(input).map_err(|error| CliError::InvalidEventCursor {
+        display_input: terminal_safe(&error.input),
+        input: error.input,
+        message: error.message,
     })
 }
 
@@ -335,6 +317,7 @@ fn print_event_list(report: &EventListReport, continuation_requested: bool, prin
         }
     }
     if !report.cursor.0.is_empty() {
+        print.status("");
         print.detail(
             "next cursor",
             format_args!("0x{}", hex::encode(&report.cursor.0)),
@@ -344,45 +327,7 @@ fn print_event_list(report: &EventListReport, continuation_requested: bool, prin
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_event_cursor, parse_event_limit, parse_topic_values};
-
-    #[test]
-    fn event_limit_defaults_and_accepts_nonzero_u32() {
-        assert_eq!(parse_event_limit(None).unwrap(), 50);
-        assert_eq!(parse_event_limit(Some("1")).unwrap(), 1);
-        assert_eq!(
-            parse_event_limit(Some(&u32::MAX.to_string())).unwrap(),
-            u32::MAX
-        );
-    }
-
-    #[test]
-    fn event_limit_rejects_invalid_values() {
-        for input in ["0", "-1", "one", "4294967296"] {
-            let error = parse_event_limit(Some(input)).expect_err("invalid limit should fail");
-            assert_eq!(error.code(), "invalid_event_limit");
-        }
-    }
-
-    #[test]
-    fn event_cursor_uses_shared_hex_contract() {
-        for (input, expected) in [
-            (None, vec![]),
-            (Some("0x"), vec![]),
-            (Some("0XAbCd"), vec![0xab, 0xcd]),
-        ] {
-            let cursor = parse_event_cursor(input).expect("shared cursor form should parse");
-            assert_eq!(cursor.0, expected);
-        }
-    }
-
-    #[test]
-    fn event_cursor_rejects_malformed_hex() {
-        for input in ["0xabc", "0xgg"] {
-            let error = parse_event_cursor(Some(input)).expect_err("invalid cursor should fail");
-            assert_eq!(error.code(), "invalid_event_cursor");
-        }
-    }
+    use super::parse_topic_values;
 
     #[test]
     fn event_topics_accept_shared_fixed_hex_forms() {

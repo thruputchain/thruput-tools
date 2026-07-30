@@ -7072,6 +7072,10 @@ fn tx_list_human_output_marks_sparse_page_and_reusable_cursor() {
     assert!(stderr.contains(&format!("address: {address}")));
     assert!(stderr.contains("transactions: none in this page"));
     assert!(stderr.contains("next cursor: 0xcafe"));
+    assert!(
+        stderr.contains("transactions: none in this page\n\n  next cursor: 0xcafe"),
+        "stderr: {stderr}"
+    );
     assert!(stderr.contains("latest indexed block: 20"));
     assert!(stderr.contains("oldest retained block: 3"));
     assert!(!stderr.contains("order:"));
@@ -8103,6 +8107,10 @@ fn events_list_nonempty_human_output_reports_complete_raw_event() {
         );
     }
     assert_eq!(stderr.matches("\n\nevent\n").count(), 2, "stderr: {stderr}");
+    assert!(
+        stderr.contains("data: 0xdeadbeef\n\n  next cursor: 0xcafe"),
+        "stderr: {stderr}"
+    );
 }
 
 #[test]
@@ -8183,6 +8191,12 @@ fn events_list_human_output_distinguishes_empty_page_states() {
             stderr.contains("next cursor: 0xcafe"),
             response_cursor == "0xcafe"
         );
+        if response_cursor == "0xcafe" {
+            assert!(
+                stderr.contains("\n\n  next cursor: 0xcafe"),
+                "stderr: {stderr}"
+            );
+        }
     }
 }
 
@@ -8626,6 +8640,12 @@ fn token_transfers_human_output_distinguishes_empty_page_states() {
             stderr.contains("next cursor: 0xcafe"),
             response_cursor == "0xcafe"
         );
+        if response_cursor == "0xcafe" {
+            assert!(
+                stderr.contains("\n\n  next cursor: 0xcafe"),
+                "stderr: {stderr}"
+            );
+        }
     }
 }
 

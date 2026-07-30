@@ -14,6 +14,7 @@ use crate::codec::format_contract_address;
 use crate::config::{ProfileOverrides, resolve_profile_with_overrides};
 use crate::events::fetch_event_page;
 use crate::events_json::RawEventReport;
+use crate::pagination::{parse_cursor, parse_limit};
 use crate::result::CommandResult;
 use crate::terminal::terminal_safe;
 use crate::token_json::{
@@ -102,36 +103,18 @@ pub fn transfers(
 }
 
 fn parse_token_transfer_limit(input: Option<&str>) -> Result<u32, CliError> {
-    let Some(input) = input else {
-        return Ok(50);
-    };
-    let limit = input
-        .parse::<u32>()
-        .map_err(|error| CliError::InvalidTokenTransferLimit {
-            input: input.to_owned(),
-            display_input: terminal_safe(input),
-            message: error.to_string(),
-        })?;
-    if limit == 0 {
-        return Err(CliError::InvalidTokenTransferLimit {
-            input: input.to_owned(),
-            display_input: terminal_safe(input),
-            message: "must be greater than zero".into(),
-        });
-    }
-    Ok(limit)
+    parse_limit(input).map_err(|error| CliError::InvalidTokenTransferLimit {
+        display_input: terminal_safe(&error.input),
+        input: error.input,
+        message: error.message,
+    })
 }
 
 fn parse_token_transfer_cursor(input: Option<&str>) -> Result<PaginationCursor, CliError> {
-    let Some(input) = input else {
-        return Ok(PaginationCursor::default());
-    };
-    serde_json::from_value(serde_json::Value::String(input.to_owned())).map_err(|error| {
-        CliError::InvalidTokenTransferCursor {
-            input: input.to_owned(),
-            display_input: terminal_safe(input),
-            message: error.to_string(),
-        }
+    parse_cursor(input).map_err(|error| CliError::InvalidTokenTransferCursor {
+        display_input: terminal_safe(&error.input),
+        input: error.input,
+        message: error.message,
     })
 }
 
@@ -326,6 +309,7 @@ fn print_transfers(report: &TokenTransfersReport, continuation_requested: bool, 
         }
     }
     if !report.cursor.0.is_empty() {
+        print.status("");
         print.detail(
             "next cursor",
             format_args!("0x{}", hex::encode(&report.cursor.0)),
