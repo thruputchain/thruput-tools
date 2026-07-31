@@ -1242,7 +1242,7 @@ mod tests {
                 latest_block: IdxBlockHeight::from(CANNED_HEIGHT_B),
                 oldest_block: IdxBlockHeight::from(0_i64),
             };
-            let Some(offset) = decode_block_transaction_cursor(query) else {
+            let Some((order, offset)) = decode_block_transaction_cursor(query) else {
                 return empty_page();
             };
 
@@ -1256,7 +1256,7 @@ mod tests {
                 })
                 .collect();
             refs.sort_unstable_by_key(|transaction| transaction.tx_hash.into_inner());
-            if query.order == IdxIterationOrder::IterationOrderDescending {
+            if order == IdxIterationOrder::IterationOrderDescending {
                 refs.reverse();
             }
 
@@ -1265,7 +1265,7 @@ mod tests {
             let end = offset.saturating_add(limit).min(refs.len());
             let page_refs = refs.get(offset..end).unwrap_or_default().to_vec();
             let cursor = if end < refs.len() {
-                encode_block_transaction_cursor(query.height.clone(), query.order, end)
+                encode_block_transaction_cursor(query.height.clone(), order, end)
             } else {
                 vec![]
             };
@@ -1317,9 +1317,11 @@ mod tests {
         cursor
     }
 
-    fn decode_block_transaction_cursor(query: &BlockTransactionQuery) -> Option<usize> {
+    fn decode_block_transaction_cursor(
+        query: &BlockTransactionQuery,
+    ) -> Option<(IdxIterationOrder, usize)> {
         if query.cursor.0.is_empty() {
-            return Some(0);
+            return Some((query.order, 0));
         }
         let cursor: [u8; BLOCK_TX_CURSOR_LEN] = query.cursor.0.as_slice().try_into().ok()?;
         let height = i64::from_be_bytes(cursor[1..9].try_into().ok()?);
@@ -1328,10 +1330,11 @@ mod tests {
             1 => IdxIterationOrder::IterationOrderDescending,
             _ => return None,
         };
-        if cursor[0] != BLOCK_TX_CURSOR_VERSION || height != *query.height || order != query.order {
+        if cursor[0] != BLOCK_TX_CURSOR_VERSION || height != *query.height {
             return None;
         }
-        usize::try_from(u32::from_be_bytes(cursor[10..14].try_into().ok()?)).ok()
+        let offset = usize::try_from(u32::from_be_bytes(cursor[10..14].try_into().ok()?)).ok()?;
+        Some((order, offset))
     }
 
     #[async_trait]
@@ -1801,7 +1804,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn transactions_by_block_rejects_cursor_with_different_order() {
+    async fn transactions_by_block_uses_order_from_cursor() {
         let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
         let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
         let backend = make_read_backend(idx_addr, sched_addr).await;
@@ -1819,10 +1822,38 @@ mod tests {
                 block_transaction_query(IterationOrder::Descending, first.cursor.0),
             )
             .await
-            .expect("bug: mismatched cursor should return an exhausted page");
+            .expect("bug: cursor order should override request order");
 
-        assert!(page.refs.is_empty());
+        assert_eq!(page.refs[0].tx_hash, canned_tx_hash(CANNED_TX_HASH_C));
         assert!(page.cursor.0.is_empty());
+    }
+
+    #[tokio::test]
+    async fn transactions_by_block_exhausts_malformed_and_stale_cursors() {
+        let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
+        let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
+        let backend = make_read_backend(idx_addr, sched_addr).await;
+        let invalid_cursors = [
+            vec![0xff],
+            encode_block_transaction_cursor(
+                IdxBlockHeight::from(CANNED_HEIGHT_A),
+                IdxIterationOrder::IterationOrderAscending,
+                99,
+            ),
+        ];
+
+        for cursor in invalid_cursors {
+            let page = backend
+                .transactions_by_block(
+                    RpcRequestContext::unbounded(),
+                    block_transaction_query(IterationOrder::Ascending, cursor),
+                )
+                .await
+                .expect("bug: invalid cursor should return an exhausted page");
+
+            assert!(page.refs.is_empty());
+            assert!(page.cursor.0.is_empty());
+        }
     }
 
     #[tokio::test]

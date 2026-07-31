@@ -221,6 +221,7 @@ All JSON-RPC responses follow these serialization rules:
 | Event topics (`Topic`) | `0x`-prefixed lowercase hex, 64 chars | `"0xdeadbeef..."` |
 | Event data (`HexBytes`) | `0x`-prefixed lowercase hex, variable length | `"0xcafe"` |
 | Block height, tx count, etc. | JSON number (decimal integer) | `42` |
+| Block timepoint | Decimal string preserving the full `u64` nanosecond value | `"123"` |
 | Enums (`TransactionStatus`, `ExecStatus`) | Tagged JSON object | `{"status":"committed","height":42,...}` |
 
 **Rationale:** Ethereum's `0x`-hex for bytes is the de facto standard.

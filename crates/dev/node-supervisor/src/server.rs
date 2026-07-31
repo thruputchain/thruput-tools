@@ -382,8 +382,8 @@ async fn start_rpc_server(
         tracing::debug!(%db_gateway_addr, "connecting to hogd-dev DbGateway for storage reads");
         tracing::warn!(
             "hogd-dev did not advertise an IndexerBlockExplorer endpoint; getBlockByNumber / \
-             getTransactionsByBlock / getTransactionReceipt / getTransactionStatus / \
-             getContractEvents return NotImplemented"
+             getTransactionsByAddress / getTransactionsByBlock / getTransactionReceipt / \
+             getTransactionStatus / getEvents return NotImplemented"
         );
         let read = HogdDevStorageReadBackend::connect(
             db_gateway_addr,
@@ -407,8 +407,8 @@ async fn start_rpc_server(
     } else {
         tracing::warn!(
             "hogd-dev did not advertise indexer_block_explorer or db_gateway endpoints; read plane is stubbed \
-             (getBlockByNumber / getTransactionsByBlock / getTransactionReceipt / \
-              getTransactionStatus / getContractEvents / getStorageAt return NotImplemented)"
+             (getBlockByNumber / getTransactionsByAddress / getTransactionsByBlock / \
+              getTransactionReceipt / getTransactionStatus / getEvents / getStorageAt return NotImplemented)"
         );
         start_rpc_server_with_read(
             listen_address,
@@ -1817,7 +1817,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
     #[tokio::test]
     #[serial]
-    async fn transactions_by_block_paginates_and_enforces_cursor_order() {
+    async fn transactions_by_block_paginates_with_cursor_order_and_rejects_wrong_height() {
         let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "ready-with-indexer");
         let hogd = HogdDevConfig::default()
             .with_binary_path(fake_hogd_dev_binary())
@@ -1861,19 +1861,19 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             )
             .await
             .expect("bug: continuation block transaction page should succeed");
-        let mismatched_query = serde_json::json!({
+        let cursor_order_query = serde_json::json!({
             "height": CANNED_HEIGHT_A,
             "order": "descending",
             "cursor": cursor,
             "limit": 1
         });
-        let mismatched: serde_json::Value = client
+        let cursor_order: serde_json::Value = client
             .request(
                 "groundhog_getTransactionsByBlock",
-                jsonrpsee::rpc_params![mismatched_query],
+                jsonrpsee::rpc_params![cursor_order_query],
             )
             .await
-            .expect("bug: mismatched cursor should return an exhausted page");
+            .expect("bug: cursor order should override request order");
         let wrong_height_query = serde_json::json!({
             "height": CANNED_HEIGHT_A + 1,
             "order": "ascending",
@@ -1892,8 +1892,8 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         assert_ne!(cursor, "0x");
         assert_eq!(second["refs"][0]["txHash"], CANNED_HASH_C_HEX);
         assert_eq!(second["cursor"], "0x");
-        assert_eq!(mismatched["refs"], serde_json::json!([]));
-        assert_eq!(mismatched["cursor"], "0x");
+        assert_eq!(cursor_order["refs"][0]["txHash"], CANNED_HASH_C_HEX);
+        assert_eq!(cursor_order["cursor"], "0x");
         assert_eq!(wrong_height["refs"], serde_json::json!([]));
         assert_eq!(wrong_height["cursor"], "0x");
 

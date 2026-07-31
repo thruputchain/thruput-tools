@@ -163,6 +163,7 @@ impl ReadPlane for GatewayBackend {
         .await
     }
 
+    #[tracing::instrument(skip_all, fields(?query.height, limit = query.limit))]
     async fn transactions_by_block(
         &self,
         context: RpcRequestContext,

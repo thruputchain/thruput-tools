@@ -1425,7 +1425,7 @@ impl FakeIndexer {
             latest_block: BlockHeight::from(CANNED_HEIGHT_B),
             oldest_block: BlockHeight::from(0_i64),
         };
-        let Some(offset) = decode_block_transaction_cursor(query) else {
+        let Some((order, offset)) = decode_block_transaction_cursor(query) else {
             return empty_page();
         };
 
@@ -1439,7 +1439,7 @@ impl FakeIndexer {
             })
             .collect();
         refs.sort_unstable_by_key(|transaction| transaction.tx_hash.into_inner());
-        if query.order == IterationOrder::IterationOrderDescending {
+        if order == IterationOrder::IterationOrderDescending {
             refs.reverse();
         }
 
@@ -1448,7 +1448,7 @@ impl FakeIndexer {
         let end = offset.saturating_add(limit).min(refs.len());
         let page_refs = refs.get(offset..end).unwrap_or_default().to_vec();
         let cursor = if end < refs.len() {
-            encode_block_transaction_cursor(query.height.clone(), query.order, end)
+            encode_block_transaction_cursor(query.height.clone(), order, end)
         } else {
             vec![]
         };
@@ -1493,9 +1493,11 @@ fn encode_block_transaction_cursor(
     cursor
 }
 
-fn decode_block_transaction_cursor(query: &BlockTransactionQuery) -> Option<usize> {
+fn decode_block_transaction_cursor(
+    query: &BlockTransactionQuery,
+) -> Option<(IterationOrder, usize)> {
     if query.cursor.0.is_empty() {
-        return Some(0);
+        return Some((query.order, 0));
     }
     let cursor: [u8; BLOCK_TX_CURSOR_LEN] = query.cursor.0.as_slice().try_into().ok()?;
     let height = i64::from_be_bytes(cursor[1..9].try_into().ok()?);
@@ -1504,10 +1506,11 @@ fn decode_block_transaction_cursor(query: &BlockTransactionQuery) -> Option<usiz
         1 => IterationOrder::IterationOrderDescending,
         _ => return None,
     };
-    if cursor[0] != BLOCK_TX_CURSOR_VERSION || height != *query.height || order != query.order {
+    if cursor[0] != BLOCK_TX_CURSOR_VERSION || height != *query.height {
         return None;
     }
-    usize::try_from(u32::from_be_bytes(cursor[10..14].try_into().ok()?)).ok()
+    let offset = usize::try_from(u32::from_be_bytes(cursor[10..14].try_into().ok()?)).ok()?;
+    Some((order, offset))
 }
 
 #[async_trait]

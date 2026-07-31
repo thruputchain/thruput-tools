@@ -444,6 +444,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn transactions_by_block_without_indexer_is_backend_unavailable() {
+        let error = get_transactions_by_block(
+            &context_without_indexer(),
+            RpcRequestContext::unbounded(),
+            BlockTransactionQuery {
+                height: BlockHeight::from(7),
+                order: IterationOrder::Ascending,
+                cursor: PaginationCursor(vec![]),
+                limit: 2,
+            },
+        )
+        .await
+        .expect_err("absent production indexer should fail");
+
+        assert!(matches!(error, GatewayError::BackendUnavailable(_)));
+    }
+
+    #[tokio::test]
     async fn transactions_by_block_does_not_convert_rpc_failure_to_empty_page() {
         let context = test_context(FakeResponse::TransactionsRpcError).await;
         let result = get_transactions_by_block(
