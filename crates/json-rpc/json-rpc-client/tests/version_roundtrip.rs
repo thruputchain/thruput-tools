@@ -10,7 +10,10 @@ use groundhog_json_rpc_types::{
     events::{EventPage, EventQuery},
     receipt::TransactionReceipt,
     state::StorageItemRead,
-    transaction::{AddressTransactionQuery, TransactionRefPage, TransactionStatus, TxHash},
+    transaction::{
+        AddressTransactionQuery, BlockTransactionQuery, TransactionRefPage, TransactionStatus,
+        TxHash,
+    },
 };
 use jsonrpsee::server::Server;
 
@@ -34,14 +37,6 @@ impl ChainPlane for VersionOnlyBackend {
         Err(RpcServerError::NotImplemented("chainTip".into()))
     }
 
-    async fn get_block_by_number(
-        &self,
-        _context: RpcRequestContext,
-        _height: BlockHeight,
-    ) -> Result<Option<BlockInfo>, RpcServerError> {
-        Err(RpcServerError::NotImplemented("getBlockByNumber".into()))
-    }
-
     async fn pending_transaction_count(
         &self,
         _context: RpcRequestContext,
@@ -54,6 +49,14 @@ impl ChainPlane for VersionOnlyBackend {
 
 #[async_trait::async_trait]
 impl ReadPlane for VersionOnlyBackend {
+    async fn get_block_by_number(
+        &self,
+        _context: RpcRequestContext,
+        _height: BlockHeight,
+    ) -> Result<Option<BlockInfo>, RpcServerError> {
+        Err(RpcServerError::NotImplemented("getBlockByNumber".into()))
+    }
+
     async fn transaction_receipt(
         &self,
         _context: RpcRequestContext,
@@ -89,6 +92,16 @@ impl ReadPlane for VersionOnlyBackend {
     ) -> Result<TransactionRefPage, RpcServerError> {
         Err(RpcServerError::NotImplemented(
             "getTransactionsByAddress".into(),
+        ))
+    }
+
+    async fn transactions_by_block(
+        &self,
+        _context: RpcRequestContext,
+        _query: BlockTransactionQuery,
+    ) -> Result<TransactionRefPage, RpcServerError> {
+        Err(RpcServerError::NotImplemented(
+            "getTransactionsByBlock".into(),
         ))
     }
 

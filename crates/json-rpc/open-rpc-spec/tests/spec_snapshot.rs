@@ -106,6 +106,40 @@ fn openrpc_spec_has_expected_shared_schema_invariants() {
         "primitive parameter schemas should stay inline",
     );
 
+    let transactions_by_block = methods
+        .iter()
+        .find(|method| method["name"] == "groundhog_getTransactionsByBlock")
+        .expect("getTransactionsByBlock should exist");
+    assert_eq!(transactions_by_block["params"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        transactions_by_block["params"][0]["schema"]["$ref"],
+        "#/components/schemas/BlockTransactionQuery"
+    );
+    assert_eq!(
+        transactions_by_block["result"]["schema"]["$ref"],
+        "#/components/schemas/TransactionRefPage"
+    );
+    assert!(
+        transactions_by_block["errors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|error| error["$ref"] == "#/components/errors/InvalidParams")
+    );
+
+    let block_by_number = methods
+        .iter()
+        .find(|method| method["name"] == "groundhog_getBlockByNumber")
+        .expect("getBlockByNumber should exist");
+    assert!(
+        block_by_number["errors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|error| error["$ref"] != "#/components/errors/BlockNotFound"),
+        "ordinary block misses are represented by null"
+    );
+
     assert_error_docs_are_wired(&spec, methods, send_raw_transaction);
 }
 

@@ -14,6 +14,9 @@ pub mod tx;
 pub use backend::{
     ChainPlane, ReadPlane, RpcRequestContext, SubmitPlane, ValidatedTransaction, ViewPlane,
 };
-pub use config::{DEFAULT_VIEW_GAS_LIMIT, RpcServerConfig};
+pub use config::{
+    DEFAULT_TRANSACTION_PAGE_LIMIT, DEFAULT_VIEW_GAS_LIMIT, MAX_TRANSACTION_PAGE_LIMIT,
+    MIN_TRANSACTION_PAGE_LIMIT, RpcServerConfig, RpcServerConfigError,
+};
 pub use error::RpcServerError;
 pub use server::{BuildInfo, GroundhogRpcServer};

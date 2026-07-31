@@ -10,8 +10,8 @@ use groundhog_json_rpc_server::{
     ChainPlane, RpcRequestContext, RpcServerError, SubmitPlane, ValidatedTransaction,
 };
 use groundhog_json_rpc_types::{
-    BlockHeight, NetworkHashHex,
-    block::{BlockInfo, ChainTip, consensus_value_hash},
+    NetworkHashHex,
+    block::{ChainTip, consensus_value_hash},
 };
 use groundhog_scheduler::{
     DbTip, ParallelBatch, SchedulerGetTipResult, parallel::ParallelSignedTransactionBatch,
@@ -170,15 +170,6 @@ impl ChainPlane for HogdDevSchedulerBackend {
             }
         })
         .await
-    }
-
-    #[tracing::instrument(skip_all)]
-    async fn get_block_by_number(
-        &self,
-        _context: RpcRequestContext,
-        _height: BlockHeight,
-    ) -> Result<Option<BlockInfo>, RpcServerError> {
-        Err(RpcServerError::NotImplemented("getBlockByNumber".into()))
     }
 
     #[tracing::instrument(skip_all)]

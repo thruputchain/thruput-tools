@@ -17,7 +17,10 @@ use groundhog_json_rpc_types::{
     hex::HexBytes,
     receipt::TransactionReceipt,
     state::StorageItemRead,
-    transaction::{AddressTransactionQuery, TransactionRefPage, TransactionStatus, TxHash},
+    transaction::{
+        AddressTransactionQuery, BlockTransactionQuery, TransactionRefPage, TransactionStatus,
+        TxHash,
+    },
     version::VersionInfo,
     view::{ViewRequest, ViewResponse},
 };
@@ -79,6 +82,14 @@ pub trait GroundhogApi {
     async fn get_transactions_by_address(
         &self,
         query: AddressTransactionQuery,
+    ) -> RpcResult<TransactionRefPage>;
+
+    /// Paginated transaction refs committed in one exact block, ordered by
+    /// transaction-hash bytes. Hydrate full bodies via `getTransactionReceipt`.
+    #[method(name = "getTransactionsByBlock")]
+    async fn get_transactions_by_block(
+        &self,
+        query: BlockTransactionQuery,
     ) -> RpcResult<TransactionRefPage>;
 
     /// Read the latest committed storage item at an address/key pair.

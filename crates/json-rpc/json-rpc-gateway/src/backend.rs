@@ -11,7 +11,10 @@ use groundhog_json_rpc_types::{
     events::{EventPage, EventQuery},
     receipt::TransactionReceipt,
     state::StorageItemRead,
-    transaction::{AddressTransactionQuery, TransactionRefPage, TransactionStatus, TxHash},
+    transaction::{
+        AddressTransactionQuery, BlockTransactionQuery, TransactionRefPage, TransactionStatus,
+        TxHash,
+    },
     view::{ViewRequest, ViewResponse},
 };
 
@@ -74,20 +77,6 @@ impl ChainPlane for GatewayBackend {
             .await
     }
 
-    #[tracing::instrument(skip_all, fields(?height))]
-    async fn get_block_by_number(
-        &self,
-        context: RpcRequestContext,
-        height: BlockHeight,
-    ) -> Result<Option<BlockInfo>, RpcServerError> {
-        let context = self.bounded_context(context);
-        self.with_deadline(
-            context,
-            handlers::blocks::get_block_by_number(&self.ctx, height),
-        )
-        .await
-    }
-
     #[tracing::instrument(skip_all)]
     async fn pending_transaction_count(
         &self,
@@ -104,6 +93,20 @@ impl ChainPlane for GatewayBackend {
 
 #[async_trait]
 impl ReadPlane for GatewayBackend {
+    #[tracing::instrument(skip_all, fields(?height))]
+    async fn get_block_by_number(
+        &self,
+        context: RpcRequestContext,
+        height: BlockHeight,
+    ) -> Result<Option<BlockInfo>, RpcServerError> {
+        let context = self.bounded_context(context);
+        self.with_deadline(
+            context,
+            handlers::blocks::get_block_by_number(&self.ctx, height),
+        )
+        .await
+    }
+
     #[tracing::instrument(skip_all, fields(?tx_hash))]
     async fn transaction_receipt(
         &self,
@@ -158,6 +161,16 @@ impl ReadPlane for GatewayBackend {
             handlers::transactions::get_transactions_by_address(&self.ctx, context, query),
         )
         .await
+    }
+
+    async fn transactions_by_block(
+        &self,
+        _context: RpcRequestContext,
+        _query: BlockTransactionQuery,
+    ) -> Result<TransactionRefPage, RpcServerError> {
+        Err(RpcServerError::NotImplemented(
+            "getTransactionsByBlock".into(),
+        ))
     }
 
     #[tracing::instrument(skip_all, fields(?address))]

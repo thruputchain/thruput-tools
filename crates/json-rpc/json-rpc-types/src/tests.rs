@@ -15,7 +15,8 @@ mod schema_generation {
     use crate::receipt::{ExecStatus, TransactionReceipt};
     use crate::state::{StorageItemInfo, StorageItemRead};
     use crate::transaction::{
-        AddressTransactionQuery, TransactionRef, TransactionRefPage, TransactionStatus, TxHash,
+        AddressTransactionQuery, BlockTransactionQuery, TransactionRef, TransactionRefPage,
+        TransactionStatus, TxHash,
     };
     use crate::view::{RootInvocationOutput, ViewRequest, ViewResponse};
 
@@ -34,6 +35,7 @@ mod schema_generation {
 
         // Transaction history types
         let _ = schema_for!(AddressTransactionQuery);
+        let _ = schema_for!(BlockTransactionQuery);
         let _ = schema_for!(TransactionRef);
         let _ = schema_for!(TransactionRefPage);
 
@@ -81,7 +83,8 @@ mod wire_format {
     use crate::receipt::{ExecStatus, TransactionReceipt};
     use crate::state::StorageItemInfo;
     use crate::transaction::{
-        AddressTransactionQuery, TransactionRef, TransactionRefPage, TransactionStatus, TxHash,
+        AddressTransactionQuery, BlockTransactionQuery, TransactionRef, TransactionRefPage,
+        TransactionStatus, TxHash,
     };
     use crate::view::{RootInvocationOutput, ViewRequest, ViewResponse};
     use groundhog_scheduler::{ConsensusValue, ProposalTxsHash};
@@ -421,6 +424,33 @@ mod wire_format {
 
         let roundtrip: AddressTransactionQuery = serde_json::from_value(v).unwrap();
         assert_eq!(roundtrip, query);
+    }
+
+    #[test]
+    fn block_transaction_query_wire_format_and_indexer_conversion() {
+        let query = BlockTransactionQuery {
+            height: BlockHeight::from(42),
+            order: IterationOrder::Descending,
+            cursor: PaginationCursor(vec![0x01, 0x02]),
+            limit: 50,
+        };
+        let value: Value = serde_json::to_value(&query).unwrap();
+        assert_eq!(value["height"], 42);
+        assert_eq!(value["order"], "descending");
+        assert_eq!(value["cursor"], "0x0102");
+        assert_eq!(value["limit"], 50);
+
+        let roundtrip: BlockTransactionQuery = serde_json::from_value(value).unwrap();
+        assert_eq!(roundtrip, query);
+
+        let wire: groundhog_indexer::indexer::BlockTransactionQuery = query.into();
+        assert_eq!(*wire.height, 42);
+        assert_eq!(
+            wire.order,
+            groundhog_indexer::pagination::IterationOrder::IterationOrderDescending
+        );
+        assert_eq!(wire.cursor.0, vec![0x01, 0x02]);
+        assert_eq!(wire.limit, 50);
     }
 
     #[test]

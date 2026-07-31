@@ -178,6 +178,21 @@ pub struct AddressTransactionQuery {
     pub limit: u32,
 }
 
+/// `getTransactionsByBlock` request: transaction refs committed at exactly
+/// `height`, walked in `order` by their transaction-hash bytes.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockTransactionQuery {
+    pub height: BlockHeight,
+    pub order: IterationOrder,
+    /// `0x` on the initial call. Non-empty to continue where a previous
+    /// response left off; the cursor carries the height and order.
+    pub cursor: PaginationCursor,
+    /// Values above the server's per-page cap (maximum 200) are rejected as
+    /// invalid params; `0` means the indexer default of 50.
+    pub limit: u32,
+}
+
 /// Lightweight reference to a transaction: its hash plus the block it
 /// executed in.  Hydrate the full body via `getTransactionReceipt`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Hash)]
@@ -187,8 +202,8 @@ pub struct TransactionRef {
     pub height: BlockHeight,
 }
 
-/// `getTransactionsByAddress` response: transaction refs in the
-/// requested order.
+/// Transaction refs returned by address and block queries in the requested
+/// order.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TransactionRefPage {
@@ -197,8 +212,7 @@ pub struct TransactionRefPage {
     pub refs: Vec<TransactionRef>,
 
     /// Empty when the stream has been exhausted in the requested
-    /// direction.  Non-empty: pass back in the next call's `cursor`
-    /// argument.
+    /// direction. Non-empty: pass back in the next query's `cursor` field.
     pub cursor: PaginationCursor,
 
     /// Highest block height the indexer has processed at response time.
@@ -215,6 +229,17 @@ impl From<AddressTransactionQuery> for groundhog_indexer::indexer::AddressTransa
             address: value.address.0,
             order: value.order.into(),
             anchor: value.anchor.into(),
+            cursor: value.cursor.into(),
+            limit: value.limit,
+        }
+    }
+}
+
+impl From<BlockTransactionQuery> for groundhog_indexer::indexer::BlockTransactionQuery {
+    fn from(value: BlockTransactionQuery) -> Self {
+        Self {
+            height: value.height,
+            order: value.order.into(),
             cursor: value.cursor.into(),
             limit: value.limit,
         }

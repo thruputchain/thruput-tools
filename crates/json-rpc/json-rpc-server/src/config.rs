@@ -1,6 +1,27 @@
 /// Default gas budget for backend `groundhog_view` execution.
 pub const DEFAULT_VIEW_GAS_LIMIT: u64 = 10_000_000;
 
+/// Default page size selected by the indexer when a transaction query uses 0.
+pub const DEFAULT_TRANSACTION_PAGE_LIMIT: u32 = 50;
+
+/// Smallest valid configured transaction-page cap.
+pub const MIN_TRANSACTION_PAGE_LIMIT: u32 = DEFAULT_TRANSACTION_PAGE_LIMIT;
+
+/// Protocol-wide maximum transaction-page size.
+pub const MAX_TRANSACTION_PAGE_LIMIT: u32 = 200;
+
+/// Invalid shared JSON-RPC server configuration.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum RpcServerConfigError {
+    /// The transaction-page cap cannot represent the indexer default or exceeds
+    /// the protocol ceiling.
+    #[error(
+        "max transactions per page must be between {MIN_TRANSACTION_PAGE_LIMIT} and {MAX_TRANSACTION_PAGE_LIMIT}, got {0}"
+    )]
+    InvalidTransactionPageLimit(u32),
+}
+
 /// Server-wide bounds on JSON-RPC requests.  The shared dispatcher
 /// rejects requests that exceed these before they reach a backend.
 #[derive(Debug, Clone)]
@@ -16,8 +37,8 @@ pub struct RpcServerConfig {
     /// above this are rejected as `InvalidParam`.
     pub max_events_per_page: u32,
 
-    /// Per-page cap on `getTransactionsByAddress` responses; requests
-    /// with `limit` above this are rejected as `InvalidParam`.
+    /// Per-page cap on transaction-ref responses; requests with `limit` above
+    /// this are rejected as `InvalidParam`.
     pub max_transactions_per_page: u32,
 
     /// Maximum length of the opaque pagination cursor on paginated
@@ -65,6 +86,18 @@ impl Default for RpcServerConfig {
 }
 
 impl RpcServerConfig {
+    /// Validate bounds that embedding applications must check before serving.
+    pub fn validate(&self) -> Result<(), RpcServerConfigError> {
+        if !(MIN_TRANSACTION_PAGE_LIMIT..=MAX_TRANSACTION_PAGE_LIMIT)
+            .contains(&self.max_transactions_per_page)
+        {
+            return Err(RpcServerConfigError::InvalidTransactionPageLimit(
+                self.max_transactions_per_page,
+            ));
+        }
+        Ok(())
+    }
+
     /// Set an end-to-end timeout for every public JSON-RPC request.
     #[must_use]
     pub fn with_request_timeout_ms(mut self, timeout_ms: u64) -> Self {
@@ -119,5 +152,37 @@ impl RpcServerConfig {
     pub fn with_tip_probe_timeout_ms(mut self, timeout_ms: u64) -> Self {
         self.tip_probe_timeout_ms = timeout_ms;
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transaction_page_cap_accepts_protocol_range() {
+        for limit in [MIN_TRANSACTION_PAGE_LIMIT, MAX_TRANSACTION_PAGE_LIMIT] {
+            assert!(
+                RpcServerConfig::default()
+                    .with_max_transactions_per_page(limit)
+                    .validate()
+                    .is_ok()
+            );
+        }
+    }
+
+    #[test]
+    fn transaction_page_cap_rejects_values_outside_protocol_range() {
+        for limit in [
+            MIN_TRANSACTION_PAGE_LIMIT - 1,
+            MAX_TRANSACTION_PAGE_LIMIT + 1,
+        ] {
+            assert_eq!(
+                RpcServerConfig::default()
+                    .with_max_transactions_per_page(limit)
+                    .validate(),
+                Err(RpcServerConfigError::InvalidTransactionPageLimit(limit))
+            );
+        }
     }
 }

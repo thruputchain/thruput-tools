@@ -19,13 +19,14 @@
 //!
 //! - `SubmitPlane`                            → scheduler
 //! - `ChainPlane::chain_tip`                  → scheduler
-//! - `ChainPlane::get_block_by_number`        → coordinator (TBD)
 //! - `ChainPlane::pending_transaction_count`  → scheduler
+//! - `ReadPlane::get_block_by_number`         → indexer
 //! - `ReadPlane::transaction_receipt`         → indexer
 //! - `ReadPlane::transaction_status`          → **both** (scheduler for
 //!   `Pending`, indexer for `Committed`) — the adapter owns this
 //!   orchestration; the shared server calls the trait method once.
 //! - `ReadPlane::contract_events`             → indexer
+//! - `ReadPlane::transactions_by_block`       → indexer
 //! - `ReadPlane::get_storage_at`              → `DbGateway1` contract-data reads
 //! - `ReadPlane::read_native_hog_balance`     → `DbGateway1` free native-token balance reads
 //! - `ViewPlane::view`                        → view executor service (TBD)
@@ -40,8 +41,8 @@
 //!
 //! Methods a given backend cannot answer return
 //! `RpcServerError::NotImplemented`. Today this is rare
-//! (`pendingTransactionCount` on gateway, `getBlockByNumber` on the
-//! current hogd-dev node supervisor). If the trait accumulates several more
+//! (`pendingTransactionCount` on gateway and indexer reads on local runtimes
+//! that do not advertise an indexer). If the trait accumulates several more
 //! capability asymmetries, a richer capability descriptor — or an `Option<T>`
 //! return mapped to `NotImplemented` in the shared server — may earn its keep.
 //! Until then, concrete error returns are simpler than typed capability
@@ -70,7 +71,10 @@ use groundhog_json_rpc_types::{
     events::{EventPage, EventQuery},
     receipt::TransactionReceipt,
     state::StorageItemRead,
-    transaction::{AddressTransactionQuery, TransactionRefPage, TransactionStatus, TxHash},
+    transaction::{
+        AddressTransactionQuery, BlockTransactionQuery, TransactionRefPage, TransactionStatus,
+        TxHash,
+    },
     view::{ViewRequest, ViewResponse},
 };
 use std::time::{Duration, Instant};
@@ -168,18 +172,11 @@ pub trait SubmitPlane: Send + Sync + 'static {
     ) -> Result<(), RpcServerError>;
 }
 
-/// Backend plane for chain metadata and block-oriented reads.
+/// Backend plane for scheduler-owned chain metadata.
 #[async_trait]
 pub trait ChainPlane: Send + Sync + 'static {
     /// Return the current chain tip.
     async fn chain_tip(&self, context: RpcRequestContext) -> Result<ChainTip, RpcServerError>;
-
-    /// Return block data at a specific height, if available.
-    async fn get_block_by_number(
-        &self,
-        context: RpcRequestContext,
-        height: BlockHeight,
-    ) -> Result<Option<BlockInfo>, RpcServerError>;
 
     /// Return the number of currently pending transactions.
     async fn pending_transaction_count(
@@ -188,9 +185,16 @@ pub trait ChainPlane: Send + Sync + 'static {
     ) -> Result<u64, RpcServerError>;
 }
 
-/// Backend plane for transaction, event, and storage reads.
+/// Backend plane for block, transaction, event, and storage reads.
 #[async_trait]
 pub trait ReadPlane: Send + Sync + 'static {
+    /// Return block data at a specific height, if available.
+    async fn get_block_by_number(
+        &self,
+        context: RpcRequestContext,
+        height: BlockHeight,
+    ) -> Result<Option<BlockInfo>, RpcServerError>;
+
     /// Return a committed transaction receipt, if available.
     async fn transaction_receipt(
         &self,
@@ -228,6 +232,13 @@ pub trait ReadPlane: Send + Sync + 'static {
         &self,
         context: RpcRequestContext,
         query: AddressTransactionQuery,
+    ) -> Result<TransactionRefPage, RpcServerError>;
+
+    /// Return one page of transaction refs committed at `query.height`.
+    async fn transactions_by_block(
+        &self,
+        context: RpcRequestContext,
+        query: BlockTransactionQuery,
     ) -> Result<TransactionRefPage, RpcServerError>;
 
     /// Return the latest committed storage item at one (address, key).

@@ -23,14 +23,16 @@ use groundhog_indexer::{
 };
 use groundhog_json_rpc_server::{ReadPlane, RpcRequestContext, RpcServerError};
 use groundhog_json_rpc_types::{
-    ContractAddress,
+    BlockHeight, ContractAddress,
+    block::BlockInfo,
     events::{EventPage, EventQuery, IdentifiedEvent},
     hex::{Hex0x, HexBytes, Topic},
     receipt::{ExecStatus, TransactionReceipt},
     state::{StorageItemInfo, StorageItemRead},
     transaction::{
-        AddressTransactionQuery as RpcAddressTransactionQuery, TransactionRefPage,
-        TransactionStatus, TxHash,
+        AddressTransactionQuery as RpcAddressTransactionQuery,
+        BlockTransactionQuery as RpcBlockTransactionQuery, TransactionRefPage, TransactionStatus,
+        TxHash,
     },
 };
 use groundhog_scheduler::{RPCError, sched_coord::SchedulerCoord_SchedulerCoord1_Client};
@@ -165,6 +167,14 @@ impl HogdDevStorageReadBackend {
 
 #[async_trait]
 impl ReadPlane for HogdDevStorageReadBackend {
+    async fn get_block_by_number(
+        &self,
+        _context: RpcRequestContext,
+        _height: BlockHeight,
+    ) -> Result<Option<BlockInfo>, RpcServerError> {
+        Err(RpcServerError::NotImplemented("getBlockByNumber".into()))
+    }
+
     async fn transaction_receipt(
         &self,
         _context: RpcRequestContext,
@@ -196,6 +206,16 @@ impl ReadPlane for HogdDevStorageReadBackend {
     ) -> Result<TransactionRefPage, RpcServerError> {
         Err(RpcServerError::NotImplemented(
             "getTransactionsByAddress".into(),
+        ))
+    }
+
+    async fn transactions_by_block(
+        &self,
+        _context: RpcRequestContext,
+        _query: RpcBlockTransactionQuery,
+    ) -> Result<TransactionRefPage, RpcServerError> {
+        Err(RpcServerError::NotImplemented(
+            "getTransactionsByBlock".into(),
         ))
     }
 
@@ -232,6 +252,14 @@ impl ReadPlane for HogdDevStorageReadBackend {
 
 #[async_trait]
 impl ReadPlane for HogdDevReadBackend {
+    async fn get_block_by_number(
+        &self,
+        _context: RpcRequestContext,
+        _height: BlockHeight,
+    ) -> Result<Option<BlockInfo>, RpcServerError> {
+        Err(RpcServerError::NotImplemented("getBlockByNumber".into()))
+    }
+
     /// Return a committed transaction receipt from the indexer, or `None` if
     /// the transaction is not (yet) committed.
     #[tracing::instrument(skip_all, fields(?tx_hash))]
@@ -471,6 +499,16 @@ impl ReadPlane for HogdDevReadBackend {
             Ok(page.into())
         })
         .await
+    }
+
+    async fn transactions_by_block(
+        &self,
+        _context: RpcRequestContext,
+        _query: RpcBlockTransactionQuery,
+    ) -> Result<TransactionRefPage, RpcServerError> {
+        Err(RpcServerError::NotImplemented(
+            "getTransactionsByBlock".into(),
+        ))
     }
 
     /// Latest-state storage read.

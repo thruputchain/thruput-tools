@@ -25,7 +25,10 @@ use groundhog_json_rpc_types::{
     events::{EventPage, EventQuery},
     receipt::TransactionReceipt,
     state::StorageItemRead,
-    transaction::{AddressTransactionQuery, TransactionRefPage, TransactionStatus, TxHash},
+    transaction::{
+        AddressTransactionQuery, BlockTransactionQuery, TransactionRefPage, TransactionStatus,
+        TxHash,
+    },
 };
 
 /// Backend that returns `NotImplemented` for unwired planes.
@@ -55,14 +58,6 @@ impl ChainPlane for StubBackend {
         Err(RpcServerError::NotImplemented("chainTip".into()))
     }
 
-    async fn get_block_by_number(
-        &self,
-        _context: RpcRequestContext,
-        _height: BlockHeight,
-    ) -> Result<Option<BlockInfo>, RpcServerError> {
-        Err(RpcServerError::NotImplemented("getBlockByNumber".into()))
-    }
-
     async fn pending_transaction_count(
         &self,
         _context: RpcRequestContext,
@@ -75,6 +70,14 @@ impl ChainPlane for StubBackend {
 
 #[async_trait]
 impl ReadPlane for StubBackend {
+    async fn get_block_by_number(
+        &self,
+        _context: RpcRequestContext,
+        _height: BlockHeight,
+    ) -> Result<Option<BlockInfo>, RpcServerError> {
+        Err(RpcServerError::NotImplemented("getBlockByNumber".into()))
+    }
+
     async fn transaction_receipt(
         &self,
         _context: RpcRequestContext,
@@ -106,6 +109,16 @@ impl ReadPlane for StubBackend {
     ) -> Result<TransactionRefPage, RpcServerError> {
         Err(RpcServerError::NotImplemented(
             "getTransactionsByAddress".into(),
+        ))
+    }
+
+    async fn transactions_by_block(
+        &self,
+        _context: RpcRequestContext,
+        _query: BlockTransactionQuery,
+    ) -> Result<TransactionRefPage, RpcServerError> {
+        Err(RpcServerError::NotImplemented(
+            "getTransactionsByBlock".into(),
         ))
     }
 

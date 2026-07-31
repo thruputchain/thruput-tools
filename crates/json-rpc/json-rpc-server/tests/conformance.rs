@@ -29,7 +29,10 @@ use groundhog_json_rpc_types::{
     hex::{Hex0x, HexBytes},
     receipt::TransactionReceipt,
     state::{StorageItemInfo, StorageItemRead},
-    transaction::{AddressTransactionQuery, TransactionRefPage, TransactionStatus, TxHash},
+    transaction::{
+        AddressTransactionQuery, BlockTransactionQuery, TransactionRefPage, TransactionStatus,
+        TxHash,
+    },
     view::{RootInvocationOutput, ViewRequest, ViewResponse},
 };
 use tokio::sync::Mutex;
@@ -121,14 +124,6 @@ impl ChainPlane for ScriptedBackend {
         })
     }
 
-    async fn get_block_by_number(
-        &self,
-        _context: RpcRequestContext,
-        _height: BlockHeight,
-    ) -> Result<Option<BlockInfo>, RpcServerError> {
-        Err(RpcServerError::NotImplemented("getBlockByNumber".into()))
-    }
-
     async fn pending_transaction_count(
         &self,
         _context: RpcRequestContext,
@@ -141,6 +136,14 @@ impl ChainPlane for ScriptedBackend {
 
 #[async_trait]
 impl ReadPlane for ScriptedBackend {
+    async fn get_block_by_number(
+        &self,
+        _context: RpcRequestContext,
+        _height: BlockHeight,
+    ) -> Result<Option<BlockInfo>, RpcServerError> {
+        Err(RpcServerError::NotImplemented("getBlockByNumber".into()))
+    }
+
     async fn transaction_receipt(
         &self,
         _context: RpcRequestContext,
@@ -182,6 +185,16 @@ impl ReadPlane for ScriptedBackend {
             latest_block: BlockHeight::from(0),
             oldest_block: BlockHeight::from(0),
         })
+    }
+
+    async fn transactions_by_block(
+        &self,
+        _context: RpcRequestContext,
+        _query: BlockTransactionQuery,
+    ) -> Result<TransactionRefPage, RpcServerError> {
+        Err(RpcServerError::NotImplemented(
+            "getTransactionsByBlock".into(),
+        ))
     }
 
     async fn get_storage_at(
@@ -646,6 +659,34 @@ async fn get_block_by_number_is_not_implemented_for_all_shapes() {
             .expect_err("bug: getBlockByNumber is not yet implemented");
 
         assert_eq!(err.code(), codes::NOT_IMPLEMENTED);
+    }
+}
+
+#[tokio::test]
+async fn block_queries_validate_and_dispatch_consistently_for_all_shapes() {
+    for backend in all_shapes() {
+        let service = server(backend);
+        let invalid = service
+            .get_transactions_by_block(BlockTransactionQuery {
+                height: BlockHeight::from(-1),
+                order: IterationOrder::Ascending,
+                cursor: PaginationCursor(vec![]),
+                limit: 0,
+            })
+            .await
+            .expect_err("negative block query height should fail validation");
+        assert_eq!(invalid.code(), codes::INVALID_PARAMS);
+
+        let unsupported = service
+            .get_transactions_by_block(BlockTransactionQuery {
+                height: BlockHeight::from(0),
+                order: IterationOrder::Ascending,
+                cursor: PaginationCursor(vec![]),
+                limit: 0,
+            })
+            .await
+            .expect_err("block transaction query should reach the temporary backend stub");
+        assert_eq!(unsupported.code(), codes::NOT_IMPLEMENTED);
     }
 }
 

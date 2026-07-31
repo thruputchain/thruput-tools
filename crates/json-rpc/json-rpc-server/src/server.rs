@@ -14,14 +14,18 @@ use groundhog_json_rpc_types::{
     hex::HexBytes,
     receipt::TransactionReceipt,
     state::{StorageItemInfo, StorageItemRead},
-    transaction::{AddressTransactionQuery, TransactionRefPage, TransactionStatus, TxHash},
+    transaction::{
+        AddressTransactionQuery, BlockTransactionQuery, TransactionRefPage, TransactionStatus,
+        TxHash,
+    },
     version::VersionInfo,
     view::{ViewRequest, ViewResponse},
 };
 
 use crate::{
-    ChainPlane, ReadPlane, RpcRequestContext, RpcServerConfig, RpcServerError, SubmitPlane,
-    ViewPlane, tx::validate_raw_transaction,
+    ChainPlane, DEFAULT_TRANSACTION_PAGE_LIMIT, MAX_TRANSACTION_PAGE_LIMIT, ReadPlane,
+    RpcRequestContext, RpcServerConfig, RpcServerError, SubmitPlane, ViewPlane,
+    tx::validate_raw_transaction,
 };
 
 /// Generic implementation of the public Groundhog JSON-RPC API over
@@ -247,7 +251,21 @@ where
     async fn get_block_by_number(&self, height: BlockHeight) -> RpcResult<Option<BlockInfo>> {
         let context = self.request_context();
         self.within_request_deadline(context, async {
-            Ok(self.chain.get_block_by_number(context, height).await?)
+            validate_block_height(&height)?;
+            let block = self
+                .read
+                .get_block_by_number(context, height.clone())
+                .await?;
+            if let Some(block) = &block
+                && block.block_height != height
+            {
+                return Err(RpcServerError::BackendUnavailable(format!(
+                    "block lookup for height {} returned height {}",
+                    *height, *block.block_height
+                ))
+                .into());
+            }
+            Ok(block)
         })
         .await
     }
@@ -278,8 +296,31 @@ where
     ) -> RpcResult<TransactionRefPage> {
         let context = self.request_context();
         self.within_request_deadline(context, async {
-            validate_address_transaction_query(&query, &self.config)?;
+            validate_transaction_page_request(query.limit, &query.cursor, &self.config)?;
             Ok(self.read.transactions_by_address(context, query).await?)
+        })
+        .await
+    }
+
+    #[tracing::instrument(skip_all, fields(?query.height, limit = query.limit))]
+    async fn get_transactions_by_block(
+        &self,
+        query: BlockTransactionQuery,
+    ) -> RpcResult<TransactionRefPage> {
+        let context = self.request_context();
+        self.within_request_deadline(context, async {
+            validate_block_height(&query.height)?;
+            validate_transaction_page_request(query.limit, &query.cursor, &self.config)?;
+            let requested_height = query.height.clone();
+            let requested_limit = query.limit;
+            let page = self.read.transactions_by_block(context, query).await?;
+            validate_block_transaction_page(
+                &page,
+                &requested_height,
+                requested_limit,
+                &self.config,
+            )?;
+            Ok(page)
         })
         .await
     }
@@ -405,27 +446,89 @@ fn validate_event_query(
     Ok(())
 }
 
-/// Bounds-check a `getTransactionsByAddress` query before the JSON-RPC
-/// dispatcher hands it to the read backend.  Rejects requests whose
-/// `limit` or opaque `cursor` exceed the per-server caps in
-/// `RpcServerConfig`.
+/// Bounds-check transaction pagination before dispatch to a read backend.
 ///
 /// `limit == 0` passes through unchanged; the indexer owns the default.
-fn validate_address_transaction_query(
-    query: &AddressTransactionQuery,
+fn validate_transaction_page_request(
+    limit: u32,
+    cursor: &groundhog_json_rpc_types::events::PaginationCursor,
     config: &RpcServerConfig,
 ) -> Result<(), RpcServerError> {
-    if query.limit > config.max_transactions_per_page {
+    let maximum = config
+        .max_transactions_per_page
+        .min(MAX_TRANSACTION_PAGE_LIMIT);
+    if limit > maximum {
         return Err(RpcServerError::InvalidParam(format!(
-            "limit {} exceeds maximum {}",
-            query.limit, config.max_transactions_per_page
+            "limit {limit} exceeds maximum {maximum}"
         )));
     }
-    if query.cursor.0.len() > config.max_cursor_bytes {
+    if cursor.0.len() > config.max_cursor_bytes {
         return Err(RpcServerError::InvalidParam(format!(
             "cursor length {} exceeds maximum {}",
-            query.cursor.0.len(),
+            cursor.0.len(),
             config.max_cursor_bytes
+        )));
+    }
+    Ok(())
+}
+
+fn validate_block_height(height: &BlockHeight) -> Result<(), RpcServerError> {
+    if **height < 0 {
+        return Err(RpcServerError::InvalidParam(format!(
+            "block height must be nonnegative, got {}",
+            **height
+        )));
+    }
+    Ok(())
+}
+
+fn validate_block_transaction_page(
+    page: &TransactionRefPage,
+    requested_height: &BlockHeight,
+    requested_limit: u32,
+    config: &RpcServerConfig,
+) -> Result<(), RpcServerError> {
+    // A successful backend response asserts that bounds are established. The
+    // protocol has no separate validity bit, and 0..0 is a legitimate range
+    // when only block zero is retained, so it cannot be treated as a sentinel.
+    if *page.oldest_block < 0 || *page.latest_block < 0 {
+        return Err(RpcServerError::BackendUnavailable(
+            "block transaction page returned negative indexer bounds".into(),
+        ));
+    }
+    if page.oldest_block > page.latest_block {
+        return Err(RpcServerError::BackendUnavailable(format!(
+            "block transaction page returned inverted bounds {}..{}",
+            *page.oldest_block, *page.latest_block
+        )));
+    }
+    if page.cursor.0.len() > config.max_cursor_bytes {
+        return Err(RpcServerError::BackendUnavailable(format!(
+            "block transaction page cursor length {} exceeds maximum {}",
+            page.cursor.0.len(),
+            config.max_cursor_bytes
+        )));
+    }
+    let page_limit = if requested_limit == 0 {
+        DEFAULT_TRANSACTION_PAGE_LIMIT
+    } else {
+        requested_limit
+    } as usize;
+    if page.refs.len() > page_limit {
+        return Err(RpcServerError::BackendUnavailable(format!(
+            "block transaction page returned {} refs for limit {}",
+            page.refs.len(),
+            page_limit
+        )));
+    }
+    if page.refs.iter().any(|reference| {
+        reference.height != *requested_height
+            || reference.height < page.oldest_block
+            || reference.height > page.latest_block
+    }) {
+        return Err(RpcServerError::BackendUnavailable(format!(
+            "block transaction page returned refs inconsistent with height {} and bounds {}..{}",
+            **requested_height, *page.oldest_block, *page.latest_block
         )));
     }
     Ok(())
@@ -444,6 +547,7 @@ mod tests {
         IterationOrder, PaginationCursor, TopicList,
     };
     use groundhog_json_rpc_types::hex::Hex0x;
+    use groundhog_json_rpc_types::transaction::TransactionRef;
     use xdr_common::VecM;
 
     // Canonical XDR/hash vector only. This transaction is structurally valid
@@ -463,6 +567,10 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         submitted: Mutex<Vec<ValidatedTransaction>>,
         event_calls: Mutex<u32>,
         tx_by_address_calls: Mutex<u32>,
+        block_calls: Mutex<Vec<BlockHeight>>,
+        block_response: Mutex<Option<Result<Option<BlockInfo>, RpcServerError>>>,
+        tx_by_block_calls: Mutex<Vec<BlockTransactionQuery>>,
+        tx_by_block_response: Mutex<Option<Result<TransactionRefPage, RpcServerError>>>,
     }
 
     #[derive(Clone)]
@@ -520,14 +628,6 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             Err(RpcServerError::NotImplemented("chainTip".into()))
         }
 
-        async fn get_block_by_number(
-            &self,
-            _context: RpcRequestContext,
-            _height: BlockHeight,
-        ) -> Result<Option<BlockInfo>, RpcServerError> {
-            Err(RpcServerError::NotImplemented("getBlockByNumber".into()))
-        }
-
         async fn pending_transaction_count(
             &self,
             _context: RpcRequestContext,
@@ -547,14 +647,6 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             })
         }
 
-        async fn get_block_by_number(
-            &self,
-            _context: RpcRequestContext,
-            _height: BlockHeight,
-        ) -> Result<Option<BlockInfo>, RpcServerError> {
-            Ok(None)
-        }
-
         async fn pending_transaction_count(
             &self,
             _context: RpcRequestContext,
@@ -565,6 +657,15 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
     #[async_trait::async_trait]
     impl ReadPlane for Arc<MockBackend> {
+        async fn get_block_by_number(
+            &self,
+            _context: RpcRequestContext,
+            height: BlockHeight,
+        ) -> Result<Option<BlockInfo>, RpcServerError> {
+            self.block_calls.lock().await.push(height);
+            self.block_response.lock().await.take().unwrap_or(Ok(None))
+        }
+
         async fn transaction_receipt(
             &self,
             _context: RpcRequestContext,
@@ -599,6 +700,19 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             Ok(empty_ref_page())
         }
 
+        async fn transactions_by_block(
+            &self,
+            _context: RpcRequestContext,
+            query: BlockTransactionQuery,
+        ) -> Result<TransactionRefPage, RpcServerError> {
+            self.tx_by_block_calls.lock().await.push(query);
+            self.tx_by_block_response
+                .lock()
+                .await
+                .take()
+                .unwrap_or_else(|| Ok(empty_ref_page()))
+        }
+
         async fn get_storage_at(
             &self,
             _context: RpcRequestContext,
@@ -628,6 +742,14 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
 
     #[async_trait::async_trait]
     impl ReadPlane for ReadOnly {
+        async fn get_block_by_number(
+            &self,
+            _context: RpcRequestContext,
+            _height: BlockHeight,
+        ) -> Result<Option<BlockInfo>, RpcServerError> {
+            Ok(None)
+        }
+
         async fn transaction_receipt(
             &self,
             _context: RpcRequestContext,
@@ -657,6 +779,14 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             &self,
             _context: RpcRequestContext,
             _query: AddressTransactionQuery,
+        ) -> Result<TransactionRefPage, RpcServerError> {
+            Ok(empty_ref_page())
+        }
+
+        async fn transactions_by_block(
+            &self,
+            _context: RpcRequestContext,
+            _query: BlockTransactionQuery,
         ) -> Result<TransactionRefPage, RpcServerError> {
             Ok(empty_ref_page())
         }
@@ -735,14 +865,6 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             })
         }
 
-        async fn get_block_by_number(
-            &self,
-            _context: RpcRequestContext,
-            _height: BlockHeight,
-        ) -> Result<Option<BlockInfo>, RpcServerError> {
-            Ok(None)
-        }
-
         async fn pending_transaction_count(
             &self,
             _context: RpcRequestContext,
@@ -768,14 +890,6 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             })
         }
 
-        async fn get_block_by_number(
-            &self,
-            _context: RpcRequestContext,
-            _height: BlockHeight,
-        ) -> Result<Option<BlockInfo>, RpcServerError> {
-            Ok(None)
-        }
-
         async fn pending_transaction_count(
             &self,
             _context: RpcRequestContext,
@@ -793,14 +907,6 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
         async fn chain_tip(&self, _context: RpcRequestContext) -> Result<ChainTip, RpcServerError> {
             tokio::time::sleep(std::time::Duration::from_hours(1)).await;
             unreachable!("bug: stalled tip probe should have been abandoned")
-        }
-
-        async fn get_block_by_number(
-            &self,
-            _context: RpcRequestContext,
-            _height: BlockHeight,
-        ) -> Result<Option<BlockInfo>, RpcServerError> {
-            Ok(None)
         }
 
         async fn pending_transaction_count(
@@ -845,14 +951,6 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
                 height: BlockHeight::from(42),
                 block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0u8; 32])),
             })
-        }
-
-        async fn get_block_by_number(
-            &self,
-            _context: RpcRequestContext,
-            _height: BlockHeight,
-        ) -> Result<Option<BlockInfo>, RpcServerError> {
-            Ok(None)
         }
 
         async fn pending_transaction_count(
@@ -1127,6 +1225,13 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
                 .expect("bug: chain plane should answer pending count"),
             7
         );
+        assert!(
+            server
+                .get_block_by_number(BlockHeight::from(7))
+                .await
+                .expect("bug: block lookup should dispatch through read plane")
+                .is_none()
+        );
 
         server
             .get_events(simple_query())
@@ -1242,7 +1347,7 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     #[tokio::test]
     async fn tx_by_address_excessive_limit_is_rejected_before_backend_dispatch() {
         let mock = Arc::new(MockBackend::default());
-        let cap = 5;
+        let cap = crate::MIN_TRANSACTION_PAGE_LIMIT;
         let server = GroundhogRpcServer::unified(
             mock.clone(),
             RpcServerConfig::default().with_max_transactions_per_page(cap),
@@ -1300,6 +1405,180 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             .expect("bug: limit=0 should pass through");
 
         assert_eq!(*mock.tx_by_address_calls.lock().await, 1);
+    }
+
+    #[tokio::test]
+    async fn negative_block_height_is_rejected_before_backend_dispatch() {
+        let mock = Arc::new(MockBackend::default());
+        let server = server(mock.clone());
+
+        let error = server
+            .get_block_by_number(BlockHeight::from(-1))
+            .await
+            .expect_err("negative block height should fail");
+
+        assert_eq!(error.code(), codes::INVALID_PARAMS);
+        assert!(mock.block_calls.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn block_lookup_dispatches_through_read_plane_and_preserves_misses() {
+        let mock = Arc::new(MockBackend::default());
+        let server = server(mock.clone());
+
+        let block = server
+            .get_block_by_number(BlockHeight::from(7))
+            .await
+            .expect("ordinary block miss should succeed");
+
+        assert!(block.is_none());
+        assert_eq!(*mock.block_calls.lock().await, vec![BlockHeight::from(7)]);
+    }
+
+    #[tokio::test]
+    async fn block_lookup_rejects_mismatched_backend_height() {
+        let mock = Arc::new(MockBackend::default());
+        *mock.block_response.lock().await = Some(Ok(Some(block_info(8))));
+        let server = server(mock);
+
+        let error = server
+            .get_block_by_number(BlockHeight::from(7))
+            .await
+            .expect_err("mismatched backend block should fail");
+
+        assert_eq!(error.code(), codes::BACKEND_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn block_transaction_request_validation_prevents_dispatch() {
+        let cases = [
+            (
+                BlockTransactionQuery {
+                    height: BlockHeight::from(-1),
+                    ..simple_block_query()
+                },
+                RpcServerConfig::default(),
+            ),
+            (
+                BlockTransactionQuery {
+                    limit: crate::MIN_TRANSACTION_PAGE_LIMIT + 1,
+                    ..simple_block_query()
+                },
+                RpcServerConfig::default()
+                    .with_max_transactions_per_page(crate::MIN_TRANSACTION_PAGE_LIMIT),
+            ),
+            (
+                BlockTransactionQuery {
+                    limit: MAX_TRANSACTION_PAGE_LIMIT + 1,
+                    ..simple_block_query()
+                },
+                RpcServerConfig::default()
+                    .with_max_transactions_per_page(MAX_TRANSACTION_PAGE_LIMIT),
+            ),
+            (
+                BlockTransactionQuery {
+                    cursor: PaginationCursor(vec![0; 17]),
+                    ..simple_block_query()
+                },
+                RpcServerConfig::default().with_max_cursor_bytes(16),
+            ),
+        ];
+
+        for (query, config) in cases {
+            let mock = Arc::new(MockBackend::default());
+            let server = GroundhogRpcServer::unified(mock.clone(), config, BuildInfo::for_tests());
+            let error = server
+                .get_transactions_by_block(query)
+                .await
+                .expect_err("invalid block transaction query should fail");
+            assert_eq!(error.code(), codes::INVALID_PARAMS);
+            assert!(mock.tx_by_block_calls.lock().await.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn block_transaction_limit_zero_dispatches_unchanged() {
+        let mock = Arc::new(MockBackend::default());
+        let server = server(mock.clone());
+
+        server
+            .get_transactions_by_block(simple_block_query())
+            .await
+            .expect("limit zero should dispatch unchanged");
+
+        let calls = mock.tx_by_block_calls.lock().await;
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].limit, 0);
+    }
+
+    #[tokio::test]
+    async fn block_transaction_page_rejects_inconsistent_refs() {
+        let mock = Arc::new(MockBackend::default());
+        *mock.tx_by_block_response.lock().await = Some(Ok(TransactionRefPage {
+            refs: vec![transaction_ref(8)],
+            cursor: PaginationCursor(vec![1]),
+            latest_block: BlockHeight::from(10),
+            oldest_block: BlockHeight::from(0),
+        }));
+        let server = server(mock);
+
+        let error = server
+            .get_transactions_by_block(simple_block_query())
+            .await
+            .expect_err("wrong-height transaction ref should fail");
+
+        assert_eq!(error.code(), codes::BACKEND_UNAVAILABLE);
+    }
+
+    #[test]
+    fn block_transaction_page_rejects_invalid_bounds_and_oversized_pages() {
+        let query_height = BlockHeight::from(7);
+        let config = RpcServerConfig::default();
+        let invalid_pages = [
+            TransactionRefPage {
+                refs: vec![],
+                cursor: PaginationCursor(vec![]),
+                latest_block: BlockHeight::from(-1),
+                oldest_block: BlockHeight::from(-1),
+            },
+            TransactionRefPage {
+                refs: vec![],
+                cursor: PaginationCursor(vec![]),
+                latest_block: BlockHeight::from(4),
+                oldest_block: BlockHeight::from(5),
+            },
+            TransactionRefPage {
+                refs: vec![transaction_ref(7), transaction_ref(7)],
+                cursor: PaginationCursor(vec![]),
+                latest_block: BlockHeight::from(10),
+                oldest_block: BlockHeight::from(0),
+            },
+        ];
+
+        for (page, limit) in invalid_pages.into_iter().zip([0, 0, 1]) {
+            assert!(matches!(
+                validate_block_transaction_page(&page, &query_height, limit, &config),
+                Err(RpcServerError::BackendUnavailable(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn block_transaction_page_accepts_established_zero_only_bounds() {
+        let page = TransactionRefPage {
+            refs: vec![],
+            cursor: PaginationCursor(vec![]),
+            latest_block: BlockHeight::from(0),
+            oldest_block: BlockHeight::from(0),
+        };
+
+        validate_block_transaction_page(
+            &page,
+            &BlockHeight::from(0),
+            0,
+            &RpcServerConfig::default(),
+        )
+        .expect("0..0 is valid after the backend reports established bounds");
     }
 
     #[tokio::test]
@@ -1374,6 +1653,39 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             anchor: BlockAnchor::AtBeginning,
             cursor: PaginationCursor(vec![]),
             limit: 0,
+        }
+    }
+
+    fn simple_block_query() -> BlockTransactionQuery {
+        BlockTransactionQuery {
+            height: BlockHeight::from(7),
+            order: IterationOrder::Ascending,
+            cursor: PaginationCursor(vec![]),
+            limit: 0,
+        }
+    }
+
+    fn transaction_ref(height: i64) -> TransactionRef {
+        TransactionRef {
+            tx_hash: TxHash(Hex0x(groundhog_xdr::types::SHA256Hash::from([1; 32]))),
+            height: BlockHeight::from(height),
+        }
+    }
+
+    fn block_info(height: i64) -> BlockInfo {
+        BlockInfo {
+            block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0; 32])),
+            protocol: groundhog_xdr::types::Protocol::new(0),
+            network_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0; 32])),
+            proposer: Hex0x(groundhog_xdr::validator::ValidatorID::new([0; 32])),
+            block_timepoint: "0".into(),
+            block_height: BlockHeight::from(height),
+            txs_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0; 32])),
+            storage_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0; 32])),
+            events_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0; 32])),
+            prev_block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0; 32])),
+            proposal_txs_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0; 32])),
+            upgrades: vec![],
         }
     }
 

@@ -225,6 +225,34 @@
         ],
         "type": "object"
       },
+      "BlockTransactionQuery": {
+        "description": "`getTransactionsByBlock` request: transaction refs committed at exactly\n`height`, walked in `order` by their transaction-hash bytes.",
+        "properties": {
+          "cursor": {
+            "$ref": "#/components/schemas/PaginationCursor",
+            "description": "`0x` on the initial call. Non-empty to continue where a previous\nresponse left off; the cursor carries the height and order."
+          },
+          "height": {
+            "$ref": "#/components/schemas/BlockHeight"
+          },
+          "limit": {
+            "description": "Values above the server's per-page cap (maximum 200) are rejected as\ninvalid params; `0` means the indexer default of 50.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "order": {
+            "$ref": "#/components/schemas/IterationOrder"
+          }
+        },
+        "required": [
+          "height",
+          "order",
+          "cursor",
+          "limit"
+        ],
+        "type": "object"
+      },
       "ChainTip": {
         "description": "Current chain tip. Returned by chainTip.",
         "properties": {
@@ -902,11 +930,11 @@
         "type": "object"
       },
       "TransactionRefPage": {
-        "description": "`getTransactionsByAddress` response: transaction refs in the\nrequested order.",
+        "description": "Transaction refs returned by address and block queries in the requested\norder.",
         "properties": {
           "cursor": {
             "$ref": "#/components/schemas/PaginationCursor",
-            "description": "Empty when the stream has been exhausted in the requested\ndirection.  Non-empty: pass back in the next call's `cursor`\nargument."
+            "description": "Empty when the stream has been exhausted in the requested\ndirection. Non-empty: pass back in the next query's `cursor` field."
           },
           "latestBlock": {
             "$ref": "#/components/schemas/BlockHeight",
@@ -1307,9 +1335,6 @@
           "$ref": "#/components/errors/InvalidParams"
         },
         {
-          "$ref": "#/components/errors/BlockNotFound"
-        },
-        {
           "$ref": "#/components/errors/BackendUnavailable"
         },
         {
@@ -1460,6 +1485,47 @@
         }
       },
       "summary": "Paginated transaction history for a single address: refs to transactions whose root invocation targets the address, walked in the requested order. Hydrate full bodies via `getTransactionReceipt`.",
+      "tags": [
+        {
+          "name": "Core API"
+        }
+      ]
+    },
+    {
+      "errors": [
+        {
+          "$ref": "#/components/errors/InvalidParams"
+        },
+        {
+          "$ref": "#/components/errors/BackendUnavailable"
+        },
+        {
+          "$ref": "#/components/errors/BackendTimeout"
+        },
+        {
+          "$ref": "#/components/errors/Overloaded"
+        },
+        {
+          "$ref": "#/components/errors/NotImplemented"
+        }
+      ],
+      "name": "groundhog_getTransactionsByBlock",
+      "params": [
+        {
+          "name": "query",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/BlockTransactionQuery"
+          }
+        }
+      ],
+      "result": {
+        "name": "TransactionRefPage",
+        "schema": {
+          "$ref": "#/components/schemas/TransactionRefPage"
+        }
+      },
+      "summary": "Paginated transaction refs committed in one exact block, ordered by transaction-hash bytes. Hydrate full bodies via `getTransactionReceipt`.",
       "tags": [
         {
           "name": "Core API"
