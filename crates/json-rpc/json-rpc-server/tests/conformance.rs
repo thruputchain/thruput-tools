@@ -10,7 +10,7 @@
 //! and avoid circular deps, these tests use a programmable mock that can
 //! be configured to mimic each backend shape.
 
-use std::sync::Arc;
+use std::{collections::VecDeque, sync::Arc};
 
 use async_trait::async_trait;
 use groundhog_json_rpc_api::{GroundhogApiServer, WIRE_FORMAT_VERSION};
@@ -30,8 +30,8 @@ use groundhog_json_rpc_types::{
     receipt::TransactionReceipt,
     state::{StorageItemInfo, StorageItemRead},
     transaction::{
-        AddressTransactionQuery, BlockTransactionQuery, TransactionRefPage, TransactionStatus,
-        TxHash,
+        AddressTransactionQuery, BlockTransactionQuery, TransactionRef, TransactionRefPage,
+        TransactionStatus, TxHash,
     },
     view::{RootInvocationOutput, ViewRequest, ViewResponse},
 };
@@ -51,12 +51,15 @@ const CANONICAL_HASH_VECTOR_TX_HASH_HEX: &str =
     "9dc7ad0fc4f74a43a62e047c0d6885c8e4df2d4840298ecd52cf157681157ed3";
 
 const MAX_EVENTS_PER_PAGE: u32 = 50;
+const MAX_TRANSACTIONS_PER_PAGE: u32 = 50;
 const MAX_CURSOR_BYTES: usize = 64;
 const MAX_VIEW_CALLDATA_BYTES: usize = 32;
 
 type StorageCall = (ContractAddress, [u8; 32]);
 type StorageCalls = Arc<Mutex<Vec<StorageCall>>>;
 type BalanceCalls = Arc<Mutex<Vec<ContractAddress>>>;
+type BlockResponse = Arc<Mutex<Option<Result<Option<BlockInfo>, RpcServerError>>>>;
+type BlockTransactionResponses = Arc<Mutex<VecDeque<Result<TransactionRefPage, RpcServerError>>>>;
 
 /// Mock backend that emulates a chosen production capability profile.
 ///
@@ -67,6 +70,10 @@ type BalanceCalls = Arc<Mutex<Vec<ContractAddress>>>;
 struct ScriptedBackend {
     submitted: Arc<Mutex<Vec<ValidatedTransaction>>>,
     contract_events_calls: Arc<Mutex<u32>>,
+    block_calls: Arc<Mutex<Vec<BlockHeight>>>,
+    block_response: BlockResponse,
+    block_transaction_calls: Arc<Mutex<Vec<BlockTransactionQuery>>>,
+    block_transaction_responses: BlockTransactionResponses,
     get_storage_at_calls: StorageCalls,
     native_balance_calls: BalanceCalls,
     storage_read: Arc<Mutex<Option<Result<StorageItemRead, RpcServerError>>>>,
@@ -93,6 +100,23 @@ impl ScriptedBackend {
         Self {
             storage_read: Arc::new(Mutex::new(Some(Ok(read)))),
             ..Self::default()
+        }
+    }
+
+    fn with_block_response(self, response: Result<Option<BlockInfo>, RpcServerError>) -> Self {
+        Self {
+            block_response: Arc::new(Mutex::new(Some(response))),
+            ..self
+        }
+    }
+
+    fn with_block_transaction_responses(
+        self,
+        responses: impl IntoIterator<Item = Result<TransactionRefPage, RpcServerError>>,
+    ) -> Self {
+        Self {
+            block_transaction_responses: Arc::new(Mutex::new(responses.into_iter().collect())),
+            ..self
         }
     }
 }
@@ -139,9 +163,14 @@ impl ReadPlane for ScriptedBackend {
     async fn get_block_by_number(
         &self,
         _context: RpcRequestContext,
-        _height: BlockHeight,
+        height: BlockHeight,
     ) -> Result<Option<BlockInfo>, RpcServerError> {
-        Err(RpcServerError::NotImplemented("getBlockByNumber".into()))
+        self.block_calls.lock().await.push(height);
+        self.block_response
+            .lock()
+            .await
+            .clone()
+            .unwrap_or_else(|| Err(RpcServerError::NotImplemented("getBlockByNumber".into())))
     }
 
     async fn transaction_receipt(
@@ -190,11 +219,18 @@ impl ReadPlane for ScriptedBackend {
     async fn transactions_by_block(
         &self,
         _context: RpcRequestContext,
-        _query: BlockTransactionQuery,
+        query: BlockTransactionQuery,
     ) -> Result<TransactionRefPage, RpcServerError> {
-        Err(RpcServerError::NotImplemented(
-            "getTransactionsByBlock".into(),
-        ))
+        self.block_transaction_calls.lock().await.push(query);
+        self.block_transaction_responses
+            .lock()
+            .await
+            .pop_front()
+            .unwrap_or_else(|| {
+                Err(RpcServerError::NotImplemented(
+                    "getTransactionsByBlock".into(),
+                ))
+            })
     }
 
     async fn get_storage_at(
@@ -252,6 +288,7 @@ fn server(backend: ScriptedBackend) -> ScriptedServer {
         backend,
         RpcServerConfig::default()
             .with_max_events_per_page(MAX_EVENTS_PER_PAGE)
+            .with_max_transactions_per_page(MAX_TRANSACTIONS_PER_PAGE)
             .with_max_cursor_bytes(MAX_CURSOR_BYTES)
             .with_max_view_calldata_bytes(MAX_VIEW_CALLDATA_BYTES),
         BuildInfo::for_tests(),
@@ -269,6 +306,7 @@ fn server_with_view(
         view,
         RpcServerConfig::default()
             .with_max_events_per_page(MAX_EVENTS_PER_PAGE)
+            .with_max_transactions_per_page(MAX_TRANSACTIONS_PER_PAGE)
             .with_max_cursor_bytes(MAX_CURSOR_BYTES)
             .with_max_view_calldata_bytes(MAX_VIEW_CALLDATA_BYTES),
         BuildInfo::for_tests(),
@@ -296,6 +334,48 @@ fn simple_query() -> EventQuery {
 
 fn opaque_hash() -> TxHash {
     TxHash(Hex0x(groundhog_xdr::types::SHA256Hash::from([0xab; 32])))
+}
+
+fn block_info(height: i64) -> BlockInfo {
+    BlockInfo {
+        block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0x10; 32])),
+        protocol: groundhog_xdr::types::Protocol::new(1),
+        network_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0x11; 32])),
+        proposer: Hex0x(groundhog_xdr::validator::ValidatorID::new([0x12; 32])),
+        block_timepoint: u64::MAX.to_string(),
+        block_height: BlockHeight::from(height),
+        txs_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0x13; 32])),
+        storage_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0x14; 32])),
+        events_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0x15; 32])),
+        prev_block_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0x16; 32])),
+        proposal_txs_hash: Hex0x(groundhog_xdr::types::SHA256Hash::from([0x17; 32])),
+        upgrades: vec![HexBytes(vec![0xaa])],
+    }
+}
+
+fn block_query(order: IterationOrder, cursor: &[u8]) -> BlockTransactionQuery {
+    BlockTransactionQuery {
+        height: BlockHeight::from(7),
+        order,
+        cursor: PaginationCursor(cursor.to_vec()),
+        limit: 1,
+    }
+}
+
+fn transaction_ref(byte: u8, height: i64) -> TransactionRef {
+    TransactionRef {
+        tx_hash: TxHash(Hex0x(groundhog_xdr::types::SHA256Hash::from([byte; 32]))),
+        height: BlockHeight::from(height),
+    }
+}
+
+fn transaction_page(refs: Vec<TransactionRef>, cursor: &[u8]) -> TransactionRefPage {
+    TransactionRefPage {
+        refs,
+        cursor: PaginationCursor(cursor.to_vec()),
+        latest_block: BlockHeight::from(10),
+        oldest_block: BlockHeight::from(0),
+    }
 }
 
 fn all_shapes() -> [ScriptedBackend; 2] {
@@ -651,42 +731,217 @@ async fn chain_tip_dispatches_through_chain_plane_for_all_shapes() {
 }
 
 #[tokio::test]
-async fn get_block_by_number_is_not_implemented_for_all_shapes() {
+async fn block_lookup_found_and_not_found_are_consistent_for_all_shapes() {
     for backend in all_shapes() {
-        let err = server(backend)
-            .get_block_by_number(BlockHeight::from(0))
+        let found = server(backend.clone().with_block_response(Ok(Some(block_info(7)))))
+            .get_block_by_number(BlockHeight::from(7))
             .await
-            .expect_err("bug: getBlockByNumber is not yet implemented");
+            .expect("scripted block lookup should succeed")
+            .expect("scripted block should be present");
+        assert_eq!(*found.block_height, 7);
+        assert_eq!(found.block_timepoint, u64::MAX.to_string());
 
-        assert_eq!(err.code(), codes::NOT_IMPLEMENTED);
+        let missing = server(backend.with_block_response(Ok(None)))
+            .get_block_by_number(BlockHeight::from(8))
+            .await
+            .expect("ordinary block miss should succeed");
+        assert!(missing.is_none());
     }
 }
 
 #[tokio::test]
-async fn block_queries_validate_and_dispatch_consistently_for_all_shapes() {
+async fn negative_block_lookup_height_is_rejected_before_dispatch_for_all_shapes() {
     for backend in all_shapes() {
-        let service = server(backend);
-        let invalid = service
-            .get_transactions_by_block(BlockTransactionQuery {
-                height: BlockHeight::from(-1),
-                order: IterationOrder::Ascending,
-                cursor: PaginationCursor(vec![]),
-                limit: 0,
-            })
+        let calls = backend.block_calls.clone();
+        let error = server(backend.with_block_response(Ok(None)))
+            .get_block_by_number(BlockHeight::from(-1))
             .await
-            .expect_err("negative block query height should fail validation");
-        assert_eq!(invalid.code(), codes::INVALID_PARAMS);
+            .expect_err("negative block lookup height should fail validation");
 
-        let unsupported = service
-            .get_transactions_by_block(BlockTransactionQuery {
-                height: BlockHeight::from(0),
-                order: IterationOrder::Ascending,
-                cursor: PaginationCursor(vec![]),
-                limit: 0,
-            })
+        assert_eq!(error.code(), codes::INVALID_PARAMS);
+        assert!(calls.lock().await.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn mismatched_block_height_is_backend_unavailable_for_all_shapes() {
+    for backend in all_shapes() {
+        let error = server(backend.with_block_response(Ok(Some(block_info(8)))))
+            .get_block_by_number(BlockHeight::from(7))
             .await
-            .expect_err("block transaction query should reach the temporary backend stub");
-        assert_eq!(unsupported.code(), codes::NOT_IMPLEMENTED);
+            .expect_err("mismatched embedded block height should fail");
+
+        assert_eq!(error.code(), codes::BACKEND_UNAVAILABLE);
+    }
+}
+
+#[tokio::test]
+async fn block_lookup_backend_failure_is_not_a_miss_for_all_shapes() {
+    for backend in all_shapes() {
+        let error = server(
+            backend.with_block_response(Err(RpcServerError::BackendUnavailable(
+                "scripted indexer failure".into(),
+            ))),
+        )
+        .get_block_by_number(BlockHeight::from(7))
+        .await
+        .expect_err("backend failure should not become a null block");
+
+        assert_eq!(error.code(), codes::BACKEND_UNAVAILABLE);
+    }
+}
+
+#[tokio::test]
+async fn block_transaction_request_validation_prevents_dispatch_for_all_shapes() {
+    let invalid_queries = [
+        BlockTransactionQuery {
+            height: BlockHeight::from(-1),
+            ..block_query(IterationOrder::Ascending, &[])
+        },
+        BlockTransactionQuery {
+            limit: MAX_TRANSACTIONS_PER_PAGE + 1,
+            ..block_query(IterationOrder::Ascending, &[])
+        },
+        BlockTransactionQuery {
+            cursor: PaginationCursor(vec![0; MAX_CURSOR_BYTES + 1]),
+            ..block_query(IterationOrder::Ascending, &[])
+        },
+    ];
+
+    for backend in all_shapes() {
+        for query in invalid_queries.clone() {
+            let calls = backend.block_transaction_calls.clone();
+            let error = server(backend.clone())
+                .get_transactions_by_block(query)
+                .await
+                .expect_err("invalid block transaction query should fail validation");
+
+            assert_eq!(error.code(), codes::INVALID_PARAMS);
+            assert!(calls.lock().await.is_empty());
+        }
+    }
+}
+
+#[tokio::test]
+async fn block_transaction_pages_preserve_order_and_opaque_cursors_for_all_shapes() {
+    const ASCENDING_CURSOR: &[u8] = b"ascending-page-2";
+    const DESCENDING_CURSOR: &[u8] = b"descending-page-2";
+    for backend in all_shapes() {
+        let backend = backend.with_block_transaction_responses([
+            Ok(transaction_page(
+                vec![transaction_ref(0x11, 7)],
+                ASCENDING_CURSOR,
+            )),
+            Ok(transaction_page(vec![transaction_ref(0x22, 7)], &[])),
+            Ok(transaction_page(
+                vec![transaction_ref(0x22, 7)],
+                DESCENDING_CURSOR,
+            )),
+            Ok(transaction_page(vec![transaction_ref(0x11, 7)], &[])),
+        ]);
+        let calls = backend.block_transaction_calls.clone();
+        let service = server(backend);
+
+        let ascending_first = service
+            .get_transactions_by_block(block_query(IterationOrder::Ascending, &[]))
+            .await
+            .expect("ascending first page should succeed");
+        let ascending_second = service
+            .get_transactions_by_block(block_query(
+                IterationOrder::Ascending,
+                &ascending_first.cursor.0,
+            ))
+            .await
+            .expect("ascending continuation should succeed");
+        let descending_first = service
+            .get_transactions_by_block(block_query(IterationOrder::Descending, &[]))
+            .await
+            .expect("descending first page should succeed");
+        let descending_second = service
+            .get_transactions_by_block(block_query(
+                IterationOrder::Descending,
+                &descending_first.cursor.0,
+            ))
+            .await
+            .expect("descending continuation should succeed");
+
+        assert_eq!(ascending_first.refs[0], transaction_ref(0x11, 7));
+        assert_eq!(ascending_first.cursor.0, ASCENDING_CURSOR);
+        assert_eq!(ascending_second.refs[0], transaction_ref(0x22, 7));
+        assert!(ascending_second.cursor.0.is_empty());
+        assert_eq!(descending_first.refs[0], transaction_ref(0x22, 7));
+        assert_eq!(descending_first.cursor.0, DESCENDING_CURSOR);
+        assert_eq!(descending_second.refs[0], transaction_ref(0x11, 7));
+        assert!(descending_second.cursor.0.is_empty());
+
+        let calls = calls.lock().await;
+        assert_eq!(calls[1].cursor.0, ASCENDING_CURSOR);
+        assert_eq!(calls[1].order, IterationOrder::Ascending);
+        assert_eq!(calls[3].cursor.0, DESCENDING_CURSOR);
+        assert_eq!(calls[3].order, IterationOrder::Descending);
+    }
+}
+
+#[tokio::test]
+async fn empty_block_transaction_page_is_successful_for_all_shapes() {
+    for backend in all_shapes() {
+        let page =
+            server(backend.with_block_transaction_responses([Ok(transaction_page(vec![], &[]))]))
+                .get_transactions_by_block(block_query(IterationOrder::Ascending, &[]))
+                .await
+                .expect("empty exhausted page should succeed");
+
+        assert!(page.refs.is_empty());
+        assert!(page.cursor.0.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn malformed_block_transaction_pages_are_backend_unavailable_for_all_shapes() {
+    let malformed_pages = [
+        transaction_page(vec![transaction_ref(0x11, 8)], &[]),
+        TransactionRefPage {
+            latest_block: BlockHeight::from(-1),
+            oldest_block: BlockHeight::from(-1),
+            ..transaction_page(vec![], &[])
+        },
+        TransactionRefPage {
+            oldest_block: BlockHeight::from(11),
+            ..transaction_page(vec![], &[])
+        },
+        TransactionRefPage {
+            cursor: PaginationCursor(vec![0; MAX_CURSOR_BYTES + 1]),
+            ..transaction_page(vec![], &[])
+        },
+        transaction_page(
+            vec![transaction_ref(0x11, 7), transaction_ref(0x22, 7)],
+            &[],
+        ),
+    ];
+
+    for backend in all_shapes() {
+        for page in malformed_pages.clone() {
+            let error = server(backend.clone().with_block_transaction_responses([Ok(page)]))
+                .get_transactions_by_block(block_query(IterationOrder::Ascending, &[]))
+                .await
+                .expect_err("malformed backend page should fail validation");
+
+            assert_eq!(error.code(), codes::BACKEND_UNAVAILABLE);
+        }
+    }
+}
+
+#[tokio::test]
+async fn block_transaction_backend_failure_is_not_an_empty_page_for_all_shapes() {
+    for backend in all_shapes() {
+        let error = server(backend.with_block_transaction_responses([Err(
+            RpcServerError::BackendUnavailable("scripted indexer failure".into()),
+        )]))
+        .get_transactions_by_block(block_query(IterationOrder::Ascending, &[]))
+        .await
+        .expect_err("backend failure should not become an empty page");
+
+        assert_eq!(error.code(), codes::BACKEND_UNAVAILABLE);
     }
 }
 
