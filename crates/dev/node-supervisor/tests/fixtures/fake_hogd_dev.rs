@@ -20,9 +20,11 @@ use groundhog_db_gateway::{
     DbGatewayItemResult, DbGatewayPayload, DbGatewayResult,
 };
 use groundhog_indexer::{
-    AddressTransactionQuery, EventPage, EventQuery, IndexerBlockExplorer_IndexerBlockExplorer1,
+    AddressTransactionQuery, BlockLookupOutcome, BlockLookupResult, BlockTransactionQuery,
+    EventPage, EventQuery, IndexerBlockExplorer_IndexerBlockExplorer1,
     IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher, IndexerBlockExplorerIntroOutcome,
-    TransactionPage, TransactionQuery, TransactionRefPage, TxInfo, TxInfoResult,
+    IterationOrder, TransactionPage, TransactionQuery, TransactionRef, TransactionRefPage, TxInfo,
+    TxInfoResult,
 };
 use groundhog_json_rpc_types::hex::Hex0x;
 use groundhog_scheduler::{
@@ -141,6 +143,8 @@ impl FakeStartupConfig {
 pub const CANNED_TX_HASH_A: [u8; 32] = [0xAAu8; 32];
 /// Second well-known committed tx hash (all 0xBB bytes).
 pub const CANNED_TX_HASH_B: [u8; 32] = [0xBBu8; 32];
+/// Second transaction committed in `CANNED_HEIGHT_A` (all 0xDD bytes).
+pub const CANNED_TX_HASH_C: [u8; 32] = [0xDDu8; 32];
 /// A hash that is *not* in the committed set (all 0xFF bytes).
 pub const CANNED_TX_HASH_UNKNOWN: [u8; 32] = [0xFFu8; 32];
 /// Block height for `CANNED_TX_HASH_A`.
@@ -155,6 +159,8 @@ pub const CANNED_STORAGE_KEY: [u8; 32] = [0x42u8; 32];
 pub const CANNED_STORAGE_VALUE: &[u8] = b"local-node-storage";
 /// Snapshot height returned by the fake `DbGateway` for storage reads.
 pub const CANNED_STORAGE_HEIGHT: i64 = 12;
+const BLOCK_TX_CURSOR_VERSION: u8 = 1;
+const BLOCK_TX_CURSOR_LEN: usize = 14;
 
 extern "C" fn handle_sigterm(_: i32) {
     TERMINATED.store(true, Ordering::SeqCst);
@@ -1328,6 +1334,20 @@ impl FakeIndexer {
         };
         map.insert(CANNED_TX_HASH_B, tx_b);
 
+        let tx_c = TxInfo {
+            height: BlockHeight::from(CANNED_HEIGHT_A),
+            tx: Self::dummy_proposed_transaction(),
+            events: TxEventLog {
+                proposed_tx_hash: SHA256Hash::from(CANNED_TX_HASH_C),
+                exec_result: ExecResult::ExecResultOK,
+                root_output: InvocationFrameOutput::Return {
+                    return_buffer: BytesM(vec![]),
+                },
+                events: VecM(vec![]),
+            },
+        };
+        map.insert(CANNED_TX_HASH_C, tx_c);
+
         map
     }
 
@@ -1397,6 +1417,97 @@ impl FakeIndexer {
                 })
         }
     }
+
+    fn block_transaction_page(&self, query: &BlockTransactionQuery) -> TransactionRefPage {
+        let empty_page = || TransactionRefPage {
+            refs: VecM(vec![]),
+            cursor: BytesM(vec![]),
+            latest_block: BlockHeight::from(CANNED_HEIGHT_B),
+            oldest_block: BlockHeight::from(0_i64),
+        };
+        let Some(offset) = decode_block_transaction_cursor(query) else {
+            return empty_page();
+        };
+
+        let mut refs: Vec<_> = self
+            .committed
+            .iter()
+            .filter(|(_, info)| info.height == query.height)
+            .map(|(hash, info)| TransactionRef {
+                tx_hash: SignedTransactionHash::from(*hash),
+                height: info.height.clone(),
+            })
+            .collect();
+        refs.sort_unstable_by_key(|transaction| transaction.tx_hash.into_inner());
+        if query.order == IterationOrder::IterationOrderDescending {
+            refs.reverse();
+        }
+
+        let limit = usize::try_from(if query.limit == 0 { 50 } else { query.limit })
+            .expect("bug: u32 limit should fit usize");
+        let end = offset.saturating_add(limit).min(refs.len());
+        let page_refs = refs.get(offset..end).unwrap_or_default().to_vec();
+        let cursor = if end < refs.len() {
+            encode_block_transaction_cursor(query.height.clone(), query.order, end)
+        } else {
+            vec![]
+        };
+        TransactionRefPage {
+            refs: VecM(page_refs),
+            cursor: BytesM(cursor),
+            latest_block: BlockHeight::from(CANNED_HEIGHT_B),
+            oldest_block: BlockHeight::from(0_i64),
+        }
+    }
+}
+
+fn fake_consensus_value(height: i64) -> ConsensusValue {
+    ConsensusValue {
+        protocol: Protocol::new(0),
+        ext: ExtensionPoint::_0,
+        prev_hash: ConsensusValueHash::new(SHA256Hash::from([0x04; 32])),
+        proposal_header: fake_proposal_header(
+            height,
+            ValidatorID::new([0x02; 32]),
+            TimePoint::new(123),
+        ),
+        proposal_txs_hash: ProposalTxsHash::new(SHA256Hash::from([0x06; 32])),
+        upgrades: VecM(vec![BytesM(vec![0xaa])]),
+    }
+}
+
+fn encode_block_transaction_cursor(
+    height: BlockHeight,
+    order: IterationOrder,
+    offset: usize,
+) -> Vec<u8> {
+    let mut cursor = Vec::with_capacity(BLOCK_TX_CURSOR_LEN);
+    cursor.push(BLOCK_TX_CURSOR_VERSION);
+    cursor.extend_from_slice(&height.into_inner().to_be_bytes());
+    cursor.push(u8::from(order != IterationOrder::IterationOrderAscending));
+    cursor.extend_from_slice(
+        &u32::try_from(offset)
+            .expect("bug: canned transaction offset fits u32")
+            .to_be_bytes(),
+    );
+    cursor
+}
+
+fn decode_block_transaction_cursor(query: &BlockTransactionQuery) -> Option<usize> {
+    if query.cursor.0.is_empty() {
+        return Some(0);
+    }
+    let cursor: [u8; BLOCK_TX_CURSOR_LEN] = query.cursor.0.as_slice().try_into().ok()?;
+    let height = i64::from_be_bytes(cursor[1..9].try_into().ok()?);
+    let order = match cursor[9] {
+        0 => IterationOrder::IterationOrderAscending,
+        1 => IterationOrder::IterationOrderDescending,
+        _ => return None,
+    };
+    if cursor[0] != BLOCK_TX_CURSOR_VERSION || height != *query.height || order != query.order {
+        return None;
+    }
+    usize::try_from(u32::from_be_bytes(cursor[10..14].try_into().ok()?)).ok()
 }
 
 #[async_trait]
@@ -1436,9 +1547,20 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for FakeIndexer {
     #[tracing::instrument(skip_all)]
     async fn get_block_by_height(
         &self,
-        _height: groundhog_xdr::types::BlockHeight,
-    ) -> Result<groundhog_indexer::BlockLookupResult, ProgramError> {
-        Err(ProgramError::msg("fake indexer does not serve blocks"))
+        height: groundhog_xdr::types::BlockHeight,
+    ) -> Result<BlockLookupResult, ProgramError> {
+        if self.mode == FakeIndexerMode::RpcFail || self.mode == FakeIndexerMode::RuntimeRpcFail {
+            return Err(ProgramError::msg("fake indexer rpc-fail mode"));
+        }
+        if *height == CANNED_HEIGHT_A {
+            Ok(BlockLookupResult::BlockFound {
+                value: fake_consensus_value(*height),
+            })
+        } else {
+            Ok(BlockLookupResult::Default {
+                outcome: BlockLookupOutcome::BlockNotFound.0,
+            })
+        }
     }
 
     #[tracing::instrument(skip_all)]
@@ -1492,11 +1614,12 @@ impl IndexerBlockExplorer_IndexerBlockExplorer1 for FakeIndexer {
     #[tracing::instrument(skip_all)]
     async fn get_transactions_by_block(
         &self,
-        _query: groundhog_indexer::BlockTransactionQuery,
+        query: BlockTransactionQuery,
     ) -> Result<TransactionRefPage, ProgramError> {
-        Err(ProgramError::msg(
-            "fake indexer does not serve transactions by block",
-        ))
+        if self.mode == FakeIndexerMode::RpcFail || self.mode == FakeIndexerMode::RuntimeRpcFail {
+            return Err(ProgramError::msg("fake indexer rpc-fail mode"));
+        }
+        Ok(self.block_transaction_page(&query))
     }
 }
 

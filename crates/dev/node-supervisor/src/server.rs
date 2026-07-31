@@ -380,6 +380,11 @@ async fn start_rpc_server(
         .await
     } else if let Some(db_gateway_addr) = readiness.endpoints.db_gateway {
         tracing::debug!(%db_gateway_addr, "connecting to hogd-dev DbGateway for storage reads");
+        tracing::warn!(
+            "hogd-dev did not advertise an IndexerBlockExplorer endpoint; getBlockByNumber / \
+             getTransactionsByBlock / getTransactionReceipt / getTransactionStatus / \
+             getContractEvents return NotImplemented"
+        );
         let read = HogdDevStorageReadBackend::connect(
             db_gateway_addr,
             protocol_version,
@@ -402,8 +407,8 @@ async fn start_rpc_server(
     } else {
         tracing::warn!(
             "hogd-dev did not advertise indexer_block_explorer or db_gateway endpoints; read plane is stubbed \
-             (getTransactionReceipt / getTransactionStatus / getContractEvents / \
-              getStorageAt return NotImplemented)"
+             (getBlockByNumber / getTransactionsByBlock / getTransactionReceipt / \
+              getTransactionStatus / getContractEvents / getStorageAt return NotImplemented)"
         );
         start_rpc_server_with_read(
             listen_address,
@@ -1710,6 +1715,8 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
     /// Mirrors the constants in `tests/fixtures/fake_hogd_dev.rs`.
     const CANNED_HASH_A_HEX: &str =
         "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const CANNED_HASH_C_HEX: &str =
+        "0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
     const CANNED_HASH_UNKNOWN_HEX: &str =
         "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
     const CANNED_HEIGHT_A: i64 = 5;
@@ -1764,6 +1771,131 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             BackendPlanes::hogd_dev_storage_only(PlaneStatus::Stub),
             "supervisor with only DbGateway should report storage-only backend planes"
         );
+
+        handle.stop().await.expect("bug: clean shutdown");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn block_lookup_returns_canned_block_and_null_for_missing_height() {
+        let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "ready-with-indexer");
+        let hogd = HogdDevConfig::default()
+            .with_binary_path(fake_hogd_dev_binary())
+            .with_startup_timeout(Duration::from_secs(5))
+            .with_shutdown_grace(Duration::from_secs(2));
+        let config = NodeSupervisorConfig::default()
+            .with_rpc_listen_address("127.0.0.1:0")
+            .with_hogd_dev(hogd);
+        let handle = NodeSupervisorHandle::start(config)
+            .await
+            .expect("bug: supervisor should start");
+        let client = HttpClientBuilder::default()
+            .build(format!("http://{}", handle.rpc_addr()))
+            .expect("bug: jsonrpsee http client builds");
+
+        let block: serde_json::Value = client
+            .request(
+                "groundhog_getBlockByNumber",
+                jsonrpsee::rpc_params![CANNED_HEIGHT_A],
+            )
+            .await
+            .expect("bug: canned block lookup should succeed");
+        let missing: serde_json::Value = client
+            .request(
+                "groundhog_getBlockByNumber",
+                jsonrpsee::rpc_params![CANNED_HEIGHT_A + 1],
+            )
+            .await
+            .expect("bug: missing block lookup should succeed");
+
+        assert_eq!(block["blockHeight"], CANNED_HEIGHT_A);
+        assert_eq!(block["blockTimepoint"], "123");
+        assert!(missing.is_null());
+
+        handle.stop().await.expect("bug: clean shutdown");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn transactions_by_block_paginates_and_enforces_cursor_order() {
+        let _mode_guard = EnvGuard::set(FAKE_HOGD_DEV_MODE_ENV, "ready-with-indexer");
+        let hogd = HogdDevConfig::default()
+            .with_binary_path(fake_hogd_dev_binary())
+            .with_startup_timeout(Duration::from_secs(5))
+            .with_shutdown_grace(Duration::from_secs(2));
+        let config = NodeSupervisorConfig::default()
+            .with_rpc_listen_address("127.0.0.1:0")
+            .with_hogd_dev(hogd);
+        let handle = NodeSupervisorHandle::start(config)
+            .await
+            .expect("bug: supervisor should start");
+        let client = HttpClientBuilder::default()
+            .build(format!("http://{}", handle.rpc_addr()))
+            .expect("bug: jsonrpsee http client builds");
+        let first_query = serde_json::json!({
+            "height": CANNED_HEIGHT_A,
+            "order": "ascending",
+            "cursor": "0x",
+            "limit": 1
+        });
+        let first: serde_json::Value = client
+            .request(
+                "groundhog_getTransactionsByBlock",
+                jsonrpsee::rpc_params![first_query],
+            )
+            .await
+            .expect("bug: first block transaction page should succeed");
+        let cursor = first["cursor"]
+            .as_str()
+            .expect("bug: first block transaction page should have a cursor");
+        let second_query = serde_json::json!({
+            "height": CANNED_HEIGHT_A,
+            "order": "ascending",
+            "cursor": cursor,
+            "limit": 1
+        });
+        let second: serde_json::Value = client
+            .request(
+                "groundhog_getTransactionsByBlock",
+                jsonrpsee::rpc_params![second_query],
+            )
+            .await
+            .expect("bug: continuation block transaction page should succeed");
+        let mismatched_query = serde_json::json!({
+            "height": CANNED_HEIGHT_A,
+            "order": "descending",
+            "cursor": cursor,
+            "limit": 1
+        });
+        let mismatched: serde_json::Value = client
+            .request(
+                "groundhog_getTransactionsByBlock",
+                jsonrpsee::rpc_params![mismatched_query],
+            )
+            .await
+            .expect("bug: mismatched cursor should return an exhausted page");
+        let wrong_height_query = serde_json::json!({
+            "height": CANNED_HEIGHT_A + 1,
+            "order": "ascending",
+            "cursor": cursor,
+            "limit": 1
+        });
+        let wrong_height: serde_json::Value = client
+            .request(
+                "groundhog_getTransactionsByBlock",
+                jsonrpsee::rpc_params![wrong_height_query],
+            )
+            .await
+            .expect("bug: height-mismatched cursor should return an exhausted page");
+
+        assert_eq!(first["refs"][0]["txHash"], CANNED_HASH_A_HEX);
+        assert_ne!(cursor, "0x");
+        assert_eq!(second["refs"][0]["txHash"], CANNED_HASH_C_HEX);
+        assert_eq!(second["cursor"], "0x");
+        assert_eq!(mismatched["refs"], serde_json::json!([]));
+        assert_eq!(mismatched["cursor"], "0x");
+        assert_eq!(wrong_height["refs"], serde_json::json!([]));
+        assert_eq!(wrong_height["cursor"], "0x");
 
         handle.stop().await.expect("bug: clean shutdown");
     }
@@ -2040,6 +2172,31 @@ c9d3fe2554e5ce62ceadc95ba43c4aa0884cd2f9ebea4e3845ef877761a6222e91f0d";
             matches!(&err, ClientError::Call(object) if object.code() == codes::NOT_IMPLEMENTED),
             "expected NOT_IMPLEMENTED JSON-RPC error, got {err:?}",
         );
+
+        for (method, params) in [
+            (
+                "groundhog_getBlockByNumber",
+                jsonrpsee::rpc_params![CANNED_HEIGHT_A],
+            ),
+            (
+                "groundhog_getTransactionsByBlock",
+                jsonrpsee::rpc_params![serde_json::json!({
+                    "height": CANNED_HEIGHT_A,
+                    "order": "ascending",
+                    "cursor": "0x",
+                    "limit": 1
+                })],
+            ),
+        ] {
+            let err = client
+                .request::<serde_json::Value, _>(method, params)
+                .await
+                .expect_err("bug: block reads should remain unavailable without indexer");
+            assert!(
+                matches!(&err, ClientError::Call(object) if object.code() == codes::NOT_IMPLEMENTED),
+                "expected NOT_IMPLEMENTED for {method}, got {err:?}",
+            );
+        }
 
         handle.stop().await.expect("bug: clean shutdown");
     }

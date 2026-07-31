@@ -1,9 +1,9 @@
 //! hogd-dev indexer-backed read plane adapter.
 //!
 //! [`HogdDevReadBackend`] implements [`ReadPlane`] against hogd-dev's indexer
-//! x23 endpoint. `transaction_receipt` and `contract_events` are pure indexer
-//! calls; `transaction_status` does the composite scheduler-then-indexer probe
-//! that the gateway uses (scheduler for `Pending`, indexer for `Committed`).
+//! x23 endpoint. Block, receipt, event, and transaction-history reads are pure
+//! indexer calls; `transaction_status` does the composite scheduler-then-indexer
+//! probe that the gateway uses (scheduler for `Pending`, indexer for `Committed`).
 //! Latest-state storage reads use hogd-dev's `DbGateway` endpoint and can also be
 //! served by [`HogdDevStorageReadBackend`] when the indexer is absent.
 //!
@@ -18,8 +18,8 @@ use groundhog_db_gateway::{
     DbGateway_DbGateway1_Client, DbGatewayIntroOutcome, DbGatewayItemResult, DbGatewayResult,
 };
 use groundhog_indexer::{
-    IndexerBlockExplorer_IndexerBlockExplorer1_Client, IndexerBlockExplorerIntroOutcome,
-    TxInfoOutcome, TxInfoResult,
+    BlockLookupOutcome, BlockLookupResult, IndexerBlockExplorer_IndexerBlockExplorer1_Client,
+    IndexerBlockExplorerIntroOutcome, TxInfoOutcome, TxInfoResult,
 };
 use groundhog_json_rpc_server::{ReadPlane, RpcRequestContext, RpcServerError};
 use groundhog_json_rpc_types::{
@@ -252,12 +252,50 @@ impl ReadPlane for HogdDevStorageReadBackend {
 
 #[async_trait]
 impl ReadPlane for HogdDevReadBackend {
+    /// Return the canonical consensus value projection for one indexed height.
+    #[tracing::instrument(skip_all, fields(?height))]
     async fn get_block_by_number(
         &self,
-        _context: RpcRequestContext,
-        _height: BlockHeight,
+        context: RpcRequestContext,
+        height: BlockHeight,
     ) -> Result<Option<BlockInfo>, RpcServerError> {
-        Err(RpcServerError::NotImplemented("getBlockByNumber".into()))
+        within_request_deadline(context, async {
+            let result = self
+                .indexer
+                .get_block_by_height(&height)
+                .await
+                .map_err(|source| {
+                    RpcServerError::BackendUnavailable(format!("hogd-dev indexer: {source}"))
+                })?;
+
+            match result {
+                BlockLookupResult::BlockFound { value } => BlockInfo::try_from(value)
+                    .map(Some)
+                    .map_err(|source| {
+                        RpcServerError::BackendUnavailable(format!(
+                            "hogd-dev indexer block: {source}"
+                        ))
+                    }),
+                BlockLookupResult::Default { outcome }
+                    if outcome == BlockLookupOutcome::BlockNotFound.0 =>
+                {
+                    Ok(None)
+                }
+                BlockLookupResult::Default { outcome } => {
+                    tracing::warn!(%outcome, "unexpected block lookup outcome from hogd-dev indexer");
+                    Err(RpcServerError::BackendUnavailable(format!(
+                        "hogd-dev indexer returned unexpected block lookup outcome: {outcome}"
+                    )))
+                }
+                _ => {
+                    tracing::warn!("unknown block lookup result variant from hogd-dev indexer");
+                    Err(RpcServerError::BackendUnavailable(
+                        "hogd-dev indexer returned unknown block lookup result variant".into(),
+                    ))
+                }
+            }
+        })
+        .await
     }
 
     /// Return a committed transaction receipt from the indexer, or `None` if
@@ -501,14 +539,25 @@ impl ReadPlane for HogdDevReadBackend {
         .await
     }
 
+    /// Return one page of transaction refs committed at the query's block height.
+    #[tracing::instrument(skip_all, fields(height = ?query.height, limit = query.limit))]
     async fn transactions_by_block(
         &self,
-        _context: RpcRequestContext,
-        _query: RpcBlockTransactionQuery,
+        context: RpcRequestContext,
+        query: RpcBlockTransactionQuery,
     ) -> Result<TransactionRefPage, RpcServerError> {
-        Err(RpcServerError::NotImplemented(
-            "getTransactionsByBlock".into(),
-        ))
+        within_request_deadline(context, async {
+            let wire_query: groundhog_indexer::indexer::BlockTransactionQuery = query.into();
+            let page = self
+                .indexer
+                .get_transactions_by_block(&wire_query)
+                .await
+                .map_err(|source| {
+                    RpcServerError::BackendUnavailable(format!("hogd-dev indexer: {source}"))
+                })?;
+            Ok(page.into())
+        })
+        .await
     }
 
     /// Latest-state storage read.
@@ -796,21 +845,26 @@ mod tests {
         DbGatewayIntroOutcome, DbGatewayItemResult, DbGatewayPayload, DbGatewayResult,
     };
     use groundhog_indexer::{
-        AddressTransactionQuery, EventPage as IdxEventPage,
-        IndexerBlockExplorer_IndexerBlockExplorer1,
+        AddressTransactionQuery, BlockLookupOutcome, BlockLookupResult, BlockTransactionQuery,
+        EventPage as IdxEventPage, IndexerBlockExplorer_IndexerBlockExplorer1,
         IndexerBlockExplorer_IndexerBlockExplorer1_Client,
         IndexerBlockExplorer_IndexerBlockExplorer1_Dispatcher, IndexerBlockExplorerIntroOutcome,
-        TransactionPage as IdxTransactionPage, TransactionQuery, TransactionRefPage, TxInfo,
+        IterationOrder as IdxIterationOrder, TransactionPage as IdxTransactionPage,
+        TransactionQuery, TransactionRef as IdxTransactionRef, TransactionRefPage, TxInfo,
         TxInfoResult,
     };
     use groundhog_json_rpc_server::{ReadPlane, RpcRequestContext, RpcServerError};
     use groundhog_json_rpc_types::{
-        events::{EventFilterList, EventQuery},
+        events::{EventFilterList, EventQuery, IterationOrder, PaginationCursor},
         hex::Hex0x,
-        transaction::{TransactionStatus, TxHash},
+        transaction::{
+            BlockTransactionQuery as RpcBlockTransactionQuery, TransactionStatus, TxHash,
+        },
     };
     use groundhog_scheduler::rpc_types::RPCError;
-    use groundhog_scheduler::{BlockID, ConsensusValue, ParallelSignedTransactionBatch, Proposal};
+    use groundhog_scheduler::{
+        BlockID, ConsensusValue, ParallelSignedTransactionBatch, Proposal, ProposalTxsHash,
+    };
     use groundhog_scheduler::{
         CoordinatorRegistrationOutcome, DbSchedResult, SchedulerCommitOutcome,
         SchedulerGetTipResult, SchedulerProposalResult, SchedulerValidationResult,
@@ -822,7 +876,7 @@ mod tests {
     use groundhog_scp::network::ProtocolCommit as Protocol;
     use groundhog_xdr::event::IdentifiedEvent as IdxIdentifiedEvent;
     use groundhog_xdr::genesis::GenesisConfiguration;
-    use groundhog_xdr::header::ProposalContext;
+    use groundhog_xdr::header::{ProposalContext, ProposalHeader};
     use groundhog_xdr::transaction::{
         Invocation, OptSignedTransactionBatch, SignedTransaction, SignedTransactionHashBatch,
         Transaction, Uniquifier,
@@ -834,7 +888,10 @@ mod tests {
         exec_result::ExecResult,
         storage_item::WireStorageItem,
         transaction::SignedTransactionHash,
-        types::{ContractAddress, SHA256Hash},
+        types::{
+            ConsensusValueHash, ContractAddress, EventsHash, ExtensionPoint, NetworkHash,
+            Protocol as XdrProtocol, SHA256Hash, StorageShortHash, TimePoint, TxsHash,
+        },
         validator::ValidatorID,
     };
     use rpc_driver::{FixedSerialPool, ProgramError, RpcServer, ServiceMap};
@@ -849,6 +906,7 @@ mod tests {
     // unit tests in this file have no dependency on the example binary's types.
     const CANNED_TX_HASH_A: [u8; 32] = [0xAAu8; 32];
     const CANNED_TX_HASH_B: [u8; 32] = [0xBBu8; 32];
+    const CANNED_TX_HASH_C: [u8; 32] = [0xDDu8; 32];
     const CANNED_TX_HASH_FAILED: [u8; 32] = [0xCCu8; 32];
     const CANNED_TX_HASH_UNKNOWN: [u8; 32] = [0xFFu8; 32];
     const CANNED_HEIGHT_A: i64 = 5;
@@ -859,6 +917,8 @@ mod tests {
     const CANNED_STORAGE_KEY: [u8; 32] = [0x42u8; 32];
     const CANNED_STORAGE_VALUE: &[u8] = b"local-node-storage";
     const CANNED_STORAGE_HEIGHT: i64 = 12;
+    const BLOCK_TX_CURSOR_VERSION: u8 = 1;
+    const BLOCK_TX_CURSOR_LEN: usize = 14;
 
     // -----------------------------------------------------------------------
     // Fake scheduler
@@ -1098,6 +1158,20 @@ mod tests {
             };
             map.insert(CANNED_TX_HASH_B, tx_b);
 
+            let tx_c = TxInfo {
+                height: IdxBlockHeight::from(CANNED_HEIGHT_A),
+                tx: dummy_proposed_transaction(),
+                events: TxEventLog {
+                    proposed_tx_hash: SHA256Hash::from(CANNED_TX_HASH_C),
+                    exec_result: ExecResult::ExecResultOK,
+                    root_output: InvocationFrameOutput::Return {
+                        return_buffer: BytesM(vec![]),
+                    },
+                    events: VecM(vec![]),
+                },
+            };
+            map.insert(CANNED_TX_HASH_C, tx_c);
+
             map
         }
 
@@ -1160,6 +1234,104 @@ mod tests {
                     })
             }
         }
+
+        fn block_transaction_page(&self, query: &BlockTransactionQuery) -> TransactionRefPage {
+            let empty_page = || TransactionRefPage {
+                refs: VecM(vec![]),
+                cursor: BytesM(vec![]),
+                latest_block: IdxBlockHeight::from(CANNED_HEIGHT_B),
+                oldest_block: IdxBlockHeight::from(0_i64),
+            };
+            let Some(offset) = decode_block_transaction_cursor(query) else {
+                return empty_page();
+            };
+
+            let mut refs: Vec<_> = self
+                .committed
+                .iter()
+                .filter(|(_, info)| info.height == query.height)
+                .map(|(hash, info)| IdxTransactionRef {
+                    tx_hash: SignedTransactionHash::from(*hash),
+                    height: info.height.clone(),
+                })
+                .collect();
+            refs.sort_unstable_by_key(|transaction| transaction.tx_hash.into_inner());
+            if query.order == IdxIterationOrder::IterationOrderDescending {
+                refs.reverse();
+            }
+
+            let limit = usize::try_from(if query.limit == 0 { 50 } else { query.limit })
+                .expect("bug: u32 limit should fit usize");
+            let end = offset.saturating_add(limit).min(refs.len());
+            let page_refs = refs.get(offset..end).unwrap_or_default().to_vec();
+            let cursor = if end < refs.len() {
+                encode_block_transaction_cursor(query.height.clone(), query.order, end)
+            } else {
+                vec![]
+            };
+            TransactionRefPage {
+                refs: VecM(page_refs),
+                cursor: BytesM(cursor),
+                latest_block: IdxBlockHeight::from(CANNED_HEIGHT_B),
+                oldest_block: IdxBlockHeight::from(0_i64),
+            }
+        }
+    }
+
+    fn canned_consensus_value(height: i64) -> ConsensusValue {
+        ConsensusValue {
+            protocol: XdrProtocol::new(0),
+            ext: ExtensionPoint::_0,
+            prev_hash: ConsensusValueHash::new(SHA256Hash::from([0x04; 32])),
+            proposal_header: ProposalHeader {
+                ext: ExtensionPoint::_0,
+                network_hash: NetworkHash::new(SHA256Hash::from([0x00; 32])),
+                proposer: ValidatorID::new([0x02; 32]),
+                block_timepoint: TimePoint::new(123),
+                block_height: IdxBlockHeight::from(height),
+                txs_hash: TxsHash::new(SHA256Hash::from([0x05; 32])),
+                storage_hash: StorageShortHash::new(SHA256Hash::from([0x05; 32])),
+                events_hash: EventsHash::new(SHA256Hash::from([0x05; 32])),
+            },
+            proposal_txs_hash: ProposalTxsHash::new(SHA256Hash::from([0x06; 32])),
+            upgrades: VecM(vec![BytesM(vec![0xaa])]),
+        }
+    }
+
+    fn encode_block_transaction_cursor(
+        height: IdxBlockHeight,
+        order: IdxIterationOrder,
+        offset: usize,
+    ) -> Vec<u8> {
+        let mut cursor = Vec::with_capacity(BLOCK_TX_CURSOR_LEN);
+        cursor.push(BLOCK_TX_CURSOR_VERSION);
+        cursor.extend_from_slice(&height.into_inner().to_be_bytes());
+        cursor.push(u8::from(
+            order != IdxIterationOrder::IterationOrderAscending,
+        ));
+        cursor.extend_from_slice(
+            &u32::try_from(offset)
+                .expect("bug: canned transaction offset fits u32")
+                .to_be_bytes(),
+        );
+        cursor
+    }
+
+    fn decode_block_transaction_cursor(query: &BlockTransactionQuery) -> Option<usize> {
+        if query.cursor.0.is_empty() {
+            return Some(0);
+        }
+        let cursor: [u8; BLOCK_TX_CURSOR_LEN] = query.cursor.0.as_slice().try_into().ok()?;
+        let height = i64::from_be_bytes(cursor[1..9].try_into().ok()?);
+        let order = match cursor[9] {
+            0 => IdxIterationOrder::IterationOrderAscending,
+            1 => IdxIterationOrder::IterationOrderDescending,
+            _ => return None,
+        };
+        if cursor[0] != BLOCK_TX_CURSOR_VERSION || height != *query.height || order != query.order {
+            return None;
+        }
+        usize::try_from(u32::from_be_bytes(cursor[10..14].try_into().ok()?)).ok()
     }
 
     #[async_trait]
@@ -1200,9 +1372,23 @@ mod tests {
 
         async fn get_block_by_height(
             &self,
-            _height: groundhog_xdr::types::BlockHeight,
-        ) -> Result<groundhog_indexer::BlockLookupResult, ProgramError> {
-            Err(ProgramError::msg("not implemented in fake indexer"))
+            height: groundhog_xdr::types::BlockHeight,
+        ) -> Result<BlockLookupResult, ProgramError> {
+            if self.mode == FakeIndexerMode::RpcFail {
+                return Err(ProgramError::msg("fake indexer rpc-fail"));
+            }
+            if self.mode == FakeIndexerMode::Slow {
+                tokio::time::sleep(Duration::from_mins(1)).await;
+            }
+            if *height == CANNED_HEIGHT_A {
+                Ok(BlockLookupResult::BlockFound {
+                    value: canned_consensus_value(*height),
+                })
+            } else {
+                Ok(BlockLookupResult::Default {
+                    outcome: BlockLookupOutcome::BlockNotFound.0,
+                })
+            }
         }
 
         async fn get_events(
@@ -1255,9 +1441,15 @@ mod tests {
 
         async fn get_transactions_by_block(
             &self,
-            _query: groundhog_indexer::BlockTransactionQuery,
+            query: BlockTransactionQuery,
         ) -> Result<TransactionRefPage, ProgramError> {
-            Err(ProgramError::msg("not implemented in fake indexer"))
+            if self.mode == FakeIndexerMode::RpcFail {
+                return Err(ProgramError::msg("fake indexer rpc-fail"));
+            }
+            if self.mode == FakeIndexerMode::Slow {
+                tokio::time::sleep(Duration::from_mins(1)).await;
+            }
+            Ok(self.block_transaction_page(&query))
         }
     }
 
@@ -1482,6 +1674,187 @@ mod tests {
             cursor: groundhog_json_rpc_types::events::PaginationCursor(cursor.to_vec()),
             limit: 10,
         }
+    }
+
+    fn block_transaction_query(order: IterationOrder, cursor: Vec<u8>) -> RpcBlockTransactionQuery {
+        RpcBlockTransactionQuery {
+            height: IdxBlockHeight::from(CANNED_HEIGHT_A),
+            order,
+            cursor: PaginationCursor(cursor),
+            limit: 1,
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // block read tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn get_block_by_number_returns_projected_canned_block() {
+        let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
+        let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
+        let backend = make_read_backend(idx_addr, sched_addr).await;
+
+        let block = backend
+            .get_block_by_number(
+                RpcRequestContext::unbounded(),
+                IdxBlockHeight::from(CANNED_HEIGHT_A),
+            )
+            .await
+            .expect("bug: block lookup should succeed")
+            .expect("bug: canned block should exist");
+
+        assert_eq!(block.block_height, IdxBlockHeight::from(CANNED_HEIGHT_A));
+        assert_eq!(block.block_timepoint, "123");
+    }
+
+    #[tokio::test]
+    async fn get_block_by_number_returns_none_for_missing_block() {
+        let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
+        let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
+        let backend = make_read_backend(idx_addr, sched_addr).await;
+
+        let block = backend
+            .get_block_by_number(
+                RpcRequestContext::unbounded(),
+                IdxBlockHeight::from(CANNED_HEIGHT_B),
+            )
+            .await
+            .expect("bug: block miss should succeed");
+
+        assert!(block.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_block_by_number_maps_indexer_failure_to_backend_unavailable() {
+        let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::RpcFail).await;
+        let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
+        let backend = make_read_backend(idx_addr, sched_addr).await;
+
+        let result = backend
+            .get_block_by_number(
+                RpcRequestContext::unbounded(),
+                IdxBlockHeight::from(CANNED_HEIGHT_A),
+            )
+            .await;
+
+        assert!(matches!(result, Err(RpcServerError::BackendUnavailable(_))));
+    }
+
+    #[tokio::test]
+    async fn get_block_by_number_respects_request_deadline() {
+        let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Slow).await;
+        let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
+        let backend = make_read_backend(idx_addr, sched_addr).await;
+
+        let result = backend
+            .get_block_by_number(
+                RpcRequestContext::new(Some(Duration::from_millis(10))),
+                IdxBlockHeight::from(CANNED_HEIGHT_A),
+            )
+            .await;
+
+        assert!(matches!(result, Err(RpcServerError::BackendTimeout)));
+    }
+
+    #[tokio::test]
+    async fn transactions_by_block_paginates_in_ascending_order() {
+        let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
+        let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
+        let backend = make_read_backend(idx_addr, sched_addr).await;
+
+        let first = backend
+            .transactions_by_block(
+                RpcRequestContext::unbounded(),
+                block_transaction_query(IterationOrder::Ascending, vec![]),
+            )
+            .await
+            .expect("bug: first block transaction page should succeed");
+        let second = backend
+            .transactions_by_block(
+                RpcRequestContext::unbounded(),
+                block_transaction_query(IterationOrder::Ascending, first.cursor.0.clone()),
+            )
+            .await
+            .expect("bug: continuation block transaction page should succeed");
+
+        assert_eq!(first.refs[0].tx_hash, canned_tx_hash(CANNED_TX_HASH_A));
+        assert_eq!(second.refs[0].tx_hash, canned_tx_hash(CANNED_TX_HASH_C));
+        assert!(second.cursor.0.is_empty());
+    }
+
+    #[tokio::test]
+    async fn transactions_by_block_orders_refs_descending() {
+        let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
+        let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
+        let backend = make_read_backend(idx_addr, sched_addr).await;
+
+        let page = backend
+            .transactions_by_block(
+                RpcRequestContext::unbounded(),
+                block_transaction_query(IterationOrder::Descending, vec![]),
+            )
+            .await
+            .expect("bug: descending block transaction page should succeed");
+
+        assert_eq!(page.refs[0].tx_hash, canned_tx_hash(CANNED_TX_HASH_C));
+    }
+
+    #[tokio::test]
+    async fn transactions_by_block_rejects_cursor_with_different_order() {
+        let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Normal).await;
+        let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
+        let backend = make_read_backend(idx_addr, sched_addr).await;
+        let first = backend
+            .transactions_by_block(
+                RpcRequestContext::unbounded(),
+                block_transaction_query(IterationOrder::Ascending, vec![]),
+            )
+            .await
+            .expect("bug: first block transaction page should succeed");
+
+        let page = backend
+            .transactions_by_block(
+                RpcRequestContext::unbounded(),
+                block_transaction_query(IterationOrder::Descending, first.cursor.0),
+            )
+            .await
+            .expect("bug: mismatched cursor should return an exhausted page");
+
+        assert!(page.refs.is_empty());
+        assert!(page.cursor.0.is_empty());
+    }
+
+    #[tokio::test]
+    async fn transactions_by_block_maps_indexer_failure_to_backend_unavailable() {
+        let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::RpcFail).await;
+        let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
+        let backend = make_read_backend(idx_addr, sched_addr).await;
+
+        let result = backend
+            .transactions_by_block(
+                RpcRequestContext::unbounded(),
+                block_transaction_query(IterationOrder::Ascending, vec![]),
+            )
+            .await;
+
+        assert!(matches!(result, Err(RpcServerError::BackendUnavailable(_))));
+    }
+
+    #[tokio::test]
+    async fn transactions_by_block_respects_request_deadline() {
+        let (idx_addr, _idx) = start_fake_indexer(FakeIndexerMode::Slow).await;
+        let (sched_addr, _sched) = start_fake_scheduler(FakeSchedulerMode::NoPending).await;
+        let backend = make_read_backend(idx_addr, sched_addr).await;
+
+        let result = backend
+            .transactions_by_block(
+                RpcRequestContext::new(Some(Duration::from_millis(10))),
+                block_transaction_query(IterationOrder::Ascending, vec![]),
+            )
+            .await;
+
+        assert!(matches!(result, Err(RpcServerError::BackendTimeout)));
     }
 
     // -----------------------------------------------------------------------
