@@ -357,6 +357,7 @@ pub enum CliError {
 
 impl CliError {
     /// Stable machine-readable error code.
+    #[allow(clippy::too_many_lines)]
     pub fn code(&self) -> &'static str {
         match self {
             Self::CargoNotFound => "cargo_not_found",
