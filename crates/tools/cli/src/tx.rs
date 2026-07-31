@@ -13,6 +13,7 @@ use crate::account_resolution::resolve_address_target;
 use crate::checks::{Finding, FindingLevel};
 use crate::codec::format_contract_address;
 use crate::config::{ProfileOverrides, resolve_profile_with_overrides};
+use crate::pagination::{parse_cursor, parse_limit};
 use crate::result::CommandResult;
 use crate::terminal::terminal_safe;
 use crate::tx_json::{
@@ -125,36 +126,18 @@ pub fn list(
 }
 
 fn parse_history_limit(input: Option<&str>) -> Result<u32, CliError> {
-    let Some(input) = input else {
-        return Ok(50);
-    };
-    let limit = input
-        .parse::<u32>()
-        .map_err(|error| CliError::InvalidTransactionHistoryLimit {
-            input: input.to_owned(),
-            display_input: terminal_safe(input),
-            message: error.to_string(),
-        })?;
-    if limit == 0 {
-        return Err(CliError::InvalidTransactionHistoryLimit {
-            input: input.to_owned(),
-            display_input: terminal_safe(input),
-            message: "must be greater than zero".into(),
-        });
-    }
-    Ok(limit)
+    parse_limit(input).map_err(|error| CliError::InvalidTransactionHistoryLimit {
+        display_input: terminal_safe(&error.input),
+        input: error.input,
+        message: error.message,
+    })
 }
 
 fn parse_transaction_cursor(input: Option<&str>) -> Result<PaginationCursor, CliError> {
-    let Some(input) = input else {
-        return Ok(PaginationCursor::default());
-    };
-    serde_json::from_value(serde_json::Value::String(input.to_owned())).map_err(|error| {
-        CliError::InvalidTransactionCursor {
-            input: input.to_owned(),
-            display_input: terminal_safe(input),
-            message: error.to_string(),
-        }
+    parse_cursor(input).map_err(|error| CliError::InvalidTransactionCursor {
+        display_input: terminal_safe(&error.input),
+        input: error.input,
+        message: error.message,
     })
 }
 
@@ -239,7 +222,10 @@ async fn fetch_transaction(
     Ok((status, receipt))
 }
 
-fn map_rpc_error(method: &'static str, error: &jsonrpsee::core::client::Error) -> CliError {
+pub(crate) fn map_rpc_error(
+    method: &'static str,
+    error: &jsonrpsee::core::client::Error,
+) -> CliError {
     let message = rpc_error_message(error);
     if is_unsupported_rpc_method_error(error) {
         return CliError::RpcCapabilityUnsupported { method, message };
@@ -327,6 +313,7 @@ fn print_list(target_input: &str, address: &str, page: &TransactionRefPage, prin
         }
     }
     if !page.cursor.0.is_empty() {
+        print.status("");
         print.detail("next cursor", format_cursor(&page.cursor));
     }
 }
@@ -337,7 +324,7 @@ fn format_cursor(cursor: &PaginationCursor) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_cursor, parse_history_limit, parse_transaction_cursor, parse_tx_hash};
+    use super::{format_cursor, parse_tx_hash};
     use crate::tx_utils::format_tx_hash;
     use groundhog_json_rpc_types::events::PaginationCursor;
 
@@ -364,41 +351,6 @@ mod tests {
             let error =
                 parse_tx_hash(&input).expect_err("bug: invalid transaction hash should fail");
             assert_eq!(error.code(), "invalid_transaction_hash");
-        }
-    }
-
-    #[test]
-    fn history_limit_parser_defaults_and_accepts_nonzero_u32() {
-        assert_eq!(parse_history_limit(None).unwrap(), 50);
-        assert_eq!(parse_history_limit(Some("1")).unwrap(), 1);
-        assert_eq!(
-            parse_history_limit(Some(&u32::MAX.to_string())).unwrap(),
-            u32::MAX
-        );
-    }
-
-    #[test]
-    fn history_limit_parser_rejects_invalid_values() {
-        for input in ["0", "-1", "one", "4294967296"] {
-            let error = parse_history_limit(Some(input)).expect_err("invalid limit should fail");
-            assert_eq!(error.code(), "invalid_transaction_history_limit");
-        }
-    }
-
-    #[test]
-    fn transaction_cursor_parser_uses_shared_hex_contract() {
-        for (input, expected) in [(None, "0x"), (Some("0x"), "0x"), (Some("0XAbCd"), "0xabcd")] {
-            let cursor = parse_transaction_cursor(input).expect("shared cursor form should parse");
-            assert_eq!(format_cursor(&cursor), expected);
-        }
-    }
-
-    #[test]
-    fn transaction_cursor_parser_rejects_malformed_hex() {
-        for input in ["0xabc", "0xgg"] {
-            let error =
-                parse_transaction_cursor(Some(input)).expect_err("invalid cursor should fail");
-            assert_eq!(error.code(), "invalid_transaction_cursor");
         }
     }
 

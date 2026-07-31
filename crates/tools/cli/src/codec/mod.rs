@@ -286,34 +286,87 @@ pub(crate) fn decode_spec_value_from_reader(
     type_defs: &TypeDefIndex<'_>,
     path: &str,
 ) -> Result<Value, CliError> {
+    decode_spec_value_from_reader_with_policy(
+        ty,
+        reader,
+        type_defs,
+        path,
+        &mut DecodePolicy {
+            strict_enums: false,
+            remaining_values: None,
+        },
+    )
+}
+
+/// Decode one event value while rejecting enum discriminants absent from the spec.
+pub(crate) fn decode_event_spec_value_from_reader(
+    ty: &ContractType,
+    reader: &mut xdrs::cxs::buf_reader::BufReader<'_>,
+    type_defs: &TypeDefIndex<'_>,
+    path: &str,
+    remaining_values: &mut usize,
+) -> Result<Value, CliError> {
+    decode_spec_value_from_reader_with_policy(
+        ty,
+        reader,
+        type_defs,
+        path,
+        &mut DecodePolicy {
+            strict_enums: true,
+            remaining_values: Some(remaining_values),
+        },
+    )
+}
+
+struct DecodePolicy<'a> {
+    strict_enums: bool,
+    remaining_values: Option<&'a mut usize>,
+}
+
+fn decode_spec_value_from_reader_with_policy(
+    ty: &ContractType,
+    reader: &mut xdrs::cxs::buf_reader::BufReader<'_>,
+    type_defs: &TypeDefIndex<'_>,
+    path: &str,
+    policy: &mut DecodePolicy<'_>,
+) -> Result<Value, CliError> {
+    if let ContractType::Option { option_inner } = ty {
+        return decode_option_value_from_reader(
+            option_inner.as_ref(),
+            reader,
+            type_defs,
+            path,
+            policy,
+        );
+    }
+    charge_decoded_values(policy, path, 1)?;
     if let Some(decoded) = decode_spec_scalar_value_from_reader(ty, reader, path) {
         return decoded;
     }
 
     match ty {
-        ContractType::Option { option_inner } => {
-            decode_option_value_from_reader(option_inner.as_ref(), reader, type_defs, path)
-        }
         ContractType::Vector { vector } => {
-            decode_vector_value_from_reader(vector, reader, type_defs, path)
+            decode_vector_value_from_reader(vector, reader, type_defs, path, policy)
         }
         ContractType::Tuple { tuple } => {
+            ensure_decoded_values(policy, path, tuple.len())?;
             let mut values = Vec::with_capacity(tuple.len());
             for (index, item) in tuple.iter().enumerate() {
-                values.push(decode_spec_value_from_reader(
+                values.push(decode_spec_value_from_reader_with_policy(
                     item,
                     reader,
                     type_defs,
                     &index_path(path, index),
+                    policy,
                 )?);
             }
             Ok(Value::Array(values))
         }
         ContractType::Named { named } => {
-            decode_named_value_from_reader(named, reader, type_defs, path)
+            decode_named_value_from_reader(named, reader, type_defs, path, policy)
         }
         ContractType::Array { array } => {
-            decode_array_value_from_reader(array, reader, type_defs, path)
+            decode_array_value_from_reader(array, reader, type_defs, path, policy)
         }
         _ => Err(CliError::SpecFailed(
             "embedded contract spec contains an unsupported contract type".into(),
@@ -1274,6 +1327,36 @@ fn decode_value_error(path: &str, message: impl Into<String>) -> CliError {
     }
 }
 
+fn ensure_decoded_values(
+    policy: &mut DecodePolicy<'_>,
+    path: &str,
+    required: usize,
+) -> Result<(), CliError> {
+    if policy
+        .remaining_values
+        .as_deref()
+        .is_some_and(|remaining| required > *remaining)
+    {
+        return Err(decode_value_error(
+            path,
+            "decoded value exceeds the per-event value limit",
+        ));
+    }
+    Ok(())
+}
+
+fn charge_decoded_values(
+    policy: &mut DecodePolicy<'_>,
+    path: &str,
+    count: usize,
+) -> Result<(), CliError> {
+    ensure_decoded_values(policy, path, count)?;
+    if let Some(remaining) = policy.remaining_values.as_deref_mut() {
+        *remaining -= count;
+    }
+    Ok(())
+}
+
 fn field_path(path: &str, field: &str) -> String {
     format!("{path}.{field}")
 }
@@ -1325,10 +1408,12 @@ fn decode_option_value_from_reader(
     reader: &mut xdrs::cxs::buf_reader::BufReader<'_>,
     type_defs: &TypeDefIndex<'_>,
     path: &str,
+    policy: &mut DecodePolicy<'_>,
 ) -> Result<Value, CliError> {
     if read_xdr_value::<bool>(reader, path)? {
-        decode_spec_value_from_reader(inner, reader, type_defs, path)
+        decode_spec_value_from_reader_with_policy(inner, reader, type_defs, path, policy)
     } else {
+        charge_decoded_values(policy, path, 1)?;
         Ok(Value::Null)
     }
 }
@@ -1338,6 +1423,7 @@ fn decode_vector_value_from_reader(
     reader: &mut xdrs::cxs::buf_reader::BufReader<'_>,
     type_defs: &TypeDefIndex<'_>,
     path: &str,
+    policy: &mut DecodePolicy<'_>,
 ) -> Result<Value, CliError> {
     let inner = vector.element.as_ref();
     if vector_contains_u8(inner) {
@@ -1354,13 +1440,15 @@ fn decode_vector_value_from_reader(
             format!("decoded vector length {len} exceeds max {}", vector.max_len),
         ));
     }
+    ensure_decoded_values(policy, path, len)?;
     let mut values = Vec::with_capacity(len);
     for index in 0..len {
-        values.push(decode_spec_value_from_reader(
+        values.push(decode_spec_value_from_reader_with_policy(
             inner,
             reader,
             type_defs,
             &index_path(path, index),
+            policy,
         )?);
     }
     Ok(Value::Array(values))
@@ -1371,14 +1459,17 @@ fn decode_named_value_from_reader(
     reader: &mut xdrs::cxs::buf_reader::BufReader<'_>,
     type_defs: &TypeDefIndex<'_>,
     path: &str,
+    policy: &mut DecodePolicy<'_>,
 ) -> Result<Value, CliError> {
     match resolve_named_type_def(named, type_defs)? {
         ContractTypeDef::TypeDefStruct { struct_def } => {
-            decode_struct_value(struct_def, reader, type_defs, path)
+            decode_struct_value(struct_def, reader, type_defs, path, policy)
         }
-        ContractTypeDef::TypeDefEnum { enum_def } => decode_enum_value(enum_def, reader, path),
+        ContractTypeDef::TypeDefEnum { enum_def } => {
+            decode_enum_value(enum_def, reader, path, policy.strict_enums)
+        }
         ContractTypeDef::TypeDefUnion { union_def } => {
-            decode_union_value(union_def, reader, type_defs, path)
+            decode_union_value(union_def, reader, type_defs, path, policy)
         }
         _ => Err(CliError::SpecFailed(
             "embedded contract spec contains an unsupported type definition kind".into(),
@@ -1391,6 +1482,7 @@ fn decode_array_value_from_reader(
     reader: &mut xdrs::cxs::buf_reader::BufReader<'_>,
     type_defs: &TypeDefIndex<'_>,
     path: &str,
+    policy: &mut DecodePolicy<'_>,
 ) -> Result<Value, CliError> {
     let inner = array.element.as_ref();
     if vector_contains_u8(inner) {
@@ -1400,13 +1492,15 @@ fn decode_array_value_from_reader(
             .map_err(|e| decode_value_error(path, format!("failed to decode byte array: {e}")));
     }
 
+    ensure_decoded_values(policy, path, array.len as usize)?;
     let mut values = Vec::with_capacity(array.len as usize);
     for index in 0..array.len as usize {
-        values.push(decode_spec_value_from_reader(
+        values.push(decode_spec_value_from_reader_with_policy(
             inner,
             reader,
             type_defs,
             &index_path(path, index),
+            policy,
         )?);
     }
     Ok(Value::Array(values))
@@ -1417,8 +1511,9 @@ fn decode_struct_value(
     reader: &mut xdrs::cxs::buf_reader::BufReader<'_>,
     type_defs: &TypeDefIndex<'_>,
     path: &str,
+    policy: &mut DecodePolicy<'_>,
 ) -> Result<Value, CliError> {
-    decode_field_values(struct_def.fields.iter(), reader, type_defs, path)
+    decode_field_values(struct_def.fields.iter(), reader, type_defs, path, policy)
 }
 
 fn decode_field_values<'a>(
@@ -1426,17 +1521,20 @@ fn decode_field_values<'a>(
     reader: &mut xdrs::cxs::buf_reader::BufReader<'_>,
     type_defs: &TypeDefIndex<'_>,
     path: &str,
+    policy: &mut DecodePolicy<'_>,
 ) -> Result<Value, CliError> {
     let fields = fields.collect::<Vec<_>>();
+    ensure_decoded_values(policy, path, fields.len())?;
     if fields_decode_to_object(&fields)? {
         let mut object = serde_json::Map::with_capacity(fields.len());
         for field in fields {
             let field_name = spec_string_text(&field.name)?;
-            let value = decode_spec_value_from_reader(
+            let value = decode_spec_value_from_reader_with_policy(
                 &field.ty,
                 reader,
                 type_defs,
                 &field_path(path, field_name),
+                policy,
             )?;
             object.insert(field_name.to_owned(), value);
         }
@@ -1444,11 +1542,12 @@ fn decode_field_values<'a>(
     } else {
         let mut values = Vec::with_capacity(fields.len());
         for (index, field) in fields.iter().enumerate() {
-            values.push(decode_spec_value_from_reader(
+            values.push(decode_spec_value_from_reader_with_policy(
                 &field.ty,
                 reader,
                 type_defs,
                 &index_path(path, index),
+                policy,
             )?);
         }
         Ok(Value::Array(values))
@@ -1469,6 +1568,7 @@ fn decode_enum_value(
     enum_def: &ContractEnumDef,
     reader: &mut xdrs::cxs::buf_reader::BufReader<'_>,
     path: &str,
+    strict: bool,
 ) -> Result<Value, CliError> {
     let discriminant = read_xdr_value::<i32>(reader, path)?;
     for variant in enum_def.variants.iter() {
@@ -1476,7 +1576,14 @@ fn decode_enum_value(
             return Ok(Value::from(spec_string_text(&variant.name)?.to_owned()));
         }
     }
-    Ok(Value::from(discriminant))
+    if strict {
+        Err(decode_value_error(
+            path,
+            format!("unknown enum discriminant `{discriminant}`"),
+        ))
+    } else {
+        Ok(Value::from(discriminant))
+    }
 }
 
 fn decode_union_value(
@@ -1484,6 +1591,7 @@ fn decode_union_value(
     reader: &mut xdrs::cxs::buf_reader::BufReader<'_>,
     type_defs: &TypeDefIndex<'_>,
     path: &str,
+    policy: &mut DecodePolicy<'_>,
 ) -> Result<Value, CliError> {
     let discriminant = read_xdr_value::<i32>(reader, path)?;
     let case = union_def
@@ -1499,23 +1607,26 @@ fn decode_union_value(
         "case".into(),
         Value::from(spec_string_text(&case.name)?.to_owned()),
     );
+    charge_decoded_values(policy, path, 1)?;
 
     match &case.case_type {
         ContractUnionCaseType::UnionCaseVoid => {}
         ContractUnionCaseType::UnionCaseTuple { tuple } => {
             object.insert(
                 "value".into(),
-                decode_spec_value_from_reader(
+                decode_spec_value_from_reader_with_policy(
                     &ContractType::Tuple {
                         tuple: tuple.clone(),
                     },
                     reader,
                     type_defs,
                     &field_path(path, "value"),
+                    policy,
                 )?,
             );
         }
         ContractUnionCaseType::UnionCaseStruct { struct_fields } => {
+            charge_decoded_values(policy, &field_path(path, "value"), 1)?;
             object.insert(
                 "value".into(),
                 decode_field_values(
@@ -1523,6 +1634,7 @@ fn decode_union_value(
                     reader,
                     type_defs,
                     &field_path(path, "value"),
+                    policy,
                 )?,
             );
         }
