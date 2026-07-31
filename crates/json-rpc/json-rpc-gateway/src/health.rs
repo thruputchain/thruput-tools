@@ -1239,6 +1239,7 @@ fn scheduler_probe_failure(
     }
 }
 
+/// Probe only the indexer capability handshake; data methods are request-path work.
 async fn probe_indexer(
     ctx: &GatewayContext,
     protocol: &Protocol,
@@ -3258,6 +3259,19 @@ mod tests {
         assert!(ctx.indexer.read().await.is_some());
         assert!(ctx.db_gateway.read().await.is_some());
         assert!(ctx.view_gateway.read().await.is_some());
+        let metrics = ctx
+            .metrics
+            .gather(&GatewayHealthSnapshot::for_test(
+                HealthStatus::Ok,
+                None,
+                &[(HealthBackend::Indexer, true)],
+            ))
+            .expect("health probe metrics should encode");
+        assert!(metrics.contains(
+            "backend=\"indexer\",operation=\"indexer_block_explorer_intro\",outcome=\"ok\""
+        ));
+        assert!(!metrics.contains("operation=\"get_block_by_height\""));
+        assert!(!metrics.contains("operation=\"get_transactions_by_block\""));
         indexer_gate.release.notify_waiters();
         db_gateway_gate.release.notify_waiters();
         view_gateway_gate.release.notify_waiters();

@@ -370,6 +370,7 @@ impl GatewayMetrics {
             "groundhog_pendingTransactionCount" => "groundhog_pendingTransactionCount",
             "groundhog_getEvents" => "groundhog_getEvents",
             "groundhog_getTransactionsByAddress" => "groundhog_getTransactionsByAddress",
+            "groundhog_getTransactionsByBlock" => "groundhog_getTransactionsByBlock",
             "groundhog_getStorageAt" => "groundhog_getStorageAt",
             "groundhog_getBalance" => "groundhog_getBalance",
             "groundhog_view" => "groundhog_view",
@@ -627,6 +628,14 @@ mod tests {
                 Duration::from_millis(3),
             );
         }
+        for operation in ["get_block_by_height", "get_transactions_by_block"] {
+            metrics.observe_backend_request(
+                HealthBackend::Indexer,
+                operation,
+                BackendRequestOutcome::Ok,
+                Duration::from_millis(2),
+            );
+        }
         for outcome in [
             BackendReconnectOutcome::Success,
             BackendReconnectOutcome::Error,
@@ -664,6 +673,12 @@ mod tests {
         assert!(body.contains(
             "groundhog_gateway_backend_request_duration_seconds_count{backend=\"scheduler\",operation=\"schedcoord_get_tip\",result=\"error\"} 3"
         ));
+        assert!(body.contains(
+            "groundhog_gateway_backend_requests_total{backend=\"indexer\",operation=\"get_block_by_height\",outcome=\"ok\"} 1"
+        ));
+        assert!(body.contains(
+            "groundhog_gateway_backend_requests_total{backend=\"indexer\",operation=\"get_transactions_by_block\",outcome=\"ok\"} 1"
+        ));
         let expected_buckets = [
             0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5,
             5.0, 10.0,
@@ -692,6 +707,7 @@ mod tests {
             "groundhog_pendingTransactionCount",
             "groundhog_getEvents",
             "groundhog_getTransactionsByAddress",
+            "groundhog_getTransactionsByBlock",
             "groundhog_getStorageAt",
             "groundhog_getBalance",
             "groundhog_view",
