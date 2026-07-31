@@ -133,6 +133,17 @@ enum Command {
         #[arg(long = "profile")]
         profile: Option<String>,
     },
+    /// Manage persisted Groundhog configuration
+    #[command(
+        long_about = "Inspect and manage persisted global and project profiles. Inspection \
+                      commands show the merged configuration. Mutations update one physical \
+                      layer: inside a project, pass --global or --project; outside a project, \
+                      omitted scope means global. Use --json for stable machine-readable output."
+    )]
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
     /// Build contract artifact
     #[command(long_about = "Cross-compile the contract to \
                       wasm32-unknown-unknown or \
@@ -493,6 +504,130 @@ enum KeysCommand {
 }
 
 #[derive(Subcommand)]
+enum ConfigCommand {
+    /// Show one persisted profile
+    #[command(
+        long_about = "Show one persisted profile merged from global and project configuration. \
+                      This excludes local-node state, signer fallback, and command-specific \
+                      overrides."
+    )]
+    Get {
+        /// Profile name; omit to use active-profile selection
+        profile: Option<String>,
+        /// Include the global or project source of each value
+        #[arg(long)]
+        sources: bool,
+    },
+    /// List global and project profiles
+    Profiles,
+    /// Create a complete profile in one config layer
+    #[command(long_about = "Create a complete profile in one atomic config update. \
+                      Outside a project, omitted scope means global. When a project config is \
+                      discoverable, choose --global or --project explicitly. The two scope flags \
+                      cannot be used together.")]
+    New {
+        /// Profile to create
+        profile: String,
+        /// Network: local, devnet, or mainnet
+        #[arg(long)]
+        network: String,
+        /// Absolute HTTP(S) RPC URL
+        #[arg(long)]
+        rpc_url: Option<String>,
+        /// Absolute HTTP(S) faucet URL
+        #[arg(long)]
+        faucet_url: Option<String>,
+        /// Profile-specific signing key
+        #[arg(long)]
+        default_key: Option<String>,
+        /// Also select the new profile as this layer's default
+        #[arg(long = "use")]
+        select: bool,
+        /// Create the profile in global config
+        #[arg(long)]
+        global: bool,
+        /// Create the profile in project config
+        #[arg(long)]
+        project: bool,
+    },
+    /// Remove an entire profile from one config layer
+    #[command(
+        long_about = "Remove an entire profile from one config layer, including its contract \
+                      aliases and wallet bindings. Normal output asks for confirmation; --json \
+                      and --quiet delete without prompting. A matching default profile selection \
+                      is cleared in the same atomic update."
+    )]
+    Rm {
+        /// Profile to remove
+        profile: String,
+        /// Remove the profile from global config
+        #[arg(long)]
+        global: bool,
+        /// Remove the profile from project config
+        #[arg(long)]
+        project: bool,
+    },
+    /// Set one typed field in a profile layer
+    #[command(
+        long_about = "Set network, rpc-url, faucet-url, or default-key on an existing \
+                      profile in one config layer. The profile must already exist in that layer. \
+                      Inside a project, pass --global or --project; outside a project, omitted \
+                      scope means global."
+    )]
+    Set {
+        /// Field to set: network, rpc-url, faucet-url, or default-key
+        field: String,
+        /// New field value
+        value: String,
+        /// Profile to update
+        #[arg(long)]
+        profile: String,
+        /// Update the global config layer
+        #[arg(long)]
+        global: bool,
+        /// Update the project config layer
+        #[arg(long)]
+        project: bool,
+    },
+    /// Remove one typed field from a profile layer
+    #[command(
+        long_about = "Remove network, rpc-url, faucet-url, or default-key from one config \
+                      layer. Missing fields and missing target-layer profiles are no-ops. Removing \
+                      a project override may reveal the inherited global value."
+    )]
+    Unset {
+        /// Field to remove: network, rpc-url, faucet-url, or default-key
+        field: String,
+        /// Profile to update
+        #[arg(long)]
+        profile: String,
+        /// Update the global config layer
+        #[arg(long)]
+        global: bool,
+        /// Update the project config layer
+        #[arg(long)]
+        project: bool,
+    },
+    /// Select the default profile in one config layer
+    #[command(
+        long_about = "Set the profile used when --profile and GROUNDHOG_PROFILE are omitted. \
+                      A global selection requires a global profile. A project selection may use a \
+                      profile from either layer. Explicit --profile and GROUNDHOG_PROFILE still \
+                      take precedence."
+    )]
+    Use {
+        /// Profile to select
+        profile: String,
+        /// Update the global config layer
+        #[arg(long)]
+        global: bool,
+        /// Update the project config layer
+        #[arg(long)]
+        project: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum WalletCommand {
     /// List saved project wallets
     Ls {
@@ -698,6 +833,20 @@ impl TokenCommand {
     }
 }
 
+impl ConfigCommand {
+    fn command_name(&self) -> &'static str {
+        match self {
+            Self::Get { .. } => "config.get",
+            Self::Profiles => "config.profiles",
+            Self::New { .. } => "config.new",
+            Self::Rm { .. } => "config.rm",
+            Self::Set { .. } => "config.set",
+            Self::Unset { .. } => "config.unset",
+            Self::Use { .. } => "config.use",
+        }
+    }
+}
+
 impl Command {
     /// Canonical command name for JSON envelopes.
     ///
@@ -718,6 +867,7 @@ impl Command {
             Self::View { .. } => "view",
             Self::Storage { .. } => "storage",
             Self::Node { .. } => "node",
+            Self::Config { command } => command.command_name(),
             Self::Keys { command } => command.command_name(),
             Self::Wallet { command } => command.command_name(),
             Self::Codegen { command } => command.command_name(),
@@ -768,6 +918,75 @@ fn main() {
         Command::Status { profile } => std::env::current_dir()
             .map_err(groundhog_cli::CliError::Io)
             .and_then(|cwd| groundhog_cli::status::run(&cwd, profile.as_deref(), cmd_name, &print)),
+        Command::Config { command } => std::env::current_dir()
+            .map_err(groundhog_cli::CliError::Io)
+            .and_then(|cwd| match command {
+                ConfigCommand::Get { profile, sources } => groundhog_cli::config_cmd::get(
+                    &cwd,
+                    profile.as_deref(),
+                    sources,
+                    cmd_name,
+                    &print,
+                ),
+                ConfigCommand::Profiles => {
+                    groundhog_cli::config_cmd::profiles(&cwd, cmd_name, &print)
+                }
+                ConfigCommand::New {
+                    profile,
+                    network,
+                    rpc_url,
+                    faucet_url,
+                    default_key,
+                    select,
+                    global,
+                    project,
+                } => groundhog_cli::config_cmd::new_profile(
+                    &cwd,
+                    &profile,
+                    &groundhog_cli::config::NewProfileOptions {
+                        network,
+                        rpc_url,
+                        faucet_url,
+                        default_key,
+                        select,
+                    },
+                    global,
+                    project,
+                    cmd_name,
+                    &print,
+                ),
+                ConfigCommand::Rm {
+                    profile,
+                    global,
+                    project,
+                } => groundhog_cli::config_cmd::remove(
+                    &cwd, &profile, global, project, cmd_name, &print,
+                ),
+                ConfigCommand::Set {
+                    field,
+                    value,
+                    profile,
+                    global,
+                    project,
+                } => groundhog_cli::config_cmd::set(
+                    &cwd, &profile, &field, &value, global, project, cmd_name, &print,
+                ),
+                ConfigCommand::Unset {
+                    field,
+                    profile,
+                    global,
+                    project,
+                } => groundhog_cli::config_cmd::unset(
+                    &cwd, &profile, &field, global, project, cmd_name, &print,
+                ),
+                ConfigCommand::Use {
+                    profile,
+                    global,
+                    project,
+                } => groundhog_cli::config_cmd::use_default(
+                    &cwd, &profile, global, project, cmd_name, &print,
+                ),
+            }),
         Command::Build {
             package,
             target,
@@ -1213,6 +1432,119 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn config_get_flags_and_command_name_parse() {
+        let cli = Cli::parse_from(["groundhog", "config", "get", "devnet", "--sources"]);
+
+        assert_eq!(cli.command.command_name(), "config.get");
+        match cli.command {
+            Command::Config {
+                command: ConfigCommand::Get { profile, sources },
+            } => {
+                assert_eq!(profile.as_deref(), Some("devnet"));
+                assert!(sources);
+            }
+            _ => panic!("expected config get command"),
+        }
+    }
+
+    #[test]
+    fn config_profiles_command_name_parses() {
+        let cli = Cli::parse_from(["groundhog", "config", "profiles"]);
+
+        assert_eq!(cli.command.command_name(), "config.profiles");
+        assert!(matches!(
+            cli.command,
+            Command::Config {
+                command: ConfigCommand::Profiles
+            }
+        ));
+    }
+
+    #[test]
+    fn config_mutation_commands_and_flags_parse() {
+        let new_profile = Cli::parse_from([
+            "groundhog",
+            "config",
+            "new",
+            "staging",
+            "--network",
+            "devnet",
+            "--rpc-url",
+            "https://rpc.example",
+            "--faucet-url",
+            "https://faucet.example",
+            "--default-key",
+            "alice",
+            "--use",
+            "--global",
+        ]);
+        assert_eq!(new_profile.command.command_name(), "config.new");
+        assert!(matches!(
+            new_profile.command,
+            Command::Config {
+                command: ConfigCommand::New {
+                    profile,
+                    network,
+                    select: true,
+                    global: true,
+                    project: false,
+                    ..
+                }
+            } if profile == "staging" && network == "devnet"
+        ));
+
+        let remove = Cli::parse_from(["groundhog", "config", "rm", "staging", "--project"]);
+        assert_eq!(remove.command.command_name(), "config.rm");
+        assert!(matches!(
+            remove.command,
+            Command::Config {
+                command: ConfigCommand::Rm {
+                    profile,
+                    global: false,
+                    project: true,
+                }
+            } if profile == "staging"
+        ));
+
+        let set = Cli::parse_from([
+            "groundhog",
+            "config",
+            "set",
+            "rpc-url",
+            "https://rpc.example",
+            "--profile",
+            "devnet",
+            "--project",
+        ]);
+        assert_eq!(set.command.command_name(), "config.set");
+        assert!(matches!(
+            set.command,
+            Command::Config {
+                command: ConfigCommand::Set {
+                    profile,
+                    project: true,
+                    global: false,
+                    ..
+                }
+            } if profile == "devnet"
+        ));
+
+        let unset = Cli::parse_from([
+            "groundhog",
+            "config",
+            "unset",
+            "faucet-url",
+            "--profile",
+            "devnet",
+            "--global",
+        ]);
+        assert_eq!(unset.command.command_name(), "config.unset");
+
+        let use_profile = Cli::parse_from(["groundhog", "config", "use", "devnet", "--global"]);
+        assert_eq!(use_profile.command.command_name(), "config.use");
+    }
 
     #[test]
     fn node_dev_account_count_flag_parses() {

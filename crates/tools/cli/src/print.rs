@@ -1,4 +1,5 @@
 use crate::CliError;
+use crate::terminal::terminal_safe;
 use serde::Serialize;
 use serde_json::json;
 use std::io::{self, IsTerminal, Write};
@@ -57,6 +58,17 @@ impl Print {
     /// Returns whether styled interactive output is appropriate.
     pub fn is_human_tty(&self) -> bool {
         !self.quiet && !self.json && supports_ansi_stderr()
+    }
+
+    /// Returns whether styled human data on stdout is appropriate.
+    pub fn is_human_stdout_tty(&self) -> bool {
+        !self.quiet
+            && !self.json
+            && io::stdout().is_terminal()
+            && terminal_allows_ansi(
+                std::env::var_os("TERM").as_deref(),
+                std::env::var_os("NO_COLOR").as_deref(),
+            )
     }
 
     /// Trace a subprocess invocation to stderr when command tracing is on.
@@ -213,12 +225,14 @@ impl Print {
         }
 
         let mut stderr = io::stderr();
+        let message = terminal_safe(&error.to_string());
         if self.is_human_tty() {
-            writeln!(stderr, "{RED}✗{RESET} {error}")?;
+            writeln!(stderr, "{RED}✗{RESET} {message}")?;
         } else {
-            writeln!(stderr, "error: {error}")?;
+            writeln!(stderr, "error: {message}")?;
         }
         if let Some(hint) = error.hint() {
+            let hint = terminal_safe(&hint);
             writeln!(stderr)?;
             if self.is_human_tty() {
                 writeln!(stderr, "  {DIM}hint:{RESET} {hint}")?;

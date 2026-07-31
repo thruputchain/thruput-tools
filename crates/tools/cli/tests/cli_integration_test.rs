@@ -29,6 +29,13 @@ fn groundhog() -> Command {
         std::process::id(),
         CONFIG_HOME_COUNTER.fetch_add(1, Ordering::Relaxed)
     ));
+    let groundhog_config = config_home.join("groundhog");
+    std::fs::create_dir_all(&groundhog_config).expect("bug: test config directory should exist");
+    std::fs::write(
+        groundhog_config.join("config.toml"),
+        "default_profile = \"default\"\n\n[profile.default]\n",
+    )
+    .expect("bug: test config should be writable");
     command.env_remove("GROUNDHOG_RUNTIME_MANIFEST");
     command.env_remove("GROUNDHOG_PROFILE");
     command.env_remove("GROUNDHOG_DEVNODE_BINARY");
@@ -37,6 +44,12 @@ fn groundhog() -> Command {
     command.env("XDG_CONFIG_HOME", config_home);
     command.env("XDG_CACHE_HOME", cache_home);
     command
+}
+
+fn write_global_config(config_home: &std::path::Path, contents: &str) {
+    let directory = config_home.join("groundhog");
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(directory.join("config.toml"), contents).unwrap();
 }
 
 fn workspace_root() -> std::path::PathBuf {
@@ -279,6 +292,1009 @@ fn version_flag_works() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("groundhog"));
+}
+
+#[test]
+fn config_help_describes_merged_inspection() {
+    let output = groundhog()
+        .args(["config", "get", "--help"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("merged from global and project configuration"));
+    assert!(stdout.contains("--sources"));
+    assert!(!stdout.contains("--global"));
+    assert!(!stdout.contains("--project"));
+
+    for removed_flag in ["--global", "--project"] {
+        let rejected = groundhog()
+            .args(["config", "get", removed_flag])
+            .output()
+            .unwrap();
+        assert!(!rejected.status.success());
+        assert!(String::from_utf8_lossy(&rejected.stderr).contains("unexpected argument"));
+    }
+}
+
+#[test]
+fn config_parent_help_describes_management_and_scope_rules() {
+    let output = groundhog().args(["config", "--help"]).output().unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Inspect and manage persisted global and project profiles"));
+    assert!(stdout.contains("pass --global or --project"));
+    assert!(stdout.contains("omitted scope means global"));
+    for command in ["get", "profiles", "new", "rm", "set", "unset", "use"] {
+        assert!(
+            stdout.contains(command),
+            "missing config command `{command}`"
+        );
+    }
+}
+
+#[test]
+fn config_mutation_help_describes_layer_specific_behavior() {
+    let set = groundhog()
+        .args(["config", "set", "--help"])
+        .output()
+        .unwrap();
+    let unset = groundhog()
+        .args(["config", "unset", "--help"])
+        .output()
+        .unwrap();
+    let use_profile = groundhog()
+        .args(["config", "use", "--help"])
+        .output()
+        .unwrap();
+
+    assert!(set.status.success() && unset.status.success() && use_profile.status.success());
+    assert!(String::from_utf8_lossy(&set.stdout).contains("must already exist in that layer"));
+    assert!(String::from_utf8_lossy(&unset.stdout).contains("Missing fields"));
+    assert!(String::from_utf8_lossy(&unset.stdout).contains("inherited global value"));
+    assert!(String::from_utf8_lossy(&use_profile.stdout).contains("GROUNDHOG_PROFILE"));
+    assert!(String::from_utf8_lossy(&use_profile.stdout).contains("either layer"));
+}
+
+#[test]
+fn config_new_help_describes_atomic_creation_and_scope_rules() {
+    let output = groundhog()
+        .args(["config", "new", "--help"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("one atomic config update"));
+    assert!(stdout.contains("omitted scope means global"));
+    assert!(stdout.contains("choose --global or --project explicitly"));
+    assert!(stdout.contains("cannot be used together"));
+    assert!(stdout.contains("--network <NETWORK>"));
+    assert!(stdout.contains("--use"));
+}
+
+#[test]
+fn config_rm_help_describes_confirmation_and_deleted_contents() {
+    let output = groundhog()
+        .args(["config", "rm", "--help"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("contract aliases and wallet bindings"));
+    assert!(stdout.contains("asks for confirmation"));
+    assert!(stdout.contains("default profile selection is cleared"));
+    assert!(stdout.contains("--global"));
+    assert!(stdout.contains("--project"));
+}
+
+#[test]
+fn config_get_human_output_shows_merged_values_and_optional_sources() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    write_global_config(
+        &config_home,
+        r#"default_profile = "devnet"
+
+[profile.devnet]
+network = "devnet"
+rpc_url = "https://global-rpc.example"
+runtime_manifest = "runtime/manifest.json"
+
+[profile.devnet.contracts]
+HOG = "0x01"
+"#,
+    );
+    std::fs::write(
+        project.join("groundhog.toml"),
+        r#"default_profile = "devnet"
+
+[profile.devnet]
+rpc_url = "https://project-rpc.example"
+faucet_url = "https://faucet.example"
+runtime_artifacts_dir = "artifacts"
+
+[profile.devnet.contracts]
+counter = "0x02"
+"#,
+    )
+    .unwrap();
+
+    let merged = groundhog()
+        .args(["config", "get", "--sources"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    assert!(merged.status.success());
+    assert!(merged.stderr.is_empty());
+    let merged_stdout = String::from_utf8_lossy(&merged.stdout);
+    assert!(!merged_stdout.contains("Selected by:"));
+    assert!(!merged_stdout.contains("Scope:"));
+    assert!(!merged_stdout.contains("runtime_manifest"));
+    assert!(!merged_stdout.contains("runtime_artifacts_dir"));
+    assert!(!merged_stdout.contains('\u{1b}'));
+    assert!(merged_stdout.contains("rpc_url"));
+    assert!(merged_stdout.contains("https://project-rpc.example"));
+    assert!(merged_stdout.contains("project"));
+    assert!(merged_stdout.contains("contracts.HOG"));
+    assert!(merged_stdout.contains("global"));
+
+    let plain = groundhog()
+        .args(["config", "get", "devnet"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    assert!(plain.status.success());
+    let plain_stdout = String::from_utf8_lossy(&plain.stdout);
+    assert!(plain_stdout.contains("Network           devnet"));
+    assert!(plain_stdout.contains("https://project-rpc.example"));
+    assert!(plain_stdout.contains("https://faucet.example"));
+    assert!(!plain_stdout.contains("Selected by:"));
+    assert!(!plain_stdout.contains("Scope:"));
+    assert!(!plain_stdout.contains("Runtime manifest:"));
+    assert!(!plain_stdout.contains("Runtime artifacts:"));
+}
+
+#[test]
+fn config_get_json_is_versioned_merged_and_secret_free() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    write_global_config(
+        &config_home,
+        r#"default_profile = "devnet"
+default_key = "top-level-secret-selection"
+
+[executor]
+username = "private-user"
+password = "private-password"
+
+[local_runtime_state]
+node_id = "private-node"
+rpc_url = "http://127.0.0.1:9545"
+runtime_manifest = "/private/runtime.json"
+
+[profile.devnet]
+network = "devnet"
+runtime_manifest = "runtime/manifest.json"
+
+[profile.devnet.wallets.primary]
+address = "0x01"
+owner_public_key = "0x02"
+
+[profile.broken]
+network = "preview"
+"#,
+    );
+    std::fs::write(
+        project.join("groundhog.toml"),
+        r#"default_profile = "devnet"
+
+[profile.devnet]
+rpc_url = "https://rpc.example"
+"#,
+    )
+    .unwrap();
+
+    let output = groundhog()
+        .args(["--json", "config", "get", "devnet", "--sources"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .env("GROUNDHOG_PROFILE", "broken")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let payload: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(payload["command"], "config.get");
+    assert_eq!(payload["data"]["schemaVersion"], 1);
+    assert_eq!(payload["data"]["selectionSource"]["kind"], "explicit");
+    assert_eq!(payload["data"]["scope"], "resolved");
+    assert_eq!(payload["data"]["rpcUrl"], "https://rpc.example");
+    assert_eq!(payload["data"]["sources"]["rpcUrl"]["kind"], "project");
+    assert_eq!(
+        payload["data"]["sources"]["contracts"],
+        serde_json::json!({})
+    );
+    assert_eq!(
+        payload["data"]["wallets"]["primary"]["ownerPublicKey"],
+        "0x02"
+    );
+    assert_eq!(
+        payload["data"]["runtimeManifest"],
+        config_home
+            .join("groundhog/runtime/manifest.json")
+            .display()
+            .to_string()
+    );
+    assert!(!stdout.contains("private-user"));
+    assert!(!stdout.contains("private-password"));
+    assert!(!stdout.contains("top-level-secret-selection"));
+    assert!(!stdout.contains("private-node"));
+}
+
+#[test]
+fn config_profiles_json_lists_invalid_and_active_missing_profiles() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    write_global_config(
+        &config_home,
+        r#"[profile.valid]
+network = "devnet"
+
+[profile.broken]
+network = "preview"
+"#,
+    );
+
+    let output = groundhog()
+        .args(["--json", "config", "profiles"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .env("GROUNDHOG_PROFILE", "missing")
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(payload["command"], "config.profiles");
+    assert_eq!(payload["data"]["schemaVersion"], 1);
+    assert_eq!(payload["data"]["activeProfile"], "missing");
+    assert_eq!(payload["data"]["selectionSource"]["kind"], "environment");
+    let profiles = payload["data"]["profiles"].as_array().unwrap();
+    assert_eq!(
+        profiles
+            .iter()
+            .map(|row| row["profile"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["broken", "missing", "valid"]
+    );
+    assert_eq!(profiles[0]["status"], "invalid");
+    assert!(
+        profiles[0]["invalidReason"]
+            .as_str()
+            .unwrap()
+            .contains("global config")
+    );
+    assert_eq!(profiles[1]["status"], "missing");
+    assert_eq!(profiles[1]["active"], true);
+    assert_eq!(profiles[2]["status"], "valid");
+}
+
+#[test]
+fn config_profiles_human_output_marks_selection_and_invalid_reasons() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    write_global_config(
+        &config_home,
+        r#"default_profile = "valid"
+
+[profile.valid]
+network = "devnet"
+
+[profile.broken]
+network = "preview"
+"#,
+    );
+
+    let output = groundhog()
+        .args(["config", "profiles"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains('\u{1b}'));
+    assert_eq!(stdout.lines().next(), Some("Profiles"));
+    assert!(stdout.contains("    PROFILE  NETWORK"));
+    assert!(stdout.contains("  * valid"));
+    assert!(stdout.contains("  ! broken"));
+    assert!(!stdout.contains("Active profile:"));
+    assert!(stdout.contains("broken"));
+    assert!(stdout.contains("invalid"));
+    assert!(stdout.contains("expected one of `local`, `devnet`, `mainnet`"));
+    assert!(stdout.contains("valid"));
+    assert!(stdout.contains("devnet"));
+}
+
+#[test]
+fn config_profiles_succeeds_without_an_active_profile() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    write_global_config(&config_home, "[profile.devnet]\nnetwork = \"devnet\"\n");
+
+    let output = groundhog()
+        .args(["--json", "config", "profiles"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(payload["data"]["activeProfile"].is_null());
+    assert!(payload["data"].get("selectionSource").is_none());
+    assert_eq!(payload["data"]["profiles"][0]["profile"], "devnet");
+}
+
+#[test]
+fn config_get_human_output_escapes_terminal_controls() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    write_global_config(
+        &config_home,
+        r#"default_profile = "devnet"
+
+[profile.devnet]
+network = "devnet"
+default_key = "alice\nforged\u001b\u202e"
+
+[profile.devnet.contracts]
+"alias\nrow" = "value\u001b"
+"#,
+    );
+
+    let output = groundhog()
+        .args(["config", "get"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains(r"alice\nforged\u{1b}\u{202e}"));
+    assert!(stdout.contains(r"alias\nrow"));
+    assert!(stdout.contains(r"value\u{1b}"));
+    assert!(!stdout.contains('\u{1b}'));
+    assert!(!stdout.contains('\u{202e}'));
+}
+
+#[test]
+fn config_human_errors_escape_dynamic_values() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config\nhome");
+    write_global_config(&config_home, "default_profile = [\n");
+
+    let malformed = groundhog()
+        .args(["config", "profiles"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    assert!(!malformed.status.success());
+    let malformed_stderr = String::from_utf8(malformed.stderr).unwrap();
+    assert!(malformed_stderr.contains(r"config\nhome"));
+    assert!(!malformed_stderr.contains("config\nhome"));
+
+    let safe_config_home = tmp.path().join("safe-config-home");
+    write_global_config(
+        &safe_config_home,
+        "default_profile = \"devnet\"\n\n[profile.devnet]\nnetwork = \"devnet\"\n",
+    );
+    let missing = groundhog()
+        .args(["config", "get", "missing\u{202e}"])
+        .env("XDG_CONFIG_HOME", &safe_config_home)
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    let missing_stderr = String::from_utf8(missing.stderr).unwrap();
+    assert!(missing_stderr.contains(r"missing\u{202e}"));
+    assert!(!missing_stderr.contains('\u{202e}'));
+}
+
+#[test]
+fn config_get_sources_json_keeps_empty_map_groups() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    write_global_config(
+        &config_home,
+        "default_profile = \"devnet\"\n\n[profile.devnet]\nnetwork = \"devnet\"\n",
+    );
+
+    let output = groundhog()
+        .args(["--json", "config", "get", "--sources"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        payload["data"]["sources"]["contracts"],
+        serde_json::json!({})
+    );
+    assert_eq!(payload["data"]["sources"]["wallets"], serde_json::json!({}));
+}
+
+#[test]
+fn config_get_reports_stable_selection_and_parse_errors() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    write_global_config(&config_home, "[profile.devnet]\nnetwork = \"devnet\"\n");
+    let no_active = groundhog()
+        .args(["--json", "config", "get"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    let no_active_error: serde_json::Value = serde_json::from_slice(&no_active.stderr).unwrap();
+    assert_eq!(no_active_error["error"]["code"], "no_active_profile");
+
+    let missing = groundhog()
+        .args(["--json", "config", "get", "missing"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    let missing_error: serde_json::Value = serde_json::from_slice(&missing.stderr).unwrap();
+    assert_eq!(missing_error["error"]["code"], "profile_not_found");
+
+    write_global_config(&config_home, "[executor]\npassword = \"super-secret\n");
+    let malformed = groundhog()
+        .args(["--json", "config", "profiles"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    let parse_error: serde_json::Value = serde_json::from_slice(&malformed.stderr).unwrap();
+    assert_eq!(parse_error["command"], "config.profiles");
+    assert_eq!(parse_error["error"]["code"], "config_parse_failed");
+    assert!(parse_error["error"]["details"]["line"].is_number());
+    assert!(parse_error["error"]["details"]["column"].is_number());
+    let malformed_stderr = String::from_utf8(malformed.stderr).unwrap();
+    assert!(!malformed_stderr.contains("super-secret"));
+
+    let malformed_human = groundhog()
+        .args(["config", "profiles"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        !String::from_utf8(malformed_human.stderr)
+            .unwrap()
+            .contains("super-secret")
+    );
+}
+
+#[test]
+fn config_new_json_creates_complete_profile_then_set_reports_noop() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    write_global_config(
+        &config_home,
+        "# retained\nunknown = true\n\n[executor]\nusername = \"private-user\"\npassword = \"private-password\"\n\n[local_runtime_state]\nnode_id = \"private-node\"\nrpc_url = \"http://127.0.0.1:8545\"\nruntime_manifest = \"/private/runtime.json\"\n",
+    );
+
+    let first = groundhog()
+        .args([
+            "--json",
+            "config",
+            "new",
+            "ci",
+            "--network",
+            "devnet",
+            "--rpc-url",
+            "https://rpc.example",
+            "--faucet-url",
+            "https://faucet.example",
+            "--default-key",
+            "alice",
+            "--use",
+        ])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .env("GROUNDHOG_PROFILE", "local")
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(first.status.success());
+    assert!(first.stderr.is_empty());
+    let first_payload: serde_json::Value = serde_json::from_slice(&first.stdout).unwrap();
+    assert_eq!(first_payload["command"], "config.new");
+    assert_eq!(
+        first_payload["data"],
+        serde_json::json!({
+            "schemaVersion": 1,
+            "profile": "ci",
+            "scope": "global",
+            "path": config_home.join("groundhog/config.toml"),
+            "changed": true,
+            "createdFields": ["default-key", "faucet-url", "network", "rpc-url"],
+            "selected": true,
+        })
+    );
+    assert_eq!(
+        first_payload["warnings"][0]["code"],
+        "default_key_not_found"
+    );
+    assert_eq!(
+        first_payload["warnings"][1]["code"],
+        "environment_profile_override"
+    );
+    let first_stdout = String::from_utf8(first.stdout).unwrap();
+    assert!(!first_stdout.contains("private-user"));
+    assert!(!first_stdout.contains("private-password"));
+    assert!(!first_stdout.contains("private-node"));
+
+    let second = groundhog()
+        .args([
+            "--json",
+            "config",
+            "set",
+            "network",
+            "devnet",
+            "--profile",
+            "ci",
+        ])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(second.status.success());
+    let second_payload: serde_json::Value = serde_json::from_slice(&second.stdout).unwrap();
+    assert_eq!(second_payload["data"]["changed"], false);
+
+    let contents = std::fs::read_to_string(config_home.join("groundhog/config.toml")).unwrap();
+    assert!(contents.starts_with("# retained\nunknown = true\n"));
+    assert!(contents.contains("default_profile = \"ci\""));
+    assert!(contents.contains(
+        "[profile.ci]\nnetwork = \"devnet\"\nrpc_url = \"https://rpc.example\"\nfaucet_url = \"https://faucet.example\"\ndefault_key = \"alice\""
+    ));
+    assert!(contents.contains("password = \"private-password\""));
+    assert!(contents.contains("node_id = \"private-node\""));
+    assert!(contents.contains("runtime_manifest = \"/private/runtime.json\""));
+}
+
+#[test]
+fn config_new_human_output_identifies_destination_fields_and_selection() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    write_global_config(&config_home, "# retained\n");
+
+    let output = groundhog()
+        .args([
+            "config",
+            "new",
+            "staging",
+            "--network",
+            "devnet",
+            "--rpc-url",
+            "https://rpc.example",
+            "--use",
+        ])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("Created profile `staging`"));
+    assert!(stderr.contains("scope: global"));
+    assert!(stderr.contains("config.toml"));
+    assert!(stderr.contains("fields: network, rpc-url"));
+    assert!(stderr.contains("default: selected"));
+}
+
+#[test]
+fn config_new_rejects_duplicate_and_invalid_profiles() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    write_global_config(&config_home, "[profile.devnet]\nnetwork = \"devnet\"\n");
+
+    let duplicate = groundhog()
+        .args(["--json", "config", "new", "devnet", "--network", "devnet"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(!duplicate.status.success());
+    let duplicate_error: serde_json::Value = serde_json::from_slice(&duplicate.stderr).unwrap();
+    assert_eq!(duplicate_error["command"], "config.new");
+    assert_eq!(duplicate_error["error"]["code"], "profile_already_exists");
+    assert_eq!(
+        duplicate_error["error"]["message"],
+        "profile `devnet` already exists in global config"
+    );
+    assert!(
+        duplicate_error["error"]["hint"]
+            .as_str()
+            .unwrap()
+            .contains("groundhog config set")
+    );
+    assert_eq!(duplicate_error["error"]["details"]["profile"], "devnet");
+    assert_eq!(duplicate_error["error"]["details"]["scope"], "global");
+
+    let invalid = groundhog()
+        .args(["--json", "config", "new", "staging", "--network", "preview"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(!invalid.status.success());
+    let invalid_error: serde_json::Value = serde_json::from_slice(&invalid.stderr).unwrap();
+    assert_eq!(invalid_error["error"]["code"], "config_value_invalid");
+    assert_eq!(invalid_error["error"]["details"]["field"], "network");
+    assert_eq!(
+        invalid_error["error"]["details"]["message"],
+        "must be one of local, devnet, or mainnet"
+    );
+    assert!(
+        !std::fs::read_to_string(config_home.join("groundhog/config.toml"))
+            .unwrap()
+            .contains("staging")
+    );
+}
+
+#[test]
+fn config_rm_cancellation_preserves_profile() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let contents = "default_profile = \"staging\"\n\n[profile.staging]\nnetwork = \"devnet\"\n";
+    write_global_config(&config_home, contents);
+    let mut child = groundhog()
+        .args(["config", "rm", "staging"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .current_dir(tmp.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.as_mut().unwrap().write_all(b"n\n").unwrap();
+
+    let output = child.wait_with_output().unwrap();
+
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("Remove profile `staging` from global config?"));
+    assert!(stderr.contains("Cancelled"));
+    assert_eq!(
+        std::fs::read_to_string(config_home.join("groundhog/config.toml")).unwrap(),
+        contents
+    );
+}
+
+#[test]
+fn config_rm_confirmation_removes_all_profile_data_and_clears_default() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    write_global_config(
+        &config_home,
+        "default_profile = \"staging\"\nunknown = true\n\n[profile.staging]\nnetwork = \"devnet\"\n\n[profile.staging.contracts]\ncounter = \"0x1234\"\n",
+    );
+    let mut child = groundhog()
+        .args(["config", "rm", "staging"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .current_dir(tmp.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.as_mut().unwrap().write_all(b"y\n").unwrap();
+
+    let output = child.wait_with_output().unwrap();
+
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("Removed profile `staging`"));
+    assert!(stderr.contains("Default profile selection cleared"));
+    assert_eq!(
+        std::fs::read_to_string(config_home.join("groundhog/config.toml")).unwrap(),
+        "unknown = true\n"
+    );
+}
+
+#[test]
+fn config_rm_json_is_non_interactive_and_reports_stable_result() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    write_global_config(
+        &config_home,
+        "default_profile = \"staging\"\n\n[profile.staging]\nnetwork = \"devnet\"\n",
+    );
+
+    let output = groundhog()
+        .args(["--json", "config", "rm", "staging"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(payload["command"], "config.rm");
+    assert_eq!(
+        payload["data"],
+        serde_json::json!({
+            "schemaVersion": 1,
+            "profile": "staging",
+            "scope": "global",
+            "path": config_home.join("groundhog/config.toml"),
+            "changed": true,
+            "clearedDefault": true,
+        })
+    );
+}
+
+#[test]
+fn config_rm_quiet_is_non_interactive() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    write_global_config(&config_home, "[profile.staging]\nnetwork = \"devnet\"\n");
+
+    let output = groundhog()
+        .args(["--quiet", "config", "rm", "staging"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+    assert_eq!(
+        std::fs::read_to_string(config_home.join("groundhog/config.toml")).unwrap(),
+        ""
+    );
+}
+
+#[test]
+fn config_mutations_report_scope_and_value_errors() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    write_global_config(&config_home, "[profile.devnet]\nnetwork = \"devnet\"\n");
+    std::fs::write(project.join("groundhog.toml"), "# project\n").unwrap();
+
+    let ambiguous = groundhog()
+        .args([
+            "--json",
+            "config",
+            "set",
+            "network",
+            "devnet",
+            "--profile",
+            "devnet",
+        ])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .current_dir(&project)
+        .output()
+        .unwrap();
+    assert!(!ambiguous.status.success());
+    let ambiguous_error: serde_json::Value = serde_json::from_slice(&ambiguous.stderr).unwrap();
+    assert_eq!(ambiguous_error["error"]["code"], "config_scope_ambiguous");
+
+    let conflicting = groundhog()
+        .args([
+            "--json",
+            "config",
+            "unset",
+            "network",
+            "--profile",
+            "devnet",
+            "--global",
+            "--project",
+        ])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .current_dir(&project)
+        .output()
+        .unwrap();
+    assert!(!conflicting.status.success());
+    let conflict_error: serde_json::Value = serde_json::from_slice(&conflicting.stderr).unwrap();
+    assert_eq!(conflict_error["error"]["code"], "config_scope_conflict");
+
+    let invalid = groundhog()
+        .args([
+            "--json",
+            "config",
+            "set",
+            "rpc-url",
+            "relative/path",
+            "--profile",
+            "devnet",
+            "--global",
+        ])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .current_dir(&project)
+        .output()
+        .unwrap();
+    assert!(!invalid.status.success());
+    let invalid_error: serde_json::Value = serde_json::from_slice(&invalid.stderr).unwrap();
+    assert_eq!(invalid_error["error"]["code"], "config_value_invalid");
+
+    let missing = groundhog()
+        .args([
+            "--json",
+            "config",
+            "set",
+            "network",
+            "devnet",
+            "--profile",
+            "missing",
+            "--project",
+        ])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .current_dir(&project)
+        .output()
+        .unwrap();
+    assert!(!missing.status.success());
+    let missing_error: serde_json::Value = serde_json::from_slice(&missing.stderr).unwrap();
+    assert_eq!(missing_error["error"]["code"], "profile_not_found_in_scope");
+    assert_eq!(missing_error["error"]["details"]["scope"], "project");
+
+    let unavailable = groundhog()
+        .args([
+            "--json",
+            "config",
+            "unset",
+            "network",
+            "--profile",
+            "devnet",
+            "--project",
+        ])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(!unavailable.status.success());
+    let unavailable_error: serde_json::Value = serde_json::from_slice(&unavailable.stderr).unwrap();
+    assert_eq!(
+        unavailable_error["error"]["code"],
+        "project_config_unavailable"
+    );
+}
+
+#[test]
+fn config_mutation_reports_stable_malformed_toml_error() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    write_global_config(&config_home, "[profile.devnet]\nsecret = \"not-closed\n");
+
+    let output = groundhog()
+        .args([
+            "--json",
+            "config",
+            "set",
+            "network",
+            "devnet",
+            "--profile",
+            "devnet",
+            "--global",
+        ])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let payload: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(payload["command"], "config.set");
+    assert_eq!(payload["error"]["code"], "config_parse_failed");
+    assert!(payload["error"]["details"]["line"].is_number());
+    assert!(
+        !String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("not-closed")
+    );
+}
+
+#[test]
+fn config_unset_project_override_reports_inherited_global_value() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    write_global_config(
+        &config_home,
+        "[profile.devnet]\nrpc_url = \"https://global.example\"\n",
+    );
+    std::fs::write(
+        project.join("groundhog.toml"),
+        "[profile.devnet]\nrpc_url = \"https://project.example\"\nunknown = true\n",
+    )
+    .unwrap();
+
+    let output = groundhog()
+        .args([
+            "config",
+            "unset",
+            "rpc-url",
+            "--profile",
+            "devnet",
+            "--project",
+        ])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .current_dir(&project)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("Unset `rpc-url` in profile `devnet`"));
+    assert!(stderr.contains("inherits `rpc-url` = `https://global.example`"));
+    assert!(stderr.contains(project.join("groundhog.toml").to_string_lossy().as_ref()));
+    let contents = std::fs::read_to_string(project.join("groundhog.toml")).unwrap();
+    assert!(!contents.contains("rpc_url"));
+    assert!(contents.contains("unknown = true"));
+}
+
+#[test]
+fn config_use_warns_when_environment_profile_remains_active() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    write_global_config(
+        &config_home,
+        "default_profile = \"local\"\n\n[profile.local]\nnetwork = \"local\"\n\n[profile.devnet]\nnetwork = \"devnet\"\n",
+    );
+
+    let output = groundhog()
+        .args(["--json", "config", "use", "devnet", "--global"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .env("GROUNDHOG_PROFILE", "local")
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(payload["command"], "config.use");
+    assert_eq!(payload["data"]["profile"], "devnet");
+    assert!(payload["data"].get("field").is_none());
+    assert_eq!(
+        payload["warnings"][0]["code"],
+        "environment_profile_override"
+    );
+    let contents = std::fs::read_to_string(config_home.join("groundhog/config.toml")).unwrap();
+    assert!(contents.starts_with("default_profile = \"devnet\""));
+    assert!(contents.contains("[profile.local]"));
+    assert!(contents.contains("[profile.devnet]"));
 }
 
 #[cfg(unix)]
@@ -767,7 +1783,11 @@ fn status_json_outputs_structured_payload() {
 #[test]
 fn status_json_flattens_project_findings_into_warnings() {
     let tmp = TempDir::new().unwrap();
-    std::fs::write(tmp.path().join("groundhog.toml"), "[profile.default]\n").unwrap();
+    std::fs::write(
+        tmp.path().join("groundhog.toml"),
+        "default_profile = \"default\"\n\n[profile.default]\n",
+    )
+    .unwrap();
 
     let output = groundhog()
         .arg("--json")
@@ -797,7 +1817,7 @@ fn status_json_reports_project_default_wallet_and_dangling_finding() {
     let tmp = TempDir::new().unwrap();
     std::fs::write(
         tmp.path().join("groundhog.toml"),
-        "[profile.default]\ndefault_wallet = \"missing\"\n",
+        "default_profile = \"default\"\n\n[profile.default]\ndefault_wallet = \"missing\"\n",
     )
     .unwrap();
 
@@ -904,6 +1924,7 @@ fn quiet_status_exits_zero_with_no_output_when_fully_configured() {
         password: "pass".into(),
     };
     groundhog_cli::config::save_executor_credentials(&creds).unwrap();
+    groundhog_cli::config::initialize_global_profiles().unwrap();
 
     let output = groundhog()
         .arg("-q")
@@ -2047,7 +3068,7 @@ fn deploy_fails_without_config() {
         .unwrap();
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("no rpc_url") || stderr.contains("no signing key"));
+    assert!(stderr.contains("no active profile"));
 }
 
 #[test]
@@ -2065,7 +3086,7 @@ fn deploy_json_fails_without_config() {
     let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(stderr["ok"], false);
     assert_eq!(stderr["command"], "deploy");
-    assert_eq!(stderr["error"]["code"], "missing_rpc_url");
+    assert_eq!(stderr["error"]["code"], "no_active_profile");
 }
 
 #[test]
@@ -2217,7 +3238,7 @@ fn wallet_create_dry_run_json_outputs_prepared_transaction() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\nruntime_manifest = \"{}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\nruntime_manifest = \"{}\"\n",
             manifest_path.file_name().unwrap().to_string_lossy()
         ),
     )
@@ -2300,7 +3321,7 @@ fn wallet_create_dry_run_defaults_name_to_key() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\nruntime_manifest = \"{}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\nruntime_manifest = \"{}\"\n",
             manifest_path.file_name().unwrap().to_string_lossy()
         ),
     )
@@ -2406,7 +3427,7 @@ fn wallet_ls_json_outputs_saved_wallets() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"http://127.0.0.1:9545\"\ndefault_wallet = \"alice\"\n\n[profile.default.wallets.alice]\naddress = \"{alice}\"\nowner_public_key = \"{alice_owner}\"\n\n[profile.default.wallets.bob]\naddress = \"{bob}\"\nowner_public_key = \"{bob_owner}\"\n"
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:9545\"\ndefault_wallet = \"alice\"\n\n[profile.default.wallets.alice]\naddress = \"{alice}\"\nowner_public_key = \"{alice_owner}\"\n\n[profile.default.wallets.bob]\naddress = \"{bob}\"\nowner_public_key = \"{bob_owner}\"\n"
         ),
     )
     .unwrap();
@@ -2434,6 +3455,21 @@ fn wallet_ls_json_outputs_saved_wallets() {
             { "name": "bob", "address": bob, "owner_public_key": bob_owner, "is_default": false },
         ])
     );
+
+    let human = groundhog()
+        .args(["wallet", "ls"])
+        .current_dir(&project)
+        .output()
+        .unwrap();
+    assert!(human.status.success());
+    let human_stdout = String::from_utf8_lossy(&human.stdout);
+    assert!(
+        human_stdout
+            .lines()
+            .any(|line| line.starts_with("* alice "))
+    );
+    assert!(human_stdout.lines().any(|line| line.starts_with("  bob ")));
+    assert!(!human_stdout.contains("(default)"));
 }
 
 #[test]
@@ -2447,7 +3483,7 @@ fn wallet_use_persists_valid_owner_matched_default() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\ndefault_key = \"alice\"\n\n[profile.default.wallets.trading]\naddress = \"{address}\"\nowner_public_key = \"{owner}\"\n"
+            "default_profile = \"default\"\n\n[profile.default]\ndefault_key = \"alice\"\n\n[profile.default.wallets.trading]\naddress = \"{address}\"\nowner_public_key = \"{owner}\"\n"
         ),
     )
     .unwrap();
@@ -2609,7 +3645,7 @@ fn airdrop_dry_run_json_outputs_prepared_transaction() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\nruntime_manifest = \"{}\"\n\n[profile.default.wallets.alice]\naddress = \"{recipient_wallet}\"\nowner_public_key = \"{recipient_owner}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\nruntime_manifest = \"{}\"\n\n[profile.default.wallets.alice]\naddress = \"{recipient_wallet}\"\nowner_public_key = \"{recipient_owner}\"\n",
             manifest_path.file_name().unwrap().to_string_lossy()
         ),
     )
@@ -2669,7 +3705,7 @@ fn airdrop_json_rejects_invalid_hog_amount_before_rpc() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\nruntime_manifest = \"{}\"\n\n[profile.default.wallets.alice]\naddress = \"{recipient_wallet}\"\nowner_public_key = \"{recipient_owner}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\nruntime_manifest = \"{}\"\n\n[profile.default.wallets.alice]\naddress = \"{recipient_wallet}\"\nowner_public_key = \"{recipient_owner}\"\n",
             manifest_path.file_name().unwrap().to_string_lossy()
         ),
     )
@@ -2714,7 +3750,7 @@ fn transfer_dry_run_json_outputs_signed_wallet_wrapped_hog_transfer() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n\n[profile.default.wallets.alice]\naddress = \"{recipient}\"\nowner_public_key = \"0x{}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n\n[profile.default.wallets.alice]\naddress = \"{recipient}\"\nowner_public_key = \"0x{}\"\n",
             manifest_path.file_name().unwrap().to_string_lossy(),
             "cd".repeat(32),
         ),
@@ -2817,7 +3853,7 @@ fn transfer_dry_run_human_output_identifies_signer_and_submit_capability() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
             manifest_path.file_name().unwrap().to_string_lossy()
         ),
     )
@@ -2927,7 +3963,7 @@ fn transfer_dry_run_profile_and_cli_target_overrides_select_endpoint() {
     let recipient = format!("0x{}", "bc".repeat(32));
     std::fs::write(
         project.join("groundhog.toml"),
-        "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\n\n[profile.devnet]\nrpc_url = \"http://127.0.0.1:2\"\ndefault_key = \"dev-0\"\n",
+        "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\n\n[profile.devnet]\nrpc_url = \"http://127.0.0.1:2\"\ndefault_key = \"dev-0\"\n",
     )
     .unwrap();
 
@@ -2972,7 +4008,7 @@ fn transfer_dry_run_rejects_invalid_inputs_before_rpc() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
             manifest_path.file_name().unwrap().to_string_lossy()
         ),
     )
@@ -3011,7 +4047,7 @@ fn transfer_dry_run_saved_wallet_errors_follow_selection_mode() {
 
     std::fs::write(
         project.join("groundhog.toml"),
-        "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"alice\"\n",
+        "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"alice\"\n",
     )
     .unwrap();
     let missing = groundhog()
@@ -3033,7 +4069,7 @@ fn transfer_dry_run_saved_wallet_errors_follow_selection_mode() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"alice\"\n\n[profile.default.wallets.broken-wallet]\naddress = \"0x{}\"\nowner_public_key = \"0x00\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"alice\"\n\n[profile.default.wallets.broken-wallet]\naddress = \"0x{}\"\nowner_public_key = \"0x00\"\n",
             "aa".repeat(32),
         ),
     )
@@ -3052,7 +4088,7 @@ fn transfer_dry_run_saved_wallet_errors_follow_selection_mode() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"alice\"\ndefault_wallet = \"broken-wallet\"\n\n[profile.default.wallets.broken-wallet]\naddress = \"0x{}\"\nowner_public_key = \"0x00\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"alice\"\ndefault_wallet = \"broken-wallet\"\n\n[profile.default.wallets.broken-wallet]\naddress = \"0x{}\"\nowner_public_key = \"0x00\"\n",
             "aa".repeat(32),
         ),
     )
@@ -3084,7 +4120,7 @@ fn transfer_rejects_unique_wallet_self_transfer_before_rpc() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"alice\"\n\n[profile.default.wallets.wallet-a]\naddress = \"{address}\"\nowner_public_key = \"{owner}\"\n"
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"alice\"\n\n[profile.default.wallets.wallet-a]\naddress = \"{address}\"\nowner_public_key = \"{owner}\"\n"
         ),
     )
     .unwrap();
@@ -3119,7 +4155,7 @@ fn transfer_from_selects_named_owner_matched_wallet() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"alice\"\ndefault_wallet = \"primary\"\n\n[profile.default.wallets.primary]\naddress = \"{primary}\"\nowner_public_key = \"{owner}\"\n\n[profile.default.wallets.trading]\naddress = \"{trading}\"\nowner_public_key = \"{owner}\"\n"
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"alice\"\ndefault_wallet = \"primary\"\n\n[profile.default.wallets.primary]\naddress = \"{primary}\"\nowner_public_key = \"{owner}\"\n\n[profile.default.wallets.trading]\naddress = \"{trading}\"\nowner_public_key = \"{owner}\"\n"
         ),
     )
     .unwrap();
@@ -3237,7 +4273,7 @@ fn transfer_live_success_returns_matching_receipt_and_events() {
 }
 
 #[test]
-fn transfer_live_client_construction_failure_uses_standard_error_stream() {
+fn transfer_live_rejects_invalid_persisted_rpc_url() {
     let tmp = TempDir::new().unwrap();
     let project = tmp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
@@ -3246,7 +4282,7 @@ fn transfer_live_client_construction_failure_uses_standard_error_stream() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"not a URL\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"not a URL\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
             manifest_path.file_name().unwrap().to_string_lossy()
         ),
     )
@@ -3262,7 +4298,7 @@ fn transfer_live_client_construction_failure_uses_standard_error_stream() {
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
     let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
-    assert_eq!(stderr["error"]["code"], "rpc_connect");
+    assert_eq!(stderr["error"]["code"], "profile_config_invalid");
 }
 
 #[test]
@@ -3846,7 +4882,7 @@ fn deploy_dry_run_uses_manifest_dev_wallet_address_without_dev_rpc() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
             manifest_path.file_name().unwrap().to_string_lossy()
         ),
     )
@@ -3896,7 +4932,7 @@ fn deploy_dry_run_uses_profile_rpc_and_manifest() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
             manifest_path.display()
         ),
     )
@@ -3948,7 +4984,7 @@ fn deploy_dry_run_runtime_manifest_env_overrides_profile() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
             profile_manifest.file_name().unwrap().to_string_lossy()
         ),
     )
@@ -4003,7 +5039,7 @@ fn deploy_dry_run_cli_target_overrides_profile_rpc_and_manifest() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
             profile_manifest.file_name().unwrap().to_string_lossy()
         ),
     )
@@ -4057,7 +5093,7 @@ fn deploy_dry_run_blank_runtime_manifest_env_falls_back_to_profile() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
             profile_manifest.file_name().unwrap().to_string_lossy()
         ),
     )
@@ -4108,7 +5144,7 @@ fn deploy_dry_run_rejects_runtime_manifest_symlink() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
             symlink_path.display()
         ),
     )
@@ -4151,7 +5187,7 @@ fn deploy_dry_run_rejects_manifest_public_key_mismatch_before_rpc() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
             manifest_path.display()
         ),
     )
@@ -4200,7 +5236,7 @@ fn deploy_dry_run_rejects_manifest_seed_that_does_not_match_signer() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
             manifest_path.display()
         ),
     )
@@ -4241,7 +5277,7 @@ fn deploy_dev_key_requires_runtime_manifest() {
 
     std::fs::write(
         project.join("groundhog.toml"),
-        "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"dev-0\"\n",
+        "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"dev-0\"\n",
     )
     .unwrap();
 
@@ -4477,7 +5513,7 @@ fn call_json_fails_without_config() {
     let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(stderr["ok"], false);
     assert_eq!(stderr["command"], "call");
-    assert_eq!(stderr["error"]["code"], "missing_rpc_url");
+    assert_eq!(stderr["error"]["code"], "no_active_profile");
 }
 
 #[test]
@@ -4495,7 +5531,7 @@ fn storage_json_fails_without_config() {
     let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(stderr["ok"], false);
     assert_eq!(stderr["command"], "storage");
-    assert_eq!(stderr["error"]["code"], "missing_rpc_url");
+    assert_eq!(stderr["error"]["code"], "no_active_profile");
 }
 
 #[test]
@@ -4512,7 +5548,7 @@ fn view_json_fails_without_config() {
     let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
     assert_eq!(stderr["ok"], false);
     assert_eq!(stderr["command"], "view");
-    assert_eq!(stderr["error"]["code"], "missing_rpc_url");
+    assert_eq!(stderr["error"]["code"], "no_active_profile");
 }
 
 #[test]
@@ -4584,7 +5620,7 @@ fn view_json_resolves_contract_alias_and_from_address() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.contracts]\ncounter = \"{address}\"\n"
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.contracts]\ncounter = \"{address}\"\n"
         ),
     )
     .unwrap();
@@ -4634,7 +5670,7 @@ fn view_json_uses_manifest_dev_account_as_caller_without_dev_rpc() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\nruntime_manifest = \"{}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\nruntime_manifest = \"{}\"\n",
             manifest_path.display()
         ),
     )
@@ -4839,7 +5875,7 @@ fn balance_json_reads_native_hog_balance() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets.alice]\naddress = \"{address}\"\nowner_public_key = \"{owner}\"\n"
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets.alice]\naddress = \"{address}\"\nowner_public_key = \"{owner}\"\n"
         ),
     )
     .unwrap();
@@ -4916,7 +5952,7 @@ fn balance_json_cli_rpc_url_overrides_profile() {
     let (rpc_url, rpc_server) = spawn_balance_rpc(&address, "42");
     std::fs::write(
         project.join("groundhog.toml"),
-        "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\n",
+        "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\n",
     )
     .unwrap();
 
@@ -4972,7 +6008,7 @@ fn balance_json_rejects_malformed_address_target_before_rpc() {
     std::fs::create_dir_all(&project).unwrap();
     std::fs::write(
         project.join("groundhog.toml"),
-        "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\n",
+        "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\n",
     )
     .unwrap();
 
@@ -5003,7 +6039,7 @@ fn balance_json_rejects_unknown_target_before_rpc() {
     std::fs::create_dir_all(&project).unwrap();
     std::fs::write(
         project.join("groundhog.toml"),
-        "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\n",
+        "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\n",
     )
     .unwrap();
 
@@ -5042,7 +6078,7 @@ fn storage_json_uses_profile_runtime_manifest_with_global_dev_key() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\nruntime_manifest = \"{}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\nruntime_manifest = \"{}\"\n",
             manifest_path.display()
         ),
     )
@@ -5081,7 +6117,7 @@ fn storage_json_cli_rpc_url_overrides_profile_rpc_url() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
             manifest_path.display()
         ),
     )
@@ -5117,7 +6153,7 @@ fn storage_json_resolves_contract_alias() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.contracts]\ncounter = \"{address}\"\n"
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.contracts]\ncounter = \"{address}\"\n"
         ),
     )
     .unwrap();
@@ -5151,7 +6187,7 @@ fn storage_json_rejects_short_key_before_rpc() {
     std::fs::create_dir_all(&project).unwrap();
     std::fs::write(
         project.join("groundhog.toml"),
-        "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\n",
+        "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\n",
     )
     .unwrap();
 
@@ -5312,7 +6348,7 @@ fn call_dry_run_uses_manifest_dev_wallet_address_without_dev_rpc() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
             manifest_path.display()
         ),
     )
@@ -5441,7 +6477,7 @@ fn call_live_json_includes_diagnostics_for_failed_local_dev_call() {
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
             manifest_path.display()
         ),
     )
@@ -6866,12 +7902,12 @@ fn tx_list_resolves_contract_direct_and_manifest_dev_targets() {
         match target_kind {
             "contract" => std::fs::write(
                 tmp.path().join("groundhog.toml"),
-                format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n[profile.default.contracts]\ncounter = \"{address}\"\n"),
+                format!("default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\n[profile.default.contracts]\ncounter = \"{address}\"\n"),
             )
             .unwrap(),
             "direct" => std::fs::write(
                 tmp.path().join("groundhog.toml"),
-                format!("[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
+                format!("default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\n"),
             )
             .unwrap(),
             _ => {
@@ -6879,7 +7915,7 @@ fn tx_list_resolves_contract_direct_and_manifest_dev_targets() {
                 std::fs::write(
                     tmp.path().join("groundhog.toml"),
                     format!(
-                        "[profile.default]\nrpc_url = \"{rpc_url}\"\nruntime_manifest = \"{}\"\n",
+                        "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\nruntime_manifest = \"{}\"\n",
                         manifest.file_name().unwrap().to_string_lossy()
                     ),
                 )
@@ -6975,7 +8011,7 @@ fn tx_list_rejects_address_resolution_failures_before_rpc() {
     let tmp = TempDir::new().unwrap();
     std::fs::write(
         tmp.path().join("groundhog.toml"),
-        "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\n[profile.default.contracts]\nbroken = \"0xdeadbeef\"\n",
+        "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\n[profile.default.contracts]\nbroken = \"0xdeadbeef\"\n",
     )
     .unwrap();
     let (rpc_url, rpc_server) = spawn_no_request_rpc();
@@ -7088,7 +8124,7 @@ fn tx_list_human_output_shows_each_reference_without_receipts() {
     std::fs::write(
         tmp.path().join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\n[profile.default.wallets.local-wallet]\naddress = \"{address}\"\nowner_public_key = \"0x{}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://127.0.0.1:1\"\n[profile.default.wallets.local-wallet]\naddress = \"{address}\"\nowner_public_key = \"0x{}\"\n",
             "86".repeat(32)
         ),
     )
@@ -9107,7 +10143,7 @@ fn run_transfer_live_mock_with_rpc_override(
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"dev-0\"\nruntime_manifest = \"{}\"\n",
             manifest_path.file_name().unwrap().to_string_lossy()
         ),
     )
@@ -9156,7 +10192,7 @@ fn run_saved_wallet_transfer_live_mock(
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"alice\"\ndefault_wallet = \"primary\"\n\n[profile.default.wallets.primary]\naddress = \"{primary}\"\nowner_public_key = \"{owner}\"\n\n[profile.default.wallets.trading]\naddress = \"{trading}\"\nowner_public_key = \"{owner}\"\n"
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\ndefault_key = \"alice\"\ndefault_wallet = \"primary\"\n\n[profile.default.wallets.primary]\naddress = \"{primary}\"\nowner_public_key = \"{owner}\"\n\n[profile.default.wallets.trading]\naddress = \"{trading}\"\nowner_public_key = \"{owner}\"\n"
         ),
     )
     .unwrap();
@@ -9598,7 +10634,7 @@ fn write_project_config_with_alice_wallet(
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets.alice]\naddress = \"0x{}\"\nowner_public_key = \"{owner_public_key}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets.alice]\naddress = \"0x{}\"\nowner_public_key = \"{owner_public_key}\"\n",
             "aa".repeat(32)
         ),
     )
@@ -9612,8 +10648,8 @@ fn add_faucet_to_default_profile(project: &std::path::Path, faucet_url: &str) {
     std::fs::write(
         path,
         config.replacen(
-            "[profile.default]\n",
-            &format!("[profile.default]\nfaucet_url = \"{faucet_url}\"\n"),
+            "default_profile = \"default\"\n\n[profile.default]\n",
+            &format!("default_profile = \"default\"\n\n[profile.default]\nfaucet_url = \"{faucet_url}\"\n"),
             1,
         ),
     )
@@ -9624,7 +10660,7 @@ fn write_project_config_with_dummy_alice_wallet(project: &std::path::Path, rpc_u
     std::fs::write(
         project.join("groundhog.toml"),
         format!(
-            "[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets.alice]\naddress = \"0x{}\"\nowner_public_key = \"0x{}\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"{rpc_url}\"\n\n[profile.default.wallets.alice]\naddress = \"0x{}\"\nowner_public_key = \"0x{}\"\n",
             "aa".repeat(32),
             "bb".repeat(32),
         ),

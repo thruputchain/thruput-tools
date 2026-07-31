@@ -47,8 +47,46 @@ pub enum CliError {
     Io(#[from] std::io::Error),
     #[error("profile `{0}` not found in project or global config")]
     ProfileNotFound(String),
-    #[error("profile `{0}` requested but no project or global config found")]
-    NoProjectConfig(String),
+    #[error("profile `{profile}` not found in {scope} config")]
+    ProfileNotFoundInScope {
+        profile: String,
+        scope: &'static str,
+    },
+    #[error("profile `{profile}` already exists in {scope} config")]
+    ProfileAlreadyExists {
+        profile: String,
+        scope: &'static str,
+    },
+    #[error("no active profile selected")]
+    NoActiveProfile,
+    #[error("invalid profile name: {0}")]
+    ProfileNameInvalid(&'static str),
+    #[error("unsupported config field `{0}`")]
+    ConfigFieldUnsupported(String),
+    #[error("invalid value for config field `{field}`: {message}")]
+    ConfigValueInvalid { field: String, message: String },
+    #[error("failed to parse config `{}`: {message}", .path.display())]
+    ConfigParse {
+        path: std::path::PathBuf,
+        message: String,
+        line: Option<usize>,
+        column: Option<usize>,
+    },
+    #[error("invalid config `{}`: {message}", .path.display())]
+    ConfigFileInvalid {
+        path: std::path::PathBuf,
+        message: String,
+    },
+    #[error("project config not found")]
+    ProjectConfigUnavailable,
+    #[error("`--global` and `--project` cannot be used together")]
+    ConfigScopeConflict,
+    #[error("config scope is ambiguous because a project config exists")]
+    ConfigScopeAmbiguous,
+    #[error("config `{}` is busy; another process may be updating it", .path.display())]
+    ConfigLockTimeout { path: std::path::PathBuf },
+    #[error("config `{}` changed while awaiting confirmation", .path.display())]
+    ConfigChangedDuringConfirmation { path: std::path::PathBuf },
     #[error("credential password cannot be empty")]
     CredentialsEmpty,
     #[error("unsupported OS: {0}")]
@@ -319,6 +357,7 @@ pub enum CliError {
 
 impl CliError {
     /// Stable machine-readable error code.
+    #[allow(clippy::too_many_lines)]
     pub fn code(&self) -> &'static str {
         match self {
             Self::CargoNotFound => "cargo_not_found",
@@ -338,7 +377,19 @@ impl CliError {
             Self::UnknownTemplate(_) => "unknown_template",
             Self::Io(_) => "io_error",
             Self::ProfileNotFound(_) => "profile_not_found",
-            Self::NoProjectConfig(_) => "no_project_config",
+            Self::ProfileNotFoundInScope { .. } => "profile_not_found_in_scope",
+            Self::ProfileAlreadyExists { .. } => "profile_already_exists",
+            Self::NoActiveProfile => "no_active_profile",
+            Self::ProfileNameInvalid(_) => "profile_name_invalid",
+            Self::ConfigFieldUnsupported(_) => "config_field_unsupported",
+            Self::ConfigValueInvalid { .. } => "config_value_invalid",
+            Self::ConfigParse { .. } => "config_parse_failed",
+            Self::ConfigFileInvalid { .. } => "config_file_invalid",
+            Self::ProjectConfigUnavailable => "project_config_unavailable",
+            Self::ConfigScopeConflict => "config_scope_conflict",
+            Self::ConfigScopeAmbiguous => "config_scope_ambiguous",
+            Self::ConfigLockTimeout { .. } => "config_lock_timeout",
+            Self::ConfigChangedDuringConfirmation { .. } => "config_changed_during_confirmation",
             Self::CredentialsEmpty => "credentials_empty",
             Self::UnsupportedOs(_) => "unsupported_os",
             Self::WasmOptFailed(_) => "wasm_opt_failed",
@@ -647,9 +698,43 @@ impl CliError {
                  an existing one with `--profile` or \
                  `GROUNDHOG_PROFILE`",
             )),
-            Self::NoProjectConfig(_) => Some(Cow::Borrowed(
-                "run `groundhog init`, create `groundhog.toml`, unset \
-                 `GROUNDHOG_PROFILE`, or use the default profile",
+            Self::ProfileNotFoundInScope { profile, scope } => Some(Cow::Owned(format!(
+                "create the profile with `groundhog config new {} --network <NETWORK> --{scope}`",
+                render_shell_arg(profile)
+            ))),
+            Self::ProfileAlreadyExists { profile, scope } => Some(Cow::Owned(format!(
+                "update it with `groundhog config set <FIELD> <VALUE> --profile={} --{scope}`",
+                render_shell_arg(profile)
+            ))),
+            Self::NoActiveProfile => Some(Cow::Borrowed(
+                "select a profile with `--profile` or `GROUNDHOG_PROFILE`, or set default_profile in project or global config",
+            )),
+            Self::ProfileNameInvalid(_) => Some(Cow::Borrowed(
+                "use a non-empty profile name without control characters",
+            )),
+            Self::ConfigFieldUnsupported(_) => Some(Cow::Borrowed(
+                "supported fields: network, rpc-url, faucet-url, default-key",
+            )),
+            Self::ConfigValueInvalid { .. } => Some(Cow::Borrowed(
+                "use local, devnet, or mainnet for network; absolute HTTP(S) URLs; and a non-empty default key",
+            )),
+            Self::ConfigParse { .. } | Self::ConfigFileInvalid { .. } => Some(Cow::Borrowed(
+                "fix the reported config file and rerun the command",
+            )),
+            Self::ProjectConfigUnavailable => Some(Cow::Borrowed(
+                "run from inside a Groundhog project or remove `--project`",
+            )),
+            Self::ConfigScopeConflict => Some(Cow::Borrowed(
+                "choose exactly one of `--global` or `--project`",
+            )),
+            Self::ConfigScopeAmbiguous => Some(Cow::Borrowed(
+                "rerun with `--global` or `--project` to choose the destination file",
+            )),
+            Self::ConfigLockTimeout { .. } => Some(Cow::Borrowed(
+                "wait for the other config command to finish, then retry",
+            )),
+            Self::ConfigChangedDuringConfirmation { .. } => Some(Cow::Borrowed(
+                "review the current profile and rerun the removal command",
             )),
             Self::CredentialsEmpty => Some(Cow::Borrowed(
                 "rerun `groundhog init` and provide a password; the username \
@@ -740,6 +825,35 @@ impl CliError {
                 Some(json!({
                     "path": path,
                     "message": message,
+                }))
+            }
+            Self::ConfigParse {
+                path,
+                message,
+                line,
+                column,
+            } => Some(json!({
+                "path": path,
+                "message": message,
+                "line": line,
+                "column": column,
+            })),
+            Self::ConfigFileInvalid { path, message } => Some(json!({
+                "path": path,
+                "message": message,
+            })),
+            Self::ConfigValueInvalid { field, message } => Some(json!({
+                "field": field,
+                "message": message,
+            })),
+            Self::ProfileNotFoundInScope { profile, scope }
+            | Self::ProfileAlreadyExists { profile, scope } => Some(json!({
+                "profile": profile,
+                "scope": scope,
+            })),
+            Self::ConfigLockTimeout { path } | Self::ConfigChangedDuringConfirmation { path } => {
+                Some(json!({
+                    "path": path,
                 }))
             }
             Self::RpcCapabilityUnsupported { method, message } => Some(json!({

@@ -1,8 +1,9 @@
 # Global and Project Config Brief
 
 **Date:** 2026-07-02
-**Status:** Follow-up design brief. Intended to guide a separate PR after the
-hosted Devnet faucet work lands.
+**Status:** Superseded by
+[`2026-07-23-config-management-design.md`](2026-07-23-config-management-design.md).
+This file records the original direction and is not the current behavior contract.
 
 **Companion to:**
 

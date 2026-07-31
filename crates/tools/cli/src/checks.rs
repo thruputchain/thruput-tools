@@ -282,44 +282,56 @@ pub fn check_project(
                 findings,
             })
         }
-        Err(CliError::ProfileNotFound(name)) => {
-            findings.push(Finding {
+        Err(CliError::ProfileNotFound(name)) => Ok(unresolved_profile_context(
+            config_path,
+            Some(name.clone()),
+            Finding {
                 level: FindingLevel::Warn,
                 code: "profile_not_found",
                 message: format!("profile `{name}` not found in project or global config"),
                 hint: Some(Cow::Borrowed(
-                    "add the profile to project or global config, or \
-                     use `--profile` to select an existing \
-                     one",
+                    "add the profile to project or global config, or use `--profile` to select an existing one",
                 )),
-            });
-            Ok(ProjectContext {
-                config_path,
-                profile_name: Some(name),
-                findings,
-                ..ProjectContext::default()
-            })
-        }
-        Err(CliError::NoProjectConfig(name)) => {
-            findings.push(Finding {
+            },
+        )),
+        Err(CliError::NoActiveProfile) => Ok(unresolved_profile_context(
+            config_path,
+            None,
+            Finding {
                 level: FindingLevel::Warn,
-                code: "no_project_config",
-                message: format!(
-                    "profile `{name}` requested but no project or global \
-                     config was found"
-                ),
+                code: "no_active_profile",
+                message: "no active profile is selected".into(),
                 hint: Some(Cow::Borrowed(
-                    "run `groundhog init`, create groundhog.toml, or use \
-                     a profile that does not require config",
+                    "run `groundhog init`, pass `--profile`, or set default_profile in project or global config",
                 )),
-            });
-            Ok(ProjectContext {
-                profile_name: Some(name),
-                findings,
-                ..ProjectContext::default()
-            })
-        }
+            },
+        )),
+        Err(CliError::ProfileConfigInvalid { profile, message }) => Ok(unresolved_profile_context(
+            config_path,
+            Some(profile.clone()),
+            Finding {
+                level: FindingLevel::Warn,
+                code: "profile_config_invalid",
+                message: format!("profile `{profile}` is invalid: {message}"),
+                hint: Some(Cow::Borrowed(
+                    "fix the selected profile or use `--profile` to select a valid one",
+                )),
+            },
+        )),
         Err(e) => Err(e),
+    }
+}
+
+fn unresolved_profile_context(
+    config_path: Option<PathBuf>,
+    profile_name: Option<String>,
+    finding: Finding,
+) -> ProjectContext {
+    ProjectContext {
+        config_path,
+        profile_name,
+        findings: vec![finding],
+        ..ProjectContext::default()
     }
 }
 
@@ -1717,7 +1729,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn check_project_reports_default_context_when_no_config() {
+    fn check_project_reports_no_active_profile_when_no_config() {
         let tmp = tempfile::TempDir::new().unwrap();
         unsafe {
             std::env::set_var("XDG_CONFIG_HOME", tmp.path());
@@ -1725,10 +1737,10 @@ mod tests {
 
         let context = check_project(tmp.path(), None).unwrap();
         assert!(context.config_path.is_none());
-        assert_eq!(context.profile_name.as_deref(), Some("default"));
+        assert!(context.profile_name.is_none());
         assert!(context.rpc_url.is_none());
         assert_eq!(context.contract_count, 0);
-        assert!(context.findings.is_empty());
+        assert_eq!(context.findings[0].code, "no_active_profile");
 
         unsafe {
             std::env::remove_var("XDG_CONFIG_HOME");
@@ -1745,7 +1757,7 @@ mod tests {
         let config = tmp.path().join("groundhog.toml");
         std::fs::write(
             &config,
-            "[profile.default]\nrpc_url = \"http://localhost\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://localhost\"\n",
         )
         .unwrap();
 
@@ -1787,7 +1799,7 @@ mod tests {
         std::fs::create_dir(&project).unwrap();
         std::fs::write(
             project.join("groundhog.toml"),
-            "[profile.default]\ndefault_key = \"ghost;echo bad\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\ndefault_key = \"ghost;echo bad\"\n",
         )
         .unwrap();
 
@@ -1933,12 +1945,12 @@ mod tests {
             std::env::set_var("XDG_CONFIG_HOME", tmp.path());
         }
 
-        // No groundhog.toml, but explicit non-default profile.
+        // No groundhog.toml, but an explicit profile selection.
         let context = check_project(tmp.path(), Some("staging")).unwrap();
         assert!(context.config_path.is_none());
         assert_eq!(context.profile_name.as_deref(), Some("staging"));
         assert_eq!(context.findings.len(), 1);
-        assert_eq!(context.findings[0].code, "no_project_config");
+        assert_eq!(context.findings[0].code, "profile_not_found");
 
         unsafe {
             std::env::remove_var("XDG_CONFIG_HOME");

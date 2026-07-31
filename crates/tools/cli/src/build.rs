@@ -198,8 +198,6 @@ pub fn build_project(
         which::which("wasm-opt").map_err(|_| CliError::WasmOptNotFound)?;
     }
 
-    print.status(format_args!("Compiling {pkg_name} to WASM..."));
-
     let mut cmd = wasm_build_command(
         &metadata.workspace_root,
         &contract_toml,
@@ -212,6 +210,8 @@ pub fn build_project(
         &metadata.workspace_root,
         cargo_args,
     )?;
+    let profile = crate::config::resolve_profile(&metadata.workspace_root, explicit_profile)?;
+    print.status(format_args!("Compiling {pkg_name} to WASM..."));
     artifacts.apply_to_command(&mut cmd);
 
     for arg in cargo_args {
@@ -230,8 +230,6 @@ pub fn build_project(
         fs::create_dir_all(parent)?;
     }
     fs::copy(&raw_wasm, &wasm)?;
-
-    let profile = crate::config::resolve_profile(&metadata.workspace_root, explicit_profile)?;
 
     if optimize {
         print.status("Optimizing with wasm-opt...");
@@ -402,6 +400,7 @@ pub fn build_rv32_project(
         &metadata.workspace_root,
         cargo_args,
     )?;
+    let profile = crate::config::resolve_profile(&metadata.workspace_root, explicit_profile)?;
 
     print.status(format_args!("Compiling {pkg_name} to RV32 ELF..."));
 
@@ -497,7 +496,6 @@ pub fn build_rv32_project(
     let spec_json = finalized.as_ref().map(|f| f.json_path.clone());
     let spec_xdr = finalized.as_ref().map(|f| f.xdr_path.clone());
 
-    let profile = crate::config::resolve_profile(&metadata.workspace_root, explicit_profile)?;
     let size = fs::metadata(&rv32)?.len();
     print.status(format_args!("Built {} ({size} bytes)", rv32.display()));
 

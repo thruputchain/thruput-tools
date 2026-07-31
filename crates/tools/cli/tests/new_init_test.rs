@@ -126,6 +126,7 @@ fn init_preserves_existing_global_profile_fields() {
         r#"
 default_profile = "devnet"
 default_key = "alice"
+plugin = "keep"
 
 [executor]
 username = "test"
@@ -133,6 +134,7 @@ password = "pass"
 
 [profile.local]
 rpc_url = "http://127.0.0.1:9999"
+plugin_field = "keep"
 
 [profile.devnet]
 rpc_url = "https://custom-rpc.devnet.example"
@@ -151,7 +153,9 @@ owner_public_key = "0x2222222222222222222222222222222222222222222222222222222222
     let global_config = fs::read_to_string(tmp.path().join("groundhog/config.toml")).unwrap();
     assert!(global_config.contains("default_profile = \"devnet\""));
     assert!(global_config.contains("default_key = \"alice\""));
+    assert!(global_config.contains("plugin = \"keep\""));
     assert!(global_config.contains("rpc_url = \"http://127.0.0.1:9999\""));
+    assert!(global_config.contains("plugin_field = \"keep\""));
     assert!(global_config.contains("rpc_url = \"https://custom-rpc.devnet.example\""));
     assert!(global_config.contains("faucet_url = \"https://custom-faucet.devnet.example\""));
     assert!(global_config.contains("[profile.local.wallets.alice]"));
