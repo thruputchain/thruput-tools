@@ -6,41 +6,21 @@ the settled shape.
 
 ## Open
 
-### 1. Block data source for `getBlockByNumber`
-
-chuckd-rs has `DiskStorage::lookup_catchup_block(height)` and
-`lookup_cv_by_height(height)`, but these are only accessible through
-the catchup/repair peer protocols (`Catchup_Catchup1::catchup_solicit`,
-`Repair_Repair1::repair_missing_cv`), which use signed requests and
-are designed for peer-to-peer block sync, not general queries.
-
-Options:
-- **(A)** Add a lightweight x23 query endpoint to chuckd-rs (e.g.,
-  `query_block_by_height`) wrapping `DiskStorage::lookup_catchup_block`.
-  Minimal change, clean separation.
-- **(B)** Have hogd index block headers during commit and serve them
-  from the indexer. More work, but avoids gateway→coordinator dependency.
-- **(C)** Defer `getBlockByNumber` from Phase 1 (6 methods instead of 7).
-
-**This is the biggest open question** — option A requires chuckd-rs
-changes, option B requires hogd changes.
-
-### 2. Concrete block query backend for `getBlockByNumber`
-
-The public method is in the OpenRPC surface, but the gateway handler still
-returns `not_implemented` until hogd/chuckd exposes a supported query backend.
-
-### ~~3. Byte format for JSON wire protocol~~ — RESOLVED
-
-See "Resolved" section below.
-
-### 4. Notify over x23 for Phase 2
+### 1. Notify over x23 for Phase 2
 
 For Phase 2 subscriptions, does exposing the `Notify` interface over
 x23 RPC make sense, or should the gateway connect to a dedicated event
 stream? [Petar, Geoff]
 
-## Resolved (from code review, 2026-03-11)
+## Resolved
+
+- **Block query backend:** The hogd `IndexerBlockExplorer` is the source for
+  both `getBlockByNumber` and `getTransactionsByBlock`. The production gateway
+  and full local-node adapter use their existing optional indexer clients. The
+  RPC implementation is complete; real block data still requires hogd to ingest
+  and persist canonical `ConsensusValue` records and per-block transaction refs.
+
+The remaining decisions below came from code review on 2026-03-11.
 
 - **`storage_delta` in receipts:** Not available from hogd indexer.
   `TxInfo` only contains `height` + `TxEventLog` (events). Deferred

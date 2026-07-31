@@ -18,17 +18,27 @@ public admission-control boundary in either mode.
 | `json-rpc-gateway` | jsonrpsee server binary — handlers, middleware, config |
 | `json-rpc-client` | Typed JSON-RPC client generated from the same trait as the server |
 
-## Phase 1 API (7 methods)
+## Public API (13 methods)
 
 ```
 groundhog_sendRawTransaction(bytes)            → TxHash
 groundhog_getTransactionReceipt(hash)          → Option<TransactionReceipt>
 groundhog_getTransactionStatus(hash)           → TransactionStatus
 groundhog_chainTip()                           → ChainTip
-groundhog_getBlockByNumber(height)             → Option<BlockInfo>
+groundhog_getBlockByNumber(height)             → BlockInfo | null
 groundhog_pendingTransactionCount()            → u64
 groundhog_getEvents(EventQuery)                → EventPage
+groundhog_getTransactionsByAddress(query)      → TransactionRefPage
+groundhog_getTransactionsByBlock(query)        → TransactionRefPage
+groundhog_getStorageAt(address, key)            → StorageItemRead
+groundhog_getBalance(address)                   → BalanceResponse
+groundhog_view(request)                         → ViewResponse
+groundhog_version()                             → VersionInfo
 ```
+
+Block metadata and block transaction refs come from the optional hogd indexer.
+The gateway methods and validation are implemented; real deployments require
+hogd ingestion and persistent block indexing to supply the data.
 
 ## Building
 

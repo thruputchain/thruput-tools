@@ -63,8 +63,8 @@ embedding it in chuckd or chuckd-rs. Reasons:
       x23 RPC        x23 RPC       x23 RPC            │
                                                       │
       receipts,       tip, submit,   block commit     │
-      contract        mempool,       notifications    │
-      events          tx lookup      (Phase 2)        │
+      events, blocks, mempool,       notifications    │
+      block tx refs   tx lookup      (Phase 2)        │
 ```
 
 ### Data Sources (via x23 RPC)
@@ -73,23 +73,22 @@ embedding it in chuckd or chuckd-rs. Reasons:
 |------|--------|-------------|-------|
 | Transaction receipt (events, height, status) | hogd indexer | `get_transaction_info(tx_hash)` | Returns `TxInfo { height, TxEventLog }` |
 | Contract events (paginated, filterable) | hogd indexer | `get_events(EventQuery)` | Returns `EventPage` with cursor + page metadata |
+| Block/CV data by height | hogd indexer | `get_block_by_height(height)` | Returns the canonical `ConsensusValue`, projected to `BlockInfo`; an ordinary miss becomes `null` |
+| Transaction refs by block | hogd indexer | `get_transactions_by_block(query)` | Deterministic hash-byte ordering with opaque cursor pagination |
 | Chain tip (height, hash) | hogd scheduler | `get_tip()` | |
 | Transaction submission | configurable: hogd scheduler or chuckd coordinator | `submit_unvetted(batch)` | Gateway config selects the private-network ingress path |
 | Transaction lookup (pending) | hogd scheduler | `lookup_transactions(hashes)` | Returns `Option<SignedTransaction>` per hash |
 | Pending tx count | hogd scheduler | `size()` | Atomic counter, includes runqueue + stranded |
 | Latest committed storage | hogd DbGateway | `get_storage_at(address, key)` | Optional endpoint; required for `groundhog_getStorageAt` |
 | Sandboxed view execution | hogd ViewGateway | `view(TransactionViewQuery)` | Optional endpoint; required for `groundhog_view` |
-| Block/CV data by height or hash | chuckd coordinator | **TBD** — see open questions | `DiskStorage` exists but not exposed for queries |
+
+The gateway block handlers, validation, and protocol clients are complete.
+Real block results still depend on hogd ingesting and persistently indexing
+canonical `ConsensusValue` records and per-block transaction refs.
 
 ### What Needs x23 Exposure
 
-Most query paths already exist. Gaps:
-
-- **Block data by height/hash**: `DiskStorage.lookup_cv_by_height()`
-  and `lookup_catchup_block()` exist in chuckd-rs but are only
-  accessible through the catchup/repair peer protocols, which use
-  signed requests. A lightweight query endpoint is needed, OR hogd
-  needs to index block headers. See `open-questions.md`.
+Most query paths already exist. Remaining gaps:
 
 - **Block commit notifications**: `Notify` interface exists (chuckd)
   but is stubbed (`IgnoreNotify`). Phase 2 needs this wired to a
@@ -397,9 +396,9 @@ index = "..."  # private registry URL
 
 # Cargo.toml (workspace root)
 [workspace.dependencies]
-groundhog-xdr = { version = "0.3.5", registry = "groundhog" }
-xdrs = { version = "0.5", registry = "groundhog" }
-rpc_driver = { version = "0.3", registry = "groundhog" }
+groundhog-xdr = { version = "0.20.0", registry = "groundhog" }
+xdrs = { version = "0.8.2", registry = "groundhog" }
+rpc_driver = { version = "0.10.0", registry = "groundhog" }
 jsonrpsee = { version = "0.24", features = ["server", "client", "macros"] }
 axum = "0.8"
 tokio = { version = "1", features = ["full"] }
@@ -430,8 +429,10 @@ remain a later phase.
 | `groundhog_getTransactionReceipt(hash) → Receipt` | indexer `get_transaction_info` | No `storage_delta` in Phase 1 |
 | `groundhog_getTransactionStatus(hash) → Status` | scheduler `find_tx` + indexer | See lookup order above |
 | `groundhog_chainTip() → TipInfo` | scheduler `get_tip` | |
-| `groundhog_getBlockByNumber(height) → BlockInfo` | **TBD** | In OpenRPC; handler is not implemented until a block query backend exists |
+| `groundhog_getBlockByNumber(height) → BlockInfo \| null` | indexer `get_block_by_height` | Projects the canonical `ConsensusValue`; missing heights return `null` |
 | `groundhog_getEvents(EventQuery) → EventPage` | indexer `get_events` | Gateway enforces per-page limit and cursor length |
+| `groundhog_getTransactionsByAddress(AddressTransactionQuery) → TransactionRefPage` | indexer `get_transactions_by_address` | Root-invocation address history |
+| `groundhog_getTransactionsByBlock(BlockTransactionQuery) → TransactionRefPage` | indexer `get_transactions_by_block` | Exact-height refs ordered by transaction-hash bytes |
 | `groundhog_pendingTransactionCount() → u64` | scheduler `size()` | In OpenRPC; gateway handler is not wired yet |
 | `groundhog_getStorageAt(address, key) → StorageItemRead` | DbGateway | Requires `db_gateway` endpoint |
 | `groundhog_view(request) → ViewResponse` | ViewGateway | Requires `view_gateway` endpoint |

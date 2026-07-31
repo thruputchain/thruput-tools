@@ -10,9 +10,10 @@ Not compilable as-is; intended to communicate shape and decisions.
 
 ## 1. Wire Format Conventions
 
-All byte values use `0x`-prefixed lowercase hex. Numeric values use
-JSON numbers (decimal). See system-design.md "Wire Format Conventions"
-for the full table.
+All byte values use `0x`-prefixed lowercase hex. Numeric values use JSON
+numbers (decimal), except quantities such as `BlockInfo.blockTimepoint` that
+are explicitly decimal strings to preserve the full `u64` range. See
+system-design.md "Wire Format Conventions" for the full table.
 
 ```json
 {
@@ -99,6 +100,13 @@ pub trait GroundhogApi {
     /// value from the previous page.
     #[method(name = "getEvents")]
     async fn get_events(&self, query: EventQuery) -> RpcResult<EventPage>;
+
+    /// Transaction refs committed at one exact block height.
+    #[method(name = "getTransactionsByBlock")]
+    async fn get_transactions_by_block(
+        &self,
+        query: BlockTransactionQuery,
+    ) -> RpcResult<TransactionRefPage>;
 
     // --- Phase 2: Subscriptions (WebSocket) ---
 
@@ -244,14 +252,48 @@ pub struct ChainTip {
     pub block_hash: SHA256Hash,
 }
 
-/// Block data returned by getBlockByNumber.
-/// Wraps the XDR BlockHeader so the RPC layer can add fields
-/// without modifying the wire type.
+/// JSON projection of the canonical ConsensusValue returned by
+/// getBlockByNumber.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BlockInfo {
-    #[serde(flatten)]
-    pub header: BlockHeader,
+    pub block_hash: BlockHash,
+    pub protocol: Protocol,
+    pub network_hash: NetworkHash,
+    pub proposer: ValidatorID,
+    /// Unix nanoseconds encoded as a decimal string for JSON precision.
+    pub block_timepoint: String,
+    pub block_height: BlockHeight,
+    pub txs_hash: SHA256Hash,
+    pub storage_hash: StorageHash,
+    pub events_hash: SHA256Hash,
+    pub prev_block_hash: BlockHash,
+    pub proposal_txs_hash: SHA256Hash,
+    pub upgrades: Vec<HexBytes>,
+}
+```
+
+### Block Transaction Pagination
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockTransactionQuery {
+    pub height: BlockHeight,
+    pub order: IterationOrder,
+    /// `0x` starts a query; a continuation cursor carries height and order.
+    pub cursor: PaginationCursor,
+    /// `0` selects the indexer default of 50; the protocol ceiling is 200.
+    pub limit: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransactionRefPage {
+    pub refs: Vec<TransactionRef>,
+    pub cursor: PaginationCursor,
+    pub latest_block: BlockHeight,
+    pub oldest_block: BlockHeight,
 }
 ```
 
@@ -324,14 +366,10 @@ pub struct GatewayContext {
     pub scheduler: Arc<groundhog_scheduler::SchedulerCoord_SchedulerCoord1_Client>,
 
     /// x23 RPC client to hogd indexer.
-    /// Used for: get_transaction_info, get_events.
+    /// Used for: receipts, events, block metadata, and transaction refs.
     pub indexer: Arc<IndexerClient>,
 
-    /// x23 RPC client to coordinator storage (optional).
-    /// Used for: block/CV queries and any future chuckd-backed submit path.
-    ///
-    /// Note: protocol-rs currently provides a generated scheduler client, but
-    /// not an equivalent generated x23 unvetted-submit path into chuckd.
+    /// Optional x23 RPC client for a future chuckd-backed submit path.
     pub coordinator: Option<Arc<CoordinatorClient>>,
 
     /// Prometheus metrics registry.
@@ -439,9 +477,9 @@ members = [
 
 [workspace.dependencies]
 # --- Groundhog (private registry) ---
-groundhog-xdr = { version = "0.3.5", registry = "groundhog" }
-xdrs = { version = "0.5", registry = "groundhog" }
-rpc_driver = { version = "0.3", registry = "groundhog" }
+groundhog-xdr = { version = "0.20.0", registry = "groundhog" }
+xdrs = { version = "0.8.2", registry = "groundhog" }
+rpc_driver = { version = "0.10.0", registry = "groundhog" }
 
 # --- JSON-RPC ---
 jsonrpsee = { version = "0.24", features = ["server", "client", "macros"] }

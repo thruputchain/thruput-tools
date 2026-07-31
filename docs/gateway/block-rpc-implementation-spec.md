@@ -1,5 +1,5 @@
 # Block RPC Design
-**Date:** 2026-07-28 **Status:** Ready for `groundhog-rpc` implementation planning. The indexer RPC contract is merged; the hogd ingestion and storage implementation remains a separate follow-up.
+**Date:** 2026-07-28 **Status:** Implemented in `groundhog-rpc`. The hogd ingestion and storage implementation remains a separate follow-up.
 ## Goal
 Support explorer block pages through the hogd indexer and public JSON-RPC gateway. Clients can fetch canonical block metadata by height and paginate the transaction references committed in one block.
 ## Scope
@@ -41,7 +41,7 @@ Support explorer block pages through the hogd indexer and public JSON-RPC gatewa
 
 ## Merged Indexer Contract
 
-The following contract is merged in `groundhog-protocol` and published in the Rust nightly bindings.
+The following contract is merged in `groundhog-protocol` and published in the stable `0.20.0` Rust bindings.
 
 ### Block By Height
 
@@ -94,10 +94,10 @@ type BlockInfo = {
   proposer: string;
   blockTimepoint: string;
   blockHeight: number;
-  transactionsHash: string;
+  txsHash: string;
   storageHash: string;
   eventsHash: string;
-  proposalTransactionsHash: string;
+  proposalTxsHash: string;
   upgrades: string[];
 };
 ```
@@ -174,7 +174,7 @@ Semantics:
 
 - Reuse `TransactionRefPage` and shared transaction pagination validation.
 
-- Use coordinated protocol version `0.20.1-nightly.20260728.g0561b96` for all Groundhog protocol crates, `rpc_driver 0.10.0`, and `xdrs 0.8.1`.
+- Use stable Groundhog protocol crates at `0.20.0`, `rpc_driver 0.10.0`, and `xdrs 0.8.2`. These stable bindings expose the required block-query, scheduler proposal, and consensus APIs.
 
 - Adapt `chainTip` to derive `height` from `DbTip.value.proposal_header.block_height` and `blockHash` from `SHA256(canonical XDR(DbTip.value))`. This hash must match `BlockInfo.blockHash` for the same consensus value.
 
@@ -210,9 +210,9 @@ The current `IndexerEvent` ingestion RPC carries height, event logs, and transac
 ## Repository Responsibilities
 1. `groundhog-protocol`: query contract, merged; any later ingestion-only wire change if hogd requires one.
 
-2. `groundhog-protocol-rs`: generated Rust bindings, published as a coordinated nightly.
+2. `groundhog-protocol-rs`: generated Rust bindings, published in stable `0.20.0` crates.
 
-3. `groundhog-rpc`: public types and methods, gateway and local-node adapters, validation, OpenRPC, metrics, tests, and documentation.
+3. `groundhog-rpc`: public types and methods, gateway and local-node adapters, validation, OpenRPC, metrics, tests, and documentation; implemented.
 
 4. `groundhog-hogd`: committed-value ingestion, persistent storage, efficient queries, retention behavior, and end-to-end tests.
 

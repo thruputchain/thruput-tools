@@ -54,7 +54,8 @@ Workspace crates are grouped by boundary:
   covers local/existing targets, contract workloads, and soak diagnostics.
 
 See `docs/gateway/system-design.md` for full gateway design and
-`docs/gateway/api-sketch.md` for the jsonrpsee trait definition.
+`docs/gateway/api-sketch.md` for historical code sketches. The live jsonrpsee
+trait is `crates/json-rpc/json-rpc-api/src/lib.rs`.
 See `docs/gateway/runtime-manifest.md` for the local
 CLI/gateway/bench startup handoff. See `docs/sim/README.md` for the
 simulator quickstart and result-artifact contract.
@@ -62,9 +63,9 @@ simulator quickstart and result-artifact contract.
 ### Gateway Data Flows
 
 - **Tx submission** → configurable: hogd scheduler or chuckd coordinator (`submit_unvetted`) via x23
-- **Receipts/events** → hogd indexer (`get_transaction_info`, `get_contract_events`) via x23
+- **Receipts/events/block reads** → hogd indexer (`get_transaction_info`,
+  `get_events`, `get_block_by_height`, `get_transactions_by_block`) via x23
 - **Chain state** → hogd scheduler (`get_tip`, `find_tx`, `size`) via x23
-- **Block data** → coordinator storage (TBD — see docs/gateway/system-design.md)
 
 The submit target is a topology choice, not a change in external
 gateway semantics. `groundhog_sendRawTransaction` should only return
