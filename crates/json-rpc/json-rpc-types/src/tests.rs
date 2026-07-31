@@ -459,7 +459,7 @@ mod wire_format {
         assert_eq!(v["protocol"], 1);
         assert_eq!(v["networkHash"], format!("0x{}", "01".repeat(32)));
         assert_eq!(v["proposer"], format!("0x{}", "02".repeat(32)));
-        assert_eq!(v["blockTimepoint"], 123);
+        assert_eq!(v["blockTimepoint"], "123");
         assert_eq!(v["blockHeight"], 99);
         assert_eq!(v["txsHash"], format!("0x{}", "03".repeat(32)));
         assert_eq!(v["storageHash"], format!("0x{}", "04".repeat(32)));
@@ -480,6 +480,27 @@ mod wire_format {
         assert_eq!(
             serde_json::to_value(hash).expect("bug: hash should serialize"),
             "0xe5557e634c3ea1dd2a28038dbf721ef874c465dab6d11c55002e22cf16776fa8"
+        );
+    }
+
+    #[test]
+    fn block_info_preserves_maximum_timepoint_as_decimal_string() {
+        let mut value = test_consensus_value();
+        value.proposal_header.block_timepoint = TimePoint::new(u64::MAX);
+
+        let hash = consensus_value_hash(&value).expect("bug: valid consensus value should hash");
+        let info =
+            BlockInfo::try_from(value).expect("bug: supported consensus value should project");
+        let json = serde_json::to_value(info).expect("bug: block info should serialize");
+
+        assert_eq!(json["blockTimepoint"], "18446744073709551615");
+        assert_eq!(
+            serde_json::to_value(hash).expect("bug: hash should serialize"),
+            "0xb5bd8b319549979e94d596a5c4d8201841b0a5ebf79d4aedafbf00b19a025a32"
+        );
+        assert_eq!(
+            json["blockHash"],
+            "0xb5bd8b319549979e94d596a5c4d8201841b0a5ebf79d4aedafbf00b19a025a32"
         );
     }
 

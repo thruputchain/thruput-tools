@@ -7,7 +7,7 @@ use groundhog_xdr::{header::ProposalHeader, types::ExtensionPoint};
 use crate::hex::{Hex0x, HexBytes};
 use crate::{
     BlockHash, BlockHeight, ConsensusValue, NetworkHash, Protocol, SHA256Hash, StorageHash,
-    TimePoint, ValidatorID,
+    ValidatorID,
 };
 
 /// Current chain tip. Returned by chainTip.
@@ -31,7 +31,9 @@ pub struct BlockInfo {
     pub protocol: Protocol,
     pub network_hash: NetworkHash,
     pub proposer: ValidatorID,
-    pub block_timepoint: TimePoint,
+    /// Unix time in nanoseconds, encoded as a decimal string for JSON precision.
+    #[schemars(regex(pattern = r"^[0-9]+$"))]
+    pub block_timepoint: String,
     pub block_height: BlockHeight,
     pub txs_hash: SHA256Hash,
     pub storage_hash: StorageHash,
@@ -95,7 +97,7 @@ impl TryFrom<ConsensusValue> for BlockInfo {
             protocol,
             network_hash: Hex0x(network_hash.into_inner()),
             proposer: Hex0x(proposer),
-            block_timepoint,
+            block_timepoint: block_timepoint.into_inner().to_string(),
             block_height,
             txs_hash: Hex0x(txs_hash.into_inner()),
             storage_hash: Hex0x(storage_hash.into_inner()),

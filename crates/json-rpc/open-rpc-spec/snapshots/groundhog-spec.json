@@ -173,7 +173,9 @@
             "$ref": "#/components/schemas/BlockHeight"
           },
           "blockTimepoint": {
-            "$ref": "#/components/schemas/TimePoint"
+            "description": "Unix time in nanoseconds, encoded as a decimal string for JSON precision.",
+            "pattern": "^[0-9]+$",
+            "type": "string"
           },
           "eventsHash": {
             "$ref": "#/components/schemas/Hex0x_SHA256Hash"
@@ -817,12 +819,6 @@
           "blockHeight"
         ],
         "type": "object"
-      },
-      "TimePoint": {
-        "description": "uint64_t, Unix time as nanoseconds elapsed since\nJanuary 1, 1970 UTC",
-        "format": "uint64",
-        "minimum": 0,
-        "type": "integer"
       },
       "Topic": {
         "pattern": "^0x[0-9a-f]{64}$",
