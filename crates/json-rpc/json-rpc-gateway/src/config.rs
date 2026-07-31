@@ -268,8 +268,8 @@ pub struct GatewayConfig {
     /// above this are rejected as `InvalidParam`.
     pub max_events_per_page: u32,
 
-    /// Per-page cap on `getTransactionsByAddress` responses; requests
-    /// with `limit` above this are rejected as `InvalidParam`.
+    /// Per-page cap on transaction-reference responses; requests with `limit`
+    /// above this are rejected as `InvalidParam`.
     pub max_transactions_per_page: u32,
 
     /// Maximum length of the opaque pagination cursor on paginated
@@ -321,6 +321,13 @@ impl Default for GatewayConfig {
 }
 
 impl GatewayConfig {
+    /// Validate gateway-owned and shared JSON-RPC configuration before startup.
+    pub(crate) fn validate(&self) -> Result<(), groundhog_json_rpc_server::RpcServerConfigError> {
+        groundhog_json_rpc_server::RpcServerConfig::default()
+            .with_max_transactions_per_page(self.max_transactions_per_page)
+            .validate()
+    }
+
     pub(crate) fn request_timeout(&self) -> Duration {
         // Keep backend, application, and HTTP deadlines strictly ordered even
         // for malformed or test-only sub-millisecond configurations.
@@ -463,6 +470,18 @@ mod tests {
         assert_eq!(minimum.backend_request_timeout(), Duration::from_millis(2));
         assert_eq!(minimum.request_timeout(), Duration::from_millis(3));
         assert_eq!(minimum.http_request_timeout(), Duration::from_millis(4));
+    }
+
+    #[test]
+    fn transaction_page_cap_is_validated_before_startup() {
+        for limit in [49, 50, 200, 201] {
+            let config = GatewayConfig {
+                max_transactions_per_page: limit,
+                ..GatewayConfig::default()
+            };
+
+            assert_eq!(config.validate().is_ok(), (50..=200).contains(&limit));
+        }
     }
 
     #[test]

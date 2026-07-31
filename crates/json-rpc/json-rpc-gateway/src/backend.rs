@@ -102,7 +102,7 @@ impl ReadPlane for GatewayBackend {
         let context = self.bounded_context(context);
         self.with_deadline(
             context,
-            handlers::blocks::get_block_by_number(&self.ctx, height),
+            handlers::blocks::get_block_by_number(&self.ctx, context, height),
         )
         .await
     }
@@ -165,12 +165,15 @@ impl ReadPlane for GatewayBackend {
 
     async fn transactions_by_block(
         &self,
-        _context: RpcRequestContext,
-        _query: BlockTransactionQuery,
+        context: RpcRequestContext,
+        query: BlockTransactionQuery,
     ) -> Result<TransactionRefPage, RpcServerError> {
-        Err(RpcServerError::NotImplemented(
-            "getTransactionsByBlock".into(),
-        ))
+        let context = self.bounded_context(context);
+        self.with_deadline(
+            context,
+            handlers::transactions::get_transactions_by_block(&self.ctx, context, query),
+        )
+        .await
     }
 
     #[tracing::instrument(skip_all, fields(?address))]

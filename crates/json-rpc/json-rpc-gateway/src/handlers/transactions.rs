@@ -1,7 +1,9 @@
-//! `groundhog_getTransactionsByAddress` handler.
+//! Transaction-reference query handlers.
 
 use groundhog_json_rpc_server::RpcRequestContext;
-use groundhog_json_rpc_types::transaction::{AddressTransactionQuery, TransactionRefPage};
+use groundhog_json_rpc_types::transaction::{
+    AddressTransactionQuery, BlockTransactionQuery, TransactionRefPage,
+};
 use std::time::Instant;
 
 use crate::config::HealthBackend;
@@ -48,6 +50,45 @@ pub async fn get_transactions_by_address(
     let page = rpc_result
         .map_err(|_| GatewayError::BackendTimeout)?
         .map_err(|e| GatewayError::BackendUnavailable(format!("indexer: {e}")))?;
+
+    Ok(page.into())
+}
+
+/// Return one page of transaction refs committed at one exact block height.
+#[tracing::instrument(skip_all, fields(?query.height, limit = query.limit))]
+pub async fn get_transactions_by_block(
+    ctx: &GatewayContext,
+    context: RpcRequestContext,
+    query: BlockTransactionQuery,
+) -> Result<TransactionRefPage, GatewayError> {
+    let client = ctx
+        .indexer
+        .read()
+        .await
+        .clone()
+        .ok_or_else(|| GatewayError::BackendUnavailable("indexer not connected".into()))?;
+
+    let wire_query: groundhog_indexer::indexer::BlockTransactionQuery = query.into();
+    let started_at = Instant::now();
+    let deadline = backend_deadline(context, ctx.config.backend_request_timeout())?;
+    let rpc_result = tokio::time::timeout_at(
+        deadline.into(),
+        client.get_transactions_by_block(&wire_query),
+    )
+    .await;
+    ctx.metrics.observe_backend_request(
+        HealthBackend::Indexer,
+        "get_transactions_by_block",
+        match &rpc_result {
+            Ok(Ok(_)) => BackendRequestOutcome::Ok,
+            Ok(Err(_)) => BackendRequestOutcome::Error,
+            Err(_) => BackendRequestOutcome::Timeout,
+        },
+        started_at.elapsed(),
+    );
+    let page = rpc_result
+        .map_err(|_| GatewayError::BackendTimeout)?
+        .map_err(|error| GatewayError::BackendUnavailable(format!("indexer: {error}")))?;
 
     Ok(page.into())
 }

@@ -118,6 +118,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     apply_cli_overrides(&mut config, cli);
+    config.validate()?;
 
     tracing::info!(
         listen = %config.listen_address,

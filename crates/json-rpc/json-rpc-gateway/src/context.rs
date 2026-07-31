@@ -166,7 +166,7 @@ pub struct GatewayContext {
     pub(crate) scheduler_quarantine: Arc<RwLock<Option<QuarantinedScheduler>>>,
 
     /// x23 RPC client to hogd indexer.
-    /// Used for: `get_transaction_info`, `get_events` (paginated).
+    /// Used for transaction, event, and block reads.
     pub indexer: Arc<RwLock<Option<IndexerClient>>>,
 
     /// Adaptive batching submitter for `sendRawTransaction`. Accumulates
