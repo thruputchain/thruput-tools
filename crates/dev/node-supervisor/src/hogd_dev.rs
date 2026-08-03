@@ -2867,10 +2867,14 @@ mod tests {
         let temp = TempDir::new().expect("bug: temp dir should be created");
         let marker = temp.path().join("sigterm-observed");
         let pid_file = temp.path().join("hog-devnode.pid");
+        // The fake records SIGTERM only after its handler is installed, so the
+        // startup timeout must outlast cold-start exec latency under a loaded
+        // parallel test run; a shorter timeout lets the readiness-timeout
+        // SIGTERM kill the fake before it can arm the handler.
         let config = HogdDevConfig::default()
             .with_data_dir(temp.path().join("data"))
             .with_pid_file(pid_file.clone())
-            .with_startup_timeout(Duration::from_millis(500));
+            .with_startup_timeout(Duration::from_secs(2));
 
         let error = start_fake_hogd_dev_with_env(
             &config,

@@ -1518,6 +1518,10 @@ fn new_creates_project() {
     let tmp = TempDir::new().unwrap();
     let workspace = tmp.path().join("work & space");
     std::fs::create_dir(&workspace).unwrap();
+    // The CLI derives the project path from `env::current_dir()`, which
+    // resolves symlinks (macOS temp dirs live under `/var` -> `/private/var`),
+    // so compare against the canonicalized workspace path.
+    let workspace = workspace.canonicalize().unwrap();
     let output = groundhog()
         .arg("new")
         .arg("my-test-project")
