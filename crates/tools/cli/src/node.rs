@@ -131,6 +131,8 @@ pub struct LocalNodeOptions {
     pub block_interval: Option<Duration>,
     /// Override the public JSON-RPC simultaneous connection cap.
     pub rpc_max_connections: Option<u32>,
+    /// Override the RAM database capacity in bytes hog-devnode reserves at startup.
+    pub ramdb_bytes: Option<u64>,
 }
 
 /// PID-file behavior for local hogd-dev startup.
@@ -566,6 +568,10 @@ fn local_node_config(
         Some(timeout) => hogd.with_startup_timeout(timeout),
         None => hogd,
     };
+    let hogd = match options.ramdb_bytes {
+        Some(ramdb_bytes) => hogd.with_ramdb_bytes(ramdb_bytes),
+        None => hogd,
+    };
     let config = NodeSupervisorConfig::default()
         .with_rpc_listen_address(format!("127.0.0.1:{}", options.port))
         .with_hogd_dev(hogd);
@@ -795,6 +801,7 @@ mod tests {
             block_driver: Some(LocalNodeBlockDriverMode::Interval),
             block_interval: Some(Duration::from_millis(250)),
             rpc_max_connections: Some(512),
+            ramdb_bytes: Some(2_147_483_648),
         })
         .expect("bug: local node config should build");
 
@@ -813,6 +820,7 @@ mod tests {
             Some(std::path::Path::new("/tmp/hog-devnode-test.pid"))
         );
         assert_eq!(config.hogd_dev.dev_account_count, 3);
+        assert_eq!(config.hogd_dev.ramdb_bytes, Some(2_147_483_648));
         assert_eq!(config.hogd_dev.startup_timeout, Duration::from_secs(30));
         assert_eq!(
             config.hogd_dev.shutdown_grace,
