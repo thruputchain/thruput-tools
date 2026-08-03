@@ -197,6 +197,16 @@ fn write_pid(path: &Path, file: &mut File, pid: u32) -> Result<(), NodeSuperviso
     })
 }
 
+/// How long to retry a contended PID-file lock before treating the holder as
+/// a live supervisor. A child process spawned concurrently by another thread
+/// briefly co-owns this process's file descriptors (and their `flock`s)
+/// between fork and exec, so an instantly contended lock does not yet prove
+/// another supervisor is running.
+#[cfg(unix)]
+const LOCK_RETRY_WINDOW: Duration = Duration::from_millis(500);
+#[cfg(unix)]
+const LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(10);
+
 #[cfg(unix)]
 async fn acquire_unix(
     path: PathBuf,
@@ -206,7 +216,7 @@ async fn acquire_unix(
 ) -> Result<PidGuard, NodeSupervisorError> {
     let mut file = open_pid_file(&path)?;
 
-    match try_lock(&path, &file) {
+    match try_lock_with_retry(&path, &file).await {
         Ok(()) => {
             clean_stale_pid(
                 &path,
@@ -231,6 +241,21 @@ async fn acquire_unix(
             })
         }
         Err(source) => Err(NodeSupervisorError::PidFile { path, source }),
+    }
+}
+
+#[cfg(unix)]
+async fn try_lock_with_retry(path: &Path, file: &File) -> Result<(), io::Error> {
+    let deadline = time::Instant::now() + LOCK_RETRY_WINDOW;
+    loop {
+        match try_lock(path, file) {
+            Err(error)
+                if error.kind() == io::ErrorKind::WouldBlock && time::Instant::now() < deadline =>
+            {
+                time::sleep(LOCK_RETRY_INTERVAL).await;
+            }
+            result => return result,
+        }
     }
 }
 
