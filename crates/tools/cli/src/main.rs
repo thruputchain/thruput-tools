@@ -435,6 +435,9 @@ enum Command {
         /// Maximum simultaneous public JSON-RPC connections
         #[arg(long)]
         rpc_max_connections: Option<u32>,
+        /// RAM database capacity in bytes for hog-devnode; omit for the devnode default
+        #[arg(long, value_name = "BYTES")]
+        ramdb_bytes: Option<u64>,
     },
     /// Manage signing keys
     #[command(long_about = "Ed25519 signing keys stored in \
@@ -1245,6 +1248,7 @@ fn main() {
             block_driver,
             block_interval_ms,
             rpc_max_connections,
+            ramdb_bytes,
         } => {
             let mut options = groundhog_cli::node::LocalNodeOptions::default();
             options.port = port;
@@ -1256,6 +1260,7 @@ fn main() {
             options.block_driver = block_driver.map(Into::into);
             options.block_interval = block_interval_ms.map(std::time::Duration::from_millis);
             options.rpc_max_connections = rpc_max_connections;
+            options.ramdb_bytes = ramdb_bytes;
             groundhog_cli::node::run_with_options(options, verbose, cmd_name, &print)
         }
         Command::Keys { command } => match command {
