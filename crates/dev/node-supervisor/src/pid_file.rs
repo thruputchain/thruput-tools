@@ -214,48 +214,66 @@ async fn acquire_unix(
     grace: Duration,
     reject_live_program_mismatch: bool,
 ) -> Result<PidGuard, NodeSupervisorError> {
-    let mut file = open_pid_file(&path)?;
-
-    match try_lock_with_retry(&path, &file).await {
-        Ok(()) => {
-            clean_stale_pid(
-                &path,
-                &mut file,
-                expected_program,
-                grace,
-                reject_live_program_mismatch,
-            )
-            .await?;
-            clear_pid(&path, &mut file)?;
-            Ok(PidGuard {
-                path,
-                file,
-                remove_on_drop: true,
-            })
+    let deadline = time::Instant::now() + LOCK_RETRY_WINDOW;
+    loop {
+        let mut file = open_pid_file(&path)?;
+        match try_lock(&path, &file) {
+            // A releasing owner unlinks the PID file before its close drops
+            // the lock, so a lock acquired through a descriptor opened before
+            // that unlink can be for a file `path` no longer names. Only a
+            // lock on the file currently at `path` counts; otherwise reopen
+            // and retry.
+            Ok(()) if locked_file_is_at_path(&path, &file)? => {
+                clean_stale_pid(
+                    &path,
+                    &mut file,
+                    expected_program,
+                    grace,
+                    reject_live_program_mismatch,
+                )
+                .await?;
+                clear_pid(&path, &mut file)?;
+                return Ok(PidGuard {
+                    path,
+                    file,
+                    remove_on_drop: true,
+                });
+            }
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+            Err(source) => return Err(NodeSupervisorError::PidFile { path, source }),
         }
-        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+
+        if time::Instant::now() >= deadline {
             let existing_pid = read_pid(&path, &mut file)?;
-            Err(NodeSupervisorError::LocalNodeAlreadyRunning {
+            return Err(NodeSupervisorError::LocalNodeAlreadyRunning {
                 path,
                 pid: existing_pid,
-            })
+            });
         }
-        Err(source) => Err(NodeSupervisorError::PidFile { path, source }),
+        time::sleep(LOCK_RETRY_INTERVAL).await;
     }
 }
 
+/// Whether the locked descriptor still refers to the file at `path`, i.e. the
+/// lock was not won on an inode the previous owner already unlinked.
 #[cfg(unix)]
-async fn try_lock_with_retry(path: &Path, file: &File) -> Result<(), io::Error> {
-    let deadline = time::Instant::now() + LOCK_RETRY_WINDOW;
-    loop {
-        match try_lock(path, file) {
-            Err(error)
-                if error.kind() == io::ErrorKind::WouldBlock && time::Instant::now() < deadline =>
-            {
-                time::sleep(LOCK_RETRY_INTERVAL).await;
-            }
-            result => return result,
-        }
+fn locked_file_is_at_path(path: &Path, file: &File) -> Result<bool, NodeSupervisorError> {
+    use std::os::unix::fs::MetadataExt;
+
+    let locked = file
+        .metadata()
+        .map_err(|source| NodeSupervisorError::PidFile {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    match fs::symlink_metadata(path) {
+        Ok(current) => Ok(current.dev() == locked.dev() && current.ino() == locked.ino()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(source) => Err(NodeSupervisorError::PidFile {
+            path: path.to_path_buf(),
+            source,
+        }),
     }
 }
 
@@ -770,6 +788,44 @@ mod tests {
         assert_eq!(
             fs::read_to_string(&path).expect("bug: PID file should be readable"),
             "8\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn contended_acquire_rebinds_to_the_file_currently_at_path() {
+        let temp = TempDir::new().expect("bug: temp dir should be created");
+        let path = temp.path().join("hogd-dev.pid");
+        let holder = PidGuard::acquire(
+            path.clone(),
+            std::ffi::OsStr::new("hogd-dev"),
+            Duration::from_millis(10),
+        )
+        .await
+        .expect("bug: holder should acquire the PID file");
+
+        let contender_path = path.clone();
+        let contender = tokio::spawn(async move {
+            PidGuard::acquire(
+                contender_path,
+                std::ffi::OsStr::new("hogd-dev"),
+                Duration::from_millis(10),
+            )
+            .await
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        // Dropping the holder unlinks the path before the close releases the
+        // lock, so a contender that keeps its pre-unlink descriptor would win
+        // the lock on an unreachable inode and write its PID there.
+        drop(holder);
+
+        let mut guard = contender
+            .await
+            .expect("bug: contender task should finish")
+            .expect("bug: contender should acquire after the holder releases");
+        guard.write(4321).expect("bug: PID write should succeed");
+        assert_eq!(
+            fs::read_to_string(&path).expect("bug: written PID should be visible at the path"),
+            "4321\n"
         );
     }
 
