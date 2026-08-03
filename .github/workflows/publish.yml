@@ -92,7 +92,7 @@ jobs:
           version: ${{ steps.publish-tag.outputs.version }}
           registry-name: groundhog
           registry-token: ${{ secrets.GROUNDHOG_REGISTRY_TOKEN }}
-          toolchain: nightly-2026-08-01
+          toolchain: nightly-2026-05-01
           force: 'true'
           expected-tag: ${{ steps.publish-tag.outputs.tag }}
 
