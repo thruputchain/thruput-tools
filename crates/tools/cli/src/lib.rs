@@ -6,6 +6,7 @@ pub mod artifacts;
 pub mod auth;
 pub mod balance;
 pub mod build;
+pub mod byte_size;
 pub mod call;
 pub mod checks;
 pub(crate) mod codec;

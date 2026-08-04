@@ -166,9 +166,10 @@ enum Command {
         /// Generate typed bindings after build (e.g. `ts`)
         #[arg(long)]
         bindings: Vec<String>,
-        /// Guest stack size in bytes (decimal or 0x hex; multiple of 16,
-        /// below 64K). RV32 only; sets the SDK linker script's `__stack_size`.
-        #[arg(long, value_parser = groundhog_cli::build::parse_stack_size)]
+        /// Guest stack size (decimal, 0x hex, or a K/M/G suffix such as 32K;
+        /// multiple of 16, below 64K). RV32 only; sets the SDK linker
+        /// script's `__stack_size`.
+        #[arg(long, value_name = "SIZE", value_parser = groundhog_cli::build::parse_stack_size)]
         stack_size: Option<u32>,
         /// Config profile to use
         #[arg(long = "profile")]
@@ -435,8 +436,9 @@ enum Command {
         /// Maximum simultaneous public JSON-RPC connections
         #[arg(long)]
         rpc_max_connections: Option<u32>,
-        /// RAM database capacity in bytes for hog-devnode; omit for the devnode default
-        #[arg(long, value_name = "BYTES")]
+        /// RAM database capacity for hog-devnode (decimal, 0x hex, or a K/M/G
+        /// suffix such as 2G); omit for the devnode default
+        #[arg(long, value_name = "SIZE", value_parser = groundhog_cli::byte_size::parse_byte_size)]
         ramdb_bytes: Option<u64>,
     },
     /// Manage signing keys

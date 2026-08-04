@@ -2370,6 +2370,21 @@ fn node_help_mentions_hogd_dev_binary_and_log_contract() {
 }
 
 #[test]
+fn node_rejects_ramdb_size_without_a_recognized_unit() {
+    let output = groundhog()
+        .args(["node", "--ramdb-bytes", "2.5G"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("K/M/G"),
+        "expected unit hint in stderr, got: {stderr}"
+    );
+}
+
+#[test]
 fn deploy_help_mentions_target_dir_and_dry_run() {
     let output = groundhog().args(["deploy", "--help"]).output().unwrap();
 
