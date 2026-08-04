@@ -61,24 +61,25 @@ pub fn run_in(
 ///
 /// Scaffolding itself always succeeds; these are advisory.  The scaffold pins
 /// a nightly channel and cross-compiles to RV32 through `rust-toolchain.toml`,
-/// which only a rustup-managed install honors.  A missing toolchain, target,
+/// which only a rustup-managed `cargo` honors.  A missing toolchain, target,
 /// or component is deliberately *not* reported: under rustup those install
 /// themselves on the first build, so warning about them would be noise.
 fn scaffold_warnings() -> Vec<Finding> {
-    if crate::checks::rustup_available() {
+    if crate::checks::cargo_is_rustup_managed() {
         return Vec::new();
     }
     vec![Finding {
         level: FindingLevel::Warn,
-        code: "rustup_unavailable",
+        code: "cargo_not_rustup_managed",
         message: format!(
-            "rustup not found, so this project's rust-toolchain.toml is inert. \
-             It pins a nightly channel and the {} target, neither of which a \
-             distro-packaged cargo will honor.",
+            "the `cargo` on PATH is not rustup-managed, so this project's \
+             rust-toolchain.toml is inert. It pins a nightly channel and the {} \
+             target, neither of which a distro-packaged cargo will honor.",
             crate::build::RV32_TARGET_TRIPLE,
         ),
         hint: Some(Cow::Borrowed(
-            "install rustup from https://rustup.rs, otherwise `groundhog build` will fail",
+            "install rustup from https://rustup.rs and make sure its shims come before \
+             any distro-packaged cargo on PATH, otherwise `groundhog build` will fail",
         )),
     }]
 }

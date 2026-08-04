@@ -1587,24 +1587,66 @@ fn new_json_outputs_structured_payload() {
     assert_eq!(stdout["data"]["template"], "counter");
 }
 
-/// Build a `PATH` containing only `directory`, optionally holding a stub
-/// `rustup` that exits 0.  Isolating `PATH` is what makes the scaffold's
-/// rustup probe deterministic instead of host-dependent.
 #[cfg(unix)]
-fn path_with_stub_rustup(directory: &std::path::Path, present: bool) -> std::ffi::OsString {
-    if present {
-        let rustup = directory.join("rustup");
-        std::fs::write(&rustup, "#!/bin/sh\necho 'rustup 1.99.0'\n").unwrap();
-        let mut permissions = std::fs::metadata(&rustup).unwrap().permissions();
-        std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
-        std::fs::set_permissions(&rustup, permissions).unwrap();
+fn write_executable(path: &std::path::Path, script: &str) {
+    std::fs::write(path, script).unwrap();
+    let mut permissions = std::fs::metadata(path).unwrap().permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+    std::fs::set_permissions(path, permissions).unwrap();
+}
+
+/// How a stub `cargo` reacts to an uninstalled `RUSTUP_TOOLCHAIN` override.
+///
+/// This is the behavior the scaffold probe keys on, so the stubs model it
+/// directly rather than modelling whether a `rustup` binary happens to exist.
+#[cfg(unix)]
+#[derive(Debug, Clone, Copy)]
+enum StubCargo {
+    /// Rustup's shim: refuses an override it cannot resolve.
+    RustupShim,
+    /// Distro-packaged cargo: ignores `RUSTUP_TOOLCHAIN` entirely.
+    IgnoresRustup,
+}
+
+/// Build a `PATH` containing only `directory`, holding a stub `cargo` of the
+/// given kind and optionally a stub `rustup`.
+///
+/// Isolating `PATH` is what makes the probe deterministic rather than
+/// dependent on how the host that runs the suite is provisioned.
+#[cfg(unix)]
+fn path_with_stub_cargo(
+    directory: &std::path::Path,
+    cargo: StubCargo,
+    rustup_present: bool,
+) -> std::ffi::OsString {
+    let script = match cargo {
+        StubCargo::RustupShim => {
+            "#!/bin/sh\n\
+             if [ -n \"$RUSTUP_TOOLCHAIN\" ]; then\n\
+             \x20 echo \"error: override toolchain '$RUSTUP_TOOLCHAIN' is not installed\" >&2\n\
+             \x20 exit 1\n\
+             fi\n\
+             echo 'cargo 1.96.0 (stub)'\n"
+        }
+        StubCargo::IgnoresRustup => "#!/bin/sh\necho 'cargo 1.75.0 (distro stub)'\n",
+    };
+    write_executable(&directory.join("cargo"), script);
+    if rustup_present {
+        write_executable(
+            &directory.join("rustup"),
+            "#!/bin/sh\necho 'rustup 1.99.0'\n",
+        );
     }
     directory.as_os_str().to_owned()
 }
 
+/// Scaffold into an isolated `PATH` and return the parsed `--json` envelope.
 #[cfg(unix)]
-#[test]
-fn new_warns_when_rustup_is_missing() {
+fn scaffold_with_stub_cargo(
+    project: &str,
+    cargo: StubCargo,
+    rustup_present: bool,
+) -> (TempDir, serde_json::Value) {
     let tmp = TempDir::new().unwrap();
     let bin = tmp.path().join("bin");
     std::fs::create_dir(&bin).unwrap();
@@ -1614,8 +1656,8 @@ fn new_warns_when_rustup_is_missing() {
     let output = groundhog()
         .arg("--json")
         .arg("new")
-        .arg("no-rustup-project")
-        .env("PATH", path_with_stub_rustup(&bin, false))
+        .arg(project)
+        .env("PATH", path_with_stub_cargo(&bin, cargo, rustup_present))
         .current_dir(&workspace)
         .output()
         .unwrap();
@@ -1627,16 +1669,23 @@ fn new_warns_when_rustup_is_missing() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        workspace
-            .join("no-rustup-project/rust-toolchain.toml")
-            .exists()
+        workspace.join(project).join("rust-toolchain.toml").exists(),
+        "scaffold should be written regardless of toolchain warnings"
     );
+    let stdout = serde_json::from_slice(&output.stdout).unwrap();
+    (tmp, stdout)
+}
 
-    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+#[cfg(unix)]
+#[test]
+fn new_warns_when_cargo_ignores_rustup() {
+    let (_tmp, stdout) =
+        scaffold_with_stub_cargo("distro-cargo-project", StubCargo::IgnoresRustup, false);
+
     assert_eq!(stdout["ok"], true);
     let warnings = stdout["warnings"].as_array().unwrap();
     assert_eq!(warnings.len(), 1, "warnings: {warnings:?}");
-    assert_eq!(warnings[0]["code"], "rustup_unavailable");
+    assert_eq!(warnings[0]["code"], "cargo_not_rustup_managed");
     assert!(
         warnings[0]["message"]
             .as_str()
@@ -1652,9 +1701,43 @@ fn new_warns_when_rustup_is_missing() {
     );
 }
 
+/// A distro-packaged `cargo` ignores `rust-toolchain.toml` even when rustup is
+/// installed alongside it, so presence of `rustup` must not silence the
+/// warning.
 #[cfg(unix)]
 #[test]
-fn new_warns_on_stderr_when_rustup_is_missing() {
+fn new_warns_when_distro_cargo_shadows_installed_rustup() {
+    let (_tmp, stdout) =
+        scaffold_with_stub_cargo("shadowed-rustup-project", StubCargo::IgnoresRustup, true);
+
+    let warnings = stdout["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "warnings: {warnings:?}");
+    assert_eq!(warnings[0]["code"], "cargo_not_rustup_managed");
+    assert!(
+        warnings[0]["hint"].as_str().unwrap().contains("PATH"),
+        "hint should explain the shadowing fix: {}",
+        warnings[0]["hint"]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn new_omits_warning_when_cargo_is_rustup_managed() {
+    let (_tmp, stdout) =
+        scaffold_with_stub_cargo("rustup-cargo-project", StubCargo::RustupShim, true);
+
+    // A missing target or toolchain is self-healing under rustup, so a
+    // rustup-managed cargo means no scaffold warnings at all.
+    assert!(
+        stdout["warnings"].as_array().unwrap().is_empty(),
+        "warnings: {}",
+        stdout["warnings"]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn new_warns_on_stderr_when_cargo_ignores_rustup() {
     let tmp = TempDir::new().unwrap();
     let bin = tmp.path().join("bin");
     std::fs::create_dir(&bin).unwrap();
@@ -1663,8 +1746,11 @@ fn new_warns_on_stderr_when_rustup_is_missing() {
 
     let output = groundhog()
         .arg("new")
-        .arg("no-rustup-human")
-        .env("PATH", path_with_stub_rustup(&bin, false))
+        .arg("distro-cargo-human")
+        .env(
+            "PATH",
+            path_with_stub_cargo(&bin, StubCargo::IgnoresRustup, false),
+        )
         .current_dir(&workspace)
         .output()
         .unwrap();
@@ -1672,45 +1758,12 @@ fn new_warns_on_stderr_when_rustup_is_missing() {
     assert!(output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("warning: rustup_unavailable:"),
+        stderr.contains("warning: cargo_not_rustup_managed:"),
         "stderr: {stderr}"
     );
     assert!(stderr.contains("hint: "), "stderr: {stderr}");
     // The project is still usable output, so the summary card must survive.
     assert!(stderr.contains("Project Ready"), "stderr: {stderr}");
-}
-
-#[cfg(unix)]
-#[test]
-fn new_omits_rustup_warning_when_rustup_is_present() {
-    let tmp = TempDir::new().unwrap();
-    let bin = tmp.path().join("bin");
-    std::fs::create_dir(&bin).unwrap();
-    let workspace = tmp.path().join("workspace");
-    std::fs::create_dir(&workspace).unwrap();
-
-    let output = groundhog()
-        .arg("--json")
-        .arg("new")
-        .arg("with-rustup-project")
-        .env("PATH", path_with_stub_rustup(&bin, true))
-        .current_dir(&workspace)
-        .output()
-        .unwrap();
-
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    // A missing target or toolchain is self-healing under rustup, so a
-    // present rustup means no scaffold warnings at all.
-    assert!(
-        stdout["warnings"].as_array().unwrap().is_empty(),
-        "warnings: {}",
-        stdout["warnings"]
-    );
 }
 
 #[test]
