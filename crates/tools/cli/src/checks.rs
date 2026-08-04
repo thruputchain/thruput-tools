@@ -674,6 +674,44 @@ fn unavailable_rust_environment(
     )
 }
 
+/// Toolchain name used only to probe whether `cargo` obeys rustup overrides.
+///
+/// Never installed: rustup rejects the override and exits before any network
+/// access, which is what makes the probe cheap.
+const RUSTUP_OVERRIDE_PROBE: &str = "groundhog-rustup-probe-not-a-toolchain";
+
+/// Reports whether the `cargo` that a build would invoke is rustup-managed,
+/// and so honors a project's `rust-toolchain.toml` pin, targets, and
+/// components.
+///
+/// Probes behavior rather than presence, because rustup being installed is
+/// not sufficient: a distro-packaged `cargo` earlier on `PATH` than rustup's
+/// shim ignores `rust-toolchain.toml` even on a machine that has rustup.
+/// Rustup's shim rejects an uninstalled `RUSTUP_TOOLCHAIN` override and exits
+/// non-zero; any other `cargo` ignores the variable and prints its version.
+///
+/// Reports `true` unless `cargo` positively demonstrates that it ignored the
+/// override, so an unusual environment stays quiet rather than raising a false
+/// alarm.
+pub(crate) fn cargo_is_rustup_managed() -> bool {
+    let probe = std::process::Command::new("cargo")
+        .arg("--version")
+        .current_dir(rustup_neutral_directory(&std::env::temp_dir()))
+        .env("RUSTUP_TOOLCHAIN", RUSTUP_OVERRIDE_PROBE)
+        .output();
+    match probe {
+        Ok(output) => {
+            let ignored_override = output.status.success()
+                && String::from_utf8_lossy(&output.stdout)
+                    .trim_start()
+                    .starts_with("cargo ");
+            !ignored_override
+        }
+        // No `cargo` at all is a separate, already-reported problem.
+        Err(_) => true,
+    }
+}
+
 fn installed_rust_toolchains() -> Result<(Vec<String>, Option<String>), String> {
     let output = installed_rust_toolchains_command()
         .output()
