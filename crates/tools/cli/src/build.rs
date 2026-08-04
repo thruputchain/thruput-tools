@@ -330,29 +330,28 @@ fn wasm_build_command(
     cmd
 }
 
-/// Parse and validate a `--stack-size` value: bytes as decimal or `0x` hex.
+/// Parse and validate a `--stack-size` value: bytes as decimal, `0x` hex, or a
+/// `K`/`M`/`G` suffixed size such as `32K`.
 ///
 /// The value becomes the guest's `__stack_size` linker symbol, so it carries
 /// the SDK linker-script contract: a positive multiple of 16 below the 64 KiB
 /// data address space.
 pub fn parse_stack_size(value: &str) -> Result<u32, String> {
-    let parsed = match value.strip_prefix("0x") {
-        Some(hex) => u32::from_str_radix(hex, 16),
-        None => value.parse::<u32>(),
-    }
-    .map_err(|_| format!("expected bytes as decimal or 0x hex, got {value:?}"))?;
+    let parsed = crate::byte_size::parse_byte_size(value)?;
     if parsed == 0 || !parsed.is_multiple_of(16) {
         return Err(format!(
             "stack size {parsed} must be a positive multiple of 16"
         ));
     }
-    if parsed as usize >= groundhog_rv32_artifact::MAX_MEMORY_BYTES {
-        return Err(format!(
-            "stack size {parsed} must be below the {} data address space",
-            groundhog_rv32_artifact::MAX_MEMORY_BYTES
-        ));
-    }
-    Ok(parsed)
+    u32::try_from(parsed)
+        .ok()
+        .filter(|size| (*size as usize) < groundhog_rv32_artifact::MAX_MEMORY_BYTES)
+        .ok_or_else(|| {
+            format!(
+                "stack size {parsed} must be below the {} data address space",
+                groundhog_rv32_artifact::MAX_MEMORY_BYTES
+            )
+        })
 }
 
 /// True when a requested stack reserve visibly did not happen: the lowered
@@ -669,18 +668,22 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn parse_stack_size_accepts_decimal_and_hex() {
+    fn parse_stack_size_accepts_decimal_hex_and_unit_suffixes() {
         assert_eq!(parse_stack_size("32768"), Ok(32768));
         assert_eq!(parse_stack_size("0x8000"), Ok(32768));
         assert_eq!(parse_stack_size("0x6000"), Ok(24576));
         assert_eq!(parse_stack_size("16"), Ok(16));
         assert_eq!(parse_stack_size("65520"), Ok(65520)); // last multiple of 16 below 64K
+        assert_eq!(parse_stack_size("32K"), Ok(32768));
+        assert_eq!(parse_stack_size("24k"), Ok(24576));
+        assert_eq!(parse_stack_size("32KiB"), Ok(32768));
     }
 
     #[test]
     fn parse_stack_size_rejects_invalid_values() {
         for bad in [
-            "0", "0x0", "24", "0x6008", "65536", "0x10000", "", "abc", "0x", "-16",
+            "0", "0x0", "24", "0x6008", "65536", "0x10000", "", "abc", "0x", "-16", "64K", "1M",
+            "1G", "2.5K",
         ] {
             assert!(
                 parse_stack_size(bad).is_err(),
