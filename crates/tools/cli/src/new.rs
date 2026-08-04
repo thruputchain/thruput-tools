@@ -1,6 +1,8 @@
+use crate::checks::{Finding, FindingLevel};
 use crate::terminal::render_shell_arg;
 use crate::{CliError, Print};
 use serde_json::json;
+use std::borrow::Cow;
 use std::env;
 use std::fs;
 use std::path::Path;
@@ -32,9 +34,19 @@ pub fn run_in(
     let task = print.start_task(format_args!("Creating project `{name}`"));
     crate::scaffold::generate(dir, name, template)?;
     task.success(format_args!("Created project `{name}`"));
+
+    let warnings = scaffold_warnings();
+    for warning in &warnings {
+        print.warn(format_args!("{}: {}", warning.code, warning.message));
+        if let Some(hint) = warning.hint.as_deref() {
+            print.status(format_args!("  hint: {hint}"));
+        }
+    }
+
     render_project_ready(dir, name, template, print);
-    print.json(&crate::result::CommandResult::new(
+    print.json(&crate::result::CommandResult::with_warnings(
         cmd,
+        warnings,
         json!({
             "project_name": name,
             "template": template,
@@ -43,6 +55,32 @@ pub fn run_in(
         }),
     ))?;
     Ok(())
+}
+
+/// Environment problems that will break the generated project's first build.
+///
+/// Scaffolding itself always succeeds; these are advisory.  The scaffold pins
+/// a nightly channel and cross-compiles to RV32 through `rust-toolchain.toml`,
+/// which only a rustup-managed install honors.  A missing toolchain, target,
+/// or component is deliberately *not* reported: under rustup those install
+/// themselves on the first build, so warning about them would be noise.
+fn scaffold_warnings() -> Vec<Finding> {
+    if crate::checks::rustup_available() {
+        return Vec::new();
+    }
+    vec![Finding {
+        level: FindingLevel::Warn,
+        code: "rustup_unavailable",
+        message: format!(
+            "rustup not found, so this project's rust-toolchain.toml is inert. \
+             It pins a nightly channel and the {} target, neither of which a \
+             distro-packaged cargo will honor.",
+            crate::build::RV32_TARGET_TRIPLE,
+        ),
+        hint: Some(Cow::Borrowed(
+            "install rustup from https://rustup.rs, otherwise `groundhog build` will fail",
+        )),
+    }]
 }
 
 fn render_project_ready(dir: &Path, name: &str, template: &str, print: &Print) {

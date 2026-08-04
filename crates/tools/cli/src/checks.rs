@@ -674,6 +674,22 @@ fn unavailable_rust_environment(
     )
 }
 
+/// Reports whether `rustup` is usable on this machine.
+///
+/// Only probes for rustup's presence, not for any particular toolchain or
+/// target.  Callers use this to distinguish a rustup-managed install — where
+/// a project's `rust-toolchain.toml` pin, targets, and components are
+/// back-filled automatically on first use — from a distro-packaged
+/// `cargo`, where that file is inert.
+pub(crate) fn rustup_available() -> bool {
+    std::process::Command::new("rustup")
+        .arg("--version")
+        .current_dir(rustup_neutral_directory(&std::env::temp_dir()))
+        .env_remove("RUSTUP_TOOLCHAIN")
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
 fn installed_rust_toolchains() -> Result<(Vec<String>, Option<String>), String> {
     let output = installed_rust_toolchains_command()
         .output()

@@ -1587,6 +1587,132 @@ fn new_json_outputs_structured_payload() {
     assert_eq!(stdout["data"]["template"], "counter");
 }
 
+/// Build a `PATH` containing only `directory`, optionally holding a stub
+/// `rustup` that exits 0.  Isolating `PATH` is what makes the scaffold's
+/// rustup probe deterministic instead of host-dependent.
+#[cfg(unix)]
+fn path_with_stub_rustup(directory: &std::path::Path, present: bool) -> std::ffi::OsString {
+    if present {
+        let rustup = directory.join("rustup");
+        std::fs::write(&rustup, "#!/bin/sh\necho 'rustup 1.99.0'\n").unwrap();
+        let mut permissions = std::fs::metadata(&rustup).unwrap().permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+        std::fs::set_permissions(&rustup, permissions).unwrap();
+    }
+    directory.as_os_str().to_owned()
+}
+
+#[cfg(unix)]
+#[test]
+fn new_warns_when_rustup_is_missing() {
+    let tmp = TempDir::new().unwrap();
+    let bin = tmp.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let workspace = tmp.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+
+    let output = groundhog()
+        .arg("--json")
+        .arg("new")
+        .arg("no-rustup-project")
+        .env("PATH", path_with_stub_rustup(&bin, false))
+        .current_dir(&workspace)
+        .output()
+        .unwrap();
+
+    // Scaffolding still succeeds: the warning is advisory, not fatal.
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        workspace
+            .join("no-rustup-project/rust-toolchain.toml")
+            .exists()
+    );
+
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["ok"], true);
+    let warnings = stdout["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "warnings: {warnings:?}");
+    assert_eq!(warnings[0]["code"], "rustup_unavailable");
+    assert!(
+        warnings[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("riscv32im-unknown-none-elf"),
+        "message should name the rv32 target: {}",
+        warnings[0]["message"]
+    );
+    assert!(
+        warnings[0]["hint"].as_str().unwrap().contains("rustup.rs"),
+        "hint should point at the installer: {}",
+        warnings[0]["hint"]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn new_warns_on_stderr_when_rustup_is_missing() {
+    let tmp = TempDir::new().unwrap();
+    let bin = tmp.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let workspace = tmp.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+
+    let output = groundhog()
+        .arg("new")
+        .arg("no-rustup-human")
+        .env("PATH", path_with_stub_rustup(&bin, false))
+        .current_dir(&workspace)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("warning: rustup_unavailable:"),
+        "stderr: {stderr}"
+    );
+    assert!(stderr.contains("hint: "), "stderr: {stderr}");
+    // The project is still usable output, so the summary card must survive.
+    assert!(stderr.contains("Project Ready"), "stderr: {stderr}");
+}
+
+#[cfg(unix)]
+#[test]
+fn new_omits_rustup_warning_when_rustup_is_present() {
+    let tmp = TempDir::new().unwrap();
+    let bin = tmp.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let workspace = tmp.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+
+    let output = groundhog()
+        .arg("--json")
+        .arg("new")
+        .arg("with-rustup-project")
+        .env("PATH", path_with_stub_rustup(&bin, true))
+        .current_dir(&workspace)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    // A missing target or toolchain is self-healing under rustup, so a
+    // present rustup means no scaffold warnings at all.
+    assert!(
+        stdout["warnings"].as_array().unwrap().is_empty(),
+        "warnings: {}",
+        stdout["warnings"]
+    );
+}
+
 #[test]
 fn new_with_stub_template() {
     let tmp = TempDir::new().unwrap();
