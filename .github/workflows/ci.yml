@@ -101,3 +101,24 @@ jobs:
       - name: Contract tests (groundhog test)
         working-directory: ${{ runner.temp }}/my-counter
         run: groundhog test
+
+      # A user-level rustflags override makes cargo drop the project's
+      # .cargo/config.toml target rustflags (linker script, codegen flags such
+      # as -Z trap-unreachable=false), yielding artifacts that fail validation.
+      # The CLI must refuse to build instead of proceeding silently.
+      - name: RUSTFLAGS guard (groundhog build refuses env rustflags)
+        working-directory: ${{ runner.temp }}/my-counter
+        run: |
+          set -euo pipefail
+          for probe in 'RUSTFLAGS=-C opt-level=2' 'CARGO_ENCODED_RUSTFLAGS='; do
+            if env "$probe" groundhog build >guard.log 2>&1; then
+              echo "groundhog build unexpectedly succeeded with $probe set"
+              cat guard.log
+              exit 1
+            fi
+            if ! grep -q "is set in the environment" guard.log; then
+              echo "groundhog build failed for a reason other than the rustflags guard with $probe set"
+              cat guard.log
+              exit 1
+            fi
+          done

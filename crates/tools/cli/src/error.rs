@@ -124,6 +124,12 @@ pub enum CliError {
     InvalidTestOptions(String),
     #[error("invalid build options: {0}")]
     InvalidBuildOptions(String),
+    #[error(
+        "`{0}` is set in the environment, so cargo would ignore the project's \
+         `.cargo/config.toml` target rustflags (Groundhog linker and codegen flags) and \
+         produce a broken artifact"
+    )]
+    EnvRustflagsSet(&'static str),
     #[error("status check found warnings")]
     StatusHasWarnings,
     #[error("command emitted structured failure output")]
@@ -407,6 +413,7 @@ impl CliError {
             Self::IntegrationTestNotFound(_) => "integration_test_not_found",
             Self::InvalidTestOptions(_) => "invalid_test_options",
             Self::InvalidBuildOptions(_) => "invalid_build_options",
+            Self::EnvRustflagsSet(_) => "env_rustflags_set",
             Self::StatusHasWarnings => "status_has_warnings",
             Self::CommandReportedFailure => "command_reported_failure",
             Self::NodeSupervisor(_) => "node_supervisor_error",
@@ -809,6 +816,11 @@ impl CliError {
             Self::InvalidBuildOptions(_) => Some(Cow::Borrowed(
                 "remove the unsupported `groundhog build` option for the selected target",
             )),
+            Self::EnvRustflagsSet(var) => Some(Cow::Owned(format!(
+                "unset it for this build (e.g. `env -u {var} groundhog build`); to add extra \
+                 rustflags, append them to the `[target.*]` rustflags lists in the project's \
+                 `.cargo/config.toml` instead"
+            ))),
         }
     }
 
