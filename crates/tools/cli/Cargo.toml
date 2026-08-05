@@ -57,7 +57,7 @@ libc = { workspace = true }
 tempfile = "3"
 
 [dev-dependencies]
-serial_test = "3"
+serial_test = { workspace = true }
 
 [lints]
 workspace = true
