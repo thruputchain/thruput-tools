@@ -20,14 +20,16 @@ test = false
 bench = false
 
 [features]
-entrypoints = []
+# `sdk/alloc` links the guest runtime's global allocator; sdk >= 0.17.8 XDR
+# types use `alloc` in no_std entrypoint builds, so contract targets need it.
+entrypoints = ["sdk/alloc"]
 rv32-entrypoints = ["entrypoints"]
 default = ["dev"]
 dev = ["sdk/dev"]
 groundhog-integration-test = ["dep:groundhog-json-rpc-client", "dep:tokio"]
 
 [dependencies]
-sdk = { version = "0.17.7", registry = "groundhog" }
+sdk = { version = "0.17.8", registry = "groundhog" }
 
 [target.'cfg(not(any(target_arch = "wasm32", target_arch = "riscv32")))'.dependencies]
 groundhog-json-rpc-client = { version = "0.6", registry = "groundhog", optional = true }
