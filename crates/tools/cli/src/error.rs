@@ -242,6 +242,18 @@ pub enum CliError {
     InvalidViewArguments(String),
     #[error("codegen failed: {0}")]
     CodegenFailed(String),
+    #[error("chain data directory is in use: {0}")]
+    ChainDataDirLocked(String),
+    #[error("invalid chain archive at {path}: {message}")]
+    ChainArchiveInvalid { path: String, message: String },
+    #[error("chain dump output already exists: {0}")]
+    ChainDumpExists(String),
+    #[error("chain restore destination is populated: {0}")]
+    ChainRestoreRequiresForce(String),
+    #[error("chain archive path must be outside the data directory: {0}")]
+    ChainArchiveInsideDataDir(String),
+    #[error("chain archive operation failed: {0}")]
+    ChainArchiveIo(String),
     #[error("{0}")]
     Other(String),
 }
@@ -328,6 +340,12 @@ impl CliError {
             Self::InvalidViewCalldata(_) => "invalid_view_calldata",
             Self::InvalidViewArguments(_) => "invalid_view_arguments",
             Self::CodegenFailed(_) => "codegen_failed",
+            Self::ChainDataDirLocked(_) => "chain_data_dir_locked",
+            Self::ChainArchiveInvalid { .. } => "chain_archive_invalid",
+            Self::ChainDumpExists(_) => "chain_dump_exists",
+            Self::ChainRestoreRequiresForce(_) => "chain_restore_requires_force",
+            Self::ChainArchiveInsideDataDir(_) => "chain_archive_inside_data_dir",
+            Self::ChainArchiveIo(_) => "chain_archive_io",
             Self::Other(_) => "other",
         }
     }
@@ -513,6 +531,24 @@ impl CliError {
             )),
             Self::CodegenFailed(_) => Some(Cow::Borrowed(
                 "check that the file contains a valid embedded contract spec",
+            )),
+            Self::ChainDataDirLocked(_) => Some(Cow::Borrowed(
+                "stop the node using this data directory and retry",
+            )),
+            Self::ChainArchiveInvalid { .. } => Some(Cow::Borrowed(
+                "use an unmodified archive produced by `groundhog chain dump`",
+            )),
+            Self::ChainDumpExists(_) => Some(Cow::Borrowed(
+                "choose another output path or pass `--overwrite`",
+            )),
+            Self::ChainRestoreRequiresForce(_) => Some(Cow::Borrowed(
+                "pass `--force` to replace the existing persistent node state",
+            )),
+            Self::ChainArchiveInsideDataDir(_) => Some(Cow::Borrowed(
+                "place the archive outside the node data directory",
+            )),
+            Self::ChainArchiveIo(_) => Some(Cow::Borrowed(
+                "check path permissions and available disk space, then retry",
             )),
             Self::RuntimeInit(_)
             | Self::ReceiptPollingExhausted

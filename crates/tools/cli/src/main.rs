@@ -425,6 +425,11 @@ enum Command {
         #[arg(long)]
         rpc_max_connections: Option<u32>,
     },
+    /// Dump or restore persistent local-chain state
+    Chain {
+        #[command(subcommand)]
+        command: ChainCommand,
+    },
     /// Manage signing keys
     #[command(long_about = "Ed25519 signing keys stored in \
                        ~/.config/groundhog/keys/. Keys are \
@@ -532,6 +537,43 @@ enum CodegenCommand {
     },
 }
 
+#[derive(Subcommand)]
+enum ChainCommand {
+    /// Dump a stopped persistent node into one compressed JSON archive
+    Dump {
+        /// Persistent directory passed to `groundhog node --data-dir`
+        #[arg(long)]
+        data_dir: PathBuf,
+        /// JSON archive to create
+        #[arg(long)]
+        output: PathBuf,
+        /// Replace an existing archive
+        #[arg(long)]
+        overwrite: bool,
+    },
+    /// Restore one compressed JSON archive into a stopped persistent node
+    Restore {
+        /// Persistent directory passed to `groundhog node --data-dir`
+        #[arg(long)]
+        data_dir: PathBuf,
+        /// JSON archive to restore
+        #[arg(long)]
+        input: PathBuf,
+        /// Replace populated persistent state
+        #[arg(long)]
+        force: bool,
+    },
+}
+
+impl ChainCommand {
+    fn command_name(&self) -> &'static str {
+        match self {
+            Self::Dump { .. } => "chain.dump",
+            Self::Restore { .. } => "chain.restore",
+        }
+    }
+}
+
 impl CodegenCommand {
     fn command_name(&self) -> &'static str {
         match self {
@@ -560,6 +602,7 @@ impl Command {
             Self::View { .. } => "view",
             Self::Storage { .. } => "storage",
             Self::Node { .. } => "node",
+            Self::Chain { command } => command.command_name(),
             Self::Keys { command } => command.command_name(),
             Self::Wallet { command } => command.command_name(),
             Self::Codegen { command } => command.command_name(),
@@ -878,6 +921,18 @@ fn main() {
             options.rpc_max_connections = rpc_max_connections;
             groundhog_cli::node::run_with_options(options, verbose, cmd_name, &print)
         }
+        Command::Chain { command } => match command {
+            ChainCommand::Dump {
+                data_dir,
+                output,
+                overwrite,
+            } => groundhog_cli::chain::dump(&data_dir, &output, overwrite, cmd_name, &print),
+            ChainCommand::Restore {
+                data_dir,
+                input,
+                force,
+            } => groundhog_cli::chain::restore(&data_dir, &input, force, cmd_name, &print),
+        },
         Command::Keys { command } => match command {
             KeysCommand::Generate { name, fund } => {
                 groundhog_cli::keys::generate(&name, fund, cmd_name, &print)

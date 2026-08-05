@@ -35,6 +35,8 @@ clap_complete = "4.5.66"
 getrandom = "0.2.17"
 hex = { workspace = true }
 sha2 = { workspace = true }
+base64 = "0.22"
+zstd = "0.13"
 zeroize = { workspace = true }
 groundhog-signing = { workspace = true }
 groundhog-rv32-artifact = { workspace = true }

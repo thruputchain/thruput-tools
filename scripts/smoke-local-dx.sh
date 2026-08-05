@@ -6,7 +6,7 @@
 #   -> dev-0/dev-1 transfer with recipient and sender balance validation
 #   -> key generate -> wallet create -> saved-wallet deploy
 #   -> saved-wallet airdrop -> second deploy/call
-#   -> stop -> restart -> verify persisted contract state
+#   -> stop -> dump/restore -> restart -> verify state and continued progress
 #
 # Required environment:
 #   GROUNDHOG_DEVNODE_BINARY=/path/to/hog-devnode
@@ -857,6 +857,18 @@ fi
 NODE_PID=""
 NODE_DESCENDANTS=""
 
+CHAIN_ARCHIVE="$WORK/chain-dump.json"
+CHAIN_DUMP_JSON="$(run_json "chain dump" "$CLI" --json chain dump \
+    --data-dir "$NODE_DATA_DIR" --output "$CHAIN_ARCHIVE")"
+[[ "$(json_field command "$CHAIN_DUMP_JSON")" == "chain.dump" ]] \
+    || die "chain dump returned the wrong command envelope"
+[[ -s "$CHAIN_ARCHIVE" ]] || die "chain dump did not create an archive"
+
+CHAIN_RESTORE_JSON="$(run_json "chain restore" "$CLI" --json chain restore --force \
+    --data-dir "$NODE_DATA_DIR" --input "$CHAIN_ARCHIVE")"
+[[ "$(json_field command "$CHAIN_RESTORE_JSON")" == "chain.restore" ]] \
+    || die "chain restore returned the wrong command envelope"
+
 log "Restarting persistent local node"
 : > "$WORK/node.json"
 : > "$WORK/node.err"
@@ -885,5 +897,15 @@ PERSISTED_VALUE_AFTER="$(json_field data.returnValue "$PERSISTED_VIEW_AFTER")"
 [[ "$PERSISTED_VALUE_AFTER" == "$PERSISTED_VALUE_BEFORE" ]] \
     || die "persisted counter changed across restart: before=$PERSISTED_VALUE_BEFORE after=$PERSISTED_VALUE_AFTER"
 log "persistent restart recovered counter value: $PERSISTED_VALUE_AFTER"
+
+POST_RESTORE_INCREMENT_JSON="$(run_json "increment after chain restore" \
+    "$CLI" --json call "$PROJECT_NAME" increment 1)"
+assert_call_succeeded "increment after chain restore" "$POST_RESTORE_INCREMENT_JSON"
+POST_RESTORE_VIEW="$(run_view_json "view after chain restore progress" "$PROJECT_NAME" get)"
+POST_RESTORE_VALUE="$(json_field data.returnValue "$POST_RESTORE_VIEW")"
+EXPECTED_POST_RESTORE_VALUE=$(( PERSISTED_VALUE_BEFORE + 1 ))
+[[ "$POST_RESTORE_VALUE" == "$EXPECTED_POST_RESTORE_VALUE" ]] \
+    || die "restored chain did not advance: got $POST_RESTORE_VALUE, expected $EXPECTED_POST_RESTORE_VALUE"
+log "restored chain advanced counter value: $PERSISTED_VALUE_AFTER->$POST_RESTORE_VALUE"
 
 log "Local DX smoke passed"
