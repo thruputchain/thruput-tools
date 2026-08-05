@@ -22,6 +22,7 @@ const CHUNK_SIZE: usize = 1024 * 1024;
 const COMPRESSION_LEVEL: i32 = 3;
 const DATA_DIR_METADATA: &str = "hog-devnode-data.json";
 const LOCK_FILE: &str = ".hog-devnode.lock";
+const NODE_PID_FILE: &str = "hog-devnode.pid";
 const PERSISTENT_DIRS: [&str; 3] = ["ramdb", "events", "indexer"];
 
 /// Stable machine-readable result for `groundhog chain dump`.
@@ -829,7 +830,7 @@ fn create_restore_file(path: &Path) -> Result<File, std::io::Error> {
 fn data_dir_is_populated(data_dir: &Path) -> Result<bool, CliError> {
     for entry in fs::read_dir(data_dir)? {
         let name = entry?.file_name();
-        if name != LOCK_FILE && name != "hog-devnode.pid" && name != "runtime" {
+        if name != LOCK_FILE && name != NODE_PID_FILE && name != "runtime" {
             return Ok(true);
         }
     }
@@ -890,41 +891,50 @@ fn set_directory_permissions(_path: &Path) -> Result<(), CliError> {
 }
 
 struct DataDirLock {
-    _file: File,
+    _files: Vec<File>,
 }
 
 impl DataDirLock {
     #[cfg(unix)]
     fn acquire(data_dir: &Path) -> Result<Self, CliError> {
-        use std::os::fd::AsRawFd;
-        use std::os::unix::fs::OpenOptionsExt;
-
-        let path = data_dir.join(LOCK_FILE);
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .mode(0o600)
-            .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
-            .open(&path)
-            .map_err(|error| archive_io(format!("open lock '{}': {error}", path.display())))?;
-        // SAFETY: flock only inspects the valid file descriptor and does not retain pointers.
-        let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-        if result != 0 {
-            let error = std::io::Error::last_os_error();
-            if matches!(error.raw_os_error(), Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN)
-            {
-                return Err(CliError::ChainDataDirLocked(data_dir.display().to_string()));
-            }
-            return Err(archive_io(format!("lock '{}': {error}", path.display())));
-        }
-        Ok(Self { _file: file })
+        let files = vec![
+            acquire_lock_file(data_dir, LOCK_FILE)?,
+            acquire_lock_file(data_dir, NODE_PID_FILE)?,
+        ];
+        Ok(Self { _files: files })
     }
 
     #[cfg(not(unix))]
     fn acquire(_data_dir: &Path) -> Result<Self, CliError> {
         Err(CliError::UnsupportedOs(std::env::consts::OS.to_owned()))
     }
+}
+
+#[cfg(unix)]
+fn acquire_lock_file(data_dir: &Path, name: &str) -> Result<File, CliError> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let path = data_dir.join(name);
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .mode(0o600)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+        .open(&path)
+        .map_err(|error| archive_io(format!("open lock '{}': {error}", path.display())))?;
+    // SAFETY: flock only inspects the valid file descriptor and does not retain pointers.
+    let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if result != 0 {
+        let error = std::io::Error::last_os_error();
+        if matches!(error.raw_os_error(), Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN)
+        {
+            return Err(CliError::ChainDataDirLocked(data_dir.display().to_string()));
+        }
+        return Err(archive_io(format!("lock '{}': {error}", path.display())));
+    }
+    Ok(file)
 }
 
 #[cfg(test)]
@@ -1051,7 +1061,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn dump_rejects_lock_held_by_node() {
+    fn dump_rejects_concurrent_archive_operation() {
         let source = fixture();
         let _lock = DataDirLock::acquire(source.path()).unwrap();
         let parent = TempDir::new().unwrap();
@@ -1064,5 +1074,61 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(error, CliError::ChainDataDirLocked(_)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dump_rejects_running_node_pid_lock() {
+        let source = fixture();
+        let _node_lock = acquire_lock_file(source.path(), NODE_PID_FILE).unwrap();
+        let parent = TempDir::new().unwrap();
+        let archive = parent.path().join("chain.json");
+
+        let error = dump(
+            source.path(),
+            &archive,
+            false,
+            "chain.dump",
+            &Print::quiet(),
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, CliError::ChainDataDirLocked(_)));
+        assert!(!archive.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restore_rejects_running_node_pid_lock() {
+        let source = fixture();
+        let parent = TempDir::new().unwrap();
+        let archive = parent.path().join("chain.json");
+        dump(
+            source.path(),
+            &archive,
+            false,
+            "chain.dump",
+            &Print::quiet(),
+        )
+        .unwrap();
+
+        let destination = fixture();
+        let original = fs::read(destination.path().join("ramdb/0.log")).unwrap();
+        let _node_lock = acquire_lock_file(destination.path(), NODE_PID_FILE).unwrap();
+
+        let error = restore(
+            destination.path(),
+            &archive,
+            true,
+            "chain.restore",
+            &Print::quiet(),
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, CliError::ChainDataDirLocked(_)));
+        assert_eq!(
+            fs::read(destination.path().join("ramdb/0.log")).unwrap(),
+            original
+        );
     }
 }
