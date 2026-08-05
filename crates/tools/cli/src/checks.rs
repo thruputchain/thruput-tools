@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::CliError;
+use crate::terminal::render_shell_arg;
 
 /// Severity of a non-fatal diagnostic finding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -258,8 +259,9 @@ pub fn check_project(
                         ),
                         hint: Some(Cow::Owned(format!(
                             "generate it with \
-                             `groundhog keys generate {key_name}` \
-                             or change the profile's default_key"
+                             `groundhog keys generate -- {}` \
+                             or change the profile's default_key",
+                            render_shell_arg(key_name),
                         ))),
                     });
                 }
@@ -280,44 +282,56 @@ pub fn check_project(
                 findings,
             })
         }
-        Err(CliError::ProfileNotFound(name)) => {
-            findings.push(Finding {
+        Err(CliError::ProfileNotFound(name)) => Ok(unresolved_profile_context(
+            config_path,
+            Some(name.clone()),
+            Finding {
                 level: FindingLevel::Warn,
                 code: "profile_not_found",
                 message: format!("profile `{name}` not found in project or global config"),
                 hint: Some(Cow::Borrowed(
-                    "add the profile to project or global config, or \
-                     use `--profile` to select an existing \
-                     one",
+                    "add the profile to project or global config, or use `--profile` to select an existing one",
                 )),
-            });
-            Ok(ProjectContext {
-                config_path,
-                profile_name: Some(name),
-                findings,
-                ..ProjectContext::default()
-            })
-        }
-        Err(CliError::NoProjectConfig(name)) => {
-            findings.push(Finding {
+            },
+        )),
+        Err(CliError::NoActiveProfile) => Ok(unresolved_profile_context(
+            config_path,
+            None,
+            Finding {
                 level: FindingLevel::Warn,
-                code: "no_project_config",
-                message: format!(
-                    "profile `{name}` requested but no project or global \
-                     config was found"
-                ),
+                code: "no_active_profile",
+                message: "no active profile is selected".into(),
                 hint: Some(Cow::Borrowed(
-                    "run `groundhog init`, create groundhog.toml, or use \
-                     a profile that does not require config",
+                    "run `groundhog init`, pass `--profile`, or set default_profile in project or global config",
                 )),
-            });
-            Ok(ProjectContext {
-                profile_name: Some(name),
-                findings,
-                ..ProjectContext::default()
-            })
-        }
+            },
+        )),
+        Err(CliError::ProfileConfigInvalid { profile, message }) => Ok(unresolved_profile_context(
+            config_path,
+            Some(profile.clone()),
+            Finding {
+                level: FindingLevel::Warn,
+                code: "profile_config_invalid",
+                message: format!("profile `{profile}` is invalid: {message}"),
+                hint: Some(Cow::Borrowed(
+                    "fix the selected profile or use `--profile` to select a valid one",
+                )),
+            },
+        )),
         Err(e) => Err(e),
+    }
+}
+
+fn unresolved_profile_context(
+    config_path: Option<PathBuf>,
+    profile_name: Option<String>,
+    finding: Finding,
+) -> ProjectContext {
+    ProjectContext {
+        config_path,
+        profile_name,
+        findings: vec![finding],
+        ..ProjectContext::default()
     }
 }
 
@@ -356,8 +370,8 @@ fn check_default_wallet(profile: &crate::config::ResolvedProfile, findings: &mut
                 profile.name
             ),
             hint: Some(Cow::Owned(format!(
-                "run `groundhog wallet use <NAME> --profile {}` to select a saved wallet",
-                profile.name
+                "run `groundhog wallet use <NAME> --profile={}` to select a saved wallet",
+                render_shell_arg(&profile.name),
             ))),
         });
         return;
@@ -528,8 +542,9 @@ fn add_rust_toolchain_findings(
             || Cow::Borrowed("install rustup and the Rust toolchain declared by the project"),
             |toolchain| {
                 Cow::Owned(format!(
-                    "run `rustup toolchain install {toolchain} --component rust-src --target {}`",
-                    crate::build::RV32_TARGET_TRIPLE
+                    "run `rustup toolchain install --component rust-src --target {} -- {}`",
+                    crate::build::RV32_TARGET_TRIPLE,
+                    render_shell_arg(toolchain),
                 ))
             },
         );
@@ -657,6 +672,44 @@ fn unavailable_rust_environment(
         RustTargetStatus::Unknown,
         RustTargetStatus::Unknown,
     )
+}
+
+/// Toolchain name used only to probe whether `cargo` obeys rustup overrides.
+///
+/// Never installed: rustup rejects the override and exits before any network
+/// access, which is what makes the probe cheap.
+const RUSTUP_OVERRIDE_PROBE: &str = "groundhog-rustup-probe-not-a-toolchain";
+
+/// Reports whether the `cargo` that a build would invoke is rustup-managed,
+/// and so honors a project's `rust-toolchain.toml` pin, targets, and
+/// components.
+///
+/// Probes behavior rather than presence, because rustup being installed is
+/// not sufficient: a distro-packaged `cargo` earlier on `PATH` than rustup's
+/// shim ignores `rust-toolchain.toml` even on a machine that has rustup.
+/// Rustup's shim rejects an uninstalled `RUSTUP_TOOLCHAIN` override and exits
+/// non-zero; any other `cargo` ignores the variable and prints its version.
+///
+/// Reports `true` unless `cargo` positively demonstrates that it ignored the
+/// override, so an unusual environment stays quiet rather than raising a false
+/// alarm.
+pub(crate) fn cargo_is_rustup_managed() -> bool {
+    let probe = std::process::Command::new("cargo")
+        .arg("--version")
+        .current_dir(rustup_neutral_directory(&std::env::temp_dir()))
+        .env("RUSTUP_TOOLCHAIN", RUSTUP_OVERRIDE_PROBE)
+        .output();
+    match probe {
+        Ok(output) => {
+            let ignored_override = output.status.success()
+                && String::from_utf8_lossy(&output.stdout)
+                    .trim_start()
+                    .starts_with("cargo ");
+            !ignored_override
+        }
+        // No `cargo` at all is a separate, already-reported problem.
+        Err(_) => true,
+    }
 }
 
 fn installed_rust_toolchains() -> Result<(Vec<String>, Option<String>), String> {
@@ -1251,7 +1304,7 @@ mod tests {
     #[test]
     fn default_wallet_check_reports_missing_binding() {
         let profile = crate::config::ResolvedProfile {
-            name: "devnet".into(),
+            name: "dev&net".into(),
             network: None,
             rpc_url: None,
             rpc_url_cli_override: false,
@@ -1271,6 +1324,10 @@ mod tests {
 
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].code, "default_wallet_not_saved");
+        assert_eq!(
+            findings[0].hint.as_deref(),
+            Some("run `groundhog wallet use <NAME> --profile='dev&net'` to select a saved wallet")
+        );
     }
 
     #[test]
@@ -1710,7 +1767,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn check_project_reports_default_context_when_no_config() {
+    fn check_project_reports_no_active_profile_when_no_config() {
         let tmp = tempfile::TempDir::new().unwrap();
         unsafe {
             std::env::set_var("XDG_CONFIG_HOME", tmp.path());
@@ -1718,10 +1775,10 @@ mod tests {
 
         let context = check_project(tmp.path(), None).unwrap();
         assert!(context.config_path.is_none());
-        assert_eq!(context.profile_name.as_deref(), Some("default"));
+        assert!(context.profile_name.is_none());
         assert!(context.rpc_url.is_none());
         assert_eq!(context.contract_count, 0);
-        assert!(context.findings.is_empty());
+        assert_eq!(context.findings[0].code, "no_active_profile");
 
         unsafe {
             std::env::remove_var("XDG_CONFIG_HOME");
@@ -1738,7 +1795,7 @@ mod tests {
         let config = tmp.path().join("groundhog.toml");
         std::fs::write(
             &config,
-            "[profile.default]\nrpc_url = \"http://localhost\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\nrpc_url = \"http://localhost\"\n",
         )
         .unwrap();
 
@@ -1780,14 +1837,20 @@ mod tests {
         std::fs::create_dir(&project).unwrap();
         std::fs::write(
             project.join("groundhog.toml"),
-            "[profile.default]\ndefault_key = \"ghost\"\n",
+            "default_profile = \"default\"\n\n[profile.default]\ndefault_key = \"ghost;echo bad\"\n",
         )
         .unwrap();
 
         let context = check_project(&project, None).unwrap();
-        assert_eq!(context.profile_key.as_deref(), Some("ghost"));
+        assert_eq!(context.profile_key.as_deref(), Some("ghost;echo bad"));
         assert_eq!(context.findings.len(), 1);
         assert_eq!(context.findings[0].code, "key_not_on_disk");
+        assert!(
+            context.findings[0]
+                .hint
+                .as_deref()
+                .is_some_and(|hint| hint.contains("groundhog keys generate -- 'ghost;echo bad'"))
+        );
 
         unsafe {
             std::env::remove_var("XDG_CONFIG_HOME");
@@ -1920,12 +1983,12 @@ mod tests {
             std::env::set_var("XDG_CONFIG_HOME", tmp.path());
         }
 
-        // No groundhog.toml, but explicit non-default profile.
+        // No groundhog.toml, but an explicit profile selection.
         let context = check_project(tmp.path(), Some("staging")).unwrap();
         assert!(context.config_path.is_none());
         assert_eq!(context.profile_name.as_deref(), Some("staging"));
         assert_eq!(context.findings.len(), 1);
-        assert_eq!(context.findings[0].code, "no_project_config");
+        assert_eq!(context.findings[0].code, "profile_not_found");
 
         unsafe {
             std::env::remove_var("XDG_CONFIG_HOME");

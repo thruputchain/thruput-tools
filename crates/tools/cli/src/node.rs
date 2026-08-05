@@ -131,6 +131,8 @@ pub struct LocalNodeOptions {
     pub block_interval: Option<Duration>,
     /// Override the public JSON-RPC simultaneous connection cap.
     pub rpc_max_connections: Option<u32>,
+    /// Override the RAM database capacity in bytes hog-devnode reserves at startup.
+    pub ramdb_bytes: Option<u64>,
 }
 
 /// PID-file behavior for local hogd-dev startup.
@@ -420,7 +422,10 @@ fn print_started_local_node(
         }
         print.detail(
             "dev-key manifest",
-            format_args!("export GROUNDHOG_RUNTIME_MANIFEST={}", path.display()),
+            format_args!(
+                "export GROUNDHOG_RUNTIME_MANIFEST={}",
+                crate::terminal::render_shell_arg(&path.to_string_lossy()),
+            ),
         );
     }
 }
@@ -561,6 +566,10 @@ fn local_node_config(
     };
     let hogd = match options.startup_timeout {
         Some(timeout) => hogd.with_startup_timeout(timeout),
+        None => hogd,
+    };
+    let hogd = match options.ramdb_bytes {
+        Some(ramdb_bytes) => hogd.with_ramdb_bytes(ramdb_bytes),
         None => hogd,
     };
     let config = NodeSupervisorConfig::default()
@@ -792,6 +801,7 @@ mod tests {
             block_driver: Some(LocalNodeBlockDriverMode::Interval),
             block_interval: Some(Duration::from_millis(250)),
             rpc_max_connections: Some(512),
+            ramdb_bytes: Some(2_147_483_648),
         })
         .expect("bug: local node config should build");
 
@@ -810,6 +820,7 @@ mod tests {
             Some(std::path::Path::new("/tmp/hog-devnode-test.pid"))
         );
         assert_eq!(config.hogd_dev.dev_account_count, 3);
+        assert_eq!(config.hogd_dev.ramdb_bytes, Some(2_147_483_648));
         assert_eq!(config.hogd_dev.startup_timeout, Duration::from_secs(30));
         assert_eq!(
             config.hogd_dev.shutdown_grace,
@@ -1010,7 +1021,7 @@ mod tests {
             cli_error
                 .hint()
                 .expect("intro rejection should have a specific hint"),
-            "pass `--hogd-protocol hogp/expected` to override, or rebuild groundhog node \
+            "pass `--hogd-protocol=hogp/expected` to override, or rebuild groundhog node \
              against a matching groundhog-xdr"
         );
     }

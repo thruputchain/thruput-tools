@@ -133,6 +133,17 @@ enum Command {
         #[arg(long = "profile")]
         profile: Option<String>,
     },
+    /// Manage persisted Groundhog configuration
+    #[command(
+        long_about = "Inspect and manage persisted global and project profiles. Inspection \
+                      commands show the merged configuration. Mutations update one physical \
+                      layer: inside a project, pass --global or --project; outside a project, \
+                      omitted scope means global. Use --json for stable machine-readable output."
+    )]
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
     /// Build contract artifact
     #[command(long_about = "Cross-compile the contract to \
                       wasm32-unknown-unknown or \
@@ -155,9 +166,10 @@ enum Command {
         /// Generate typed bindings after build (e.g. `ts`)
         #[arg(long)]
         bindings: Vec<String>,
-        /// Guest stack size in bytes (decimal or 0x hex; multiple of 16,
-        /// below 64K). RV32 only; sets the SDK linker script's `__stack_size`.
-        #[arg(long, value_parser = groundhog_cli::build::parse_stack_size)]
+        /// Guest stack size (decimal, 0x hex, or a K/M/G suffix such as 32K;
+        /// multiple of 16, below 64K). RV32 only; sets the SDK linker
+        /// script's `__stack_size`.
+        #[arg(long, value_name = "SIZE", value_parser = groundhog_cli::build::parse_stack_size)]
         stack_size: Option<u32>,
         /// Config profile to use
         #[arg(long = "profile")]
@@ -424,6 +436,10 @@ enum Command {
         /// Maximum simultaneous public JSON-RPC connections
         #[arg(long)]
         rpc_max_connections: Option<u32>,
+        /// RAM database capacity for hog-devnode (decimal, 0x hex, or a K/M/G
+        /// suffix such as 2G); omit for the devnode default
+        #[arg(long, value_name = "SIZE", value_parser = groundhog_cli::byte_size::parse_byte_size)]
+        ramdb_bytes: Option<u64>,
     },
     /// Dump or restore persistent local-chain state
     Chain {
@@ -449,6 +465,21 @@ enum Command {
     Codegen {
         #[command(subcommand)]
         command: CodegenCommand,
+    },
+    /// Inspect public transactions and address history
+    Tx {
+        #[command(subcommand)]
+        command: TxCommand,
+    },
+    /// Inspect indexed contract events
+    Events {
+        #[command(subcommand)]
+        command: EventsCommand,
+    },
+    /// Inspect canonical token activity
+    Token {
+        #[command(subcommand)]
+        command: TokenCommand,
     },
     /// Generate shell completions
     Completion {
@@ -479,6 +510,130 @@ enum KeysCommand {
     Rm {
         /// Key name to remove
         name: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum ConfigCommand {
+    /// Show one persisted profile
+    #[command(
+        long_about = "Show one persisted profile merged from global and project configuration. \
+                      This excludes local-node state, signer fallback, and command-specific \
+                      overrides."
+    )]
+    Get {
+        /// Profile name; omit to use active-profile selection
+        profile: Option<String>,
+        /// Include the global or project source of each value
+        #[arg(long)]
+        sources: bool,
+    },
+    /// List global and project profiles
+    Profiles,
+    /// Create a complete profile in one config layer
+    #[command(long_about = "Create a complete profile in one atomic config update. \
+                      Outside a project, omitted scope means global. When a project config is \
+                      discoverable, choose --global or --project explicitly. The two scope flags \
+                      cannot be used together.")]
+    New {
+        /// Profile to create
+        profile: String,
+        /// Network: local, devnet, or mainnet
+        #[arg(long)]
+        network: String,
+        /// Absolute HTTP(S) RPC URL
+        #[arg(long)]
+        rpc_url: Option<String>,
+        /// Absolute HTTP(S) faucet URL
+        #[arg(long)]
+        faucet_url: Option<String>,
+        /// Profile-specific signing key
+        #[arg(long)]
+        default_key: Option<String>,
+        /// Also select the new profile as this layer's default
+        #[arg(long = "use")]
+        select: bool,
+        /// Create the profile in global config
+        #[arg(long)]
+        global: bool,
+        /// Create the profile in project config
+        #[arg(long)]
+        project: bool,
+    },
+    /// Remove an entire profile from one config layer
+    #[command(
+        long_about = "Remove an entire profile from one config layer, including its contract \
+                      aliases and wallet bindings. Normal output asks for confirmation; --json \
+                      and --quiet delete without prompting. A matching default profile selection \
+                      is cleared in the same atomic update."
+    )]
+    Rm {
+        /// Profile to remove
+        profile: String,
+        /// Remove the profile from global config
+        #[arg(long)]
+        global: bool,
+        /// Remove the profile from project config
+        #[arg(long)]
+        project: bool,
+    },
+    /// Set one typed field in a profile layer
+    #[command(
+        long_about = "Set network, rpc-url, faucet-url, or default-key on an existing \
+                      profile in one config layer. The profile must already exist in that layer. \
+                      Inside a project, pass --global or --project; outside a project, omitted \
+                      scope means global."
+    )]
+    Set {
+        /// Field to set: network, rpc-url, faucet-url, or default-key
+        field: String,
+        /// New field value
+        value: String,
+        /// Profile to update
+        #[arg(long)]
+        profile: String,
+        /// Update the global config layer
+        #[arg(long)]
+        global: bool,
+        /// Update the project config layer
+        #[arg(long)]
+        project: bool,
+    },
+    /// Remove one typed field from a profile layer
+    #[command(
+        long_about = "Remove network, rpc-url, faucet-url, or default-key from one config \
+                      layer. Missing fields and missing target-layer profiles are no-ops. Removing \
+                      a project override may reveal the inherited global value."
+    )]
+    Unset {
+        /// Field to remove: network, rpc-url, faucet-url, or default-key
+        field: String,
+        /// Profile to update
+        #[arg(long)]
+        profile: String,
+        /// Update the global config layer
+        #[arg(long)]
+        global: bool,
+        /// Update the project config layer
+        #[arg(long)]
+        project: bool,
+    },
+    /// Select the default profile in one config layer
+    #[command(
+        long_about = "Set the profile used when --profile and GROUNDHOG_PROFILE are omitted. \
+                      A global selection requires a global profile. A project selection may use a \
+                      profile from either layer. Explicit --profile and GROUNDHOG_PROFILE still \
+                      take precedence."
+    )]
+    Use {
+        /// Profile to select
+        profile: String,
+        /// Update the global config layer
+        #[arg(long)]
+        global: bool,
+        /// Update the project config layer
+        #[arg(long)]
+        project: bool,
     },
 }
 
@@ -574,10 +729,167 @@ impl ChainCommand {
     }
 }
 
+#[derive(Subcommand)]
+enum TxCommand {
+    /// Show one transaction's public status and receipt
+    #[command(
+        long_about = "Perform a one-shot public transaction lookup without waiting.\n\n\
+                       Shows only public status and receipt fields. Raw transaction bodies, \
+                       inferred transfers, and deep traces are not available."
+    )]
+    Show {
+        /// Transaction hash as exactly 32 bytes of hex
+        tx_hash: String,
+        /// Config profile to use
+        #[arg(long = "profile")]
+        profile: Option<String>,
+        #[command(flatten)]
+        target_args: RpcTargetArgs,
+    },
+    /// List one page of root-invocation transaction history
+    #[command(
+        long_about = "List exactly one page of transactions whose root invocation targets \
+                       the resolved address. Incoming wallet-wrapped transfers may not appear \
+                       when querying the recipient.\n\nThe continuation cursor is opaque and reusable. \
+                       Receipts are not fetched; inspect selected hashes with `groundhog tx show`."
+    )]
+    List {
+        /// Wallet name, contract alias, dev-N account, or direct address
+        target: String,
+        /// Number of transaction references to request (default: 50)
+        #[arg(long, allow_hyphen_values = true)]
+        limit: Option<String>,
+        /// Opaque cursor returned by a previous page
+        #[arg(long)]
+        cursor: Option<String>,
+        /// Config profile to use
+        #[arg(long = "profile")]
+        profile: Option<String>,
+        #[command(flatten)]
+        target_args: RpcTargetArgs,
+    },
+}
+
+#[derive(Subcommand)]
+enum EventsCommand {
+    /// List one page of raw events emitted by a contract
+    #[command(
+        long_about = "List exactly one newest-first page of raw events emitted by one resolved \
+                       contract address. A global event scan is not performed.\n\nRepeat a topic \
+                       option for OR within that position; constraints across topic positions \
+                       combine with AND. Raw topics and data are authoritative. The continuation \
+                       cursor is opaque and must be reused with the same contract and filters."
+    )]
+    List {
+        /// Wallet name, contract alias, dev-N account, or direct address
+        contract: String,
+        /// Topic-0 value; repeat for OR within this position
+        #[arg(long)]
+        topic0: Vec<String>,
+        /// Topic-1 value; repeat for OR within this position
+        #[arg(long)]
+        topic1: Vec<String>,
+        /// Topic-2 value; repeat for OR within this position
+        #[arg(long)]
+        topic2: Vec<String>,
+        /// Number of events to request (default: 50)
+        #[arg(long, allow_hyphen_values = true)]
+        limit: Option<String>,
+        /// Opaque cursor returned by a previous page
+        #[arg(long)]
+        cursor: Option<String>,
+        /// Trusted local .wasm or .xdr artifact used to decode matching events
+        #[arg(long)]
+        spec: Option<PathBuf>,
+        /// Case-sensitive event name declared by --spec
+        #[arg(long)]
+        event: Option<String>,
+        /// Config profile to use
+        #[arg(long = "profile")]
+        profile: Option<String>,
+        #[command(flatten)]
+        target_args: RpcTargetArgs,
+    },
+}
+
+#[derive(Subcommand)]
+enum TokenCommand {
+    /// List one page of canonical ERC20 transfer history
+    #[command(
+        long_about = "List exactly one newest-first page of canonical ERC20 TransferEvent records.\n\n\
+                      Participant filters are applied by the server. --account matches transfers \
+                      where the address is either sender or recipient. Amounts remain unformatted \
+                      base-unit decimal strings; token metadata is not fetched."
+    )]
+    Transfers {
+        /// Token contract alias, wallet name, dev-N account, or direct address
+        token: String,
+        /// Include only transfers from this resolved address
+        #[arg(long)]
+        from: Option<String>,
+        /// Include only transfers to this resolved address
+        #[arg(long)]
+        to: Option<String>,
+        /// Include transfers where this address is sender or recipient
+        #[arg(long)]
+        account: Option<String>,
+        /// Number of transfer records to request (default: 50)
+        #[arg(long, allow_hyphen_values = true)]
+        limit: Option<String>,
+        /// Opaque cursor returned by a previous page
+        #[arg(long)]
+        cursor: Option<String>,
+        /// Config profile to use
+        #[arg(long = "profile")]
+        profile: Option<String>,
+        #[command(flatten)]
+        target_args: RpcTargetArgs,
+    },
+}
+
 impl CodegenCommand {
     fn command_name(&self) -> &'static str {
         match self {
             Self::Ts { .. } => "codegen.ts",
+        }
+    }
+}
+
+impl TxCommand {
+    fn command_name(&self) -> &'static str {
+        match self {
+            Self::Show { .. } => "tx.show",
+            Self::List { .. } => "tx.list",
+        }
+    }
+}
+
+impl EventsCommand {
+    fn command_name(&self) -> &'static str {
+        match self {
+            Self::List { .. } => "events.list",
+        }
+    }
+}
+
+impl TokenCommand {
+    fn command_name(&self) -> &'static str {
+        match self {
+            Self::Transfers { .. } => "token.transfers",
+        }
+    }
+}
+
+impl ConfigCommand {
+    fn command_name(&self) -> &'static str {
+        match self {
+            Self::Get { .. } => "config.get",
+            Self::Profiles => "config.profiles",
+            Self::New { .. } => "config.new",
+            Self::Rm { .. } => "config.rm",
+            Self::Set { .. } => "config.set",
+            Self::Unset { .. } => "config.unset",
+            Self::Use { .. } => "config.use",
         }
     }
 }
@@ -603,9 +915,13 @@ impl Command {
             Self::Storage { .. } => "storage",
             Self::Node { .. } => "node",
             Self::Chain { command } => command.command_name(),
+            Self::Config { command } => command.command_name(),
             Self::Keys { command } => command.command_name(),
             Self::Wallet { command } => command.command_name(),
             Self::Codegen { command } => command.command_name(),
+            Self::Tx { command } => command.command_name(),
+            Self::Events { command } => command.command_name(),
+            Self::Token { command } => command.command_name(),
             Self::Completion { .. } => "completion",
         }
     }
@@ -650,6 +966,75 @@ fn main() {
         Command::Status { profile } => std::env::current_dir()
             .map_err(groundhog_cli::CliError::Io)
             .and_then(|cwd| groundhog_cli::status::run(&cwd, profile.as_deref(), cmd_name, &print)),
+        Command::Config { command } => std::env::current_dir()
+            .map_err(groundhog_cli::CliError::Io)
+            .and_then(|cwd| match command {
+                ConfigCommand::Get { profile, sources } => groundhog_cli::config_cmd::get(
+                    &cwd,
+                    profile.as_deref(),
+                    sources,
+                    cmd_name,
+                    &print,
+                ),
+                ConfigCommand::Profiles => {
+                    groundhog_cli::config_cmd::profiles(&cwd, cmd_name, &print)
+                }
+                ConfigCommand::New {
+                    profile,
+                    network,
+                    rpc_url,
+                    faucet_url,
+                    default_key,
+                    select,
+                    global,
+                    project,
+                } => groundhog_cli::config_cmd::new_profile(
+                    &cwd,
+                    &profile,
+                    &groundhog_cli::config::NewProfileOptions {
+                        network,
+                        rpc_url,
+                        faucet_url,
+                        default_key,
+                        select,
+                    },
+                    global,
+                    project,
+                    cmd_name,
+                    &print,
+                ),
+                ConfigCommand::Rm {
+                    profile,
+                    global,
+                    project,
+                } => groundhog_cli::config_cmd::remove(
+                    &cwd, &profile, global, project, cmd_name, &print,
+                ),
+                ConfigCommand::Set {
+                    field,
+                    value,
+                    profile,
+                    global,
+                    project,
+                } => groundhog_cli::config_cmd::set(
+                    &cwd, &profile, &field, &value, global, project, cmd_name, &print,
+                ),
+                ConfigCommand::Unset {
+                    field,
+                    profile,
+                    global,
+                    project,
+                } => groundhog_cli::config_cmd::unset(
+                    &cwd, &profile, &field, global, project, cmd_name, &print,
+                ),
+                ConfigCommand::Use {
+                    profile,
+                    global,
+                    project,
+                } => groundhog_cli::config_cmd::use_default(
+                    &cwd, &profile, global, project, cmd_name, &print,
+                ),
+            }),
         Command::Build {
             package,
             target,
@@ -908,6 +1293,7 @@ fn main() {
             block_driver,
             block_interval_ms,
             rpc_max_connections,
+            ramdb_bytes,
         } => {
             let mut options = groundhog_cli::node::LocalNodeOptions::default();
             options.port = port;
@@ -919,6 +1305,7 @@ fn main() {
             options.block_driver = block_driver.map(Into::into);
             options.block_interval = block_interval_ms.map(std::time::Duration::from_millis);
             options.rpc_max_connections = rpc_max_connections;
+            options.ramdb_bytes = ramdb_bytes;
             groundhog_cli::node::run_with_options(options, verbose, cmd_name, &print)
         }
         Command::Chain { command } => match command {
@@ -972,6 +1359,104 @@ fn main() {
                 groundhog_cli::codegen_cmd::run(&source, output.as_deref(), cmd_name, &print)
             }
         },
+        Command::Tx { command } => match command {
+            TxCommand::Show {
+                tx_hash,
+                profile,
+                target_args,
+            } => std::env::current_dir()
+                .map_err(groundhog_cli::CliError::Io)
+                .and_then(|cwd| {
+                    groundhog_cli::tx::show(
+                        &tx_hash,
+                        &cwd,
+                        profile.as_deref(),
+                        &target_args.into(),
+                        cmd_name,
+                        &print,
+                    )
+                }),
+            TxCommand::List {
+                target,
+                limit,
+                cursor,
+                profile,
+                target_args,
+            } => std::env::current_dir()
+                .map_err(groundhog_cli::CliError::Io)
+                .and_then(|cwd| {
+                    groundhog_cli::tx::list(
+                        &target,
+                        limit.as_deref(),
+                        cursor.as_deref(),
+                        &cwd,
+                        profile.as_deref(),
+                        &target_args.into(),
+                        cmd_name,
+                        &print,
+                    )
+                }),
+        },
+        Command::Events { command } => match command {
+            EventsCommand::List {
+                contract,
+                topic0,
+                topic1,
+                topic2,
+                limit,
+                cursor,
+                spec,
+                event,
+                profile,
+                target_args,
+            } => std::env::current_dir()
+                .map_err(groundhog_cli::CliError::Io)
+                .and_then(|cwd| {
+                    groundhog_cli::events::list(
+                        &contract,
+                        &topic0,
+                        &topic1,
+                        &topic2,
+                        limit.as_deref(),
+                        cursor.as_deref(),
+                        spec.as_deref(),
+                        event.as_deref(),
+                        &cwd,
+                        profile.as_deref(),
+                        &target_args.into(),
+                        cmd_name,
+                        &print,
+                    )
+                }),
+        },
+        Command::Token { command } => match command {
+            TokenCommand::Transfers {
+                token,
+                from,
+                to,
+                account,
+                limit,
+                cursor,
+                profile,
+                target_args,
+            } => std::env::current_dir()
+                .map_err(groundhog_cli::CliError::Io)
+                .and_then(|cwd| {
+                    groundhog_cli::token::transfers(
+                        &token,
+                        from.as_deref(),
+                        to.as_deref(),
+                        account.as_deref(),
+                        limit.as_deref(),
+                        cursor.as_deref(),
+                        &cwd,
+                        profile.as_deref(),
+                        &target_args.into(),
+                        cmd_name,
+                        &print,
+                    )
+                }),
+        },
         Command::Completion { shell } => {
             let mut output = Vec::new();
             let shell_name = shell.to_string();
@@ -1009,6 +1494,119 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn config_get_flags_and_command_name_parse() {
+        let cli = Cli::parse_from(["groundhog", "config", "get", "devnet", "--sources"]);
+
+        assert_eq!(cli.command.command_name(), "config.get");
+        match cli.command {
+            Command::Config {
+                command: ConfigCommand::Get { profile, sources },
+            } => {
+                assert_eq!(profile.as_deref(), Some("devnet"));
+                assert!(sources);
+            }
+            _ => panic!("expected config get command"),
+        }
+    }
+
+    #[test]
+    fn config_profiles_command_name_parses() {
+        let cli = Cli::parse_from(["groundhog", "config", "profiles"]);
+
+        assert_eq!(cli.command.command_name(), "config.profiles");
+        assert!(matches!(
+            cli.command,
+            Command::Config {
+                command: ConfigCommand::Profiles
+            }
+        ));
+    }
+
+    #[test]
+    fn config_mutation_commands_and_flags_parse() {
+        let new_profile = Cli::parse_from([
+            "groundhog",
+            "config",
+            "new",
+            "staging",
+            "--network",
+            "devnet",
+            "--rpc-url",
+            "https://rpc.example",
+            "--faucet-url",
+            "https://faucet.example",
+            "--default-key",
+            "alice",
+            "--use",
+            "--global",
+        ]);
+        assert_eq!(new_profile.command.command_name(), "config.new");
+        assert!(matches!(
+            new_profile.command,
+            Command::Config {
+                command: ConfigCommand::New {
+                    profile,
+                    network,
+                    select: true,
+                    global: true,
+                    project: false,
+                    ..
+                }
+            } if profile == "staging" && network == "devnet"
+        ));
+
+        let remove = Cli::parse_from(["groundhog", "config", "rm", "staging", "--project"]);
+        assert_eq!(remove.command.command_name(), "config.rm");
+        assert!(matches!(
+            remove.command,
+            Command::Config {
+                command: ConfigCommand::Rm {
+                    profile,
+                    global: false,
+                    project: true,
+                }
+            } if profile == "staging"
+        ));
+
+        let set = Cli::parse_from([
+            "groundhog",
+            "config",
+            "set",
+            "rpc-url",
+            "https://rpc.example",
+            "--profile",
+            "devnet",
+            "--project",
+        ]);
+        assert_eq!(set.command.command_name(), "config.set");
+        assert!(matches!(
+            set.command,
+            Command::Config {
+                command: ConfigCommand::Set {
+                    profile,
+                    project: true,
+                    global: false,
+                    ..
+                }
+            } if profile == "devnet"
+        ));
+
+        let unset = Cli::parse_from([
+            "groundhog",
+            "config",
+            "unset",
+            "faucet-url",
+            "--profile",
+            "devnet",
+            "--global",
+        ]);
+        assert_eq!(unset.command.command_name(), "config.unset");
+
+        let use_profile = Cli::parse_from(["groundhog", "config", "use", "devnet", "--global"]);
+        assert_eq!(use_profile.command.command_name(), "config.use");
+    }
 
     #[test]
     fn node_dev_account_count_flag_parses() {
@@ -1300,6 +1898,213 @@ mod tests {
                 );
             }
             _ => panic!("expected transfer command"),
+        }
+    }
+
+    #[test]
+    fn tx_show_flags_and_command_name_parse() {
+        let cli = Cli::parse_from([
+            "groundhog",
+            "tx",
+            "show",
+            &format!("0x{}", "ab".repeat(32)),
+            "--profile",
+            "devnet",
+            "--rpc-url",
+            "https://rpc.example",
+            "--runtime-manifest",
+            "/tmp/runtime.json",
+        ]);
+
+        assert_eq!(cli.command.command_name(), "tx.show");
+        match cli.command {
+            Command::Tx {
+                command:
+                    TxCommand::Show {
+                        tx_hash,
+                        profile,
+                        target_args,
+                    },
+            } => {
+                assert_eq!(tx_hash, format!("0x{}", "ab".repeat(32)));
+                assert_eq!(profile.as_deref(), Some("devnet"));
+                assert_eq!(target_args.rpc_url.as_deref(), Some("https://rpc.example"));
+                assert_eq!(
+                    target_args.runtime_manifest.as_deref(),
+                    Some(std::path::Path::new("/tmp/runtime.json"))
+                );
+            }
+            _ => panic!("expected tx show command"),
+        }
+    }
+
+    #[test]
+    fn tx_list_flags_and_command_name_parse() {
+        let cli = Cli::parse_from([
+            "groundhog",
+            "tx",
+            "list",
+            "alice",
+            "--limit",
+            "25",
+            "--cursor",
+            "0xaabb",
+            "--profile",
+            "devnet",
+            "--rpc-url",
+            "https://rpc.example",
+            "--runtime-manifest",
+            "/tmp/runtime.json",
+        ]);
+
+        assert_eq!(cli.command.command_name(), "tx.list");
+        match cli.command {
+            Command::Tx {
+                command:
+                    TxCommand::List {
+                        target,
+                        limit,
+                        cursor,
+                        profile,
+                        target_args,
+                    },
+            } => {
+                assert_eq!(target, "alice");
+                assert_eq!(limit.as_deref(), Some("25"));
+                assert_eq!(cursor.as_deref(), Some("0xaabb"));
+                assert_eq!(profile.as_deref(), Some("devnet"));
+                assert_eq!(target_args.rpc_url.as_deref(), Some("https://rpc.example"));
+                assert_eq!(
+                    target_args.runtime_manifest.as_deref(),
+                    Some(std::path::Path::new("/tmp/runtime.json"))
+                );
+            }
+            _ => panic!("expected tx list command"),
+        }
+    }
+
+    #[test]
+    fn events_list_flags_and_command_name_parse() {
+        let cli = Cli::parse_from([
+            "groundhog",
+            "events",
+            "list",
+            "counter",
+            "--topic0",
+            "0x11",
+            "--topic0",
+            "0x22",
+            "--topic1",
+            "0x33",
+            "--topic2",
+            "0x44",
+            "--limit",
+            "25",
+            "--cursor",
+            "0xaabb",
+            "--spec",
+            "./counter.spec.xdr",
+            "--event",
+            "PingEvent",
+            "--profile",
+            "devnet",
+            "--rpc-url",
+            "https://rpc.example",
+            "--runtime-manifest",
+            "/tmp/runtime.json",
+        ]);
+
+        assert_eq!(cli.command.command_name(), "events.list");
+        match cli.command {
+            Command::Events {
+                command:
+                    EventsCommand::List {
+                        contract,
+                        topic0,
+                        topic1,
+                        topic2,
+                        limit,
+                        cursor,
+                        spec,
+                        event,
+                        profile,
+                        target_args,
+                    },
+            } => {
+                assert_eq!(contract, "counter");
+                assert_eq!(topic0, ["0x11", "0x22"]);
+                assert_eq!(topic1, ["0x33"]);
+                assert_eq!(topic2, ["0x44"]);
+                assert_eq!(limit.as_deref(), Some("25"));
+                assert_eq!(cursor.as_deref(), Some("0xaabb"));
+                assert_eq!(
+                    spec.as_deref(),
+                    Some(std::path::Path::new("./counter.spec.xdr"))
+                );
+                assert_eq!(event.as_deref(), Some("PingEvent"));
+                assert_eq!(profile.as_deref(), Some("devnet"));
+                assert_eq!(target_args.rpc_url.as_deref(), Some("https://rpc.example"));
+                assert_eq!(
+                    target_args.runtime_manifest.as_deref(),
+                    Some(std::path::Path::new("/tmp/runtime.json"))
+                );
+            }
+            _ => panic!("expected events list command"),
+        }
+    }
+
+    #[test]
+    fn token_transfers_flags_and_command_name_parse() {
+        let cli = Cli::parse_from([
+            "groundhog",
+            "token",
+            "transfers",
+            "alula",
+            "--from",
+            "alice",
+            "--to",
+            "bob",
+            "--limit",
+            "25",
+            "--cursor",
+            "0xaabb",
+            "--profile",
+            "local",
+            "--rpc-url",
+            "https://rpc.example",
+            "--runtime-manifest",
+            "/tmp/runtime.json",
+        ]);
+
+        assert_eq!(cli.command.command_name(), "token.transfers");
+        match cli.command {
+            Command::Token {
+                command:
+                    TokenCommand::Transfers {
+                        token,
+                        from,
+                        to,
+                        account,
+                        limit,
+                        cursor,
+                        profile,
+                        target_args,
+                    },
+            } => {
+                assert_eq!(token, "alula");
+                assert_eq!(from.as_deref(), Some("alice"));
+                assert_eq!(to.as_deref(), Some("bob"));
+                assert!(account.is_none());
+                assert_eq!(limit.as_deref(), Some("25"));
+                assert_eq!(cursor.as_deref(), Some("0xaabb"));
+                assert_eq!(profile.as_deref(), Some("local"));
+                assert_eq!(target_args.rpc_url.as_deref(), Some("https://rpc.example"));
+                assert_eq!(
+                    target_args.runtime_manifest.as_deref(),
+                    Some(std::path::Path::new("/tmp/runtime.json"))
+                );
+            }
+            _ => panic!("expected token transfers command"),
         }
     }
 

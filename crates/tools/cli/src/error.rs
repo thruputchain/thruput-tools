@@ -2,6 +2,8 @@ use serde_json::{Value, json};
 use std::borrow::Cow;
 use thiserror::Error;
 
+use crate::terminal::{render_shell_arg, terminal_safe};
+
 /// All errors returned by CLI commands.
 #[derive(Error, Debug)]
 pub enum CliError {
@@ -45,8 +47,46 @@ pub enum CliError {
     Io(#[from] std::io::Error),
     #[error("profile `{0}` not found in project or global config")]
     ProfileNotFound(String),
-    #[error("profile `{0}` requested but no project or global config found")]
-    NoProjectConfig(String),
+    #[error("profile `{profile}` not found in {scope} config")]
+    ProfileNotFoundInScope {
+        profile: String,
+        scope: &'static str,
+    },
+    #[error("profile `{profile}` already exists in {scope} config")]
+    ProfileAlreadyExists {
+        profile: String,
+        scope: &'static str,
+    },
+    #[error("no active profile selected")]
+    NoActiveProfile,
+    #[error("invalid profile name: {0}")]
+    ProfileNameInvalid(&'static str),
+    #[error("unsupported config field `{0}`")]
+    ConfigFieldUnsupported(String),
+    #[error("invalid value for config field `{field}`: {message}")]
+    ConfigValueInvalid { field: String, message: String },
+    #[error("failed to parse config `{}`: {message}", .path.display())]
+    ConfigParse {
+        path: std::path::PathBuf,
+        message: String,
+        line: Option<usize>,
+        column: Option<usize>,
+    },
+    #[error("invalid config `{}`: {message}", .path.display())]
+    ConfigFileInvalid {
+        path: std::path::PathBuf,
+        message: String,
+    },
+    #[error("project config not found")]
+    ProjectConfigUnavailable,
+    #[error("`--global` and `--project` cannot be used together")]
+    ConfigScopeConflict,
+    #[error("config scope is ambiguous because a project config exists")]
+    ConfigScopeAmbiguous,
+    #[error("config `{}` is busy; another process may be updating it", .path.display())]
+    ConfigLockTimeout { path: std::path::PathBuf },
+    #[error("config `{}` changed while awaiting confirmation", .path.display())]
+    ConfigChangedDuringConfirmation { path: std::path::PathBuf },
     #[error("credential password cannot be empty")]
     CredentialsEmpty,
     #[error("unsupported OS: {0}")]
@@ -84,6 +124,12 @@ pub enum CliError {
     InvalidTestOptions(String),
     #[error("invalid build options: {0}")]
     InvalidBuildOptions(String),
+    #[error(
+        "`{0}` is set in the environment, so cargo would ignore the project's \
+         `.cargo/config.toml` target rustflags (Groundhog linker and codegen flags) and \
+         produce a broken artifact"
+    )]
+    EnvRustflagsSet(&'static str),
     #[error("status check found warnings")]
     StatusHasWarnings,
     #[error("command emitted structured failure output")]
@@ -107,10 +153,75 @@ pub enum CliError {
     MissingSigningKey,
     #[error("invalid HOG amount `{input}`: {message}")]
     InvalidHogAmount { input: String, message: String },
-    #[error("address target `{target}` is invalid: {message}")]
+    #[error("address target {target:?} is invalid: {message}")]
     InvalidAddressTarget { target: String, message: String },
-    #[error("unknown address target `{target}`")]
+    #[error("unknown address target {target:?}")]
     UnknownAddressTarget { target: String },
+    #[error("invalid transaction hash `{display_input}`: {message}")]
+    InvalidTransactionHash {
+        input: String,
+        display_input: String,
+        message: String,
+    },
+    #[error("invalid transaction history limit `{display_input}`: {message}")]
+    InvalidTransactionHistoryLimit {
+        input: String,
+        display_input: String,
+        message: String,
+    },
+    #[error("invalid transaction cursor `{display_input}`: {message}")]
+    InvalidTransactionCursor {
+        input: String,
+        display_input: String,
+        message: String,
+    },
+    #[error("invalid event {position} value `{display_input}`: {message}")]
+    InvalidEventTopic {
+        position: &'static str,
+        input: String,
+        display_input: String,
+        message: String,
+    },
+    #[error("invalid event filter: {position} has {count} values; maximum is {max}")]
+    InvalidEventFilter {
+        position: &'static str,
+        count: usize,
+        max: u32,
+    },
+    #[error("invalid event limit `{display_input}`: {message}")]
+    InvalidEventLimit {
+        input: String,
+        display_input: String,
+        message: String,
+    },
+    #[error("invalid event cursor `{display_input}`: {message}")]
+    InvalidEventCursor {
+        input: String,
+        display_input: String,
+        message: String,
+    },
+    #[error("invalid event options: {message}")]
+    InvalidEventOptions { message: String },
+    #[error("invalid token transfer limit `{display_input}`: {message}")]
+    InvalidTokenTransferLimit {
+        input: String,
+        display_input: String,
+        message: String,
+    },
+    #[error("invalid token transfer cursor `{display_input}`: {message}")]
+    InvalidTokenTransferCursor {
+        input: String,
+        display_input: String,
+        message: String,
+    },
+    #[error("invalid token transfer options: {message}")]
+    InvalidTokenTransferOptions { message: String },
+    #[error("invalid event spec `{display_path}`: {message}")]
+    InvalidEventSpec {
+        path: String,
+        display_path: String,
+        message: String,
+    },
     #[error("failed to initialize async runtime: {0}")]
     RuntimeInit(String),
     #[error("{method} failed: {message}")]
@@ -165,7 +276,11 @@ pub enum CliError {
         message: String,
     },
     #[error(
-        "no wallet saved for key `{key_name}` in profile `{profile}`; run `groundhog wallet create --key {key_name} --profile {profile}`"
+        "no wallet saved for key `{}` in profile `{}`; run `groundhog wallet create --key={} --profile={}`",
+        terminal_safe(.key_name.as_str()),
+        terminal_safe(.profile.as_str()),
+        render_shell_arg(.key_name.as_str()),
+        render_shell_arg(.profile.as_str()),
     )]
     SavedWalletMissing { key_name: String, profile: String },
     #[error(
@@ -260,6 +375,7 @@ pub enum CliError {
 
 impl CliError {
     /// Stable machine-readable error code.
+    #[allow(clippy::too_many_lines)]
     pub fn code(&self) -> &'static str {
         match self {
             Self::CargoNotFound => "cargo_not_found",
@@ -279,7 +395,19 @@ impl CliError {
             Self::UnknownTemplate(_) => "unknown_template",
             Self::Io(_) => "io_error",
             Self::ProfileNotFound(_) => "profile_not_found",
-            Self::NoProjectConfig(_) => "no_project_config",
+            Self::ProfileNotFoundInScope { .. } => "profile_not_found_in_scope",
+            Self::ProfileAlreadyExists { .. } => "profile_already_exists",
+            Self::NoActiveProfile => "no_active_profile",
+            Self::ProfileNameInvalid(_) => "profile_name_invalid",
+            Self::ConfigFieldUnsupported(_) => "config_field_unsupported",
+            Self::ConfigValueInvalid { .. } => "config_value_invalid",
+            Self::ConfigParse { .. } => "config_parse_failed",
+            Self::ConfigFileInvalid { .. } => "config_file_invalid",
+            Self::ProjectConfigUnavailable => "project_config_unavailable",
+            Self::ConfigScopeConflict => "config_scope_conflict",
+            Self::ConfigScopeAmbiguous => "config_scope_ambiguous",
+            Self::ConfigLockTimeout { .. } => "config_lock_timeout",
+            Self::ConfigChangedDuringConfirmation { .. } => "config_changed_during_confirmation",
             Self::CredentialsEmpty => "credentials_empty",
             Self::UnsupportedOs(_) => "unsupported_os",
             Self::WasmOptFailed(_) => "wasm_opt_failed",
@@ -297,6 +425,7 @@ impl CliError {
             Self::IntegrationTestNotFound(_) => "integration_test_not_found",
             Self::InvalidTestOptions(_) => "invalid_test_options",
             Self::InvalidBuildOptions(_) => "invalid_build_options",
+            Self::EnvRustflagsSet(_) => "env_rustflags_set",
             Self::StatusHasWarnings => "status_has_warnings",
             Self::CommandReportedFailure => "command_reported_failure",
             Self::NodeSupervisor(_) => "node_supervisor_error",
@@ -309,6 +438,21 @@ impl CliError {
             Self::InvalidHogAmount { .. } => "invalid_hog_amount",
             Self::InvalidAddressTarget { .. } => "invalid_address_target",
             Self::UnknownAddressTarget { .. } => "unknown_address_target",
+            Self::InvalidTransactionHash { .. } => "invalid_transaction_hash",
+            Self::InvalidTransactionHistoryLimit { .. } => "invalid_transaction_history_limit",
+            Self::InvalidTransactionCursor { .. } => "invalid_transaction_cursor",
+            Self::InvalidEventTopic { .. } => "invalid_event_topic",
+            Self::InvalidEventFilter { .. } => "invalid_event_filter",
+            Self::InvalidEventLimit { .. } | Self::InvalidTokenTransferLimit { .. } => {
+                "invalid_event_limit"
+            }
+            Self::InvalidEventCursor { .. } | Self::InvalidTokenTransferCursor { .. } => {
+                "invalid_event_cursor"
+            }
+            Self::InvalidEventOptions { .. } | Self::InvalidTokenTransferOptions { .. } => {
+                "invalid_event_options"
+            }
+            Self::InvalidEventSpec { .. } => "invalid_event_spec",
             Self::RuntimeInit(_) => "runtime_init_failed",
             Self::RpcMethodFailed { .. } => "rpc_method_failed",
             Self::RpcCapabilityUnsupported { .. } => "rpc_capability_unsupported",
@@ -417,8 +561,9 @@ impl CliError {
                 expected_protocol: Some(protocol),
                 ..
             } => Some(Cow::Owned(format!(
-                "pass `--hogd-protocol {protocol}` to override, or rebuild groundhog node \
-                 against a matching groundhog-xdr"
+                "pass `--hogd-protocol={}` to override, or rebuild groundhog node \
+                 against a matching groundhog-xdr",
+                render_shell_arg(protocol),
             ))),
             Self::NodeSupervisorProtocolIntroRejected {
                 expected_protocol: None,
@@ -451,11 +596,42 @@ impl CliError {
                     "use a saved wallet, contract alias, dev-N account, or 32-byte 0x-prefixed address",
                 ))
             }
+            Self::InvalidTransactionHash { .. } | Self::InvalidEventTopic { .. } => {
+                Some(Cow::Borrowed(
+                    "pass exactly 32 bytes as case-insensitive hex, with or without a 0x prefix",
+                ))
+            }
+            Self::InvalidTransactionHistoryLimit { .. }
+            | Self::InvalidEventLimit { .. }
+            | Self::InvalidTokenTransferLimit { .. } => Some(Cow::Borrowed(
+                "pass a positive whole-number page size; the selected endpoint enforces its maximum",
+            )),
+            Self::InvalidTransactionCursor { .. } => Some(Cow::Borrowed(
+                "pass the opaque hex cursor returned by the previous `groundhog tx list` page",
+            )),
+            Self::InvalidEventFilter { max, .. } => Some(Cow::Owned(format!(
+                "pass at most {max} values at each event topic position"
+            ))),
+            Self::InvalidEventCursor { .. } => Some(Cow::Borrowed(
+                "pass the opaque hex cursor returned by the previous `groundhog events list` page with unchanged filters",
+            )),
+            Self::InvalidEventOptions { .. } => Some(Cow::Borrowed(
+                "pass `--spec <PATH>` with `--event`, and do not combine a selected event with a conflicting `--topic0`",
+            )),
+            Self::InvalidTokenTransferCursor { .. } => Some(Cow::Borrowed(
+                "pass the opaque hex cursor returned by the previous `groundhog token transfers` page with the same token and participant filters",
+            )),
+            Self::InvalidTokenTransferOptions { .. } => Some(Cow::Borrowed(
+                "use `--account` by itself, or use `--from` and `--to` separately or together",
+            )),
+            Self::InvalidEventSpec { .. } => Some(Cow::Borrowed(
+                "pass a trusted local `.wasm` or `.xdr` artifact containing a valid contract event spec",
+            )),
             Self::RpcMethodFailed { .. } => Some(Cow::Borrowed(
                 "check the RPC endpoint and node logs for details",
             )),
             Self::RpcCapabilityUnsupported { .. } => Some(Cow::Borrowed(
-                "use a full local devnode or a compatible remote RPC that supports transaction submission",
+                "use a full local devnode or a compatible remote RPC that supports the required RPC method",
             )),
             Self::LocalDevAccountUnavailable { .. } => Some(Cow::Borrowed(
                 "run `groundhog node` backed by hog-devnode, or use a stored key for non-local endpoints",
@@ -472,7 +648,9 @@ impl CliError {
                 "check the stored public key material, or regenerate the key",
             )),
             Self::SavedWalletMissing { key_name, profile } => Some(Cow::Owned(format!(
-                "run `groundhog wallet create --key {key_name} --profile {profile}` before using this stored key"
+                "run `groundhog wallet create --key={} --profile={}` before using this stored key",
+                render_shell_arg(key_name),
+                render_shell_arg(profile),
             ))),
             Self::SavedWalletAmbiguous { .. } => Some(Cow::Borrowed(
                 "set `default_wallet` in the selected profile or pass the command's explicit wallet option",
@@ -487,10 +665,12 @@ impl CliError {
                 "remove the explicit/default wallet selection when using a manifest-backed dev key",
             )),
             Self::InheritedDefaultWalletRemoval { profile, .. } => Some(Cow::Owned(format!(
-                "run `groundhog wallet use <NAME> --profile {profile}` to select a project default before removing this wallet"
+                "run `groundhog wallet use <NAME> --profile={}` to select a project default before removing this wallet",
+                render_shell_arg(profile),
             ))),
             Self::WalletRemovalExposesMissingDefault { profile, .. } => Some(Cow::Owned(format!(
-                "save the inherited wallet binding or select another project default with `groundhog wallet use <NAME> --profile {profile}`"
+                "save the inherited wallet binding or select another project default with `groundhog wallet use <NAME> --profile={}`",
+                render_shell_arg(profile),
             ))),
             Self::SavedWalletOwnerPublicKeyInvalid { .. } => Some(Cow::Borrowed(
                 "recreate the wallet binding with `groundhog wallet create`, or fix owner_public_key in the selected profile",
@@ -561,9 +741,43 @@ impl CliError {
                  an existing one with `--profile` or \
                  `GROUNDHOG_PROFILE`",
             )),
-            Self::NoProjectConfig(_) => Some(Cow::Borrowed(
-                "run `groundhog init`, create `groundhog.toml`, unset \
-                 `GROUNDHOG_PROFILE`, or use the default profile",
+            Self::ProfileNotFoundInScope { profile, scope } => Some(Cow::Owned(format!(
+                "create the profile with `groundhog config new {} --network <NETWORK> --{scope}`",
+                render_shell_arg(profile)
+            ))),
+            Self::ProfileAlreadyExists { profile, scope } => Some(Cow::Owned(format!(
+                "update it with `groundhog config set <FIELD> <VALUE> --profile={} --{scope}`",
+                render_shell_arg(profile)
+            ))),
+            Self::NoActiveProfile => Some(Cow::Borrowed(
+                "select a profile with `--profile` or `GROUNDHOG_PROFILE`, or set default_profile in project or global config",
+            )),
+            Self::ProfileNameInvalid(_) => Some(Cow::Borrowed(
+                "use a non-empty profile name without control characters",
+            )),
+            Self::ConfigFieldUnsupported(_) => Some(Cow::Borrowed(
+                "supported fields: network, rpc-url, faucet-url, default-key",
+            )),
+            Self::ConfigValueInvalid { .. } => Some(Cow::Borrowed(
+                "use local, devnet, or mainnet for network; absolute HTTP(S) URLs; and a non-empty default key",
+            )),
+            Self::ConfigParse { .. } | Self::ConfigFileInvalid { .. } => Some(Cow::Borrowed(
+                "fix the reported config file and rerun the command",
+            )),
+            Self::ProjectConfigUnavailable => Some(Cow::Borrowed(
+                "run from inside a Groundhog project or remove `--project`",
+            )),
+            Self::ConfigScopeConflict => Some(Cow::Borrowed(
+                "choose exactly one of `--global` or `--project`",
+            )),
+            Self::ConfigScopeAmbiguous => Some(Cow::Borrowed(
+                "rerun with `--global` or `--project` to choose the destination file",
+            )),
+            Self::ConfigLockTimeout { .. } => Some(Cow::Borrowed(
+                "wait for the other config command to finish, then retry",
+            )),
+            Self::ConfigChangedDuringConfirmation { .. } => Some(Cow::Borrowed(
+                "review the current profile and rerun the removal command",
             )),
             Self::CredentialsEmpty => Some(Cow::Borrowed(
                 "rerun `groundhog init` and provide a password; the username \
@@ -612,7 +826,8 @@ impl CliError {
             )),
             Self::KeyExists(name) => Some(Cow::Owned(format!(
                 "use a different name, or remove the existing key \
-                 with `groundhog keys rm {name}`"
+                 with `groundhog keys rm -- {}`",
+                render_shell_arg(name),
             ))),
             Self::KeyNotFound(_) => Some(Cow::Borrowed(
                 "list available keys with `groundhog keys ls`",
@@ -637,6 +852,11 @@ impl CliError {
             Self::InvalidBuildOptions(_) => Some(Cow::Borrowed(
                 "remove the unsupported `groundhog build` option for the selected target",
             )),
+            Self::EnvRustflagsSet(var) => Some(Cow::Owned(format!(
+                "unset it for this build (e.g. `env -u {var} groundhog build`); to add extra \
+                 rustflags, append them to the `[target.*]` rustflags lists in the project's \
+                 `.cargo/config.toml` instead"
+            ))),
         }
     }
 
@@ -653,6 +873,35 @@ impl CliError {
                 Some(json!({
                     "path": path,
                     "message": message,
+                }))
+            }
+            Self::ConfigParse {
+                path,
+                message,
+                line,
+                column,
+            } => Some(json!({
+                "path": path,
+                "message": message,
+                "line": line,
+                "column": column,
+            })),
+            Self::ConfigFileInvalid { path, message } => Some(json!({
+                "path": path,
+                "message": message,
+            })),
+            Self::ConfigValueInvalid { field, message } => Some(json!({
+                "field": field,
+                "message": message,
+            })),
+            Self::ProfileNotFoundInScope { profile, scope }
+            | Self::ProfileAlreadyExists { profile, scope } => Some(json!({
+                "profile": profile,
+                "scope": scope,
+            })),
+            Self::ConfigLockTimeout { path } | Self::ConfigChangedDuringConfirmation { path } => {
+                Some(json!({
+                    "path": path,
                 }))
             }
             Self::RpcCapabilityUnsupported { method, message } => Some(json!({
@@ -739,8 +988,33 @@ impl CliError {
             Self::TransferToSelf { address } => Some(json!({
                 "address": address,
             })),
-            Self::InvalidHogAmount { input, message } => Some(json!({
+            Self::InvalidHogAmount { input, message }
+            | Self::InvalidTransactionHash { input, message, .. }
+            | Self::InvalidTransactionHistoryLimit { input, message, .. }
+            | Self::InvalidTransactionCursor { input, message, .. }
+            | Self::InvalidEventTopic { input, message, .. }
+            | Self::InvalidEventLimit { input, message, .. }
+            | Self::InvalidEventCursor { input, message, .. }
+            | Self::InvalidTokenTransferLimit { input, message, .. }
+            | Self::InvalidTokenTransferCursor { input, message, .. } => Some(json!({
                 "input": input,
+                "message": message,
+            })),
+            Self::InvalidEventFilter {
+                position,
+                count,
+                max,
+            } => Some(json!({
+                "position": position,
+                "count": count,
+                "max": max,
+            })),
+            Self::InvalidEventOptions { message }
+            | Self::InvalidTokenTransferOptions { message } => Some(json!({
+                "message": message,
+            })),
+            Self::InvalidEventSpec { path, message, .. } => Some(json!({
+                "path": path,
                 "message": message,
             })),
             Self::InvalidAddressTarget { target, message } => Some(json!({
@@ -828,5 +1102,29 @@ mod tests {
             .details_json()
             .expect("details expected");
         assert_eq!(details["message"], message);
+    }
+
+    #[test]
+    fn generated_command_hints_quote_dynamic_arguments() {
+        let error = CliError::SavedWalletMissing {
+            key_name: "-alice;echo bad\n".into(),
+            profile: "-dev&net\u{202e}".into(),
+        };
+        let rendered = error.to_string();
+        assert!(!rendered.contains('\n'));
+        assert!(!rendered.contains('\u{202e}'));
+        assert_eq!(
+            hint(&error),
+            r"run `groundhog wallet create --key='-alice;echo bad\n' --profile='-dev&net\u{202e}'` before using this stored key"
+        );
+
+        let error = CliError::NodeSupervisorProtocolIntroRejected {
+            message: "rejected".into(),
+            expected_protocol: Some("hogp/test;echo bad".into()),
+        };
+        assert_eq!(
+            hint(&error),
+            "pass `--hogd-protocol='hogp/test;echo bad'` to override, or rebuild groundhog node against a matching groundhog-xdr"
+        );
     }
 }

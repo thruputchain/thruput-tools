@@ -613,6 +613,13 @@ pub fn build_hogd_dev_spec(binary: impl AsRef<Path>, config: &HogdDevConfig) -> 
         ]);
     }
 
+    if let Some(ramdb_bytes) = config.ramdb_bytes {
+        spec = spec.args([
+            OsString::from("--ramdb-bytes"),
+            OsString::from(ramdb_bytes.to_string()),
+        ]);
+    }
+
     spec
 }
 
@@ -649,6 +656,13 @@ pub(crate) fn build_hogd_dev_spec_with_bootstrap_manifest(
         spec = spec.args([
             OsString::from("--data-dir"),
             data_dir.as_os_str().to_owned(),
+        ]);
+    }
+
+    if let Some(ramdb_bytes) = config.ramdb_bytes {
+        spec = spec.args([
+            OsString::from("--ramdb-bytes"),
+            OsString::from(ramdb_bytes.to_string()),
         ]);
     }
 
@@ -1751,6 +1765,27 @@ mod tests {
     }
 
     #[test]
+    fn ramdb_bytes_forwarded_when_set() {
+        let config = HogdDevConfig::default().with_ramdb_bytes(2_147_483_648);
+
+        let supervisor_spec = build_hogd_dev_spec_with_bootstrap_manifest(
+            "/tmp/hog-devnode",
+            &config,
+            "/tmp/bootstrap-manifest.json",
+        );
+        let compat_spec = build_hogd_dev_spec("/tmp/hog-devnode", &config);
+
+        for spec in [supervisor_spec, compat_spec] {
+            let args = spec.program_args();
+            let flag_index = args
+                .iter()
+                .position(|arg| arg == "--ramdb-bytes")
+                .expect("--ramdb-bytes forwarded");
+            assert_eq!(args[flag_index + 1], OsString::from("2147483648"));
+        }
+    }
+
+    #[test]
     fn public_command_builder_keeps_shorthand_compatibility() {
         let config = HogdDevConfig::default()
             .with_listen_host("127.0.0.2")
@@ -2832,10 +2867,14 @@ mod tests {
         let temp = TempDir::new().expect("bug: temp dir should be created");
         let marker = temp.path().join("sigterm-observed");
         let pid_file = temp.path().join("hog-devnode.pid");
+        // The fake records SIGTERM only after its handler is installed, so the
+        // startup timeout must outlast cold-start exec latency under a loaded
+        // parallel test run; a shorter timeout lets the readiness-timeout
+        // SIGTERM kill the fake before it can arm the handler.
         let config = HogdDevConfig::default()
             .with_data_dir(temp.path().join("data"))
             .with_pid_file(pid_file.clone())
-            .with_startup_timeout(Duration::from_millis(500));
+            .with_startup_timeout(Duration::from_secs(2));
 
         let error = start_fake_hogd_dev_with_env(
             &config,

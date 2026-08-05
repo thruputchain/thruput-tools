@@ -320,6 +320,10 @@ pub struct HogdDevConfig {
     pub dev_account_seed: String,
     /// Storage-token funding target per dev account.
     pub dev_account_tokens: u64,
+    /// RAM database capacity in bytes hog-devnode reserves at startup.
+    ///
+    /// When unset, hog-devnode uses its built-in default capacity.
+    pub ramdb_bytes: Option<u64>,
     /// PID file used to detect and clean up orphaned hogd-dev children.
     pub pid_file: Option<PathBuf>,
 }
@@ -336,6 +340,7 @@ impl Default for HogdDevConfig {
             dev_account_count: DEFAULT_HOGD_DEV_ACCOUNT_COUNT,
             dev_account_seed: DEFAULT_HOGD_DEV_ACCOUNT_SEED.to_string(),
             dev_account_tokens: DEFAULT_HOGD_DEV_ACCOUNT_TOKENS,
+            ramdb_bytes: None,
             pid_file: None,
         }
     }
@@ -402,6 +407,13 @@ impl HogdDevConfig {
     #[must_use]
     pub fn with_dev_account_tokens(mut self, dev_account_tokens: u64) -> Self {
         self.dev_account_tokens = dev_account_tokens;
+        self
+    }
+
+    /// Return a copy with an explicit hog-devnode RAM database capacity in bytes.
+    #[must_use]
+    pub fn with_ramdb_bytes(mut self, ramdb_bytes: u64) -> Self {
+        self.ramdb_bytes = Some(ramdb_bytes);
         self
     }
 

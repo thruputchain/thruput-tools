@@ -40,6 +40,11 @@ fn test_rejects_conflicting_target_dir_passthrough() {
     .unwrap();
     fs::create_dir_all(tmp.path().join(".cargo")).unwrap();
     fs::write(tmp.path().join(".cargo/contract.toml"), "").unwrap();
+    fs::write(
+        tmp.path().join("groundhog.toml"),
+        "default_profile = \"default\"\n\n[profile.default]\n",
+    )
+    .unwrap();
 
     let fake_bin = tmp.path().join("bin");
     fs::create_dir_all(&fake_bin).unwrap();
@@ -226,6 +231,11 @@ fn test_failed_wasm_tests_update_rerun_cache() {
     .unwrap();
     fs::create_dir_all(tmp.path().join(".cargo")).unwrap();
     fs::write(tmp.path().join(".cargo/contract.toml"), "").unwrap();
+    fs::write(
+        tmp.path().join("groundhog.toml"),
+        "default_profile = \"default\"\n\n[profile.default]\n",
+    )
+    .unwrap();
 
     let fake_bin = tmp.path().join("bin");
     fs::create_dir_all(&fake_bin).unwrap();

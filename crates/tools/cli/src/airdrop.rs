@@ -569,7 +569,9 @@ fn resolve_airdrop_recipient(
         return Ok(format_contract_address(&address.0));
     }
     Err(CliError::Other(format!(
-        "unknown wallet `{recipient}`; run `groundhog wallet create --key {recipient}` or pass a 0x-prefixed wallet address"
+        "unknown wallet `{}`; run `groundhog wallet create --key={}` or pass a 0x-prefixed wallet address",
+        crate::terminal::terminal_safe(recipient),
+        crate::terminal::render_shell_arg(recipient),
     )))
 }
 
@@ -741,6 +743,21 @@ mod tests {
             .expect_err("bug: malformed direct address should fail");
 
         assert!(err.to_string().contains("64-character hex string"));
+    }
+
+    #[test]
+    fn unknown_recipient_is_terminal_safe_and_shell_quoted_in_guidance() {
+        let profile = test_profile(BTreeMap::new());
+        let err = resolve_airdrop_recipient(&profile, "alice; touch /tmp/pwned\n\u{1b}[31m")
+            .expect_err("bug: unknown recipient should fail");
+        let message = err.to_string();
+
+        assert!(!message.contains('\n'));
+        assert!(!message.contains('\u{1b}'));
+        assert!(
+            message
+                .contains(r"groundhog wallet create --key='alice; touch /tmp/pwned\n\u{1b}[31m'")
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # Groundhog CLI Roadmap
 
-Execution roadmap for the Groundhog CLI as of 2026-05-23.
+Execution roadmap for the Groundhog CLI as of 2026-07-30.
 
 Historical competitive-analysis notes live under `docs/archive/cli/`.
 This file is the working plan we should actually execute against.
@@ -32,6 +32,7 @@ What exists today:
 - `groundhog init` (interactive first-run wizard)
 - `groundhog status` (non-interactive diagnostic)
 - `groundhog keys`
+- `groundhog config` (persisted profile inspection and management)
 - shell completions
 - global config with profiles, keys, mock-executor download credentials,
   wallet bindings, and local runtime state
@@ -52,6 +53,10 @@ What that means:
 
 Implementation status:
 
+- Config-management Phase 1 is complete: merged persisted inspection, typed
+  field mutation, atomic profile creation and confirmed deletion, explicit
+  global/project targeting, and versioned JSON reports are shipped. Config
+  writes preserve comments and unrelated state under shared sidecar locks.
 - Phase 1 is effectively complete: deploy/call work, `--json` works, and
   contract-spec-aware invocation is in place through embedded contract specs
   plus local metadata. The CLI now emits `.spec.json` as an inspection/export
@@ -122,12 +127,21 @@ Maintenance rules:
 - [x] `groundhog deploy`
 - [x] `groundhog call`
 - [x] `groundhog transfer`
+- [x] `groundhog tx show`
+- [x] `groundhog tx list`
 - [x] `groundhog view`
 - [x] `groundhog storage`
 - [x] `groundhog node`
 - [x] `groundhog init`
 - [x] `groundhog status`
 - [x] `groundhog keys`
+- [x] `groundhog config get`
+- [x] `groundhog config profiles`
+- [x] `groundhog config new`
+- [x] `groundhog config rm`
+- [x] `groundhog config set`
+- [x] `groundhog config unset`
+- [x] `groundhog config use`
 - [x] shell completions
 - [x] `--quiet`, `--json`, `--profile`
 - [x] global and project profiles with contract aliases and wallet bindings
@@ -157,6 +171,9 @@ Maintenance rules:
 - [x] Minimal project config: active profile selection, `rpc_url`,
   default key name, per-profile contract aliases / addresses, and
   environment override
+- [x] Persisted profile inspection with merged source provenance
+- [x] Typed global/project profile mutation with atomic creation and deletion
+- [x] Stable versioned JSON reports for config inspection and mutation
 - [x] Wire contract spec / IDL generation into the CLI workflow
 - [x] Clarify the contract spec / IDL path needed for `call`
 - [x] Signing / tx-building: shared `groundhog-signing` crate landed at
@@ -588,12 +605,13 @@ prefer pinning/documenting the minimum `hog-devnode` protocol/runtime version
 over adding a compatibility capability probe unless a real multi-version need
 appears.
 
-Current validated runtime reference: `hog-devnode 0.1.8` with protocol
-`hogp/6d1e8e6eca4e`. The local-DX smoke validates current RV32 execution,
-prefund-first wallet creation, two manifest-backed dev wallets, balance reads,
-receipt-confirmed native HOG transfers, and saved-wallet deploy/call flows.
-This runtime accepts direct-address transfers to materialized balance addresses;
-an undeployed recipient currently fails with a `boundsExceeded` conflict.
+Current validated runtime reference: `hog-devnode 0.1.12`. The local-DX smoke
+validates current RV32 execution, prefund-first wallet creation, two
+manifest-backed dev wallets, balance reads, receipt-confirmed native HOG
+transfers, transaction inspection and bounded history pagination, saved-wallet
+deploy/call flows, and persistent-node restart recovery. Direct-address
+transfers to materialized balance addresses pass; the earlier 0.1.8 runtime
+returned a `boundsExceeded` conflict for an undeployed recipient.
 
 **Phase 3 testing DX, after `--integration` v1:**
 

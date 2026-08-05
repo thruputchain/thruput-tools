@@ -23,9 +23,10 @@ scripts/smoke-local-dx.sh
 ```
 
 The smoke scaffolds a counter project, builds the default artifact, starts
-`groundhog node`, deploys and calls through `dev-0`, exercises `groundhog
-view`, performs a raw `groundhog storage` read, then creates a normal saved
-wallet and proves that it can deploy and call an RV32 contract.
+`groundhog node`, transfers HOG, inspects transaction status and paginated
+history, deploys and calls through `dev-0`, exercises `groundhog view`, performs
+a raw `groundhog storage` read, creates a normal saved wallet, and verifies
+state after a persistent-node restart.
 
 For a gateway/bench smoke against the runtime manifest path:
 
@@ -328,6 +329,23 @@ Local requests are signed by the bootstrap faucet account. Remote requests go
 through the configured faucet HTTP service and use its quota and idempotency
 policy.
 
+### `groundhog transfer` and `groundhog tx`
+
+Transfer native HOG from the selected profile wallet, inspect one transaction,
+or request one page of address history:
+
+```bash
+groundhog transfer alice 10.5
+groundhog tx show 0x0123...
+groundhog tx list alice --limit 25
+groundhog tx list alice --cursor 0x0123...
+```
+
+`tx show` performs one status lookup and fetches a receipt only for a committed
+transaction; it does not wait. `tx list` preserves the endpoint's opaque cursor
+and does not fetch receipts. Address history includes root invocations only, so
+incoming wallet-wrapped transfers may not appear in a recipient's history.
+
 ### `groundhog deploy`
 
 Deploy a contract to the active profile's RPC URL. Resolves the selected
@@ -406,6 +424,8 @@ RPC-facing commands can target a remote endpoint without editing
 groundhog deploy --rpc-url http://<your-rpc-host>:8545
 groundhog call my-counter increment 1 --rpc-url http://<your-rpc-host>:8545
 groundhog balance alice --rpc-url http://<your-rpc-host>:8545
+groundhog tx show 0x0123... --rpc-url http://<your-rpc-host>:8545
+groundhog tx list alice --rpc-url http://<your-rpc-host>:8545
 groundhog view my-counter get --rpc-url http://<your-rpc-host>:8545
 groundhog storage my-counter <32-byte-storage-key> --rpc-url http://<your-rpc-host>:8545
 ```
@@ -488,37 +508,107 @@ groundhog completion zsh > ~/.zfunc/_groundhog
 groundhog completion bash > /etc/bash_completion.d/groundhog
 ```
 
-## Project Configuration
+## Configuration Profiles
 
-Scaffolded projects include a `groundhog.toml` with profile
-support:
+Groundhog combines user-wide profiles from
+`$XDG_CONFIG_HOME/groundhog/config.toml` (or
+`~/.config/groundhog/config.toml`) with the nearest project
+`groundhog.toml`. Project fields override same-named global profile fields;
+omitted fields inherit global values.
+
+Scaffolded projects include a project profile overlay:
 
 ```toml
 default_profile = "local"
 
 [profile.local]
 network = "local"
-# runtime_manifest = "runtime-manifest.json"
 
 [profile.local.contracts]
 # counter = "0x..."
 
 [profile.devnet]
 network = "devnet"
-rpc_url = "http://44.236.180.135:8545"
-faucet_url = "http://44.236.180.135:8085"
+
+[profile.devnet.contracts]
+# counter = "0x..."
 ```
 
-Select a profile via `--profile`, `GROUNDHOG_PROFILE`, or `default_profile`.
-If none is configured, the fallback profile name is `default`.
+Active-profile selection uses explicit `--profile`, `GROUNDHOG_PROFILE`, the
+project `default_profile`, then the global `default_profile`. If none is set,
+commands that require a profile report that no active profile is selected. The
+name `default` has no special behavior.
+
+Inspect the merged persisted configuration without applying local-node state,
+signer fallback, or command-specific overrides:
+
+```bash
+groundhog config get
+groundhog config get devnet
+groundhog config get devnet --sources
+groundhog config profiles
+```
+
+Create a complete profile atomically, then update individual typed fields:
+
+```bash
+# Outside a project, omitted scope means global.
+groundhog config new staging \
+  --network devnet \
+  --rpc-url https://rpc.example \
+  --faucet-url https://faucet.example \
+  --default-key alice \
+  --use
+
+groundhog config set rpc-url https://rpc2.example \
+  --profile staging --global
+groundhog config unset faucet-url --profile staging --global
+groundhog config use staging --global
+```
+
+Editable fields are `network`, `rpc-url`, `faucet-url`, and `default-key`.
+`config new` creates a profile; `config set` updates a profile that already
+exists in the selected layer. `config unset` removes only the selected layer's
+field, so removing a project override may reveal an inherited global value.
+
+Mutations always target one physical file:
+
+| Location | Scope behavior |
+|----------|----------------|
+| Outside a project | Omitted scope writes global config; `--project` fails |
+| Inside a project | Pass exactly one of `--global` or `--project` |
+
+Create a project overlay by targeting the project layer explicitly:
+
+```bash
+groundhog config new staging --network devnet --project
+groundhog config set rpc-url http://127.0.0.1:9545 \
+  --profile staging --project
+groundhog config get staging --sources
+```
+
+Delete a profile with `config rm`. Normal output asks for confirmation and
+defaults to cancellation. `--json` and `--quiet` skip the prompt and delete
+immediately. Deletion removes the entire selected-layer profile, including its
+contract aliases and wallet bindings, and clears a matching layer default.
+
+```bash
+groundhog config rm staging --global
+groundhog --json config profiles
+```
+
+All config commands support `--json`. Their data payloads use
+`schemaVersion: 1`; warnings appear in the JSON result envelope instead of
+human stderr.
 
 Contract aliases map names to addresses per profile. `deploy`, `call`, and
 `storage` resolve aliases from the active profile. When `runtime_manifest` is
-set, relative paths resolve from the directory containing `groundhog.toml`;
-`GROUNDHOG_RUNTIME_MANIFEST` overrides the profile field for ephemeral local
-node runs, and a command-line `--runtime-manifest` override wins over both.
-Profiles with `network = "local"` can also use the active local node endpoint
-and runtime artifacts written by `groundhog node` to global config.
+set, relative paths resolve from the directory containing the global or project
+config file that supplied the value. `GROUNDHOG_RUNTIME_MANIFEST` overrides the
+profile field for ephemeral local node runs, and a command-line
+`--runtime-manifest` override wins over both. Profiles with `network = "local"`
+can also use the active local node endpoint and runtime artifacts written by
+`groundhog node` to global runtime state.
 
 ## Global Flags
 
@@ -527,11 +617,12 @@ and runtime artifacts written by `groundhog node` to global config.
 | `-q`, `--quiet` | Suppress status messages |
 | `--json` | Emit structured JSON output |
 
-`--profile` is available on commands that interact with project
-config (`build`, `test`, `deploy`, `call`, `storage`, `status`). `--rpc-url`
-and `--runtime-manifest` are available on RPC-facing commands when you need a
-one-off endpoint or local-dev account override. Keys are global — not
-per-profile.
+`--profile` selects runtime configuration on commands such as `build`, `test`,
+`deploy`, `call`, `storage`, and `status`. On `config set` and `config unset`,
+the required `--profile` names the mutation target instead. `--rpc-url` and
+`--runtime-manifest` are available on RPC-facing commands when you need a
+one-off endpoint or local-dev account override. Stored signing keys are global;
+profiles may name a default key.
 
 ## Templates
 

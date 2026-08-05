@@ -1,12 +1,15 @@
 use std::collections::BTreeMap;
-
-use serde::{Deserialize, Serialize};
-
-use super::atomic::atomic_write_private;
-use super::dirs::config_file_path;
 use std::path::PathBuf;
 
-use super::project::{Network, ProjectProfile};
+use serde::{Deserialize, Serialize};
+use toml_edit::{DocumentMut, InlineTable, Item, Table, Value, value};
+
+use super::atomic::{ConfigFileKind, insert_preserving_decor, transact_document};
+use super::dirs::config_file_path;
+use super::project::ProjectProfile;
+use super::read::{
+    PersistedProfileState, load_global_field, load_global_profile_state, validate_http_url,
+};
 use crate::CliError;
 
 const INITIAL_DEFAULT_PROFILE: &str = "local";
@@ -45,37 +48,85 @@ pub(crate) struct GlobalConfigFile {
     pub(crate) local_runtime_state: Option<LocalRuntimeState>,
 }
 
-pub(crate) fn read_config_file() -> Result<GlobalConfigFile, CliError> {
-    let path = config_file_path()?;
-    match std::fs::read_to_string(&path) {
-        Ok(contents) => {
-            let config: GlobalConfigFile =
-                toml::from_str(&contents).map_err(|e| CliError::Other(e.to_string()))?;
-            Ok(config)
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(GlobalConfigFile::default()),
-        Err(e) => Err(e.into()),
-    }
-}
-
 pub(crate) fn load_global_profile(name: &str) -> Result<Option<ProjectProfile>, CliError> {
-    Ok(read_config_file()?.profile.remove(name))
+    match load_global_profile_state(name)? {
+        Some(PersistedProfileState::Valid(profile)) => Ok(Some(profile)),
+        Some(PersistedProfileState::Invalid { reason }) => Err(CliError::ProfileConfigInvalid {
+            profile: name.to_owned(),
+            message: format!(
+                "is invalid in global config `{}`: {reason}",
+                config_file_path()?.display()
+            ),
+        }),
+        None => Ok(None),
+    }
 }
 
-fn write_config_file(config: &GlobalConfigFile) -> Result<(), CliError> {
+fn transact_config_file(
+    mutate: impl FnOnce(&mut DocumentMut, &GlobalConfigFile) -> Result<(), CliError>,
+) -> Result<bool, CliError> {
     let path = config_file_path()?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+    transact_document(
+        &path,
+        ConfigFileKind::Global,
+        |document| {
+            let config = parse_config_document(document)?;
+            mutate(document, &config)
+        },
+        |document| parse_config_document(document).map(|_| ()),
+    )
+}
+
+fn parse_config_document(document: &DocumentMut) -> Result<GlobalConfigFile, CliError> {
+    toml::from_str(&document.to_string()).map_err(|error| CliError::Other(error.to_string()))
+}
+
+fn root_table<'a>(
+    document: &'a mut DocumentMut,
+    key: &str,
+    error: &'static str,
+) -> Result<&'a mut Item, CliError> {
+    let item = document
+        .entry(key)
+        .or_insert_with(|| Item::Table(Table::new()));
+    if item.as_table_like().is_none() {
+        return Err(CliError::Other(error.into()));
     }
-    let contents = toml::to_string(config).map_err(|e| CliError::Other(e.to_string()))?;
-    atomic_write_private(&path, contents.as_bytes())
+    Ok(item)
+}
+
+fn child_table<'a>(
+    parent: &'a mut Item,
+    key: &str,
+    error: &'static str,
+) -> Result<&'a mut Item, CliError> {
+    let default = if parent.as_inline_table().is_some() {
+        Item::Value(Value::InlineTable(InlineTable::new()))
+    } else {
+        Item::Table(Table::new())
+    };
+    let child = parent
+        .as_table_like_mut()
+        .ok_or_else(|| CliError::Other(error.into()))?
+        .entry(key)
+        .or_insert(default);
+    if child.as_table_like().is_none() {
+        return Err(CliError::Other(error.into()));
+    }
+    Ok(child)
 }
 
 /// Save mock-executor FFI download credentials to `config.toml`.
 pub fn save_executor_credentials(creds: &ExecutorCredentials) -> Result<(), CliError> {
-    let mut config = read_config_file()?;
-    config.executor = Some(creds.clone());
-    write_config_file(&config)
+    transact_config_file(|document, _| {
+        let executor = root_table(document, "executor", "executor must be a table")?
+            .as_table_like_mut()
+            .ok_or_else(|| CliError::Other("executor must be a table".into()))?;
+        insert_preserving_decor(executor, "username", value(creds.username.as_str()));
+        insert_preserving_decor(executor, "password", value(creds.password.as_str()));
+        Ok(())
+    })?;
+    Ok(())
 }
 
 /// Load mock-executor FFI download credentials from `config.toml`.
@@ -83,106 +134,153 @@ pub fn save_executor_credentials(creds: &ExecutorCredentials) -> Result<(), CliE
 /// Returns `Ok(None)` if no credentials are stored
 /// or the file does not exist.
 pub fn load_executor_credentials() -> Result<Option<ExecutorCredentials>, CliError> {
-    let config = read_config_file()?;
-    Ok(config.executor)
+    load_global_field("executor")
 }
 
 /// Save the default key name to `config.toml`.
 pub fn save_default_key(name: &str) -> Result<(), CliError> {
-    let mut config = read_config_file()?;
-    config.default_key = Some(name.to_string());
-    write_config_file(&config)
+    transact_config_file(|document, _| {
+        insert_preserving_decor(document.as_table_mut(), "default_key", value(name));
+        Ok(())
+    })?;
+    Ok(())
 }
 
 /// Load the default key name from `config.toml`.
 pub fn load_default_key() -> Result<Option<String>, CliError> {
-    let config = read_config_file()?;
-    Ok(config.default_key)
+    load_global_field("default_key")
 }
 
 /// Remove the default key selection from `config.toml`.
 pub fn clear_default_key() -> Result<(), CliError> {
-    let mut config = read_config_file()?;
-    config.default_key = None;
-    write_config_file(&config)
+    transact_config_file(|document, _| {
+        document.remove("default_key");
+        Ok(())
+    })?;
+    Ok(())
 }
 
 /// Initialize global profile defaults without overwriting existing user config.
 pub fn initialize_global_profiles() -> Result<(), CliError> {
-    let mut config = read_config_file()?;
-    if config
-        .default_profile
-        .as_deref()
-        .map(str::trim)
-        .is_none_or(str::is_empty)
-    {
-        config.default_profile = Some(INITIAL_DEFAULT_PROFILE.to_string());
-    }
+    transact_config_file(|document, config| {
+        if config
+            .default_profile
+            .as_deref()
+            .map(str::trim)
+            .is_none_or(str::is_empty)
+        {
+            insert_preserving_decor(
+                document.as_table_mut(),
+                "default_profile",
+                value(INITIAL_DEFAULT_PROFILE),
+            );
+        }
 
-    let local = config.profile.entry("local".to_string()).or_default();
-    if local.network.is_none() {
-        local.network = Some(Network::Local);
-    }
-    local
-        .contracts
-        .entry("HOG".to_string())
-        .or_insert_with(|| HOG_CONTRACT_ADDRESS.to_string());
-
-    let devnet = config.profile.entry("devnet".to_string()).or_default();
-    if devnet.network.is_none() {
-        devnet.network = Some(Network::Devnet);
-    }
-    if devnet.rpc_url.is_none() {
-        devnet.rpc_url = Some(DEVNET_RPC_URL.to_string());
-    }
-    if devnet.faucet_url.is_none() {
-        devnet.faucet_url = Some(DEVNET_FAUCET_URL.to_string());
-    }
-    devnet
-        .contracts
-        .entry("HOG".to_string())
-        .or_insert_with(|| HOG_CONTRACT_ADDRESS.to_string());
-
-    write_config_file(&config)
+        let profiles = root_table(document, "profile", "profile must be a table")?;
+        {
+            let local_config = config.profile.get("local");
+            let local = child_table(profiles, "local", "profile entry must be a table")?;
+            if local_config.is_none_or(|profile| profile.network.is_none()) {
+                insert_preserving_decor(
+                    local
+                        .as_table_like_mut()
+                        .ok_or_else(|| CliError::Other("profile entry must be a table".into()))?,
+                    "network",
+                    value("local"),
+                );
+            }
+            if local_config.is_none_or(|profile| !profile.contracts.contains_key("HOG")) {
+                insert_preserving_decor(
+                    child_table(local, "contracts", "contracts must be a table")?
+                        .as_table_like_mut()
+                        .ok_or_else(|| CliError::Other("contracts must be a table".into()))?,
+                    "HOG",
+                    value(HOG_CONTRACT_ADDRESS),
+                );
+            }
+        }
+        {
+            let devnet_config = config.profile.get("devnet");
+            let devnet = child_table(profiles, "devnet", "profile entry must be a table")?;
+            let devnet_table = devnet
+                .as_table_like_mut()
+                .ok_or_else(|| CliError::Other("profile entry must be a table".into()))?;
+            if devnet_config.is_none_or(|profile| profile.network.is_none()) {
+                insert_preserving_decor(devnet_table, "network", value("devnet"));
+            }
+            if devnet_config.is_none_or(|profile| profile.rpc_url.is_none()) {
+                insert_preserving_decor(devnet_table, "rpc_url", value(DEVNET_RPC_URL));
+            }
+            if devnet_config.is_none_or(|profile| profile.faucet_url.is_none()) {
+                insert_preserving_decor(devnet_table, "faucet_url", value(DEVNET_FAUCET_URL));
+            }
+            if devnet_config.is_none_or(|profile| !profile.contracts.contains_key("HOG")) {
+                insert_preserving_decor(
+                    child_table(devnet, "contracts", "contracts must be a table")?
+                        .as_table_like_mut()
+                        .ok_or_else(|| CliError::Other("contracts must be a table".into()))?,
+                    "HOG",
+                    value(HOG_CONTRACT_ADDRESS),
+                );
+            }
+        }
+        Ok(())
+    })?;
+    Ok(())
 }
 
 pub fn save_local_runtime_state(state: &LocalRuntimeState) -> Result<PathBuf, CliError> {
     validate_local_runtime_state(state)?;
-    let mut config = read_config_file()?;
-    config.local_runtime_state = Some(state.clone());
-    write_config_file(&config)?;
-    config_file_path()
+    let runtime_manifest = state
+        .runtime_manifest
+        .to_str()
+        .ok_or_else(|| CliError::Other("runtime_manifest must be valid UTF-8".into()))?;
+    let runtime_artifacts_dir = state
+        .runtime_artifacts_dir
+        .as_deref()
+        .map(|path| {
+            path.to_str()
+                .ok_or_else(|| CliError::Other("runtime_artifacts_dir must be valid UTF-8".into()))
+        })
+        .transpose()?;
+    let path = config_file_path()?;
+    transact_config_file(|document, _| {
+        let runtime = root_table(
+            document,
+            "local_runtime_state",
+            "local_runtime_state must be a table",
+        )?
+        .as_table_like_mut()
+        .ok_or_else(|| CliError::Other("local_runtime_state must be a table".into()))?;
+        insert_preserving_decor(runtime, "node_id", value(state.node_id.as_str()));
+        insert_preserving_decor(runtime, "rpc_url", value(state.rpc_url.as_str()));
+        insert_preserving_decor(runtime, "runtime_manifest", value(runtime_manifest));
+        if let Some(artifacts_dir) = runtime_artifacts_dir {
+            insert_preserving_decor(runtime, "runtime_artifacts_dir", value(artifacts_dir));
+        } else {
+            runtime.remove("runtime_artifacts_dir");
+        }
+        Ok(())
+    })?;
+    Ok(path)
 }
 
 pub fn clear_local_runtime_state_if_matches(
     state: &LocalRuntimeState,
 ) -> Result<PathBuf, CliError> {
     let path = config_file_path()?;
-    let mut config = match std::fs::read_to_string(&path) {
-        Ok(contents) => toml::from_str::<GlobalConfigFile>(&contents)
-            .map_err(|e| CliError::Other(e.to_string()))?,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(path),
-        Err(e) => return Err(e.into()),
-    };
-
-    if config.local_runtime_state.as_ref() == Some(state) {
-        config.local_runtime_state = None;
-        write_config_file(&config)?;
-    }
-
+    transact_config_file(|document, config| {
+        if config.local_runtime_state.as_ref() == Some(state) {
+            document.remove("local_runtime_state");
+        }
+        Ok(())
+    })?;
     Ok(path)
 }
 
-fn validate_local_runtime_state(state: &LocalRuntimeState) -> Result<(), CliError> {
-    let rpc_url = state.rpc_url.trim();
-    if rpc_url.is_empty() {
-        return Err(CliError::Other("rpc_url cannot be empty".into()));
-    }
-    if !rpc_url.starts_with("http://") && !rpc_url.starts_with("https://") {
-        return Err(CliError::Other(
-            "rpc_url must start with http:// or https://".into(),
-        ));
-    }
+pub(super) fn validate_local_runtime_state(state: &LocalRuntimeState) -> Result<(), CliError> {
+    validate_http_url(&state.rpc_url)
+        .map_err(|message| CliError::Other(format!("rpc_url {message}")))?;
     if state.node_id.trim().is_empty() {
         return Err(CliError::Other("node_id cannot be empty".into()));
     }

@@ -4,12 +4,14 @@ use std::path::{Path, PathBuf};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::atomic::{atomic_write, atomic_write_private};
+use super::atomic::{ConfigFileKind, insert_preserving_decor, transact_document};
 use super::dirs::config_file_path;
-use super::global::{LocalRuntimeState, load_default_key, read_config_file};
+use super::global::{LocalRuntimeState, load_default_key};
+use super::read::{
+    PersistedProfileState, load_local_runtime_state, load_persisted_config,
+    resolve_persisted_profile,
+};
 use crate::CliError;
-
-pub const DEFAULT_PROFILE: &str = "default";
 
 /// Project profile loaded from `groundhog.toml`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -50,14 +52,6 @@ pub struct SavedWalletBinding {
     /// Public key that owns the wallet contract.
     #[serde(default)]
     pub owner_public_key: String,
-}
-
-#[derive(Debug, Default, Serialize, Deserialize)]
-pub(crate) struct ProjectConfigFile {
-    #[serde(default)]
-    pub(crate) default_profile: Option<String>,
-    #[serde(default)]
-    pub(crate) profile: BTreeMap<String, ProjectProfile>,
 }
 
 /// Active project profile resolved from `groundhog.toml`.
@@ -112,34 +106,22 @@ impl ResolvedProfile {
     }
 }
 
-/// Returns the active profile name from an explicit selection,
-/// `GROUNDHOG_PROFILE`, project default, global default, or the
-/// built-in fallback.
+/// Returns the selected existing profile from explicit, environment, project,
+/// or global selection.
 pub fn active_profile_name(start: &Path, explicit: Option<&str>) -> Result<String, CliError> {
-    if let Some(name) = explicit.map(str::trim).filter(|name| !name.is_empty()) {
-        return Ok(name.to_owned());
-    }
+    let (profile, selection) = resolve_persisted_profile(start, explicit)?;
+    debug_assert_eq!(profile.name, selection.profile);
+    Ok(selection.profile)
+}
 
-    if let Some(name) = std::env::var("GROUNDHOG_PROFILE")
-        .ok()
-        .map(|name| name.trim().to_string())
-        .filter(|name| !name.is_empty())
-    {
-        return Ok(name);
+fn profile_name_for_write(start: &Path, explicit: Option<&str>) -> Result<String, CliError> {
+    if explicit.is_none() {
+        return active_profile_name(start, None);
     }
-
-    if let Some(config) = load_project_config(start)?
-        && let Some(name) = non_empty(config.default_profile)
-    {
-        return Ok(name);
-    }
-
-    let global = read_config_file()?;
-    if let Some(name) = non_empty(global.default_profile) {
-        return Ok(name);
-    }
-
-    Ok(DEFAULT_PROFILE.to_string())
+    load_persisted_config(start)?
+        .selection(explicit)?
+        .map(|selection| selection.profile)
+        .ok_or(CliError::NoActiveProfile)
 }
 
 /// Find `groundhog.toml` by walking up from `start`.
@@ -167,18 +149,16 @@ pub fn find_project_config(start: &Path) -> Option<PathBuf> {
 pub fn load_project_profiles(
     start: &Path,
 ) -> Result<Option<BTreeMap<String, ProjectProfile>>, CliError> {
-    Ok(load_project_config(start)?.map(|config| config.profile))
-}
-
-fn load_project_config(start: &Path) -> Result<Option<ProjectConfigFile>, CliError> {
-    let Some(path) = find_project_config(start) else {
-        return Ok(None);
-    };
-
-    let contents = std::fs::read_to_string(path)?;
-    let config: ProjectConfigFile =
-        toml::from_str(&contents).map_err(|e| CliError::Other(e.to_string()))?;
-    Ok(Some(config))
+    Ok(load_persisted_config(start)?.project.map(|layer| {
+        layer
+            .profiles
+            .into_iter()
+            .filter_map(|(name, state)| match state {
+                PersistedProfileState::Valid(profile) => Some((name, profile)),
+                PersistedProfileState::Invalid { .. } => None,
+            })
+            .collect()
+    }))
 }
 
 /// Persist a contract alias under the selected project profile.
@@ -206,34 +186,26 @@ pub fn save_profile_contract_alias(
         ));
     }
 
-    let profile_name = active_profile_name(project_root, explicit_profile)?;
+    let profile_name = profile_name_for_write(project_root, explicit_profile)?;
     let path = profile_write_path(project_root)?;
 
-    let contents = match std::fs::read_to_string(&path) {
-        Ok(s) => s,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => return Err(e.into()),
-    };
-
-    let mut doc: toml_edit::DocumentMut = contents
-        .parse::<toml_edit::DocumentMut>()
-        .map_err(|e| CliError::Other(e.to_string()))?;
-
-    doc.entry("profile")
-        .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
-        .as_table_mut()
-        .ok_or_else(|| CliError::Other("profile must be a table".into()))?
-        .entry(&profile_name)
-        .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
-        .as_table_mut()
-        .ok_or_else(|| CliError::Other("profile entry must be a table".into()))?
-        .entry("contracts")
-        .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
-        .as_table_mut()
-        .ok_or_else(|| CliError::Other("contracts must be a table".into()))?
-        .insert(alias.trim(), toml_edit::value(address.trim()));
-
-    write_profile_config(&path, doc.to_string().as_bytes())?;
+    transact_profile_document(&path, |document| {
+        let contracts = document
+            .entry("profile")
+            .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
+            .as_table_mut()
+            .ok_or_else(|| CliError::Other("profile must be a table".into()))?
+            .entry(&profile_name)
+            .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
+            .as_table_mut()
+            .ok_or_else(|| CliError::Other("profile entry must be a table".into()))?
+            .entry("contracts")
+            .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
+            .as_table_mut()
+            .ok_or_else(|| CliError::Other("contracts must be a table".into()))?;
+        insert_preserving_decor(contracts, alias.trim(), toml_edit::value(address.trim()));
+        Ok(())
+    })?;
     Ok(path)
 }
 
@@ -286,48 +258,42 @@ pub fn save_profile_wallet_address_with_default(
         ));
     }
 
-    let profile_name = active_profile_name(project_root, explicit_profile)?;
+    let profile_name = profile_name_for_write(project_root, explicit_profile)?;
     let path = profile_write_path(project_root)?;
 
-    let contents = match std::fs::read_to_string(&path) {
-        Ok(s) => s,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => return Err(e.into()),
-    };
+    transact_profile_document(&path, |document| {
+        let profile = document
+            .entry("profile")
+            .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
+            .as_table_mut()
+            .ok_or_else(|| CliError::Other("profile must be a table".into()))?
+            .entry(&profile_name)
+            .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
+            .as_table_mut()
+            .ok_or_else(|| CliError::Other("profile entry must be a table".into()))?;
 
-    let mut doc: toml_edit::DocumentMut = contents
-        .parse::<toml_edit::DocumentMut>()
-        .map_err(|e| CliError::Other(e.to_string()))?;
+        if make_default {
+            insert_preserving_decor(profile, "default_wallet", toml_edit::value(name.trim()));
+        }
 
-    let profile = doc
-        .entry("profile")
-        .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
-        .as_table_mut()
-        .ok_or_else(|| CliError::Other("profile must be a table".into()))?
-        .entry(&profile_name)
-        .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
-        .as_table_mut()
-        .ok_or_else(|| CliError::Other("profile entry must be a table".into()))?;
-    let wallet = profile
-        .entry("wallets")
-        .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
-        .as_table_mut()
-        .ok_or_else(|| CliError::Other("wallets must be a table".into()))?
-        .entry(name.trim())
-        .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
-        .as_table_mut()
-        .ok_or_else(|| CliError::Other("wallet entry must be a table".into()))?;
+        let wallet = profile
+            .entry("wallets")
+            .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
+            .as_table_mut()
+            .ok_or_else(|| CliError::Other("wallets must be a table".into()))?
+            .entry(name.trim())
+            .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
+            .as_table_mut()
+            .ok_or_else(|| CliError::Other("wallet entry must be a table".into()))?;
 
-    wallet.insert("address", toml_edit::value(address.trim()));
-    wallet.insert(
-        "owner_public_key",
-        toml_edit::value(owner_public_key.trim()),
-    );
-    if make_default {
-        profile.insert("default_wallet", toml_edit::value(name.trim()));
-    }
-
-    write_profile_config(&path, doc.to_string().as_bytes())?;
+        insert_preserving_decor(wallet, "address", toml_edit::value(address.trim()));
+        insert_preserving_decor(
+            wallet,
+            "owner_public_key",
+            toml_edit::value(owner_public_key.trim()),
+        );
+        Ok(())
+    })?;
     Ok(path)
 }
 
@@ -342,40 +308,32 @@ pub fn remove_profile_wallet_address(
         return Err(CliError::EmptyWalletName);
     }
 
-    let profile_name = active_profile_name(project_root, explicit_profile)?;
+    let profile_name = profile_name_for_write(project_root, explicit_profile)?;
     let path = profile_write_path(project_root)?;
-    let contents = match std::fs::read_to_string(&path) {
-        Ok(s) => s,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => return Err(e.into()),
-    };
-    let mut doc: toml_edit::DocumentMut = contents
-        .parse::<toml_edit::DocumentMut>()
-        .map_err(|e| CliError::Other(e.to_string()))?;
+    transact_profile_document(&path, |document| {
+        let profile = document
+            .get_mut("profile")
+            .and_then(toml_edit::Item::as_table_mut)
+            .and_then(|profiles| profiles.get_mut(&profile_name))
+            .and_then(toml_edit::Item::as_table_mut)
+            .ok_or_else(|| CliError::Other(format!("wallet `{name}` is not saved")))?;
+        let wallets = profile
+            .get_mut("wallets")
+            .and_then(toml_edit::Item::as_table_mut)
+            .ok_or_else(|| CliError::Other(format!("wallet `{name}` is not saved")))?;
 
-    let profile = doc
-        .get_mut("profile")
-        .and_then(toml_edit::Item::as_table_mut)
-        .and_then(|profiles| profiles.get_mut(&profile_name))
-        .and_then(toml_edit::Item::as_table_mut)
-        .ok_or_else(|| CliError::Other(format!("wallet `{name}` is not saved")))?;
-    let wallets = profile
-        .get_mut("wallets")
-        .and_then(toml_edit::Item::as_table_mut)
-        .ok_or_else(|| CliError::Other(format!("wallet `{name}` is not saved")))?;
-
-    if wallets.remove(name).is_none() {
-        return Err(CliError::Other(format!("wallet `{name}` is not saved")));
-    }
-    if profile
-        .get("default_wallet")
-        .and_then(toml_edit::Item::as_str)
-        == Some(name)
-    {
-        profile.remove("default_wallet");
-    }
-
-    write_profile_config(&path, doc.to_string().as_bytes())?;
+        if wallets.remove(name).is_none() {
+            return Err(CliError::Other(format!("wallet `{name}` is not saved")));
+        }
+        if profile
+            .get("default_wallet")
+            .and_then(toml_edit::Item::as_str)
+            == Some(name)
+        {
+            profile.remove("default_wallet");
+        }
+        Ok(())
+    })?;
     Ok(path)
 }
 
@@ -393,28 +351,21 @@ pub fn save_profile_default_wallet(
         return Err(CliError::Other("default wallet cannot be empty".into()));
     }
 
-    let profile_name = active_profile_name(project_root, explicit_profile)?;
+    let profile_name = profile_name_for_write(project_root, explicit_profile)?;
     let path = profile_write_path(project_root)?;
-    let contents = match std::fs::read_to_string(&path) {
-        Ok(contents) => contents,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => return Err(e.into()),
-    };
-    let mut doc: toml_edit::DocumentMut = contents
-        .parse::<toml_edit::DocumentMut>()
-        .map_err(|e| CliError::Other(e.to_string()))?;
-
-    doc.entry("profile")
-        .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
-        .as_table_mut()
-        .ok_or_else(|| CliError::Other("profile must be a table".into()))?
-        .entry(&profile_name)
-        .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
-        .as_table_mut()
-        .ok_or_else(|| CliError::Other("profile entry must be a table".into()))?
-        .insert("default_wallet", toml_edit::value(wallet));
-
-    write_profile_config(&path, doc.to_string().as_bytes())?;
+    transact_profile_document(&path, |document| {
+        let profile = document
+            .entry("profile")
+            .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
+            .as_table_mut()
+            .ok_or_else(|| CliError::Other("profile must be a table".into()))?
+            .entry(&profile_name)
+            .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
+            .as_table_mut()
+            .ok_or_else(|| CliError::Other("profile entry must be a table".into()))?;
+        insert_preserving_decor(profile, "default_wallet", toml_edit::value(wallet));
+        Ok(())
+    })?;
     Ok(path)
 }
 
@@ -449,59 +400,34 @@ pub fn resolve_default_key_for_profile(
         return Ok(Some(key));
     }
 
-    let local_runtime_state = read_config_file()?.local_runtime_state;
+    if profile.network != Some(Network::Local) {
+        return Ok(None);
+    }
+
+    let local_runtime_state = load_local_runtime_state()?;
     let uses_active_local_runtime = local_runtime_state.is_some_and(|state| {
-        profile.network == Some(Network::Local)
-            && profile.rpc_url.as_deref() == Some(state.rpc_url.as_str())
+        profile.rpc_url.as_deref() == Some(state.rpc_url.as_str())
             && profile.runtime_manifest.as_deref() == Some(state.runtime_manifest.as_path())
     });
 
     Ok(uses_active_local_runtime.then(|| "dev-0".to_string()))
 }
 
-/// Resolve the active project profile, defaulting to `default`
-/// when no `groundhog.toml` exists.
+/// Resolve the active profile and apply transient local-node state.
 pub fn resolve_profile(start: &Path, explicit: Option<&str>) -> Result<ResolvedProfile, CliError> {
-    let name = active_profile_name(start, explicit)?;
-    let project_source = find_project_config(start);
-    let global_source = config_file_path()?;
-    let project_config = load_project_config(start)?;
-    let global_config = read_config_file()?;
-    let local_runtime_state = global_config.local_runtime_state.clone();
-
-    let global_profile = global_config
-        .profile
-        .get(&name)
-        .cloned()
-        .map(|mut profile| {
-            normalize_runtime_manifest(&mut profile, &global_source);
-            normalize_runtime_artifacts_dir(&mut profile, &global_source);
-            profile
-        });
-    let project_profile = match (&project_config, &project_source) {
-        (Some(config), Some(path)) => config.profile.get(&name).cloned().map(|mut profile| {
-            normalize_runtime_artifacts_dir(&mut profile, path);
-            profile
-        }),
-        _ => None,
+    let (persisted, _) = resolve_persisted_profile(start, explicit)?;
+    let source = if persisted.project {
+        find_project_config(start)
+    } else if persisted.global {
+        Some(config_file_path()?)
+    } else {
+        None
     };
-
-    let source = match (&project_profile, &global_profile, &project_source) {
-        (Some(_), _, Some(path)) => Some(path.clone()),
-        (None, Some(_), _) => Some(global_source),
-        _ => None,
-    };
-
-    let mut profile = match (global_profile, project_profile, project_source.is_some()) {
-        (Some(global), Some(project), _) => merge_profiles(global, project),
-        (Some(global), None, _) => global,
-        (None, Some(project), _) => project,
-        (None, None, _) if name == DEFAULT_PROFILE => ProjectProfile::default(),
-        (None, None, false) => return Err(CliError::NoProjectConfig(name)),
-        (None, None, true) => return Err(CliError::ProfileNotFound(name)),
-    };
-
-    apply_local_runtime_state(&mut profile, local_runtime_state.as_ref());
+    let name = persisted.name;
+    let mut profile = persisted.values;
+    if profile.network == Some(Network::Local) {
+        apply_local_runtime_state(&mut profile, load_local_runtime_state()?.as_ref());
+    }
 
     Ok(ResolvedProfile {
         name,
@@ -518,33 +444,6 @@ pub fn resolve_profile(start: &Path, explicit: Option<&str>) -> Result<ResolvedP
         wallets: profile.wallets,
         source,
     })
-}
-
-fn merge_profiles(mut global: ProjectProfile, project: ProjectProfile) -> ProjectProfile {
-    if project.network.is_some() {
-        global.network = project.network;
-    }
-    if project.rpc_url.is_some() {
-        global.rpc_url = project.rpc_url;
-    }
-    if project.faucet_url.is_some() {
-        global.faucet_url = project.faucet_url;
-    }
-    if project.default_key.is_some() {
-        global.default_key = project.default_key;
-    }
-    if project.default_wallet.is_some() {
-        global.default_wallet = project.default_wallet;
-    }
-    if project.runtime_manifest.is_some() {
-        global.runtime_manifest = project.runtime_manifest;
-    }
-    if project.runtime_artifacts_dir.is_some() {
-        global.runtime_artifacts_dir = project.runtime_artifacts_dir;
-    }
-    global.contracts.extend(project.contracts);
-    global.wallets.extend(project.wallets);
-    global
 }
 
 fn apply_local_runtime_state(profile: &mut ProjectProfile, state: Option<&LocalRuntimeState>) {
@@ -567,46 +466,20 @@ fn apply_local_runtime_state(profile: &mut ProjectProfile, state: Option<&LocalR
     }
 }
 
-fn normalize_runtime_manifest(profile: &mut ProjectProfile, config_path: &Path) {
-    let Some(path) = profile.runtime_manifest.as_ref() else {
-        return;
-    };
-    if path.is_absolute() {
-        return;
-    }
-    if let Some(parent) = config_path.parent() {
-        profile.runtime_manifest = Some(parent.join(path));
-    }
-}
-
-fn normalize_runtime_artifacts_dir(profile: &mut ProjectProfile, config_path: &Path) {
-    let Some(path) = profile.runtime_artifacts_dir.as_ref() else {
-        return;
-    };
-    if path.is_absolute() {
-        return;
-    }
-    if let Some(parent) = config_path.parent() {
-        profile.runtime_artifacts_dir = Some(parent.join(path));
-    }
-}
-
-fn non_empty(value: Option<String>) -> Option<String> {
-    value
-        .map(|name| name.trim().to_string())
-        .filter(|name| !name.is_empty())
-}
-
 fn profile_write_path(start: &Path) -> Result<PathBuf, CliError> {
     Ok(find_project_config(start).unwrap_or(config_file_path()?))
 }
 
-fn write_profile_config(path: &Path, data: &[u8]) -> Result<(), CliError> {
-    if path == config_file_path()? {
-        atomic_write_private(path, data)
+fn transact_profile_document(
+    path: &Path,
+    mutate: impl FnOnce(&mut toml_edit::DocumentMut) -> Result<(), CliError>,
+) -> Result<bool, CliError> {
+    let kind = if path == config_file_path()? {
+        ConfigFileKind::Global
     } else {
-        atomic_write(path, data)
-    }
+        ConfigFileKind::Project
+    };
+    transact_document(path, kind, mutate, |_| Ok(()))
 }
 
 /// Resolve a profile and apply explicit CLI target overrides.

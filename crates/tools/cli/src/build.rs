@@ -177,6 +177,7 @@ pub fn build_project(
     bindings: &[String],
     print: &Print,
 ) -> Result<BuildResult, CliError> {
+    ensure_no_env_rustflags()?;
     crate::require_cargo()?;
 
     let cwd = std::env::current_dir()?;
@@ -198,8 +199,6 @@ pub fn build_project(
         which::which("wasm-opt").map_err(|_| CliError::WasmOptNotFound)?;
     }
 
-    print.status(format_args!("Compiling {pkg_name} to WASM..."));
-
     let mut cmd = wasm_build_command(
         &metadata.workspace_root,
         &contract_toml,
@@ -212,6 +211,8 @@ pub fn build_project(
         &metadata.workspace_root,
         cargo_args,
     )?;
+    let profile = crate::config::resolve_profile(&metadata.workspace_root, explicit_profile)?;
+    print.status(format_args!("Compiling {pkg_name} to WASM..."));
     artifacts.apply_to_command(&mut cmd);
 
     for arg in cargo_args {
@@ -230,8 +231,6 @@ pub fn build_project(
         fs::create_dir_all(parent)?;
     }
     fs::copy(&raw_wasm, &wasm)?;
-
-    let profile = crate::config::resolve_profile(&metadata.workspace_root, explicit_profile)?;
 
     if optimize {
         print.status("Optimizing with wasm-opt...");
@@ -299,6 +298,22 @@ pub fn build_project(
     })
 }
 
+/// Refuse to build when the environment carries a rustflags override.
+///
+/// Cargo lets `CARGO_ENCODED_RUSTFLAGS` / `RUSTFLAGS` — even set-but-empty —
+/// replace the project's `.cargo/config.toml` target rustflags wholesale.
+/// That drops the Groundhog link args and per-crate codegen flags such as
+/// `-Z trap-unreachable=false`, which surfaces later as link failures or
+/// artifact-validation rejections instead of an obvious build error.
+fn ensure_no_env_rustflags() -> Result<(), CliError> {
+    for var in ["CARGO_ENCODED_RUSTFLAGS", "RUSTFLAGS"] {
+        if std::env::var_os(var).is_some() {
+            return Err(CliError::EnvRustflagsSet(var));
+        }
+    }
+    Ok(())
+}
+
 /// Assemble the cargo invocation for the wasm contract build.
 ///
 /// The build is scoped to the cdylib target with `--lib`: older project RV32
@@ -332,29 +347,28 @@ fn wasm_build_command(
     cmd
 }
 
-/// Parse and validate a `--stack-size` value: bytes as decimal or `0x` hex.
+/// Parse and validate a `--stack-size` value: bytes as decimal, `0x` hex, or a
+/// `K`/`M`/`G` suffixed size such as `32K`.
 ///
 /// The value becomes the guest's `__stack_size` linker symbol, so it carries
 /// the SDK linker-script contract: a positive multiple of 16 below the 64 KiB
 /// data address space.
 pub fn parse_stack_size(value: &str) -> Result<u32, String> {
-    let parsed = match value.strip_prefix("0x") {
-        Some(hex) => u32::from_str_radix(hex, 16),
-        None => value.parse::<u32>(),
-    }
-    .map_err(|_| format!("expected bytes as decimal or 0x hex, got {value:?}"))?;
+    let parsed = crate::byte_size::parse_byte_size(value)?;
     if parsed == 0 || !parsed.is_multiple_of(16) {
         return Err(format!(
             "stack size {parsed} must be a positive multiple of 16"
         ));
     }
-    if parsed as usize >= groundhog_rv32_artifact::MAX_MEMORY_BYTES {
-        return Err(format!(
-            "stack size {parsed} must be below the {} data address space",
-            groundhog_rv32_artifact::MAX_MEMORY_BYTES
-        ));
-    }
-    Ok(parsed)
+    u32::try_from(parsed)
+        .ok()
+        .filter(|size| (*size as usize) < groundhog_rv32_artifact::MAX_MEMORY_BYTES)
+        .ok_or_else(|| {
+            format!(
+                "stack size {parsed} must be below the {} data address space",
+                groundhog_rv32_artifact::MAX_MEMORY_BYTES
+            )
+        })
 }
 
 /// True when a requested stack reserve visibly did not happen: the lowered
@@ -384,6 +398,7 @@ pub fn build_rv32_project(
     stack_size: Option<u32>,
     print: &Print,
 ) -> Result<Rv32BuildResult, CliError> {
+    ensure_no_env_rustflags()?;
     crate::require_cargo()?;
 
     let cwd = std::env::current_dir()?;
@@ -402,6 +417,7 @@ pub fn build_rv32_project(
         &metadata.workspace_root,
         cargo_args,
     )?;
+    let profile = crate::config::resolve_profile(&metadata.workspace_root, explicit_profile)?;
 
     print.status(format_args!("Compiling {pkg_name} to RV32 ELF..."));
 
@@ -497,7 +513,6 @@ pub fn build_rv32_project(
     let spec_json = finalized.as_ref().map(|f| f.json_path.clone());
     let spec_xdr = finalized.as_ref().map(|f| f.xdr_path.clone());
 
-    let profile = crate::config::resolve_profile(&metadata.workspace_root, explicit_profile)?;
     let size = fs::metadata(&rv32)?.len();
     print.status(format_args!("Built {} ({size} bytes)", rv32.display()));
 
@@ -671,18 +686,22 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn parse_stack_size_accepts_decimal_and_hex() {
+    fn parse_stack_size_accepts_decimal_hex_and_unit_suffixes() {
         assert_eq!(parse_stack_size("32768"), Ok(32768));
         assert_eq!(parse_stack_size("0x8000"), Ok(32768));
         assert_eq!(parse_stack_size("0x6000"), Ok(24576));
         assert_eq!(parse_stack_size("16"), Ok(16));
         assert_eq!(parse_stack_size("65520"), Ok(65520)); // last multiple of 16 below 64K
+        assert_eq!(parse_stack_size("32K"), Ok(32768));
+        assert_eq!(parse_stack_size("24k"), Ok(24576));
+        assert_eq!(parse_stack_size("32KiB"), Ok(32768));
     }
 
     #[test]
     fn parse_stack_size_rejects_invalid_values() {
         for bad in [
-            "0", "0x0", "24", "0x6008", "65536", "0x10000", "", "abc", "0x", "-16",
+            "0", "0x0", "24", "0x6008", "65536", "0x10000", "", "abc", "0x", "-16", "64K", "1M",
+            "1G", "2.5K",
         ] {
             assert!(
                 parse_stack_size(bad).is_err(),

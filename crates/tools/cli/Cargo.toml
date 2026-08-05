@@ -43,6 +43,7 @@ groundhog-rv32-artifact = { workspace = true }
 groundhog-rv32-lower = { workspace = true }
 groundhog-wasm-meter = { workspace = true }
 groundhog-contract-spec = { workspace = true }
+groundhog-erc20-if = { workspace = true }
 groundhog-contract-util = { workspace = true }
 groundhog-spec-tool = { workspace = true }
 groundhog-json-rpc-client = { workspace = true }
@@ -58,7 +59,7 @@ libc = { workspace = true }
 tempfile = "3"
 
 [dev-dependencies]
-serial_test = "3"
+serial_test = { workspace = true }
 
 [lints]
 workspace = true

@@ -504,10 +504,17 @@ mod tests {
         .await
         .expect("bug: connect to dead port should return promptly");
 
+        // A concurrent test can rebind the freed port before we connect, in
+        // which case the probe reaches a live listener and fails at the intro
+        // RPC instead of the connect.
         assert!(
             matches!(
                 result,
-                Err(crate::NodeSupervisorError::ViewGatewayConnect { .. })
+                Err(crate::NodeSupervisorError::ViewGatewayConnect { .. }
+                    | crate::NodeSupervisorError::ViewGatewayRpc {
+                        op: "viewgateway_intro",
+                        ..
+                    })
             ),
             "expected ViewGateway startup connection failure, got {result:?}"
         );
