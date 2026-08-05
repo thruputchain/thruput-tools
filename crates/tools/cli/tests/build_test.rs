@@ -823,6 +823,80 @@ fn build_run_rejects_stack_size_for_wasm_target() {
     ));
 }
 
+/// A user-level `RUSTFLAGS` makes cargo ignore the project's
+/// `.cargo/config.toml` target rustflags entirely, so the guard must refuse
+/// to build before cargo runs. The empty temp dir would otherwise fail with
+/// a cargo-metadata error, so seeing the rustflags error proves the guard
+/// fires first.
+#[test]
+fn build_rejects_env_rustflags_before_running_cargo() {
+    let tmp = TempDir::new().unwrap();
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_groundhog"))
+        .arg("build")
+        .current_dir(tmp.path())
+        .env("RUSTFLAGS", "-C opt-level=2")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .output()
+        .expect("bug: groundhog binary should run");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "expected build to fail: {stderr}");
+    assert!(
+        stderr.contains("RUSTFLAGS"),
+        "expected RUSTFLAGS in error, got: {stderr}"
+    );
+    assert!(
+        stderr.contains(".cargo/config.toml"),
+        "expected actionable hint pointing at .cargo/config.toml, got: {stderr}"
+    );
+}
+
+/// Cargo treats a set-but-empty `CARGO_ENCODED_RUSTFLAGS` as a full override
+/// of config rustflags, so even an empty value must be rejected.
+#[test]
+fn build_rejects_empty_cargo_encoded_rustflags() {
+    let tmp = TempDir::new().unwrap();
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_groundhog"))
+        .arg("build")
+        .current_dir(tmp.path())
+        .env("CARGO_ENCODED_RUSTFLAGS", "")
+        .env_remove("RUSTFLAGS")
+        .output()
+        .expect("bug: groundhog binary should run");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "expected build to fail: {stderr}");
+    assert!(
+        stderr.contains("CARGO_ENCODED_RUSTFLAGS"),
+        "expected CARGO_ENCODED_RUSTFLAGS in error, got: {stderr}"
+    );
+}
+
+/// The rv32 build path loses per-crate codegen flags such as
+/// `-Z trap-unreachable=false` under a user-level `RUSTFLAGS`, which only
+/// surfaces later as artifact-validation rejections — so it guards too.
+#[test]
+fn build_rv32_rejects_env_rustflags() {
+    let tmp = TempDir::new().unwrap();
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_groundhog"))
+        .args(["build", "--target", "rv32"])
+        .current_dir(tmp.path())
+        .env("RUSTFLAGS", "-C opt-level=2")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .output()
+        .expect("bug: groundhog binary should run");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "expected build to fail: {stderr}");
+    assert!(
+        stderr.contains("RUSTFLAGS"),
+        "expected RUSTFLAGS in error, got: {stderr}"
+    );
+}
+
 fn spec_string(value: &str) -> groundhog_spec_tool::ContractSpecString {
     value.try_into().expect("bug: test spec string should fit")
 }

@@ -177,6 +177,7 @@ pub fn build_project(
     bindings: &[String],
     print: &Print,
 ) -> Result<BuildResult, CliError> {
+    ensure_no_env_rustflags()?;
     crate::require_cargo()?;
 
     let cwd = std::env::current_dir()?;
@@ -297,6 +298,22 @@ pub fn build_project(
     })
 }
 
+/// Refuse to build when the environment carries a rustflags override.
+///
+/// Cargo lets `CARGO_ENCODED_RUSTFLAGS` / `RUSTFLAGS` — even set-but-empty —
+/// replace the project's `.cargo/config.toml` target rustflags wholesale.
+/// That drops the Groundhog link args and per-crate codegen flags such as
+/// `-Z trap-unreachable=false`, which surfaces later as link failures or
+/// artifact-validation rejections instead of an obvious build error.
+fn ensure_no_env_rustflags() -> Result<(), CliError> {
+    for var in ["CARGO_ENCODED_RUSTFLAGS", "RUSTFLAGS"] {
+        if std::env::var_os(var).is_some() {
+            return Err(CliError::EnvRustflagsSet(var));
+        }
+    }
+    Ok(())
+}
+
 /// Assemble the cargo invocation for the wasm contract build.
 ///
 /// The build is scoped to the cdylib target with `--lib`: older project RV32
@@ -381,6 +398,7 @@ pub fn build_rv32_project(
     stack_size: Option<u32>,
     print: &Print,
 ) -> Result<Rv32BuildResult, CliError> {
+    ensure_no_env_rustflags()?;
     crate::require_cargo()?;
 
     let cwd = std::env::current_dir()?;

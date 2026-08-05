@@ -29,6 +29,23 @@ for tmpl in counter stub; do
     echo "==> groundhog test ($tmpl)"
     "$CLI" test
 
+    # A user-level rustflags override makes cargo drop the project's
+    # .cargo/config.toml target rustflags; the CLI must refuse to build.
+    echo "==> RUSTFLAGS guard ($tmpl)"
+    for probe in 'RUSTFLAGS=-C opt-level=2' 'CARGO_ENCODED_RUSTFLAGS='; do
+        if env "$probe" "$CLI" build > guard.log 2>&1; then
+            echo "ERROR: groundhog build unexpectedly succeeded with $probe set" >&2
+            cat guard.log >&2
+            exit 1
+        fi
+        if ! grep -q "is set in the environment" guard.log; then
+            echo "ERROR: groundhog build failed for a reason other than the rustflags guard with $probe set" >&2
+            cat guard.log >&2
+            exit 1
+        fi
+    done
+    rm -f guard.log
+
     echo "==> $tmpl OK"
 done
 
