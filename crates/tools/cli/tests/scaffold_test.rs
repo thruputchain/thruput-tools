@@ -62,7 +62,7 @@ fn scaffold_counter_creates_expected_files() {
     assert!(cargo.contains(r#"name = "my-counter""#));
     assert!(cargo.contains("registry = \"groundhog\""));
     assert!(!cargo.contains("sdk/spec"));
-    assert!(cargo.contains(r#"sdk = { version = "0.17.8", registry = "groundhog" }"#));
+    assert!(cargo.contains(r#"sdk = { version = "0.17.9", registry = "groundhog" }"#));
     assert!(cargo.contains("groundhog-integration-test = ["));
     assert!(cargo.contains(r#"groundhog-json-rpc-client = { version = "0.6.2""#));
     assert!(cargo.contains("optional = true"));
