@@ -1022,9 +1022,9 @@ fi
 NODE_PID=""
 NODE_DESCENDANTS=""
 
-# Dump and restore both acquire exclusive data-directory locks, so the node must
-# be stopped. The standalone gateway was also stopped above while its backend is
-# offline.
+# Dump and restore the chain. Both actions acquire exclusive data-directory
+# locks, so the node must be stopped. The standalone gateway was also stopped
+# above while its backend is offline.
 CHAIN_ARCHIVE="$WORK/chain-dump.json"
 CHAIN_DUMP_JSON="$(run_json "chain dump" "$CLI" --json chain dump \
     --data-dir "$NODE_DATA_DIR" --output "$CHAIN_ARCHIVE")"
