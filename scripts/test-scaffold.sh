@@ -46,6 +46,34 @@ for tmpl in counter stub; do
     done
     rm -f guard.log
 
+    # Wrapping a generated project into a parent workspace without adopting
+    # its .cargo/config.toml makes cargo (run from the workspace root) drop
+    # the Groundhog rustflags: no linker script means the rv32 build can
+    # never produce a valid artifact, so the CLI must refuse with the
+    # copy-the-config hint. The check asks `cargo config get` (nightly-only),
+    # so the project's toolchain pin moves to the workspace root the way a
+    # bootstrapper would. CARGO_HOME is pointed at an empty directory so a
+    # developer's global cargo config cannot satisfy the check.
+    echo "==> rv32 linker-script guard ($tmpl)"
+    cd "$WORK"
+    mkdir -p "wrapped-$tmpl" "empty-cargo-home"
+    mv "test-$tmpl" "wrapped-$tmpl/test-$tmpl"
+    printf '[workspace]\nmembers = ["test-%s"]\nresolver = "2"\n' "$tmpl" \
+        > "wrapped-$tmpl/Cargo.toml"
+    cp "wrapped-$tmpl/test-$tmpl/rust-toolchain.toml" "wrapped-$tmpl/"
+    cd "wrapped-$tmpl/test-$tmpl"
+    if CARGO_HOME="$WORK/empty-cargo-home" "$CLI" build > guard.log 2>&1; then
+        echo "ERROR: groundhog build unexpectedly succeeded without the Groundhog rustflags" >&2
+        cat guard.log >&2
+        exit 1
+    fi
+    if ! grep -q 'no `-T` linker script' guard.log; then
+        echo "ERROR: groundhog build failed for a reason other than the rv32 linker-script guard" >&2
+        cat guard.log >&2
+        exit 1
+    fi
+    rm -f guard.log
+
     echo "==> $tmpl OK"
 done
 
