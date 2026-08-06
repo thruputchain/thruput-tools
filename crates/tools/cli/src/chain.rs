@@ -18,11 +18,15 @@ use crate::{CliError, Print};
 const ARCHIVE_SCHEMA_VERSION: u32 = 1;
 const REPORT_SCHEMA_VERSION: u32 = 1;
 const ARCHIVE_KIND: &str = "groundhog-chain-dump";
+// Files are compressed independently in bounded chunks so restore never has to
+// hold an entire database file in memory.
 const CHUNK_SIZE: usize = 1024 * 1024;
 const COMPRESSION_LEVEL: i32 = 3;
 const DATA_DIR_METADATA: &str = "hog-devnode-data.json";
 const LOCK_FILE: &str = ".hog-devnode.lock";
 const NODE_PID_FILE: &str = "hog-devnode.pid";
+// Runtime state is deliberately excluded: endpoints, PIDs, and other process
+// metadata must be recreated when the restored node starts.
 const PERSISTENT_DIRS: [&str; 3] = ["ramdb", "events", "indexer"];
 
 /// Stable machine-readable result for `groundhog chain dump`.
@@ -55,6 +59,7 @@ pub struct ChainRestoreReport {
 struct ArchiveStats {
     file_count: usize,
     uncompressed_bytes: u64,
+    // Tracks both duplicate entries and the required persistent-state entries.
     paths: HashSet<String>,
 }
 
@@ -74,6 +79,8 @@ pub fn dump(
             output.display().to_string(),
         ));
     }
+    // Holding the node's locks gives every archived file a single stopped-node
+    // snapshot rather than a mixture of database states.
     let _lock = DataDirLock::acquire(&data_dir)?;
 
     if output.exists() && !overwrite {
@@ -88,6 +95,8 @@ pub fn dump(
     ensure_outside_data_dir(&data_dir, &output)?;
 
     let task = print.start_task(format!("Dumping chain state from {}", data_dir.display()));
+    // Build and fsync beside the destination, then rename into place. This
+    // avoids exposing a partial archive and keeps the rename on one filesystem.
     let mut temp = tempfile::Builder::new()
         .prefix(".groundhog-chain-dump-")
         .tempfile_in(output_parent)
@@ -141,8 +150,11 @@ pub fn dump(
     Ok(())
 }
 
+// Streams the archive envelope and file records to the destination.
 fn write_archive(file: &mut File, files: &[(String, PathBuf)]) -> Result<u64, CliError> {
     let mut writer = BufWriter::new(file);
+    // Write the envelope directly instead of materializing its base64 payloads
+    // in a serde_json::Value; large chain dumps remain memory-bounded.
     write!(
         writer,
         "{{\"schemaVersion\":{ARCHIVE_SCHEMA_VERSION},\"kind\":\"{ARCHIVE_KIND}\",\"producerVersion\":"
@@ -191,6 +203,8 @@ pub fn restore(
         .map_err(|error| archive_io(format!("open archive '{}': {error}", input.display())))?;
     let data_dir = prepare_restore_data_dir(data_dir)?;
     ensure_outside_data_dir(&data_dir, &input)?;
+    // Keep the destination locked through validation and the directory swap so
+    // a node cannot start against state that is about to be replaced.
     let _old_lock = DataDirLock::acquire(&data_dir)?;
     if data_dir_is_populated(&data_dir)? && !force {
         return Err(CliError::ChainRestoreRequiresForce(
@@ -204,6 +218,8 @@ pub fn restore(
             data_dir.display()
         ))
     })?;
+    // Restore into a sibling directory first. No unverified archive content is
+    // installed into the live data directory.
     let staging = tempfile::Builder::new()
         .prefix(".groundhog-chain-restore-")
         .tempdir_in(parent)
@@ -237,9 +253,13 @@ pub fn restore(
         path: input.display().to_string(),
         message,
     })?;
+    // Flush file contents during decoding and directory entries here before the
+    // staged replacement below.
     sync_tree_directories(staging.path())?;
 
     let backup = unused_backup_path(parent, data_dir.file_name())?;
+    // The two-step swap preserves the old directory for rollback if installing
+    // the staged restore fails.
     fs::rename(&data_dir, &backup)
         .map_err(|error| archive_io(format!("move existing data directory aside: {error}")))?;
     let staging_path = staging.keep();
@@ -287,6 +307,7 @@ pub fn restore(
     Ok(())
 }
 
+// Rejects platforms that cannot provide the locking and permission guarantees used here.
 fn require_unix() -> Result<(), CliError> {
     if cfg!(unix) {
         Ok(())
@@ -295,10 +316,12 @@ fn require_unix() -> Result<(), CliError> {
     }
 }
 
+// Wraps archive-specific context in the CLI's stable error category.
 fn archive_io(message: String) -> CliError {
     CliError::ChainArchiveIo(message)
 }
 
+// Resolves a relative path against the process working directory without requiring it to exist.
 fn absolute_path(path: &Path) -> Result<PathBuf, CliError> {
     if path.is_absolute() {
         Ok(path.to_path_buf())
@@ -307,6 +330,7 @@ fn absolute_path(path: &Path) -> Result<PathBuf, CliError> {
     }
 }
 
+// Validates that a data directory exists and is not itself a symlink.
 fn require_existing_data_dir(path: &Path) -> Result<PathBuf, CliError> {
     let metadata = fs::symlink_metadata(path).map_err(|error| {
         archive_io(format!(
@@ -328,6 +352,7 @@ fn require_existing_data_dir(path: &Path) -> Result<PathBuf, CliError> {
     })
 }
 
+// Creates a missing restore destination and returns its canonical path.
 fn prepare_restore_data_dir(path: &Path) -> Result<PathBuf, CliError> {
     let absolute = absolute_path(path)?;
     if !absolute.exists() {
@@ -337,7 +362,10 @@ fn prepare_restore_data_dir(path: &Path) -> Result<PathBuf, CliError> {
     require_existing_data_dir(&absolute)
 }
 
+// Ensures the archive cannot be read from or written into the managed state tree.
 fn ensure_outside_data_dir(data_dir: &Path, archive: &Path) -> Result<(), CliError> {
+    // Canonicalize the existing portion of the path so `..` and symlinked
+    // parents cannot disguise an archive located inside the data directory.
     let candidate = if archive.exists() {
         fs::canonicalize(archive)?
     } else {
@@ -361,6 +389,7 @@ fn ensure_outside_data_dir(data_dir: &Path, archive: &Path) -> Result<(), CliErr
     Ok(())
 }
 
+// Collects the persistent state files in deterministic archive-path order.
 fn collect_archive_files(data_dir: &Path) -> Result<Vec<(String, PathBuf)>, CliError> {
     let metadata = data_dir.join(DATA_DIR_METADATA);
     require_regular_file(&metadata)?;
@@ -385,6 +414,7 @@ fn collect_archive_files(data_dir: &Path) -> Result<Vec<(String, PathBuf)>, CliE
     Ok(files)
 }
 
+// Recursively collects regular files while rejecting links and special files.
 fn collect_directory_files(
     data_dir: &Path,
     directory: &Path,
@@ -394,6 +424,8 @@ fn collect_directory_files(
         let entry = entry?;
         let path = entry.path();
         let metadata = fs::symlink_metadata(&path)?;
+        // Never follow links while walking state: that could capture files
+        // outside the data directory or make the snapshot self-referential.
         if metadata.file_type().is_symlink() {
             return Err(archive_io(format!(
                 "symlink '{}' is not allowed in a chain dump",
@@ -417,6 +449,7 @@ fn collect_directory_files(
     Ok(())
 }
 
+// Converts a native relative path into the archive's portable slash-separated form.
 fn portable_relative_path(path: &Path) -> Result<String, CliError> {
     let mut parts = Vec::new();
     for component in path.components() {
@@ -430,9 +463,11 @@ fn portable_relative_path(path: &Path) -> Result<String, CliError> {
             archive_io(format!("archive path '{}' is not UTF-8", path.display()))
         })?);
     }
+    // Archive paths always use `/`, independent of the host path separator.
     Ok(parts.join("/"))
 }
 
+// Requires a path to name a real regular file rather than a link or special file.
 fn require_regular_file(path: &Path) -> Result<(), CliError> {
     let metadata = fs::symlink_metadata(path).map_err(|error| {
         archive_io(format!(
@@ -449,6 +484,7 @@ fn require_regular_file(path: &Path) -> Result<(), CliError> {
     Ok(())
 }
 
+// Computes a file's lowercase SHA-256 digest without loading the whole file.
 fn hash_file(path: &Path) -> Result<String, CliError> {
     let mut file = BufReader::new(File::open(path)?);
     let mut hasher = Sha256::new();
@@ -463,6 +499,7 @@ fn hash_file(path: &Path) -> Result<String, CliError> {
     Ok(hex::encode(hasher.finalize()))
 }
 
+// Compresses and base64-encodes one file as a bounded JSON chunk sequence.
 fn write_file_chunks(path: &Path, writer: &mut impl Write) -> Result<(), CliError> {
     let mut file = BufReader::new(File::open(path)?);
     let mut buffer = vec![0u8; CHUNK_SIZE];
@@ -489,9 +526,12 @@ struct ArchiveSeed<'a> {
     root: &'a Path,
 }
 
+// The seed/visitor hierarchy decodes directly from the input stream and writes
+// each validated file into staging without retaining the full archive in RAM.
 impl<'de> DeserializeSeed<'de> for ArchiveSeed<'_> {
     type Value = ArchiveStats;
 
+    // Starts streaming deserialization of the top-level archive object.
     fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
     where
         D: Deserializer<'de>,
@@ -507,10 +547,12 @@ struct ArchiveVisitor<'a> {
 impl<'de> Visitor<'de> for ArchiveVisitor<'_> {
     type Value = ArchiveStats;
 
+    // Describes the top-level shape expected by serde diagnostics.
     fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("a canonical Groundhog chain archive")
     }
 
+    // Validates archive metadata before delegating the file stream.
     fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
     where
         A: MapAccess<'de>,
@@ -533,6 +575,9 @@ impl<'de> Visitor<'de> for ArchiveVisitor<'_> {
                 "contentEncoding" => encoding = Some(map.next_value::<String>()?),
                 "chunkSizeBytes" => chunk_size = Some(map.next_value::<usize>()?),
                 "files" => {
+                    // The writer emits format metadata before `files`; enforcing
+                    // that order lets chunks be decoded only after their codec
+                    // and size contract have been validated.
                     if schema != Some(ARCHIVE_SCHEMA_VERSION)
                         || kind.as_deref() != Some(ARCHIVE_KIND)
                         || compression.as_deref() != Some("zstd")
@@ -569,6 +614,7 @@ struct FilesSeed<'a> {
 impl<'de> DeserializeSeed<'de> for FilesSeed<'_> {
     type Value = ArchiveStats;
 
+    // Starts deserializing file records while carrying aggregate statistics forward.
     fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
     where
         D: Deserializer<'de>,
@@ -588,10 +634,12 @@ struct FilesVisitor<'a> {
 impl<'de> Visitor<'de> for FilesVisitor<'_> {
     type Value = ArchiveStats;
 
+    // Describes the file-list shape expected by serde diagnostics.
     fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("an array of archived files")
     }
 
+    // Restores each file record and returns the accumulated archive statistics.
     fn visit_seq<A>(mut self, mut sequence: A) -> Result<Self::Value, A::Error>
     where
         A: SeqAccess<'de>,
@@ -612,6 +660,7 @@ struct FileSeed<'a> {
 impl<'de> DeserializeSeed<'de> for FileSeed<'_> {
     type Value = ();
 
+    // Starts deserializing one file record into the shared restore state.
     fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
     where
         D: Deserializer<'de>,
@@ -631,10 +680,12 @@ struct FileVisitor<'a> {
 impl<'de> Visitor<'de> for FileVisitor<'_> {
     type Value = ();
 
+    // Describes the per-file object shape expected by serde diagnostics.
     fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("a canonical archived file")
     }
 
+    // Writes one file into staging and verifies its declared size and digest.
     fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
     where
         A: MapAccess<'de>,
@@ -651,6 +702,9 @@ impl<'de> Visitor<'de> for FileVisitor<'_> {
                     size = Some(value.parse::<u64>().map_err(A::Error::custom)?);
                 }
                 "chunks" => {
+                    // Field ordering is part of the canonical streaming format:
+                    // the target and declared limit must be known before bytes
+                    // are accepted from the archive.
                     let relative = path
                         .as_deref()
                         .ok_or_else(|| A::Error::custom("file path must precede chunks"))?;
@@ -720,6 +774,7 @@ struct ChunksSeed {
 impl<'de> DeserializeSeed<'de> for ChunksSeed {
     type Value = RestoredFile;
 
+    // Starts decoding a file's chunk sequence into its newly created destination.
     fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
     where
         D: Deserializer<'de>,
@@ -743,15 +798,19 @@ struct ChunksVisitor {
 impl<'de> Visitor<'de> for ChunksVisitor {
     type Value = RestoredFile;
 
+    // Describes the encoded chunk-list shape expected by serde diagnostics.
     fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("an array of zstd+base64 chunks")
     }
 
+    // Decodes chunks into the target while enforcing the file's declared size.
     fn visit_seq<A>(mut self, mut sequence: A) -> Result<Self::Value, A::Error>
     where
         A: SeqAccess<'de>,
     {
         while let Some(encoded) = sequence.next_element::<String>()? {
+            // Base64 plus zstd overhead should stay well below twice the raw
+            // chunk size; reject oversized input before allocating its decode.
             if encoded.len() > (CHUNK_SIZE * 2) {
                 return Err(A::Error::custom("encoded archive chunk is too large"));
             }
@@ -778,7 +837,10 @@ impl<'de> Visitor<'de> for ChunksVisitor {
     }
 }
 
+// Restricts an archive entry to the known persistent-state namespace.
 fn validate_archive_path(path: &str) -> Result<(), String> {
+    // Accept only portable relative paths. This blocks absolute paths,
+    // traversal components, and Windows separators before joining with root.
     if path.is_empty() || path.len() > 4096 || path.contains('\\') {
         return Err(format!("unsafe archive path '{path}'"));
     }
@@ -801,6 +863,7 @@ fn validate_archive_path(path: &str) -> Result<(), String> {
     Err(format!("archive path '{path}' is outside persistent state"))
 }
 
+// Confirms that the minimum state needed to start a node was restored.
 fn validate_required_entries(stats: &ArchiveStats) -> Result<(), String> {
     if !stats.paths.contains(DATA_DIR_METADATA) {
         return Err(format!("archive is missing {DATA_DIR_METADATA}"));
@@ -812,6 +875,7 @@ fn validate_required_entries(stats: &ArchiveStats) -> Result<(), String> {
 }
 
 #[cfg(unix)]
+// Creates a restore target exclusively with owner-only permissions.
 fn create_restore_file(path: &Path) -> Result<File, std::io::Error> {
     use std::os::unix::fs::OpenOptionsExt;
 
@@ -823,13 +887,17 @@ fn create_restore_file(path: &Path) -> Result<File, std::io::Error> {
 }
 
 #[cfg(not(unix))]
+// Provides a compile-time fallback for platforms rejected by `require_unix`.
 fn create_restore_file(path: &Path) -> Result<File, std::io::Error> {
     OpenOptions::new().write(true).create_new(true).open(path)
 }
 
+// Distinguishes durable chain contents from harmless process-management files.
 fn data_dir_is_populated(data_dir: &Path) -> Result<bool, CliError> {
     for entry in fs::read_dir(data_dir)? {
         let name = entry?.file_name();
+        // Lock files and ephemeral runtime metadata may be created by command
+        // setup; they do not represent chain state that requires `--force`.
         if name != LOCK_FILE && name != NODE_PID_FILE && name != "runtime" {
             return Ok(true);
         }
@@ -837,6 +905,7 @@ fn data_dir_is_populated(data_dir: &Path) -> Result<bool, CliError> {
     Ok(false)
 }
 
+// Finds a collision-free sibling name for the data directory being replaced.
 fn unused_backup_path(
     parent: &Path,
     file_name: Option<&std::ffi::OsStr>,
@@ -858,7 +927,9 @@ fn unused_backup_path(
     ))
 }
 
+// Flushes every directory in a restored tree from the leaves upward.
 fn sync_tree_directories(root: &Path) -> Result<(), CliError> {
+    // Recurses depth-first so child directory entries are durable before their parents.
     fn visit(path: &Path) -> Result<(), CliError> {
         for entry in fs::read_dir(path)? {
             let entry = entry?;
@@ -866,18 +937,22 @@ fn sync_tree_directories(root: &Path) -> Result<(), CliError> {
                 visit(&entry.path())?;
             }
         }
+        // Sync children before their parent so every restored directory entry
+        // reaches stable storage before the top-level rename is persisted.
         sync_directory(path)
     }
 
     visit(root)
 }
 
+// Flushes changes to a directory entry to stable storage.
 fn sync_directory(path: &Path) -> Result<(), CliError> {
     File::open(path)?.sync_all()?;
     Ok(())
 }
 
 #[cfg(unix)]
+// Applies owner-only access to restored directories.
 fn set_directory_permissions(path: &Path) -> Result<(), CliError> {
     use std::os::unix::fs::PermissionsExt;
 
@@ -886,6 +961,7 @@ fn set_directory_permissions(path: &Path) -> Result<(), CliError> {
 }
 
 #[cfg(not(unix))]
+// Leaves permissions unchanged on platforms rejected by `require_unix`.
 fn set_directory_permissions(_path: &Path) -> Result<(), CliError> {
     Ok(())
 }
@@ -896,7 +972,10 @@ struct DataDirLock {
 
 impl DataDirLock {
     #[cfg(unix)]
+    // Acquires all lock identities used by supported local-node tooling.
     fn acquire(data_dir: &Path) -> Result<Self, CliError> {
+        // The supervisor and older tooling use these two lock identities. Both
+        // must be held to exclude every supported node startup path.
         let files = vec![
             acquire_lock_file(data_dir, LOCK_FILE)?,
             acquire_lock_file(data_dir, NODE_PID_FILE)?,
@@ -905,12 +984,14 @@ impl DataDirLock {
     }
 
     #[cfg(not(unix))]
+    // Reports the unsupported platform instead of providing weaker locking.
     fn acquire(_data_dir: &Path) -> Result<Self, CliError> {
         Err(CliError::UnsupportedOs(std::env::consts::OS.to_owned()))
     }
 }
 
 #[cfg(unix)]
+// Opens and non-blockingly locks one owner-only lock file without following symlinks.
 fn acquire_lock_file(data_dir: &Path, name: &str) -> Result<File, CliError> {
     use std::os::fd::AsRawFd;
     use std::os::unix::fs::OpenOptionsExt;
@@ -921,6 +1002,8 @@ fn acquire_lock_file(data_dir: &Path, name: &str) -> Result<File, CliError> {
         .write(true)
         .create(true)
         .mode(0o600)
+        // O_NOFOLLOW closes the final-component symlink race after the earlier
+        // directory validation; O_CLOEXEC keeps locks out of child processes.
         .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
         .open(&path)
         .map_err(|error| archive_io(format!("open lock '{}': {error}", path.display())))?;
@@ -942,6 +1025,7 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    // Builds the smallest representative persistent data directory for archive tests.
     fn fixture() -> TempDir {
         let temp = TempDir::new().unwrap();
         fs::write(
@@ -959,6 +1043,7 @@ mod tests {
     }
 
     #[test]
+    // Verifies that every persistent file survives a dump-and-restore cycle unchanged.
     fn dump_and_restore_round_trip() {
         let source = fixture();
         let parent = TempDir::new().unwrap();
@@ -989,6 +1074,7 @@ mod tests {
     }
 
     #[test]
+    // Verifies that traversal, absolute, foreign-root, and backslash paths are rejected.
     fn archive_path_validation_rejects_traversal_and_unknown_roots() {
         for path in [
             "../ramdb/0.log",
@@ -1002,6 +1088,7 @@ mod tests {
     }
 
     #[test]
+    // Verifies that restore detects content whose digest no longer matches the archive.
     fn restore_rejects_tampered_file_hash() {
         let source = fixture();
         let parent = TempDir::new().unwrap();
@@ -1038,6 +1125,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    // Verifies that dumping never follows a symlink from persistent state.
     fn dump_rejects_symlinks_in_persistent_state() {
         use std::os::unix::fs::symlink;
 
@@ -1061,6 +1149,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    // Verifies that two archive operations cannot hold the data-directory lock together.
     fn dump_rejects_concurrent_archive_operation() {
         let source = fixture();
         let _lock = DataDirLock::acquire(source.path()).unwrap();
@@ -1078,6 +1167,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    // Verifies that a node-held PID lock prevents a dump from starting.
     fn dump_rejects_running_node_pid_lock() {
         let source = fixture();
         let _node_lock = acquire_lock_file(source.path(), NODE_PID_FILE).unwrap();
@@ -1099,6 +1189,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    // Verifies that a node-held PID lock prevents restore from replacing live state.
     fn restore_rejects_running_node_pid_lock() {
         let source = fixture();
         let parent = TempDir::new().unwrap();
