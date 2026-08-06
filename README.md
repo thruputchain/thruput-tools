@@ -60,6 +60,14 @@ options:
 groundhog node --data-dir .groundhog/node
 ```
 
+With the node stopped, the persistent directory can be saved and restored as
+a single compressed JSON archive:
+
+```bash
+groundhog chain dump --data-dir .groundhog/node --output chain-backup.json
+groundhog chain restore --data-dir .groundhog/node --input chain-backup.json --force
+```
+
 Then deploy and call it from the same project directory in another terminal:
 
 ```bash

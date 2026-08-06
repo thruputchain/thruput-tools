@@ -812,16 +812,23 @@ mod tests {
             )
             .await
         });
-        tokio::time::sleep(Duration::from_millis(100)).await;
         // Dropping the holder unlinks the path before the close releases the
         // lock, so a contender that keeps its pre-unlink descriptor would win
-        // the lock on an unreachable inode and write its PID there.
-        drop(holder);
+        // the lock on an unreachable inode and write its PID there. Release
+        // from a separate OS thread so an overloaded single-threaded Tokio
+        // executor cannot delay this past the contender's retry deadline.
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            drop(holder);
+        });
 
         let mut guard = contender
             .await
             .expect("bug: contender task should finish")
             .expect("bug: contender should acquire after the holder releases");
+        release
+            .join()
+            .expect("bug: holder release thread should finish");
         guard.write(4321).expect("bug: PID write should succeed");
         assert_eq!(
             fs::read_to_string(&path).expect("bug: written PID should be visible at the path"),

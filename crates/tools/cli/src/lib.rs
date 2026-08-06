@@ -8,6 +8,7 @@ pub mod balance;
 pub mod build;
 pub mod byte_size;
 pub mod call;
+pub mod chain;
 pub mod checks;
 pub(crate) mod codec;
 pub(crate) mod codegen;

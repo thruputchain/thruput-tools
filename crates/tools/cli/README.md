@@ -481,6 +481,23 @@ only when you need exact filters or debug/trace-level output; if set,
 See `../../docs/cli/2026-04-25-hogd-dev-node-hybrid.md` for the
 durable backend direction.
 
+### `groundhog chain dump|restore`
+
+Back up or restore all persistent state for a stopped local node as one
+zstd-compressed, JSON-encoded archive. The archive includes RAMDB, events, the
+indexer, and devnode metadata; runtime manifests, PID files, and lock files are
+recreated instead of archived.
+
+```bash
+groundhog chain dump --data-dir .groundhog/node --output chain-backup.json
+groundhog chain restore --data-dir .groundhog/node --input chain-backup.json --force
+```
+
+Both commands fail while `groundhog node` is using the data directory. Dump
+refuses an existing output unless `--overwrite` is passed. Restore requires
+`--force` before replacing populated state and validates every archived file's
+size and SHA-256 before installing it.
+
 ### `groundhog completion <shell>`
 
 Generate shell completions for bash, zsh, fish, elvish, or
