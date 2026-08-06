@@ -79,7 +79,10 @@ fn target_dir() -> std::path::PathBuf {
 }
 
 #[cfg(unix)]
+// Creates the minimum persistent on-disk state accepted by `groundhog chain dump`.
 fn write_chain_data_fixture(root: &std::path::Path) {
+    // The archive contract includes these database directories but excludes
+    // transient runtime state such as endpoints and process identifiers.
     std::fs::create_dir_all(root.join("ramdb")).unwrap();
     std::fs::create_dir_all(root.join("events")).unwrap();
     std::fs::create_dir_all(root.join("indexer")).unwrap();
@@ -95,6 +98,7 @@ fn write_chain_data_fixture(root: &std::path::Path) {
 
 #[cfg(unix)]
 #[test]
+// Exercises the JSON CLI contract and the overwrite guard through the real binary.
 fn chain_dump_and_restore_emit_structured_results_and_require_force() {
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("source");
@@ -102,6 +106,8 @@ fn chain_dump_and_restore_emit_structured_results_and_require_force() {
     let archive = temp.path().join("chain.json");
     write_chain_data_fixture(&source);
 
+    // Dump the fixture and verify both the machine-readable report and the
+    // archive side effect exposed to callers.
     let dump = groundhog()
         .args(["--json", "chain", "dump", "--data-dir"])
         .arg(&source)
@@ -120,6 +126,8 @@ fn chain_dump_and_restore_emit_structured_results_and_require_force() {
     assert_eq!(dump_json["data"]["fileCount"], 4);
     assert!(archive.is_file());
 
+    // A populated destination must remain protected unless the caller opts in
+    // to replacement with `--force`.
     write_chain_data_fixture(&destination);
     let refused = groundhog()
         .args(["--json", "chain", "restore", "--data-dir"])
@@ -135,6 +143,8 @@ fn chain_dump_and_restore_emit_structured_results_and_require_force() {
         "chain_restore_requires_force"
     );
 
+    // Make the destination observably different so the final assertion proves
+    // that forced restore replaced its contents with the archived source state.
     std::fs::write(destination.join("ramdb/0.log"), b"different").unwrap();
     let restored = groundhog()
         .args(["--json", "chain", "restore", "--force", "--data-dir"])
@@ -148,6 +158,8 @@ fn chain_dump_and_restore_emit_structured_results_and_require_force() {
         "{}",
         String::from_utf8_lossy(&restored.stderr)
     );
+    // Successful restore reports through stdout and preserves the stable
+    // command-specific schema version used by automation.
     let restore_json: serde_json::Value = serde_json::from_slice(&restored.stdout).unwrap();
     assert_eq!(restore_json["command"], "chain.restore");
     assert_eq!(restore_json["data"]["schemaVersion"], 1);
