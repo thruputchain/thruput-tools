@@ -1022,6 +1022,9 @@ fi
 NODE_PID=""
 NODE_DESCENDANTS=""
 
+# Dump and restore both acquire exclusive data-directory locks, so the node must
+# be stopped. The standalone gateway was also stopped above while its backend is
+# offline.
 CHAIN_ARCHIVE="$WORK/chain-dump.json"
 CHAIN_DUMP_JSON="$(run_json "chain dump" "$CLI" --json chain dump \
     --data-dir "$NODE_DATA_DIR" --output "$CHAIN_ARCHIVE")"
@@ -1029,6 +1032,8 @@ CHAIN_DUMP_JSON="$(run_json "chain dump" "$CLI" --json chain dump \
     || die "chain dump returned the wrong command envelope"
 [[ -s "$CHAIN_ARCHIVE" ]] || die "chain dump did not create an archive"
 
+# Restore over the original, populated directory to cover the replacement path;
+# `--force` is the explicit opt-in required to replace existing chain state.
 CHAIN_RESTORE_JSON="$(run_json "chain restore" "$CLI" --json chain restore --force \
     --data-dir "$NODE_DATA_DIR" --input "$CHAIN_ARCHIVE")"
 [[ "$(json_field command "$CHAIN_RESTORE_JSON")" == "chain.restore" ]] \
@@ -1063,6 +1068,8 @@ PERSISTED_VALUE_AFTER="$(json_field data.returnValue "$PERSISTED_VIEW_AFTER")"
     || die "persisted counter changed across restart: before=$PERSISTED_VALUE_BEFORE after=$PERSISTED_VALUE_AFTER"
 log "persistent restart recovered counter value: $PERSISTED_VALUE_AFTER"
 
+# Reading the old value proves the snapshot survived; committing another call
+# also proves the restored databases remain writable and can advance the chain.
 POST_RESTORE_INCREMENT_JSON="$(run_json "increment after chain restore" \
     "$CLI" --json call "$PROJECT_NAME" increment 1)"
 assert_call_succeeded "increment after chain restore" "$POST_RESTORE_INCREMENT_JSON"
