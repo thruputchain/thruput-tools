@@ -614,6 +614,7 @@ fn build_rv32_project_compiles_and_lowers_elf() {
                 interface_name: spec_string("Counter"),
                 interface_version: spec_string("0.1.0"),
                 throws: vec![].try_into().unwrap(),
+                emits: vec![].try_into().unwrap(),
             },
         },
         // Spec shaking keeps only anchored interfaces; a real build emits
