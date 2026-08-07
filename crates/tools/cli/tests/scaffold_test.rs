@@ -64,7 +64,7 @@ fn scaffold_counter_creates_expected_files() {
     assert!(!cargo.contains("sdk/spec"));
     assert!(cargo.contains(r#"sdk = { version = "0.18.0", registry = "groundhog" }"#));
     assert!(cargo.contains("groundhog-integration-test = ["));
-    assert!(cargo.contains(r#"groundhog-json-rpc-client = { version = "0.7.0""#));
+    assert!(cargo.contains(r#"groundhog-json-rpc-client = { version = "0.6.2""#));
     assert!(cargo.contains("optional = true"));
     assert!(cargo.contains(r#"tokio = { version = "1", features = ["macros", "rt-multi-thread"]"#));
     assert!(!cargo.contains(r#"features = ["storage"]"#));
