@@ -1205,6 +1205,7 @@ async fn terminate_child(child: &mut Child, grace: Duration) -> Result<(), SimEr
     Ok(())
 }
 
+#[cfg(unix)]
 fn signal_process_group(pid: u32, signal: libc::c_int) -> Result<(), SimError> {
     let target = -pid.cast_signed();
     let rc = unsafe { libc::kill(target, signal) };
