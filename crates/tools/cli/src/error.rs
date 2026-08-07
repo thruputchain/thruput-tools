@@ -130,6 +130,15 @@ pub enum CliError {
          produce a broken artifact"
     )]
     EnvRustflagsSet(&'static str),
+    #[error(
+        "no `-T` linker script in the effective rustflags for \
+         `[target.riscv32im-unknown-none-elf]`; the rv32 link would use the default memory \
+         layout and produce an artifact that fails validation"
+    )]
+    Rv32LinkerScriptNotConfigured {
+        workspace_root: String,
+        member_config: Option<String>,
+    },
     #[error("status check found warnings")]
     StatusHasWarnings,
     #[error("command emitted structured failure output")]
@@ -426,6 +435,7 @@ impl CliError {
             Self::InvalidTestOptions(_) => "invalid_test_options",
             Self::InvalidBuildOptions(_) => "invalid_build_options",
             Self::EnvRustflagsSet(_) => "env_rustflags_set",
+            Self::Rv32LinkerScriptNotConfigured { .. } => "rv32_linker_script_not_configured",
             Self::StatusHasWarnings => "status_has_warnings",
             Self::CommandReportedFailure => "command_reported_failure",
             Self::NodeSupervisor(_) => "node_supervisor_error",
@@ -541,10 +551,25 @@ impl CliError {
                 "remove `--target-dir` from passthrough args or \
                  config when using the CLI target directory option",
             )),
-            Self::CargoFailed(_) | Self::CargoFailedWithOutput { .. } => Some(Cow::Borrowed(
+            Self::CargoFailed(_) => Some(Cow::Borrowed(
                 "see the cargo output above for the underlying build \
                  or test failure",
             )),
+            Self::CargoFailedWithOutput { stderr, .. } => {
+                Some(if stderr.contains("groundhog-rv32.ld") {
+                    Cow::Borrowed(
+                        "the link references `groundhog-rv32.ld`, which the Groundhog SDK's \
+                         build script supplies through a linker search path; check that the \
+                         `sdk` dependency resolves for this build, and rebuild after \
+                         `cargo clean` to re-run its build script",
+                    )
+                } else {
+                    Cow::Borrowed(
+                        "see the cargo output above for the underlying build \
+                         or test failure",
+                    )
+                })
+            }
             Self::DirExists(path) => Some(Cow::Owned(format!(
                 "remove `{path}`, or choose a different project name"
             ))),
@@ -857,6 +882,22 @@ impl CliError {
                  rustflags, append them to the `[target.*]` rustflags lists in the project's \
                  `.cargo/config.toml` instead"
             ))),
+            Self::Rv32LinkerScriptNotConfigured {
+                workspace_root,
+                member_config,
+            } => Some(match member_config {
+                Some(member_config) => Cow::Owned(format!(
+                    "cargo reads `.cargo/config.toml` from its invocation directory upward \
+                     and the build runs cargo at the workspace root — copy {member_config} \
+                     (and the adjacent `contract.toml`) into {workspace_root}/.cargo/ so the \
+                     Groundhog rustflags apply"
+                )),
+                None => Cow::Owned(format!(
+                    "merge the `[target.riscv32im-unknown-none-elf]` rustflags from a \
+                     `groundhog new` project's `.cargo/config.toml` into \
+                     {workspace_root}/.cargo/config.toml"
+                )),
+            }),
         }
     }
 

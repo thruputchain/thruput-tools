@@ -83,9 +83,38 @@ pub fn run_cargo(
             String::from_utf8_lossy(&output.stderr).into_owned(),
         ))
     } else {
-        let status = cmd.status()?;
+        // Tee stderr: stream it to the user as cargo produces it, and keep a
+        // copy so failure hints can react to what cargo actually said (for
+        // example a link error naming the Groundhog linker script). Piping
+        // stderr would otherwise turn cargo's color off, so ask for it back
+        // when our own stderr is a terminal and the user has not chosen.
+        use std::io::{IsTerminal, Read, Write};
+        if std::io::stderr().is_terminal() && std::env::var_os("CARGO_TERM_COLOR").is_none() {
+            cmd.env("CARGO_TERM_COLOR", "always");
+        }
+        cmd.stderr(std::process::Stdio::piped());
+        let mut child = cmd.spawn()?;
+        let mut stderr_pipe = child
+            .stderr
+            .take()
+            .expect("bug: child stderr is piped above");
+        let mut captured = Vec::new();
+        let mut chunk = [0u8; 8192];
+        loop {
+            let read = stderr_pipe.read(&mut chunk)?;
+            if read == 0 {
+                break;
+            }
+            std::io::stderr().write_all(&chunk[..read])?;
+            captured.extend_from_slice(&chunk[..read]);
+        }
+        let status = child.wait()?;
         if !status.success() {
-            return Err(CliError::CargoFailed(status.code().unwrap_or(1)));
+            return Err(CliError::CargoFailedWithOutput {
+                code: status.code().unwrap_or(1),
+                stdout: String::new(),
+                stderr: String::from_utf8_lossy(&captured).into_owned(),
+            });
         }
         Ok((String::new(), String::new()))
     }

@@ -183,7 +183,6 @@ pub fn build_project(
     let cwd = std::env::current_dir()?;
     let metadata = cargo_metadata_with_artifacts(artifacts)?;
     let pkg_name = resolve_package(&metadata, package, &cwd)?;
-    let contract_toml = require_contract_toml(&metadata.workspace_root)?;
 
     // The built package's own directory. Equals `workspace_root` for a
     // single-package project, but is the member directory in a workspace —
@@ -194,6 +193,8 @@ pub fn build_project(
         .find(|p| p.name == pkg_name)
         .and_then(|p| p.manifest_path.parent())
         .map_or_else(|| metadata.workspace_root.clone(), Path::to_path_buf);
+
+    let contract_toml = require_contract_toml(&metadata.workspace_root)?;
 
     if optimize {
         which::which("wasm-opt").map_err(|_| CliError::WasmOptNotFound)?;
@@ -412,6 +413,7 @@ pub fn build_rv32_project(
         .and_then(|p| p.manifest_path.parent())
         .map_or_else(|| metadata.workspace_root.clone(), Path::to_path_buf);
 
+    check_rv32_build_config(&metadata.workspace_root, &package_root, print)?;
     artifacts::ensure_no_target_dir_passthrough_conflicts(
         artifacts,
         &metadata.workspace_root,
@@ -664,6 +666,164 @@ pub fn cargo_metadata_with_artifacts(
 
     serde_json::from_slice(&output.stdout).map_err(|e| CliError::CargoMetadataFailed(e.to_string()))
 }
+/// The linker script the Groundhog SDK supplies for rv32 builds.
+pub(crate) const RV32_LINKER_SCRIPT: &str = "groundhog-rv32.ld";
+
+/// What cargo's effective config says about the rv32 build.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Rv32ConfigCheck {
+    /// The Groundhog linker script is in the effective rustflags.
+    GroundhogScript,
+    /// A different `-T` linker script is configured.
+    CustomScript(String),
+    /// Rustflags resolve (or are unset) without any `-T` linker script.
+    NoScript,
+    /// Cargo rejected the probe: the toolchain resolved at the workspace
+    /// root is not nightly, which `cargo config` requires.
+    NotNightly,
+    /// The probe failed some other way; carries a short reason.
+    Unverifiable(String),
+}
+
+/// Verify the rv32 build config cargo will actually use before compiling.
+///
+/// Cargo discovers config from its invocation directory upward plus
+/// `CARGO_HOME`, and the build runs cargo from the workspace root — so a
+/// project wrapped into a parent workspace after `groundhog new` leaves the
+/// generated config behind in the member directory where cargo never reads
+/// it. Linking without a `-T` script cannot produce a valid artifact, so
+/// that refuses with the copy-the-config hint; every other imperfect probe
+/// outcome warns with its diagnosis and lets the build proceed.
+fn check_rv32_build_config(
+    workspace_root: &Path,
+    package_root: &Path,
+    print: &Print,
+) -> Result<(), CliError> {
+    match probe_rv32_config(workspace_root) {
+        Rv32ConfigCheck::GroundhogScript => Ok(()),
+        Rv32ConfigCheck::CustomScript(script) => {
+            print.warn(format_args!(
+                "the effective rv32 rustflags select linker script `-T{script}` instead of \
+                 `-T{RV32_LINKER_SCRIPT}`; the build proceeds, but the script must preserve \
+                 the Groundhog memory layout for the artifact to validate"
+            ));
+            Ok(())
+        }
+        Rv32ConfigCheck::NoScript => Err(CliError::Rv32LinkerScriptNotConfigured {
+            workspace_root: workspace_root.display().to_string(),
+            member_config: member_leftover_cargo_config(workspace_root, package_root)
+                .map(|path| path.display().to_string()),
+        }),
+        Rv32ConfigCheck::NotNightly => {
+            print.warn(format_args!(
+                "could not verify the rv32 build config: cargo at the workspace root {} is \
+                 not a nightly toolchain, which Groundhog builds require; if this project \
+                 was wrapped into a workspace, copy `rust-toolchain.toml` to the workspace \
+                 root alongside `.cargo/config.toml`",
+                workspace_root.display()
+            ));
+            Ok(())
+        }
+        Rv32ConfigCheck::Unverifiable(reason) => {
+            print.warn(format_args!(
+                "could not verify the rv32 build config (`cargo config get` failed: {reason})"
+            ));
+            Ok(())
+        }
+    }
+}
+
+/// Ask cargo for the effective `target.riscv32im-unknown-none-elf.rustflags`
+/// as seen from the workspace root, where the build runs — cargo applies its
+/// own config discovery (invocation directory upward, `CARGO_HOME`, and
+/// environment overrides). A `RUSTFLAGS` environment override is invisible
+/// to `cargo config get`, which is why `ensure_no_env_rustflags` guards it
+/// separately.
+fn probe_rv32_config(workspace_root: &Path) -> Rv32ConfigCheck {
+    let output = Command::new("cargo")
+        .current_dir(workspace_root)
+        .args([
+            "config",
+            "get",
+            &format!("target.{RV32_TARGET_TRIPLE}.rustflags"),
+            "--format",
+            "json-value",
+            "-Zunstable-options",
+        ])
+        .output();
+    match output {
+        Ok(output) => classify_rv32_config_probe(
+            output.status.success(),
+            &String::from_utf8_lossy(&output.stdout),
+            &String::from_utf8_lossy(&output.stderr),
+        ),
+        Err(error) => Rv32ConfigCheck::Unverifiable(error.to_string()),
+    }
+}
+
+fn classify_rv32_config_probe(success: bool, stdout: &str, stderr: &str) -> Rv32ConfigCheck {
+    if !success {
+        return if stderr.contains("is not set") {
+            Rv32ConfigCheck::NoScript
+        } else if stderr.contains("nightly") {
+            Rv32ConfigCheck::NotNightly
+        } else {
+            Rv32ConfigCheck::Unverifiable(
+                stderr
+                    .lines()
+                    .next()
+                    .unwrap_or("no error output")
+                    .to_string(),
+            )
+        };
+    }
+    let tokens: Vec<String> = match serde_json::from_str::<serde_json::Value>(stdout.trim()) {
+        Ok(serde_json::Value::Array(values)) => values
+            .into_iter()
+            .filter_map(|value| value.as_str().map(str::to_string))
+            .collect(),
+        Ok(serde_json::Value::String(flags)) => {
+            flags.split_whitespace().map(str::to_string).collect()
+        }
+        _ => {
+            return Rv32ConfigCheck::Unverifiable(
+                "unexpected `cargo config get` output".to_string(),
+            );
+        }
+    };
+    match rv32_linker_script(&tokens) {
+        Some(script) if script == RV32_LINKER_SCRIPT => Rv32ConfigCheck::GroundhogScript,
+        Some(script) => Rv32ConfigCheck::CustomScript(script),
+        None => Rv32ConfigCheck::NoScript,
+    }
+}
+
+/// The linker script selected by a `-T` inside `link-arg=`/`link-args=`
+/// rustflags tokens, if any.
+fn rv32_linker_script(tokens: &[String]) -> Option<String> {
+    tokens.iter().find_map(|token| {
+        let (_, value) = token
+            .split_once("link-arg=")
+            .or_else(|| token.split_once("link-args="))?;
+        value
+            .split_whitespace()
+            .find_map(|arg| arg.strip_prefix("-T"))
+            .map(str::to_string)
+    })
+}
+
+/// The generated cargo config a workspace member kept after being wrapped in
+/// a parent workspace, honoring cargo's legacy extension-less `config` name.
+fn member_leftover_cargo_config(workspace_root: &Path, package_root: &Path) -> Option<PathBuf> {
+    if package_root == workspace_root {
+        return None;
+    }
+    [".cargo/config.toml", ".cargo/config"]
+        .into_iter()
+        .map(|name| package_root.join(name))
+        .find(|path| path.is_file())
+}
+
 /// Check that `.cargo/contract.toml` exists at the workspace root.
 fn require_contract_toml(workspace_root: &Path) -> Result<PathBuf, CliError> {
     let path = workspace_root.join(".cargo/contract.toml");
@@ -679,11 +839,120 @@ fn require_contract_toml(workspace_root: &Path) -> Result<PathBuf, CliError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CargoMetadata, MetadataPackage, parse_stack_size, rv32_entrypoints_feature,
-        stack_size_defsym_ignored,
+        CargoMetadata, MetadataPackage, Rv32ConfigCheck, classify_rv32_config_probe,
+        member_leftover_cargo_config, parse_stack_size, rv32_entrypoints_feature,
+        rv32_linker_script, stack_size_defsym_ignored,
     };
     use std::path::PathBuf;
     use tempfile::TempDir;
+
+    fn tokens(raw: &[&str]) -> Vec<String> {
+        raw.iter().map(|token| (*token).to_string()).collect()
+    }
+
+    #[test]
+    fn probe_accepts_groundhog_script_in_array_flags() {
+        assert_eq!(
+            classify_rv32_config_probe(
+                true,
+                r#"["-C","target-feature=+unaligned-scalar-mem","-C","link-arg=-Tgroundhog-rv32.ld","-C","link-arg=-static"]"#,
+                ""
+            ),
+            Rv32ConfigCheck::GroundhogScript
+        );
+    }
+
+    #[test]
+    fn probe_accepts_groundhog_script_in_string_flags() {
+        assert_eq!(
+            classify_rv32_config_probe(true, r#""-C link-arg=-Tgroundhog-rv32.ld""#, ""),
+            Rv32ConfigCheck::GroundhogScript
+        );
+    }
+
+    #[test]
+    fn probe_reports_custom_linker_script() {
+        assert_eq!(
+            classify_rv32_config_probe(true, r#"["-C","link-arg=-Tcustom.ld"]"#, ""),
+            Rv32ConfigCheck::CustomScript("custom.ld".into())
+        );
+    }
+
+    #[test]
+    fn probe_flags_without_linker_script_mean_no_script() {
+        assert_eq!(
+            classify_rv32_config_probe(true, r#"["-C","opt-level=3"]"#, ""),
+            Rv32ConfigCheck::NoScript
+        );
+    }
+
+    #[test]
+    fn probe_unset_rustflags_mean_no_script() {
+        assert_eq!(
+            classify_rv32_config_probe(
+                false,
+                "",
+                "error: config value `target.riscv32im-unknown-none-elf.rustflags` is not set\n"
+            ),
+            Rv32ConfigCheck::NoScript
+        );
+    }
+
+    #[test]
+    fn probe_detects_non_nightly_toolchain() {
+        assert_eq!(
+            classify_rv32_config_probe(
+                false,
+                "",
+                "error: the `-Z` flag is only accepted on the nightly channel of Cargo, but \
+                 this is the `stable` channel\n"
+            ),
+            Rv32ConfigCheck::NotNightly
+        );
+    }
+
+    #[test]
+    fn probe_reports_other_failures_as_unverifiable() {
+        let checked = classify_rv32_config_probe(false, "", "error: something exploded\nmore\n");
+        assert_eq!(
+            checked,
+            Rv32ConfigCheck::Unverifiable("error: something exploded".into())
+        );
+        // Successful probe with output the classifier cannot parse is equally
+        // inconclusive.
+        assert!(matches!(
+            classify_rv32_config_probe(true, "not json", ""),
+            Rv32ConfigCheck::Unverifiable(_)
+        ));
+    }
+
+    #[test]
+    fn linker_script_extraction_handles_flag_spellings() {
+        assert_eq!(
+            rv32_linker_script(&tokens(&["-Clink-arg=-Tfoo.ld"])),
+            Some("foo.ld".into())
+        );
+        assert_eq!(
+            rv32_linker_script(&tokens(&["link-args=-zstack-size=30000 -Tbar.ld"])),
+            Some("bar.ld".into())
+        );
+        assert_eq!(rv32_linker_script(&tokens(&["-C", "opt-level=3"])), None);
+    }
+
+    #[test]
+    fn member_leftover_config_reported_only_for_distinct_member_dir() {
+        let tmp = TempDir::new().unwrap();
+        let member = tmp.path().join("member");
+        std::fs::create_dir_all(member.join(".cargo")).unwrap();
+        std::fs::write(member.join(".cargo/config.toml"), "").unwrap();
+
+        assert_eq!(
+            member_leftover_cargo_config(tmp.path(), &member),
+            Some(member.join(".cargo/config.toml"))
+        );
+        // A single-package project is its own workspace root; nothing to name.
+        assert_eq!(member_leftover_cargo_config(&member, &member), None);
+    }
 
     #[test]
     fn parse_stack_size_accepts_decimal_hex_and_unit_suffixes() {
