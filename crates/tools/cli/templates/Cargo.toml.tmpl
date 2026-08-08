@@ -27,7 +27,7 @@ dev = ["sdk/dev"]
 groundhog-integration-test = ["dep:groundhog-json-rpc-client", "dep:tokio"]
 
 [dependencies]
-sdk = { version = "0.18.0", registry = "groundhog" }
+sdk = { version = "0.18.1", registry = "groundhog" }
 
 [target.'cfg(not(any(target_arch = "wasm32", target_arch = "riscv32")))'.dependencies]
 groundhog-json-rpc-client = { version = "0.7.0", registry = "groundhog", optional = true }
