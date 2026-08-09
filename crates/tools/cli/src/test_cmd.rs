@@ -1566,8 +1566,13 @@ fn executed_tests(outputs: &[TestRunOutput]) -> Vec<String> {
 
 fn test_command(root: &Path, project_name: &str, test_target: &str, features: &str) -> Command {
     let mut cargo_cmd = Command::new("cargo");
+    // Host tests must compile for the host. An inherited CARGO_BUILD_TARGET
+    // (e.g. exported for embedded work) would cross-compile the test harness
+    // and fail; no explicit --target is passed so host artifacts share
+    // target/debug with plain cargo test.
     cargo_cmd
         .current_dir(root)
+        .env_remove("CARGO_BUILD_TARGET")
         .arg("test")
         .arg("-p")
         .arg(project_name)
@@ -2237,6 +2242,24 @@ mod tests {
                 .any(|window| window[0] == "--test" && window[1] == RV32_TEST_TARGET)
         );
         assert!(args.iter().any(|arg| arg == "--include-ignored"));
+    }
+
+    #[test]
+    fn test_command_clears_inherited_cargo_build_target() {
+        let command = test_command(
+            std::path::Path::new("/project"),
+            "demo",
+            WASM_TEST_TARGET,
+            "dev",
+        );
+
+        let removed = command
+            .get_envs()
+            .any(|(key, value)| key == "CARGO_BUILD_TARGET" && value.is_none());
+        assert!(
+            removed,
+            "expected CARGO_BUILD_TARGET to be cleared so host tests never cross-compile"
+        );
     }
 
     #[test]
