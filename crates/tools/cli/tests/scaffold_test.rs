@@ -114,6 +114,9 @@ fn scaffold_counter_creates_expected_files() {
     assert!(config.contains("link-arg=-Tgroundhog-rv32.ld"));
     assert!(config.contains("trap-unreachable=false"));
 
+    assert!(config.contains("[profile.dev.build-override]"));
+    assert!(config.contains("# [profile.dev.package.\"*\"]"));
+
     let toolchain = fs::read_to_string(dir.join("rust-toolchain.toml")).unwrap();
     assert!(toolchain.contains("riscv32im-unknown-none-elf"));
 

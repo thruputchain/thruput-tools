@@ -7,7 +7,6 @@ use crate::test_json::{
 use crate::{CliError, Print};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::{self, Read, Write};
@@ -127,7 +126,6 @@ struct SelectedFilter<'a> {
 struct TestCommandContext<'a> {
     root: &'a Path,
     project_name: &'a str,
-    host_target: &'a str,
     test_target: &'a str,
     features: &'a str,
     env: &'a [(OsString, OsString)],
@@ -377,7 +375,6 @@ fn run_integration_target_with_dev_node(
     print: &Print,
 ) -> Result<(IntegrationRun, Vec<crate::checks::Finding>), CliError> {
     let build = build_integration_artifact(package, target, artifacts, explicit_profile, print)?;
-    let host_target = host_target()?;
     artifacts::ensure_no_target_dir_passthrough_conflicts(
         artifacts,
         &build.project_root,
@@ -409,7 +406,6 @@ fn run_integration_target_with_dev_node(
     let runtime_manifest = started.readiness().manifest_path.clone();
     let result = run_integration_against_node(
         &build,
-        &host_target,
         &rpc_url,
         runtime_manifest,
         options,
@@ -512,7 +508,6 @@ fn local_node_shutdown_warning(context: &'static str, error: &CliError) -> crate
 #[allow(clippy::too_many_arguments)]
 fn run_integration_against_node(
     build: &IntegrationBuild,
-    host_target: &str,
     rpc_url: &str,
     runtime_manifest: Option<std::path::PathBuf>,
     options: &TestOptions,
@@ -553,7 +548,6 @@ fn run_integration_against_node(
     let context = TestCommandContext {
         root: &build.project_root,
         project_name: &build.project_name,
-        host_target,
         test_target: INTEGRATION_TEST_TARGET,
         features: build.test_features,
         env: &env,
@@ -883,7 +877,6 @@ fn run_once_with_options(
     }
     print_test_status(options, rerun_filters.len(), print);
 
-    let host_target = host_target()?;
     let mut env = local_test_environment(&build.target_directory);
     let credential_environment = crate::auth::executor_credential_environment()?;
     env.extend(credential_environment.set.iter().cloned());
@@ -892,7 +885,6 @@ fn run_once_with_options(
     let context = TestCommandContext {
         root: &root,
         project_name: &build.project_name,
-        host_target: &host_target,
         test_target: test_target_for(options.target),
         features: "dev",
         env: &env,
@@ -1250,15 +1242,6 @@ fn test_mode_for_artifact(kind: ArtifactKind) -> TestMode {
     }
 }
 
-fn host_target() -> Result<String, CliError> {
-    let os = match env::consts::OS {
-        "macos" => "apple-darwin",
-        "linux" => "unknown-linux-gnu",
-        os => return Err(CliError::UnsupportedOs(os.to_string())),
-    };
-    Ok(format!("{}-{os}", env::consts::ARCH))
-}
-
 fn selected_filters<'a>(
     options: &'a TestOptions,
     rerun_filters: &'a [String],
@@ -1295,7 +1278,6 @@ fn run_test_commands(
         let mut cargo_cmd = test_command(
             context.root,
             context.project_name,
-            context.host_target,
             context.test_target,
             context.features,
         );
@@ -1582,13 +1564,7 @@ fn executed_tests(outputs: &[TestRunOutput]) -> Vec<String> {
         .collect()
 }
 
-fn test_command(
-    root: &Path,
-    project_name: &str,
-    host_target: &str,
-    test_target: &str,
-    features: &str,
-) -> Command {
+fn test_command(root: &Path, project_name: &str, test_target: &str, features: &str) -> Command {
     let mut cargo_cmd = Command::new("cargo");
     cargo_cmd
         .current_dir(root)
@@ -1597,8 +1573,6 @@ fn test_command(
         .arg(project_name)
         .arg("--test")
         .arg(test_target)
-        .arg("--target")
-        .arg(host_target)
         .arg("--features")
         .arg(features)
         .arg("--");
@@ -2167,7 +2141,6 @@ mod tests {
         let command = test_command(
             std::path::Path::new("/project"),
             "demo",
-            "x86_64-unknown-linux-gnu",
             INTEGRATION_TEST_TARGET,
             "dev,groundhog-integration-test",
         );
@@ -2197,7 +2170,6 @@ mod tests {
         let command = test_command(
             std::path::Path::new("/project"),
             "demo",
-            "x86_64-unknown-linux-gnu",
             INTEGRATION_TEST_TARGET,
             "dev",
         );
@@ -2232,7 +2204,6 @@ mod tests {
         let command = test_command(
             std::path::Path::new("/project"),
             "demo",
-            "x86_64-unknown-linux-gnu",
             WASM_TEST_TARGET,
             "dev",
         );
@@ -2253,7 +2224,6 @@ mod tests {
         let command = test_command(
             std::path::Path::new("/project"),
             "demo",
-            "x86_64-unknown-linux-gnu",
             RV32_TEST_TARGET,
             "dev",
         );
