@@ -1267,6 +1267,9 @@ fn run_test_commands(
     options: &TestOptions,
     filters: &[SelectedFilter<'_>],
 ) -> Result<Vec<TestRunOutput>, CliError> {
+    if let Some(warning) = build_target_override_warning() {
+        context.print.warn(warning);
+    }
     let mut outputs = Vec::new();
     for filter in filters {
         if options.rerun
@@ -1564,15 +1567,25 @@ fn executed_tests(outputs: &[TestRunOutput]) -> Vec<String> {
         .collect()
 }
 
+/// Warning for host test runs when an ambient `CARGO_BUILD_TARGET` will
+/// redirect the test build away from cargo's default host target. The
+/// variable is honored as a deliberate choice; the warning makes a value
+/// leaked from unrelated cross-compilation work self-diagnosing.
+fn build_target_override_warning() -> Option<String> {
+    std::env::var("CARGO_BUILD_TARGET").ok().map(|triple| {
+        format!(
+            "CARGO_BUILD_TARGET={triple} is set; host tests will build for that target. \
+             Unset it if this run should use the default host target."
+        )
+    })
+}
+
 fn test_command(root: &Path, project_name: &str, test_target: &str, features: &str) -> Command {
     let mut cargo_cmd = Command::new("cargo");
-    // Host tests must compile for the host. An inherited CARGO_BUILD_TARGET
-    // (e.g. exported for embedded work) would cross-compile the test harness
-    // and fail; no explicit --target is passed so host artifacts share
-    // target/debug with plain cargo test.
+    // No explicit --target: host test artifacts share target/debug with
+    // plain cargo test and IDE builds instead of a per-triple host tree.
     cargo_cmd
         .current_dir(root)
-        .env_remove("CARGO_BUILD_TARGET")
         .arg("test")
         .arg("-p")
         .arg(project_name)
@@ -1838,10 +1851,11 @@ mod tests {
         ArtifactKind, FAILURE_CACHE_VERSION, FailureCache, INTEGRATION_TEST_TARGET,
         IntegrationTestOptions, RV32_TEST_TARGET, SelectedFilter, TestHarnessOptions, TestOptions,
         TestRunOutput, WASM_TEST_TARGET, WatchContext, aggregate_summary, apply_harness_options,
-        apply_test_environment, combined_output, derive_summary_from_cases, extract_failed_tests,
-        failure_cache_path, filter_cached_tests, integration_test_features, next_cached_failures,
-        parse_summary_line, parse_test_case_line, read_failure_cache, should_stop_rerun,
-        should_watch_file, test_command, update_failure_cache, watch_snapshot, write_failure_cache,
+        apply_test_environment, build_target_override_warning, combined_output,
+        derive_summary_from_cases, extract_failed_tests, failure_cache_path, filter_cached_tests,
+        integration_test_features, next_cached_failures, parse_summary_line, parse_test_case_line,
+        read_failure_cache, should_stop_rerun, should_watch_file, test_command,
+        update_failure_cache, watch_snapshot, write_failure_cache,
     };
     use crate::test_json::{
         IntegrationTestInfo, TEST_JSON_SCHEMA_VERSION, TestArtifactInfo, TestCase, TestCaseStatus,
@@ -2245,7 +2259,7 @@ mod tests {
     }
 
     #[test]
-    fn test_command_clears_inherited_cargo_build_target() {
+    fn test_command_preserves_inherited_cargo_build_target() {
         let command = test_command(
             std::path::Path::new("/project"),
             "demo",
@@ -2253,12 +2267,28 @@ mod tests {
             "dev",
         );
 
-        let removed = command
+        let touched = command
             .get_envs()
-            .any(|(key, value)| key == "CARGO_BUILD_TARGET" && value.is_none());
+            .any(|(key, _)| key == "CARGO_BUILD_TARGET");
         assert!(
-            removed,
-            "expected CARGO_BUILD_TARGET to be cleared so host tests never cross-compile"
+            !touched,
+            "a deliberately set CARGO_BUILD_TARGET should reach cargo test untouched"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn build_target_override_warning_reports_inherited_target() {
+        unsafe { std::env::set_var("CARGO_BUILD_TARGET", "riscv32im-unknown-none-elf") };
+        let warning = build_target_override_warning();
+        unsafe { std::env::remove_var("CARGO_BUILD_TARGET") };
+
+        let warning = warning.expect("expected a warning when CARGO_BUILD_TARGET is set");
+        assert!(warning.contains("CARGO_BUILD_TARGET=riscv32im-unknown-none-elf"));
+
+        assert!(
+            build_target_override_warning().is_none(),
+            "no warning expected when CARGO_BUILD_TARGET is unset"
         );
     }
 
