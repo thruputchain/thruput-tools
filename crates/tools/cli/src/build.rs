@@ -183,7 +183,7 @@ pub fn build_project(
     let cwd = std::env::current_dir()?;
     let metadata = cargo_metadata_with_artifacts(artifacts)?;
     let pkg_name = resolve_package(&metadata, package, &cwd)?;
-    check_contract_raw_spec_format(pkg_name, print)?;
+    check_contract_raw_spec_format(pkg_name, cargo_args, print)?;
 
     // The built package's own directory. Equals `workspace_root` for a
     // single-package project, but is the member directory in a workspace —
@@ -406,7 +406,7 @@ pub fn build_rv32_project(
     let cwd = std::env::current_dir()?;
     let metadata = cargo_metadata_with_artifacts(artifacts)?;
     let pkg_name = resolve_package(&metadata, package, &cwd)?;
-    check_contract_raw_spec_format(pkg_name, print)?;
+    check_contract_raw_spec_format(pkg_name, cargo_args, print)?;
     let rv32_feature = rv32_entrypoints_feature(&metadata, pkg_name);
     let package_root = metadata
         .packages
@@ -728,16 +728,31 @@ impl DependencyPackage {
     }
 }
 
+/// Cargo flags that constrain how the manifest may be resolved.
+///
+/// The preflight resolves the dependency graph, which is exactly what these
+/// restrict, so a build that asked for them must not have them dropped: a
+/// `--locked` build whose preflight omits it can rewrite the lockfile the
+/// build was promised would not change, and an `--offline` build can reach
+/// the network.
+const MANIFEST_RESOLVE_FLAGS: [&str; 3] = ["--locked", "--offline", "--frozen"];
+
 /// Run `cargo metadata` over the resolved dependency graph.
 ///
 /// Deliberately a separate call from [`cargo_metadata_with_artifacts`], which
 /// passes `--no-deps`: resolving the full graph is slower and can hit the
 /// network on a cold checkout, and no other caller needs dependencies.
-fn cargo_metadata_with_deps() -> Result<DependencyMetadata, CliError> {
-    let output = Command::new("cargo")
-        .arg("metadata")
-        .arg("--format-version")
-        .arg("1")
+fn cargo_metadata_with_deps(cargo_args: &[String]) -> Result<DependencyMetadata, CliError> {
+    let mut command = Command::new("cargo");
+    command.arg("metadata").arg("--format-version").arg("1");
+    for arg in cargo_args
+        .iter()
+        .filter(|arg| MANIFEST_RESOLVE_FLAGS.contains(&arg.as_str()))
+    {
+        command.arg(arg);
+    }
+
+    let output = command
         .output()
         .map_err(|e| CliError::CargoMetadataFailed(e.to_string()))?;
 
@@ -820,14 +835,21 @@ fn check_dependency_raw_spec_format(
 /// Groundhog contract and is left alone. An unavailable dependency graph
 /// warns rather than refuses, so an offline or vendored build still
 /// completes: only a format this build genuinely cannot read is a hard error.
-fn check_contract_raw_spec_format(pkg_name: &str, print: &Print) -> Result<(), CliError> {
-    match cargo_metadata_with_deps() {
+fn check_contract_raw_spec_format(
+    pkg_name: &str,
+    cargo_args: &[String],
+    print: &Print,
+) -> Result<(), CliError> {
+    match cargo_metadata_with_deps(cargo_args) {
         Ok(metadata) => check_dependency_raw_spec_format(&metadata, pkg_name),
         Err(error) => {
             print.warn(format_args!(
-                "could not verify the contract's spec format before building \
-                 ({error}); a version mismatch will surface as a spec parse \
-                 failure after the build instead"
+                "could not check which raw contract-spec section this \
+                 contract emits ({error}); this CLI reads \
+                 `{}` — the embedded spec section format, not a crate \
+                 version — so a mismatch will now surface as a spec parse \
+                 failure after the build instead",
+                groundhog_spec_tool::RAW_SECTION_NAME
             ));
             Ok(())
         }

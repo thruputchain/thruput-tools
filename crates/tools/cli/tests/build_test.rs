@@ -1381,6 +1381,7 @@ fn rv32_build_with_declared_raw_spec_format(declared: u32) -> String {
     write_scaffold_cargo_config(&project_root);
 
     let cargo_args_log = project_root.join("cargo-args.log");
+    let metadata_args_log = project_root.join("metadata-args.log");
     // `--no-deps` reports workspace members only, so the preflight has to ask
     // for the resolved graph: serve the SDK package on that call alone, and
     // the test fails if the preflight reads the wrong one.
@@ -1415,7 +1416,8 @@ fn rv32_build_with_declared_raw_spec_format(declared: u32) -> String {
     fs::write(
         &cargo,
         format!(
-            "#!/bin/sh\nif [ \"$1\" = \"metadata\" ]; then\n  case \"$*\" in\n    *--no-deps*) printf '%s' '{workspace_metadata}' ;;\n    *) printf '%s' '{dep_graph_metadata}' ;;\n  esac\n  exit 0\nfi\nprintf '%s\\n' \"$*\" >> '{}'\n",
+            "#!/bin/sh\nif [ \"$1\" = \"metadata\" ]; then\n  case \"$*\" in\n    *--no-deps*) printf '%s' '{workspace_metadata}' ;;\n    *) printf '%s\\n' \"$*\" >> '{}'; printf '%s' '{dep_graph_metadata}' ;;\n  esac\n  exit 0\nfi\nprintf '%s\\n' \"$*\" >> '{}'\n",
+            metadata_args_log.display(),
             cargo_args_log.display()
         ),
     )
@@ -1454,6 +1456,14 @@ fn rv32_build_with_declared_raw_spec_format(declared: u32) -> String {
         !cargo_args_log.exists(),
         "preflight must refuse before cargo runs, but cargo was invoked with: {}",
         fs::read_to_string(&cargo_args_log).unwrap_or_default()
+    );
+    // The caller asked for `--locked`; a preflight that resolves the graph
+    // without it can rewrite the lockfile the build was promised would not
+    // change. `--offline` and `--frozen` carry the same contract.
+    let metadata_args = fs::read_to_string(&metadata_args_log).unwrap_or_default();
+    assert!(
+        metadata_args.contains("--locked"),
+        "the preflight metadata call must honor the build's manifest flags, got: {metadata_args}"
     );
 
     message
