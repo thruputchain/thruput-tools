@@ -214,13 +214,7 @@ fn classify_submit_rpc_error(error: &rpc_driver::RpcError) -> RpcServerError {
     RpcServerError::BackendUnavailable(format!("hogd-dev scheduler submit failed: {error}"))
 }
 
-fn chain_tip_from_db_tip(
-    DbTip {
-        value,
-        storage_long_hash: _,
-        id: _,
-    }: DbTip,
-) -> Result<ChainTip, RpcServerError> {
+fn chain_tip_from_db_tip(DbTip { value, .. }: DbTip) -> Result<ChainTip, RpcServerError> {
     let block_hash = consensus_value_hash(&value).map_err(|error| {
         RpcServerError::BackendUnavailable(format!(
             "hogd-dev scheduler returned an unencodable consensus value: {error}"

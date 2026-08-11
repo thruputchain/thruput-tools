@@ -4,10 +4,13 @@ use groundhog_scheduler::{
     DbSchedResult, DbTip, SchedulerGetTipResult, sched_coord::SchedulerCoord_SchedulerCoord1_Client,
 };
 use groundhog_xdr::{
+    contract::{Contract, ContractType, DeployedContractHash},
     genesis::{GenesisConfiguration, InitialConfigurationList},
+    precompiles::HogexecPrecompiledNativeContracts,
     storage_cost::StorageCostModelXdr,
-    types::ExtensionPoint,
+    types::{ExtensionPoint, SHA256Hash},
 };
+use sha2::{Digest, Sha256};
 
 use crate::NodeSupervisorError;
 
@@ -103,6 +106,19 @@ fn dev_genesis_config() -> GenesisConfiguration {
             replay_cache_cost_per_entry: 7,
             balance_cost: 1_234,
         },
+        default_wallet: native_default_wallet_hash(),
+    }
+}
+
+fn native_default_wallet_hash() -> DeployedContractHash {
+    let contract = Contract::kNative {
+        native_contract_id: HogexecPrecompiledNativeContracts::kNativeContractDefaultWallet,
+    };
+    let encoded = xdrs::txs::encode(&contract).expect("native contract XDR encoding is infallible");
+    DeployedContractHash {
+        hash: SHA256Hash::from(<[u8; 32]>::from(Sha256::digest(encoded))),
+        contract_size: 0,
+        contract_type: ContractType::kNative,
     }
 }
 

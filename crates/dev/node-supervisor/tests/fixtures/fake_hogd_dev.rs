@@ -34,6 +34,7 @@ use groundhog_scheduler::{
     sched_coord::{SchedulerCoord_SchedulerCoord1, SchedulerCoord_SchedulerCoord1_Dispatcher},
 };
 use groundhog_xdr::PROTOCOL_VERSION;
+use groundhog_xdr::contract::{ContractType, DeployedContractHash};
 use groundhog_xdr::event::IdentifiedEvent;
 use groundhog_xdr::genesis::GenesisConfiguration;
 use groundhog_xdr::header::{ProposalContext, ProposalHeader};
@@ -774,6 +775,11 @@ impl FakeScheduler {
         DbTip {
             id: 0,
             storage_long_hash: [0u8; 2048].into(),
+            default_wallet: DeployedContractHash {
+                hash: SHA256Hash::from([0; 32]),
+                contract_size: 0,
+                contract_type: ContractType::kNative,
+            },
             value: ConsensusValue {
                 protocol: Protocol::new(0),
                 ext: ExtensionPoint::_0,

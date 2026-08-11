@@ -1570,7 +1570,7 @@ mod tests {
     };
     use groundhog_xdr::{
         auth_claim::{AuthClaim, AuthClaim_source_address_claim},
-        contract::ContractEntrypointID,
+        contract::{ContractEntrypointID, ContractType, DeployedContractHash},
         genesis::GenesisConfiguration,
         header::{ProposalContext, ProposalHeader},
         invoke_flag::InvokeFlag,
@@ -1739,6 +1739,11 @@ mod tests {
         DbTip {
             id: 1,
             storage_long_hash: [0u8; 2048].into(),
+            default_wallet: DeployedContractHash {
+                hash: SHA256Hash::from([0; 32]),
+                contract_size: 0,
+                contract_type: ContractType::kNative,
+            },
             value: ConsensusValue {
                 protocol: ConsensusProtocol::new(0),
                 ext: ExtensionPoint::_0,

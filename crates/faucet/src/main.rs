@@ -6,10 +6,15 @@ use groundhog_faucet::{
 use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 
+const DISTRIBUTION_VERSION: &str = match option_env!("GROUNDHOG_DISTRIBUTION_VERSION") {
+    Some(version) => version,
+    None => env!("CARGO_PKG_VERSION"),
+};
+
 #[derive(Debug, Parser)]
 #[command(
     name = "groundhog-faucet",
-    version,
+    version = DISTRIBUTION_VERSION,
     about = "Groundhog Devnet faucet service"
 )]
 struct Cli {

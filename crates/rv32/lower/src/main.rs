@@ -14,9 +14,14 @@ use groundhog_rv32_lower::{
     FORMAT_FINGERPRINT, LowerError, MetadataInput, lower, render_metadata, summary_json,
 };
 
+const DISTRIBUTION_VERSION: &str = match option_env!("GROUNDHOG_DISTRIBUTION_VERSION") {
+    Some(version) => version,
+    None => env!("CARGO_PKG_VERSION"),
+};
+
 /// Lower a RISC-V rv32im contract ELF to a Groundhog v5 RV32 artifact.
 #[derive(Parser)]
-#[command(name = "rv32-lower", version, about)]
+#[command(name = "rv32-lower", version = DISTRIBUTION_VERSION, about)]
 struct Cli {
     /// Input rv32 ELF (the `<contract>-rv32` cargo build output).
     #[arg(long)]

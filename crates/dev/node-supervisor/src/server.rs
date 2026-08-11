@@ -470,7 +470,10 @@ where
         read,
         view,
         RpcServerConfig::default().with_view_gas_limit(options.view_gas_limit),
-        BuildInfo::new(env!("CARGO_PKG_VERSION"), option_env!("GIT_COMMIT")),
+        BuildInfo::new(
+            option_env!("GROUNDHOG_DISTRIBUTION_VERSION").unwrap_or(env!("CARGO_PKG_VERSION")),
+            option_env!("GIT_COMMIT"),
+        ),
     );
     let mut module = RpcModule::new(());
     // `merge` only fails on duplicate method names, which is a compile-time
