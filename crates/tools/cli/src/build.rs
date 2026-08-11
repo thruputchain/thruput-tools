@@ -416,6 +416,7 @@ pub fn build_rv32_project(
         .map_or_else(|| metadata.workspace_root.clone(), Path::to_path_buf);
 
     check_rv32_build_config(&metadata.workspace_root, &package_root, print)?;
+    let contract_toml = require_contract_toml(&metadata.workspace_root)?;
     artifacts::ensure_no_target_dir_passthrough_conflicts(
         artifacts,
         &metadata.workspace_root,
@@ -426,11 +427,15 @@ pub fn build_rv32_project(
     print.status(format_args!("Compiling {pkg_name} to RV32 ELF..."));
 
     // `--stack-size` switches to `cargo rustc`: its trailing flags append to
-    // the final rustc invocation, composing with the project's own
-    // .cargo/config.toml rustflags (RUSTFLAGS or --config would replace the
-    // whole target rustflags list, losing the linker script).
+    // the final rustc invocation, which is the only way to add a one-off
+    // `--defsym` on top of the project's own .cargo/config.toml rustflags.
+    // (`RUSTFLAGS` would replace that whole target rustflags list, losing the
+    // linker script; `--config` joins rather than replaces, which is why the
+    // contract.toml overlay below is safe but cannot carry rustflags.)
     let mut cmd = Command::new("cargo");
     cmd.current_dir(&metadata.workspace_root)
+        .arg("--config")
+        .arg(&contract_toml)
         .arg(if stack_size.is_some() {
             "rustc"
         } else {
@@ -556,6 +561,13 @@ fn manifest_has_feature(manifest_path: &Path, feature: &str) -> Option<&'static 
         .map(|_| "rv32-entrypoints")
 }
 
+/// The cargo invocation recorded in the `.rv32.json` sidecar.
+///
+/// The `--config` overlay is recorded as its workspace-relative path (the
+/// build runs with the workspace root as its working directory) so the
+/// recorded command reproduces the artifact without embedding the absolute
+/// path of the machine that built it. It cannot be omitted: the overlay
+/// carries `build-std`, which changes codegen.
 fn rv32_build_flags(
     pkg_name: &str,
     rv32_feature: &str,
@@ -564,6 +576,8 @@ fn rv32_build_flags(
 ) -> String {
     let mut flags = vec![
         "cargo".to_string(),
+        "--config".to_string(),
+        CONTRACT_TOML_RELATIVE_PATH.to_string(),
         if stack_size.is_some() {
             "rustc"
         } else {
@@ -1014,9 +1028,16 @@ fn member_leftover_cargo_config(workspace_root: &Path, package_root: &Path) -> O
         .find(|path| path.is_file())
 }
 
+/// The CLI-only cargo config overlay, relative to the workspace root.
+///
+/// It carries `[unstable] build-std`, which both contract targets need and
+/// which cannot live in `.cargo/config.toml` — `[unstable]` is global rather
+/// than per-target, so it would also apply to host `cargo test` runs.
+const CONTRACT_TOML_RELATIVE_PATH: &str = ".cargo/contract.toml";
+
 /// Check that `.cargo/contract.toml` exists at the workspace root.
 fn require_contract_toml(workspace_root: &Path) -> Result<PathBuf, CliError> {
-    let path = workspace_root.join(".cargo/contract.toml");
+    let path = workspace_root.join(CONTRACT_TOML_RELATIVE_PATH);
     if path.try_exists()? {
         Ok(path)
     } else {

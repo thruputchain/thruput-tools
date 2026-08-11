@@ -116,8 +116,10 @@ plain `cargo` builds and tests work for the host target:
 
 The `dev` feature enables `std` for native compilation.
 `groundhog build` passes `--no-default-features` to disable it
-for WASM. The `.cargo/contract.toml` overlay adds `build-std`
-and `panic=immediate-abort` for optimized contract builds.
+for WASM. The `.cargo/contract.toml` overlay supplies `build-std`
+for both the WASM and RV32 contract builds; `panic=immediate-abort`
+lives in `.cargo/config.toml` alongside the rest of the target
+rustflags.
 
 ## Commands
 

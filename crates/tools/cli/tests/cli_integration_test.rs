@@ -17,6 +17,17 @@ mod support;
 
 static CONFIG_HOME_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
+/// Write the `.cargo/contract.toml` overlay every contract build requires at
+/// the cargo workspace root.
+///
+/// `groundhog build` passes it as `--config` for both the wasm and rv32
+/// targets, so its absence refuses the build before cargo runs. Contents are
+/// irrelevant here — only the fake cargo on `PATH` ever reads them.
+fn write_contract_toml(workspace_root: &std::path::Path) {
+    std::fs::create_dir_all(workspace_root.join(".cargo")).unwrap();
+    std::fs::write(workspace_root.join(".cargo/contract.toml"), "").unwrap();
+}
+
 fn groundhog() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_groundhog"));
     let config_home = std::env::temp_dir().join(format!(
@@ -2413,6 +2424,7 @@ fn build_default_json_success_reports_rv32_artifact_paths() {
         "[package]\nname = \"demo-contract-rv32\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
     )
     .unwrap();
+    write_contract_toml(tmp.path());
     std::fs::create_dir_all(tmp.path().join("src")).unwrap();
     std::fs::write(tmp.path().join("src/main.rs"), "fn main() {}\n").unwrap();
 
@@ -2509,6 +2521,7 @@ fn build_rv32_json_reports_lowerer_failure_details() {
         "[package]\nname = \"demo-contract-rv32\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
     )
     .unwrap();
+    write_contract_toml(tmp.path());
 
     let fake_bin = tmp.path().join("bin");
     std::fs::create_dir_all(&fake_bin).unwrap();
@@ -2903,6 +2916,7 @@ fn test_integration_default_rv32_build_reaches_local_node_startup() {
         "[package]\nname = \"demo-contract\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
     )
     .unwrap();
+    write_contract_toml(tmp.path());
     std::fs::create_dir_all(tmp.path().join("tests")).unwrap();
     std::fs::write(tmp.path().join("tests/integration.rs"), "").unwrap();
 
@@ -2929,6 +2943,9 @@ fn test_integration_default_rv32_build_reaches_local_node_startup() {
         format!(
             concat!(
                 "#!/bin/sh\n",
+                // Contract builds run as `cargo --config <overlay> <subcmd>`,
+                // so step past the overlay before matching the subcommand.
+                "if [ \"$1\" = \"--config\" ]; then shift 2; fi\n",
                 "if [ \"$1\" = \"metadata\" ]; then\n",
                 "  printf '%s' \"$GROUNDHOG_TEST_METADATA_JSON\"\n",
                 "  exit 0\n",
@@ -3109,6 +3126,7 @@ fn test_rv32_harness_receives_resolved_cargo_target_dir() {
         "[package]\nname = \"demo-contract\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
     )
     .unwrap();
+    write_contract_toml(tmp.path());
 
     let fake_bin = tmp.path().join("bin");
     std::fs::create_dir_all(&fake_bin).unwrap();
@@ -3133,6 +3151,9 @@ fn test_rv32_harness_receives_resolved_cargo_target_dir() {
         format!(
             concat!(
                 "#!/bin/sh\n",
+                // Contract builds run as `cargo --config <overlay> <subcmd>`,
+                // so step past the overlay before matching the subcommand.
+                "if [ \"$1\" = \"--config\" ]; then shift 2; fi\n",
                 "if [ \"$1\" = \"metadata\" ]; then\n",
                 "  printf '%s' '{}'\n",
                 "  exit 0\n",
