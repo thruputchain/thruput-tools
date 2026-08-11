@@ -1390,10 +1390,21 @@ fn rv32_build_with_declared_raw_spec_format(declared: u32) -> String {
         project_root.join("target").display(),
         project_root.join("Cargo.toml").display()
     );
+    // Shaped like a real contract graph: the member reaches
+    // `groundhog-contract-spec` through `sdk`, not directly.
     let dep_graph_metadata = format!(
-        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract-rv32","manifest_path":"{}","metadata":null}},{{"name":"groundhog-contract-spec","manifest_path":"{}","metadata":{{"groundhog":{{"raw_spec_format":{declared}}}}}}}]}}"#,
+        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[
+            {{"id":"member","name":"demo-contract-rv32","manifest_path":"{}","metadata":null}},
+            {{"id":"sdk","name":"sdk","manifest_path":"{}","metadata":null}},
+            {{"id":"spec","name":"groundhog-contract-spec","manifest_path":"{}","metadata":{{"groundhog":{{"raw_spec_format":{declared}}}}}}}
+        ],"resolve":{{"nodes":[
+            {{"id":"member","dependencies":["sdk"]}},
+            {{"id":"sdk","dependencies":["spec"]}},
+            {{"id":"spec","dependencies":[]}}
+        ]}}}}"#,
         project_root.display(),
         project_root.join("target").display(),
+        project_root.join("Cargo.toml").display(),
         project_root.join("Cargo.toml").display(),
         project_root.join("Cargo.toml").display()
     );
@@ -1446,4 +1457,82 @@ fn rv32_build_with_declared_raw_spec_format(declared: u32) -> String {
     );
 
     message
+}
+
+#[test]
+#[serial]
+fn rv32_build_proceeds_when_the_dependency_graph_is_unavailable() {
+    // Offline and vendored builds must keep working: resolving the graph can
+    // need the network, so a failed `cargo metadata` warns and lets the build
+    // run rather than refusing a contract that may be perfectly fine.
+    let tmp = TempDir::new().unwrap();
+    let project_root =
+        std::fs::canonicalize(tmp.path()).expect("bug: project path should canonicalize");
+    write_active_profile(&project_root);
+    fs::write(
+        project_root.join("Cargo.toml"),
+        "[package]\nname = \"demo-contract-rv32\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\nentrypoints = []\nrv32-entrypoints = [\"entrypoints\"]\n",
+    )
+    .unwrap();
+    fs::create_dir_all(project_root.join("src")).unwrap();
+    fs::write(project_root.join("src/main.rs"), "fn main() {}\n").unwrap();
+    write_scaffold_cargo_config(&project_root);
+
+    let cargo_args_log = project_root.join("cargo-args.log");
+    let workspace_metadata = format!(
+        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract-rv32","manifest_path":"{}","features":{{"entrypoints":[],"rv32-entrypoints":["entrypoints"]}}}}]}}"#,
+        project_root.display(),
+        project_root.join("target").display(),
+        project_root.join("Cargo.toml").display()
+    );
+
+    let fake_bin = project_root.join("bin");
+    fs::create_dir_all(&fake_bin).unwrap();
+    let cargo = fake_bin.join("cargo");
+    // The deps-resolving metadata call fails the way an offline cargo does;
+    // the `--no-deps` call still works from the lockfile.
+    fs::write(
+        &cargo,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = \"metadata\" ]; then\n  case \"$*\" in\n    *--no-deps*) printf '%s' '{workspace_metadata}' ;;\n    *) echo 'error: failed to download from registry (offline)' >&2; exit 101 ;;\n  esac\n  exit 0\nfi\nprintf '%s\\n' \"$*\" >> '{}'\n",
+            cargo_args_log.display()
+        ),
+    )
+    .unwrap();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&cargo).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&cargo, perms).unwrap();
+    }
+
+    let _cwd = CurrentDirGuard::enter(&project_root);
+    let _path = PathGuard::set(fake_bin.as_os_str());
+
+    let error = groundhog_cli::build::build_rv32_project(
+        Some("demo-contract-rv32"),
+        &["--locked".into()],
+        &groundhog_cli::artifacts::ArtifactOptions::default(),
+        None,
+        None,
+        &groundhog_cli::Print::quiet(),
+    )
+    .expect_err("the fake cargo produces no ELF, so the build fails downstream");
+
+    // Whatever stopped it, it must not be the preflight: an unreadable graph
+    // is not evidence of a version mismatch.
+    let message = error.to_string();
+    assert!(
+        !message.contains("Groundhog SDK"),
+        "an unavailable dep graph must not be reported as version skew: {message}"
+    );
+    assert!(
+        cargo_args_log.exists()
+            && fs::read_to_string(&cargo_args_log)
+                .unwrap()
+                .contains("build --release"),
+        "the build must reach cargo despite the unresolvable dependency graph"
+    );
 }
