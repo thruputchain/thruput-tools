@@ -1296,8 +1296,8 @@ dependencies = [
  "clap",
  "clap_complete",
  "getrandom 0.2.17",
- "groundhog-contract-spec 0.18.2",
- "groundhog-contract-util 0.18.2",
+ "groundhog-contract-spec 0.19.0",
+ "groundhog-contract-util 0.19.0",
  "groundhog-erc20-if",
  "groundhog-json-rpc-client",
  "groundhog-json-rpc-types",
@@ -1346,9 +1346,9 @@ dependencies = [
 
 [[package]]
 name = "groundhog-contract-spec"
-version = "0.18.2"
+version = "0.19.0"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "c0d40e51262b394ae6a9375b3247276ab5b48b832e1366314e4e67eaedc768e6"
+checksum = "8fdff6d52b2f1b189cfbde462fa50d6355f768134919080f8a7ae22af380d5c4"
 dependencies = [
  "groundhog-spec",
  "groundhog-xdr",
@@ -1370,9 +1370,9 @@ dependencies = [
 
 [[package]]
 name = "groundhog-contract-util"
-version = "0.18.2"
+version = "0.19.0"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "929dd79671c6f9fdb984794dfc2b44e481414e865304ed76786b0881769c1df2"
+checksum = "add49cbde59718f45adc9d92cec602c1523e73840860a7d5532dbd7e59170f42"
 dependencies = [
  "groundhog-xdr",
  "sha2 0.11.0",
@@ -1415,9 +1415,9 @@ dependencies = [
 
 [[package]]
 name = "groundhog-event"
-version = "0.18.2"
+version = "0.19.0"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "6e8d57920367dcf53bae769db3449e0c64c3d28b49f6983ae37b24ef772c4586"
+checksum = "8560666205d1ac780523021aa9c37d7721ed9c63565faa7959166214a3495db9"
 dependencies = [
  "groundhog-xdr",
  "xdrs",
@@ -1571,12 +1571,12 @@ dependencies = [
 
 [[package]]
 name = "groundhog-macros"
-version = "0.18.2"
+version = "0.19.0"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "7f3fba09d16468d090ef4be0f4b5d936335eb8e30675778d766be14f875dc00c"
+checksum = "38ccb7d6eb924e41a627942b4557d4b72afc6b6fda88dfce8333a605843d54a4"
 dependencies = [
  "darling",
- "groundhog-contract-util 0.18.2",
+ "groundhog-contract-util 0.19.0",
  "groundhog-xdr",
  "proc-macro2",
  "quote",
@@ -1678,9 +1678,9 @@ checksum = "1e88f6b719040cbc538ce580e1e49caf762ca8bbab46785e730fff0727d3669a"
 
 [[package]]
 name = "groundhog-rv32-runtime"
-version = "0.18.2"
+version = "0.19.0"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "9804f91950dd2932be633206789ea5a79be533505cfbcabd73f536b312836772"
+checksum = "cfc84e85542de2e67122f966fd77e49564f68d99169a74750237520b7cd346bc"
 
 [[package]]
 name = "groundhog-serde_arrays"
@@ -1710,7 +1710,7 @@ name = "groundhog-sim"
 version = "0.7.2"
 dependencies = [
  "clap",
- "groundhog-contract-util 0.18.2",
+ "groundhog-contract-util 0.19.0",
  "groundhog-json-rpc-client",
  "groundhog-json-rpc-types",
  "groundhog-signing",
@@ -1744,13 +1744,13 @@ dependencies = [
 
 [[package]]
 name = "groundhog-spec-tool"
-version = "0.18.2"
+version = "0.19.0"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "bb24486bead9282d8c3648d45a2bfaeb191813c8fbe7d1de273d1139f5975d04"
+checksum = "0764ab3e2e72bfc570e1846bfd58c2a17dd8f0598b8bc9fbb7e2ae6d10e131f4"
 dependencies = [
- "groundhog-contract-spec 0.18.2",
- "groundhog-contract-util 0.18.2",
- "sdk 0.18.2",
+ "groundhog-contract-spec 0.19.0",
+ "groundhog-contract-util 0.19.0",
+ "sdk 0.19.0",
  "serde_json",
  "thiserror 2.0.19",
  "wasm-encoder",
@@ -1768,7 +1768,7 @@ checksum = "489c4ae3ca5701cd27a14e9d6d1af6c05e86a367243b5131bb727a49f8d15409"
 name = "groundhog-testkit"
 version = "0.7.2"
 dependencies = [
- "groundhog-contract-util 0.18.2",
+ "groundhog-contract-util 0.19.0",
  "groundhog-json-rpc-client",
  "groundhog-json-rpc-types",
  "groundhog-node-supervisor",
@@ -1820,9 +1820,9 @@ dependencies = [
 
 [[package]]
 name = "groundhog-wasm-runtime"
-version = "0.18.2"
+version = "0.19.0"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "88fec95c94a44d1f49fb15f993c4d81926798a6ae9ad85bde5600866d1ff8ff6"
+checksum = "993d6b2c1318635adb0e19fbf46d228eb36ff67b0b3c8974cf7bfe13040786ab"
 dependencies = [
  "groundhog-xdr",
  "heapless",
@@ -3488,15 +3488,15 @@ dependencies = [
 
 [[package]]
 name = "sdk"
-version = "0.18.2"
+version = "0.19.0"
 source = "sparse+https://groundhog.dev/crates/api/v1/crates/"
-checksum = "7deb5ea8d76468cdc720e64d2bea39a0da0d4ce31bc679ae8e3f20e4518dc30a"
+checksum = "ecff85adeb18cb562c85ce82f9689c489cb5b6961ca987ce400c8c1b96f3e61a"
 dependencies = [
- "groundhog-contract-spec 0.18.2",
- "groundhog-event 0.18.2",
- "groundhog-macros 0.18.2",
- "groundhog-rv32-runtime 0.18.2",
- "groundhog-wasm-runtime 0.18.2",
+ "groundhog-contract-spec 0.19.0",
+ "groundhog-event 0.19.0",
+ "groundhog-macros 0.19.0",
+ "groundhog-rv32-runtime 0.19.0",
+ "groundhog-wasm-runtime 0.19.0",
  "groundhog-xdr",
  "heapless",
  "hogexec-internal",
