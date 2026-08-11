@@ -1787,6 +1787,7 @@ fn config_field_validation_accepts_typed_values_and_rejects_invalid_values() {
 }
 
 #[test]
+#[serial]
 fn config_new_creates_complete_project_profile_and_preserves_unrelated_content() {
     let tmp = TempDir::new().unwrap();
     let path = tmp.path().join("groundhog.toml");
@@ -1831,6 +1832,7 @@ fn config_new_creates_complete_project_profile_and_preserves_unrelated_content()
 }
 
 #[test]
+#[serial]
 fn config_new_rejects_existing_target_layer_profile_without_changes() {
     let tmp = TempDir::new().unwrap();
     let path = tmp.path().join("groundhog.toml");
@@ -1883,6 +1885,7 @@ fn config_new_validates_all_values_before_waiting_for_lock() {
 }
 
 #[test]
+#[serial]
 fn concurrent_config_new_allows_only_one_creator() {
     let tmp = TempDir::new().unwrap();
     fs::write(tmp.path().join("groundhog.toml"), "# retained\n").unwrap();
@@ -1993,6 +1996,7 @@ fn config_new_project_use_rejects_invalid_global_layer_without_changes() {
 }
 
 #[test]
+#[serial]
 fn config_rm_removes_complete_profile_and_matching_default() {
     let tmp = TempDir::new().unwrap();
     let path = tmp.path().join("groundhog.toml");
@@ -2015,6 +2019,7 @@ fn config_rm_removes_complete_profile_and_matching_default() {
 }
 
 #[test]
+#[serial]
 fn config_rm_rejects_missing_target_layer_profile_without_changes() {
     let tmp = TempDir::new().unwrap();
     let path = tmp.path().join("groundhog.toml");
@@ -2029,6 +2034,7 @@ fn config_rm_rejects_missing_target_layer_profile_without_changes() {
 }
 
 #[test]
+#[serial]
 fn config_rm_preserves_comment_position_when_default_is_between_keys() {
     let tmp = TempDir::new().unwrap();
     let path = tmp.path().join("groundhog.toml");
@@ -2047,6 +2053,7 @@ fn config_rm_preserves_comment_position_when_default_is_between_keys() {
 }
 
 #[test]
+#[serial]
 fn config_rm_preserves_leading_comment_when_profile_is_only_content() {
     let tmp = TempDir::new().unwrap();
     let path = tmp.path().join("groundhog.toml");
@@ -2062,6 +2069,7 @@ fn config_rm_preserves_leading_comment_when_profile_is_only_content() {
 }
 
 #[test]
+#[serial]
 fn concurrent_config_rm_allows_only_one_removal() {
     let tmp = TempDir::new().unwrap();
     fs::write(
@@ -2121,6 +2129,7 @@ fn config_set_rejects_missing_target_layer_profile_without_creating_it() {
 }
 
 #[test]
+#[serial]
 fn config_set_reports_unchanged_for_existing_value() {
     let tmp = TempDir::new().unwrap();
     fs::write(
@@ -2186,6 +2195,7 @@ fn config_set_updates_global_file_symlink_target_without_replacing_link() {
 }
 
 #[test]
+#[serial]
 fn config_unset_missing_project_profile_is_noop_without_creating_table() {
     let tmp = TempDir::new().unwrap();
     let path = tmp.path().join("groundhog.toml");
@@ -2206,6 +2216,7 @@ fn config_unset_missing_project_profile_is_noop_without_creating_table() {
 }
 
 #[test]
+#[serial]
 fn config_set_validation_failure_leaves_selected_profile_unchanged() {
     let tmp = TempDir::new().unwrap();
     let path = tmp.path().join("groundhog.toml");
