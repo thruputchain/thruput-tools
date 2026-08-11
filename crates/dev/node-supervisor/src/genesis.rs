@@ -114,7 +114,8 @@ fn native_default_wallet_hash() -> DeployedContractHash {
     let contract = Contract::kNative {
         native_contract_id: HogexecPrecompiledNativeContracts::kNativeContractDefaultWallet,
     };
-    let encoded = xdrs::txs::encode(&contract).expect("native contract XDR encoding is infallible");
+    let encoded =
+        xdrs::txs::encode(&contract).expect("bug: native contract XDR encoding is infallible");
     DeployedContractHash {
         hash: SHA256Hash::from(<[u8; 32]>::from(Sha256::digest(encoded))),
         contract_size: 0,
