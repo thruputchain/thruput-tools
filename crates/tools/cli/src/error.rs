@@ -101,6 +101,13 @@ pub enum CliError {
     WasmVerifyFailed(String),
     #[error("contract spec finalization failed: {0}")]
     SpecFailed(String),
+    /// The contract's raw spec wire format is one this build cannot read.
+    ///
+    /// Surfaced verbatim rather than reworded: the inner error names both
+    /// versions and the way out for that direction, and the SDK reports the
+    /// same text, so the two toolchains agree on the diagnosis.
+    #[error(transparent)]
+    RawSpecFormat(groundhog_spec_tool::SpecToolError),
     #[error("key `{0}` already exists")]
     KeyExists(String),
     #[error("key `{0}` not found")]
@@ -424,6 +431,7 @@ impl CliError {
             Self::WasmInstrumentFailed(_) => "wasm_instrument_failed",
             Self::WasmVerifyFailed(_) => "wasm_verify_failed",
             Self::SpecFailed(_) => "spec_failed",
+            Self::RawSpecFormat(_) => "raw_spec_format",
             Self::KeyExists(_) => "key_exists",
             Self::KeyNotFound(_) => "key_not_found",
             Self::KeyNameEmpty => "key_name_empty",
@@ -755,7 +763,9 @@ impl CliError {
             Self::ChainArchiveIo(_) => Some(Cow::Borrowed(
                 "check path permissions and available disk space, then retry",
             )),
-            Self::RuntimeInit(_)
+            // The version-skew message states the fix for its direction.
+            Self::RawSpecFormat(_)
+            | Self::RuntimeInit(_)
             | Self::ReceiptPollingExhausted
             | Self::Io(_)
             | Self::Other(_)

@@ -62,7 +62,9 @@ fn scaffold_counter_creates_expected_files() {
     assert!(cargo.contains(r#"name = "my-counter""#));
     assert!(cargo.contains("registry = \"groundhog\""));
     assert!(!cargo.contains("sdk/spec"));
-    assert!(cargo.contains(r#"sdk = { version = "0.18.2", registry = "groundhog" }"#));
+    // Must be an SDK whose raw spec format this CLI reads, or `groundhog new`
+    // scaffolds a project that `groundhog build` refuses at the preflight.
+    assert!(cargo.contains(r#"sdk = { version = "0.19.0", registry = "groundhog" }"#));
     assert!(cargo.contains("groundhog-integration-test = ["));
     assert!(cargo.contains(r#"groundhog-json-rpc-client = { version = "0.7.0""#));
     assert!(cargo.contains("optional = true"));

@@ -486,7 +486,16 @@ fn rejects_unexpected_alloc_section() {
 
 #[test]
 fn ignores_alloc_contract_spec_metadata_sections() {
-    for name in ["groundhogspecrawv0", "groundhogspecv0"] {
+    // Every raw version, not just the one this build's spec-tool reads: the
+    // lowerer drops these bytes rather than decoding them, so a section
+    // written by an older or newer SDK must still be stripped instead of
+    // failing the lowering with "unexpected alloc section".
+    for name in [
+        "groundhogspecrawv0",
+        groundhog_spec_tool::RAW_SECTION_NAME,
+        "groundhogspecrawv99",
+        "groundhogspecv0",
+    ] {
         let mut spec = happy_spec();
         spec.extras.push(ExtraSection::progbits(
             name,
@@ -504,12 +513,16 @@ fn ignores_alloc_contract_spec_metadata_sections() {
 
 #[test]
 fn spec_metadata_section_names_match_spec_tool() {
+    // The lowerer mirrors these names locally so the production binary keeps
+    // no spec-tool dependency; pin them here (dev-dependency only) so a
+    // rename in the SDK cannot silently leave spec bytes in a lowered image.
     assert_eq!(
-        groundhog_rv32_lower::lower::SPEC_METADATA_SECTIONS,
-        [
-            groundhog_spec_tool::RAW_SECTION_NAME,
-            groundhog_spec_tool::FINAL_SECTION_NAME,
-        ]
+        groundhog_rv32_lower::lower::RAW_SPEC_SECTION_PREFIX,
+        groundhog_spec_tool::RAW_SECTION_PREFIX,
+    );
+    assert_eq!(
+        groundhog_rv32_lower::lower::FINAL_SPEC_SECTION,
+        groundhog_spec_tool::FINAL_SECTION_NAME,
     );
 }
 

@@ -22,10 +22,21 @@ pub const ALLOC_ALLOWLIST: [&str; 7] = [
 /// reaches into it.
 pub const NULL_GUARD_BYTES: u32 = 8;
 
-/// Contract spec metadata sections are compile-time sidecars, not VM memory.
-/// These names mirror `groundhog_spec_tool::{RAW_SECTION_NAME, FINAL_SECTION_NAME}`;
-/// keep them local so the production lowerer has no spec-tool dependency.
-pub const SPEC_METADATA_SECTIONS: [&str; 2] = ["groundhogspecrawv0", "groundhogspecv0"];
+/// Name prefix shared by every version of the raw contract-spec section.
+///
+/// Matched as a prefix, not an exact name: the raw section name carries a
+/// wire-format version (`groundhogspecrawv1`), and the lowerer drops these
+/// bytes rather than decoding them. Recognizing every version keeps a spec
+/// format bump from turning into a lowering failure — or worse, spec content
+/// copied into the deployed memory image — over bytes that are discarded
+/// either way. Mirrors `groundhog_spec_tool::RAW_SECTION_PREFIX`; kept local
+/// so the production lowerer has no spec-tool dependency, and pinned to it by
+/// `spec_metadata_section_names_match_spec_tool`.
+pub const RAW_SPEC_SECTION_PREFIX: &str = "groundhogspecraw";
+
+/// Name of the finalized contract-spec section, mirroring
+/// `groundhog_spec_tool::FINAL_SECTION_NAME`.
+pub const FINAL_SPEC_SECTION: &str = "groundhogspecv0";
 
 /// The product of lowering: the serialized artifact plus the pieces that went
 /// into it (handy for metadata and tests).
@@ -65,7 +76,7 @@ fn spans_overlap(a_start: u32, a_end: u32, b_start: u32, b_end: u32) -> bool {
 }
 
 fn is_spec_metadata_section(name: &str) -> bool {
-    SPEC_METADATA_SECTIONS.contains(&name)
+    name.starts_with(RAW_SPEC_SECTION_PREFIX) || name == FINAL_SPEC_SECTION
 }
 
 /// Find the single `.text` section, erroring if absent or duplicated.

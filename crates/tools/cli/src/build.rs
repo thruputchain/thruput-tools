@@ -183,6 +183,7 @@ pub fn build_project(
     let cwd = std::env::current_dir()?;
     let metadata = cargo_metadata_with_artifacts(artifacts)?;
     let pkg_name = resolve_package(&metadata, package, &cwd)?;
+    check_contract_raw_spec_format(pkg_name, cargo_args, print)?;
 
     // The built package's own directory. Equals `workspace_root` for a
     // single-package project, but is the member directory in a workspace —
@@ -405,6 +406,7 @@ pub fn build_rv32_project(
     let cwd = std::env::current_dir()?;
     let metadata = cargo_metadata_with_artifacts(artifacts)?;
     let pkg_name = resolve_package(&metadata, package, &cwd)?;
+    check_contract_raw_spec_format(pkg_name, cargo_args, print)?;
     let rv32_feature = rv32_entrypoints_feature(&metadata, pkg_name);
     let package_root = metadata
         .packages
@@ -666,6 +668,194 @@ pub fn cargo_metadata_with_artifacts(
 
     serde_json::from_slice(&output.stdout).map_err(|e| CliError::CargoMetadataFailed(e.to_string()))
 }
+/// The SDK crate whose manifest declares the raw spec wire format a contract
+/// emits. It owns the fragment types, so the format version travels with it
+/// and no version table has to be maintained here.
+const CONTRACT_SPEC_PACKAGE: &str = "groundhog-contract-spec";
+
+/// `cargo metadata` output read for the resolved dependency graph.
+///
+/// Separate from [`CargoMetadata`], which is produced with `--no-deps` and so
+/// reports only workspace members.
+#[derive(Debug, serde::Deserialize)]
+pub struct DependencyMetadata {
+    packages: Vec<DependencyPackage>,
+    /// Absent when cargo was asked not to resolve (`--no-deps`).
+    resolve: Option<DependencyResolve>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct DependencyResolve {
+    nodes: Vec<DependencyNode>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct DependencyNode {
+    id: String,
+    dependencies: Vec<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct DependencyPackage {
+    id: String,
+    name: String,
+    /// `null` for a package with no `[package.metadata]` table.
+    metadata: Option<DependencyPackageMetadata>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct DependencyPackageMetadata {
+    groundhog: Option<GroundhogPackageMetadata>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct GroundhogPackageMetadata {
+    raw_spec_format: Option<u32>,
+}
+
+impl DependencyPackage {
+    /// The raw spec format this package declares.
+    ///
+    /// A `groundhog-contract-spec` predating the manifest key is
+    /// pre-versioning, which is format 0 — genuinely unsupported, so absence
+    /// is not treated as "unknown, allow it".
+    fn raw_spec_format(&self) -> u32 {
+        self.metadata
+            .as_ref()
+            .and_then(|metadata| metadata.groundhog.as_ref())
+            .and_then(|groundhog| groundhog.raw_spec_format)
+            .unwrap_or(0)
+    }
+}
+
+/// Cargo flags that constrain how the manifest may be resolved.
+///
+/// The preflight resolves the dependency graph, which is exactly what these
+/// restrict, so a build that asked for them must not have them dropped: a
+/// `--locked` build whose preflight omits it can rewrite the lockfile the
+/// build was promised would not change, and an `--offline` build can reach
+/// the network.
+const MANIFEST_RESOLVE_FLAGS: [&str; 3] = ["--locked", "--offline", "--frozen"];
+
+/// Run `cargo metadata` over the resolved dependency graph.
+///
+/// Deliberately a separate call from [`cargo_metadata_with_artifacts`], which
+/// passes `--no-deps`: resolving the full graph is slower and can hit the
+/// network on a cold checkout, and no other caller needs dependencies.
+fn cargo_metadata_with_deps(cargo_args: &[String]) -> Result<DependencyMetadata, CliError> {
+    let mut command = Command::new("cargo");
+    command.arg("metadata").arg("--format-version").arg("1");
+    for arg in cargo_args
+        .iter()
+        .filter(|arg| MANIFEST_RESOLVE_FLAGS.contains(&arg.as_str()))
+    {
+        command.arg(arg);
+    }
+
+    let output = command
+        .output()
+        .map_err(|e| CliError::CargoMetadataFailed(e.to_string()))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(CliError::CargoMetadataFailed(stderr.trim().to_string()));
+    }
+
+    serde_json::from_slice(&output.stdout).map_err(|e| CliError::CargoMetadataFailed(e.to_string()))
+}
+
+/// Refuse a contract whose SDK writes a raw spec format this CLI cannot read.
+///
+/// Scoped to what `pkg_name` actually resolves, since `cargo metadata` reports
+/// the whole workspace graph but the build is scoped with `-p`: an unrelated
+/// member pinning an SDK this build cannot read must not refuse a package that
+/// never depends on it.
+///
+/// Every copy reachable from the selected package is checked. Two SDK versions
+/// under one contract is already a broken build, so an unreadable copy refuses
+/// rather than being resolved arbitrarily in favor of a readable one.
+///
+/// Returns `Ok(())` when the graph cannot be scoped — an unresolved metadata
+/// document, or a package cargo did not report. Refusing on a copy that may
+/// belong to something else is worse than leaving the skew to the
+/// post-compile check.
+fn check_dependency_raw_spec_format(
+    metadata: &DependencyMetadata,
+    pkg_name: &str,
+) -> Result<(), CliError> {
+    let Some(resolve) = metadata.resolve.as_ref() else {
+        return Ok(());
+    };
+    let Some(root) = metadata
+        .packages
+        .iter()
+        .find(|package| package.name == pkg_name)
+    else {
+        return Ok(());
+    };
+
+    let nodes: std::collections::HashMap<&str, &DependencyNode> = resolve
+        .nodes
+        .iter()
+        .map(|node| (node.id.as_str(), node))
+        .collect();
+    let mut seen = std::collections::HashSet::from([root.id.as_str()]);
+    let mut queue = vec![root.id.as_str()];
+
+    while let Some(id) = queue.pop() {
+        let Some(node) = nodes.get(id) else { continue };
+        for dependency in &node.dependencies {
+            // `insert` returns false for an id already walked, which is what
+            // terminates the walk on a dependency cycle.
+            if seen.insert(dependency.as_str()) {
+                queue.push(dependency.as_str());
+            }
+        }
+    }
+
+    for package in &metadata.packages {
+        if package.name != CONTRACT_SPEC_PACKAGE || !seen.contains(package.id.as_str()) {
+            continue;
+        }
+        groundhog_spec_tool::check_raw_spec_format(package.raw_spec_format())
+            .map_err(CliError::RawSpecFormat)?;
+    }
+    Ok(())
+}
+
+/// Verify the contract's raw spec format before compiling it.
+///
+/// The raw spec section is written by the SDK compiled into the contract and
+/// read by the `groundhog-spec-tool` linked into this CLI, and the two are
+/// released independently. Reading the format out of the dependency graph
+/// costs one `cargo metadata` call, so skew is reported in seconds instead of
+/// as a fragment parse failure after a full contract compile.
+///
+/// A project with no `groundhog-contract-spec` in its graph is not a
+/// Groundhog contract and is left alone. An unavailable dependency graph
+/// warns rather than refuses, so an offline or vendored build still
+/// completes: only a format this build genuinely cannot read is a hard error.
+fn check_contract_raw_spec_format(
+    pkg_name: &str,
+    cargo_args: &[String],
+    print: &Print,
+) -> Result<(), CliError> {
+    match cargo_metadata_with_deps(cargo_args) {
+        Ok(metadata) => check_dependency_raw_spec_format(&metadata, pkg_name),
+        Err(error) => {
+            print.warn(format_args!(
+                "could not check which raw contract-spec section this \
+                 contract emits ({error}); this CLI reads \
+                 `{}` — the embedded spec section format, not a crate \
+                 version — so a mismatch will now surface as a spec parse \
+                 failure after the build instead",
+                groundhog_spec_tool::RAW_SECTION_NAME
+            ));
+            Ok(())
+        }
+    }
+}
+
 /// The linker script the Groundhog SDK supplies for rv32 builds.
 pub(crate) const RV32_LINKER_SCRIPT: &str = "groundhog-rv32.ld";
 
@@ -1034,5 +1224,201 @@ mod tests {
                 manifest_path,
             }],
         }
+    }
+}
+
+#[cfg(test)]
+mod raw_spec_format_preflight_tests {
+    use groundhog_spec_tool::RAW_SPEC_FORMAT;
+
+    const SELECTED: &str = "demo-contract";
+    const SELECTED_ID: &str = "path+file:///ws/demo#demo-contract@0.1.0";
+    const UNRELATED_ID: &str = "path+file:///ws/other#other-member@0.1.0";
+
+    /// What a workspace member reaches, spec-wise.
+    #[derive(Clone, Copy)]
+    enum SpecDep {
+        /// No `groundhog-contract-spec` in this member's subtree.
+        Absent,
+        /// A copy declaring this raw spec format.
+        Format(u32),
+        /// A copy predating `[package.metadata.groundhog] raw_spec_format`.
+        PreVersioning,
+    }
+
+    /// `cargo metadata` for a two-member workspace: the package being built
+    /// depends on a `groundhog-contract-spec` declaring `selected`, and an
+    /// unrelated member depends on a second copy declaring `unrelated`.
+    ///
+    /// `SpecDep::Absent` means the member reaches no
+    /// `groundhog-contract-spec` at all.
+    fn workspace_json(selected: SpecDep, unrelated: SpecDep) -> String {
+        const SELECTED_SPEC_ID: &str = "registry+groundhog#groundhog-contract-spec@0.19.0";
+        const UNRELATED_SPEC_ID: &str = "registry+groundhog#groundhog-contract-spec@0.18.2";
+
+        let mut packages = vec![
+            format!(r#"{{"id":"{SELECTED_ID}","name":"{SELECTED}","metadata":null}}"#),
+            format!(r#"{{"id":"{UNRELATED_ID}","name":"other-member","metadata":null}}"#),
+        ];
+        let mut node = |member_id: &str, spec_id: &str, dep: SpecDep| {
+            let table = match dep {
+                SpecDep::Absent => {
+                    return format!(r#"{{"id":"{member_id}","dependencies":[]}}"#);
+                }
+                SpecDep::Format(format) => {
+                    format!(r#"{{"groundhog":{{"raw_spec_format":{format}}}}}"#)
+                }
+                SpecDep::PreVersioning => "null".to_string(),
+            };
+            packages.push(format!(
+                r#"{{"id":"{spec_id}","name":"groundhog-contract-spec","metadata":{table}}}"#
+            ));
+            format!(r#"{{"id":"{member_id}","dependencies":["{spec_id}"]}}"#)
+        };
+        let nodes = [
+            node(SELECTED_ID, SELECTED_SPEC_ID, selected),
+            node(UNRELATED_ID, UNRELATED_SPEC_ID, unrelated),
+        ];
+
+        format!(
+            r#"{{"packages":[{}],"resolve":{{"nodes":[{}]}}}}"#,
+            packages.join(","),
+            nodes.join(",")
+        )
+    }
+
+    fn check(json: &str) -> Result<(), String> {
+        let metadata = serde_json::from_str(json).expect("bug: fixture should parse");
+        super::check_dependency_raw_spec_format(&metadata, SELECTED).map_err(|e| e.to_string())
+    }
+
+    #[test]
+    fn accepts_the_format_this_build_reads() {
+        let json = workspace_json(SpecDep::Format(RAW_SPEC_FORMAT), SpecDep::Absent);
+
+        assert!(check(&json).is_ok());
+    }
+
+    #[test]
+    fn refuses_a_newer_format() {
+        let newer = RAW_SPEC_FORMAT + 1;
+        let json = workspace_json(SpecDep::Format(newer), SpecDep::Absent);
+
+        let message = check(&json).expect_err("a newer SDK format must refuse the build");
+
+        assert!(
+            message.contains("newer Groundhog SDK") && message.contains(&newer.to_string()),
+            "expected a version-skew diagnosis naming {newer}, got: {message}"
+        );
+    }
+
+    #[test]
+    fn refuses_an_older_format() {
+        let json = workspace_json(SpecDep::Format(RAW_SPEC_FORMAT - 1), SpecDep::Absent);
+
+        let message = check(&json).expect_err("an older SDK format must refuse the build");
+
+        assert!(
+            message.contains("older Groundhog SDK"),
+            "expected a version-skew diagnosis, got: {message}"
+        );
+    }
+
+    #[test]
+    fn treats_a_contract_spec_without_the_key_as_pre_versioning() {
+        // An SDK predating `[package.metadata.groundhog] raw_spec_format` is
+        // format 0, which is unsupported in both directions.
+        let message = check(&workspace_json(SpecDep::PreVersioning, SpecDep::Absent))
+            .expect_err("a pre-versioning SDK must refuse the build");
+
+        assert!(
+            message.contains("older Groundhog SDK"),
+            "expected a version-skew diagnosis, got: {message}"
+        );
+    }
+
+    #[test]
+    fn skips_a_project_that_does_not_depend_on_contract_spec() {
+        // Not a Groundhog contract: there is no format to disagree about.
+        assert!(check(&workspace_json(SpecDep::Absent, SpecDep::Absent)).is_ok());
+    }
+
+    #[test]
+    fn ignores_a_contract_spec_outside_the_selected_package() {
+        // The build is scoped with `-p`, so an unrelated workspace member
+        // pinning an SDK this build cannot read is none of its business.
+        let json = workspace_json(
+            SpecDep::Format(RAW_SPEC_FORMAT),
+            SpecDep::Format(RAW_SPEC_FORMAT + 1),
+        );
+
+        assert!(
+            check(&json).is_ok(),
+            "an unrelated member's SDK must not refuse the selected package"
+        );
+    }
+
+    #[test]
+    fn refuses_the_selected_package_despite_a_readable_sibling() {
+        let json = workspace_json(
+            SpecDep::Format(RAW_SPEC_FORMAT + 1),
+            SpecDep::Format(RAW_SPEC_FORMAT),
+        );
+
+        assert!(
+            check(&json).is_err(),
+            "a readable sibling must not excuse the selected package"
+        );
+    }
+
+    #[test]
+    fn skips_the_check_when_the_graph_cannot_be_scoped() {
+        // No `resolve` section means no way to tell which copy belongs to the
+        // package being built; refusing on the wrong one is worse than
+        // letting the build proceed to the post-compile check.
+        let json = format!(
+            r#"{{"packages":[{{"id":"{SELECTED_ID}","name":"{SELECTED}","metadata":null}},
+                {{"id":"x","name":"groundhog-contract-spec","metadata":{{"groundhog":{{"raw_spec_format":{}}}}}}}]}}"#,
+            RAW_SPEC_FORMAT + 1
+        );
+
+        assert!(check(&json).is_ok());
+    }
+
+    #[test]
+    fn checks_a_contract_spec_reached_transitively() {
+        // Contracts depend on `sdk`, which depends on `groundhog-contract-spec`
+        // — the common shape, and it must not be missed by a depth-1 scan.
+        let newer = RAW_SPEC_FORMAT + 1;
+        let json = format!(
+            r#"{{"packages":[
+                {{"id":"{SELECTED_ID}","name":"{SELECTED}","metadata":null}},
+                {{"id":"sdk","name":"sdk","metadata":null}},
+                {{"id":"spec","name":"groundhog-contract-spec","metadata":{{"groundhog":{{"raw_spec_format":{newer}}}}}}}
+            ],"resolve":{{"nodes":[
+                {{"id":"{SELECTED_ID}","dependencies":["sdk"]}},
+                {{"id":"sdk","dependencies":["spec"]}},
+                {{"id":"spec","dependencies":[]}}
+            ]}}}}"#
+        );
+
+        assert!(check(&json).is_err());
+    }
+
+    #[test]
+    fn tolerates_a_dependency_cycle_in_the_graph() {
+        // Dev-dependency cycles are legal in cargo's resolve graph; the walk
+        // must terminate rather than hang the build it is meant to speed up.
+        let json = format!(
+            r#"{{"packages":[
+                {{"id":"{SELECTED_ID}","name":"{SELECTED}","metadata":null}},
+                {{"id":"helper","name":"helper","metadata":null}}
+            ],"resolve":{{"nodes":[
+                {{"id":"{SELECTED_ID}","dependencies":["helper"]}},
+                {{"id":"helper","dependencies":["{SELECTED_ID}"]}}
+            ]}}}}"#
+        );
+
+        assert!(check(&json).is_ok());
     }
 }
