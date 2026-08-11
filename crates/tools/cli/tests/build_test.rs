@@ -1287,3 +1287,163 @@ fn build_show_cargo_commands_traces_invocation_to_stderr() {
         "expected target triple in trace, got: {stderr}"
     );
 }
+
+/// Build an ELF whose raw spec section carries `format`, with a body that is
+/// deliberately not decodable: the format check must fire before any fragment
+/// byte is read, and well-formed bytes would let a too-late check pass.
+fn rv32_elf_with_raw_spec_format(format: u32) -> Vec<u8> {
+    support::minimal_rv32_elf_with_section(&format!("groundhogspecrawv{format}"), &[0xff; 16])
+}
+
+fn finalize_rv32_spec_err(elf_bytes: &[u8]) -> String {
+    let dir = TempDir::new().unwrap();
+    let elf = dir.path().join("contract.elf");
+    fs::write(&elf, elf_bytes).unwrap();
+
+    groundhog_cli::contract_spec::finalize_rv32_spec(
+        &elf,
+        &dir.path().join("contract.rv32a"),
+        &groundhog_cli::Print::quiet(),
+    )
+    .expect_err("a raw spec format this build cannot read must be an error, not `no spec`")
+    .to_string()
+}
+
+#[test]
+fn rv32_raw_spec_section_newer_than_this_build_reports_skew() {
+    let supported = groundhog_spec_tool::RAW_SPEC_FORMAT;
+    let message = finalize_rv32_spec_err(&rv32_elf_with_raw_spec_format(supported + 1));
+
+    assert!(
+        message.contains("newer Groundhog SDK"),
+        "expected a version-skew diagnosis, got: {message}"
+    );
+    assert!(
+        message.contains(&(supported + 1).to_string()) && message.contains(&supported.to_string()),
+        "expected both versions named, got: {message}"
+    );
+}
+
+#[test]
+fn rv32_raw_spec_section_older_than_this_build_reports_skew() {
+    let supported = groundhog_spec_tool::RAW_SPEC_FORMAT;
+    let message = finalize_rv32_spec_err(&rv32_elf_with_raw_spec_format(supported - 1));
+
+    assert!(
+        message.contains("older Groundhog SDK"),
+        "expected a version-skew diagnosis, got: {message}"
+    );
+    assert!(
+        message.contains(&(supported - 1).to_string()) && message.contains(&supported.to_string()),
+        "expected both versions named, got: {message}"
+    );
+}
+
+#[test]
+#[serial]
+fn rv32_build_refuses_a_newer_contract_spec_format_before_compiling() {
+    let message =
+        rv32_build_with_declared_raw_spec_format(groundhog_spec_tool::RAW_SPEC_FORMAT + 1);
+
+    assert!(
+        message.contains("newer Groundhog SDK"),
+        "expected a version-skew diagnosis, got: {message}"
+    );
+}
+
+#[test]
+#[serial]
+fn rv32_build_refuses_an_older_contract_spec_format_before_compiling() {
+    let message =
+        rv32_build_with_declared_raw_spec_format(groundhog_spec_tool::RAW_SPEC_FORMAT - 1);
+
+    assert!(
+        message.contains("older Groundhog SDK"),
+        "expected a version-skew diagnosis, got: {message}"
+    );
+}
+
+/// Run an rv32 build whose resolved `groundhog-contract-spec` declares
+/// `declared`, asserting it refuses before cargo is asked to compile
+/// anything. Returns the error message for the caller to inspect.
+fn rv32_build_with_declared_raw_spec_format(declared: u32) -> String {
+    let tmp = TempDir::new().unwrap();
+    let project_root =
+        std::fs::canonicalize(tmp.path()).expect("bug: project path should canonicalize");
+    write_active_profile(&project_root);
+    fs::write(
+        project_root.join("Cargo.toml"),
+        "[package]\nname = \"demo-contract-rv32\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[features]\nentrypoints = []\nrv32-entrypoints = [\"entrypoints\"]\n",
+    )
+    .unwrap();
+    fs::create_dir_all(project_root.join("src")).unwrap();
+    fs::write(project_root.join("src/main.rs"), "fn main() {}\n").unwrap();
+    write_scaffold_cargo_config(&project_root);
+
+    let cargo_args_log = project_root.join("cargo-args.log");
+    // `--no-deps` reports workspace members only, so the preflight has to ask
+    // for the resolved graph: serve the SDK package on that call alone, and
+    // the test fails if the preflight reads the wrong one.
+    let workspace_metadata = format!(
+        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract-rv32","manifest_path":"{}","features":{{"entrypoints":[],"rv32-entrypoints":["entrypoints"]}}}}]}}"#,
+        project_root.display(),
+        project_root.join("target").display(),
+        project_root.join("Cargo.toml").display()
+    );
+    let dep_graph_metadata = format!(
+        r#"{{"workspace_root":"{}","target_directory":"{}","packages":[{{"name":"demo-contract-rv32","manifest_path":"{}","metadata":null}},{{"name":"groundhog-contract-spec","manifest_path":"{}","metadata":{{"groundhog":{{"raw_spec_format":{declared}}}}}}}]}}"#,
+        project_root.display(),
+        project_root.join("target").display(),
+        project_root.join("Cargo.toml").display(),
+        project_root.join("Cargo.toml").display()
+    );
+
+    let fake_bin = project_root.join("bin");
+    fs::create_dir_all(&fake_bin).unwrap();
+    let cargo = fake_bin.join("cargo");
+    fs::write(
+        &cargo,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = \"metadata\" ]; then\n  case \"$*\" in\n    *--no-deps*) printf '%s' '{workspace_metadata}' ;;\n    *) printf '%s' '{dep_graph_metadata}' ;;\n  esac\n  exit 0\nfi\nprintf '%s\\n' \"$*\" >> '{}'\n",
+            cargo_args_log.display()
+        ),
+    )
+    .unwrap();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&cargo).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&cargo, perms).unwrap();
+    }
+
+    let _cwd = CurrentDirGuard::enter(&project_root);
+    let _path = PathGuard::set(fake_bin.as_os_str());
+
+    let error = groundhog_cli::build::build_rv32_project(
+        Some("demo-contract-rv32"),
+        &["--locked".into()],
+        &groundhog_cli::artifacts::ArtifactOptions::default(),
+        None,
+        None,
+        &groundhog_cli::Print::quiet(),
+    )
+    .expect_err("a raw spec format this build cannot read must refuse the build");
+
+    let message = error.to_string();
+    assert!(
+        message.contains(&declared.to_string())
+            && message.contains(&groundhog_spec_tool::RAW_SPEC_FORMAT.to_string()),
+        "expected both formats named, got: {message}"
+    );
+    // Nothing was handed to cargo beyond the metadata queries: the point of
+    // the preflight is refusing in seconds rather than after a full compile.
+    assert!(
+        !cargo_args_log.exists(),
+        "preflight must refuse before cargo runs, but cargo was invoked with: {}",
+        fs::read_to_string(&cargo_args_log).unwrap_or_default()
+    );
+
+    message
+}

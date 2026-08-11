@@ -76,7 +76,7 @@ pub(crate) fn load_embedded_contract_spec_from_bytes(
 }
 
 fn load_rv32_contract_spec_from_bytes(bytes: &[u8]) -> Result<Option<ContractSpec>, CliError> {
-    use groundhog_spec_tool::{FINAL_SECTION_NAME, RAW_SECTION_NAME};
+    use groundhog_spec_tool::{SpecSection, check_raw_spec_format, classify_section};
 
     let sections = groundhog_rv32_lower::elf::parse_elf(bytes)
         .map_err(|e| CliError::SpecFailed(format!("failed to read rv32 ELF contract spec: {e}")))?;
@@ -84,7 +84,12 @@ fn load_rv32_contract_spec_from_bytes(bytes: &[u8]) -> Result<Option<ContractSpe
     let mut final_data: Option<&[u8]> = None;
 
     for section in sections {
-        if section.name != RAW_SECTION_NAME && section.name != FINAL_SECTION_NAME {
+        // Classify by prefix so a raw section this build cannot read is
+        // reported as version skew rather than skipped — skipping it yields
+        // `Ok(None)`, which surfaces as "this contract has no spec": the
+        // wrong diagnosis, and harder to act on than the skew message.
+        let kind = classify_section(&section.name);
+        if kind == SpecSection::Other {
             continue;
         }
         let start = section.offset as usize;
@@ -98,14 +103,29 @@ fn load_rv32_contract_spec_from_bytes(bytes: &[u8]) -> Result<Option<ContractSpe
             ))
         })?;
 
-        if section.name == RAW_SECTION_NAME {
-            raw_fragments.extend(groundhog_spec_tool::parse_raw_fragments(data).map_err(|e| {
-                CliError::SpecFailed(format!("failed to parse rv32 raw contract spec: {e}"))
-            })?);
-        } else if final_data.replace(data).is_some() {
-            return Err(CliError::SpecFailed(
-                "rv32 ELF contains multiple finalized contract spec sections".into(),
-            ));
+        match kind {
+            // The raw body is an unframed XDR stream, so the format check has
+            // to happen before the first fragment byte is decoded: a mismatch
+            // desynchronizes the parse instead of failing cleanly.
+            SpecSection::Raw(format) => {
+                check_raw_spec_format(format).map_err(CliError::RawSpecFormat)?;
+                raw_fragments.extend(groundhog_spec_tool::parse_raw_fragments(data).map_err(
+                    |e| {
+                        CliError::SpecFailed(format!("failed to parse rv32 raw contract spec: {e}"))
+                    },
+                )?);
+            }
+            SpecSection::Final => {
+                if final_data.replace(data).is_some() {
+                    return Err(CliError::SpecFailed(
+                        "rv32 ELF contains multiple finalized contract spec sections".into(),
+                    ));
+                }
+            }
+            // Skipped above, before the section body is sliced: an
+            // unrelated section (`.bss` in particular) has no file bytes to
+            // slice.
+            SpecSection::Other => {}
         }
     }
 

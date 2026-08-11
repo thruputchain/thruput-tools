@@ -179,6 +179,7 @@ pub fn build_project(
 ) -> Result<BuildResult, CliError> {
     ensure_no_env_rustflags()?;
     crate::require_cargo()?;
+    check_contract_raw_spec_format(print)?;
 
     let cwd = std::env::current_dir()?;
     let metadata = cargo_metadata_with_artifacts(artifacts)?;
@@ -401,6 +402,7 @@ pub fn build_rv32_project(
 ) -> Result<Rv32BuildResult, CliError> {
     ensure_no_env_rustflags()?;
     crate::require_cargo()?;
+    check_contract_raw_spec_format(print)?;
 
     let cwd = std::env::current_dir()?;
     let metadata = cargo_metadata_with_artifacts(artifacts)?;
@@ -666,6 +668,115 @@ pub fn cargo_metadata_with_artifacts(
 
     serde_json::from_slice(&output.stdout).map_err(|e| CliError::CargoMetadataFailed(e.to_string()))
 }
+/// The SDK crate whose manifest declares the raw spec wire format a contract
+/// emits. It owns the fragment types, so the format version travels with it
+/// and no version table has to be maintained here.
+const CONTRACT_SPEC_PACKAGE: &str = "groundhog-contract-spec";
+
+/// `cargo metadata` output read for the resolved dependency graph.
+///
+/// Separate from [`CargoMetadata`], which is produced with `--no-deps` and so
+/// reports only workspace members.
+#[derive(Debug, serde::Deserialize)]
+pub struct DependencyMetadata {
+    packages: Vec<DependencyPackage>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct DependencyPackage {
+    name: String,
+    /// `null` for a package with no `[package.metadata]` table.
+    metadata: Option<DependencyPackageMetadata>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct DependencyPackageMetadata {
+    groundhog: Option<GroundhogPackageMetadata>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct GroundhogPackageMetadata {
+    raw_spec_format: Option<u32>,
+}
+
+impl DependencyPackage {
+    /// The raw spec format this package declares.
+    ///
+    /// A `groundhog-contract-spec` predating the manifest key is
+    /// pre-versioning, which is format 0 — genuinely unsupported, so absence
+    /// is not treated as "unknown, allow it".
+    fn raw_spec_format(&self) -> u32 {
+        self.metadata
+            .as_ref()
+            .and_then(|metadata| metadata.groundhog.as_ref())
+            .and_then(|groundhog| groundhog.raw_spec_format)
+            .unwrap_or(0)
+    }
+}
+
+/// Run `cargo metadata` over the resolved dependency graph.
+///
+/// Deliberately a separate call from [`cargo_metadata_with_artifacts`], which
+/// passes `--no-deps`: resolving the full graph is slower and can hit the
+/// network on a cold checkout, and no other caller needs dependencies.
+fn cargo_metadata_with_deps() -> Result<DependencyMetadata, CliError> {
+    let output = Command::new("cargo")
+        .arg("metadata")
+        .arg("--format-version")
+        .arg("1")
+        .output()
+        .map_err(|e| CliError::CargoMetadataFailed(e.to_string()))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(CliError::CargoMetadataFailed(stderr.trim().to_string()));
+    }
+
+    serde_json::from_slice(&output.stdout).map_err(|e| CliError::CargoMetadataFailed(e.to_string()))
+}
+
+/// Refuse a contract whose SDK writes a raw spec format this CLI cannot read.
+///
+/// Checks every resolved copy: two SDK versions in one graph is already a
+/// broken build, so an unreadable copy refuses rather than being resolved
+/// arbitrarily in favor of a readable one.
+fn check_dependency_raw_spec_format(metadata: &DependencyMetadata) -> Result<(), CliError> {
+    for package in &metadata.packages {
+        if package.name != CONTRACT_SPEC_PACKAGE {
+            continue;
+        }
+        groundhog_spec_tool::check_raw_spec_format(package.raw_spec_format())
+            .map_err(CliError::RawSpecFormat)?;
+    }
+    Ok(())
+}
+
+/// Verify the contract's raw spec format before compiling it.
+///
+/// The raw spec section is written by the SDK compiled into the contract and
+/// read by the `groundhog-spec-tool` linked into this CLI, and the two are
+/// released independently. Reading the format out of the dependency graph
+/// costs one `cargo metadata` call, so skew is reported in seconds instead of
+/// as a fragment parse failure after a full contract compile.
+///
+/// A project with no `groundhog-contract-spec` in its graph is not a
+/// Groundhog contract and is left alone. An unavailable dependency graph
+/// (offline, vendored, a cargo that refuses to resolve) warns rather than
+/// refuses: only a format this build genuinely cannot read is a hard error.
+fn check_contract_raw_spec_format(print: &Print) -> Result<(), CliError> {
+    match cargo_metadata_with_deps() {
+        Ok(metadata) => check_dependency_raw_spec_format(&metadata),
+        Err(error) => {
+            print.warn(format_args!(
+                "could not verify the contract's spec format before building \
+                 ({error}); a version mismatch will surface as a spec parse \
+                 failure after the build instead"
+            ));
+            Ok(())
+        }
+    }
+}
+
 /// The linker script the Groundhog SDK supplies for rv32 builds.
 pub(crate) const RV32_LINKER_SCRIPT: &str = "groundhog-rv32.ld";
 
@@ -1034,5 +1145,97 @@ mod tests {
                 manifest_path,
             }],
         }
+    }
+}
+
+#[cfg(test)]
+mod raw_spec_format_preflight_tests {
+    use groundhog_spec_tool::RAW_SPEC_FORMAT;
+
+    /// `cargo metadata` output carrying one resolved `groundhog-contract-spec`
+    /// whose `[package.metadata.groundhog]` table is `table`.
+    fn metadata_json(table: &str) -> String {
+        format!(
+            r#"{{"packages":[
+                {{"name":"demo-contract","metadata":null}},
+                {{"name":"groundhog-contract-spec","metadata":{table}}}
+            ]}}"#
+        )
+    }
+
+    fn check(json: &str) -> Result<(), String> {
+        let metadata = serde_json::from_str(json).expect("bug: fixture should parse");
+        super::check_dependency_raw_spec_format(&metadata).map_err(|e| e.to_string())
+    }
+
+    #[test]
+    fn accepts_the_format_this_build_reads() {
+        let json = metadata_json(&format!(
+            r#"{{"groundhog":{{"raw_spec_format":{RAW_SPEC_FORMAT}}}}}"#
+        ));
+
+        assert!(check(&json).is_ok());
+    }
+
+    #[test]
+    fn refuses_a_newer_format() {
+        let newer = RAW_SPEC_FORMAT + 1;
+        let json = metadata_json(&format!(r#"{{"groundhog":{{"raw_spec_format":{newer}}}}}"#));
+
+        let message = check(&json).expect_err("a newer SDK format must refuse the build");
+
+        assert!(
+            message.contains("newer Groundhog SDK") && message.contains(&newer.to_string()),
+            "expected a version-skew diagnosis naming {newer}, got: {message}"
+        );
+    }
+
+    #[test]
+    fn refuses_an_older_format() {
+        let older = RAW_SPEC_FORMAT - 1;
+        let json = metadata_json(&format!(r#"{{"groundhog":{{"raw_spec_format":{older}}}}}"#));
+
+        let message = check(&json).expect_err("an older SDK format must refuse the build");
+
+        assert!(
+            message.contains("older Groundhog SDK"),
+            "expected a version-skew diagnosis, got: {message}"
+        );
+    }
+
+    #[test]
+    fn treats_a_contract_spec_without_the_key_as_pre_versioning() {
+        // An SDK predating `[package.metadata.groundhog] raw_spec_format` is
+        // format 0, which is unsupported in both directions.
+        let message =
+            check(&metadata_json("null")).expect_err("a pre-versioning SDK must refuse the build");
+
+        assert!(
+            message.contains("older Groundhog SDK"),
+            "expected a version-skew diagnosis, got: {message}"
+        );
+    }
+
+    #[test]
+    fn skips_a_project_that_does_not_depend_on_contract_spec() {
+        // Not a Groundhog contract: there is no format to disagree about.
+        let json = r#"{"packages":[{"name":"demo-contract","metadata":null}]}"#;
+
+        assert!(check(json).is_ok());
+    }
+
+    #[test]
+    fn refuses_when_any_resolved_contract_spec_is_unreadable() {
+        // Two SDK versions in one graph is already broken; refuse on the copy
+        // this build cannot read rather than picking one arbitrarily.
+        let newer = RAW_SPEC_FORMAT + 1;
+        let json = format!(
+            r#"{{"packages":[
+                {{"name":"groundhog-contract-spec","metadata":{{"groundhog":{{"raw_spec_format":{RAW_SPEC_FORMAT}}}}}}},
+                {{"name":"groundhog-contract-spec","metadata":{{"groundhog":{{"raw_spec_format":{newer}}}}}}}
+            ]}}"#
+        );
+
+        assert!(check(&json).is_err());
     }
 }
