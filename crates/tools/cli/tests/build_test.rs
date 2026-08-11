@@ -22,6 +22,15 @@ fn write_scaffold_cargo_config(project_root: &Path) {
     .unwrap();
 }
 
+/// The `.cargo/contract.toml` overlay every contract build now requires at the
+/// cargo workspace root: `groundhog build` passes it as `--config` for both the
+/// wasm and rv32 targets, so its absence refuses the build before cargo runs.
+/// Contents are irrelevant to these tests — only the fake cargo sees them.
+fn write_contract_toml(workspace_root: &Path) {
+    fs::create_dir_all(workspace_root.join(".cargo")).unwrap();
+    fs::write(workspace_root.join(".cargo/contract.toml"), "").unwrap();
+}
+
 fn write_active_profile(project_root: &Path) {
     fs::write(
         project_root.join("groundhog.toml"),
@@ -589,6 +598,7 @@ fn build_rv32_project_compiles_and_lowers_elf() {
     .unwrap();
     fs::create_dir_all(project_root.join("src")).unwrap();
     fs::write(project_root.join("src/main.rs"), "fn main() {}\n").unwrap();
+    write_contract_toml(&project_root);
 
     let target_dir = project_root.join("target");
     let raw_elf = target_dir
@@ -714,6 +724,15 @@ fn build_rv32_project_compiles_and_lowers_elf() {
     assert_eq!(spec.interfaces.len(), 1);
 
     let cargo_args = fs::read_to_string(cargo_args_log).unwrap();
+    // The `build-std` overlay applies to rv32 too, and `--config` only counts
+    // ahead of the subcommand.
+    assert!(
+        cargo_args.starts_with(&format!(
+            "--config {} build --release",
+            project_root.join(".cargo/contract.toml").display()
+        )),
+        "cargo args: {cargo_args}"
+    );
     assert!(
         cargo_args.contains(
             "build --release --no-default-features --features rv32-entrypoints --target riscv32im-unknown-none-elf"
@@ -726,9 +745,11 @@ fn build_rv32_project_compiles_and_lowers_elf() {
     // scoped with --lib.
     assert!(!cargo_args.contains("--lib"), "cargo args: {cargo_args}");
     assert_eq!(metadata["target_triple"], "riscv32im-unknown-none-elf");
+    // The sidecar records the overlay by its workspace-relative path: it
+    // changes codegen, but the absolute path is specific to this machine.
     assert_eq!(
         metadata["build_flags"],
-        "cargo build --release --no-default-features --features rv32-entrypoints --target riscv32im-unknown-none-elf -p demo-contract-rv32 --bin demo_contract_rv32 --locked"
+        "cargo --config .cargo/contract.toml build --release --no-default-features --features rv32-entrypoints --target riscv32im-unknown-none-elf -p demo-contract-rv32 --bin demo_contract_rv32 --locked"
     );
 }
 
@@ -746,6 +767,7 @@ fn build_rv32_project_with_stack_size_uses_cargo_rustc_defsym() {
     .unwrap();
     fs::create_dir_all(project_root.join("src")).unwrap();
     fs::write(project_root.join("src/main.rs"), "fn main() {}\n").unwrap();
+    write_contract_toml(&project_root);
 
     let target_dir = project_root.join("target");
     let raw_elf = target_dir
@@ -807,14 +829,21 @@ fn build_rv32_project_with_stack_size_uses_cargo_rustc_defsym() {
     // the project's own .cargo/config.toml rustflags instead of replacing
     // them; user cargo args stay ahead of the `--` separator.
     let cargo_args = fs::read_to_string(&cargo_args_log).unwrap();
-    assert!(cargo_args.starts_with("rustc "), "cargo args: {cargo_args}");
+    // The overlay rides ahead of the subcommand on this path too.
+    assert!(
+        cargo_args.starts_with(&format!(
+            "--config {} rustc ",
+            project_root.join(".cargo/contract.toml").display()
+        )),
+        "cargo args: {cargo_args}"
+    );
     assert!(cargo_args.contains("--locked -- -C link-arg=--defsym=__stack_size=24576"));
 
     let metadata: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&processed_metadata).unwrap()).unwrap();
     assert_eq!(
         metadata["build_flags"],
-        "cargo rustc --release --no-default-features --features rv32-entrypoints --target riscv32im-unknown-none-elf -p demo-contract-rv32 --bin demo_contract_rv32 --locked -- -C link-arg=--defsym=__stack_size=24576"
+        "cargo --config .cargo/contract.toml rustc --release --no-default-features --features rv32-entrypoints --target riscv32im-unknown-none-elf -p demo-contract-rv32 --bin demo_contract_rv32 --locked -- -C link-arg=--defsym=__stack_size=24576"
     );
 }
 
@@ -1057,6 +1086,7 @@ fn build_rv32_warns_on_custom_linker_script_and_proceeds() {
     let root = std::fs::canonicalize(tmp.path()).expect("bug: workspace path should canonicalize");
     let (member, metadata_json) = write_bootstrapped_workspace(&root, "demo-contract-rv32");
     write_active_profile(&root);
+    write_contract_toml(&root);
     let fake_bin = root.join("bin");
     write_fake_cargo_with_metadata(&fake_bin, &metadata_json, CONFIG_GET_CUSTOM_SCRIPT, "");
     let cargo_home = root.join("cargo-home");
@@ -1089,6 +1119,7 @@ fn build_rv32_warns_on_non_nightly_toolchain_and_proceeds() {
     let root = std::fs::canonicalize(tmp.path()).expect("bug: workspace path should canonicalize");
     let (member, metadata_json) = write_bootstrapped_workspace(&root, "demo-contract-rv32");
     write_active_profile(&root);
+    write_contract_toml(&root);
     let fake_bin = root.join("bin");
     write_fake_cargo_with_metadata(&fake_bin, &metadata_json, CONFIG_GET_NOT_NIGHTLY, "");
     let cargo_home = root.join("cargo-home");
@@ -1121,6 +1152,7 @@ fn build_rv32_link_failure_mentioning_script_gets_search_path_hint() {
     let root = std::fs::canonicalize(tmp.path()).expect("bug: workspace path should canonicalize");
     let (member, metadata_json) = write_bootstrapped_workspace(&root, "demo-contract-rv32");
     write_active_profile(&root);
+    write_contract_toml(&root);
     let fake_bin = root.join("bin");
     // Config resolves correctly, but the link cannot find the script — the
     // moved/missing groundhog-rv32.ld case, detectable only from lld's error.
@@ -1145,6 +1177,81 @@ fn build_rv32_link_failure_mentioning_script_gets_search_path_hint() {
     assert!(
         stderr.contains("linker search path"),
         "expected the linker-script search-path hint, got: {stderr}"
+    );
+}
+
+/// The rv32 compile needs `build-std` for the same reason the wasm one does:
+/// `-C panic=immediate-abort` is incompatible with the prebuilt `core`. That
+/// only reaches cargo through the `.cargo/contract.toml` overlay, and only
+/// when `--config` precedes the subcommand.
+#[test]
+fn build_rv32_passes_the_contract_toml_overlay_to_cargo() {
+    let tmp = TempDir::new().unwrap();
+    let root = std::fs::canonicalize(tmp.path()).expect("bug: workspace path should canonicalize");
+    let (member, metadata_json) = write_bootstrapped_workspace(&root, "demo-contract-rv32");
+    write_active_profile(&root);
+    write_contract_toml(&root);
+    let cargo_args_log = root.join("cargo-args.log");
+    let fake_bin = root.join("bin");
+    write_fake_cargo_with_metadata(
+        &fake_bin,
+        &metadata_json,
+        CONFIG_GET_GROUNDHOG_SCRIPT,
+        &format!("printf '%s\\n' \"$*\" > '{}'", cargo_args_log.display()),
+    );
+    let cargo_home = root.join("cargo-home");
+    fs::create_dir_all(&cargo_home).unwrap();
+
+    // The compile fails downstream on the ELF the fake cargo never produces;
+    // the recorded argv is what this test is about.
+    run_groundhog_with_fake_cargo(
+        &member,
+        &fake_bin,
+        &cargo_home,
+        &["build", "--target", "rv32", "-p", "demo-contract-rv32"],
+    );
+
+    let cargo_args = fs::read_to_string(&cargo_args_log).unwrap();
+    assert!(
+        cargo_args.starts_with(&format!(
+            "--config {} build ",
+            root.join(".cargo/contract.toml").display()
+        )),
+        "expected the overlay ahead of the subcommand, got: {cargo_args}"
+    );
+}
+
+/// The overlay is not optional: without it the rv32 compile fails deep in
+/// cargo on the panic strategy, so it is refused up front instead.
+#[test]
+fn build_rv32_refuses_a_missing_contract_toml() {
+    let tmp = TempDir::new().unwrap();
+    let root = std::fs::canonicalize(tmp.path()).expect("bug: workspace path should canonicalize");
+    let (member, metadata_json) = write_bootstrapped_workspace(&root, "demo-contract-rv32");
+    write_active_profile(&root);
+    let fake_bin = root.join("bin");
+    write_fake_cargo_with_metadata(&fake_bin, &metadata_json, CONFIG_GET_GROUNDHOG_SCRIPT, "");
+    let cargo_home = root.join("cargo-home");
+    fs::create_dir_all(&cargo_home).unwrap();
+
+    let output = run_groundhog_with_fake_cargo(
+        &member,
+        &fake_bin,
+        &cargo_home,
+        &["build", "--target", "rv32", "-p", "demo-contract-rv32"],
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(
+        stderr.contains(".cargo/contract.toml` not found"),
+        "expected the missing-overlay error, got: {stderr}"
+    );
+    // The hint has to name what goes in the file, and warn off the rustflags
+    // that would duplicate the linker script.
+    assert!(
+        stderr.contains("build-std") && stderr.contains("[target.*]"),
+        "expected the build-std hint, got: {stderr}"
     );
 }
 
@@ -1487,6 +1594,7 @@ fn rv32_build_proceeds_when_the_dependency_graph_is_unavailable() {
     fs::create_dir_all(project_root.join("src")).unwrap();
     fs::write(project_root.join("src/main.rs"), "fn main() {}\n").unwrap();
     write_scaffold_cargo_config(&project_root);
+    write_contract_toml(&project_root);
 
     let cargo_args_log = project_root.join("cargo-args.log");
     let workspace_metadata = format!(

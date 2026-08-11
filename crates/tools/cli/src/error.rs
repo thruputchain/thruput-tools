@@ -524,8 +524,13 @@ impl CliError {
                  rerun without `--optimize`",
             )),
             Self::ContractTomlNotFound(_) => Some(Cow::Borrowed(
-                "create `.cargo/contract.toml` with WASM build flags, \
-                 or run `groundhog new` to scaffold a project",
+                "every contract build (wasm and rv32) runs as \
+                 `cargo --config .cargo/contract.toml`; create that file \
+                 containing `[unstable]` and \
+                 `build-std = [\"core\", \"alloc\"]`, or run `groundhog new` \
+                 to scaffold a project. Do not put `[target.*]` rustflags in \
+                 it — cargo joins those with `.cargo/config.toml`, so a flag \
+                 in both files is passed twice",
             )),
             Self::PackageNotFound(name) => Some(Cow::Owned(format!(
                 "available packages can be listed with \
@@ -564,7 +569,14 @@ impl CliError {
                  or test failure",
             )),
             Self::CargoFailedWithOutput { stderr, .. } => {
-                Some(if stderr.contains("groundhog-rv32.ld") {
+                Some(if stderr.contains("incompatible with `immediate-abort`") {
+                    Cow::Borrowed(
+                        "the prebuilt `core` uses a different panic strategy than the \
+                         `-C panic=immediate-abort` in `.cargo/config.toml`, so `core` has to \
+                         be rebuilt from source; check that `.cargo/contract.toml` still \
+                         contains `[unstable]` and `build-std = [\"core\", \"alloc\"]`",
+                    )
+                } else if stderr.contains("groundhog-rv32.ld") {
                     Cow::Borrowed(
                         "the link references `groundhog-rv32.ld`, which the Groundhog SDK's \
                          build script supplies through a linker search path; check that the \

@@ -35,6 +35,46 @@ fn assert_integration_scaffold(dir: &std::path::Path) {
     );
 }
 
+/// Assert the scaffolded `.cargo` pair splits build configuration correctly:
+/// every target rustflag in `config.toml`, and `build-std` alone in the
+/// `contract.toml` overlay.
+fn assert_scaffold_cargo_config(dir: &std::path::Path) {
+    let config = fs::read_to_string(dir.join(".cargo/config.toml")).unwrap();
+    assert!(config.contains("[target.riscv32im-unknown-none-elf]"));
+    // The canonical rv32 flag set, verbatim: `+relax` and the two extra link
+    // args are measured size wins, and a substring match on the bare
+    // `+unaligned-scalar-mem` would not notice them going missing.
+    assert_contains_all(
+        &config,
+        &[
+            "target-feature=+unaligned-scalar-mem,+relax",
+            "link-arg=-Tgroundhog-rv32.ld",
+            "link-arg=--icf=all",
+            "link-arg=--relax-gp",
+            "trap-unreachable=false",
+            "[profile.dev.build-override]",
+            "# [profile.dev.package.\"*\"]",
+        ],
+    );
+    // Both targets set `panic=immediate-abort` in config.toml, not in the
+    // contract.toml overlay.
+    assert_eq!(config.matches("panic=immediate-abort").count(), 2);
+    assert!(!config.contains(r#""panic=abort""#));
+
+    // The overlay is `build-std` and nothing else: cargo JOINS target
+    // rustflags across config layers, so a `[target.*]` section here would
+    // duplicate the rv32 linker script and fail the link.
+    let contract = fs::read_to_string(dir.join(".cargo/contract.toml")).unwrap();
+    assert_contains_all(
+        &contract,
+        &["[unstable]", r#"build-std = ["core", "alloc"]"#],
+    );
+    assert!(
+        !contract.lines().any(|line| line.starts_with("[target.")),
+        "contract.toml: {contract}"
+    );
+}
+
 #[test]
 fn scaffold_counter_creates_expected_files() {
     let tmp = TempDir::new().unwrap();
@@ -110,14 +150,7 @@ fn scaffold_counter_creates_expected_files() {
     assert!(main.contains("#![no_main]"));
     assert!(main.contains("extern crate my_counter;"));
 
-    let config = fs::read_to_string(dir.join(".cargo/config.toml")).unwrap();
-    assert!(config.contains("[target.riscv32im-unknown-none-elf]"));
-    assert!(config.contains("target-feature=+unaligned-scalar-mem"));
-    assert!(config.contains("link-arg=-Tgroundhog-rv32.ld"));
-    assert!(config.contains("trap-unreachable=false"));
-
-    assert!(config.contains("[profile.dev.build-override]"));
-    assert!(config.contains("# [profile.dev.package.\"*\"]"));
+    assert_scaffold_cargo_config(&dir);
 
     let toolchain = fs::read_to_string(dir.join("rust-toolchain.toml")).unwrap();
     assert!(toolchain.contains("riscv32im-unknown-none-elf"));
