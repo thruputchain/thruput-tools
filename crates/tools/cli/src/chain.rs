@@ -159,8 +159,11 @@ fn write_archive(file: &mut File, files: &[(String, PathBuf)]) -> Result<u64, Cl
         writer,
         "{{\"schemaVersion\":{ARCHIVE_SCHEMA_VERSION},\"kind\":\"{ARCHIVE_KIND}\",\"producerVersion\":"
     )?;
-    serde_json::to_writer(&mut writer, env!("CARGO_PKG_VERSION"))
-        .map_err(|error| archive_io(format!("encode producer version: {error}")))?;
+    serde_json::to_writer(
+        &mut writer,
+        option_env!("GROUNDHOG_DISTRIBUTION_VERSION").unwrap_or(env!("CARGO_PKG_VERSION")),
+    )
+    .map_err(|error| archive_io(format!("encode producer version: {error}")))?;
     write!(
         writer,
         ",\"compression\":\"zstd\",\"contentEncoding\":\"base64\",\"chunkSizeBytes\":{CHUNK_SIZE},\"files\":["
