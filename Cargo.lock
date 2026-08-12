@@ -1272,7 +1272,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-bench"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "clap",
  "groundhog-json-rpc-types",
@@ -1290,7 +1290,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-cli"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "base64",
  "clap",
@@ -1392,7 +1392,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-faucet"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "async-trait",
  "aws-config",
@@ -1423,7 +1423,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-json-rpc-api"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "async-trait",
  "groundhog-json-rpc-types",
@@ -1434,7 +1434,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-json-rpc-client"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "async-trait",
  "groundhog-json-rpc-api",
@@ -1450,7 +1450,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-json-rpc-gateway"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "async-trait",
  "axum",
@@ -1485,7 +1485,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-json-rpc-server"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "async-trait",
  "groundhog-json-rpc-api",
@@ -1503,7 +1503,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-json-rpc-types"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "bytes",
  "groundhog-trace",
@@ -1538,7 +1538,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-node-supervisor"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "async-trait",
  "groundhog-json-rpc-api",
@@ -1573,7 +1573,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-open-rpc"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "schemars",
  "serde",
@@ -1582,7 +1582,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-open-rpc-macros"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "groundhog-open-rpc",
  "jsonrpsee",
@@ -1594,7 +1594,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-open-rpc-spec"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "groundhog-json-rpc-api",
  "groundhog-open-rpc",
@@ -1605,7 +1605,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-rv32-artifact"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "sha2 0.10.9",
  "thiserror 2.0.19",
@@ -1613,7 +1613,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-rv32-lower"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "clap",
  "groundhog-rv32-artifact",
@@ -1639,7 +1639,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-signing"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "ed25519-dalek",
  "groundhog-xdr",
@@ -1653,7 +1653,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-sim"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "clap",
  "groundhog-contract-util",
@@ -1712,7 +1712,7 @@ checksum = "31cc543d20ec88858921ad57887eb41b7100077389b2a57f2cf3947d5544c965"
 
 [[package]]
 name = "groundhog-testkit"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "groundhog-contract-util",
  "groundhog-json-rpc-client",
@@ -1766,7 +1766,7 @@ dependencies = [
 
 [[package]]
 name = "groundhog-x23-transport"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "async-trait",
  "rpc_driver",
