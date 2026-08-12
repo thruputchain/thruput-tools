@@ -43,6 +43,12 @@ impl CommandError {
             details,
         }
     }
+
+    #[must_use]
+    pub fn with_hint(mut self, hint: &'static str) -> Self {
+        self.hint = Some(hint);
+        self
+    }
 }
 
 impl<T: Serialize> CommandResult<T> {

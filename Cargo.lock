@@ -1314,6 +1314,7 @@ dependencies = [
  "reqwest",
  "rpassword",
  "schemars",
+ "sdk",
  "serde",
  "serde_json",
  "serial_test",

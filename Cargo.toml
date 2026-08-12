@@ -69,6 +69,7 @@ groundhog-spec-tool = { version = "0.19.0", registry = "groundhog" }
 groundhog-contract-util = { version = "0.19.0", registry = "groundhog" }
 groundhog-contract-spec = { version = "0.19.0", registry = "groundhog" }
 groundhog-erc20-if = { version = "=0.1.9", registry = "groundhog" }
+sdk = { version = "0.19.0", registry = "groundhog" }
 
 # --- Async ---
 async-trait = "0.1"

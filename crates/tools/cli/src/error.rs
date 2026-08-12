@@ -733,7 +733,7 @@ impl CliError {
                 if conflict_code == "boundsExceeded" =>
             {
                 Some(Cow::Borrowed(
-                    "check the signing wallet balance and run `groundhog airdrop` before retrying; the submitted transaction has not committed",
+                    "check the signing wallet balance and run `groundhog airdrop` before retrying; a commit attempt reported insufficient storage-token bounds",
                 ))
             }
             Self::TransactionRecentFailure { .. } => Some(Cow::Borrowed(
