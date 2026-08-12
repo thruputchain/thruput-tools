@@ -5733,6 +5733,62 @@ fn deploy_live_json_fails_with_receipt_context() {
 }
 
 #[test]
+fn deploy_live_json_reports_actionable_native_hog_overdraft() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let (rpc_url, rpc_server) = spawn_transaction_rpc(
+        42,
+        sample_insufficient_funding_deploy_receipt(42),
+        DevDetailRpcResponse::MethodNotFound,
+    );
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
+
+    let wasm_path = tmp.path().join("test.wasm");
+    std::fs::write(&wasm_path, b"\0asm\x01\0\0\0").unwrap();
+    let output = groundhog()
+        .args([
+            "--json",
+            "deploy",
+            "--artifact",
+            wasm_path.to_str().unwrap(),
+        ])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stderr.is_empty());
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["ok"], false);
+    assert_eq!(stdout["command"], "deploy");
+    assert_eq!(stdout["data"]["schemaVersion"], 3);
+    assert_eq!(stdout["data"]["height"], 42);
+    assert_eq!(stdout["data"]["status"]["result"], "reverted");
+    assert_eq!(stdout["error"]["code"], "transaction_insufficient_funds");
+    assert_eq!(
+        stdout["error"]["details"]["reason"],
+        "nativeHogTransferOverdraft"
+    );
+    assert!(
+        stdout["error"]["hint"]
+            .as_str()
+            .is_some_and(|hint| hint.contains("when the selected profile has a faucet"))
+    );
+    assert_ne!(stdout["error"]["code"], "transaction_reverted");
+    assert!(
+        stdout["data"]["abort_data"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("0x"))
+    );
+}
+
+#[test]
 fn deploy_live_human_fails_after_printing_receipt_context() {
     let tmp = TempDir::new().unwrap();
     let config_home = tmp.path().join("config-home");
@@ -11175,6 +11231,21 @@ fn sample_failed_deploy_receipt(height: i64) -> serde_json::Value {
         "events": [],
         "returnData": "0x0102",
         "abortData": "0x0304",
+    })
+}
+
+fn sample_insufficient_funding_deploy_receipt(height: i64) -> serde_json::Value {
+    let abort_data = xdrs::cxs::encode(&(
+        <groundhog_erc20_if::ERC20Error as sdk::exn::Exn>::SELECTOR,
+        groundhog_erc20_if::ERC20Error::TooLarge,
+    ))
+    .expect("bug: ERC20 exception should encode");
+    serde_json::json!({
+        "txHash": mock_tx_hash(),
+        "height": height,
+        "status": { "result": "reverted", "message": null },
+        "events": [],
+        "abortData": format!("0x{}", hex::encode(abort_data)),
     })
 }
 

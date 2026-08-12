@@ -395,6 +395,18 @@ run_json() {
     printf '%s\n' "$output"
 }
 
+run_json_failure() {
+    local label="$1"
+    shift
+    log "$label: $(display_command "$@")"
+    local output
+    if output="$("$@" 2> >(sed "s/^/[$label stderr] /" >&2))"; then
+        printf '%s\n' "$output" >&2
+        die "$label unexpectedly succeeded"
+    fi
+    printf '%s\n' "$output"
+}
+
 run_view_json() {
     local label="$1"
     shift
@@ -976,6 +988,24 @@ USER_CONTRACT_ADDRESS="$(json_field data.address "$USER_DEPLOY_JSON")"
 [[ "$USER_CONTRACT_ADDRESS" != "null" && -n "$USER_CONTRACT_ADDRESS" ]] \
     || die "saved-wallet deploy did not return a contract address"
 log "saved-wallet deploy result: address=$USER_CONTRACT_ADDRESS height=$(json_field data.height "$USER_DEPLOY_JSON") tx=$(json_field data.tx_hash "$USER_DEPLOY_JSON")"
+
+UNDERFUNDED_DEPLOY_JSON="$(run_json_failure "underfunded saved-wallet deploy" "$CLI" --json deploy)"
+UNDERFUNDED_CODE="$(json_field error.code "$UNDERFUNDED_DEPLOY_JSON")"
+case "$UNDERFUNDED_CODE" in
+    transaction_insufficient_funds)
+        [[ "$(json_field error.details.reason "$UNDERFUNDED_DEPLOY_JSON")" == "nativeHogTransferOverdraft" ]] \
+            || die "underfunded deploy did not report a native HOG transfer overdraft"
+        ;;
+    transaction_recent_failure)
+        [[ "$(json_field error.details.conflict.code "$UNDERFUNDED_DEPLOY_JSON")" == "boundsExceeded" ]] \
+            || die "underfunded deploy did not report boundsExceeded"
+        ;;
+    *) die "underfunded deploy returned non-actionable error code: $UNDERFUNDED_CODE" ;;
+esac
+UNDERFUNDED_HINT="$(json_field error.hint "$UNDERFUNDED_DEPLOY_JSON")"
+[[ "$UNDERFUNDED_HINT" == *"groundhog airdrop"* ]] \
+    || die "underfunded deploy did not provide airdrop guidance"
+log "underfunded saved-wallet deploy returned actionable airdrop guidance: $UNDERFUNDED_CODE"
 
 WALLET_BALANCE_BEFORE_JSON="$(run_json "saved-wallet balance before airdrop" "$CLI" --json balance "$USER_KEY")"
 WALLET_BALANCE_BEFORE="$(json_field data.raw_balance "$WALLET_BALANCE_BEFORE_JSON")"

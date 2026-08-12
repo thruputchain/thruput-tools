@@ -18,7 +18,7 @@ use crate::artifacts::{ArtifactKind, ArtifactOptions, ResolvedArtifact};
 use crate::config::{ProfileOverrides, ResolvedProfile, resolve_profile_with_overrides};
 use crate::dev_detail::{fetch_transaction_detail_blocking, print_transaction_detail};
 use crate::network_descriptor::resolve_wallet_entrypoints;
-use crate::result::CommandResult;
+use crate::result::{CommandError, CommandResult};
 use crate::tx_utils::{
     command_error_for_exec_status, format_tx_hash, nonce_from_timestamp, print_failed_receipt_data,
     resolve_block_expiry_height, submit_and_poll, summarize_exec_status,
@@ -145,7 +145,7 @@ pub fn run(
         print_transaction_detail(detail, print);
     }
 
-    let command_error = command_error_for_exec_status(&receipt.status);
+    let command_error = command_error_for_deploy_receipt(&receipt);
     let mut data = json!({
         "schemaVersion": DEPLOY_JSON_SCHEMA_VERSION,
         "tx_hash": tx_hash_formatted,
@@ -185,6 +185,45 @@ pub fn run(
     print.json(&CommandResult::new(cmd, data))?;
 
     Ok(())
+}
+
+fn command_error_for_deploy_receipt(receipt: &TransactionReceipt) -> Option<CommandError> {
+    if is_insufficient_deploy_funding(receipt) {
+        return Some(
+            CommandError::new(
+                "transaction_insufficient_funds",
+                "the signing wallet has insufficient HOG to fund another contract deployment",
+                json!({
+                    "reason": "nativeHogTransferOverdraft",
+                    "walletEntrypoint": "deploy",
+                    "erc20Error": "tooLarge",
+                }),
+            )
+            .with_hint(
+                "fund the signing wallet before retrying; when the selected profile has a faucet, run `groundhog airdrop <WALLET>`",
+            ),
+        );
+    }
+    command_error_for_exec_status(&receipt.status)
+}
+
+fn is_insufficient_deploy_funding(receipt: &TransactionReceipt) -> bool {
+    if !matches!(
+        receipt.status,
+        groundhog_json_rpc_types::receipt::ExecStatus::Reverted { .. }
+    ) {
+        return false;
+    }
+    let Some(abort_data) = receipt.abort_data.as_ref() else {
+        return false;
+    };
+    let Ok((selector, error)) =
+        xdrs::cxs::decode::<(u64, groundhog_erc20_if::ERC20Error)>(&abort_data.0)
+    else {
+        return false;
+    };
+    selector == <groundhog_erc20_if::ERC20Error as sdk::exn::Exn>::SELECTOR
+        && matches!(error, groundhog_erc20_if::ERC20Error::TooLarge)
 }
 
 fn print_dry_run(
@@ -502,10 +541,16 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        DeployAddressSource, derive_deploy_address, hex_to_32_bytes, resolve_deployed_address,
+        DeployAddressSource, command_error_for_deploy_receipt, derive_deploy_address,
+        hex_to_32_bytes, resolve_deployed_address,
     };
     use crate::artifacts::{ArtifactKind, ArtifactOptions, resolve_groundhog_artifact_path};
-    use groundhog_json_rpc_types::hex::HexBytes;
+    use groundhog_json_rpc_types::{
+        BlockHeight,
+        hex::{Hex0x, HexBytes},
+        receipt::{ExecStatus, TransactionReceipt},
+        transaction::TxHash,
+    };
     use groundhog_xdr::types::{ContractAddress, SHA256Hash};
     use serial_test::serial;
     use tempfile::TempDir;
@@ -567,6 +612,51 @@ mod tests {
 
         assert_eq!(first, second);
         assert_ne!(first, deployer);
+    }
+
+    #[test]
+    fn native_hog_overdraft_is_actionable_deploy_failure() {
+        let abort_data = xdrs::cxs::encode(&(
+            <groundhog_erc20_if::ERC20Error as sdk::exn::Exn>::SELECTOR,
+            groundhog_erc20_if::ERC20Error::TooLarge,
+        ))
+        .expect("bug: ERC20 exception should encode");
+        let receipt = failed_receipt(Some(HexBytes(abort_data)));
+
+        let error = command_error_for_deploy_receipt(&receipt)
+            .expect("native HOG overdraft should be classified");
+        let json = serde_json::to_value(error).expect("bug: command error should serialize");
+
+        assert_eq!(json["code"], "transaction_insufficient_funds");
+        assert_eq!(json["details"]["reason"], "nativeHogTransferOverdraft");
+        assert!(
+            json["hint"]
+                .as_str()
+                .is_some_and(|hint| hint.contains("when the selected profile has a faucet"))
+        );
+    }
+
+    #[test]
+    fn unrelated_revert_remains_generic_deploy_failure() {
+        let receipt = failed_receipt(Some(HexBytes(vec![0x01, 0x02])));
+
+        let error = command_error_for_deploy_receipt(&receipt)
+            .expect("reverted receipt should remain a command failure");
+        let json = serde_json::to_value(error).expect("bug: command error should serialize");
+
+        assert_eq!(json["code"], "transaction_reverted");
+        assert!(json["hint"].is_null());
+    }
+
+    fn failed_receipt(abort_data: Option<HexBytes>) -> TransactionReceipt {
+        TransactionReceipt {
+            tx_hash: TxHash(Hex0x(SHA256Hash::from([0x11; 32]))),
+            height: BlockHeight::from(1),
+            status: ExecStatus::Reverted { message: None },
+            events: Vec::new(),
+            return_data: None,
+            abort_data,
+        }
     }
 
     #[test]
