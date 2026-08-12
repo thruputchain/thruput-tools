@@ -279,7 +279,7 @@ fn selector_summary(resolved: &ResolvedCall) -> String {
     match &resolved.metadata {
         Some(CallMetadata::Spec(metadata)) => {
             format!(
-                "embedded spec {} v{}",
+                "contract spec {} v{}",
                 metadata.interface_name, metadata.version
             )
         }
@@ -295,13 +295,17 @@ fn selector_summary(resolved: &ResolvedCall) -> String {
 
 pub(crate) fn selector_json(resolved: &ResolvedCall) -> serde_json::Value {
     match &resolved.metadata {
-        Some(CallMetadata::Spec(metadata)) => json!({
-            "source": "embedded_spec",
-            "interface": {
-                "name": metadata.interface_name,
-                "version": metadata.version,
-            },
-        }),
+        Some(CallMetadata::Spec(metadata)) => {
+            // Keep the legacy machine-readable value stable even though specs
+            // may now come from an RV32 sidecar as well as embedded WASM.
+            json!({
+                "source": "embedded_spec",
+                "interface": {
+                    "name": metadata.interface_name,
+                    "version": metadata.version,
+                },
+            })
+        }
         Some(CallMetadata::Local(metadata)) => json!({
             "source": "local_metadata",
             "interface": {
@@ -1071,14 +1075,14 @@ mod tests {
     }
 
     #[test]
-    fn selector_helpers_report_embedded_spec_resolution() {
+    fn selector_helpers_report_contract_spec_resolution() {
         let metadata = sample_single_arg_spec_metadata(ContractType::U32);
         let resolved = ResolvedCall {
             entrypoint: method_entrypoint_id("Counter", "0.1.0", "call"),
             metadata: Some(CallMetadata::Spec(metadata)),
         };
 
-        assert_eq!(selector_summary(&resolved), "embedded spec Counter v0.1.0");
+        assert_eq!(selector_summary(&resolved), "contract spec Counter v0.1.0");
         assert_eq!(
             selector_json(&resolved),
             json!({

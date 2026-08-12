@@ -60,25 +60,43 @@ pub fn load_contract_spec(wasm: &Path) -> Result<Option<ContractSpec>, CliError>
 ///
 /// RV32 is the default build target and stores its finalized spec in an XDR
 /// sidecar because the lowered `.rv32a` artifact has no embedded-spec section.
-/// Prefer that sidecar when the matching RV32 artifact exists, then preserve
-/// the existing WASM embedded-spec fallback for projects built with
-/// `--target wasm`.
+/// When both targets have been built, use the most recently written spec and
+/// prefer RV32 on timestamp ties. This keeps the default RV32 workflow while
+/// respecting a later explicit `--target wasm` build.
 pub fn load_built_contract_spec(
     target_dir: &Path,
     package_name: &str,
 ) -> Result<Option<ContractSpec>, CliError> {
     let rv32 = crate::artifacts::groundhog_rv32_output_path(target_dir, package_name);
-    if rv32.try_exists()? {
-        let spec_xdr = spec_xdr_sidecar_path(&rv32);
-        match std::fs::read(&spec_xdr) {
-            Ok(bytes) => return load_contract_spec_from_xdr(&bytes).map(Some),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-            Err(err) => return Err(err.into()),
-        }
-    }
-
+    let rv32_spec = spec_xdr_sidecar_path(&rv32);
     let wasm = crate::artifacts::groundhog_wasm_output_path(target_dir, package_name);
-    load_contract_spec(&wasm)
+
+    let rv32_spec_modified = if rv32.try_exists()? {
+        file_modified(&rv32_spec)?
+    } else {
+        None
+    };
+    let wasm_modified = file_modified(&wasm)?;
+
+    match (rv32_spec_modified, wasm_modified) {
+        (Some(rv32_modified), Some(wasm_modified)) if wasm_modified > rv32_modified => {
+            load_contract_spec(&wasm)
+        }
+        (Some(_), _) => {
+            let bytes = std::fs::read(&rv32_spec)?;
+            load_contract_spec_from_xdr(&bytes).map(Some)
+        }
+        (None, Some(_)) => load_contract_spec(&wasm),
+        (None, None) => Ok(None),
+    }
+}
+
+fn file_modified(path: &Path) -> Result<Option<std::time::SystemTime>, CliError> {
+    match std::fs::metadata(path) {
+        Ok(metadata) => metadata.modified().map(Some).map_err(Into::into),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err.into()),
+    }
 }
 
 /// Load the embedded `groundhogspecv0` custom section from a WASM file.
@@ -401,7 +419,7 @@ mod tests {
     }
 
     #[test]
-    fn built_contract_spec_prefers_rv32_sidecar_and_falls_back_to_wasm() {
+    fn built_contract_spec_uses_latest_target_and_prefers_rv32_on_ties() {
         let rv32_spec = sample_contract_spec();
         let wasm_spec = sample_multi_interface_contract_spec();
         let dir = tempfile::tempdir().expect("bug: temp dir should be created");
@@ -417,6 +435,7 @@ mod tests {
             ),
         )
         .expect("bug: wasm fixture should be written");
+        set_modified(&wasm, 20);
 
         let loaded = load_built_contract_spec(target_dir, "demo-contract")
             .expect("bug: wasm fallback should load")
@@ -425,16 +444,42 @@ mod tests {
 
         let rv32 = output_dir.join("demo_contract.rv32a");
         std::fs::write(&rv32, b"rv32 fixture").expect("bug: rv32 fixture should be written");
+        let rv32_spec_path = rv32.with_extension("spec.xdr");
         std::fs::write(
-            rv32.with_extension("spec.xdr"),
+            &rv32_spec_path,
             xdrs::txs::encode(&rv32_spec).expect("bug: rv32 spec should encode"),
         )
         .expect("bug: rv32 spec sidecar should be written");
+        set_modified(&rv32_spec_path, 10);
 
         let loaded = load_built_contract_spec(target_dir, "demo-contract")
-            .expect("bug: rv32 sidecar should load")
-            .expect("bug: rv32 sidecar spec should exist");
+            .expect("bug: newer wasm spec should load")
+            .expect("bug: newer wasm spec should exist");
+        assert_eq!(loaded, wasm_spec);
+
+        set_modified(&rv32_spec_path, 30);
+
+        let loaded = load_built_contract_spec(target_dir, "demo-contract")
+            .expect("bug: newer rv32 sidecar should load")
+            .expect("bug: newer rv32 sidecar spec should exist");
         assert_eq!(loaded, rv32_spec);
+
+        set_modified(&wasm, 30);
+        let loaded = load_built_contract_spec(target_dir, "demo-contract")
+            .expect("bug: tied rv32 sidecar should load")
+            .expect("bug: tied rv32 sidecar spec should exist");
+        assert_eq!(loaded, rv32_spec);
+    }
+
+    fn set_modified(path: &Path, seconds_since_epoch: u64) {
+        let file = std::fs::File::options()
+            .write(true)
+            .open(path)
+            .expect("bug: fixture should open for timestamp update");
+        file.set_times(std::fs::FileTimes::new().set_modified(
+            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(seconds_since_epoch),
+        ))
+        .expect("bug: fixture timestamp should update");
     }
 
     #[test]
