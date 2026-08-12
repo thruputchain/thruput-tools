@@ -56,6 +56,31 @@ pub fn load_contract_spec(wasm: &Path) -> Result<Option<ContractSpec>, CliError>
     load_embedded_contract_spec(wasm)
 }
 
+/// Load the contract spec produced by the default build for a Cargo package.
+///
+/// RV32 is the default build target and stores its finalized spec in an XDR
+/// sidecar because the lowered `.rv32a` artifact has no embedded-spec section.
+/// Prefer that sidecar when the matching RV32 artifact exists, then preserve
+/// the existing WASM embedded-spec fallback for projects built with
+/// `--target wasm`.
+pub fn load_built_contract_spec(
+    target_dir: &Path,
+    package_name: &str,
+) -> Result<Option<ContractSpec>, CliError> {
+    let rv32 = crate::artifacts::groundhog_rv32_output_path(target_dir, package_name);
+    if rv32.try_exists()? {
+        let spec_xdr = spec_xdr_sidecar_path(&rv32);
+        match std::fs::read(&spec_xdr) {
+            Ok(bytes) => return load_contract_spec_from_xdr(&bytes).map(Some),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err.into()),
+        }
+    }
+
+    let wasm = crate::artifacts::groundhog_wasm_output_path(target_dir, package_name);
+    load_contract_spec(&wasm)
+}
+
 /// Load the embedded `groundhogspecv0` custom section from a WASM file.
 fn load_embedded_contract_spec(wasm: &Path) -> Result<Option<ContractSpec>, CliError> {
     let bytes = match std::fs::read(wasm) {
@@ -158,6 +183,17 @@ fn canonicalize_rv32_raw_fragments(
 /// Load only the registered interface ids from a built contract artifact.
 pub fn load_registered_interfaces(wasm: &Path) -> Result<Option<Vec<InterfaceSpec>>, CliError> {
     match load_contract_spec(wasm)? {
+        Some(spec) => Ok(Some(registered_interfaces(&spec)?)),
+        None => Ok(None),
+    }
+}
+
+/// Load registered interfaces from the built RV32 or WASM contract spec.
+pub fn load_built_registered_interfaces(
+    target_dir: &Path,
+    package_name: &str,
+) -> Result<Option<Vec<InterfaceSpec>>, CliError> {
+    match load_built_contract_spec(target_dir, package_name)? {
         Some(spec) => Ok(Some(registered_interfaces(&spec)?)),
         None => Ok(None),
     }
@@ -301,9 +337,10 @@ mod tests {
     };
 
     use super::{
-        InterfaceSpec, canonicalize_rv32_raw_fragments, find_method_interfaces, load_contract_spec,
-        load_contract_spec_from_file, load_contract_spec_from_xdr,
-        load_embedded_contract_spec_from_bytes, registered_interfaces, spec_json_sidecar_path,
+        InterfaceSpec, canonicalize_rv32_raw_fragments, find_method_interfaces,
+        load_built_contract_spec, load_contract_spec, load_contract_spec_from_file,
+        load_contract_spec_from_xdr, load_embedded_contract_spec_from_bytes, registered_interfaces,
+        spec_json_sidecar_path,
     };
 
     #[test]
@@ -361,6 +398,43 @@ mod tests {
             .expect("bug: embedded spec file should load")
             .expect("bug: embedded spec file should exist");
         assert_eq!(loaded, spec);
+    }
+
+    #[test]
+    fn built_contract_spec_prefers_rv32_sidecar_and_falls_back_to_wasm() {
+        let rv32_spec = sample_contract_spec();
+        let wasm_spec = sample_multi_interface_contract_spec();
+        let dir = tempfile::tempdir().expect("bug: temp dir should be created");
+        let target_dir = dir.path();
+        let output_dir = target_dir.join("groundhog");
+        std::fs::create_dir_all(&output_dir).expect("bug: output dir should be created");
+        let wasm = output_dir.join("demo_contract.wasm");
+        std::fs::write(
+            &wasm,
+            wasm_with_custom_section(
+                groundhog_spec_tool::FINAL_SECTION_NAME,
+                &xdrs::txs::encode(&wasm_spec).expect("bug: wasm spec should encode"),
+            ),
+        )
+        .expect("bug: wasm fixture should be written");
+
+        let loaded = load_built_contract_spec(target_dir, "demo-contract")
+            .expect("bug: wasm fallback should load")
+            .expect("bug: wasm fallback spec should exist");
+        assert_eq!(loaded, wasm_spec);
+
+        let rv32 = output_dir.join("demo_contract.rv32a");
+        std::fs::write(&rv32, b"rv32 fixture").expect("bug: rv32 fixture should be written");
+        std::fs::write(
+            rv32.with_extension("spec.xdr"),
+            xdrs::txs::encode(&rv32_spec).expect("bug: rv32 spec should encode"),
+        )
+        .expect("bug: rv32 spec sidecar should be written");
+
+        let loaded = load_built_contract_spec(target_dir, "demo-contract")
+            .expect("bug: rv32 sidecar should load")
+            .expect("bug: rv32 sidecar spec should exist");
+        assert_eq!(loaded, rv32_spec);
     }
 
     #[test]
