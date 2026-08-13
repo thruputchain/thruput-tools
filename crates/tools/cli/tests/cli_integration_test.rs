@@ -3401,6 +3401,168 @@ fn deploy_json_fails_without_config() {
     assert_eq!(stderr["error"]["code"], "no_active_profile");
 }
 
+fn write_deploy_workspace(root: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    let member = root.join("counter");
+    std::fs::create_dir_all(member.join("src")).unwrap();
+    std::fs::write(
+        root.join("Cargo.toml"),
+        "[workspace]\nresolver = \"3\"\nmembers = [\"counter\"]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        member.join("Cargo.toml"),
+        "[package]\nname = \"counter\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+    std::fs::write(member.join("src/lib.rs"), "pub fn counter() {}\n").unwrap();
+
+    let artifact = root.join("target/groundhog/counter.rv32a");
+    std::fs::create_dir_all(artifact.parent().unwrap()).unwrap();
+    std::fs::write(&artifact, b"rv32-counter").unwrap();
+    (member, artifact)
+}
+
+#[test]
+fn deploy_workspace_root_without_package_recommends_supported_option() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let workspace = tmp.path().join("shared-workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    write_deploy_workspace(&workspace);
+    write_project_config_with_dummy_alice_wallet(&workspace, "http://127.0.0.1:1");
+
+    let output = groundhog()
+        .args(["--json", "deploy", "--dry-run"])
+        .current_dir(&workspace)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(stderr["error"]["code"], "package_required");
+    assert!(
+        stderr["error"]["hint"]
+            .as_str()
+            .is_some_and(|hint| hint.contains("-p <package>"))
+    );
+}
+
+#[test]
+fn deploy_workspace_root_rejects_unknown_package() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let workspace = tmp.path().join("shared-workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    write_deploy_workspace(&workspace);
+    write_project_config_with_dummy_alice_wallet(&workspace, "http://127.0.0.1:1");
+
+    let output = groundhog()
+        .args(["--json", "deploy", "--dry-run", "-p", "missing"])
+        .current_dir(&workspace)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(stderr["error"]["code"], "package_not_found");
+    assert!(
+        stderr["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("missing"))
+    );
+}
+
+#[test]
+fn deploy_workspace_root_accepts_long_package_option() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let workspace = tmp.path().join("shared-workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let (_, artifact) = write_deploy_workspace(&workspace);
+    let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
+    write_project_config_with_alice_wallet(&workspace, &rpc_url, &config_home);
+
+    let output = groundhog()
+        .args(["--json", "deploy", "--dry-run", "--package", "counter"])
+        .current_dir(&workspace)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        std::fs::canonicalize(stdout["data"]["artifact_path"].as_str().unwrap()).unwrap(),
+        std::fs::canonicalize(artifact).unwrap()
+    );
+}
+
+#[test]
+fn deploy_workspace_member_infers_package_without_option() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let workspace = tmp.path().join("shared-workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let (member, artifact) = write_deploy_workspace(&workspace);
+    let (rpc_url, rpc_server) = spawn_chain_tip_rpc(42);
+    write_project_config_with_alice_wallet(&workspace, &rpc_url, &config_home);
+
+    let output = groundhog()
+        .args(["--json", "deploy", "--dry-run"])
+        .current_dir(&member)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        std::fs::canonicalize(stdout["data"]["artifact_path"].as_str().unwrap()).unwrap(),
+        std::fs::canonicalize(artifact).unwrap()
+    );
+}
+
+#[test]
+fn deploy_workspace_package_persists_selected_package_alias() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let workspace = tmp.path().join("shared-workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    write_deploy_workspace(&workspace);
+    let (rpc_url, rpc_server) = spawn_deploy_rpc(42);
+    write_project_config_with_alice_wallet(&workspace, &rpc_url, &config_home);
+
+    let output = groundhog()
+        .args(["--json", "deploy", "-p", "counter"])
+        .current_dir(&workspace)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let config = std::fs::read_to_string(workspace.join("groundhog.toml")).unwrap();
+    let expected_address = format!("0x{}", "bb".repeat(32));
+    assert!(config.contains(&format!("counter = \"{expected_address}\"")));
+    assert!(!config.contains("shared-workspace ="));
+}
+
 #[test]
 fn deploy_dry_run_json_outputs_prepared_transaction() {
     let tmp = TempDir::new().unwrap();

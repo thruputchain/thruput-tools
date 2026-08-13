@@ -182,6 +182,7 @@ default, or build the explicit WASM fallback target.
 
 ```bash
 groundhog build                # RV32 release artifact
+groundhog build -p counter     # select a Cargo workspace member
 groundhog build --target wasm  # explicit WASM fallback
 groundhog build --target wasm --optimize  # + wasm-opt (requires wasm-opt on PATH)
 groundhog build --profile testnet   # resolve profile from groundhog.toml
@@ -197,6 +198,11 @@ The RV32 target uses the built-in `groundhog-rv32-lower` library (v4 dispatch
 lives in the guest, so stripped release builds are valid), then writes
 `target/groundhog/<package>.rv32a` plus `target/groundhog/<package>.rv32.json`
 build metadata.
+
+In a multi-contract Cargo workspace, keep `groundhog.toml`,
+`rust-toolchain.toml`, and `.cargo/` at the workspace root so members share the
+same profile, toolchain, and target directory. Run `groundhog build -p
+<package>` from that root, or run `groundhog build` from inside one member.
 
 This RV32 path currently emits the deployable artifact and lowerer metadata.
 Contract spec sidecars for RV32 are a cross-repo follow-up; today spec
@@ -357,12 +363,18 @@ saves a contract alias into the active profile when running inside a project.
 
 ```bash
 groundhog deploy
+groundhog deploy -p counter
 groundhog deploy --profile testnet
 groundhog deploy --rpc-url http://<your-rpc-host>:8545
 groundhog deploy --artifact target/groundhog/counter.rv32a
 groundhog deploy --target rv32
 groundhog deploy --json
 ```
+
+At a Cargo workspace root, `-p <package>` (or `--package <package>`) selects the
+member's artifact and saves a successful deployment under that package name in
+the shared root `groundhog.toml`. From inside a member directory, the package
+is inferred and `-p` may be omitted.
 
 ### `groundhog call`
 

@@ -266,6 +266,9 @@ enum Command {
     },
     /// Deploy a contract
     Deploy {
+        /// Package to deploy (required at a workspace root)
+        #[arg(short, long, conflicts_with = "artifact")]
+        package: Option<String>,
         /// Path to compiled .wasm or .rv32a (default: auto-detect)
         #[arg(long)]
         artifact: Option<PathBuf>,
@@ -1136,6 +1139,7 @@ fn main() {
                 }
             }),
         Command::Deploy {
+            package,
             artifact,
             target,
             dry_run,
@@ -1152,6 +1156,7 @@ fn main() {
                 );
                 groundhog_cli::deploy::run(
                     artifact.as_deref(),
+                    package.as_deref(),
                     target.unwrap_or(BuildTargetArg::Rv32).into(),
                     dry_run,
                     wallet.as_deref(),
