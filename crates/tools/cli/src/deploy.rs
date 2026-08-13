@@ -272,11 +272,15 @@ fn print_insufficient_deploy_funding(prepared: &PreparedDeploy, print: &Print) {
         .wallet_name
         .as_deref()
         .unwrap_or(&prepared.wallet_address);
+    let wallet = crate::terminal::terminal_safe(wallet);
     print.warn(format_args!(
         "Deploy failed because wallet `{wallet}` has insufficient HOG for deployment"
     ));
     print.detail("wallet address", &prepared.wallet_address);
-    print.detail("profile", &prepared.profile_name);
+    print.detail(
+        "profile",
+        crate::terminal::terminal_safe(&prepared.profile_name),
+    );
     print.status(
         "The project alias and prior deployment are not the cause; fund the selected wallet and retry the original deploy command.",
     );

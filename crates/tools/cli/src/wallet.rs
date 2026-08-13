@@ -126,6 +126,7 @@ struct CreateWalletRequest {
 struct CreateWalletResponse {
     attempt_status: String,
     wallet_address: String,
+    prefund_raw_amount: String,
     prefund_tx_hash: Option<String>,
     tx_hash: Option<String>,
     height: Option<groundhog_json_rpc_types::BlockHeight>,
@@ -348,21 +349,8 @@ fn create_remote_wallet(
             genesis_hash: prepared.genesis_hash.clone(),
         },
     )?;
-    if create.attempt_status != "created" {
-        return Err(CliError::Other(format!(
-            "remote wallet-create is pending ({}) - retry the same command to continue",
-            create.attempt_status
-        )));
-    }
-    let create_status = create.status.as_ref().ok_or_else(|| {
-        CliError::Other("remote wallet-create response omitted final transaction status".into())
-    })?;
-    if !matches!(create_status, ExecStatus::Ok) {
-        return Err(CliError::Other(
-            "remote wallet-create transaction did not commit successfully".into(),
-        ));
-    }
-    validate_remote_create_wallet_address(&prepared.wallet_address, &create.wallet_address)?;
+    let (prefund_tx_hash, create_tx_hash, create_height) =
+        validate_remote_wallet_create_response(prepared, &create)?;
 
     let project_root = find_project_config(cwd)
         .and_then(|path| path.parent().map(Path::to_path_buf))
@@ -381,17 +369,6 @@ fn create_remote_wallet(
         make_default,
     )?;
     remove_remote_wallet_create_attempt(prepared)?;
-
-    let create_tx_hash = create
-        .tx_hash
-        .clone()
-        .ok_or_else(|| CliError::Other("remote wallet-create response omitted txHash".into()))?;
-    let prefund_tx_hash = create.prefund_tx_hash.clone().ok_or_else(|| {
-        CliError::Other("remote wallet-create response omitted prefundTxHash".into())
-    })?;
-    let create_height = create.height.ok_or_else(|| {
-        CliError::Other("remote wallet-create response omitted create height".into())
-    })?;
     print.status(format_args!("Wallet created: {}", prepared.wallet_address));
     let balance =
         observe_created_wallet_balance(&prepared.rpc_url, &prepared.wallet_address, print);
@@ -423,6 +400,42 @@ fn create_remote_wallet(
     Ok(())
 }
 
+fn validate_remote_wallet_create_response(
+    prepared: &PreparedRemoteWalletCreate,
+    create: &CreateWalletResponse,
+) -> Result<(String, String, groundhog_json_rpc_types::BlockHeight), CliError> {
+    if create.attempt_status != "created" {
+        return Err(CliError::Other(format!(
+            "remote wallet-create is pending ({}) - retry the same command to continue",
+            create.attempt_status
+        )));
+    }
+    let create_status = create.status.as_ref().ok_or_else(|| {
+        CliError::Other("remote wallet-create response omitted final transaction status".into())
+    })?;
+    if !matches!(create_status, ExecStatus::Ok) {
+        return Err(CliError::Other(
+            "remote wallet-create transaction did not commit successfully".into(),
+        ));
+    }
+    validate_remote_create_wallet_address(&prepared.wallet_address, &create.wallet_address)?;
+    validate_remote_wallet_prefund_amount(
+        &prepared.prefund_raw_amount,
+        &create.prefund_raw_amount,
+    )?;
+    let create_tx_hash = create
+        .tx_hash
+        .clone()
+        .ok_or_else(|| CliError::Other("remote wallet-create response omitted txHash".into()))?;
+    let prefund_tx_hash = create.prefund_tx_hash.clone().ok_or_else(|| {
+        CliError::Other("remote wallet-create response omitted prefundTxHash".into())
+    })?;
+    let create_height = create.height.clone().ok_or_else(|| {
+        CliError::Other("remote wallet-create response omitted create height".into())
+    })?;
+    Ok((prefund_tx_hash, create_tx_hash, create_height))
+}
+
 fn observe_created_wallet_balance(
     rpc_url: &str,
     address: &str,
@@ -452,8 +465,25 @@ fn observe_created_wallet_balance(
         });
 
     observation.unwrap_or_else(|error| {
-        print.warn(format_args!("could not observe wallet balance: {error}"));
+        print.warn(format_args!(
+            "could not observe wallet balance: {}",
+            crate::terminal::terminal_safe(&error.to_string())
+        ));
         json!({ "status": "unavailable", "error": error.to_string() })
+    })
+}
+
+fn validate_remote_wallet_prefund_amount(expected: &str, actual: &str) -> Result<(), CliError> {
+    let expected_amount = expected.parse::<u128>();
+    let actual_amount = actual.parse::<u128>();
+    if matches!((expected_amount, actual_amount), (Ok(expected), Ok(actual)) if expected == actual)
+    {
+        return Ok(());
+    }
+    Err(CliError::NetworkDescriptorMismatch {
+        field: "walletCreate.prefundRawAmount",
+        expected: expected.to_owned(),
+        actual: actual.to_owned(),
     })
 }
 
@@ -715,11 +745,13 @@ fn print_remote_dry_run_plan(
 }
 
 fn print_wallet_funding_next_step(wallet_name: &str, profile_name: &str, print: &Print) {
-    print.next_steps(&[format!(
-        "groundhog airdrop {} --profile {}",
-        render_shell_arg(wallet_name),
-        render_shell_arg(profile_name)
-    )]);
+    print.next_steps(&[wallet_funding_command(wallet_name, profile_name)]);
+}
+
+fn wallet_funding_command(wallet_name: &str, profile_name: &str) -> String {
+    let profile = render_shell_arg(&format!("--profile={profile_name}"));
+    let wallet = render_shell_arg(wallet_name);
+    format!("groundhog airdrop {profile} -- {wallet}")
 }
 
 pub(crate) fn prepare_wallet_create(
@@ -1360,8 +1392,8 @@ mod tests {
         read_remote_wallet_create_attempt, remote_wallet_create_attempt_path,
         remove_remote_wallet_create_attempt, resolve_dev_wallet_artifact_path,
         resolve_wallet_create_backend, resolve_wallet_create_inputs,
-        validate_remote_create_wallet_address, wallet_should_become_default,
-        write_remote_wallet_create_attempt,
+        validate_remote_create_wallet_address, validate_remote_wallet_prefund_amount,
+        wallet_funding_command, wallet_should_become_default, write_remote_wallet_create_attempt,
     };
     use crate::config::{LocalRuntimeState, Network, ProfileOverrides, ResolvedProfile};
 
@@ -1392,6 +1424,28 @@ mod tests {
             .expect_err("bug: sub-one HOG prefund should fail");
 
         assert_eq!(error.code(), "invalid_hog_amount");
+    }
+
+    #[test]
+    fn wallet_funding_command_supports_option_like_names() {
+        assert_eq!(
+            wallet_funding_command("-alice", "-preview"),
+            "groundhog airdrop --profile=-preview -- -alice"
+        );
+    }
+
+    #[test]
+    fn remote_wallet_prefund_compares_amounts_numerically() {
+        validate_remote_wallet_prefund_amount("010000000", "10000000")
+            .expect("bug: equivalent prefund amounts should match");
+    }
+
+    #[test]
+    fn remote_wallet_prefund_rejects_mismatch() {
+        let error = validate_remote_wallet_prefund_amount("10000000", "20000000")
+            .expect_err("bug: mismatched prefund should fail");
+
+        assert_eq!(error.code(), "network_descriptor_mismatch");
     }
 
     struct EnvGuard {

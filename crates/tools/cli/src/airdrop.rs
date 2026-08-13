@@ -324,7 +324,10 @@ fn observe_post_airdrop_balance(label: &str, rpc_url: &str, address: &str, print
         });
 
     observation.unwrap_or_else(|error| {
-        print.warn(format_args!("could not observe {label}: {error}"));
+        print.warn(format_args!(
+            "could not observe {label}: {}",
+            crate::terminal::terminal_safe(&error.to_string())
+        ));
         json!({ "status": "unavailable", "error": error.to_string() })
     })
 }
@@ -370,7 +373,6 @@ fn run_remote_airdrop(
         ));
     }
     validate_remote_airdrop_amount(&prepared.airdrop_policy.raw_amount, &response.raw_amount)?;
-    remove_remote_airdrop_attempt(prepared)?;
     let tx_hash = response
         .tx_hash
         .clone()
@@ -378,6 +380,7 @@ fn run_remote_airdrop(
     let height = response
         .height
         .ok_or_else(|| CliError::Other("remote airdrop response omitted height".into()))?;
+    remove_remote_airdrop_attempt(prepared)?;
     print.status(format_args!("Airdrop sent: {tx_hash}"));
 
     print.json(&CommandResult::new(
@@ -432,6 +435,10 @@ fn print_remote_airdrop_policy(
     print.status(format_args!(
         "Client/IP quota: {} per {} seconds",
         policy.client_quota_max, policy.client_quota_window_seconds
+    ));
+    print.status(format_args!(
+        "Pending requests per recipient: {}",
+        policy.max_pending_per_recipient
     ));
 }
 

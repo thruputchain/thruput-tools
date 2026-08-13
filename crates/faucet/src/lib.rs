@@ -462,6 +462,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn airdrop_rejects_mismatched_accepted_amount_without_resubmitting() {
+        let airdrop = Arc::new(MockAirdropSubmitter::success_with_mismatched_accepted_amount());
+        let config = test_config_with_submitters(
+            airdrop.clone(),
+            Arc::new(MockWalletCreateSubmitter::success()),
+        );
+
+        let response = airdrop_request(&config).await;
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+
+        let response = airdrop_request(&config).await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(airdrop.calls(), 1);
+        assert_eq!(airdrop.poll_calls(), 1);
+    }
+
+    #[tokio::test]
     async fn airdrop_and_wallet_create_use_distinct_transfer_amounts() {
         let mut descriptor = test_network_descriptor();
         descriptor.wallet_create.prefund_raw_amount = "200000000".into();
@@ -1548,6 +1566,7 @@ mod tests {
         calls: Mutex<usize>,
         poll_calls: Mutex<usize>,
         raw_amount: String,
+        accepted_raw_amount: String,
     }
 
     impl MockAirdropSubmitter {
@@ -1562,7 +1581,14 @@ mod tests {
                 calls: Mutex::new(0),
                 poll_calls: Mutex::new(0),
                 raw_amount: raw_amount.into(),
+                accepted_raw_amount: raw_amount.into(),
             }
+        }
+
+        fn success_with_mismatched_accepted_amount() -> Self {
+            let mut submitter = Self::success();
+            submitter.accepted_raw_amount = "200000000".into();
+            submitter
         }
 
         fn failure() -> Self {
@@ -1572,6 +1598,7 @@ mod tests {
                 calls: Mutex::new(0),
                 poll_calls: Mutex::new(0),
                 raw_amount: "100000000".into(),
+                accepted_raw_amount: "100000000".into(),
             }
         }
 
@@ -1582,6 +1609,7 @@ mod tests {
                 calls: Mutex::new(0),
                 poll_calls: Mutex::new(0),
                 raw_amount: "100000000".into(),
+                accepted_raw_amount: "100000000".into(),
             }
         }
 
@@ -1596,6 +1624,7 @@ mod tests {
                 calls: Mutex::new(0),
                 poll_calls: Mutex::new(0),
                 raw_amount: "100000000".into(),
+                accepted_raw_amount: "100000000".into(),
             }
         }
 
@@ -1631,7 +1660,7 @@ mod tests {
                 return Err(airdrop::AirdropSubmitError::BuildTransaction("boom".into()));
             }
             Ok(airdrop::AcceptedAirdrop {
-                raw_amount: self.raw_amount.clone(),
+                raw_amount: self.accepted_raw_amount.clone(),
                 tx_hash: test_tx_hash(),
             })
         }
