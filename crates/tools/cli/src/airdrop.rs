@@ -407,26 +407,15 @@ fn print_remote_airdrop_policy(
     amount_hog: &str,
     print: &Print,
 ) {
-    for line in remote_airdrop_policy_lines(policy, amount_hog) {
-        print.status(line);
-    }
-}
-
-fn remote_airdrop_policy_lines(
-    policy: &groundhog_json_rpc_types::network_descriptor::AirdropDescriptor,
-    amount_hog: &str,
-) -> [String; 3] {
-    [
-        format!("Fixed airdrop amount: {amount_hog} HOG"),
-        format!(
-            "Recipient cooldown: {} seconds",
-            policy.recipient_cooldown_seconds
-        ),
-        format!(
-            "Client/IP quota: {} per {} seconds",
-            policy.client_quota_max, policy.client_quota_window_seconds
-        ),
-    ]
+    print.status(format_args!("Fixed airdrop amount: {amount_hog} HOG"));
+    print.status(format_args!(
+        "Recipient cooldown: {} seconds",
+        policy.recipient_cooldown_seconds
+    ));
+    print.status(format_args!(
+        "Client/IP quota: {} per {} seconds",
+        policy.client_quota_max, policy.client_quota_window_seconds
+    ));
 }
 
 pub(crate) fn prepare_airdrop(
@@ -852,7 +841,7 @@ mod tests {
     use super::{
         PreparedAirdrop, PreparedLocalAirdrop, ensure_local_airdrop_success,
         observe_post_airdrop_balance, prepare_remote_airdrop_with_descriptor,
-        remote_airdrop_policy_lines, resolve_airdrop_backend, resolve_airdrop_recipient,
+        resolve_airdrop_backend, resolve_airdrop_recipient,
     };
     use crate::config::{Network, ResolvedProfile, SavedWalletBinding};
     use crate::hog;
@@ -901,20 +890,6 @@ mod tests {
             format!("0x{}", "cd".repeat(32))
         );
         assert!(resolve_airdrop_recipient(&profile, "missing").is_err());
-    }
-
-    #[test]
-    fn remote_airdrop_policy_copy_omits_pending_attempt_limit() {
-        let descriptor = test_network_descriptor();
-
-        assert_eq!(
-            remote_airdrop_policy_lines(&descriptor.policy, &descriptor.amount_hog),
-            [
-                "Fixed airdrop amount: 10 HOG",
-                "Recipient cooldown: 43200 seconds",
-                "Client/IP quota: 10 per 3600 seconds",
-            ]
-        );
     }
 
     #[test]

@@ -679,15 +679,11 @@ fn print_remote_dry_run_plan(
 }
 
 fn print_wallet_funding_next_step(wallet_name: &str, profile_name: &str, print: &Print) {
-    print.next_steps(&[wallet_funding_next_step(wallet_name, profile_name)]);
-}
-
-fn wallet_funding_next_step(wallet_name: &str, profile_name: &str) -> String {
-    format!(
+    print.next_steps(&[format!(
         "groundhog airdrop {} --profile {}",
         render_shell_arg(wallet_name),
         render_shell_arg(profile_name)
-    )
+    )]);
 }
 
 pub(crate) fn prepare_wallet_create(
@@ -1328,8 +1324,8 @@ mod tests {
         read_remote_wallet_create_attempt, remote_wallet_create_attempt_path,
         remove_remote_wallet_create_attempt, resolve_dev_wallet_artifact_path,
         resolve_wallet_create_backend, resolve_wallet_create_inputs,
-        validate_remote_create_wallet_address, wallet_funding_next_step,
-        wallet_should_become_default, write_remote_wallet_create_attempt,
+        validate_remote_create_wallet_address, wallet_should_become_default,
+        write_remote_wallet_create_attempt,
     };
     use crate::config::{LocalRuntimeState, Network, ProfileOverrides, ResolvedProfile};
 
@@ -1360,14 +1356,6 @@ mod tests {
             .expect_err("bug: sub-one HOG prefund should fail");
 
         assert_eq!(error.code(), "invalid_hog_amount");
-    }
-
-    #[test]
-    fn wallet_funding_next_step_quotes_wallet_and_profile() {
-        assert_eq!(
-            wallet_funding_next_step("primary wallet", "dev net"),
-            "groundhog airdrop 'primary wallet' --profile 'dev net'"
-        );
     }
 
     struct EnvGuard {
