@@ -6527,6 +6527,7 @@ fn contract_commands_report_unknown_alias_before_rpc() {
             ),
         )
         .unwrap();
+        let config_path = std::fs::canonicalize(config_path).unwrap();
         let (rpc_url, rpc_server) = spawn_no_request_rpc();
         let output = groundhog()
             .arg("--json")
