@@ -109,6 +109,7 @@ impl FakeStartupConfig {
         )
         .expect("bug: fake bootstrap manifest should parse");
         assert_eq!(manifest["schemaVersion"], 2);
+        assert_eq!(manifest["kind"], "groundhog-bootstrap");
         assert_eq!(manifest["bootstrapFaucet"]["index"], 0);
         assert_eq!(
             manifest["bootstrapFaucet"]["initialStorageTokens"],

@@ -1850,7 +1850,7 @@ mod tests {
         )
         .expect("bug: bootstrap manifest should parse");
 
-        assert_eq!(value["kind"], "hogd-bootstrap");
+        assert_eq!(value["kind"], "groundhog-bootstrap");
         assert_eq!(
             value["networkHash"],
             "0000000000000000000000000000000000000000000000000000000000000000"

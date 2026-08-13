@@ -60,7 +60,7 @@ pub const LOCAL_FAUCET_INDEX: u32 = 0;
 pub const FIRST_LOCAL_USER_INDEX: u32 = 1;
 
 /// Bootstrap manifest kind emitted for hogd-dev shorthand lowering.
-pub const HOGD_DEV_BOOTSTRAP_MANIFEST_KIND: &str = "hogd-bootstrap";
+pub const HOGD_DEV_BOOTSTRAP_MANIFEST_KIND: &str = "groundhog-bootstrap";
 
 /// Default bootstrap profile requested from hogd-dev.
 pub const DEFAULT_HOGD_DEV_BOOTSTRAP_PROFILE: &str = "local-dev";
@@ -541,7 +541,7 @@ mod tests {
             value,
             json!({
                 "schemaVersion": 2,
-                "kind": "hogd-bootstrap",
+                "kind": "groundhog-bootstrap",
                 "networkHash": "5151515151515151515151515151515151515151515151515151515151515151",
                 "profile": "local-dev",
                 "devWallet": {

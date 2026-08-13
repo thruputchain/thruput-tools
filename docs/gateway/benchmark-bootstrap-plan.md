@@ -89,7 +89,7 @@ Input to a backend launcher. Describes desired genesis/bootstrap state.
 ```json
 {
   "schemaVersion": 2,
-  "kind": "hogd-bootstrap",
+  "kind": "groundhog-bootstrap",
   "networkHash": "5151515151515151515151515151515151515151515151515151515151515151",
   "profile": "local-dev",
   "devWallet": {

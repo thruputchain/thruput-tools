@@ -15,7 +15,7 @@ pub const BOOTSTRAP_MANIFEST_SCHEMA_VERSION: u32 = 2;
 pub struct BootstrapManifest {
     /// Version of this JSON contract.
     pub schema_version: u32,
-    /// Manifest family, for example `hogd-bootstrap`.
+    /// Manifest family, for example `groundhog-bootstrap`.
     pub kind: String,
     /// Unprefixed 32-byte network hash stamped into proposed block headers.
     pub network_hash: NetworkHashHex,
@@ -180,7 +180,7 @@ mod tests {
             value,
             json!({
                 "schemaVersion": 2,
-                "kind": "hogd-bootstrap",
+                "kind": "groundhog-bootstrap",
                 "networkHash": "5151515151515151515151515151515151515151515151515151515151515151",
                 "profile": "local-dev",
                 "devWallet": {
@@ -255,7 +255,7 @@ mod tests {
     fn full_manifest() -> BootstrapManifest {
         BootstrapManifest {
             schema_version: BOOTSTRAP_MANIFEST_SCHEMA_VERSION,
-            kind: "hogd-bootstrap".into(),
+            kind: "groundhog-bootstrap".into(),
             network_hash: crate::NetworkHashHex::from([0x51; 32]),
             profile: "local-dev".into(),
             dev_wallet: BootstrapManifestDevWallet {

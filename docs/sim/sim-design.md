@@ -92,7 +92,7 @@ For v2, sim only needs the existing local-dev shape:
 ```json
 {
   "schemaVersion": 2,
-  "kind": "hogd-bootstrap",
+  "kind": "groundhog-bootstrap",
   "networkHash": "0000000000000000000000000000000000000000000000000000000000000000",
   "profile": "local-dev",
   "devWallet": {
