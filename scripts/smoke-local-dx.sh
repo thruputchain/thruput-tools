@@ -54,6 +54,8 @@ if value is None:
     print("null")
 elif isinstance(value, (dict, list)):
     print(json.dumps(value, sort_keys=True, separators=(",", ":")))
+elif isinstance(value, bool):
+    print("true" if value else "false")
 else:
     print(value)
 PY
@@ -839,6 +841,12 @@ if [[ -n "$GATEWAY_RPC_URL" ]]; then
         "standalone gateway" "$GATEWAY_RPC_URL" "$DEPLOY_TX_HASH" "$DEPLOY_HEIGHT"
 fi
 
+INITIALIZE_DRY_RUN_JSON="$(run_json "dry-run initialize" "$CLI" --json call "$PROJECT_NAME" initialize "$INITIAL_VALUE" --dry-run)"
+[[ "$(json_field data.dry_run "$INITIALIZE_DRY_RUN_JSON")" == "true" ]] \
+    || die "initialize dry-run was not reported as a dry-run"
+INITIALIZE_SELECTOR_SOURCE="$(json_field data.selector.source "$INITIALIZE_DRY_RUN_JSON")"
+[[ "$INITIALIZE_SELECTOR_SOURCE" == "embedded_spec" ]] \
+    || die "initialize selector source was $INITIALIZE_SELECTOR_SOURCE, expected embedded_spec from the RV32 sidecar"
 INITIALIZE_JSON="$(run_json "call initialize" "$CLI" --json call "$PROJECT_NAME" initialize "$INITIAL_VALUE")"
 assert_call_succeeded "initialize" "$INITIALIZE_JSON"
 log "initialize result: status=$(json_field data.status_summary "$INITIALIZE_JSON") height=$(json_field data.height "$INITIALIZE_JSON") tx=$(json_field data.tx_hash "$INITIALIZE_JSON")"
@@ -942,9 +950,8 @@ else
     GET_JSON="$(run_json "call get" "$CLI" --json call "$PROJECT_NAME" get)"
     assert_call_succeeded "get" "$GET_JSON"
     GET_RETURN="$(json_field data.return_value "$GET_JSON")"
-    if [[ "$GET_RETURN" == "null" ]]; then
-        GET_RETURN="<unavailable until receipt return_data lands>"
-    fi
+    [[ "$GET_RETURN" == "$EXPECTED_VALUE" ]] \
+        || die "get decoded return was $GET_RETURN, expected $EXPECTED_VALUE"
     log "get result: status=$(json_field data.status_summary "$GET_JSON") height=$(json_field data.height "$GET_JSON") tx=$(json_field data.tx_hash "$GET_JSON") return=$GET_RETURN"
 fi
 
