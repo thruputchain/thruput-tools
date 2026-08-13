@@ -43,6 +43,18 @@ impl FaucetConfig {
         wallet_prefund_submitter: Arc<dyn airdrop::AirdropSubmitter>,
         wallet_create_submitter: Arc<dyn wallet_create::WalletCreateSubmitter>,
     ) -> Self {
+        let descriptor_airdrop_raw_amount = network_descriptor
+            .airdrop
+            .as_ref()
+            .expect("faucet network descriptor must advertise airdrop policy")
+            .raw_amount
+            .parse::<u128>()
+            .expect("airdrop amount in network descriptor must be a valid u128");
+        assert_eq!(
+            airdrop_submitter.raw_amount(),
+            descriptor_airdrop_raw_amount,
+            "airdrop submitter amount must match network descriptor"
+        );
         let descriptor_prefund_raw_amount = network_descriptor
             .wallet_create
             .prefund_raw_amount
@@ -438,35 +450,15 @@ mod tests {
         assert_eq!(json["txHash"], format!("0x{}", "22".repeat(32)));
     }
 
-    #[tokio::test]
-    async fn airdrop_uses_submitted_raw_amount_for_response_and_retry() {
-        let airdrop = Arc::new(MockAirdropSubmitter::success_with_raw_amount("200000000"));
-        let config = FaucetConfig::new(
+    #[test]
+    #[should_panic(expected = "airdrop submitter amount must match network descriptor")]
+    fn airdrop_submitter_amount_must_match_network_descriptor() {
+        FaucetConfig::new(
             test_network_descriptor(),
-            airdrop.clone(),
+            Arc::new(MockAirdropSubmitter::success_with_raw_amount("200000000")),
             Arc::new(MockAirdropSubmitter::success()),
             Arc::new(MockWalletCreateSubmitter::success()),
         );
-        let response = airdrop_request(&config).await;
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), 4096)
-            .await
-            .expect("bug: airdrop body should read");
-        let json: serde_json::Value =
-            serde_json::from_slice(&body).expect("bug: airdrop body should be JSON");
-        assert_eq!(json["rawAmount"], "200000000");
-
-        let response = airdrop_request(&config).await;
-
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(airdrop.calls(), 1);
-        let body = axum::body::to_bytes(response.into_body(), 4096)
-            .await
-            .expect("bug: airdrop retry body should read");
-        let json: serde_json::Value =
-            serde_json::from_slice(&body).expect("bug: airdrop retry body should be JSON");
-        assert_eq!(json["rawAmount"], "200000000");
     }
 
     #[tokio::test]

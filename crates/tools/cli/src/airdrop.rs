@@ -34,7 +34,7 @@ use crate::tx_utils::{
 };
 use crate::{CliError, Print};
 
-pub const AIRDROP_JSON_SCHEMA_VERSION: u32 = 1;
+pub const AIRDROP_JSON_SCHEMA_VERSION: u32 = 2;
 const DEFAULT_AIRDROP_HOG: &str = "10";
 const LOW_FAUCET_BALANCE_RAW: u128 = 10 * hog::SCALE;
 
@@ -234,7 +234,9 @@ fn ensure_local_airdrop_success(
     tx_hash: &str,
 ) -> Result<(), CliError> {
     let decoded_abort = crate::tx_utils::decode_receipt_abort(receipt, None);
-    if crate::codec::is_erc20_too_large(decoded_abort.as_ref()) {
+    if matches!(receipt.status, ExecStatus::Reverted { .. })
+        && crate::codec::is_erc20_too_large(decoded_abort.as_ref())
+    {
         return Err(insufficient_local_faucet_error(
             prepared.raw_amount,
             prepared.funding_projection.estimated_max,
@@ -367,6 +369,7 @@ fn run_remote_airdrop(
             "remote airdrop transaction did not commit successfully".into(),
         ));
     }
+    validate_remote_airdrop_amount(&prepared.airdrop_policy.raw_amount, &response.raw_amount)?;
     remove_remote_airdrop_attempt(prepared)?;
     let tx_hash = response
         .tx_hash
@@ -400,6 +403,20 @@ fn run_remote_airdrop(
             "status": status,
         }),
     ))
+}
+
+fn validate_remote_airdrop_amount(expected: &str, actual: &str) -> Result<(), CliError> {
+    let expected_amount = expected.parse::<u128>();
+    let actual_amount = actual.parse::<u128>();
+    if matches!((expected_amount, actual_amount), (Ok(expected), Ok(actual)) if expected == actual)
+    {
+        return Ok(());
+    }
+    Err(CliError::NetworkDescriptorMismatch {
+        field: "airdrop.rawAmount",
+        expected: expected.to_owned(),
+        actual: actual.to_owned(),
+    })
 }
 
 fn print_remote_airdrop_policy(
@@ -841,7 +858,7 @@ mod tests {
     use super::{
         PreparedAirdrop, PreparedLocalAirdrop, ensure_local_airdrop_success,
         observe_post_airdrop_balance, prepare_remote_airdrop_with_descriptor,
-        resolve_airdrop_backend, resolve_airdrop_recipient,
+        resolve_airdrop_backend, resolve_airdrop_recipient, validate_remote_airdrop_amount,
     };
     use crate::config::{Network, ResolvedProfile, SavedWalletBinding};
     use crate::hog;
@@ -1076,14 +1093,71 @@ mod tests {
 
     #[test]
     fn committed_too_large_airdrop_reports_actionable_local_faucet_error() {
-        let prepared = PreparedLocalAirdrop {
+        let prepared = prepared_local_airdrop();
+        let receipt = reverted_too_large_receipt();
+
+        let error = ensure_local_airdrop_success(&prepared, &receipt, "0x44")
+            .expect_err("bug: committed TooLarge should map to faucet funding guidance");
+
+        assert!(
+            error
+                .to_string()
+                .contains("insufficient actionable balance")
+        );
+        assert!(error.to_string().contains("start a fresh local chain"));
+    }
+
+    #[test]
+    fn non_reverted_too_large_airdrop_preserves_transaction_status() {
+        let prepared = prepared_local_airdrop();
+        let mut receipt = reverted_too_large_receipt();
+        receipt.status = groundhog_json_rpc_types::receipt::ExecStatus::DeterministicError {
+            kind: "outOfGas".into(),
+        };
+
+        let error = ensure_local_airdrop_success(&prepared, &receipt, "0x44")
+            .expect_err("bug: deterministic error should remain a transaction failure");
+
+        assert!(
+            !error
+                .to_string()
+                .contains("insufficient actionable balance")
+        );
+        assert!(error.to_string().contains("deterministic execution error"));
+    }
+
+    #[test]
+    fn remote_airdrop_rejects_amount_different_from_advertised_policy() {
+        let error = validate_remote_airdrop_amount("100000000", "200000000")
+            .expect_err("bug: mismatched service amount should fail");
+
+        assert_eq!(error.code(), "network_descriptor_mismatch");
+        assert!(error.to_string().contains("airdrop.rawAmount"));
+    }
+
+    #[test]
+    fn remote_airdrop_compares_raw_amounts_numerically() {
+        validate_remote_airdrop_amount("0100000000", "100000000")
+            .expect("bug: equivalent raw amounts should match");
+    }
+
+    #[test]
+    fn remote_airdrop_rejects_malformed_response_amount() {
+        let error = validate_remote_airdrop_amount("100000000", "invalid")
+            .expect_err("bug: malformed service amount should fail");
+
+        assert_eq!(error.code(), "network_descriptor_mismatch");
+    }
+
+    fn prepared_local_airdrop() -> PreparedLocalAirdrop {
+        PreparedLocalAirdrop {
             rpc_url: String::new(),
             recipient_input: "alice".into(),
             recipient_wallet: format!("0x{}", "ab".repeat(32)),
             amount_hog: "10".into(),
             raw_amount: 100_000_000,
             faucet_key_name: "dev-0".into(),
-            faucet_role: "local_user".into(),
+            faucet_role: "faucet".into(),
             faucet_wallet: format!("0x{}", "cd".repeat(32)),
             faucet_balance_height: groundhog_json_rpc_types::BlockHeight::from(42),
             funding_projection: crate::balance::LocalFundingProjection {
@@ -1093,8 +1167,11 @@ mod tests {
                 projected_balance: Some(99_987_993),
             },
             tx_hex: String::new(),
-        };
-        let receipt = groundhog_json_rpc_types::receipt::TransactionReceipt {
+        }
+    }
+
+    fn reverted_too_large_receipt() -> groundhog_json_rpc_types::receipt::TransactionReceipt {
+        groundhog_json_rpc_types::receipt::TransactionReceipt {
             tx_hash: groundhog_json_rpc_types::transaction::TxHash(
                 groundhog_json_rpc_types::hex::Hex0x(groundhog_xdr::types::SHA256Hash::from(
                     [0x44; 32],
@@ -1107,17 +1184,7 @@ mod tests {
                 erc20_too_large_abort(),
             )),
             events: Vec::new(),
-        };
-
-        let error = ensure_local_airdrop_success(&prepared, &receipt, "0x44")
-            .expect_err("bug: committed TooLarge should map to faucet funding guidance");
-
-        assert!(
-            error
-                .to_string()
-                .contains("insufficient actionable balance")
-        );
-        assert!(error.to_string().contains("start a fresh local chain"));
+        }
     }
 
     fn erc20_too_large_abort() -> Vec<u8> {

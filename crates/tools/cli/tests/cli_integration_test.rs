@@ -4204,6 +4204,7 @@ fn airdrop_dry_run_json_outputs_prepared_transaction() {
         stdout["data"]["schemaVersion"],
         groundhog_cli::airdrop::AIRDROP_JSON_SCHEMA_VERSION
     );
+    assert_eq!(stdout["data"]["schemaVersion"], 2);
     assert_eq!(stdout["data"]["dry_run"], true);
     assert_eq!(stdout["data"]["submitted"], false);
     assert_eq!(stdout["data"]["recipient"], "alice");
@@ -6031,17 +6032,49 @@ fn deploy_live_json_reports_actionable_native_hog_overdraft() {
         stdout["error"]["details"]["reason"],
         "nativeHogTransferOverdraft"
     );
-    assert!(
-        stdout["error"]["hint"]
-            .as_str()
-            .is_some_and(|hint| hint.contains("when the selected profile has a faucet"))
-    );
+    assert!(stdout["error"]["hint"].as_str().is_some_and(|hint| {
+        hint.contains("groundhog balance --profile=default -- alice")
+            && hint.contains("groundhog airdrop --profile=default -- alice")
+    }));
     assert_ne!(stdout["error"]["code"], "transaction_reverted");
     assert!(
         stdout["data"]["abort_data"]
             .as_str()
             .is_some_and(|value| value.starts_with("0x"))
     );
+}
+
+#[test]
+fn deploy_live_human_reports_selected_wallet_funding_commands() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config-home");
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let (rpc_url, rpc_server) = spawn_transaction_rpc(
+        42,
+        sample_insufficient_funding_deploy_receipt(42),
+        DevDetailRpcResponse::MethodNotFound,
+    );
+    write_project_config_with_alice_wallet(&project, &rpc_url, &config_home);
+
+    let wasm_path = tmp.path().join("test.wasm");
+    std::fs::write(&wasm_path, b"\0asm\x01\0\0\0").unwrap();
+    let output = groundhog()
+        .args(["deploy", "--artifact", wasm_path.to_str().unwrap()])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+
+    rpc_server.join().unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("wallet `alice` has insufficient HOG"));
+    assert!(stderr.contains("groundhog balance --profile=default -- alice"));
+    assert!(stderr.contains("groundhog airdrop --profile=default -- alice"));
+    assert!(stderr.contains("retry the original deploy command"));
 }
 
 #[test]

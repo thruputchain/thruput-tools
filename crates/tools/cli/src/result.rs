@@ -30,7 +30,7 @@ pub struct CommandResult<T: Serialize> {
 pub struct CommandError {
     code: &'static str,
     message: String,
-    hint: Option<&'static str>,
+    hint: Option<String>,
     details: Value,
 }
 
@@ -45,8 +45,8 @@ impl CommandError {
     }
 
     #[must_use]
-    pub fn with_hint(mut self, hint: &'static str) -> Self {
-        self.hint = Some(hint);
+    pub fn with_hint(mut self, hint: impl Into<String>) -> Self {
+        self.hint = Some(hint.into());
         self
     }
 }
